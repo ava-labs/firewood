@@ -16,6 +16,8 @@
 //!   (or doesn't exist) in a trie with a given root hash.
 //! - **Range proofs** ([`RangeProof`]): Verify that a contiguous set of key-value pairs
 //!   exists within a specific key range.
+//! - **Change proofs** ([`ChangeProof`]): Verify that a set of key-value changes
+//!   between two trie revisions is consistent with a target root hash.
 //! - **Serialization format**: A compact binary format for transmitting proofs over the
 //!   network or storing them persistently.
 //!
@@ -26,6 +28,7 @@
 //! - `types`: Core proof types including [`Proof`], [`ProofNode`], [`ProofError`], and
 //!   [`ProofCollection`].
 //! - `range`: Range proof implementation for verifying multiple consecutive keys.
+//! - `change`: Change proof type and structural verification.
 //! - `header`: Proof format headers and validation.
 //! - `reader`: Proof reading and deserialization utilities.
 //! - `ser`: Proof serialization implementation (internal).
@@ -49,6 +52,17 @@
 //! for (key, value) in &range_proof {
 //!     // Process key-value pairs
 //! }
+//!
+//! // Verify a change proof
+//! // Step 1: Structural validation and boundary proof hash chain verification.
+//! let ctx = verify_change_proof_structure(&proof, end_root, start_key, end_key, max_length)?;
+//!
+//! // Step 2: Apply batch_ops to the verifier's start_root to produce a proposal.
+//! let proposal = db.apply_change_proof_to_parent(&proof, &parent_revision)?;
+//!
+//! // Step 3: Build a proving trie from the proposal's in-range keys, reconcile
+//! //         boundary proof nodes, and compare the computed root hash against end_root.
+//! verify_change_proof_root_hash(&proof, &ctx, &proposal)?;
 //! ```
 //!
 //! # Proof Format
@@ -62,9 +76,24 @@
 //!    - A bitmap indicating which children are present
 //!    - The hash of each present child
 //!
+//! Change proofs additionally serialize their `batch_ops` as a sequence of tagged
+//! Put/Delete operations after the boundary proof nodes. See `ser.rs` for details.
+//!
 //! The serialization format is versioned to allow for future evolution while maintaining
 //! backward compatibility with proof verification.
+//!
+//! # Formal Verification (Change Proofs)
+//!
+//! The change proof verification design has been formally verified using TLA+ and
+//! the TLC model checker. 35 design properties and 3 protocol properties were
+//! exhaustively checked for all trie instances up to branch factor 4 with depth 2,
+//! covering boundary classification, hash chain soundness, structural validation,
+//! operation consistency, truncated proofs, exclusion proofs, attack detection, and
+//! multi-round sync safety under adversarial provers. Two previously fixed bugs
+//! were formally reproduced as regression tests — TLC confirms both the vulnerable
+//! behavior and the necessity of their fixes. No new bugs were found.
 
+pub(crate) mod change;
 pub(super) mod de;
 pub(crate) mod header;
 pub(crate) mod range;
@@ -74,6 +103,9 @@ pub(super) mod ser;
 mod tests;
 pub(crate) mod types;
 
+pub use self::change::{
+    ChangeProof, ChangeProofVerificationContext, verify_change_proof_structure,
+};
 pub use self::header::InvalidHeader;
 pub use self::range::RangeProof;
 pub use self::reader::ReadError;

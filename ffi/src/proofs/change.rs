@@ -1,7 +1,6 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::convert::Into;
 use std::num::NonZeroUsize;
 
 use firewood_metrics::firewood_increment;
@@ -11,17 +10,14 @@ use firewood_storage::TrieHash;
 use rlp::Rlp;
 
 use firewood::{
-    ProofError,
-    api::{self, DbView as _, FrozenChangeProof},
-    logger::warn,
+    ChangeProofVerificationContext, ProofError,
+    api::{self, FrozenChangeProof, HashKey as ApiHashKey},
+    verify_change_proof_root_hash, verify_change_proof_structure,
 };
-
-use std::cmp::Ordering;
 
 use crate::{
     BorrowedBytes, ChangeProofResult, DatabaseHandle, HashKey, HashResult, KeyRange, Maybe,
-    NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult,
-    results::{ProposedChangeProofResult, VerifiedChangeProofResult},
+    NextKeyRangeResult, OwnedBytes, ProposedChangeProofResult, ValueResult, VoidResult,
 };
 
 #[cfg(feature = "ethhash")]
@@ -56,19 +52,15 @@ pub struct CreateChangeProofArgs<'a> {
     pub max_length: u32,
 }
 
-/// Arguments for verifying a change proof.
+/// Arguments for verifying a change proof (used by both propose and commit).
 #[derive(Debug)]
 #[repr(C)]
 pub struct VerifyChangeProofArgs<'a> {
-    /// The change proof to verify. If null, the function will return
-    /// [`VoidResult::NullHandlePointer`]. We need a mutable reference to
-    /// update the validation context.
-    pub proof: Option<&'a mut ChangeProofContext>,
-    /// The root hash of the starting revision. This must match the starting
-    /// root of the proof.
+    /// The change proof to verify.
+    pub proof: Option<Box<ChangeProofContext>>,
+    /// The root hash of the starting revision.
     pub start_root: HashKey,
-    /// The root hash of the ending revision. This must match the ending root of
-    /// the proof.
+    /// The root hash of the ending revision.
     pub end_root: HashKey,
     /// The lower bound of the key range that the proof is expected to cover. If
     /// `None`, the proof is expected to cover from the start of the keyspace.
@@ -77,192 +69,183 @@ pub struct VerifyChangeProofArgs<'a> {
     /// `None`, the proof is expected to cover to the end of the keyspace.
     pub end_key: Maybe<BorrowedBytes<'a>>,
     /// The maximum number of key/value pairs that the proof is expected to cover.
-    /// If the proof contains more items than this, it is considered invalid. If
-    /// `0`, there is no limit.
     pub max_length: u32,
 }
 
-// Arguments for creating a proposal from a verified change proof
 #[derive(Debug)]
 #[repr(C)]
-pub struct ProposedChangeProofArgs<'a> {
-    /// The verified change proof context that will be used to create a proposal.
-    pub proof: Option<&'a mut VerifiedChangeProofContext>,
+pub struct CommittedChangeProofArgs<'a, 'db> {
+    // The change proof context that has been proposed and will be committed
+    pub proof: Option<&'a mut ProposedChangeProofContext<'db>>,
 }
 
-#[derive(Debug)]
-#[repr(C)]
-pub struct CommittedChangeProofArgs<'a> {
-    // The proposed change proof context that will be used to commit a proposal
-    pub proof: Option<&'a mut ProposedChangeProofContext<'a>>,
-}
-
-/// FFI context for a parsed or generated change proof. This change proof has not
-/// been verified. Calling `verify` on it will generate a `VerifiedChangeProofContext`
-/// and consume the `proof`, replacing it with `None`. After verification,
-/// serialization should be done via the `VerifiedChangeProofContext` instead.
+/// FFI context for a parsed or generated change proof that has not yet been
+/// verified or proposed.
 #[derive(Debug)]
 pub struct ChangeProofContext {
-    proof: Option<FrozenChangeProof>,
+    proof: FrozenChangeProof,
+}
+
+/// FFI context for a change proof that has been verified and proposed against
+/// a database. The verification context and proposal state are non-optional,
+/// meaning this type can only be constructed after successful verification.
+#[derive(Debug)]
+pub struct ProposedChangeProofContext<'db> {
+    proof: FrozenChangeProof,
+    verification: VerificationContext,
+    proposal_state: ProposalState<'db>,
+}
+
+/// Type alias — the struct now lives in the firewood crate.
+type VerificationContext = ChangeProofVerificationContext;
+
+#[derive(Debug)]
+enum ProposalState<'db> {
+    Proposed(crate::ProposalHandle<'db>),
+    Committed(Option<ApiHashKey>),
+    Failed,
 }
 
 impl From<FrozenChangeProof> for ChangeProofContext {
     fn from(proof: FrozenChangeProof) -> Self {
-        Self { proof: Some(proof) }
+        Self { proof }
     }
 }
 
 impl ChangeProofContext {
-    /// Verifies the `ChangeProofContext` and creates a `VerifiedChangeProofContext`
-    /// on success. Calling `verify` consumes the proof, and calling it again will
-    /// return a `ProofIsNone` error.
+    /// Verify the change proof and prepare a proposal against the given database
+    /// without committing it.
     ///
-    /// Currently only performs a cursory verification, such as whether
-    /// the keys in the change proof is sorted.
-    fn verify(
-        &mut self,
-        params: VerificationParams,
-    ) -> Result<VerifiedChangeProofContext, api::Error> {
-        let Some(proof) = self.proof.take() else {
-            return Err(api::Error::ProofError(ProofError::ProofIsNone));
-        };
-
-        let batch_ops = proof.batch_ops();
-
-        // Check to make sure the BatchOp array size is less than or equal to `max_length`
-        if let Some(max_length) = params.max_length
-            && batch_ops.len() > max_length.into()
-        {
-            return Err(api::Error::ProofError(
-                ProofError::ProofIsLargerThanMaxLength,
-            ));
-        }
-
-        // Check the start key is not greater than the first key in the proof.
-        if let (Some(start_key), Some(first_key)) = (&params.start_key, batch_ops.first())
-            && start_key.cmp(first_key.key()) == Ordering::Greater
-        {
-            return Err(api::Error::ProofError(
-                ProofError::StartKeyLargerThanFirstKey,
-            ));
-        }
-
-        // Check the end key is not less than the last key in the proof.
-        if let (Some(end_key), Some(last_key)) = (&params.end_key, batch_ops.last())
-            && end_key.cmp(last_key.key()) == Ordering::Less
-        {
-            return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
-        }
-
-        // Verify the keys are in sorted order.
-        if batch_ops
-            .iter()
-            .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
-        {
-            warn!("change proof verification not yet implemented");
-            Ok(VerifiedChangeProofContext {
-                proof: Some(proof),
-                params,
-            })
-        } else {
-            Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted))
-        }
-    }
-}
-
-/// FFI context for a verified change proof. It is created from calling `verify`
-/// on a `ChangeProofContext` and stores the parameters of that call in `params`.
-/// Calling `propose` on it will consume the proof to create a
-/// `ProposedChangeProofContext`.
-#[derive(Debug)]
-pub struct VerifiedChangeProofContext {
-    proof: Option<FrozenChangeProof>,
-    params: VerificationParams,
-}
-
-impl VerifiedChangeProofContext {
-    /// Creates a proposal from the verified change proof context, and stores the change
-    /// proof, database handle, and proposal handle in a `ProposedChangeProofContext`.
-    /// Calling `propose` consumes the proof, and calling it again will return a
-    /// `ProofIsNone` error.
-    fn propose<'db>(
-        &'db mut self,
+    /// On success, consumes `self` and returns a [`ProposedChangeProofContext`]
+    /// containing the verified proof, verification context, and proposal state.
+    ///
+    /// On failure, returns `self` back to the caller (along with the error) so
+    /// that the caller retains ownership of the unverified proof.
+    fn verify_and_propose<'db>(
+        self,
         db: &'db DatabaseHandle,
-    ) -> Result<ProposedChangeProofContext<'db>, api::Error> {
-        let Some(proof) = self.proof.take() else {
-            return Err(api::Error::ProofError(ProofError::ProofIsNone));
+        start_root: ApiHashKey,
+        end_root: ApiHashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<ProposedChangeProofContext<'db>, Box<(Self, api::Error)>> {
+        // Destructure self so we can move `proof` into either the Ok or Err
+        // result without cloning.
+        let proof = self.proof;
+
+        let verification = match verify_change_proof_structure(
+            &proof,
+            end_root.clone(),
+            start_key,
+            end_key,
+            max_length,
+        ) {
+            Ok(v) => v,
+            Err(e) => return Err(Box::new((Self { proof }, e))),
         };
-        let proposal = db.apply_change_proof_to_parent(self.params.start_root.into(), &proof)?;
-        let root_hash = proposal.handle.root_hash().map(Into::into);
+
+        let proposal = match db.apply_change_proof_to_parent(start_root, &proof) {
+            Ok(p) => p,
+            Err(e) => return Err(Box::new((Self { proof }, e))),
+        };
+
+        // Root hash verification: build a proving trie from the proposal's
+        // in-range keys, reconcile boundary proof nodes, and compare the
+        // computed hybrid root hash against end_root.
+        if let Err(e) = verify_change_proof_root_hash(&proof, &verification, &proposal.handle) {
+            return Err(Box::new((Self { proof }, e)));
+        }
+
         Ok(ProposedChangeProofContext {
             proof,
-            db,
-            root_hash,
-            end_root: self.params.end_root,
-            end_key: self.params.end_key.clone(),
-            proposal: Some(proposal.handle),
+            verification,
+            proposal_state: ProposalState::Proposed(proposal.handle),
         })
+    }
+
+    /// Verify and commit the change proof to the given database.
+    ///
+    /// Consumes `self`. The proof is consumed regardless of success or failure.
+    fn verify_and_commit(
+        self,
+        db: &DatabaseHandle,
+        start_root: ApiHashKey,
+        end_root: ApiHashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<Option<ApiHashKey>, api::Error> {
+        let mut proposed = self
+            .verify_and_propose(db, start_root, end_root, start_key, end_key, max_length)
+            .map_err(|boxed| {
+                let (_proof, err) = *boxed;
+                err
+            })?;
+        proposed.commit()
     }
 }
 
-/// FFI context for a proposed change proof. It is created from calling `propose`
-/// on a `VerifiedChangeProofContext` and stores the database, proposal handle,
-/// and other parameters need to implement `find_next_key`. Calling `commit` on it
-/// will consume the proof, but `find_next_key` can still be called on it.
-#[expect(unused)]
-#[derive(Debug)]
-pub struct ProposedChangeProofContext<'db> {
-    proof: FrozenChangeProof,
-    db: &'db DatabaseHandle,
-    root_hash: Option<HashKey>,
-    end_root: HashKey,
-    end_key: Option<Box<[u8]>>,
-    proposal: Option<crate::ProposalHandle<'db>>,
-}
+impl ProposedChangeProofContext<'_> {
+    /// Commit a previously proposed change proof. Consumes the proposal handle.
+    fn commit(&mut self) -> Result<Option<ApiHashKey>, api::Error> {
+        // Pessimistically set state to Failed; success paths below restore it.
+        let state = std::mem::replace(&mut self.proposal_state, ProposalState::Failed);
+        match state {
+            ProposalState::Committed(hash) => {
+                self.proposal_state = ProposalState::Committed(hash.clone());
+                Ok(hash)
+            }
+            ProposalState::Proposed(handle) => match handle.commit_proposal() {
+                Ok(hash) => {
+                    firewood_increment!(crate::registry::MERGE_COUNT, 1, "change" => "commit");
+                    self.proposal_state = ProposalState::Committed(hash.clone());
+                    Ok(hash)
+                }
+                Err(err) => Err(err),
+            },
+            ProposalState::Failed => Err(api::Error::CommitAlreadyFailed),
+        }
+    }
 
-impl<'db> ProposedChangeProofContext<'db> {
+    /// Returns the next key range that should be fetched after processing this
+    /// change proof, or `None` if there are no more keys to fetch.
+    ///
+    /// This function only inspects the proof structure to determine whether
+    /// more keys exist in the keyspace. It does **not** verify sync completion
+    /// — callers must compare root hashes themselves to decide when the
+    /// accumulated state matches the target revision.
     fn find_next_key(&mut self) -> Result<Option<KeyRange>, api::Error> {
         let Some(last_op) = self.proof.batch_ops().last() else {
-            // no BatchOps in the proof, so we are done
+            // No batch_ops means the proof contains no changes in this range.
+            // There is nothing more to fetch — the caller should check root
+            // hashes to determine whether sync is complete.
             return Ok(None);
         };
 
         if self.proof.end_proof().is_empty() {
-            // unbounded, so we are done
+            // An empty end_proof signals the end of the keyspace — there
+            // are no more keys beyond the last batch operation. The caller
+            // should compare root hashes to confirm sync completion.
             return Ok(None);
         }
 
-        if let Some(ref end_key) = self.end_key
+        // Range-bounded completion: the last batch operation has reached or
+        // exceeded the receiver-controlled end_key, so the requested range
+        // is fully covered.
+        if let Some(ref end_key) = self.verification.end_key
             && **last_op.key() >= **end_key
         {
-            // reached or exceeded the end key, so we are done
             return Ok(None);
         }
 
-        Ok(Some((last_op.key().clone(), self.end_key.clone())))
+        // More keys may exist beyond last_op within the requested range.
+        // Return the continuation range for the caller to fetch next.
+        Ok(Some((
+            last_op.key().clone(),
+            self.verification.end_key.clone(),
+        )))
     }
-
-    /// Consumes proposal handle after being called once.
-    fn commit(&'db mut self) -> Result<Option<HashKey>, api::Error> {
-        let Some(proposal_handle) = self.proposal.take() else {
-            return Err(api::Error::ProofError(ProofError::ProposalIsNone));
-        };
-
-        let result = proposal_handle.commit_proposal();
-        let hash = result?.map(Into::into);
-        firewood_increment!(crate::registry::MERGE_COUNT, 1, "change" => "commit");
-        Ok(hash)
-    }
-}
-
-/// FFI parameters for verifying a change proof
-#[derive(Debug)]
-struct VerificationParams {
-    start_root: HashKey,
-    end_root: HashKey,
-    start_key: Option<Box<[u8]>>,
-    end_key: Option<Box<[u8]>>,
-    max_length: Option<NonZeroUsize>,
 }
 
 /// A key range that should be fetched to continue iterating through a range
@@ -400,18 +383,24 @@ pub extern "C" fn fwd_db_change_proof(
     })
 }
 
-/// Verify a change proof and return a `VerifiedChangeProofResult`.
+/// Verify a change proof and prepare a proposal to later commit or drop.
+///
+/// On success, the proof is consumed and a [`ProposedChangeProofContext`] is
+/// returned. On failure, the original [`ChangeProofContext`] is returned to
+/// the caller so it can be retried or freed.
 ///
 /// # Arguments
 ///
-/// - `args` - The arguments for verifying the change proof.
+/// - `db` - The database to verify the proof against.
+/// - `args` - The arguments for verifying and proposing the change proof.
 ///
 /// # Returns
 ///
-/// - [`VerifiedChangeProofResult::NullHandlePointer`] if the caller provided a null pointer to the
-///   proof.
-/// - [`VerifiedChangeProofResult::Ok`] if the proof was successfully verified.
-/// - [`VerifiedChangeProofResult::Err`] containing an error message if the proof could not be verified
+/// - [`ProposedChangeProofResult::NullHandlePointer`] if the caller provided a null pointer
+///   to either the database or the proof.
+/// - [`ProposedChangeProofResult::Ok`] containing the proposed context on success.
+/// - [`ProposedChangeProofResult::VerificationFailed`] containing the original proof and
+///   error message on verification failure.
 ///
 /// # Thread Safety
 ///
@@ -420,34 +409,41 @@ pub extern "C" fn fwd_db_change_proof(
 /// concurrently. The caller must ensure exclusive access to the proof context
 /// for the duration of the call.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_verify_change_proof(
+pub extern "C" fn fwd_db_verify_and_propose_change_proof<'db>(
+    db: Option<&'db DatabaseHandle>,
     args: VerifyChangeProofArgs,
-) -> VerifiedChangeProofResult {
-    crate::invoke_with_handle(args.proof, |ctx| {
-        let context = VerificationParams {
-            start_root: args.start_root,
-            end_root: args.end_root,
-            start_key: args.start_key.into_option().as_deref().map(Box::from),
-            end_key: args.end_key.into_option().as_deref().map(Box::from),
-            max_length: NonZeroUsize::new(args.max_length as usize),
-        };
-        ctx.verify(context)
+) -> ProposedChangeProofResult<'db> {
+    let start_key = args.start_key.into_option();
+    let end_key = args.end_key.into_option();
+    let handle = db.and_then(|db| args.proof.map(|p| (db, p)));
+    crate::invoke_with_handle(handle, |(db, ctx)| {
+        ctx.verify_and_propose(
+            db,
+            args.start_root.into(),
+            args.end_root.into(),
+            start_key.as_deref(),
+            end_key.as_deref(),
+            NonZeroUsize::new(args.max_length as usize),
+        )
     })
 }
 
-/// Create a proposal from a change proof and return a `ProposedChangeProofResult`.
+/// Verify and commit a change proof to the database.
+///
+/// The proof is consumed regardless of success or failure.
 ///
 /// # Arguments
 ///
-/// - `db` - The database to create the proposal.
-/// - `args` - The arguments for verifying the change proof.
+/// - `db` - The database to commit the changes to.
+/// - `args` - The arguments for verifying and committing the change proof.
 ///
 /// # Returns
 ///
-/// - [`ProposedChangeProofResult::NullHandlePointer`] if the caller provided a null pointer to either
+/// - [`HashResult::NullHandlePointer`] if the caller provided a null pointer to either
 ///   the database or the proof.
-/// - [`ProposedChangeProofResult::Ok`] if a proposal was successfully created.
-/// - [`ProposedChangeProofResult::Err`] containing an error message if the proposal could not be created.
+/// - [`HashResult::None`] if the proof resulted in an empty database (i.e., all keys were deleted).
+/// - [`HashResult::Some`] containing the new root hash if the proof was successfully verified
+/// - [`HashResult::Err`] containing an error message if the proof could not be verified or committed.
 ///
 /// # Thread Safety
 ///
@@ -456,19 +452,31 @@ pub extern "C" fn fwd_verify_change_proof(
 /// concurrently. The caller must ensure exclusive access to the proof context
 /// for the duration of the call.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_db_propose_change_proof<'db>(
-    db: Option<&'db DatabaseHandle>,
-    args: ProposedChangeProofArgs<'db>,
-) -> ProposedChangeProofResult<'db> {
+pub extern "C" fn fwd_db_verify_and_commit_change_proof(
+    db: Option<&DatabaseHandle>,
+    args: VerifyChangeProofArgs,
+) -> HashResult {
+    let start_key = args.start_key.into_option();
+    let end_key = args.end_key.into_option();
     let handle = db.and_then(|db| args.proof.map(|p| (db, p)));
-    crate::invoke_with_handle(handle, |(db, ctx)| ctx.propose(db))
+    crate::invoke_with_handle(handle, |(db, ctx)| {
+        ctx.verify_and_commit(
+            db,
+            args.start_root.into(),
+            args.end_root.into(),
+            start_key.as_deref(),
+            end_key.as_deref(),
+            NonZeroUsize::new(args.max_length as usize),
+        )
+    })
 }
 
 /// Commit a change proof to the database.
 ///
 /// # Arguments
 ///
-/// - `args` - The arguments for verifying the change proof, which is just a `ProposedChangeProofContext`.
+/// - `args` - The arguments for committing the change proof, which is just a
+///   `ProposedChangeProofContext`.
 ///
 /// # Returns
 ///
@@ -484,10 +492,8 @@ pub extern "C" fn fwd_db_propose_change_proof<'db>(
 /// concurrently. The caller must ensure exclusive access to the proof context
 /// for the duration of the call.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_db_commit_change_proof(args: CommittedChangeProofArgs<'_>) -> HashResult {
-    crate::invoke_with_handle(args.proof, |ctx| {
-        ctx.commit().map(|hash_key| hash_key.map(Into::into))
-    })
+pub extern "C" fn fwd_db_commit_change_proof(args: CommittedChangeProofArgs<'_, '_>) -> HashResult {
+    crate::invoke_with_handle(args.proof, ProposedChangeProofContext::commit)
 }
 
 /// Returns the next key range that should be fetched after processing the
@@ -495,15 +501,11 @@ pub extern "C" fn fwd_db_commit_change_proof(args: CommittedChangeProofArgs<'_>)
 ///
 /// # Arguments
 ///
-/// - `proof` - A [`ChangeProofContext`] previously returned from the create
-///   methods and has been prepared into a proposal or already committed.
+/// - `proof` - A [`ProposedChangeProofContext`] that has been verified and proposed.
 ///
 /// # Returns
 ///
 /// - [`NextKeyRangeResult::NullHandlePointer`] if the caller provided a null pointer.
-/// - [`NextKeyRangeResult::NotPrepared`] if the proof has not been prepared into
-///   a proposal nor committed to the database. Should not be possible for a change
-///   proof due to its different interface compared to range proofs.
 /// - [`NextKeyRangeResult::None`] if there are no more keys to fetch.
 /// - [`NextKeyRangeResult::Some`] containing the next key range to fetch.
 /// - [`NextKeyRangeResult::Err`] containing an error message if the next key range
@@ -522,53 +524,54 @@ pub extern "C" fn fwd_change_proof_find_next_key_proposed(
     crate::invoke_with_handle(proof, ProposedChangeProofContext::find_next_key)
 }
 
-/// Serialize a `FrozenChangeProof` to bytes, returning an error if the proof
-/// has been consumed (e.g., by verification or proposing).
-fn serialize_change_proof(
-    proof: Option<&FrozenChangeProof>,
-) -> Result<Option<Box<[u8]>>, api::Error> {
-    let proof = proof.ok_or(api::Error::ProofError(ProofError::ProofIsNone))?;
-    let mut vec = Vec::new();
-    proof.write_to_vec(&mut vec);
-    Ok(Some(vec.into_boxed_slice()))
-}
-
 /// Serialize a `ChangeProof` to bytes.
 ///
 /// # Arguments
 ///
 /// - `proof` - A [`ChangeProofContext`] previously returned from the create
-///   method. If the proof has been consumed by verification, this will return
-///   an error.
+///   method. If from a parsed proof, the proof will not be verified before
+///   serialization.
 ///
 /// # Returns
 ///
 /// - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
 /// - [`ValueResult::Some`] containing the serialized bytes if successful.
-/// - [`ValueResult::Err`] if the proof has been consumed by verification.
+/// - [`ValueResult::Err`] containing an error message if the `ChangeProof`
+///   cannot be serialized.
+///
+/// The other [`ValueResult`] variants are not used.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_change_proof_to_bytes(proof: Option<&ChangeProofContext>) -> ValueResult {
-    crate::invoke_with_handle(proof, |ctx| serialize_change_proof(ctx.proof.as_ref()))
+    crate::invoke_with_handle(proof, |ctx| serialize_proof(&ctx.proof))
 }
 
-/// Serialize a `VerifiedChangeProof` to bytes.
+/// Serialize a proposed `ChangeProof` to bytes.
 ///
 /// # Arguments
 ///
-/// - `proof` - A [`VerifiedChangeProofContext`] previously returned from
-///   verification. If the proof has been consumed by proposing, this will
-///   return an error.
+/// - `proof` - A [`ProposedChangeProofContext`] previously returned from the
+///   verify and propose method.
 ///
 /// # Returns
 ///
 /// - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
 /// - [`ValueResult::Some`] containing the serialized bytes if successful.
-/// - [`ValueResult::Err`] if the proof has been consumed by proposing.
+/// - [`ValueResult::Err`] containing an error message if the proposed `ChangeProof`
+///   cannot be serialized.
+///
+/// The other [`ValueResult`] variants are not used.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_verified_change_proof_to_bytes(
-    proof: Option<&VerifiedChangeProofContext>,
+pub extern "C" fn fwd_proposed_change_proof_to_bytes(
+    proof: Option<&ProposedChangeProofContext>,
 ) -> ValueResult {
-    crate::invoke_with_handle(proof, |ctx| serialize_change_proof(ctx.proof.as_ref()))
+    crate::invoke_with_handle(proof, |ctx| serialize_proof(&ctx.proof))
+}
+
+/// Serialize a [`FrozenChangeProof`] into a byte vector.
+fn serialize_proof(proof: &FrozenChangeProof) -> Vec<u8> {
+    let mut vec = Vec::new();
+    proof.write_to_vec(&mut vec);
+    vec
 }
 
 /// Deserialize a `ChangeProof` from bytes.
@@ -607,28 +610,12 @@ pub extern "C" fn fwd_free_change_proof(proof: Option<Box<ChangeProofContext>>) 
     crate::invoke_with_handle(proof, drop)
 }
 
-/// Frees the memory associated with a `VerifiedChangeProofContext`.
-///
-/// # Arguments
-///
-/// * `proof` - The `VerifiedChangeProofContext` to free, previously returned from any Rust function.
-///
-/// # Returns
-///
-/// - [`VoidResult::Ok`] if the memory was successfully freed.
-/// - [`VoidResult::Err`] if the process panics while freeing the memory.
-#[unsafe(no_mangle)]
-pub extern "C" fn fwd_free_verified_change_proof(
-    proof: Option<Box<VerifiedChangeProofContext>>,
-) -> VoidResult {
-    crate::invoke_with_handle(proof, drop)
-}
-
 /// Frees the memory associated with a `ProposedChangeProofContext`.
 ///
 /// # Arguments
 ///
-/// * `proof` - The `ProposedChangeProofContext` to free, previously returned from any Rust function.
+/// * `proof` - The `ProposedChangeProofContext` to free, previously returned
+///   from the verify and propose function.
 ///
 /// # Returns
 ///
@@ -647,32 +634,380 @@ impl crate::MetricsContextExt for ChangeProofContext {
     }
 }
 
-impl crate::MetricsContextExt for VerifiedChangeProofContext {
-    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
-        None
-    }
-}
-
 impl crate::MetricsContextExt for ProposedChangeProofContext<'_> {
     fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
         None
     }
 }
 
-impl crate::MetricsContextExt for (&DatabaseHandle, &mut ChangeProofContext) {
-    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
-        self.0.metrics_context()
-    }
-}
-
-impl crate::MetricsContextExt for (&DatabaseHandle, &mut VerifiedChangeProofContext) {
-    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
-        self.0.metrics_context()
-    }
-}
-
 impl crate::MetricsContextExt for CodeIteratorHandle<'_> {
     fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
         None
+    }
+}
+
+impl crate::MetricsContextExt for (&DatabaseHandle, Box<ChangeProofContext>) {
+    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
+        self.0.metrics_context()
+    }
+}
+
+// Verification logic tests have been moved to firewood/src/merkle/tests/change.rs.
+// Only FFI lifecycle tests (find_next_key, commit state machine) remain here.
+#[cfg(test)]
+mod tests {
+    use firewood::{
+        Key, Value,
+        api::{BatchOp, Proposal as _},
+    };
+
+    use crate::{BorrowedBytes, CView, DatabaseHandle, DatabaseHandleArgs, NodeHashAlgorithm};
+
+    use super::ChangeProofContext;
+
+    fn put(key: &[u8], val: &[u8]) -> BatchOp<Key, Value> {
+        BatchOp::Put {
+            key: key.to_vec().into_boxed_slice(),
+            value: val.to_vec().into_boxed_slice(),
+        }
+    }
+
+    fn test_db(dir: &std::path::Path) -> DatabaseHandle {
+        let dir_str = dir.to_str().expect("tempdir path should be valid UTF-8");
+        let args = DatabaseHandleArgs {
+            dir: BorrowedBytes::from_slice(dir_str.as_bytes()),
+            root_store: true,
+            node_cache_memory_limit: 0,
+            free_list_cache_size: 1024,
+            revisions: 100,
+            strategy: 0,
+            truncate: true,
+            expensive_metrics: false,
+            node_hash_algorithm: if cfg!(feature = "ethhash") {
+                NodeHashAlgorithm::Ethereum
+            } else {
+                NodeHashAlgorithm::MerkleDB
+            },
+            deferred_persistence_commit_count: 1,
+        };
+        DatabaseHandle::new(args).expect("failed to create test database")
+    }
+
+    /// A truncated unbounded proof (`max_length=1` with 3 changes) must
+    /// return a continuation from `find_next_key`, not `None`.
+    #[test]
+    fn test_truncated_unbounded_proof_returns_continuation() {
+        use std::num::NonZeroUsize;
+
+        let dir_prover = tempfile::tempdir().expect("tempdir");
+        let dir_verifier = tempfile::tempdir().expect("tempdir");
+        let db_prover = test_db(dir_prover.path());
+        let db_verifier = test_db(dir_verifier.path());
+
+        // Both databases start with identical state.
+        let initial = vec![
+            put(b"\x10", b"v0"),
+            put(b"\x20", b"v1"),
+            put(b"\x30", b"v2"),
+        ];
+        let p = (&db_prover)
+            .create_proposal(initial.clone())
+            .expect("proposal");
+        p.commit().expect("commit");
+        let root1_prover = db_prover.current_root_hash().expect("root");
+
+        let p = (&db_verifier).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_verifier = db_verifier.current_root_hash().expect("root");
+        assert_eq!(root1_prover, root1_verifier);
+
+        // Prover advances: change all three values.
+        let changes = vec![
+            put(b"\x10", b"changed0"),
+            put(b"\x20", b"changed1"),
+            put(b"\x30", b"changed2"),
+        ];
+        let p = (&db_prover).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_prover.current_root_hash().expect("root");
+
+        // Prover generates an unbounded proof truncated to 1 op (of 3 total).
+        // Only Put(\x10, changed0) is included; \x20 and \x30 are not.
+        let proof = db_prover
+            .change_proof(
+                root1_prover,
+                root2.clone(),
+                None,
+                None,
+                NonZeroUsize::new(1),
+            )
+            .expect("truncated change proof");
+
+        // Verifier checks the proof (still at root1_verifier).
+        let change_ctx = ChangeProofContext::from(proof);
+        let mut proposed = change_ctx
+            .verify_and_propose(&db_verifier, root1_verifier, root2, None, None, None)
+            .expect("verify_and_propose should succeed");
+
+        // The proof only covered 1 of 3 changes, so find_next_key must
+        // return Some — indicating more rounds are needed.
+        let next = proposed
+            .find_next_key()
+            .expect("find_next_key should not error");
+        assert!(
+            next.is_some(),
+            "truncated proof presented as unbounded must indicate more data needed"
+        );
+    }
+
+    /// A bounded proof that covers the full range (`last_op >= end_key`)
+    /// must return `None` from `find_next_key`, and the committed root
+    /// hash must match the target.
+    #[test]
+    fn test_find_next_key_bounded_complete() {
+        let dir_prover = tempfile::tempdir().expect("tempdir");
+        let dir_verifier = tempfile::tempdir().expect("tempdir");
+        let db_prover = test_db(dir_prover.path());
+        let db_verifier = test_db(dir_verifier.path());
+
+        // Both databases start with identical state.
+        let initial = vec![put(b"\x10", b"v0"), put(b"\x20", b"v1")];
+        let p = (&db_prover)
+            .create_proposal(initial.clone())
+            .expect("proposal");
+        p.commit().expect("commit");
+        let root1_prover = db_prover.current_root_hash().expect("root");
+
+        let p = (&db_verifier).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_verifier = db_verifier.current_root_hash().expect("root");
+
+        // Prover advances: change both values.
+        let changes = vec![put(b"\x10", b"changed0"), put(b"\x20", b"changed1")];
+        let p = (&db_prover).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_prover.current_root_hash().expect("root");
+
+        // Bounded proof with end_key=\x20. Both changes are within range,
+        // so the proof is complete (not truncated).
+        let proof = db_prover
+            .change_proof(
+                root1_prover,
+                root2.clone(),
+                None,
+                Some(b"\x20".as_ref()),
+                None,
+            )
+            .expect("change proof");
+
+        // Verifier checks the proof.
+        let change_ctx = ChangeProofContext::from(proof);
+        let mut proposed = change_ctx
+            .verify_and_propose(
+                &db_verifier,
+                root1_verifier,
+                root2.clone(),
+                None,
+                Some(b"\x20".as_ref()),
+                None,
+            )
+            .expect("verify_and_propose should succeed");
+
+        // last_op key \x20 >= end_key \x20, so range is fully covered.
+        let next = proposed
+            .find_next_key()
+            .expect("find_next_key should not error");
+        assert_eq!(next, None, "single-round proof should be complete");
+
+        // Verify the committed root hash matches the target root.
+        let committed_root = proposed.commit().expect("commit").expect("root hash");
+        assert_eq!(
+            committed_root, root2,
+            "root hashes should match after complete proof"
+        );
+    }
+
+    #[test]
+    fn test_double_commit_returns_cached_hash() {
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let initial = vec![put(b"\x10", b"v0"), put(b"\x20", b"v1")];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+
+        let changes = vec![put(b"\x10", b"changed")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        let proof = db_a
+            .change_proof(root1_a, root2.clone(), None, None, None)
+            .expect("change proof");
+
+        let change_ctx = ChangeProofContext::from(proof);
+        let mut proposed = change_ctx
+            .verify_and_propose(&db_b, root1_b, root2, None, None, None)
+            .expect("verify_and_propose");
+
+        let hash1 = proposed.commit().expect("first commit");
+        let hash2 = proposed.commit().expect("second commit");
+        assert_eq!(hash1, hash2, "double commit should return cached hash");
+    }
+
+    #[test]
+    fn test_commit_after_failed_commit_returns_error() {
+        use firewood::api::Proposal as _;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let initial = vec![put(b"\x10", b"v0"), put(b"\x20", b"v1")];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+
+        let changes = vec![put(b"\x10", b"changed")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        let proof = db_a
+            .change_proof(root1_a, root2.clone(), None, None, None)
+            .expect("change proof");
+
+        let change_ctx = ChangeProofContext::from(proof);
+        let mut proposed = change_ctx
+            .verify_and_propose(&db_b, root1_b, root2, None, None, None)
+            .expect("verify_and_propose");
+
+        // Advance db_b with a sibling proposal, making ours stale
+        let sibling = (&db_b)
+            .create_proposal(vec![put(b"\x20", b"sibling")])
+            .expect("sibling proposal");
+        sibling.commit().expect("sibling commit");
+
+        let err1 = proposed.commit().expect_err("first commit should fail");
+        assert!(
+            matches!(
+                err1,
+                firewood::api::Error::SiblingCommitted
+                    | firewood::api::Error::ParentNotLatest { .. }
+            ),
+            "expected SiblingCommitted or ParentNotLatest, got: {err1}"
+        );
+
+        let err2 = proposed.commit().expect_err("second commit should fail");
+        assert!(
+            matches!(err2, firewood::api::Error::CommitAlreadyFailed),
+            "expected CommitAlreadyFailed, got: {err2}"
+        );
+    }
+
+    #[test]
+    fn test_iterative_sync_converges() {
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let mut initial = Vec::new();
+        for i in 0..100u32 {
+            let key = format!("key{i:03}");
+            let val = format!("val{i:03}");
+            initial.push(put(key.as_bytes(), val.as_bytes()));
+        }
+
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let mut root_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root_b);
+
+        let mut changes = Vec::new();
+        for i in 0..50u32 {
+            let key = format!("key{i:03}");
+            let val = format!("changed{i:03}");
+            changes.push(put(key.as_bytes(), val.as_bytes()));
+        }
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        let mut start_key: Option<Vec<u8>> = None;
+        let max_rounds = 20;
+
+        for round in 0..max_rounds {
+            let proof = db_a
+                .change_proof(
+                    root1_a.clone(),
+                    root2.clone(),
+                    start_key.as_deref(),
+                    None,
+                    std::num::NonZeroUsize::new(10),
+                )
+                .expect("proof");
+
+            let ctx = ChangeProofContext::from(proof);
+            let mut proposed = ctx
+                .verify_and_propose(
+                    &db_b,
+                    root_b.clone(),
+                    root2.clone(),
+                    start_key.as_deref(),
+                    None,
+                    std::num::NonZeroUsize::new(10),
+                )
+                .unwrap_or_else(|e| panic!("round {round}: verify failed: {:?}", e.1));
+
+            root_b = proposed
+                .commit()
+                .unwrap_or_else(|e| panic!("round {round}: commit failed: {e:?}"))
+                .expect("commit should return a root hash");
+
+            // Sync is complete when root hashes match.
+            if root_b == root2 {
+                break;
+            }
+
+            // Not done — find next key range to continue syncing.
+            let next = proposed
+                .find_next_key()
+                .unwrap_or_else(|e| panic!("round {round}: find_next_key failed: {e:?}"));
+
+            start_key = Some(match next {
+                Some((next_start, _)) => next_start.to_vec(),
+                None => panic!(
+                    "find_next_key returned None but root hashes don't match — \
+                     expected root {root2:?}, got {root_b:?}"
+                ),
+            });
+
+            assert!(
+                round < max_rounds - 1,
+                "sync did not converge after {max_rounds} rounds"
+            );
+        }
+
+        assert_eq!(
+            root_b, root2,
+            "after iterative sync, root hashes should match"
+        );
     }
 }
