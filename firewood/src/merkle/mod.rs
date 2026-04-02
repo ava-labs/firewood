@@ -24,9 +24,8 @@ use firewood_storage::MemStore;
 use firewood_storage::{
     BranchNode, Child, Children, FileIoError, HashType, HashableShunt, HashedNodeReader,
     ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, Mutable, MutableKind,
-    NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, PathComponentSliceExt,
-    PathIterItem, Propose, ReadableStorage, SharedNode, TrieHash, TriePathFromPackedBytes,
-    TrieReader, U4, ValueDigest,
+    NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, PathIterItem, Propose,
+    ReadableStorage, SharedNode, TrieHash, TriePathFromPackedBytes, TrieReader, U4, ValueDigest,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -958,22 +957,13 @@ impl<T: TrieReader> Merkle<T> {
             return Err(ProofError::Empty);
         };
 
+        // PathIterator yields every node on the path from root toward
+        // `key`, including divergent children whose partial_path doesn't
+        // match (they prove the key's absence in exclusion proofs).
         let path_iter = self.path_iter(key)?;
         let mut proof = Vec::new();
-
-        // Track the last PathIterItem's raw node and next_nibble so we can
-        // detect and handle the divergent-child exclusion case after the
-        // loop. When PathIterator descends into a child whose partial_path
-        // diverges from the key, it yields the parent (with next_nibble set)
-        // then stops — the divergent child is loaded but never yielded.
-        let mut last_node: Option<SharedNode> = None;
-        let mut last_next_nibble: Option<PathComponent> = None;
-
-        for item in path_iter {
-            let item = item?;
-            last_next_nibble = item.next_nibble;
-            last_node = Some(item.node.clone());
-            proof.push(ProofNode::from(item));
+        for node in path_iter {
+            proof.push(ProofNode::from(node?));
         }
 
         if proof.is_empty() {
@@ -987,10 +977,7 @@ impl<T: TrieReader> Merkle<T> {
             };
 
             proof.push(ProofNode {
-                // key is expected to be in nibbles
                 key: root.partial_path().as_components().into(),
-                // partial len is the number of nibbles in the path leading to this node,
-                // which is always zero for the root node.
                 partial_len: 0,
                 value_digest: root
                     .value()
@@ -999,96 +986,7 @@ impl<T: TrieReader> Merkle<T> {
             });
         }
 
-        // Append the divergent child for exclusion proofs.
-        //
-        // When the last PathIterItem had next_nibble = Some(bn), the iterator
-        // descended into the child at bn but the child's partial_path
-        // diverged from the key, so the iterator stopped without yielding
-        // the child. AvalancheGo includes this child in the proof to
-        // demonstrate the key's absence — the child occupies the position
-        // where the key would be, proving it cannot exist there.
-        //
-        // Without this child, the verifier cannot distinguish "child exists
-        // but diverges" from "no child at this index". This distinction is
-        // critical for change proof verification: the divergent child becomes
-        // the terminal proof node, and its children are all verified as
-        // in-range, closing the boundary child gap.
-        //
-        // Detection: last_next_nibble is Some (iterator descended into a
-        // child) AND the last proof node's key doesn't match the proven key
-        // (exclusion — the child wasn't yielded as a proof node).
-        let key_nibbles: Vec<u8> = NibblesIterator::new(key).collect();
-        if let (Some(bn), Some(parent_node)) = (last_next_nibble, &last_node) {
-            // Compare the last proof node's key (as raw nibble bytes)
-            // against the proven key's nibbles to detect exclusion.
-            let is_exclusion = proof
-                .last()
-                .is_some_and(|last| last.key.as_byte_slice() != key_nibbles.as_slice());
-
-            if is_exclusion {
-                self.append_divergent_child(&mut proof, parent_node, bn)?;
-            }
-        }
-
         Ok(Proof::new(proof.into_boxed_slice()))
-    }
-
-    /// Load the divergent child at `child_nibble` from `parent_node` and
-    /// append it to `proof`. Called by [`prove`] for exclusion proofs where
-    /// the child's `partial_path` diverged from the proven key.
-    fn append_divergent_child(
-        &self,
-        proof: &mut Vec<ProofNode>,
-        parent_node: &SharedNode,
-        child_nibble: PathComponent,
-    ) -> Result<(), ProofError> {
-        // The parent must be a branch with a child at child_nibble.
-        // This is guaranteed by the PathIterator: it only sets
-        // next_nibble = Some(bn) when branch.children[bn] exists.
-        let Some(branch) = parent_node.as_branch() else {
-            return Ok(());
-        };
-        let Some(child_ref) = &branch.children[child_nibble] else {
-            return Ok(());
-        };
-
-        // Read the child node from storage.
-        let child = child_ref.as_shared_node(&self.nodestore)?;
-
-        // Build the child's full nibble key:
-        //   parent_proof_node.key + [child_nibble] + child.partial_path
-        // This key will extend past the proven key (it diverged), which
-        // is what makes this a valid exclusion proof — the verifier sees
-        // that a different key occupies this position.
-        let parent_proof_key = &proof.last().ok_or(ProofError::Empty)?.key;
-        let child_partial = child.partial_path();
-
-        let mut child_nibbles: PathBuf = PathBuf::new();
-        child_nibbles.extend_from_slice(parent_proof_key);
-        child_nibbles.push(child_nibble);
-        for &nibble_byte in &child_partial.0 {
-            child_nibbles
-                .push(PathComponent::try_new(nibble_byte).ok_or(ProofError::InvalidProofNodeKey)?);
-        }
-
-        let partial_len = child_nibbles.len().saturating_sub(child_partial.0.len());
-
-        let child_hashes = if let Some(b) = child.as_branch() {
-            b.children_hashes()
-        } else {
-            Children::new()
-        };
-
-        proof.push(ProofNode {
-            key: child_nibbles,
-            partial_len,
-            value_digest: child
-                .value()
-                .map(|value| ValueDigest::Value(value.to_vec().into_boxed_slice())),
-            child_hashes,
-        });
-
-        Ok(())
     }
 
     /// Merges a sequence of key-value pairs with the base merkle trie, yielding

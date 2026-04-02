@@ -382,6 +382,7 @@ impl<'a, 'b, T: TrieReader> PathIterator<'a, 'b, T> {
 impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
     type Item = Result<PathIterItem, FileIoError>;
 
+    #[expect(clippy::too_many_lines, reason = "The divergent-child branch mirrors the Equal branch")]
     fn next(&mut self) -> Option<Self::Item> {
         // destructuring is necessary here because we need mutable access to `state`
         // at the same time as immutable access to `merkle`.
@@ -404,8 +405,22 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
 
                 match comparison {
                     Ordering::Less | Ordering::Greater => {
+                        // The node's partial_path diverged from the key.
+                        // Yield the divergent node so that prove() can
+                        // include it in exclusion proofs — it demonstrates
+                        // that a different key occupies the position where
+                        // the proven key would be. This matches AvalancheGo's
+                        // behavior (getProof appends the divergent child).
+                        matched_key.extend(partial_path.iter());
+                        let node_key = PathBuf::path_from_unpacked_bytes(matched_key)
+                            .expect("valid components");
+                        let node = node.clone();
                         self.state = PathIteratorState::Exhausted;
-                        None
+                        Some(Ok(PathIterItem {
+                            key_nibbles: node_key,
+                            node,
+                            next_nibble: None,
+                        }))
                     }
                     Ordering::Equal => {
                         matched_key.extend(partial_path.iter());

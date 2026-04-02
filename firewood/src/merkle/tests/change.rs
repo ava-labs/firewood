@@ -8,6 +8,7 @@ use crate::merkle::verify_change_proof_root_hash;
 use crate::{
     ChangeProofVerificationContext, change_proof_boundary_key, verify_change_proof_structure,
 };
+use firewood_storage::PathComponentSliceExt;
 
 // ── Test infrastructure ────────────────────────────────────────────────────
 
