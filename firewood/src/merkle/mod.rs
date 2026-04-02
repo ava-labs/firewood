@@ -635,6 +635,15 @@ fn verify_in_range_children(
         let lookup_item = cursor.advance_to(depth);
         verify_proof_node_value(node, lookup_item, start_key)?;
 
+        // Skip child checks for nodes whose byte key is before start_key.
+        // The proposal only needs to match the end trie within [start_key,
+        // end_key]. A proof node before start_key may have children that
+        // exist in the end trie but not in the proposal (e.g., when the
+        // start trie is empty and the proposal only contains in-range keys).
+        if start_key.is_some_and(|sk| &*change_proof_node_byte_key(node) < sk) {
+            continue;
+        }
+
         // Derive the boundary nibble from the proof's own structure: the
         // next node's key at this depth tells us which child the proof
         // navigated to. At the last node, fall back to the range boundary
