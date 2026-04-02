@@ -31,7 +31,7 @@ on GitHub Pages.
 
 ### C-Chain re-execution — fwdctl launch
 
-**When:** a GitHub Actions run surfaced a signal worth investigating — SSH into the instance, install any tooling, change code and rebuild freely.
+**When:** a GitHub Actions run surfaced a signal worth investigating, or when running reexecution tests expected to take longer than 24 hours — SSH into the instance, install any tooling, change code and rebuild freely.
 
 Same workload as GitHub Actions, provisioned on demand on EC2. Full root access
 — install `perf`, flamegraphs, or any tooling, change code and rebuild freely.
