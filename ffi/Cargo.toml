@@ -39,6 +39,7 @@ firewood-replay = { workspace = true, optional = true }
 [dev-dependencies]
 # Workspace dependencies
 test-case.workspace = true
+tempfile.workspace = true
 
 [features]
 logger = ["dep:env_logger", "firewood/logger"]
