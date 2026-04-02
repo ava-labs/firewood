@@ -235,6 +235,19 @@ pub enum ProofError {
     /// Empty end proof when `end_key` is set or `batch_ops` is non-empty.
     #[error("missing end proof: end_key is set or batch_ops is non-empty")]
     MissingEndProof,
+
+    /// Exclusion proof is incomplete: the last proof node is an ancestor of
+    /// the proven key and has a child at the next nibble index. The proof
+    /// must include that child to demonstrate the key's absence — without
+    /// it the verifier cannot distinguish "child exists but diverges" from
+    /// "no child at this index".
+    #[error("exclusion proof missing child at boundary index")]
+    ExclusionProofMissingChild,
+
+    /// A proof node's nibble key contains an invalid value (> 0x0F).
+    /// This indicates corruption in the trie or proof construction.
+    #[error("invalid nibble in proof node key")]
+    InvalidProofNodeKey,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -421,7 +434,31 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
             return Ok(last_node.value_digest());
         }
 
-        // This is an exclusion proof.
+        // Exclusion proof validation.
+        //
+        // If the last node is an ancestor of the key (its key is a strict
+        // prefix of the proven key), check whether a child exists at the
+        // next nibble. If a child exists there, the proof is incomplete —
+        // it must include that child to demonstrate the key's absence.
+        // Without the child, the verifier cannot tell whether the key
+        // exists deeper in the trie.
+        //
+        // When no child exists at the next nibble, the ancestor alone is
+        // sufficient: the absence of a child proves the key cannot exist.
+        //
+        // When the last node's key is NOT an ancestor of the key (it
+        // extends past or diverges from the key), this is the valid
+        // "divergent child" case — the node occupies the position where
+        // the key would be, proving it cannot exist.
+        //
+        // This matches AvalancheGo's verifyProofPath behavior which
+        // returns ErrExclusionProofMissingEndNodes in the ancestor case.
+        if let Some(next_idx) = next_nibble(last_node.full_path(), key.as_components())
+            && last_node.children()[next_idx].is_some()
+        {
+            return Err(ProofError::ExclusionProofMissingChild);
+        }
+
         Ok(None)
     }
 

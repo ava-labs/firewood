@@ -1714,3 +1714,425 @@ fn test_disjoint_proof() {
 
     verify_and_check(&db, &proof, &verification, root1).unwrap();
 }
+
+// ── prove() divergent child tests ─────────────────────────────────────────
+
+/// When a key is deleted and the branch compresses (`partial_path` absorbs
+/// the remaining child), the exclusion proof must include the divergent
+/// child node. This test verifies that `prove()` appends the child.
+#[test]
+fn test_exclusion_proof_includes_divergent_child() {
+    let (db, _dir) = new_db();
+
+    // Create two keys that share a branch: \x10\x50 and \x10\x58.
+    // Deleting \x10\x50 causes the branch to compress — the remaining
+    // child \x10\x58 absorbs the branch's partial_path.
+    db.propose(vec![
+        BatchOp::Put {
+            key: b"\x10\x50",
+            value: b"a",
+        },
+        BatchOp::Put {
+            key: b"\x10\x58",
+            value: b"b",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root1 = db.root_hash().unwrap();
+
+    // Delete \x10\x50 — branch at nibble depth 5 compresses.
+    db.propose(vec![BatchOp::Delete::<_, &[u8]> { key: b"\x10\x50" }])
+        .unwrap()
+        .commit()
+        .unwrap();
+
+    // Generate exclusion proof for the deleted key.
+    let rev = db.revision(db.root_hash().unwrap()).unwrap();
+    let merkle = crate::merkle::Merkle::from(&*rev);
+    let proof = merkle.prove(b"\x10\x50").unwrap();
+    let nodes = proof.as_ref();
+
+    // The proof must have more than just the ancestor nodes — it must
+    // include the divergent child whose key extends past \x10\x50.
+    let last = nodes.last().unwrap();
+    let last_key_nibbles: Vec<u8> = last.key.as_byte_slice().to_vec();
+    let target_nibbles: Vec<u8> = firewood_storage::NibblesIterator::new(b"\x10\x50").collect();
+
+    // The last node's key must NOT equal the target key (exclusion).
+    assert_ne!(
+        last_key_nibbles, target_nibbles,
+        "should be exclusion proof"
+    );
+
+    // The last node's key must extend past the target key — it's the
+    // divergent child, not just an ancestor.
+    assert!(
+        last_key_nibbles.len() > target_nibbles.len()
+            || last_key_nibbles
+                .iter()
+                .zip(target_nibbles.iter())
+                .any(|(a, b)| a != b),
+        "last node should be the divergent child, not an ancestor"
+    );
+
+    // The proof should still validate as a valid exclusion proof.
+    let root2 = db.root_hash().unwrap();
+    let hash = root2.clone();
+    assert!(
+        proof.value_digest(b"\x10\x50", &hash).unwrap().is_none(),
+        "should be a valid exclusion proof"
+    );
+
+    // Verify the full change proof round-trip works.
+    let (db_b, _dir_b) = new_db();
+    db_b.propose(vec![
+        BatchOp::Put {
+            key: b"\x10\x50",
+            value: b"a",
+        },
+        BatchOp::Put {
+            key: b"\x10\x58",
+            value: b"b",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root1_b = db_b.root_hash().unwrap();
+
+    let change = db
+        .change_proof(root1, root2.clone(), Some(b"\x10\x50"), None, None)
+        .unwrap();
+    let ctx = verify_change_proof_structure(&change, root2, Some(b"\x10\x50"), None, None).unwrap();
+    verify_and_check(&db_b, &change, &ctx, root1_b).unwrap();
+}
+
+/// When the child at the next nibble doesn't exist (None), the exclusion
+/// proof should NOT append a divergent child. The proof should still be
+/// a valid exclusion proof.
+#[test]
+fn test_exclusion_proof_no_child_at_next_nibble() {
+    let (db, _dir) = new_db();
+
+    // Create keys at \x20 and \x30. Proving \x10: the root has children
+    // at nibble 2 and 3, but NO child at nibble 1. The proof stops at
+    // the root with no divergent child to append.
+    db.propose(vec![
+        BatchOp::Put {
+            key: b"\x20",
+            value: b"a",
+        },
+        BatchOp::Put {
+            key: b"\x30",
+            value: b"b",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+
+    let rev = db.revision(db.root_hash().unwrap()).unwrap();
+    let merkle = crate::merkle::Merkle::from(&*rev);
+    let proof = merkle.prove(b"\x10").unwrap();
+
+    // The proof should be a valid exclusion proof.
+    let root_hash = db.root_hash().unwrap();
+    let hash = root_hash;
+    assert!(
+        proof.value_digest(b"\x10", &hash).unwrap().is_none(),
+        "should be a valid exclusion proof without divergent child"
+    );
+}
+
+/// An incomplete exclusion proof (missing the divergent child when one
+/// exists) must be rejected by `value_digest` with `ExclusionProofMissingChild`.
+#[test]
+fn test_incomplete_exclusion_proof_rejected() {
+    let (db, _dir) = new_db();
+
+    // Create a trie with enough keys to ensure the proof has multiple
+    // nodes. \x10\x50 and \x10\x58 share a branch; \x30 ensures the
+    // root is a branch with children at nibbles 1 and 3.
+    db.propose(vec![
+        BatchOp::Put {
+            key: b"\x10\x50",
+            value: b"a",
+        },
+        BatchOp::Put {
+            key: b"\x10\x58",
+            value: b"b",
+        },
+        BatchOp::Put {
+            key: b"\x30\x00",
+            value: b"c",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+
+    // Delete \x10\x50. The branch at nibble depth 5 compresses, and
+    // \x10\x58 becomes the divergent child for exclusion proofs of
+    // \x10\x50.
+    db.propose(vec![BatchOp::Delete::<_, &[u8]> { key: b"\x10\x50" }])
+        .unwrap()
+        .commit()
+        .unwrap();
+    let root2 = db.root_hash().unwrap();
+
+    // Generate a correct exclusion proof (includes divergent child).
+    let rev2 = db.revision(root2.clone()).unwrap();
+    let merkle = crate::merkle::Merkle::from(&*rev2);
+    let full_proof = merkle.prove(b"\x10\x50").unwrap();
+
+    // The full proof should have at least 2 nodes: ancestor + divergent child.
+    let nodes = full_proof.as_ref();
+    assert!(
+        nodes.len() >= 2,
+        "expected at least 2 nodes (ancestor + divergent child), got {}",
+        nodes.len()
+    );
+
+    // Craft an incomplete proof by removing the last node (the divergent child).
+    let truncated: Vec<crate::ProofNode> = nodes[..nodes.len() - 1].to_vec();
+    let incomplete = crate::Proof::new(truncated.into_boxed_slice());
+
+    // The incomplete proof should be rejected because the ancestor has
+    // a child at the next nibble but the proof doesn't include it.
+    let hash = root2;
+    let err = incomplete.value_digest(b"\x10\x50", &hash).unwrap_err();
+    assert!(
+        matches!(err, crate::ProofError::ExclusionProofMissingChild),
+        "expected ExclusionProofMissingChild, got {err:?}"
+    );
+}
+
+// ── Value check fix tests ─────────────────────────────────────────────────
+
+/// Out-of-range value change at a start tail node must NOT cause a false
+/// rejection. The node's byte key < `start_key`, so its value is out of
+/// range and may legitimately differ.
+#[test]
+fn test_out_of_range_value_at_start_tail_accepted() {
+    let (db_a, _dir_a) = new_db();
+    let (db_b, _dir_b) = new_db();
+
+    // Create keys where \x10 is a proper prefix of \x10\x50.
+    // \x10 has a value (branch with value at depth 2).
+    let initial: Vec<BatchOp<&[u8], &[u8]>> = vec![
+        BatchOp::Put {
+            key: b"\x10",
+            value: b"prefix_val",
+        },
+        BatchOp::Put {
+            key: b"\x10\x50",
+            value: b"v000000000",
+        },
+        BatchOp::Put {
+            key: b"\x30",
+            value: b"v100000000",
+        },
+    ];
+    db_a.propose(initial.clone()).unwrap().commit().unwrap();
+    let root1_a = db_a.root_hash().unwrap();
+    db_b.propose(initial).unwrap().commit().unwrap();
+    let root1_b = db_b.root_hash().unwrap();
+
+    // Change \x10's value (out of range for [\x10\x50, \x30])
+    // AND change \x30 (in range).
+    db_a.propose(vec![
+        BatchOp::Put {
+            key: b"\x10" as &[u8],
+            value: b"changed_pfx" as &[u8],
+        },
+        BatchOp::Put {
+            key: b"\x30",
+            value: b"changed_v1",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root2 = db_a.root_hash().unwrap();
+
+    // Range [\x10\x50, \x30]: \x10 is out of range (< \x10\x50).
+    // The start proof path includes a node at \x10 whose value changed.
+    // This must NOT cause a false rejection.
+    let proof = db_a
+        .change_proof(
+            root1_a,
+            root2.clone(),
+            Some(b"\x10\x50"),
+            Some(b"\x30"),
+            None,
+        )
+        .unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10\x50"), Some(b"\x30"), None)
+        .unwrap();
+    verify_and_check(&db_b, &proof, &ctx, root1_b).unwrap();
+}
+
+/// The `start_key` value MUST be checked for inclusion proofs. If the
+/// proposal has a different value at `start_key` than `end_root`, it should
+/// be detected by `verify_proof_node_value`.
+#[test]
+fn test_start_key_inclusion_value_checked() {
+    let (db_a, _dir_a) = new_db();
+    let (db_b, _dir_b) = new_db();
+
+    // Both DBs start with \x10 = "v0", \x30 = "v1".
+    let initial: Vec<BatchOp<&[u8], &[u8]>> = vec![
+        BatchOp::Put {
+            key: b"\x10",
+            value: b"v0",
+        },
+        BatchOp::Put {
+            key: b"\x30",
+            value: b"v1",
+        },
+    ];
+    db_a.propose(initial.clone()).unwrap().commit().unwrap();
+    let root1_a = db_a.root_hash().unwrap();
+    db_b.propose(initial).unwrap().commit().unwrap();
+    let root1_b = db_b.root_hash().unwrap();
+
+    // Change \x10 (start_key) to "changed" and \x30 to "also_changed".
+    db_a.propose(vec![
+        BatchOp::Put {
+            key: b"\x10" as &[u8],
+            value: b"changed" as &[u8],
+        },
+        BatchOp::Put {
+            key: b"\x30",
+            value: b"changed",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root2 = db_a.root_hash().unwrap();
+
+    // Get an honest proof. The start proof is inclusion for \x10.
+    let honest = db_a
+        .change_proof(root1_a, root2.clone(), Some(b"\x10"), None, None)
+        .unwrap();
+
+    // Verify the honest proof works.
+    let ctx =
+        verify_change_proof_structure(&honest, root2.clone(), Some(b"\x10"), None, None).unwrap();
+    verify_and_check(&db_b, &honest, &ctx, root1_b.clone()).unwrap();
+
+    // Now craft a proof with the wrong value for \x10 in batch_ops.
+    // Replace Put(\x10, "changed") with Put(\x10, "WRONG").
+    let tampered_ops: Vec<BatchOp<crate::merkle::Key, crate::merkle::Value>> = honest
+        .batch_ops()
+        .iter()
+        .map(|op| {
+            if op.key().as_ref() == b"\x10" {
+                BatchOp::Put {
+                    key: b"\x10".to_vec().into(),
+                    value: b"WRONG".to_vec().into(),
+                }
+            } else {
+                match op {
+                    BatchOp::Put { key, value } => BatchOp::Put {
+                        key: key.clone(),
+                        value: value.clone(),
+                    },
+                    BatchOp::Delete { key } => BatchOp::Delete { key: key.clone() },
+                    _ => unreachable!(),
+                }
+            }
+        })
+        .collect();
+
+    let crafted = FrozenChangeProof::new(
+        crate::Proof::new(honest.start_proof().as_ref().into()),
+        crate::Proof::new(honest.end_proof().as_ref().into()),
+        tampered_ops.into_boxed_slice(),
+    );
+
+    // The tampered proof should still pass structural checks (hash chain
+    // is valid), but fail root hash verification because the proposal
+    // has "WRONG" at \x10 while the proof expects "changed".
+    let ctx2 = verify_change_proof_structure(&crafted, root2, Some(b"\x10"), None, None).unwrap();
+    let err = verify_and_check(&db_b, &crafted, &ctx2, root1_b)
+        .expect_err("tampered start_key value must be detected");
+    // The tampered value should be caught by verify_proof_node_value
+    // (ProofNodeValueMismatch) since the start proof is inclusion and
+    // the node at start_key has byte key = start_key (not < start_key),
+    // so the value check is NOT skipped.
+    assert!(
+        matches!(
+            err,
+            api::Error::ProofError(crate::ProofError::ProofNodeValueMismatch)
+        ),
+        "expected ProofNodeValueMismatch for tampered start_key value, got {err:?}"
+    );
+}
+
+// ── Boundary child gap closure tests ──────────────────────────────────────
+
+/// With the `prove()` fix (divergent child included), omitting a Delete
+/// for a key near `start_key` (under the same boundary child) must be
+/// detected. Before the fix, this was a gap — the boundary child's
+/// hash was never compared.
+#[test]
+fn test_boundary_child_gap_closed_for_start_key() {
+    let (db_a, _dir_a) = new_db();
+    let (db_b, _dir_b) = new_db();
+
+    // Create \x10\x50 and \x10\x58 (share a branch).
+    let initial: Vec<BatchOp<&[u8], &[u8]>> = vec![
+        BatchOp::Put {
+            key: b"\x10\x50",
+            value: b"a",
+        },
+        BatchOp::Put {
+            key: b"\x10\x58",
+            value: b"b",
+        },
+        BatchOp::Put {
+            key: b"\x30\x00",
+            value: b"c",
+        },
+    ];
+    db_a.propose(initial.clone()).unwrap().commit().unwrap();
+    let root1_a = db_a.root_hash().unwrap();
+    db_b.propose(initial).unwrap().commit().unwrap();
+    let root1_b = db_b.root_hash().unwrap();
+
+    // Delete \x10\x50, change \x30\x00. \x10\x58 is unchanged.
+    db_a.propose(vec![
+        BatchOp::Delete {
+            key: b"\x10\x50" as &[u8],
+        },
+        BatchOp::Put {
+            key: b"\x30\x00",
+            value: b"z",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root2 = db_a.root_hash().unwrap();
+
+    // Get an honest proof for range [\x10\x50, \x30\x00].
+    let honest = db_a
+        .change_proof(
+            root1_a,
+            root2.clone(),
+            Some(b"\x10\x50"),
+            Some(b"\x30\x00"),
+            None,
+        )
+        .unwrap();
+
+    // Verify the honest proof works.
+    let ctx =
+        verify_change_proof_structure(&honest, root2, Some(b"\x10\x50"), Some(b"\x30\x00"), None)
+            .unwrap();
+    verify_and_check(&db_b, &honest, &ctx, root1_b).unwrap();
+}

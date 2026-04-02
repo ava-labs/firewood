@@ -24,8 +24,9 @@ use firewood_storage::MemStore;
 use firewood_storage::{
     BranchNode, Child, Children, FileIoError, HashType, HashableShunt, HashedNodeReader,
     ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, Mutable, MutableKind,
-    NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, PathIterItem, Propose,
-    ReadableStorage, SharedNode, TrieHash, TriePathFromPackedBytes, TrieReader, U4, ValueDigest,
+    NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, PathComponentSliceExt,
+    PathIterItem, Propose, ReadableStorage, SharedNode, TrieHash, TriePathFromPackedBytes,
+    TrieReader, U4, ValueDigest,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -635,15 +636,6 @@ fn verify_in_range_children(
         let lookup_item = cursor.advance_to(depth);
         verify_proof_node_value(node, lookup_item, start_key)?;
 
-        // Skip child checks for nodes whose byte key is before start_key.
-        // The proposal only needs to match the end trie within [start_key,
-        // end_key]. A proof node before start_key may have children that
-        // exist in the end trie but not in the proposal (e.g., when the
-        // start trie is empty and the proposal only contains in-range keys).
-        if start_key.is_some_and(|sk| &*change_proof_node_byte_key(node) < sk) {
-            continue;
-        }
-
         // Derive the boundary nibble from the proof's own structure: the
         // next node's key at this depth tells us which child the proof
         // navigated to. At the last node, fall back to the range boundary
@@ -753,12 +745,14 @@ fn verify_change_proof_divergent(
     // then continues into the divergence parent and start tail.
     let mut start_cursor = ProofCursor::new(start_path);
     for node in shared {
-        // None means the proposal compressed through this depth (no
-        // explicit node). verify_proof_node_value allows (None, None)
-        // — if the proof node claims a value exists but the proposal
-        // has none, the mismatch is caught.
-        let item = start_cursor.advance_to(node.key.len());
-        verify_proof_node_value(node, item, start_key)?;
+        // Advance the cursor past shared prefix nodes. Their keys are
+        // proper prefixes of start_key (< start_key, out of range), so
+        // their values are NOT checked — they may legitimately differ
+        // between the proposal and end_root due to out-of-range changes.
+        // The cursor must still advance so that child comparisons at
+        // deeper nodes (divergence parent, tails) find the correct
+        // proposal node.
+        start_cursor.advance_to(node.key.len());
     }
 
     // At the divergence parent: children between the two boundary nibbles
@@ -813,12 +807,15 @@ fn verify_change_proof_divergent(
         // The end tail walks a different branch of the trie from the
         // divergence parent, so it needs its own cursor into the proposal.
         let mut end_cursor = ProofCursor::new(end_path);
+        // Pass None for start_key: end tail node keys are always in
+        // [start_key, end_key], so their values must always be checked.
+        // The start_key skip in verify_proof_node_value must not apply.
         verify_in_range_children(
             end_tail,
             &mut end_cursor,
             end_nibbles.unwrap_or(&[]),
             true,
-            start_key,
+            None,
         )?;
     }
 
@@ -903,13 +900,16 @@ pub fn verify_change_proof_root_hash(
 
     if start_nodes.is_empty() {
         // Case 2a: Only end proof (first sync round, start_key=None).
+        // Pass None: end proof values are always in range and must be
+        // checked. (start_key is already None here since the start proof
+        // is empty, but we pass None explicitly for clarity.)
         let mut cursor = ProofCursor::new(end_path);
         verify_in_range_children(
             end_nodes,
             &mut cursor,
             end_nibbles.as_deref().unwrap_or(&[]),
             true,
-            start_key,
+            None,
         )?;
     } else if end_nodes.is_empty() {
         // Case 2b: Only start proof (last sync round, end of keyspace).
@@ -958,12 +958,22 @@ impl<T: TrieReader> Merkle<T> {
             return Err(ProofError::Empty);
         };
 
-        // Get the path to the key
         let path_iter = self.path_iter(key)?;
         let mut proof = Vec::new();
-        for node in path_iter {
-            let node = node?;
-            proof.push(ProofNode::from(node));
+
+        // Track the last PathIterItem's raw node and next_nibble so we can
+        // detect and handle the divergent-child exclusion case after the
+        // loop. When PathIterator descends into a child whose partial_path
+        // diverges from the key, it yields the parent (with next_nibble set)
+        // then stops — the divergent child is loaded but never yielded.
+        let mut last_node: Option<SharedNode> = None;
+        let mut last_next_nibble: Option<PathComponent> = None;
+
+        for item in path_iter {
+            let item = item?;
+            last_next_nibble = item.next_nibble;
+            last_node = Some(item.node.clone());
+            proof.push(ProofNode::from(item));
         }
 
         if proof.is_empty() {
@@ -989,7 +999,96 @@ impl<T: TrieReader> Merkle<T> {
             });
         }
 
+        // Append the divergent child for exclusion proofs.
+        //
+        // When the last PathIterItem had next_nibble = Some(bn), the iterator
+        // descended into the child at bn but the child's partial_path
+        // diverged from the key, so the iterator stopped without yielding
+        // the child. AvalancheGo includes this child in the proof to
+        // demonstrate the key's absence — the child occupies the position
+        // where the key would be, proving it cannot exist there.
+        //
+        // Without this child, the verifier cannot distinguish "child exists
+        // but diverges" from "no child at this index". This distinction is
+        // critical for change proof verification: the divergent child becomes
+        // the terminal proof node, and its children are all verified as
+        // in-range, closing the boundary child gap.
+        //
+        // Detection: last_next_nibble is Some (iterator descended into a
+        // child) AND the last proof node's key doesn't match the proven key
+        // (exclusion — the child wasn't yielded as a proof node).
+        let key_nibbles: Vec<u8> = NibblesIterator::new(key).collect();
+        if let (Some(bn), Some(parent_node)) = (last_next_nibble, &last_node) {
+            // Compare the last proof node's key (as raw nibble bytes)
+            // against the proven key's nibbles to detect exclusion.
+            let is_exclusion = proof
+                .last()
+                .is_some_and(|last| last.key.as_byte_slice() != key_nibbles.as_slice());
+
+            if is_exclusion {
+                self.append_divergent_child(&mut proof, parent_node, bn)?;
+            }
+        }
+
         Ok(Proof::new(proof.into_boxed_slice()))
+    }
+
+    /// Load the divergent child at `child_nibble` from `parent_node` and
+    /// append it to `proof`. Called by [`prove`] for exclusion proofs where
+    /// the child's `partial_path` diverged from the proven key.
+    fn append_divergent_child(
+        &self,
+        proof: &mut Vec<ProofNode>,
+        parent_node: &SharedNode,
+        child_nibble: PathComponent,
+    ) -> Result<(), ProofError> {
+        // The parent must be a branch with a child at child_nibble.
+        // This is guaranteed by the PathIterator: it only sets
+        // next_nibble = Some(bn) when branch.children[bn] exists.
+        let Some(branch) = parent_node.as_branch() else {
+            return Ok(());
+        };
+        let Some(child_ref) = &branch.children[child_nibble] else {
+            return Ok(());
+        };
+
+        // Read the child node from storage.
+        let child = child_ref.as_shared_node(&self.nodestore)?;
+
+        // Build the child's full nibble key:
+        //   parent_proof_node.key + [child_nibble] + child.partial_path
+        // This key will extend past the proven key (it diverged), which
+        // is what makes this a valid exclusion proof — the verifier sees
+        // that a different key occupies this position.
+        let parent_proof_key = &proof.last().ok_or(ProofError::Empty)?.key;
+        let child_partial = child.partial_path();
+
+        let mut child_nibbles: PathBuf = PathBuf::new();
+        child_nibbles.extend_from_slice(parent_proof_key);
+        child_nibbles.push(child_nibble);
+        for &nibble_byte in &child_partial.0 {
+            child_nibbles
+                .push(PathComponent::try_new(nibble_byte).ok_or(ProofError::InvalidProofNodeKey)?);
+        }
+
+        let partial_len = child_nibbles.len().saturating_sub(child_partial.0.len());
+
+        let child_hashes = if let Some(b) = child.as_branch() {
+            b.children_hashes()
+        } else {
+            Children::new()
+        };
+
+        proof.push(ProofNode {
+            key: child_nibbles,
+            partial_len,
+            value_digest: child
+                .value()
+                .map(|value| ValueDigest::Value(value.to_vec().into_boxed_slice())),
+            child_hashes,
+        });
+
+        Ok(())
     }
 
     /// Merges a sequence of key-value pairs with the base merkle trie, yielding
