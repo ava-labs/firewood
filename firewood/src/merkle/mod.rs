@@ -581,8 +581,7 @@ impl<T: TrieReader> Merkle<T> {
         let proof = self
             .path_iter(key)?
             .map(|node| node.map(ProofNode::from))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_boxed_slice();
+            .collect::<Result<_, _>>()?;
 
         Ok(Proof::new(proof))
     }
