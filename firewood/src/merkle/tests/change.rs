@@ -1101,16 +1101,13 @@ fn test_divergence_at_depth_zero() {
     // The crafted proof has start/end proofs that skip the shared root,
     // so the proving trie reconciliation should detect the inconsistency.
     let err = verify_change_proof_root_hash(&crafted, &verification, &proposal).unwrap_err();
-    // With the restructure approach, the root hash simply won't match
-    // because the crafted proof nodes don't form a valid hash chain.
+    // Reconciliation detects the value conflict when the crafted proof's
+    // non-root node is reconciled against the proposal's existing data.
     assert!(
         matches!(
             err,
             api::Error::ProofError(
-                crate::ProofError::EndRootMismatch
-                    | crate::ProofError::BoundaryProofsDivergeAtRoot
-                    | crate::ProofError::UnexpectedValue
-                    | crate::ProofError::UnexpectedHash,
+                crate::ProofError::UnexpectedValue | crate::ProofError::EndRootMismatch,
             )
         ),
         "crafted proof with skipped root should be rejected, got {err:?}"
@@ -2215,14 +2212,9 @@ fn test_empty_start_trie_bounded_inclusion() {
             None,
         )
         .unwrap();
-    let ctx = verify_change_proof_structure(
-        &proof,
-        root2.clone(),
-        Some(b"\x10"),
-        Some(b"\x30"),
-        None,
-    )
-    .unwrap();
+    let ctx =
+        verify_change_proof_structure(&proof, root2.clone(), Some(b"\x10"), Some(b"\x30"), None)
+            .unwrap();
 
     let (db_b, _dir_b) = new_db();
     db_b.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
@@ -2276,14 +2268,9 @@ fn test_empty_start_trie_bounded_exclusion() {
             None,
         )
         .unwrap();
-    let ctx = verify_change_proof_structure(
-        &proof,
-        root2.clone(),
-        Some(b"\x05"),
-        Some(b"\x30"),
-        None,
-    )
-    .unwrap();
+    let ctx =
+        verify_change_proof_structure(&proof, root2.clone(), Some(b"\x05"), Some(b"\x30"), None)
+            .unwrap();
 
     let (db_b, _dir_b) = new_db();
     db_b.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
@@ -2340,22 +2327,9 @@ fn test_empty_start_trie_large_end_trie_multi_round() {
         let end = window[1];
 
         let proof = db
-            .change_proof(
-                empty_root.clone(),
-                root2.clone(),
-                start,
-                end,
-                None,
-            )
+            .change_proof(empty_root.clone(), root2.clone(), start, end, None)
             .unwrap();
-        let ctx = verify_change_proof_structure(
-            &proof,
-            root2.clone(),
-            start,
-            end,
-            None,
-        )
-        .unwrap();
+        let ctx = verify_change_proof_structure(&proof, root2.clone(), start, end, None).unwrap();
         verify_and_check(&db_b, &proof, &ctx, empty_root_b.clone()).unwrap();
     }
 
@@ -2369,14 +2343,8 @@ fn test_empty_start_trie_large_end_trie_multi_round() {
             None,
         )
         .unwrap();
-    let ctx = verify_change_proof_structure(
-        &proof,
-        root2.clone(),
-        Some(b"\x00\x4b"),
-        None,
-        None,
-    )
-    .unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2.clone(), Some(b"\x00\x4b"), None, None)
+        .unwrap();
     verify_and_check(&db_b, &proof, &ctx, empty_root_b).unwrap();
 }
 
@@ -2508,13 +2476,7 @@ fn test_empty_start_trie_start_only_proof() {
 
     // Start-only proof (end_key = None). Range is [\x10, +inf).
     let proof = db
-        .change_proof(
-            empty_root.clone(),
-            root2.clone(),
-            Some(b"\x10"),
-            None,
-            None,
-        )
+        .change_proof(empty_root.clone(), root2.clone(), Some(b"\x10"), None, None)
         .unwrap();
     let ctx =
         verify_change_proof_structure(&proof, root2.clone(), Some(b"\x10"), None, None).unwrap();
@@ -2522,15 +2484,8 @@ fn test_empty_start_trie_start_only_proof() {
 
     // End-only proof (start_key = None). Range is (-inf, \x20].
     let proof = db
-        .change_proof(
-            empty_root,
-            root2.clone(),
-            None,
-            Some(b"\x20"),
-            None,
-        )
+        .change_proof(empty_root, root2.clone(), None, Some(b"\x20"), None)
         .unwrap();
-    let ctx =
-        verify_change_proof_structure(&proof, root2, None, Some(b"\x20"), None).unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, None, Some(b"\x20"), None).unwrap();
     verify_and_check(&db_b, &proof, &ctx, empty_root_b).unwrap();
 }

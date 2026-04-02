@@ -112,16 +112,6 @@ impl From<FrozenChangeProof> for ChangeProofContext {
     }
 }
 
-/// FFI wrapper for root hash verification. Delegates to the firewood crate's
-/// `verify_change_proof_root_hash` using the restructure approach.
-fn verify_root_hash(
-    proof: &FrozenChangeProof,
-    verification: &VerificationContext,
-    proposal: &crate::ProposalHandle<'_>,
-) -> Result<(), api::Error> {
-    verify_change_proof_root_hash(proof, verification, proposal)
-}
-
 impl ChangeProofContext {
     /// Verify the change proof and prepare a proposal against the given database
     /// without committing it.
@@ -160,10 +150,10 @@ impl ChangeProofContext {
             Err(e) => return Err(Box::new((Self { proof }, e))),
         };
 
-        // Root hash verification: walk boundary proof paths bottom-up,
-        // substituting in-range children from the proposal, and compare
-        // the computed root against end_root.
-        if let Err(e) = verify_root_hash(&proof, &verification, &proposal.handle) {
+        // Root hash verification: build a proving trie from the proposal's
+        // in-range keys, reconcile boundary proof nodes, and compare the
+        // computed hybrid root hash against end_root.
+        if let Err(e) = verify_change_proof_root_hash(&proof, &verification, &proposal.handle) {
             return Err(Box::new((Self { proof }, e)));
         }
 

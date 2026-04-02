@@ -382,7 +382,10 @@ impl<'a, 'b, T: TrieReader> PathIterator<'a, 'b, T> {
 impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
     type Item = Result<PathIterItem, FileIoError>;
 
-    #[expect(clippy::too_many_lines, reason = "The divergent-child branch mirrors the Equal branch")]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "The divergent-child branch mirrors the Equal branch"
+    )]
     fn next(&mut self) -> Option<Self::Item> {
         // destructuring is necessary here because we need mutable access to `state`
         // at the same time as immutable access to `merkle`.

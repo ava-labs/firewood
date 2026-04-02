@@ -428,9 +428,7 @@ fn test_slow_change_proof_fuzz_varlen() {
                     let Some(decreased) = decrease_key_vec(&end_keys[si]) else {
                         continue;
                     };
-                    if decreased >= end_keys[si]
-                        || (si > 0 && decreased == end_keys[si - 1])
-                    {
+                    if decreased >= end_keys[si] || (si > 0 && decreased == end_keys[si - 1]) {
                         continue;
                     }
 

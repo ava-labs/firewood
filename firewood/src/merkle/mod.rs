@@ -317,9 +317,7 @@ fn compute_root_hash_with_proofs(
     }
 
     // For children outside the proven range, use proof node hashes.
-    if let (Some(proof_node), Some(outside)) =
-        (proof_nodes.get(&full_key), outside_mask)
-    {
+    if let (Some(proof_node), Some(outside)) = (proof_nodes.get(&full_key), outside_mask) {
         for (nibble, hash) in proof_node.child_hashes.iter_present() {
             if outside.is_set(nibble.0) {
                 child_hashes[nibble] = Some(hash.clone());
@@ -610,21 +608,18 @@ pub fn verify_change_proof_root_hash<V: api::DbView>(
 
     // Build an in-memory proving trie from the proposal's in-range keys.
     // Out-of-range subtree hashes will come from the proof nodes. This is
-    // the same pattern as range proof's verify_root_hash (line 509).
+    // the same pattern as range proof's `verify_root_hash`.
     let memstore = MemStore::default();
     let nodestore = NodeStore::new_empty_proposal(memstore.into());
-    let mut proving_merkle: Merkle<NodeStore<Mutable<Propose>, MemStore>> =
-        Merkle::from(nodestore);
+    let mut proving_merkle: Merkle<NodeStore<Mutable<Propose>, MemStore>> = Merkle::from(nodestore);
 
     // Insert the proposal's in-range key-value pairs into the proving trie.
     // The effective end boundary is last_op_key when batch_ops is non-empty,
     // or end_key when empty. Keys beyond the effective end are outside the
     // proven range and must NOT be in the proving trie — their presence
     // would create trie structure that conflicts with the proof's hashes.
-    let last_op_key: Option<Box<[u8]>> = proof
-        .batch_ops()
-        .last()
-        .map(|op| op.key().as_ref().into());
+    let last_op_key: Option<Box<[u8]>> =
+        proof.batch_ops().last().map(|op| op.key().as_ref().into());
     let effective_end = last_op_key.as_deref().or(verification.end_key.as_deref());
 
     for item in proposal.iter_option(verification.start_key.as_deref())? {
@@ -635,10 +630,10 @@ pub fn verify_change_proof_root_hash<V: api::DbView>(
         proving_merkle.insert(&key, value)?;
     }
 
-    // Reconcile all boundary proof nodes into the proving trie.
-    // This inserts branch structure matching end_root's layout so that the
-    // hash computation produces the same trie shape. Reuses the range proof's
-    // reconcile_branch_proof_node (line 2028).
+    // Reconcile all boundary proof nodes into the proving trie via
+    // `reconcile_branch_proof_node`. This inserts branch structure matching
+    // `end_root`'s layout so that the hash computation produces the same
+    // trie shape.
     let mut proof_node_map: HashMap<PathBuf, &ProofNode> = HashMap::new();
     for proof_node in start_nodes.iter().chain(end_nodes.iter()) {
         proving_merkle.reconcile_branch_proof_node(proof_node)?;
@@ -654,10 +649,8 @@ pub fn verify_change_proof_root_hash<V: api::DbView>(
         }
     }
 
-    // Compute which children at each boundary node are outside the proven range.
-    // Reuses the range proof's compute_outside_children (line 195).
-    // effective_end was computed above for iteration bounds and reused here.
-
+    // Compute which children at each boundary node are outside the proven
+    // range via `compute_outside_children`.
     let mut outside_children =
         compute_outside_children(start_nodes, verification.start_key.as_deref(), true)?;
     for (key, flags) in compute_outside_children(end_nodes, effective_end, false)? {
@@ -675,21 +668,22 @@ pub fn verify_change_proof_root_hash<V: api::DbView>(
     if last_op_key.is_some()
         && let Some(terminal) = end_nodes.last()
     {
-        let end_nibbles: Vec<u8> = effective_end
-            .map(|ek| NibblesIterator::new(ek).collect())
-            .unwrap_or_default();
-        if terminal.key.iter().map(|c| c.as_u8()).eq(end_nibbles.iter().copied()) {
-            let entry = outside_children
-                .entry(terminal.key.clone())
-                .or_default();
+        let keys_match = effective_end.is_some_and(|ek| {
+            terminal
+                .key
+                .iter()
+                .map(|c| c.as_u8())
+                .eq(NibblesIterator::new(ek))
+        });
+        if keys_match {
+            let entry = outside_children.entry(terminal.key.clone()).or_default();
             *entry = ChildMask::ALL;
         }
     }
 
-    // Compute the hybrid root hash. In-range children are hashed from the
-    // proving trie (built from the proposal's in-range keys). Out-of-range
-    // children use hashes from the proof nodes. Reuses the range proof's
-    // compute_root_hash_with_proofs (line 273).
+    // Compute the hybrid root hash via `compute_root_hash_with_proofs`.
+    // In-range children are hashed from the proving trie. Out-of-range
+    // children use hashes from the proof nodes.
     let Some(root_node) = proving_merkle.root() else {
         // The proving trie is empty — no in-range keys exist. If the proof
         // claims end_root has keys in this range, this is a mismatch.

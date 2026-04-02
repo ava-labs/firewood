@@ -212,25 +212,9 @@ pub enum ProofError {
     #[error("bounded change proof requires at least one boundary proof")]
     MissingBoundaryProof,
 
-    /// A proof node's value doesn't match the proposal at the same depth.
-    #[error("proof node value doesn't match the proposal")]
-    ProofNodeValueMismatch,
-
-    /// Start and end boundary proofs share no common prefix — they
-    /// disagree on the very first node. Since both proofs have already
-    /// passed hash chain verification against the same `end_root`, their
-    /// first nodes must be identical. This is unreachable without a hash
-    /// collision.
-    #[error("boundary proofs diverge at the root node")]
-    BoundaryProofsDivergeAtRoot,
-
     /// Non-empty end proof when no end key is set and no batch operations.
     #[error("unexpected non-empty end proof with no end key and no batch operations")]
     UnexpectedEndProof,
-
-    /// In-range child hash mismatch between proof and proposal.
-    #[error("in-range child hash mismatch")]
-    InRangeChildMismatch,
 
     /// Empty end proof when `end_key` is set or `batch_ops` is non-empty.
     #[error("missing end proof: end_key is set or batch_ops is non-empty")]
