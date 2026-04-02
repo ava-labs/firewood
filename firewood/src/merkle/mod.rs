@@ -9,8 +9,6 @@ pub(crate) mod childmask;
 mod merge;
 /// Parallel merkle
 pub mod parallel;
-// proof_cursor module removed — the restructure approach (reconcile + hash)
-// replaced the cursor-based in-range children comparison.
 
 use crate::api::{
     self, BatchIter, FrozenChangeProof, FrozenProof, FrozenRangeProof, HashKey, KeyType,

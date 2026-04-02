@@ -406,11 +406,22 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                 match comparison {
                     Ordering::Less | Ordering::Greater => {
                         // The node's partial_path diverged from the key.
-                        // Yield the divergent node so that prove() can
-                        // include it in exclusion proofs — it demonstrates
-                        // that a different key occupies the position where
-                        // the proven key would be. This matches AvalancheGo's
-                        // behavior (getProof appends the divergent child).
+                        //
+                        // If we descended into this node from a parent
+                        // (matched_key is non-empty), yield the divergent
+                        // node so that prove() can include it in exclusion
+                        // proofs — it demonstrates that a different key
+                        // occupies the position where the proven key would
+                        // be. This matches AvalancheGo's behavior (getProof
+                        // appends the divergent child).
+                        //
+                        // If this is the root node (matched_key is empty),
+                        // there is no parent-child relationship — the root
+                        // simply doesn't match the key. Return None.
+                        if matched_key.is_empty() {
+                            self.state = PathIteratorState::Exhausted;
+                            return None;
+                        }
                         matched_key.extend(partial_path.iter());
                         let node_key = PathBuf::path_from_unpacked_bytes(matched_key)
                             .expect("valid components");

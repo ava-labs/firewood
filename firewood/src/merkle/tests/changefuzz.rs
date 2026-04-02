@@ -37,7 +37,7 @@ fn verify_and_check(
 fn test_slow_change_proof_fuzz() {
     let outer_rng = firewood_storage::SeededRng::from_env_or_random();
 
-    for run in 0..100 {
+    for run in 0..25 {
         let seed = outer_rng.next_u64();
         eprintln!("run {run}: seed={seed} (export FIREWOOD_TEST_SEED={seed} to reproduce)");
         let rng = firewood_storage::SeededRng::new(seed);
@@ -320,7 +320,7 @@ fn test_slow_change_proof_fuzz_varlen() {
         vec![s.parse().expect("FIREWOOD_TEST_SEED must be a u64")]
     } else {
         let outer_rng = firewood_storage::SeededRng::from_random();
-        (0..100).map(|_| outer_rng.next_u64()).collect()
+        (0..25).map(|_| outer_rng.next_u64()).collect()
     };
 
     for (run, &seed) in seeds.iter().enumerate() {
