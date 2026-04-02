@@ -99,11 +99,16 @@ pub fn expensive_metrics_enabled() -> bool {
 
 /// Increments a counter metric.
 ///
+/// Use for values that only ever increase: commit counts, error counts, byte
+/// totals. Metric names should end in `_total` (e.g. `proposals_created_total`,
+/// `bytes_written_total`). For values that can go up or down use
+/// [`firewood_set!`] instead.
+///
 /// # Usage
 /// ```ignore
-/// firewood_increment!(registry::OP_COUNT, 1);
-/// firewood_increment!(registry::OP_COUNT, 1, "label" => "value");
-/// firewood_increment!(registry::SLOW_OP_COUNT, 1, expensive);
+/// firewood_increment!(registry::PROPOSALS_CREATED_TOTAL, 1);
+/// firewood_increment!(registry::PROPOSALS_CREATED_TOTAL, 1, "status" => "ok");
+/// firewood_increment!(registry::SLOW_PATH_TOTAL, 1, expensive);
 /// ```
 #[macro_export]
 macro_rules! firewood_increment {
@@ -122,9 +127,13 @@ macro_rules! firewood_increment {
 
 /// Returns a counter handle for advanced operations.
 ///
+/// Prefer [`firewood_increment!`] for simple increment-by-N callsites.
+/// Use this when you need to call `.absolute()` or reuse the handle across
+/// multiple operations without a repeated name lookup.
+///
 /// # Usage
 /// ```ignore
-/// let counter = firewood_counter!(registry::OP_COUNT);
+/// let counter = firewood_counter!(registry::PROPOSALS_CREATED_TOTAL);
 /// counter.increment(1);
 /// counter.absolute(100);
 /// ```
@@ -140,11 +149,17 @@ macro_rules! firewood_counter {
 
 /// Sets a gauge metric value.
 ///
+/// Use for values that can go up or down: active revision counts, queue
+/// depths, cache sizes. Metric names should include the unit where applicable
+/// (e.g. `node_cache_bytes`, `active_revisions`). Do not use a `_total`
+/// suffix — that is reserved for counters. For values that only ever increase
+/// use [`firewood_increment!`] instead.
+///
 /// # Usage
 /// ```ignore
 /// firewood_set!(registry::ACTIVE_REVISIONS, count);
-/// firewood_set!(registry::QUEUE_SIZE, size, "queue" => "main");
-/// firewood_set!(registry::DETAILED_STAT, value, expensive);
+/// firewood_set!(registry::NODE_CACHE_BYTES, size, "tier" => "l1");
+/// firewood_set!(registry::PENDING_PROPOSALS, count, expensive);
 /// ```
 #[macro_export]
 macro_rules! firewood_set {
@@ -163,6 +178,10 @@ macro_rules! firewood_set {
 
 /// Returns a gauge handle for advanced operations.
 ///
+/// Prefer [`firewood_set!`] for simple set-value callsites. Use this when
+/// you need `.increment()` / `.decrement()` on a gauge or want to reuse the
+/// handle across multiple operations.
+///
 /// # Usage
 /// ```ignore
 /// let gauge = firewood_gauge!(registry::ACTIVE_REVISIONS);
@@ -177,6 +196,48 @@ macro_rules! firewood_gauge {
     };
     ($name:expr, $($labels:tt)+) => {
         ::metrics::gauge!($name, $($labels)+)
+    };
+}
+
+/// Describes a counter metric with a human-readable description.
+///
+/// `$name` must be a string literal so the metrics key can be cached in a
+/// per-callsite `static`, avoiding an allocation on every call.
+///
+/// # Examples
+///
+/// ```rust
+/// firewood_describe_counter!("proposals_created_total", "Number of proposals created");
+/// firewood_describe_counter!("bytes_written_total", Unit::Bytes, "Total bytes written to disk");
+/// ```
+#[macro_export]
+macro_rules! firewood_describe_counter {
+    ($name:literal, $desc:expr) => {
+        ::metrics::describe_counter!($name, $desc)
+    };
+    ($name:literal, $unit:expr, $desc:expr) => {
+        ::metrics::describe_counter!($name, $unit, $desc)
+    };
+}
+
+/// Describes a gauge metric with a human-readable description.
+///
+/// `$name` must be a string literal so the metrics key can be cached in a
+/// per-callsite `static`, avoiding an allocation on every call.
+///
+/// # Examples
+///
+/// ```rust
+/// firewood_describe_gauge!("active_revisions", "Number of revisions currently held in memory");
+/// firewood_describe_gauge!("node_cache_bytes", Unit::Bytes, "Current node cache size");
+/// ```
+#[macro_export]
+macro_rules! firewood_describe_gauge {
+    ($name:literal, $desc:expr) => {
+        ::metrics::describe_gauge!($name, $desc)
+    };
+    ($name:literal, $unit:expr, $desc:expr) => {
+        ::metrics::describe_gauge!($name, $unit, $desc)
     };
 }
 
