@@ -312,8 +312,9 @@ fn test_reconcile_branch_proof_node_creates_missing_branch_without_value() {
 
     let proof_node = test_branch_proof_node(&[0xa, 0xb, 0xc], None);
 
-    let result = merkle.reconcile_branch_proof_node(&proof_node).unwrap();
-    assert_eq!(result, ReconcileResult::NoValue);
+    merkle
+        .reconcile_branch_proof_node(&proof_node, |_| unreachable!())
+        .unwrap();
 
     let node = merkle
         .get_node_from_nibbles(&[0xa, 0xb, 0xc])
@@ -324,15 +325,20 @@ fn test_reconcile_branch_proof_node_creates_missing_branch_without_value() {
 }
 
 #[test]
-fn test_reconcile_branch_proof_node_sets_missing_value() {
+fn test_reconcile_branch_proof_node_sets_missing_value_via_callback() {
     let mut merkle = create_in_memory_merkle();
     merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
 
     let proof_node =
         test_branch_proof_node(&[0xa, 0xb], Some(ValueDigest::Value(Box::from([7u8]))));
 
-    let result = merkle.reconcile_branch_proof_node(&proof_node).unwrap();
-    assert_eq!(result, ReconcileResult::ValueInserted);
+    // Proof has a value but trie doesn't — callback resolves it.
+    merkle
+        .reconcile_branch_proof_node(&proof_node, |pn| match &pn.value_digest {
+            Some(ValueDigest::Value(v)) => Ok(Some(v.clone())),
+            _ => Ok(None),
+        })
+        .unwrap();
 
     let node = merkle.get_node_from_nibbles(&[0xa, 0xb]).unwrap().unwrap();
     let branch = node.as_branch().expect("expected branch node");
@@ -340,23 +346,25 @@ fn test_reconcile_branch_proof_node_sets_missing_value() {
 }
 
 #[test]
-fn test_reconcile_branch_proof_node_noop_when_proof_has_no_value() {
+fn test_reconcile_branch_proof_node_clears_value_via_callback() {
     let mut merkle = create_in_memory_merkle();
     merkle.insert(&[0xab], Box::from([3u8])).unwrap();
     merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
 
     let proof_node = test_branch_proof_node(&[0xa, 0xb], None);
 
-    let result = merkle.reconcile_branch_proof_node(&proof_node).unwrap();
-    assert_eq!(result, ReconcileResult::NoValue);
+    // Proof says no value, trie has one — callback returns None to clear it.
+    merkle
+        .reconcile_branch_proof_node(&proof_node, |_| Ok(None))
+        .unwrap();
 
     let node = merkle.get_node_from_nibbles(&[0xa, 0xb]).unwrap().unwrap();
     let branch = node.as_branch().expect("expected branch node");
-    assert_eq!(branch.value.as_deref(), Some([3u8].as_slice()));
+    assert!(branch.value.is_none());
 }
 
 #[test]
-fn test_reconcile_branch_proof_node_fails_on_value_mismatch() {
+fn test_reconcile_branch_proof_node_rejects_conflict_via_callback() {
     let mut merkle = create_in_memory_merkle();
     merkle.insert(&[0xab], Box::from([1u8])).unwrap();
     merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
@@ -364,9 +372,13 @@ fn test_reconcile_branch_proof_node_fails_on_value_mismatch() {
     let proof_node =
         test_branch_proof_node(&[0xa, 0xb], Some(ValueDigest::Value(Box::from([2u8]))));
 
-    let err = merkle.reconcile_branch_proof_node(&proof_node).unwrap_err();
+    // Callback rejects the conflict.
+    let err = merkle
+        .reconcile_branch_proof_node(&proof_node, |_| Err(ProofError::UnexpectedValue))
+        .unwrap_err();
     assert!(matches!(err, ProofError::UnexpectedValue));
 
+    // Value is unchanged.
     let node = merkle.get_node_from_nibbles(&[0xa, 0xb]).unwrap().unwrap();
     let branch = node.as_branch().expect("expected branch node");
     assert_eq!(branch.value.as_deref(), Some([1u8].as_slice()));

@@ -153,7 +153,9 @@ impl ChangeProofContext {
         // Root hash verification: build a proving trie from the proposal's
         // in-range keys, reconcile boundary proof nodes, and compare the
         // computed hybrid root hash against end_root.
-        if let Err(e) = verify_change_proof_root_hash(&proof, &verification, &proposal.handle) {
+        if let Err(e) =
+            verify_change_proof_root_hash(&proof, &verification, proposal.handle.proposal())
+        {
             return Err(Box::new((Self { proof }, e)));
         }
 

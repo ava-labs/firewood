@@ -2489,3 +2489,148 @@ fn test_empty_start_trie_start_only_proof() {
     let ctx = verify_change_proof_structure(&proof, root2, None, Some(b"\x20"), None).unwrap();
     verify_and_check(&db_b, &proof, &ctx, empty_root_b).unwrap();
 }
+
+#[test]
+fn test_bounded_range_with_existing_keys() {
+    let (db_a, _dir_a) = new_db();
+    let (db_b, _dir_b) = new_db();
+
+    // root1: \x10, \x20, \x30 all exist
+    let initial: Vec<BatchOp<&[u8], &[u8]>> = vec![
+        BatchOp::Put {
+            key: b"\x10",
+            value: b"v1",
+        },
+        BatchOp::Put {
+            key: b"\x20",
+            value: b"v2",
+        },
+        BatchOp::Put {
+            key: b"\x30",
+            value: b"v3",
+        },
+    ];
+    db_a.propose(initial.clone()).unwrap().commit().unwrap();
+    let root1_a = db_a.root_hash().unwrap();
+    db_b.propose(initial).unwrap().commit().unwrap();
+    let root1_b = db_b.root_hash().unwrap();
+
+    // root2: change \x20
+    db_a.propose(vec![BatchOp::Put {
+        key: b"\x20" as &[u8],
+        value: b"changed" as &[u8],
+    }])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root2 = db_a.root_hash().unwrap();
+
+    // Range [\x15, \x25]: \x20 is in range, \x10 and \x30 are outside
+    let proof = db_a
+        .change_proof(
+            root1_a.clone(),
+            root2.clone(),
+            Some(b"\x15"),
+            Some(b"\x25"),
+            None,
+        )
+        .unwrap();
+    let ctx =
+        verify_change_proof_structure(&proof, root2.clone(), Some(b"\x15"), Some(b"\x25"), None)
+            .unwrap();
+    verify_and_check(&db_b, &proof, &ctx, root1_b.clone()).unwrap();
+
+    // Also test with exact existing keys as boundaries
+    let proof = db_a
+        .change_proof(root1_a, root2.clone(), Some(b"\x10"), Some(b"\x30"), None)
+        .unwrap();
+    let ctx =
+        verify_change_proof_structure(&proof, root2, Some(b"\x10"), Some(b"\x30"), None).unwrap();
+    verify_and_check(&db_b, &proof, &ctx, root1_b).unwrap();
+}
+
+/// Regression test: a key that is a proper prefix of `start_key` has a value
+/// in root1 that is deleted in root2. Because the prefix key is outside the
+/// query range (shorter key &lt; `start_key`), it is not in `batch_ops`. The
+/// proving trie must clear this stale value so the computed hash matches
+/// `end_root`.
+///
+/// Without the fix, `reconcile_branch_proof_node` ignored the trie's value
+/// when the proof node had no value, silently leaving the stale value in the
+/// proving trie and causing `EndRootMismatch`.
+#[test]
+fn test_change_proof_prefix_key_deleted_in_end_root() {
+    let (db, _dir) = new_db();
+
+    // Root1: keys include b"\xab" which is a prefix of b"\xab\xcd".
+    // Two children under [a,b] ensure the branch survives deletion of
+    // b"\xab"'s value (a single child would be merged away).
+    db.propose(vec![
+        BatchOp::Put {
+            key: b"\xab" as &[u8],
+            value: b"prefix_value" as &[u8],
+        },
+        BatchOp::Put {
+            key: b"\xab\xcd",
+            value: b"full_key",
+        },
+        BatchOp::Put {
+            key: b"\xab\xef",
+            value: b"sibling",
+        },
+        BatchOp::Put {
+            key: b"\xff",
+            value: b"high",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root1 = db.root_hash().unwrap();
+
+    // Root2: delete the prefix key b"\xab". The branch at [a,b] survives
+    // because it still has two children (b"\xab\xcd" and b"\xab\xef").
+    // Also update a key within the query range so batch_ops is non-empty.
+    db.propose(vec![
+        BatchOp::Delete {
+            key: b"\xab" as &[u8],
+        },
+        BatchOp::Put {
+            key: b"\xab\xcd",
+            value: b"updated",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root2 = db.root_hash().unwrap();
+
+    // Query range starts AFTER b"\xab": use b"\xab\x00" as start_key.
+    // b"\xab" < b"\xab\x00", so the deleted prefix key is outside the range
+    // and won't appear in batch_ops. But the start proof passes through the
+    // branch at nibbles [a,b] where root1 has a value and root2 does not.
+    let start_key = b"\xab\x00";
+    let end_key = b"\xff";
+
+    let proof = db
+        .change_proof(
+            root1.clone(),
+            root2.clone(),
+            Some(start_key.as_slice()),
+            Some(end_key.as_slice()),
+            None,
+        )
+        .unwrap();
+
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2.clone(),
+        Some(start_key.as_slice()),
+        Some(end_key.as_slice()),
+        None,
+    )
+    .unwrap();
+
+    // This failed with EndRootMismatch before the fix.
+    verify_and_check(&db, &proof, &ctx, root1).unwrap();
+}
