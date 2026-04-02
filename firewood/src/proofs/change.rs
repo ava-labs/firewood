@@ -32,9 +32,7 @@
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 
-use firewood_storage::PathComponentSliceExt;
-
-use super::types::{Proof, ProofCollection, ProofError, ProofNode};
+use super::types::{Proof, ProofCollection, ProofError};
 use crate::api::{self, BatchOp, FrozenChangeProof, HashKey};
 
 /// A change proof can demonstrate that by applying the provided array of `BatchOp`s to a Merkle
@@ -394,33 +392,6 @@ pub fn verify_change_proof_structure(
         start_key: start_key.map(Box::from),
         end_key: end_key.map(Box::from),
     })
-}
-
-/// Convert a proof node's nibble key to a byte-level key for path lookup.
-///
-/// Each pair of nibbles is combined into one byte. Odd-length keys are
-/// implicitly padded with a zero nibble so that `path_to_key` traverses
-/// through the odd-depth node. Only valid for the last node in a proof
-/// path — the zero padding would misalign intermediate nodes.
-#[must_use]
-pub fn change_proof_node_byte_key(node: &ProofNode) -> Box<[u8]> {
-    // Pair nibbles into bytes directly. For odd-length keys, the
-    // trailing nibble is padded with 0 so path_to_key traverses
-    // through odd-depth nodes. The extra nibble is harmless since
-    // path_to_key stops at the deepest matching node.
-    let (pairs, remainder) = node.key.as_byte_slice().as_chunks::<2>();
-    pairs
-        .iter()
-        .map(|&[hi, lo]| hi << 4 | lo)
-        .chain(remainder.iter().map(|&nibble| nibble << 4))
-        .collect()
-}
-
-/// Return the byte key needed to look up a proposal path aligned with the
-/// given boundary proof nodes. Returns `None` when the proof is empty.
-#[must_use]
-pub fn change_proof_boundary_key(proof_nodes: &[ProofNode]) -> Option<Box<[u8]>> {
-    proof_nodes.last().map(change_proof_node_byte_key)
 }
 
 #[cfg(test)]

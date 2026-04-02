@@ -158,7 +158,7 @@ pub use merkle::{Key, Value, verify_change_proof_root_hash, verify_range_proof};
 pub use proofs::{
     ChangeProof, ChangeProofVerificationContext, EmptyProofCollection, InvalidHeader, Proof,
     ProofCollection, ProofError, ProofNode, ProofType, RangeProof, ReadError,
-    change_proof_boundary_key, change_proof_node_byte_key, verify_change_proof_structure,
+    verify_change_proof_structure,
 };
 
 // Re-export the proc macro from firewood-macros

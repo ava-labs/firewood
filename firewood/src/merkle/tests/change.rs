@@ -1958,8 +1958,8 @@ fn test_out_of_range_value_at_start_tail_accepted() {
 }
 
 /// The `start_key` value MUST be checked for inclusion proofs. If the
-/// proposal has a different value at `start_key` than `end_root`, it should
-/// be detected by `verify_proof_node_value`.
+/// proposal has a different value at `start_key` than `end_root`, the
+/// reconciliation or root hash comparison should detect the mismatch.
 #[test]
 fn test_start_key_inclusion_value_checked() {
     let (db_a, _dir_a) = new_db();

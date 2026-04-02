@@ -60,10 +60,9 @@
 //! // Step 2: Apply batch_ops to the verifier's start_root to produce a proposal.
 //! let proposal = db.apply_change_proof_to_parent(&proof, &parent_revision)?;
 //!
-//! // Step 3: Compare in-range children from the boundary proofs against the
-//! //         proposal's trie. Paths are derived from the last proof node in
-//! //         each boundary proof via change_proof_boundary_key.
-//! verify_change_proof_root_hash(&proof, &ctx, proposal_root.as_ref(), &start_path, &end_path)?;
+//! // Step 3: Build a proving trie from the proposal's in-range keys, reconcile
+//! //         boundary proof nodes, and compare the computed root hash against end_root.
+//! verify_change_proof_root_hash(&proof, &ctx, &proposal)?;
 //! ```
 //!
 //! # Proof Format
@@ -105,8 +104,7 @@ mod tests;
 pub(crate) mod types;
 
 pub use self::change::{
-    ChangeProof, ChangeProofVerificationContext, change_proof_boundary_key,
-    change_proof_node_byte_key, verify_change_proof_structure,
+    ChangeProof, ChangeProofVerificationContext, verify_change_proof_structure,
 };
 pub use self::header::InvalidHeader;
 pub use self::range::RangeProof;
