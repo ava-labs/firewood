@@ -1293,7 +1293,10 @@ fn test_range_proof_fuzz() {
     let merkle = init_merkle(items.clone());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    for _ in 0..50 {
+    // Debug assertions significantly slow down each scenario; use fewer
+    // iterations in debug builds so the test finishes in reasonable time.
+    let scenarios = if cfg!(debug_assertions) { 50 } else { 500 };
+    for _ in 0..scenarios {
         let scenario = rng.random_range(0..5u8);
         match scenario {
             // Both edges are existing keys
