@@ -18,7 +18,7 @@ pub use self::results::{
     ChangeProofResult, CodeIteratorResult, HandleResult, HashResult, IteratorResult,
     KeyValueBatchResult, KeyValueResult, NextKeyRangeResult, ProposalResult,
     ProposedChangeProofResult, RangeProofResult, ReconstructedResult, RevisionResult, ValueResult,
-    VerifiedChangeProofResult, VoidResult,
+    VoidResult,
 };
 
 /// Maybe is a C-compatible optional type using a tagged union pattern.
