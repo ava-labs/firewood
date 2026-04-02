@@ -5,9 +5,7 @@ use super::*;
 use crate::api::{self, BatchOp, Db as DbTrait, DbView, FrozenChangeProof, Proposal as _};
 use crate::db::{Db, DbConfig};
 use crate::merkle::verify_change_proof_root_hash;
-use crate::{
-    ChangeProofVerificationContext, change_proof_boundary_key, verify_change_proof_structure,
-};
+use crate::{ChangeProofVerificationContext, verify_change_proof_structure};
 use firewood_storage::PathComponentSliceExt;
 
 // ── Test infrastructure ────────────────────────────────────────────────────
@@ -19,6 +17,11 @@ fn new_db() -> (Db, tempfile::TempDir) {
 }
 
 /// Verify a change proof end-to-end: structural check + root hash check.
+///
+/// Builds a proposal (`start_root` + `batch_ops`) and verifies its in-range
+/// state matches `end_root` using the restructure approach: an in-memory
+/// proving trie is built from the proposal's in-range keys, boundary
+/// proof nodes are reconciled into it, and a hybrid root hash is computed.
 fn verify_and_check(
     db: &Db,
     proof: &FrozenChangeProof,
@@ -27,23 +30,7 @@ fn verify_and_check(
 ) -> Result<(), api::Error> {
     let parent = db.revision(start_root)?;
     let proposal = db.apply_change_proof_to_parent(proof, &*parent)?;
-
-    let start_path = match change_proof_boundary_key(proof.start_proof().as_ref()) {
-        Some(key) => proposal.path_to_key(&key)?,
-        None => Box::default(),
-    };
-    let end_path = match change_proof_boundary_key(proof.end_proof().as_ref()) {
-        Some(key) => proposal.path_to_key(&key)?,
-        None => Box::default(),
-    };
-
-    verify_change_proof_root_hash(
-        proof,
-        verification,
-        proposal.root_hash().as_ref(),
-        &start_path,
-        &end_path,
-    )
+    verify_change_proof_root_hash(proof, verification, &proposal)
 }
 
 // ── Structural validation tests ────────────────────────────────────────────
@@ -1111,25 +1098,23 @@ fn test_divergence_at_depth_zero() {
         end_key: Some(b"\xa1".to_vec().into()),
     };
 
-    let start_path = change_proof_boundary_key(crafted.start_proof().as_ref())
-        .map(|k| proposal.path_to_key(&k).unwrap())
-        .unwrap_or_default();
-    let end_path = change_proof_boundary_key(crafted.end_proof().as_ref())
-        .map(|k| proposal.path_to_key(&k).unwrap())
-        .unwrap_or_default();
-
-    let err = verify_change_proof_root_hash(
-        &crafted,
-        &verification,
-        proposal.root_hash().as_ref(),
-        &start_path,
-        &end_path,
-    )
-    .unwrap_err();
-    assert!(matches!(
-        err,
-        api::Error::ProofError(crate::ProofError::BoundaryProofsDivergeAtRoot)
-    ));
+    // The crafted proof has start/end proofs that skip the shared root,
+    // so the proving trie reconciliation should detect the inconsistency.
+    let err = verify_change_proof_root_hash(&crafted, &verification, &proposal).unwrap_err();
+    // With the restructure approach, the root hash simply won't match
+    // because the crafted proof nodes don't form a valid hash chain.
+    assert!(
+        matches!(
+            err,
+            api::Error::ProofError(
+                crate::ProofError::EndRootMismatch
+                    | crate::ProofError::BoundaryProofsDivergeAtRoot
+                    | crate::ProofError::UnexpectedValue
+                    | crate::ProofError::UnexpectedHash,
+            )
+        ),
+        "crafted proof with skipped root should be rejected, got {err:?}"
+    );
 }
 
 // Verify that the children of the last node in the start proof are checked
@@ -2061,16 +2046,16 @@ fn test_start_key_inclusion_value_checked() {
     let ctx2 = verify_change_proof_structure(&crafted, root2, Some(b"\x10"), None, None).unwrap();
     let err = verify_and_check(&db_b, &crafted, &ctx2, root1_b)
         .expect_err("tampered start_key value must be detected");
-    // The tampered value should be caught by verify_proof_node_value
-    // (ProofNodeValueMismatch) since the start proof is inclusion and
-    // the node at start_key has byte key = start_key (not < start_key),
-    // so the value check is NOT skipped.
+    // With the restructure approach, the tampered value is detected during
+    // reconciliation (UnexpectedValue) or root hash comparison (EndRootMismatch).
     assert!(
         matches!(
             err,
-            api::Error::ProofError(crate::ProofError::ProofNodeValueMismatch)
+            api::Error::ProofError(
+                crate::ProofError::UnexpectedValue | crate::ProofError::EndRootMismatch,
+            )
         ),
-        "expected ProofNodeValueMismatch for tampered start_key value, got {err:?}"
+        "tampered start_key value must be detected, got {err:?}"
     );
 }
 
@@ -2136,4 +2121,416 @@ fn test_boundary_child_gap_closed_for_start_key() {
         verify_change_proof_structure(&honest, root2, Some(b"\x10\x50"), Some(b"\x30\x00"), None)
             .unwrap();
     verify_and_check(&db_b, &honest, &ctx, root1_b).unwrap();
+}
+
+// ── Empty start trie tests ────────────────────────────────────────────────
+//
+// When the start revision is empty, every key in the end revision is a new
+// insertion. The start proofs are always exclusion proofs (nothing exists
+// in the empty trie). These tests exercise the interaction between empty
+// start tries and the divergent child / value skip logic.
+
+/// Empty start trie, single key inserted. Complete proof (no bounds).
+#[cfg(feature = "ethhash")]
+#[test]
+fn test_empty_start_trie_single_key_no_bounds() {
+    let (db, _dir) = new_db();
+
+    // Commit an empty revision to get a root hash for the empty state.
+    let empty_ops: Vec<BatchOp<&[u8], &[u8]>> = vec![];
+    db.propose(empty_ops).unwrap().commit().unwrap();
+    let empty_root = db.root_hash().unwrap();
+
+    // Add a single key.
+    db.propose(vec![BatchOp::Put {
+        key: b"\x50",
+        value: b"hello",
+    }])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root2 = db.root_hash().unwrap();
+
+    // Complete proof — no bounds.
+    let proof = db
+        .change_proof(empty_root, root2.clone(), None, None, None)
+        .unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2.clone(), None, None, None).unwrap();
+
+    // Receiver also starts empty.
+    let (db_b, _dir_b) = new_db();
+    db_b.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
+        .unwrap()
+        .commit()
+        .unwrap();
+    let empty_root_b = db_b.root_hash().unwrap();
+
+    verify_and_check(&db_b, &proof, &ctx, empty_root_b).unwrap();
+}
+
+/// Empty start trie, multiple keys inserted, bounded range with inclusion
+/// start proof (`start_key` exists in end trie).
+#[cfg(feature = "ethhash")]
+#[test]
+fn test_empty_start_trie_bounded_inclusion() {
+    let (db, _dir) = new_db();
+
+    db.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
+        .unwrap()
+        .commit()
+        .unwrap();
+    let empty_root = db.root_hash().unwrap();
+
+    // Insert several keys.
+    db.propose(vec![
+        BatchOp::Put {
+            key: b"\x10" as &[u8],
+            value: b"a" as &[u8],
+        },
+        BatchOp::Put {
+            key: b"\x20",
+            value: b"b",
+        },
+        BatchOp::Put {
+            key: b"\x30",
+            value: b"c",
+        },
+        BatchOp::Put {
+            key: b"\x40",
+            value: b"d",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root2 = db.root_hash().unwrap();
+
+    // Bounded range [\x10, \x30] — start_key \x10 exists (inclusion).
+    let proof = db
+        .change_proof(
+            empty_root.clone(),
+            root2.clone(),
+            Some(b"\x10"),
+            Some(b"\x30"),
+            None,
+        )
+        .unwrap();
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2.clone(),
+        Some(b"\x10"),
+        Some(b"\x30"),
+        None,
+    )
+    .unwrap();
+
+    let (db_b, _dir_b) = new_db();
+    db_b.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
+        .unwrap()
+        .commit()
+        .unwrap();
+    let empty_root_b = db_b.root_hash().unwrap();
+
+    verify_and_check(&db_b, &proof, &ctx, empty_root_b).unwrap();
+}
+
+/// Empty start trie, bounded range with exclusion start proof
+/// (`start_key` does NOT exist in end trie).
+#[cfg(feature = "ethhash")]
+#[test]
+fn test_empty_start_trie_bounded_exclusion() {
+    let (db, _dir) = new_db();
+
+    db.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
+        .unwrap()
+        .commit()
+        .unwrap();
+    let empty_root = db.root_hash().unwrap();
+
+    db.propose(vec![
+        BatchOp::Put {
+            key: b"\x10" as &[u8],
+            value: b"a" as &[u8],
+        },
+        BatchOp::Put {
+            key: b"\x20",
+            value: b"b",
+        },
+        BatchOp::Put {
+            key: b"\x30",
+            value: b"c",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root2 = db.root_hash().unwrap();
+
+    // start_key \x05 does NOT exist — exclusion proof.
+    let proof = db
+        .change_proof(
+            empty_root.clone(),
+            root2.clone(),
+            Some(b"\x05"),
+            Some(b"\x30"),
+            None,
+        )
+        .unwrap();
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2.clone(),
+        Some(b"\x05"),
+        Some(b"\x30"),
+        None,
+    )
+    .unwrap();
+
+    let (db_b, _dir_b) = new_db();
+    db_b.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
+        .unwrap()
+        .commit()
+        .unwrap();
+    let empty_root_b = db_b.root_hash().unwrap();
+
+    verify_and_check(&db_b, &proof, &ctx, empty_root_b).unwrap();
+}
+
+/// Empty start trie, large end trie (100 keys), multiple rounds with
+/// different boundary positions.
+#[cfg(feature = "ethhash")]
+#[test]
+fn test_empty_start_trie_large_end_trie_multi_round() {
+    let (db, _dir) = new_db();
+
+    db.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
+        .unwrap()
+        .commit()
+        .unwrap();
+    let empty_root = db.root_hash().unwrap();
+
+    // Insert 100 keys: \x00\x00 through \x00\x63.
+    let keys: Vec<[u8; 2]> = (0..100).map(|i| [0x00, i]).collect();
+    let ops: Vec<BatchOp<&[u8], &[u8]>> = keys
+        .iter()
+        .map(|k| BatchOp::Put {
+            key: k.as_ref(),
+            value: b"val" as &[u8],
+        })
+        .collect();
+    db.propose(ops).unwrap().commit().unwrap();
+    let root2 = db.root_hash().unwrap();
+
+    let (db_b, _dir_b) = new_db();
+    db_b.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
+        .unwrap()
+        .commit()
+        .unwrap();
+    let empty_root_b = db_b.root_hash().unwrap();
+
+    // Simulate iterative sync with 4 rounds of ~25 keys each.
+    let boundaries: &[Option<&[u8]>] = &[
+        None,
+        Some(b"\x00\x19"),
+        Some(b"\x00\x32"),
+        Some(b"\x00\x4b"),
+    ];
+
+    for window in boundaries.windows(2) {
+        let start = window[0];
+        let end = window[1];
+
+        let proof = db
+            .change_proof(
+                empty_root.clone(),
+                root2.clone(),
+                start,
+                end,
+                None,
+            )
+            .unwrap();
+        let ctx = verify_change_proof_structure(
+            &proof,
+            root2.clone(),
+            start,
+            end,
+            None,
+        )
+        .unwrap();
+        verify_and_check(&db_b, &proof, &ctx, empty_root_b.clone()).unwrap();
+    }
+
+    // Final round: from last boundary to end.
+    let proof = db
+        .change_proof(
+            empty_root.clone(),
+            root2.clone(),
+            Some(b"\x00\x4b"),
+            None,
+            None,
+        )
+        .unwrap();
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2.clone(),
+        Some(b"\x00\x4b"),
+        None,
+        None,
+    )
+    .unwrap();
+    verify_and_check(&db_b, &proof, &ctx, empty_root_b).unwrap();
+}
+
+/// Empty start trie with prefix keys (key is a prefix of another key).
+/// Tests that branch nodes with values at prefix keys are handled
+/// correctly when the start trie is empty.
+#[cfg(feature = "ethhash")]
+#[test]
+fn test_empty_start_trie_prefix_keys() {
+    let (db, _dir) = new_db();
+
+    db.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
+        .unwrap()
+        .commit()
+        .unwrap();
+    let empty_root = db.root_hash().unwrap();
+
+    // Insert keys where some are prefixes of others. This creates
+    // branch nodes with values — the scenario that triggers the
+    // out-of-range value check bug.
+    db.propose(vec![
+        BatchOp::Put {
+            key: b"\x10" as &[u8],
+            value: b"prefix" as &[u8],
+        },
+        BatchOp::Put {
+            key: b"\x10\x50",
+            value: b"child1",
+        },
+        BatchOp::Put {
+            key: b"\x10\x50\xaa",
+            value: b"grandchild",
+        },
+        BatchOp::Put {
+            key: b"\x20",
+            value: b"other",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root2 = db.root_hash().unwrap();
+
+    let (db_b, _dir_b) = new_db();
+    db_b.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
+        .unwrap()
+        .commit()
+        .unwrap();
+    let empty_root_b = db_b.root_hash().unwrap();
+
+    // Range [\x10\x50, \x20]: start_key \x10\x50 exists (inclusion).
+    // The node at \x10 is on the start proof path with a value, but
+    // its byte key < start_key — value check must be skipped.
+    let proof = db
+        .change_proof(
+            empty_root.clone(),
+            root2.clone(),
+            Some(b"\x10\x50"),
+            Some(b"\x20"),
+            None,
+        )
+        .unwrap();
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2.clone(),
+        Some(b"\x10\x50"),
+        Some(b"\x20"),
+        None,
+    )
+    .unwrap();
+    verify_and_check(&db_b, &proof, &ctx, empty_root_b.clone()).unwrap();
+
+    // Range [\x10\x50\x00, \x20]: start_key doesn't exist (exclusion).
+    // Exercises the divergent child path with an empty start trie.
+    let proof = db
+        .change_proof(
+            empty_root.clone(),
+            root2.clone(),
+            Some(b"\x10\x50\x00"),
+            Some(b"\x20"),
+            None,
+        )
+        .unwrap();
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2.clone(),
+        Some(b"\x10\x50\x00"),
+        Some(b"\x20"),
+        None,
+    )
+    .unwrap();
+    verify_and_check(&db_b, &proof, &ctx, empty_root_b).unwrap();
+}
+
+/// Empty start trie, end trie with a single key at the root (empty key
+/// prefix). Tests the degenerate case where the root itself has a value.
+#[cfg(feature = "ethhash")]
+#[test]
+fn test_empty_start_trie_start_only_proof() {
+    let (db, _dir) = new_db();
+
+    db.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
+        .unwrap()
+        .commit()
+        .unwrap();
+    let empty_root = db.root_hash().unwrap();
+
+    db.propose(vec![
+        BatchOp::Put {
+            key: b"\x10" as &[u8],
+            value: b"a" as &[u8],
+        },
+        BatchOp::Put {
+            key: b"\x20",
+            value: b"b",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root2 = db.root_hash().unwrap();
+
+    let (db_b, _dir_b) = new_db();
+    db_b.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
+        .unwrap()
+        .commit()
+        .unwrap();
+    let empty_root_b = db_b.root_hash().unwrap();
+
+    // Start-only proof (end_key = None). Range is [\x10, +inf).
+    let proof = db
+        .change_proof(
+            empty_root.clone(),
+            root2.clone(),
+            Some(b"\x10"),
+            None,
+            None,
+        )
+        .unwrap();
+    let ctx =
+        verify_change_proof_structure(&proof, root2.clone(), Some(b"\x10"), None, None).unwrap();
+    verify_and_check(&db_b, &proof, &ctx, empty_root_b.clone()).unwrap();
+
+    // End-only proof (start_key = None). Range is (-inf, \x20].
+    let proof = db
+        .change_proof(
+            empty_root,
+            root2.clone(),
+            None,
+            Some(b"\x20"),
+            None,
+        )
+        .unwrap();
+    let ctx =
+        verify_change_proof_structure(&proof, root2, None, Some(b"\x20"), None).unwrap();
+    verify_and_check(&db_b, &proof, &ctx, empty_root_b).unwrap();
 }

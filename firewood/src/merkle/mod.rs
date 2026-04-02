@@ -9,7 +9,8 @@ pub(crate) mod childmask;
 mod merge;
 /// Parallel merkle
 pub mod parallel;
-pub(crate) mod proof_cursor;
+// proof_cursor module removed — the restructure approach (reconcile + hash)
+// replaced the cursor-based in-range children comparison.
 
 use crate::api::{
     self, BatchIter, FrozenChangeProof, FrozenProof, FrozenRangeProof, HashKey, KeyType,
@@ -17,15 +18,15 @@ use crate::api::{
 };
 use crate::iter::{MerkleKeyValueIter, PathIterator};
 use crate::merkle::changes::DiffMerkleNodeStream;
-use crate::proofs::change::{ChangeProofVerificationContext, change_proof_node_byte_key};
+use crate::proofs::change::ChangeProofVerificationContext;
 use crate::{ChangeProof, Proof, ProofCollection, ProofError, ProofNode, RangeProof};
 use firewood_metrics::firewood_increment;
 use firewood_storage::MemStore;
 use firewood_storage::{
     BranchNode, Child, Children, FileIoError, HashType, HashableShunt, HashedNodeReader,
     ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, Mutable, MutableKind,
-    NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, PathIterItem, Propose,
-    ReadableStorage, SharedNode, TrieHash, TriePathFromPackedBytes, TrieReader, U4, ValueDigest,
+    NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, Propose, ReadableStorage,
+    SharedNode, TrieHash, TrieReader, U4, ValueDigest,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -290,25 +291,21 @@ fn compute_root_hash_with_proofs(
 
     let mut child_hashes: Children<Option<HashType>> = Children::new();
 
-    // For children outside the proven range, use proof node hashes
-    if let (Some(proof_node), Some(outside)) =
-        (proof_nodes.get(&full_key), outside_children.get(&full_key))
-    {
-        for (nibble, hash) in proof_node.child_hashes.iter_present() {
-            if outside.is_set(nibble.0) {
-                child_hashes[nibble] = Some(hash.clone());
-            }
-        }
-    }
+    let outside_mask = outside_children.get(&full_key);
 
     // For children in the in-memory trie, compute hashes recursively.
-    // These children were inserted from the proven key-value pairs, so they
-    // are *inside* the proven range. A nibble cannot be both inside (present
-    // in the trie) and outside (marked in outside_children) at the same time,
-    // so this does not conflict with the proof hashes set above.
+    // Skip children that are outside the proven range — their hashes
+    // come from the proof node (set below), not from the proving trie.
+    // For range proofs the two sets are disjoint (no child is both
+    // present in the trie and marked outside). For change proofs they
+    // can overlap because the proving trie is built from the proposal's
+    // in-range keys which may create branches at boundary positions.
     let mut child_prefix: PathBuf = full_key.iter().copied().collect();
     for (nibble, child_opt) in &branch.children {
         if let Some(Child::Node(child_node)) = child_opt {
+            if outside_mask.is_some_and(|m| m.is_set(nibble.0)) {
+                continue;
+            }
             child_prefix.push(nibble);
             let child_hash = compute_root_hash_with_proofs(
                 child_node,
@@ -318,6 +315,17 @@ fn compute_root_hash_with_proofs(
             );
             child_hashes[nibble] = Some(child_hash);
             child_prefix.pop();
+        }
+    }
+
+    // For children outside the proven range, use proof node hashes.
+    if let (Some(proof_node), Some(outside)) =
+        (proof_nodes.get(&full_key), outside_mask)
+    {
+        for (nibble, hash) in proof_node.child_hashes.iter_present() {
+            if outside.is_set(nibble.0) {
+                child_hashes[nibble] = Some(hash.clone());
+            }
         }
     }
 
@@ -561,291 +569,31 @@ fn verify_root_hash<H: ProofCollection<Node = ProofNode>>(
 
 // ── Change proof verification ──────────────────────────────────────────────
 
-use proof_cursor::ProofCursor;
-
-/// Verify that a proof node's value matches the proposal's value at the
-/// same trie path.
+/// Verify that the proposal (`start_root` + `batch_ops`) is consistent with
+/// `end_root` within the proven range.
 ///
-/// Nodes at odd nibble depths cannot carry values in the trie encoding.
-/// Malicious proofs with values at odd depths are rejected earlier by
-/// the boundary proof hash chain verification (`ValueAtOddNibbleLength`).
-fn verify_proof_node_value(
-    node: &ProofNode,
-    lookup_item: Option<&PathIterItem>,
-    start_key: Option<&[u8]>,
-) -> Result<(), ProofError> {
-    let depth = node.key.len();
-    // Only nodes at even nibble depths can carry values.
-    if !depth.is_multiple_of(2) {
-        return Ok(());
-    }
-    // The proposal only needs to match the end trie within [start_key, end_key].
-    // Values at nodes outside the range may legitimately differ. Every proof
-    // node is on a path from the root to a boundary key, so its packed byte
-    // key is a prefix of that boundary key and therefore ≤ end_key. Only
-    // the start_key bound can exclude a proof node.
-    let packed = change_proof_node_byte_key(node);
-    if start_key.is_some_and(|sk| &*packed < sk) {
-        return Ok(());
-    }
-    let proposal_value = lookup_item.and_then(|item| item.node.value());
-    match (&node.value_digest, proposal_value) {
-        (None, None) => Ok(()),
-        (Some(digest), Some(val)) if digest.verify(val) => Ok(()),
-        _ => Err(ProofError::ProofNodeValueMismatch),
-    }
-}
-
-/// Verify that in-range children of each proof node match the proposal.
+/// Uses the same "restructure the trie" approach as range proof verification:
+/// 1. Build an in-memory proving trie from the proposal's in-range keys
+/// 2. Reconcile boundary proof nodes into the proving trie (inserts branch
+///    structure matching `end_root`'s layout)
+/// 3. Compute a hybrid root hash: in-range children hashed from the proving
+///    trie, out-of-range children hashed from the proof nodes
+/// 4. Compare the computed hash against `end_root`
 ///
-/// Each proof node's hash has already been verified against `end_root`
-/// by `verify_change_proof_structure`. A mismatch in any in-range child
-/// hash means the proposal's state differs from `end_root` in the
-/// proven range.
-///
-/// * `nodes` — proof nodes in ascending depth order (guaranteed by
-///   `verify_change_proof_structure` via `Proof::value_digest`, which
-///   requires each node's key to be a strict prefix of the next).
-/// * `cursor` — forward-only cursor into the proposal trie, used to
-///   look up the proposal's node and child hashes at each depth.
-/// * `range_key_nibbles` — nibble-expanded range boundary key
-///   (`start_key` for start proofs, last batch op key or `end_key` for end
-///   proofs). Used as the boundary nibble at the last proof node, where
-///   no next node exists to derive it from.
-/// * `is_end_proof` — controls the direction of the in-range check and
-///   the behavior when no boundary nibble is available (key exhausted,
-///   i.e. an inclusion proof): end proofs check no children (all come
-///   after the proven key); start proofs check all children (after the
-///   key is the in-range direction).
-fn verify_in_range_children(
-    nodes: &[ProofNode],
-    cursor: &mut ProofCursor<'_>,
-    range_key_nibbles: &[PathComponent],
-    is_end_proof: bool,
-    start_key: Option<&[u8]>,
-) -> Result<(), ProofError> {
-    let mut nodes_iter = nodes.iter().peekable();
-    while let Some(node) = nodes_iter.next() {
-        let depth = node.key.len();
-
-        // Advance cursor to this depth. None means the proposal has no node
-        // here (trie compressed through this level). This is safe: the value
-        // check passes with (None, None), and children below default to
-        // all-None so any proof child hash at an in-range slot mismatches.
-        let lookup_item = cursor.advance_to(depth);
-        verify_proof_node_value(node, lookup_item, start_key)?;
-
-        // Derive the boundary nibble from the proof's own structure: the
-        // next node's key at this depth tells us which child the proof
-        // navigated to. At the last node, fall back to the range boundary
-        // key's nibble at this depth. If neither source has a nibble
-        // (key exhausted — inclusion proof), the end proof checks no
-        // children (they're all after the key) while the start proof
-        // checks all children (after the key is the in-range direction).
-        let boundary_nibble = nodes_iter
-            .peek()
-            .and_then(|next| next.key.get(depth).copied())
-            .or_else(|| range_key_nibbles.get(depth).copied());
-
-        // Get the proposal's child hashes at this depth for comparison
-        // against the proof's. Defaults to all-None if the proposal has
-        // no branch node here (cursor miss or leaf).
-        let proposal_children: Children<Option<HashType>> = lookup_item
-            .and_then(|item| item.node.as_branch().map(|b| b.children_hashes()))
-            .unwrap_or_default();
-
-        // Zip the proof and proposal child hashes. If any hashes differ
-        // at an in-range slot, the proposal disagrees with end_root.
-        let has_mismatch = node.child_hashes.iter().zip(proposal_children.iter()).any(
-            |((nibble, proof_hash), (_, proposal_hash))| {
-                proof_hash != proposal_hash
-                    && match boundary_nibble {
-                        Some(bn) if is_end_proof => nibble < bn,
-                        Some(bn) => nibble > bn,
-                        None => !is_end_proof,
-                    }
-            },
-        );
-        if has_mismatch {
-            return Err(ProofError::InRangeChildMismatch);
-        }
-    }
-    Ok(())
-}
-
-/// Verify Case 2c: both start and end boundary proofs exist.
-///
-/// # Algorithm overview
-///
-/// Both the start and end boundary proofs are paths from the trie root down
-/// to the start/end keys respectively. Because they originate from the same
-/// trie, the two paths share a common prefix of nodes (the "shared prefix")
-/// before splitting apart at some interior node (the "divergence parent").
-///
-/// The **divergence point** is the depth at which the start and end proof
-/// paths first visit different trie nodes. The node just above that point —
-/// the last node the two paths have in common — is the **divergence parent**.
-/// Below the divergence parent, the start proof descends toward the left
-/// boundary key and the end proof descends toward the right boundary key;
-/// these disjoint suffixes are the **tails**.
-///
-/// The **shared prefix values** are the key/value pairs stored at each node
-/// along the common prefix. Because both proofs pass through these same
-/// nodes, neither proof "owns" children in the key range there — only the
-/// values at those nodes need to match the proposal.
-///
-/// After validating the shared prefix, this function checks the divergence
-/// parent's children that fall strictly between the two boundary nibbles
-/// (these children are entirely within the proven range and must match the
-/// proposal), then **walks both tails** independently: the start tail
-/// checks children to the right of the start boundary, and the end tail
-/// checks children to the left of the end boundary.
-fn verify_change_proof_divergent(
-    start_nodes: &[ProofNode],
-    end_nodes: &[ProofNode],
-    start_path: &[PathIterItem],
-    end_path: &[PathIterItem],
-    start_nibbles: Option<&[PathComponent]>,
-    end_nibbles: Option<&[PathComponent]>,
-    start_key: Option<&[u8]>,
-) -> Result<(), api::Error> {
-    // Find where the two proof paths diverge. Both proofs are rooted at the
-    // same trie (end_root), so nodes at the same position are identical —
-    // comparing `key` alone is sufficient to detect when the paths take
-    // different branches. The `key` is the node's full path from the root,
-    // so equal keys mean the same node; divergence means the two proofs
-    // descended into different children of the parent.
-    let shared_len = start_nodes
-        .iter()
-        .zip(end_nodes.iter())
-        .take_while(|(s, e)| s.key == e.key)
-        .inspect(|(s, e)| debug_assert_eq!(s, e))
-        .count();
-
-    // Split each proof into (shared prefix, tail). The shared prefix
-    // includes the divergence parent as its last element; the tails are
-    // the disjoint suffixes that descend toward each boundary key.
-    let (shared, start_tail) = start_nodes.split_at(shared_len);
-    let (_shared_end, end_tail) = end_nodes.split_at(shared_len);
-
-    // Extract the divergence parent via split_last. If the shared prefix
-    // is empty, the two proofs disagree on the very first (root) node.
-    // Since both proofs originate from the same trie, this should be
-    // impossible — it means the prover supplied inconsistent root nodes.
-    let (parent, _ancestors) = shared
-        .split_last()
-        .ok_or(ProofError::BoundaryProofsDivergeAtRoot)?;
-
-    // Verify values at shared prefix nodes (including divergence parent).
-    // At shared prefix nodes both proofs route through the same nibble,
-    // so no children are in-range from either side — only values matter.
-    //
-    // The start cursor advances through shared prefix nodes first,
-    // then continues into the divergence parent and start tail.
-    let mut start_cursor = ProofCursor::new(start_path);
-    for node in shared {
-        // Advance the cursor past shared prefix nodes. Their keys are
-        // proper prefixes of start_key (< start_key, out of range), so
-        // their values are NOT checked — they may legitimately differ
-        // between the proposal and end_root due to out-of-range changes.
-        // The cursor must still advance so that child comparisons at
-        // deeper nodes (divergence parent, tails) find the correct
-        // proposal node.
-        start_cursor.advance_to(node.key.len());
-    }
-
-    // At the divergence parent: children between the two boundary nibbles
-    // are entirely within the proven range and must match the proposal.
-    //
-    // Derive boundary nibbles from the first node in each tail (the child
-    // the proof navigated to from the parent). If a tail is empty, fall
-    // back to the external key's nibble at the parent depth.
-    let parent_depth = parent.key.len();
-    let start_bn = start_tail
-        .first()
-        .and_then(|next| next.key.get(parent_depth).copied())
-        .or_else(|| start_nibbles.and_then(|sn| sn.get(parent_depth).copied()));
-    let end_bn = end_tail
-        .first()
-        .and_then(|next| next.key.get(parent_depth).copied())
-        .or_else(|| end_nibbles.and_then(|en| en.get(parent_depth).copied()));
-
-    // Look up the divergence parent's children in the proposal. None means
-    // the proposal compressed through this depth; children default to
-    // all-None, so any proof child with a hash at an in-range slot will
-    // produce an InRangeChildMismatch — the proof claims a subtree exists
-    // but the proposal says nothing is there.
-    let item = start_cursor.advance_to(parent_depth);
-    let proposal_children = item
-        .and_then(|i| i.node.as_branch().map(|b| b.children_hashes()))
-        .unwrap_or_default();
-    for nibble in PathComponent::ALL {
-        let after_start = start_bn.is_none_or(|s| nibble > s);
-        let before_end = end_bn.is_none_or(|e| nibble < e);
-        if after_start && before_end && parent.child_hashes[nibble] != proposal_children[nibble] {
-            return Err(ProofError::InRangeChildMismatch.into());
-        }
-    }
-
-    // Walk tails independently below the divergence point. Each tail
-    // contains the proof nodes from the divergence point down to the
-    // respective boundary key. The start tail checks children to the
-    // right of each node's boundary nibble; the end tail checks children
-    // to the left.
-    if !start_tail.is_empty() {
-        // start_cursor naturally continues past the shared prefix nodes.
-        verify_in_range_children(
-            start_tail,
-            &mut start_cursor,
-            start_nibbles.unwrap_or(&[]),
-            false,
-            start_key,
-        )?;
-    }
-    if !end_tail.is_empty() {
-        // The end tail walks a different branch of the trie from the
-        // divergence parent, so it needs its own cursor into the proposal.
-        let mut end_cursor = ProofCursor::new(end_path);
-        // Pass None for start_key: end tail node keys are always in
-        // [start_key, end_key], so their values must always be checked.
-        // The start_key skip in verify_proof_node_value must not apply.
-        verify_in_range_children(
-            end_tail,
-            &mut end_cursor,
-            end_nibbles.unwrap_or(&[]),
-            true,
-            None,
-        )?;
-    }
-
-    Ok(())
-}
-
-/// Verify that boundary proof nodes are consistent with the proposal
-/// by comparing in-range children directly.
-///
-/// The proof's hash chain to `end_root` is already verified in
-/// `verify_change_proof_structure`. Substituting a child hash with an
-/// identical value doesn't change the hash input, so rehashing is
-/// redundant. Instead we compare in-range children directly — same
-/// verification, less work.
-///
-/// `proposal_root_hash` is the root hash of the proposal (after applying
-/// `batch_ops` to the `start_root` revision). `start_path` and `end_path`
-/// are pre-computed path-to-key results aligned with the start and end
-/// boundary proofs respectively.
+/// This reuses three existing range proof functions:
+/// - [`reconcile_branch_proof_node`] — inserts proof branch structure
+/// - [`compute_outside_children`] — determines which children are outside
+///   the proven range
+/// - [`compute_root_hash_with_proofs`] — computes the hybrid root hash
 ///
 /// # Errors
 ///
-/// Returns [`api::Error::ProofError`] if the in-range children of boundary
-/// proof nodes don't match the proposal, or if the computed root hash
-/// doesn't match `end_root`.
-pub fn verify_change_proof_root_hash(
+/// Returns [`api::Error::ProofError`] if the computed root hash doesn't
+/// match `end_root`, or if proof nodes conflict with the proving trie.
+pub fn verify_change_proof_root_hash<V: api::DbView>(
     proof: &FrozenChangeProof,
     verification: &ChangeProofVerificationContext,
-    proposal_root_hash: Option<&HashKey>,
-    start_path: &[PathIterItem],
-    end_path: &[PathIterItem],
+    proposal: &V,
 ) -> Result<(), api::Error> {
     let start_nodes: &[ProofNode] = proof.start_proof().as_ref();
     let end_nodes: &[ProofNode] = proof.end_proof().as_ref();
@@ -855,82 +603,106 @@ pub fn verify_change_proof_root_hash(
     // full target state, so compare its root hash directly against
     // end_root. Also covers the degenerate case of an empty diff.
     if start_nodes.is_empty() && end_nodes.is_empty() {
-        let computed = proposal_root_hash.cloned().unwrap_or_else(HashKey::empty);
+        let computed = proposal.root_hash().unwrap_or_else(HashKey::empty);
         if computed != verification.end_root {
             return Err(api::Error::ProofError(ProofError::EndRootMismatch));
         }
         return Ok(());
     }
 
-    // Range boundary keys as nibbles — used at the last proof node
-    // where no next node exists to derive the boundary from. Intermediate
-    // nodes derive their boundary from the next proof node's key, which
-    // is always correct regardless of which key the end boundary proof was validated against.
-    let start_nibbles: Option<Box<[PathComponent]>> = verification
-        .start_key
-        .as_deref()
-        .map(TriePathFromPackedBytes::path_from_packed_bytes);
+    // Build an in-memory proving trie from the proposal's in-range keys.
+    // Out-of-range subtree hashes will come from the proof nodes. This is
+    // the same pattern as range proof's verify_root_hash (line 509).
+    let memstore = MemStore::default();
+    let nodestore = NodeStore::new_empty_proposal(memstore.into());
+    let mut proving_merkle: Merkle<NodeStore<Mutable<Propose>, MemStore>> =
+        Merkle::from(nodestore);
 
-    // The end proof's last-node boundary comes from the last batch_op's
-    // key when batch_ops is non-empty. The proposal only applies changes
-    // up to last_op — children beyond last_op's nibble are unchanged
-    // from start_root and should not be compared against end_root (which
-    // may differ due to truncation).
-    //
-    // When batch_ops is empty, the proposal is just start_root with no
-    // modifications. The in-range region extends to end_key, so we fall
-    // back to end_key's nibbles to ensure in-range children at the last
-    // end-proof node are still checked. Without this fallback,
-    // boundary_nibble would be None and no children would be verified,
-    // allowing a prover to claim "no changes" while end_root actually
-    // differs from start_root within the range.
-    let end_nibbles: Option<Box<[PathComponent]>> = proof
+    // Insert the proposal's in-range key-value pairs into the proving trie.
+    // The effective end boundary is last_op_key when batch_ops is non-empty,
+    // or end_key when empty. Keys beyond the effective end are outside the
+    // proven range and must NOT be in the proving trie — their presence
+    // would create trie structure that conflicts with the proof's hashes.
+    let last_op_key: Option<Box<[u8]>> = proof
         .batch_ops()
         .last()
-        .map(|op| TriePathFromPackedBytes::path_from_packed_bytes(op.key().as_ref()))
-        .or_else(|| {
-            verification
-                .end_key
-                .as_deref()
-                .map(TriePathFromPackedBytes::path_from_packed_bytes)
-        });
+        .map(|op| op.key().as_ref().into());
+    let effective_end = last_op_key.as_deref().or(verification.end_key.as_deref());
 
-    let start_key = verification.start_key.as_deref();
+    for item in proposal.iter_option(verification.start_key.as_deref())? {
+        let (key, value) = item.map_err(api::Error::from)?;
+        if effective_end.is_some_and(|ek| key.as_ref() > ek) {
+            break;
+        }
+        proving_merkle.insert(&key, value)?;
+    }
 
-    if start_nodes.is_empty() {
-        // Case 2a: Only end proof (first sync round, start_key=None).
-        // Pass None: end proof values are always in range and must be
-        // checked. (start_key is already None here since the start proof
-        // is empty, but we pass None explicitly for clarity.)
-        let mut cursor = ProofCursor::new(end_path);
-        verify_in_range_children(
-            end_nodes,
-            &mut cursor,
-            end_nibbles.as_deref().unwrap_or(&[]),
-            true,
-            None,
-        )?;
-    } else if end_nodes.is_empty() {
-        // Case 2b: Only start proof (last sync round, end of keyspace).
-        let mut cursor = ProofCursor::new(start_path);
-        verify_in_range_children(
-            start_nodes,
-            &mut cursor,
-            start_nibbles.as_deref().unwrap_or(&[]),
-            false,
-            start_key,
-        )?;
-    } else {
-        // Case 2c: Both boundary proofs exist (middle sync round).
-        verify_change_proof_divergent(
-            start_nodes,
-            end_nodes,
-            start_path,
-            end_path,
-            start_nibbles.as_deref(),
-            end_nibbles.as_deref(),
-            start_key,
-        )?;
+    // Reconcile all boundary proof nodes into the proving trie.
+    // This inserts branch structure matching end_root's layout so that the
+    // hash computation produces the same trie shape. Reuses the range proof's
+    // reconcile_branch_proof_node (line 2028).
+    let mut proof_node_map: HashMap<PathBuf, &ProofNode> = HashMap::new();
+    for proof_node in start_nodes.iter().chain(end_nodes.iter()) {
+        proving_merkle.reconcile_branch_proof_node(proof_node)?;
+        match proof_node_map.entry(proof_node.key.clone()) {
+            std::collections::hash_map::Entry::Occupied(existing) => {
+                if *existing.get() != proof_node {
+                    return Err(api::Error::ProofError(ProofError::ConflictingProofNodes));
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(proof_node);
+            }
+        }
+    }
+
+    // Compute which children at each boundary node are outside the proven range.
+    // Reuses the range proof's compute_outside_children (line 195).
+    // effective_end was computed above for iteration bounds and reused here.
+
+    let mut outside_children =
+        compute_outside_children(start_nodes, verification.start_key.as_deref(), true)?;
+    for (key, flags) in compute_outside_children(end_nodes, effective_end, false)? {
+        let entry = outside_children.entry(key).or_default();
+        *entry |= flags;
+    }
+
+    // For truncated change proofs (batch_ops non-empty, last_op_key < end_key),
+    // the end proof's terminal node may be an inclusion proof for last_op_key.
+    // In that case, compute_outside_children marks no children at the terminal
+    // (exact key match). But the terminal's children are extensions of
+    // last_op_key (keys > last_op_key) — they're beyond the truncated range
+    // and must be marked outside. Without this, the proving trie (which lacks
+    // those children) produces a different hash than end_root.
+    if last_op_key.is_some()
+        && let Some(terminal) = end_nodes.last()
+    {
+        let end_nibbles: Vec<u8> = effective_end
+            .map(|ek| NibblesIterator::new(ek).collect())
+            .unwrap_or_default();
+        if terminal.key.iter().map(|c| c.as_u8()).eq(end_nibbles.iter().copied()) {
+            let entry = outside_children
+                .entry(terminal.key.clone())
+                .or_default();
+            *entry = ChildMask::ALL;
+        }
+    }
+
+    // Compute the hybrid root hash. In-range children are hashed from the
+    // proving trie (built from the proposal's in-range keys). Out-of-range
+    // children use hashes from the proof nodes. Reuses the range proof's
+    // compute_root_hash_with_proofs (line 273).
+    let Some(root_node) = proving_merkle.root() else {
+        // The proving trie is empty — no in-range keys exist. If the proof
+        // claims end_root has keys in this range, this is a mismatch.
+        return Err(api::Error::ProofError(ProofError::Empty));
+    };
+
+    let computed =
+        compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children);
+
+    if computed != verification.end_root.clone().into_hash_type() {
+        return Err(api::Error::ProofError(ProofError::EndRootMismatch));
     }
 
     Ok(())

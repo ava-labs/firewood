@@ -4,7 +4,6 @@
 use std::num::NonZeroUsize;
 
 use firewood_metrics::firewood_increment;
-use firewood_storage::PathIterItem;
 #[cfg(feature = "ethhash")]
 use firewood_storage::TrieHash;
 #[cfg(feature = "ethhash")]
@@ -12,8 +11,8 @@ use rlp::Rlp;
 
 use firewood::{
     ChangeProofVerificationContext, ProofError,
-    api::{self, DbView as _, FrozenChangeProof, HashKey as ApiHashKey},
-    change_proof_boundary_key, verify_change_proof_root_hash, verify_change_proof_structure,
+    api::{self, FrozenChangeProof, HashKey as ApiHashKey},
+    verify_change_proof_root_hash, verify_change_proof_structure,
 };
 
 use crate::{
@@ -114,33 +113,13 @@ impl From<FrozenChangeProof> for ChangeProofContext {
 }
 
 /// FFI wrapper for root hash verification. Delegates to the firewood crate's
-/// `verify_change_proof_root_hash` after computing paths from the proposal.
+/// `verify_change_proof_root_hash` using the restructure approach.
 fn verify_root_hash(
     proof: &FrozenChangeProof,
     verification: &VerificationContext,
     proposal: &crate::ProposalHandle<'_>,
 ) -> Result<(), api::Error> {
-    let proposal_root_hash = proposal.root_hash();
-    let start_path = get_proposal_path_for_proof(proof.start_proof().as_ref(), proposal)?;
-    let end_path = get_proposal_path_for_proof(proof.end_proof().as_ref(), proposal)?;
-    verify_change_proof_root_hash(
-        proof,
-        verification,
-        proposal_root_hash.as_ref(),
-        &start_path,
-        &end_path,
-    )
-}
-
-/// Retrieve the proposal's path aligned with the given proof nodes.
-fn get_proposal_path_for_proof(
-    proof_nodes: &[firewood::ProofNode],
-    proposal: &crate::ProposalHandle<'_>,
-) -> Result<Box<[PathIterItem]>, api::Error> {
-    let Some(key) = change_proof_boundary_key(proof_nodes) else {
-        return Ok(Box::default());
-    };
-    proposal.path_to_key(&key)
+    verify_change_proof_root_hash(proof, verification, proposal)
 }
 
 impl ChangeProofContext {

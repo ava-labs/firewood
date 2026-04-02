@@ -15,12 +15,10 @@
 //! the printed seed can be passed via `FIREWOOD_TEST_SEED` to reproduce.
 
 use super::*;
-use crate::api::{self, BatchOp, Db as DbTrait, DbView, Proposal as _};
+use crate::api::{self, BatchOp, Db as DbTrait, Proposal as _};
 use crate::db::{Db, DbConfig};
 use crate::merkle::verify_change_proof_root_hash;
-use crate::{
-    ChangeProofVerificationContext, change_proof_boundary_key, verify_change_proof_structure,
-};
+use crate::{ChangeProofVerificationContext, verify_change_proof_structure};
 
 /// Verify a change proof end-to-end: structural check + root hash check.
 fn verify_and_check(
@@ -31,23 +29,7 @@ fn verify_and_check(
 ) -> Result<(), api::Error> {
     let parent = db.revision(start_root)?;
     let proposal = db.apply_change_proof_to_parent(proof, &*parent)?;
-
-    let start_path = match change_proof_boundary_key(proof.start_proof().as_ref()) {
-        Some(key) => proposal.path_to_key(&key)?,
-        None => Box::default(),
-    };
-    let end_path = match change_proof_boundary_key(proof.end_proof().as_ref()) {
-        Some(key) => proposal.path_to_key(&key)?,
-        None => Box::default(),
-    };
-
-    verify_change_proof_root_hash(
-        proof,
-        verification,
-        proposal.root_hash().as_ref(),
-        &start_path,
-        &end_path,
-    )
+    verify_change_proof_root_hash(proof, verification, &proposal)
 }
 
 #[test]
