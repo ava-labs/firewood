@@ -573,42 +573,17 @@ impl<T: TrieReader> Merkle<T> {
     ///
     /// Returns an error if the trie is empty or an error occurs while reading from storage.
     pub fn prove(&self, key: &[u8]) -> Result<FrozenProof, ProofError> {
-        let Some(root) = self.root() else {
-            return Err(ProofError::Empty);
-        };
+        self.root().ok_or(ProofError::Empty)?;
 
-        // Get the path to the key
-        let path_iter = self.path_iter(key)?;
-        let mut proof = Vec::new();
-        for node in path_iter {
-            let node = node?;
-            proof.push(ProofNode::from(node));
-        }
+        // PathIterator yields every node on the path from root toward
+        // `key`, including divergent nodes whose partial_path doesn't
+        // match (they prove the key's absence in exclusion proofs).
+        let proof = self
+            .path_iter(key)?
+            .map(|node| node.map(ProofNode::from))
+            .collect::<Result<_, _>>()?;
 
-        if proof.is_empty() {
-            // No nodes, even the root, are before `key`.
-            // The root alone proves the non-existence of `key`.
-            // TODO reduce duplicate code with ProofNode::from<PathIterItem>
-            let child_hashes = if let Some(branch) = root.as_branch() {
-                branch.children_hashes()
-            } else {
-                Children::new()
-            };
-
-            proof.push(ProofNode {
-                // key is expected to be in nibbles
-                key: root.partial_path().as_components().into(),
-                // partial len is the number of nibbles in the path leading to this node,
-                // which is always zero for the root node.
-                partial_len: 0,
-                value_digest: root
-                    .value()
-                    .map(|value| ValueDigest::Value(value.to_vec().into_boxed_slice())),
-                child_hashes,
-            });
-        }
-
-        Ok(Proof::new(proof.into_boxed_slice()))
+        Ok(Proof::new(proof))
     }
 
     /// Merges a sequence of key-value pairs with the base merkle trie, yielding
