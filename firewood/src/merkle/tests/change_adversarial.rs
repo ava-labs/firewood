@@ -13,7 +13,7 @@
 //! borrowed from proof nodes rather than recomputed from the proposal.
 
 use super::*;
-use crate::api::{self, BatchOp, Db as DbTrait, FrozenChangeProof, Proposal as _};
+use crate::api::{self, BatchOp, Db as DbTrait, DbView, FrozenChangeProof, Proposal as _};
 use crate::db::{Db, DbConfig};
 use crate::merkle::verify_change_proof_root_hash;
 use crate::{ChangeProofVerificationContext, verify_change_proof_structure};
@@ -167,7 +167,20 @@ fn test_spurious_delete_in_range_not_rejected() {
         ops.into_boxed_slice(),
     );
 
-    // The spurious delete MUST be rejected by at least one check.
+    // Verify that applying the attack proof produces a DIFFERENT root hash
+    // than root2, proving the attack actually changed the trie state.
+    let parent = db.revision(root1.clone()).unwrap();
+    let attack_proposal = db
+        .apply_change_proof_to_parent(&attack_proof, &*parent)
+        .unwrap();
+    let attack_root = attack_proposal.root_hash().unwrap();
+    assert_ne!(
+        attack_root, root2,
+        "attack proposal root hash should differ from root2 \
+         (the spurious Delete removed key C)"
+    );
+
+    // Yet the verifier does NOT reject it — this is the bug.
     assert!(
         is_rejected(
             &db,
@@ -177,7 +190,8 @@ fn test_spurious_delete_in_range_not_rejected() {
             Some(&end_key),
             root1,
         ),
-        "spurious Delete of in-range key C was NOT rejected"
+        "spurious Delete of in-range key C was NOT rejected, \
+         even though proposal root {attack_root:?} != end root"
     );
 }
 
@@ -260,6 +274,151 @@ fn test_spurious_delete_same_subtree_as_changed_key() {
             root1,
         ),
         "spurious Delete of C (same subtree as changed B) was NOT rejected"
+    );
+}
+
+/// Same bug with EXISTING boundary keys (inclusion proofs).
+/// The issue isn't exclusion vs inclusion — it's that the end proof traces
+/// to the last changed key (B), and `compute_outside_children` marks
+/// everything above B's nibble as out-of-range, including C.
+#[test]
+fn test_spurious_delete_with_existing_boundaries() {
+    let (db, _dir) = new_db();
+
+    let keys: [[u8; 32]; 5] = {
+        let mut arr = [[0u8; 32]; 5];
+        arr[0][0] = 0x10; // A — start_key (exists)
+        arr[1][0] = 0x30; // B — changed
+        arr[2][0] = 0x50; // C — target (unchanged)
+        arr[3][0] = 0x70; // D
+        arr[4][0] = 0x90; // E — end_key (exists)
+        arr
+    };
+
+    db.propose(vec![
+        BatchOp::Put { key: &keys[0], value: &[0xAA; 20] },
+        BatchOp::Put { key: &keys[1], value: &[0xBB; 20] },
+        BatchOp::Put { key: &keys[2], value: &[0xCC; 20] },
+        BatchOp::Put { key: &keys[3], value: &[0xDD; 20] },
+        BatchOp::Put { key: &keys[4], value: &[0xEE; 20] },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root1 = db.root_hash().unwrap();
+
+    // Only B changes.
+    db.propose(vec![BatchOp::Put {
+        key: &keys[1],
+        value: &[0xB2; 20],
+    }])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root2 = db.root_hash().unwrap();
+
+    // Boundaries are EXISTING keys: A (0x10) and E (0x90).
+    // Both boundary proofs will be inclusion proofs.
+    let valid_proof = db
+        .change_proof(
+            root1.clone(),
+            root2.clone(),
+            Some(&keys[0]),
+            Some(&keys[4]),
+            None,
+        )
+        .unwrap();
+
+    assert!(
+        !is_rejected(
+            &db,
+            &valid_proof,
+            root2.clone(),
+            Some(&keys[0]),
+            Some(&keys[4]),
+            root1.clone(),
+        ),
+        "valid proof should pass"
+    );
+
+    // Attack: spurious Delete for C (0x50).
+    let mut ops: Vec<BatchOp<Box<[u8]>, Box<[u8]>>> = valid_proof.batch_ops().to_vec();
+    let target_key: Box<[u8]> = keys[2].to_vec().into_boxed_slice();
+    let pos = ops
+        .binary_search_by(|op| op.key().as_ref().cmp(target_key.as_ref()))
+        .unwrap_or_else(|i| i);
+    ops.insert(pos, BatchOp::Delete { key: target_key });
+
+    let attack_proof = crate::ChangeProof::new(
+        crate::Proof::new(valid_proof.start_proof().as_ref().into()),
+        crate::Proof::new(valid_proof.end_proof().as_ref().into()),
+        ops.into_boxed_slice(),
+    );
+
+    // Confirm the proposal root hash actually differs.
+    let parent = db.revision(root1.clone()).unwrap();
+    let attack_proposal = db
+        .apply_change_proof_to_parent(&attack_proof, &*parent)
+        .unwrap();
+    let attack_root = attack_proposal.root_hash().unwrap();
+    assert_ne!(attack_root, root2, "attack should change the root hash");
+
+    assert!(
+        is_rejected(
+            &db,
+            &attack_proof,
+            root2,
+            Some(&keys[0]),
+            Some(&keys[4]),
+            root1,
+        ),
+        "spurious Delete with existing boundaries was NOT rejected"
+    );
+}
+
+// ── value_digest bug demonstration ────────────────────────────────────────
+
+/// Demonstrates the root cause: `value_digest` accepts a proof for key B
+/// as a valid exclusion proof for a completely different key C.
+///
+/// The proof [ROOT, leaf_B] traces root → child[3] → leaf_B. When asked
+/// "does key C (nibble 5) exist?", value_digest should reject the proof
+/// because the path follows child 3 (toward B), not child 5 (toward C).
+/// Instead, it accepts leaf_B as a "divergent child" exclusion for C.
+#[test]
+fn test_value_digest_accepts_wrong_path_as_exclusion() {
+    let keys: [[u8; 32]; 3] = {
+        let mut arr = [[0u8; 32]; 3];
+        arr[0][0] = 0x10; // A
+        arr[1][0] = 0x30; // B
+        arr[2][0] = 0x50; // C
+        arr
+    };
+
+    let merkle = init_merkle([
+        (keys[0], [0xAA; 20]),
+        (keys[1], [0xBB; 20]),
+        (keys[2], [0xCC; 20]),
+    ]);
+    let root_hash = firewood_storage::HashedNodeReader::root_hash(merkle.nodestore()).unwrap();
+
+    // Generate a proof for B.
+    let proof_for_b = merkle.prove(&keys[1]).unwrap();
+
+    // The proof should verify as an inclusion proof for B.
+    proof_for_b
+        .verify(&keys[1], Some(&[0xBB; 20]), &root_hash)
+        .expect("proof for B should verify B");
+
+    // The proof should NOT verify as an exclusion proof for C.
+    // C exists in the trie, but even setting that aside, the proof path
+    // traces toward B (nibble 3), not toward C (nibble 5). The proof
+    // has no information about C's subtree.
+    let result = proof_for_b.value_digest(&keys[2], &root_hash);
+    assert!(
+        result.is_err(),
+        "proof for B should NOT be accepted when queried for C, \
+         but value_digest returned {result:?}"
     );
 }
 
