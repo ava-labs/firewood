@@ -22,6 +22,43 @@
 use std::fmt::{Display, Formatter, LowerHex, Result};
 use std::ops::Range;
 
+/// In constant context, convert an ASCII hex string to a byte array.
+///
+/// `FROM` must be exactly twice `TO`. This is a workaround because generic
+/// parameters cannot be used in constant expressions yet (see [upstream]).
+///
+/// [upstream]: https://github.com/rust-lang/rust/issues/76560
+#[doc(hidden)]
+pub const fn from_ascii<const FROM: usize, const TO: usize>(hex: &[u8; FROM]) -> [u8; TO] {
+    #![expect(clippy::arithmetic_side_effects, clippy::indexing_slicing)]
+
+    const fn from_hex_char(c: u8) -> u8 {
+        match c {
+            b'0'..=b'9' => c - b'0',
+            b'a'..=b'f' => c - b'a' + 10,
+            b'A'..=b'F' => c - b'A' + 10,
+            _ => panic!("invalid hex character"),
+        }
+    }
+
+    const {
+        assert!(FROM == TO.wrapping_mul(2));
+    }
+
+    let mut bytes = [0u8; TO];
+    let mut i = 0_usize;
+    while i < TO {
+        let off = i.wrapping_mul(2);
+        let hi = hex[off];
+        let off = off.wrapping_add(1);
+        let lo = hex[off];
+        bytes[i] = (from_hex_char(hi) << 4) | from_hex_char(lo);
+        i += 1;
+    }
+
+    bytes
+}
+
 mod checker;
 mod hashednode;
 mod hashedshunt;

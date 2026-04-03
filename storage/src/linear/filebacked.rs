@@ -23,7 +23,6 @@ use parking_lot::Mutex;
 use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::num::NonZero;
-use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 
 use firewood_metrics::{firewood_increment, firewood_set};
@@ -231,7 +230,7 @@ const PREDICTIVE_READ_BUFFER_SIZE: usize = 1024;
 
 /// A reader that can predictively read from a file, avoiding reading past boundaries, but reading in 1k chunks
 struct PredictiveReader<'a> {
-    fd: &'a File,
+    fd: &'a UnlockOnDrop,
     buffer: [u8; PREDICTIVE_READ_BUFFER_SIZE],
     offset: u64,
     len: usize,
@@ -294,6 +293,65 @@ impl Drop for UnlockOnDrop {
     fn drop(&mut self) {
         // ignore the error, we might not have ever called `lock`
         _ = self.0.unlock();
+    }
+}
+
+impl UnlockOnDrop {
+    fn write_all_at(&self, mut buf: &[u8], mut offset: u64) -> Result<(), std::io::Error> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::FileExt;
+            return self.0.write_all_at(buf, offset);
+        }
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::FileExt;
+            while !buf.is_empty() {
+                let written = self.0.seek_write(buf, offset)?;
+                if written == 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::WriteZero,
+                        "failed to write whole buffer",
+                    ));
+                }
+                buf = &buf[written..];
+                offset = offset.wrapping_add(written as u64);
+            }
+            Ok(())
+        }
+
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (buf, offset);
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "FileExt is not supported on this platform",
+            ))
+        }
+    }
+
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> Result<usize, std::io::Error> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::FileExt;
+            return self.0.read_at(buf, offset);
+        }
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::FileExt;
+            self.0.seek_read(buf, offset)
+        }
+
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (buf, offset);
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "FileExt is not supported on this platform",
+            ))
+        }
     }
 }
 

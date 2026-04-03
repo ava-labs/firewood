@@ -444,84 +444,36 @@ impl<T: std::fmt::Debug> std::fmt::Debug for DebugChildren<'_, T> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    #![expect(clippy::unwrap_used)]
-
-    use test_case::test_case;
-
-    use super::*;
-
-    /// In constant context, convert an ASCII hex string to a byte array.
-    ///
-    /// `FROM` must be exactly twice `TO`. This is workaround because generic
-    /// parameters cannot be used in constant expressions yet (see [upstream]).
-    ///
-    /// The [`expected_hash`] macro is able to work around this limitation by
-    /// evaluating the length at macro expansion time which provides a constant
-    /// value for both generic parameters at compile time.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the input is not valid hex. Because this panic occurs in constant
-    /// context, this will result in an "erroneous constant error" during compilation.
-    ///
-    /// [upstream]: https://github.com/rust-lang/rust/issues/76560
-    const fn from_ascii<const FROM: usize, const TO: usize>(hex: &[u8; FROM]) -> [u8; TO] {
-        #![expect(clippy::arithmetic_side_effects, clippy::indexing_slicing)]
-
-        const fn from_hex_char(c: u8) -> u8 {
-            match c {
-                b'0'..=b'9' => c - b'0',
-                b'a'..=b'f' => c - b'a' + 10,
-                b'A'..=b'F' => c - b'A' + 10,
-                _ => panic!("invalid hex character"),
-            }
-        }
-
-        const {
-            assert!(FROM == TO.wrapping_mul(2));
-        }
-
-        let mut bytes = [0u8; TO];
-        let mut i = 0_usize;
-        while i < TO {
-            let off = i.wrapping_mul(2);
-            let hi = hex[off];
-            let off = off.wrapping_add(1);
-            let lo = hex[off];
-            bytes[i] = (from_hex_char(hi) << 4) | from_hex_char(lo);
-            i += 1;
-        }
-
-        bytes
-    }
-
-    /// A macro to select the expected hash based on the enabled cargo features.
-    ///
-    /// For both merkledb hash types, only a 64-character hex string (32 bytes)
-    /// is expected. For the ethereum hash type, either a 64-character hex string
-    /// or an RLP-encoded byte string of arbitrary length can be provided, if
-    /// wrapped in `rlp(...)`.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// expected_hash!{
-    ///     merkledb16: b"749390713e51d3e4e50ba492a669c1644a6d9cb7e48b2a14d556e7f953da92fc",
-    ///     ethereum: b"2e636399fae96dc07abaf21167a34b8a5514d6594e777635987e319c76f28a75",
-    /// }
-    /// ```
-    ///
-    /// or with RLP:
-    ///
-    /// ```ignore
-    /// expected_hash!{
-    ///     merkledb16: b"1ffe11ce995a9c07021d6f8a8c5b1817e6375dd0ea27296b91a8d48db2858bc9",
-    ///     ethereum: rlp(b"c482206131"),
-    /// }
-    /// ```
-    macro_rules! expected_hash {
+/// A macro to select the expected hash based on the enabled cargo features.
+///
+/// For both merkledb hash types, only a 64-character hex string (32 bytes)
+/// is expected. For the ethereum hash type, either a 64-character hex string
+/// or an RLP-encoded byte string of arbitrary length can be provided, if
+/// wrapped in `rlp(...)`.
+///
+/// # Example
+///
+/// ```rust
+/// use firewood_storage::expected_hash;
+///
+/// let _ = expected_hash! {
+///     merkledb16: b"749390713e51d3e4e50ba492a669c1644a6d9cb7e48b2a14d556e7f953da92fc",
+///     ethereum: b"2e636399fae96dc07abaf21167a34b8a5514d6594e777635987e319c76f28a75",
+/// };
+/// ```
+///
+/// or with RLP:
+///
+/// ```rust
+/// use firewood_storage::expected_hash;
+///
+/// let _ = expected_hash! {
+///     merkledb16: b"1ffe11ce995a9c07021d6f8a8c5b1817e6375dd0ea27296b91a8d48db2858bc9",
+///     ethereum: rlp(b"c482206131"),
+/// };
+/// ```
+#[macro_export]
+macro_rules! expected_hash {
         (
             merkledb16: $hex16:expr,
             ethereum: rlp($hexeth:expr),
@@ -530,12 +482,12 @@ mod tests {
                 if #[cfg(feature = "ethhash")] {
                     fn __expected_hash() -> $crate::HashType {
                         $crate::HashType::Rlp(smallvec::SmallVec::from(
-                            &from_ascii::<{ $hexeth.len() }, { $hexeth.len() / 2 }>($hexeth)[..],
+                            &$crate::from_ascii::<{ $hexeth.len() }, { $hexeth.len() / 2 }>($hexeth)[..],
                         ))
                     }
                 } else {
                     fn __expected_hash() -> $crate::HashType {
-                        $crate::HashType::from(from_ascii($hex16))
+                        $crate::HashType::from($crate::from_ascii($hex16))
                     }
                 }
             }
@@ -549,11 +501,11 @@ mod tests {
             cfg_if::cfg_if! {
                 if #[cfg(feature = "ethhash")] {
                     fn __expected_hash() -> $crate::HashType {
-                        $crate::HashType::from(from_ascii($hexeth))
+                        $crate::HashType::from($crate::from_ascii($hexeth))
                     }
                 } else {
                     fn __expected_hash() -> $crate::HashType {
-                        $crate::HashType::from(from_ascii($hex16))
+                        $crate::HashType::from($crate::from_ascii($hex16))
                     }
                 }
             }
@@ -561,6 +513,15 @@ mod tests {
             __expected_hash()
         }};
     }
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::unwrap_used)]
+
+    use test_case::test_case;
+
+    use super::*;
+    use crate::expected_hash;
 
     #[test_case(&[])]
     #[test_case(&[("a", "1")])]

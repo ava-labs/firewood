@@ -11,11 +11,14 @@
 //!
 //! # Usage
 //!
-//! ```ignore
+//! ```rust,no_run
 //! use firewood_metrics::firewood_increment;
-//! use crate::registry;
 //!
-//! registry::register();
+//! // Each crate defines its own metric registry (e.g., `ffi::registry`, `storage::registry`).
+//! // This is a minimal stand-in to show usage.
+//! mod registry {
+//!     pub const OP_COUNT: &'static str = "op_count_total";
+//! }
 //!
 //! firewood_increment!(registry::OP_COUNT, 1);
 //! ```
@@ -105,7 +108,13 @@ pub fn expensive_metrics_enabled() -> bool {
 /// [`firewood_set!`] instead.
 ///
 /// # Usage
-/// ```ignore
+/// ```rust,no_run
+/// # mod registry {
+/// #     pub const PROPOSALS_CREATED_TOTAL: &'static str = "proposals_created_total";
+/// #     pub const SLOW_PATH_TOTAL: &'static str = "slow_path_total";
+/// # }
+/// use firewood_metrics::firewood_increment;
+///
 /// firewood_increment!(registry::PROPOSALS_CREATED_TOTAL, 1);
 /// firewood_increment!(registry::PROPOSALS_CREATED_TOTAL, 1, "status" => "ok");
 /// firewood_increment!(registry::SLOW_PATH_TOTAL, 1, expensive);
@@ -132,7 +141,12 @@ macro_rules! firewood_increment {
 /// multiple operations without a repeated name lookup.
 ///
 /// # Usage
-/// ```ignore
+/// ```rust,no_run
+/// # mod registry {
+/// #     pub const PROPOSALS_CREATED_TOTAL: &'static str = "proposals_created_total";
+/// # }
+/// use firewood_metrics::firewood_counter;
+///
 /// let counter = firewood_counter!(registry::PROPOSALS_CREATED_TOTAL);
 /// counter.increment(1);
 /// counter.absolute(100);
@@ -156,7 +170,16 @@ macro_rules! firewood_counter {
 /// use [`firewood_increment!`] instead.
 ///
 /// # Usage
-/// ```ignore
+/// ```rust,no_run
+/// # mod registry {
+/// #     pub const ACTIVE_REVISIONS: &'static str = "active_revisions";
+/// #     pub const NODE_CACHE_BYTES: &'static str = "node_cache_bytes";
+/// #     pub const PENDING_PROPOSALS: &'static str = "pending_proposals";
+/// # }
+/// use firewood_metrics::firewood_set;
+///
+/// # let count = 0usize;
+/// # let size = 0usize;
 /// firewood_set!(registry::ACTIVE_REVISIONS, count);
 /// firewood_set!(registry::NODE_CACHE_BYTES, size, "tier" => "l1");
 /// firewood_set!(registry::PENDING_PROPOSALS, count, expensive);
@@ -183,7 +206,12 @@ macro_rules! firewood_set {
 /// handle across multiple operations.
 ///
 /// # Usage
-/// ```ignore
+/// ```rust,no_run
+/// # mod registry {
+/// #     pub const ACTIVE_REVISIONS: &'static str = "active_revisions";
+/// # }
+/// use firewood_metrics::firewood_gauge;
+///
 /// let gauge = firewood_gauge!(registry::ACTIVE_REVISIONS);
 /// gauge.set(10.0);
 /// gauge.increment(1.0);
@@ -207,6 +235,9 @@ macro_rules! firewood_gauge {
 /// # Examples
 ///
 /// ```rust
+/// use firewood_metrics::firewood_describe_counter;
+/// use metrics::Unit;
+///
 /// firewood_describe_counter!("proposals_created_total", "Number of proposals created");
 /// firewood_describe_counter!("bytes_written_total", Unit::Bytes, "Total bytes written to disk");
 /// ```
@@ -228,6 +259,9 @@ macro_rules! firewood_describe_counter {
 /// # Examples
 ///
 /// ```rust
+/// use firewood_metrics::firewood_describe_gauge;
+/// use metrics::Unit;
+///
 /// firewood_describe_gauge!("active_revisions", "Number of revisions currently held in memory");
 /// firewood_describe_gauge!("node_cache_bytes", Unit::Bytes, "Current node cache size");
 /// ```

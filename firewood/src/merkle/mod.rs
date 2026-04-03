@@ -677,27 +677,29 @@ impl<T: TrieReader> Merkle<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// // Prove all keys between "alice" and "charlie"
-    /// let proof = merkle.range_proof(
-    ///     Some(b"alice"),
-    ///     Some(b"charlie"),
-    ///     None
-    /// ).await?;
+    /// ```rust,no_run
+    /// use firewood::api::DbView;
+    /// use std::num::NonZeroUsize;
     ///
-    /// // Prove the first 100 keys starting from "alice"
-    /// let proof = merkle.range_proof(
-    ///     Some(b"alice"),
-    ///     None,
-    ///     Some(NonZeroUsize::new(100).unwrap())
-    /// ).await?;
+    /// fn example<V: DbView>(view: &V) -> Result<(), firewood::api::Error> {
+    ///     // Prove all keys between "alice" and "charlie"
+    ///     let _proof = view.range_proof(Some(b"alice".as_slice()), Some(b"charlie".as_slice()), None)?;
     ///
-    /// // Prove that no keys exist in a range
-    /// let proof = merkle.range_proof(
-    ///     Some(b"aardvark"),
-    ///     Some(b"aaron"),
-    ///     None
-    /// ).await?;
+    ///     // Prove the first 100 keys starting from "alice"
+    ///     let _proof = view.range_proof(
+    ///         Some(b"alice".as_slice()),
+    ///         None,
+    ///         Some(NonZeroUsize::new(100).unwrap()),
+    ///     )?;
+    ///
+    ///     // Prove that no keys exist in a range
+    ///     let _proof = view.range_proof(
+    ///         Some(b"aardvark".as_slice()),
+    ///         Some(b"aaron".as_slice()),
+    ///         None,
+    ///     )?;
+    ///     Ok(())
+    /// }
     /// ```
     pub(super) fn range_proof(
         &self,
