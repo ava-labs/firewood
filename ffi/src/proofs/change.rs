@@ -211,7 +211,10 @@ impl ProposedChangeProofContext<'_> {
         let hash = match handle.commit_proposal() {
             Err(api::Error::ParentNotLatest { .. }) => {
                 // Stale proposal — rebase onto current revision and retry once.
-                self.db.create_proposal_handle(&self.proof)?.handle.commit_proposal()
+                self.db
+                    .create_proposal_handle(&self.proof)?
+                    .handle
+                    .commit_proposal()
             }
             other => other,
         }?;
@@ -920,7 +923,9 @@ mod tests {
         assert!(hash1.is_some(), "commit should return a root hash");
 
         // Second commit returns cached hash
-        let hash2 = proposed.commit().expect("second commit should return cached hash");
+        let hash2 = proposed
+            .commit()
+            .expect("second commit should return cached hash");
         assert_eq!(hash1, hash2, "double commit should return same hash");
     }
 
