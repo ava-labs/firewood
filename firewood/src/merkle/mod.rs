@@ -677,27 +677,38 @@ impl<T: TrieReader> Merkle<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```no_run
+    /// use std::num::NonZeroUsize;
+    ///
+    /// # struct Merkle;
+    /// # impl Merkle {
+    /// #     async fn range_proof(
+    /// #         &self,
+    /// #         _start: Option<&[u8]>,
+    /// #         _end: Option<&[u8]>,
+    /// #         _limit: Option<NonZeroUsize>,
+    /// #     ) -> Result<(), Box<dyn std::error::Error>> {
+    /// #         Ok(())
+    /// #     }
+    /// # }
+    /// # let merkle = Merkle;
+    /// # async fn docs(merkle: Merkle) -> Result<(), Box<dyn std::error::Error>> {
     /// // Prove all keys between "alice" and "charlie"
-    /// let proof = merkle.range_proof(
-    ///     Some(b"alice"),
-    ///     Some(b"charlie"),
-    ///     None
-    /// ).await?;
+    /// merkle
+    ///     .range_proof(Some(b"alice"), Some(b"charlie"), None)
+    ///     .await?;
     ///
     /// // Prove the first 100 keys starting from "alice"
-    /// let proof = merkle.range_proof(
-    ///     Some(b"alice"),
-    ///     None,
-    ///     Some(NonZeroUsize::new(100).unwrap())
-    /// ).await?;
+    /// merkle
+    ///     .range_proof(Some(b"alice"), None, Some(NonZeroUsize::new(100).unwrap()))
+    ///     .await?;
     ///
     /// // Prove that no keys exist in a range
-    /// let proof = merkle.range_proof(
-    ///     Some(b"aardvark"),
-    ///     Some(b"aaron"),
-    ///     None
-    /// ).await?;
+    /// merkle
+    ///     .range_proof(Some(b"aardvark"), Some(b"aaron"), None)
+    ///     .await?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub(super) fn range_proof(
         &self,
