@@ -397,20 +397,19 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
             }
 
             if let Some(next_node) = iter.peek() {
-                // Assert that every node's key is a prefix of `key`, except for the last node,
-                // whose key can be equal to or a suffix of `key` in an exclusion proof.
-                if next_nibble(node.full_path(), key.as_components()).is_none() {
+                // Assert that every non-terminal node's key is a prefix of
+                // `key`, and that the proof follows the branch toward `key`.
+                let Some(key_nibble) = next_nibble(node.full_path(), key.as_components()) else {
                     return Err(ProofError::ShouldBePrefixOfProvenKey);
-                }
-
-                // Assert that every node's key is a prefix of the next node's key.
-                let next_node_index = next_nibble(node.full_path(), next_node.full_path());
-
-                let Some(next_nibble) = next_node_index else {
-                    return Err(ProofError::ShouldBePrefixOfNextKey);
                 };
 
-                expected_hash = node.children()[next_nibble]
+                // Assert that every node's key is a prefix of the next node's
+                // key, and that the next node is on the path toward `key`.
+                if next_nibble(node.full_path(), next_node.full_path()) != Some(key_nibble) {
+                    return Err(ProofError::ShouldBePrefixOfNextKey);
+                }
+
+                expected_hash = node.children()[key_nibble]
                     .as_ref()
                     .ok_or(ProofError::NodeNotInTrie)?
                     .clone();
@@ -645,5 +644,59 @@ impl ProofType {
             ProofType::Range => "range",
             ProofType::Change => "change",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a `ProofNode` at the given nibble path with the given children and value.
+    fn make_node(
+        nibbles: &[u8],
+        parent_prefix_len: usize,
+        value: Option<&[u8]>,
+        child_hashes: Children<Option<HashType>>,
+    ) -> ProofNode {
+        let key: PathBuf = nibbles
+            .iter()
+            .map(|&b| PathComponent(firewood_storage::U4::new_masked(b)))
+            .collect();
+        ProofNode {
+            key,
+            partial_len: parent_prefix_len,
+            value_digest: value.map(|v| ValueDigest::Value(v.to_vec().into_boxed_slice())),
+            child_hashes,
+        }
+    }
+
+    /// A proof for key B (nibble 3) must not be accepted as an exclusion
+    /// proof for key C (nibble 5).
+    #[test]
+    fn proof_for_wrong_branch_is_rejected() {
+        // Leaf at nibble path [3, 0] with a value.
+        let leaf = make_node(&[3, 0], 1, Some(b"val_b"), Children::new());
+        let leaf_hash = leaf.to_hash();
+
+        // Root branch with children at nibbles 3 and 5.
+        let mut root_children: Children<Option<HashType>> = Children::new();
+        root_children[PathComponent(firewood_storage::U4::new_masked(3))] = Some(leaf_hash);
+        root_children[PathComponent(firewood_storage::U4::new_masked(5))] =
+            Some(HashType::from([0xCC; 32]));
+        let root = make_node(&[], 0, None, root_children);
+        let root_hash: TrieHash = root.to_hash().into_triehash();
+
+        let proof = Proof::new(vec![root, leaf]);
+
+        // Verifying against key [0x30] (nibble path [3, 0]) should succeed
+        // — this is the key the proof was built for.
+        assert!(proof.value_digest([0x30u8], &root_hash).is_ok());
+
+        // Verifying against key [0x50] (nibble path [5, 0]) must fail
+        // — the proof goes to nibble 3, not nibble 5.
+        assert!(matches!(
+            proof.value_digest([0x50u8], &root_hash),
+            Err(ProofError::ShouldBePrefixOfNextKey),
+        ));
     }
 }
