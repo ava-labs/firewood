@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775115090369,
+  "lastUpdate": 1775201517999,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -2067,6 +2067,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 78.63044968741912,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "1915d09963c76b23397b92c7b38f122d8b511725",
+          "message": "fix(proofs): yield divergent nodes from PathIterator for exclusion proofs (#1875)\n\n## Why this should be merged\n\nPreviously, PathIterator returned None whenever a node's partial path\ndiverged from the target key, at any depth. prove() compensated for\nroot-level divergence by manually constructing a ProofNode when the\niterator yielded nothing, but non-root divergent children were simply\nomitted from proofs.\n\nDiscovered during change proof implementation.\n\n## How this works\n\nNow PathIterator always yields divergent nodes regardless of depth. This\nis useful for exclusion proofs — a divergent node demonstrates that a\ndifferent key occupies the position where the proven key would be. This\nalso lets prove() collapse from 35 lines of special-case logic into a\nsimple iterator pipeline, removing a TODO about duplicated ProofNode\nconstruction, and simplifying prove() to be a simple pipeline.\n\nThe PathIterator::next() method is also restructured: the nested \\`match\ncomparison\\` + \\`match node\\` is replaced with early returns,\neliminating duplicated code between the divergent and leaf cases.\n\n## How this was tested\n\nNew unit test `path_iterate_yields_non_root_divergent_node` verifies\nthis behavior.\n\n## Breaking Changes\n\nNone",
+          "timestamp": "2026-04-02T20:14:57Z",
+          "url": "https://github.com/ava-labs/firewood/commit/1915d09963c76b23397b92c7b38f122d8b511725"
+        },
+        "date": 1775201517500,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 168.44964433365638,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5936.492201902496,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 110.47564980030867,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5745.976308027006,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 77.4175549959749,
             "unit": "block_accept_ms/ggas"
           }
         ]
