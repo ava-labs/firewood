@@ -348,21 +348,10 @@ fn compute_root_hash_with_proofs(
 
 /// Verify that a range proof is valid for the specified key range and root hash.
 ///
-/// This function validates a range proof by constructing a partial trie from the
-/// proof data and verifying that it produces the expected root hash. The proof may
-/// contain fewer key-value pairs than requested if the peer chose to limit the
-/// response size.
-///
-/// # Verification Process
-///
-/// 1. **Structural validation**: Ensure key-value pairs are in strictly ascending order,
-///    within the requested `[first_key, last_key]` range, and reject unexpected proofs
-/// 2. **Boundary proof verification**: Cryptographically verify start/end proofs against
-///    the provided root hash
-/// 3. **Trie reconstruction**: Build an in-memory Merkle trie from the key-value pairs
-///    and reconcile it with proof nodes
-/// 4. **Root hash comparison**: Verify the reconstructed trie's root hash matches the
-///    expected hash
+/// Validates structural properties, boundary proofs, and reconstructs a proving
+/// trie to compute a hybrid root hash. See the
+/// [module-level documentation](crate::proofs#range-proof-verification-algorithm)
+/// for the full algorithm description.
 ///
 /// # Errors
 ///
@@ -580,21 +569,12 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
 // ── Change proof verification ──────────────────────────────────────────────
 
 /// Verify that the proposal (`start_root` + `batch_ops`) is consistent with
-/// `end_root` within the proven range.
+/// `end_root` within the proven range (phase 3 of change proof verification).
 ///
-/// Uses the same "restructure the trie" approach as range proof verification:
-/// 1. Build an in-memory proving trie from the proposal's in-range keys
-/// 2. Reconcile boundary proof nodes into the proving trie (inserts branch
-///    structure matching `end_root`'s layout)
-/// 3. Compute a hybrid root hash: in-range children hashed from the proving
-///    trie, out-of-range children hashed from the proof nodes
-/// 4. Compare the computed hash against `end_root`
-///
-/// This reuses three existing range proof functions:
-/// - [`reconcile_branch_proof_node`] — inserts proof branch structure
-/// - [`compute_outside_children`] — determines which children are outside
-///   the proven range
-/// - [`compute_root_hash_with_proofs`] — computes the hybrid root hash
+/// Forks the proposal into a proving trie, reshapes it to match `end_root`'s
+/// structure via branch reconciliation and collapsing, then computes a hybrid
+/// root hash. See the [module-level documentation](crate::proofs#change-proof-verification-algorithm)
+/// for the full algorithm description.
 ///
 /// # Errors
 ///
@@ -1490,9 +1470,9 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
     /// Navigate to the branch at `key_nibbles` and return a mutable reference.
     /// Returns `None` if the path doesn't lead to an in-memory branch.
     ///
-    /// This is the mutable counterpart to [`get_node_from_nibbles`]. It only
+    /// This is the mutable counterpart to `get_node_from_nibbles`. It only
     /// works for in-memory nodes (`Child::Node`), which is guaranteed after
-    /// [`insert_branch_from_nibbles`].
+    /// `insert_branch_from_nibbles`.
     fn get_branch_from_nibbles_mut<'a>(
         root: &'a mut Option<Node>,
         key: &[PathComponent],

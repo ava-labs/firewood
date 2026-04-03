@@ -36,35 +36,6 @@
 //! - `childmask` (in `merkle`): Compact bitmap for tracking present children.
 //! - `magic`: Magic constants for proof format identification (internal).
 //!
-//! # Usage
-//!
-//! For most use cases, import proof types directly from the top level of the crate:
-//!
-//! ```rust,ignore
-//! use firewood::{Proof, ProofNode, RangeProof};
-//!
-//! // Verify a single key
-//! let proof: Proof<Vec<ProofNode>> = /* ... */;
-//! proof.verify(b"key", Some(b"value"), &root_hash)?;
-//!
-//! // Verify a key range
-//! let range_proof: RangeProof<Vec<u8>, Vec<u8>, Vec<ProofNode>> = /* ... */;
-//! for (key, value) in &range_proof {
-//!     // Process key-value pairs
-//! }
-//!
-//! // Verify a change proof
-//! // Step 1: Structural validation and boundary proof hash chain verification.
-//! let ctx = verify_change_proof_structure(&proof, end_root, start_key, end_key, max_length)?;
-//!
-//! // Step 2: Apply batch_ops to the verifier's start_root to produce a proposal.
-//! let proposal = db.apply_change_proof_to_parent(&proof, &parent_revision)?;
-//!
-//! // Step 3: Build a proving trie from the proposal's in-range keys, reconcile
-//! //         boundary proof nodes, and compare the computed root hash against end_root.
-//! verify_change_proof_root_hash(&proof, &ctx, &proposal)?;
-//! ```
-//!
 //! # Proof Format
 //!
 //! Proofs are serialized in a compact binary format that includes:
@@ -82,16 +53,100 @@
 //! The serialization format is versioned to allow for future evolution while maintaining
 //! backward compatibility with proof verification.
 //!
-//! # Formal Verification (Change Proofs)
+//! # Range Proof Verification Algorithm
 //!
-//! The change proof verification design has been formally verified using TLA+ and
-//! the TLC model checker. 35 design properties and 3 protocol properties were
-//! exhaustively checked for all trie instances up to branch factor 4 with depth 2,
-//! covering boundary classification, hash chain soundness, structural validation,
-//! operation consistency, truncated proofs, exclusion proofs, attack detection, and
-//! multi-round sync safety under adversarial provers. Two previously fixed bugs
-//! were formally reproduced as regression tests — TLC confirms both the vulnerable
-//! behavior and the necessity of their fixes. No new bugs were found.
+//! Range proof verification confirms that a contiguous set of key-value pairs
+//! exists within a specific key range of a trie with a given root hash.
+//!
+//! [`verify_range_proof`] proceeds in two phases:
+//!
+//! ## Phase 1 — Structural and boundary validation
+//!
+//! Validates that key-value pairs are strictly ascending and within the
+//! requested `[first_key, last_key]` range. Proof nodes carrying in-range
+//! values must appear in the key-value list (prevents an attacker from
+//! hiding keys that sit on a proof path). Start and end boundary proofs
+//! are verified against `root_hash` via hash chain checks.
+//!
+//! ## Phase 2 — Root hash verification
+//!
+//! A fresh in-memory proving trie is built from the key-value pairs.
+//! Boundary proof nodes are reconciled into it via
+//! `reconcile_branch_proof_node`, which inserts branch structure matching
+//! the original trie's layout. `compute_root_hash_with_proofs` then
+//! computes a hybrid root hash: in-range children are hashed from the
+//! proving trie, while out-of-range children (identified by
+//! `compute_outside_children`) use hashes from the proof nodes. The
+//! result must match `root_hash`.
+//!
+//! # Change Proof Verification Algorithm
+//!
+//! Change proof verification confirms that applying a set of `BatchOp`s to a trie
+//! with `start_root` produces a trie consistent with `end_root`, without requiring
+//! the verifier to hold the full `end_root` trie.
+//!
+//! Verification proceeds in three phases:
+//!
+//! ## Phase 1 — Structural validation ([`verify_change_proof_structure`])
+//!
+//! Validates the proof's internal consistency: key ordering, range bounds,
+//! absence of `DeleteRange` ops, and boundary proof hash chain verification
+//! against `end_root`. The start proof anchors the left edge of the proven
+//! range; the end proof anchors the right edge. Both are standard Merkle
+//! inclusion/exclusion proofs.
+//!
+//! ## Phase 2 — Apply batch ops
+//!
+//! The verifier applies the proof's `batch_ops` to its own copy of
+//! `start_root`, producing a proposal. This is the same commit path used
+//! for normal trie operations.
+//!
+//! ## Phase 3 — Root hash verification ([`verify_change_proof_root_hash`])
+//!
+//! The proposal's nodestore is forked into a "proving trie" that already
+//! contains the correct in-range key-value data. Two reshaping passes make
+//! its structure match `end_root`:
+//!
+//! 1. **Branch reconciliation** — `reconcile_branch_proof_node` ensures
+//!    branch nodes exist at every proof-path position with values matching
+//!    `end_root`. Out-of-range ancestors (proper prefixes of the boundary
+//!    keys) may carry values from `start_root` that differ from `end_root`;
+//!    the proof node's value is adopted for these positions.
+//!
+//! 2. **Branch collapsing** — `collapse_branch_to_path` removes out-of-range
+//!    children and flattens single-child branches between consecutive proof
+//!    nodes. The proof implies a direct path with no intermediate branches;
+//!    the fork may have extra structure from out-of-range keys that must be
+//!    stripped so the trie shape matches `end_root`.
+//!
+//! After reshaping, `compute_root_hash_with_proofs` walks the proving trie,
+//! hashing in-range children directly and substituting proof hashes for
+//! out-of-range children. The result is compared against `end_root`.
+//!
+//! # Range vs. Change Proof Verification
+//!
+//! Both algorithms build a proving trie, reconcile boundary proof nodes into
+//! it, and compute a hybrid root hash. They differ in three ways:
+//!
+//! 1. **Proving trie origin** — Range proofs build a fresh in-memory trie
+//!    from the key-value pairs provided in the proof. Change proofs fork
+//!    the proposal's nodestore, which already contains the full trie
+//!    (in-range *and* out-of-range keys).
+//!
+//! 2. **Branch collapsing** — Because the change proof's fork contains
+//!    out-of-range keys, it may have branch structure that doesn't exist
+//!    in `end_root`. `collapse_branch_to_path` strips this extra structure
+//!    between consecutive proof nodes. Range proofs skip this step — the
+//!    proving trie was built from only in-range keys, so no extra branches
+//!    exist.
+//!
+//! 3. **Out-of-range value trust** — When a proof node's value conflicts
+//!    with the proving trie, range proofs unconditionally accept the
+//!    proof's value (the proving trie has no out-of-range data to
+//!    preserve). Change proofs must be selective: out-of-range ancestors
+//!    adopt the proof's value (which reflects `end_root`), but a conflict
+//!    at a boundary key itself is an error, since that key is in-range and
+//!    should already match.
 
 pub(crate) mod change;
 pub(super) mod de;
