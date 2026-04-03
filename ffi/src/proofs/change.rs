@@ -16,7 +16,7 @@ use firewood::{
 };
 
 use crate::{
-    BorrowedBytes, ChangeProofResult, DatabaseHandle, HashKey, HashResult, KeyRange, Maybe,
+    BorrowedBytes, CView, ChangeProofResult, DatabaseHandle, HashKey, HashResult, KeyRange, Maybe,
     NextKeyRangeResult, OwnedBytes, ProposedChangeProofResult, ValueResult, VoidResult,
 };
 
@@ -91,6 +91,7 @@ pub struct ChangeProofContext {
 /// meaning this type can only be constructed after successful verification.
 #[derive(Debug)]
 pub struct ProposedChangeProofContext<'db> {
+    db: &'db DatabaseHandle,
     proof: FrozenChangeProof,
     verification: VerificationContext,
     proposal_state: ProposalState<'db>,
@@ -160,6 +161,7 @@ impl ChangeProofContext {
         }
 
         Ok(ProposedChangeProofContext {
+            db,
             proof,
             verification,
             proposal_state: ProposalState::Proposed(proposal.handle),
@@ -190,24 +192,33 @@ impl ChangeProofContext {
 
 impl ProposedChangeProofContext<'_> {
     /// Commit a previously proposed change proof. Consumes the proposal handle.
+    ///
+    /// If the proposal is stale (another proposal committed first), the proposal
+    /// is automatically rebased onto the current revision and retried once.
     fn commit(&mut self) -> Result<Option<ApiHashKey>, api::Error> {
         // Pessimistically set state to Failed; success paths below restore it.
         let state = std::mem::replace(&mut self.proposal_state, ProposalState::Failed);
-        match state {
+
+        let handle = match state {
             ProposalState::Committed(hash) => {
                 self.proposal_state = ProposalState::Committed(hash.clone());
-                Ok(hash)
+                return Ok(hash);
             }
-            ProposalState::Proposed(handle) => match handle.commit_proposal() {
-                Ok(hash) => {
-                    firewood_increment!(crate::registry::MERGE_COUNT, 1, "change" => "commit");
-                    self.proposal_state = ProposalState::Committed(hash.clone());
-                    Ok(hash)
-                }
-                Err(err) => Err(err),
-            },
-            ProposalState::Failed => Err(api::Error::CommitAlreadyFailed),
-        }
+            ProposalState::Proposed(handle) => handle,
+            ProposalState::Failed => return Err(api::Error::CommitAlreadyFailed),
+        };
+
+        let hash = match handle.commit_proposal() {
+            Err(api::Error::ParentNotLatest { .. }) => {
+                // Stale proposal — rebase onto current revision and retry once.
+                self.db.create_proposal_handle(&self.proof)?.handle.commit_proposal()
+            }
+            other => other,
+        }?;
+
+        firewood_increment!(crate::registry::MERGE_COUNT, 1, "change" => "commit");
+        self.proposal_state = ProposalState::Committed(hash.clone());
+        Ok(hash)
     }
 
     /// Returns the next key range that should be fetched after processing this
@@ -864,8 +875,10 @@ mod tests {
         assert_eq!(hash1, hash2, "double commit should return cached hash");
     }
 
+    /// A stale proposal (sibling committed first) should automatically rebase
+    /// and succeed. A second commit returns the cached hash.
     #[test]
-    fn test_commit_after_failed_commit_returns_error() {
+    fn test_commit_rebases_stale_proposal() {
         use firewood::api::Proposal as _;
 
         let dir_a = tempfile::tempdir().expect("tempdir");
@@ -902,21 +915,13 @@ mod tests {
             .expect("sibling proposal");
         sibling.commit().expect("sibling commit");
 
-        let err1 = proposed.commit().expect_err("first commit should fail");
-        assert!(
-            matches!(
-                err1,
-                firewood::api::Error::SiblingCommitted
-                    | firewood::api::Error::ParentNotLatest { .. }
-            ),
-            "expected SiblingCommitted or ParentNotLatest, got: {err1}"
-        );
+        // Commit should succeed via automatic rebase
+        let hash1 = proposed.commit().expect("commit should succeed via rebase");
+        assert!(hash1.is_some(), "commit should return a root hash");
 
-        let err2 = proposed.commit().expect_err("second commit should fail");
-        assert!(
-            matches!(err2, firewood::api::Error::CommitAlreadyFailed),
-            "expected CommitAlreadyFailed, got: {err2}"
-        );
+        // Second commit returns cached hash
+        let hash2 = proposed.commit().expect("second commit should return cached hash");
+        assert_eq!(hash1, hash2, "double commit should return same hash");
     }
 
     #[test]
