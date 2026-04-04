@@ -12,11 +12,13 @@
 //! within `[start_key, end_key]` can still fall in subtrees whose hashes are
 //! borrowed from proof nodes rather than recomputed from the proposal.
 
-use super::*;
+use super::init_merkle;
 use crate::api::{self, BatchOp, Db as DbTrait, DbView, FrozenChangeProof, Proposal as _};
 use crate::db::{Db, DbConfig};
 use crate::merkle::verify_change_proof_root_hash;
 use crate::{ChangeProofVerificationContext, verify_change_proof_structure};
+
+type OwnedBatchOps = Vec<BatchOp<Box<[u8]>, Box<[u8]>>>;
 
 fn new_db() -> (Db, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
@@ -59,17 +61,18 @@ fn is_rejected(
 ///
 /// Setup:
 ///   - Start trie and end trie both contain keys A, B, C, D, E (with some
-///     actual changes at other keys so batch_ops is non-empty).
+///     actual changes at other keys so `batch_ops` is non-empty).
 ///   - The change proof is bounded by non-existent gap keys around B..D.
-///   - Key C is unchanged between revisions and is NOT in batch_ops.
-///   - An attacker adds `Delete { key: C }` to batch_ops.
-///   - Structural check passes (C is between start_key and end_key, and the
+///   - Key C is unchanged between revisions and is NOT in `batch_ops`.
+///   - An attacker adds `Delete { key: C }` to `batch_ops`.
+///   - Structural check passes (C is between `start_key` and `end_key`, and the
 ///     end proof was generated for a key after C).
 ///   - Root hash check passes because C's subtree hash comes from the boundary
 ///     proof nodes (out-of-range) rather than being recomputed from the proposal.
 ///
 /// This means an attacker can claim a key was deleted when it wasn't.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn test_spurious_delete_in_range_not_rejected() {
     let (db, _dir) = new_db();
 
@@ -92,11 +95,26 @@ fn test_spurious_delete_in_range_not_rejected() {
 
     // Commit revision 1 (start trie): all 5 keys.
     db.propose(vec![
-        BatchOp::Put { key: &keys[0], value: &val_a },
-        BatchOp::Put { key: &keys[1], value: &val_b },
-        BatchOp::Put { key: &keys[2], value: &val_c },
-        BatchOp::Put { key: &keys[3], value: &val_d },
-        BatchOp::Put { key: &keys[4], value: &val_e },
+        BatchOp::Put {
+            key: &keys[0],
+            value: &val_a,
+        },
+        BatchOp::Put {
+            key: &keys[1],
+            value: &val_b,
+        },
+        BatchOp::Put {
+            key: &keys[2],
+            value: &val_c,
+        },
+        BatchOp::Put {
+            key: &keys[3],
+            value: &val_d,
+        },
+        BatchOp::Put {
+            key: &keys[4],
+            value: &val_e,
+        },
     ])
     .unwrap()
     .commit()
@@ -154,7 +172,7 @@ fn test_spurious_delete_in_range_not_rejected() {
     // ── Attack: add a spurious Delete for key C (0x50...) ─────────────
     // C is unchanged between revisions, within [start_key, end_key],
     // and exists in both tries.
-    let mut ops: Vec<BatchOp<Box<[u8]>, Box<[u8]>>> = valid_proof.batch_ops().to_vec();
+    let mut ops: OwnedBatchOps = valid_proof.batch_ops().to_vec();
     let target_key: Box<[u8]> = keys[2].to_vec().into_boxed_slice();
     let pos = ops
         .binary_search_by(|op| op.key().as_ref().cmp(target_key.as_ref()))
@@ -196,7 +214,7 @@ fn test_spurious_delete_in_range_not_rejected() {
 }
 
 /// Variant: the spurious delete target shares a first nibble with a key that
-/// IS in batch_ops, forcing them into the same top-level subtree. The subtree
+/// IS in `batch_ops`, forcing them into the same top-level subtree. The subtree
 /// must be recomputed because it contains a changed key, so the delete of the
 /// unchanged sibling should be visible.
 #[test]
@@ -215,11 +233,26 @@ fn test_spurious_delete_same_subtree_as_changed_key() {
     };
 
     db.propose(vec![
-        BatchOp::Put { key: &keys[0], value: &[0xAA; 20] },
-        BatchOp::Put { key: &keys[1], value: &[0xBB; 20] },
-        BatchOp::Put { key: &keys[2], value: &[0xCC; 20] },
-        BatchOp::Put { key: &keys[3], value: &[0xDD; 20] },
-        BatchOp::Put { key: &keys[4], value: &[0xEE; 20] },
+        BatchOp::Put {
+            key: &keys[0],
+            value: &[0xAA; 20],
+        },
+        BatchOp::Put {
+            key: &keys[1],
+            value: &[0xBB; 20],
+        },
+        BatchOp::Put {
+            key: &keys[2],
+            value: &[0xCC; 20],
+        },
+        BatchOp::Put {
+            key: &keys[3],
+            value: &[0xDD; 20],
+        },
+        BatchOp::Put {
+            key: &keys[4],
+            value: &[0xEE; 20],
+        },
     ])
     .unwrap()
     .commit()
@@ -251,7 +284,7 @@ fn test_spurious_delete_same_subtree_as_changed_key() {
         .unwrap();
 
     // Attack: spurious Delete for C (0x38), same top-nibble subtree as B (0x30).
-    let mut ops: Vec<BatchOp<Box<[u8]>, Box<[u8]>>> = valid_proof.batch_ops().to_vec();
+    let mut ops: OwnedBatchOps = valid_proof.batch_ops().to_vec();
     let target_key: Box<[u8]> = keys[2].to_vec().into_boxed_slice();
     let pos = ops
         .binary_search_by(|op| op.key().as_ref().cmp(target_key.as_ref()))
@@ -296,11 +329,26 @@ fn test_spurious_delete_with_existing_boundaries() {
     };
 
     db.propose(vec![
-        BatchOp::Put { key: &keys[0], value: &[0xAA; 20] },
-        BatchOp::Put { key: &keys[1], value: &[0xBB; 20] },
-        BatchOp::Put { key: &keys[2], value: &[0xCC; 20] },
-        BatchOp::Put { key: &keys[3], value: &[0xDD; 20] },
-        BatchOp::Put { key: &keys[4], value: &[0xEE; 20] },
+        BatchOp::Put {
+            key: &keys[0],
+            value: &[0xAA; 20],
+        },
+        BatchOp::Put {
+            key: &keys[1],
+            value: &[0xBB; 20],
+        },
+        BatchOp::Put {
+            key: &keys[2],
+            value: &[0xCC; 20],
+        },
+        BatchOp::Put {
+            key: &keys[3],
+            value: &[0xDD; 20],
+        },
+        BatchOp::Put {
+            key: &keys[4],
+            value: &[0xEE; 20],
+        },
     ])
     .unwrap()
     .commit()
@@ -342,7 +390,7 @@ fn test_spurious_delete_with_existing_boundaries() {
     );
 
     // Attack: spurious Delete for C (0x50).
-    let mut ops: Vec<BatchOp<Box<[u8]>, Box<[u8]>>> = valid_proof.batch_ops().to_vec();
+    let mut ops: OwnedBatchOps = valid_proof.batch_ops().to_vec();
     let target_key: Box<[u8]> = keys[2].to_vec().into_boxed_slice();
     let pos = ops
         .binary_search_by(|op| op.key().as_ref().cmp(target_key.as_ref()))
@@ -381,10 +429,10 @@ fn test_spurious_delete_with_existing_boundaries() {
 /// Demonstrates the root cause: `value_digest` accepts a proof for key B
 /// as a valid exclusion proof for a completely different key C.
 ///
-/// The proof [ROOT, leaf_B] traces root → child[3] → leaf_B. When asked
-/// "does key C (nibble 5) exist?", value_digest should reject the proof
+/// The proof `[ROOT, leaf_B]` traces root -> `child[3]` -> `leaf_B`. When asked
+/// "does key C (nibble 5) exist?", `value_digest` should reject the proof
 /// because the path follows child 3 (toward B), not child 5 (toward C).
-/// Instead, it accepts leaf_B as a "divergent child" exclusion for C.
+/// Instead, it accepts `leaf_B` as a "divergent child" exclusion for C.
 #[test]
 fn test_value_digest_accepts_wrong_path_as_exclusion() {
     let keys: [[u8; 32]; 3] = {
@@ -407,14 +455,14 @@ fn test_value_digest_accepts_wrong_path_as_exclusion() {
 
     // The proof should verify as an inclusion proof for B.
     proof_for_b
-        .verify(&keys[1], Some(&[0xBB; 20]), &root_hash)
+        .verify(keys[1], Some(&[0xBB; 20]), &root_hash)
         .expect("proof for B should verify B");
 
     // The proof should NOT verify as an exclusion proof for C.
     // C exists in the trie, but even setting that aside, the proof path
     // traces toward B (nibble 3), not toward C (nibble 5). The proof
     // has no information about C's subtree.
-    let result = proof_for_b.value_digest(&keys[2], &root_hash);
+    let result = proof_for_b.value_digest(keys[2], &root_hash);
     assert!(
         result.is_err(),
         "proof for B should NOT be accepted when queried for C, \
@@ -424,7 +472,7 @@ fn test_value_digest_accepts_wrong_path_as_exclusion() {
 
 // ── Control tests (correctly rejected) ────────────────────────────────────
 
-/// Control test: swapping the value of a Put that IS in batch_ops is correctly
+/// Control test: swapping the value of a Put that IS in `batch_ops` is correctly
 /// rejected. This confirms the hybrid hash works for keys that were changed
 /// between revisions (their subtree is computed from the proposal, not borrowed
 /// from proof nodes).
@@ -444,11 +492,26 @@ fn test_swapped_value_in_range_is_rejected() {
 
     // Revision 1.
     db.propose(vec![
-        BatchOp::Put { key: &keys[0], value: &[0xAA; 20] },
-        BatchOp::Put { key: &keys[1], value: &[0xBB; 20] },
-        BatchOp::Put { key: &keys[2], value: &[0xCC; 20] },
-        BatchOp::Put { key: &keys[3], value: &[0xDD; 20] },
-        BatchOp::Put { key: &keys[4], value: &[0xEE; 20] },
+        BatchOp::Put {
+            key: &keys[0],
+            value: &[0xAA; 20],
+        },
+        BatchOp::Put {
+            key: &keys[1],
+            value: &[0xBB; 20],
+        },
+        BatchOp::Put {
+            key: &keys[2],
+            value: &[0xCC; 20],
+        },
+        BatchOp::Put {
+            key: &keys[3],
+            value: &[0xDD; 20],
+        },
+        BatchOp::Put {
+            key: &keys[4],
+            value: &[0xEE; 20],
+        },
     ])
     .unwrap()
     .commit()
@@ -457,8 +520,14 @@ fn test_swapped_value_in_range_is_rejected() {
 
     // Revision 2: change B and D.
     db.propose(vec![
-        BatchOp::Put { key: &keys[1], value: &[0xB2; 20] },
-        BatchOp::Put { key: &keys[3], value: &[0xD2; 20] },
+        BatchOp::Put {
+            key: &keys[1],
+            value: &[0xB2; 20],
+        },
+        BatchOp::Put {
+            key: &keys[3],
+            value: &[0xD2; 20],
+        },
     ])
     .unwrap()
     .commit()
@@ -487,7 +556,7 @@ fn test_swapped_value_in_range_is_rejected() {
     );
 
     // Attack: change the value of the first Put (B) to garbage.
-    let mut ops: Vec<BatchOp<Box<[u8]>, Box<[u8]>>> = valid_proof.batch_ops().to_vec();
+    let mut ops: OwnedBatchOps = valid_proof.batch_ops().to_vec();
     let first_put_idx = ops
         .iter()
         .position(|op| matches!(op, BatchOp::Put { .. }))
@@ -534,11 +603,26 @@ fn test_spurious_put_in_range_is_rejected() {
     };
 
     db.propose(vec![
-        BatchOp::Put { key: &keys[0], value: &[0xAA; 20] },
-        BatchOp::Put { key: &keys[1], value: &[0xBB; 20] },
-        BatchOp::Put { key: &keys[2], value: &[0xCC; 20] },
-        BatchOp::Put { key: &keys[3], value: &[0xDD; 20] },
-        BatchOp::Put { key: &keys[4], value: &[0xEE; 20] },
+        BatchOp::Put {
+            key: &keys[0],
+            value: &[0xAA; 20],
+        },
+        BatchOp::Put {
+            key: &keys[1],
+            value: &[0xBB; 20],
+        },
+        BatchOp::Put {
+            key: &keys[2],
+            value: &[0xCC; 20],
+        },
+        BatchOp::Put {
+            key: &keys[3],
+            value: &[0xDD; 20],
+        },
+        BatchOp::Put {
+            key: &keys[4],
+            value: &[0xEE; 20],
+        },
     ])
     .unwrap()
     .commit()
@@ -571,7 +655,7 @@ fn test_spurious_put_in_range_is_rejected() {
         .unwrap();
 
     // Attack: add a Put for key 0x60... (between C and D, doesn't exist).
-    let mut ops: Vec<BatchOp<Box<[u8]>, Box<[u8]>>> = valid_proof.batch_ops().to_vec();
+    let mut ops: OwnedBatchOps = valid_proof.batch_ops().to_vec();
     let mut fake_key = [0u8; 32];
     fake_key[0] = 0x60;
     let pos = ops
