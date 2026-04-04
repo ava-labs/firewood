@@ -698,14 +698,20 @@ pub fn verify_change_proof_root_hash(
 
     // If the end trie's root has a non-empty partial_path, the first proof
     // node sits deeper than the proposal root. Collapse the proving trie's
-    // root to match so that out-of-range children above the first proof
-    // node are stripped and the root shape matches end_root.
+    // root so that out-of-range children above the first proof node are
+    // stripped and the root shape matches end_root. Only children provably
+    // outside [start_key, right_edge_key] are stripped; in-range children
+    // are kept so the hash computation can detect attacker-injected keys.
     let first_proof_key = start_nodes
         .first()
         .or_else(|| end_nodes.first())
         .map(|n| n.key.as_ref());
     if let Some(key) = first_proof_key {
-        proving_merkle.collapse_root_to_path(key)?;
+        proving_merkle.collapse_root_to_path(
+            key,
+            verification.start_key.as_deref(),
+            verification.right_edge_key.as_deref(),
+        )?;
     }
 
     // Compute which children at each boundary node are outside the proven
@@ -1819,6 +1825,53 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         Ok(())
     }
 
+    /// Range-aware root stripping: only remove children provably
+    /// outside `[start_key, right_edge_key]` at the given `depth`.
+    fn collapse_root_in_range(
+        branch: &mut BranchNode,
+        on_path: PathComponent,
+        depth: usize,
+        start_key: Option<&[u8]>,
+        right_edge_key: Option<&[u8]>,
+    ) {
+        // Convert byte-level range bounds to nibbles at the branching
+        // depth. A child at nibble N covers all keys where the nibble
+        // at position `depth` equals N.
+        let start_nib: Option<u8> = start_key.and_then(|k| NibblesIterator::new(k).nth(depth));
+        let end_nib: Option<u8> = right_edge_key.and_then(|k| NibblesIterator::new(k).nth(depth));
+
+        for (nibble, slot) in &mut branch.children {
+            if nibble == on_path {
+                // Always keep the on-path child — the proof
+                // traverses through it.
+                continue;
+            }
+
+            let n = nibble.as_u8();
+
+            // A child is entirely before the range if its nibble
+            // is below the start bound at this depth.
+            let before_range = start_nib.is_some_and(|s| n < s);
+
+            // A child is entirely after the range if its nibble
+            // is above the end bound at this depth.
+            let after_range = end_nib.is_some_and(|e| n > e);
+
+            if before_range || after_range {
+                // Subtree is provably out of range — safe to strip.
+                *slot = None;
+            }
+            // Otherwise the child may contain in-range keys
+            // (possibly injected by an attacker) — keep it so the
+            // hash computation detects the mismatch.
+        }
+
+        // Clear the root's value. The root path is a proper prefix
+        // of all keys; its value (if any) is out-of-range for a
+        // bounded proof and was already handled by reconciliation.
+        branch.value = None;
+    }
+
     /// Collapse intermediate branches between two consecutive proof-path
     /// positions.
     ///
@@ -1841,6 +1894,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     pub(crate) fn collapse_root_to_path(
         &mut self,
         target: &[PathComponent],
+        start_key: Option<&[u8]>,
+        right_edge_key: Option<&[u8]>,
     ) -> Result<(), FileIoError> {
         // The root's partial_path consumes some prefix of target.
         // Only collapse if target extends beyond the root's partial_path.
@@ -1855,9 +1910,44 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
                 .zip(root_node.partial_path().0.iter())
                 .all(|(t, p)| t.as_u8() == *p)
         {
-            // On error the root is left empty, but the caller discards
-            // the proving trie on any verification failure.
-            root_node = self.collapse_strip(root_node, remaining)?;
+            let on_path = remaining[0];
+
+            if let Some(branch) = root_node.as_branch_mut() {
+                // Range-aware strip at the root level: only remove
+                // children provably outside [start_key, right_edge_key].
+                Self::collapse_root_in_range(branch, on_path, pp_len, start_key, right_edge_key);
+
+                // Deeper levels between root and first proof node: use
+                // unconditional collapse_strip (intermediate branches in
+                // end_root have only the on-path child).
+                if let Some(child) = branch.children.take(on_path) {
+                    let mut child_node = self.read_for_update(child)?;
+                    let child_pp_len = child_node.partial_path().len();
+                    // remaining[0] is on_path (consumed), rest is deeper.
+                    let deeper = remaining.get(1 + child_pp_len..).unwrap_or_default();
+                    if !deeper.is_empty() {
+                        child_node = self.collapse_strip(child_node, deeper)?;
+                    }
+                    branch.children[on_path] = Some(Child::Node(child_node));
+                }
+
+                // Flatten: if single child and no value, merge partial
+                // paths to match end_root's compressed structure.
+                if branch.value.is_none()
+                    && let Some((child_idx, only_child)) = branch.children.take_only_child() {
+                        let mut merged = self.read_for_update(only_child)?;
+                        let merged_path = Path::from_nibbles_iterator(
+                            branch
+                                .partial_path
+                                .iter()
+                                .chain(std::iter::once(&child_idx.as_u8()))
+                                .chain(merged.partial_path().iter())
+                                .copied(),
+                        );
+                        merged.update_partial_path(merged_path);
+                        root_node = merged;
+                    }
+            }
         }
 
         *self.nodestore.root_mut() = Some(root_node);
