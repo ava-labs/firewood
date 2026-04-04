@@ -876,13 +876,9 @@ fn test_spurious_put_in_range_is_rejected() {
 ///     at `[]` with children at nibbles 0 and 1.
 ///   - `end_root`'s proof path starts from its root at `[1]`, so
 ///     there's no proof node at `[]` to seal off nibble 0.
-///   - The hybrid hash includes nibble 0's subtree (from the proposal)
-///     but `end_root` doesn't have it → `EndRootMismatch`.
-///
-/// This is a structural limitation of the change proof mechanism:
-/// it assumes the proposal and `end_root` have compatible root-level
-/// trie structure. In multi-round sync, this assumption can be violated
-/// when out-of-range keys are deleted between revisions.
+///   - `collapse_root_to_path` reshapes the proving trie's root to
+///     match `end_root`'s structure, stripping the out-of-range child
+///     and flattening the root's `partial_path` to `[1]`.
 #[test]
 fn test_out_of_range_root_structure_change() {
     let (db, _dir) = new_db();
@@ -947,11 +943,11 @@ fn test_out_of_range_root_structure_change() {
     let ctx =
         verify_change_proof_structure(&proof, root2.clone(), Some(b"\x10"), None, None).unwrap();
 
-    // BUG: Root hash check fails with EndRootMismatch.
     // The proposal has \x01 (from start_root, outside range) which
     // creates a root at nibble path [] with children at nibbles 0 and 1.
     // But end_root's root is compressed to nibble path [1] (no nibble-0
-    // keys). The proof can't reconcile these different root shapes.
+    // keys). collapse_root_to_path reshapes the proving trie's root to
+    // match end_root's structure.
     let result = verify_and_check(&db, &proof, &ctx, root1);
     assert!(
         result.is_ok(),

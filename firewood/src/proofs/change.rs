@@ -243,8 +243,7 @@ fn compute_right_edge_key<'a>(
     end_key: Option<&'a [u8]>,
     max_length: Option<NonZeroUsize>,
 ) -> Option<&'a [u8]> {
-    let possibly_truncated =
-        max_length.is_some_and(|n| proof.batch_ops().len() == n.get());
+    let possibly_truncated = max_length.is_some_and(|n| proof.batch_ops().len() == n.get());
     let truncated = possibly_truncated
         && last_op_key.is_some_and(|k| {
             proof
@@ -396,8 +395,7 @@ pub fn verify_change_proof_structure(
     }
 
     let last_op_key = last_op.map(|op| op.key().as_ref());
-    let right_edge_key =
-        compute_right_edge_key(proof, &end_root, last_op_key, end_key, max_length);
+    let right_edge_key = compute_right_edge_key(proof, &end_root, last_op_key, end_key, max_length);
 
     // Verify end boundary proof against end_root. The end proof was
     // generated for right_edge_key. The boundary_op check applies when
