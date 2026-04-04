@@ -3,14 +3,10 @@
 
 //! Adversarial tests for change proof verification.
 //!
-//! These tests demonstrate that an attacker can craft change proofs containing
-//! in-range key/value mutations that pass both structural and root hash
-//! verification. The core issue is that `verify_change_proof_root_hash` borrows
-//! subtree hashes from boundary proof nodes for "out-of-range" children, but
-//! the boundary between in-range and out-of-range is determined by proof path
-//! structure — not by the lexicographic key range. Keys that are lexicographically
-//! within `[start_key, end_key]` can still fall in subtrees whose hashes are
-//! borrowed from proof nodes rather than recomputed from the proposal.
+//! These tests verify that crafted change proofs containing spurious in-range
+//! mutations are correctly **rejected** by both structural and root hash
+//! verification. Each test constructs an attack proof with an unauthorized
+//! operation and asserts that verification catches it.
 
 use super::init_merkle;
 use crate::api::{self, BatchOp, Db as DbTrait, DbView, FrozenChangeProof, Proposal as _};
@@ -55,9 +51,8 @@ fn is_rejected(
 
 // ── Bug demonstrations ────────────────────────────────────────────────────
 
-/// Demonstrates that adding a spurious Delete for an in-range key that exists
-/// in the end trie (but is unchanged between revisions) is not rejected by
-/// change proof verification.
+/// Verifies that a spurious Delete for an in-range key that exists in the end
+/// trie (but is unchanged between revisions) is correctly rejected.
 ///
 /// Setup:
 ///   - Start trie and end trie both contain keys A, B, C, D, E (with some
@@ -65,15 +60,9 @@ fn is_rejected(
 ///   - The change proof is bounded by non-existent gap keys around B..D.
 ///   - Key C is unchanged between revisions and is NOT in `batch_ops`.
 ///   - An attacker adds `Delete { key: C }` to `batch_ops`.
-///   - Structural check passes (C is between `start_key` and `end_key`, and the
-///     end proof was generated for a key after C).
-///   - Root hash check passes because C's subtree hash comes from the boundary
-///     proof nodes (out-of-range) rather than being recomputed from the proposal.
-///
-/// This means an attacker can claim a key was deleted when it wasn't.
 #[test]
 #[allow(clippy::too_many_lines)]
-fn test_spurious_delete_in_range_not_rejected() {
+fn test_spurious_delete_in_range_is_rejected() {
     let (db, _dir) = new_db();
 
     // 5 well-separated keys so they occupy distinct trie subtrees.
@@ -198,7 +187,6 @@ fn test_spurious_delete_in_range_not_rejected() {
          (the spurious Delete removed key C)"
     );
 
-    // Yet the verifier does NOT reject it — this is the bug.
     assert!(
         is_rejected(
             &db,
@@ -208,8 +196,8 @@ fn test_spurious_delete_in_range_not_rejected() {
             Some(&end_key),
             root1,
         ),
-        "spurious Delete of in-range key C was NOT rejected, \
-         even though proposal root {attack_root:?} != end root"
+        "spurious Delete of in-range key C should be rejected \
+         (proposal root {attack_root:?} != end root)"
     );
 }
 

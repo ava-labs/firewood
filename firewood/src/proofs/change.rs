@@ -12,10 +12,10 @@
 //! A change proof consists of three components:
 //!
 //! 1. **Start proof**: A Merkle proof establishing that the smallest key does or doesn't
-//!    exist in the start trie.
+//!    exist in the end trie.
 //!
 //! 2. **End proof**: A Merkle proof establishing that the largest key does or doesn't
-//!    exist in the start trie.
+//!    exist in the end trie.
 //!
 //! 3. **Batch operations**: The actual [`BatchOp`]s (puts and deletes) that transform
 //!    the start trie into the end trie, in lexicographic key order.
@@ -39,7 +39,7 @@ use crate::api::{self, BatchOp, FrozenChangeProof, HashKey};
 /// trie with given start root hash, the resulting trie will have the given end root hash. It
 /// consists of the following:
 /// - A start proof: proves that the smallest key does/doesn't exist
-/// - An end proof: proves the the largest key does/doesn't exist
+/// - An end proof: proves the largest key does/doesn't exist
 /// - The actual `BatchOp`s that specify the difference between the start and end tries.
 #[derive(Debug)]
 pub struct ChangeProof<K: AsRef<[u8]> + Debug, V: AsRef<[u8]> + Debug, H> {
@@ -218,7 +218,7 @@ fn verify_boundary_proof<C: ProofCollection>(
 /// Verify structural properties and boundary proofs of a change proof.
 ///
 /// Performs the following checks:
-/// - Range validity (`start_key` < `end_key`)
+/// - Range validity (`start_key` ≤ `end_key`)
 /// - No `DeleteRange` operations
 /// - `batch_ops` length does not exceed `max_length`
 /// - Keys are sorted and unique
