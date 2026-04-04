@@ -109,7 +109,7 @@ explicit `unsafe impl Send + Sync` with documented safety justifications.
 The relevant source code lives in:
 
 | Area | Path |
-|------|------|
+| ------ | ------ |
 | Proof types & traits | `firewood/src/proofs/types.rs` |
 | Range proofs | `firewood/src/proofs/range.rs` |
 | Change proofs | `firewood/src/proofs/change.rs` |
