@@ -580,6 +580,12 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
 ///
 /// Returns [`api::Error::ProofError`] if the computed root hash doesn't
 /// match `end_root`, or if proof nodes conflict with the proving trie.
+///
+/// # Panics
+///
+/// Panics if reconciling non-empty boundary proof nodes into the proving
+/// trie fails to create a root node (this is structurally guaranteed by
+/// `insert_branch_from_nibbles`).
 pub fn verify_change_proof_root_hash(
     proof: &FrozenChangeProof,
     verification: &ChangeProofVerificationContext,
@@ -727,11 +733,9 @@ pub fn verify_change_proof_root_hash(
     // Compute the hybrid root hash via `compute_root_hash_with_proofs`.
     // In-range children are hashed from the proving trie. Out-of-range
     // children use hashes from the proof nodes.
-    let Some(root_node) = proving_merkle.root() else {
-        // The proving trie is empty — no in-range keys exist. If the proof
-        // claims end_root has keys in this range, this is a mismatch.
-        return Err(api::Error::ProofError(ProofError::Empty));
-    };
+    let root_node = proving_merkle
+        .root()
+        .expect("a non-empty proof reconciliation always leaves behind a root node");
 
     let computed =
         compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children)?;
