@@ -470,6 +470,187 @@ fn test_value_digest_accepts_wrong_path_as_exclusion() {
     );
 }
 
+// ── Truncated proof tests ─────────────────────────────────────────────────
+// These demonstrate WHY `effective_end` uses `last_op_key` rather than
+// `end_key`: truncated proofs send changes in chunks, and each chunk's
+// end proof covers only the last key in that chunk.
+
+/// Truncated proof round-trip: 3 keys all change, but the prover sends
+/// only 1 change at a time (limit=1). The verifier accepts each chunk
+/// and applies it. After all chunks, the receiver has the full end state.
+///
+/// This test confirms that `effective_end = last_op_key` is necessary —
+/// changing it to `end_key` would break this flow.
+#[test]
+fn test_truncated_proof_round_trip() {
+    let (db_a, _dir_a) = new_db();
+    let (db_b, _dir_b) = new_db();
+
+    // Both DBs start with the same 3 keys.
+    let initial = vec![
+        BatchOp::Put {
+            key: b"\x10".as_slice(),
+            value: b"v0".as_slice(),
+        },
+        BatchOp::Put {
+            key: b"\x20",
+            value: b"v1",
+        },
+        BatchOp::Put {
+            key: b"\x30",
+            value: b"v2",
+        },
+    ];
+    db_a.propose(initial.clone()).unwrap().commit().unwrap();
+    let root1_a = db_a.root_hash().unwrap();
+    db_b.propose(initial).unwrap().commit().unwrap();
+    let root1_b = db_b.root_hash().unwrap();
+
+    // db_a changes all 3 keys.
+    db_a.propose(vec![
+        BatchOp::Put {
+            key: b"\x10",
+            value: b"c0",
+        },
+        BatchOp::Put {
+            key: b"\x20",
+            value: b"c1",
+        },
+        BatchOp::Put {
+            key: b"\x30",
+            value: b"c2",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root2 = db_a.root_hash().unwrap();
+
+    // Round 1: truncated to 1 op. End proof is for \x10 (last_op_key),
+    // not for the full range end. Keys \x20 and \x30 are beyond the
+    // truncation point — their hashes must come from the proof.
+    let proof1 = db_a
+        .change_proof(
+            root1_a.clone(),
+            root2.clone(),
+            None,
+            None,
+            std::num::NonZeroUsize::new(1),
+        )
+        .unwrap();
+    assert_eq!(proof1.batch_ops().len(), 1, "truncated to 1 op");
+
+    let ctx1 = verify_change_proof_structure(
+        &proof1,
+        root2.clone(),
+        None,
+        None,
+        std::num::NonZeroUsize::new(1),
+    )
+    .unwrap();
+    verify_and_check(&db_b, &proof1, &ctx1, root1_b.clone())
+        .expect("truncated proof round 1 should verify");
+
+    // Apply round 1 to db_b.
+    let parent1 = db_b.revision(root1_b).unwrap();
+    let proposal1 = db_b
+        .apply_change_proof_to_parent(&proof1, &*parent1)
+        .unwrap();
+    let root_b_after_1 = proposal1.root_hash().unwrap();
+    proposal1.commit().unwrap();
+
+    // Round 2: continue from last key of round 1.
+    let next_start = proof1.batch_ops().last().unwrap().key().clone();
+    let proof2 = db_a
+        .change_proof(
+            root1_a,
+            root2.clone(),
+            Some(&next_start),
+            None,
+            None,
+        )
+        .unwrap();
+    let ctx2 = verify_change_proof_structure(
+        &proof2,
+        root2,
+        Some(&next_start),
+        None,
+        None,
+    )
+    .unwrap();
+    verify_and_check(&db_b, &proof2, &ctx2, root_b_after_1)
+        .expect("truncated proof round 2 should verify");
+}
+
+/// Truncated proof where the last op is a Delete. The end proof is an
+/// exclusion proof for the deleted key. This exercises the
+/// `effective_end = last_op_key` path with exclusion semantics.
+#[test]
+fn test_truncated_proof_with_delete_last_op() {
+    let (db_a, _dir_a) = new_db();
+    let (db_b, _dir_b) = new_db();
+
+    let initial = vec![
+        BatchOp::Put {
+            key: b"\x10".as_slice(),
+            value: b"v0".as_slice(),
+        },
+        BatchOp::Put {
+            key: b"\x20",
+            value: b"v1",
+        },
+        BatchOp::Put {
+            key: b"\x30",
+            value: b"v2",
+        },
+    ];
+    db_a.propose(initial.clone()).unwrap().commit().unwrap();
+    let root1_a = db_a.root_hash().unwrap();
+    db_b.propose(initial).unwrap().commit().unwrap();
+    let root1_b = db_b.root_hash().unwrap();
+
+    // Change \x10, delete \x20, change \x30.
+    db_a.propose(vec![
+        BatchOp::Put {
+            key: b"\x10",
+            value: b"changed",
+        },
+        BatchOp::Delete { key: b"\x20" },
+        BatchOp::Put {
+            key: b"\x30",
+            value: b"changed",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root2 = db_a.root_hash().unwrap();
+
+    // Truncated to 2 ops: [Put{\x10}, Delete{\x20}].
+    // Last op is Delete{\x20} — end proof is an exclusion proof for \x20.
+    let proof = db_a
+        .change_proof(
+            root1_a,
+            root2.clone(),
+            None,
+            None,
+            std::num::NonZeroUsize::new(2),
+        )
+        .unwrap();
+    assert_eq!(proof.batch_ops().len(), 2, "truncated to 2 ops");
+
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2,
+        None,
+        None,
+        std::num::NonZeroUsize::new(2),
+    )
+    .unwrap();
+    verify_and_check(&db_b, &proof, &ctx, root1_b)
+        .expect("truncated proof with delete last op should verify");
+}
+
 // ── Control tests (correctly rejected) ────────────────────────────────────
 
 /// Control test: swapping the value of a Put that IS in `batch_ops` is correctly
@@ -685,5 +866,121 @@ fn test_spurious_put_in_range_is_rejected() {
             root1,
         ),
         "spurious Put of in-range key 0x60 was NOT rejected"
+    );
+}
+
+// ── Root structure incompatibility (found by TLA+ model checking) ─────
+
+/// Demonstrates that an honest change proof fails verification when the
+/// start and end tries differ outside the proven range in a way that
+/// changes the root-level trie structure.
+///
+/// Found by exhaustive TLA+ model checking (AdversarialProof.tla):
+/// the `OnlyCorrectDiffAccepted` invariant produced a counterexample
+/// where the verification pipeline rejects a correct proof because the
+/// proposal's root shape is incompatible with `end_root`'s compressed
+/// structure.
+///
+/// Setup:
+///   - `start_root` has keys at first nibbles 0 AND 1 (e.g., `\x01`
+///     and `\x10`, `\x11`). The root branches at both nibbles.
+///   - `end_root` deletes `\x01` (outside the query range) and changes
+///     `\x10` (inside the range). Now only nibble-1 keys remain, so
+///     the root compresses to start at nibble path `[1]`.
+///   - The query range `[\x10, None]` excludes `\x01`.
+///   - The honest diff is `{Put(\x10, new_val)}`.
+///   - The proposal (start + diff) still has `\x01`, creating a root
+///     at `[]` with children at nibbles 0 and 1.
+///   - `end_root`'s proof path starts from its root at `[1]`, so
+///     there's no proof node at `[]` to seal off nibble 0.
+///   - The hybrid hash includes nibble 0's subtree (from the proposal)
+///     but `end_root` doesn't have it → `EndRootMismatch`.
+///
+/// This is a structural limitation of the change proof mechanism:
+/// it assumes the proposal and `end_root` have compatible root-level
+/// trie structure. In multi-round sync, this assumption can be violated
+/// when out-of-range keys are deleted between revisions.
+#[test]
+fn test_out_of_range_root_structure_change() {
+    let (db, _dir) = new_db();
+
+    // Revision 1: keys at different first nibbles.
+    //   \x01 → nibble path [0, 1]   (first nibble 0)
+    //   \x10 → nibble path [1, 0]   (first nibble 1)
+    //   \x11 → nibble path [1, 1]   (first nibble 1)
+    // Root has children at both nibbles 0 and 1.
+    db.propose(vec![
+        BatchOp::Put {
+            key: b"\x01",
+            value: b"alpha",
+        },
+        BatchOp::Put {
+            key: b"\x10",
+            value: b"betax",
+        },
+        BatchOp::Put {
+            key: b"\x11",
+            value: b"gamma",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root1 = db.root_hash().unwrap();
+
+    // Revision 2: delete \x01 (out of range), change \x10 (in range).
+    // Only nibble-1 keys remain → root compresses past nibble 0.
+    db.propose(vec![
+        BatchOp::Delete { key: b"\x01" },
+        BatchOp::Put {
+            key: b"\x10",
+            value: b"beta2",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root2 = db.root_hash().unwrap();
+
+    // Generate change proof for range [\x10, None].
+    // \x01 is outside the range (0x01 < 0x10), so the diff should
+    // only contain {Put(\x10, "beta2")}.
+    let proof = db
+        .change_proof(
+            root1.clone(),
+            root2.clone(),
+            Some(b"\x10".as_slice()),
+            None,
+            None,
+        )
+        .unwrap();
+
+    assert!(
+        !proof.batch_ops().is_empty(),
+        "expected non-empty batch_ops for the \\x10 value change"
+    );
+
+    // Structural check should pass — the proof is honest.
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2.clone(),
+        Some(b"\x10"),
+        None,
+        None,
+    )
+    .unwrap();
+
+    // BUG: Root hash check fails with EndRootMismatch.
+    // The proposal has \x01 (from start_root, outside range) which
+    // creates a root at nibble path [] with children at nibbles 0 and 1.
+    // But end_root's root is compressed to nibble path [1] (no nibble-0
+    // keys). The proof can't reconcile these different root shapes.
+    let result = verify_and_check(&db, &proof, &ctx, root1);
+    assert!(
+        result.is_ok(),
+        "honest change proof rejected due to out-of-range root structure \
+         change: {result:?}. The proposal root (at []) is incompatible \
+         with end_root (at [1]) because key \\x01 was deleted outside \
+         the proven range."
     );
 }
