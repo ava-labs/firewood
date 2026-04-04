@@ -251,16 +251,24 @@ pub struct ProofNode {
 
 impl std::fmt::Debug for ProofNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Filter the missing children and only show the present ones with their indices
-        let child_hashes = self.child_hashes.iter_present().collect::<Vec<_>>();
+        // Render nibble key as a compact hex string (e.g. "c9ee60")
+        let key_hex: String = self.key.iter().map(|c| format!("{c:x}")).collect();
+
+        // Show present children as hex nibble indices
+        let children: Vec<String> = self
+            .child_hashes
+            .iter_present()
+            .map(|(nibble, hash)| format!("{nibble:x}:{hash:?}"))
+            .collect();
+
         // Compute the hash and render it as well
         let hash = firewood_storage::Preimage::to_hash(self);
 
         f.debug_struct("ProofNode")
-            .field("key", &self.key)
+            .field("key", &key_hex)
             .field("partial_len", &self.partial_len)
             .field("value_digest", &self.value_digest)
-            .field("child_hashes", &child_hashes)
+            .field("child_hashes", &children)
             .field("hash", &hash)
             .finish()
     }

@@ -19,6 +19,7 @@ use crate::api::{self, BatchOp, Db as DbTrait, FrozenChangeProof, Proposal as _}
 use crate::db::{Db, DbConfig};
 use crate::merkle::verify_change_proof_root_hash;
 use crate::{ChangeProof, ChangeProofVerificationContext, Proof, verify_change_proof_structure};
+use firewood_storage::logger::{debug, trace};
 
 /// Verify a change proof end-to-end: structural check + root hash check.
 fn verify_and_check(
@@ -603,7 +604,27 @@ fn test_slow_change_proof_fuzz_varlen() {
 /// Adversarial fuzz test: generates valid change proofs, then applies random
 /// mutations (corruptions) and asserts that verification always rejects them.
 ///
-/// Mutation groups (by weight):
+/// # Reproducing failures
+///
+/// Each iteration prints a seed to stderr. To reproduce a specific failure:
+///
+/// ```sh
+/// FIREWOOD_TEST_SEED=<seed> cargo nextest run -p firewood --features logger \
+///   -E 'test(adversarial_change_proof_fuzz)' --profile ci
+/// ```
+///
+/// For detailed diagnostics, enable the `logger` feature and set `RUST_LOG`:
+///
+/// - `RUST_LOG=DEBUG` — shows scenario selection, boundary keys, mutation
+///   applied, and whether each mutation was rejected (and by which phase).
+/// - `RUST_LOG=TRACE` — additionally dumps the full start/end tries (DOT
+///   format), all proof nodes, and batch ops before and after mutation.
+///
+/// The failure message includes the seed, scenario, group, mutation name,
+/// and proof dimensions to help narrow down the issue.
+///
+/// # Mutation groups (by weight)
+///
 ///   30% — batch op mutations (omit/add/swap keys and values)
 ///   25% — exclusion proof attacks (truncate, clear child, graft, swap)
 ///   15% — out-of-range structural (corrupt sibling hash, remove intermediate)
@@ -647,6 +668,8 @@ fn test_slow_adversarial_change_proof_fuzz() {
             .collect();
         db.propose(start_batch).unwrap().commit().unwrap();
         let root1 = db.root_hash().unwrap();
+        debug!("start trie: {key_count} keys, root1={root1:?}");
+        trace!("start trie dump:\n{}", db.dump_to_string().unwrap());
 
         // ── Build end trie ────────────────────────────────────────────
         let delete_step = (start_keys.len() / 7).max(1);
@@ -674,6 +697,11 @@ fn test_slow_adversarial_change_proof_fuzz() {
 
         db.propose(end_batch).unwrap().commit().unwrap();
         let root2 = db.root_hash().unwrap();
+        debug!(
+            "end trie: deleted={}, inserted={insert_count}, root2={root2:?}",
+            deleted_indices.len()
+        );
+        trace!("end trie dump:\n{}", db.dump_to_string().unwrap());
 
         // ── Build end-state key list ──────────────────────────────────
         let mut end_keys: Vec<[u8; 32]> = start_keys
@@ -699,6 +727,7 @@ fn test_slow_adversarial_change_proof_fuzz() {
             .collect();
         db.propose(extra_batch).unwrap().commit().unwrap();
         let root3 = db.root_hash().unwrap();
+        debug!("3rd revision root3={root3:?}");
 
         // ── 2nd independent DB for replay tests ──────────────────────
         let dir2 = tempfile::tempdir().unwrap();
@@ -840,6 +869,32 @@ fn test_slow_adversarial_change_proof_fuzz() {
                 }
             };
 
+            let scenario_desc = match scenario {
+                0..36 => "both_exist",
+                36..56 => "start_nonexistent",
+                56..76 => "end_nonexistent",
+                76..96 => "both_nonexistent",
+                _ => "no_bounds",
+            };
+            debug!(
+                "scenario={scenario}({scenario_desc}) start_key={} end_key={} \
+                 batch_ops={} start_proof={} end_proof={}",
+                start_key
+                    .as_ref()
+                    .map(hex::encode)
+                    .unwrap_or_else(|| "None".into()),
+                end_key
+                    .as_ref()
+                    .map(hex::encode)
+                    .unwrap_or_else(|| "None".into()),
+                proof.batch_ops().len(),
+                proof.start_proof().as_ref().len(),
+                proof.end_proof().as_ref().len(),
+            );
+            trace!("batch_ops: {:#?}", proof.batch_ops());
+            debug!("start_proof: {:?}", proof.start_proof().as_ref());
+            debug!("end_proof: {:?}", proof.end_proof().as_ref());
+
             // Pick mutation group.
             let group = rng.random_range(0..100_u32);
 
@@ -920,6 +975,12 @@ fn test_slow_adversarial_change_proof_fuzz() {
                                 .zip(mask.iter())
                                 .map(|(a, b)| a ^ b)
                                 .collect();
+                            debug!(
+                                "M3: key={} old_val={} new_val={}",
+                                hex::encode(&*key),
+                                hex::encode(&*old_val),
+                                hex::encode(&new_val),
+                            );
                             ops[idx] = BatchOp::Put {
                                 key,
                                 value: new_val.into_boxed_slice(),
@@ -956,6 +1017,11 @@ fn test_slow_adversarial_change_proof_fuzz() {
                             let idx = del_indices[rng.random_range(0..del_indices.len())];
                             let key = ops[idx].key().clone();
                             let new_val: [u8; 20] = rng.random();
+                            debug!(
+                                "M5: key={} new_val={}",
+                                hex::encode(&*key),
+                                hex::encode(new_val),
+                            );
                             ops[idx] = BatchOp::Put {
                                 key,
                                 value: new_val.to_vec().into_boxed_slice(),
@@ -1455,6 +1521,23 @@ fn test_slow_adversarial_change_proof_fuzz() {
             }
 
             // ── Assert rejection ──────────────────────────────────────
+            debug!(
+                "group={group} mutation={mutation_name} \
+                 mutated_batch_ops={} mutated_start_proof={} mutated_end_proof={}",
+                mutated_proof.batch_ops().len(),
+                mutated_proof.start_proof().as_ref().len(),
+                mutated_proof.end_proof().as_ref().len(),
+            );
+            trace!("mutated batch_ops: {:#?}", mutated_proof.batch_ops());
+            trace!(
+                "mutated start_proof: {:#?}",
+                mutated_proof.start_proof().as_ref()
+            );
+            trace!(
+                "mutated end_proof: {:#?}",
+                mutated_proof.end_proof().as_ref()
+            );
+
             let structural_result = verify_change_proof_structure(
                 &mutated_proof,
                 use_end_root.clone(),
@@ -1462,10 +1545,24 @@ fn test_slow_adversarial_change_proof_fuzz() {
                 use_end_key.as_deref(),
                 None,
             );
-            let rejected = match structural_result {
-                Err(_) => true,
-                Ok(ref ctx) => {
-                    verify_and_check(use_db, &mutated_proof, ctx, use_start_root.clone()).is_err()
+            let rejected = match &structural_result {
+                Err(e) => {
+                    debug!("rejected by structural check: {e}");
+                    true
+                }
+                Ok(ctx) => {
+                    let root_result =
+                        verify_and_check(use_db, &mutated_proof, ctx, use_start_root.clone());
+                    match &root_result {
+                        Err(e) => {
+                            debug!("rejected by root hash check: {e}");
+                            true
+                        }
+                        Ok(()) => {
+                            debug!("NOT REJECTED — mutation {mutation_name} passed verification!");
+                            false
+                        }
+                    }
                 }
             };
 
