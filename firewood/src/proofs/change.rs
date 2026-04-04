@@ -176,6 +176,39 @@ pub struct ChangeProofVerificationContext {
     pub end_key: Option<Box<[u8]>>,
 }
 
+/// Verify a boundary proof against `end_root` and optionally check that the
+/// proof's inclusion/exclusion result is consistent with `boundary_op`.
+///
+/// When `boundary_op` is `Some`, a `Put` must be an inclusion proof (key
+/// present) and a `Delete` must be an exclusion proof (key absent).
+/// When `boundary_op` is `None` the key is an arbitrary range bound and
+/// both outcomes are valid.
+type FrozenBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
+
+fn verify_boundary_proof<C: ProofCollection>(
+    proof: &Proof<C>,
+    key: &[u8],
+    end_root: &HashKey,
+    boundary_op: Option<&FrozenBatchOp>,
+    mismatch_error: ProofError,
+) -> Result<(), api::Error> {
+    let result = match proof.value_digest(key, end_root) {
+        Ok(result) => result,
+        Err(ProofError::Empty) => None,
+        Err(e) => return Err(api::Error::ProofError(e)),
+    };
+
+    match boundary_op {
+        Some(BatchOp::Put { .. }) if result.is_none() => {
+            Err(api::Error::ProofError(mismatch_error))
+        }
+        Some(BatchOp::Delete { .. }) if result.is_some() => {
+            Err(api::Error::ProofError(mismatch_error))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Verify structural properties and boundary proofs of a change proof.
 ///
 /// Performs the following checks:
@@ -195,7 +228,6 @@ pub struct ChangeProofVerificationContext {
 ///
 /// On success, returns a [`ChangeProofVerificationContext`] capturing the
 /// verification parameters for use by downstream root hash verification.
-#[expect(clippy::too_many_lines)]
 pub fn verify_change_proof_structure(
     proof: &FrozenChangeProof,
     end_root: HashKey,
@@ -233,15 +265,21 @@ pub fn verify_change_proof_structure(
     // proofs should be present. These O(1) checks reject malformed
     // proofs before expensive O(n) scans.
 
-    // Non-empty start_proof without a start_key is unverifiable — the
-    // honest generator only produces start_proof when start_key is Some.
+    // A start_proof anchors the first batch op to end_root at start_key.
+    // Without start_key we have no key to verify the proof against, so a
+    // non-empty start_proof is rejected as unverifiable.
     if !proof.start_proof().is_empty() && start_key.is_none() {
         return Err(api::Error::ProofError(ProofError::UnexpectedStartProof));
     }
 
     match (batch_ops.is_empty(), proof.end_proof().is_empty()) {
-        // batch_ops present but no end_proof — always an error, but
-        // distinguish "no boundary proofs at all" from "just missing end".
+        // batch_ops present but no end_proof — always an error. The end
+        // proof anchors the last batch key to end_root; without it an
+        // attacker could truncate batch_ops and the verifier couldn't
+        // detect the omission. This applies even when proving through the
+        // end of the DB, because the proof still needs to bind the last
+        // key's inclusion/exclusion to the claimed root hash.
+        // Distinguish "no boundary proofs at all" from "just missing end".
         (false, true) => {
             if proof.start_proof().is_empty() && (start_key.is_some() || end_key.is_some()) {
                 return Err(api::Error::ProofError(ProofError::MissingBoundaryProof));
@@ -279,52 +317,21 @@ pub fn verify_change_proof_structure(
 
     // Verify start boundary proof against end_root.
     // When start_key is None, the start proof must be empty (enforced by
-    // the UnexpectedStartProof check above), so there is nothing to
-    // verify and we skip this block.
-    // value_digest returns:
-    //   Ok(Some(_)) → inclusion proof (key exists at the last proof node)
-    //   Ok(None)    → exclusion proof (key does not exist)
-    //   Err(Empty)  → start_proof is empty, valid here (range starts
-    //                  from beginning of keyspace)
+    // the UnexpectedStartProof check above), so there is nothing to verify.
+    // When first_op_key == start_key, the proof must be consistent with
+    // the op type (Put→inclusion, Delete→exclusion). Otherwise start_key
+    // is an arbitrary range bound and both outcomes are valid.
     if let Some(start_key) = start_key {
-        let result = match proof.start_proof().value_digest(start_key, &end_root) {
-            Ok(result) => result,
-            Err(ProofError::Empty) => None,
-            Err(e) => return Err(api::Error::ProofError(e)),
-        };
-
-        // When the first batch op key equals start_key, verify that
-        // the start proof's inclusion/exclusion result matches the op
-        // type. A Put expects inclusion (key exists in end_root); a
-        // Delete expects exclusion (key absent). A mismatch means the
-        // attacker added a spurious key at start_key (e.g., Put when
-        // start_key doesn't exist) or converted a Put to Delete.
-        //
-        // When first_op_key != start_key (or batch_ops is empty), the
-        // start proof is for start_key which is an arbitrary range
-        // bound — both inclusion and exclusion are valid.
-        if let Some(first_op) = batch_ops.first()
-            && first_op.key().as_ref() == start_key
-        {
-            // Reject DeleteRange early with the specific error
-            // before the generic mismatch check. The O(n) scan
-            // below also catches DeleteRange, but this provides
-            // a better error for the first-op position.
-            if matches!(first_op, BatchOp::DeleteRange { .. }) {
-                return Err(api::Error::ProofError(
-                    ProofError::DeleteRangeFoundInChangeProof,
-                ));
-            }
-            let consistent = matches!(
-                (first_op, &result),
-                (BatchOp::Put { .. }, Some(_)) | (BatchOp::Delete { .. }, None)
-            );
-            if !consistent {
-                return Err(api::Error::ProofError(
-                    ProofError::StartProofOperationMismatch,
-                ));
-            }
-        }
+        let boundary_op = batch_ops
+            .first()
+            .filter(|op| op.key().as_ref() == start_key);
+        verify_boundary_proof(
+            proof.start_proof(),
+            start_key,
+            &end_root,
+            boundary_op,
+            ProofError::StartProofOperationMismatch,
+        )?;
     }
 
     // Single-pass O(n) scan: reject DeleteRange ops and verify keys are
@@ -352,39 +359,17 @@ pub fn verify_change_proof_structure(
     // The key used is last_op_key when batch_ops is non-empty, or end_key
     // when batch_ops is empty. When both are None, this block is skipped
     // — the structural match block above guarantees the end proof is also
-    // empty in that case (UnexpectedEndProof rejects non-empty end proofs
-    // when batch_ops is empty and end_key is None).
+    // empty in that case. When last_op is Some, the proof must be
+    // consistent with the op type; otherwise end_key is an arbitrary range
+    // bound and both inclusion/exclusion are valid.
     if let Some(key) = last_op.map(|op| op.key().as_ref()).or(end_key) {
-        // value_digest returns:
-        //   Ok(Some(_)) → inclusion proof (key exists at the last proof node)
-        //   Ok(None)    → exclusion proof (key does not exist)
-        //   Err(Empty)  → end_proof is empty, valid here only when
-        //                  batch_ops is empty (no operation to check)
-        let result = match proof.end_proof().value_digest(key, &end_root) {
-            Ok(result) => result,
-            Err(ProofError::Empty) => None,
-            Err(e) => return Err(api::Error::ProofError(e)),
-        };
-
-        // When batch_ops is non-empty, the generator built the end proof
-        // for last_op_key. A Put means the key was inserted in end_root
-        // (expect inclusion); a Delete means it was removed (expect
-        // exclusion). When batch_ops is empty (last_op is None), the key
-        // came from end_key (an arbitrary range bound) — both inclusion
-        // and exclusion are valid, so we fall through to the wildcard.
-        match last_op {
-            Some(BatchOp::Put { .. }) if result.is_none() => {
-                return Err(api::Error::ProofError(
-                    ProofError::EndProofOperationMismatch,
-                ));
-            }
-            Some(BatchOp::Delete { .. }) if result.is_some() => {
-                return Err(api::Error::ProofError(
-                    ProofError::EndProofOperationMismatch,
-                ));
-            }
-            _ => {}
-        }
+        verify_boundary_proof(
+            proof.end_proof(),
+            key,
+            &end_root,
+            last_op,
+            ProofError::EndProofOperationMismatch,
+        )?;
     }
 
     Ok(ChangeProofVerificationContext {
