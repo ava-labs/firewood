@@ -879,14 +879,8 @@ fn test_slow_adversarial_change_proof_fuzz() {
             debug!(
                 "scenario={scenario}({scenario_desc}) start_key={} end_key={} \
                  batch_ops={} start_proof={} end_proof={}",
-                start_key
-                    .as_ref()
-                    .map(hex::encode)
-                    .unwrap_or_else(|| "None".into()),
-                end_key
-                    .as_ref()
-                    .map(hex::encode)
-                    .unwrap_or_else(|| "None".into()),
+                start_key.as_ref().map_or("None".into(), hex::encode),
+                end_key.as_ref().map_or("None".into(), hex::encode),
                 proof.batch_ops().len(),
                 proof.start_proof().as_ref().len(),
                 proof.end_proof().as_ref().len(),
@@ -1553,15 +1547,12 @@ fn test_slow_adversarial_change_proof_fuzz() {
                 Ok(ctx) => {
                     let root_result =
                         verify_and_check(use_db, &mutated_proof, ctx, use_start_root.clone());
-                    match &root_result {
-                        Err(e) => {
-                            debug!("rejected by root hash check: {e}");
-                            true
-                        }
-                        Ok(()) => {
-                            debug!("NOT REJECTED — mutation {mutation_name} passed verification!");
-                            false
-                        }
+                    if let Err(e) = &root_result {
+                        debug!("rejected by root hash check: {e}");
+                        true
+                    } else {
+                        debug!("NOT REJECTED — mutation {mutation_name} passed verification!");
+                        false
                     }
                 }
             };

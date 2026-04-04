@@ -47,6 +47,8 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
+use std::fmt::Write;
+
 use firewood_storage::{
     Children, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator, Path,
     PathBuf, PathComponent, PathIterItem, Preimage, SplitPath, TrieHash, TriePath, ValueDigest,
@@ -252,7 +254,10 @@ pub struct ProofNode {
 impl std::fmt::Debug for ProofNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Render nibble key as a compact hex string (e.g. "c9ee60")
-        let key_hex: String = self.key.iter().map(|c| format!("{c:x}")).collect();
+        let key_hex = self.key.iter().try_fold(String::new(), |mut s, c| {
+            write!(s, "{c:x}")?;
+            Ok(s)
+        })?;
 
         // Show present children as hex nibble indices
         let children: Vec<String> = self

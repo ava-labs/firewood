@@ -28,7 +28,9 @@ use firewood_storage::{
     NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, Propose, ReadableStorage,
     SharedNode, TrieHash, TrieReader, U4, ValueDigest,
 };
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::mem;
 use std::fmt::Debug;
 use std::io::Error;
 use std::iter::once;
@@ -344,6 +346,66 @@ fn compute_root_hash_with_proofs(
         child_hashes,
     )
     .to_hash())
+}
+
+/// Returns `true` when a child at nibble `child_nib` under the accumulated
+/// prefix `acc_prefix` falls within `[start_nib, end_nib]` (inclusive).
+///
+/// Used by [`Merkle::collapse_strip`] to distinguish in-range children
+/// (which indicate tampered `batch_ops`) from out-of-range children (which
+/// are stripped normally).
+fn child_in_range(
+    acc_prefix: &[u8],
+    nibble: PathComponent,
+    start_nib: &[u8],
+    end_nib: &[u8],
+) -> bool {
+    let depth = acc_prefix.len();
+    let child_nib = nibble.0.as_u8();
+
+    // Split each boundary at `depth`. The left half is compared against
+    // the same-length prefix of acc_prefix; the right half's first element
+    // (if any) is compared against child_nib to break ties.
+    let split = depth.min(start_nib.len());
+    let (start_pre, start_rest) = start_nib.split_at(split);
+    let (acc_start, _) = acc_prefix.split_at(split);
+    let above_start = match acc_start.cmp(start_pre) {
+        Ordering::Greater => true,
+        Ordering::Less => false,
+        Ordering::Equal => match start_rest.first() {
+            None => true,
+            Some(&boundary) => child_nib >= boundary,
+        },
+    };
+
+    let split = depth.min(end_nib.len());
+    let (end_pre, end_rest) = end_nib.split_at(split);
+    let (acc_end, _) = acc_prefix.split_at(split);
+    let below_end = match acc_end.cmp(end_pre) {
+        Ordering::Less => true,
+        Ordering::Greater => false,
+        Ordering::Equal => match end_rest.first() {
+            None => false,
+            Some(&boundary) => child_nib <= boundary,
+        },
+    };
+
+    above_start && below_end
+}
+
+/// Builds the accumulated nibble prefix for a child node by extending
+/// `prefix` with the descent nibble and the child's `partial_path`.
+fn build_child_prefix(prefix: &[u8], nibble: u8, node: &Node) -> Box<[u8]> {
+    let pp = &node.partial_path().0;
+    let capacity = prefix
+        .len()
+        .wrapping_add(mem::size_of::<u8>())
+        .wrapping_add(pp.len());
+    let mut v = Vec::with_capacity(capacity);
+    v.extend_from_slice(prefix);
+    v.push(nibble);
+    v.extend_from_slice(pp);
+    v.into_boxed_slice()
 }
 
 /// Verify that a range proof is valid for the specified key range and root hash.
@@ -696,11 +758,16 @@ pub fn verify_change_proof_root_hash(
     // extra branch structure from out-of-range keys that doesn't exist in
     // end_root's trie. Between consecutive proof nodes, the proof implies a
     // direct path with no intermediate branches.
+    //
+    // Out-of-range children are stripped. In-range children that are also
+    // proposal-local (created by this proposal's batch_ops, not inherited
+    // from the parent) indicate tampered operations and trigger rejection.
+    let range = Some((start_key_nibbles.as_slice(), end_key_nibbles.as_slice()));
     for [parent, child] in start_nodes.array_windows() {
-        proving_merkle.collapse_branch_to_path(&parent.key, &child.key)?;
+        proving_merkle.collapse_branch_to_path(&parent.key, &child.key, range)?;
     }
     for [parent, child] in end_nodes.array_windows() {
-        proving_merkle.collapse_branch_to_path(&parent.key, &child.key)?;
+        proving_merkle.collapse_branch_to_path(&parent.key, &child.key, range)?;
     }
 
     // If the end trie's root has a non-empty partial_path, the first proof
@@ -712,7 +779,7 @@ pub fn verify_change_proof_root_hash(
         .or_else(|| end_nodes.first())
         .map(|n| n.key.as_ref());
     if let Some(key) = first_proof_key {
-        proving_merkle.collapse_root_to_path(key)?;
+        proving_merkle.collapse_root_to_path(key, range)?;
     }
 
     // Compute which children at each boundary node are outside the proven
@@ -1848,7 +1915,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     pub(crate) fn collapse_root_to_path(
         &mut self,
         target: &[PathComponent],
-    ) -> Result<(), FileIoError> {
+        range: Option<(&[u8], &[u8])>,
+    ) -> Result<(), api::Error> {
         // The root's partial_path consumes some prefix of target.
         // Only collapse if target extends beyond the root's partial_path.
         let mut root_node = std::mem::take(self.nodestore.root_mut())
@@ -1864,25 +1932,30 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         {
             // On error the root is left empty, but the caller discards
             // the proving trie on any verification failure.
-            root_node = self.collapse_strip(root_node, remaining)?;
+            let root_prefix: Box<[u8]> = root_node.partial_path().0.iter().copied().collect();
+            root_node = self.collapse_strip(root_node, remaining, &root_prefix, range)?;
         }
 
         *self.nodestore.root_mut() = Some(root_node);
         Ok(())
     }
 
+    /// `range`: `(start_nibbles, end_nibbles)` for the proven range.
+    /// In-range children that are also proposal-local trigger rejection.
     pub(crate) fn collapse_branch_to_path(
         &mut self,
         from: &[PathComponent],
         to: &[PathComponent],
-    ) -> Result<(), FileIoError> {
+        range: Option<(&[u8], &[u8])>,
+    ) -> Result<(), api::Error> {
         let suffix = to.strip_prefix(from).expect("to must start with from");
+        let parent_prefix: Box<[u8]> = from.iter().map(|c| c.as_u8()).collect();
 
         let root = self.nodestore.root_mut();
         let Some(root_node) = std::mem::take(root) else {
             return Ok(());
         };
-        let root_node = self.collapse_navigate(root_node, from, suffix)?;
+        let root_node = self.collapse_navigate(root_node, from, suffix, &parent_prefix, range)?;
         *self.nodestore.root_mut() = root_node.into();
         Ok(())
     }
@@ -1894,7 +1967,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         mut node: Node,
         key: &[PathComponent],
         suffix: &[PathComponent],
-    ) -> Result<Node, FileIoError> {
+        parent_prefix: &[u8],
+        range: Option<(&[u8], &[u8])>,
+    ) -> Result<Node, api::Error> {
         // get a reference to the partial path for ease of reading
         let pp = &node.partial_path().0;
 
@@ -1916,7 +1991,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
 
         let Some((&child_component, deeper)) = key_rest.split_first() else {
             // Exact match — arrived at the parent proof node.
-            return self.collapse_descend(node, suffix);
+            return self.collapse_descend(node, suffix, parent_prefix, range);
         };
 
         // key extends past partial_path — descend into child.
@@ -1931,7 +2006,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         };
 
         let child_node = self.read_for_update(child)?;
-        let child_node = self.collapse_navigate(child_node, deeper, suffix)?;
+        let child_node =
+            self.collapse_navigate(child_node, deeper, suffix, parent_prefix, range)?;
         branch.children[child_component] = Some(Child::Node(child_node));
         Ok(node)
     }
@@ -1945,7 +2021,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         &mut self,
         mut node: Node,
         path: &[PathComponent],
-    ) -> Result<Node, FileIoError> {
+        acc_prefix: &[u8],
+        range: Option<(&[u8], &[u8])>,
+    ) -> Result<Node, api::Error> {
         let Some((&first, remaining)) = path.split_first() else {
             return Ok(node);
         };
@@ -1960,24 +2038,33 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
 
         let mut child_node = self.read_for_update(child)?;
 
-        // The child's partial_path consumes some of `remaining`.
+        let child_prefix = build_child_prefix(acc_prefix, first.0.as_u8(), &child_node);
+
         let child_pp_len = child_node.partial_path().len();
         let after_child = remaining.get(child_pp_len..).unwrap_or_default();
 
-        child_node = self.collapse_strip(child_node, after_child)?;
+        child_node = self.collapse_strip(child_node, after_child, &child_prefix, range)?;
 
         branch.children[first] = Some(Child::Node(child_node));
         Ok(node)
     }
 
-    /// Strip non-on-path children and values from an intermediate branch
-    /// and recurse. Flattens single-child branches to match `end_root`'s
-    /// path-compressed structure.
+    /// Strip non-on-path children from an intermediate branch and recurse.
+    /// Flattens single-child branches to match `end_root`'s path-compressed
+    /// structure.
+    ///
+    /// Children that are both in-range AND proposal-local (created by this
+    /// proposal's `batch_ops`) trigger `EndRootMismatch` — they indicate
+    /// tampered operations since `end_root` has no branch at this position.
+    /// In-range children inherited from the parent are legitimate unchanged
+    /// keys and are stripped normally (handled by proof hashes).
     fn collapse_strip(
         &mut self,
         mut node: Node,
         path: &[PathComponent],
-    ) -> Result<Node, FileIoError> {
+        acc_prefix: &[u8],
+        range: Option<(&[u8], &[u8])>,
+    ) -> Result<Node, api::Error> {
         let Some((&on_path, remaining)) = path.split_first() else {
             return Ok(node);
         };
@@ -1986,15 +2073,18 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
             return Ok(node);
         };
 
-        // Between consecutive proof nodes in end_root, the path is direct:
-        // intermediate nodes have only the on-path child. If they had other
-        // children, those intermediate nodes would be proof nodes themselves.
-        // Remove all non-on-path children and values from intermediate nodes
-        // so the proving trie matches end_root's path-compressed structure.
         for (nibble, slot) in &mut branch.children {
-            if nibble != on_path {
-                *slot = None;
+            if nibble == on_path || slot.is_none() {
+                continue;
             }
+
+            if let Some((start_nib, end_nib)) = range
+                && child_in_range(acc_prefix, nibble, start_nib, end_nib)
+            {
+                return Err(api::Error::ProofError(ProofError::EndRootMismatch));
+            }
+
+            *slot = None;
         }
         branch.value = None;
 
@@ -2007,7 +2097,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         let child_pp_len = child_node.partial_path().len();
         let deeper = remaining.get(child_pp_len..).unwrap_or_default();
         if !deeper.is_empty() {
-            child_node = self.collapse_strip(child_node, deeper)?;
+            let child_prefix = build_child_prefix(acc_prefix, on_path.0.as_u8(), &child_node);
+            child_node = self.collapse_strip(child_node, deeper, &child_prefix, range)?;
         }
 
         branch.children[on_path] = Some(Child::Node(child_node));

@@ -977,3 +977,37 @@ fn remove_nonexistent_with_one() {
     assert_eq!(merkle.remove(b"does_not_exist").unwrap(), None);
     assert_eq!(&*merkle.get_value(b"do").unwrap().unwrap(), b"verb");
 }
+
+mod child_in_range_tests {
+    use super::*;
+    use test_case::test_case;
+
+    fn pc(n: u8) -> PathComponent {
+        PathComponent(firewood_storage::U4::new_masked(n))
+    }
+
+    //                          prefix    nib  start    end      expected
+    #[test_case(&[3],    5,   &[3, 0],  &[3, 9],  true  ; "squarely in range")]
+    #[test_case(&[3],    1,   &[3, 5],  &[3, 9],  false ; "nibble below start")]
+    #[test_case(&[3],    0xA, &[3, 0],  &[3, 9],  false ; "nibble above end")]
+    #[test_case(&[3],    5,   &[3, 5],  &[3, 9],  true  ; "nibble at start boundary")]
+    #[test_case(&[3],    9,   &[3, 0],  &[3, 9],  true  ; "nibble at end boundary")]
+    #[test_case(&[2],    5,   &[3, 0],  &[7, 0],  false ; "prefix below start short-circuits")]
+    #[test_case(&[8],    0,   &[3, 0],  &[7, 0],  false ; "prefix above end short-circuits")]
+    #[test_case(&[5],    0,   &[3, 0],  &[7, 0],  true  ; "prefix above start, any nibble")]
+    #[test_case(&[5],    0xF, &[3, 0],  &[7, 0],  true  ; "prefix below end, any nibble")]
+    #[test_case(&[3, 5], 7,   &[3],     &[3,5,9], true  ; "depth past start key")]
+    #[test_case(&[3, 5], 0,   &[2],     &[3],     false ; "depth past end key")]
+    #[test_case(&[5, 5], 0,   &[3],     &[5],     false ; "depth past both keys")]
+    #[test_case(&[],     5,   &[3],     &[9],     true  ; "empty prefix, in range")]
+    #[test_case(&[],     2,   &[3],     &[9],     false ; "empty prefix, below start")]
+    #[test_case(&[],     0xA, &[3],     &[9],     false ; "empty prefix, above end")]
+    #[test_case(&[5],    5,   &[5, 5],  &[5, 5],  true  ; "single-point range, match")]
+    #[test_case(&[5],    4,   &[5, 5],  &[5, 5],  false ; "single-point range, below")]
+    #[test_case(&[5],    6,   &[5, 5],  &[5, 5],  false ; "single-point range, above")]
+    #[test_case(&[2, 5], 0xF, &[3],     &[9],     false ; "bug: prefix longer than start but less")]
+    #[test_case(&[8, 0], 0,   &[3],     &[7],     false ; "bug: prefix longer than end but greater")]
+    fn test_child_in_range(prefix: &[u8], nibble: u8, start: &[u8], end: &[u8], expected: bool) {
+        assert_eq!(child_in_range(prefix, pc(nibble), start, end), expected);
+    }
+}

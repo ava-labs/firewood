@@ -953,18 +953,18 @@ fn test_out_of_range_root_structure_change() {
 // by exhaustive or probabilistic model checking with the TLA+ specs in
 // formal/.
 
-/// Bug 3 regression: Verify that collapse_root_to_path (commit d94527f5f)
+/// Bug 3 regression: Verify that `collapse_root_to_path` (commit d94527f5f)
 /// correctly handles root reshaping when out-of-range key deletions
-/// compress the endTrie root. The proposal retains the old root shape
-/// but the fix strips non-on-path children to match endTrie.
+/// compress the `endTrie` root. The proposal retains the old root shape
+/// but the fix strips non-on-path children to match `endTrie`.
 ///
 /// Note: TLA+ model checking found a remaining edge case where endTrie
 /// is completely empty (all keys deleted). In that case both proofs are
-/// empty and collapse_root_to_path never runs. However, this edge case
-/// is not reachable through the Rust API: change_proof() requires both
+/// empty and `collapse_root_to_path` never runs. However, this edge case
+/// is not reachable through the Rust API: `change_proof()` requires both
 /// roots to be valid revisions, and an empty trie has no stored root.
 ///
-/// Found by ChangeProofVerification.tla HonestProofAccepted invariant.
+/// Found by `ChangeProofVerification.tla` `HonestProofAccepted` invariant.
 #[test]
 fn test_root_shape_mismatch_low_range() {
     let (db, _dir) = new_db();
@@ -1028,26 +1028,27 @@ fn test_root_shape_mismatch_low_range() {
     );
 }
 
-/// State injection via collapse_root_to_path (found by TLA+ model).
+/// State injection via `collapse_root_to_path` (found by TLA+ model).
 ///
-/// collapse_root_to_path strips non-on-path children from the proving
-/// trie root so its shape matches end_root. An attacker exploits this:
+/// `collapse_root_to_path` strips non-on-path children from the proving
+/// trie root so its shape matches `end_root`. An attacker exploits this:
 /// inject a spurious key at a different first nibble than the proof path.
 /// The collapse strips the injected key's nibble (it's "non-on-path"),
 /// so the hash computation never sees it. The verification passes, but
-/// the verifier's trie now contains a key that doesn't exist in end_root.
+/// the verifier's trie now contains a key that doesn't exist in `end_root`.
 ///
 /// Setup:
-///   - start_root: {\x90: "orig"}
-///   - end_root:   {\x90: "new!"} (same first nibble 9)
-///   - Unbounded range [None, None], right_edge_key = \x90
+///   - `start_root`: `{\x90: "orig"}`
+///   - `end_root`:   `{\x90: "new!"}` (same first nibble 9)
+///   - Unbounded range `[None, None]`, `right_edge_key` = `\x90`
 ///   - End proof traverses nibble 9
-///   - Attacker adds Put(\x10, "evil") — nibble 1, off the proof path
-///   - collapse_root_to_path strips nibble 1, hiding the injected key
+///   - Attacker adds `Put(\x10, "evil")` — nibble 1, off the proof path
+///   - `collapse_root_to_path` strips nibble 1, hiding the injected key
 ///
-/// Found by AdversarialProof.tla OnlyCorrectDiffAccepted invariant.
+/// Found by `AdversarialProof.tla` `OnlyCorrectDiffAccepted` invariant.
 #[test]
 fn test_collapse_root_hides_spurious_key() {
+    type BoxBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
     let (db, _dir) = new_db();
 
     db.propose(vec![BatchOp::Put {
@@ -1075,7 +1076,7 @@ fn test_collapse_root_hides_spurious_key() {
     assert_eq!(valid_proof.batch_ops().len(), 1);
 
     // Attack: inject Put(\x10, "evil") at a different first nibble.
-    let mut ops: Vec<BatchOp<Box<[u8]>, Box<[u8]>>> = valid_proof.batch_ops().to_vec();
+    let mut ops: Vec<BoxBatchOp> = valid_proof.batch_ops().to_vec();
     ops.insert(
         0,
         BatchOp::Put {
