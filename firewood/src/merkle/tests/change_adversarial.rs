@@ -562,22 +562,10 @@ fn test_truncated_proof_round_trip() {
     // Round 2: continue from last key of round 1.
     let next_start = proof1.batch_ops().last().unwrap().key().clone();
     let proof2 = db_a
-        .change_proof(
-            root1_a,
-            root2.clone(),
-            Some(&next_start),
-            None,
-            None,
-        )
+        .change_proof(root1_a, root2.clone(), Some(&next_start), None, None)
         .unwrap();
-    let ctx2 = verify_change_proof_structure(
-        &proof2,
-        root2,
-        Some(&next_start),
-        None,
-        None,
-    )
-    .unwrap();
+    let ctx2 =
+        verify_change_proof_structure(&proof2, root2, Some(&next_start), None, None).unwrap();
     verify_and_check(&db_b, &proof2, &ctx2, root_b_after_1)
         .expect("truncated proof round 2 should verify");
 }
@@ -639,14 +627,9 @@ fn test_truncated_proof_with_delete_last_op() {
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 2, "truncated to 2 ops");
 
-    let ctx = verify_change_proof_structure(
-        &proof,
-        root2,
-        None,
-        None,
-        std::num::NonZeroUsize::new(2),
-    )
-    .unwrap();
+    let ctx =
+        verify_change_proof_structure(&proof, root2, None, None, std::num::NonZeroUsize::new(2))
+            .unwrap();
     verify_and_check(&db_b, &proof, &ctx, root1_b)
         .expect("truncated proof with delete last op should verify");
 }
@@ -961,14 +944,8 @@ fn test_out_of_range_root_structure_change() {
     );
 
     // Structural check should pass — the proof is honest.
-    let ctx = verify_change_proof_structure(
-        &proof,
-        root2.clone(),
-        Some(b"\x10"),
-        None,
-        None,
-    )
-    .unwrap();
+    let ctx =
+        verify_change_proof_structure(&proof, root2.clone(), Some(b"\x10"), None, None).unwrap();
 
     // BUG: Root hash check fails with EndRootMismatch.
     // The proposal has \x01 (from start_root, outside range) which

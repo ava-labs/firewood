@@ -612,10 +612,6 @@ pub fn verify_change_proof_root_hash(
     let forked = NodeStore::new(proposal.inner_nodestore())?;
     let mut proving_merkle = Merkle::from(forked);
 
-    let last_op_key: Option<Box<[u8]>> =
-        proof.batch_ops().last().map(|op| op.key().as_ref().into());
-    let effective_end = last_op_key.as_deref().or(verification.end_key.as_deref());
-
     // Reconcile all boundary proof nodes into the proving trie via
     // `reconcile_branch_proof_node`. This inserts branch structure matching
     // `end_root`'s layout so that the hash computation produces the same
@@ -657,9 +653,11 @@ pub fn verify_change_proof_root_hash(
     }
 
     // Same treatment for end proof nodes: ancestors and divergent nodes
-    // of effective_end may have out-of-range values that differ from the
-    // proposal.
-    let end_key_nibbles: Vec<u8> = effective_end
+    // of the right boundary may have out-of-range values that differ
+    // from the proposal.
+    let end_key_nibbles: Vec<u8> = verification
+        .right_edge_key
+        .as_deref()
         .map(|k| NibblesIterator::new(k).collect())
         .unwrap_or_default();
 
@@ -702,32 +700,11 @@ pub fn verify_change_proof_root_hash(
     // range via `compute_outside_children`.
     let mut outside_children =
         compute_outside_children(start_nodes, verification.start_key.as_deref(), true)?;
-    for (key, flags) in compute_outside_children(end_nodes, effective_end, false)? {
+    for (key, flags) in
+        compute_outside_children(end_nodes, verification.right_edge_key.as_deref(), false)?
+    {
         let entry = outside_children.entry(key).or_default();
         *entry |= flags;
-    }
-
-    // For truncated change proofs (batch_ops non-empty, last_op_key < end_key),
-    // the end proof's terminal node may be an inclusion proof for last_op_key.
-    // In that case, compute_outside_children marks no children at the terminal
-    // (exact key match). But the terminal's children are extensions of
-    // last_op_key (keys > last_op_key) — they're beyond the truncated range
-    // and must be marked outside. Without this, the proving trie (which lacks
-    // those children) produces a different hash than end_root.
-    if last_op_key.is_some()
-        && let Some(terminal) = end_nodes.last()
-    {
-        let keys_match = effective_end.is_some_and(|ek| {
-            terminal
-                .key
-                .iter()
-                .map(|c| c.as_u8())
-                .eq(NibblesIterator::new(ek))
-        });
-        if keys_match {
-            let entry = outside_children.entry(terminal.key.clone()).or_default();
-            *entry = ChildMask::ALL;
-        }
     }
 
     // Compute the hybrid root hash via `compute_root_hash_with_proofs`.
@@ -1129,19 +1106,20 @@ impl<T: HashedNodeReader> Merkle<T> {
             .take(limit.map_or(usize::MAX, NonZeroUsize::get))
             .collect::<Result<Box<_>, FileIoError>>()?;
 
-        // The end proof is built for the last batch_op key when batch_ops
-        // is non-empty, or for end_key when batch_ops is empty (the "no
-        // changes in this range" case). When batch_ops is non-empty,
-        // end_key is not used for end proof generation — last_op_key
-        // always takes precedence. This matches AvalancheGo's convention
-        // and ensures the verifier can always determine the end proof's
-        // key deterministically from the proof content — no ambiguity, no
-        // two-key trial needed.
-        let end_proof = batch_ops
-            .last()
-            .map(|largest_key| &**largest_key.key())
-            .or(end_key)
-            .map(|end_key| self.prove(end_key))
+        // Check whether the limit cut off remaining items.
+        let hit_limit = iter.next().transpose()?.is_some();
+
+        // When the limit was hit, the end proof is for the last key in
+        // batch_ops (the actual right edge of what was produced). When
+        // all items fit, the end proof is for end_key so the verifier
+        // can check the full requested range.
+        let end_proof_key = if hit_limit {
+            batch_ops.last().map(|op| &**op.key()).or(end_key)
+        } else {
+            end_key.or(batch_ops.last().map(|op| &**op.key()))
+        };
+        let end_proof = end_proof_key
+            .map(|key| self.prove(key))
             .transpose()?
             .unwrap_or_default();
 

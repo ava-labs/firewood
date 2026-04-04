@@ -174,6 +174,12 @@ pub struct ChangeProofVerificationContext {
     pub start_key: Option<Box<[u8]>>,
     /// The upper bound of the verified key range, if any.
     pub end_key: Option<Box<[u8]>>,
+    /// The actual right edge of the proven range. This equals `end_key`
+    /// when all items fit within the limit, or the last key in `batch_ops`
+    /// when the proof may have been truncated (`batch_ops.len() ==
+    /// max_length`). The root hash verifier uses this as the right
+    /// boundary for `compute_outside_children` and reconciliation.
+    pub right_edge_key: Option<Box<[u8]>>,
 }
 
 /// Verify a boundary proof against `end_root` and optionally check that the
@@ -221,6 +227,40 @@ fn verify_boundary_proof<C: ProofCollection>(
 /// - Start and end proof hash chain verification against `end_root`
 /// - End proof inclusion/exclusion consistency with the last batch operation
 ///
+/// Compute the right edge of the proven range.
+///
+/// The proof may have been truncated by the generator's limit when:
+///   1. `batch_ops.len() == max_length` (limit was potentially hit)
+///   2. the end proof is an inclusion proof of the last batch op key
+///      (the generator produced the proof at that key, not at `end_key`)
+///
+/// When truncated, the right edge is `last_op_key`. Otherwise it is
+/// `end_key` (falling back to `last_op_key` for unbounded ranges).
+fn compute_right_edge_key<'a>(
+    proof: &FrozenChangeProof,
+    end_root: &HashKey,
+    last_op_key: Option<&'a [u8]>,
+    end_key: Option<&'a [u8]>,
+    max_length: Option<NonZeroUsize>,
+) -> Option<&'a [u8]> {
+    let possibly_truncated =
+        max_length.is_some_and(|n| proof.batch_ops().len() == n.get());
+    let truncated = possibly_truncated
+        && last_op_key.is_some_and(|k| {
+            proof
+                .end_proof()
+                .value_digest(k, end_root)
+                .ok()
+                .flatten()
+                .is_some()
+        });
+    if truncated {
+        last_op_key.or(end_key)
+    } else {
+        end_key.or(last_op_key)
+    }
+}
+
 /// # Errors
 ///
 /// Returns [`api::Error::ProofError`] if the proof is structurally invalid
@@ -355,19 +395,23 @@ pub fn verify_change_proof_structure(
         last_op = Some(op);
     }
 
-    // Verify end boundary proof against end_root.
-    // The key used is last_op_key when batch_ops is non-empty, or end_key
-    // when batch_ops is empty. When both are None, this block is skipped
-    // — the structural match block above guarantees the end proof is also
-    // empty in that case. When last_op is Some, the proof must be
-    // consistent with the op type; otherwise end_key is an arbitrary range
-    // bound and both inclusion/exclusion are valid.
-    if let Some(key) = last_op.map(|op| op.key().as_ref()).or(end_key) {
+    let last_op_key = last_op.map(|op| op.key().as_ref());
+    let right_edge_key =
+        compute_right_edge_key(proof, &end_root, last_op_key, end_key, max_length);
+
+    // Verify end boundary proof against end_root. The end proof was
+    // generated for right_edge_key. The boundary_op check applies when
+    // the right edge matches the last batch op key (meaning the proof
+    // must be consistent with the op type); otherwise the key is just a
+    // range bound and both inclusion/exclusion are valid.
+    let end_boundary_op =
+        last_op.filter(|op| right_edge_key.is_some_and(|k| op.key().as_ref() == k));
+    if let Some(key) = right_edge_key {
         verify_boundary_proof(
             proof.end_proof(),
             key,
             &end_root,
-            last_op,
+            end_boundary_op,
             ProofError::EndProofOperationMismatch,
         )?;
     }
@@ -376,6 +420,7 @@ pub fn verify_change_proof_structure(
         end_root,
         start_key: start_key.map(Box::from),
         end_key: end_key.map(Box::from),
+        right_edge_key: right_edge_key.map(Box::from),
     })
 }
 

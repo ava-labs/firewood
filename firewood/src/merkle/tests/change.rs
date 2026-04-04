@@ -969,7 +969,7 @@ fn test_end_proof_inclusion_with_children_below() {
     db_a.propose(changes).unwrap().commit().unwrap();
     let root2 = db_a.root_hash().unwrap();
 
-    // Truncated to 1 — last_op_key is prefix with children below
+    // Limited to 1 — last_op_key is a prefix with children below.
     let proof = db_a
         .change_proof(root1_a, root2.clone(), None, None, NonZeroUsize::new(1))
         .unwrap();
@@ -1096,6 +1096,7 @@ fn test_divergence_at_depth_zero() {
         end_root: root2,
         start_key: Some(b"\x10".to_vec().into()),
         end_key: Some(b"\xa1".to_vec().into()),
+        right_edge_key: Some(b"\xa1".to_vec().into()),
     };
 
     // The crafted proof has start/end proofs that skip the shared root,
@@ -1465,7 +1466,7 @@ fn test_truncated_proof_with_delete_last_op() {
 }
 
 #[test]
-fn test_generator_uses_last_op_key_for_end_proof() {
+fn test_generator_uses_end_key_for_complete_proof() {
     let (db, _dir) = new_db();
 
     db.propose(vec![
@@ -1492,14 +1493,13 @@ fn test_generator_uses_last_op_key_for_end_proof() {
     .unwrap();
     let root2 = db.root_hash().unwrap();
 
-    // end_key far beyond last change
+    // end_key far beyond last change, no limit — complete proof
     let proof = db
         .change_proof(root1, root2.clone(), None, Some(b"\xff"), None)
         .unwrap();
 
-    // End proof validates against last_op_key, not end_key
-    let last_key = proof.batch_ops().last().unwrap().key();
-    proof.end_proof().value_digest(last_key, &root2).unwrap();
+    // End proof validates against end_key for complete proofs
+    proof.end_proof().value_digest(b"\xff", &root2).unwrap();
 }
 
 /// Attacker adds a spurious Put at `start_key` when `start_key` doesn't
