@@ -953,7 +953,6 @@ fn test_out_of_range_root_structure_change() {
 // by exhaustive or probabilistic model checking with the TLA+ specs in
 // formal/.
 
-
 /// Bug 3 regression: Verify that collapse_root_to_path (commit d94527f5f)
 /// correctly handles root reshaping when out-of-range key deletions
 /// compress the endTrie root. The proposal retains the old root shape
@@ -1012,14 +1011,9 @@ fn test_root_shape_mismatch_low_range() {
         )
         .unwrap();
 
-    let ctx = verify_change_proof_structure(
-        &proof,
-        root2.clone(),
-        Some(b"\x80"),
-        Some(b"\x90"),
-        None,
-    )
-    .unwrap();
+    let ctx =
+        verify_change_proof_structure(&proof, root2.clone(), Some(b"\x80"), Some(b"\x90"), None)
+            .unwrap();
 
     // The proposal has \x01 (from start_root, outside range).
     // endTrie's root is compressed to nibble 9. The proof extracted
@@ -1111,14 +1105,7 @@ fn test_collapse_root_hides_spurious_key() {
 
     // Yet the verifier does NOT reject it.
     assert!(
-        is_rejected(
-            &db,
-            &attack_proof,
-            root2,
-            None,
-            None,
-            root1,
-        ),
+        is_rejected(&db, &attack_proof, root2, None, None, root1,),
         "spurious Put at \\x10 was NOT rejected — \
          collapse_root_to_path stripped nibble 1 (non-on-path \
          relative to the end proof through nibble 9), hiding \

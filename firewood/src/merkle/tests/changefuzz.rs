@@ -15,7 +15,7 @@
 //! the printed seed can be passed via `FIREWOOD_TEST_SEED` to reproduce.
 
 use super::*;
-use crate::api::{self, BatchOp, Db as DbTrait, DbView as _, FrozenChangeProof, Proposal as _};
+use crate::api::{self, BatchOp, Db as DbTrait, FrozenChangeProof, Proposal as _};
 use crate::db::{Db, DbConfig};
 use crate::merkle::verify_change_proof_root_hash;
 use crate::{ChangeProof, ChangeProofVerificationContext, Proof, verify_change_proof_structure};
@@ -905,10 +905,24 @@ fn test_slow_adversarial_change_proof_fuzz() {
                             }
                             let idx = put_indices[rng.random_range(0..put_indices.len())];
                             let key = ops[idx].key().clone();
-                            let new_val: [u8; 20] = rng.random();
+                            let old_val = match &ops[idx] {
+                                BatchOp::Put { value, .. } => value.clone(),
+                                _ => unreachable!(),
+                            };
+                            let mask: [u8; 20] = loop {
+                                let m: [u8; 20] = rng.random();
+                                if m != [0u8; 20] {
+                                    break m;
+                                }
+                            };
+                            let new_val: Vec<u8> = old_val
+                                .iter()
+                                .zip(mask.iter())
+                                .map(|(a, b)| a ^ b)
+                                .collect();
                             ops[idx] = BatchOp::Put {
                                 key,
-                                value: new_val.to_vec().into_boxed_slice(),
+                                value: new_val.into_boxed_slice(),
                             };
                             mutation_name = "M3_swap_value";
                         }
@@ -969,7 +983,7 @@ fn test_slow_adversarial_change_proof_fuzz() {
                             mutation_name = "M6_spurious_put";
                         }
                         // M7: Add spurious Delete for a key that exists in
-                        // the end trie within the proven range.
+                        // both the start and end tries within the proven range.
                         _ => {
                             let sk = start_key.as_ref().map(AsRef::as_ref);
                             let ek = end_key.as_ref().map(AsRef::as_ref);
@@ -979,6 +993,7 @@ fn test_slow_adversarial_change_proof_fuzz() {
                                     let in_range = sk.is_none_or(|s| k.as_slice() >= s)
                                         && ek.is_none_or(|e| k.as_slice() <= e);
                                     in_range
+                                        && start_keys.binary_search(k).is_ok()
                                         && !ops.iter().any(|op| op.key().as_ref() == k.as_slice())
                                 })
                                 .copied()
@@ -1439,18 +1454,6 @@ fn test_slow_adversarial_change_proof_fuzz() {
                 }
             }
 
-            // ── Verify mutation actually changes the trie state ───────
-            let parent = use_db.revision(use_start_root.clone()).unwrap();
-            let proposal = use_db
-                .apply_change_proof_to_parent(&mutated_proof, &*parent)
-                .unwrap();
-            let proposal_root = proposal.root_hash().unwrap();
-            if proposal_root == use_end_root {
-                // Mutation is a no-op — the trie state is unchanged.
-                // Accepting this proof is correct behavior, not a bug.
-                continue;
-            }
-
             // ── Assert rejection ──────────────────────────────────────
             let structural_result = verify_change_proof_structure(
                 &mutated_proof,
@@ -1471,8 +1474,7 @@ fn test_slow_adversarial_change_proof_fuzz() {
                 "mutation {mutation_name} was NOT rejected! \
                  seed={seed}, run={run}, scenario={scenario}, group={group}, \
                  batch_ops={}, start_proof_len={}, end_proof_len={}, \
-                 structural_ok={}, proposal_root={proposal_root:?}, \
-                 end_root={use_end_root:?}",
+                 structural_ok={}, end_root={use_end_root:?}",
                 mutated_proof.batch_ops().len(),
                 mutated_proof.start_proof().as_ref().len(),
                 mutated_proof.end_proof().as_ref().len(),
