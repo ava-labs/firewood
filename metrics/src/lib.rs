@@ -12,7 +12,7 @@
 //! # Usage
 //!
 //! ```no_run
-//! use firewood_metrics::firewood_increment;
+//! # use firewood_metrics::firewood_increment;
 //!
 //! mod registry {
 //!     pub const OP_COUNT: &str = "op_count_total";
@@ -109,7 +109,7 @@ pub fn expensive_metrics_enabled() -> bool {
 ///
 /// # Usage
 /// ```no_run
-/// use firewood_metrics::firewood_increment;
+/// # use firewood_metrics::firewood_increment;
 ///
 /// mod registry {
 ///     pub const PROPOSALS_CREATED_TOTAL: &str = "proposals_created_total";
@@ -143,7 +143,7 @@ macro_rules! firewood_increment {
 ///
 /// # Usage
 /// ```no_run
-/// use firewood_metrics::firewood_counter;
+/// # use firewood_metrics::firewood_counter;
 ///
 /// mod registry {
 ///     pub const PROPOSALS_CREATED_TOTAL: &str = "proposals_created_total";
@@ -173,7 +173,7 @@ macro_rules! firewood_counter {
 ///
 /// # Usage
 /// ```no_run
-/// use firewood_metrics::firewood_set;
+/// # use firewood_metrics::firewood_set;
 ///
 /// mod registry {
 ///     pub const ACTIVE_REVISIONS: &str = "active_revisions";
@@ -210,7 +210,7 @@ macro_rules! firewood_set {
 ///
 /// # Usage
 /// ```no_run
-/// use firewood_metrics::firewood_gauge;
+/// # use firewood_metrics::firewood_gauge;
 ///
 /// mod registry {
 ///     pub const ACTIVE_REVISIONS: &str = "active_revisions";

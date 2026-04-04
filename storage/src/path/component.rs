@@ -25,10 +25,10 @@ impl PathComponent {
     /// in a type-safe way. It is preferrable to do:
     ///
     /// ```rust
-    /// use firewood_storage::PathComponent;
+    /// # use firewood_storage::PathComponent;
     ///
     /// // Example child slots (one per nibble).
-    /// let children = [(); PathComponent::LEN];
+    /// # let children = [(); PathComponent::LEN];
     /// for (idx, slot) in PathComponent::ALL.into_iter().zip(children.iter()) {
     ///     let _ = (idx, slot);
     /// }
