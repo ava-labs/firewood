@@ -35,13 +35,19 @@ fn verify_and_check(
 #[test]
 #[expect(clippy::too_many_lines)]
 fn test_slow_change_proof_fuzz() {
-    let outer_rng = firewood_storage::SeededRng::from_env_or_random();
+    // When FIREWOOD_TEST_SEED is set, run only that single seed (for
+    // reproducing CI failures). Otherwise, run random iterations.
     // Debug assertions significantly slow down each iteration; use fewer
     // iterations in debug builds so the test finishes in reasonable time.
     let iterations = if cfg!(debug_assertions) { 25 } else { 250 };
+    let seeds: Vec<u64> = if let Ok(s) = std::env::var("FIREWOOD_TEST_SEED") {
+        vec![s.parse().expect("FIREWOOD_TEST_SEED must be a u64")]
+    } else {
+        let outer_rng = firewood_storage::SeededRng::from_random();
+        (0..iterations).map(|_| outer_rng.next_u64()).collect()
+    };
 
-    for run in 0..iterations {
-        let seed = outer_rng.next_u64();
+    for (run, &seed) in seeds.iter().enumerate() {
         eprintln!("run {run}: seed={seed} (export FIREWOOD_TEST_SEED={seed} to reproduce)");
         let rng = firewood_storage::SeededRng::new(seed);
 
@@ -607,11 +613,17 @@ fn test_slow_change_proof_fuzz_varlen() {
 #[test]
 #[expect(clippy::too_many_lines)]
 fn test_slow_adversarial_change_proof_fuzz() {
-    let outer_rng = firewood_storage::SeededRng::from_env_or_random();
+    // When FIREWOOD_TEST_SEED is set, run only that single seed (for
+    // reproducing CI failures). Otherwise, run random iterations.
     let iterations = if cfg!(debug_assertions) { 10 } else { 100 };
+    let seeds: Vec<u64> = if let Ok(s) = std::env::var("FIREWOOD_TEST_SEED") {
+        vec![s.parse().expect("FIREWOOD_TEST_SEED must be a u64")]
+    } else {
+        let outer_rng = firewood_storage::SeededRng::from_random();
+        (0..iterations).map(|_| outer_rng.next_u64()).collect()
+    };
 
-    for run in 0..iterations {
-        let seed = outer_rng.next_u64();
+    for (run, &seed) in seeds.iter().enumerate() {
         eprintln!(
             "adversarial run {run}: seed={seed} (export FIREWOOD_TEST_SEED={seed} to reproduce)"
         );
