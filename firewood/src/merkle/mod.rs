@@ -639,8 +639,12 @@ pub fn verify_change_proof_root_hash(
     for proof_node in start_nodes {
         proving_merkle.reconcile_branch_proof_node(proof_node, |pn| {
             let node_nibbles: Vec<u8> = pn.key.iter().map(|c| c.as_u8()).collect();
-            // Reject only if the node is exactly at start_key (in range).
-            if node_nibbles == start_key_nibbles {
+            // A start proof node is in-range if its key >= start_key. This
+            // covers both inclusion proofs (key == start_key) and exclusion
+            // proofs where the terminal node overshoots start_key to the
+            // nearest existing key. Value conflicts at in-range positions
+            // are real errors — the proposal already has the correct value.
+            if node_nibbles >= start_key_nibbles {
                 Err(ProofError::UnexpectedValue)
             } else {
                 match &pn.value_digest {
@@ -664,7 +668,10 @@ pub fn verify_change_proof_root_hash(
     for proof_node in end_nodes {
         proving_merkle.reconcile_branch_proof_node(proof_node, |pn| {
             let node_nibbles: Vec<u8> = pn.key.iter().map(|c| c.as_u8()).collect();
-            if node_nibbles == end_key_nibbles {
+            // Symmetric to the start proof: an end proof node is in-range
+            // if its key <= end_key (covers exclusion proofs where the
+            // terminal undershoots to the nearest existing key).
+            if node_nibbles <= end_key_nibbles {
                 Err(ProofError::UnexpectedValue)
             } else {
                 match &pn.value_digest {
