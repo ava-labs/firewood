@@ -696,6 +696,18 @@ pub fn verify_change_proof_root_hash(
         proving_merkle.collapse_branch_to_path(&parent.key, &child.key)?;
     }
 
+    // If the end trie's root has a non-empty partial_path, the first proof
+    // node sits deeper than the proposal root. Collapse the proving trie's
+    // root to match so that out-of-range children above the first proof
+    // node are stripped and the root shape matches end_root.
+    let first_proof_key = start_nodes
+        .first()
+        .or_else(|| end_nodes.first())
+        .map(|n| n.key.as_ref());
+    if let Some(key) = first_proof_key {
+        proving_merkle.collapse_root_to_path(key)?;
+    }
+
     // Compute which children at each boundary node are outside the proven
     // range via `compute_outside_children`.
     let mut outside_children =
@@ -1820,6 +1832,38 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     /// intermediate nodes have only the on-path child. Removes all
     /// non-on-path children and values from intermediate branches so the
     /// proving trie matches `end_root`'s path-compressed structure.
+    /// Collapse the proving trie's root so its structure matches the end
+    /// trie's root path. When out-of-range deletions cause the end trie's
+    /// root to compress (e.g., root `partial_path` changes from `[]` to `[1]`),
+    /// the proposal root still has the old shape. This strips non-on-path
+    /// children from the root and flattens single-child branches so the
+    /// root's `partial_path` matches the first proof node's key.
+    pub(crate) fn collapse_root_to_path(
+        &mut self,
+        target: &[PathComponent],
+    ) -> Result<(), FileIoError> {
+        // The root's partial_path consumes some prefix of target.
+        // Only collapse if target extends beyond the root's partial_path.
+        let mut root_node = std::mem::take(self.nodestore.root_mut())
+            .expect("reconciliation guarantees a root node exists");
+
+        let pp_len = root_node.partial_path().len();
+        if let Some((prefix, remaining)) = target.split_at_checked(pp_len)
+            && !remaining.is_empty()
+            && prefix
+                .iter()
+                .zip(root_node.partial_path().0.iter())
+                .all(|(t, p)| t.as_u8() == *p)
+        {
+            // On error the root is left empty, but the caller discards
+            // the proving trie on any verification failure.
+            root_node = self.collapse_strip(root_node, remaining)?;
+        }
+
+        *self.nodestore.root_mut() = Some(root_node);
+        Ok(())
+    }
+
     pub(crate) fn collapse_branch_to_path(
         &mut self,
         from: &[PathComponent],
