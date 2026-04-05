@@ -16,6 +16,47 @@ fn new_db() -> (Db, tempfile::TempDir) {
     (db, dir)
 }
 
+/// Create a new database pre-populated with key/value pairs.
+///
+/// ```rust,no_run
+/// let (db, _dir) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1")];
+/// ```
+macro_rules! setup_db {
+    [] => {{
+        let (db, dir) = new_db();
+        db.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
+            .unwrap()
+            .commit()
+            .unwrap();
+        (db, dir)
+    }};
+    [$(($key:expr, $val:expr)),+ $(,)?] => {{
+        let (db, dir) = new_db();
+        db.propose(vec![$(BatchOp::Put { key: $key as &[u8], value: $val as &[u8] }),+])
+            .unwrap()
+            .commit()
+            .unwrap();
+        (db, dir)
+    }};
+}
+
+/// Commit a second batch of Puts to `$db`, returning `(root_before, root_after)`.
+///
+/// ```rust,no_run
+/// let (root1, root2) = setup_2nd_commit!(db, [(b"\x50", b"mid")]);
+/// ```
+macro_rules! setup_2nd_commit {
+    ($db:expr, [$(($key:expr, $val:expr)),+ $(,)?]) => {{
+        let root1 = $db.root_hash().unwrap();
+        $db.propose(vec![$(BatchOp::Put { key: $key as &[u8], value: $val as &[u8] }),+])
+            .unwrap()
+            .commit()
+            .unwrap();
+        let root2 = $db.root_hash().unwrap();
+        (root1, root2)
+    }};
+}
+
 /// Verify a change proof end-to-end: structural check + root hash check.
 ///
 /// Builds a proposal (`start_root` + `batch_ops`) and verifies its in-range
@@ -37,30 +78,8 @@ fn verify_and_check(
 
 #[test]
 fn test_inverted_range_rejected() {
-    let (db, _dir) = new_db();
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\xa0",
-            value: b"v1",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root1 = db.root_hash().unwrap();
-
-    db.propose(vec![BatchOp::Put {
-        key: b"\x50",
-        value: b"mid",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db.root_hash().unwrap();
+    let (db, _dir) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x50", b"mid")]);
 
     let proof = db
         .change_proof(root1, root2.clone(), Some(b"\x10"), Some(b"\xa0"), None)
@@ -73,30 +92,8 @@ fn test_inverted_range_rejected() {
 
 #[test]
 fn test_boundary_proof_unverifiable() {
-    let (db, _dir) = new_db();
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x00",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v1",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root1 = db.root_hash().unwrap();
-
-    db.propose(vec![BatchOp::Put {
-        key: b"\x05",
-        value: b"v2",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db.root_hash().unwrap();
+    let (db, _dir) = setup_db![(b"\x00", b"v0"), (b"\x10", b"v1")];
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x05", b"v2")]);
 
     let proof = db
         .change_proof(root1, root2.clone(), Some(b"\x00"), Some(b"\x10"), None)
@@ -112,30 +109,8 @@ fn test_boundary_proof_unverifiable() {
 
 #[test]
 fn test_keys_not_sorted() {
-    let (db, _dir) = new_db();
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\xa0",
-            value: b"v1",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root1 = db.root_hash().unwrap();
-
-    db.propose(vec![BatchOp::Put {
-        key: b"\x50",
-        value: b"mid",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db.root_hash().unwrap();
+    let (db, _dir) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x50", b"mid")]);
 
     let valid = db
         .change_proof(root1, root2.clone(), None, None, None)
@@ -165,30 +140,8 @@ fn test_keys_not_sorted() {
 
 #[test]
 fn test_start_key_larger_than_first_key() {
-    let (db, _dir) = new_db();
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\xa0",
-            value: b"v1",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root1 = db.root_hash().unwrap();
-
-    db.propose(vec![BatchOp::Put {
-        key: b"\x50",
-        value: b"mid",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db.root_hash().unwrap();
+    let (db, _dir) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x50", b"mid")]);
 
     let proof = db
         .change_proof(root1, root2.clone(), None, None, None)
@@ -202,30 +155,8 @@ fn test_start_key_larger_than_first_key() {
 
 #[test]
 fn test_end_key_less_than_last_key() {
-    let (db, _dir) = new_db();
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\xa0",
-            value: b"v1",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root1 = db.root_hash().unwrap();
-
-    db.propose(vec![BatchOp::Put {
-        key: b"\x50",
-        value: b"mid",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db.root_hash().unwrap();
+    let (db, _dir) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x50", b"mid")]);
 
     let proof = db
         .change_proof(root1, root2.clone(), None, None, None)
@@ -239,36 +170,8 @@ fn test_end_key_less_than_last_key() {
 
 #[test]
 fn test_proof_larger_than_max_length() {
-    let (db, _dir) = new_db();
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\xa0",
-            value: b"v1",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root1 = db.root_hash().unwrap();
-
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x50",
-            value: b"mid_",
-        },
-        BatchOp::Put {
-            key: b"\x60",
-            value: b"mid2",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db.root_hash().unwrap();
+    let (db, _dir) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x50", b"mid_"), (b"\x60", b"mid2")]);
 
     let proof = db
         .change_proof(root1, root2.clone(), None, None, None)
@@ -307,30 +210,8 @@ fn test_missing_boundary_proof() {
 
 #[test]
 fn test_missing_end_proof() {
-    let (db, _dir) = new_db();
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\xa0",
-            value: b"v1",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root1 = db.root_hash().unwrap();
-
-    db.propose(vec![BatchOp::Put {
-        key: b"\x50",
-        value: b"mid",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db.root_hash().unwrap();
+    let (db, _dir) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x50", b"mid")]);
 
     let valid = db
         .change_proof(root1, root2.clone(), None, None, None)
@@ -350,30 +231,8 @@ fn test_missing_end_proof() {
 
 #[test]
 fn test_unexpected_end_proof() {
-    let (db, _dir) = new_db();
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"v1",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root1 = db.root_hash().unwrap();
-
-    db.propose(vec![BatchOp::Put {
-        key: b"\x20",
-        value: b"changed",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db.root_hash().unwrap();
+    let (db, _dir) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1")];
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x20", b"changed")]);
 
     // Get a proof with a non-empty end_proof
     let valid = db
@@ -397,30 +256,8 @@ fn test_unexpected_end_proof() {
 
 #[test]
 fn test_wrong_end_root_boundary_check() {
-    let (db, _dir) = new_db();
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\xa0",
-            value: b"v1",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root1 = db.root_hash().unwrap();
-
-    db.propose(vec![BatchOp::Put {
-        key: b"\x50",
-        value: b"mid",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db.root_hash().unwrap();
+    let (db, _dir) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x50", b"mid")]);
 
     let proof = db
         .change_proof(root1, root2, Some(b"\x10"), Some(b"\xa0"), None)
@@ -440,38 +277,12 @@ fn test_wrong_end_root_boundary_check() {
 
 #[test]
 fn test_root_hash_complete_no_proofs() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
-    let initial = vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"v1",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
-    let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_a, _dir_a) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1")];
+    let (db_b, _dir_b) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1")];
     let root1_b = db_b.root_hash().unwrap();
 
-    db_a.propose(vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"changed0",
-        },
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"changed1",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db_a.root_hash().unwrap();
+    let (root1_a, root2) =
+        setup_2nd_commit!(db_a, [(b"\x10", b"changed0"), (b"\x20", b"changed1")]);
 
     let proof = db_a
         .change_proof(root1_a, root2.clone(), None, None, None)
@@ -482,32 +293,11 @@ fn test_root_hash_complete_no_proofs() {
 
 #[test]
 fn test_root_hash_single_end_proof() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
-    let initial = vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"v1",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
-    let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_a, _dir_a) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1")];
+    let (db_b, _dir_b) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1")];
     let root1_b = db_b.root_hash().unwrap();
 
-    db_a.propose(vec![BatchOp::Put {
-        key: b"\x10",
-        value: b"changed",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db_a.root_hash().unwrap();
+    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x10", b"changed")]);
 
     let proof = db_a
         .change_proof(root1_a, root2.clone(), None, Some(b"\x20"), None)
@@ -518,32 +308,11 @@ fn test_root_hash_single_end_proof() {
 
 #[test]
 fn test_root_hash_single_start_proof() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
-    let initial = vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"v1",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
-    let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_a, _dir_a) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1")];
+    let (db_b, _dir_b) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1")];
     let root1_b = db_b.root_hash().unwrap();
 
-    db_a.propose(vec![BatchOp::Put {
-        key: b"\x20",
-        value: b"changed",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db_a.root_hash().unwrap();
+    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x20", b"changed")]);
 
     let proof = db_a
         .change_proof(root1_a, root2.clone(), Some(b"\x10"), None, None)
@@ -554,36 +323,11 @@ fn test_root_hash_single_start_proof() {
 
 #[test]
 fn test_root_hash_two_proofs() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
-    let initial = vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"v1",
-        },
-        BatchOp::Put {
-            key: b"\x30",
-            value: b"v2",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
-    let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_a, _dir_a) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+    let (db_b, _dir_b) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
     let root1_b = db_b.root_hash().unwrap();
 
-    db_a.propose(vec![BatchOp::Put {
-        key: b"\x20",
-        value: b"changed",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db_a.root_hash().unwrap();
+    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x20", b"changed")]);
 
     let proof = db_a
         .change_proof(root1_a, root2.clone(), Some(b"\x10"), Some(b"\x30"), None)
@@ -597,46 +341,14 @@ fn test_root_hash_two_proofs() {
 
 #[test]
 fn test_omitted_change_detected() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
-    let initial = vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"v1",
-        },
-        BatchOp::Put {
-            key: b"\x30",
-            value: b"v2",
-        },
-        BatchOp::Put {
-            key: b"\x40",
-            value: b"v3",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
-    let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_a, _dir_a) =
+        setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2"), (b"\x40", b"v3")];
+    let (db_b, _dir_b) =
+        setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2"), (b"\x40", b"v3")];
     let root1_b = db_b.root_hash().unwrap();
 
-    db_a.propose(vec![
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"changed1",
-        },
-        BatchOp::Put {
-            key: b"\x30",
-            value: b"changed2",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db_a.root_hash().unwrap();
+    let (root1_a, root2) =
+        setup_2nd_commit!(db_a, [(b"\x20", b"changed1"), (b"\x30", b"changed2")]);
 
     let valid = db_a
         .change_proof(root1_a, root2.clone(), Some(b"\x10"), Some(b"\x40"), None)
@@ -657,32 +369,11 @@ fn test_omitted_change_detected() {
 
 #[test]
 fn test_forged_value_detected() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
-    let initial = vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\xa0",
-            value: b"v1",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
-    let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_a, _dir_a) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+    let (db_b, _dir_b) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
     let root1_b = db_b.root_hash().unwrap();
 
-    db_a.propose(vec![BatchOp::Put {
-        key: b"\x10",
-        value: b"real",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db_a.root_hash().unwrap();
+    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x10", b"real")]);
 
     let valid = db_a
         .change_proof(root1_a, root2.clone(), None, None, None)
@@ -705,32 +396,11 @@ fn test_forged_value_detected() {
 
 #[test]
 fn test_wrong_end_root_detected() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
-    let initial = vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\xa0",
-            value: b"v1",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
-    let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_a, _dir_a) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+    let (db_b, _dir_b) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
     let root1_b = db_b.root_hash().unwrap();
 
-    db_a.propose(vec![BatchOp::Put {
-        key: b"\x50",
-        value: b"mid",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db_a.root_hash().unwrap();
+    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x50", b"mid")]);
 
     let proof = db_a.change_proof(root1_a, root2, None, None, None).unwrap();
 
@@ -744,32 +414,11 @@ fn test_wrong_end_root_detected() {
 
 #[test]
 fn test_spurious_batch_op_detected() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
-    let initial = vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\xa0",
-            value: b"v1",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
-    let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_a, _dir_a) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+    let (db_b, _dir_b) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
     let root1_b = db_b.root_hash().unwrap();
 
-    db_a.propose(vec![BatchOp::Put {
-        key: b"\xa0",
-        value: b"changed",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db_a.root_hash().unwrap();
+    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\xa0", b"changed")]);
 
     let valid = db_a
         .change_proof(root1_a, root2.clone(), None, None, None)
@@ -800,37 +449,12 @@ fn test_spurious_batch_op_detected() {
 
 #[test]
 fn test_empty_batch_ops_with_nonempty_proofs() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
-    let initial = vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"v1",
-        },
-        BatchOp::Put {
-            key: b"\x30",
-            value: b"v2",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
-    let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_a, _dir_a) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+    let (db_b, _dir_b) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
     let root1_b = db_b.root_hash().unwrap();
 
     // Change only \x30 (outside range [\x10, \x20])
-    db_a.propose(vec![BatchOp::Put {
-        key: b"\x30",
-        value: b"changed",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db_a.root_hash().unwrap();
+    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x30", b"changed")]);
 
     let proof = db_a
         .change_proof(root1_a, root2.clone(), Some(b"\x10"), Some(b"\x20"), None)
@@ -850,36 +474,11 @@ fn test_empty_batch_ops_with_nonempty_proofs() {
 
 #[test]
 fn test_odd_depth_proof_node_accepted() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
-    let initial = vec![
-        BatchOp::Put {
-            key: b"\x12",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\x13",
-            value: b"v1",
-        },
-        BatchOp::Put {
-            key: b"\x50",
-            value: b"v2",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
-    let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_a, _dir_a) = setup_db![(b"\x12", b"v0"), (b"\x13", b"v1"), (b"\x50", b"v2")];
+    let (db_b, _dir_b) = setup_db![(b"\x12", b"v0"), (b"\x13", b"v1"), (b"\x50", b"v2")];
     let root1_b = db_b.root_hash().unwrap();
 
-    db_a.propose(vec![BatchOp::Put {
-        key: b"\x50",
-        value: b"changed",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db_a.root_hash().unwrap();
+    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x50", b"changed")]);
 
     let proof = db_a
         .change_proof(root1_a, root2.clone(), Some(b"\x14"), None, None)
@@ -890,36 +489,11 @@ fn test_odd_depth_proof_node_accepted() {
 
 #[test]
 fn test_start_proof_inclusion_with_children_below() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
-    let initial: Vec<BatchOp<&[u8], &[u8]>> = vec![
-        BatchOp::Put {
-            key: b"\xab",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\xab\xcd",
-            value: b"v1",
-        },
-        BatchOp::Put {
-            key: b"\xf0",
-            value: b"v2",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
-    let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_a, _dir_a) = setup_db![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
+    let (db_b, _dir_b) = setup_db![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
     let root1_b = db_b.root_hash().unwrap();
 
-    db_a.propose(vec![BatchOp::Put {
-        key: b"\xf0",
-        value: b"changed",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db_a.root_hash().unwrap();
+    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\xf0", b"changed")]);
 
     let proof = db_a
         .change_proof(root1_a, root2.clone(), Some(b"\xab"), None, None)
@@ -930,26 +504,9 @@ fn test_start_proof_inclusion_with_children_below() {
 
 #[test]
 fn test_end_proof_inclusion_with_children_below() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
-    let initial: Vec<BatchOp<&[u8], &[u8]>> = vec![
-        BatchOp::Put {
-            key: b"\xab",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\xab\xcd",
-            value: b"v1",
-        },
-        BatchOp::Put {
-            key: b"\xf0",
-            value: b"v2",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
+    let (db_a, _dir_a) = setup_db![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
     let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_b, _dir_b) = setup_db![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
     let root1_b = db_b.root_hash().unwrap();
 
     let changes: Vec<BatchOp<&[u8], &[u8]>> = vec![
@@ -980,36 +537,13 @@ fn test_end_proof_inclusion_with_children_below() {
 
 #[test]
 fn test_divergence_parent_start_key_exhausted() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
-    let initial: Vec<BatchOp<&[u8], &[u8]>> = vec![
-        BatchOp::Put {
-            key: b"\x12\x01",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\x12\x02",
-            value: b"v1",
-        },
-        BatchOp::Put {
-            key: b"\xf0",
-            value: b"v2",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
-    let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_a, _dir_a) =
+        setup_db![(b"\x12\x01", b"v0"), (b"\x12\x02", b"v1"), (b"\xf0", b"v2")];
+    let (db_b, _dir_b) =
+        setup_db![(b"\x12\x01", b"v0"), (b"\x12\x02", b"v1"), (b"\xf0", b"v2")];
     let root1_b = db_b.root_hash().unwrap();
 
-    db_a.propose(vec![BatchOp::Put {
-        key: b"\xf0",
-        value: b"changed",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db_a.root_hash().unwrap();
+    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\xf0", b"changed")]);
 
     let proof = db_a
         .change_proof(root1_a, root2.clone(), Some(b"\x12"), Some(b"\xf0"), None)
@@ -1021,30 +555,11 @@ fn test_divergence_parent_start_key_exhausted() {
 
 #[test]
 fn test_divergence_at_depth_zero() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
-    let initial = vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\x11",
-            value: b"v1",
-        },
-        BatchOp::Put {
-            key: b"\xa0",
-            value: b"v2",
-        },
-        BatchOp::Put {
-            key: b"\xa1",
-            value: b"v3",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
+    let (db_a, _dir_a) =
+        setup_db![(b"\x10", b"v0"), (b"\x11", b"v1"), (b"\xa0", b"v2"), (b"\xa1", b"v3")];
     let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_b, _dir_b) =
+        setup_db![(b"\x10", b"v0"), (b"\x11", b"v1"), (b"\xa0", b"v2"), (b"\xa1", b"v3")];
     let root1_b = db_b.root_hash().unwrap();
 
     let changes: Vec<BatchOp<&[u8], &[u8]>> = vec![
@@ -1135,46 +650,14 @@ fn test_divergence_at_depth_zero() {
 // validate that \x10's children are intact.
 #[test]
 fn test_start_tail_last_node_children_checked() {
-    let (sender, _dir_sender) = new_db();
-    let (receiver, _dir_receiver) = new_db();
-
-    let start_data_for_both: Vec<BatchOp<&[u8], &[u8]>> = vec![
-        BatchOp::Put {
-            key: b"\x10\x01",
-            value: b"a",
-        },
-        BatchOp::Put {
-            key: b"\x10\x02",
-            value: b"b",
-        },
-        BatchOp::Put {
-            key: b"\x30",
-            value: b"c",
-        },
-    ];
-    sender
-        .propose(start_data_for_both.clone())
-        .unwrap()
-        .commit()
-        .unwrap();
-    let sender_root1 = sender.root_hash().unwrap();
-    receiver
-        .propose(start_data_for_both)
-        .unwrap()
-        .commit()
-        .unwrap();
+    let (sender, _dir_sender) =
+        setup_db![(b"\x10\x01", b"a"), (b"\x10\x02", b"b"), (b"\x30", b"c")];
+    let (receiver, _dir_receiver) =
+        setup_db![(b"\x10\x01", b"a"), (b"\x10\x02", b"b"), (b"\x30", b"c")];
     let receiver_root1 = receiver.root_hash().unwrap();
 
     // Only modify \x30 on the sender; \x10's children are untouched
-    sender
-        .propose(vec![BatchOp::Put {
-            key: b"\x30",
-            value: b"changed",
-        }])
-        .unwrap()
-        .commit()
-        .unwrap();
-    let sender_root2 = sender.root_hash().unwrap();
+    let (sender_root1, sender_root2) = setup_2nd_commit!(sender, [(b"\x30", b"changed")]);
 
     let proof = sender
         .change_proof(
@@ -1192,26 +675,9 @@ fn test_start_tail_last_node_children_checked() {
 
 #[test]
 fn test_start_proof_exclusion_for_deleted_key() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
-    let initial = vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"v1",
-        },
-        BatchOp::Put {
-            key: b"\x30",
-            value: b"v2",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
+    let (db_a, _dir_a) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
     let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_b, _dir_b) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
     let root1_b = db_b.root_hash().unwrap();
 
     db_a.propose(vec![
@@ -1235,36 +701,8 @@ fn test_start_proof_exclusion_for_deleted_key() {
 
 #[test]
 fn test_delete_range_rejected() {
-    let (db, _dir) = new_db();
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\xa0",
-            value: b"v1",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root1 = db.root_hash().unwrap();
-
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x50",
-            value: b"mid",
-        },
-        BatchOp::Put {
-            key: b"\x80",
-            value: b"end",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db.root_hash().unwrap();
+    let (db, _dir) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x50", b"mid"), (b"\x80", b"end")]);
 
     let valid = db
         .change_proof(root1, root2.clone(), None, None, None)
@@ -1298,30 +736,8 @@ fn test_delete_range_rejected() {
 /// before the end-proof consistency check runs.
 #[test]
 fn test_delete_range_rejected_with_boundary_proofs() {
-    let (db, _dir) = new_db();
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\xa0",
-            value: b"v1",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root1 = db.root_hash().unwrap();
-
-    db.propose(vec![BatchOp::Put {
-        key: b"\x50",
-        value: b"mid",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db.root_hash().unwrap();
+    let (db, _dir) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x50", b"mid")]);
 
     let valid = db
         .change_proof(root1, root2.clone(), None, None, None)
@@ -1345,46 +761,12 @@ fn test_delete_range_rejected_with_boundary_proofs() {
 
 #[test]
 fn test_truncated_proof_round_trip() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
-    let initial = vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"v1",
-        },
-        BatchOp::Put {
-            key: b"\x30",
-            value: b"v2",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
-    let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_a, _dir_a) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+    let (db_b, _dir_b) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
     let root1_b = db_b.root_hash().unwrap();
 
-    db_a.propose(vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"c0",
-        },
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"c1",
-        },
-        BatchOp::Put {
-            key: b"\x30",
-            value: b"c2",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db_a.root_hash().unwrap();
+    let (root1_a, root2) =
+        setup_2nd_commit!(db_a, [(b"\x10", b"c0"), (b"\x20", b"c1"), (b"\x30", b"c2")]);
 
     // Round 1: truncated
     let proof1 = db_a
@@ -1421,26 +803,9 @@ fn test_truncated_proof_round_trip() {
 
 #[test]
 fn test_truncated_proof_with_delete_last_op() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
-    let initial = vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"v1",
-        },
-        BatchOp::Put {
-            key: b"\x30",
-            value: b"v2",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
+    let (db_a, _dir_a) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
     let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_b, _dir_b) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
     let root1_b = db_b.root_hash().unwrap();
 
     let changes: Vec<BatchOp<&[u8], &[u8]>> = vec![
@@ -1467,31 +832,8 @@ fn test_truncated_proof_with_delete_last_op() {
 
 #[test]
 fn test_generator_uses_end_key_for_complete_proof() {
-    let (db, _dir) = new_db();
-
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\xa0",
-            value: b"v1",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root1 = db.root_hash().unwrap();
-
-    db.propose(vec![BatchOp::Put {
-        key: b"\x10",
-        value: b"changed",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db.root_hash().unwrap();
+    let (db, _dir) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x10", b"changed")]);
 
     // end_key far beyond last change, no limit — complete proof
     let proof = db
@@ -1508,34 +850,13 @@ fn test_generator_uses_end_key_for_complete_proof() {
 /// but the proof is exclusion.
 #[test]
 fn test_spurious_put_at_start_key_boundary() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
     // Keys \x20 and \x90 exist. \x10 (start_key) does NOT exist.
-    let initial = vec![
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"v2",
-        },
-        BatchOp::Put {
-            key: b"\x90",
-            value: b"v9",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
-    let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_a, _dir_a) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+    let (db_b, _dir_b) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
     let root1_b = db_b.root_hash().unwrap();
 
     // Change \x20 on db_a
-    db_a.propose(vec![BatchOp::Put {
-        key: b"\x20",
-        value: b"changed",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db_a.root_hash().unwrap();
+    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x20", b"changed")]);
 
     // Generate bounded proof for [\x10, \x90].
     // Start proof for \x10 is an exclusion proof (\x10 doesn't exist).
@@ -1576,34 +897,13 @@ fn test_spurious_put_at_start_key_boundary() {
 /// claims the key was removed — `StartProofOperationMismatch`.
 #[test]
 fn test_spurious_delete_at_start_key_boundary() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
     // Keys \x20 and \x90 exist. start_key \x20 EXISTS in end_root.
-    let initial = vec![
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"v2",
-        },
-        BatchOp::Put {
-            key: b"\x90",
-            value: b"v9",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
-    let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_a, _dir_a) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+    let (db_b, _dir_b) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
     let root1_b = db_b.root_hash().unwrap();
 
     // Change \x90 on db_a (not \x20 — \x20 stays in end_root).
-    db_a.propose(vec![BatchOp::Put {
-        key: b"\x90",
-        value: b"changed",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db_a.root_hash().unwrap();
+    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x90", b"changed")]);
 
     // Generate bounded proof for [\x20, \x90].
     // Start proof for \x20 is an inclusion proof (\x20 exists).
@@ -1651,27 +951,11 @@ fn test_spurious_delete_at_start_key_boundary() {
 /// skipped.
 #[test]
 fn test_disjoint_proof() {
-    let (db, _dir) = new_db();
-
     // R1: trie with a single key \x00
-    db.propose(vec![BatchOp::Put {
-        key: b"\x00",
-        value: b"v0",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root1 = db.root_hash().unwrap();
+    let (db, _dir) = setup_db![(b"\x00", b"v0")];
 
     // R2: add \x00\x10 (outside query range [\x00\x10\x20, \x00\x10\x30])
-    db.propose(vec![BatchOp::Put {
-        key: b"\x00\x10",
-        value: b"v1",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db.root_hash().unwrap();
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x00\x10", b"v1")]);
 
     let first = b"\x00\x10\x20";
     let last = b"\x00\x10\x30";
@@ -1705,24 +989,10 @@ fn test_disjoint_proof() {
 /// child node. This test verifies that `prove()` appends the child.
 #[test]
 fn test_exclusion_proof_includes_divergent_child() {
-    let (db, _dir) = new_db();
-
     // Create two keys that share a branch: \x10\x50 and \x10\x58.
     // Deleting \x10\x50 causes the branch to compress — the remaining
     // child \x10\x58 absorbs the branch's partial_path.
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x10\x50",
-            value: b"a",
-        },
-        BatchOp::Put {
-            key: b"\x10\x58",
-            value: b"b",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
+    let (db, _dir) = setup_db![(b"\x10\x50", b"a"), (b"\x10\x58", b"b")];
     let root1 = db.root_hash().unwrap();
 
     // Delete \x10\x50 — branch at nibble depth 5 compresses.
@@ -1769,20 +1039,7 @@ fn test_exclusion_proof_includes_divergent_child() {
     );
 
     // Verify the full change proof round-trip works.
-    let (db_b, _dir_b) = new_db();
-    db_b.propose(vec![
-        BatchOp::Put {
-            key: b"\x10\x50",
-            value: b"a",
-        },
-        BatchOp::Put {
-            key: b"\x10\x58",
-            value: b"b",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
+    let (db_b, _dir_b) = setup_db![(b"\x10\x50", b"a"), (b"\x10\x58", b"b")];
     let root1_b = db_b.root_hash().unwrap();
 
     let change = db
@@ -1797,24 +1054,10 @@ fn test_exclusion_proof_includes_divergent_child() {
 /// a valid exclusion proof.
 #[test]
 fn test_exclusion_proof_no_child_at_next_nibble() {
-    let (db, _dir) = new_db();
-
     // Create keys at \x20 and \x30. Proving \x10: the root has children
     // at nibble 2 and 3, but NO child at nibble 1. The proof stops at
     // the root with no divergent child to append.
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"a",
-        },
-        BatchOp::Put {
-            key: b"\x30",
-            value: b"b",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
+    let (db, _dir) = setup_db![(b"\x20", b"a"), (b"\x30", b"b")];
 
     let rev = db.revision(db.root_hash().unwrap()).unwrap();
     let merkle = crate::merkle::Merkle::from(&*rev);
@@ -1833,28 +1076,10 @@ fn test_exclusion_proof_no_child_at_next_nibble() {
 /// exists) must be rejected by `value_digest` with `ExclusionProofMissingChild`.
 #[test]
 fn test_incomplete_exclusion_proof_rejected() {
-    let (db, _dir) = new_db();
-
     // Create a trie with enough keys to ensure the proof has multiple
     // nodes. \x10\x50 and \x10\x58 share a branch; \x30 ensures the
     // root is a branch with children at nibbles 1 and 3.
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x10\x50",
-            value: b"a",
-        },
-        BatchOp::Put {
-            key: b"\x10\x58",
-            value: b"b",
-        },
-        BatchOp::Put {
-            key: b"\x30\x00",
-            value: b"c",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
+    let (db, _dir) = setup_db![(b"\x10\x50", b"a"), (b"\x10\x58", b"b"), (b"\x30\x00", b"c")];
 
     // Delete \x10\x50. The branch at nibble depth 5 compresses, and
     // \x10\x58 becomes the divergent child for exclusion proofs of
@@ -1899,46 +1124,18 @@ fn test_incomplete_exclusion_proof_rejected() {
 /// range and may legitimately differ.
 #[test]
 fn test_out_of_range_value_at_start_tail_accepted() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
     // Create keys where \x10 is a proper prefix of \x10\x50.
     // \x10 has a value (branch with value at depth 2).
-    let initial: Vec<BatchOp<&[u8], &[u8]>> = vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"prefix_val",
-        },
-        BatchOp::Put {
-            key: b"\x10\x50",
-            value: b"v000000000",
-        },
-        BatchOp::Put {
-            key: b"\x30",
-            value: b"v100000000",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
-    let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_a, _dir_a) =
+        setup_db![(b"\x10", b"prefix_val"), (b"\x10\x50", b"v000000000"), (b"\x30", b"v100000000")];
+    let (db_b, _dir_b) =
+        setup_db![(b"\x10", b"prefix_val"), (b"\x10\x50", b"v000000000"), (b"\x30", b"v100000000")];
     let root1_b = db_b.root_hash().unwrap();
 
     // Change \x10's value (out of range for [\x10\x50, \x30])
     // AND change \x30 (in range).
-    db_a.propose(vec![
-        BatchOp::Put {
-            key: b"\x10" as &[u8],
-            value: b"changed_pfx" as &[u8],
-        },
-        BatchOp::Put {
-            key: b"\x30",
-            value: b"changed_v1",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db_a.root_hash().unwrap();
+    let (root1_a, root2) =
+        setup_2nd_commit!(db_a, [(b"\x10", b"changed_pfx"), (b"\x30", b"changed_v1")]);
 
     // Range [\x10\x50, \x30]: \x10 is out of range (< \x10\x50).
     // The start proof path includes a node at \x10 whose value changed.
@@ -1962,40 +1159,14 @@ fn test_out_of_range_value_at_start_tail_accepted() {
 /// reconciliation or root hash comparison should detect the mismatch.
 #[test]
 fn test_start_key_inclusion_value_checked() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
     // Both DBs start with \x10 = "v0", \x30 = "v1".
-    let initial: Vec<BatchOp<&[u8], &[u8]>> = vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v0",
-        },
-        BatchOp::Put {
-            key: b"\x30",
-            value: b"v1",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
-    let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_a, _dir_a) = setup_db![(b"\x10", b"v0"), (b"\x30", b"v1")];
+    let (db_b, _dir_b) = setup_db![(b"\x10", b"v0"), (b"\x30", b"v1")];
     let root1_b = db_b.root_hash().unwrap();
 
     // Change \x10 (start_key) to "changed" and \x30 to "also_changed".
-    db_a.propose(vec![
-        BatchOp::Put {
-            key: b"\x10" as &[u8],
-            value: b"changed" as &[u8],
-        },
-        BatchOp::Put {
-            key: b"\x30",
-            value: b"changed",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db_a.root_hash().unwrap();
+    let (root1_a, root2) =
+        setup_2nd_commit!(db_a, [(b"\x10", b"changed"), (b"\x30", b"changed")]);
 
     // Get an honest proof. The start proof is inclusion for \x10.
     let honest = db_a
@@ -2064,27 +1235,12 @@ fn test_start_key_inclusion_value_checked() {
 /// hash was never compared.
 #[test]
 fn test_boundary_child_gap_closed_for_start_key() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
     // Create \x10\x50 and \x10\x58 (share a branch).
-    let initial: Vec<BatchOp<&[u8], &[u8]>> = vec![
-        BatchOp::Put {
-            key: b"\x10\x50",
-            value: b"a",
-        },
-        BatchOp::Put {
-            key: b"\x10\x58",
-            value: b"b",
-        },
-        BatchOp::Put {
-            key: b"\x30\x00",
-            value: b"c",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
+    let (db_a, _dir_a) =
+        setup_db![(b"\x10\x50", b"a"), (b"\x10\x58", b"b"), (b"\x30\x00", b"c")];
     let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_b, _dir_b) =
+        setup_db![(b"\x10\x50", b"a"), (b"\x10\x58", b"b"), (b"\x30\x00", b"c")];
     let root1_b = db_b.root_hash().unwrap();
 
     // Delete \x10\x50, change \x30\x00. \x10\x58 is unchanged.
@@ -2131,22 +1287,8 @@ fn test_boundary_child_gap_closed_for_start_key() {
 #[cfg(feature = "ethhash")]
 #[test]
 fn test_empty_start_trie_single_key_no_bounds() {
-    let (db, _dir) = new_db();
-
-    // Commit an empty revision to get a root hash for the empty state.
-    let empty_ops: Vec<BatchOp<&[u8], &[u8]>> = vec![];
-    db.propose(empty_ops).unwrap().commit().unwrap();
-    let empty_root = db.root_hash().unwrap();
-
-    // Add a single key.
-    db.propose(vec![BatchOp::Put {
-        key: b"\x50",
-        value: b"hello",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db.root_hash().unwrap();
+    let (db, _dir) = setup_db![];
+    let (empty_root, root2) = setup_2nd_commit!(db, [(b"\x50", b"hello")]);
 
     // Complete proof — no bounds.
     let proof = db
@@ -2155,11 +1297,7 @@ fn test_empty_start_trie_single_key_no_bounds() {
     let ctx = verify_change_proof_structure(&proof, root2.clone(), None, None, None).unwrap();
 
     // Receiver also starts empty.
-    let (db_b, _dir_b) = new_db();
-    db_b.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
-        .unwrap()
-        .commit()
-        .unwrap();
+    let (db_b, _dir_b) = setup_db![];
     let empty_root_b = db_b.root_hash().unwrap();
 
     verify_and_check(&db_b, &proof, &ctx, empty_root_b).unwrap();
@@ -2170,37 +1308,11 @@ fn test_empty_start_trie_single_key_no_bounds() {
 #[cfg(feature = "ethhash")]
 #[test]
 fn test_empty_start_trie_bounded_inclusion() {
-    let (db, _dir) = new_db();
-
-    db.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
-        .unwrap()
-        .commit()
-        .unwrap();
-    let empty_root = db.root_hash().unwrap();
+    let (db, _dir) = setup_db![];
 
     // Insert several keys.
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x10" as &[u8],
-            value: b"a" as &[u8],
-        },
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"b",
-        },
-        BatchOp::Put {
-            key: b"\x30",
-            value: b"c",
-        },
-        BatchOp::Put {
-            key: b"\x40",
-            value: b"d",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db.root_hash().unwrap();
+    let (empty_root, root2) =
+        setup_2nd_commit!(db, [(b"\x10", b"a"), (b"\x20", b"b"), (b"\x30", b"c"), (b"\x40", b"d")]);
 
     // Bounded range [\x10, \x30] — start_key \x10 exists (inclusion).
     let proof = db
@@ -2216,11 +1328,7 @@ fn test_empty_start_trie_bounded_inclusion() {
         verify_change_proof_structure(&proof, root2.clone(), Some(b"\x10"), Some(b"\x30"), None)
             .unwrap();
 
-    let (db_b, _dir_b) = new_db();
-    db_b.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
-        .unwrap()
-        .commit()
-        .unwrap();
+    let (db_b, _dir_b) = setup_db![];
     let empty_root_b = db_b.root_hash().unwrap();
 
     verify_and_check(&db_b, &proof, &ctx, empty_root_b).unwrap();
@@ -2231,32 +1339,9 @@ fn test_empty_start_trie_bounded_inclusion() {
 #[cfg(feature = "ethhash")]
 #[test]
 fn test_empty_start_trie_bounded_exclusion() {
-    let (db, _dir) = new_db();
-
-    db.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
-        .unwrap()
-        .commit()
-        .unwrap();
-    let empty_root = db.root_hash().unwrap();
-
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x10" as &[u8],
-            value: b"a" as &[u8],
-        },
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"b",
-        },
-        BatchOp::Put {
-            key: b"\x30",
-            value: b"c",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db.root_hash().unwrap();
+    let (db, _dir) = setup_db![];
+    let (empty_root, root2) =
+        setup_2nd_commit!(db, [(b"\x10", b"a"), (b"\x20", b"b"), (b"\x30", b"c")]);
 
     // start_key \x05 does NOT exist — exclusion proof.
     let proof = db
@@ -2272,11 +1357,7 @@ fn test_empty_start_trie_bounded_exclusion() {
         verify_change_proof_structure(&proof, root2.clone(), Some(b"\x05"), Some(b"\x30"), None)
             .unwrap();
 
-    let (db_b, _dir_b) = new_db();
-    db_b.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
-        .unwrap()
-        .commit()
-        .unwrap();
+    let (db_b, _dir_b) = setup_db![];
     let empty_root_b = db_b.root_hash().unwrap();
 
     verify_and_check(&db_b, &proof, &ctx, empty_root_b).unwrap();
@@ -2287,12 +1368,7 @@ fn test_empty_start_trie_bounded_exclusion() {
 #[cfg(feature = "ethhash")]
 #[test]
 fn test_empty_start_trie_large_end_trie_multi_round() {
-    let (db, _dir) = new_db();
-
-    db.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
-        .unwrap()
-        .commit()
-        .unwrap();
+    let (db, _dir) = setup_db![];
     let empty_root = db.root_hash().unwrap();
 
     // Insert 100 keys: \x00\x00 through \x00\x63.
@@ -2307,11 +1383,7 @@ fn test_empty_start_trie_large_end_trie_multi_round() {
     db.propose(ops).unwrap().commit().unwrap();
     let root2 = db.root_hash().unwrap();
 
-    let (db_b, _dir_b) = new_db();
-    db_b.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
-        .unwrap()
-        .commit()
-        .unwrap();
+    let (db_b, _dir_b) = setup_db![];
     let empty_root_b = db_b.root_hash().unwrap();
 
     // Simulate iterative sync with 4 rounds of ~25 keys each.
@@ -2354,45 +1426,22 @@ fn test_empty_start_trie_large_end_trie_multi_round() {
 #[cfg(feature = "ethhash")]
 #[test]
 fn test_empty_start_trie_prefix_keys() {
-    let (db, _dir) = new_db();
-
-    db.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
-        .unwrap()
-        .commit()
-        .unwrap();
-    let empty_root = db.root_hash().unwrap();
+    let (db, _dir) = setup_db![];
 
     // Insert keys where some are prefixes of others. This creates
     // branch nodes with values — the scenario that triggers the
     // out-of-range value check bug.
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x10" as &[u8],
-            value: b"prefix" as &[u8],
-        },
-        BatchOp::Put {
-            key: b"\x10\x50",
-            value: b"child1",
-        },
-        BatchOp::Put {
-            key: b"\x10\x50\xaa",
-            value: b"grandchild",
-        },
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"other",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db.root_hash().unwrap();
+    let (empty_root, root2) = setup_2nd_commit!(
+        db,
+        [
+            (b"\x10", b"prefix"),
+            (b"\x10\x50", b"child1"),
+            (b"\x10\x50\xaa", b"grandchild"),
+            (b"\x20", b"other"),
+        ]
+    );
 
-    let (db_b, _dir_b) = new_db();
-    db_b.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
-        .unwrap()
-        .commit()
-        .unwrap();
+    let (db_b, _dir_b) = setup_db![];
     let empty_root_b = db_b.root_hash().unwrap();
 
     // Range [\x10\x50, \x20]: start_key \x10\x50 exists (inclusion).
@@ -2444,34 +1493,10 @@ fn test_empty_start_trie_prefix_keys() {
 #[cfg(feature = "ethhash")]
 #[test]
 fn test_empty_start_trie_start_only_proof() {
-    let (db, _dir) = new_db();
+    let (db, _dir) = setup_db![];
+    let (empty_root, root2) = setup_2nd_commit!(db, [(b"\x10", b"a"), (b"\x20", b"b")]);
 
-    db.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
-        .unwrap()
-        .commit()
-        .unwrap();
-    let empty_root = db.root_hash().unwrap();
-
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\x10" as &[u8],
-            value: b"a" as &[u8],
-        },
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"b",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db.root_hash().unwrap();
-
-    let (db_b, _dir_b) = new_db();
-    db_b.propose(vec![] as Vec<BatchOp<&[u8], &[u8]>>)
-        .unwrap()
-        .commit()
-        .unwrap();
+    let (db_b, _dir_b) = setup_db![];
     let empty_root_b = db_b.root_hash().unwrap();
 
     // Start-only proof (end_key = None). Range is [\x10, +inf).
@@ -2492,38 +1517,13 @@ fn test_empty_start_trie_start_only_proof() {
 
 #[test]
 fn test_bounded_range_with_existing_keys() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
-
     // root1: \x10, \x20, \x30 all exist
-    let initial: Vec<BatchOp<&[u8], &[u8]>> = vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"v1",
-        },
-        BatchOp::Put {
-            key: b"\x20",
-            value: b"v2",
-        },
-        BatchOp::Put {
-            key: b"\x30",
-            value: b"v3",
-        },
-    ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
-    let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
+    let (db_a, _dir_a) = setup_db![(b"\x10", b"v1"), (b"\x20", b"v2"), (b"\x30", b"v3")];
+    let (db_b, _dir_b) = setup_db![(b"\x10", b"v1"), (b"\x20", b"v2"), (b"\x30", b"v3")];
     let root1_b = db_b.root_hash().unwrap();
 
     // root2: change \x20
-    db_a.propose(vec![BatchOp::Put {
-        key: b"\x20" as &[u8],
-        value: b"changed" as &[u8],
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db_a.root_hash().unwrap();
+    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x20", b"changed")]);
 
     // Range [\x15, \x25]: \x20 is in range, \x10 and \x30 are outside
     let proof = db_a
@@ -2560,32 +1560,15 @@ fn test_bounded_range_with_existing_keys() {
 /// proving trie and causing `EndRootMismatch`.
 #[test]
 fn test_change_proof_prefix_key_deleted_in_end_root() {
-    let (db, _dir) = new_db();
-
     // Root1: keys include b"\xab" which is a prefix of b"\xab\xcd".
     // Two children under [a,b] ensure the branch survives deletion of
     // b"\xab"'s value (a single child would be merged away).
-    db.propose(vec![
-        BatchOp::Put {
-            key: b"\xab" as &[u8],
-            value: b"prefix_value" as &[u8],
-        },
-        BatchOp::Put {
-            key: b"\xab\xcd",
-            value: b"full_key",
-        },
-        BatchOp::Put {
-            key: b"\xab\xef",
-            value: b"sibling",
-        },
-        BatchOp::Put {
-            key: b"\xff",
-            value: b"high",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
+    let (db, _dir) = setup_db![
+        (b"\xab", b"prefix_value"),
+        (b"\xab\xcd", b"full_key"),
+        (b"\xab\xef", b"sibling"),
+        (b"\xff", b"high"),
+    ];
     let root1 = db.root_hash().unwrap();
 
     // Root2: delete the prefix key b"\xab". The branch at [a,b] survives
