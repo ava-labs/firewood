@@ -209,7 +209,7 @@ go test -race -fuzz=FuzzTree -fuzztime=1m
 Failing inputs are saved under `testdata/` in the respective test directory
 and will be replayed on subsequent runs.
 
-**Formal Methods**
+## Formal Methods
 
 TLA+ model checking was used to verify the correctness of Firewood’s change proof verification approach. It provides more comprehensive coverage of both valid and invalid proofs even compared to fuzz testing, with the limit that the verified tries are smaller in both their branching factors and their depth. This limit is due to the computational requirements of exhaustive model checking. To verify larger configurations, the \-simulate flag was used to not exhaustively enumerate all states but instead randomly sample states from the state space.
 
