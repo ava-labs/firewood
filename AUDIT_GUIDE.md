@@ -215,6 +215,8 @@ TLA+ model checking was used to verify the correctness of Firewood’s change pr
 
 Model checking was effective at identifying several edge case security and correctness bugs. All of these bugs have since been fixed. With each bug fix, the models were updated to reflect the updated implementation, and regression specifications were added to ensure that the fixed bugs were not later reintroduced.
 
+### Models
+
 There are four main models in our testing framework that build on top of each other:
 
 1. **CompressedTrieModel:** Models Firewood’s Merkle trie including path compression that reduces trie depth at the cost of increased complexity. Modelling path compression is critical as it is the source of many corner cases that must be verified. This model exhaustively enumerates through the entire key space for a specific maximum trie size, and generates a flat key-value map for each one. Keys are restricted to even nibble lengths, matching Firewood's byte-level key representation where each byte is two nibbles.
