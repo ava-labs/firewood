@@ -70,20 +70,94 @@
 //!
 //! ## Phase 2 — Root hash verification
 //!
-//! A fresh in-memory proving trie is built from the key-value pairs.
+//! A fresh in-memory **proving trie** is built from the key-value pairs.
 //! Boundary proof nodes are reconciled into it via
 //! `reconcile_branch_proof_node`, which inserts branch structure matching
-//! the original trie's layout. `compute_root_hash_with_proofs` then
-//! computes a hybrid root hash: in-range children are hashed from the
-//! proving trie, while out-of-range children (identified by
-//! `compute_outside_children`) use hashes from the proof nodes. The
-//! result must match `root_hash`.
+//! the original trie's layout. Value mismatches between the proof and the
+//! **proving trie** cause early rejection (see Step 2 of the change proof
+//! algorithm for details on value conflict handling).
+//! `compute_root_hash_with_proofs` then computes a **hybrid root hash**:
+//! in-range children are hashed from the **proving trie**, while
+//! out-of-range children (identified by `compute_outside_children`) use
+//! hashes from the proof nodes. The result must match `root_hash`.
 //!
 //! # Change Proof Verification Algorithm
 //!
 //! Change proof verification confirms that applying a set of `BatchOp`s to a trie
 //! with `start_root` produces a trie consistent with `end_root`, without requiring
 //! the verifier to hold the full `end_root` trie.
+//!
+//! ## Terminology
+//!
+//! - **requested_start_key / requested_end_key**: The key range bounds
+//!   passed to the proof generator.
+//!
+//! - **proof_key_values**: The key/value pairs included in the proof (the
+//!   `batch_ops`), including `first_proof_key` and `last_proof_key`.
+//!
+//! - **first_proof_key / last_proof_key**: First and last keys within
+//!   `proof_key_values`.
+//!
+//! - **left_edge_proof / right_edge_proof**: Merkle inclusion/exclusion
+//!   proofs anchoring the left and right boundaries of the proof to the
+//!   root hash.
+//!
+//! - **left_edge_proof_key / right_edge_proof_key**: The key each edge
+//!   proof was generated for. These may or may not coincide with
+//!   `requested_start_key` / `requested_end_key`.
+//!
+//! - **proving trie**: A mutable fork of the proposal used to verify
+//!   the root hash. It is reshaped to match `end_root`'s boundary
+//!   structure so that computing its hybrid root hash reproduces
+//!   `end_root` when the `batch_ops` are correct.
+//!
+//! - **hybrid root hash**: A root hash computed by combining two sources:
+//!   in-range children are hashed directly from the **proving trie**, while
+//!   out-of-range children use hashes provided by the boundary proof
+//!   nodes. This allows verification without the full trie.
+//!
+//! ```text
+//! Keyspace layout diagram
+//!
+//! Along the main line, "x" represents an exclusion proof and
+//! "i" represents an inclusion proof. No proofs are provided at
+//! points indicated with a "*"
+//!
+//!     left_edge_proof_key                  right_edge_proof_key
+//!     (possible locations)                 (possible locations)
+//!       |    |   |   |                        |   |   |     |
+//!       v    v   v   v                        v   v   v     v
+//!   |---x----x---x---i----------*-*-----------i---x---x-----x---|
+//!   ^        ^       ^          ^ ^           ^       ^         ^
+//!   |        |       |          | |           |       |         |
+//!  0x00      |  first_proof_key | |    last_proof_key |       0xff..
+//!            |       ^          | |           ^       |     
+//!         requested_start_key   | |        requested_end_key
+//!       (2 possible locations)  | |        (2 possible locations)
+//!                               | |
+//!                     other proof_key_values
+//! ```
+//!
+//! The `left_edge_proof_key` can land at any of the four positions
+//! shown. Only when it coincides with `requested_start_key` (the `i`
+//! position) is the left edge proof an inclusion proof; all other
+//! positions produce exclusion proofs. The symmetric property holds
+//! for `right_edge_proof_key` on the right side.
+//!
+//! Note: the diagram shows the general case with two edge proofs and
+//! multiple keys. Edge cases include: a single proof key (where
+//! `first_proof_key` = `last_proof_key`), empty `batch_ops` (no proof
+//! keys), or absent edge proofs (when the range covers the entire
+//! keyspace).
+//!
+//! Note: `requested_start_key` and `right_edge_key` (which equals
+//! `requested_end_key` unless the proof was truncated) are used during
+//! root hash verification (Phase 3) to distinguish in-range from
+//! out-of-range nodes. This determines which proof node values to
+//! adopt during branch expansion and which children to check during
+//! branch collapsing.
+//!
+//! ## Verification phases
 //!
 //! Verification proceeds in three phases:
 //!
@@ -99,54 +173,117 @@
 //!
 //! The verifier applies the proof's `batch_ops` to its own copy of
 //! `start_root`, producing a proposal. This is the same commit path used
-//! for normal trie operations.
+//! for normal trie operations. The proposal now contains `start_root`'s
+//! full trie structure with the batch_ops' changes applied on top.
 //!
 //! ## Phase 3 — Root hash verification ([`verify_change_proof_root_hash`])
 //!
-//! The proposal's nodestore is forked into a "proving trie" that already
-//! contains the correct in-range key-value data. Two reshaping passes make
-//! its structure match `end_root`:
+//! The verifier forks the proposal into a mutable **proving trie**,
+//! reshapes it to match `end_root`'s boundary structure, and computes a
+//! hybrid root hash. If the hash matches `end_root`, the batch_ops are
+//! consistent with the claimed state transition.
 //!
-//! 1. **Branch reconciliation** — `reconcile_branch_proof_node` ensures
-//!    branch nodes exist at every proof-path position with values matching
-//!    `end_root`. Out-of-range ancestors (proper prefixes of the boundary
-//!    keys) may carry values from `start_root` that differ from `end_root`;
-//!    the proof node's value is adopted for these positions.
+//! The verification proceeds in four steps:
 //!
-//! 2. **Branch collapsing** — `collapse_branch_to_path` removes out-of-range
-//!    children and flattens single-child branches between consecutive proof
-//!    nodes. The proof implies a direct path with no intermediate branches;
-//!    the fork may have extra structure from out-of-range keys that must be
-//!    stripped so the trie shape matches `end_root`.
+//! ### Step 1 — Fork the proposal
 //!
-//! After reshaping, `compute_root_hash_with_proofs` walks the proving trie,
-//! hashing in-range children directly and substituting proof hashes for
-//! out-of-range children. The result is compared against `end_root`.
+//! The proposal's nodestore (which contains `start_root` + `batch_ops`)
+//! is forked into a mutable nodestore — the **proving trie**. The fork is
+//! mutable because the subsequent steps will reshape it to match the
+//! start and end boundary proof structures. The **proving trie** starts
+//! with the full trie including both in-range data (from `batch_ops`)
+//! and out-of-range data (inherited from `start_root`).
+//!
+//! ### Step 2 — Branch expansion
+//!
+//! `reconcile_branch_proof_node` ensures branch nodes exist at every
+//! proof-path position with structure matching `end_root`. This expands
+//! the **proving trie** by inserting any branch nodes that the boundary
+//! proofs require but that may not exist in the proposal.
+//!
+//! Out-of-range proof nodes (proper prefixes of the boundary keys, or
+//! divergent nodes in exclusion proofs) may carry values from `end_root`
+//! that differ from the proposal (which has `start_root`'s values
+//! outside the range). The proof's value is adopted for these positions
+//! so the hash computation reflects `end_root`.
+//!
+//! For exclusion proofs, the terminal proof node may overshoot the
+//! boundary key to the nearest existing key. Such nodes are in-range
+//! (>= `requested_start_key` for start proofs, <= `requested_end_key`
+//! for end proofs) and
+//! value conflicts there are real errors — the proposal already has
+//! the correct value from the batch_ops.
+//!
+//! ### Step 3 — Branch collapsing
+//!
+//! Between consecutive proof nodes in `end_root`, the path is direct —
+//! no intermediate branches exist (if they did, those nodes would
+//! themselves be proof nodes). The **proving trie**, forked from the
+//! proposal, may have extra branch structure from out-of-range keys at
+//! these intermediate positions.
+//!
+//! `collapse_branch_to_path` walks from each parent proof node to its
+//! child proof node and strips non-on-path children at intermediate
+//! nodes, then flattens single-child branches so the trie shape matches
+//! `end_root`'s path-compressed structure.
+//!
+//! **Range-safety invariant**: before stripping a child, the collapse
+//! checks whether the child's nibble prefix falls within
+//! `[requested_start_key, right_edge_key]`. An in-range child at an
+//! intermediate position cannot
+//! exist in `end_root` (there is no branch here), so its presence
+//! indicates tampered `batch_ops` — either a key was illegitimately
+//! created (e.g., changing a Delete to a Put) or a required Delete was
+//! omitted. The proof is rejected with `EndRootMismatch`.
+//!
+//! Out-of-range children are stripped normally — they represent
+//! `start_root` structure that doesn't exist in `end_root` and will be
+//! accounted for by the proof's boundary hashes.
+//!
+//! `collapse_root_to_path` applies the same logic to the root itself,
+//! handling cases where out-of-range deletions caused `end_root`'s root
+//! to path-compress (e.g., root partial_path changes from `[]` to
+//! `[1]`).
+//!
+//! ### Step 4 — Hybrid hash computation
+//!
+//! `compute_outside_children` determines which children at each
+//! boundary proof node fall outside the proven range (left of
+//! `requested_start_key` or right of `right_edge_key`).
+//!
+//! `compute_root_hash_with_proofs` recursively walks the **proving trie**:
+//!
+//! - **In-range children** (not in the outside mask): hashed from the
+//!   **proving trie**. Persisted children already carry their hash;
+//!   in-memory children are hashed recursively.
+//! - **Out-of-range children** (in the outside mask): substituted with
+//!   hashes from the corresponding proof node's `child_hashes`.
+//!
+//! The resulting root hash is compared against `end_root`. A mismatch
+//! means the batch_ops are inconsistent with the claimed state
+//! transition.
 //!
 //! # Range vs. Change Proof Verification
 //!
-//! Both algorithms build a proving trie, reconcile boundary proof nodes into
-//! it, and compute a hybrid root hash. They differ in three ways:
+//! Both algorithms build a **proving trie**, expand boundary proof nodes
+//! into it, and compute a hybrid root hash. They differ in three ways:
 //!
 //! 1. **Proving trie origin** — Range proofs build a fresh in-memory trie
 //!    from the key-value pairs provided in the proof. Change proofs fork
-//!    the proposal's nodestore, which already contains the full trie
-//!    (in-range *and* out-of-range keys).
+//!    `start_root`'s nodestore, which contains the full trie (in-range
+//!    *and* out-of-range keys).
 //!
-//! 2. **Branch collapsing** — Because the change proof's fork contains
-//!    out-of-range keys, it may have branch structure that doesn't exist
-//!    in `end_root`. `collapse_branch_to_path` strips this extra structure
-//!    between consecutive proof nodes. Range proofs skip this step — the
-//!    proving trie was built from only in-range keys, so no extra branches
-//!    exist.
+//! 2. **Branch collapsing** — Change proofs require a collapse step to
+//!    strip `start_root`'s out-of-range branch structure that doesn't
+//!    exist in `end_root`. Range proofs skip this — the **proving trie** was
+//!    built from only in-range keys, so no extra branches exist.
 //!
-//! 3. **Out-of-range value trust** — When a proof node's value conflicts
-//!    with the proving trie, range proofs unconditionally accept the
-//!    proof's value (the proving trie has no out-of-range data to
-//!    preserve). Change proofs must be selective: out-of-range ancestors
-//!    adopt the proof's value (which reflects `end_root`), but a conflict
-//!    at a boundary key itself is an error, since that key is in-range and
-//!    should already match.
+//! 3. **Out-of-range value trust** — Range proofs unconditionally accept
+//!    the proof's value when it conflicts with the **proving trie** (the trie
+//!    has no out-of-range data to preserve). Change proofs are selective:
+//!    out-of-range ancestors adopt the proof's value (reflecting
+//!    `end_root`), but in-range positions keep `start_root`'s value since
+//!    the batch_ops will update them.
 
 pub(crate) mod change;
 pub(super) mod de;

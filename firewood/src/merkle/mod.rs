@@ -30,10 +30,10 @@ use firewood_storage::{
 };
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::mem;
 use std::fmt::Debug;
 use std::io::Error;
 use std::iter::once;
+use std::mem;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -633,15 +633,19 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
 /// Verify that the proposal (`start_root` + `batch_ops`) is consistent with
 /// `end_root` within the proven range (phase 3 of change proof verification).
 ///
-/// Forks the proposal into a proving trie, reshapes it to match `end_root`'s
-/// structure via branch reconciliation and collapsing, then computes a hybrid
-/// root hash. See the [module-level documentation](crate::proofs#change-proof-verification-algorithm)
+/// Forks the proposal into a proving trie, reconciles boundary proof nodes,
+/// collapses out-of-range branches (rejecting in-range children at
+/// intermediate positions), and computes a hybrid root hash. See the
+/// [module-level documentation](crate::proofs#change-proof-verification-algorithm)
 /// for the full algorithm description.
 ///
 /// # Errors
 ///
-/// Returns [`api::Error::ProofError`] if the computed root hash doesn't
-/// match `end_root`, or if proof nodes conflict with the proving trie.
+/// Returns [`api::Error::ProofError`] if:
+/// - The computed root hash doesn't match `end_root`
+/// - Proof nodes conflict with the proving trie at in-range positions
+/// - An in-range child is found at an intermediate node between
+///   consecutive proof nodes (indicates tampered `batch_ops`)
 ///
 /// # Panics
 ///
