@@ -14,24 +14,12 @@
 //! Runs 100 independent iterations, each with a freshly seeded RNG. On failure,
 //! the printed seed can be passed via `FIREWOOD_TEST_SEED` to reproduce.
 
-use super::*;
-use crate::api::{self, BatchOp, Db as DbTrait, FrozenChangeProof, Proposal as _};
+use super::super::*;
+use super::verify_and_check;
+use crate::api::{BatchOp, Db as DbTrait, FrozenChangeProof, Proposal as _};
 use crate::db::{Db, DbConfig};
-use crate::merkle::verify_change_proof_root_hash;
-use crate::{ChangeProof, ChangeProofVerificationContext, Proof, verify_change_proof_structure};
+use crate::{ChangeProof, Proof, verify_change_proof_structure};
 use firewood_storage::logger::{debug, trace};
-
-/// Verify a change proof end-to-end: structural check + root hash check.
-fn verify_and_check(
-    db: &Db,
-    proof: &api::FrozenChangeProof,
-    verification: &ChangeProofVerificationContext,
-    start_root: api::HashKey,
-) -> Result<(), api::Error> {
-    let parent = db.revision(start_root)?;
-    let proposal = db.apply_change_proof_to_parent(proof, &*parent)?;
-    verify_change_proof_root_hash(proof, verification, &proposal)
-}
 
 #[test]
 #[expect(clippy::too_many_lines)]

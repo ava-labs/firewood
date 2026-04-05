@@ -10,7 +10,7 @@ use firewood_storage::PathComponentSliceExt;
 
 // ── Test infrastructure ────────────────────────────────────────────────────
 
-fn new_db() -> (Db, tempfile::TempDir) {
+pub(super) fn new_db() -> (Db, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::new(dir.path(), DbConfig::builder().build()).unwrap();
     (db, dir)
@@ -63,7 +63,7 @@ macro_rules! setup_2nd_commit {
 /// state matches `end_root` using the restructure approach: an in-memory
 /// proving trie is built from the proposal's in-range keys, boundary
 /// proof nodes are reconciled into it, and a hybrid root hash is computed.
-fn verify_and_check(
+pub(super) fn verify_and_check(
     db: &Db,
     proof: &FrozenChangeProof,
     verification: &ChangeProofVerificationContext,
@@ -73,6 +73,9 @@ fn verify_and_check(
     let proposal = db.apply_change_proof_to_parent(proof, &*parent)?;
     verify_change_proof_root_hash(proof, verification, &proposal)
 }
+
+mod adversarial;
+mod fuzz;
 
 // ── Structural validation tests ────────────────────────────────────────────
 
@@ -341,10 +344,18 @@ fn test_root_hash_two_proofs() {
 
 #[test]
 fn test_omitted_change_detected() {
-    let (db_a, _dir_a) =
-        setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2"), (b"\x40", b"v3")];
-    let (db_b, _dir_b) =
-        setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2"), (b"\x40", b"v3")];
+    let (db_a, _dir_a) = setup_db![
+        (b"\x10", b"v0"),
+        (b"\x20", b"v1"),
+        (b"\x30", b"v2"),
+        (b"\x40", b"v3")
+    ];
+    let (db_b, _dir_b) = setup_db![
+        (b"\x10", b"v0"),
+        (b"\x20", b"v1"),
+        (b"\x30", b"v2"),
+        (b"\x40", b"v3")
+    ];
     let root1_b = db_b.root_hash().unwrap();
 
     let (root1_a, root2) =
@@ -537,10 +548,8 @@ fn test_end_proof_inclusion_with_children_below() {
 
 #[test]
 fn test_divergence_parent_start_key_exhausted() {
-    let (db_a, _dir_a) =
-        setup_db![(b"\x12\x01", b"v0"), (b"\x12\x02", b"v1"), (b"\xf0", b"v2")];
-    let (db_b, _dir_b) =
-        setup_db![(b"\x12\x01", b"v0"), (b"\x12\x02", b"v1"), (b"\xf0", b"v2")];
+    let (db_a, _dir_a) = setup_db![(b"\x12\x01", b"v0"), (b"\x12\x02", b"v1"), (b"\xf0", b"v2")];
+    let (db_b, _dir_b) = setup_db![(b"\x12\x01", b"v0"), (b"\x12\x02", b"v1"), (b"\xf0", b"v2")];
     let root1_b = db_b.root_hash().unwrap();
 
     let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\xf0", b"changed")]);
@@ -555,11 +564,19 @@ fn test_divergence_parent_start_key_exhausted() {
 
 #[test]
 fn test_divergence_at_depth_zero() {
-    let (db_a, _dir_a) =
-        setup_db![(b"\x10", b"v0"), (b"\x11", b"v1"), (b"\xa0", b"v2"), (b"\xa1", b"v3")];
+    let (db_a, _dir_a) = setup_db![
+        (b"\x10", b"v0"),
+        (b"\x11", b"v1"),
+        (b"\xa0", b"v2"),
+        (b"\xa1", b"v3")
+    ];
     let root1_a = db_a.root_hash().unwrap();
-    let (db_b, _dir_b) =
-        setup_db![(b"\x10", b"v0"), (b"\x11", b"v1"), (b"\xa0", b"v2"), (b"\xa1", b"v3")];
+    let (db_b, _dir_b) = setup_db![
+        (b"\x10", b"v0"),
+        (b"\x11", b"v1"),
+        (b"\xa0", b"v2"),
+        (b"\xa1", b"v3")
+    ];
     let root1_b = db_b.root_hash().unwrap();
 
     let changes: Vec<BatchOp<&[u8], &[u8]>> = vec![
@@ -1079,7 +1096,11 @@ fn test_incomplete_exclusion_proof_rejected() {
     // Create a trie with enough keys to ensure the proof has multiple
     // nodes. \x10\x50 and \x10\x58 share a branch; \x30 ensures the
     // root is a branch with children at nibbles 1 and 3.
-    let (db, _dir) = setup_db![(b"\x10\x50", b"a"), (b"\x10\x58", b"b"), (b"\x30\x00", b"c")];
+    let (db, _dir) = setup_db![
+        (b"\x10\x50", b"a"),
+        (b"\x10\x58", b"b"),
+        (b"\x30\x00", b"c")
+    ];
 
     // Delete \x10\x50. The branch at nibble depth 5 compresses, and
     // \x10\x58 becomes the divergent child for exclusion proofs of
@@ -1126,10 +1147,16 @@ fn test_incomplete_exclusion_proof_rejected() {
 fn test_out_of_range_value_at_start_tail_accepted() {
     // Create keys where \x10 is a proper prefix of \x10\x50.
     // \x10 has a value (branch with value at depth 2).
-    let (db_a, _dir_a) =
-        setup_db![(b"\x10", b"prefix_val"), (b"\x10\x50", b"v000000000"), (b"\x30", b"v100000000")];
-    let (db_b, _dir_b) =
-        setup_db![(b"\x10", b"prefix_val"), (b"\x10\x50", b"v000000000"), (b"\x30", b"v100000000")];
+    let (db_a, _dir_a) = setup_db![
+        (b"\x10", b"prefix_val"),
+        (b"\x10\x50", b"v000000000"),
+        (b"\x30", b"v100000000")
+    ];
+    let (db_b, _dir_b) = setup_db![
+        (b"\x10", b"prefix_val"),
+        (b"\x10\x50", b"v000000000"),
+        (b"\x30", b"v100000000")
+    ];
     let root1_b = db_b.root_hash().unwrap();
 
     // Change \x10's value (out of range for [\x10\x50, \x30])
@@ -1165,8 +1192,7 @@ fn test_start_key_inclusion_value_checked() {
     let root1_b = db_b.root_hash().unwrap();
 
     // Change \x10 (start_key) to "changed" and \x30 to "also_changed".
-    let (root1_a, root2) =
-        setup_2nd_commit!(db_a, [(b"\x10", b"changed"), (b"\x30", b"changed")]);
+    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x10", b"changed"), (b"\x30", b"changed")]);
 
     // Get an honest proof. The start proof is inclusion for \x10.
     let honest = db_a
@@ -1236,11 +1262,17 @@ fn test_start_key_inclusion_value_checked() {
 #[test]
 fn test_boundary_child_gap_closed_for_start_key() {
     // Create \x10\x50 and \x10\x58 (share a branch).
-    let (db_a, _dir_a) =
-        setup_db![(b"\x10\x50", b"a"), (b"\x10\x58", b"b"), (b"\x30\x00", b"c")];
+    let (db_a, _dir_a) = setup_db![
+        (b"\x10\x50", b"a"),
+        (b"\x10\x58", b"b"),
+        (b"\x30\x00", b"c")
+    ];
     let root1_a = db_a.root_hash().unwrap();
-    let (db_b, _dir_b) =
-        setup_db![(b"\x10\x50", b"a"), (b"\x10\x58", b"b"), (b"\x30\x00", b"c")];
+    let (db_b, _dir_b) = setup_db![
+        (b"\x10\x50", b"a"),
+        (b"\x10\x58", b"b"),
+        (b"\x30\x00", b"c")
+    ];
     let root1_b = db_b.root_hash().unwrap();
 
     // Delete \x10\x50, change \x30\x00. \x10\x58 is unchanged.
@@ -1311,8 +1343,15 @@ fn test_empty_start_trie_bounded_inclusion() {
     let (db, _dir) = setup_db![];
 
     // Insert several keys.
-    let (empty_root, root2) =
-        setup_2nd_commit!(db, [(b"\x10", b"a"), (b"\x20", b"b"), (b"\x30", b"c"), (b"\x40", b"d")]);
+    let (empty_root, root2) = setup_2nd_commit!(
+        db,
+        [
+            (b"\x10", b"a"),
+            (b"\x20", b"b"),
+            (b"\x30", b"c"),
+            (b"\x40", b"d")
+        ]
+    );
 
     // Bounded range [\x10, \x30] — start_key \x10 exists (inclusion).
     let proof = db
