@@ -81,7 +81,10 @@ mod attack;
 mod bounds;
 mod divergent_child;
 mod edge_cases;
-mod empty_and_bounded;
+// Empty start trie tests require ethhash: without it, the empty trie has no
+// root hash, so change proofs from an empty database can't be generated.
+#[cfg(feature = "ethhash")]
+mod empty;
 mod fuzz;
 mod partial;
 mod structural;

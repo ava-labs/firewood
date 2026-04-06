@@ -473,3 +473,61 @@ fn test_out_of_range_value_change_adopted() {
         .unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
+
+/// A key that is a proper prefix of `start_key` has a value in root1 that
+/// is deleted in root2. Because the prefix key is outside the query range
+/// (shorter key < `start_key`), it is not in `batch_ops`. The proving trie
+/// must clear this stale value so the computed hash matches `end_root`.
+///
+/// Without the fix, `reconcile_branch_proof_node` ignored the trie's value
+/// when the proof node had no value, silently leaving the stale value in the
+/// proving trie and causing `EndRootMismatch`.
+#[test]
+fn test_change_proof_prefix_key_deleted_in_end_root() {
+    let (db, _dir) = setup_db![
+        (b"\xab", b"prefix_value"),
+        (b"\xab\xcd", b"full_key"),
+        (b"\xab\xef", b"sibling"),
+        (b"\xff", b"high"),
+    ];
+    let root1 = db.root_hash().unwrap();
+
+    db.propose(vec![
+        BatchOp::Delete {
+            key: b"\xab" as &[u8],
+        },
+        BatchOp::Put {
+            key: b"\xab\xcd",
+            value: b"updated",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root2 = db.root_hash().unwrap();
+
+    // b"\xab" < b"\xab\x00", so the deleted prefix key is outside the range.
+    // The start proof passes through [a,b] where root1 has a value and root2
+    // does not — reconciliation must clear the stale value.
+    let proof = db
+        .change_proof(
+            root1.clone(),
+            root2.clone(),
+            Some(b"\xab\x00".as_slice()),
+            Some(b"\xff".as_slice()),
+            None,
+        )
+        .unwrap();
+
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2.clone(),
+        Some(b"\xab\x00".as_slice()),
+        Some(b"\xff".as_slice()),
+        None,
+    )
+    .unwrap();
+
+    // This failed with EndRootMismatch before the fix.
+    verify_and_check(&db, &proof, &ctx, root1).unwrap();
+}

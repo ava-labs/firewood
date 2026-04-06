@@ -13,6 +13,7 @@ use test_case::test_case;
 #[test_case(None,          Some(b"\x30"), b"\x10" ; "provided right edge")]
 #[test_case(Some(b"\x10"), None,          b"\x30" ; "provided left edge")]
 #[test_case(Some(b"\x10"), Some(b"\x30"), b"\x20" ; "provided both edges")]
+#[test_case(Some(b"\x15"), Some(b"\x25"), b"\x20" ; "both edges with gap keys")]
 fn test_verify(start_key: Option<&[u8]>, end_key: Option<&[u8]>, change_key: &[u8]) {
     let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
     let (target, _dir_target) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
@@ -38,4 +39,20 @@ fn test_verify(start_key: Option<&[u8]>, end_key: Option<&[u8]>, change_key: &[u
         .unwrap();
     proposal.commit().unwrap();
     assert_eq!(target.root_hash().unwrap(), root2);
+}
+
+/// When `requested_end_key` is set and the proof is complete (not truncated),
+/// the right edge proof anchors at `requested_end_key`, not the last batch key.
+#[test]
+fn test_generator_uses_end_key_for_complete_proof() {
+    let (db, _dir) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x10", b"changed")]);
+
+    // end_key far beyond last change, no limit — complete proof
+    let proof = db
+        .change_proof(root1, root2.clone(), None, Some(b"\xff"), None)
+        .unwrap();
+
+    // End proof validates against end_key for complete proofs
+    proof.end_proof().value_digest(b"\xff", &root2).unwrap();
 }
