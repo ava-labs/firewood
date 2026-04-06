@@ -185,12 +185,20 @@ fn test_bad_proof() {
         let proof = merkle.prove(key).unwrap();
         assert!(!proof.is_empty());
 
-        // Delete an entry from the generated proofs.
+        // Truncate the proof by removing the last node.
         let mut new_proof = proof.into_mutable();
         new_proof.pop();
 
-        // TODO: verify error result matches expected error
-        assert!(new_proof.verify(key, Some(value), &root_hash).is_err());
+        let err = new_proof.verify(key, Some(value), &root_hash).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ProofError::UnexpectedHash
+                    | ProofError::NodeNotInTrie
+                    | ProofError::ExclusionProofMissingChild
+            ),
+            "truncated proof should fail with hash/path error, got {err:?}"
+        );
     }
 }
 
@@ -421,5 +429,84 @@ fn test_value_digest_rejects_wrong_key_proof() {
         result.is_err(),
         "proof for B should NOT be accepted when queried for C, \
          but value_digest returned {result:?}"
+    );
+}
+
+// ── Verify mismatch tests ───────────────────────────────────────────────
+
+#[test]
+fn test_verify_rejects_wrong_value() {
+    let merkle = init_merkle([("key", "correct")]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let proof = merkle.prove(b"key").unwrap();
+    proof
+        .verify(b"key", Some(b"correct".as_slice()), &root_hash)
+        .unwrap();
+
+    let err = proof
+        .verify(b"key", Some(b"WRONG".as_slice()), &root_hash)
+        .unwrap_err();
+    assert!(
+        matches!(err, ProofError::ValueMismatch),
+        "wrong value should produce ValueMismatch, got {err:?}"
+    );
+}
+
+#[test]
+fn test_verify_rejects_wrong_root_hash() {
+    let merkle = init_merkle([("key", "value")]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let proof = merkle.prove(b"key").unwrap();
+    proof
+        .verify(b"key", Some(b"value".as_slice()), &root_hash)
+        .unwrap();
+
+    let wrong_hash = TrieHash::empty();
+    let err = proof
+        .verify(b"key", Some(b"value".as_slice()), &wrong_hash)
+        .unwrap_err();
+    assert!(
+        matches!(err, ProofError::UnexpectedHash),
+        "wrong root hash should produce UnexpectedHash, got {err:?}"
+    );
+}
+
+#[test]
+fn test_verify_rejects_inclusion_as_exclusion() {
+    // Key exists — claiming it's absent (None) should fail.
+    let merkle = init_merkle([("key", "value")]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let proof = merkle.prove(b"key").unwrap();
+
+    let err = proof
+        .verify(b"key", Option::<&[u8]>::None, &root_hash)
+        .unwrap_err();
+    assert!(
+        matches!(err, ProofError::UnexpectedValue),
+        "existing key verified as absent should produce UnexpectedValue, got {err:?}"
+    );
+}
+
+#[test]
+fn test_verify_rejects_exclusion_as_inclusion() {
+    // Key doesn't exist — claiming it has a value should fail.
+    let merkle = init_merkle([("aaa", "v1"), ("zzz", "v2")]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let proof = merkle.prove(b"mmm").unwrap();
+    // Sanity: exclusion proof works
+    proof
+        .verify(b"mmm", Option::<&[u8]>::None, &root_hash)
+        .unwrap();
+
+    let err = proof
+        .verify(b"mmm", Some(b"fake".as_slice()), &root_hash)
+        .unwrap_err();
+    assert!(
+        matches!(err, ProofError::ExpectedValue),
+        "missing key verified with value should produce ExpectedValue, got {err:?}"
     );
 }
