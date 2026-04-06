@@ -213,3 +213,81 @@ fn test_spurious_delete_at_start_key_boundary() {
             .expect_err("spurious Delete at start_key should be detected");
     }
 }
+
+/// Spurious Put at `end_key` when `end_key` doesn't exist (exclusion end proof).
+/// The end proof is exclusion but Put expects inclusion — mismatch.
+///
+/// Exercises: `EndProofOperationMismatch`
+#[test]
+fn test_spurious_put_at_end_key_boundary() {
+    let (db_a, _dir_a) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+    let (db_b, _dir_b) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+    let root1_b = db_b.root_hash().unwrap();
+
+    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x20", b"changed")]);
+
+    // end_key \xb0 doesn't exist — exclusion end proof.
+    let honest = db_a
+        .change_proof(root1_a, root2.clone(), Some(b"\x20"), Some(b"\xb0"), None)
+        .unwrap();
+
+    // Inject Put at \xb0 (end_key). end proof is exclusion but Put expects inclusion.
+    let mut ops: Vec<BatchOp<Key, Value>> = honest.batch_ops().to_vec();
+    ops.push(BatchOp::Put {
+        key: b"\xb0".to_vec().into(),
+        value: b"fake".to_vec().into(),
+    });
+    ops.sort_by(|a, b| a.key().cmp(b.key()));
+
+    let crafted = FrozenChangeProof::new(
+        crate::Proof::new(honest.start_proof().as_ref().into()),
+        crate::Proof::new(honest.end_proof().as_ref().into()),
+        ops.into_boxed_slice(),
+    );
+
+    let result =
+        verify_change_proof_structure(&crafted, root2.clone(), Some(b"\x20"), Some(b"\xb0"), None);
+    if let Ok(ctx) = result {
+        verify_and_check(&db_b, &crafted, &ctx, root1_b)
+            .expect_err("spurious Put at end_key should be detected");
+    }
+}
+
+/// Spurious Delete at `end_key` when `end_key` EXISTS (inclusion end proof).
+/// The end proof is inclusion but Delete expects exclusion — mismatch.
+///
+/// Exercises: `EndProofOperationMismatch`
+#[test]
+fn test_spurious_delete_at_end_key_boundary() {
+    let (db_a, _dir_a) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+    let (db_b, _dir_b) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+    let root1_b = db_b.root_hash().unwrap();
+
+    // Change \x20, leave \x90 unchanged.
+    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x20", b"changed")]);
+
+    // end_key \x90 EXISTS — inclusion end proof.
+    let honest = db_a
+        .change_proof(root1_a, root2.clone(), Some(b"\x20"), Some(b"\x90"), None)
+        .unwrap();
+
+    // Inject Delete at \x90 (end_key). end proof is inclusion but Delete expects exclusion.
+    let mut ops: Vec<BatchOp<Key, Value>> = honest.batch_ops().to_vec();
+    ops.push(BatchOp::Delete {
+        key: b"\x90".to_vec().into(),
+    });
+    ops.sort_by(|a, b| a.key().cmp(b.key()));
+
+    let crafted = FrozenChangeProof::new(
+        crate::Proof::new(honest.start_proof().as_ref().into()),
+        crate::Proof::new(honest.end_proof().as_ref().into()),
+        ops.into_boxed_slice(),
+    );
+
+    let result =
+        verify_change_proof_structure(&crafted, root2.clone(), Some(b"\x20"), Some(b"\x90"), None);
+    if let Ok(ctx) = result {
+        verify_and_check(&db_b, &crafted, &ctx, root1_b)
+            .expect_err("spurious Delete at end_key should be detected");
+    }
+}

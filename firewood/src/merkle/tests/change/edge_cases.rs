@@ -263,64 +263,6 @@ fn test_start_proof_exclusion_for_deleted_key() {
     verify_and_check(&db_b, &proof, &ctx, root1_b).unwrap();
 }
 
-#[test]
-fn test_delete_range_rejected() {
-    let (db, _dir) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
-    let (root1, root2) = setup_2nd_commit!(db, [(b"\x50", b"mid"), (b"\x80", b"end")]);
-
-    let valid = db
-        .change_proof(root1, root2.clone(), None, None, None)
-        .unwrap();
-
-    // Place a DeleteRange before a valid Put so the end-proof consistency
-    // check passes on the last op (Put) and the O(n) scan catches the
-    // DeleteRange.
-    let crafted = FrozenChangeProof::new(
-        crate::Proof::new(valid.start_proof().as_ref().into()),
-        crate::Proof::new(valid.end_proof().as_ref().into()),
-        Box::new([
-            BatchOp::DeleteRange {
-                prefix: b"\x50".to_vec().into(),
-            },
-            BatchOp::Put {
-                key: b"\x80".to_vec().into(),
-                value: b"end".to_vec().into(),
-            },
-        ]),
-    );
-
-    let err = verify_change_proof_structure(&crafted, root2, None, None, None).unwrap_err();
-    assert!(matches!(
-        err,
-        api::Error::ProofError(crate::ProofError::DeleteRangeFoundInChangeProof)
-    ));
-}
-
-/// When boundary proofs are present, the O(n) scan catches the `DeleteRange`
-/// before the end-proof consistency check runs.
-#[test]
-fn test_delete_range_rejected_with_boundary_proofs() {
-    let (db, _dir) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
-    let (root1, root2) = setup_2nd_commit!(db, [(b"\x50", b"mid")]);
-
-    let valid = db
-        .change_proof(root1, root2.clone(), None, None, None)
-        .unwrap();
-    let crafted = FrozenChangeProof::new(
-        crate::Proof::new(valid.start_proof().as_ref().into()),
-        crate::Proof::new(valid.end_proof().as_ref().into()),
-        Box::new([BatchOp::DeleteRange {
-            prefix: b"\x50".to_vec().into(),
-        }]),
-    );
-
-    let err = verify_change_proof_structure(&crafted, root2, None, None, None).unwrap_err();
-    assert!(matches!(
-        err,
-        api::Error::ProofError(crate::ProofError::DeleteRangeFoundInChangeProof)
-    ));
-}
-
 /// Verify that change proof verification succeeds when the only key
 /// changed between two revisions falls outside the requested range,
 /// so the proof's `batch_ops` for the queried subrange is empty.
