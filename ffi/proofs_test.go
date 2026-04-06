@@ -136,11 +136,7 @@ func newProposedChangeProof(
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(changeProof.Free()) })
 
-	verifiedProof, err := changeProof.VerifyChangeProof(rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(verifiedProof.Free()) })
-
-	proposed, err := dbB.ProposeChangeProof(verifiedProof)
+	proposed, err := dbB.VerifyAndProposeChangeProof(changeProof, rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
 
 	return proposed, rootAUpdated
@@ -523,7 +519,7 @@ func TestRoundTripChangeProofSerialization(t *testing.T) {
 	r.Equal(proofBytes, serialized)
 }
 
-func TestVerifyChangeProof(t *testing.T) {
+func TestVerifyAndProposeChangeProof(t *testing.T) {
 	r := require.New(t)
 	dbA := newTestDatabase(t)
 	dbB := newTestDatabase(t)
@@ -545,13 +541,8 @@ func TestVerifyChangeProof(t *testing.T) {
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(changeProof.Free()) })
 
-	// Verify the change proof
-	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
-
-	// Create a proposal on dbB.
-	proposedChangeProof, err := dbB.ProposeChangeProof(verifiedChangeProof)
+	// Verify and propose the change proof on dbB.
+	proposedChangeProof, err := dbB.VerifyAndProposeChangeProof(changeProof, rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(proposedChangeProof.Free()) })
 }
@@ -589,13 +580,8 @@ func TestVerifyEmptyChangeProofRange(t *testing.T) {
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(changeProof.Free()) })
 
-	// Verify the change proof.
-	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootB, rootAUpdated, startKey, endKey, 5)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
-
-	// Create an empty proposal on dbB.
-	proposedChangeProof, err := dbB.ProposeChangeProof(verifiedChangeProof)
+	// Verify and propose the change proof on dbB.
+	proposedChangeProof, err := dbB.VerifyAndProposeChangeProof(changeProof, rootB, rootAUpdated, startKey, endKey, 5)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(proposedChangeProof.Free()) })
 }
@@ -621,13 +607,8 @@ func TestVerifyAndCommitChangeProof(t *testing.T) {
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(changeProof.Free()) })
 
-	// Verify the change proof.
-	verifiedChangeProof, err := changeProof.VerifyChangeProof(root, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
-
-	// Propose change proof
-	proposedChangeProof, err := dbB.ProposeChangeProof(verifiedChangeProof)
+	// Verify and propose the change proof on dbB.
+	proposedChangeProof, err := dbB.VerifyAndProposeChangeProof(changeProof, root, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(proposedChangeProof.Free()) })
 
@@ -665,13 +646,8 @@ func TestChangeProofFindNextKey(t *testing.T) {
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(proof.Free()) })
 
-	// Verify the change proof.
-	verifiedChangeProof, err := proof.VerifyChangeProof(rootB, rootAUpdated, nothing(), nothing(), changeProofLenTruncated)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
-
-	// Propose change proof
-	proposedChangeProof, err := dbB.ProposeChangeProof(verifiedChangeProof)
+	// Verify and propose the change proof on dbB.
+	proposedChangeProof, err := dbB.VerifyAndProposeChangeProof(proof, rootB, rootAUpdated, nothing(), nothing(), changeProofLenTruncated)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(proposedChangeProof.Free()) })
 
@@ -794,13 +770,8 @@ func TestMultiRoundChangeProof(t *testing.T) {
 				r.NoError(err)
 				t.Cleanup(func() { r.NoError(proof.Free()) })
 
-				// Verify the proof
-				verifiedProof, err := proof.VerifyChangeProof(rootB, rootAUpdated, startKey, nothing(), changeProofLenTruncated)
-				r.NoError(err)
-				t.Cleanup(func() { r.NoError(verifiedProof.Free()) })
-
-				// Propose the proof
-				proposedProof, err := dbB.ProposeChangeProof(verifiedProof)
+				// Verify and propose the proof on dbB.
+				proposedProof, err := dbB.VerifyAndProposeChangeProof(proof, rootB, rootAUpdated, startKey, nothing(), changeProofLenTruncated)
 				r.NoError(err)
 				t.Cleanup(func() { r.NoError(proposedProof.Free()) })
 
@@ -839,7 +810,7 @@ func TestMultiRoundChangeProof(t *testing.T) {
 
 // TestChangeProofMarshalFailsAfterVerify verifies that MarshalBinary on a
 // ChangeProof returns an error after the proof has been consumed by
-// VerifyChangeProof. Previously, this silently returned empty bytes.
+// VerifyAndProposeChangeProof. Previously, this silently returned empty bytes.
 func TestChangeProofMarshalFailsAfterVerify(t *testing.T) {
 	r := require.New(t)
 	dbA := newTestDatabase(t)
@@ -866,19 +837,19 @@ func TestChangeProofMarshalFailsAfterVerify(t *testing.T) {
 	r.NoError(err)
 	r.NotEmpty(marshalledBefore)
 
-	// Verify the change proof — consumes the inner proof.
-	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	// Verify and propose — consumes the inner proof.
+	proposed, err := dbB.VerifyAndProposeChangeProof(changeProof, rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
-	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
+	t.Cleanup(func() { r.NoError(proposed.Free()) })
 
 	// Marshal after verify — should return an error, not empty bytes.
 	_, err = changeProof.MarshalBinary()
 	r.Error(err)
 }
 
-// TestVerifiedChangeProofMarshal verifies that MarshalBinary works on a
-// VerifiedChangeProof and produces the same bytes as the original ChangeProof.
-func TestVerifiedChangeProofMarshal(t *testing.T) {
+// TestProposedChangeProofMarshal verifies that MarshalBinary works on a
+// ProposedChangeProof and produces the same bytes as the original ChangeProof.
+func TestProposedChangeProofMarshal(t *testing.T) {
 	r := require.New(t)
 	dbA := newTestDatabase(t)
 	dbB := newTestDatabase(t)
@@ -904,13 +875,13 @@ func TestVerifiedChangeProofMarshal(t *testing.T) {
 	r.NoError(err)
 	r.NotEmpty(marshalledBefore)
 
-	// Verify the change proof.
-	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	// Verify and propose the change proof.
+	proposed, err := dbB.VerifyAndProposeChangeProof(changeProof, rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
-	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
+	t.Cleanup(func() { r.NoError(proposed.Free()) })
 
-	// Marshal from the verified proof — should produce the same bytes.
-	marshalledAfterVerify, err := verifiedChangeProof.MarshalBinary()
+	// Marshal from the proposed proof — should produce the same bytes.
+	marshalledAfterPropose, err := proposed.MarshalBinary()
 	r.NoError(err)
-	r.Equal(marshalledBefore, marshalledAfterVerify)
+	r.Equal(marshalledBefore, marshalledAfterPropose)
 }
