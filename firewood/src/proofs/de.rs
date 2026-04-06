@@ -7,9 +7,10 @@
 //! It supports parsing proof headers, proof nodes, and range proofs with full
 //! validation of the format.
 
-#[cfg(feature = "ethhash")]
-use firewood_storage::HashType;
-use firewood_storage::{Children, PathBuf, TrieHash, TriePathFromUnpackedBytes, ValueDigest};
+use firewood_storage::{
+    Children, HashType, NodeHashAlgorithm, PathBuf, TrieHash, TriePathFromUnpackedBytes,
+    ValueDigest,
+};
 use integer_encoding::VarInt;
 
 use super::{
@@ -122,10 +123,14 @@ impl Version0 for FrozenRangeProof {
         let start_proof = reader.read_v0_item()?;
         let end_proof = reader.read_v0_item()?;
         let key_values = reader.read_v0_item()?;
+        let node_hash_algorithm = reader
+            .header()
+            .node_hash_algorithm()
+            .map_err(ReadError::InvalidHeader)?;
 
         Ok(Self::new(
-            Proof::new(start_proof),
-            Proof::new(end_proof),
+            Proof::new_with_hash_algorithm(node_hash_algorithm, start_proof),
+            Proof::new_with_hash_algorithm(node_hash_algorithm, end_proof),
             key_values,
         ))
     }
@@ -136,10 +141,14 @@ impl Version0 for FrozenChangeProof {
         let start_proof = reader.read_v0_item()?;
         let end_proof = reader.read_v0_item()?;
         let key_values = reader.read_v0_item()?;
+        let node_hash_algorithm = reader
+            .header()
+            .node_hash_algorithm()
+            .map_err(ReadError::InvalidHeader)?;
 
         Ok(Self::new(
-            Proof::new(start_proof),
-            Proof::new(end_proof),
+            Proof::new_with_hash_algorithm(node_hash_algorithm, start_proof),
+            Proof::new_with_hash_algorithm(node_hash_algorithm, end_proof),
             key_values,
         ))
     }
@@ -168,15 +177,19 @@ impl Version0 for BatchOp<Key, Value> {
 
 impl Version0 for ProofNode {
     fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
+        let node_hash_algorithm = reader
+            .header()
+            .node_hash_algorithm()
+            .map_err(ReadError::InvalidHeader)?;
         let key = reader.read_v0_item()?;
         let partial_len = reader.read_item()?;
-        let value_digest = reader.read_item()?;
+        let value_digest = read_value_digest_boxed(reader, node_hash_algorithm)?;
 
         let children_map = reader.read_item::<ChildMask>()?;
 
         let mut child_hashes = Children::new();
         for idx in children_map.iter_indices() {
-            child_hashes[idx] = Some(reader.read_item()?);
+            child_hashes[idx] = Some(read_hash_type(reader, node_hash_algorithm)?);
         }
 
         Ok(ProofNode {
@@ -273,34 +286,6 @@ impl<'a, T: ReadItem<'a>> ReadItem<'a> for Option<T> {
     }
 }
 
-impl<'a> ReadItem<'a> for ValueDigest<&'a [u8]> {
-    fn read_item(reader: &mut ProofReader<'a>) -> Result<Self, ReadError> {
-        match reader
-            .read_item::<u8>()
-            .map_err(|err| err.set_item("value digest discriminant"))?
-        {
-            0 => Ok(ValueDigest::Value(reader.read_item()?)),
-            #[cfg(not(feature = "ethhash"))]
-            1 => Ok(ValueDigest::Hash(reader.read_item()?)),
-            found => Err(reader.invalid_item(
-                "value digest discriminant",
-                "0 (value) or 1 (hash)",
-                found,
-            )),
-        }
-    }
-}
-
-impl<'a> ReadItem<'a> for ValueDigest<Box<[u8]>> {
-    fn read_item(reader: &mut ProofReader<'a>) -> Result<Self, ReadError> {
-        reader.read_item::<ValueDigest<&[u8]>>().map(|vd| match vd {
-            ValueDigest::Value(v) => ValueDigest::Value(v.into()),
-            #[cfg(not(feature = "ethhash"))]
-            ValueDigest::Hash(h) => ValueDigest::Hash(h),
-        })
-    }
-}
-
 impl<'a> ReadItem<'a> for TrieHash {
     fn read_item(reader: &mut ProofReader<'a>) -> Result<Self, ReadError> {
         reader
@@ -321,18 +306,45 @@ impl<'a> ReadItem<'a> for ChildMask {
     }
 }
 
-#[cfg(feature = "ethhash")]
-impl<'a> ReadItem<'a> for HashType {
-    fn read_item(reader: &mut ProofReader<'a>) -> Result<Self, ReadError> {
-        match reader
-            .read_item::<u8>()
-            .map_err(|err| err.set_item("hash type discriminant"))?
-        {
-            0 => Ok(HashType::Hash(reader.read_item()?)),
-            1 => Ok(HashType::Rlp(reader.read_item::<&[u8]>()?.into())),
-            found => {
-                Err(reader.invalid_item("hash type discriminant", "0 (hash) or 1 (rlp)", found))
-            }
+fn read_hash_type(
+    reader: &mut ProofReader<'_>,
+    node_hash_algorithm: NodeHashAlgorithm,
+) -> Result<HashType, ReadError> {
+    HashType::from_reader_for_node_hash_algorithm(&mut *reader, node_hash_algorithm)
+        .map_err(|err| reader.invalid_item("hash type", "valid hash encoding", err))
+}
+
+fn read_value_digest_boxed(
+    reader: &mut ProofReader<'_>,
+    node_hash_algorithm: NodeHashAlgorithm,
+) -> Result<Option<ValueDigest<Box<[u8]>>>, ReadError> {
+    match reader
+        .read_item::<u8>()
+        .map_err(|err| err.set_item("option discriminant"))?
+    {
+        0 => Ok(None),
+        1 => Ok(Some(
+            read_value_digest(reader, node_hash_algorithm)?.map(Into::into),
+        )),
+        found => Err(reader.invalid_item("option discriminant", "0 or 1", found)),
+    }
+}
+
+fn read_value_digest<'a>(
+    reader: &mut ProofReader<'a>,
+    node_hash_algorithm: NodeHashAlgorithm,
+) -> Result<ValueDigest<&'a [u8]>, ReadError> {
+    match reader
+        .read_item::<u8>()
+        .map_err(|err| err.set_item("value digest discriminant"))?
+    {
+        0 => Ok(ValueDigest::Value(reader.read_item()?)),
+        1 => Ok(ValueDigest::Hash(read_hash_type(
+            reader,
+            node_hash_algorithm,
+        )?)),
+        found => {
+            Err(reader.invalid_item("value digest discriminant", "0 (value) or 1 (hash)", found))
         }
     }
 }

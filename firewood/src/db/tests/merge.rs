@@ -5,6 +5,7 @@ use crate::{
     api::{Db, DbView, Proposal},
     db::BatchOp,
 };
+use firewood_storage::NodeHashAlgorithm;
 
 use super::*;
 use test_case::test_case;
@@ -144,7 +145,7 @@ fn test_merge_key_value_range(
     merge_kvs: &[(&[u8], &[u8])],
     expected_kvs: &[(&[u8], Option<&[u8]>)],
 ) {
-    let db = TestDb::new();
+    let db = TestDb::new(NodeHashAlgorithm::MerkleDB);
 
     if !initial_kvs.is_empty() {
         db.propose(initial_kvs).unwrap().commit().unwrap();
@@ -176,7 +177,7 @@ fn test_merge_key_value_range(
     let merge_root_hash = proposal.root_hash();
 
     // Create a fresh database with the same initial state
-    let db2 = TestDb::new();
+    let db2 = TestDb::new(NodeHashAlgorithm::MerkleDB);
     if !initial_kvs.is_empty() {
         db2.propose(initial_kvs).unwrap().commit().unwrap();
     }

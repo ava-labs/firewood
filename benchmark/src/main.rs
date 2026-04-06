@@ -236,12 +236,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         .max_revisions(args.global_opts.revisions)
         .build();
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
         .truncate(matches!(args.test_name, TestName::Create))
         .manager(mgrcfg)
         .build();
 
-    let db = Db::new(args.global_opts.dbname.clone(), cfg).expect("db initiation should succeed");
+    let db = Db::new(
+        args.global_opts.dbname.clone(),
+        NodeHashAlgorithm::MerkleDB,
+        cfg,
+    )
+    .expect("db initiation should succeed");
 
     match args.test_name {
         TestName::Create => {

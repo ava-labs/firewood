@@ -262,7 +262,7 @@ pub struct NodeStoreHeader {
     /// The hash of the area sizes used in this database to prevent someone from changing the
     /// area sizes and trying to read old databases with the wrong area sizes.
     area_size_hash: [u8; 32],
-    /// Whether ethhash was enabled when this database was created.
+    /// The runtime hash algorithm recorded when this database was created.
     node_hash_algorithm: u64,
     /// The merkle root hash of the entire database when it was last committed.
     ///
@@ -316,11 +316,6 @@ impl NodeStoreHeader {
     pub fn read_from_storage<S: crate::linear::ReadableStorage>(
         storage: &S,
     ) -> Result<Self, crate::FileIoError> {
-        // TODO(#1088): remove this after implementing runtime selection of hash algorithms
-        storage.node_hash_algorithm().validate_init().map_err(|e| {
-            storage.file_io_error(e, 0, Some("NodeHashAlgorithm::validate_init".to_string()))
-        })?;
-
         let mut this = bytemuck::zeroed::<Self>();
         let header_bytes = bytemuck::bytes_of_mut(&mut this);
         storage
@@ -511,7 +506,6 @@ impl NodeStoreHeader {
     }
 
     fn validate_node_hash_algorithm(&self, expected: NodeHashAlgorithm) -> Result<(), Error> {
-        expected.validate_init()?;
         NodeHashAlgorithm::try_from(self.node_hash_algorithm)
             .map_err(|err| {
                 std::io::Error::new(
@@ -560,7 +554,7 @@ mod tests {
 
     #[test]
     fn test_header_new() {
-        let header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let header = NodeStoreHeader::new(NodeHashAlgorithm::MerkleDB);
 
         // Check the header is correctly initialized.
         assert_eq!(header.version, Version::new());

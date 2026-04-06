@@ -13,9 +13,6 @@ use crate::{
     StoredAreaParent, TrieNodeParent, WritableStorage, nodestore::NodeStoreHeader,
 };
 
-#[cfg(not(feature = "ethhash"))]
-use crate::hashednode::hash_node;
-
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -38,15 +35,13 @@ fn extra_read_pages(addr: LinearAddress, bytes: u64) -> Option<u64> {
     Some(pages_read.saturating_sub(min_pages))
 }
 
-#[cfg(feature = "ethhash")]
-fn is_valid_key(key: &Path) -> bool {
-    const VALID_ETH_KEY_SIZES: [usize; 2] = [64, 128]; // in number of nibbles - two nibbles make a byte
-    VALID_ETH_KEY_SIZES.contains(&key.0.len())
-}
-
-#[cfg(not(feature = "ethhash"))]
-fn is_valid_key(key: &Path) -> bool {
-    key.0.len().is_multiple_of(2)
+fn is_valid_key(key: &Path, node_hash_algorithm: crate::NodeHashAlgorithm) -> bool {
+    if node_hash_algorithm.is_ethereum() {
+        const VALID_ETH_KEY_SIZES: [usize; 2] = [64, 128]; // in number of nibbles - two nibbles make a byte
+        VALID_ETH_KEY_SIZES.contains(&key.0.len())
+    } else {
+        key.0.len().is_multiple_of(2)
+    }
 }
 
 #[expect(clippy::result_large_err)]
@@ -161,7 +156,6 @@ struct SubTrieMetadata {
     parent: TrieNodeParent,
     depth: usize,
     path_prefix: Path,
-    #[cfg(feature = "ethhash")]
     has_peers: bool,
 }
 
@@ -260,7 +254,6 @@ where
             parent: TrieNodeParent::Root,
             depth: 0,
             path_prefix: Path::new(),
-            #[cfg(feature = "ethhash")]
             has_peers: false,
         };
         let mut trie_stats = TrieStats::default();
@@ -287,9 +280,9 @@ where
             parent,
             depth,
             path_prefix,
-            #[cfg(feature = "ethhash")]
             has_peers,
         } = subtrie;
+        let node_hash_algorithm = self.node_hash_algorithm();
 
         // check that address is aligned
         check_area_aligned(subtrie_root_address, StoredAreaParent::TrieNode(parent))?;
@@ -325,7 +318,7 @@ where
         // if the node has a value, check that the key is valid
         let mut current_path_prefix = path_prefix.clone();
         current_path_prefix.0.extend_from_slice(node.partial_path());
-        if node.value().is_some() && !is_valid_key(&current_path_prefix) {
+        if node.value().is_some() && !is_valid_key(&current_path_prefix, node_hash_algorithm) {
             return Err(vec![CheckerError::InvalidKey {
                 key: current_path_prefix,
                 address: subtrie_root_address,
@@ -335,10 +328,7 @@ where
 
         // compute the hash of the node and check it against the stored hash
         if hash_check {
-            #[cfg(feature = "ethhash")]
-            let hash = Self::compute_node_ethhash(&node, &path_prefix, has_peers);
-            #[cfg(not(feature = "ethhash"))]
-            let hash = hash_node(&node, &path_prefix);
+            let hash = Self::compute_node_hash(node_hash_algorithm, &node, &path_prefix, has_peers);
             if hash != subtrie_root_hash {
                 return Err(vec![CheckerError::HashMismatch {
                     path: current_path_prefix,
@@ -435,7 +425,6 @@ where
                         parent,
                         depth: depth.saturating_add(1),
                         path_prefix: child_path_prefix,
-                        #[cfg(feature = "ethhash")]
                         has_peers: num_children != 1,
                     };
                     if let Err(e) = self.visit_trie_helper(
@@ -755,7 +744,7 @@ mod test {
     use crate::nodestore::primitives::area_size_iter;
     use crate::{
         BranchNode, Child, Children, FreeListParent, ImmutableProposal, LeafNode, NodeStore, Path,
-        PathComponent, area_index, hash_node,
+        PathComponent, area_index,
     };
     use std::sync::Arc;
 
@@ -794,7 +783,11 @@ mod test {
             value: Box::new([6, 7, 8]),
         });
         let leaf_addr = LinearAddress::new(high_watermark).unwrap();
-        let leaf_hash = hash_node(&leaf, &Path::from([2, 0, 3, 1]));
+        let leaf_hash = crate::hashednode::hash_node(
+            &leaf,
+            &Path::from([2, 0, 3, 1]),
+            crate::NodeHashAlgorithm::MerkleDB,
+        );
         let (bytes_written, stored_area_size) =
             test_write_new_node(nodestore, &leaf, high_watermark);
         high_watermark += stored_area_size;
@@ -810,7 +803,11 @@ mod test {
             children: branch_children,
         }));
         let branch_addr = LinearAddress::new(high_watermark).unwrap();
-        let branch_hash = hash_node(&branch, &Path::from([2, 0]));
+        let branch_hash = crate::hashednode::hash_node(
+            &branch,
+            &Path::from([2, 0]),
+            crate::NodeHashAlgorithm::MerkleDB,
+        );
         let (bytes_written, stored_area_size) =
             test_write_new_node(nodestore, &branch, high_watermark);
         high_watermark += stored_area_size;
@@ -827,7 +824,8 @@ mod test {
             children: root_children,
         }));
         let root_addr = LinearAddress::new(high_watermark).unwrap();
-        let root_hash = hash_node(&root, &Path::new());
+        let root_hash =
+            crate::hashednode::hash_node(&root, &Path::new(), crate::NodeHashAlgorithm::MerkleDB);
         let (bytes_written, stored_area_size) =
             test_write_new_node(nodestore, &root, high_watermark);
         high_watermark += stored_area_size;
@@ -1042,14 +1040,12 @@ mod test {
         test_write_new_node(&nodestore, branch_node, branch_addr.get());
 
         // Compute the current branch hash
-        #[cfg(feature = "ethhash")]
-        let computed_hash = NodeStore::<Committed, MemStore>::compute_node_ethhash(
+        let computed_hash = NodeStore::<Committed, MemStore>::compute_node_hash(
+            nodestore.node_hash_algorithm(),
             branch_node,
             &Path::from([2, 0]),
             false,
         );
-        #[cfg(not(feature = "ethhash"))]
-        let computed_hash = hash_node(branch_node, &Path::from([2, 0]));
 
         // Get parent stored hash
         let (root_node, _) = test_trie

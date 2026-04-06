@@ -211,7 +211,10 @@ impl RevisionManager {
         }
 
         let mut by_hash = HashMap::new();
-        if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
+        if let Some(hash) = nodestore
+            .root_hash()
+            .or_default_root_hash(nodestore.node_hash_algorithm())
+        {
             by_hash.insert(hash, nodestore.clone());
         }
 
@@ -313,7 +316,9 @@ impl RevisionManager {
         // TODO: Handle the case where we get something off the free list that is not free
         while in_memory_revisions.len() >= self.max_revisions {
             let oldest = in_memory_revisions.pop_front().expect("must be present");
-            let oldest_hash = oldest.root_hash().or_default_root_hash();
+            let oldest_hash = oldest
+                .root_hash()
+                .or_default_root_hash(oldest.node_hash_algorithm());
             if let Some(ref hash) = oldest_hash {
                 // BLOCKING: write lock on `by_hash` while already holding the write lock on
                 // `in_memory_revisions`. Nested locking order must remain consistent (always
@@ -349,9 +354,12 @@ impl RevisionManager {
         // The `view()` method relies on this ordering - it checks `proposals` first,
         // then `by_hash`, ensuring the revision is always findable during the transition.
         in_memory_revisions.push_back(committed.clone());
-        if let Some(hash) = committed.root_hash().or_default_root_hash() {
-            // BLOCKING: write lock on `by_hash` (still inside the `in_memory_revisions` write
-            // lock). Same nested ordering as the reap path above; must not be inverted.
+        // BLOCKING: write lock on `by_hash` (still inside the `in_memory_revisions` write
+        // lock). Same nested ordering as the reap path above; must not be inverted.
+        if let Some(hash) = committed
+            .root_hash()
+            .or_default_root_hash(committed.node_hash_algorithm())
+        {
             self.by_hash.write().insert(hash, committed.clone());
         }
 
@@ -470,7 +478,10 @@ impl RevisionManager {
     }
 
     pub fn root_hash(&self) -> Option<HashKey> {
-        self.current_revision().root_hash()
+        let revision = self.current_revision();
+        revision
+            .root_hash()
+            .or_default_root_hash(revision.node_hash_algorithm())
     }
 
     pub fn current_revision(&self) -> CommittedRevision {
@@ -603,7 +614,7 @@ mod tests {
             self.proposals
                 .lock()
                 .iter()
-                .filter_map(|p| p.root_hash().or_default_root_hash())
+                .filter_map(|p| p.root_hash().or_default_root_hash(p.node_hash_algorithm()))
                 .collect()
         }
 
@@ -636,7 +647,7 @@ mod tests {
 
         let config = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
-            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+            .node_hash_algorithm(NodeHashAlgorithm::MerkleDB)
             .create(true)
             .truncate(false)
             .build();
@@ -695,7 +706,7 @@ mod tests {
 
         let config = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
-            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+            .node_hash_algorithm(NodeHashAlgorithm::MerkleDB)
             .create(true)
             .manager(
                 RevisionManagerConfig::builder()
@@ -869,7 +880,7 @@ mod tests {
         // Create a database with root_store disabled (default)
         let config = ConfigManager::builder()
             .root_dir(db_path.clone())
-            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+            .node_hash_algorithm(NodeHashAlgorithm::MerkleDB)
             .create(true)
             .root_store(false)
             .build();
@@ -893,7 +904,7 @@ mod tests {
         // Create a database with root_store enabled
         let config = ConfigManager::builder()
             .root_dir(db_path.clone())
-            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+            .node_hash_algorithm(NodeHashAlgorithm::MerkleDB)
             .create(true)
             .root_store(true)
             .build();
@@ -916,7 +927,7 @@ mod tests {
         // `max_revisions` < `commit_count`
         let config = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
-            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+            .node_hash_algorithm(NodeHashAlgorithm::MerkleDB)
             .create(true)
             .manager(
                 RevisionManagerConfig::builder()
@@ -932,7 +943,7 @@ mod tests {
         // `max_revisions` == `commit_count`
         let config = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
-            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+            .node_hash_algorithm(NodeHashAlgorithm::MerkleDB)
             .manager(
                 RevisionManagerConfig::builder()
                     .max_revisions(commit_count.get() as usize)
@@ -948,7 +959,7 @@ mod tests {
         let max_revisions = commit_count.get().wrapping_add(1) as usize;
         let config = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
-            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+            .node_hash_algorithm(NodeHashAlgorithm::MerkleDB)
             .manager(
                 RevisionManagerConfig::builder()
                     .max_revisions(max_revisions)

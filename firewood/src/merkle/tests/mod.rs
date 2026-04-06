@@ -3,12 +3,10 @@
 
 #![expect(clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[cfg(feature = "ethhash")]
 mod ethhash;
 // TODO: get the hashes from merkledb and verify compatibility with branch factor 256
 mod proof;
 mod range;
-#[cfg(not(feature = "ethhash"))]
 mod triehash;
 
 use std::collections::HashMap;
@@ -52,12 +50,14 @@ where
     K: AsRef<[u8]>,
     V: AsRef<[u8]>,
 {
-    let (merkle, _header) = init_merkle_with_header(iter);
+    let (merkle, _header) =
+        init_merkle_with_header_and_hash_algorithm(iter, NodeHashAlgorithm::MerkleDB);
     merkle
 }
 
-pub(crate) fn init_merkle_with_header<I, K, V>(
+pub(crate) fn init_merkle_with_header_and_hash_algorithm<I, K, V>(
     iter: I,
+    node_hash_algorithm: NodeHashAlgorithm,
 ) -> (Merkle<NodeStore<Committed, MemStore>>, NodeStoreHeader)
 where
     I: Clone + IntoIterator<Item = (K, V)>,
@@ -66,9 +66,9 @@ where
 {
     let memstore = Arc::new(MemStore::new(
         Vec::with_capacity(64 * 1024),
-        NodeHashAlgorithm::compile_option(),
+        node_hash_algorithm,
     ));
-    let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+    let mut header = NodeStoreHeader::new(node_hash_algorithm);
     let base = Merkle::from(NodeStore::new_empty_committed(memstore.clone()));
     let mut merkle = base.fork().unwrap();
 

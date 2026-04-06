@@ -16,9 +16,8 @@
 
 use crate::node::branch::ReadSerializable;
 use crate::nodestore::AreaIndex;
-use crate::{HashType, LinearAddress, Path, PathBuf, PathComponent, SharedNode};
+use crate::{HashType, LinearAddress, NodeHashAlgorithm, Path, PathBuf, PathComponent, SharedNode};
 use bitfield::bitfield;
-use branch::Serializable as _;
 pub use branch::{BranchNode, Child};
 pub use children::{Children, ChildrenSlots};
 use enum_as_inner::EnumAsInner;
@@ -234,7 +233,11 @@ impl Node {
     /// # Errors
     ///
     /// Returns an error if the encoded size exceeds the maximum area size.
-    pub fn as_bytes<T>(&self, encoded: &mut T) -> Result<AreaIndex, Error>
+    pub fn as_bytes<T>(
+        &self,
+        node_hash_algorithm: NodeHashAlgorithm,
+        encoded: &mut T,
+    ) -> Result<AreaIndex, Error>
     where
         T: ExtendableBytes + AsRef<[u8]> + std::ops::IndexMut<usize, Output = u8>,
     {
@@ -284,7 +287,7 @@ impl Node {
                             .persist_info()
                             .expect("child must be hashed when serializing");
                         encoded.extend_from_slice(&address.get().to_ne_bytes());
-                        hash.write_to(encoded);
+                        hash.write_to_for_node_hash_algorithm(encoded, node_hash_algorithm);
                     }
                 } else {
                     for (position, child) in child_iter {
@@ -293,7 +296,7 @@ impl Node {
                             .persist_info()
                             .expect("child must be hashed when serializing");
                         encoded.extend_from_slice(&address.get().to_ne_bytes());
-                        hash.write_to(encoded);
+                        hash.write_to_for_node_hash_algorithm(encoded, node_hash_algorithm);
                     }
                 }
             }
@@ -336,7 +339,10 @@ impl Node {
     }
 
     /// Given a reader, return a [Node] from those bytes
-    pub fn from_reader(mut serialized: &mut impl Read) -> Result<Self, Error> {
+    pub fn from_reader(
+        mut serialized: &mut impl Read,
+        node_hash_algorithm: NodeHashAlgorithm,
+    ) -> Result<Self, Error> {
         match serialized.read_byte()? {
             255 => {
                 // this is a freed area
@@ -384,7 +390,10 @@ impl Node {
                         serialized.read_exact(&mut address_buf)?;
                         let address = u64::from_ne_bytes(address_buf);
 
-                        let hash = HashType::from_reader(&mut serialized)?;
+                        let hash = HashType::from_reader_for_node_hash_algorithm(
+                            &mut serialized,
+                            node_hash_algorithm,
+                        )?;
 
                         *child = Some(Child::AddressWithHash(
                             LinearAddress::new(address)
@@ -408,7 +417,10 @@ impl Node {
                         serialized.read_exact(&mut address_buf)?;
                         let address = u64::from_ne_bytes(address_buf);
 
-                        let hash = HashType::from_reader(&mut serialized)?;
+                        let hash = HashType::from_reader_for_node_hash_algorithm(
+                            &mut serialized,
+                            node_hash_algorithm,
+                        )?;
 
                         children[position] = Some(Child::AddressWithHash(
                             LinearAddress::new(address)
@@ -585,21 +597,19 @@ than 126 bytes as the length would be encoded in multiple bytes.
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
         )})), 1165; "full branch node with obnoxiously long partial path and long value"
     )]
-    // When ethhash is enabled, we don't actually check the `expected_length`
-    fn test_serialize_deserialize(
-        node: Node,
-        #[cfg_attr(feature = "ethhash", expect(unused_variables))] expected_length: usize,
-    ) {
+    fn test_serialize_deserialize(node: Node, expected_length: usize) {
         use crate::node::Node;
         use std::io::Cursor;
 
         let mut serialized = Vec::new();
-        let _area_index = node.as_bytes(&mut serialized).unwrap();
-        #[cfg(not(feature = "ethhash"))]
+        let _area_index = node
+            .as_bytes(crate::NodeHashAlgorithm::MerkleDB, &mut serialized)
+            .unwrap();
         assert_eq!(serialized.len(), expected_length);
         let mut cursor = Cursor::new(&serialized);
         cursor.set_position(1);
-        let deserialized = Node::from_reader(&mut cursor).unwrap();
+        let deserialized =
+            Node::from_reader(&mut cursor, crate::NodeHashAlgorithm::MerkleDB).unwrap();
 
         assert_eq!(node, deserialized);
     }
@@ -617,12 +627,16 @@ than 126 bytes as the length would be encoded in multiple bytes.
 
         // First, encode into an empty buffer to get the expected area index
         let mut empty_buffer = Vec::new();
-        let expected_area_index = node.as_bytes(&mut empty_buffer).unwrap();
+        let expected_area_index = node
+            .as_bytes(crate::NodeHashAlgorithm::MerkleDB, &mut empty_buffer)
+            .unwrap();
         let expected_size = empty_buffer.len();
 
         // Now encode into a non-empty buffer with a 100-byte prefix
         let mut non_empty_buffer = vec![0xFF; 100];
-        let area_index = node.as_bytes(&mut non_empty_buffer).unwrap();
+        let area_index = node
+            .as_bytes(crate::NodeHashAlgorithm::MerkleDB, &mut non_empty_buffer)
+            .unwrap();
 
         // The area index should be the same regardless of buffer prefix
         assert_eq!(

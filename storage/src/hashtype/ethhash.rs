@@ -10,15 +10,20 @@ use std::{
 };
 
 use crate::{
-    TrieHash,
+    NodeHashAlgorithm, TrieHash,
     node::{ExtendableBytes, branch::Serializable},
 };
 
+/// A child hash representation that can store either a 32-byte hash or an
+/// inlined RLP payload for Ethereum-style short-node encodings.
 #[derive(Clone)]
 pub enum HashOrRlp {
+    /// A fully hashed trie node reference.
     Hash(TrieHash),
     // TODO: this slice is never larger than 32 bytes so smallvec is probably not our best container
     // the length is stored in a `usize` but it could be in a `u8` and it will never overflow
+    /// An inlined RLP node encoding used when the Ethereum preimage is shorter
+    /// than 32 bytes.
     Rlp(SmallVec<[u8; 32]>),
 }
 
@@ -48,12 +53,52 @@ impl HashOrRlp {
         TrieHash::empty().into()
     }
 
+    /// Returns the bytes represented by this value.
+    #[must_use]
     pub fn as_slice(&self) -> &[u8] {
         self
     }
 
+    /// Converts this value into a canonical [`TrieHash`].
+    #[must_use]
     pub fn into_triehash(self) -> TrieHash {
         self.into()
+    }
+
+    /// Writes this child reference using the encoding expected by the selected
+    /// node hash algorithm.
+    pub fn write_to_for_node_hash_algorithm<W: ExtendableBytes>(
+        &self,
+        vec: &mut W,
+        node_hash_algorithm: NodeHashAlgorithm,
+    ) {
+        match node_hash_algorithm {
+            NodeHashAlgorithm::MerkleDB => match self {
+                Self::Hash(hash) => vec.extend_from_slice(hash.as_ref()),
+                Self::Rlp(_) => unreachable!("MerkleDB hashes must not use inline RLP"),
+            },
+            NodeHashAlgorithm::Ethereum => self.write_to(vec),
+        }
+    }
+
+    /// Reads a child reference using the encoding expected by the selected
+    /// node hash algorithm.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the encoded bytes cannot be read or are incomplete.
+    pub fn from_reader_for_node_hash_algorithm<R: Read>(
+        mut reader: R,
+        node_hash_algorithm: NodeHashAlgorithm,
+    ) -> Result<Self, std::io::Error> {
+        match node_hash_algorithm {
+            NodeHashAlgorithm::MerkleDB => {
+                let mut buf = [0u8; 32];
+                reader.read_exact(&mut buf)?;
+                Ok(Self::Hash(buf.into()))
+            }
+            NodeHashAlgorithm::Ethereum => Self::from_reader(reader),
+        }
     }
 }
 

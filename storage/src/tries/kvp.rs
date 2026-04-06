@@ -241,7 +241,20 @@ impl<'a, T: AsRef<[u8]> + ?Sized> KeyValueTrieRoot<'a, T> {
     /// Hashes this trie, returning a hashed trie.
     #[must_use]
     pub fn into_hashed_trie(self: Box<Self>) -> Box<HashedKeyValueTrieRoot<'a, T>> {
-        HashedKeyValueTrieRoot::new(PathGuard::new(&mut PathBuf::new_const()), self)
+        self.into_hashed_trie_with(crate::NodeHashAlgorithm::MerkleDB)
+    }
+
+    /// Hashes this trie using the selected hash algorithm, returning a hashed trie.
+    #[must_use]
+    pub fn into_hashed_trie_with(
+        self: Box<Self>,
+        node_hash_algorithm: crate::NodeHashAlgorithm,
+    ) -> Box<HashedKeyValueTrieRoot<'a, T>> {
+        HashedKeyValueTrieRoot::new(
+            PathGuard::new(&mut PathBuf::new_const()),
+            self,
+            node_hash_algorithm,
+        )
     }
 }
 
@@ -252,10 +265,11 @@ impl<'a, T: AsRef<[u8]> + ?Sized> HashedKeyValueTrieRoot<'a, T> {
     pub fn new(
         mut leading_path: PathGuard<'_>,
         #[expect(clippy::boxed_local)] node: Box<KeyValueTrieRoot<'a, T>>,
+        node_hash_algorithm: crate::NodeHashAlgorithm,
     ) -> Box<Self> {
-        let children = node
-            .children
-            .map(|pc, child| child.map(|child| Self::new(leading_path.fork_append(pc), child)));
+        let children = node.children.map(|pc, child| {
+            child.map(|child| Self::new(leading_path.fork_append(pc), child, node_hash_algorithm))
+        });
 
         Box::new(Self {
             computed: HashableShunt::new(
@@ -266,7 +280,7 @@ impl<'a, T: AsRef<[u8]> + ?Sized> HashedKeyValueTrieRoot<'a, T> {
                     .each_ref()
                     .map(|_, c| c.as_deref().map(|c| c.computed.clone())),
             )
-            .to_hash(),
+            .to_hash(node_hash_algorithm),
             leading_path: leading_path.as_slice().into(),
             partial_path: node.partial_path,
             value: node.value,
@@ -526,39 +540,21 @@ mod tests {
             merkledb16: $hex16:expr,
             ethereum: rlp($hexeth:expr),
         ) => {{
-            cfg_if::cfg_if! {
-                if #[cfg(feature = "ethhash")] {
-                    fn __expected_hash() -> $crate::HashType {
-                        $crate::HashType::Rlp(smallvec::SmallVec::from(
-                            &from_ascii::<{ $hexeth.len() }, { $hexeth.len() / 2 }>($hexeth)[..],
-                        ))
-                    }
-                } else {
-                    fn __expected_hash() -> $crate::HashType {
-                        $crate::HashType::from(from_ascii($hex16))
-                    }
-                }
-            }
-
-            __expected_hash()
+            (
+                $crate::HashType::from(from_ascii($hex16)),
+                $crate::HashType::Rlp(smallvec::SmallVec::from(
+                    &from_ascii::<{ $hexeth.len() }, { $hexeth.len() / 2 }>($hexeth)[..],
+                )),
+            )
         }};
         (
             merkledb16: $hex16:expr,
             ethereum: $hexeth:expr,
         ) => {{
-            cfg_if::cfg_if! {
-                if #[cfg(feature = "ethhash")] {
-                    fn __expected_hash() -> $crate::HashType {
-                        $crate::HashType::from(from_ascii($hexeth))
-                    }
-                } else {
-                    fn __expected_hash() -> $crate::HashType {
-                        $crate::HashType::from(from_ascii($hex16))
-                    }
-                }
-            }
-
-            __expected_hash()
+            (
+                $crate::HashType::from(from_ascii($hex16)),
+                $crate::HashType::from(from_ascii($hexeth)),
+            )
         }};
     }
 
@@ -681,13 +677,26 @@ mod tests {
         merkledb16: b"697e767d6f4af8236090bc95131220c1c94cadba3e66e0a8011c9beef7b255a5",
         ethereum: b"3fa832b90f7f1a053a48a4528d1e446cc679fbcf376d0ef8703748d64030e19d",
     }; "seven keys")]
-    fn test_hashed_trie(slice: &[(&str, &str)], root_hash: crate::HashType) {
-        let root = KeyValueTrieRoot::<str>::from_slice(slice)
-            .unwrap()
-            .unwrap()
-            .into_hashed_trie();
+    fn test_hashed_trie(
+        slice: &[(&str, &str)],
+        expected_hashes: (crate::HashType, crate::HashType),
+    ) {
+        let cases = [
+            (crate::NodeHashAlgorithm::MerkleDB, &expected_hashes.0),
+            (crate::NodeHashAlgorithm::Ethereum, &expected_hashes.1),
+        ];
 
-        assert_eq!(*root.computed(), root_hash);
-        assert_eq!(*root.computed(), crate::Preimage::to_hash(&*root));
+        for (node_hash_algorithm, expected_hash) in cases {
+            let root = KeyValueTrieRoot::<str>::from_slice(slice)
+                .unwrap()
+                .unwrap()
+                .into_hashed_trie_with(node_hash_algorithm);
+
+            assert_eq!(*root.computed(), expected_hash.clone());
+            assert_eq!(
+                *root.computed(),
+                crate::Preimage::to_hash(&*root, node_hash_algorithm)
+            );
+        }
     }
 }

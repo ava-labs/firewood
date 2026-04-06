@@ -601,7 +601,12 @@ pub mod test_utils {
         offset: u64,
     ) -> (u64, u64) {
         let mut stored_area_bytes = Vec::new();
-        let area_size_index = node.as_bytes(&mut stored_area_bytes).unwrap();
+        let area_size_index = node
+            .as_bytes(
+                nodestore.storage.node_hash_algorithm(),
+                &mut stored_area_bytes,
+            )
+            .unwrap();
         let bytes_written = stored_area_bytes.len() as u64;
         nodestore
             .storage
@@ -629,7 +634,7 @@ pub mod test_utils {
         root_node_info: Option<RootNodeInfo>,
         free_lists: FreeLists,
     ) -> NodeStoreHeader {
-        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::MerkleDB);
         header.set_size(size);
         header.set_root_location(root_node_info);
         *header.free_lists_mut() = free_lists;

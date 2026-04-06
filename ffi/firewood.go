@@ -59,13 +59,9 @@ const RootLength = C.sizeof_HashKey
 type Hash [RootLength]byte
 
 // NodeHashAlgorithm represents the node hashing algorithm used by the database;
-// this must match the algorithm previously used to crate the database.
+// this must match the algorithm previously used to create the database.
 //
 // Currently, there are only two variants but more may be added in the future.
-// At this time, the node hash algorithm used when opening the database must
-// match the compile-time feature used when building the FFI library. This
-// restriction will be lifted after #1088, which enables runtime selection of
-// the node hashing algorithm.
 type NodeHashAlgorithm C.enum_NodeHashAlgorithm
 
 const (
@@ -93,9 +89,9 @@ var (
 // access the database's memory. These must be released before closing the
 // database. See [Database.Close] for more details.
 //
-// Database supports two hashing modes: Firewood hashing and Ethereum-compatible
-// hashing. Ethereum-compatible hashing is distributed, but you can use the more efficient
-// Firewood hashing by compiling from source. See the Firewood repository for more details.
+// Database supports two hashing modes: MerkleDB-compatible SHA-256 hashing and
+// Ethereum-compatible Keccak-256 hashing. [New] requires callers to choose the
+// hashing mode explicitly.
 //
 // For concurrent use cases, see each type and method's documentation for thread-safety.
 type Database struct {
@@ -138,7 +134,7 @@ type config struct {
 	deferredPersistenceCommitCount uint64
 }
 
-func defaultConfig() *config {
+func defaultConfig(nodeHashAlgorithm NodeHashAlgorithm) *config {
 	return &config{
 		nodeCacheSizeInBytes:           128_000_000,
 		freeListCacheEntries:           1_000_000,
@@ -242,17 +238,9 @@ const (
 	invalidCacheStrategy
 )
 
-// New opens or creates a new Firewood database with the given node hashing
-// algorithm and database options. The database directory will be created at the
-// provided path if it does not already exist.
-//
-// The [nodeHashAlgorithm] is required and must match the compile-time feature:
-//   - NodeHashAlgorithmEthereum if the ethhash feature is enabled
-//   - NodeHashAlgorithmMerkleDB if the ethhash feature is disabled
-//
-// In the future, the node hash algorithm will be configurable at runtime and
-// no longer need to match compile-time features but will instead select the
-// desired hashing mode.
+// New opens or creates a new Firewood database with the given database options.
+// The database directory will be created at the provided path if it does not
+// already exist.
 //
 // If no [Option] is provided, sensible defaults will be used.
 // See the With* functions for details about each configuration parameter and its default value.
@@ -261,7 +249,7 @@ const (
 // is no longer needed. No other [Database] in this process should be opened with
 // the same file path until the database is closed.
 func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Database, error) {
-	conf := defaultConfig()
+	conf := defaultConfig(nodeHashAlgorithm)
 	for _, opt := range opts {
 		opt(conf)
 	}

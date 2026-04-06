@@ -63,11 +63,11 @@ benchmark/            # Performance benchmarking suite
 - **Commit**: Operation of applying Proposals to the most recent Revision
 - **Batch**: Ordered set of Put/Delete operations
 
-## Feature Flags
+## Hash Modes
 
-### `ethhash`
-
-By default, Firewood uses SHA-256 hashing compatible with merkledb. Enable this feature for Ethereum compatibility:
+By default, Firewood uses SHA-256 hashing compatible with merkledb. To use
+Ethereum-compatible hashing, configure the database with the Ethereum hash mode
+at runtime:
 
 - Changes hashing from SHA-256 to Keccak-256
 - Understands "account" nodes at specific depths with RLP-encoded values
@@ -88,7 +88,7 @@ Firewood Rust FFI bindings:
 ```bash
 cd ffi/src                                              # Go to Rust binding directory
 cargo clean                                             # Remove any existing bindings
-cargo build --profile maxperf --features ethhash,logger # Generate bindings
+cargo build --profile maxperf --features logger # Generate bindings
 ```
 
 To then have Golang utilize these new bindings:
@@ -143,8 +143,8 @@ Before submitting/updating a PR, run the following
 
 ```bash
 cargo fmt                                                               # Format code
-cargo nextest run --workspace --features ethhash,logger --all-targets   # Run tests
-cargo clippy --workspace --features ethhash,logger --all-targets        # Linter
+cargo nextest run --workspace --features logger --all-targets           # Run tests
+cargo clippy --workspace --features logger --all-targets                # Linter
 cargo doc --no-deps                                                     # Ensure docs build
 ```
 
@@ -155,7 +155,7 @@ All tests must pass, and there should be no clippy warnings.
 If your PR modifies code that is tested by any test prefixed with `test_slow_`, you should also run the full test suite with the `ci` profile to ensure those tests pass:
 
 ```bash
-cargo nextest run --workspace --features ethhash,logger --all-targets --profile ci
+cargo nextest run --workspace --features logger --all-targets --profile ci
 ```
 
 The `ci` profile includes slow tests that are skipped in the default profile for faster local development.
@@ -217,7 +217,7 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
 
 4. **Beta Status**: The API may change. Don't assume stability guarantees.
 
-5. **Feature Flags**: Be aware of `ethhash` feature flag when discussing Ethereum compatibility vs. default merkledb compatibility.
+5. **Hash Mode**: Be aware of the runtime-selected node hash algorithm when discussing Ethereum compatibility vs. default merkledb compatibility.
 
 6. **Documentation**: Public APIs should be well-documented. Run `cargo doc --no-deps` to check.
 

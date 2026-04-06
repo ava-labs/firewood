@@ -59,12 +59,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         .max_revisions(args.revisions)
         .build();
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
         .truncate(args.truncate)
         .manager(mgrcfg)
         .build();
 
-    let db = Db::new("firewood", cfg).expect("db initiation should succeed");
+    let db = Db::new("firewood", NodeHashAlgorithm::MerkleDB, cfg)
+        .expect("db initiation should succeed");
 
     let keys = args.batch_size;
     let start = Instant::now();

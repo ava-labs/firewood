@@ -165,10 +165,11 @@ fn serialize_node_to_bump<'a>(
     bump: &'a bumpalo::Bump,
     shared_node: &crate::SharedNode,
     node_allocator: &mut NodeAllocator<'_, impl WritableStorage>,
+    node_hash_algorithm: crate::NodeHashAlgorithm,
 ) -> Result<(&'a [u8], crate::LinearAddress, usize), FileIoError> {
     let mut bytes = bumpalo::collections::Vec::new_in(bump);
     let area_size_index = shared_node
-        .as_bytes(&mut bytes)
+        .as_bytes(node_hash_algorithm, &mut bytes)
         .map_err(|e| node_allocator.io_error(e, 0, Some("allocate_node".to_owned())))?;
     let (persisted_address, _) = node_allocator.allocate_node(bytes.as_slice())?;
     bytes.shrink_to_fit();
@@ -219,8 +220,12 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             let shared_node = node.as_shared_node(self).expect("in memory, so no IO");
 
             // Serialize the node into the bump allocator
-            let (slice, persisted_address, idx_size) =
-                serialize_node_to_bump(bump, &shared_node, node_allocator)?;
+            let (slice, persisted_address, idx_size) = serialize_node_to_bump(
+                bump,
+                &shared_node,
+                node_allocator,
+                self.storage.node_hash_algorithm(),
+            )?;
 
             // NOTE(#1488): we need to set the address so that the parent node can
             // reference it when they are serialized within the same batch.
@@ -527,7 +532,7 @@ mod tests {
     fn test_into_committed_with_generic_storage() {
         // Create a base committed store with MemStore
         let mem_store = MemStore::default();
-        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::MerkleDB);
         let base_committed = NodeStore::new_empty_committed(mem_store.into());
 
         // Create a mutable proposal from the base

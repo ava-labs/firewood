@@ -48,8 +48,9 @@
 )]
 
 use firewood_storage::{
-    Children, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator, Path,
-    PathBuf, PathComponent, PathIterItem, Preimage, SplitPath, TrieHash, TriePath, ValueDigest,
+    Children, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator,
+    NodeHashAlgorithm, Path, PathBuf, PathComponent, PathIterItem, SplitPath, TrieHash, TriePath,
+    ValueDigest,
 };
 use thiserror::Error;
 
@@ -256,15 +257,12 @@ impl std::fmt::Debug for ProofNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Filter the missing children and only show the present ones with their indices
         let child_hashes = self.child_hashes.iter_present().collect::<Vec<_>>();
-        // Compute the hash and render it as well
-        let hash = firewood_storage::Preimage::to_hash(self);
 
         f.debug_struct("ProofNode")
             .field("key", &self.key)
             .field("partial_len", &self.partial_len)
             .field("value_digest", &self.value_digest)
             .field("child_hashes", &child_hashes)
-            .field("hash", &hash)
             .finish()
     }
 }
@@ -334,10 +332,19 @@ impl From<PathIterItem> for ProofNode {
 }
 
 /// A proof that a given key-value pair either exists or does not exist in a trie.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub struct Proof<T: ?Sized>(T);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Proof<T: ?Sized> {
+    node_hash_algorithm: NodeHashAlgorithm,
+    proof: T,
+}
 
 impl<T: ProofCollection + ?Sized> Proof<T> {
+    /// Returns the node hash algorithm used to generate this proof.
+    #[must_use]
+    pub const fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        self.node_hash_algorithm
+    }
+
     /// Verify a proof
     pub fn verify<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         &self,
@@ -378,15 +385,16 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
     ) -> Result<Option<ValueDigest<&[u8]>>, ProofError> {
         let key = Path(NibblesIterator::new(key.as_ref()).collect());
 
-        let Some(last_node) = self.0.as_ref().last() else {
+        let Some(last_node) = self.proof.as_ref().last() else {
             return Err(ProofError::Empty);
         };
 
         let mut expected_hash = root_hash.clone().into_hash_type();
 
-        let mut iter = self.0.as_ref().iter().peekable();
+        let mut iter = self.proof.as_ref().iter().peekable();
         while let Some(node) = iter.next() {
-            if node.to_hash() != expected_hash {
+            if firewood_storage::Preimage::to_hash(node, self.node_hash_algorithm) != expected_hash
+            {
                 return Err(ProofError::UnexpectedHash);
             }
 
@@ -427,13 +435,13 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
     /// Returns the length of the proof.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.0.as_ref().len()
+        self.proof.as_ref().len()
     }
 
     /// Returns true if the proof is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.0.as_ref().is_empty()
+        self.proof.as_ref().is_empty()
     }
 }
 
@@ -442,14 +450,14 @@ impl<T: ProofCollection + ?Sized> std::ops::Deref for Proof<T> {
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.proof
     }
 }
 
 impl<T: ProofCollection + ?Sized> std::ops::DerefMut for Proof<T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.proof
     }
 }
 
@@ -458,7 +466,17 @@ impl<T: ProofCollection> Proof<T> {
     #[inline]
     #[must_use]
     pub const fn new(proof: T) -> Self {
-        Self(proof)
+        Self::new_with_hash_algorithm(NodeHashAlgorithm::MerkleDB, proof)
+    }
+
+    /// Constructs a new proof with an explicit hash algorithm.
+    #[inline]
+    #[must_use]
+    pub const fn new_with_hash_algorithm(node_hash_algorithm: NodeHashAlgorithm, proof: T) -> Self {
+        Self {
+            node_hash_algorithm,
+            proof,
+        }
     }
 }
 
@@ -467,14 +485,21 @@ impl Proof<EmptyProofCollection> {
     #[inline]
     #[must_use]
     pub const fn empty() -> Self {
-        Self::new(EmptyProofCollection)
+        Self::empty_with_hash_algorithm(NodeHashAlgorithm::MerkleDB)
+    }
+
+    /// Constructs a new empty proof with an explicit hash algorithm.
+    #[inline]
+    #[must_use]
+    pub const fn empty_with_hash_algorithm(node_hash_algorithm: NodeHashAlgorithm) -> Self {
+        Self::new_with_hash_algorithm(node_hash_algorithm, EmptyProofCollection)
     }
 
     /// Converts an empty immutable proof into an empty mutable proof.
     #[inline]
     #[must_use]
     pub const fn into_mutable<T: Hashable>(self) -> Proof<Vec<T>> {
-        Proof::new(Vec::new())
+        Proof::new_with_hash_algorithm(self.node_hash_algorithm, Vec::new())
     }
 }
 
@@ -483,7 +508,7 @@ impl<T: Hashable> Proof<Box<[T]>> {
     #[inline]
     #[must_use]
     pub fn into_mutable(self) -> Proof<Vec<T>> {
-        Proof::new(self.0.into_vec())
+        Proof::new_with_hash_algorithm(self.node_hash_algorithm, self.proof.into_vec())
     }
 }
 
@@ -492,7 +517,7 @@ impl<T: Hashable> Proof<Vec<T>> {
     #[inline]
     #[must_use]
     pub fn into_immutable(self) -> Proof<Box<[T]>> {
-        Proof::new(self.0.into_boxed_slice())
+        Proof::new_with_hash_algorithm(self.node_hash_algorithm, self.proof.into_boxed_slice())
     }
 }
 
@@ -502,27 +527,38 @@ where
     V: ProofCollection<Node = T> + IntoIterator<Item = T> + FromIterator<T>,
 {
     /// Joins two proofs into one.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the two proofs use different hash algorithms.
     #[inline]
     #[must_use]
     pub fn join<O: ProofCollection<Node = T> + IntoIterator<Item = T>>(
         self,
         other: Proof<O>,
     ) -> Proof<V> {
-        self.into_iter().chain(other).collect()
+        assert_eq!(
+            self.node_hash_algorithm, other.node_hash_algorithm,
+            "joined proofs must use the same hash algorithm"
+        );
+        Proof::new_with_hash_algorithm(
+            self.node_hash_algorithm,
+            self.into_iter().chain(other).collect(),
+        )
     }
 }
 
 impl<V: ProofCollection + FromIterator<V::Node>> FromIterator<V::Node> for Proof<V> {
     #[inline]
     fn from_iter<I: IntoIterator<Item = V::Node>>(iter: I) -> Self {
-        Proof(iter.into_iter().collect())
+        Proof::new(iter.into_iter().collect())
     }
 }
 
 impl<V: ProofCollection + Extend<V::Node>> Extend<V::Node> for Proof<V> {
     #[inline]
     fn extend<I: IntoIterator<Item = V::Node>>(&mut self, iter: I) {
-        self.0.extend(iter);
+        self.proof.extend(iter);
     }
 }
 
@@ -532,7 +568,13 @@ impl<V: ProofCollection + IntoIterator<Item = V::Node>> IntoIterator for Proof<V
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
+        self.proof.into_iter()
+    }
+}
+
+impl<T: ProofCollection + Default> Default for Proof<T> {
+    fn default() -> Self {
+        Self::new(T::default())
     }
 }
 
@@ -674,9 +716,11 @@ mod tests {
     /// proof for key C (nibble 5).
     #[test]
     fn proof_for_wrong_branch_is_rejected() {
+        let node_hash_algorithm = NodeHashAlgorithm::MerkleDB;
+
         // Leaf at nibble path [3, 0] with a value.
         let leaf = make_node(&[3, 0], 1, Some(b"val_b"), Children::new());
-        let leaf_hash = leaf.to_hash();
+        let leaf_hash = firewood_storage::Preimage::to_hash(&leaf, node_hash_algorithm);
 
         // Root branch with children at nibbles 3 and 5.
         let mut root_children: Children<Option<HashType>> = Children::new();
@@ -684,9 +728,10 @@ mod tests {
         root_children[PathComponent(firewood_storage::U4::new_masked(5))] =
             Some(HashType::from([0xCC; 32]));
         let root = make_node(&[], 0, None, root_children);
-        let root_hash: TrieHash = root.to_hash().into_triehash();
+        let root_hash: TrieHash =
+            firewood_storage::Preimage::to_hash(&root, node_hash_algorithm).into_triehash();
 
-        let proof = Proof::new(vec![root, leaf]);
+        let proof = Proof::new_with_hash_algorithm(node_hash_algorithm, vec![root, leaf]);
 
         // Verifying against key [0x30] (nibble path [3, 0]) should succeed
         // — this is the key the proof was built for.

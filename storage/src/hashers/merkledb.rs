@@ -1,16 +1,13 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![cfg_attr(
-    not(feature = "ethhash"),
-    expect(
-        clippy::arithmetic_side_effects,
-        reason = "Found 1 occurrences after enabling the lint."
-    )
+#![expect(
+    clippy::arithmetic_side_effects,
+    reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use crate::hashednode::{HasUpdate, Hashable, Preimage};
-use crate::{TrieHash, TriePath, TriePathAsPackedBytes, ValueDigest};
+use crate::hashednode::{HasUpdate, Hashable};
+use crate::{HashType, TriePath, TriePathAsPackedBytes, ValueDigest};
 /// Merkledb compatible hashing algorithm.
 use integer_encoding::VarInt;
 use sha2::{Digest, Sha256};
@@ -24,38 +21,36 @@ impl HasUpdate for Sha256 {
     }
 }
 
-impl<T: Hashable> Preimage for T {
-    fn to_hash(&self) -> TrieHash {
-        let mut hasher = Sha256::new();
+#[must_use]
+pub(crate) fn to_hash<T: Hashable>(hashable: &T) -> HashType {
+    let mut hasher = Sha256::new();
+    write(hashable, &mut hasher);
+    HashType::Hash(hasher.finalize().into())
+}
 
-        self.write(&mut hasher);
-        hasher.finalize().into()
-    }
+pub(crate) fn write<T: Hashable>(hashable: &T, buf: &mut impl HasUpdate) {
+    let children = hashable.children();
 
-    fn write(&self, buf: &mut impl HasUpdate) {
-        let children = self.children();
+    let num_children = children.count() as u64;
 
-        let num_children = children.count() as u64;
+    add_varint_to_buf(buf, num_children);
 
-        add_varint_to_buf(buf, num_children);
-
-        for (index, hash) in &children {
-            if let Some(hash) = hash {
-                add_varint_to_buf(buf, u64::from(index.as_u8()));
-                buf.update(hash);
-            }
+    for (index, hash) in &children {
+        if let Some(hash) = hash {
+            add_varint_to_buf(buf, u64::from(index.as_u8()));
+            buf.update(hash.as_ref());
         }
-
-        // Add value digest (if any) to hash pre-image
-        add_value_digest_to_buf(buf, self.value_digest());
-
-        // Add key length (in bits) to hash pre-image
-        let key = self.full_path();
-        let key_bit_len = BITS_PER_NIBBLE * key.len() as u64;
-        add_varint_to_buf(buf, key_bit_len);
-        // Add key to hash pre-image
-        key.as_packed_bytes().for_each(|byte| buf.update([byte]));
     }
+
+    // Add value digest (if any) to hash pre-image
+    add_value_digest_to_buf(buf, hashable.value_digest());
+
+    // Add key length (in bits) to hash pre-image
+    let key = hashable.full_path();
+    let key_bit_len = BITS_PER_NIBBLE * key.len() as u64;
+    add_varint_to_buf(buf, key_bit_len);
+    // Add key to hash pre-image
+    key.as_packed_bytes().for_each(|byte| buf.update([byte]));
 }
 
 fn add_value_digest_to_buf<H: HasUpdate, T: AsRef<[u8]>>(
@@ -71,7 +66,10 @@ fn add_value_digest_to_buf<H: HasUpdate, T: AsRef<[u8]>>(
     let value_exists: u8 = 1;
     buf.update([value_exists]);
 
-    add_len_and_value_to_buf(buf, value_digest.make_hash());
+    add_len_and_value_to_buf(
+        buf,
+        value_digest.make_hash(crate::NodeHashAlgorithm::MerkleDB),
+    );
 }
 
 #[inline]

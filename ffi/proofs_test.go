@@ -343,15 +343,13 @@ func TestRangeProofCodeHashes(t *testing.T) {
 	proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenUnbounded)
 
 	i := 0
-	mode, err := inferHashingMode(t.Context())
-	r.NoError(err)
 	for h, err := range proof.CodeHashes() {
 		i++
-		if mode == ethhashKey {
+		if selectedNodeHashAlgorithm == EthereumNodeHashing {
 			r.NoError(err, "%T.CodeHashes()", proof)
 			r.Equal(codeHash, h)
 		} else {
-			require.ErrorContains(t, err, "feature not supported in this build: ethhash code hash iterator")
+			require.ErrorContains(t, err, "operation not supported for this hash mode: ethhash code hash iterator")
 		}
 	}
 

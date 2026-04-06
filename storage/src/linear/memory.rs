@@ -27,7 +27,7 @@ impl Default for MemStore {
     fn default() -> Self {
         Self {
             bytes: Mutex::new(Vec::new()),
-            node_hash_algorithm: NodeHashAlgorithm::compile_option(),
+            node_hash_algorithm: NodeHashAlgorithm::MerkleDB,
         }
     }
 }

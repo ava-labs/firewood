@@ -70,12 +70,20 @@ fn manual_deserializer(b: &mut Bencher, input: &Vec<u8>) {
         .as_slice()
         .split_first()
         .expect("always has at least one byte");
-    b.iter(|| Node::from_reader(&mut std::io::Cursor::new(input)).expect("to deserialize node"));
+    b.iter(|| {
+        Node::from_reader(
+            &mut std::io::Cursor::new(input),
+            firewood_storage::NodeHashAlgorithm::MerkleDB,
+        )
+        .expect("to deserialize node")
+    });
 }
 
 fn to_bytes(input: &Node) -> Vec<u8> {
     let mut bytes = Vec::new();
-    let _area_index = input.as_bytes(&mut bytes).expect("to serialize node");
+    let _area_index = input
+        .as_bytes(firewood_storage::NodeHashAlgorithm::MerkleDB, &mut bytes)
+        .expect("to serialize node");
     bytes
 }
 

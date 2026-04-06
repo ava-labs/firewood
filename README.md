@@ -126,12 +126,11 @@ you can find those instructions in the [ffi README](ffi/README.md).
 ## Ethereum compatibility
 
 By default, Firewood builds with hashes compatible with [merkledb](https://github.com/ava-labs/avalanchego/tree/master/x/merkledb),
-and does not support accounts.
-To enable this feature (at the cost of some performance) enable the ethhash [feature flag](https://doc.rust-lang.org/cargo/reference/features.html#command-line-feature-options).
-
-Enabling this feature
-changes the hashing algorithm from [sha256](https://docs.rs/sha2/latest/sha2/type.Sha256.html)
-to [keccak256](https://docs.rs/sha3/latest/sha3/type.Keccak256.html),
+and does not support accounts when opened in MerkleDB mode. To support
+Ethereum Merkle Trie hash compatibility, create or open the database with
+`NodeHashAlgorithm::Ethereum`. That changes the hashing algorithm from
+[sha256](https://docs.rs/sha2/latest/sha2/type.Sha256.html) to
+[keccak256](https://docs.rs/sha3/latest/sha3/type.Keccak256.html),
 understands that an "account" is actually just a node in the storage tree at a specific depth with a specific RLP-encoded value,
 and computes the hash of the account trie as if it were an actual root.
 

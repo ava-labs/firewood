@@ -6,8 +6,8 @@ use std::{cmp::Ordering, iter::once};
 
 use firewood_metrics::firewood_increment;
 use firewood_storage::{
-    Child, FileIoError, HashedNodeReader, NibblesIterator, Node, NodeReader, Path, SharedNode,
-    TrieHash,
+    Child, FileIoError, HashedNodeReader, NibblesIterator, Node, NodeHashAlgorithm, NodeReader,
+    Path, SharedNode, TrieHash,
 };
 use lender::{Lender, Lending};
 
@@ -40,11 +40,16 @@ where
     /// Create a new change proof with the given start and end proofs
     /// and the `BatchOp`s that are included in the proof.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         start_proof: Proof<H>,
         end_proof: Proof<H>,
         key_values: Box<[BatchOp<K, V>]>,
     ) -> Self {
+        assert_eq!(
+            start_proof.node_hash_algorithm(),
+            end_proof.node_hash_algorithm(),
+            "change proof boundary proofs must use the same hash algorithm"
+        );
         Self {
             start_proof,
             end_proof,
@@ -62,6 +67,12 @@ where
     #[must_use]
     pub const fn end_proof(&self) -> &Proof<H> {
         &self.end_proof
+    }
+
+    /// Returns the node hash algorithm used by this proof.
+    #[must_use]
+    pub const fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        self.start_proof.node_hash_algorithm()
     }
 
     /// Returns the `BatchOp`s included in the change proof, which may be empty.
@@ -528,7 +539,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
             .map(|root| ComparableNodeInfo {
                 path: root.partial_path().clone(),
                 node: root,
-                hash: trie.root_hash().map(|hash| hash.clone().into_triehash()),
+                hash: trie.root_hash(),
             })
             .collect();
 
@@ -704,7 +715,7 @@ mod tests {
 
     use firewood_storage::{
         Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, MemStore, Mutable,
-        NodeStore, Propose, SeededRng, TestRecorder, TrieReader,
+        NodeHashAlgorithm, NodeStore, Propose, SeededRng, TestRecorder, TrieReader,
     };
     use lender::Lender;
     use std::{collections::HashSet, ops::Deref, path::PathBuf, sync::Arc};
@@ -725,13 +736,13 @@ mod tests {
     }
 
     impl TestDb {
-        pub fn new() -> Self {
+        pub fn new(node_hash_algorithm: NodeHashAlgorithm) -> Self {
             let tmpdir = tempfile::tempdir().unwrap();
             let dbconfig = DbConfig::builder().truncate(true).build();
             let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
                 .iter()
                 .collect();
-            let db = Db::new(dbpath, dbconfig.clone()).unwrap();
+            let db = Db::new(dbpath, node_hash_algorithm, dbconfig.clone()).unwrap();
             TestDb { db }
         }
     }
@@ -1697,7 +1708,7 @@ mod tests {
             }
         }
 
-        let db = TestDb::new();
+        let db = TestDb::new(NodeHashAlgorithm::MerkleDB);
         let rng = SeededRng::from_env_or_random();
         let mut committed_keys = HashSet::new();
         let start_val = 0;
@@ -1738,7 +1749,7 @@ mod tests {
         let rng = SeededRng::from_env_or_random();
         // Run this test several times.
         for _ in 0..4 {
-            let db = TestDb::new();
+            let db = TestDb::new(NodeHashAlgorithm::MerkleDB);
             let mut committed_keys = HashSet::new();
             let start_val = 0;
 

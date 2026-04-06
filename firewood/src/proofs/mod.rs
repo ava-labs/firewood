@@ -94,14 +94,6 @@ pub(super) mod magic {
     /// Current proof format version: `0`
     pub const PROOF_VERSION: u8 = 0;
 
-    /// Hash mode identifier for SHA-256 hashing
-    #[cfg(not(feature = "ethhash"))]
-    pub const HASH_MODE: u8 = 0;
-
-    /// Hash mode identifier for Keccak-256 hashing (Ethereum-compatible)
-    #[cfg(feature = "ethhash")]
-    pub const HASH_MODE: u8 = 1;
-
     /// Returns the human-readable name for a hash mode identifier.
     pub const fn hash_mode_name(v: u8) -> &'static str {
         match v {

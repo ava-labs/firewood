@@ -6,7 +6,7 @@ use crate::merkle::parallel::CreateProposalError;
 use crate::merkle::{Key, Value};
 use crate::persist_worker::PersistError;
 use crate::{Proof, ProofError, ProofNode, RangeProof};
-use firewood_storage::{FileIoError, TrieHash};
+use firewood_storage::{FileIoError, NodeHashAlgorithm, TrieHash};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -42,43 +42,27 @@ pub type HashKey = firewood_storage::TrieHash;
 /// An extension trait for the [`HashKey`] type to provide additional methods.
 pub trait HashKeyExt: Sized {
     /// Default root hash for an empty database.
-    fn default_root_hash() -> Option<HashKey>;
+    fn default_root_hash(node_hash_algorithm: NodeHashAlgorithm) -> Option<HashKey>;
 }
 
 /// An extension trait for an optional `HashKey` type to provide additional methods.
 pub trait OptionalHashKeyExt: Sized {
     /// Returns the default root hash if the current value is [`None`].
-    fn or_default_root_hash(self) -> Option<HashKey>;
+    fn or_default_root_hash(self, node_hash_algorithm: NodeHashAlgorithm) -> Option<HashKey>;
 }
 
-#[cfg(not(feature = "ethhash"))]
 impl HashKeyExt for HashKey {
     /// Creates a new `HashKey` representing the empty root hash.
     #[inline]
-    fn default_root_hash() -> Option<HashKey> {
-        None
-    }
-}
-
-#[cfg(feature = "ethhash")]
-impl HashKeyExt for HashKey {
-    #[inline]
-    fn default_root_hash() -> Option<HashKey> {
-        const EMPTY_RLP_HASH: [u8; size_of::<TrieHash>()] = [
-            // "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421"
-            0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6, 0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0,
-            0xf8, 0x6e, 0x5b, 0x48, 0xe0, 0x1b, 0x99, 0x6c, 0xad, 0xc0, 0x01, 0x62, 0x2f, 0xb5,
-            0xe3, 0x63, 0xb4, 0x21,
-        ];
-
-        Some(EMPTY_RLP_HASH.into())
+    fn default_root_hash(node_hash_algorithm: NodeHashAlgorithm) -> Option<HashKey> {
+        node_hash_algorithm.default_root_hash()
     }
 }
 
 impl OptionalHashKeyExt for Option<HashKey> {
     #[inline]
-    fn or_default_root_hash(self) -> Option<HashKey> {
-        self.or_else(HashKey::default_root_hash)
+    fn or_default_root_hash(self, node_hash_algorithm: NodeHashAlgorithm) -> Option<HashKey> {
+        self.or_else(|| HashKey::default_root_hash(node_hash_algorithm))
     }
 }
 
@@ -194,8 +178,8 @@ pub enum Error {
     #[error("error converting a u8 index into a path component")]
     InvalidConversionToPathComponent,
 
-    // Feature not supported in this build
-    #[error("feature not supported in this build: {0}")]
+    // Operation not supported for the selected runtime hash mode
+    #[error("operation not supported for this hash mode: {0}")]
     FeatureNotSupported(String),
 
     #[error("commit count must be positive")]
@@ -288,8 +272,7 @@ pub trait Db {
     ///
     /// # Note
     ///
-    /// If the database is empty, this will return None, unless the ethhash feature is enabled.
-    /// In that case, we return the special ethhash compatible empty trie hash.
+    /// If the database is empty, this returns the mode-appropriate empty root hash.
     fn root_hash(&self) -> Option<TrieHash>;
 
     /// Propose a change to the database via a batch
@@ -325,8 +308,7 @@ pub trait DbView {
     ///
     /// # Note
     ///
-    /// If the database is empty, this will return None, unless the ethhash feature is enabled.
-    /// In that case, we return the special ethhash compatible empty trie hash.
+    /// If the database is empty, this returns the mode-appropriate empty root hash.
     fn root_hash(&self) -> Option<HashKey>;
 
     /// Get the value of a specific key
@@ -399,8 +381,7 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
     ///
     /// # Note
     ///
-    /// If the database is empty, this will return None, unless the ethhash feature is enabled.
-    /// In that case, we return the special ethhash compatible empty trie hash.
+    /// If the database is empty, this returns the mode-appropriate empty root hash.
     fn root_hash(&self) -> Option<HashKey>;
 
     /// Get the value of a specific key
@@ -558,12 +539,11 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(feature = "ethhash")]
     fn test_ethhash_compat_default_root_hash_equals_empty_rlp_hash() {
         use sha3::Digest as _;
 
         assert_eq!(
-            TrieHash::default_root_hash(),
+            TrieHash::default_root_hash(NodeHashAlgorithm::Ethereum),
             sha3::Keccak256::digest(rlp::NULL_RLP)
                 .as_slice()
                 .try_into()
@@ -572,8 +552,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "ethhash"))]
     fn test_firewood_default_root_hash_equals_none() {
-        assert_eq!(TrieHash::default_root_hash(), None);
+        assert_eq!(
+            TrieHash::default_root_hash(NodeHashAlgorithm::MerkleDB),
+            None
+        );
     }
 }

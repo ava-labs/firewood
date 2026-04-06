@@ -14,8 +14,8 @@ import (
     "github.com/ava-labs/firewood/ffi"
 )
 
-// Open a database with default configuration
-db, err := ffi.New("/path/to/database_dir")
+// Open a database with default configuration and explicit Ethereum hashing.
+db, err := ffi.New("/path/to/database_dir", ffi.EthereumNodeHashing)
 if err != nil {
     log.Fatal(err)
 }
@@ -29,7 +29,7 @@ defer db.Close(ctx)
 Firewood uses the functional options pattern for configuration. You can customize the database by passing option functions:
 
 ```go
-db, err := ffi.New("/path/to/database_dir",
+db, err := ffi.New("/path/to/database_dir", ffi.MerkleDBNodeHashing,
     ffi.WithTruncate(true),                    // Clear the database if it exists
     ffi.WithNodeCacheSizeInBytes(256_000_000), // Set node cache memory limit
     ffi.WithFreeListCacheEntries(50_000),      // Set freelist cache size
@@ -45,7 +45,7 @@ For detailed information about each configuration option, see the godoc for the 
 
 The Golang FFI layer uses a CGO directive to locate a C-API compatible binary built from Firewood. Firewood supports both seamless local development and a single-step compilation process for Go projects that depend or transitively depend on Firewood.
 
-To do this, [firewood.go](./firewood.go) includes CGO directives to include multiple search paths for the Firewood binary in the local `target/` build directory and `ffi/libs`. For the latter, [attach-static-libs](../.github/workflows/attach-static-libs.yaml) GitHub Action pushes an FFI package for `ethhash` with static libraries attached for the following supported architectures:
+To do this, [firewood.go](./firewood.go) includes CGO directives to include multiple search paths for the Firewood binary in the local `target/` build directory and `ffi/libs`. For the latter, [attach-static-libs](../.github/workflows/attach-static-libs.yaml) GitHub Action pushes an FFI package with static libraries attached for the following supported architectures:
 
 - x86_64-unknown-linux-gnu
 - aarch64-unknown-linux-gnu
@@ -89,15 +89,18 @@ To trigger this build, [attach-static-libs](../.github/workflows/attach-static-l
 
 ### Hash Mode
 
-Firewood implemented its own optimized merkle trie structure. To support Ethereum Merkle Trie hash compatibility, it also provides a feature flag `ethhash`.
+The Go FFI requires callers to specify the hash mode when creating or opening
+the database. Pass `ffi.EthereumNodeHashing` for Ethereum-compatible
+Keccak-256 hashing or `ffi.MerkleDBNodeHashing` for MerkleDB-compatible
+SHA-256 hashing.
 
-This is an optional feature (disabled by default). To enable it for a local build, compile with:
+For a local build, compile with:
 
 ```sh
-cargo build -p firewood-ffi --features ethhash
+cargo build -p firewood-ffi
 ```
 
-To support development in [Coreth](https://github.com/ava-labs/coreth), Firewood pushes static libraries for Ethereum-compatible hashing to [firewood-go-ethhash](https://github.com/ava-labs/firewood-go-ethhash) with `ethhash` enabled by default. To use Firewood's native hashing structure, you must still build the static library separately.
+To support development in [Coreth](https://github.com/ava-labs/coreth), Firewood pushes static libraries to [firewood-go-ethhash](https://github.com/ava-labs/firewood-go-ethhash). The library now supports both MerkleDB and Ethereum hashing modes at runtime.
 
 ## Development
 
@@ -113,7 +116,7 @@ It is possible that your editor does not properly recognize the C bindings, due 
 
 ### Testing
 
-Although the VS Code testing feature does work, there are some quirks in ensuring proper building. The Rust code must be compiled separated, and sometimes the `go test` command continues to use a cached result. Whenever testing after making changes to the Rust/C builds, the cache should be cleared if results don't seem correct. The Go testing suite can determine dynamically whether ethhash is enabled or not, so it can be run with either configuration. For each individual testing module, ensure the hashing method you compiled with matches the test.
+Although the VS Code testing feature does work, there are some quirks in ensuring proper building. The Rust code must be compiled separated, and sometimes the `go test` command continues to use a cached result. Whenever testing after making changes to the Rust/C builds, the cache should be cleared if results don't seem correct. The Go testing suite can choose the hash mode dynamically, so it can be run against either configuration from the same build.
 
 To ensure there are no memory leaks, the easiest way is to use your preferred CLI tool (e.g. `valgrind` for Linux, `leaks` for macOS) and compile the tests into a binary. You must not compile a release binary to ensure all memory can be managed. An example flow is given below.
 

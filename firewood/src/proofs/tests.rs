@@ -8,6 +8,7 @@ use test_case::test_case;
 
 use super::{header::InvalidHeader, magic, reader::ReadError, types::ProofType};
 use crate::api::FrozenRangeProof;
+use firewood_storage::NodeHashAlgorithm;
 
 fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
     let merkle = crate::merkle::tests::init_merkle((0u8..=10).map(|k| ([k], [k])));
@@ -204,7 +205,7 @@ fn test_empty_proof() {
     let bytes = [
         b'f', b'w', b'd', b'p', b'r', b'o', b'o', b'f', // magic
         0, // version
-        magic::HASH_MODE,
+        NodeHashAlgorithm::MerkleDB.proof_hash_mode(),
         magic::BRANCH_FACTOR,
         ProofType::Range as u8,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // reserved

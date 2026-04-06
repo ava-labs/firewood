@@ -62,7 +62,7 @@ where
         Self: 'view;
 
     fn root_hash(&self) -> Option<HashKey> {
-        HashedNodeReader::root_hash(self).or_default_root_hash()
+        HashedNodeReader::root_hash(self).or_default_root_hash(self.node_hash_algorithm())
     }
 
     fn val<K: api::KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
@@ -109,13 +109,11 @@ pub enum UseParallel {
     Always,
 }
 
-/// Database configuration.
+/// Database configuration for per-instance behavior that does not affect
+/// on-disk hash compatibility.
 #[derive(Clone, TypedBuilder, Debug)]
 #[non_exhaustive]
 pub struct DbConfig {
-    /// The algorithm used for hashing nodes (required).
-    #[cfg_attr(test, builder(default = NodeHashAlgorithm::compile_option()))]
-    pub node_hash_algorithm: NodeHashAlgorithm,
     /// Whether to create the DB if it doesn't exist.
     #[builder(default = true)]
     pub create_if_missing: bool,
@@ -162,7 +160,7 @@ impl api::Db for Db {
     }
 
     fn root_hash(&self) -> Option<HashKey> {
-        self.manager.root_hash().or_default_root_hash()
+        self.manager.root_hash()
     }
 
     fn propose(&self, batch: impl IntoBatchIter) -> Result<Self::Proposal<'_>, api::Error> {
@@ -175,13 +173,20 @@ impl api::Db for Db {
 
 impl Db {
     /// Create a new database instance.
-    pub fn new<P: AsRef<Path>>(db_dir: P, cfg: DbConfig) -> Result<Self, api::Error> {
+    ///
+    /// `node_hash_algorithm` must match the algorithm that was previously used
+    /// to create the database at `db_dir`.
+    pub fn new<P: AsRef<Path>>(
+        db_dir: P,
+        node_hash_algorithm: NodeHashAlgorithm,
+        cfg: DbConfig,
+    ) -> Result<Self, api::Error> {
         let metrics = Arc::new(DbMetrics {
             proposals: firewood_counter!(crate::registry::PROPOSALS),
         });
         let config_manager = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
-            .node_hash_algorithm(cfg.node_hash_algorithm)
+            .node_hash_algorithm(node_hash_algorithm)
             .create(cfg.create_if_missing)
             .truncate(cfg.truncate)
             .root_store(cfg.root_store)
@@ -222,6 +227,12 @@ impl Db {
     /// Get a copy of the database metrics
     pub fn metrics(&self) -> Arc<DbMetrics> {
         self.metrics.clone()
+    }
+
+    /// Returns the node hash algorithm configured for this database.
+    #[must_use]
+    pub fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        self.manager.current_revision().node_hash_algorithm()
     }
 
     /// Check the database for consistency
@@ -570,7 +581,9 @@ mod test {
     use std::ops::{Deref, DerefMut};
     use std::path::Path;
 
-    use firewood_storage::{CheckOpt, CheckerError, LinearAddress, MaybePersistedNode, TrieHash};
+    use firewood_storage::{
+        CheckOpt, CheckerError, LinearAddress, MaybePersistedNode, NodeHashAlgorithm, TrieHash,
+    };
     use nonzero_ext::nonzero;
 
     use crate::api::{Db as _, DbView, HashKeyExt, Proposal as _, Reconstructible};
@@ -628,12 +641,15 @@ mod test {
     #[test]
     fn test_reconstruct_deterministic() {
         let parallel_db = TestDb::new_with_config(
+            NodeHashAlgorithm::MerkleDB,
             DbConfig::builder()
                 .use_parallel(UseParallel::Always)
                 .build(),
         );
-        let serial_db =
-            TestDb::new_with_config(DbConfig::builder().use_parallel(UseParallel::Never).build());
+        let serial_db = TestDb::new_with_config(
+            NodeHashAlgorithm::MerkleDB,
+            DbConfig::builder().use_parallel(UseParallel::Never).build(),
+        );
 
         let initial_batch = vec![BatchOp::Put {
             key: b"base",
@@ -683,7 +699,7 @@ mod test {
 
     #[test]
     fn test_proposal_reads() {
-        let db = TestDb::new();
+        let db = TestDb::new(NodeHashAlgorithm::MerkleDB);
         let batch = vec![BatchOp::Put {
             key: b"k",
             value: b"v",
@@ -708,7 +724,7 @@ mod test {
 
     #[test]
     fn test_reconstruct_reads_and_chains() {
-        let db = TestDb::new();
+        let db = TestDb::new(NodeHashAlgorithm::MerkleDB);
 
         let initial = db
             .propose(vec![BatchOp::Put {
@@ -746,7 +762,7 @@ mod test {
 
     #[test]
     fn reopen_test() {
-        let db = TestDb::new();
+        let db = TestDb::new(NodeHashAlgorithm::MerkleDB);
         let initial_root = db.root_hash();
         let batch = vec![
             BatchOp::Put {
@@ -781,7 +797,7 @@ mod test {
     // R1 --> P2 - will get dropped
     //    \-> P3 - will get orphaned, but it's still known
     fn test_proposal_scope_historic() {
-        let db = TestDb::new();
+        let db = TestDb::new(NodeHashAlgorithm::MerkleDB);
         let batch1 = vec![BatchOp::Put {
             key: b"k1",
             value: b"v1",
@@ -833,7 +849,7 @@ mod test {
     //   \-> P2 - will get dropped
     //    \-> P3 - will get orphaned, but it's still known
     fn test_proposal_scope_orphan() {
-        let db = TestDb::new();
+        let db = TestDb::new(NodeHashAlgorithm::MerkleDB);
         let batch1 = vec![BatchOp::Put {
             key: b"k1",
             value: b"v1",
@@ -884,7 +900,7 @@ mod test {
 
     #[test]
     fn test_view_sync() {
-        let db = TestDb::new();
+        let db = TestDb::new(NodeHashAlgorithm::MerkleDB);
 
         // Create and commit some data to get a historical revision
         let batch = vec![BatchOp::Put {
@@ -926,6 +942,7 @@ mod test {
 
         // Create, insert, close, open, insert
         let db = TestDb::new_with_config(
+            NodeHashAlgorithm::MerkleDB,
             DbConfig::builder()
                 .use_parallel(UseParallel::Always)
                 .build(),
@@ -945,12 +962,14 @@ mod test {
 
         // Open-db1, insert, open-db2, insert
         let db1 = TestDb::new_with_config(
+            NodeHashAlgorithm::MerkleDB,
             DbConfig::builder()
                 .use_parallel(UseParallel::Always)
                 .build(),
         );
         insert_commit(&db1, 1);
         let db2 = TestDb::new_with_config(
+            NodeHashAlgorithm::MerkleDB,
             DbConfig::builder()
                 .use_parallel(UseParallel::Always)
                 .build(),
@@ -971,6 +990,7 @@ mod test {
     fn test_propose_parallel() {
         const N: usize = 100;
         let db = TestDb::new_with_config(
+            NodeHashAlgorithm::MerkleDB,
             DbConfig::builder()
                 .use_parallel(UseParallel::Always)
                 .build(),
@@ -1100,12 +1120,15 @@ mod test {
         }
 
         let parallel_db = TestDb::new_with_config(
+            NodeHashAlgorithm::MerkleDB,
             DbConfig::builder()
                 .use_parallel(UseParallel::Always)
                 .build(),
         );
-        let single_threaded_db =
-            TestDb::new_with_config(DbConfig::builder().use_parallel(UseParallel::Never).build());
+        let single_threaded_db = TestDb::new_with_config(
+            NodeHashAlgorithm::MerkleDB,
+            DbConfig::builder().use_parallel(UseParallel::Never).build(),
+        );
 
         // First batch: insert two keys with different first nibbles so they are
         // handled by different workers in the parallel merkle implementation.
@@ -1162,12 +1185,15 @@ mod test {
     #[test]
     fn test_parallel_delete_range_empty_prefix_with_existing_workers() {
         let parallel_db = TestDb::new_with_config(
+            NodeHashAlgorithm::MerkleDB,
             DbConfig::builder()
                 .use_parallel(UseParallel::Always)
                 .build(),
         );
-        let single_db =
-            TestDb::new_with_config(DbConfig::builder().use_parallel(UseParallel::Never).build());
+        let single_db = TestDb::new_with_config(
+            NodeHashAlgorithm::MerkleDB,
+            DbConfig::builder().use_parallel(UseParallel::Never).build(),
+        );
 
         // Insert keys in different subtries (different first nibbles)
         let setup_keys: Vec<[u8; 1]> = vec![[0x00], [0x10], [0x20]];
@@ -1228,7 +1254,7 @@ mod test {
         // number of keys and values to create for this test
         const N: usize = 20;
 
-        let db = TestDb::new();
+        let db = TestDb::new(NodeHashAlgorithm::MerkleDB);
 
         // create N keys and values like (key0, value0)..(keyN, valueN)
         let (keys, vals): (Vec<_>, Vec<_>) = (0..N)
@@ -1287,7 +1313,7 @@ mod test {
     fn test_slow_fuzz_checker() {
         let rng = firewood_storage::SeededRng::from_env_or_random();
 
-        let db = TestDb::new();
+        let db = TestDb::new(NodeHashAlgorithm::MerkleDB);
 
         // takes about 0.3s on a mac to run 50 times
         for _ in 0..50 {
@@ -1337,7 +1363,7 @@ mod test {
         const NUM_KEYS: NonZeroUsize = const { NonZeroUsize::new(2).unwrap() };
         const NUM_PROPOSALS: usize = 100;
 
-        let db = TestDb::new();
+        let db = TestDb::new(NodeHashAlgorithm::MerkleDB);
 
         let ops = (0..(NUM_KEYS.get() * NUM_PROPOSALS))
             .map(|i| (format!("key{i}"), format!("value{i}")))
@@ -1390,7 +1416,7 @@ mod test {
 
         const CHANNEL_CAPACITY: usize = 8;
 
-        let testdb = TestDb::new();
+        let testdb = TestDb::new(NodeHashAlgorithm::MerkleDB);
         let db = &*testdb;
 
         let (tx, rx) = std::sync::mpsc::sync_channel::<Proposal<'_>>(CHANNEL_CAPACITY);
@@ -1437,7 +1463,10 @@ mod test {
     /// be retrieved via the root store.
     #[test]
     fn test_resurrect_unpersisted_root() {
-        let db = TestDb::new_with_config(DbConfig::builder().root_store(true).build());
+        let db = TestDb::new_with_config(
+            NodeHashAlgorithm::MerkleDB,
+            DbConfig::builder().root_store(true).build(),
+        );
 
         // First, create a revision to retrieve
         let key = b"key";
@@ -1476,7 +1505,10 @@ mod test {
     /// Verifies that persisted revisions are still accessible when reopening the database.
     #[test]
     fn test_root_store() {
-        let db = TestDb::new_with_config(DbConfig::builder().root_store(true).build());
+        let db = TestDb::new_with_config(
+            NodeHashAlgorithm::MerkleDB,
+            DbConfig::builder().root_store(true).build(),
+        );
 
         // First, create a revision to retrieve
         let key = b"key";
@@ -1507,7 +1539,10 @@ mod test {
 
     #[test]
     fn test_rootstore_empty_db_reopen() {
-        let db = TestDb::new_with_config(DbConfig::builder().root_store(true).build());
+        let db = TestDb::new_with_config(
+            NodeHashAlgorithm::MerkleDB,
+            DbConfig::builder().root_store(true).build(),
+        );
 
         db.reopen();
     }
@@ -1521,7 +1556,7 @@ mod test {
             .manager(RevisionManagerConfig::builder().max_revisions(5).build())
             .root_store(true)
             .build();
-        let db = TestDb::new_with_config(dbconfig);
+        let db = TestDb::new_with_config(NodeHashAlgorithm::MerkleDB, dbconfig);
 
         // Create and commit 10 proposals
         let key = b"root_store";
@@ -1558,8 +1593,10 @@ mod test {
     /// Verifies that `RootStore` is truncated as well if we truncate the database.
     #[test]
     fn test_root_store_truncation() {
-        let db =
-            TestDb::new_with_config(DbConfig::builder().root_store(true).truncate(true).build());
+        let db = TestDb::new_with_config(
+            NodeHashAlgorithm::MerkleDB,
+            DbConfig::builder().root_store(true).truncate(true).build(),
+        );
 
         // Create a revision to store
         let batch = vec![BatchOp::Put {
@@ -1579,14 +1616,21 @@ mod test {
     fn test_nonexistent_directory() {
         let tmpdir = tempfile::tempdir().unwrap();
 
-        assert!(Db::new(tmpdir, DbConfig::builder().create_if_missing(false).build()).is_err());
+        assert!(
+            Db::new(
+                tmpdir,
+                NodeHashAlgorithm::MerkleDB,
+                DbConfig::builder().create_if_missing(false).build(),
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn test_backwards_compatible_magic_string() {
         use std::os::unix::fs::FileExt;
 
-        let testdb = TestDb::new();
+        let testdb = TestDb::new(NodeHashAlgorithm::MerkleDB);
 
         testdb
             .propose([(b"key", b"value")])
@@ -1632,7 +1676,7 @@ mod test {
             )
             .build();
 
-        let db = TestDb::new_with_config(dbcfg);
+        let db = TestDb::new_with_config(NodeHashAlgorithm::MerkleDB, dbcfg);
 
         // Create and commit NUM_REVISIONS proposals, storing their root hashes
         let root_hashes: Vec<TrieHash> = (0..NUM_REVISIONS)
@@ -1669,7 +1713,7 @@ mod test {
     fn test_deferred_persist_close_with_commit_count_one() {
         let dbcfg = DbConfig::builder().build();
 
-        let db = TestDb::new_with_config(dbcfg);
+        let db = TestDb::new_with_config(NodeHashAlgorithm::MerkleDB, dbcfg);
 
         // Then, commit once and see what the latest revision is
         let key = b"foo";
@@ -1703,7 +1747,7 @@ mod test {
             )
             .build();
 
-        let db = TestDb::new_with_config(dbcfg);
+        let db = TestDb::new_with_config(NodeHashAlgorithm::MerkleDB, dbcfg);
 
         // Then, commit once and see what the latest revision is
         let key = b"foo";
@@ -1734,7 +1778,7 @@ mod test {
             )
             .build();
 
-        let db = TestDb::new_with_config(dbcfg);
+        let db = TestDb::new_with_config(NodeHashAlgorithm::MerkleDB, dbcfg);
 
         let mut root_hashes = Vec::new();
 
@@ -1776,7 +1820,7 @@ mod test {
             )
             .build();
 
-        let db = TestDb::new_with_config(dbcfg);
+        let db = TestDb::new_with_config(NodeHashAlgorithm::MerkleDB, dbcfg);
 
         // Commit COMMIT_COUNT proposals to trigger the first persist
         for i in 0..COMMIT_COUNT.get() {
@@ -1797,7 +1841,10 @@ mod test {
 
         // Verify that the latest committed revision is empty.
         let last_committed_hash = db.root_hash();
-        assert_eq!(last_committed_hash, TrieHash::default_root_hash());
+        assert_eq!(
+            last_committed_hash,
+            TrieHash::default_root_hash(NodeHashAlgorithm::MerkleDB)
+        );
     }
 
     #[test]
@@ -1816,7 +1863,7 @@ mod test {
             .root_store(true)
             .build();
 
-        let db = TestDb::new_with_config(dbcfg);
+        let db = TestDb::new_with_config(NodeHashAlgorithm::MerkleDB, dbcfg);
 
         let mut root_hashes = Vec::new();
 
@@ -1877,7 +1924,7 @@ mod test {
             .root_store(true)
             .build();
 
-        let db = TestDb::new_with_config(dbcfg);
+        let db = TestDb::new_with_config(NodeHashAlgorithm::MerkleDB, dbcfg);
 
         let mut root_hashes = Vec::new();
 
@@ -1913,6 +1960,7 @@ mod test {
     pub(super) struct TestDb {
         db: Option<Db>,
         tmpdir: tempfile::TempDir,
+        node_hash_algorithm: NodeHashAlgorithm,
         dbconfig: DbConfig,
     }
     impl Drop for TestDb {
@@ -1935,16 +1983,17 @@ mod test {
     }
 
     impl TestDb {
-        pub fn new() -> Self {
-            TestDb::new_with_config(DbConfig::builder().build())
+        pub fn new(node_hash_algorithm: NodeHashAlgorithm) -> Self {
+            TestDb::new_with_config(node_hash_algorithm, DbConfig::builder().build())
         }
 
-        pub fn new_with_config(dbconfig: DbConfig) -> Self {
+        pub fn new_with_config(node_hash_algorithm: NodeHashAlgorithm, dbconfig: DbConfig) -> Self {
             let tmpdir = tempfile::tempdir().unwrap();
-            let db = Db::new(tmpdir.as_ref(), dbconfig.clone()).unwrap();
+            let db = Db::new(tmpdir.as_ref(), node_hash_algorithm, dbconfig.clone()).unwrap();
             TestDb {
                 db: Some(db),
                 tmpdir,
+                node_hash_algorithm,
                 dbconfig,
             }
         }
@@ -1956,7 +2005,12 @@ mod test {
         pub fn reopen(mut self) -> Self {
             self.db.take().unwrap().close().unwrap();
 
-            let db = Db::new(self.tmpdir.path(), self.dbconfig.clone()).unwrap();
+            let db = Db::new(
+                self.tmpdir.path(),
+                self.node_hash_algorithm,
+                self.dbconfig.clone(),
+            )
+            .unwrap();
             self.db = Some(db);
             self
         }
@@ -1974,7 +2028,12 @@ mod test {
             self.db.take().unwrap().close().unwrap();
 
             self.dbconfig = DbConfig::builder().truncate(true).build();
-            let db = Db::new(self.tmpdir.path(), self.dbconfig.clone()).unwrap();
+            let db = Db::new(
+                self.tmpdir.path(),
+                self.node_hash_algorithm,
+                self.dbconfig.clone(),
+            )
+            .unwrap();
             self.db = Some(db);
             self
         }

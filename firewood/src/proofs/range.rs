@@ -57,6 +57,7 @@
 //! ```
 
 use super::types::{Proof, ProofCollection};
+use firewood_storage::NodeHashAlgorithm;
 
 /// A range proof is a cryptographic proof that demonstrates a contiguous set of key-value pairs
 /// exists within a Merkle trie with a given root hash.
@@ -111,12 +112,17 @@ where
     ///   established by the start and end proofs. The keys should be in lexicographic
     ///   order as they appear in the trie. May be empty if proving the absence of keys
     ///   in a range.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `start_proof` and `end_proof` use different hash algorithms.
     #[must_use]
-    pub const fn new(
-        start_proof: Proof<H>,
-        end_proof: Proof<H>,
-        key_values: Box<[(K, V)]>,
-    ) -> Self {
+    pub fn new(start_proof: Proof<H>, end_proof: Proof<H>, key_values: Box<[(K, V)]>) -> Self {
+        assert_eq!(
+            start_proof.node_hash_algorithm(),
+            end_proof.node_hash_algorithm(),
+            "range proof boundary proofs must use the same hash algorithm"
+        );
         Self {
             start_proof,
             end_proof,
@@ -134,6 +140,12 @@ where
     #[must_use]
     pub const fn end_proof(&self) -> &Proof<H> {
         &self.end_proof
+    }
+
+    /// Returns the node hash algorithm used by this proof.
+    #[must_use]
+    pub const fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        self.start_proof.node_hash_algorithm()
     }
 
     /// Returns the key-value pairs included in the range proof, which may be empty.

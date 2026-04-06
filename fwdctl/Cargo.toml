@@ -52,7 +52,6 @@ thiserror = { version = "2.0", optional = true }
 tokio = { version = "1.50", features = ["rt-multi-thread", "sync", "time"], optional = true }
 
 [features]
-ethhash = ["firewood/ethhash"]
 logger = ["firewood/logger"]
 launch = [
     "dep:aws-config",

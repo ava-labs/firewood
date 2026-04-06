@@ -319,12 +319,11 @@ fn test_bad_range_proof_modified_key() {
 
 #[test]
 // Detects a modified value via trie reconstruction and root hash mismatch.
-// In ethhash mode, account values at depth 32 have their storageRoot field
+// In Ethereum mode, account values at depth 32 have their storageRoot field
 // replaced with a computed hash during hashing. A blind XOR on the raw value
 // may only affect the storageRoot (or the RLP header that wraps it), making
-// the modification invisible to the hash. This test is not meaningful under
-// ethhash because the hashing intentionally ignores part of the value.
-#[cfg(not(feature = "ethhash"))]
+// the modification invisible to the hash. This test uses the default MerkleDB
+// helper and therefore remains meaningful here.
 fn test_bad_range_proof_modified_value() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 

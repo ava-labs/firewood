@@ -7,8 +7,9 @@
 //! It provides efficient encoding of proof nodes, child bitmaps, and range proofs
 //! for transmission or persistent storage.
 
-use firewood_storage::{PathBuf, PathComponentSliceExt, ValueDigest};
+use firewood_storage::{HashType, NodeHashAlgorithm, PathBuf, PathComponentSliceExt, ValueDigest};
 use integer_encoding::VarInt;
+use std::ops::Deref as _;
 
 use super::{
     header::Header,
@@ -78,15 +79,17 @@ impl FrozenRangeProof {
     ///
     /// Variable-length integers are encoded using unsigned LEB128.
     pub fn write_to_vec(&self, out: &mut Vec<u8>) {
-        Header::from(ProofType::Range).write_item(out);
-        self.write_item(out);
+        let node_hash_algorithm = self.node_hash_algorithm();
+        Header::new(ProofType::Range, node_hash_algorithm).write_item(out, node_hash_algorithm);
+        self.write_item(out, node_hash_algorithm);
     }
 }
 
 impl FrozenChangeProof {
     pub fn write_to_vec(&self, out: &mut Vec<u8>) {
-        Header::from(ProofType::Change).write_item(out);
-        self.write_item(out);
+        let node_hash_algorithm = self.node_hash_algorithm();
+        Header::new(ProofType::Change, node_hash_algorithm).write_item(out, node_hash_algorithm);
+        self.write_item(out, node_hash_algorithm);
     }
 }
 
@@ -104,42 +107,42 @@ impl PushVarInt for Vec<u8> {
 }
 
 trait WriteItem {
-    fn write_item(&self, out: &mut Vec<u8>);
+    fn write_item(&self, out: &mut Vec<u8>, node_hash_algorithm: NodeHashAlgorithm);
 }
 
 impl WriteItem for FrozenRangeProof {
-    fn write_item(&self, out: &mut Vec<u8>) {
-        self.start_proof().write_item(out);
-        self.end_proof().write_item(out);
-        self.key_values().write_item(out);
+    fn write_item(&self, out: &mut Vec<u8>, node_hash_algorithm: NodeHashAlgorithm) {
+        self.start_proof().write_item(out, node_hash_algorithm);
+        self.end_proof().write_item(out, node_hash_algorithm);
+        self.key_values().write_item(out, node_hash_algorithm);
     }
 }
 
 impl WriteItem for FrozenChangeProof {
-    fn write_item(&self, out: &mut Vec<u8>) {
-        self.start_proof().write_item(out);
-        self.end_proof().write_item(out);
-        self.batch_ops().write_item(out);
+    fn write_item(&self, out: &mut Vec<u8>, node_hash_algorithm: NodeHashAlgorithm) {
+        self.start_proof().write_item(out, node_hash_algorithm);
+        self.end_proof().write_item(out, node_hash_algorithm);
+        self.batch_ops().write_item(out, node_hash_algorithm);
     }
 }
 
 impl WriteItem for [BatchOp<Key, Value>] {
-    fn write_item(&self, out: &mut Vec<u8>) {
+    fn write_item(&self, out: &mut Vec<u8>, node_hash_algorithm: NodeHashAlgorithm) {
         out.push_var_int(self.len());
         for item in self {
             match item {
                 BatchOp::Put { key, value } => {
                     out.push(BATCH_PUT);
-                    key.write_item(out);
-                    value.write_item(out);
+                    key.write_item(out, node_hash_algorithm);
+                    value.write_item(out, node_hash_algorithm);
                 }
                 BatchOp::Delete { key } => {
                     out.push(BATCH_DELETE);
-                    key.write_item(out);
+                    key.write_item(out, node_hash_algorithm);
                 }
                 BatchOp::DeleteRange { prefix } => {
                     out.push(BATCH_DELETE_RANGE);
-                    prefix.write_item(out);
+                    prefix.write_item(out, node_hash_algorithm);
                 }
             }
         }
@@ -147,29 +150,29 @@ impl WriteItem for [BatchOp<Key, Value>] {
 }
 
 impl WriteItem for ProofNode {
-    fn write_item(&self, out: &mut Vec<u8>) {
-        self.key.write_item(out);
+    fn write_item(&self, out: &mut Vec<u8>, node_hash_algorithm: NodeHashAlgorithm) {
+        self.key.write_item(out, node_hash_algorithm);
         out.push_var_int(self.partial_len);
-        self.value_digest.write_item(out);
-        ChildMask::from_children(&self.child_hashes).write_item(out);
+        self.value_digest.write_item(out, node_hash_algorithm);
+        ChildMask::from_children(&self.child_hashes).write_item(out, node_hash_algorithm);
         for (_, child) in self.child_hashes.iter_present() {
-            child.write_item(out);
+            child.write_item(out, node_hash_algorithm);
         }
     }
 }
 
 impl WriteItem for PathBuf {
-    fn write_item(&self, out: &mut Vec<u8>) {
+    fn write_item(&self, out: &mut Vec<u8>, _: NodeHashAlgorithm) {
         out.push_var_int(self.len());
         out.extend_from_slice(self.as_byte_slice());
     }
 }
 
 impl<T: WriteItem> WriteItem for Option<T> {
-    fn write_item(&self, out: &mut Vec<u8>) {
+    fn write_item(&self, out: &mut Vec<u8>, node_hash_algorithm: NodeHashAlgorithm) {
         if let Some(v) = self {
             out.push(1);
-            v.write_item(out);
+            v.write_item(out, node_hash_algorithm);
         } else {
             out.push(0);
         }
@@ -177,75 +180,75 @@ impl<T: WriteItem> WriteItem for Option<T> {
 }
 
 impl<T: WriteItem> WriteItem for [T] {
-    fn write_item(&self, out: &mut Vec<u8>) {
+    fn write_item(&self, out: &mut Vec<u8>, node_hash_algorithm: NodeHashAlgorithm) {
         out.push_var_int(self.len());
         for item in self {
-            item.write_item(out);
+            item.write_item(out, node_hash_algorithm);
         }
     }
 }
 
 impl WriteItem for [u8] {
-    fn write_item(&self, out: &mut Vec<u8>) {
+    fn write_item(&self, out: &mut Vec<u8>, _: NodeHashAlgorithm) {
         out.push_var_int(self.len());
         out.extend_from_slice(self);
     }
 }
 
 impl<T: AsRef<[u8]>> WriteItem for ValueDigest<T> {
-    fn write_item(&self, out: &mut Vec<u8>) {
-        match self.make_hash() {
+    fn write_item(&self, out: &mut Vec<u8>, node_hash_algorithm: NodeHashAlgorithm) {
+        match self.make_hash(node_hash_algorithm) {
             ValueDigest::Value(v) => {
                 out.push(0);
-                v.write_item(out);
+                v.write_item(out, node_hash_algorithm);
             }
-            #[cfg(not(feature = "ethhash"))]
             ValueDigest::Hash(h) => {
                 out.push(1);
-                h.write_item(out);
+                h.write_item(out, node_hash_algorithm);
             }
         }
     }
 }
 
 impl WriteItem for Header {
-    fn write_item(&self, out: &mut Vec<u8>) {
+    fn write_item(&self, out: &mut Vec<u8>, _: NodeHashAlgorithm) {
         out.extend_from_slice(bytemuck::bytes_of(self));
     }
 }
 
 impl WriteItem for firewood_storage::TrieHash {
-    fn write_item(&self, out: &mut Vec<u8>) {
+    fn write_item(&self, out: &mut Vec<u8>, _: NodeHashAlgorithm) {
         out.extend_from_slice(self.as_ref());
     }
 }
 
-#[cfg(feature = "ethhash")]
-impl WriteItem for firewood_storage::HashType {
-    fn write_item(&self, out: &mut Vec<u8>) {
-        match self {
-            firewood_storage::HashType::Hash(h) => {
-                out.push(0);
-                h.write_item(out);
-            }
-            firewood_storage::HashType::Rlp(h) => {
-                out.push(1);
-                h.write_item(out);
-            }
-        }
+impl WriteItem for HashType {
+    fn write_item(&self, out: &mut Vec<u8>, node_hash_algorithm: NodeHashAlgorithm) {
+        self.write_to_for_node_hash_algorithm(out, node_hash_algorithm);
     }
 }
 
 impl WriteItem for ChildMask {
-    fn write_item(&self, out: &mut Vec<u8>) {
+    fn write_item(&self, out: &mut Vec<u8>, _: NodeHashAlgorithm) {
         out.extend_from_slice(&self.to_le_bytes());
     }
 }
 
 impl<K: AsRef<[u8]>, V: AsRef<[u8]>> WriteItem for (K, V) {
-    fn write_item(&self, out: &mut Vec<u8>) {
+    fn write_item(&self, out: &mut Vec<u8>, node_hash_algorithm: NodeHashAlgorithm) {
         let (key, value) = self;
-        key.as_ref().write_item(out);
-        value.as_ref().write_item(out);
+        key.as_ref().write_item(out, node_hash_algorithm);
+        value.as_ref().write_item(out, node_hash_algorithm);
+    }
+}
+
+impl<H> WriteItem for super::types::Proof<H>
+where
+    H: super::types::ProofCollection,
+    H::Node: WriteItem,
+{
+    fn write_item(&self, out: &mut Vec<u8>, node_hash_algorithm: NodeHashAlgorithm) {
+        debug_assert_eq!(self.node_hash_algorithm(), node_hash_algorithm);
+        self.deref().as_ref().write_item(out, node_hash_algorithm);
     }
 }

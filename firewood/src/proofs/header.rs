@@ -8,6 +8,7 @@
 //! branching factor, and proof type, enabling quick validation before deserialization.
 
 use super::{magic, types::ProofType};
+use firewood_storage::NodeHashAlgorithm;
 
 /// A fixed-size header at the beginning of every serialized proof.
 ///
@@ -36,20 +37,26 @@ const _: () = {
     assert!(size_of::<Header>() == 32);
 };
 
-impl From<ProofType> for Header {
-    fn from(proof_type: ProofType) -> Self {
+impl Header {
+    pub(super) const fn new(proof_type: ProofType, node_hash_algorithm: NodeHashAlgorithm) -> Self {
         Self {
             magic: *magic::PROOF_HEADER,
             version: magic::PROOF_VERSION,
-            hash_mode: magic::HASH_MODE,
+            hash_mode: node_hash_algorithm.proof_hash_mode(),
             branch_factor: magic::BRANCH_FACTOR,
             proof_type: proof_type as u8,
             _reserved: [0; 20],
         }
     }
-}
 
-impl Header {
+    pub(super) fn node_hash_algorithm(&self) -> Result<NodeHashAlgorithm, InvalidHeader> {
+        NodeHashAlgorithm::try_from(self.hash_mode).map_err(|_| {
+            InvalidHeader::UnsupportedHashMode {
+                found: self.hash_mode,
+            }
+        })
+    }
+
     /// Validates the header, returning the discovered proof type if valid.
     ///
     /// If `expected_type` is `Some`, the proof type must match (in which case the return
@@ -73,11 +80,7 @@ impl Header {
             });
         }
 
-        if self.hash_mode != magic::HASH_MODE {
-            return Err(InvalidHeader::UnsupportedHashMode {
-                found: self.hash_mode,
-            });
-        }
+        self.node_hash_algorithm()?;
 
         if self.branch_factor != magic::BRANCH_FACTOR {
             return Err(InvalidHeader::UnsupportedBranchFactor {
@@ -121,10 +124,8 @@ pub enum InvalidHeader {
     },
     /// The proof was encoded for an unsupported hash mode.
     #[error(
-        "unsupported hash mode: found {found:02x} ({}); expected {:02x} ({})",
+        "unsupported hash mode: found {found:02x} ({})",
         magic::hash_mode_name(*found),
-        magic::HASH_MODE,
-        magic::hash_mode_name(magic::HASH_MODE)
     )]
     UnsupportedHashMode {
         /// The flag indicating which hash mode created this proof.

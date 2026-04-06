@@ -48,7 +48,8 @@ where
     K: AsRef<[u8]> + Ord,
     V: AsRef<[u8]>,
 {
-    let merkle = init_merkle(kvs.clone());
+    let (merkle, _) =
+        init_merkle_with_header_and_hash_algorithm(kvs.clone(), NodeHashAlgorithm::Ethereum);
     let firewood_hash = merkle.nodestore.root_hash().unwrap_or_else(TrieHash::empty);
     let eth_hash: TrieHash = KeccakHasher::trie_root(kvs).to_fixed_bytes().into();
     assert_eq!(firewood_hash, eth_hash);
@@ -104,7 +105,8 @@ fn test_eth_compatible_accounts(
     }))
     .collect::<Vec<(Box<_>, Box<_>)>>();
 
-    let merkle = init_merkle(items);
+    let (merkle, _) =
+        init_merkle_with_header_and_hash_algorithm(items, NodeHashAlgorithm::Ethereum);
     let firewood_hash = merkle.nodestore.root_hash();
 
     assert_eq!(
@@ -149,7 +151,8 @@ fn test_root_hash_random_deletions() {
         items_ordered.sort_unstable();
         items_ordered.shuffle(&mut &rng);
 
-        let (mut committed_merkle, mut header) = init_merkle_with_header(&items);
+        let (mut committed_merkle, mut header) =
+            init_merkle_with_header_and_hash_algorithm(&items, NodeHashAlgorithm::Ethereum);
 
         for (k, v) in items_ordered {
             let mut merkle = committed_merkle.fork().unwrap();
@@ -173,7 +176,7 @@ fn test_root_hash_random_deletions() {
             let h0 = committed_merkle
                 .nodestore()
                 .root_hash()
-                .or_default_root_hash()
+                .or_default_root_hash(NodeHashAlgorithm::Ethereum)
                 .unwrap();
 
             assert_eq!(h, h0);

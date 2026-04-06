@@ -115,7 +115,7 @@ test-ffi-nix-go-bindings: build-ffi-nix
     cd result/ffi
 
     # - cgocheck2 is expensive but provides complete pointer checks
-    # - use hash mode ethhash since the flake builds with `--features ethhash,logger`
+    # - use Ethereum hash mode to match the flake's runtime configuration
     GOEXPERIMENT=cgocheck2 TEST_FIREWOOD_HASH_MODE=ethhash ${GO} test ./...
 
 # Ensure the FFI flake is up-to-date

@@ -132,6 +132,20 @@ impl std::ops::DerefMut for V0Reader<'_> {
     }
 }
 
+impl std::io::Read for ProofReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let len = buf.len().min(self.remainder().len());
+        let src = self
+            .read_slice(len)
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::UnexpectedEof, err))?;
+        let dst = buf
+            .get_mut(..len)
+            .ok_or_else(|| std::io::Error::other("failed to slice destination buffer"))?;
+        dst.copy_from_slice(src);
+        Ok(len)
+    }
+}
+
 /// Error that ocurred while reading an item from the byte stream.
 #[derive(Debug, thiserror::Error)]
 pub enum ReadError {

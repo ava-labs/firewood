@@ -21,8 +21,8 @@ use firewood_storage::MemStore;
 use firewood_storage::{
     BranchNode, Child, Children, FileIoError, HashType, HashableShunt, HashedNodeReader,
     ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, Mutable, MutableKind,
-    NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, Propose, ReadableStorage,
-    SharedNode, TrieHash, TrieReader, U4, ValueDigest,
+    NibblesIterator, Node, NodeHashAlgorithm, NodeStore, Path, PathBuf, PathComponent, Propose,
+    ReadableStorage, RootReader, SharedNode, TrieHash, TrieReader, U4, ValueDigest,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -279,9 +279,12 @@ fn compute_root_hash_with_proofs(
     path_prefix: &[PathComponent],
     proof_nodes: &HashMap<PathBuf, &ProofNode>,
     outside_children: &HashMap<PathBuf, ChildMask>,
+    node_hash_algorithm: NodeHashAlgorithm,
 ) -> HashType {
     let branch = match node {
-        Node::Leaf(_) => return HashableShunt::from_node(path_prefix, node).to_hash(),
+        Node::Leaf(_) => {
+            return HashableShunt::from_node(path_prefix, node).to_hash(node_hash_algorithm);
+        }
         Node::Branch(branch) => branch,
     };
 
@@ -319,6 +322,7 @@ fn compute_root_hash_with_proofs(
                 &child_prefix,
                 proof_nodes,
                 outside_children,
+                node_hash_algorithm,
             );
             child_hashes[nibble] = Some(child_hash);
             child_prefix.pop();
@@ -332,7 +336,7 @@ fn compute_root_hash_with_proofs(
         value,
         child_hashes,
     )
-    .to_hash()
+    .to_hash(node_hash_algorithm)
 }
 
 /// Verify that a range proof is valid for the specified key range and root hash.
@@ -377,6 +381,7 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
 
     // check that the keys are in ascending order and within the requested range
     let key_values = proof.key_values();
+    let node_hash_algorithm = proof.node_hash_algorithm();
     if !key_values
         .iter()
         .map(|(key, _)| key.as_ref())
@@ -457,6 +462,7 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         first_key_bytes,
         last_key_bytes,
         root_hash,
+        node_hash_algorithm,
     )
 }
 
@@ -521,9 +527,10 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
     first_key_bytes: Option<&[u8]>,
     last_key_bytes: Option<&[u8]>,
     root_hash: &TrieHash,
+    node_hash_algorithm: NodeHashAlgorithm,
 ) -> Result<(), api::Error> {
     // Build in-memory merkle from key-value pairs
-    let memstore = MemStore::default();
+    let memstore = MemStore::new(Vec::new(), node_hash_algorithm);
     let nodestore = NodeStore::new_empty_proposal(memstore.into());
     let mut proving_merkle: Merkle<NodeStore<Mutable<Propose>, MemStore>> = Merkle::from(nodestore);
 
@@ -565,8 +572,13 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
         return Err(api::Error::ProofError(ProofError::Empty));
     };
 
-    let computed =
-        compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children);
+    let computed = compute_root_hash_with_proofs(
+        &root_node,
+        &[],
+        &proof_node_map,
+        &outside_children,
+        node_hash_algorithm,
+    );
 
     if computed != root_hash.clone().into_hash_type() {
         return Err(api::Error::ProofError(ProofError::UnexpectedHash));
@@ -575,7 +587,7 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
     Ok(())
 }
 
-impl<T: TrieReader> Merkle<T> {
+impl<T: TrieReader + RootReader> Merkle<T> {
     pub(crate) fn root(&self) -> Option<SharedNode> {
         self.nodestore.root_node()
     }
@@ -583,6 +595,10 @@ impl<T: TrieReader> Merkle<T> {
     // Must be pub because it is used in FFI calls.
     pub const fn nodestore(&self) -> &T {
         &self.nodestore
+    }
+
+    pub(crate) fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        self.nodestore.node_hash_algorithm()
     }
 
     /// Returns a proof that the given key has a certain value,
@@ -602,7 +618,10 @@ impl<T: TrieReader> Merkle<T> {
             .map(|node| node.map(ProofNode::from))
             .collect::<Result<_, _>>()?;
 
-        Ok(Proof::new(proof))
+        Ok(Proof::new_with_hash_algorithm(
+            self.node_hash_algorithm(),
+            proof,
+        ))
     }
 
     /// Merges a sequence of key-value pairs with the base merkle trie, yielding
@@ -740,7 +759,12 @@ impl<T: TrieReader> Merkle<T> {
         let start_proof = start_key
             .map(|key| self.prove(key))
             .transpose()?
-            .unwrap_or_default();
+            .unwrap_or_else(|| {
+                Proof::new_with_hash_algorithm(
+                    self.node_hash_algorithm(),
+                    Box::<[ProofNode]>::default(),
+                )
+            });
 
         let mut iter = self
             .key_value_iter_from_key(start_key.unwrap_or_default())
@@ -772,7 +796,12 @@ impl<T: TrieReader> Merkle<T> {
         }
         .map(|end_key| self.prove(end_key))
         .transpose()?
-        .unwrap_or_default();
+        .unwrap_or_else(|| {
+            Proof::new_with_hash_algorithm(
+                self.node_hash_algorithm(),
+                Box::<[ProofNode]>::default(),
+            )
+        });
 
         Ok(RangeProof::new(start_proof, end_proof, key_values))
     }
@@ -929,7 +958,12 @@ impl<T: HashedNodeReader> Merkle<T> {
         let start_proof = start_key
             .map(|key| self.prove(key))
             .transpose()?
-            .unwrap_or_default();
+            .unwrap_or_else(|| {
+                Proof::new_with_hash_algorithm(
+                    self.node_hash_algorithm(),
+                    Box::<[ProofNode]>::default(),
+                )
+            });
 
         // Create a difference iterator between the two tries with the given start
         // key and end key.
@@ -971,7 +1005,12 @@ impl<T: HashedNodeReader> Merkle<T> {
         }
         .map(|end_key| self.prove(end_key))
         .transpose()?
-        .unwrap_or_default();
+        .unwrap_or_else(|| {
+            Proof::new_with_hash_algorithm(
+                self.node_hash_algorithm(),
+                Box::<[ProofNode]>::default(),
+            )
+        });
 
         Ok(ChangeProof::new(start_proof, end_proof, batch_ops))
     }

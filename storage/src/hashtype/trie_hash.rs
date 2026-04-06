@@ -96,13 +96,6 @@ impl From<GenericArray<u8, typenum::U32>> for TrieHash {
 }
 
 impl TrieHash {
-    /// Some code needs a `TrieHash` even though it only has a `HashType`.
-    /// This function is a no-op, as `HashType` is a `TrieHash` in this context.
-    #[must_use]
-    pub const fn into_triehash(self) -> Self {
-        self
-    }
-
     /// Creates a new `TrieHash` from an array of bytes.
     #[must_use]
     pub fn from_bytes(bytes: [u8; TRIE_HASH_LEN]) -> Self {

@@ -47,7 +47,6 @@ default = []
 nightly = []
 io-uring = ["firewood-storage/io-uring"]
 logger = ["firewood-storage/logger"]
-ethhash = ["firewood-storage/ethhash"]
 # Exposes internal types (e.g. `Merkle`) for use by benchmarks, integration
 # tests, and the FFI. Not part of the public API; do not use in production code.
 test_utils = ["firewood-storage/test_utils"]

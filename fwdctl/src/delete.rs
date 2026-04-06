@@ -20,11 +20,15 @@ pub struct Options {
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("deleting key {opts:?}");
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(opts.database.node_hash_algorithm.into())
         .create_if_missing(false)
-        .truncate(false);
+        .truncate(false)
+        .build();
 
-    let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
+    let db = Db::new(
+        opts.database.dbpath.clone(),
+        opts.database.node_hash_algorithm.into(),
+        cfg,
+    )?;
 
     let batch: Vec<BatchOp<String, String>> = vec![BatchOp::Delete {
         key: opts.key.clone(),

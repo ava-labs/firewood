@@ -96,11 +96,7 @@ pub struct DatabaseHandleArgs<'a> {
 
     /// The hashing mode to use for the database.
     ///
-    /// This must match the compile-time feature:
-    /// - [`NodeHashAlgorithm::Ethereum`] if the `ethhash` feature is enabled
-    /// - [`NodeHashAlgorithm::MerkleDB`] if the `ethhash` feature is disabled
-    ///
-    /// Opening returns an error if this does not match the compile-time feature.
+    /// This selects the database's runtime hashing mode.
     pub node_hash_algorithm: NodeHashAlgorithm,
 
     /// The maximum number of unpersisted revisions that can exist at a given time.
@@ -163,7 +159,6 @@ impl DatabaseHandle {
         let metrics_context = MetricsContext::new(args.expensive_metrics);
 
         let cfg = DbConfig::builder()
-            .node_hash_algorithm(args.node_hash_algorithm.into())
             .truncate(args.truncate)
             .manager(args.as_rev_manager_config()?)
             .root_store(args.root_store)
@@ -178,7 +173,7 @@ impl DatabaseHandle {
             return Err(invalid_data("database path cannot be empty"));
         }
 
-        let db = Db::new(path, cfg)?;
+        let db = Db::new(path, args.node_hash_algorithm.into(), cfg)?;
         Ok(Self {
             db,
             metrics_context,
@@ -202,7 +197,7 @@ impl DatabaseHandle {
     pub fn get_latest(&self, key: impl KeyType) -> Result<Option<Box<[u8]>>, api::Error> {
         let Some(root) = self.current_root_hash() else {
             return Err(api::Error::RevisionNotFound {
-                provided: HashKey::default_root_hash(),
+                provided: HashKey::default_root_hash(self.db.node_hash_algorithm()),
             });
         };
 

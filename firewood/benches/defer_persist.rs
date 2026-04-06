@@ -36,7 +36,6 @@ fn bench_deferred_persistence<const N: usize, const COMMIT_COUNT: u64>(criterion
                 |batch_ops| {
                     let tmpdir = tempfile::tempdir().unwrap();
                     let dbcfg = DbConfig::builder()
-                        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
                         .manager(
                             RevisionManagerConfig::builder()
                                 .max_revisions(max_revisions)
@@ -44,7 +43,7 @@ fn bench_deferred_persistence<const N: usize, const COMMIT_COUNT: u64>(criterion
                                 .build(),
                         )
                         .build();
-                    let db = Db::new(tmpdir, dbcfg).unwrap();
+                    let db = Db::new(tmpdir, NodeHashAlgorithm::MerkleDB, dbcfg).unwrap();
 
                     for op in batch_ops {
                         let proposal = db.propose(vec![op]).unwrap();

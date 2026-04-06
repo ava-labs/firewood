@@ -24,11 +24,15 @@ pub struct Options {
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("inserting key value pair {opts:?}");
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(opts.database.node_hash_algorithm.into())
         .create_if_missing(false)
-        .truncate(false);
+        .truncate(false)
+        .build();
 
-    let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
+    let db = Db::new(
+        opts.database.dbpath.clone(),
+        opts.database.node_hash_algorithm.into(),
+        cfg,
+    )?;
 
     let batch: Vec<BatchOp<Vec<u8>, Vec<u8>>> = vec![BatchOp::Put {
         key: opts.key.clone().into(),

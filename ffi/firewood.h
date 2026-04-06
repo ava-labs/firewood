@@ -1070,11 +1070,7 @@ typedef struct DatabaseHandleArgs {
   /**
    * The hashing mode to use for the database.
    *
-   * This must match the compile-time feature:
-   * - [`NodeHashAlgorithm::Ethereum`] if the `ethhash` feature is enabled
-   * - [`NodeHashAlgorithm::MerkleDB`] if the `ethhash` feature is disabled
-   *
-   * Opening returns an error if this does not match the compile-time feature.
+   * This selects the database's runtime hashing mode.
    */
   enum NodeHashAlgorithm node_hash_algorithm;
   /**

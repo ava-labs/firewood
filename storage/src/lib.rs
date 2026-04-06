@@ -364,8 +364,8 @@ pub enum CheckerError {
         "The node {key:#x} at {address:#x} (parent: {parent:#x}) has a value but its path is not 32 or 64 bytes long"
     )]
     /// A value is found corresponding to an invalid key.
-    /// With ethhash, keys must be 32 or 64 bytes long.
-    /// Without ethhash, keys cannot contain half-bytes (i.e., odd number of nibbles).
+    /// In Ethereum mode, keys must be 32 or 64 bytes long.
+    /// In MerkleDB mode, keys cannot contain half-bytes (i.e., an odd number of nibbles).
     InvalidKey {
         /// The key found, or equivalently the path of the node that stores the value
         key: Path,

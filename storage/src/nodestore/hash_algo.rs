@@ -7,11 +7,6 @@
 pub struct NodeHashAlgorithmTryFromIntError(u64);
 
 /// The hash algorithm used by the node store.
-///
-/// This must currently match the compile-time option. However, it will eventually
-/// be made a runtime option when initializing the node store. Therefore, the
-/// option is required when initializing and opening the node store to ensure
-/// compatibility and to detect any mismatches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NodeHashAlgorithm {
     /// Use the MerkleDB node hashing algorithm, with sha256 as the hash function.
@@ -21,32 +16,19 @@ pub enum NodeHashAlgorithm {
     Ethereum,
 }
 
-// This is used in `validate_init` regardless of whether test code is being built.
-#[inline]
-const fn compile_option() -> NodeHashAlgorithm {
-    if cfg!(feature = "ethhash") {
-        NodeHashAlgorithm::Ethereum
-    } else {
-        NodeHashAlgorithm::MerkleDB
-    }
-}
-
 impl NodeHashAlgorithm {
-    /// Returns the hash algorithm that matches the compile-time option.
-    ///
-    /// Note: This function is only available in test builds or when the
-    /// `test_utils` feature is enabled (for upstream testing purposes).
+    /// Returns `true` if this algorithm uses Ethereum state trie hashing.
     #[must_use]
-    pub const fn compile_option() -> Self {
-        compile_option()
+    pub const fn is_ethereum(self) -> bool {
+        matches!(self, Self::Ethereum)
     }
 
-    /// Returns whether this hash algorithm matches the compile-time option.
+    /// Returns the proof-header discriminator for this hash algorithm.
     #[must_use]
-    pub const fn matches_compile_option(self) -> bool {
+    pub const fn proof_hash_mode(self) -> u8 {
         match self {
-            NodeHashAlgorithm::MerkleDB => !cfg!(feature = "ethhash"),
-            NodeHashAlgorithm::Ethereum => cfg!(feature = "ethhash"),
+            Self::MerkleDB => 0,
+            Self::Ethereum => 1,
         }
     }
 
@@ -57,20 +39,19 @@ impl NodeHashAlgorithm {
         }
     }
 
-    // TODO(#1088): remove this after implementing runtime selection of hash algorithms
-    pub(crate) fn validate_init(self) -> std::io::Result<()> {
-        if self.matches_compile_option() {
-            Ok(())
-        } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                format!(
-                    "node store hash algorithm mismatch: want to initialize with {}, \
-                     but build option is for {}",
-                    self.name(),
-                    compile_option().name()
-                ),
-            ))
+    /// Returns the canonical empty-root hash for this algorithm, if it has one.
+    #[must_use]
+    pub fn default_root_hash(self) -> Option<crate::TrieHash> {
+        match self {
+            Self::MerkleDB => None,
+            Self::Ethereum => Some(
+                [
+                    0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6, 0xff, 0x83, 0x45, 0xe6, 0x92,
+                    0xc0, 0xf8, 0x6e, 0x5b, 0x48, 0xe0, 0x1b, 0x99, 0x6c, 0xad, 0xc0, 0x01, 0x62,
+                    0x2f, 0xb5, 0xe3, 0x63, 0xb4, 0x21,
+                ]
+                .into(),
+            ),
         }
     }
 
@@ -88,6 +69,14 @@ impl NodeHashAlgorithm {
                 ),
             ))
         }
+    }
+}
+
+impl TryFrom<u8> for NodeHashAlgorithm {
+    type Error = NodeHashAlgorithmTryFromIntError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        Self::try_from(u64::from(value))
     }
 }
 

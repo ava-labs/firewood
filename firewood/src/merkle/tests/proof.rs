@@ -213,7 +213,11 @@ fn exclusion_with_proof_value_present() {
 
     debug!("{proof:#?}");
     assert_eq!(
-        proof.as_ref().first().unwrap().to_hash(),
+        proof
+            .as_ref()
+            .first()
+            .unwrap()
+            .to_hash(proof.node_hash_algorithm()),
         root_hash.clone().into_hash_type()
     );
 

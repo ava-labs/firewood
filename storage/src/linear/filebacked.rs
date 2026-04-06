@@ -359,7 +359,7 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            NodeHashAlgorithm::compile_option(),
+            NodeHashAlgorithm::MerkleDB,
         )
         .unwrap();
 
@@ -402,7 +402,7 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            NodeHashAlgorithm::compile_option(),
+            NodeHashAlgorithm::MerkleDB,
         )
         .unwrap();
 

@@ -117,6 +117,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     ///
     /// Returns a [`FileIoError`] if the root node cannot be read from storage.
     pub fn open(header: &NodeStoreHeader, storage: Arc<S>) -> Result<Self, FileIoError> {
+        let node_hash_algorithm = storage.node_hash_algorithm();
         let mut nodestore = Self {
             kind: Committed {
                 deleted: Box::default(),
@@ -132,7 +133,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
                 debug!("No root hash in header; computing from disk");
                 nodestore
                     .read_node_from_disk(root_address, ReadableNodeMode::Open)
-                    .map(|n| hash_node(&n, &Path(SmallVec::default())))?
+                    .map(|n| hash_node(&n, &Path(SmallVec::default()), node_hash_algorithm))?
             };
 
             nodestore.kind.root = Some(Child::AddressWithHash(root_address, root_hash));
@@ -169,6 +170,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         root_address: LinearAddress,
         storage: Arc<S>,
     ) -> Result<Self, FileIoError> {
+        let node_hash_algorithm = storage.node_hash_algorithm();
         // first construct a nodestore without a root
         let mut nodestore = NodeStore {
             kind: Committed {
@@ -180,7 +182,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
         let node = nodestore.read_node(root_address)?;
 
-        if hash_node(node.as_ref(), &Path::new()) == root_hash {
+        if hash_node(node.as_ref(), &Path::new(), node_hash_algorithm) == root_hash {
             nodestore.kind.root = Some(Child::AddressWithHash(root_address, root_hash));
             Ok(nodestore)
         } else {
@@ -197,6 +199,14 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     #[must_use]
     pub fn deleted_len(&self) -> usize {
         self.kind.deleted.len()
+    }
+}
+
+impl<T, S: ReadableStorage> NodeStore<T, S> {
+    /// Returns the node hash algorithm used by this storage backend.
+    #[must_use]
+    pub fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        self.storage.node_hash_algorithm()
     }
 }
 
@@ -481,6 +491,10 @@ where
     T: Deref,
     T::Target: RootReader,
 {
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        self.deref().node_hash_algorithm()
+    }
+
     fn root_node(&self) -> Option<SharedNode> {
         self.deref().root_node()
     }
@@ -493,6 +507,9 @@ where
 ///
 /// The root may be None if the trie is empty.
 pub trait RootReader {
+    /// Returns the hash algorithm used by this trie.
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm;
+
     /// Returns the root of the trie.
     /// Callers that just need the node at the root should use this function.
     fn root_node(&self) -> Option<SharedNode>;
@@ -819,10 +836,7 @@ impl<S: ReadableStorage> TryFrom<NodeStore<Mutable<Propose>, S>>
         };
 
         // Hashes the trie with an empty path and returns the address of the new root.
-        #[cfg(feature = "ethhash")]
         let (root, root_hash) = nodestore.hash_helper(root, Path::new())?;
-        #[cfg(not(feature = "ethhash"))]
-        let (root, root_hash) = NodeStore::<Mutable<Propose>, S>::hash_helper(root, Path::new())?;
 
         let immutable_proposal =
             Arc::into_inner(nodestore.kind).expect("no other references to the proposal");
@@ -855,6 +869,10 @@ impl<T: Parentable, S: ReadableStorage> NodeReader for NodeStore<T, S> {
 }
 
 impl<T, S: ReadableStorage> RootReader for NodeStore<Mutable<T>, S> {
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        self.storage.node_hash_algorithm()
+    }
+
     fn root_node(&self) -> Option<SharedNode> {
         self.kind.root.as_ref().map(|node| node.clone().into())
     }
@@ -867,6 +885,10 @@ impl<T, S: ReadableStorage> RootReader for NodeStore<Mutable<T>, S> {
 }
 
 impl<S: ReadableStorage> RootReader for NodeStore<Committed, S> {
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        self.storage.node_hash_algorithm()
+    }
+
     fn root_node(&self) -> Option<SharedNode> {
         // TODO: If the read_node fails, we just say there is no root; this is incorrect
         self.kind
@@ -881,6 +903,10 @@ impl<S: ReadableStorage> RootReader for NodeStore<Committed, S> {
 }
 
 impl<S: ReadableStorage> RootReader for NodeStore<Arc<ImmutableProposal>, S> {
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        self.storage.node_hash_algorithm()
+    }
+
     fn root_node(&self) -> Option<SharedNode> {
         // Use the MaybePersistedNode's as_shared_node method to get the root
         self.kind
@@ -895,6 +921,10 @@ impl<S: ReadableStorage> RootReader for NodeStore<Arc<ImmutableProposal>, S> {
 }
 
 impl<S: ReadableStorage> RootReader for NodeStore<Reconstructed, S> {
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        self.storage.node_hash_algorithm()
+    }
+
     fn root_node(&self) -> Option<SharedNode> {
         self.kind.node.clone()
     }
@@ -939,11 +969,7 @@ where
             return Some(hash.clone());
         }
         let node_val: Node = Node::clone(node);
-        #[cfg(feature = "ethhash")]
         let (_, hash) = self.hash_helper(node_val, Path::new()).ok()?;
-        #[cfg(not(feature = "ethhash"))]
-        let (_, hash) =
-            NodeStore::<Mutable<Propose>, S>::hash_helper(node_val, Path::new()).ok()?;
         let hash = hash.into_triehash();
         // If another thread raced us, discard ours — both computed the same value.
         let _ = self.kind.hash.set(hash.clone());
@@ -1035,12 +1061,16 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
 
         let mut area_stream = self.storage.stream_from(actual_addr)?;
         let offset_before = area_stream.offset();
-        let node: SharedNode = Node::from_reader(&mut area_stream)
-            .map_err(|e| {
-                self.storage
-                    .file_io_error(e, actual_addr, Some("read_node_from_disk".to_string()))
-            })?
-            .into();
+        let node: SharedNode =
+            Node::from_reader(&mut area_stream, self.storage.node_hash_algorithm())
+                .map_err(|e| {
+                    self.storage.file_io_error(
+                        e,
+                        actual_addr,
+                        Some("read_node_from_disk".to_string()),
+                    )
+                })?
+                .into();
         let length = area_stream
             .offset()
             .checked_sub(offset_before)
@@ -1227,7 +1257,7 @@ mod tests {
     #[test]
     fn test_slow_giant_node() {
         let memstore = Arc::new(MemStore::default());
-        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::MerkleDB);
         let empty_root = NodeStore::new_empty_committed(Arc::clone(&memstore));
 
         let mut node_store = NodeStore::new(&empty_root).unwrap();
@@ -1290,9 +1320,9 @@ mod tests {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            NodeHashAlgorithm::compile_option(),
+            NodeHashAlgorithm::MerkleDB,
         )?);
-        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::MerkleDB);
         let nodestore = NodeStore::open(&header, storage)?;
 
         let mut proposal = NodeStore::new(&nodestore)?;
@@ -1369,9 +1399,9 @@ mod tests {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            NodeHashAlgorithm::compile_option(),
+            NodeHashAlgorithm::MerkleDB,
         )?);
-        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::MerkleDB);
         let base = NodeStore::open(&header, Arc::clone(&storage))?;
 
         // Create a proposal with a leaf node and persist it
@@ -1408,9 +1438,9 @@ mod tests {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            NodeHashAlgorithm::compile_option(),
+            NodeHashAlgorithm::MerkleDB,
         )?);
-        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::MerkleDB);
         let base = NodeStore::open(&header, Arc::clone(&storage))?;
 
         // Create a proposal with a leaf node and persist it

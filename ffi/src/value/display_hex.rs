@@ -54,7 +54,6 @@ fn display_hex_bytes(bytes: &[u8], f: &mut fmt::Formatter<'_>) -> fmt::Result {
 mod tests {
     use super::*;
 
-    #[cfg(feature = "ethhash")]
     use firewood::api::HashKeyExt;
     use test_case::test_case;
 
@@ -65,8 +64,8 @@ mod tests {
     #[test_case(b"abc", "616263", Some(16); "short slice with long precision")]
     #[test_case(firewood_storage::TrieHash::empty().as_ref(), "0000000000000000000000000000000000000000000000000000000000000000", None; "empty trie hash")]
     #[test_case(firewood_storage::TrieHash::empty().as_ref(), "00000000000000000000000000000000... (16 remaining bytes)", Some(16); "empty trie hash with precision")]
-    #[cfg_attr(feature = "ethhash", test_case(firewood_storage::TrieHash::default_root_hash().as_deref().expect("feature = \"ethhash\""), "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421", None; "empty rlp hash"))]
-    #[cfg_attr(feature = "ethhash", test_case(firewood_storage::TrieHash::default_root_hash().as_deref().expect("feature = \"ethhash\""), "56e81f171bcc55a6ff8345e692c0f86e... (16 remaining bytes)", Some(16); "empty rlp hash with precision"))]
+    #[test_case(firewood_storage::TrieHash::default_root_hash(firewood_storage::NodeHashAlgorithm::Ethereum).as_deref().expect("ethereum empty root hash"), "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421", None; "empty rlp hash")]
+    #[test_case(firewood_storage::TrieHash::default_root_hash(firewood_storage::NodeHashAlgorithm::Ethereum).as_deref().expect("ethereum empty root hash"), "56e81f171bcc55a6ff8345e692c0f86e... (16 remaining bytes)", Some(16); "empty rlp hash with precision")]
     fn test_display_hex(input: &[u8], expected: &str, precision: Option<usize>) {
         let input = DisplayHex(input);
         if let Some(p) = precision {

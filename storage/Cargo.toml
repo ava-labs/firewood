@@ -46,15 +46,14 @@ parking_lot.workspace = true
 triomphe = "0.1.15"
 weak-table = "0.3.2"
 # Optional dependencies
-bytes = { version = "1.11.1", optional = true }
+bytes = { version = "1.11.1" }
 io-uring = { version = "0.7.11", optional = true }
 log = { version = "0.4.29", optional = true }
-rlp = { version = "0.6.1", optional = true }
-sha3 = { version = "0.10.8", optional = true }
+rlp = { version = "0.6.1" }
+sha3 = { version = "0.10.8" }
 bumpalo = { version = "3.20.2", features = ["collections", "std"] }
 
 [dev-dependencies]
-cfg-if = "1.0.4"
 # Workspace dependencies
 criterion = { workspace = true, features = ["html_reports"] }
 metrics-util.workspace = true
@@ -66,7 +65,6 @@ test-case.workspace = true
 [features]
 logger = ["log"]
 io-uring = ["dep:io-uring"]
-ethhash = ["dep:rlp", "dep:sha3", "dep:bytes"]
 test_utils = ["dep:metrics-util", "dep:rand"]
 
 [[bench]]

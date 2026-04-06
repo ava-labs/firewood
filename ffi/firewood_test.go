@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -34,14 +33,13 @@ const (
 	errWrongParent    = "The proposal cannot be committed since it is not a direct child of the most recent commit. "
 )
 
-// expectedRoots contains the expected root hashes for different use cases across both default
-// firewood hashing and ethhash.
-// By default, TestMain infers which mode Firewood is operating in and selects the expected roots
-// accordingly (this does turn test empty database into an effective no-op).
+// expectedRoots contains the expected root hashes for different use cases across
+// both MerkleDB hashing and Ethereum hashing.
 //
 // To test a specific hashing mode explicitly, set the environment variable:
 // TEST_FIREWOOD_HASH_MODE=ethhash or TEST_FIREWOOD_HASH_MODE=firewood
-// This will skip the inference step and enforce we use the expected roots for the specified mode.
+// This selects both the expected roots and the constructor option used by the
+// test helpers.
 var (
 	// expectedRoots contains a mapping of expected root hashes for different test
 	// vectors.
@@ -55,11 +53,8 @@ var (
 			insert100Key: "f858b51ada79c4abeb6566ef1204a453030dba1cca3526d174e2cb3ce2aadc57",
 		},
 	}
-	expectedEmptyRootToMode = map[string]string{
-		emptyEthhashRoot:  ethhashKey,
-		emptyFirewoodRoot: firewoodKey,
-	}
-	expectedRoots map[string]string
+	expectedRoots             map[string]string
+	selectedNodeHashAlgorithm = EthereumNodeHashing
 )
 
 func stringToHash(t *testing.T, s string) Hash {
@@ -68,30 +63,6 @@ func stringToHash(t *testing.T, s string) Hash {
 	require.NoError(t, err)
 	require.Len(t, b, RootLength)
 	return Hash(b)
-}
-
-func inferHashingMode(ctx context.Context) (string, error) {
-	dbDir := os.TempDir()
-	db, err := newDatabase(dbDir)
-	if err != nil {
-		return "", err
-	}
-	defer func() {
-		ctx, cancel := context.WithTimeout(ctx, time.Second)
-		defer cancel()
-		_ = db.Close(ctx)
-		_ = os.Remove(dbDir)
-	}()
-
-	actualEmptyRoot := db.Root()
-	actualEmptyRootHex := hex.EncodeToString(actualEmptyRoot[:])
-
-	actualFwMode, ok := expectedEmptyRootToMode[actualEmptyRootHex]
-	if !ok {
-		return "", fmt.Errorf("unknown empty root %q, cannot infer mode", actualEmptyRootHex)
-	}
-
-	return actualFwMode, nil
 }
 
 func TestMain(m *testing.M) {
@@ -117,19 +88,21 @@ func TestMain(m *testing.M) {
 		}
 	}
 
-	// If TEST_FIREWOOD_HASH_MODE is set, use it to select the expected roots.
-	// Otherwise, infer the hash mode from an empty database.
 	hashMode := os.Getenv("TEST_FIREWOOD_HASH_MODE")
 	if hashMode == "" {
-		inferredHashMode, err := inferHashingMode(context.Background())
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to infer hash mode %v\n", err)
-			os.Exit(1)
-		}
-		hashMode = inferredHashMode
+		hashMode = ethhashKey
 	}
 	selectedExpectedRoots, ok := expectedRootModes[hashMode]
 	if !ok {
+		fmt.Fprintf(os.Stderr, "unknown hash mode %q\n", hashMode)
+		os.Exit(1)
+	}
+	switch hashMode {
+	case ethhashKey:
+		selectedNodeHashAlgorithm = EthereumNodeHashing
+	case firewoodKey:
+		selectedNodeHashAlgorithm = MerkleDBNodeHashing
+	default:
 		fmt.Fprintf(os.Stderr, "unknown hash mode %q\n", hashMode)
 		os.Exit(1)
 	}
@@ -169,28 +142,8 @@ func newTestDatabase(tb testing.TB, opts ...Option) *Database {
 	return db
 }
 
-var (
-	// detectedNodeHashAlgorithm is cached after first detection to avoid repeated attempts
-	detectedNodeHashAlgorithm     NodeHashAlgorithm
-	detectedNodeHashAlgorithmOnce sync.Once
-)
-
 func newDatabase(dbDir string, opts ...Option) (*Database, error) {
-	// Detect the correct algo once and cache it
-	detectedNodeHashAlgorithmOnce.Do(func() {
-		// Try ethhash first, if it fails try merkledb
-		tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("firewood-hash-detection-%d", time.Now().UnixNano()))
-		defer os.RemoveAll(tempDir)
-
-		_, err := New(tempDir, EthereumNodeHashing, WithTruncate(true))
-		if err == nil {
-			detectedNodeHashAlgorithm = EthereumNodeHashing
-		} else {
-			detectedNodeHashAlgorithm = MerkleDBNodeHashing
-		}
-	})
-
-	f, err := New(dbDir, detectedNodeHashAlgorithm, opts...)
+	f, err := New(dbDir, selectedNodeHashAlgorithm, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new database in directory %q: %w", dbDir, err)
 	}
@@ -212,43 +165,34 @@ func TestUpdateSingleKV(t *testing.T) {
 func TestNodeHashAlgorithmValidation(t *testing.T) {
 	r := require.New(t)
 
-	// Try to create a database with ethhash
 	dbDirEth := t.TempDir()
-	dbEth, errEth := New(dbDirEth, EthereumNodeHashing, WithTruncate(true))
+	dbEth, err := New(dbDirEth, EthereumNodeHashing, WithTruncate(true))
+	r.NoError(err)
+	r.NoError(dbEth.Close(oneSecCtx(t)))
 
-	// Try to create a database with merkledb
+	_, err = New(dbDirEth, MerkleDBNodeHashing)
+	r.ErrorContains(err, "node store hash algorithm mismatch: want to open with MerkleDB")
+
 	dbDirMerkledb := t.TempDir()
-	dbMerkledb, errMerkledb := New(dbDirMerkledb, MerkleDBNodeHashing, WithTruncate(true))
-
-	// Exactly one should succeed based on compile-time feature
-	type resultType int
-	const (
-		ethereumOnly resultType = iota
-		merkledbOnly
-		bothOrNeither
+	dbMerkledb, err := New(
+		dbDirMerkledb,
+		MerkleDBNodeHashing,
+		WithTruncate(true),
 	)
+	r.NoError(err)
+	r.NoError(dbMerkledb.Close(oneSecCtx(t)))
 
-	result := bothOrNeither
-	switch {
-	case errEth == nil && errMerkledb != nil:
-		result = ethereumOnly
-	case errMerkledb == nil && errEth != nil:
-		result = merkledbOnly
-	}
+	_, err = New(dbDirMerkledb, EthereumNodeHashing)
+	r.ErrorContains(err, "node store hash algorithm mismatch: want to open with Ethereum")
+}
 
-	switch result {
-	case ethereumOnly:
-		r.NoError(dbEth.Close(oneSecCtx(t)))
-		r.Error(errMerkledb)
-		r.ErrorContains(errMerkledb, "node store hash algorithm mismatch: want to initialize with MerkleDB, but build option is for Ethereum")
-	case merkledbOnly:
-		r.NoError(dbMerkledb.Close(oneSecCtx(t)))
-		r.Error(errEth)
-		r.ErrorContains(errEth, "node store hash algorithm mismatch: want to initialize with Ethereum, but build option is for MerkleDB")
-	case bothOrNeither:
-		// Both succeeded or both failed - this should not happen
-		r.Failf("Expected exactly one hash type to succeed", "got errEth=%v, errNative=%v", errEth, errMerkledb)
-	}
+func TestExplicitEthereumNodeHashAlgorithmUsesEthereumEmptyRoot(t *testing.T) {
+	r := require.New(t)
+
+	db, err := New(t.TempDir(), EthereumNodeHashing, WithTruncate(true))
+	r.NoError(err)
+	r.Equal(stringToHash(t, emptyEthhashRoot), db.Root())
+	r.NoError(db.Close(oneSecCtx(t)))
 }
 
 func TestUpdateMultiKV(t *testing.T) {
