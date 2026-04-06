@@ -47,6 +47,8 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
+use std::fmt::Write;
+
 use firewood_storage::{
     Children, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator, Path,
     PathBuf, PathComponent, PathIterItem, Preimage, SplitPath, TrieHash, TriePath, ValueDigest,
@@ -174,6 +176,10 @@ pub enum ProofError {
     #[error("proof node has a value not included in key-value pairs")]
     ProofNodeHasUnincludedValue,
 
+    /// A proof node's value differs from the corresponding key-value pair
+    #[error("proof node value does not match the key-value pair at the same key")]
+    ProofNodeValueMismatch,
+
     #[error("the proposal for a change proof is None as it has been consumed")]
     ProposalIsNone,
 
@@ -212,29 +218,26 @@ pub enum ProofError {
     #[error("bounded change proof requires at least one boundary proof")]
     MissingBoundaryProof,
 
-    /// A proof node's value doesn't match the proposal at the same depth.
-    #[error("proof node value doesn't match the proposal")]
-    ProofNodeValueMismatch,
-
-    /// Start and end boundary proofs share no common prefix — they
-    /// disagree on the very first node. Since both proofs have already
-    /// passed hash chain verification against the same `end_root`, their
-    /// first nodes must be identical. This is unreachable without a hash
-    /// collision.
-    #[error("boundary proofs diverge at the root node")]
-    BoundaryProofsDivergeAtRoot,
-
     /// Non-empty end proof when no end key is set and no batch operations.
     #[error("unexpected non-empty end proof with no end key and no batch operations")]
     UnexpectedEndProof,
 
-    /// In-range child hash mismatch between proof and proposal.
-    #[error("in-range child hash mismatch")]
-    InRangeChildMismatch,
-
     /// Empty end proof when `end_key` is set or `batch_ops` is non-empty.
     #[error("missing end proof: end_key is set or batch_ops is non-empty")]
     MissingEndProof,
+
+    /// Exclusion proof is incomplete: the last proof node is an ancestor of
+    /// the proven key and has a child at the next nibble index. The proof
+    /// must include that child to demonstrate the key's absence — without
+    /// it the verifier cannot distinguish "child exists but diverges" from
+    /// "no child at this index".
+    #[error("exclusion proof missing child at boundary index")]
+    ExclusionProofMissingChild,
+
+    /// A proof node's nibble key contains an invalid value (> 0x0F).
+    /// This indicates corruption in the trie or proof construction.
+    #[error("invalid nibble in proof node key")]
+    InvalidProofNodeKey,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -254,16 +257,27 @@ pub struct ProofNode {
 
 impl std::fmt::Debug for ProofNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Filter the missing children and only show the present ones with their indices
-        let child_hashes = self.child_hashes.iter_present().collect::<Vec<_>>();
+        // Render nibble key as a compact hex string (e.g. "c9ee60")
+        let key_hex = self.key.iter().try_fold(String::new(), |mut s, c| {
+            write!(s, "{c:x}")?;
+            Ok(s)
+        })?;
+
+        // Show present children as hex nibble indices
+        let children: Vec<String> = self
+            .child_hashes
+            .iter_present()
+            .map(|(nibble, hash)| format!("{nibble:x}:{hash:?}"))
+            .collect();
+
         // Compute the hash and render it as well
         let hash = firewood_storage::Preimage::to_hash(self);
 
         f.debug_struct("ProofNode")
-            .field("key", &self.key)
+            .field("key", &key_hex)
             .field("partial_len", &self.partial_len)
             .field("value_digest", &self.value_digest)
-            .field("child_hashes", &child_hashes)
+            .field("child_hashes", &children)
             .field("hash", &hash)
             .finish()
     }
@@ -333,7 +347,13 @@ impl From<PathIterItem> for ProofNode {
     }
 }
 
-/// A proof that a given key-value pair either exists or does not exist in a trie.
+/// A Merkle proof that a given key-value pair either exists (inclusion) or does
+/// not exist (exclusion) in a trie.
+///
+/// `T` is a [`ProofCollection`] — an ordered sequence of [`ProofNode`]s forming
+/// the path from the trie root to the proven key. Common concrete types are
+/// `Vec<ProofNode>` and `Box<[ProofNode]>`; use [`EmptyProofCollection`] for a
+/// zero-node proof (e.g., when a boundary proof is absent).
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Proof<T: ?Sized>(T);
 
@@ -420,7 +440,31 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
             return Ok(last_node.value_digest());
         }
 
-        // This is an exclusion proof.
+        // Exclusion proof validation.
+        //
+        // If the last node is an ancestor of the key (its key is a strict
+        // prefix of the proven key), check whether a child exists at the
+        // next nibble. If a child exists there, the proof is incomplete —
+        // it must include that child to demonstrate the key's absence.
+        // Without the child, the verifier cannot tell whether the key
+        // exists deeper in the trie.
+        //
+        // When no child exists at the next nibble, the ancestor alone is
+        // sufficient: the absence of a child proves the key cannot exist.
+        //
+        // When the last node's key is NOT an ancestor of the key (it
+        // extends past or diverges from the key), this is the valid
+        // "divergent child" case — the node occupies the position where
+        // the key would be, proving it cannot exist.
+        //
+        // This matches AvalancheGo's verifyProofPath behavior which
+        // returns ErrExclusionProofMissingEndNodes in the ancestor case.
+        if let Some(next_idx) = next_nibble(last_node.full_path(), key.as_components())
+            && last_node.children()[next_idx].is_some()
+        {
+            return Err(ProofError::ExclusionProofMissingChild);
+        }
+
         Ok(None)
     }
 
