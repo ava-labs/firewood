@@ -370,11 +370,22 @@ impl RevisionManager {
             let mut lock = self.proposals.lock();
             let mut discarded = 0u64;
             lock.retain(|p| {
-                let should_retain = !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1;
-                if !should_retain {
-                    discarded = discarded.wrapping_add(1);
+                if Arc::ptr_eq(&proposal, p) {
+                    // discard the proposal we just committed but without counting it as
+                    // discarded since we always remove the proposal that was just committed
+                    return false;
                 }
-                should_retain
+
+                if Arc::strong_count(p) > 1 {
+                    // reparent any retained proposals that have this proposal as a parent to
+                    // the committed version. We can do this at the same time as the retain
+                    // check to avoid scanning the proposals multiple times.
+                    proposal.commit_reparent(p);
+                    true
+                } else {
+                    discarded = discarded.wrapping_add(1);
+                    false
+                }
             });
 
             if discarded > 0 {
@@ -383,15 +394,6 @@ impl RevisionManager {
 
             // Update uncommitted proposals gauge after cleanup
             firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, lock.len());
-        }
-
-        // then reparent any proposals that have this proposal as a parent
-        // BLOCKING: second acquisition of the `proposals` mutex in this function. Held while
-        // iterating all open proposals to reparent them. Re-acquiring after the first lock
-        // drop avoids long holds, but two separate acquisitions mean the proposal list could
-        // have changed between the two critical sections.
-        for p in &*self.proposals.lock() {
-            proposal.commit_reparent(p);
         }
 
         if crate::logger::trace_enabled() {
