@@ -60,24 +60,11 @@ if [ "${#NVME_DEVS[@]}" -gt 0 ]; then
     # Single device, use it directly
     DEVICE_TO_USE="${NVME_DEVS[0]}"
     echo "Using single NVMe device: $DEVICE_TO_USE"
-  elif [ "${#NVME_DEVS[@]}" -eq 2 ]; then
-    # Two devices, create RAID1
-    echo "Creating RAID1 array with 2 devices: ${NVME_DEVS[*]}"
-    mdadm --create /dev/md0 --level=1 --raid-devices=2 "${NVME_DEVS[@]}"
-    DEVICE_TO_USE="/dev/md0"
-  elif [ "${#NVME_DEVS[@]}" -eq 3 ]; then
-    # Three devices, create RAID5
-    echo "Creating RAID5 array with 3 devices: ${NVME_DEVS[*]}"
-    mdadm --create /dev/md0 --level=5 --raid-devices=3 "${NVME_DEVS[@]}"
-    DEVICE_TO_USE="/dev/md0"
-  elif [ "${#NVME_DEVS[@]}" -eq 4 ]; then
-    # Four devices, create RAID10
-    echo "Creating RAID10 array with 4 devices: ${NVME_DEVS[*]}"
-    mdadm --create /dev/md0 --level=10 --raid-devices=4 "${NVME_DEVS[@]}"
-    DEVICE_TO_USE="/dev/md0"
   else
-    echo "Unsupported number of NVMe devices: ${#NVME_DEVS[@]}. Using first device only."
-    DEVICE_TO_USE="${NVME_DEVS[0]}"
+    # Multiple devices, create RAID0
+    echo "Creating RAID0 array with ${#NVME_DEVS[@]} devices: ${NVME_DEVS[*]}"
+    mdadm --create /dev/md0 --level=0 --raid-devices="${#NVME_DEVS[@]}" "${NVME_DEVS[@]}"
+    DEVICE_TO_USE="/dev/md0"
   fi
 
   # Wait for RAID array to be ready (if created)
