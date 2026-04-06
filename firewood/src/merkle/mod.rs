@@ -284,9 +284,9 @@ fn compute_root_hash_with_proofs(
     path_prefix: &[PathComponent],
     proof_nodes: &HashMap<PathBuf, &ProofNode>,
     outside_children: &HashMap<PathBuf, ChildMask>,
-) -> Result<HashType, FileIoError> {
+) -> HashType {
     let branch = match node {
-        Node::Leaf(_) => return Ok(HashableShunt::from_node(path_prefix, node).to_hash()),
+        Node::Leaf(_) => return HashableShunt::from_node(path_prefix, node).to_hash(),
         Node::Branch(branch) => branch,
     };
 
@@ -319,12 +319,8 @@ fn compute_root_hash_with_proofs(
             unreachable!()
         };
         child_prefix.push(nibble);
-        let child_hash = compute_root_hash_with_proofs(
-            child_node,
-            &child_prefix,
-            proof_nodes,
-            outside_children,
-        )?;
+        let child_hash =
+            compute_root_hash_with_proofs(child_node, &child_prefix, proof_nodes, outside_children);
         child_hashes[nibble] = Some(child_hash);
         child_prefix.pop();
     }
@@ -339,13 +335,13 @@ fn compute_root_hash_with_proofs(
     }
 
     let value = branch.value.as_deref().map(ValueDigest::Value);
-    Ok(HashableShunt::new(
+    HashableShunt::new(
         path_prefix,
         branch.partial_path.as_components(),
         value,
         child_hashes,
     )
-    .to_hash())
+    .to_hash()
 }
 
 /// Returns `true` when a child at nibble `child_nib` under the accumulated
@@ -550,9 +546,7 @@ fn verify_proof_node_values(
         let in_range = first_key_bytes.is_none_or(|start| node_key_bytes.as_slice() >= start)
             && last_key_bytes.is_none_or(|end| node_key_bytes.as_slice() <= end);
         if in_range {
-            match key_values
-                .binary_search_by(|(k, _)| k.as_ref().cmp(node_key_bytes.as_slice()))
-            {
+            match key_values.binary_search_by(|(k, _)| k.as_ref().cmp(node_key_bytes.as_slice())) {
                 Err(_) => {
                     return Err(api::Error::ProofError(
                         ProofError::ProofNodeHasUnincludedValue,
@@ -567,9 +561,7 @@ fn verify_proof_node_values(
                         unreachable!("binary_search returned valid index");
                     };
                     if kv_value.as_ref() != proof_value {
-                        return Err(api::Error::ProofError(
-                            ProofError::ProofNodeValueMismatch,
-                        ));
+                        return Err(api::Error::ProofError(ProofError::ProofNodeValueMismatch));
                     }
                 }
             }
@@ -635,7 +627,7 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
     };
 
     let computed =
-        compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children)?;
+        compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children);
 
     if computed != root_hash.clone().into_hash_type() {
         return Err(api::Error::ProofError(ProofError::UnexpectedHash));
@@ -821,7 +813,7 @@ pub fn verify_change_proof_root_hash(
         .expect("a non-empty proof reconciliation always leaves behind a root node");
 
     let computed =
-        compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children)?;
+        compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children);
 
     if computed != verification.end_root.clone().into_hash_type() {
         return Err(api::Error::ProofError(ProofError::EndRootMismatch));
