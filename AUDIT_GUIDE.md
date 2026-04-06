@@ -242,10 +242,10 @@ There are four main models in our testing framework that build on top of each ot
 
 | Spec | Config | Mode | Property | Traces/States | Violations |
 |------|--------|------|----------|---------------|-----------|
-| CompressedTrieModel | BF=2, MaxDepth=2 | Exhaustive | All | 81 states | 0 |
-| CompressedTrieModel | BF=3, MaxDepth=2 | Exhaustive | All | 19,683 states | 0 |
-| TrieOperations | BF=3, MaxDepth=2 | Exhaustive | All | 531,441 states | 0 |
-| TrieOperations | BF=3, MaxDepth=4 | Simulate | All | ~14,000 traces | 0 |
+| CompressedTrieModel | BF=2, MaxDepth=2 | Exhaustive | Trie correctness | 81 states | 0 |
+| CompressedTrieModel | BF=3, MaxDepth=2 | Exhaustive | Trie correctness | 19,683 states | 0 |
+| TrieOperations | BF=3, MaxDepth=2 | Exhaustive | Insert/Delete correctness | 531,441 states | 0 |
+| TrieOperations | BF=3, MaxDepth=4 | Simulate | Insert/Delete correctness | ~14,000 traces | 0 |
 | ChangeProofVerification | BF=2, MaxDepth=2 | Simulate | Honest proof always accepted | ~650,000 traces | 0 |
 | ChangeProofVerification | BF=3, MaxDepth=2 | Simulate | Honest proof always accepted | ~280,000 traces | 0 |
 | ChangeProofVerification | BF=3, MaxDepth=4 | Simulate | Honest proof always accepted | ~9,700 traces | 0 |
