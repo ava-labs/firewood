@@ -251,7 +251,7 @@ There are four main models in our testing framework that build on top of each ot
 | ChangeProofVerification | BF=3, MaxDepth=4 | Simulate | Honest proofs always accepted | ~9,700 traces | 0 |
 | AdversarialProof | BF=2, MaxDepth=2 | Simulate | Tampered diffs rejected | ~95,000 traces | 0 |
 | AdversarialProof | BF=3, MaxDepth=2 | Simulate | Tampered diffs rejected | ~10,000 traces | 0 |
-| AdversarialProof | BF=3, MaxDepth=4 | Simulate | Tampered diffs (single-key) rejected | ~3,200 traces | 0 |
+| AdversarialProof | BF=3, MaxDepth=4 | Simulate | Single-key tampered diffs rejected | ~3,200 traces | 0 |
 
 
 **BF** (Branch Factor): The number of children per trie node. Firewood uses BF=16 (hex nibbles). The models use smaller values (2–3) for tractability.
