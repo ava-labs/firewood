@@ -332,12 +332,164 @@ impl std::ops::DerefMut for UnlockOnDrop {
 mod test {
     #![expect(clippy::unwrap_used)]
 
-    use crate::NodeHashAlgorithm;
+    use crate::{LeafNode, Node, NodeHashAlgorithm, Path, SharedNode};
 
     use super::*;
     use nonzero_ext::nonzero;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    /// Minimum valid [`LinearAddress`] value (16-byte aligned).
+    const ADDR_16: LinearAddress = LinearAddress::new(16).unwrap();
+    const ADDR_32: LinearAddress = LinearAddress::new(32).unwrap();
+    const ADDR_48: LinearAddress = LinearAddress::new(48).unwrap();
+
+    /// Build a minimal leaf [`SharedNode`] for use as a cache value.
+    fn make_leaf(value: &[u8]) -> SharedNode {
+        triomphe::Arc::new(Node::Leaf(LeafNode {
+            partial_path: Path::from([]),
+            value: value.into(),
+        }))
+    }
+
+    fn make_fb(cache_read_strategy: CacheReadStrategy) -> FileBacked {
+        let tf = NamedTempFile::new().unwrap();
+        FileBacked::new(
+            tf.path().to_path_buf(),
+            nonzero!(1024usize),
+            nonzero!(16usize),
+            false,
+            true,
+            cache_read_strategy,
+            NodeHashAlgorithm::compile_option(),
+        )
+        .unwrap()
+    }
+
+    // ── read_cached_node ──────────────────────────────────────────────────────
+
+    #[test]
+    fn read_cached_node_miss_returns_none() {
+        let fb = make_fb(CacheReadStrategy::WritesOnly);
+        assert!(
+            fb.read_cached_node(ADDR_16, ReadableNodeMode::Read)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn read_cached_node_hit_after_cache_node_all() {
+        let fb = make_fb(CacheReadStrategy::All);
+        let node = make_leaf(b"hello");
+        fb.cache_node(ADDR_16, node.clone());
+        let cached = fb.read_cached_node(ADDR_16, ReadableNodeMode::Read);
+        assert!(cached.is_some());
+        // The cached node should be the same allocation.
+        assert!(triomphe::Arc::ptr_eq(&cached.unwrap(), &node));
+    }
+
+    #[test]
+    fn cache_node_writes_only_does_not_populate_cache() {
+        let fb = make_fb(CacheReadStrategy::WritesOnly);
+        fb.cache_node(ADDR_16, make_leaf(b"ignored"));
+        assert!(
+            fb.read_cached_node(ADDR_16, ReadableNodeMode::Read)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn cache_node_branch_reads_skips_leaves() {
+        let fb = make_fb(CacheReadStrategy::BranchReads);
+        fb.cache_node(ADDR_16, make_leaf(b"leaf"));
+        assert!(
+            fb.read_cached_node(ADDR_16, ReadableNodeMode::Read)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn read_cached_node_wrong_addr_returns_none() {
+        let fb = make_fb(CacheReadStrategy::All);
+        fb.cache_node(ADDR_16, make_leaf(b"val"));
+        // Different address — should not be found.
+        assert!(
+            fb.read_cached_node(ADDR_32, ReadableNodeMode::Read)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn read_cached_node_independent_addresses() {
+        let fb = make_fb(CacheReadStrategy::All);
+        let n1 = make_leaf(b"one");
+        let n2 = make_leaf(b"two");
+        fb.cache_node(ADDR_16, n1.clone());
+        fb.cache_node(ADDR_32, n2.clone());
+
+        let c1 = fb
+            .read_cached_node(ADDR_16, ReadableNodeMode::Read)
+            .unwrap();
+        let c2 = fb
+            .read_cached_node(ADDR_32, ReadableNodeMode::Read)
+            .unwrap();
+        assert!(triomphe::Arc::ptr_eq(&c1, &n1));
+        assert!(triomphe::Arc::ptr_eq(&c2, &n2));
+    }
+
+    // ── free_list_cache ───────────────────────────────────────────────────────
+
+    #[test]
+    fn free_list_cache_miss_returns_none() {
+        let fb = make_fb(CacheReadStrategy::WritesOnly);
+        assert!(fb.free_list_cache(ADDR_16).is_none());
+    }
+
+    #[test]
+    fn free_list_cache_hit_returns_cached_next() {
+        let fb = make_fb(CacheReadStrategy::WritesOnly);
+        fb.add_to_free_list_cache(ADDR_16, Some(ADDR_32));
+        assert_eq!(fb.free_list_cache(ADDR_16), Some(Some(ADDR_32)));
+    }
+
+    #[test]
+    fn free_list_cache_end_of_list_returns_some_none() {
+        let fb = make_fb(CacheReadStrategy::WritesOnly);
+        fb.add_to_free_list_cache(ADDR_16, None);
+        // Some(None) means "cached as end-of-list"
+        assert_eq!(fb.free_list_cache(ADDR_16), Some(None));
+    }
+
+    #[test]
+    fn free_list_cache_pop_consumes_entry() {
+        let fb = make_fb(CacheReadStrategy::WritesOnly);
+        fb.add_to_free_list_cache(ADDR_16, Some(ADDR_32));
+        // First call returns the cached value.
+        assert_eq!(fb.free_list_cache(ADDR_16), Some(Some(ADDR_32)));
+        // Second call is a miss because pop consumed the entry.
+        assert!(fb.free_list_cache(ADDR_16).is_none());
+    }
+
+    #[test]
+    fn free_list_cache_multiple_independent_entries() {
+        let fb = make_fb(CacheReadStrategy::WritesOnly);
+        fb.add_to_free_list_cache(ADDR_16, Some(ADDR_32));
+        fb.add_to_free_list_cache(ADDR_32, Some(ADDR_48));
+        fb.add_to_free_list_cache(ADDR_48, None);
+
+        assert_eq!(fb.free_list_cache(ADDR_16), Some(Some(ADDR_32)));
+        assert_eq!(fb.free_list_cache(ADDR_32), Some(Some(ADDR_48)));
+        assert_eq!(fb.free_list_cache(ADDR_48), Some(None));
+    }
+
+    #[test]
+    fn free_list_cache_overwrite_updates_value() {
+        let fb = make_fb(CacheReadStrategy::WritesOnly);
+        fb.add_to_free_list_cache(ADDR_16, Some(ADDR_32));
+        fb.add_to_free_list_cache(ADDR_16, Some(ADDR_48));
+        // The second put should overwrite the first.
+        assert_eq!(fb.free_list_cache(ADDR_16), Some(Some(ADDR_48)));
+    }
 
     #[test]
     fn basic_reader_test() {
