@@ -544,7 +544,7 @@ fn test_end_proof_exclusion_for_deleted_key() {
 }
 
 /// Single-point range: `start_key == end_key`. Both boundary proofs anchor
-/// at the same key. If that key was changed, batch_ops has exactly 1 entry.
+/// at the same key. If that key was changed, `batch_ops` has exactly 1 entry.
 #[test]
 fn test_single_point_range() {
     let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
@@ -580,5 +580,107 @@ fn test_single_point_range() {
     );
     let ctx =
         verify_change_proof_structure(&proof, root2, Some(b"\x20"), Some(b"\x20"), None).unwrap();
+    verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
+}
+
+/// Out-of-range deletion compresses the root's `partial_path`. The proving
+/// trie's root (forked from the proposal) retains the old shape, and
+/// `collapse_root_to_path` must reshape it to match `end_root`.
+///
+/// Root1: keys at nibbles 0 and 1. Root at `[]`.
+/// Root2: `\x01` deleted → root compresses to `partial_path` `[1]`.
+/// Bounded proof `[\x10, None]` excludes the deleted key.
+///
+/// Found by `ChangeProofVerification.tla` `HonestProofAccepted` invariant.
+#[test]
+fn test_out_of_range_root_compression() {
+    let (db, _dir) = setup_db![
+        (b"\x01", b"alpha"),
+        (b"\x10", b"betax"),
+        (b"\x11", b"gamma")
+    ];
+    let root1 = db.root_hash().unwrap();
+
+    db.propose(vec![
+        BatchOp::Delete { key: b"\x01" },
+        BatchOp::Put {
+            key: b"\x10",
+            value: b"beta2",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root2 = db.root_hash().unwrap();
+
+    let proof = db
+        .change_proof(
+            root1.clone(),
+            root2.clone(),
+            Some(b"\x10".as_slice()),
+            None,
+            None,
+        )
+        .unwrap();
+    assert!(!proof.batch_ops().is_empty());
+
+    let ctx =
+        verify_change_proof_structure(&proof, root2.clone(), Some(b"\x10"), None, None).unwrap();
+    verify_and_check(&db, &proof, &ctx, root1).unwrap();
+}
+
+/// Reverse of root compression: out-of-range insert adds a key at a new
+/// first nibble, expanding root's `partial_path` from `[1]` to `[]`.
+#[test]
+fn test_out_of_range_root_expansion() {
+    let (source, _dir_source) = setup_db![(b"\x10", b"a"), (b"\x11", b"b")];
+    let root1_source = source.root_hash().unwrap();
+    let (target, _dir_target) = setup_db![(b"\x10", b"a"), (b"\x11", b"b")];
+    let root1_target = target.root_hash().unwrap();
+
+    // Insert \x01 (nibble 0, out of range) and change \x10 (in range).
+    // Root expands from partial_path [1] to [].
+    source
+        .propose(vec![
+            BatchOp::Put {
+                key: b"\x01" as &[u8],
+                value: b"new" as &[u8],
+            },
+            BatchOp::Put {
+                key: b"\x10",
+                value: b"changed",
+            },
+        ])
+        .unwrap()
+        .commit()
+        .unwrap();
+    let root2 = source.root_hash().unwrap();
+
+    let proof = source
+        .change_proof(root1_source, root2.clone(), Some(b"\x10"), None, None)
+        .unwrap();
+    assert_eq!(proof.batch_ops().len(), 1);
+
+    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10"), None, None).unwrap();
+    verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
+}
+
+/// The root node itself has a value (key `b""`) that changes between
+/// revisions. Tests that root-level value deltas are handled correctly.
+#[test]
+fn test_root_value_change() {
+    let (source, _dir_source) = setup_db![(b"", b"root_old"), (b"\x10", b"v0")];
+    let (target, _dir_target) = setup_db![(b"", b"root_old"), (b"\x10", b"v0")];
+    let root1_target = target.root_hash().unwrap();
+
+    let (root1_source, root2) =
+        setup_2nd_commit!(source, [(b"", b"root_new"), (b"\x10", b"changed")]);
+
+    let proof = source
+        .change_proof(root1_source, root2.clone(), None, None, None)
+        .unwrap();
+    assert_eq!(proof.batch_ops().len(), 2);
+
+    let ctx = verify_change_proof_structure(&proof, root2, None, None, None).unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }

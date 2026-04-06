@@ -387,3 +387,39 @@ fn test_crafted_incomplete_exclusion_proof_rejected() {
         "expected ExclusionProofMissingChild, got {err:?}"
     );
 }
+
+/// A proof for key B must NOT validate as an exclusion proof for unrelated
+/// key C. The proof path traces toward B (nibble 3), not toward C (nibble 5)
+/// — it has no information about C's subtree.
+#[test]
+fn test_value_digest_rejects_wrong_key_proof() {
+    let keys: [[u8; 32]; 3] = {
+        let mut arr = [[0u8; 32]; 3];
+        arr[0][0] = 0x10; // A
+        arr[1][0] = 0x30; // B
+        arr[2][0] = 0x50; // C
+        arr
+    };
+
+    let merkle = init_merkle([
+        (keys[0], [0xAAu8; 20]),
+        (keys[1], [0xBBu8; 20]),
+        (keys[2], [0xCCu8; 20]),
+    ]);
+    let root_hash = firewood_storage::HashedNodeReader::root_hash(merkle.nodestore()).unwrap();
+
+    let proof_for_b = merkle.prove(&keys[1]).unwrap();
+
+    // Inclusion proof for B should work.
+    proof_for_b
+        .verify(keys[1], Some(&[0xBBu8; 20]), &root_hash)
+        .expect("proof for B should verify B");
+
+    // The same proof queried for C should be rejected.
+    let result = proof_for_b.value_digest(keys[2], &root_hash);
+    assert!(
+        result.is_err(),
+        "proof for B should NOT be accepted when queried for C, \
+         but value_digest returned {result:?}"
+    );
+}

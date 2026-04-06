@@ -75,7 +75,6 @@ pub(super) fn verify_and_check(
 
 // ── Test modules ──────────────────────────────────────────────────────────
 
-mod adversarial;
 mod attack;
 mod bounds;
 mod edge_cases;

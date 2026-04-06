@@ -6,26 +6,32 @@
 use super::*;
 
 #[test]
-fn test_omitted_change_detected() {
-    let (db_a, _dir_a) = setup_db![
+fn test_crafted_omitted_change_detected() {
+    let (source, _dir_source) = setup_db![
         (b"\x10", b"v0"),
         (b"\x20", b"v1"),
         (b"\x30", b"v2"),
         (b"\x40", b"v3")
     ];
-    let (db_b, _dir_b) = setup_db![
+    let (target, _dir_target) = setup_db![
         (b"\x10", b"v0"),
         (b"\x20", b"v1"),
         (b"\x30", b"v2"),
         (b"\x40", b"v3")
     ];
-    let root1_b = db_b.root_hash().unwrap();
+    let root1_target = target.root_hash().unwrap();
 
-    let (root1_a, root2) =
-        setup_2nd_commit!(db_a, [(b"\x20", b"changed1"), (b"\x30", b"changed2")]);
+    let (root1_source, root2) =
+        setup_2nd_commit!(source, [(b"\x20", b"changed1"), (b"\x30", b"changed2")]);
 
-    let valid = db_a
-        .change_proof(root1_a, root2.clone(), Some(b"\x10"), Some(b"\x40"), None)
+    let valid = source
+        .change_proof(
+            root1_source,
+            root2.clone(),
+            Some(b"\x10"),
+            Some(b"\x40"),
+            None,
+        )
         .unwrap();
 
     let mut shortened: Vec<BatchOp<Key, Value>> = valid.batch_ops().to_vec();
@@ -38,19 +44,20 @@ fn test_omitted_change_detected() {
 
     let ctx =
         verify_change_proof_structure(&crafted, root2, Some(b"\x10"), Some(b"\x40"), None).unwrap();
-    verify_and_check(&db_b, &crafted, &ctx, root1_b).expect_err("omitted change must be detected");
+    verify_and_check(&target, &crafted, &ctx, root1_target)
+        .expect_err("omitted change must be detected");
 }
 
 #[test]
-fn test_forged_value_detected() {
-    let (db_a, _dir_a) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
-    let (db_b, _dir_b) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
-    let root1_b = db_b.root_hash().unwrap();
+fn test_crafted_forged_value_detected() {
+    let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+    let (target, _dir_target) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+    let root1_target = target.root_hash().unwrap();
 
-    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x10", b"real")]);
+    let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x10", b"real")]);
 
-    let valid = db_a
-        .change_proof(root1_a, root2.clone(), None, None, None)
+    let valid = source
+        .change_proof(root1_source, root2.clone(), None, None, None)
         .unwrap();
 
     let mut forged_ops: Vec<BatchOp<Key, Value>> = valid.batch_ops().to_vec();
@@ -65,37 +72,20 @@ fn test_forged_value_detected() {
     );
 
     let ctx = verify_change_proof_structure(&crafted, root2, None, None, None).unwrap();
-    verify_and_check(&db_b, &crafted, &ctx, root1_b).expect_err("forged value must be detected");
+    verify_and_check(&target, &crafted, &ctx, root1_target)
+        .expect_err("forged value must be detected");
 }
 
 #[test]
-fn test_wrong_end_root_detected() {
-    let (db_a, _dir_a) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
-    let (db_b, _dir_b) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
-    let root1_b = db_b.root_hash().unwrap();
+fn test_crafted_spurious_batch_op_detected() {
+    let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+    let (target, _dir_target) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+    let root1_target = target.root_hash().unwrap();
 
-    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x50", b"mid")]);
+    let (root1_source, root2) = setup_2nd_commit!(source, [(b"\xa0", b"changed")]);
 
-    let proof = db_a.change_proof(root1_a, root2, None, None, None).unwrap();
-
-    // Wrong end_root — boundary hash chain rejects
-    let result = verify_change_proof_structure(&proof, api::HashKey::empty(), None, None, None);
-    if let Ok(ctx) = result {
-        verify_and_check(&db_b, &proof, &ctx, root1_b)
-            .expect_err("wrong end_root must be detected");
-    }
-}
-
-#[test]
-fn test_spurious_batch_op_detected() {
-    let (db_a, _dir_a) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
-    let (db_b, _dir_b) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
-    let root1_b = db_b.root_hash().unwrap();
-
-    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\xa0", b"changed")]);
-
-    let valid = db_a
-        .change_proof(root1_a, root2.clone(), None, None, None)
+    let valid = source
+        .change_proof(root1_source, root2.clone(), None, None, None)
         .unwrap();
 
     let mut ops: Vec<BatchOp<Key, Value>> = valid.batch_ops().to_vec();
@@ -114,7 +104,7 @@ fn test_spurious_batch_op_detected() {
     // Structural check or root hash check catches this
     let result = verify_change_proof_structure(&crafted, root2, None, None, None);
     if let Ok(ctx) = result {
-        verify_and_check(&db_b, &crafted, &ctx, root1_b)
+        verify_and_check(&target, &crafted, &ctx, root1_target)
             .expect_err("spurious batch op must be detected");
     }
 }
@@ -124,20 +114,20 @@ fn test_spurious_batch_op_detected() {
 /// `StartProofOperationMismatch` check catches this: Put expects inclusion
 /// but the proof is exclusion.
 #[test]
-fn test_spurious_put_at_start_key_boundary() {
+fn test_crafted_spurious_put_at_start_key_boundary() {
     // Keys \x20 and \x90 exist. \x10 (start_key) does NOT exist.
-    let (db_a, _dir_a) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
-    let (db_b, _dir_b) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
-    let root1_b = db_b.root_hash().unwrap();
+    let (source, _dir_source) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+    let (target, _dir_target) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+    let root1_target = target.root_hash().unwrap();
 
-    // Change \x20 on db_a
-    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x20", b"changed")]);
+    // Change \x20 on source
+    let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x20", b"changed")]);
 
     // Generate bounded proof for [\x10, \x90].
     // Start proof for \x10 is an exclusion proof (\x10 doesn't exist).
-    let honest = db_a
+    let honest = source
         .change_proof(
-            root1_a,
+            root1_source,
             root2.clone(),
             Some(b"\x10".as_ref()),
             Some(b"\x90".as_ref()),
@@ -162,7 +152,7 @@ fn test_spurious_put_at_start_key_boundary() {
     // Structural check or root hash check should catch this.
     let result = verify_change_proof_structure(&crafted, root2, Some(b"\x10"), Some(b"\x90"), None);
     if let Ok(ctx) = result {
-        verify_and_check(&db_b, &crafted, &ctx, root1_b)
+        verify_and_check(&target, &crafted, &ctx, root1_target)
             .expect_err("spurious Put at start_key should be detected");
     }
 }
@@ -171,20 +161,20 @@ fn test_spurious_put_at_start_key_boundary() {
 /// in `end_root`. The start proof is an inclusion proof, but the Delete
 /// claims the key was removed — `StartProofOperationMismatch`.
 #[test]
-fn test_spurious_delete_at_start_key_boundary() {
+fn test_crafted_spurious_delete_at_start_key_boundary() {
     // Keys \x20 and \x90 exist. start_key \x20 EXISTS in end_root.
-    let (db_a, _dir_a) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
-    let (db_b, _dir_b) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
-    let root1_b = db_b.root_hash().unwrap();
+    let (source, _dir_source) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+    let (target, _dir_target) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+    let root1_target = target.root_hash().unwrap();
 
-    // Change \x90 on db_a (not \x20 — \x20 stays in end_root).
-    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x90", b"changed")]);
+    // Change \x90 on source (not \x20 — \x20 stays in end_root).
+    let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x90", b"changed")]);
 
     // Generate bounded proof for [\x20, \x90].
     // Start proof for \x20 is an inclusion proof (\x20 exists).
-    let honest = db_a
+    let honest = source
         .change_proof(
-            root1_a,
+            root1_source,
             root2.clone(),
             Some(b"\x20".as_ref()),
             Some(b"\x90".as_ref()),
@@ -209,7 +199,7 @@ fn test_spurious_delete_at_start_key_boundary() {
 
     let result = verify_change_proof_structure(&crafted, root2, Some(b"\x20"), Some(b"\x90"), None);
     if let Ok(ctx) = result {
-        verify_and_check(&db_b, &crafted, &ctx, root1_b)
+        verify_and_check(&target, &crafted, &ctx, root1_target)
             .expect_err("spurious Delete at start_key should be detected");
     }
 }
@@ -219,16 +209,22 @@ fn test_spurious_delete_at_start_key_boundary() {
 ///
 /// Exercises: `EndProofOperationMismatch`
 #[test]
-fn test_spurious_put_at_end_key_boundary() {
-    let (db_a, _dir_a) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
-    let (db_b, _dir_b) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
-    let root1_b = db_b.root_hash().unwrap();
+fn test_crafted_spurious_put_at_end_key_boundary() {
+    let (source, _dir_source) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+    let (target, _dir_target) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+    let root1_target = target.root_hash().unwrap();
 
-    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x20", b"changed")]);
+    let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x20", b"changed")]);
 
     // end_key \xb0 doesn't exist — exclusion end proof.
-    let honest = db_a
-        .change_proof(root1_a, root2.clone(), Some(b"\x20"), Some(b"\xb0"), None)
+    let honest = source
+        .change_proof(
+            root1_source,
+            root2.clone(),
+            Some(b"\x20"),
+            Some(b"\xb0"),
+            None,
+        )
         .unwrap();
 
     // Inject Put at \xb0 (end_key). end proof is exclusion but Put expects inclusion.
@@ -248,7 +244,7 @@ fn test_spurious_put_at_end_key_boundary() {
     let result =
         verify_change_proof_structure(&crafted, root2.clone(), Some(b"\x20"), Some(b"\xb0"), None);
     if let Ok(ctx) = result {
-        verify_and_check(&db_b, &crafted, &ctx, root1_b)
+        verify_and_check(&target, &crafted, &ctx, root1_target)
             .expect_err("spurious Put at end_key should be detected");
     }
 }
@@ -258,17 +254,23 @@ fn test_spurious_put_at_end_key_boundary() {
 ///
 /// Exercises: `EndProofOperationMismatch`
 #[test]
-fn test_spurious_delete_at_end_key_boundary() {
-    let (db_a, _dir_a) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
-    let (db_b, _dir_b) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
-    let root1_b = db_b.root_hash().unwrap();
+fn test_crafted_spurious_delete_at_end_key_boundary() {
+    let (source, _dir_source) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+    let (target, _dir_target) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+    let root1_target = target.root_hash().unwrap();
 
     // Change \x20, leave \x90 unchanged.
-    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x20", b"changed")]);
+    let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x20", b"changed")]);
 
     // end_key \x90 EXISTS — inclusion end proof.
-    let honest = db_a
-        .change_proof(root1_a, root2.clone(), Some(b"\x20"), Some(b"\x90"), None)
+    let honest = source
+        .change_proof(
+            root1_source,
+            root2.clone(),
+            Some(b"\x20"),
+            Some(b"\x90"),
+            None,
+        )
         .unwrap();
 
     // Inject Delete at \x90 (end_key). end proof is inclusion but Delete expects exclusion.
@@ -287,7 +289,7 @@ fn test_spurious_delete_at_end_key_boundary() {
     let result =
         verify_change_proof_structure(&crafted, root2.clone(), Some(b"\x20"), Some(b"\x90"), None);
     if let Ok(ctx) = result {
-        verify_and_check(&db_b, &crafted, &ctx, root1_b)
+        verify_and_check(&target, &crafted, &ctx, root1_target)
             .expect_err("spurious Delete at end_key should be detected");
     }
 }
@@ -550,5 +552,379 @@ fn test_crafted_divergence_at_depth_zero() {
             )
         ),
         "crafted proof with skipped root should be rejected, got {err:?}"
+    );
+}
+
+// ── Adversarial tests (5-key setup with injection helpers) ──────────────
+
+type OwnedBatchOps = Vec<BatchOp<Box<[u8]>, Box<[u8]>>>;
+
+/// Helper: returns true if the (possibly corrupted) proof is rejected by
+/// either the structural check or the root hash check.
+fn is_rejected(
+    db: &Db,
+    proof: &FrozenChangeProof,
+    end_root: api::HashKey,
+    start_key: Option<&[u8]>,
+    end_key: Option<&[u8]>,
+    start_root: api::HashKey,
+) -> bool {
+    match verify_change_proof_structure(proof, end_root, start_key, end_key, None) {
+        Err(_) => true,
+        Ok(ctx) => verify_and_check(db, proof, &ctx, start_root).is_err(),
+    }
+}
+
+/// 5 well-separated 32-byte keys at nibbles 0x10, 0x30, 0x50, 0x70, 0x90.
+fn five_keys() -> [[u8; 32]; 5] {
+    let mut arr = [[0u8; 32]; 5];
+    arr[0][0] = 0x10; // A
+    arr[1][0] = 0x30; // B
+    arr[2][0] = 0x50; // C
+    arr[3][0] = 0x70; // D
+    arr[4][0] = 0x90; // E
+    arr
+}
+
+/// Non-existent gap boundaries between A..B and D..E.
+fn gap_boundaries() -> ([u8; 32], [u8; 32]) {
+    let mut start = [0u8; 32];
+    start[0] = 0x20;
+    let mut end = [0u8; 32];
+    end[0] = 0x80;
+    (start, end)
+}
+
+/// Helper for the common adversarial pattern: generate a valid bounded proof
+/// for the 5-key setup, inject a spurious operation, and assert rejection.
+#[allow(clippy::too_many_arguments)]
+fn inject_and_assert_rejected(
+    db: &Db,
+    root1: api::HashKey,
+    root2: api::HashKey,
+    valid_proof: &FrozenChangeProof,
+    start_key: &[u8],
+    end_key: &[u8],
+    spurious_op: BatchOp<Box<[u8]>, Box<[u8]>>,
+    msg: &str,
+) {
+    let mut ops: OwnedBatchOps = valid_proof.batch_ops().to_vec();
+    let pos = ops
+        .binary_search_by(|op| op.key().as_ref().cmp(spurious_op.key().as_ref()))
+        .unwrap_or_else(|i| i);
+    ops.insert(pos, spurious_op);
+
+    let attack_proof = crate::ChangeProof::new(
+        crate::Proof::new(valid_proof.start_proof().as_ref().into()),
+        crate::Proof::new(valid_proof.end_proof().as_ref().into()),
+        ops.into_boxed_slice(),
+    );
+
+    assert!(
+        is_rejected(
+            db,
+            &attack_proof,
+            root2,
+            Some(start_key),
+            Some(end_key),
+            root1
+        ),
+        "{msg}"
+    );
+}
+
+/// Verifies that a spurious Delete for an in-range key that exists in the end
+/// trie (but is unchanged between revisions) is correctly rejected.
+///
+/// Setup:
+///   - Start trie and end trie both contain keys A, B, C, D, E (with some
+///     actual changes at other keys so `batch_ops` is non-empty).
+///   - The change proof is bounded by non-existent gap keys around B..D.
+///   - Key C is unchanged between revisions and is NOT in `batch_ops`.
+///   - An attacker adds `Delete { key: C }` to `batch_ops`.
+#[test]
+fn test_spurious_delete_in_range_is_rejected() {
+    let keys = five_keys();
+    let (db, _dir) = setup_db![
+        (&keys[0], &[0xAAu8; 20]),
+        (&keys[1], &[0xBBu8; 20]),
+        (&keys[2], &[0xCCu8; 20]),
+        (&keys[3], &[0xDDu8; 20]),
+        (&keys[4], &[0xEEu8; 20])
+    ];
+    let (root1, root2) = setup_2nd_commit!(db, [(&keys[1], &[0xB2u8; 20])]);
+
+    let (start_key, end_key) = gap_boundaries();
+    let valid_proof = db
+        .change_proof(
+            root1.clone(),
+            root2.clone(),
+            Some(&start_key),
+            Some(&end_key),
+            None,
+        )
+        .unwrap();
+
+    assert!(
+        !is_rejected(
+            &db,
+            &valid_proof,
+            root2.clone(),
+            Some(&start_key),
+            Some(&end_key),
+            root1.clone(),
+        ),
+        "valid proof should pass"
+    );
+
+    inject_and_assert_rejected(
+        &db,
+        root1,
+        root2,
+        &valid_proof,
+        &start_key,
+        &end_key,
+        BatchOp::Delete {
+            key: keys[2].to_vec().into_boxed_slice(),
+        },
+        "spurious Delete of in-range key C should be rejected",
+    );
+}
+
+/// Variant: the spurious delete target shares a first nibble with a key that
+/// IS in `batch_ops`, forcing them into the same top-level subtree. The subtree
+/// must be recomputed because it contains a changed key, so the delete of the
+/// unchanged sibling should be visible.
+#[test]
+fn test_spurious_delete_same_subtree_as_changed_key() {
+    let mut keys = five_keys();
+    keys[2][0] = 0x38; // C — target, same first nibble as B (0x30)
+
+    let (db, _dir) = setup_db![
+        (&keys[0], &[0xAAu8; 20]),
+        (&keys[1], &[0xBBu8; 20]),
+        (&keys[2], &[0xCCu8; 20]),
+        (&keys[3], &[0xDDu8; 20]),
+        (&keys[4], &[0xEEu8; 20])
+    ];
+    let (root1, root2) = setup_2nd_commit!(db, [(&keys[1], &[0xB2u8; 20])]);
+
+    let (start_key, end_key) = gap_boundaries();
+    let valid_proof = db
+        .change_proof(
+            root1.clone(),
+            root2.clone(),
+            Some(&start_key),
+            Some(&end_key),
+            None,
+        )
+        .unwrap();
+
+    inject_and_assert_rejected(
+        &db,
+        root1,
+        root2,
+        &valid_proof,
+        &start_key,
+        &end_key,
+        BatchOp::Delete {
+            key: keys[2].to_vec().into_boxed_slice(),
+        },
+        "spurious Delete of C (same subtree as changed B) was NOT rejected",
+    );
+}
+
+/// Same bug with EXISTING boundary keys (inclusion proofs).
+#[test]
+fn test_spurious_delete_with_existing_boundaries() {
+    let keys = five_keys();
+    let (db, _dir) = setup_db![
+        (&keys[0], &[0xAAu8; 20]),
+        (&keys[1], &[0xBBu8; 20]),
+        (&keys[2], &[0xCCu8; 20]),
+        (&keys[3], &[0xDDu8; 20]),
+        (&keys[4], &[0xEEu8; 20])
+    ];
+    let (root1, root2) = setup_2nd_commit!(db, [(&keys[1], &[0xB2u8; 20])]);
+
+    let valid_proof = db
+        .change_proof(
+            root1.clone(),
+            root2.clone(),
+            Some(&keys[0]),
+            Some(&keys[4]),
+            None,
+        )
+        .unwrap();
+
+    assert!(
+        !is_rejected(
+            &db,
+            &valid_proof,
+            root2.clone(),
+            Some(&keys[0]),
+            Some(&keys[4]),
+            root1.clone(),
+        ),
+        "valid proof should pass"
+    );
+
+    inject_and_assert_rejected(
+        &db,
+        root1,
+        root2,
+        &valid_proof,
+        &keys[0],
+        &keys[4],
+        BatchOp::Delete {
+            key: keys[2].to_vec().into_boxed_slice(),
+        },
+        "spurious Delete with existing boundaries was NOT rejected",
+    );
+}
+
+/// Control test: swapping the value of a Put that IS in `batch_ops` is correctly
+/// rejected. This confirms the hybrid hash works for keys that were changed
+/// between revisions (their subtree is computed from the proposal, not borrowed
+/// from proof nodes).
+#[test]
+fn test_swapped_value_in_range_is_rejected() {
+    let keys = five_keys();
+    let (db, _dir) = setup_db![
+        (&keys[0], &[0xAAu8; 20]),
+        (&keys[1], &[0xBBu8; 20]),
+        (&keys[2], &[0xCCu8; 20]),
+        (&keys[3], &[0xDDu8; 20]),
+        (&keys[4], &[0xEEu8; 20])
+    ];
+    let (root1, root2) =
+        setup_2nd_commit!(db, [(&keys[1], &[0xB2u8; 20]), (&keys[3], &[0xD2u8; 20])]);
+
+    let (start_key, end_key) = gap_boundaries();
+    let valid_proof = db
+        .change_proof(
+            root1.clone(),
+            root2.clone(),
+            Some(&start_key),
+            Some(&end_key),
+            None,
+        )
+        .unwrap();
+
+    assert!(
+        valid_proof.batch_ops().len() >= 2,
+        "expected at least 2 batch_ops"
+    );
+
+    let mut ops: OwnedBatchOps = valid_proof.batch_ops().to_vec();
+    let first_put_idx = ops
+        .iter()
+        .position(|op| matches!(op, BatchOp::Put { .. }))
+        .expect("should have at least one Put");
+    let key = ops[first_put_idx].key().clone();
+    ops[first_put_idx] = BatchOp::Put {
+        key,
+        value: [0xFFu8; 20].to_vec().into_boxed_slice(),
+    };
+
+    let attack_proof = crate::ChangeProof::new(
+        crate::Proof::new(valid_proof.start_proof().as_ref().into()),
+        crate::Proof::new(valid_proof.end_proof().as_ref().into()),
+        ops.into_boxed_slice(),
+    );
+
+    assert!(
+        is_rejected(
+            &db,
+            &attack_proof,
+            root2,
+            Some(&start_key),
+            Some(&end_key),
+            root1,
+        ),
+        "swapped value of in-range key B was NOT rejected"
+    );
+}
+
+/// Control test: a spurious Put for a non-existent in-range key is correctly
+/// rejected when the key falls in a subtree that is recomputed (not borrowed).
+#[test]
+fn test_spurious_put_in_range_is_rejected() {
+    let keys = five_keys();
+    let (db, _dir) = setup_db![
+        (&keys[0], &[0xAAu8; 20]),
+        (&keys[1], &[0xBBu8; 20]),
+        (&keys[2], &[0xCCu8; 20]),
+        (&keys[3], &[0xDDu8; 20]),
+        (&keys[4], &[0xEEu8; 20])
+    ];
+    let (root1, root2) = setup_2nd_commit!(db, [(&keys[1], &[0xB2u8; 20])]);
+
+    let (start_key, end_key) = gap_boundaries();
+    let valid_proof = db
+        .change_proof(
+            root1.clone(),
+            root2.clone(),
+            Some(&start_key),
+            Some(&end_key),
+            None,
+        )
+        .unwrap();
+
+    let mut fake_key = [0u8; 32];
+    fake_key[0] = 0x60;
+    inject_and_assert_rejected(
+        &db,
+        root1,
+        root2,
+        &valid_proof,
+        &start_key,
+        &end_key,
+        BatchOp::Put {
+            key: fake_key.to_vec().into_boxed_slice(),
+            value: [0xFFu8; 20].to_vec().into_boxed_slice(),
+        },
+        "spurious Put of in-range key 0x60 was NOT rejected",
+    );
+}
+
+/// State injection via `collapse_root_to_path` (found by TLA+ model).
+///
+/// An attacker injects a spurious key at a different first nibble than the
+/// proof path. The collapse strips the injected key's nibble (it's
+/// "non-on-path"), so the hash computation never sees it.
+#[test]
+fn test_collapse_root_hides_spurious_key() {
+    type BoxBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
+    let (db, _dir) = setup_db![(b"\x90", b"orig")];
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x90", b"new!")]);
+
+    let valid_proof = db
+        .change_proof(root1.clone(), root2.clone(), None, None, None)
+        .unwrap();
+
+    assert_eq!(valid_proof.batch_ops().len(), 1);
+
+    let mut ops: Vec<BoxBatchOp> = valid_proof.batch_ops().to_vec();
+    ops.insert(
+        0,
+        BatchOp::Put {
+            key: b"\x10".to_vec().into_boxed_slice(),
+            value: b"evil".to_vec().into_boxed_slice(),
+        },
+    );
+
+    let attack_proof = crate::ChangeProof::new(
+        crate::Proof::new(valid_proof.start_proof().as_ref().into()),
+        crate::Proof::new(valid_proof.end_proof().as_ref().into()),
+        ops.into_boxed_slice(),
+    );
+
+    assert!(
+        is_rejected(&db, &attack_proof, root2, None, None, root1),
+        "spurious Put at \\x10 was NOT rejected — \
+         collapse_root_to_path stripped nibble 1 (non-on-path \
+         relative to the end proof through nibble 9), hiding \
+         the injected key from the hash computation"
     );
 }
