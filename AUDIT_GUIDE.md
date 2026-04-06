@@ -172,6 +172,13 @@ proofs):
 cargo nextest run --profile ci -p firewood test_slow_change_proof_fuzz_varlen -- --exact
 ```
 
+**Change proof adversarial fuzz** (mutates generated proofs to model adversarial
+conditions):
+
+```bash
+cargo nextest run --profile ci -p firewood test_slow_adversarial_change_proof_fuzz -- --exact
+```
+
 **Range proof fuzz**:
 
 ```bash
@@ -211,7 +218,7 @@ and will be replayed on subsequent runs.
 
 ## Formal Methods
 
-TLA+ model checking was used to verify the correctness of Firewood’s change proof verification approach. It provides more comprehensive coverage of both valid and invalid proofs even compared to fuzz testing, with the limit that the verified tries are smaller in both their branching factors and their depth. This limit is due to the computational requirements of exhaustive model checking. To verify larger configurations, the \-simulate flag was used to not exhaustively enumerate all states but instead randomly sample states from the state space.
+TLA+ model checking was used to verify the correctness of Firewood’s change proof verification approach. It provides more comprehensive coverage of both valid and invalid proofs even compared to fuzz testing, with the limit that the verified tries are smaller in both their branching factors and their depth. This limit is due to the computational requirements of exhaustive model checking. To verify larger configurations, the `-simulate` flag was used to not exhaustively enumerate all states but instead randomly sample states from the state space.
 
 Model checking was effective at identifying several edge case security and correctness bugs. All of these bugs have since been fixed. With each bug fix, the models were updated to reflect the updated implementation, and regression specifications were added to ensure that the fixed bugs were not later reintroduced.
 
@@ -223,7 +230,7 @@ There are four main models in our testing framework that build on top of each ot
 
    The main use of this model is to determine the correctness of the compressed trie operators (Compress/Decompress/Lookup/Hash) by verifying a number of properties of the trie. These include **RoundTrip** (compress/decompress is lossless), **LookupCorrect**, **StructurallyValid** (follows rules such as a node with no children must have a value), **DepthBounded**, **Hash injectivity** (no two different flat maps produce the same root hash), etc.
 
-2. **TrieOperations**: Models Insert and Delete on the trie. The state transition involves performing Insert and Deletes to explore all reachable states. The main properties that it verifies are **TrieMatchesShadow**, where the incrementally maintained compressed trie is identical to one built from scratch, **TrieWellFormed**, and **LookupMatchesShadow.**
+2. **TrieOperations**: Models Insert and Delete on the trie. The state transition involves performing Insert and Deletes to explore all reachable states. The main properties that it verifies are **TrieMatchesShadow**, where the incrementally maintained compressed trie is identical to one built from scratch, **TrieWellFormed**, and **LookupMatchesShadow**.
 
 3. **ChangeProofVerification:** Models the full change proof generation and verification pipeline. Its purpose is to verify that honest proofs are always accepted. Its state machine consists of 4 variables: *startTrie*, *endTrie*, *startKey*, and *endKey*. They are used to represent two trie revisions, and a query range.
 
@@ -233,20 +240,20 @@ There are four main models in our testing framework that build on top of each ot
 
 ### Results
 
-| Spec | Config | Mode | Property | Traces/States | Violations |                                                                                                                                                                                  
+| Spec | Config | Mode | Property | Traces/States | Violations |
 |------|--------|------|----------|---------------|-----------|
-| CompressedTrieModel | BF=2, MaxDepth=2 | Exhaustive | All | 81 states | 0 |                                                                                                                                                                     
-| CompressedTrieModel | BF=3, MaxDepth=2 | Exhaustive | All | 19,683 states | 0 |                                                                                                                                                                 
-| TrieOperations | BF=3, MaxDepth=2 | Exhaustive | All | 531,441 states | 0 |                                                                                                                                                                     
-| TrieOperations | BF=3, MaxDepth=4 | Simulate | All | ~14,000 traces | 0 |                                                                                                                                                                       
-| ChangeProofVerification | BF=2, MaxDepth=2 | Simulate | HonestProofAccepted | ~650,000 traces | 0 |                                                                                                                                             
-| ChangeProofVerification | BF=3, MaxDepth=2 | Simulate | HonestProofAccepted | ~280,000 traces | 0 |                                                                                                                                             
-| ChangeProofVerification | BF=3, MaxDepth=4 | Simulate | HonestProofAccepted | ~9,700 traces | 0 |                                                                                                                                               
-| AdversarialProof | BF=2, MaxDepth=2 | Simulate | Full enumeration | ~95,000 traces | 0 |                                                                                                                                                        
-| AdversarialProof | BF=3, MaxDepth=2 | Simulate | Full enumeration | ~10,000 traces | 0 |                                                                                                                                                        
-| AdversarialProof | BF=3, MaxDepth=4 | Simulate | Single-key tampering | ~3,200 traces | 0 |                                                                                                                                                     
+| CompressedTrieModel | BF=2, MaxDepth=2 | Exhaustive | All | 81 states | 0 |
+| CompressedTrieModel | BF=3, MaxDepth=2 | Exhaustive | All | 19,683 states | 0 |
+| TrieOperations | BF=3, MaxDepth=2 | Exhaustive | All | 531,441 states | 0 |
+| TrieOperations | BF=3, MaxDepth=4 | Simulate | All | ~14,000 traces | 0 |
+| ChangeProofVerification | BF=2, MaxDepth=2 | Simulate | Honest proof always accepted | ~650,000 traces | 0 |
+| ChangeProofVerification | BF=3, MaxDepth=2 | Simulate | Honest proof always accepted | ~280,000 traces | 0 |
+| ChangeProofVerification | BF=3, MaxDepth=4 | Simulate | Honest proof always accepted | ~9,700 traces | 0 |
+| AdversarialProof | BF=2, MaxDepth=2 | Simulate | Full enumeration | ~95,000 traces | 0 |
+| AdversarialProof | BF=3, MaxDepth=2 | Simulate | Full enumeration | ~10,000 traces | 0 |
+| AdversarialProof | BF=3, MaxDepth=4 | Simulate | Single-key tampering | ~3,200 traces | 0 |
 
 
-**BF** (Branch Factor): The number of children per trie node. Firewood uses BF=16 (hex nibbles). The model uses smaller values (2–3) for tractability. 
-                                                                                                                                                                                                                                                    
-**MaxDepth**: The maximum key length in nibbles. Keys are restricted to even lengths (matching Firewood's byte-level keys where each byte is two nibbles). MaxDepth=2 corresponds to 1-byte keys; MaxDepth=4 corresponds to 1–2 byte keys.        
+**BF** (Branch Factor): The number of children per trie node. Firewood uses BF=16 (hex nibbles). The model uses smaller values (2–3) for tractability.
+
+**MaxDepth**: The maximum key length in nibbles. Keys are restricted to even lengths (matching Firewood's byte-level keys where each byte is two nibbles). MaxDepth=2 corresponds to 1-byte keys; MaxDepth=4 corresponds to 1–2 byte keys.
