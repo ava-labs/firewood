@@ -78,11 +78,11 @@ pub(super) fn verify_and_check(
 
 mod adversarial;
 mod attack;
+mod bounds;
 mod divergent_child;
 mod edge_cases;
 mod empty_and_bounded;
 mod fuzz;
 mod partial;
 mod pipeline;
-mod root_hash;
 mod structural;
