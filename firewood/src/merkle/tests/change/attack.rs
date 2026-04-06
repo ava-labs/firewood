@@ -118,3 +118,98 @@ fn test_spurious_batch_op_detected() {
             .expect_err("spurious batch op must be detected");
     }
 }
+
+/// Attacker adds a spurious Put at `start_key` when `start_key` doesn't
+/// exist in `end_root`. The start proof is an exclusion proof. The
+/// `StartProofOperationMismatch` check catches this: Put expects inclusion
+/// but the proof is exclusion.
+#[test]
+fn test_spurious_put_at_start_key_boundary() {
+    // Keys \x20 and \x90 exist. \x10 (start_key) does NOT exist.
+    let (db_a, _dir_a) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+    let (db_b, _dir_b) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+    let root1_b = db_b.root_hash().unwrap();
+
+    // Change \x20 on db_a
+    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x20", b"changed")]);
+
+    // Generate bounded proof for [\x10, \x90].
+    // Start proof for \x10 is an exclusion proof (\x10 doesn't exist).
+    let honest = db_a
+        .change_proof(
+            root1_a,
+            root2.clone(),
+            Some(b"\x10".as_ref()),
+            Some(b"\x90".as_ref()),
+            None,
+        )
+        .unwrap();
+
+    // Add spurious Put(\x10, fake) — start_key becomes first_op_key.
+    let mut ops: Vec<BatchOp<Key, Value>> = honest.batch_ops().to_vec();
+    ops.push(BatchOp::Put {
+        key: b"\x10".to_vec().into(),
+        value: b"fake".to_vec().into(),
+    });
+    ops.sort_by(|a, b| a.key().cmp(b.key()));
+
+    let crafted = FrozenChangeProof::new(
+        crate::Proof::new(honest.start_proof().as_ref().into()),
+        crate::Proof::new(honest.end_proof().as_ref().into()),
+        ops.into_boxed_slice(),
+    );
+
+    // Structural check or root hash check should catch this.
+    let result = verify_change_proof_structure(&crafted, root2, Some(b"\x10"), Some(b"\x90"), None);
+    if let Ok(ctx) = result {
+        verify_and_check(&db_b, &crafted, &ctx, root1_b)
+            .expect_err("spurious Put at start_key should be detected");
+    }
+}
+
+/// Attacker adds a spurious Delete at `start_key` when `start_key` EXISTS
+/// in `end_root`. The start proof is an inclusion proof, but the Delete
+/// claims the key was removed — `StartProofOperationMismatch`.
+#[test]
+fn test_spurious_delete_at_start_key_boundary() {
+    // Keys \x20 and \x90 exist. start_key \x20 EXISTS in end_root.
+    let (db_a, _dir_a) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+    let (db_b, _dir_b) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+    let root1_b = db_b.root_hash().unwrap();
+
+    // Change \x90 on db_a (not \x20 — \x20 stays in end_root).
+    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x90", b"changed")]);
+
+    // Generate bounded proof for [\x20, \x90].
+    // Start proof for \x20 is an inclusion proof (\x20 exists).
+    let honest = db_a
+        .change_proof(
+            root1_a,
+            root2.clone(),
+            Some(b"\x20".as_ref()),
+            Some(b"\x90".as_ref()),
+            None,
+        )
+        .unwrap();
+
+    // Add spurious Delete(\x20) — start_key = first_op_key.
+    // The start proof is inclusion (key exists) but Delete claims
+    // it was removed — contradiction.
+    let mut ops: Vec<BatchOp<Key, Value>> = honest.batch_ops().to_vec();
+    ops.push(BatchOp::Delete {
+        key: b"\x20".to_vec().into(),
+    });
+    ops.sort_by(|a, b| a.key().cmp(b.key()));
+
+    let crafted = FrozenChangeProof::new(
+        crate::Proof::new(honest.start_proof().as_ref().into()),
+        crate::Proof::new(honest.end_proof().as_ref().into()),
+        ops.into_boxed_slice(),
+    );
+
+    let result = verify_change_proof_structure(&crafted, root2, Some(b"\x20"), Some(b"\x90"), None);
+    if let Ok(ctx) = result {
+        verify_and_check(&db_b, &crafted, &ctx, root1_b)
+            .expect_err("spurious Delete at start_key should be detected");
+    }
+}

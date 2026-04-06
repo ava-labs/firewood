@@ -352,3 +352,17 @@ fn test_change_proof_prefix_key_deleted_in_end_root() {
     // This failed with EndRootMismatch before the fix.
     verify_and_check(&db, &proof, &ctx, root1).unwrap();
 }
+
+#[test]
+fn test_generator_uses_end_key_for_complete_proof() {
+    let (db, _dir) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x10", b"changed")]);
+
+    // end_key far beyond last change, no limit — complete proof
+    let proof = db
+        .change_proof(root1, root2.clone(), None, Some(b"\xff"), None)
+        .unwrap();
+
+    // End proof validates against end_key for complete proofs
+    proof.end_proof().value_digest(b"\xff", &root2).unwrap();
+}
