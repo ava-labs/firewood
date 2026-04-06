@@ -305,3 +305,55 @@ fn test_disjoint_proof() {
 
     verify_and_check(&db, &proof, &verification, root1).unwrap();
 }
+
+/// The `prove()` fix includes divergent children in start proofs. This
+/// exercises the fixed path — a Delete near `start_key` under a shared
+/// branch produces a valid proof. Before the fix, the proof generator
+/// omitted the divergent child, leaving a verification gap.
+#[test]
+fn test_boundary_child_gap_closed_for_start_key() {
+    // \x10\x50 and \x10\x58 share a branch at nibble path [1,0].
+    let (source, _dir_source) = setup_db![
+        (b"\x10\x50", b"a"),
+        (b"\x10\x58", b"b"),
+        (b"\x30\x00", b"c")
+    ];
+    let root1_source = source.root_hash().unwrap();
+    let (target, _dir_target) = setup_db![
+        (b"\x10\x50", b"a"),
+        (b"\x10\x58", b"b"),
+        (b"\x30\x00", b"c")
+    ];
+    let root1_target = target.root_hash().unwrap();
+
+    // Delete \x10\x50, change \x30\x00. \x10\x58 is unchanged.
+    source
+        .propose(vec![
+            BatchOp::Delete {
+                key: b"\x10\x50" as &[u8],
+            },
+            BatchOp::Put {
+                key: b"\x30\x00",
+                value: b"z",
+            },
+        ])
+        .unwrap()
+        .commit()
+        .unwrap();
+    let root2 = source.root_hash().unwrap();
+
+    let honest = source
+        .change_proof(
+            root1_source,
+            root2.clone(),
+            Some(b"\x10\x50"),
+            Some(b"\x30\x00"),
+            None,
+        )
+        .unwrap();
+
+    let ctx =
+        verify_change_proof_structure(&honest, root2, Some(b"\x10\x50"), Some(b"\x30\x00"), None)
+            .unwrap();
+    verify_and_check(&target, &honest, &ctx, root1_target).unwrap();
+}

@@ -84,6 +84,5 @@ mod empty_and_bounded;
 mod fuzz;
 mod partial;
 mod pipeline;
-mod regression;
 mod root_hash;
 mod structural;

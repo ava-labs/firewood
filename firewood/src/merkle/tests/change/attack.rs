@@ -291,3 +291,57 @@ fn test_spurious_delete_at_end_key_boundary() {
             .expect_err("spurious Delete at end_key should be detected");
     }
 }
+
+/// The `start_key` value MUST be checked for inclusion proofs. If the
+/// proposal has a different value at `start_key` than `end_root`, the
+/// reconciliation or root hash comparison should detect the mismatch.
+#[test]
+fn test_crafted_tampered_start_key_value_detected() {
+    let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\x30", b"v1")];
+    let (target, _dir_target) = setup_db![(b"\x10", b"v0"), (b"\x30", b"v1")];
+    let root1_target = target.root_hash().unwrap();
+
+    let (root1_source, root2) =
+        setup_2nd_commit!(source, [(b"\x10", b"changed"), (b"\x30", b"changed")]);
+
+    let honest = source
+        .change_proof(root1_source, root2.clone(), Some(b"\x10"), None, None)
+        .unwrap();
+
+    // Verify the honest proof works.
+    let ctx =
+        verify_change_proof_structure(&honest, root2.clone(), Some(b"\x10"), None, None).unwrap();
+    verify_and_check(&target, &honest, &ctx, root1_target.clone()).unwrap();
+
+    // Tamper: replace Put(\x10, "changed") with Put(\x10, "WRONG").
+    let mut tampered_ops: Vec<BatchOp<Key, Value>> = honest.batch_ops().to_vec();
+    let idx = tampered_ops
+        .iter()
+        .position(|op| op.key().as_ref() == b"\x10")
+        .unwrap();
+    tampered_ops[idx] = BatchOp::Put {
+        key: b"\x10".to_vec().into(),
+        value: b"WRONG".to_vec().into(),
+    };
+
+    let crafted = FrozenChangeProof::new(
+        crate::Proof::new(honest.start_proof().as_ref().into()),
+        crate::Proof::new(honest.end_proof().as_ref().into()),
+        tampered_ops.into_boxed_slice(),
+    );
+
+    // Structural checks pass (hash chain is valid), but root hash
+    // verification catches the tampered value.
+    let ctx2 = verify_change_proof_structure(&crafted, root2, Some(b"\x10"), None, None).unwrap();
+    let err = verify_and_check(&target, &crafted, &ctx2, root1_target)
+        .expect_err("tampered start_key value must be detected");
+    assert!(
+        matches!(
+            err,
+            api::Error::ProofError(
+                crate::ProofError::UnexpectedValue | crate::ProofError::EndRootMismatch,
+            )
+        ),
+        "tampered start_key value must be detected, got {err:?}"
+    );
+}
