@@ -1,6 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use firewood_storage::PathComponentSliceExt;
 use firewood_storage::Preimage;
 use firewood_storage::logger::debug;
 
@@ -296,4 +297,93 @@ fn roundtrip_range_proof(proof: &FrozenRangeProof) -> FrozenRangeProof {
     let deserialized = FrozenRangeProof::from_slice(&serialized).unwrap();
     assert_eq!(proof, &deserialized);
     deserialized
+}
+
+// ── Exclusion proof divergent child tests ────────────────────────────────
+
+/// When a key doesn't exist and the proof path diverges at a branch,
+/// `prove()` must include the divergent child node so `value_digest`
+/// can confirm the key's absence.
+#[test]
+fn test_exclusion_proof_includes_divergent_child() {
+    // \x10\x58 only — proving non-existent \x10\x50 diverges at nibble 3
+    // (0 vs 8) and should include the divergent child.
+    let merkle = init_merkle([(b"\x10\x58".as_ref(), b"b".as_ref())]);
+    let root_hash = firewood_storage::HashedNodeReader::root_hash(merkle.nodestore()).unwrap();
+    let proof = merkle.prove(b"\x10\x50").unwrap();
+    let nodes = proof.as_ref();
+
+    // The last node's key must diverge from the target — it's the
+    // divergent child, not just an ancestor.
+    let last = nodes.last().unwrap();
+    let last_key_nibbles: Vec<u8> = last.key.as_byte_slice().to_vec();
+    let target_nibbles: Vec<u8> = firewood_storage::NibblesIterator::new(b"\x10\x50").collect();
+    assert_ne!(
+        last_key_nibbles, target_nibbles,
+        "should be exclusion proof"
+    );
+    assert!(
+        last_key_nibbles.len() > target_nibbles.len()
+            || last_key_nibbles
+                .iter()
+                .zip(target_nibbles.iter())
+                .any(|(a, b)| a != b),
+        "last node should be the divergent child, not an ancestor"
+    );
+
+    // Must validate as a valid exclusion proof.
+    assert!(
+        proof
+            .value_digest(b"\x10\x50", &root_hash)
+            .unwrap()
+            .is_none(),
+        "should be a valid exclusion proof"
+    );
+}
+
+/// When the child at the next nibble doesn't exist (None), the exclusion
+/// proof should NOT append a divergent child. The proof should still be
+/// a valid exclusion proof.
+#[test]
+fn test_exclusion_proof_no_child_at_next_nibble() {
+    // Keys at \x20 and \x30. Proving \x10: the root has children at
+    // nibbles 2 and 3, but NO child at nibble 1.
+    let merkle = init_merkle([(b"\x20".as_ref(), b"a".as_ref()), (b"\x30", b"b")]);
+    let root_hash = firewood_storage::HashedNodeReader::root_hash(merkle.nodestore()).unwrap();
+    let proof = merkle.prove(b"\x10").unwrap();
+
+    assert!(
+        proof.value_digest(b"\x10", &root_hash).unwrap().is_none(),
+        "should be a valid exclusion proof without divergent child"
+    );
+}
+
+/// An incomplete exclusion proof (missing the divergent child when one
+/// exists) must be rejected by `value_digest` with `ExclusionProofMissingChild`.
+#[test]
+fn test_crafted_incomplete_exclusion_proof_rejected() {
+    // \x10\x58 and \x30\x00 — proving deleted \x10\x50 should include
+    // the divergent child at \x10\x58.
+    let merkle = init_merkle([(b"\x10\x58".as_ref(), b"b".as_ref()), (b"\x30\x00", b"c")]);
+    let root_hash = firewood_storage::HashedNodeReader::root_hash(merkle.nodestore()).unwrap();
+    let full_proof = merkle.prove(b"\x10\x50").unwrap();
+
+    let nodes = full_proof.as_ref();
+    assert!(
+        nodes.len() >= 2,
+        "expected at least 2 nodes (ancestor + divergent child), got {}",
+        nodes.len()
+    );
+
+    // Strip the last node (the divergent child).
+    let truncated: Vec<crate::ProofNode> = nodes[..nodes.len() - 1].to_vec();
+    let incomplete = crate::Proof::new(truncated.into_boxed_slice());
+
+    let err = incomplete
+        .value_digest(b"\x10\x50", &root_hash)
+        .unwrap_err();
+    assert!(
+        matches!(err, crate::ProofError::ExclusionProofMissingChild),
+        "expected ExclusionProofMissingChild, got {err:?}"
+    );
 }
