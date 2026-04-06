@@ -246,12 +246,12 @@ There are four main models in our testing framework that build on top of each ot
 | CompressedTrieModel | BF=3, MaxDepth=2 | Exhaustive | Trie correctness | 19,683 states | 0 |
 | TrieOperations | BF=3, MaxDepth=2 | Exhaustive | Insert/Delete correctness | 531,441 states | 0 |
 | TrieOperations | BF=3, MaxDepth=4 | Simulate | Insert/Delete correctness | ~14,000 traces | 0 |
-| ChangeProofVerification | BF=2, MaxDepth=2 | Simulate | Honest proof always accepted | ~650,000 traces | 0 |
-| ChangeProofVerification | BF=3, MaxDepth=2 | Simulate | Honest proof always accepted | ~280,000 traces | 0 |
-| ChangeProofVerification | BF=3, MaxDepth=4 | Simulate | Honest proof always accepted | ~9,700 traces | 0 |
-| AdversarialProof | BF=2, MaxDepth=2 | Simulate | All possible diffs | ~95,000 traces | 0 |
-| AdversarialProof | BF=3, MaxDepth=2 | Simulate | All possible diffs | ~10,000 traces | 0 |
-| AdversarialProof | BF=3, MaxDepth=4 | Simulate | Single-key tampering | ~3,200 traces | 0 |
+| ChangeProofVerification | BF=2, MaxDepth=2 | Simulate | Honest proofs always accepted | ~650,000 traces | 0 |
+| ChangeProofVerification | BF=3, MaxDepth=2 | Simulate | Honest proofs always accepted | ~280,000 traces | 0 |
+| ChangeProofVerification | BF=3, MaxDepth=4 | Simulate | Honest proofs always accepted | ~9,700 traces | 0 |
+| AdversarialProof | BF=2, MaxDepth=2 | Simulate | Tampered diffs rejected | ~95,000 traces | 0 |
+| AdversarialProof | BF=3, MaxDepth=2 | Simulate | Tampered diffs rejected | ~10,000 traces | 0 |
+| AdversarialProof | BF=3, MaxDepth=4 | Simulate | Tampered diffs (single-key) rejected | ~3,200 traces | 0 |
 
 
 **BF** (Branch Factor): The number of children per trie node. Firewood uses BF=16 (hex nibbles). The models use smaller values (2–3) for tractability.
