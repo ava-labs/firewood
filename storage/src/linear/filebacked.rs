@@ -2,9 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 // This synchronous file layer is a simple implementation of what we
-// want to do for I/O. This uses a [Mutex] lock around a simple `File`
-// object. Instead, we probably should use an IO system that can perform multiple
-// read/write operations at once
+// want to do for I/O. Instead, we probably should use an IO system
+// that can perform multiple read/write operations at once
 
 #![expect(
     clippy::arithmetic_side_effects,
@@ -19,7 +18,6 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use parking_lot::Mutex;
 use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::num::NonZero;
@@ -27,20 +25,19 @@ use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 
 use firewood_metrics::{firewood_increment, firewood_set};
-use lru::LruCache as EntryLruCache;
-use lru_mem::LruCache as MemLruCache;
 
 use crate::linear::ReadableNodeMode;
 use crate::{CacheReadStrategy, CachedNode, LinearAddress, MaybePersistedNode, SharedNode};
 
+use super::sharded_cache::{ShardedFreeListCache, ShardedNodeCache};
 use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
 
 /// A [`ReadableStorage`] and [`WritableStorage`] backed by a file
 #[derive(Debug)]
 pub struct FileBacked {
     filename: PathBuf,
-    cache: Mutex<MemLruCache<LinearAddress, CachedNode>>,
-    free_list_cache: Mutex<EntryLruCache<LinearAddress, Option<LinearAddress>>>,
+    cache: ShardedNodeCache,
+    free_list_cache: ShardedFreeListCache,
     cache_read_strategy: CacheReadStrategy,
     node_hash_algorithm: crate::NodeHashAlgorithm,
     // keep before `fd` so that it is dropped first (fields are dropped in the order they are declared)
@@ -95,8 +92,8 @@ impl FileBacked {
         })?;
 
         Ok(Self {
-            cache: Mutex::new(MemLruCache::new(node_cache_memory_limit.get())),
-            free_list_cache: Mutex::new(EntryLruCache::new(free_list_cache_size)),
+            cache: ShardedNodeCache::new(node_cache_memory_limit),
+            free_list_cache: ShardedFreeListCache::new(free_list_cache_size),
             cache_read_strategy,
             filename: path,
             node_hash_algorithm,
@@ -133,22 +130,18 @@ impl ReadableStorage for FileBacked {
     }
 
     fn read_cached_node(&self, addr: LinearAddress, mode: ReadableNodeMode) -> Option<SharedNode> {
-        // BLOCKING: mutex lock on the node LRU cache. This is in the hot read path; every
-        // node lookup acquires this lock. Under concurrent readers the lock becomes a serialization
-        // point — all trie traversals contend here. Impact scales with reader concurrency.
-        let mut guard = self.cache.lock();
-        let cached = guard.get(&addr).map(|cached_node| cached_node.0.clone());
+        let cached = self.cache.get(addr);
         firewood_increment!(crate::registry::CACHE_NODE, 1, "mode" => mode.as_str(), "type" => if cached.is_some() { "hit" } else { "miss" });
         cached
     }
 
     fn free_list_cache(&self, addr: LinearAddress) -> Option<Option<LinearAddress>> {
-        // BLOCKING: mutex lock on the free-list LRU cache. Called during node allocation on
-        // every proposal/commit. Contends with writes that also update the free-list cache.
-        let mut guard = self.free_list_cache.lock();
-        let cached = guard.pop(&addr);
+        let cached = self.free_list_cache.pop(addr);
         firewood_increment!(crate::registry::CACHE_FREELIST, 1, "type" => if cached.is_some() { "hit" } else { "miss" });
-        firewood_set!(crate::registry::FREELIST_CACHE_SIZE, guard.len());
+        firewood_set!(
+            crate::registry::FREELIST_CACHE_SIZE,
+            self.free_list_cache.total_len()
+        );
         cached
     }
 
@@ -162,15 +155,19 @@ impl ReadableStorage for FileBacked {
                 // we don't cache reads
             }
             CacheReadStrategy::All => {
-                // BLOCKING: cache mutex on read path (only when CacheReadStrategy::All is set).
-                let mut guard = self.cache.lock();
-                CachedNode(node).insert_into_cache(&mut guard, addr);
+                self.cache.insert(addr, CachedNode(node));
+                CachedNode::update_cache_metrics(
+                    self.cache.total_current_size(),
+                    self.cache.total_max_size(),
+                );
             }
             CacheReadStrategy::BranchReads => {
                 if !node.is_leaf() {
-                    // BLOCKING: cache mutex on branch-read path (CacheReadStrategy::BranchReads).
-                    let mut guard = self.cache.lock();
-                    CachedNode(node).insert_into_cache(&mut guard, addr);
+                    self.cache.insert(addr, CachedNode(node));
+                    CachedNode::update_cache_metrics(
+                        self.cache.total_current_size(),
+                        self.cache.total_max_size(),
+                    );
                 }
             }
         }
@@ -207,40 +204,39 @@ impl WritableStorage for FileBacked {
         &self,
         nodes: impl IntoIterator<Item = MaybePersistedNode>,
     ) -> Result<(), FileIoError> {
-        // BLOCKING: cache mutex held while inserting every node in the batch. This is the write
-        // path after a persist; the lock is held for the entire batch iteration, blocking all
-        // concurrent reads that need the cache. Larger batches mean longer hold times.
-        let mut guard = self.cache.lock();
         for maybe_persisted_node in nodes {
             // Since we know the node is in Allocated state, we can get both address and shared node
             let (addr, shared_node) = maybe_persisted_node
                 .allocated_info()
                 .expect("node should be allocated");
 
-            CachedNode(shared_node).insert_into_cache(&mut guard, addr);
+            self.cache.insert(addr, CachedNode(shared_node));
             // The node can now be read from the general cache, so we can delete the local copy
             maybe_persisted_node.persist_at(addr);
         }
+        CachedNode::update_cache_metrics(
+            self.cache.total_current_size(),
+            self.cache.total_max_size(),
+        );
         Ok(())
     }
 
     fn invalidate_cached_nodes<'a>(&self, nodes: impl Iterator<Item = &'a MaybePersistedNode>) {
-        // BLOCKING: cache mutex held while evicting all invalidated nodes. Same concern as
-        // `write_cached_nodes` — blocks concurrent reads for the duration of the loop.
-        let mut guard = self.cache.lock();
         for addr in nodes.filter_map(MaybePersistedNode::as_linear_address) {
-            guard.remove(&addr);
+            self.cache.remove(addr);
         }
-        // Update cache metrics after removals
-        CachedNode::update_cache_metrics(&guard);
+        CachedNode::update_cache_metrics(
+            self.cache.total_current_size(),
+            self.cache.total_max_size(),
+        );
     }
 
     fn add_to_free_list_cache(&self, addr: LinearAddress, next: Option<LinearAddress>) {
-        // BLOCKING: free-list cache mutex. Called once per freed node during reap; contends
-        // with concurrent readers calling `free_list_cache()`.
-        let mut guard = self.free_list_cache.lock();
-        guard.put(addr, next);
-        firewood_set!(crate::registry::FREELIST_CACHE_SIZE, guard.len());
+        self.free_list_cache.put(addr, next);
+        firewood_set!(
+            crate::registry::FREELIST_CACHE_SIZE,
+            self.free_list_cache.total_len()
+        );
     }
 }
 

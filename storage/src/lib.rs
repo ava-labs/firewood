@@ -117,38 +117,17 @@ impl lru_mem::HeapSize for CachedNode {
 }
 
 impl CachedNode {
-    /// Insert this node into the cache, ignoring any errors.
-    ///
-    /// The only error that can occur is `EntryTooLarge`, which happens when a single
-    /// node's size exceeds the cache's maximum capacity. This is extremely unlikely
-    /// (would require a node with hundreds of megabytes of data), and if it occurs,
-    /// the node simply won't be cached. Since the cache is secondary storage and the
-    /// node is already persisted to disk, the database remains fully functional - just
-    /// with cache misses for oversized nodes.
-    ///
-    /// Updates cache memory metrics after insertion.
-    pub(crate) fn insert_into_cache(
-        self,
-        cache: &mut lru_mem::LruCache<LinearAddress, Self>,
-        addr: LinearAddress,
-    ) {
-        let _ = cache.insert(addr, self);
-        Self::update_cache_metrics(cache);
-    }
-
     /// Update cache memory usage metrics.
     ///
     /// This is called after cache operations to keep metrics in sync.
-    /// The `current_size()` and `max_size()` methods are simple field accesses,
-    /// so this is very cheap to call frequently.
     #[expect(
         clippy::cast_precision_loss,
         reason = "Precision loss is acceptable for metrics; only affects values > 2^52 bytes"
     )]
-    pub(crate) fn update_cache_metrics(cache: &lru_mem::LruCache<LinearAddress, Self>) {
+    pub(crate) fn update_cache_metrics(current_size: usize, max_size: usize) {
         use firewood_metrics::firewood_set;
-        firewood_set!(registry::CACHE_MEMORY_USED, cache.current_size() as f64);
-        firewood_set!(registry::CACHE_MEMORY_LIMIT, cache.max_size() as f64);
+        firewood_set!(registry::CACHE_MEMORY_USED, current_size as f64);
+        firewood_set!(registry::CACHE_MEMORY_LIMIT, max_size as f64);
     }
 }
 

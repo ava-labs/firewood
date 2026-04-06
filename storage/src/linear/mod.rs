@@ -19,6 +19,7 @@ pub(super) mod filebacked;
 #[cfg(feature = "io-uring")]
 mod io_uring;
 pub mod memory;
+mod sharded_cache;
 
 /// An error that occurs when reading or writing to a [`ReadableStorage`] or [`WritableStorage`]
 ///
