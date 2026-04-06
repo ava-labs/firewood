@@ -80,9 +80,46 @@ ProofFollowsKey(proofNodes, targetKey) ==
                 /\ Len(thisKey) < Len(nextKey)
                 /\ nextKey[Len(thisKey) + 1] = targetKey[Len(thisKey) + 1]
 
+\* Hash of a proof node (same as CompressedHash record structure).
+ProofNodeHash(pn) == [fp |-> pn.key, v |-> pn.value, ch |-> pn.ch]
+
+\* Full proof validity check for a target key. Models value_digest:
+\*   1. Hash chain: first node hash = rootHash; each non-terminal's
+\*      child hash at the nibble toward targetKey = next node's hash
+\*   2. Branch direction: non-terminal nodes follow targetKey's path
+\*   3. Terminal: inclusion (key matches) or valid exclusion
+\*
+\* Returns TRUE if the proof is valid for targetKey against rootHash.
+ProofValidForKey(proofNodes, targetKey, rootHash) ==
+    IF proofNodes = <<>> THEN TRUE  \* Empty proof = valid exclusion
+    ELSE
+        \* Hash chain: first node must match rootHash.
+        /\ ProofNodeHash(proofNodes[1]) = rootHash
+        \* Hash chain + branch direction for non-terminal nodes.
+        /\ \A i \in 1..(Len(proofNodes) - 1) :
+            LET thisNode == proofNodes[i]
+                nextNode == proofNodes[i + 1]
+                thisKey  == thisNode.key
+            IN  \* Node must be a strict prefix of targetKey.
+                /\ Len(thisKey) < Len(targetKey)
+                \* Nibble toward target key.
+                /\ LET nibToward == targetKey[Len(thisKey) + 1]
+                   IN  \* Child hash at that nibble must equal next node's hash.
+                       thisNode.ch[nibToward] = ProofNodeHash(nextNode)
+        \* Terminal node validity.
+        /\ LET last == proofNodes[Len(proofNodes)]
+               lastKey == last.key
+               cpl == CommonPrefixLen(lastKey, targetKey)
+           IN  \* Inclusion: key matches exactly.
+               \/ lastKey = targetKey
+               \* Exclusion: last node diverges from target.
+               \/ cpl < Len(lastKey)
+               \* Exclusion: last node is ancestor with no child
+               \* at next nibble.
+               \/ (cpl = Len(lastKey) /\ Len(targetKey) > cpl
+                   /\ last.ch[targetKey[cpl + 1]] = None)
+
 \* Is the proof an inclusion proof for the target key?
-\* Inclusion: last proof node is at the target key and has a value.
-\* Exclusion: last node diverges or has no value.
 ProofIsInclusion(proofNodes, targetKey) ==
     /\ proofNodes # <<>>
     /\ proofNodes[Len(proofNodes)].key = targetKey
@@ -93,14 +130,18 @@ ProofIsInclusion(proofNodes, targetKey) ==
 \*   - Put at lastOpKey expects inclusion (key exists in end_root)
 \*   - Delete at lastOpKey expects exclusion (key absent)
 \* Also models StartProofOperationMismatch for first op at startKey.
-EndProofOpConsistent(diff, endProof, effectiveEnd) ==
-    IF diff = {} \/ endProof = <<>> THEN TRUE
+EndProofOpConsistent(diff, endProof, rightEdge) ==
+    IF diff = {} THEN TRUE
+    ELSE IF rightEdge = None THEN TRUE
     ELSE
         LET lastOp == CHOOSE d \in diff :
                 \A d2 \in diff : SeqLte(d2.key, d.key)
-            isInclusion == ProofIsInclusion(endProof, effectiveEnd)
-        IN  (lastOp.op = "Put" => isInclusion)
-            /\ (lastOp.op = "Delete" => ~isInclusion)
+            \* Empty proof = exclusion (Rust: Err(Empty) → None).
+            \* Op consistency only applies when right_edge_key == last_op_key.
+            isInclusion == ProofIsInclusion(endProof, rightEdge)
+        IN  IF lastOp.key # rightEdge THEN TRUE
+            ELSE (lastOp.op = "Put" => isInclusion)
+                 /\ (lastOp.op = "Delete" => ~isInclusion)
 
 StartProofOpConsistent(diff, startProof, startKey) ==
     IF diff = {} \/ startProof = <<>> \/ startKey = None THEN TRUE
@@ -197,29 +238,38 @@ InsertBranchAt(node, remKey) ==
 \* Phase 2: Resolve value conflict at the proof node's target position
 \* ONLY. Does not touch intermediate nodes — those are handled by the
 \* collapse step later.
-\* Matches reconcile_branch_proof_node + on_conflict in merkle/mod.rs:2024.
+\* Matches reconcile_branch_proof_node + on_conflict in merkle/mod.rs.
 \*
-\* on_conflict logic (from verify_change_proof_root_hash:637-681):
-\*   - If node is at the exact boundary key: reject mismatch (in-range)
-\*   - Otherwise: adopt proof's value (out-of-range ancestor)
+\* on_conflict logic: a proof node is in-range if its key >= startKey
+\* (for start proofs) or <= endKey (for end proofs). This covers both
+\* inclusion proofs (exact match) and exclusion proofs where the
+\* terminal overshoots to the nearest existing key.
+\*   - In-range: reject mismatch (keep trie value)
+\*   - Out-of-range: adopt proof's value
 
-ReconcileProofNode(ptrie, pn, boundaryKeyNibbles) ==
+ReconcileProofNode(ptrie, pn, boundaryKeyNibbles, isStartProof) ==
     LET withBranch == InsertBranchAt(ptrie, pn.key)
         curVal     == GetValueAt(withBranch, pn.key)
+        \* Start proof: in-range if pn.key >= boundaryKey
+        \* End proof: in-range if pn.key <= boundaryKey
+        inRange == IF isStartProof
+                   THEN SeqLte(boundaryKeyNibbles, pn.key)
+                   ELSE SeqLte(pn.key, boundaryKeyNibbles)
     IN  IF pn.value = curVal THEN withBranch
-        ELSE IF pn.key = boundaryKeyNibbles THEN
+        ELSE IF inRange THEN
             withBranch  \* In-range: keep trie value.
         ELSE
             \* Out-of-range: adopt proof's value (may be NoVal).
             SetValueAt(withBranch, pn.key, pn.value)
 
 \* Fold reconciliation over a sequence of proof nodes.
-RECURSIVE FoldReconcile(_, _, _, _)
-FoldReconcile(ptrie, proofNodes, boundaryKey, idx) ==
+RECURSIVE FoldReconcile(_, _, _, _, _)
+FoldReconcile(ptrie, proofNodes, boundaryKey, isStartProof, idx) ==
     IF idx > Len(proofNodes) THEN ptrie
     ELSE FoldReconcile(
-            ReconcileProofNode(ptrie, proofNodes[idx], boundaryKey),
-            proofNodes, boundaryKey, idx + 1)
+            ReconcileProofNode(ptrie, proofNodes[idx], boundaryKey,
+                               isStartProof),
+            proofNodes, boundaryKey, isStartProof, idx + 1)
 
 --------------------------------------------------------------------------------
 (* Section 4: Collapse — Strip intermediate branches between proof nodes *)
@@ -229,130 +279,196 @@ FoldReconcile(ptrie, proofNodes, boundaryKey, idx) ==
 \* The proving trie may have extra structure from proposal keys that
 \* are outside the range. Strip it to match end_root's shape.
 \*
+\* In-range children at intermediate positions indicate tampered
+\* batch_ops and cause rejection (return None to signal failure).
+\* Out-of-range children are stripped normally.
+\*
 \* Corresponds to collapse_branch_to_path / collapse_strip in
-\* merkle/mod.rs:1841-2001.
+\* merkle/mod.rs.
 
-\* Strip non-on-path children and values from intermediate branches
-\* along `onPath`, then flatten single-child branches.
-\* `onPath` is the nibble sequence from the current node to the
-\* next proof node (excluding the current node's partial path).
+\* Check if a child at nibble `nib` under accumulated prefix `accPrefix`
+\* falls within [startNib, endNib]. Matches child_in_range in mod.rs.
+ChildInRange(accPrefix, nib, startNib, endNib) ==
+    LET depth == Len(accPrefix)
+        \* Compare acc_prefix against start boundary prefix.
+        startSplit == IF depth < Len(startNib) THEN depth ELSE Len(startNib)
+        accStart == SubSeq(accPrefix, 1, startSplit)
+        startPre == SubSeq(startNib, 1, startSplit)
+        startRest == SubSeq(startNib, startSplit + 1, Len(startNib))
+        aboveStart ==
+            IF accStart # startPre THEN
+                \* Compare lexicographically.
+                SeqLte(startPre, accStart) /\ accStart # startPre
+            ELSE
+                \* Tied — compare child nibble against boundary.
+                IF startRest = <<>> THEN TRUE
+                ELSE nib >= startRest[1]
+        \* Compare acc_prefix against end boundary prefix.
+        endSplit == IF depth < Len(endNib) THEN depth ELSE Len(endNib)
+        accEnd == SubSeq(accPrefix, 1, endSplit)
+        endPre == SubSeq(endNib, 1, endSplit)
+        endRest == SubSeq(endNib, endSplit + 1, Len(endNib))
+        belowEnd ==
+            IF accEnd # endPre THEN
+                SeqLte(accEnd, endPre) /\ accEnd # endPre
+            ELSE
+                IF endRest = <<>> THEN FALSE
+                ELSE nib <= endRest[1]
+    IN  aboveStart /\ belowEnd
 
-RECURSIVE CollapseStripNode(_, _)
-CollapseStripNode(node, onPath) ==
+\* Strip non-on-path children from an intermediate branch.
+\* `onPath` is the nibble path from this node to the next proof node.
+\* `accPrefix` is the accumulated nibble prefix to this node.
+\* `range` is None (no range check) or <<startNib, endNib>>.
+\*
+\* Returns None if an in-range child is found (tampered batch_ops).
+\* Otherwise returns the stripped and flattened node.
+
+RECURSIVE CollapseStripNode(_, _, _, _)
+CollapseStripNode(node, onPath, accPrefix, range) ==
     IF node = None THEN None
-    ELSE IF onPath = <<>> THEN node  \* Reached target — stop.
+    ELSE IF onPath = <<>> THEN node
     ELSE
         LET pp    == node.pp
             ppLen == Len(pp)
-            \* Consume partial path from onPath.
             afterPP == SubSeq(onPath, ppLen + 1, Len(onPath))
         IN
-            IF afterPP = <<>> THEN node  \* Path consumed within pp.
+            IF afterPP = <<>> THEN node
             ELSE
                 LET onNib == afterPP[1]
                     deeper == Tail(afterPP)
-                    branch == node
+                    \* Check each non-on-path child.
+                    \* If any is in-range, return None (rejection).
+                    hasInRangeChild ==
+                        range # None /\
+                        \E n \in Nibbles :
+                            /\ n # onNib
+                            /\ node.children[n] # None
+                            /\ ChildInRange(accPrefix, n,
+                                   range[1], range[2])
                 IN
-                    \* Strip: remove non-on-path children and value.
-                    LET stripped == [branch EXCEPT
-                            !.value = NoVal,
-                            !.children = [n \in Nibbles |->
-                                IF n = onNib
-                                THEN branch.children[n]
-                                ELSE None]]
-                        \* Recurse into on-path child.
-                        child == stripped.children[onNib]
-                        newChild == IF child = None THEN None
-                                    ELSE
-                                        LET childPPLen == Len(child.pp)
-                                            childDeeper == SubSeq(deeper,
-                                                childPPLen + 1, Len(deeper))
-                                        IN  IF childDeeper = <<>> THEN child
-                                            ELSE CollapseStripNode(child,
-                                                     deeper)
-                        updatedNode == [stripped EXCEPT
-                            !.children[onNib] = newChild]
-                    IN
-                        \* Flatten: if no value and single child, merge pp.
-                        LET numCh == Cardinality(
-                                {n \in Nibbles :
-                                    updatedNode.children[n] # None})
-                        IN  IF updatedNode.value = NoVal /\ numCh = 1 THEN
-                                LET cn == CHOOSE n \in Nibbles :
-                                        updatedNode.children[n] # None
-                                    ch == updatedNode.children[cn]
-                                IN  [ch EXCEPT !.pp =
-                                        updatedNode.pp \o <<cn>> \o ch.pp]
-                            ELSE updatedNode
+                    IF hasInRangeChild THEN None  \* Rejection.
+                    ELSE
+                        \* Strip out-of-range non-on-path children.
+                        LET stripped == [node EXCEPT
+                                !.value = NoVal,
+                                !.children = [n \in Nibbles |->
+                                    IF n = onNib
+                                    THEN node.children[n]
+                                    ELSE None]]
+                            child == stripped.children[onNib]
+                            childPrefix == accPrefix \o <<onNib>>
+                                \o (IF child # None THEN child.pp
+                                    ELSE <<>>)
+                            newChild == IF child = None THEN None
+                                        ELSE
+                                            LET childPPLen == Len(child.pp)
+                                                childDeeper == SubSeq(deeper,
+                                                    childPPLen + 1,
+                                                    Len(deeper))
+                                            IN  IF childDeeper = <<>>
+                                                THEN child
+                                                ELSE CollapseStripNode(
+                                                    child, deeper,
+                                                    childPrefix, range)
+                            updatedNode == [stripped EXCEPT
+                                !.children[onNib] = newChild]
+                        IN
+                            \* Check for rejection from recursive call.
+                            IF newChild = None /\ child # None
+                            THEN None  \* Propagate rejection.
+                            ELSE
+                                \* Flatten: single child, no value.
+                                LET numCh == Cardinality(
+                                    {n \in Nibbles :
+                                        updatedNode.children[n] # None})
+                                IN  IF updatedNode.value = NoVal
+                                       /\ numCh = 1 THEN
+                                        LET cn == CHOOSE n \in Nibbles :
+                                            updatedNode.children[n] # None
+                                            ch == updatedNode.children[cn]
+                                        IN  [ch EXCEPT !.pp =
+                                            updatedNode.pp \o <<cn>>
+                                            \o ch.pp]
+                                    ELSE updatedNode
 
-\* Collapse between two consecutive proof nodes.
-\* Navigate from root to parentKey, then call CollapseStripNode on
-\* the on-path child with the suffix leading to childKey.
-
-RECURSIVE CollapseNavigate(_, _, _)
-CollapseNavigate(node, parentKey, suffix) ==
+\* Navigate to parentKey, then collapse toward childKey.
+RECURSIVE CollapseNavigate(_, _, _, _, _)
+CollapseNavigate(node, parentKey, suffix, accPrefix, range) ==
     IF node = None THEN None
     ELSE
         LET pp  == node.pp
             cpl == CommonPrefixLen(parentKey, pp)
         IN
             IF cpl < Len(pp) THEN
-                node  \* Parent not reachable here.
+                node
             ELSE IF SubSeq(parentKey, cpl + 1, Len(parentKey)) = <<>> THEN
-                \* Arrived at parent — strip the on-path child.
                 IF suffix = <<>> THEN node
                 ELSE
                     LET firstNib == suffix[1]
                         rest     == Tail(suffix)
                         child    == node.children[firstNib]
+                        childPrefix == accPrefix \o <<firstNib>>
+                            \o (IF child # None THEN child.pp
+                                ELSE <<>>)
                         newChild == IF child = None THEN None
                                     ELSE
                                         LET cpLen == Len(child.pp)
                                             afterCP == SubSeq(rest,
                                                 cpLen + 1, Len(rest))
                                         IN  IF afterCP = <<>> THEN child
-                                            ELSE CollapseStripNode(child,
-                                                     rest)
-                    IN  [node EXCEPT !.children[firstNib] = newChild]
+                                            ELSE CollapseStripNode(
+                                                child, rest,
+                                                childPrefix, range)
+                    IN  IF newChild = None /\ child # None
+                        THEN None  \* Propagate rejection.
+                        ELSE [node EXCEPT !.children[firstNib] = newChild]
             ELSE
-                \* Descend toward parent.
                 LET rem == SubSeq(parentKey, cpl + 1, Len(parentKey))
                     ci  == rem[1]
                     rest == Tail(rem)
                     newChild == CollapseNavigate(
-                        node.children[ci], rest, suffix)
-                IN  [node EXCEPT !.children[ci] = newChild]
+                        node.children[ci], rest, suffix,
+                        accPrefix, range)
+                IN  IF newChild = None /\ node.children[ci] # None
+                    THEN None
+                    ELSE [node EXCEPT !.children[ci] = newChild]
 
-CollapseBetween(ptrie, parentKey, childKey) ==
+CollapseBetween(ptrie, parentKey, childKey, range) ==
     IF ptrie = None THEN None
     ELSE
         LET suffix == SubSeq(childKey, Len(parentKey) + 1,
                              Len(childKey))
-        IN  CollapseNavigate(ptrie, parentKey, suffix)
+            accPrefix == parentKey
+        IN  CollapseNavigate(ptrie, parentKey, suffix, accPrefix, range)
 
-\* Fold collapse over consecutive pairs of proof nodes.
-RECURSIVE FoldCollapse(_, _, _)
-FoldCollapse(ptrie, proofNodes, idx) ==
-    IF idx >= Len(proofNodes) THEN ptrie
-    ELSE FoldCollapse(
-            CollapseBetween(ptrie,
-                proofNodes[idx].key, proofNodes[idx + 1].key),
-            proofNodes, idx + 1)
-
-\* Collapse the proving trie's root when end_root's root has a longer
-\* partial path (due to out-of-range deletions compressing the root).
-\* Strips non-on-path children and flattens single-child branches so
-\* the root shape matches end_root.
-\* Matches collapse_root_to_path in merkle/mod.rs.
-CollapseRootToPath(ptrie, targetKey) ==
+\* Collapse root to match end_root's shape. Passes range to
+\* CollapseStripNode so in-range children trigger rejection.
+CollapseRootToPath(ptrie, targetKey, range) ==
     IF ptrie = None THEN None
     ELSE
-        LET ppLen == Len(ptrie.pp)
-            remaining == SubSeq(targetKey, ppLen + 1, Len(targetKey))
-        IN  IF remaining = <<>> THEN ptrie  \* Root already at target depth.
-            ELSE IF ppLen > 0 /\ SubSeq(targetKey, 1, ppLen) # ptrie.pp
-                 THEN ptrie  \* Root pp doesn't match target prefix.
-                 ELSE CollapseStripNode(ptrie, remaining)
+        LET pp == ptrie.pp
+            ppLen == Len(pp)
+        IN
+            IF Len(targetKey) <= ppLen THEN ptrie
+            ELSE IF SubSeq(targetKey, 1, ppLen) # pp THEN ptrie
+            ELSE
+                LET remaining == SubSeq(targetKey, ppLen + 1,
+                                        Len(targetKey))
+                    rootPrefix == pp
+                IN  CollapseStripNode(ptrie, remaining,
+                                      rootPrefix, range)
+
+\* Fold collapse over consecutive pairs of proof nodes.
+\* Returns None if any collapse rejects (in-range child found).
+RECURSIVE FoldCollapse(_, _, _, _)
+FoldCollapse(ptrie, proofNodes, range, idx) ==
+    IF ptrie = None THEN None  \* Propagate rejection.
+    ELSE IF idx >= Len(proofNodes) THEN ptrie
+    ELSE FoldCollapse(
+            CollapseBetween(ptrie,
+                proofNodes[idx].key, proofNodes[idx + 1].key, range),
+            proofNodes, range, idx + 1)
 
 --------------------------------------------------------------------------------
 (* Section 5: Compute Outside Children *)
@@ -469,14 +585,8 @@ HybridHash(ptrie, pnMap, outsideMap) ==
 \* Convert keys to nibble sequences for proof operations.
 KeyToNibbles(key) == key  \* In our model, keys are already nibbles.
 
-\* The right edge of the proven range. For non-truncated proofs
-\* (which is all our model tests — no max_length parameter), the
-\* right edge is end_key when present, falling back to last_op_key.
-\*
-\* Previously this was "effective_end" which unconditionally used
-\* last_op_key, creating a gap between last_op_key and end_key
-\* where borrowed subtree hashes hid tampered keys (Bug 2).
-\*
+\* Right edge of the proven range. For non-truncated proofs (all our
+\* model tests), prefer end_key, fall back to last_op_key.
 \* Matches compute_right_edge_key in proofs/change.rs.
 RightEdgeKey(diff, endKey) ==
     IF endKey # None THEN endKey
@@ -499,7 +609,6 @@ VerifyChangeProof(startTrie, endTrie, startKey, endKey) ==
         proposalFlat == ApplyDiff(startTrie, diff)
         proposal     == Compress(proposalFlat)
 
-        \* Right edge of proven range (replaces old effective_end).
         rightEdge == RightEdgeKey(diff, endKey)
 
         \* Step 3: Extract proofs from end trie.
@@ -507,6 +616,12 @@ VerifyChangeProof(startTrie, endTrie, startKey, endKey) ==
                       ELSE ExtractProof(endCtrie, startKey)
         endProof   == IF rightEdge = None THEN <<>>
                       ELSE ExtractProof(endCtrie, rightEdge)
+
+        \* Nibble-level range for collapse range checks.
+        startKeyNibs == IF startKey = None THEN <<>> ELSE startKey
+        endKeyNibs   == IF rightEdge = None THEN <<>> ELSE rightEdge
+        range == IF startKey = None /\ rightEdge = None THEN None
+                 ELSE <<startKeyNibs, endKeyNibs>>
 
     IN
         \* Case 1: Both proofs empty — direct hash comparison.
@@ -516,41 +631,44 @@ VerifyChangeProof(startTrie, endTrie, startKey, endKey) ==
             IN  proposalHash = endRoot
 
         ELSE
-            \* Step 4: Fork proposal into proving trie and reconcile.
+            \* Step 4: Reconcile proof nodes (>= / <= for in-range).
             LET pt1 == FoldReconcile(proposal, startProof,
-                            startKey, 1)
+                            startKeyNibs, TRUE, 1)
                 pt2 == FoldReconcile(pt1, endProof,
-                            rightEdge, 1)
+                            endKeyNibs, FALSE, 1)
 
                 \* Step 5: Collapse between consecutive proof nodes.
-                pt3 == FoldCollapse(pt2, startProof, 1)
-                pt4 == FoldCollapse(pt3, endProof, 1)
+                \* In-range children trigger rejection (None).
+                pt3 == FoldCollapse(pt2, startProof, range, 1)
+                pt4 == FoldCollapse(pt3, endProof, range, 1)
 
-                \* Step 5b: Collapse root to match end_root's shape.
-                \* When out-of-range deletions compress end_root's root,
-                \* the proposal root retains the old shape. Strip
-                \* non-on-path children from the root so it matches.
+                \* Step 5b: Collapse root to match end_root shape.
                 firstProofKey ==
                     IF startProof # <<>> THEN startProof[1].key
                     ELSE IF endProof # <<>> THEN endProof[1].key
                     ELSE <<>>
-                pt5 == CollapseRootToPath(pt4, firstProofKey)
+                pt5 == CollapseRootToPath(pt4, firstProofKey, range)
 
-                \* Step 6: Compute outside children.
-                startOutside == ComputeOutsideChildren(
-                    startProof, startKey, TRUE)
-                endOutside   == ComputeOutsideChildren(
-                    endProof, rightEdge, FALSE)
-                allOutside   == MergeOutside(startOutside, endOutside)
+            IN
+                \* Collapse rejection propagates as None.
+                IF pt5 = None THEN FALSE
+                ELSE
+                    \* Step 6: Compute outside children.
+                    LET startOutside == ComputeOutsideChildren(
+                            startProof, startKey, TRUE)
+                        endOutside   == ComputeOutsideChildren(
+                            endProof, rightEdge, FALSE)
+                        allOutside   == MergeOutside(
+                            startOutside, endOutside)
 
-                \* Step 7: Build proof node map and compute hybrid hash.
-                pnMap == ProofNodeMap(startProof, endProof)
+                        \* Step 7: Build proof node map.
+                        pnMap == ProofNodeMap(startProof, endProof)
 
-                \* Step 8: Compute hybrid hash.
-                computed == HybridHash(pt5, pnMap, allOutside)
+                        \* Step 8: Compute hybrid hash.
+                        computed == HybridHash(pt5, pnMap, allOutside)
 
-            \* Step 9: Compare with end_root.
-            IN  computed = endRoot
+                    \* Step 9: Compare with end_root.
+                    IN  computed = endRoot
 
 --------------------------------------------------------------------------------
 (* Section 8: Adversarial Verification *)
@@ -566,12 +684,12 @@ VerifyWithDiff(st, et, sk, ek, tamperedDiff) ==
                     ELSE CompressedHash(endCtrie, <<>>)
 
         \* Honest proofs (extracted from end trie using right_edge_key).
-        honestDiff     == ComputeDiff(st, et, sk, ek)
+        honestDiff      == ComputeDiff(st, et, sk, ek)
         honestRightEdge == RightEdgeKey(honestDiff, ek)
-        startProof     == IF sk = None THEN <<>>
-                          ELSE ExtractProof(endCtrie, sk)
-        endProof       == IF honestRightEdge = None THEN <<>>
-                          ELSE ExtractProof(endCtrie, honestRightEdge)
+        startProof      == IF sk = None THEN <<>>
+                           ELSE ExtractProof(endCtrie, sk)
+        endProof        == IF honestRightEdge = None THEN <<>>
+                           ELSE ExtractProof(endCtrie, honestRightEdge)
 
         \* Proposal built from tampered diff.
         proposalFlat == ApplyDiff(st, tamperedDiff)
@@ -581,14 +699,24 @@ VerifyWithDiff(st, et, sk, ek, tamperedDiff) ==
         \* against: for non-truncated proofs, end_key or last_op_key.
         tamperedRightEdge == RightEdgeKey(tamperedDiff, ek)
 
+        \* Range for reconcile and collapse — uses tamperedRightEdge,
+        \* matching the Rust code where the verification context's
+        \* right_edge_key comes from the received batch_ops.
+        \* The hash chain check in ProofValidForKey ensures the proof
+        \* is compatible with tamperedRightEdge before reaching here.
+        skNibs == IF sk = None THEN <<>> ELSE sk
+        ekNibs == IF tamperedRightEdge = None THEN <<>> ELSE tamperedRightEdge
+        range  == IF sk = None /\ tamperedRightEdge = None THEN None
+                  ELSE <<skNibs, ekNibs>>
+
     IN
         \* ── Structural checks (model verify_change_proof_structure) ──
 
-        \* 1. Proof must follow correct branch toward target key.
-        /\ (endProof # <<>> /\ tamperedRightEdge # None
-            => ProofFollowsKey(endProof, tamperedRightEdge))
-        /\ (startProof # <<>> /\ sk # None
-            => ProofFollowsKey(startProof, sk))
+        \* 1. Full value_digest check: hash chain + branch direction + terminal.
+        /\ (tamperedRightEdge # None
+            => ProofValidForKey(endProof, tamperedRightEdge, endRoot))
+        /\ (sk # None
+            => ProofValidForKey(startProof, sk, endRoot))
 
         \* 2. Op consistency: Put expects inclusion, Delete expects exclusion.
         /\ EndProofOpConsistent(tamperedDiff, endProof, tamperedRightEdge)
@@ -600,27 +728,30 @@ VerifyWithDiff(st, et, sk, ek, tamperedDiff) ==
                                     ELSE CompressedHash(proposal, <<>>)
                 IN  proposalHash = endRoot
            ELSE
-                LET pt1 == FoldReconcile(proposal, startProof, sk, 1)
+                LET pt1 == FoldReconcile(proposal, startProof,
+                                skNibs, TRUE, 1)
                     pt2 == FoldReconcile(pt1, endProof,
-                                honestRightEdge, 1)
-                    pt3 == FoldCollapse(pt2, startProof, 1)
-                    pt4 == FoldCollapse(pt3, endProof, 1)
+                                ekNibs, FALSE, 1)
+                    pt3 == FoldCollapse(pt2, startProof, range, 1)
+                    pt4 == FoldCollapse(pt3, endProof, range, 1)
 
                     firstProofKey ==
                         IF startProof # <<>> THEN startProof[1].key
                         ELSE IF endProof # <<>> THEN endProof[1].key
                         ELSE <<>>
-                    pt5 == CollapseRootToPath(pt4, firstProofKey)
-
-                    startOutside == ComputeOutsideChildren(
-                        startProof, sk, TRUE)
-                    endOutside   == ComputeOutsideChildren(
-                        endProof, honestRightEdge, FALSE)
-                    allOutside   == MergeOutside(startOutside, endOutside)
-
-                    pnMap    == ProofNodeMap(startProof, endProof)
-                    computed == HybridHash(pt5, pnMap, allOutside)
-                IN  computed = endRoot
+                    pt5 == CollapseRootToPath(pt4, firstProofKey, range)
+                IN
+                    IF pt5 = None THEN FALSE
+                    ELSE
+                        LET startOutside == ComputeOutsideChildren(
+                                startProof, sk, TRUE)
+                            endOutside   == ComputeOutsideChildren(
+                                endProof, tamperedRightEdge, FALSE)
+                            allOutside   == MergeOutside(
+                                startOutside, endOutside)
+                            pnMap    == ProofNodeMap(startProof, endProof)
+                            computed == HybridHash(pt5, pnMap, allOutside)
+                        IN  computed = endRoot
 
 \* Generate all single-key tamperings of the honest diff for a given range.
 \* For each in-range key NOT in the honest diff:
@@ -693,10 +824,5 @@ Next == UNCHANGED vars
 HonestProofAccepted ==
     ValidRange(startKey, endKey) =>
         VerifyChangeProof(startTrie, endTrie, startKey, endKey)
-
-\* P2: Adversarial proofs (single spurious op) are always rejected.
-AdversarialProofRejected ==
-    \A tampered \in SpuriousOps(startTrie, endTrie, startKey, endKey) :
-        ~VerifyWithDiff(startTrie, endTrie, startKey, endKey, tampered)
 
 =============================================================================

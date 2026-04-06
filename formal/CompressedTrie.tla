@@ -24,8 +24,11 @@ Nibbles == 0..(BF - 1)
 Values == 1..NumValues
 NoVal == 0           \* Absent value (integer to avoid mixed-type sets)
 
-\* All possible keys: nibble sequences of length 1..MaxDepth.
-AllKeys == UNION {[1..d -> Nibbles] : d \in 1..MaxDepth}
+\* All possible keys: even-length nibble sequences up to MaxDepth.
+\* Only even lengths because Firewood keys are byte sequences — each
+\* byte is two nibbles, so values only exist at even nibble depths.
+\* This matches the Rust ValueAtOddNibbleLength check.
+AllKeys == UNION {[1..d -> Nibbles] : d \in {d \in 1..MaxDepth : d % 2 = 0}}
 
 \* All possible tries: partial functions from keys to values.
 AllTries == [AllKeys -> Values \cup {NoVal}]

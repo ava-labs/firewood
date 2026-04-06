@@ -40,4 +40,13 @@ OnlyCorrectDiffAccepted ==
                     InRange(k, sk, ek) =>
                         proposalFlat(diff)[k] = endTrie[k]
 
+\* Single-key tampering check: for each in-range key not in the honest
+\* diff, try adding one spurious Delete or Put and verify rejection.
+\* Lighter than OnlyCorrectDiffAccepted (linear vs exponential in keys),
+\* enabling adversarial checks at larger MaxDepth.
+AdversarialProofRejected ==
+    ValidRange(startKey, endKey) =>
+        \A tampered \in SpuriousOps(startTrie, endTrie, startKey, endKey) :
+            ~VerifyWithDiff(startTrie, endTrie, startKey, endKey, tampered)
+
 =============================================================================

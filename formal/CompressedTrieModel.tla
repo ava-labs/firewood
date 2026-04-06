@@ -24,6 +24,7 @@ EXTENDS CompressedTrie
 VARIABLE trie
 
 Init == trie \in AllTries
+SimInit == trie = RandomElement(AllTries)
 Next == UNCHANGED trie
 
 \* P1: Round-trip.
