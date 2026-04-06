@@ -176,6 +176,10 @@ pub enum ProofError {
     #[error("proof node has a value not included in key-value pairs")]
     ProofNodeHasUnincludedValue,
 
+    /// A proof node's value differs from the corresponding key-value pair
+    #[error("proof node value does not match the key-value pair at the same key")]
+    ProofNodeValueMismatch,
+
     #[error("the proposal for a change proof is None as it has been consumed")]
     ProposalIsNone,
 
