@@ -205,7 +205,11 @@ impl ProposedChangeProofContext<'_> {
                 return Ok(hash);
             }
             ProposalState::Proposed(handle) => handle,
-            ProposalState::Failed => return Err(api::Error::CommitAlreadyFailed),
+            ProposalState::Failed => {
+                return Err(api::Error::InternalError(
+                    "proposal already failed to commit".into(),
+                ));
+            }
         };
 
         let hash = match handle.commit_proposal() {
