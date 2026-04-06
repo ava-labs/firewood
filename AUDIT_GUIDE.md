@@ -249,8 +249,8 @@ There are four main models in our testing framework that build on top of each ot
 | ChangeProofVerification | BF=2, MaxDepth=2 | Simulate | Honest proof always accepted | ~650,000 traces | 0 |
 | ChangeProofVerification | BF=3, MaxDepth=2 | Simulate | Honest proof always accepted | ~280,000 traces | 0 |
 | ChangeProofVerification | BF=3, MaxDepth=4 | Simulate | Honest proof always accepted | ~9,700 traces | 0 |
-| AdversarialProof | BF=2, MaxDepth=2 | Simulate | Full enumeration | ~95,000 traces | 0 |
-| AdversarialProof | BF=3, MaxDepth=2 | Simulate | Full enumeration | ~10,000 traces | 0 |
+| AdversarialProof | BF=2, MaxDepth=2 | Simulate | All possible diffs | ~95,000 traces | 0 |
+| AdversarialProof | BF=3, MaxDepth=2 | Simulate | All possible diffs | ~10,000 traces | 0 |
 | AdversarialProof | BF=3, MaxDepth=4 | Simulate | Single-key tampering | ~3,200 traces | 0 |
 
 
