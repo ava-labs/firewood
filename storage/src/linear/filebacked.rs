@@ -133,6 +133,9 @@ impl ReadableStorage for FileBacked {
     }
 
     fn read_cached_node(&self, addr: LinearAddress, mode: ReadableNodeMode) -> Option<SharedNode> {
+        // BLOCKING: mutex lock on the node LRU cache. This is in the hot read path; every
+        // node lookup acquires this lock. Under concurrent readers the lock becomes a serialization
+        // point — all trie traversals contend here. Impact scales with reader concurrency.
         let mut guard = self.cache.lock();
         let cached = guard.get(&addr).map(|cached_node| cached_node.0.clone());
         firewood_increment!(crate::registry::CACHE_NODE, 1, "mode" => mode.as_str(), "type" => if cached.is_some() { "hit" } else { "miss" });
@@ -140,6 +143,8 @@ impl ReadableStorage for FileBacked {
     }
 
     fn free_list_cache(&self, addr: LinearAddress) -> Option<Option<LinearAddress>> {
+        // BLOCKING: mutex lock on the free-list LRU cache. Called during node allocation on
+        // every proposal/commit. Contends with writes that also update the free-list cache.
         let mut guard = self.free_list_cache.lock();
         let cached = guard.pop(&addr);
         firewood_increment!(crate::registry::CACHE_FREELIST, 1, "type" => if cached.is_some() { "hit" } else { "miss" });
@@ -157,11 +162,13 @@ impl ReadableStorage for FileBacked {
                 // we don't cache reads
             }
             CacheReadStrategy::All => {
+                // BLOCKING: cache mutex on read path (only when CacheReadStrategy::All is set).
                 let mut guard = self.cache.lock();
                 CachedNode(node).insert_into_cache(&mut guard, addr);
             }
             CacheReadStrategy::BranchReads => {
                 if !node.is_leaf() {
+                    // BLOCKING: cache mutex on branch-read path (CacheReadStrategy::BranchReads).
                     let mut guard = self.cache.lock();
                     CachedNode(node).insert_into_cache(&mut guard, addr);
                 }
@@ -176,6 +183,9 @@ impl ReadableStorage for FileBacked {
 
 impl WritableStorage for FileBacked {
     fn write(&self, offset: u64, object: &[u8]) -> Result<usize, FileIoError> {
+        // BLOCKING: `write_all_at` is a blocking pwrite(2) syscall. Duration depends on I/O
+        // scheduler, storage device latency, and page-cache pressure. On a cold page cache or
+        // slow device this can be tens of milliseconds. Called per-node on the non-io-uring path.
         self.fd
             .write_all_at(object, offset)
             .map(|()| object.len())
@@ -197,6 +207,9 @@ impl WritableStorage for FileBacked {
         &self,
         nodes: impl IntoIterator<Item = MaybePersistedNode>,
     ) -> Result<(), FileIoError> {
+        // BLOCKING: cache mutex held while inserting every node in the batch. This is the write
+        // path after a persist; the lock is held for the entire batch iteration, blocking all
+        // concurrent reads that need the cache. Larger batches mean longer hold times.
         let mut guard = self.cache.lock();
         for maybe_persisted_node in nodes {
             // Since we know the node is in Allocated state, we can get both address and shared node
@@ -212,6 +225,8 @@ impl WritableStorage for FileBacked {
     }
 
     fn invalidate_cached_nodes<'a>(&self, nodes: impl Iterator<Item = &'a MaybePersistedNode>) {
+        // BLOCKING: cache mutex held while evicting all invalidated nodes. Same concern as
+        // `write_cached_nodes` — blocks concurrent reads for the duration of the loop.
         let mut guard = self.cache.lock();
         for addr in nodes.filter_map(MaybePersistedNode::as_linear_address) {
             guard.remove(&addr);
@@ -221,6 +236,8 @@ impl WritableStorage for FileBacked {
     }
 
     fn add_to_free_list_cache(&self, addr: LinearAddress, next: Option<LinearAddress>) {
+        // BLOCKING: free-list cache mutex. Called once per freed node during reap; contends
+        // with concurrent readers calling `free_list_cache()`.
         let mut guard = self.free_list_cache.lock();
         guard.put(addr, next);
         firewood_set!(crate::registry::FREELIST_CACHE_SIZE, guard.len());
@@ -267,6 +284,10 @@ impl Read for PredictiveReader<'_> {
         if self.len == self.pos {
             let bytes_left_in_page = PREDICTIVE_READ_BUFFER_SIZE
                 - (self.offset % PREDICTIVE_READ_BUFFER_SIZE as u64) as usize;
+            // BLOCKING: `read_at` is a blocking pread(2) syscall. Every cache miss on the read
+            // path goes through here. On warm page cache this is sub-microsecond; on cold cache
+            // or slow storage this can be many milliseconds. Called on any trie traversal that
+            // encounters a node not in the in-memory cache.
             let read = self
                 .fd
                 .read_at(&mut self.buffer[..bytes_left_in_page], self.offset)?;

@@ -58,6 +58,10 @@ impl<K: PartialEq, V: ?Sized> ArcCache<K, V> {
         key: K,
         factory: impl FnOnce(&K) -> Result<Arc<V>, E>,
     ) -> Result<Arc<V>, E> {
+        // BLOCKING: the cache mutex is held across the entire function, including the `factory`
+        // call on a cache miss. In the FFI layer the factory calls `Db::view()`, which acquires
+        // internal revision-manager locks. Holding this mutex during the factory call serializes
+        // all concurrent FFI view lookups and can compound lock contention with the inner locks.
         let mut cache = self.lock();
         if let Some((cached_key, value)) = cache.as_ref()
             && *cached_key == key

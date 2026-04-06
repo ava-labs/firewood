@@ -167,6 +167,10 @@ impl PersistWorker {
     ///
     /// Propagates any panic from the background thread.
     pub(crate) fn persist(&self, committed: CommittedRevision) -> Result<(), PersistError> {
+        // BLOCKING: `push` will block the calling thread (i.e. the commit path) if all permits
+        // are consumed — meaning the background persist thread has fallen behind. This is the
+        // primary backpressure mechanism: excessive commit rates are slowed down here until the
+        // persist loop catches up and releases permits via the `commit_not_full` condvar.
         if self.shared.channel.push(committed).is_err() {
             self.join_handle();
             self.check_error()?;
@@ -244,6 +248,10 @@ impl PersistWorker {
     ///
     /// Propagates the panic if the background thread panicked.
     fn join_handle(&self) {
+        // BLOCKING: `handle.lock()` acquires the JoinHandle mutex (fast). `handle.join()` then
+        // blocks until the background thread exits — which can be an arbitrarily long wait if
+        // the thread is mid-persist or mid-reap with slow disk I/O. This is only called from
+        // `persist()` on a channel shutdown or from `close()`, so normal operation is unaffected.
         if let Some(handle) = self.handle.lock().take()
             && let Err(payload) = handle.join()
         {
@@ -321,6 +329,11 @@ impl PersistChannel {
         let mut state = self.state.lock();
         state.emit_permits();
 
+        // BLOCKING: condvar wait. The commit thread parks here when all permits are consumed
+        // (i.e. `deferred_persistence_commit_count` commits have accumulated without a persist).
+        // It wakes when the background persist loop calls `commit_not_full.notify_all()` after
+        // releasing permits. Duration is bounded by how fast the background thread can write a
+        // revision to disk. Under slow I/O this can stall commits for hundreds of milliseconds.
         while state.permits_available == 0 && !state.shutdown {
             firewood_increment!(crate::registry::COMMIT_BLOCKED, 1);
             self.commit_not_full.wait(&mut state);
@@ -372,7 +385,11 @@ impl PersistChannel {
                 if !state.pending_reaps.is_empty() {
                     break (0, std::mem::take(&mut state.pending_reaps), None);
                 }
-                // Block until it is woken up by the committer thread.
+                // BLOCKING: condvar wait. The background persist thread parks here when there is
+                // no work to do (permits above threshold, no pending reaps). It is woken by the
+                // commit thread via `persist_ready.notify_one()`. While parked the thread
+                // consumes no CPU, but wake latency from a sleeping SQPOLL thread (io-uring) or
+                // OS scheduler jitter can add a few microseconds of lag to each persist cycle.
                 self.persist_ready.wait(&mut state);
             }
         };
@@ -543,6 +560,10 @@ impl PersistLoop {
 
     /// Persists the revision to disk.
     fn persist_to_disk(&self, revision: &CommittedRevision) -> Result<(), PersistError> {
+        // BLOCKING: mutex lock on the shared `NodeStoreHeader`. Held for the entire duration of
+        // the disk flush (serializes all node writes + header write). Any concurrent caller of
+        // `RevisionManager::locked_header()` (e.g. `Db::check`) will stall until this returns.
+        // Under heavy I/O this can take tens to hundreds of milliseconds.
         let mut header = self.shared.header.lock();
         revision.persist(&mut header).map_err(|e| {
             error!("Failed to persist revision: {e}");
@@ -552,6 +573,10 @@ impl PersistLoop {
 
     /// Adds the nodes of this revision to the free lists.
     fn reap(&self, nodestore: NodeStore<Committed, FileBacked>) -> Result<(), PersistError> {
+        // BLOCKING: same header mutex as `persist_to_disk`. Held while writing all freed-node
+        // metadata back to the free-list in storage. Contends with any `persist_to_disk` that
+        // might be running concurrently (they cannot — both run in the single background thread —
+        // but the lock also blocks external `locked_header()` callers).
         nodestore
             .reap_deleted(&mut self.shared.header.lock())
             .map_err(|e| {
