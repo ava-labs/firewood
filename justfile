@@ -124,8 +124,8 @@ update-ffi-flake: check-nix
     set -euo pipefail
     cd ffi
 
-    echo "ensuring flake lock file is current for golang"
-    nix flake update golang
+    echo "ensuring flake lock file is current for golang and rust-overlay"
+    nix flake update golang rust-overlay
 
     echo "checking for a consistent golang verion"
     ../scripts/run-just.sh check-golang-version
