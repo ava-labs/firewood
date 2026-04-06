@@ -443,7 +443,7 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         key_values,
     )?;
 
-    verify_root_hash(
+    verify_range_proof_root_hash(
         &all_proof_nodes,
         key_values,
         proof,
@@ -495,7 +495,7 @@ fn verify_proof_node_values(
 
 /// Reconstructs the trie from key-value pairs and proof nodes, then verifies
 /// that the computed root hash matches the expected one.
-fn verify_root_hash<H: ProofCollection<Node = ProofNode>>(
+fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
     all_proof_nodes: &[&ProofNode],
     key_values: &[(impl KeyType, impl ValueType)],
     proof: &RangeProof<impl KeyType, impl ValueType, H>,
