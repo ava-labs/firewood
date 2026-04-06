@@ -462,3 +462,93 @@ fn test_crafted_value_at_odd_nibble_length_rejected() {
         "expected ValueAtOddNibbleLength, got {err:?}"
     );
 }
+
+/// Craft start/end proofs from two disjoint bounded proofs, skipping the
+/// shared root node. The proofs diverge at depth zero — reconciliation
+/// should detect the inconsistency.
+#[test]
+fn test_crafted_divergence_at_depth_zero() {
+    let (source, _dir_source) = setup_db![
+        (b"\x10", b"v0"),
+        (b"\x11", b"v1"),
+        (b"\xa0", b"v2"),
+        (b"\xa1", b"v3")
+    ];
+    let root1_source = source.root_hash().unwrap();
+    let (target, _dir_target) = setup_db![
+        (b"\x10", b"v0"),
+        (b"\x11", b"v1"),
+        (b"\xa0", b"v2"),
+        (b"\xa1", b"v3")
+    ];
+    let root1_target = target.root_hash().unwrap();
+
+    let changes: Vec<BatchOp<&[u8], &[u8]>> = vec![
+        BatchOp::Put {
+            key: b"\x10",
+            value: b"changed",
+        },
+        BatchOp::Put {
+            key: b"\xa0",
+            value: b"changed2",
+        },
+    ];
+    source.propose(changes).unwrap().commit().unwrap();
+    let root2 = source.root_hash().unwrap();
+
+    let left = source
+        .change_proof(
+            root1_source.clone(),
+            root2.clone(),
+            Some(b"\x10"),
+            Some(b"\x11"),
+            None,
+        )
+        .unwrap();
+    let right = source
+        .change_proof(
+            root1_source,
+            root2.clone(),
+            Some(b"\xa0"),
+            Some(b"\xa1"),
+            None,
+        )
+        .unwrap();
+
+    // Skip shared root to create divergence at position 0
+    let s = left.start_proof().as_ref();
+    let e = right.end_proof().as_ref();
+    assert!(s.len() >= 2 && e.len() >= 2);
+
+    let crafted = FrozenChangeProof::new(
+        crate::Proof::new(s[1..].into()),
+        crate::Proof::new(e[1..].into()),
+        Box::new([BatchOp::Put {
+            key: b"\x50".to_vec().into(),
+            value: b"mid".to_vec().into(),
+        }]),
+    );
+
+    let parent = target.revision(root1_target).unwrap();
+    let proposal = target
+        .apply_change_proof_to_parent(&crafted, &*parent)
+        .unwrap();
+
+    let verification = ChangeProofVerificationContext {
+        end_root: root2,
+        start_key: Some(b"\x10".to_vec().into()),
+        end_key: Some(b"\xa1".to_vec().into()),
+        right_edge_key: Some(b"\xa1".to_vec().into()),
+    };
+
+    let err = verify_change_proof_root_hash(&crafted, &verification, &proposal).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            api::Error::ProofError(
+                crate::ProofError::UnexpectedValue | crate::ProofError::EndRootMismatch,
+            )
+        ),
+        "crafted proof with skipped root should be rejected, got {err:?}"
+    );
+}

@@ -7,191 +7,139 @@ use super::*;
 
 #[test]
 fn test_empty_batch_ops_with_nonempty_proofs() {
-    let (db_a, _dir_a) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
-    let (db_b, _dir_b) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
-    let root1_b = db_b.root_hash().unwrap();
+    let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+    let (target, _dir_target) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+    let root1_target = target.root_hash().unwrap();
 
     // Change only \x30 (outside range [\x10, \x20])
-    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x30", b"changed")]);
+    let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x30", b"changed")]);
 
-    let proof = db_a
-        .change_proof(root1_a, root2.clone(), Some(b"\x10"), Some(b"\x20"), None)
+    let proof = source
+        .change_proof(
+            root1_source,
+            root2.clone(),
+            Some(b"\x10"),
+            Some(b"\x20"),
+            None,
+        )
         .unwrap();
     assert!(proof.batch_ops().is_empty());
+    assert!(!proof.start_proof().is_empty());
+    assert!(!proof.end_proof().is_empty());
 
     let ctx =
         verify_change_proof_structure(&proof, root2, Some(b"\x10"), Some(b"\x20"), None).unwrap();
-    verify_and_check(&db_b, &proof, &ctx, root1_b).unwrap();
+    verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
-
-// test_empty_batch_ops_end_nibbles_fallback removed: this attack scenario
-// requires the receiver's base state to differ from the sender's within the
-// proven range, which means different start_roots. In practice, the receiver
-// always verifies against its own start_root, so this scenario is already
-// covered by the root hash check in the empty-batch-ops happy-path test.
 
 #[test]
 fn test_odd_depth_proof_node_accepted() {
-    let (db_a, _dir_a) = setup_db![(b"\x12", b"v0"), (b"\x13", b"v1"), (b"\x50", b"v2")];
-    let (db_b, _dir_b) = setup_db![(b"\x12", b"v0"), (b"\x13", b"v1"), (b"\x50", b"v2")];
-    let root1_b = db_b.root_hash().unwrap();
+    let (source, _dir_source) = setup_db![(b"\x12", b"v0"), (b"\x13", b"v1"), (b"\x50", b"v2")];
+    let (target, _dir_target) = setup_db![(b"\x12", b"v0"), (b"\x13", b"v1"), (b"\x50", b"v2")];
+    let root1_target = target.root_hash().unwrap();
 
-    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\x50", b"changed")]);
+    let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x50", b"changed")]);
 
-    let proof = db_a
-        .change_proof(root1_a, root2.clone(), Some(b"\x14"), None, None)
+    let proof = source
+        .change_proof(root1_source, root2.clone(), Some(b"\x14"), None, None)
         .unwrap();
+    assert_eq!(proof.batch_ops().len(), 1);
+    // \x14 doesn't exist — start proof is exclusion at an odd nibble depth.
+    assert!(
+        proof
+            .start_proof()
+            .value_digest(b"\x14", &root2)
+            .unwrap()
+            .is_none()
+    );
     let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x14"), None, None).unwrap();
-    verify_and_check(&db_b, &proof, &ctx, root1_b).unwrap();
+    verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
 #[test]
 fn test_start_proof_inclusion_with_children_below() {
-    let (db_a, _dir_a) = setup_db![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
-    let (db_b, _dir_b) = setup_db![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
-    let root1_b = db_b.root_hash().unwrap();
+    let (source, _dir_source) = setup_db![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
+    let (target, _dir_target) = setup_db![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
+    let root1_target = target.root_hash().unwrap();
 
-    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\xf0", b"changed")]);
+    let (root1_source, root2) = setup_2nd_commit!(source, [(b"\xf0", b"changed")]);
 
-    let proof = db_a
-        .change_proof(root1_a, root2.clone(), Some(b"\xab"), None, None)
+    let proof = source
+        .change_proof(root1_source, root2.clone(), Some(b"\xab"), None, None)
         .unwrap();
+    assert_eq!(proof.batch_ops().len(), 1);
+    // \xab exists and has children below — start proof is inclusion.
+    assert!(
+        proof
+            .start_proof()
+            .value_digest(b"\xab", &root2)
+            .unwrap()
+            .is_some()
+    );
     let ctx = verify_change_proof_structure(&proof, root2, Some(b"\xab"), None, None).unwrap();
-    verify_and_check(&db_b, &proof, &ctx, root1_b).unwrap();
+    verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
 #[test]
 fn test_end_proof_inclusion_with_children_below() {
-    let (db_a, _dir_a) = setup_db![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
-    let root1_a = db_a.root_hash().unwrap();
-    let (db_b, _dir_b) = setup_db![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
-    let root1_b = db_b.root_hash().unwrap();
+    let (source, _dir_source) = setup_db![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
+    let (target, _dir_target) = setup_db![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
+    let root1_target = target.root_hash().unwrap();
 
-    let changes: Vec<BatchOp<&[u8], &[u8]>> = vec![
-        BatchOp::Put {
-            key: b"\xab",
-            value: b"c0",
-        },
-        BatchOp::Put {
-            key: b"\xab\xcd",
-            value: b"c1",
-        },
-        BatchOp::Put {
-            key: b"\xf0",
-            value: b"c2",
-        },
-    ];
-    db_a.propose(changes).unwrap().commit().unwrap();
-    let root2 = db_a.root_hash().unwrap();
+    let (root1_source, root2) = setup_2nd_commit!(
+        source,
+        [(b"\xab", b"c0"), (b"\xab\xcd", b"c1"), (b"\xf0", b"c2")]
+    );
 
-    // Limited to 1 — last_op_key is a prefix with children below.
-    let proof = db_a
-        .change_proof(root1_a, root2.clone(), None, None, NonZeroUsize::new(1))
+    // Limited to 1 — last_op_key \xab is a prefix with children below.
+    let proof = source
+        .change_proof(
+            root1_source,
+            root2.clone(),
+            None,
+            None,
+            NonZeroUsize::new(1),
+        )
         .unwrap();
+    assert_eq!(proof.batch_ops().len(), 1);
+    assert!(proof.start_proof().is_empty());
     let ctx =
         verify_change_proof_structure(&proof, root2, None, None, NonZeroUsize::new(1)).unwrap();
-    verify_and_check(&db_b, &proof, &ctx, root1_b).unwrap();
+    verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
 #[test]
 fn test_divergence_parent_start_key_exhausted() {
-    let (db_a, _dir_a) = setup_db![(b"\x12\x01", b"v0"), (b"\x12\x02", b"v1"), (b"\xf0", b"v2")];
-    let (db_b, _dir_b) = setup_db![(b"\x12\x01", b"v0"), (b"\x12\x02", b"v1"), (b"\xf0", b"v2")];
-    let root1_b = db_b.root_hash().unwrap();
+    let (source, _dir_source) =
+        setup_db![(b"\x12\x01", b"v0"), (b"\x12\x02", b"v1"), (b"\xf0", b"v2")];
+    let (target, _dir_target) =
+        setup_db![(b"\x12\x01", b"v0"), (b"\x12\x02", b"v1"), (b"\xf0", b"v2")];
+    let root1_target = target.root_hash().unwrap();
 
-    let (root1_a, root2) = setup_2nd_commit!(db_a, [(b"\xf0", b"changed")]);
+    let (root1_source, root2) = setup_2nd_commit!(source, [(b"\xf0", b"changed")]);
 
-    let proof = db_a
-        .change_proof(root1_a, root2.clone(), Some(b"\x12"), Some(b"\xf0"), None)
-        .unwrap();
-    let ctx =
-        verify_change_proof_structure(&proof, root2, Some(b"\x12"), Some(b"\xf0"), None).unwrap();
-    verify_and_check(&db_b, &proof, &ctx, root1_b).unwrap();
-}
-
-#[test]
-fn test_divergence_at_depth_zero() {
-    let (db_a, _dir_a) = setup_db![
-        (b"\x10", b"v0"),
-        (b"\x11", b"v1"),
-        (b"\xa0", b"v2"),
-        (b"\xa1", b"v3")
-    ];
-    let root1_a = db_a.root_hash().unwrap();
-    let (db_b, _dir_b) = setup_db![
-        (b"\x10", b"v0"),
-        (b"\x11", b"v1"),
-        (b"\xa0", b"v2"),
-        (b"\xa1", b"v3")
-    ];
-    let root1_b = db_b.root_hash().unwrap();
-
-    let changes: Vec<BatchOp<&[u8], &[u8]>> = vec![
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"changed",
-        },
-        BatchOp::Put {
-            key: b"\xa0",
-            value: b"changed2",
-        },
-    ];
-    db_a.propose(changes).unwrap().commit().unwrap();
-    let root2 = db_a.root_hash().unwrap();
-
-    let left = db_a
+    let proof = source
         .change_proof(
-            root1_a.clone(),
+            root1_source,
             root2.clone(),
-            Some(b"\x10"),
-            Some(b"\x11"),
+            Some(b"\x12"),
+            Some(b"\xf0"),
             None,
         )
         .unwrap();
-    let right = db_a
-        .change_proof(root1_a, root2.clone(), Some(b"\xa0"), Some(b"\xa1"), None)
-        .unwrap();
-
-    // Skip shared root to create divergence at position 0
-    let s = left.start_proof().as_ref();
-    let e = right.end_proof().as_ref();
-    assert!(s.len() >= 2 && e.len() >= 2);
-
-    let crafted = FrozenChangeProof::new(
-        crate::Proof::new(s[1..].into()),
-        crate::Proof::new(e[1..].into()),
-        Box::new([BatchOp::Put {
-            key: b"\x50".to_vec().into(),
-            value: b"mid".to_vec().into(),
-        }]),
-    );
-
-    let parent = db_b.revision(root1_b).unwrap();
-    let proposal = db_b
-        .apply_change_proof_to_parent(&crafted, &*parent)
-        .unwrap();
-
-    let verification = ChangeProofVerificationContext {
-        end_root: root2,
-        start_key: Some(b"\x10".to_vec().into()),
-        end_key: Some(b"\xa1".to_vec().into()),
-        right_edge_key: Some(b"\xa1".to_vec().into()),
-    };
-
-    // The crafted proof has start/end proofs that skip the shared root,
-    // so the proving trie reconciliation should detect the inconsistency.
-    let err = verify_change_proof_root_hash(&crafted, &verification, &proposal).unwrap_err();
-    // Reconciliation detects the value conflict when the crafted proof's
-    // non-root node is reconciled against the proposal's existing data.
+    assert_eq!(proof.batch_ops().len(), 1);
+    // \x12 doesn't exist (only \x12\x01 and \x12\x02 do) — exclusion proof
+    // where the start key is exhausted at the parent branch.
     assert!(
-        matches!(
-            err,
-            api::Error::ProofError(
-                crate::ProofError::UnexpectedValue | crate::ProofError::EndRootMismatch,
-            )
-        ),
-        "crafted proof with skipped root should be rejected, got {err:?}"
+        proof
+            .start_proof()
+            .value_digest(b"\x12", &root2)
+            .unwrap()
+            .is_none()
     );
+    let ctx =
+        verify_change_proof_structure(&proof, root2, Some(b"\x12"), Some(b"\xf0"), None).unwrap();
+    verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
 // Verify that the children of the last node in the start proof are checked
@@ -214,53 +162,66 @@ fn test_divergence_at_depth_zero() {
 // validate that \x10's children are intact.
 #[test]
 fn test_start_tail_last_node_children_checked() {
-    let (sender, _dir_sender) =
+    let (source, _dir_source) =
         setup_db![(b"\x10\x01", b"a"), (b"\x10\x02", b"b"), (b"\x30", b"c")];
-    let (receiver, _dir_receiver) =
+    let (target, _dir_target) =
         setup_db![(b"\x10\x01", b"a"), (b"\x10\x02", b"b"), (b"\x30", b"c")];
-    let receiver_root1 = receiver.root_hash().unwrap();
+    let root1_target = target.root_hash().unwrap();
 
-    // Only modify \x30 on the sender; \x10's children are untouched
-    let (sender_root1, sender_root2) = setup_2nd_commit!(sender, [(b"\x30", b"changed")]);
+    // Only modify \x30 on the source; \x10's children are untouched
+    let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x30", b"changed")]);
 
-    let proof = sender
-        .change_proof(
-            sender_root1,
-            sender_root2.clone(),
-            Some(b"\x10"),
-            None,
-            None,
-        )
+    let proof = source
+        .change_proof(root1_source, root2.clone(), Some(b"\x10"), None, None)
         .unwrap();
-    let ctx =
-        verify_change_proof_structure(&proof, sender_root2, Some(b"\x10"), None, None).unwrap();
-    verify_and_check(&receiver, &proof, &ctx, receiver_root1).unwrap();
+    assert_eq!(proof.batch_ops().len(), 1);
+    // \x10 itself doesn't exist (only \x10\x01 and \x10\x02) — exclusion
+    // start proof whose last node is the branch with children to verify.
+    assert!(
+        proof
+            .start_proof()
+            .value_digest(b"\x10", &root2)
+            .unwrap()
+            .is_none()
+    );
+    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10"), None, None).unwrap();
+    verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
 #[test]
 fn test_start_proof_exclusion_for_deleted_key() {
-    let (db_a, _dir_a) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
-    let root1_a = db_a.root_hash().unwrap();
-    let (db_b, _dir_b) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
-    let root1_b = db_b.root_hash().unwrap();
+    let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+    let root1_source = source.root_hash().unwrap();
+    let (target, _dir_target) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+    let root1_target = target.root_hash().unwrap();
 
-    db_a.propose(vec![
-        BatchOp::Delete { key: b"\x10" },
-        BatchOp::Put {
-            key: b"\x30",
-            value: b"changed",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db_a.root_hash().unwrap();
-
-    let proof = db_a
-        .change_proof(root1_a, root2.clone(), Some(b"\x10"), None, None)
+    source
+        .propose(vec![
+            BatchOp::Delete { key: b"\x10" },
+            BatchOp::Put {
+                key: b"\x30",
+                value: b"changed",
+            },
+        ])
+        .unwrap()
+        .commit()
         .unwrap();
+    let root2 = source.root_hash().unwrap();
+
+    let proof = source
+        .change_proof(root1_source, root2.clone(), Some(b"\x10"), None, None)
+        .unwrap();
+    assert_eq!(proof.batch_ops().len(), 2); // Delete(\x10) + Put(\x30)
+    // \x10 was deleted — start proof is exclusion.
+    assert!(
+        proof
+            .start_proof()
+            .value_digest(b"\x10", &root2)
+            .unwrap()
+            .is_none()
+    );
     let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10"), None, None).unwrap();
-    verify_and_check(&db_b, &proof, &ctx, root1_b).unwrap();
+    verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
 /// Verify that change proof verification succeeds when the only key
@@ -293,6 +254,7 @@ fn test_disjoint_proof() {
             None,
         )
         .unwrap();
+    assert!(proof.batch_ops().is_empty());
 
     let verification = verify_change_proof_structure(
         &proof,
@@ -351,6 +313,7 @@ fn test_boundary_child_gap_closed_for_start_key() {
             None,
         )
         .unwrap();
+    assert_eq!(honest.batch_ops().len(), 2); // Delete(\x10\x50) + Put(\x30\x00)
 
     let ctx =
         verify_change_proof_structure(&honest, root2, Some(b"\x10\x50"), Some(b"\x30\x00"), None)
@@ -377,6 +340,7 @@ fn test_terminal_divergence_within_partial_path() {
     let proof = source
         .change_proof(root1_source, root2.clone(), Some(b"\x10\x40"), None, None)
         .unwrap();
+    assert_eq!(proof.batch_ops().len(), 1);
     let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10\x40"), None, None).unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
@@ -410,6 +374,7 @@ fn test_terminal_ancestor_marks_on_path_child() {
     let proof = source
         .change_proof(root1_source, root2.clone(), Some(b"\x10"), None, None)
         .unwrap();
+    assert_eq!(proof.batch_ops().len(), 1);
     let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10"), None, None).unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
@@ -431,6 +396,7 @@ fn test_right_edge_boundary_prefix_of_terminal() {
     let proof = source
         .change_proof(root1_source, root2.clone(), None, Some(b"\x20"), None)
         .unwrap();
+    assert_eq!(proof.batch_ops().len(), 1);
     let ctx = verify_change_proof_structure(&proof, root2, None, Some(b"\x20"), None).unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
@@ -469,6 +435,8 @@ fn test_out_of_range_value_change_adopted() {
             None,
         )
         .unwrap();
+    // Only \x30 is in range [\x10\x50, \x30]; \x10's change is out of range.
+    assert_eq!(proof.batch_ops().len(), 1);
     let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10\x50"), Some(b"\x30"), None)
         .unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
@@ -518,6 +486,8 @@ fn test_change_proof_prefix_key_deleted_in_end_root() {
             None,
         )
         .unwrap();
+    // Only \xab\xcd update is in range; \xab deletion is out of range.
+    assert_eq!(proof.batch_ops().len(), 1);
 
     let ctx = verify_change_proof_structure(
         &proof,
@@ -530,4 +500,85 @@ fn test_change_proof_prefix_key_deleted_in_end_root() {
 
     // This failed with EndRootMismatch before the fix.
     verify_and_check(&db, &proof, &ctx, root1).unwrap();
+}
+
+/// Mirror of `test_start_proof_exclusion_for_deleted_key` for the end side.
+/// `end_key` existed in root1 but is deleted in root2, so the end proof
+/// is an exclusion proof. Start and end proofs take different code paths
+/// (`compute_right_edge_key`, `verify_boundary_proof` with different
+/// `boundary_op`), so both sides need coverage.
+#[test]
+fn test_end_proof_exclusion_for_deleted_key() {
+    let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+    let root1_source = source.root_hash().unwrap();
+    let (target, _dir_target) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+    let root1_target = target.root_hash().unwrap();
+
+    source
+        .propose(vec![
+            BatchOp::Put {
+                key: b"\x10",
+                value: b"changed",
+            },
+            BatchOp::Delete { key: b"\x30" },
+        ])
+        .unwrap()
+        .commit()
+        .unwrap();
+    let root2 = source.root_hash().unwrap();
+
+    let proof = source
+        .change_proof(root1_source, root2.clone(), None, Some(b"\x30"), None)
+        .unwrap();
+    assert_eq!(proof.batch_ops().len(), 2); // Put(\x10) + Delete(\x30)
+    // \x30 was deleted — end proof is exclusion.
+    assert!(
+        proof
+            .end_proof()
+            .value_digest(b"\x30", &root2)
+            .unwrap()
+            .is_none()
+    );
+    let ctx = verify_change_proof_structure(&proof, root2, None, Some(b"\x30"), None).unwrap();
+    verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
+}
+
+/// Single-point range: `start_key == end_key`. Both boundary proofs anchor
+/// at the same key. If that key was changed, batch_ops has exactly 1 entry.
+#[test]
+fn test_single_point_range() {
+    let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+    let (target, _dir_target) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+    let root1_target = target.root_hash().unwrap();
+
+    let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x20", b"changed")]);
+
+    let proof = source
+        .change_proof(
+            root1_source,
+            root2.clone(),
+            Some(b"\x20"),
+            Some(b"\x20"),
+            None,
+        )
+        .unwrap();
+    assert_eq!(proof.batch_ops().len(), 1);
+    // Both proofs anchor at the same key — start is inclusion, end is inclusion.
+    assert!(
+        proof
+            .start_proof()
+            .value_digest(b"\x20", &root2)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        proof
+            .end_proof()
+            .value_digest(b"\x20", &root2)
+            .unwrap()
+            .is_some()
+    );
+    let ctx =
+        verify_change_proof_structure(&proof, root2, Some(b"\x20"), Some(b"\x20"), None).unwrap();
+    verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
