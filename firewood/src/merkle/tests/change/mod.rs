@@ -84,5 +84,4 @@ mod edge_cases;
 mod empty_and_bounded;
 mod fuzz;
 mod partial;
-mod pipeline;
 mod structural;

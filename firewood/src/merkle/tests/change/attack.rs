@@ -345,3 +345,120 @@ fn test_crafted_tampered_start_key_value_detected() {
         "tampered start_key value must be detected, got {err:?}"
     );
 }
+
+/// When start and end proofs share a proof node at the same key but with
+/// different content, reconciliation rejects with `ConflictingProofNodes`.
+///
+/// Take a valid bounded proof and flip a bit in the end proof's root node.
+/// This breaks the structural hash chain, so we skip structural validation
+/// and call `verify_change_proof_root_hash` directly. The start and end
+/// proofs both contain the root node, but now they disagree.
+#[test]
+fn test_crafted_conflicting_proof_nodes_rejected() {
+    let (db, _dir) = setup_db![(b"\x10", b"a"), (b"\x20", b"b")];
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x10", b"A"), (b"\x20", b"B")]);
+
+    let valid = db
+        .change_proof(
+            root1.clone(),
+            root2.clone(),
+            Some(b"\x10"),
+            Some(b"\x20"),
+            None,
+        )
+        .unwrap();
+
+    // Modify a child hash in the end proof's root node so it differs from
+    // the start proof's root node (which remains untouched).
+    let mut end_nodes: Vec<crate::ProofNode> = valid.end_proof().as_ref().to_vec();
+    assert!(!end_nodes.is_empty(), "end proof should have nodes");
+
+    let root_node = &mut end_nodes[0];
+    for pc in firewood_storage::PathComponent::ALL {
+        if let Some(ref mut h) = root_node.child_hashes[pc] {
+            let trie_hash = h.clone().into_triehash();
+            let bytes: [u8; 32] = trie_hash.into();
+            let mut new_bytes = bytes;
+            new_bytes[0] ^= 1;
+            *h = firewood_storage::TrieHash::from(new_bytes).into_hash_type();
+            break;
+        }
+    }
+
+    let crafted = FrozenChangeProof::new(
+        crate::Proof::new(valid.start_proof().as_ref().into()),
+        crate::Proof::new(end_nodes.into_boxed_slice()),
+        valid.batch_ops().into(),
+    );
+
+    // Skip structural validation (the modified hash chain won't pass).
+    let ctx = ChangeProofVerificationContext {
+        end_root: root2,
+        start_key: Some(b"\x10".to_vec().into()),
+        end_key: Some(b"\x20".to_vec().into()),
+        right_edge_key: Some(b"\x20".to_vec().into()),
+    };
+
+    let parent = db.revision(root1).unwrap();
+    let proposal = db.apply_change_proof_to_parent(&crafted, &*parent).unwrap();
+    let err = verify_change_proof_root_hash(&crafted, &ctx, &proposal).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            api::Error::ProofError(crate::ProofError::ConflictingProofNodes)
+        ),
+        "expected ConflictingProofNodes, got {err:?}"
+    );
+}
+
+/// A proof node at an odd nibble depth carrying a value must be rejected.
+/// Values can only exist at even nibble depths (complete byte boundaries).
+///
+/// Keys `\x10` and `\x15` share nibble 1 at depth 0, then fork at depth 1
+/// (nibbles 0 vs 5). The branch at depth 1 is at odd nibble length. We
+/// inject a spurious value into that odd-depth proof node.
+#[test]
+fn test_crafted_value_at_odd_nibble_length_rejected() {
+    let (db, _dir) = setup_db![(b"\x10", b"a"), (b"\x15", b"b"), (b"\x30", b"c")];
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x30", b"changed")]);
+
+    let valid = db
+        .change_proof(root1.clone(), root2.clone(), Some(b"\x10"), None, None)
+        .unwrap();
+
+    // Find a start proof node at odd nibble depth and inject a value.
+    let mut start_nodes: Vec<crate::ProofNode> = valid.start_proof().as_ref().to_vec();
+    let odd_idx = start_nodes
+        .iter()
+        .position(|n| n.key.len() % 2 != 0)
+        .expect("should have a proof node at odd nibble depth");
+
+    start_nodes[odd_idx].value_digest = Some(firewood_storage::ValueDigest::Value(
+        b"injected".to_vec().into(),
+    ));
+
+    let crafted = FrozenChangeProof::new(
+        crate::Proof::new(start_nodes.into_boxed_slice()),
+        crate::Proof::new(valid.end_proof().as_ref().into()),
+        valid.batch_ops().into(),
+    );
+
+    // Skip structural validation (injected value breaks the hash chain).
+    let ctx = ChangeProofVerificationContext {
+        end_root: root2,
+        start_key: Some(b"\x10".to_vec().into()),
+        end_key: None,
+        right_edge_key: None,
+    };
+
+    let parent = db.revision(root1).unwrap();
+    let proposal = db.apply_change_proof_to_parent(&crafted, &*parent).unwrap();
+    let err = verify_change_proof_root_hash(&crafted, &ctx, &proposal).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            api::Error::ProofError(crate::ProofError::ValueAtOddNibbleLength)
+        ),
+        "expected ValueAtOddNibbleLength, got {err:?}"
+    );
+}

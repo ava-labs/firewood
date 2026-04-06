@@ -357,3 +357,119 @@ fn test_boundary_child_gap_closed_for_start_key() {
             .unwrap();
     verify_and_check(&target, &honest, &ctx, root1_target).unwrap();
 }
+
+/// Case A of `compute_outside_children`: boundary key diverges within
+/// the terminal node's partial path.
+///
+/// Keys `\x10\x50` and `\x10\x58` share a branch with partial path containing
+/// nibble 5. `start_key` `\x10\x40` diverges at nibble 4 < 5, so the start
+/// boundary is "before" the terminal — no children are marked outside.
+#[test]
+fn test_terminal_divergence_within_partial_path() {
+    let (source, _dir_source) =
+        setup_db![(b"\x10\x50", b"a"), (b"\x10\x58", b"b"), (b"\x30", b"c")];
+    let (target, _dir_target) =
+        setup_db![(b"\x10\x50", b"a"), (b"\x10\x58", b"b"), (b"\x30", b"c")];
+    let root1_target = target.root_hash().unwrap();
+
+    let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x30", b"changed")]);
+
+    let proof = source
+        .change_proof(root1_source, root2.clone(), Some(b"\x10\x40"), None, None)
+        .unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10\x40"), None, None).unwrap();
+    verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
+}
+
+/// Case B of `compute_outside_children`: terminal is an ancestor of the
+/// boundary key. The on-path child must be marked as outside so its hash
+/// comes from the proof, not the proving trie.
+///
+/// Keys at `\x10\x01` and `\x10\x02` create a branch at nibble path `[1,0]`.
+/// `start_key` `\x10` is exhausted at depth 2 — the terminal node at `[1,0]`
+/// is an ancestor of `start_key`'s nibble path. The on-path child (nibble 0)
+/// is marked outside.
+#[test]
+fn test_terminal_ancestor_marks_on_path_child() {
+    let (source, _dir_source) = setup_db![
+        (b"\x10\x01", b"a"),
+        (b"\x10\x02", b"b"),
+        (b"\x10\x03", b"c"),
+        (b"\x30", b"d")
+    ];
+    let (target, _dir_target) = setup_db![
+        (b"\x10\x01", b"a"),
+        (b"\x10\x02", b"b"),
+        (b"\x10\x03", b"c"),
+        (b"\x30", b"d")
+    ];
+    let root1_target = target.root_hash().unwrap();
+
+    let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x30", b"changed")]);
+
+    let proof = source
+        .change_proof(root1_source, root2.clone(), Some(b"\x10"), None, None)
+        .unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10"), None, None).unwrap();
+    verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
+}
+
+/// Case C of `compute_outside_children` (right edge): boundary is a
+/// prefix of the terminal node's key. All children extend beyond
+/// `end_key`, so all are marked outside.
+///
+/// Key `\x20` is a prefix of `\x20\xab`. `end_key` = `\x20` — children of
+/// the `\x20` node extend beyond `end_key` and must use proof hashes.
+#[test]
+fn test_right_edge_boundary_prefix_of_terminal() {
+    let (source, _dir_source) = setup_db![(b"\x10", b"a"), (b"\x20", b"b"), (b"\x20\xab", b"c")];
+    let (target, _dir_target) = setup_db![(b"\x10", b"a"), (b"\x20", b"b"), (b"\x20\xab", b"c")];
+    let root1_target = target.root_hash().unwrap();
+
+    let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x10", b"changed")]);
+
+    let proof = source
+        .change_proof(root1_source, root2.clone(), None, Some(b"\x20"), None)
+        .unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, None, Some(b"\x20"), None).unwrap();
+    verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
+}
+
+/// An out-of-range prefix node's value changes between root1 and root2.
+/// The proof's value must be adopted during `reconcile_branch_proof_node`
+/// so the hybrid hash matches `end_root`.
+///
+/// `\x10` has a value that changes from `"old_pfx"` to `"new_pfx"`. The query
+/// range `[\x10\x50, \x30]` excludes `\x10` (it's a proper prefix of `start_key`),
+/// so `\x10` is out-of-range. The start proof path passes through `\x10`, and
+/// reconciliation must adopt the proof's value (`"new_pfx"`) to match `end_root`.
+#[test]
+fn test_out_of_range_value_change_adopted() {
+    let (source, _dir_source) = setup_db![
+        (b"\x10", b"old_pfx"),
+        (b"\x10\x50", b"val0000"),
+        (b"\x30", b"val1000")
+    ];
+    let (target, _dir_target) = setup_db![
+        (b"\x10", b"old_pfx"),
+        (b"\x10\x50", b"val0000"),
+        (b"\x30", b"val1000")
+    ];
+    let root1_target = target.root_hash().unwrap();
+
+    let (root1_source, root2) =
+        setup_2nd_commit!(source, [(b"\x10", b"new_pfx"), (b"\x30", b"changed")]);
+
+    let proof = source
+        .change_proof(
+            root1_source,
+            root2.clone(),
+            Some(b"\x10\x50"),
+            Some(b"\x30"),
+            None,
+        )
+        .unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10\x50"), Some(b"\x30"), None)
+        .unwrap();
+    verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
+}
