@@ -93,6 +93,11 @@ impl RootStore {
         hash: &TrieHash,
         address: &LinearAddress,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // BLOCKING: `insert` is a synchronous write into fjall's in-memory buffer (typically
+        // fast), but `persist` below triggers an fsync-equivalent flush to protect against
+        // application crashes. This can block for milliseconds on slow or busy storage.
+        // `add_root` is called on every commit from the background persist loop, so slow flushes
+        // directly extend the time the `NodeStoreHeader` mutex is held by `persist_to_disk`.
         self.items.insert(**hash, address.get().to_be_bytes())?;
 
         // Flush the keyspace to protect against application crashes, but not
@@ -127,6 +132,10 @@ impl RootStore {
         hash: &TrieHash,
     ) -> Result<Option<CommittedRevision>, Box<dyn std::error::Error + Send + Sync>> {
         // 1. Obtain the lock to prevent multiple threads from caching the same result
+        // BLOCKING: mutex lock held for the entire `get` operation, including the fjall read
+        // (step 3) and NodeStore construction (step 4) on a cache miss. A cache miss against a
+        // cold fjall partition may involve disk I/O, holding the lock for milliseconds and
+        // serializing all concurrent historical revision lookups.
         let mut revision_cache = self.revision_cache.lock();
 
         // 2. Check if the committed revision is cached.
@@ -137,6 +146,8 @@ impl RootStore {
         }
 
         // 3. Not cached, query the datastore
+        // BLOCKING: fjall read — may involve disk I/O on a cold page cache. The revision_cache
+        // mutex above is still held, so this blocks all other callers for the I/O duration.
         let Some(v) = self.items.get(**hash)? else {
             // not in the datastore
             firewood_counter!(registry::ROOTSTORE_GET, "result" => "notfound").increment(1);

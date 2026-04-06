@@ -172,6 +172,11 @@ impl ParallelMerkle {
     ) -> Result<(), Box<SendError<Result<Response, FileIoError>>>> {
         // Wait for a message on the receiver child channel. Break out of loop when the sender has
         // closed the child sender.
+        // BLOCKING: `recv()` parks this rayon worker thread until the coordinator sends the next
+        // operation. Since rayon threads are a shared pool, a worker blocked here is unavailable
+        // for other rayon tasks. Duration is bounded by how fast the coordinator iterates the
+        // batch. Low risk for normal batches, but could stall unrelated rayon work if all pool
+        // threads are occupied as parallel-merkle workers.
         while let Ok(request) = child_receiver.recv() {
             if let Err(err) = match request {
                 // insert a key-value pair into the subtrie
@@ -281,6 +286,10 @@ impl ParallelMerkle {
         proposal: &mut NodeStore<Mutable<Propose>, FileBacked>,
         root_branch: &mut BranchNode,
     ) -> Result<(), FileIoError> {
+        // BLOCKING: `recv()` blocks the coordinator (main) thread waiting for each worker to
+        // finish hashing its sub-trie. The coordinator is blocked for as long as the slowest
+        // worker takes. In the worst case (deeply unbalanced trie with one very large sub-trie)
+        // this stalls the commit path for the entire hashing duration of that sub-trie.
         while let Ok(response) = response_channel.recv() {
             match response {
                 Ok(response) => {
