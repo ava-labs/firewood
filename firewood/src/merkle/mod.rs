@@ -450,7 +450,7 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         key_values,
     )?;
 
-    verify_root_hash(
+    verify_range_proof_root_hash(
         &all_proof_nodes,
         key_values,
         proof,
@@ -487,14 +487,26 @@ fn verify_proof_node_values(
         let node_key_bytes: Vec<u8> = Path::from(key_nibbles.as_slice()).bytes_iter().collect();
         let in_range = first_key_bytes.is_none_or(|start| node_key_bytes.as_slice() >= start)
             && last_key_bytes.is_none_or(|end| node_key_bytes.as_slice() <= end);
-        if in_range
-            && key_values
-                .binary_search_by(|(k, _)| k.as_ref().cmp(node_key_bytes.as_slice()))
-                .is_err()
-        {
-            return Err(api::Error::ProofError(
-                ProofError::ProofNodeHasUnincludedValue,
-            ));
+        if in_range {
+            match key_values.binary_search_by(|(k, _)| k.as_ref().cmp(node_key_bytes.as_slice())) {
+                Err(_) => {
+                    return Err(api::Error::ProofError(
+                        ProofError::ProofNodeHasUnincludedValue,
+                    ));
+                }
+                Ok(idx) => {
+                    let proof_value = match &proof_node.value_digest {
+                        Some(ValueDigest::Value(v)) => v.as_ref(),
+                        _ => unreachable!("guarded by matches! check above"),
+                    };
+                    let Some((_, kv_value)) = key_values.get(idx) else {
+                        unreachable!("binary_search returned valid index");
+                    };
+                    if kv_value.as_ref() != proof_value {
+                        return Err(api::Error::ProofError(ProofError::ProofNodeValueMismatch));
+                    }
+                }
+            }
         }
     }
     Ok(())
@@ -502,7 +514,7 @@ fn verify_proof_node_values(
 
 /// Reconstructs the trie from key-value pairs and proof nodes, then verifies
 /// that the computed root hash matches the expected one.
-fn verify_root_hash<H: ProofCollection<Node = ProofNode>>(
+fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
     all_proof_nodes: &[&ProofNode],
     key_values: &[(impl KeyType, impl ValueType)],
     proof: &RangeProof<impl KeyType, impl ValueType, H>,
