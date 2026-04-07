@@ -137,6 +137,9 @@ struct NodeWeighter;
 
 impl Weighter<LinearAddress, CachedNode> for NodeWeighter {
     fn weight(&self, _key: &LinearAddress, value: &CachedNode) -> u64 {
-        value.heap_size() as u64
+        // Floor at 1: quick_cache silently drops zero-weight entries. A leaf
+        // node with an empty value and a short (inline) path has heap_size == 0
+        // but should still be cacheable.
+        value.heap_size().max(1) as u64
     }
 }
