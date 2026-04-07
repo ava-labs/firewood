@@ -48,6 +48,21 @@ fn outside_children_single_node_exact_match() {
 }
 
 #[test]
+fn outside_children_single_node_exact_match_right_edge() {
+    // Boundary matches terminal exactly on right edge — all children marked outside.
+    let nodes = [proof_node(&[1, 2])];
+    let result = compute_outside_children(&nodes, Some(&[0x12]), false).unwrap();
+    // Look up the mask for the terminal node at [1, 2].
+    let mask = result[&nibble_path(&[1, 2])];
+    for i in 0..16u8 {
+        assert!(
+            mask.is_set(U4::new_masked(i)),
+            "child {i} should be outside on right edge exact match"
+        );
+    }
+}
+
+#[test]
 fn outside_children_ancestor_left_edge() {
     // Terminal key [1], boundary key 0x15 → nibbles [1, 5].
     // Terminal is ancestor of boundary. On-path nibble = 5.
@@ -1706,4 +1721,32 @@ fn test_bad_range_proof_value_mismatch_on_proof_path() {
         ),
         "expected ProofNodeValueMismatch, got {result:?}"
     );
+}
+
+/// Create and validate a range proof with no left edge and an `end_key` at
+/// a branch node with children. Keys are \x10, \x20, and \x20\xab. Proof is
+/// generated from None to \x20. Children of the \x20 node should not be
+/// included in the proof.
+#[test]
+fn test_right_edge_boundary_prefix_of_terminal() {
+    let merkle = init_merkle([
+        (b"\x10" as &[u8], b"a"),
+        (b"\x20", b"b"),
+        (b"\x20\xab", b"c"),
+    ]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let proof = merkle.range_proof(None, Some(b"\x20"), None).unwrap();
+    // Proof should only have 2 keys.
+    assert_eq!(proof.key_values().len(), 2);
+    // Child of \x20 not in proof.
+    assert!(
+        !proof
+            .key_values()
+            .iter()
+            .any(|(k, _)| k.as_ref() == b"\x20\xab"),
+        "child of end key should not be included in the proof"
+    );
+    // End proof should only have 2 proof nodes.
+    assert_eq!(proof.end_proof().len(), 2);
+    verify_range_proof(None::<&[u8]>, Some(b"\x20"), &root_hash, &proof).unwrap();
 }
