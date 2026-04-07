@@ -31,7 +31,6 @@
     )
 )]
 
-mod arc_cache;
 mod handle;
 mod iterator;
 mod jemalloc_metrics;
