@@ -7,7 +7,7 @@
 )]
 
 use nonzero_ext::nonzero;
-use parking_lot::{Mutex, MutexGuard, RwLock};
+use parking_lot::{Mutex, MutexGuard};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::num::{NonZero, NonZeroU64};
@@ -100,17 +100,34 @@ pub(crate) struct RevisionManager {
 
     /// FIFO queue of committed revisions kept in memory. The queue always
     /// contains at least one revision.
-    in_memory_revisions: RwLock<VecDeque<CommittedRevision>>,
+    ///
+    /// Protected by a `Mutex` rather than an `RwLock` because `commit_lock`
+    /// already serializes all writers, making concurrent read access irrelevant
+    /// — the critical section for each reader or writer is nanoseconds.
+    in_memory_revisions: Mutex<VecDeque<CommittedRevision>>,
 
     /// Hash-based index of committed revisions kept in memory.
     ///
     /// Maps root hash to the corresponding committed revision for O(1) lookup
     /// performance. This allows efficient retrieval of revisions without
     /// scanning through the `in_memory_revisions` queue.
-    by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
+    ///
+    /// Protected by a `Mutex` rather than an `RwLock`: all writes occur under
+    /// `commit_lock` (at most one writer at a time), and the reader critical
+    /// section in `revision()` is nanoseconds (`HashMap::get` + `Arc` clone),
+    /// making concurrent read access indistinguishable from serialized access.
+    by_hash: Mutex<HashMap<TrieHash, CommittedRevision>>,
 
     /// Active proposals that have not yet been committed.
     proposals: Mutex<Vec<ProposedRevision>>,
+
+    /// Serializes concurrent commits without blocking readers.
+    ///
+    /// Held for the entire duration of [`commit()`](Self::commit). Separated
+    /// from `in_memory_revisions` so that readers (`current_revision`, `view`)
+    /// are never blocked by the potentially long `persist_worker.persist()`
+    /// backpressure stall — only other committers queue behind this lock.
+    commit_lock: Mutex<()>,
 
     /// Lazily initialized thread pool for parallel operations.
     threadpool: OnceLock<ThreadPool>,
@@ -223,9 +240,10 @@ impl RevisionManager {
 
         let manager = Self {
             max_revisions: config.manager.max_revisions,
-            in_memory_revisions: RwLock::new(VecDeque::from([nodestore.clone()])),
-            by_hash: RwLock::new(by_hash),
+            in_memory_revisions: Mutex::new(VecDeque::from([nodestore.clone()])),
+            by_hash: Mutex::new(by_hash),
             proposals: Mutex::new(Default::default()),
+            commit_lock: Mutex::new(()),
             threadpool: OnceLock::new(),
             root_store,
             persist_worker,
@@ -249,77 +267,96 @@ impl RevisionManager {
         Ok(manager)
     }
 
-    /// Commit a proposal
-    /// To commit a proposal involves a few steps:
+    /// Commit a proposal.
+    ///
+    /// To commit a proposal involves the following steps:
+    ///
     /// 1. Check if the persist worker has failed.
     ///    If so, return the error as this means we won't be able to make any
     ///    further progress.
     /// 2. Commit check.
-    ///    The proposal's parent must be the last committed revision, otherwise the commit fails.
-    ///    It only contains the address of the nodes that are deleted, which should be very small.
+    ///    The proposal's parent must be the last committed revision, otherwise
+    ///    the commit fails.
     /// 3. Revision reaping.
     ///    If more than the maximum number of revisions are kept in memory, the
     ///    oldest revision is removed from memory and sent to the `PersistWorker`
     ///    for reaping.
     /// 4. Signal to the `PersistWorker` to persist this revision.
+    ///    May block the commit thread under backpressure; readers are unaffected.
     /// 5. Set last committed revision.
-    ///    Set last committed revision in memory.
+    ///    Publish the committed revision into `in_memory_revisions` and `by_hash`.
     /// 6. Proposal Cleanup.
-    ///    Any other proposals that have this proposal as a parent should be reparented to the committed version.
+    ///    Any other proposals that have this proposal as a parent are reparented
+    ///    to the committed version.
     ///
-    /// Steps 1 through 5 are executed behind a lock to maintain the invariant
-    /// that only one revision can commit at a time.
+    /// A dedicated `commit_lock` serializes concurrent commits for the duration
+    /// of all steps. `in_memory_revisions` is held only for brief, non-blocking
+    /// windows so that readers (`current_revision`, `view`) are never stalled by
+    /// the potentially slow step 4.
     #[fastrace::trace(short_name = true)]
     #[crate::metrics("proposal.commit", "proposal commit to storage")]
     pub fn commit(&self, proposal: ProposedRevision) -> Result<(), RevisionManagerError> {
-        // Hold a write lock on `in_memory_revisions` for the duration of the
-        // critical section (steps 1-5). This is necessary because:
-        // 1. Without the lock, two proposals with the same parent could pass the
-        //    commit check simultaneously, allowing both to commit.
-        // 2. New proposals rely on the latest committed revision via
-        //    `current_revision()`, which takes a read lock on `in_memory_revisions`.
-        //    The write lock here prevents proposals from being created against
-        //    an older revision while a newer revision is mid-commit.
-        // BLOCKING: write lock on `in_memory_revisions`. Blocks all concurrent readers
-        // (current_revision, view) and any other commit attempts for the full duration of steps
-        // 1-5. In high-commit-rate scenarios with many parallel readers, lock contention here
-        // may stall reader threads until the commit critical section completes.
-        let mut in_memory_revisions = self.in_memory_revisions.write();
+        // BLOCKING: mutex lock on `commit_lock`. Serializes concurrent commits for the
+        // full duration of steps 1-5. Unlike holding `in_memory_revisions.write()` for
+        // this entire period, this lock does not prevent readers from calling
+        // `current_revision()` or `view()` — those only need a read lock on
+        // `in_memory_revisions`, which remains available except during the brief
+        // non-blocking windows in steps 3 and 5.
+        let _commit_guard = self.commit_lock.lock();
 
         // 1. Check if the persist worker has failed.
         self.persist_worker
             .check_error()
             .map_err(RevisionManagerError::PersistError)?;
 
-        // 2. Commit check
-        let current_revision = in_memory_revisions
-            .back()
-            .expect("there is always one revision");
-        if !proposal.parent_hash_is(current_revision.root_hash()) {
-            return Err(RevisionManagerError::NotLatest {
-                provided: proposal.root_hash(),
-                expected: current_revision.root_hash(),
-            });
+        // 2. Commit check — brief lock.
+        // `commit_lock` prevents any other commit from advancing the latest revision
+        // between this check and step 5, so the result remains valid.
+        // BLOCKING: mutex lock on `in_memory_revisions`. Contends only with the brief
+        // lock windows in steps 3 and 5 (fast, no I/O).
+        {
+            let in_memory_revisions = self.in_memory_revisions.lock();
+            let current_revision = in_memory_revisions
+                .back()
+                .expect("there is always one revision");
+            if !proposal.parent_hash_is(current_revision.root_hash()) {
+                return Err(RevisionManagerError::NotLatest {
+                    provided: proposal.root_hash(),
+                    expected: current_revision.root_hash(),
+                });
+            }
         }
 
         let committed = proposal.as_committed();
 
         firewood_set!(crate::registry::DELETED_LIST_LEN, committed.deleted_len());
 
-        // 3. Revision reaping
+        // 3. Revision reaping.
         // When we exceed max_revisions, remove the oldest revision from memory
         // and send it to the `PersistWorker`.
         // If you crash after freeing some of these, then the free list will point to nodes that are not actually free.
         // TODO: Handle the case where we get something off the free list that is not free
-        while in_memory_revisions.len() >= self.max_revisions {
-            let oldest = in_memory_revisions.pop_front().expect("must be present");
-            let oldest_hash = oldest.root_hash().or_default_root_hash();
-            if let Some(ref hash) = oldest_hash {
-                // BLOCKING: write lock on `by_hash` while already holding the write lock on
-                // `in_memory_revisions`. Nested locking order must remain consistent (always
-                // acquire `in_memory_revisions` before `by_hash`) to avoid deadlocks.
-                self.by_hash.write().remove(hash);
-            }
+        loop {
+            // Brief lock: check the count, pop the oldest if needed, remove from
+            // by_hash. All three operations are fast (no I/O). Released before reap().
+            let (oldest, remaining_len) = {
+                let mut in_memory_revisions = self.in_memory_revisions.lock();
+                if in_memory_revisions.len() < self.max_revisions {
+                    break;
+                }
+                let oldest = in_memory_revisions.pop_front().expect("must be present");
+                let oldest_hash = oldest.root_hash().or_default_root_hash();
+                if let Some(ref hash) = oldest_hash {
+                    // BLOCKING: mutex lock on `by_hash` while holding the mutex on
+                    // `in_memory_revisions`. Nested locking order must remain consistent
+                    // (always acquire `in_memory_revisions` before `by_hash`) to avoid
+                    // deadlocks.
+                    self.by_hash.lock().remove(hash);
+                }
+                let remaining = in_memory_revisions.len();
+                (oldest, remaining)
+                // lock released here
+            };
 
             // The warning in the docs for `Arc::try_unwrap` does not apply here
             // because `original` is retained and not immediately dropped.
@@ -330,34 +367,41 @@ impl RevisionManager {
                     .map_err(RevisionManagerError::PersistError)?,
                 Err(original) => {
                     warn!("Oldest revision could not be reaped; still referenced");
-                    in_memory_revisions.push_front(original);
+                    self.in_memory_revisions.lock().push_front(original);
                     break;
                 }
             }
-            firewood_set!(crate::registry::ACTIVE_REVISIONS, in_memory_revisions.len());
+            firewood_set!(crate::registry::ACTIVE_REVISIONS, remaining_len);
             firewood_set!(crate::registry::MAX_REVISIONS, self.max_revisions);
         }
 
         // 4. Signal to the `PersistWorker` to persist this revision.
         let committed: CommittedRevision = committed.into();
+        // BLOCKING: `persist_worker.persist()` parks the commit thread when all deferred-
+        // persistence permits are consumed (i.e. the background persist loop has fallen behind).
+        // `in_memory_revisions` is NOT held here, so readers (`current_revision`, `view`) remain
+        // unblocked and observe the previous committed revision — which is correct, since the new
+        // revision has not been published yet. Only other commit attempts are queued, via
+        // `commit_lock` above.
         self.persist_worker
             .persist(committed.clone())
             .map_err(RevisionManagerError::PersistError)?;
 
-        // 5. Set last committed revision
-        // The revision is added to `by_hash` here while it still exists in `proposals`.
-        // The `view()` method relies on this ordering - it checks `proposals` first,
+        // 5. Set last committed revision — brief lock.
+        // The revision is added to `by_hash` while it still exists in `proposals`.
+        // The `view()` method relies on this ordering — it checks `proposals` first,
         // then `by_hash`, ensuring the revision is always findable during the transition.
-        in_memory_revisions.push_back(committed.clone());
-        if let Some(hash) = committed.root_hash().or_default_root_hash() {
-            // BLOCKING: write lock on `by_hash` (still inside the `in_memory_revisions` write
-            // lock). Same nested ordering as the reap path above; must not be inverted.
-            self.by_hash.write().insert(hash, committed.clone());
+        {
+            let mut in_memory_revisions = self.in_memory_revisions.lock();
+            in_memory_revisions.push_back(committed.clone());
+            if let Some(hash) = committed.root_hash().or_default_root_hash() {
+                // BLOCKING: mutex lock on `by_hash` while holding the mutex on
+                // `in_memory_revisions`. Same nested ordering as the reap path above;
+                // must not be inverted.
+                self.by_hash.lock().insert(hash, committed.clone());
+            }
+            // lock released here
         }
-
-        // At this point, we can release the lock on the queue of in-memory
-        // revisions as we've now set the new latest committed revision.
-        drop(in_memory_revisions);
 
         // 6. Proposal Cleanup
         // Free proposal that is being committed as well as any proposals no longer
@@ -445,10 +489,10 @@ impl RevisionManager {
     /// 2. Check `RootStore` (if it exists).
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
         // 1. Check the in-memory revision manager.
-        // BLOCKING: read lock on `by_hash`. Concurrent writes (commit reap/insert) will pause
-        // until readers release. Low contention in practice since reads are fast, but parking_lot
-        // RwLock favours writers, so a steady stream of commits can starve readers transiently.
-        if let Some(revision) = self.by_hash.read().get(&root_hash).cloned() {
+        // BLOCKING: mutex lock on `by_hash`. The critical section is a single HashMap lookup
+        // plus an Arc clone — nanoseconds. All writers hold `commit_lock`, so at most one
+        // writer can ever contend with this reader.
+        if let Some(revision) = self.by_hash.lock().get(&root_hash).cloned() {
             return Ok(revision);
         }
 
@@ -474,10 +518,12 @@ impl RevisionManager {
     }
 
     pub fn current_revision(&self) -> CommittedRevision {
-        // BLOCKING: read lock on `in_memory_revisions`. Called on every propose() and
-        // merge_key_value_range(); blocks while a commit() holds the write lock (steps 1-5).
+        // BLOCKING: mutex lock on `in_memory_revisions`. Called on every propose() and
+        // merge_key_value_range(). Contends only with the brief lock windows inside commit()
+        // (steps 2, 3, and 5 — all fast, non-I/O). The backpressure stall in step 4 does not
+        // block this call because `in_memory_revisions` is not held during that wait.
         self.in_memory_revisions
-            .read()
+            .lock()
             .back()
             .expect("there is always one revision")
             .clone()
@@ -503,6 +549,12 @@ impl RevisionManager {
         // Note that OnceLock currently doesn't support get_or_try_init (it is available in a
         // nightly release). The get_or_init should be replaced with get_or_try_init once it
         // is available to allow the error to be passed back to the caller.
+        //
+        // BLOCKING: on the very first call, `get_or_init` spawns `BranchNode::MAX_CHILDREN`
+        // (16) OS threads for the rayon pool. OS thread creation is typically 1–5 ms per thread,
+        // so the first caller may block for up to ~80 ms. Any concurrent callers are also parked
+        // by `OnceLock` until initialization completes. Subsequent calls return immediately.
+        // This is only relevant if the first parallel proposal is latency-sensitive.
         self.threadpool.get_or_init(|| {
             ThreadPoolBuilder::new()
                 .num_threads(BranchNode::MAX_CHILDREN)
