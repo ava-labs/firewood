@@ -70,19 +70,10 @@ impl ProposalHandle<'_> {
         let ProposalHandle {
             hash_key,
             proposal,
-            handle,
+            handle: _,
         } = self;
 
-        // promote the proposal to the handle's cached view so that it can be used
-        // for future reads while the proposal is being committed
-        if let Some(ref hash_key) = hash_key {
-            _ = handle.get_root(hash_key.clone());
-        }
-
         proposal.commit()?;
-
-        // clear the cached view so that it does not hold onto the proposal view
-        handle.clear_cached_view();
 
         Ok(hash_key)
     }
