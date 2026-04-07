@@ -9,10 +9,16 @@
 
   inputs = {
     nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.2505.*.tar.gz";
-    rust-overlay.url = "github:oxalica/rust-overlay";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     crane.url = "github:ipetkov/crane";
     flake-utils.url = "github:numtide/flake-utils";
-    golang.url = "github:ava-labs/avalanchego?dir=nix/go&ref=50585cbbdfe1af02a2c11bdc9fa77fca26e6b838";
+    golang = {
+      url = "github:ava-labs/avalanchego?dir=nix/go&ref=50585cbbdfe1af02a2c11bdc9fa77fca26e6b838";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = { self, nixpkgs, rust-overlay, crane, flake-utils, golang }:
@@ -24,7 +30,9 @@
 
       go = golang.packages.${system}.default;
 
-      rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+      # Pin to workspace MSRV (Cargo.toml rust-version) to avoid rebuilds
+      # when rust-overlay updates. Bump this when the MSRV changes.
+      rustToolchain = pkgs.rust-bin.stable."1.94.0".default.override {
         extensions = [ "rust-src" "rustfmt" "clippy" ];
       };
 
