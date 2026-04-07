@@ -26,7 +26,7 @@ use std::num::NonZeroUsize;
 use quick_cache::Weighter;
 use quick_cache::sync::Cache;
 
-use crate::{CachedNode, HeapSize as _, LinearAddress, SharedNode};
+use crate::{CachedNode, HeapSize, LinearAddress, SharedNode};
 
 /// A concurrent, memory-bounded node cache backed by [`quick_cache`].
 ///
