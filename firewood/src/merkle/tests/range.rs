@@ -1649,3 +1649,61 @@ fn test_range_proof_with_limit() {
     )
     .unwrap();
 }
+
+#[test]
+// Demonstrates that verify_range_proof does not verify that proof node values
+// match the corresponding values in key_values. A malicious prover can supply
+// correct proof nodes (with the real value) but incorrect key_values at an
+// intermediate proof-path position. Reconciliation silently overwrites the
+// wrong value with the proof's correct one, the hash check passes, and the
+// caller trusts the wrong key_values.
+//
+// Trie: ("b", "v1"), ("ba", "v2"), ("bc", "v3")
+// Range: ["a", "bc"]
+// The end proof for "bc" traverses the "b" node (which carries "v1").
+// We change "b"'s value in key_values to "WRONG" — verification should fail
+// but currently passes.
+fn test_bad_range_proof_value_mismatch_on_proof_path() {
+    let items = [("b", "v1"), ("ba", "v2"), ("bc", "v3")];
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    // "a" is not in the trie → exclusion proof for start
+    let start_proof = merkle.prove(b"a").unwrap();
+    // "bc" is in the trie → inclusion proof for end
+    let end_proof = merkle.prove(b"bc").unwrap();
+
+    // Tampered key_values: "b" has the wrong value, others are correct
+    let key_values: KeyValuePairs = vec![
+        (
+            b"b".to_vec().into_boxed_slice(),
+            b"WRONG".to_vec().into_boxed_slice(), // should be "v1"
+        ),
+        (
+            b"ba".to_vec().into_boxed_slice(),
+            b"v2".to_vec().into_boxed_slice(),
+        ),
+        (
+            b"bc".to_vec().into_boxed_slice(),
+            b"v3".to_vec().into_boxed_slice(),
+        ),
+    ];
+
+    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+    let result = verify_range_proof(
+        Some(b"a".as_slice()),
+        Some(b"bc".as_slice()),
+        &root_hash,
+        &range_proof,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(crate::api::Error::ProofError(
+                ProofError::ProofNodeValueMismatch
+            ))
+        ),
+        "expected ProofNodeValueMismatch, got {result:?}"
+    );
+}
