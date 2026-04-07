@@ -212,8 +212,8 @@ pub enum ProofError {
     #[error("bounded change proof requires at least one boundary proof")]
     MissingBoundaryProof,
 
-    /// A proof node's value doesn't match the proposal at the same depth.
-    #[error("proof node value doesn't match the proposal")]
+    /// A proof node's value differs from the expected value
+    #[error("proof node value does not match the expected value at the same key")]
     ProofNodeValueMismatch,
 
     /// Start and end boundary proofs share no common prefix — they

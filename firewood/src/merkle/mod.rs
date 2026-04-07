@@ -480,14 +480,26 @@ fn verify_proof_node_values(
         let node_key_bytes: Vec<u8> = Path::from(key_nibbles.as_slice()).bytes_iter().collect();
         let in_range = first_key_bytes.is_none_or(|start| node_key_bytes.as_slice() >= start)
             && last_key_bytes.is_none_or(|end| node_key_bytes.as_slice() <= end);
-        if in_range
-            && key_values
-                .binary_search_by(|(k, _)| k.as_ref().cmp(node_key_bytes.as_slice()))
-                .is_err()
-        {
-            return Err(api::Error::ProofError(
-                ProofError::ProofNodeHasUnincludedValue,
-            ));
+        if in_range {
+            match key_values.binary_search_by(|(k, _)| k.as_ref().cmp(node_key_bytes.as_slice())) {
+                Err(_) => {
+                    return Err(api::Error::ProofError(
+                        ProofError::ProofNodeHasUnincludedValue,
+                    ));
+                }
+                Ok(idx) => {
+                    let proof_value = match &proof_node.value_digest {
+                        Some(ValueDigest::Value(v)) => v.as_ref(),
+                        _ => unreachable!("guarded by matches! check above"),
+                    };
+                    let Some((_, kv_value)) = key_values.get(idx) else {
+                        unreachable!("binary_search returned valid index");
+                    };
+                    if kv_value.as_ref() != proof_value {
+                        return Err(api::Error::ProofError(ProofError::ProofNodeValueMismatch));
+                    }
+                }
+            }
         }
     }
     Ok(())
