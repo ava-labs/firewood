@@ -9,8 +9,8 @@
 use crate::node::ExtendableBytes;
 use crate::node::children::Children;
 use crate::{
-    FileIoError, HashType, LeafNode, LinearAddress, MaybePersistedNode, Node, NodeReader, Path,
-    PathComponent, SharedNode,
+    FileIoError, HashType, HeapSize, LeafNode, LinearAddress, MaybePersistedNode, Node, NodeReader,
+    Path, PathComponent, SharedNode,
 };
 use std::fmt::{Debug, Formatter};
 use std::io::Read;
@@ -68,7 +68,7 @@ pub enum Child {
     MaybePersisted(MaybePersistedNode, HashType),
 }
 
-impl lru_mem::HeapSize for Child {
+impl HeapSize for Child {
     fn heap_size(&self) -> usize {
         match self {
             Child::Node(node) => node.heap_size(),
@@ -190,14 +190,14 @@ pub struct BranchNode {
     pub children: Children<Option<Child>>,
 }
 
-impl lru_mem::HeapSize for BranchNode {
+impl HeapSize for BranchNode {
     fn heap_size(&self) -> usize {
         let value_size = self.value.as_ref().map_or(0, |v| v.len());
         let children_size: usize = self
             .children
             .iter()
             .filter_map(|(_, child)| child.as_ref())
-            .map(lru_mem::HeapSize::heap_size)
+            .map(HeapSize::heap_size)
             .sum();
         self.partial_path
             .heap_size()

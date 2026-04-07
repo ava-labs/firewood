@@ -7,7 +7,7 @@
 //! area sizes, `AreaIndex` that uniquely identifies a valid area size, and
 //! `LinearAddress` that points to a specific location in the linear storage space.
 
-use crate::TrieHash;
+use crate::{HeapSize, TrieHash};
 
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -241,7 +241,7 @@ pub(super) struct AreaSizeError(pub(super) u64);
 #[repr(transparent)]
 pub struct LinearAddress(NonZeroU64);
 
-impl lru_mem::HeapSize for LinearAddress {
+impl HeapSize for LinearAddress {
     fn heap_size(&self) -> usize {
         // LinearAddress is just a NonZeroU64, no heap allocation
         0

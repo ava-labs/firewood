@@ -3,7 +3,7 @@
 
 use std::fmt::{Debug, Error as FmtError, Formatter};
 
-use crate::Path;
+use crate::{HeapSize, Path};
 
 /// A leaf node
 #[derive(PartialEq, Eq, Clone)]
@@ -15,7 +15,7 @@ pub struct LeafNode {
     pub value: Box<[u8]>,
 }
 
-impl lru_mem::HeapSize for LeafNode {
+impl HeapSize for LeafNode {
     fn heap_size(&self) -> usize {
         self.partial_path.heap_size().wrapping_add(self.value.len())
     }

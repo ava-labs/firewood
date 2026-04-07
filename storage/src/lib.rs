@@ -80,6 +80,15 @@ pub use test_utils::SeededRng;
 #[cfg(any(test, feature = "test_utils"))]
 pub use test_utils::TestRecorder;
 
+/// Measures the heap-allocated bytes of a value, excluding its stack footprint.
+///
+/// Implement this for any type that holds heap allocations (e.g. `Vec`, `Box`,
+/// `SmallVec` when spilled) whose size should count toward cache memory limits.
+/// Types with no heap allocation should return `0`.
+pub(crate) trait HeapSize {
+    fn heap_size(&self) -> usize;
+}
+
 /// A shared node, which is just a triophe Arc of a node
 pub type SharedNode = triomphe::Arc<Node>;
 
@@ -87,32 +96,34 @@ pub type SharedNode = triomphe::Arc<Node>;
 /// This newtype allows implementing foreign traits while maintaining
 /// compatibility with the rest of the codebase that uses `SharedNode` directly.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CachedNode(pub(crate) SharedNode);
+pub(crate) struct CachedNode {
+    pub(crate) node: SharedNode,
+    pub(crate) heap_size: usize,
+}
 
 impl From<SharedNode> for CachedNode {
     fn from(node: SharedNode) -> Self {
-        CachedNode(node)
+        let heap_size = node.heap_size();
+        CachedNode { node, heap_size }
     }
 }
 
 impl From<CachedNode> for SharedNode {
     fn from(cached: CachedNode) -> Self {
-        cached.0
+        cached.node
     }
 }
 
 impl std::ops::Deref for CachedNode {
     type Target = Node;
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.node
     }
 }
 
-impl lru_mem::HeapSize for CachedNode {
+impl HeapSize for CachedNode {
     fn heap_size(&self) -> usize {
-        // Arc overhead plus the inner Node's heap size
-        // Note: We count the full Node size since this is the primary reference
-        self.0.heap_size()
+        self.heap_size
     }
 }
 
@@ -124,7 +135,7 @@ impl CachedNode {
         clippy::cast_precision_loss,
         reason = "Precision loss is acceptable for metrics; only affects values > 2^52 bytes"
     )]
-    pub(crate) fn update_cache_metrics(current_size: usize, max_size: usize) {
+    pub(crate) fn update_cache_metrics(current_size: u64, max_size: u64) {
         use firewood_metrics::firewood_set;
         firewood_set!(registry::CACHE_MEMORY_USED, current_size as f64);
         firewood_set!(registry::CACHE_MEMORY_LIMIT, max_size as f64);

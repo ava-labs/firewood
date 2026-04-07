@@ -1,125 +1,106 @@
 // Copyright (C) 2026, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-//! Sharded caches for [`FileBacked`](super::filebacked::FileBacked).
+//! Caches for [`FileBacked`](super::filebacked::FileBacked), backed by
+//! [`quick_cache`].
 //!
-//! Both the node cache and the free-list cache are split across
-//! [`SHARD_COUNT`] independent [`Mutex`]-protected shards. Shards are
-//! selected by masking low bits of each [`LinearAddress`], distributing
-//! entries deterministically while allowing concurrent accesses to
-//! different addresses to proceed without contention.
+//! Both caches delegate all sharding, eviction, and synchronization to
+//! `quick_cache::sync::Cache`, which uses Clock-PRO eviction (scan-resistant,
+//! comparable to S3-FIFO) and allows true parallel reads without exclusive
+//! locking.
 //!
-//! # Size tracking
+//! # Memory-bounded node cache
 //!
-//! Each [`Shard`] pairs its [`Mutex`]-protected cache with an [`AtomicUsize`]
-//! that mirrors the cache's current size. The atomic is updated unconditionally
-//! on every [`SlotGuard`] drop — including read-only accesses such as
-//! [`ShardedNodeCache::get`] — because [`MemLruCache::get`] reorders entries
-//! without changing `current_size`, making the extra store cheap and the
-//! implementation simpler than tracking write-only paths explicitly. The
-//! pay-off is that [`ShardedNodeCache::total_current_size`] and
-//! [`ShardedFreeListCache::total_len`] are fully lock-free: they sum the
-//! per-shard atomics without acquiring any mutex.
+//! [`ShardedNodeCache`] uses a custom [`NodeWeighter`] that reports each
+//! entry's heap footprint via [`HeapSize`]. `quick_cache` accumulates
+//! these weights and evicts entries once the total exceeds the configured byte
+//! limit.
+//!
+//! # Entry-count free-list cache
+//!
+//! [`ShardedFreeListCache`] uses `quick_cache`'s built-in unit weighter (each
+//! entry weighs 1), so capacity equals the maximum number of entries.
 
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crossbeam_utils::CachePadded;
-use lru::LruCache as EntryLruCache;
-use lru_mem::LruCache as MemLruCache;
-use parking_lot::Mutex;
+use quick_cache::Weighter;
+use quick_cache::sync::Cache;
 
-use crate::{CachedNode, LinearAddress, SharedNode};
+use crate::{CachedNode, HeapSize as _, LinearAddress, SharedNode};
 
-/// A sharded node cache that distributes entries across [`SHARD_COUNT`]
-/// independent [`Mutex<MemLruCache>`] shards.
+/// A concurrent, memory-bounded node cache backed by [`quick_cache`].
 ///
-/// Each shard holds an equal slice of the total memory budget (rounded up so
-/// that no shard gets zero bytes). The shard for a given address is always the
-/// same, so reads, inserts, and removals never need to consult more than one
-/// shard. [`total_current_size`] and [`total_max_size`] are lock-free.
+/// Eviction is weight-based: each entry's weight is its heap footprint in
+/// bytes as reported by [`NodeWeighter`]. [`total_current_size`] and
+/// [`total_max_size`] are lock-free reads of `quick_cache`'s internal
+/// counters.
 ///
 /// [`total_current_size`]: ShardedNodeCache::total_current_size
 /// [`total_max_size`]: ShardedNodeCache::total_max_size
 #[derive(Debug)]
-pub(super) struct ShardedNodeCache {
-    shards: ShardedLock<MemLruCache<LinearAddress, CachedNode>>,
-    /// Per-shard memory limit. Stored separately so [`total_max_size`] never
-    /// needs to acquire any lock.
-    ///
-    /// [`total_max_size`]: ShardedNodeCache::total_max_size
-    per_shard_limit: usize,
-}
+pub(super) struct ShardedNodeCache(Cache<LinearAddress, CachedNode, NodeWeighter>);
 
 impl ShardedNodeCache {
-    /// Create a new cache with `total_limit` bytes divided equally (ceiling)
-    /// across all shards.
+    /// Create a new cache with `total_limit` bytes of capacity.
     pub(super) fn new(total_limit: NonZeroUsize) -> Self {
-        let per_shard = total_limit.div_ceil(SHARD_COUNT).get();
-        Self {
-            shards: ShardedLock::new(|| MemLruCache::new(per_shard)),
-            per_shard_limit: per_shard,
-        }
+        Self(Cache::with_weighter(
+            // estimated_items: used only for initial hash-table sizing.
+            // A modest estimate; the cache will resize as needed.
+            1024,
+            total_limit.get() as u64,
+            NodeWeighter,
+        ))
     }
 
     /// Returns the cached [`SharedNode`] for `addr`, or `None` on a miss.
     pub(super) fn get(&self, addr: LinearAddress) -> Option<SharedNode> {
-        self.shards.slot(addr).get(&addr).map(|n| n.0.clone())
+        self.0.get(&addr).map(|n| n.node.clone())
     }
 
     /// Inserts `node` into the cache for `addr`.
     ///
-    /// Silently drops the node if it exceeds the shard's memory limit (same as
-    /// the previous single-shard behaviour).
-    pub(super) fn insert(&self, addr: LinearAddress, node: CachedNode) {
-        let _ = self.shards.slot(addr).insert(addr, node);
+    /// Silently drops the node if it exceeds the total weight capacity.
+    pub(super) fn insert(&self, addr: LinearAddress, node: SharedNode) {
+        self.0.insert(addr, CachedNode::from(node));
     }
 
-    /// Removes the entry for `addr` from its shard, if present.
+    /// Removes the entry for `addr`, if present.
     pub(super) fn remove(&self, addr: LinearAddress) {
-        self.shards.slot(addr).remove(&addr);
+        self.0.remove(&addr);
     }
 
-    /// Returns the sum of `current_size()` across all shards, in bytes.
+    /// Returns the current total weight of all cached entries, in bytes.
     ///
-    /// This is a lock-free read of per-shard [`AtomicUsize`] counters; no
-    /// mutex is acquired.
-    pub(super) fn total_current_size(&self) -> usize {
-        self.shards.sum_size()
+    /// Lock-free read of `quick_cache`'s internal counter.
+    pub(super) fn total_current_size(&self) -> u64 {
+        self.0.weight()
     }
 
-    /// Returns the sum of `max_size()` across all shards, in bytes.
-    ///
-    /// Computed from the stored `per_shard_limit`; no lock or atomic is needed.
-    pub(super) const fn total_max_size(&self) -> usize {
-        self.per_shard_limit.wrapping_mul(SHARD_COUNT.get())
+    /// Returns the configured weight capacity, in bytes.
+    pub(super) fn total_max_size(&self) -> u64 {
+        self.0.capacity()
     }
 }
 
-/// A sharded free-list pointer cache that distributes entries across
-/// [`SHARD_COUNT`] independent [`Mutex<EntryLruCache>`] shards.
+/// A concurrent, entry-count-bounded free-list pointer cache backed by
+/// [`quick_cache`].
 ///
-/// Each shard holds an equal share (rounded up) of the total entry budget.
-/// [`total_len`] is lock-free.
+/// Each entry weighs 1 unit (the default), so capacity equals the maximum
+/// number of entries. [`total_len`] is a lock-free read of `quick_cache`'s
+/// internal counter.
 ///
 /// [`total_len`]: ShardedFreeListCache::total_len
 #[derive(Debug)]
-pub(super) struct ShardedFreeListCache {
-    shards: ShardedLock<EntryLruCache<LinearAddress, Option<LinearAddress>>>,
-}
+pub(super) struct ShardedFreeListCache(Cache<LinearAddress, Option<LinearAddress>>);
 
 impl ShardedFreeListCache {
-    /// Create a new cache with `total_entries` capacity divided equally
-    /// (ceiling) across all shards.
+    /// Create a new cache that holds up to `total_entries` entries.
     pub(super) fn new(total_entries: NonZeroUsize) -> Self {
-        let per_shard = total_entries.div_ceil(SHARD_COUNT);
-        Self {
-            shards: ShardedLock::new(|| EntryLruCache::new(per_shard)),
-        }
+        Self(Cache::new(total_entries.get()))
     }
 
     /// Removes and returns the cached next-pointer for `addr`, consuming the
-    /// entry (mirrors [`lru::LruCache::pop`]).
+    /// entry.
     ///
     /// Returns `None` if `addr` is not in the cache. Returns `Some(None)` if
     /// `addr` is cached as the end of the free list.
@@ -128,141 +109,34 @@ impl ShardedFreeListCache {
         reason = "Option<Option<LinearAddress>> is semantically necessary: outer None = not cached, inner None = cached as end-of-list"
     )]
     pub(super) fn pop(&self, addr: LinearAddress) -> Option<Option<LinearAddress>> {
-        self.shards.slot(addr).pop(&addr)
+        self.0.remove(&addr).map(|(_, v)| v)
     }
 
     /// Inserts or replaces the next-pointer for `addr`.
     pub(super) fn put(&self, addr: LinearAddress, next: Option<LinearAddress>) {
-        self.shards.slot(addr).put(addr, next);
+        self.0.insert(addr, next);
     }
 
-    /// Returns the sum of `len()` across all shards.
+    /// Returns the current number of entries in the cache.
     ///
-    /// This is a lock-free read of per-shard [`AtomicUsize`] counters; no
-    /// mutex is acquired.
+    /// Lock-free read of `quick_cache`'s internal counter.
     pub(super) fn total_len(&self) -> usize {
-        self.shards.sum_size()
+        self.0.len()
     }
 }
 
-/// Number of cache shards. Must be a power of two.
-const SHARD_COUNT: NonZeroUsize = NonZeroUsize::new(16).unwrap();
-const SHARD_MASK: u64 = SHARD_COUNT.get() as u64 - 1;
-
-/// Computes the shard index for `addr`.
+/// A [`quick_cache`] weighter that maps each [`CachedNode`] to its heap
+/// footprint in bytes.
 ///
-/// Shifts off the 4 alignment bits (all [`LinearAddress`] values are 16-byte
-/// aligned, so the low 4 bits are always zero) before masking, spreading
-/// entries across shards without bias from the alignment padding.
-#[inline]
-const fn shard_index(addr: LinearAddress) -> usize {
-    ((addr.get() >> 4) & SHARD_MASK) as usize
-}
+/// The weight is computed via [`HeapSize::heap_size`], which recursively sums
+/// the on-heap allocations of the node's path, value, and (for branch nodes)
+/// any inlined children. The key ([`LinearAddress`]) is a plain `NonZeroU64`
+/// with no heap allocation, so its contribution is zero.
+#[derive(Clone)]
+struct NodeWeighter;
 
-/// A fixed-size array of [`CachePadded`] [`Shard`]s with address-based
-/// dispatch and a lock-free aggregate size.
-///
-/// Each shard is cache-line padded to prevent false sharing between
-/// independently accessed shards.
-#[derive(Debug)]
-struct ShardedLock<T>([CachePadded<Shard<T>>; SHARD_COUNT.get()]);
-
-impl<T: CurrentSize> ShardedLock<T> {
-    /// Creates a new `ShardedLock` by calling `factory` once per shard.
-    #[must_use]
-    fn new(mut factory: impl FnMut() -> T) -> Self {
-        Self(std::array::from_fn(|_| {
-            CachePadded::new(Shard {
-                slot: Mutex::new(factory()),
-                size: AtomicUsize::new(0),
-            })
-        }))
-    }
-
-    /// Locks and returns the shard for `addr` as a [`SlotGuard`].
-    ///
-    /// The guard's [`Drop`] impl writes the shard's post-operation size back
-    /// to [`Shard::size`], keeping the atomic in sync without any extra call
-    /// at each call site.
-    #[must_use]
-    fn slot(&self, addr: LinearAddress) -> SlotGuard<'_, T> {
-        #![expect(clippy::indexing_slicing)]
-        let shard = &self.0[shard_index(addr)];
-        SlotGuard {
-            slot: shard.slot.lock(),
-            size: &shard.size,
-        }
-    }
-
-    /// Returns the sum of all per-shard size atomics without acquiring any lock.
-    fn sum_size(&self) -> usize {
-        self.0.iter().map(|s| s.size.load(Ordering::Relaxed)).sum()
-    }
-}
-
-/// A single shard: a mutex-protected cache paired with an [`AtomicUsize`] that
-/// tracks its current size between lock acquisitions.
-///
-/// The `size` atomic is written on every [`SlotGuard`] drop, including
-/// read-only accesses. See the [module-level documentation](self) for the
-/// rationale.
-#[derive(Debug)]
-struct Shard<T> {
-    slot: Mutex<T>,
-    size: AtomicUsize,
-}
-
-/// Abstracts over the two LRU cache types to expose a unified `current_size`
-/// method that [`SlotGuard`]'s [`Drop`] impl can call generically.
-///
-/// - [`MemLruCache`] already has a `current_size()` method returning bytes.
-/// - [`EntryLruCache`] uses `len()` to count entries; this trait maps that to
-///   the same name so [`ShardedLock`] can be generic over both.
-trait CurrentSize {
-    fn current_size(&self) -> usize;
-}
-
-impl CurrentSize for MemLruCache<LinearAddress, CachedNode> {
-    fn current_size(&self) -> usize {
-        self.current_size()
-    }
-}
-
-impl CurrentSize for EntryLruCache<LinearAddress, Option<LinearAddress>> {
-    fn current_size(&self) -> usize {
-        self.len()
-    }
-}
-
-/// A RAII guard returned by [`ShardedLock::slot`].
-///
-/// Derefs to the inner cache `T`, giving mutable access to the shard while
-/// the mutex is held. On drop, writes [`T::current_size()`] to [`Shard::size`]
-/// so that [`ShardedLock::sum_size`] always reflects the latest known state
-/// without acquiring any lock.
-///
-/// [`T::current_size()`]: CurrentSize::current_size
-struct SlotGuard<'a, T: CurrentSize> {
-    slot: parking_lot::MutexGuard<'a, T>,
-    size: &'a AtomicUsize,
-}
-
-impl<T: CurrentSize> std::ops::Deref for SlotGuard<'_, T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.slot
-    }
-}
-
-impl<T: CurrentSize> std::ops::DerefMut for SlotGuard<'_, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.slot
-    }
-}
-
-impl<T: CurrentSize> Drop for SlotGuard<'_, T> {
-    fn drop(&mut self) {
-        self.size.store(self.slot.current_size(), Ordering::Relaxed);
+impl Weighter<LinearAddress, CachedNode> for NodeWeighter {
+    fn weight(&self, _key: &LinearAddress, value: &CachedNode) -> u64 {
+        value.heap_size() as u64
     }
 }

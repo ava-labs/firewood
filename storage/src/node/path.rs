@@ -21,7 +21,7 @@ use std::fmt::{self, Debug, LowerHex};
 use std::iter::{FusedIterator, once};
 use std::ops::Add;
 
-use crate::{PathComponent, TriePathFromUnpackedBytes};
+use crate::{HeapSize, PathComponent, TriePathFromUnpackedBytes};
 
 static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
@@ -30,7 +30,7 @@ static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Default)]
 pub struct Path(pub SmallVec<[u8; 64]>);
 
-impl lru_mem::HeapSize for Path {
+impl HeapSize for Path {
     fn heap_size(&self) -> usize {
         // Heap allocation size if spilled beyond inline capacity
         if self.0.spilled() {

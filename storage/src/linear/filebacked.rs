@@ -155,7 +155,7 @@ impl ReadableStorage for FileBacked {
                 // we don't cache reads
             }
             CacheReadStrategy::All => {
-                self.cache.insert(addr, CachedNode(node));
+                self.cache.insert(addr, node);
                 CachedNode::update_cache_metrics(
                     self.cache.total_current_size(),
                     self.cache.total_max_size(),
@@ -163,7 +163,7 @@ impl ReadableStorage for FileBacked {
             }
             CacheReadStrategy::BranchReads => {
                 if !node.is_leaf() {
-                    self.cache.insert(addr, CachedNode(node));
+                    self.cache.insert(addr, node);
                     CachedNode::update_cache_metrics(
                         self.cache.total_current_size(),
                         self.cache.total_max_size(),
@@ -210,7 +210,7 @@ impl WritableStorage for FileBacked {
                 .allocated_info()
                 .expect("node should be allocated");
 
-            self.cache.insert(addr, CachedNode(shared_node));
+            self.cache.insert(addr, shared_node);
             // The node can now be read from the general cache, so we can delete the local copy
             maybe_persisted_node.persist_at(addr);
         }

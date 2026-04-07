@@ -16,7 +16,7 @@
 
 use crate::node::branch::ReadSerializable;
 use crate::nodestore::AreaIndex;
-use crate::{HashType, LinearAddress, Path, PathBuf, PathComponent, SharedNode};
+use crate::{HashType, HeapSize, LinearAddress, Path, PathBuf, PathComponent, SharedNode};
 use bitfield::bitfield;
 use branch::Serializable as _;
 pub use branch::{BranchNode, Child};
@@ -44,7 +44,7 @@ pub enum Node {
     Leaf(LeafNode),
 }
 
-impl lru_mem::HeapSize for Node {
+impl HeapSize for Node {
     fn heap_size(&self) -> usize {
         match self {
             Node::Branch(branch) => {
