@@ -48,6 +48,21 @@ fn outside_children_single_node_exact_match() {
 }
 
 #[test]
+fn outside_children_single_node_exact_match_right_edge() {
+    // Boundary matches terminal exactly on right edge — all children marked outside.
+    let nodes = [proof_node(&[1, 2])];
+    let result = compute_outside_children(&nodes, Some(&[0x12]), false).unwrap();
+    // Look up the mask for the terminal node at [1, 2].
+    let mask = result[&nibble_path(&[1, 2])];
+    for i in 0..16u8 {
+        assert!(
+            mask.is_set(U4::new_masked(i)),
+            "child {i} should be outside on right edge exact match"
+        );
+    }
+}
+
+#[test]
 fn outside_children_ancestor_left_edge() {
     // Terminal key [1], boundary key 0x15 → nibbles [1, 5].
     // Terminal is ancestor of boundary. On-path nibble = 5.
