@@ -218,6 +218,18 @@ pub enum ProofError {
     #[error("bounded change proof requires at least one boundary proof")]
     MissingBoundaryProof,
 
+    /// A proof node's value differs from the expected value
+    #[error("proof node value does not match the expected value at the same key")]
+    ProofNodeValueMismatch,
+
+    /// Start and end boundary proofs share no common prefix — they
+    /// disagree on the very first node. Since both proofs have already
+    /// passed hash chain verification against the same `end_root`, their
+    /// first nodes must be identical. This is unreachable without a hash
+    /// collision.
+    #[error("boundary proofs diverge at the root node")]
+    BoundaryProofsDivergeAtRoot,
+
     /// Non-empty end proof when no end key is set and no batch operations.
     #[error("unexpected non-empty end proof with no end key and no batch operations")]
     UnexpectedEndProof,
