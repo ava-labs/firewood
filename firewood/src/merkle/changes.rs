@@ -1,6 +1,30 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+//! Trie diff generation for change proofs.
+//!
+//! Computes the minimal set of [`BatchOp`]s (puts and deletes) that transform
+//! one trie revision into another. This is the *generation* side of change
+//! proofs — see [`crate::proofs`] for the verification side.
+//!
+//! # Algorithm
+//!
+//! [`DiffMerkleNodeStream`] performs a lock-step pre-order traversal of two
+//! tries (left = old revision, right = new revision). At each step it compares
+//! the current nodes' full paths:
+//!
+//! - **Left < Right** — the left node's key was deleted; advance left.
+//! - **Left > Right** — the right node's key was inserted; advance right.
+//! - **Equal paths, equal hashes** — subtrees are identical; skip children
+//!   of both.
+//! - **Equal paths, different hashes** — descend into both to find the
+//!   divergent keys.
+//! - **Equal paths, different values** — emit a put or delete for the key.
+//!
+//! The hash comparison lets the iterator skip entire subtrees that haven't
+//! changed, making the diff proportional to the number of changed keys rather
+//! than the trie size.
+
 use std::fmt::Debug;
 use std::{cmp::Ordering, iter::once};
 

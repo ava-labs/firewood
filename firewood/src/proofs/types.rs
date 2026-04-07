@@ -333,7 +333,13 @@ impl From<PathIterItem> for ProofNode {
     }
 }
 
-/// A proof that a given key-value pair either exists or does not exist in a trie.
+/// A Merkle proof that a given key-value pair either exists (inclusion) or does
+/// not exist (exclusion) in a trie.
+///
+/// `T` is a [`ProofCollection`] — an ordered sequence of [`ProofNode`]s forming
+/// the path from the trie root to the proven key. Common concrete types are
+/// `Vec<ProofNode>` and `Box<[ProofNode]>`; use [`EmptyProofCollection`] for a
+/// zero-node proof (e.g., when a boundary proof is absent).
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Proof<T: ?Sized>(T);
 

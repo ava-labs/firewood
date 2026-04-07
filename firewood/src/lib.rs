@@ -138,19 +138,8 @@ pub mod registry;
 
 /// Cryptographic proof system for Merkle tries.
 ///
-/// This module provides types and functionality for creating and verifying proofs
-/// of key-value pairs in Firewood's Merkle trie. For convenience, the most commonly
-/// used types are re-exported at the crate root level.
-///
-/// # Recommended Usage
-///
-/// Import proof types directly from the crate root rather than through this module:
-///
-/// ```rust,ignore
-/// use firewood::{Proof, ProofNode, RangeProof};  // Recommended
-/// // instead of
-/// use firewood::proofs::{Proof, ProofNode, RangeProof};  // Also works
-/// ```
+/// Provides types and verification for single-key, range, and change proofs.
+/// Commonly used types are re-exported at the crate root.
 pub mod proofs;
 
 // Re-export commonly used proof types at the crate root for ergonomic access
