@@ -1723,20 +1723,30 @@ fn test_bad_range_proof_value_mismatch_on_proof_path() {
     );
 }
 
-/// Case C of `compute_outside_children` (right edge): boundary is a
-/// prefix of the terminal node's key. All children extend beyond
-/// `end_key`, so all are marked outside.
-///
-/// Key `\x20` is a prefix of `\x20\xab`. `end_key` = `\x20` — children of
-/// the `\x20` node extend beyond `end_key` and must use proof hashes.
+/// Create and validate a range proof with no left edge and an `end_key` at
+/// a branch node with children. Keys are \x10, \x20, and \x20\xab. Proof is
+/// generated from None to \x20. Children of the \x20 node should not be
+/// included in the proof.
 #[test]
 fn test_right_edge_boundary_prefix_of_terminal() {
     let merkle = init_merkle([
-        (b"\x10" as &[u8], b"a" as &[u8]),
+        (b"\x10" as &[u8], b"a"),
         (b"\x20", b"b"),
         (b"\x20\xab", b"c"),
     ]);
     let root_hash = merkle.nodestore().root_hash().unwrap();
     let proof = merkle.range_proof(None, Some(b"\x20"), None).unwrap();
+    // Proof should only have 2 keys.
+    assert_eq!(proof.key_values().len(), 2);
+    // Child of \x20 not in proof.
+    assert!(
+        !proof
+            .key_values()
+            .iter()
+            .any(|(k, _)| k.as_ref() == b"\x20\xab"),
+        "child of end key should not be included in the proof"
+    );
+    // End proof should only have 2 proof nodes.
+    assert_eq!(proof.end_proof().len(), 2);
     verify_range_proof(None::<&[u8]>, Some(b"\x20"), &root_hash, &proof).unwrap();
 }
