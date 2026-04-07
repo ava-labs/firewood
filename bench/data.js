@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775461173506,
+  "lastUpdate": 1775547092610,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -2161,6 +2161,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 74.60364021542223,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Joachim Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "9e2fc0c78820eb131e621e2c273c68640a5ddef7",
+          "message": "refactor(ffi): remove ArcCache from DatabaseHandle (#1891)\n\n## Why this should be merged\n\nArcCache was introduced to avoid redundant Db::view() calls during\ncommit by caching the proposal view before committing and clearing it\nafter. Due to subsequent API changes the cache has a 100% miss rate, so\nit provides no benefit while serializing all concurrent FFI view lookups\nbehind a Mutex held across the Db::view() factory call.\n\n## How this works\n\nReplace get_root() with a thin view() method that delegates directly to\nDb::view(), remove clear_cached_view() and the surrounding\ncommit_proposal() bookkeeping, and delete arc_cache.rs along with the\nCACHED_VIEW_MISS/HIT metrics.\n\n## How this was tested\n\nCI for integration tests\n\n## Breaking Changes\n\nn/a",
+          "timestamp": "2026-04-07T03:09:15Z",
+          "url": "https://github.com/ava-labs/firewood/commit/9e2fc0c78820eb131e621e2c273c68640a5ddef7"
+        },
+        "date": 1775547091643,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 169.13458653407523,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5912.451264357643,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 109.9352126853406,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5723.408754814351,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 76.55587550224865,
             "unit": "block_accept_ms/ggas"
           }
         ]
