@@ -1707,3 +1707,21 @@ fn test_bad_range_proof_value_mismatch_on_proof_path() {
         "expected ProofNodeValueMismatch, got {result:?}"
     );
 }
+
+/// Case C of `compute_outside_children` (right edge): boundary is a
+/// prefix of the terminal node's key. All children extend beyond
+/// `end_key`, so all are marked outside.
+///
+/// Key `\x20` is a prefix of `\x20\xab`. `end_key` = `\x20` — children of
+/// the `\x20` node extend beyond `end_key` and must use proof hashes.
+#[test]
+fn test_right_edge_boundary_prefix_of_terminal() {
+    let merkle = init_merkle([
+        (b"\x10" as &[u8], b"a" as &[u8]),
+        (b"\x20", b"b"),
+        (b"\x20\xab", b"c"),
+    ]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let proof = merkle.range_proof(None, Some(b"\x20"), None).unwrap();
+    verify_range_proof(None::<&[u8]>, Some(b"\x20"), &root_hash, &proof).unwrap();
+}
