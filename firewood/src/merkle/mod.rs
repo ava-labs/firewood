@@ -252,8 +252,15 @@ fn compute_outside_children(
                 entry.set_above(on_path_nibble)
             }
             .set(on_path_nibble);
+        } else if !is_left_edge {
+            // Boundary is a prefix of or exactly matches the terminal key.
+            // For the right edge, all children extend beyond end_key (they
+            // represent keys longer than end_key sharing its prefix), so
+            // they are outside the proven range.
+            result.insert(terminal.key.clone(), ChildMask::ALL);
         }
-        // Otherwise boundary matches terminal exactly — no children need marking.
+        // For the left edge when boundary matches/is-prefix-of terminal,
+        // children extend beyond start_key and are in-range — no marking.
     }
 
     Ok(result)
