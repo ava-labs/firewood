@@ -218,12 +218,8 @@ fn test_bad_range_proof_out_of_order() {
     let merkle = init_merkle(items.clone());
 
     for _ in 0..10 {
-        let start = rng.random_range(0..items.len());
-        let end = rng.random_range(0..items.len() - start) + start - 1;
-
-        if end <= start {
-            continue;
-        }
+        let start = rng.random_range(0..items.len() - 2);
+        let end = rng.random_range(start + 2..items.len());
 
         let mut keys: Vec<[u8; 32]> = Vec::new();
         let mut vals: Vec<[u8; 20]> = Vec::new();
@@ -403,12 +399,8 @@ fn test_range_proof_with_non_existent_proof() {
     let merkle = init_merkle(items.clone());
 
     for _ in 0..10 {
-        let start = rng.random_range(0..items.len());
-        let end = rng.random_range(0..items.len() - start) + start - 1;
-
-        if end <= start {
-            continue;
-        }
+        let start = rng.random_range(1..items.len() - 2);
+        let end = rng.random_range(start + 1..items.len());
 
         // Short circuit if the decreased key is same with the previous key
         let first = decrease_key(items[start].0);
@@ -703,8 +695,7 @@ fn test_all_elements_proof() {
 }
 
 #[test]
-// Tests the range proof with "no" element. The first edge proof must
-// be a non-existent proof.
+// Empty key_values with a non-existent boundary key past the last entry.
 fn test_empty_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -712,28 +703,16 @@ fn test_empty_range_proof() {
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
     let merkle = init_merkle(items.clone());
+    let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    let cases = [(items.len() - 1, false)];
-    for c in &cases {
-        let first = increase_key(items[c.0].0);
-        let proof = merkle.prove(&first).unwrap();
-        assert!(!proof.is_empty());
+    let first = increase_key(items[items.len() - 1].0);
+    let proof = merkle.prove(&first).unwrap();
+    assert!(!proof.is_empty());
 
-        // key and value vectors are intentionally empty.
-        let key_values: KeyValuePairs = Vec::new();
+    let key_values: KeyValuePairs = Vec::new();
+    let range_proof = RangeProof::new(proof.clone(), proof, key_values.into_boxed_slice());
 
-        let range_proof = RangeProof::new(proof.clone(), proof, key_values.into_boxed_slice());
-
-        let root_hash = merkle.nodestore().root_hash().unwrap();
-
-        if c.1 {
-            assert!(
-                verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof,).is_err()
-            );
-        } else {
-            verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof).unwrap();
-        }
-    }
+    verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof).unwrap();
 }
 
 #[test]
@@ -775,12 +754,13 @@ fn test_gapped_range_proof() {
 
     assert!(
         verify_range_proof(
-            Some(&items[0].0),
-            Some(&items[items.len() - 1].0),
+            Some(&items[first].0),
+            Some(&items[last - 1].0),
             &root_hash,
             &range_proof,
         )
-        .is_err()
+        .is_err(),
+        "gapped entries should be detected in small trie"
     );
 }
 
@@ -1071,8 +1051,7 @@ fn test_range_proof_keys_with_shared_prefix() {
 #[test]
 // Tests a malicious proof, where the proof is more or less the
 // whole trie. This is to match corresponding test in geth.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
-fn test_bloadted_range_proof() {
+fn test_bloated_range_proof() {
     // Use a small trie
     let mut items = Vec::new();
     for i in 0..100_u32 {
@@ -1619,4 +1598,54 @@ fn test_bad_range_proof_start_after_end() {
         ),
         "expected StartAfterEnd, got {result:?}"
     );
+}
+
+#[test]
+// Tests range_proof() with a limit parameter. When limit truncates, the
+// end proof should anchor at the last returned key, not the requested end_key.
+fn test_range_proof_with_limit() {
+    let items: Vec<([u8; 32], [u8; 20])> = (0..10u32)
+        .map(|i| {
+            let mut key = [0u8; 32];
+            let mut value = [0u8; 20];
+            key[..4].copy_from_slice(&i.to_be_bytes());
+            value[..4].copy_from_slice(&(i + 100).to_be_bytes());
+            (key, value)
+        })
+        .collect();
+
+    let merkle = init_merkle(items.clone());
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    // Request range [items[0], items[9]] with limit=3. Should return items[0..3].
+    let limit = NonZeroUsize::new(3).unwrap();
+    let range_proof = merkle
+        .range_proof(Some(&items[0].0), Some(&items[9].0), Some(limit))
+        .unwrap();
+
+    assert_eq!(range_proof.key_values().len(), 3);
+
+    // The end proof should anchor at items[2] (last returned), not items[9].
+    // Verify the truncated proof against the last returned key.
+    verify_range_proof(
+        Some(&items[0].0),
+        Some(&items[2].0),
+        &root_hash,
+        &range_proof,
+    )
+    .unwrap();
+
+    // Full range (no limit) should return all 10.
+    let full_proof = merkle
+        .range_proof(Some(&items[0].0), Some(&items[9].0), None)
+        .unwrap();
+    assert_eq!(full_proof.key_values().len(), 10);
+
+    verify_range_proof(
+        Some(&items[0].0),
+        Some(&items[9].0),
+        &root_hash,
+        &full_proof,
+    )
+    .unwrap();
 }
