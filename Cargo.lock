@@ -1716,7 +1716,6 @@ dependencies = [
  "bytes",
  "cfg-if",
  "criterion",
- "crossbeam-utils",
  "derive-where",
  "enum-as-inner",
  "fastrace",

@@ -35,7 +35,6 @@ thiserror.workspace = true
 # Regular dependencies
 bitfield = "0.19.4"
 bitflags = "2.11.0"
-crossbeam-utils = "0.8.21"
 derive-where = "1.6.1"
 enum-as-inner = "0.7.0"
 fjall = "=2.11.2" # 3.0.0 has breaking changes
