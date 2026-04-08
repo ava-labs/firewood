@@ -658,21 +658,18 @@ impl<'db> From<Result<ProposedChangeProofContext<'db>, api::Error>>
 /// Once Try trait is stable, we can use that instead of this trait:
 ///
 /// ```text
-/// // This is an example of what we'd like to implement once `Try` / residual
-/// // conversions are stable. Kept as commented code so the doctest compiles.
-/// //
-/// // impl std::ops::FromResidual<Option<std::convert::Infallible>> for VoidResult {
-/// //     #[inline]
-/// //     fn from_residual(residual: Option<std::convert::Infallible>) -> Self {
-/// //         match residual {
-/// //             None => VoidResult::NullHandlePointer,
-/// //             // no other branches are needed because `std::convert::Infallible` is uninhabited
-/// //             // this compiles without error because the compiler knows that Some(_) is impossible
-/// //             // see: https://github.com/rust-lang/rust/blob/3fb1b53a9dbfcdf37a4b67d35cde373316829930/library/core/src/option.rs#L2627-L2631
-/// //             // and: https://doc.rust-lang.org/nomicon/exotic-sizes.html#empty-types
-/// //         }
-/// //     }
-/// // }
+/// impl std::ops::FromResidual<Option<std::convert::Infallible>> for VoidResult {
+///     #[inline]
+///     fn from_residual(residual: Option<std::convert::Infallible>) -> Self {
+///         match residual {
+///             None => VoidResult::NullHandlePointer,
+///             // no other branches are needed because `std::convert::Infallible` is uninhabited
+///             // this compiles without error because the compiler knows that Some(_) is impossible
+///             // see: https://github.com/rust-lang/rust/blob/3fb1b53a9dbfcdf37a4b67d35cde373316829930/library/core/src/option.rs#L2627-L2631
+///             // and: https://doc.rust-lang.org/nomicon/exotic-sizes.html#empty-types
+///         }
+///     }
+/// }
 /// ```
 pub(crate) trait NullHandleResult: CResult {
     fn null_handle_pointer_error() -> Self;
