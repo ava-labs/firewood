@@ -67,6 +67,7 @@ area_sizes![
 ];
 
 fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
     let dest_path = std::path::Path::new(&out_dir).join("area_sizes.rs");
     let contents = generate_area_sizes_rs().expect("Failed to generate area_sizes.rs");
