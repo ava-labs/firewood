@@ -235,6 +235,10 @@ pub enum ProofError {
     /// Empty end proof when `end_key` is set or `batch_ops` is non-empty.
     #[error("missing end proof: end_key is set or batch_ops is non-empty")]
     MissingEndProof,
+
+    /// Proof node is unreachable in the proving trie during collapse                                                 
+    #[error("proof node unreachable in proving trie")]                                                                
+    ProofNodeUnreachable,
 }
 
 #[derive(Clone, PartialEq, Eq)]

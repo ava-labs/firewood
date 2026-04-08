@@ -1,0 +1,503 @@
+// Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
+// See the file LICENSE.md for licensing terms.
+
+use std::mem;
+
+use firewood_storage::{
+    Child, Mutable, Node, NodeStore, Path, PathComponent, Propose, ReadableStorage,
+};
+
+use crate::{ProofError, api, merkle::Merkle};
+
+/// Returns `true` when a child at nibble `child_nib` under the accumulated
+/// prefix `acc_prefix` falls within `[start_nib, end_nib]` (inclusive).
+///
+/// Used by [`Merkle::collapse_strip`] to distinguish in-range children
+/// (which indicate tampered `batch_ops`) from out-of-range children (which
+/// are stripped normally).
+fn child_in_range(
+    acc_prefix: &[u8],
+    nibble: PathComponent,
+    start_nib: &[u8],
+    end_nib: &[u8],
+) -> bool {
+    let mut child_path = Vec::with_capacity(acc_prefix.len().saturating_add(1));
+    child_path.extend_from_slice(acc_prefix);
+    child_path.push(nibble.as_u8());
+    child_path.as_slice() >= start_nib && child_path.as_slice() <= end_nib
+}
+
+/// Builds the accumulated nibble prefix for a child node by extending
+/// `prefix` with the descent nibble and the child's `partial_path`.
+fn build_child_prefix(prefix: &[u8], nibble: u8, node: &Node) -> Box<[u8]> {
+    let pp = &node.partial_path().0;
+    let capacity = prefix
+        .len()
+        .wrapping_add(mem::size_of::<u8>())
+        .wrapping_add(pp.len());
+    let mut v = Vec::with_capacity(capacity);
+    v.extend_from_slice(prefix);
+    v.push(nibble);
+    v.extend_from_slice(pp);
+    v.into_boxed_slice()
+}
+
+impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
+    /// Collapse intermediate branches between two consecutive proof-path
+    /// positions.
+    ///
+    /// The proof implies a direct path from the parent to the child with
+    /// no intermediate branch nodes. If the fork's trie has extra branches
+    /// along this path (from out-of-range keys), this method removes their
+    /// off-path children on the outside of the range and flattens
+    /// single-child branches.
+    ///
+    /// Between consecutive proof nodes in `end_root`, the path is direct:
+    /// intermediate nodes have only the on-path child. Removes all
+    /// non-on-path children and values from intermediate branches so the
+    /// proving trie matches `end_root`'s path-compressed structure.
+    /// Collapse the proving trie's root so its structure matches the end
+    /// trie's root path. When out-of-range deletions cause the end trie's
+    /// root to compress (e.g., root `partial_path` changes from `[]` to `[1]`),
+    /// the proposal root still has the old shape. This strips non-on-path
+    /// children from the root and flattens single-child branches so the
+    /// root's `partial_path` matches the first proof node's key.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn collapse_root_to_path(
+        &mut self,
+        target: &[PathComponent],
+        range: Option<(&[u8], &[u8])>,
+    ) -> Result<(), api::Error> {
+        // The root's partial_path consumes some prefix of target.
+        // Only collapse if target extends beyond the root's partial_path.
+        let mut root_node = std::mem::take(self.nodestore.root_mut())
+            .expect("reconciliation guarantees a root node exists");
+
+        let pp_len = root_node.partial_path().len();
+        if let Some((prefix, remaining)) = target.split_at_checked(pp_len)
+            && !remaining.is_empty()
+            && prefix
+                .iter()
+                .zip(root_node.partial_path().0.iter())
+                .all(|(t, p)| t.as_u8() == *p)
+        {
+            // On error the root is left empty, but the caller discards
+            // the proving trie on any verification failure.
+            let root_prefix: Box<[u8]> = root_node.partial_path().0.iter().copied().collect();
+            root_node = self.collapse_strip(root_node, remaining, &root_prefix, range)?;
+        }
+
+        *self.nodestore.root_mut() = Some(root_node);
+        Ok(())
+    }
+
+    /// `range`: `(start_nibbles, end_nibbles)` for the proven range.
+    /// In-range children that are also proposal-local trigger rejection.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn collapse_branch_to_path(
+        &mut self,
+        from: &[PathComponent],
+        to: &[PathComponent],
+        range: Option<(&[u8], &[u8])>,
+    ) -> Result<(), api::Error> {
+        let suffix = to.strip_prefix(from).expect("to must start with from");
+        let parent_prefix: Box<[u8]> = from.iter().map(|c| c.as_u8()).collect();
+
+        let root = self.nodestore.root_mut();
+        let Some(root_node) = std::mem::take(root) else {
+            return Ok(());
+        };
+        let root_node = self.collapse_navigate(root_node, from, suffix, &parent_prefix, range)?;
+        *self.nodestore.root_mut() = root_node.into();
+        Ok(())
+    }
+
+    /// Finds the parent proof node in the proving trie so that the
+    /// intermediate structure between it and the next proof node can be
+    /// collapsed. Navigate from `node` down through `key` to reach the
+    /// parent proof node, then call `collapse_descend` with `suffix`.
+    ///
+    /// Must be called after `reconcile_branch_proof_node` to ensure that
+    /// each proof node exists as a branch in the proving trie.
+    ///                                                                                                                                                                                                                                           
+    /// # Parameters                                                                                                                                                                                                                              
+    /// - `node`: Current node in the proving trie being traversed.                                                                                                                                                                               
+    /// - `key`: Remaining path to the parent proof node, shortened at each
+    ///   recursive level as partial paths and child nibbles are consumed.                                                                                                                                                                        
+    /// - `suffix`: Path from the parent proof node to the child proof node,
+    ///   passed through unchanged to `collapse_descend`.                                                                                                                                                                                         
+    /// - `parent_prefix`: Nibble path from root to the parent proof node,
+    ///   used by `collapse_strip` for in-range child detection.                                                                                                                                                                                  
+    /// - `range`: Optional proven range boundaries for detecting tampered
+    ///   `batch_ops`.
+    fn collapse_navigate(
+        &mut self,
+        mut node: Node,
+        key: &[PathComponent],
+        suffix: &[PathComponent],
+        parent_prefix: &[u8],
+        range: Option<(&[u8], &[u8])>,
+    ) -> Result<Node, api::Error> {
+        // get a reference to the partial path for ease of reading
+        let pp = &node.partial_path().0;
+
+        // find the point where the key differs from the partial path
+        // unwrap_or handles the case where they are subsets of each other
+        let diverge = key
+            .iter()
+            .zip(pp.iter())
+            .position(|(pc, nibble)| pc.as_u8() != *nibble)
+            .unwrap_or(key.len().min(pp.len()));
+
+        if diverge != pp.len() {
+            // partial_path not fully consumed — key diverges or is a prefix
+            // of partial_path. Either way, from-node isn't reachable here.
+            return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
+        }
+
+        let (_, key_rest) = key.split_at(diverge);
+
+        let Some((&child_component, deeper)) = key_rest.split_first() else {
+            // Exact match — arrived at the parent proof node.
+            return self.collapse_descend(node, suffix, parent_prefix, range);
+        };
+
+        // key extends past partial_path — descend into child.
+        let Some(branch) = node.as_branch_mut() else {
+            return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
+        };
+
+        // Temporarily take ownership of the child so we can resolve it to a
+        // mutable Node, recurse, and put the (possibly modified) node back.
+        let Some(child) = branch.children.take(child_component) else {
+            return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
+        };
+
+        let child_node = self.read_for_update(child)?;
+        let child_node =
+            self.collapse_navigate(child_node, deeper, suffix, parent_prefix, range)?;
+        branch.children[child_component] = Some(Child::Node(child_node));
+        Ok(node)
+    }
+
+    /// Descend from the parent proof node into its on-path child, then
+    /// strip non-on-path children from intermediate branches along `path`.
+    ///
+    /// The first component of `path` selects the child to descend into —
+    /// we don't modify the parent proof node itself.
+    fn collapse_descend(
+        &mut self,
+        mut node: Node,
+        path: &[PathComponent],
+        acc_prefix: &[u8],
+        range: Option<(&[u8], &[u8])>,
+    ) -> Result<Node, api::Error> {
+        let Some((&first, remaining)) = path.split_first() else {
+            return Ok(node);
+        };
+
+        let Some(branch) = node.as_branch_mut() else {
+            // Cannot descend from parent proof node to child proof node if
+            // the parent proof node is not a branch.
+            return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
+        };
+
+        let Some(child) = branch.children.take(first) else {
+            // No child pointer exists on path to child proof node.
+            return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
+        };
+
+        let mut child_node = self.read_for_update(child)?;
+
+        let child_prefix = build_child_prefix(acc_prefix, first.0.as_u8(), &child_node);
+
+        let child_pp_len = child_node.partial_path().len();
+        let after_child = remaining.get(child_pp_len..).unwrap_or_default();
+
+        child_node = self.collapse_strip(child_node, after_child, &child_prefix, range)?;
+
+        branch.children[first] = Some(Child::Node(child_node));
+        Ok(node)
+    }
+
+    /// Strip non-on-path children from an intermediate branch and recurse.
+    /// Flattens single-child branches to match `end_root`'s path-compressed
+    /// structure.
+    ///
+    /// Children that are both in-range AND proposal-local (created by this
+    /// proposal's `batch_ops`) trigger `EndRootMismatch` — they indicate
+    /// tampered operations since `end_root` has no branch at this position.
+    /// In-range children inherited from the parent are legitimate unchanged
+    /// keys and are stripped normally (handled by proof hashes).
+    fn collapse_strip(
+        &mut self,
+        mut node: Node,
+        path: &[PathComponent],
+        acc_prefix: &[u8],
+        range: Option<(&[u8], &[u8])>,
+    ) -> Result<Node, api::Error> {
+        let Some((&on_path, remaining)) = path.split_first() else {
+            return Ok(node);
+        };
+
+        let Some(branch) = node.as_branch_mut() else {
+            // Path is non-empty but node is not a branch — cannot descend further.
+            return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
+        };
+
+        for (nibble, slot) in &mut branch.children {
+            if nibble == on_path || slot.is_none() {
+                continue;
+            }
+
+            if let Some((start_nib, end_nib)) = range
+                && child_in_range(acc_prefix, nibble, start_nib, end_nib)
+            {
+                return Err(api::Error::ProofError(ProofError::EndRootMismatch));
+            }
+
+            *slot = None;
+        }
+        branch.value = None;
+
+        // Recurse into the on-path child.
+        let Some(child) = branch.children.take(on_path) else {
+            // No child pointer exists on path to child proof node.
+            return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
+        };
+
+        let mut child_node = self.read_for_update(child)?;
+        let child_pp_len = child_node.partial_path().len();
+        let deeper = remaining.get(child_pp_len..).unwrap_or_default();
+        if !deeper.is_empty() {
+            let child_prefix = build_child_prefix(acc_prefix, on_path.0.as_u8(), &child_node);
+            child_node = self.collapse_strip(child_node, deeper, &child_prefix, range)?;
+        }
+
+        branch.children[on_path] = Some(Child::Node(child_node));
+        debug_assert!(
+            branch.value.is_none(),
+            "intermediate branch value should have been cleared"
+        );
+
+        // If exactly one child remains, flatten by merging partial paths.
+        let Some((child_idx, only_child)) = branch.children.take_only_child() else {
+            return Ok(node);
+        };
+        let mut merged = self.read_for_update(only_child)?;
+        let merged_path = Path::from_nibbles_iterator(
+            branch
+                .partial_path
+                .iter()
+                .chain(std::iter::once(&child_idx.as_u8()))
+                .chain(merged.partial_path().iter())
+                .copied(),
+        );
+        merged.update_partial_path(merged_path);
+        Ok(merged)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use firewood_storage::MemStore;
+
+    use super::*;
+
+    fn create_test_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
+        let memstore = MemStore::default();
+        let nodestore = NodeStore::new_empty_proposal(memstore.into());
+        Merkle { nodestore }
+    }
+
+    #[test]
+    fn test_child_in_range() {
+        let pc = |n| PathComponent::try_new(n).unwrap();
+
+        // inside range
+        assert!(child_in_range(&[0xa], pc(0x5), &[0xa, 0x0], &[0xa, 0xf]));
+        // before start
+        assert!(!child_in_range(&[0xa], pc(0x2), &[0xa, 0x5], &[0xa, 0xf]));
+        // after end
+        assert!(!child_in_range(&[0xa], pc(0xf), &[0xa, 0x0], &[0xa, 0x5]));
+        // at start boundary
+        assert!(child_in_range(&[0xa], pc(0x5), &[0xa, 0x5], &[0xa, 0xf]));
+        // at end boundary
+        assert!(child_in_range(&[0xa], pc(0x5), &[0xa, 0x0], &[0xa, 0x5]));
+        // acc_prefix past start — in range regardless of nibble
+        assert!(child_in_range(&[0xb], pc(0x0), &[0xa, 0x5], &[0xf, 0x0]));
+        // acc_prefix before end — in range regardless of nibble
+        assert!(child_in_range(&[0xa], pc(0xf), &[0x0, 0x0], &[0xb, 0x0]));
+        // empty prefix
+        assert!(child_in_range(&[], pc(0x5), &[0x0], &[0xf]));
+        assert!(!child_in_range(&[], pc(0x5), &[0x6], &[0xf]));
+        // start shorter than depth — child is past start
+        assert!(child_in_range(
+            &[0xa, 0xb],
+            pc(0x0),
+            &[0xa],
+            &[0xa, 0xb, 0xf]
+        ));
+        // end shorter than depth — child is past end
+        assert!(!child_in_range(
+            &[0xa, 0xb],
+            pc(0x0),
+            &[0xa, 0xb, 0x0],
+            &[0xa]
+        ));
+    }
+
+    #[test]
+    fn test_collapse_navigate_exact_match() {
+        let pc = |n: u8| PathComponent::try_new(n).unwrap();
+        let mut merkle = create_test_merkle();
+
+        // Under \x10, branch with children at 2 and 3.
+        // Under \x10\x2, branch with children at 1 and 2.
+        // \x20 forces the root to have an empty partial path.
+        merkle
+            .insert(b"\x10\x21", Box::from(b"a".as_slice()))
+            .unwrap();
+        merkle
+            .insert(b"\x10\x22", Box::from(b"b".as_slice()))
+            .unwrap();
+        merkle
+            .insert(b"\x10\x30", Box::from(b"c".as_slice()))
+            .unwrap();
+        merkle.insert(b"\x20", Box::from(b"d".as_slice())).unwrap();
+        let node = std::mem::take(merkle.nodestore.root_mut()).unwrap();
+
+        // Navigates down nibble 1 because the key parameter is [pc(1), pc(0)].
+        // From the suffix, the child proof is at \x10\x21. `parent_prefix` is
+        // the nibble path from the root to the parent proof node which will be
+        // passed to `collapse_strip`. In this case, `collapse_strip` will strip
+        // \x10\x22.
+        let root_node = merkle
+            .collapse_navigate(node, &[pc(1), pc(0)], &[pc(2), pc(1)], &[0x1, 0x0], None)
+            .unwrap();
+
+        let branch = root_node.as_branch().unwrap();
+
+        // Root children unchanged
+        assert!(branch.children[pc(1)].is_some());
+        assert!(branch.children[pc(2)].is_some());
+
+        // Put the root back into the merkle and check for the stripped node.
+        *merkle.nodestore.root_mut() = Some(root_node);
+        // \x10\x21 is on-path — should still exist
+        assert!(merkle.get_value(b"\x10\x21").unwrap().is_some());
+        // \x10\x22 is off-path — should be stripped
+        assert!(merkle.get_value(b"\x10\x22").unwrap().is_none());
+        // \x10\x30 is a sibling of the on-path child at the parent proof node — not stripped
+        assert!(merkle.get_value(b"\x10\x30").unwrap().is_some());
+    }
+
+    #[test]
+    fn test_collapse_navigate_recurse() {
+        let pc = |n: u8| PathComponent::try_new(n).unwrap();
+        let mut merkle = create_test_merkle();
+
+        // Under \x1, branch with children at nibbles 0 and 1.
+        // Under \x10\x2, branch with children at nibbles 1 and 3.
+        // \x11 prevents path compression under nibble 1.
+        // \x20 forces the root to have an empty partial path.
+        merkle
+            .insert(b"\x10\x21", Box::from(b"a".as_slice()))
+            .unwrap();
+        merkle
+            .insert(b"\x10\x23", Box::from(b"b".as_slice()))
+            .unwrap();
+        merkle.insert(b"\x11", Box::from(b"c".as_slice())).unwrap();
+        merkle.insert(b"\x20", Box::from(b"d".as_slice())).unwrap();
+        let node = std::mem::take(merkle.nodestore.root_mut()).unwrap();
+
+        // Navigates down nibble 1 because the key parameter is [pc(1)].
+        // Unlike exact_match, the key is consumed by child descent rather
+        // than partial path matching — the branch under nibble 1 has no
+        // partial path. Recurse with empty key → exact match at that branch.
+        // From the suffix, the child proof is at \x10\x21. `parent_prefix`
+        // is the nibble path from root to the parent proof node, passed to
+        // `collapse_strip`. In this case, `collapse_strip` will strip \x10\x23.
+        let node = merkle
+            .collapse_navigate(node, &[pc(1)], &[pc(0), pc(2), pc(1)], &[0x1], None)
+            .unwrap();
+
+        // Put the root back into the merkle and check for the stripped node.
+        *merkle.nodestore.root_mut() = Some(node);
+        // \x10\x21 is on-path — should still exist
+        assert!(merkle.get_value(b"\x10\x21").unwrap().is_some());
+        // \x10\x23 is off-path — should be stripped
+        assert!(merkle.get_value(b"\x10\x23").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_collapse_navigate_errors() {
+        let pc = |n: u8| PathComponent::try_new(n).unwrap();
+        let mut merkle = create_test_merkle();
+
+        // Single key \x10 → root has partial_path [1, 0]
+        merkle.insert(b"\x10", Box::from(b"a".as_slice())).unwrap();
+        let node = std::mem::take(merkle.nodestore.root_mut()).unwrap();
+
+        // Invalid key [2, 0] diverges at first nibble.
+        let result = merkle.collapse_navigate(node.clone(), &[pc(2), pc(0)], &[pc(0)], &[], None);
+        assert!(matches!(
+            result,
+            Err(api::Error::ProofError(ProofError::ProofNodeUnreachable))
+        ));
+
+        // Passing invalid key [1, 0, 5]. Consumes partial_path [1, 0] then tries
+        // to descend, but node is a leaf — should error.
+        let result =
+            merkle.collapse_navigate(node.clone(), &[pc(1), pc(0), pc(5)], &[pc(0)], &[], None);
+        assert!(matches!(
+            result,
+            Err(api::Error::ProofError(ProofError::ProofNodeUnreachable))
+        ));
+
+        // Put root node back into the merkle and add \x20 to make root a branch
+        // with children at 1 and 2 and no partial path.
+        *merkle.nodestore.root_mut() = Some(node);
+        merkle.insert(b"\x20", Box::from(b"b".as_slice())).unwrap();
+        let node = std::mem::take(merkle.nodestore.root_mut()).unwrap();
+
+        // Invalid key [3] points to nibble 3 which doesn't exist — should error.
+        let result = merkle.collapse_navigate(node, &[pc(3)], &[pc(0)], &[], None);
+        assert!(matches!(
+            result,
+            Err(api::Error::ProofError(ProofError::ProofNodeUnreachable))
+        ));
+
+        // Range covers \x10\x22 in this test. An in-range off-path child
+        // should result in an `EndRootMismatch`.
+        let mut merkle = create_test_merkle();
+        merkle
+            .insert(b"\x10\x21", Box::from(b"a".as_slice()))
+            .unwrap();
+        merkle
+            .insert(b"\x10\x22", Box::from(b"b".as_slice()))
+            .unwrap();
+        merkle
+            .insert(b"\x10\x30", Box::from(b"c".as_slice()))
+            .unwrap();
+        merkle.insert(b"\x20", Box::from(b"d".as_slice())).unwrap();
+        let node = std::mem::take(merkle.nodestore.root_mut()).unwrap();
+
+        // Key is [1, 0], and suffix is [2, 1], which means it will navigate to the
+        // \x10, then call `collapse_descend` to traverse down nibble 2. There is
+        // one off-path child entry to strip at nibble 2 (\x10\x22), but that child
+        // is inside the range which will result in an `EndRootMismatch` error.
+        let result = merkle.collapse_navigate(
+            node,
+            &[pc(1), pc(0)],
+            &[pc(2), pc(1)],
+            &[0x1, 0x0],
+            Some((&[0x1, 0x0, 0x2, 0x0], &[0x1, 0x0, 0x2, 0xf])),
+        );
+        assert!(matches!(
+            result,
+            Err(api::Error::ProofError(ProofError::EndRootMismatch))
+        ));
+    }
+}
