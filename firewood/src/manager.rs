@@ -88,6 +88,18 @@ pub struct ConfigManager {
 pub type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
 type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
 
+/// The commiter token is held by the mutex and ensures only one commit operation
+/// is in progress at a time.
+///
+/// It is not clonable or copy-able to prevent illicitly acquiring a committer
+/// token. The token can be used to enforce that certain operations
+/// (e.g. [`reap_stale_revisions`]) are only called by the commit function
+/// while holding the commit lock.
+///
+/// [`reap_stale_revisions`]: RevisionManager::reap_stale_revisions
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct Committer;
+
 #[derive(Debug)]
 pub(crate) struct RevisionManager {
     /// Maximum number of revisions to keep in memory.
@@ -127,7 +139,7 @@ pub(crate) struct RevisionManager {
     /// from `in_memory_revisions` so that readers (`current_revision`, `view`)
     /// are never blocked by the potentially long `persist_worker.persist()`
     /// backpressure stall — only other committers queue behind this lock.
-    commit_lock: Mutex<()>,
+    commit_lock: Mutex<Committer>,
 
     /// Lazily initialized thread pool for parallel operations.
     threadpool: OnceLock<ThreadPool>,
@@ -243,7 +255,7 @@ impl RevisionManager {
             in_memory_revisions: Mutex::new(VecDeque::from([nodestore.clone()])),
             by_hash: Mutex::new(by_hash),
             proposals: Mutex::new(Default::default()),
-            commit_lock: Mutex::new(()),
+            commit_lock: Mutex::new(Committer),
             threadpool: OnceLock::new(),
             root_store,
             persist_worker,
@@ -414,7 +426,7 @@ impl RevisionManager {
     /// and ensuring thread safety.
     fn reap_stale_revisions(
         &self,
-        _commit_guard: &mut MutexGuard<'_, ()>,
+        _commit_guard: &mut MutexGuard<'_, Committer>,
     ) -> Result<(), RevisionManagerError> {
         // TODO: Handle the case where we get something off the free list that is not free
         loop {
