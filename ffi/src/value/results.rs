@@ -657,7 +657,7 @@ impl<'db> From<Result<ProposedChangeProofContext<'db>, api::Error>>
 ///
 /// Once Try trait is stable, we can use that instead of this trait:
 ///
-/// ```ignore
+/// ```text
 /// impl std::ops::FromResidual<Option<std::convert::Infallible>> for VoidResult {
 ///     #[inline]
 ///     fn from_residual(residual: Option<std::convert::Infallible>) -> Self {

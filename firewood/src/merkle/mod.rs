@@ -252,8 +252,15 @@ fn compute_outside_children(
                 entry.set_above(on_path_nibble)
             }
             .set(on_path_nibble);
+        } else if !is_left_edge {
+            // Boundary is a prefix of or exactly matches the terminal key.
+            // For the right edge, all children extend beyond end_key (they
+            // represent keys longer than end_key sharing its prefix), so
+            // they are outside the proven range.
+            result.insert(terminal.key.clone(), ChildMask::ALL);
         }
-        // Otherwise boundary matches terminal exactly — no children need marking.
+        // For the left edge when boundary matches/is-prefix-of terminal,
+        // children extend beyond start_key and are in-range — no marking.
     }
 
     Ok(result)
@@ -686,31 +693,6 @@ impl<T: TrieReader> Merkle<T> {
     ///   - I/O errors when reading nodes from storage
     ///   - Corrupted trie structure
     ///   - Invalid node references
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // Prove all keys between "alice" and "charlie"
-    /// let proof = merkle.range_proof(
-    ///     Some(b"alice"),
-    ///     Some(b"charlie"),
-    ///     None
-    /// ).await?;
-    ///
-    /// // Prove the first 100 keys starting from "alice"
-    /// let proof = merkle.range_proof(
-    ///     Some(b"alice"),
-    ///     None,
-    ///     Some(NonZeroUsize::new(100).unwrap())
-    /// ).await?;
-    ///
-    /// // Prove that no keys exist in a range
-    /// let proof = merkle.range_proof(
-    ///     Some(b"aardvark"),
-    ///     Some(b"aaron"),
-    ///     None
-    /// ).await?;
-    /// ```
     pub(super) fn range_proof(
         &self,
         start_key: Option<&[u8]>,
