@@ -302,7 +302,7 @@ impl RevisionManager {
         // `current_revision()` or `view()` — those only need a read lock on
         // `in_memory_revisions`, which remains available except during the brief
         // non-blocking windows in steps 3 and 5.
-        let _commit_guard = self.commit_lock.lock();
+        let mut commit_guard = self.commit_lock.lock();
 
         // 1. Check if the persist worker has failed.
         self.persist_worker
@@ -327,48 +327,7 @@ impl RevisionManager {
         firewood_set!(crate::registry::DELETED_LIST_LEN, committed.deleted_len());
 
         // 3. Revision reaping.
-        // When we exceed max_revisions, remove the oldest revision from memory
-        // and send it to the `PersistWorker`.
-        // If you crash after freeing some of these, then the free list will point to nodes that are not actually free.
-        // TODO: Handle the case where we get something off the free list that is not free
-        loop {
-            // Brief lock: check the count, pop the oldest if needed, remove from
-            // by_hash. All three operations are fast (no I/O). Released before reap().
-            let (oldest, remaining_len) = {
-                let mut in_memory_revisions = self.in_memory_revisions.lock();
-                if in_memory_revisions.len() < self.max_revisions {
-                    break;
-                }
-                let oldest = in_memory_revisions.pop_front().expect("must be present");
-                let oldest_hash = oldest.root_hash().or_default_root_hash();
-                if let Some(ref hash) = oldest_hash {
-                    // BLOCKING: mutex lock on `by_hash` while holding the mutex on
-                    // `in_memory_revisions`. Nested locking order must remain consistent
-                    // (always acquire `in_memory_revisions` before `by_hash`) to avoid
-                    // deadlocks.
-                    self.by_hash.lock().remove(hash);
-                }
-                let remaining = in_memory_revisions.len();
-                (oldest, remaining)
-                // lock released here
-            };
-
-            // The warning in the docs for `Arc::try_unwrap` does not apply here
-            // because `original` is retained and not immediately dropped.
-            match Arc::try_unwrap(oldest) {
-                Ok(oldest) => self
-                    .persist_worker
-                    .reap(oldest)
-                    .map_err(RevisionManagerError::PersistError)?,
-                Err(original) => {
-                    warn!("Oldest revision could not be reaped; still referenced");
-                    self.in_memory_revisions.lock().push_front(original);
-                    break;
-                }
-            }
-            firewood_set!(crate::registry::ACTIVE_REVISIONS, remaining_len);
-            firewood_set!(crate::registry::MAX_REVISIONS, self.max_revisions);
-        }
+        self.reap_stale_revisions(&mut commit_guard)?;
 
         // 4. Signal to the `PersistWorker` to persist this revision.
         let committed: CommittedRevision = committed.into();
@@ -438,6 +397,63 @@ impl RevisionManager {
             if let Ok(s) = merkle.dump_to_string() {
                 trace!("{s}");
             }
+        }
+
+        Ok(())
+    }
+
+    /// Reap stale revisions until the number of in-memory revisions is below the
+    /// maximum threshold.
+    ///
+    /// When we exceed `max_revisions`, remove the oldest revision from memory and
+    /// send it to the `PersistWorker`. If you crash after freeing some of these,
+    /// then the free list will point to nodes that are not actually free.
+    ///
+    /// A reference to the commit guard is required to ensure this function is only called by the
+    /// commit function while holding the commit lock, preventing concurrent calls to this function
+    /// and ensuring thread safety.
+    fn reap_stale_revisions(
+        &self,
+        _commit_guard: &mut MutexGuard<'_, ()>,
+    ) -> Result<(), RevisionManagerError> {
+        // TODO: Handle the case where we get something off the free list that is not free
+        loop {
+            // Brief lock: check the count, pop the oldest if needed, remove from
+            // by_hash. All three operations are fast (no I/O). Released before reap().
+            let (oldest, remaining_len) = {
+                let mut in_memory_revisions = self.in_memory_revisions.lock();
+                if in_memory_revisions.len() < self.max_revisions {
+                    break;
+                }
+                let oldest = in_memory_revisions.pop_front().expect("must be present");
+                let oldest_hash = oldest.root_hash().or_default_root_hash();
+                if let Some(ref hash) = oldest_hash {
+                    // BLOCKING: mutex lock on `by_hash` while holding the mutex on
+                    // `in_memory_revisions`. Nested locking order must remain consistent
+                    // (always acquire `in_memory_revisions` before `by_hash`) to avoid
+                    // deadlocks.
+                    self.by_hash.lock().remove(hash);
+                }
+                let remaining = in_memory_revisions.len();
+                (oldest, remaining)
+                // lock released here
+            };
+
+            // The warning in the docs for `Arc::try_unwrap` does not apply here
+            // because `original` is retained and not immediately dropped.
+            match Arc::try_unwrap(oldest) {
+                Ok(oldest) => self
+                    .persist_worker
+                    .reap(oldest)
+                    .map_err(RevisionManagerError::PersistError)?,
+                Err(original) => {
+                    warn!("Oldest revision could not be reaped; still referenced");
+                    self.in_memory_revisions.lock().push_front(original);
+                    break;
+                }
+            }
+            firewood_set!(crate::registry::ACTIVE_REVISIONS, remaining_len);
+            firewood_set!(crate::registry::MAX_REVISIONS, self.max_revisions);
         }
 
         Ok(())
