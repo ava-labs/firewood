@@ -693,31 +693,6 @@ impl<T: TrieReader> Merkle<T> {
     ///   - I/O errors when reading nodes from storage
     ///   - Corrupted trie structure
     ///   - Invalid node references
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // Prove all keys between "alice" and "charlie"
-    /// let proof = merkle.range_proof(
-    ///     Some(b"alice"),
-    ///     Some(b"charlie"),
-    ///     None
-    /// ).await?;
-    ///
-    /// // Prove the first 100 keys starting from "alice"
-    /// let proof = merkle.range_proof(
-    ///     Some(b"alice"),
-    ///     None,
-    ///     Some(NonZeroUsize::new(100).unwrap())
-    /// ).await?;
-    ///
-    /// // Prove that no keys exist in a range
-    /// let proof = merkle.range_proof(
-    ///     Some(b"aardvark"),
-    ///     Some(b"aaron"),
-    ///     None
-    /// ).await?;
-    /// ```
     pub(super) fn range_proof(
         &self,
         start_key: Option<&[u8]>,
