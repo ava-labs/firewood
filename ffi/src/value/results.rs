@@ -657,7 +657,7 @@ impl<'db> From<Result<ProposedChangeProofContext<'db>, api::Error>>
 ///
 /// Once Try trait is stable, we can use that instead of this trait:
 ///
-/// ```ignore
+/// ```text
 /// // This is an example of what we'd like to implement once `Try` / residual
 /// // conversions are stable. Kept as commented code so the doctest compiles.
 /// //
