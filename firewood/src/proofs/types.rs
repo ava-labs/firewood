@@ -237,7 +237,7 @@ pub enum ProofError {
     MissingEndProof,
 
     /// Proof node is unreachable in the proving trie during collapse                                                 
-    #[error("proof node unreachable in proving trie")]                                                                
+    #[error("proof node unreachable in proving trie")]
     ProofNodeUnreachable,
 }
 
