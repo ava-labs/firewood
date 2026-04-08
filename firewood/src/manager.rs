@@ -314,17 +314,12 @@ impl RevisionManager {
         // between this check and step 5, so the result remains valid.
         // BLOCKING: mutex lock on `in_memory_revisions`. Contends only with the brief
         // lock windows in steps 3 and 5 (fast, no I/O).
-        {
-            let in_memory_revisions = self.in_memory_revisions.lock();
-            let current_revision = in_memory_revisions
-                .back()
-                .expect("there is always one revision");
-            if !proposal.parent_hash_is(current_revision.root_hash()) {
-                return Err(RevisionManagerError::NotLatest {
-                    provided: proposal.root_hash(),
-                    expected: current_revision.root_hash(),
-                });
-            }
+        let parent_hash = self.current_revision().root_hash();
+        if !proposal.parent_hash_is(parent_hash.clone()) {
+            return Err(RevisionManagerError::NotLatest {
+                provided: proposal.root_hash(),
+                expected: parent_hash,
+            });
         }
 
         let committed = proposal.as_committed();
