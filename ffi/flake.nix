@@ -1,6 +1,6 @@
 {
   # To test with arbitrary firewood versions (alternative to firewood-go-ethhash):
-  #  - Install nix: https://github.com/DeterminateSystems/nix-installer?tab=readme-ov-file#install-nix
+  #  - Install nix: https://nixos.org/download/
   #  - Clone firewood locally at desired version/commit
   #  - Build: `cd ffi && nix build`
   #  - In your Go project: `go mod edit -replace github.com/ava-labs/firewood-go-ethhash/ffi=/path/to/firewood/ffi/result/ffi`
@@ -8,7 +8,7 @@
   description = "Firewood FFI library and development environment";
 
   inputs = {
-    nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.2505.*.tar.gz";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
     rust-overlay.url = "github:oxalica/rust-overlay";
     crane.url = "github:ipetkov/crane";
     flake-utils.url = "github:numtide/flake-utils";
@@ -36,8 +36,8 @@
       src = lib.cleanSourceWith {
         src = craneLib.path ./..;
         filter = path: type:
-          (lib.hasSuffix "\.md" path) ||
-          (lib.hasSuffix "\.go" path) ||
+          (lib.hasSuffix ".md" path) ||
+          (lib.hasSuffix ".go" path) ||
           (lib.hasSuffix "go.mod" path) ||
           (lib.hasSuffix "go.sum" path) ||
           (lib.hasSuffix "firewood.h" path) ||
