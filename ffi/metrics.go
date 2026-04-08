@@ -21,6 +21,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 
 	dto "github.com/prometheus/client_model/go"
 )
@@ -37,7 +38,7 @@ func (Gatherer) Gather() ([]*dto.MetricFamily, error) {
 
 	reader := strings.NewReader(metrics)
 
-	var parser expfmt.TextParser
+	parser := expfmt.NewTextParser(model.UTF8Validation)
 	parsedMetrics, err := parser.TextToMetricFamilies(reader)
 	if err != nil {
 		return nil, err
