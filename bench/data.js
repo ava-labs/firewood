@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775547092610,
+  "lastUpdate": 1775633773979,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -2208,6 +2208,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 76.55587550224865,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "faf306557759b7e322a7e0c96b0fea209eb082c2",
+          "message": "chore(ci): Avoid running benchmarks on normal nextest (#1903)\n\n## Why this should be merged\n\nThe benchmarks run locally, take a long time, and the results are\nactually discarded. The only thing this actually checks is that the\nbenchmarks don't fail.\n\nWithout nextest, the benchmarks never run, so this seems like a useful\nimprovement.\n\n## How this works\n\nJust exclude benches from nextest\n\n## How this was tested\n\ncargo nextest is faster now\n\n## Breaking Changes\n\nNone",
+          "timestamp": "2026-04-08T01:13:38Z",
+          "url": "https://github.com/ava-labs/firewood/commit/faf306557759b7e322a7e0c96b0fea209eb082c2"
+        },
+        "date": 1775633773604,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 164.16784280983788,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6091.326918136701,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 114.49318092959055,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5889.822431551212,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 83.73697221306969,
             "unit": "block_accept_ms/ggas"
           }
         ]
