@@ -334,75 +334,18 @@ impl RevisionManager {
             });
         }
 
-        let committed = proposal.as_committed();
-
+        let committed = Arc::new(proposal.as_committed());
         firewood_set!(crate::registry::DELETED_LIST_LEN, committed.deleted_len());
 
         // 3. Revision reaping.
         self.reap_stale_revisions(&mut commit_guard)?;
 
         // 4. Signal to the `PersistWorker` to persist this revision.
-        let committed: CommittedRevision = committed.into();
-        // BLOCKING: `persist_worker.persist()` parks the commit thread when all deferred-
-        // persistence permits are consumed (i.e. the background persist loop has fallen behind).
-        // `in_memory_revisions` is NOT held here, so readers (`current_revision`, `view`) remain
-        // unblocked and observe the previous committed revision — which is correct, since the new
-        // revision has not been published yet. Only other commit attempts are queued, via
-        // `commit_lock` above.
-        self.persist_worker
-            .persist(committed.clone())
-            .map_err(RevisionManagerError::PersistError)?;
-
-        // 5. Set last committed revision — brief lock.
-        // The revision is added to `by_hash` while it still exists in `proposals`.
-        // The `view()` method relies on this ordering — it checks `proposals` first,
-        // then `by_hash`, ensuring the revision is always findable during the transition.
-        {
-            let mut in_memory_revisions = self.in_memory_revisions.lock();
-            in_memory_revisions.push_back(committed.clone());
-            if let Some(hash) = committed.root_hash().or_default_root_hash() {
-                // BLOCKING: mutex lock on `by_hash` while holding the mutex on
-                // `in_memory_revisions`. Same nested ordering as the reap path above;
-                // must not be inverted.
-                self.by_hash.lock().insert(hash, committed.clone());
-            }
-            // lock released here
-        }
+        // and 5. Set last committed revision.
+        self.publish_commit(&mut commit_guard, &committed)?;
 
         // 6. Proposal Cleanup
-        // Free proposal that is being committed as well as any proposals no longer
-        // referenced by anyone else. Track how many were discarded (dropped without commit).
-        {
-            // BLOCKING: mutex lock on `proposals`. Held while scanning all open proposals.
-            // Duration is proportional to the number of live proposals. In pathological cases
-            // (many stale proposals) this extends the overall time the commit function runs,
-            // though it is no longer inside the `in_memory_revisions` write lock at this point.
-            let mut lock = self.proposals.lock();
-            let mut discarded = 0u64;
-            lock.retain(|p| {
-                let should_retain = !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1;
-                if !should_retain {
-                    discarded = discarded.wrapping_add(1);
-                }
-                should_retain
-            });
-
-            if discarded > 0 {
-                firewood_increment!(crate::registry::PROPOSALS_DISCARDED, discarded);
-            }
-
-            // Update uncommitted proposals gauge after cleanup
-            firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, lock.len());
-        }
-
-        // then reparent any proposals that have this proposal as a parent
-        // BLOCKING: second acquisition of the `proposals` mutex in this function. Held while
-        // iterating all open proposals to reparent them. Re-acquiring after the first lock
-        // drop avoids long holds, but two separate acquisitions mean the proposal list could
-        // have changed between the two critical sections.
-        for p in &*self.proposals.lock() {
-            proposal.commit_reparent(p);
-        }
+        self.cleanup_proposals(&mut commit_guard, &proposal);
 
         if crate::logger::trace_enabled() {
             let merkle = Merkle::from(committed);
@@ -469,6 +412,87 @@ impl RevisionManager {
         }
 
         Ok(())
+    }
+
+    /// Publish a committed revision by notifying the `PersistWorker` and adding it to the
+    /// in-memory revision structures.
+    fn publish_commit(
+        &self,
+        _commit_guard: &mut MutexGuard<'_, Committer>,
+        committed: &CommittedRevision,
+    ) -> Result<(), RevisionManagerError> {
+        // BLOCKING: `persist_worker.persist()` parks the commit thread when all deferred-
+        // persistence permits are consumed (i.e. the background persist loop has fallen behind).
+        // `in_memory_revisions` is NOT held here, so readers (`current_revision`, `view`) remain
+        // unblocked and observe the previous committed revision — which is correct, since the new
+        // revision has not been published yet. Only other commit attempts are queued, via
+        // `commit_lock` above.
+        self.persist_worker
+            .persist(committed.clone())
+            .map_err(RevisionManagerError::PersistError)?;
+
+        // 5. Set last committed revision — brief lock.
+        // The revision is added to `by_hash` while it still exists in `proposals`.
+        // The `view()` method relies on this ordering — it checks `proposals` first,
+        // then `by_hash`, ensuring the revision is always findable during the transition.
+        let mut in_memory_revisions = self.in_memory_revisions.lock();
+        in_memory_revisions.push_back(committed.clone());
+        if let Some(hash) = committed.root_hash().or_default_root_hash() {
+            // BLOCKING: mutex lock on `by_hash` while holding the mutex on
+            // `in_memory_revisions`. Same nested ordering as the reap path above;
+            // must not be inverted.
+            self.by_hash.lock().insert(hash, committed.clone());
+        }
+
+        Ok(())
+        // lock released here
+    }
+
+    /// Cleanup proposals that are no longer needed.
+    ///
+    /// The committed proposal is freed, and any proposals that have this proposal
+    /// as a parent are reparented to the committed version.
+    ///
+    /// Reparenting a proposal updates its parent pointer to point to the committed revision
+    /// instead of the in-memory proposal.
+    fn cleanup_proposals(
+        &self,
+        _commit_guard: &mut MutexGuard<'_, Committer>,
+        committed_proposal: &ProposedRevision,
+    ) {
+        // Free proposal that is being committed as well as any proposals no longer
+        // referenced by anyone else. Track how many were discarded (dropped without commit).
+        {
+            // BLOCKING: mutex lock on `proposals`. Held while scanning all open proposals.
+            // Duration is proportional to the number of live proposals. In pathological cases
+            // (many stale proposals) this extends the overall time the commit function runs,
+            // though it is no longer inside the `in_memory_revisions` write lock at this point.
+            let mut lock = self.proposals.lock();
+            let mut discarded = 0u64;
+            lock.retain(|p| {
+                let should_retain = !Arc::ptr_eq(committed_proposal, p) && Arc::strong_count(p) > 1;
+                if !should_retain {
+                    discarded = discarded.wrapping_add(1);
+                }
+                should_retain
+            });
+
+            if discarded > 0 {
+                firewood_increment!(crate::registry::PROPOSALS_DISCARDED, discarded);
+            }
+
+            // Update uncommitted proposals gauge after cleanup
+            firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, lock.len());
+        }
+
+        // then reparent any proposals that have this proposal as a parent
+        // BLOCKING: second acquisition of the `proposals` mutex in this function. Held while
+        // iterating all open proposals to reparent them. Re-acquiring after the first lock
+        // drop avoids long holds, but two separate acquisitions mean the proposal list could
+        // have changed between the two critical sections.
+        for p in &*self.proposals.lock() {
+            committed_proposal.commit_reparent(p);
+        }
     }
 
     /// View the database at a specific hash.
