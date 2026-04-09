@@ -113,6 +113,7 @@ func TestGatherRenderedMetrics(t *testing.T) {
 	// Find the native histogram metric for gather duration.
 	var histFamily *dto.MetricFamily
 	for _, mf := range allFamilies {
+		// prometheus metric names are normalized to lowercase with underscores
 		if mf.GetName() == "ffi_gather_duration_seconds" {
 			histFamily = mf
 			break
