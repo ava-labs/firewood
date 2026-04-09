@@ -94,6 +94,8 @@ fn apply_histogram_config(
                 )
             })?,
         ),
+        // non_exhaustive - if new configs are added, default to returning the unmodified builder
+        _ => builder,
     })
 }
 
