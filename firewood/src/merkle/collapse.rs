@@ -42,6 +42,23 @@ fn build_child_prefix(prefix: &[u8], nibble: u8, node: &Node) -> Box<[u8]> {
     v.into_boxed_slice()
 }
 
+/// Verifies that `remaining` starts with the node's partial path and returns
+/// the unconsumed suffix. Errors if `remaining` is too short or the nibbles
+/// don't match.
+fn consume_partial_path<'a>(
+    remaining: &'a [PathComponent],
+    node: &Node,
+) -> Result<&'a [PathComponent], api::Error> {
+    let pp = node.partial_path();
+    let (consumed, rest) = remaining
+        .split_at_checked(pp.len())
+        .ok_or(api::Error::ProofError(ProofError::ProofNodeUnreachable))?;
+    if !consumed.iter().zip(pp.iter()).all(|(a, b)| a.as_u8() == *b) {
+        return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
+    }
+    Ok(rest)
+}
+
 impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     /// Collapse intermediate branches between two consecutive proof-path
     /// positions.
@@ -70,7 +87,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     ) -> Result<(), api::Error> {
         // The root's partial_path consumes some prefix of target.
         // Only collapse if target extends beyond the root's partial_path.
-        let mut root_node = std::mem::take(self.nodestore.root_mut())
+        let mut root_node = self
+            .nodestore
+            .root_mut()
+            .take()
             .expect("reconciliation guarantees a root node exists");
 
         let pp_len = root_node.partial_path().len();
@@ -100,15 +120,19 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         to: &[PathComponent],
         range: Option<(&[u8], &[u8])>,
     ) -> Result<(), api::Error> {
-        let suffix = to.strip_prefix(from).expect("to must start with from");
+        // `to` must start with `from` since consecutive proof nodes form a
+        // parent-child path — the child's key is always a prefix extension
+        // of the parent's key.
+        let suffix = to
+            .strip_prefix(from)
+            .ok_or(api::Error::ProofError(ProofError::ProofNodeUnreachable))?;
         let parent_prefix: Box<[u8]> = from.iter().map(|c| c.as_u8()).collect();
 
-        let root = self.nodestore.root_mut();
-        let Some(root_node) = std::mem::take(root) else {
+        let Some(root_node) = self.nodestore.root_mut().take() else {
             return Ok(());
         };
         let root_node = self.collapse_navigate(root_node, from, suffix, &parent_prefix, range)?;
-        *self.nodestore.root_mut() = root_node.into();
+        *self.nodestore.root_mut() = Some(root_node);
         Ok(())
     }
 
@@ -211,8 +235,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
 
         let child_prefix = build_child_prefix(acc_prefix, first.0.as_u8(), &child_node);
 
-        let child_pp_len = child_node.partial_path().len();
-        let after_child = remaining.get(child_pp_len..).unwrap_or_default();
+        let after_child = consume_partial_path(remaining, &child_node)?;
 
         child_node = self.collapse_strip(child_node, after_child, &child_prefix, range)?;
 
@@ -267,18 +290,13 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         };
 
         let mut child_node = self.read_for_update(child)?;
-        let child_pp_len = child_node.partial_path().len();
-        let deeper = remaining.get(child_pp_len..).unwrap_or_default();
+        let deeper = consume_partial_path(remaining, &child_node)?;
         if !deeper.is_empty() {
             let child_prefix = build_child_prefix(acc_prefix, on_path.0.as_u8(), &child_node);
             child_node = self.collapse_strip(child_node, deeper, &child_prefix, range)?;
         }
 
         branch.children[on_path] = Some(Child::Node(child_node));
-        debug_assert!(
-            branch.value.is_none(),
-            "intermediate branch value should have been cleared"
-        );
 
         // If exactly one child remains, flatten by merging partial paths.
         let Some((child_idx, only_child)) = branch.children.take_only_child() else {
@@ -366,7 +384,7 @@ mod tests {
             .insert(b"\x10\x30", Box::from(b"c".as_slice()))
             .unwrap();
         merkle.insert(b"\x20", Box::from(b"d".as_slice())).unwrap();
-        let node = std::mem::take(merkle.nodestore.root_mut()).unwrap();
+        let node = merkle.nodestore.root_mut().take().unwrap();
 
         // Navigates down nibble 1 because the key parameter is [pc(1), pc(0)].
         // From the suffix, the child proof is at \x10\x21. `parent_prefix` is
@@ -410,7 +428,7 @@ mod tests {
             .unwrap();
         merkle.insert(b"\x11", Box::from(b"c".as_slice())).unwrap();
         merkle.insert(b"\x20", Box::from(b"d".as_slice())).unwrap();
-        let node = std::mem::take(merkle.nodestore.root_mut()).unwrap();
+        let node = merkle.nodestore.root_mut().take().unwrap();
 
         // Navigates down nibble 1 because the key parameter is [pc(1)].
         // Unlike exact_match, the key is consumed by child descent rather
@@ -438,7 +456,7 @@ mod tests {
 
         // Single key \x10 → root has partial_path [1, 0]
         merkle.insert(b"\x10", Box::from(b"a".as_slice())).unwrap();
-        let node = std::mem::take(merkle.nodestore.root_mut()).unwrap();
+        let node = merkle.nodestore.root_mut().take().unwrap();
 
         // Invalid key [2, 0] diverges at first nibble.
         let result = merkle.collapse_navigate(node.clone(), &[pc(2), pc(0)], &[pc(0)], &[], None);
@@ -460,7 +478,7 @@ mod tests {
         // with children at 1 and 2 and no partial path.
         *merkle.nodestore.root_mut() = Some(node);
         merkle.insert(b"\x20", Box::from(b"b".as_slice())).unwrap();
-        let node = std::mem::take(merkle.nodestore.root_mut()).unwrap();
+        let node = merkle.nodestore.root_mut().take().unwrap();
 
         // Invalid key [3] points to nibble 3 which doesn't exist — should error.
         let result = merkle.collapse_navigate(node, &[pc(3)], &[pc(0)], &[], None);
@@ -482,7 +500,7 @@ mod tests {
             .insert(b"\x10\x30", Box::from(b"c".as_slice()))
             .unwrap();
         merkle.insert(b"\x20", Box::from(b"d".as_slice())).unwrap();
-        let node = std::mem::take(merkle.nodestore.root_mut()).unwrap();
+        let node = merkle.nodestore.root_mut().take().unwrap();
 
         // Key is [1, 0], and suffix is [2, 1], which means it will navigate to the
         // \x10, then call `collapse_descend` to traverse down nibble 2. There is
@@ -498,6 +516,29 @@ mod tests {
         assert!(matches!(
             result,
             Err(api::Error::ProofError(ProofError::EndRootMismatch))
+        ));
+    }
+
+    #[test]
+    fn test_collapse_navigate_mismatched_partial_path() {
+        let pc = |n: u8| PathComponent::try_new(n).unwrap();
+        let mut merkle = create_test_merkle();
+
+        // Under [1, 0, 2]: leaf with partial_path [1] for \x10\x21
+        merkle
+            .insert(b"\x10\x21", Box::from(b"a".as_slice()))
+            .unwrap();
+        merkle
+            .insert(b"\x10\x30", Box::from(b"b".as_slice()))
+            .unwrap();
+        merkle.insert(b"\x20", Box::from(b"c".as_slice())).unwrap();
+        let node = merkle.nodestore.root_mut().take().unwrap();
+
+        // suffix [1, 0, 2, 9] — nibble 9 doesn't match child's partial path [1]
+        let result = merkle.collapse_navigate(node, &[], &[pc(1), pc(0), pc(2), pc(9)], &[], None);
+        assert!(matches!(
+            result,
+            Err(api::Error::ProofError(ProofError::ProofNodeUnreachable))
         ));
     }
 }
