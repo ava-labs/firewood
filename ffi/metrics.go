@@ -106,11 +106,8 @@ func convertRenderedMetrics(owned C.OwnedRenderedMetrics) ([]*dto.MetricFamily, 
 	return families, nil
 }
 
-// borrowString returns a borrowed Go string that references the data in the
-// provided C.OwnedBytes. The respective calls to [proto.String] in the
-// conversion functions ensure that the data is copied into Go-owned memory,
-// therefore the borrowed string is only valid for the duration of the
-// conversion and should not be used after the conversion functions return.
+// borrowString will return a new Go string that copies the data from the provided
+// C.OwnedBytes without taking ownership.
 func borrowString(b C.OwnedBytes) string {
 	if b.ptr == nil {
 		return ""
