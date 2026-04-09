@@ -78,14 +78,11 @@ func GatherRenderedMetrics() ([]*dto.MetricFamily, error) {
 	switch result.tag {
 	case C.RenderedMetricsResult_Ok:
 		owned := *(*C.OwnedRenderedMetrics)(unsafe.Pointer(&result.anon0))
-		families, err := convertRenderedMetrics(owned)
+		families := convertRenderedMetrics(owned)
 		if freeErr := getErrorFromVoidResult(C.fwd_free_rendered_metrics(owned)); freeErr != nil {
-			if err != nil {
-				return nil, fmt.Errorf("%w (free error: %w)", err, freeErr)
-			}
 			return nil, fmt.Errorf("%w: %w", errFreeingValue, freeErr)
 		}
-		return families, err
+		return families, nil
 	case C.RenderedMetricsResult_Err:
 		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 	default:
@@ -93,9 +90,9 @@ func GatherRenderedMetrics() ([]*dto.MetricFamily, error) {
 	}
 }
 
-func convertRenderedMetrics(owned C.OwnedRenderedMetrics) ([]*dto.MetricFamily, error) {
+func convertRenderedMetrics(owned C.OwnedRenderedMetrics) []*dto.MetricFamily {
 	if owned.ptr == nil {
-		return nil, nil
+		return nil
 	}
 
 	cFamilies := unsafe.Slice((*C.OwnedMetricFamily)(unsafe.Pointer(owned.ptr)), owned.len)
@@ -103,7 +100,7 @@ func convertRenderedMetrics(owned C.OwnedRenderedMetrics) ([]*dto.MetricFamily, 
 	for i := range cFamilies {
 		families[i] = convertMetricFamily(&cFamilies[i])
 	}
-	return families, nil
+	return families
 }
 
 // borrowString will return a new Go string that copies the data from the provided
