@@ -4,5 +4,7 @@
 mod change;
 mod range;
 
-pub use self::change::*;
-pub use self::range::*;
+pub use change::{
+    ChangeProofContext, CodeIteratorHandle, NextKeyRange, ProposedChangeProofContext,
+};
+pub use range::{KeyRange, RangeProofContext};

@@ -5,14 +5,13 @@ use crate::manager::RevisionManagerError;
 use crate::merkle::parallel::CreateProposalError;
 use crate::merkle::{Key, Value};
 use crate::persist_worker::PersistError;
-use crate::{Proof, ProofError, ProofNode, RangeProof};
+use crate::{ChangeProof, Proof, ProofError, ProofNode, RangeProof};
 use firewood_storage::{FileIoError, TrieHash};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 pub use crate::batch_op::{BatchIter, BatchOp, IntoBatchIter, KeyValuePair, TryIntoBatch};
-use crate::merkle::changes::ChangeProof;
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
 /// and can be sent and shared across threads. References with
@@ -179,7 +178,7 @@ pub enum Error {
     SiblingCommitted,
 
     /// Proof error
-    #[error("proof error")]
+    #[error("proof error: {0}")]
     ProofError(#[from] ProofError),
 
     /// An invalid root hash was provided

@@ -505,6 +505,12 @@ impl Proposal<'_> {
     pub fn view(&self) -> ArcDynDbView {
         self.nodestore.clone()
     }
+
+    /// Returns a reference to the inner nodestore.
+    #[must_use]
+    pub(crate) fn inner_nodestore(&self) -> &NodeStore<Arc<ImmutableProposal>, FileBacked> {
+        &self.nodestore
+    }
 }
 
 impl api::DbView for ReconstructedView<'_> {

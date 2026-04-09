@@ -18,12 +18,6 @@ pub type IterPresentRef<'a, T> = std::iter::FilterMap<
     fn((PathComponent, &'a Option<T>)) -> Option<(PathComponent, &'a T)>,
 >;
 
-/// The type of iterator returned by [`Children::iter_present`].
-pub type IterPresentMut<'a, T> = std::iter::FilterMap<
-    ChildrenSlots<&'a mut Option<T>>,
-    fn((PathComponent, &'a mut Option<T>)) -> Option<(PathComponent, &'a mut T)>,
->;
-
 /// Type alias for a collection of children in a branch node.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Children<T>([T; MAX_CHILDREN]);
@@ -156,6 +150,22 @@ impl<T> Children<Option<T>> {
         self.into_iter()
             .filter_map(|(pc, opt)| opt.as_ref().map(|v| (pc, v)))
     }
+
+    /// If exactly one child is present, takes and returns it along with its
+    /// index. Returns `None` if zero or more than one child is present.
+    pub fn take_only_child(&mut self) -> Option<(PathComponent, T)> {
+        let mut children = self.iter_present();
+
+        // get first child, return None if not present
+        let (idx, _) = children.next()?;
+        if children.next().is_some() {
+            // second child found
+            return None;
+        }
+        drop(children);
+
+        self.take(idx).map(|child| (idx, child))
+    }
 }
 
 impl<T> Default for Children<Option<T>> {
@@ -179,18 +189,11 @@ impl<'a, T> Children<&'a Option<T>> {
     }
 }
 
-impl<'a, T> Children<&'a mut Option<T>> {
+impl<T> Children<&mut Option<T>> {
     /// Returns the number of [`Some`] elements in this collection.
     #[must_use]
     pub fn count(&self) -> usize {
         self.0.iter().filter(|c| c.is_some()).count()
-    }
-
-    /// Returns an iterator over each [`Some`] element with its corresponding
-    /// [`PathComponent`].
-    pub fn iter_present(self) -> IterPresentMut<'a, T> {
-        self.into_iter()
-            .filter_map(|(pc, opt)| opt.as_mut().map(|v| (pc, v)))
     }
 }
 

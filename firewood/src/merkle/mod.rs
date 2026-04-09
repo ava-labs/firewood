@@ -3,6 +3,8 @@
 
 #[cfg(test)]
 pub(crate) mod tests;
+#[cfg(test)]
+mod trie_diff;
 
 pub(crate) mod changes;
 pub(crate) mod childmask;
@@ -11,11 +13,13 @@ mod merge;
 pub mod parallel;
 
 use crate::api::{
-    self, BatchIter, FrozenProof, FrozenRangeProof, KeyType, KeyValuePair, ValueType,
+    self, BatchIter, FrozenChangeProof, FrozenProof, FrozenRangeProof, HashKey, KeyType,
+    KeyValuePair, ValueType,
 };
 use crate::iter::{MerkleKeyValueIter, PathIterator};
-use crate::merkle::changes::{ChangeProof, DiffMerkleNodeStream};
-use crate::{Proof, ProofCollection, ProofError, ProofNode, RangeProof};
+use crate::merkle::changes::DiffMerkleNodeStream;
+use crate::proofs::change::ChangeProofVerificationContext;
+use crate::{ChangeProof, Proof, ProofCollection, ProofError, ProofNode, RangeProof};
 use firewood_metrics::firewood_increment;
 use firewood_storage::MemStore;
 use firewood_storage::{
@@ -24,10 +28,12 @@ use firewood_storage::{
     NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, Propose, ReadableStorage,
     SharedNode, TrieHash, TrieReader, U4, ValueDigest,
 };
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::io::Error;
 use std::iter::once;
+use std::mem;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -269,11 +275,10 @@ fn compute_outside_children(
 /// Recursively computes the hash of a node in the proving trie, merging
 /// child hashes from proof nodes for subtrees outside the proven range.
 ///
-/// For branch nodes, children present in the in-memory trie get their hash
-/// computed recursively. Children not in the trie that are **outside** the
-/// proven range (as indicated by `outside_children`) get their hash from the
-/// corresponding proof node. Children not in the trie that are **inside** the
-/// range are left as `None`, causing a hash mismatch if they should exist.
+/// For branch nodes, in-range children that are in-memory (`Child::Node`)
+/// are hashed recursively. Persisted children (`AddressWithHash`,
+/// `MaybePersisted`) already carry their hash and are used directly.
+/// Out-of-range children get their hash from the corresponding proof node.
 fn compute_root_hash_with_proofs(
     node: &Node,
     path_prefix: &[PathComponent],
@@ -294,34 +299,38 @@ fn compute_root_hash_with_proofs(
 
     let mut child_hashes: Children<Option<HashType>> = Children::new();
 
-    // For children outside the proven range, use proof node hashes
-    if let (Some(proof_node), Some(outside)) =
-        (proof_nodes.get(&full_key), outside_children.get(&full_key))
-    {
+    let outside_mask = outside_children.get(&full_key);
+
+    // For children inside the proven range, compute hashes recursively.
+    // For children outside the range, use proof node hashes (set below).
+    let mut child_prefix: PathBuf = full_key.iter().copied().collect();
+    for (nibble, child_opt) in &branch.children {
+        let Some(child) = child_opt else { continue };
+        if outside_mask.is_some_and(|m| m.is_set(nibble.0)) {
+            continue;
+        }
+        // Persisted children already carry their hash — use it directly
+        // instead of resolving and recursing into the subtree.
+        if let Child::AddressWithHash(_, hash) | Child::MaybePersisted(_, hash) = child {
+            child_hashes[nibble] = Some(hash.clone());
+            continue;
+        }
+        let Child::Node(child_node) = child else {
+            unreachable!()
+        };
+        child_prefix.push(nibble);
+        let child_hash =
+            compute_root_hash_with_proofs(child_node, &child_prefix, proof_nodes, outside_children);
+        child_hashes[nibble] = Some(child_hash);
+        child_prefix.pop();
+    }
+
+    // For children outside the proven range, use proof node hashes.
+    if let (Some(proof_node), Some(outside)) = (proof_nodes.get(&full_key), outside_mask) {
         for (nibble, hash) in proof_node.child_hashes.iter_present() {
             if outside.is_set(nibble.0) {
                 child_hashes[nibble] = Some(hash.clone());
             }
-        }
-    }
-
-    // For children in the in-memory trie, compute hashes recursively.
-    // These children were inserted from the proven key-value pairs, so they
-    // are *inside* the proven range. A nibble cannot be both inside (present
-    // in the trie) and outside (marked in outside_children) at the same time,
-    // so this does not conflict with the proof hashes set above.
-    let mut child_prefix: PathBuf = full_key.iter().copied().collect();
-    for (nibble, child_opt) in &branch.children {
-        if let Some(Child::Node(child_node)) = child_opt {
-            child_prefix.push(nibble);
-            let child_hash = compute_root_hash_with_proofs(
-                child_node,
-                &child_prefix,
-                proof_nodes,
-                outside_children,
-            );
-            child_hashes[nibble] = Some(child_hash);
-            child_prefix.pop();
         }
     }
 
@@ -335,23 +344,72 @@ fn compute_root_hash_with_proofs(
     .to_hash()
 }
 
+/// Returns `true` when a child at nibble `child_nib` under the accumulated
+/// prefix `acc_prefix` falls within `[start_nib, end_nib]` (inclusive).
+///
+/// Used by [`Merkle::collapse_strip`] to distinguish in-range children
+/// (which indicate tampered `batch_ops`) from out-of-range children (which
+/// are stripped normally).
+fn child_in_range(
+    acc_prefix: &[u8],
+    nibble: PathComponent,
+    start_nib: &[u8],
+    end_nib: &[u8],
+) -> bool {
+    let depth = acc_prefix.len();
+    let child_nib = nibble.0.as_u8();
+
+    // Split each boundary at `depth`. The left half is compared against
+    // the same-length prefix of acc_prefix; the right half's first element
+    // (if any) is compared against child_nib to break ties.
+    let split = depth.min(start_nib.len());
+    let (start_pre, start_rest) = start_nib.split_at(split);
+    let (acc_start, _) = acc_prefix.split_at(split);
+    let above_start = match acc_start.cmp(start_pre) {
+        Ordering::Greater => true,
+        Ordering::Less => false,
+        Ordering::Equal => match start_rest.first() {
+            None => true,
+            Some(&boundary) => child_nib >= boundary,
+        },
+    };
+
+    let split = depth.min(end_nib.len());
+    let (end_pre, end_rest) = end_nib.split_at(split);
+    let (acc_end, _) = acc_prefix.split_at(split);
+    let below_end = match acc_end.cmp(end_pre) {
+        Ordering::Less => true,
+        Ordering::Greater => false,
+        Ordering::Equal => match end_rest.first() {
+            None => false,
+            Some(&boundary) => child_nib <= boundary,
+        },
+    };
+
+    above_start && below_end
+}
+
+/// Builds the accumulated nibble prefix for a child node by extending
+/// `prefix` with the descent nibble and the child's `partial_path`.
+fn build_child_prefix(prefix: &[u8], nibble: u8, node: &Node) -> Box<[u8]> {
+    let pp = &node.partial_path().0;
+    let capacity = prefix
+        .len()
+        .wrapping_add(mem::size_of::<u8>())
+        .wrapping_add(pp.len());
+    let mut v = Vec::with_capacity(capacity);
+    v.extend_from_slice(prefix);
+    v.push(nibble);
+    v.extend_from_slice(pp);
+    v.into_boxed_slice()
+}
+
 /// Verify that a range proof is valid for the specified key range and root hash.
 ///
-/// This function validates a range proof by constructing a partial trie from the
-/// proof data and verifying that it produces the expected root hash. The proof may
-/// contain fewer key-value pairs than requested if the peer chose to limit the
-/// response size.
-///
-/// # Verification Process
-///
-/// 1. **Structural validation**: Ensure key-value pairs are in strictly ascending order,
-///    within the requested `[first_key, last_key]` range, and reject unexpected proofs
-/// 2. **Boundary proof verification**: Cryptographically verify start/end proofs against
-///    the provided root hash
-/// 3. **Trie reconstruction**: Build an in-memory Merkle trie from the key-value pairs
-///    and reconcile it with proof nodes
-/// 4. **Root hash comparison**: Verify the reconstructed trie's root hash matches the
-///    expected hash
+/// Validates structural properties, boundary proofs, and reconstructs a proving
+/// trie to compute a hybrid root hash. See the
+/// [module-level documentation](crate::proofs#range-proof-verification-algorithm)
+/// for the full algorithm description.
 ///
 /// # Errors
 ///
@@ -538,7 +596,10 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
     // Conflicting proof nodes (same key, different data) are rejected.
     let mut proof_node_map: HashMap<PathBuf, &ProofNode> = HashMap::new();
     for proof_node in all_proof_nodes {
-        proving_merkle.reconcile_branch_proof_node(proof_node)?;
+        proving_merkle.reconcile_branch_proof_node(proof_node, |pn| match &pn.value_digest {
+            Some(ValueDigest::Value(v)) => Ok(Some(v.clone())),
+            _ => Ok(None),
+        })?;
         match proof_node_map.entry(proof_node.key.clone()) {
             std::collections::hash_map::Entry::Occupied(existing) => {
                 if *existing.get() != *proof_node {
@@ -570,6 +631,192 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
 
     if computed != root_hash.clone().into_hash_type() {
         return Err(api::Error::ProofError(ProofError::UnexpectedHash));
+    }
+
+    Ok(())
+}
+
+// ── Change proof verification ──────────────────────────────────────────────
+
+/// Verify that the proposal (`start_root` + `batch_ops`) is consistent with
+/// `end_root` within the proven range (phase 3 of change proof verification).
+///
+/// Forks the proposal into a proving trie, reconciles boundary proof nodes,
+/// collapses out-of-range branches (rejecting in-range children at
+/// intermediate positions), and computes a hybrid root hash. See the
+/// [module-level documentation](crate::proofs#change-proof-verification-algorithm)
+/// for the full algorithm description.
+///
+/// # Errors
+///
+/// Returns [`api::Error::ProofError`] if:
+/// - The computed root hash doesn't match `end_root`
+/// - Proof nodes conflict with the proving trie at in-range positions
+/// - An in-range child is found at an intermediate node between
+///   consecutive proof nodes (indicates tampered `batch_ops`)
+///
+/// # Panics
+///
+/// Panics if reconciling non-empty boundary proof nodes into the proving
+/// trie fails to create a root node (this is structurally guaranteed by
+/// `insert_branch_from_nibbles`).
+pub fn verify_change_proof_root_hash(
+    proof: &FrozenChangeProof,
+    verification: &ChangeProofVerificationContext,
+    proposal: &crate::db::Proposal<'_>,
+) -> Result<(), api::Error> {
+    let start_nodes: &[ProofNode] = proof.start_proof().as_ref();
+    let end_nodes: &[ProofNode] = proof.end_proof().as_ref();
+
+    // Case 1: Both proofs empty — this is a "complete" proof covering the
+    // entire keyspace (no boundaries). The proposal should contain the
+    // full target state, so compare its root hash directly against
+    // end_root. Also covers the degenerate case of an empty diff.
+    if start_nodes.is_empty() && end_nodes.is_empty() {
+        let computed = api::DbView::root_hash(proposal).unwrap_or_else(HashKey::empty);
+        if computed != verification.end_root {
+            return Err(api::Error::ProofError(ProofError::EndRootMismatch));
+        }
+        return Ok(());
+    }
+
+    // Fork the proposal's nodestore into a mutable proving trie.
+    // The proposal already contains the correct trie structure; forking
+    // preserves it so we don't need to re-insert keys.
+    let forked = NodeStore::new(proposal.inner_nodestore())?;
+    let mut proving_merkle = Merkle::from(forked);
+
+    // Reconcile all boundary proof nodes into the proving trie via
+    // `reconcile_branch_proof_node`. This inserts branch structure matching
+    // `end_root`'s layout so that the hash computation produces the same
+    // trie shape.
+    let mut proof_node_map: HashMap<PathBuf, &ProofNode> = HashMap::new();
+
+    // Start proof nodes that are out of range may have values that differ
+    // between end_root (proof) and the proposal (which has start_root's
+    // values outside the range). Overwrite with the proof's value so the
+    // hash computation uses end_root's value.
+    //
+    // Out-of-range nodes include:
+    //  - proper prefixes of start_key (ancestors on the path)
+    //  - divergent nodes whose key is NOT a prefix of start_key (these
+    //    appear in exclusion proofs when start_key doesn't exist)
+    //
+    // Only nodes whose key exactly equals start_key are in-range; value
+    // mismatches there are real errors.
+    let start_key_nibbles: Vec<u8> = verification
+        .start_key
+        .as_deref()
+        .map(|k| NibblesIterator::new(k).collect())
+        .unwrap_or_default();
+
+    for proof_node in start_nodes {
+        proving_merkle.reconcile_branch_proof_node(proof_node, |pn| {
+            let node_nibbles: Vec<u8> = pn.key.iter().map(|c| c.as_u8()).collect();
+            // A start proof node is in-range if its key >= start_key. This
+            // covers both inclusion proofs (key == start_key) and exclusion
+            // proofs where the terminal node overshoots start_key to the
+            // nearest existing key. Value conflicts at in-range positions
+            // are real errors — the proposal already has the correct value.
+            if node_nibbles >= start_key_nibbles {
+                Err(ProofError::UnexpectedValue)
+            } else {
+                match &pn.value_digest {
+                    Some(ValueDigest::Value(v)) => Ok(Some(v.clone())),
+                    _ => Ok(None),
+                }
+            }
+        })?;
+        proof_node_map.insert(proof_node.key.clone(), proof_node);
+    }
+
+    // Same treatment for end proof nodes: ancestors and divergent nodes
+    // of the right boundary may have out-of-range values that differ
+    // from the proposal.
+    let end_key_nibbles: Vec<u8> = verification
+        .right_edge_key
+        .as_deref()
+        .map(|k| NibblesIterator::new(k).collect())
+        .unwrap_or_default();
+
+    for proof_node in end_nodes {
+        proving_merkle.reconcile_branch_proof_node(proof_node, |pn| {
+            let node_nibbles: Vec<u8> = pn.key.iter().map(|c| c.as_u8()).collect();
+            // Symmetric to the start proof: an end proof node is in-range
+            // if its key <= end_key (covers exclusion proofs where the
+            // terminal undershoots to the nearest existing key).
+            if node_nibbles <= end_key_nibbles {
+                Err(ProofError::UnexpectedValue)
+            } else {
+                match &pn.value_digest {
+                    Some(ValueDigest::Value(v)) => Ok(Some(v.clone())),
+                    _ => Ok(None),
+                }
+            }
+        })?;
+        match proof_node_map.entry(proof_node.key.clone()) {
+            std::collections::hash_map::Entry::Occupied(existing) => {
+                if *existing.get() != proof_node {
+                    return Err(api::Error::ProofError(ProofError::ConflictingProofNodes));
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(proof_node);
+            }
+        }
+    }
+
+    // Collapse intermediate branches along proof paths. The fork may have
+    // extra branch structure from out-of-range keys that doesn't exist in
+    // end_root's trie. Between consecutive proof nodes, the proof implies a
+    // direct path with no intermediate branches.
+    //
+    // Out-of-range children are stripped. In-range children that are also
+    // proposal-local (created by this proposal's batch_ops, not inherited
+    // from the parent) indicate tampered operations and trigger rejection.
+    let range = Some((start_key_nibbles.as_slice(), end_key_nibbles.as_slice()));
+    for [parent, child] in start_nodes.array_windows() {
+        proving_merkle.collapse_branch_to_path(&parent.key, &child.key, range)?;
+    }
+    for [parent, child] in end_nodes.array_windows() {
+        proving_merkle.collapse_branch_to_path(&parent.key, &child.key, range)?;
+    }
+
+    // If the end trie's root has a non-empty partial_path, the first proof
+    // node sits deeper than the proposal root. Collapse the proving trie's
+    // root to match so that out-of-range children above the first proof
+    // node are stripped and the root shape matches end_root.
+    let first_proof_key = start_nodes
+        .first()
+        .or_else(|| end_nodes.first())
+        .map(|n| n.key.as_ref());
+    if let Some(key) = first_proof_key {
+        proving_merkle.collapse_root_to_path(key, range)?;
+    }
+
+    // Compute which children at each boundary node are outside the proven
+    // range via `compute_outside_children`.
+    let mut outside_children =
+        compute_outside_children(start_nodes, verification.start_key.as_deref(), true)?;
+    for (key, flags) in
+        compute_outside_children(end_nodes, verification.right_edge_key.as_deref(), false)?
+    {
+        let entry = outside_children.entry(key).or_default();
+        *entry |= flags;
+    }
+
+    // Compute the hybrid root hash via `compute_root_hash_with_proofs`.
+    // In-range children are hashed from the proving trie. Out-of-range
+    // children use hashes from the proof nodes.
+    let root_node = proving_merkle
+        .root()
+        .expect("a non-empty proof reconciliation always leaves behind a root node");
+
+    let computed =
+        compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children);
+
+    if computed != verification.end_root.clone().into_hash_type() {
+        return Err(api::Error::ProofError(ProofError::EndRootMismatch));
     }
 
     Ok(())
@@ -932,21 +1179,22 @@ impl<T: HashedNodeReader> Merkle<T> {
             .take(limit.map_or(usize::MAX, NonZeroUsize::get))
             .collect::<Result<Box<_>, FileIoError>>()?;
 
-        let end_proof = if let Some(limit) = limit
-            && limit.get() <= batch_ops.len()
-            && iter.next().is_some()
-        {
-            // limit was provided, we hit it, and there is at least one more key
-            // end proof is for the last key provided
-            batch_ops.last().map(|largest_key| &**largest_key.key())
+        // Check whether the limit cut off remaining items.
+        let hit_limit = iter.next().transpose()?.is_some();
+
+        // When the limit was hit, the end proof is for the last key in
+        // batch_ops (the actual right edge of what was produced). When
+        // all items fit, the end proof is for end_key so the verifier
+        // can check the full requested range.
+        let end_proof_key = if hit_limit {
+            batch_ops.last().map(|op| &**op.key()).or(end_key)
         } else {
-            // limit was not hit or not provided, end proof is for the requested
-            // end key so that we can prove we have all keys up to that key
-            end_key
-        }
-        .map(|end_key| self.prove(end_key))
-        .transpose()?
-        .unwrap_or_default();
+            end_key.or(batch_ops.last().map(|op| &**op.key()))
+        };
+        let end_proof = end_proof_key
+            .map(|key| self.prove(key))
+            .transpose()?
+            .unwrap_or_default();
 
         Ok(ChangeProof::new(start_proof, end_proof, batch_ops))
     }
@@ -1274,6 +1522,46 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
         self.remove_from_iter(NibblesIterator::new(key))
     }
 
+    /// Navigate to the branch at `key_nibbles` and return a mutable reference.
+    /// Returns `None` if the path doesn't lead to an in-memory branch.
+    ///
+    /// This is the mutable counterpart to `get_node_from_nibbles`. It only
+    /// works for in-memory nodes (`Child::Node`), which is guaranteed after
+    /// `insert_branch_from_nibbles`.
+    fn get_branch_from_nibbles_mut<'a>(
+        root: &'a mut Option<Node>,
+        key: &[PathComponent],
+    ) -> Option<&'a mut BranchNode> {
+        let node = root.as_mut()?;
+        Self::get_branch_from_nibbles_mut_helper(node, key)
+    }
+
+    fn get_branch_from_nibbles_mut_helper<'a>(
+        node: &'a mut Node,
+        key: &[PathComponent],
+    ) -> Option<&'a mut BranchNode> {
+        let branch = node.as_branch_mut()?;
+        let pp = &branch.partial_path.0;
+        let shared_len = key
+            .iter()
+            .zip(pp.iter())
+            .take_while(|(a, b)| a.as_u8() == **b)
+            .count();
+        if shared_len != pp.len() {
+            return None;
+        }
+        let rest = key.get(shared_len..)?;
+        let Some((&child_nibble, deeper)) = rest.split_first() else {
+            return Some(branch);
+        };
+        match &mut branch.children[child_nibble] {
+            Some(Child::Node(child_node)) => {
+                Self::get_branch_from_nibbles_mut_helper(child_node, deeper)
+            }
+            _ => None,
+        }
+    }
+
     /// Removes the value associated with the given `key` where `key` is a `NibblesIterator`
     /// Returns the value that was removed, if any.
     /// Otherwise returns `None`.
@@ -1552,20 +1840,10 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
     }
 }
 
-/// The outcome of reconciling a branch proof node against the in-memory trie.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReconcileResult {
-    /// The proof node had no value to reconcile (hash-only or absent).
-    NoValue,
-    /// The branch already had a matching value.
-    ValueAlreadyMatches,
-    /// A value was inserted into a branch that previously had none.
-    ValueInserted,
-}
-
-impl Merkle<NodeStore<Mutable<Propose>, MemStore>> {
+impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     /// Returns the node mapped to by `key_nibbles` where each key element is a
     /// single nibble.
+    #[cfg(test)]
     pub(crate) fn get_node_from_nibbles(
         &self,
         key_nibbles: &[u8],
@@ -1602,6 +1880,238 @@ impl Merkle<NodeStore<Mutable<Propose>, MemStore>> {
         Ok(())
     }
 
+    /// Collapse intermediate branches between two consecutive proof-path
+    /// positions.
+    ///
+    /// The proof implies a direct path from the parent to the child with
+    /// no intermediate branch nodes. If the fork's trie has extra branches
+    /// along this path (from out-of-range keys), this method removes their
+    /// off-path children on the outside of the range and flattens
+    /// single-child branches.
+    ///
+    /// Between consecutive proof nodes in `end_root`, the path is direct:
+    /// intermediate nodes have only the on-path child. Removes all
+    /// non-on-path children and values from intermediate branches so the
+    /// proving trie matches `end_root`'s path-compressed structure.
+    /// Collapse the proving trie's root so its structure matches the end
+    /// trie's root path. When out-of-range deletions cause the end trie's
+    /// root to compress (e.g., root `partial_path` changes from `[]` to `[1]`),
+    /// the proposal root still has the old shape. This strips non-on-path
+    /// children from the root and flattens single-child branches so the
+    /// root's `partial_path` matches the first proof node's key.
+    pub(crate) fn collapse_root_to_path(
+        &mut self,
+        target: &[PathComponent],
+        range: Option<(&[u8], &[u8])>,
+    ) -> Result<(), api::Error> {
+        // The root's partial_path consumes some prefix of target.
+        // Only collapse if target extends beyond the root's partial_path.
+        let mut root_node = std::mem::take(self.nodestore.root_mut())
+            .expect("reconciliation guarantees a root node exists");
+
+        let pp_len = root_node.partial_path().len();
+        if let Some((prefix, remaining)) = target.split_at_checked(pp_len)
+            && !remaining.is_empty()
+            && prefix
+                .iter()
+                .zip(root_node.partial_path().0.iter())
+                .all(|(t, p)| t.as_u8() == *p)
+        {
+            // On error the root is left empty, but the caller discards
+            // the proving trie on any verification failure.
+            let root_prefix: Box<[u8]> = root_node.partial_path().0.iter().copied().collect();
+            root_node = self.collapse_strip(root_node, remaining, &root_prefix, range)?;
+        }
+
+        *self.nodestore.root_mut() = Some(root_node);
+        Ok(())
+    }
+
+    /// `range`: `(start_nibbles, end_nibbles)` for the proven range.
+    /// In-range children that are also proposal-local trigger rejection.
+    pub(crate) fn collapse_branch_to_path(
+        &mut self,
+        from: &[PathComponent],
+        to: &[PathComponent],
+        range: Option<(&[u8], &[u8])>,
+    ) -> Result<(), api::Error> {
+        let suffix = to.strip_prefix(from).expect("to must start with from");
+        let parent_prefix: Box<[u8]> = from.iter().map(|c| c.as_u8()).collect();
+
+        let root = self.nodestore.root_mut();
+        let Some(root_node) = std::mem::take(root) else {
+            return Ok(());
+        };
+        let root_node = self.collapse_navigate(root_node, from, suffix, &parent_prefix, range)?;
+        *self.nodestore.root_mut() = root_node.into();
+        Ok(())
+    }
+
+    /// Navigate from `node` down through `key` to reach the parent proof
+    /// node, then call `collapse_descend` with `suffix`.
+    fn collapse_navigate(
+        &mut self,
+        mut node: Node,
+        key: &[PathComponent],
+        suffix: &[PathComponent],
+        parent_prefix: &[u8],
+        range: Option<(&[u8], &[u8])>,
+    ) -> Result<Node, api::Error> {
+        // get a reference to the partial path for ease of reading
+        let pp = &node.partial_path().0;
+
+        // find the point where the key differs from the partial path
+        // unwrap_or handles the case where they are subsets of each other
+        let diverge = key
+            .iter()
+            .zip(pp.iter())
+            .position(|(pc, nibble)| pc.as_u8() != *nibble)
+            .unwrap_or(key.len().min(pp.len()));
+
+        if diverge != pp.len() {
+            // partial_path not fully consumed — key diverges or is a prefix
+            // of partial_path. Either way, from-node isn't reachable here.
+            return Ok(node);
+        }
+
+        let (_, key_rest) = key.split_at(diverge);
+
+        let Some((&child_component, deeper)) = key_rest.split_first() else {
+            // Exact match — arrived at the parent proof node.
+            return self.collapse_descend(node, suffix, parent_prefix, range);
+        };
+
+        // key extends past partial_path — descend into child.
+        let Some(branch) = node.as_branch_mut() else {
+            return Ok(node);
+        };
+
+        // Temporarily take ownership of the child so we can resolve it to a
+        // mutable Node, recurse, and put the (possibly modified) node back.
+        let Some(child) = branch.children.take(child_component) else {
+            return Ok(node);
+        };
+
+        let child_node = self.read_for_update(child)?;
+        let child_node =
+            self.collapse_navigate(child_node, deeper, suffix, parent_prefix, range)?;
+        branch.children[child_component] = Some(Child::Node(child_node));
+        Ok(node)
+    }
+
+    /// Descend from the parent proof node into its on-path child, then
+    /// strip non-on-path children from intermediate branches along `path`.
+    ///
+    /// The first component of `path` selects the child to descend into —
+    /// we don't modify the parent proof node itself.
+    fn collapse_descend(
+        &mut self,
+        mut node: Node,
+        path: &[PathComponent],
+        acc_prefix: &[u8],
+        range: Option<(&[u8], &[u8])>,
+    ) -> Result<Node, api::Error> {
+        let Some((&first, remaining)) = path.split_first() else {
+            return Ok(node);
+        };
+
+        let Some(branch) = node.as_branch_mut() else {
+            return Ok(node);
+        };
+
+        let Some(child) = branch.children.take(first) else {
+            return Ok(node);
+        };
+
+        let mut child_node = self.read_for_update(child)?;
+
+        let child_prefix = build_child_prefix(acc_prefix, first.0.as_u8(), &child_node);
+
+        let child_pp_len = child_node.partial_path().len();
+        let after_child = remaining.get(child_pp_len..).unwrap_or_default();
+
+        child_node = self.collapse_strip(child_node, after_child, &child_prefix, range)?;
+
+        branch.children[first] = Some(Child::Node(child_node));
+        Ok(node)
+    }
+
+    /// Strip non-on-path children from an intermediate branch and recurse.
+    /// Flattens single-child branches to match `end_root`'s path-compressed
+    /// structure.
+    ///
+    /// Children that are both in-range AND proposal-local (created by this
+    /// proposal's `batch_ops`) trigger `EndRootMismatch` — they indicate
+    /// tampered operations since `end_root` has no branch at this position.
+    /// In-range children inherited from the parent are legitimate unchanged
+    /// keys and are stripped normally (handled by proof hashes).
+    fn collapse_strip(
+        &mut self,
+        mut node: Node,
+        path: &[PathComponent],
+        acc_prefix: &[u8],
+        range: Option<(&[u8], &[u8])>,
+    ) -> Result<Node, api::Error> {
+        let Some((&on_path, remaining)) = path.split_first() else {
+            return Ok(node);
+        };
+
+        let Some(branch) = node.as_branch_mut() else {
+            return Ok(node);
+        };
+
+        for (nibble, slot) in &mut branch.children {
+            if nibble == on_path || slot.is_none() {
+                continue;
+            }
+
+            if let Some((start_nib, end_nib)) = range
+                && child_in_range(acc_prefix, nibble, start_nib, end_nib)
+            {
+                return Err(api::Error::ProofError(ProofError::EndRootMismatch));
+            }
+
+            *slot = None;
+        }
+        branch.value = None;
+
+        // Recurse into the on-path child.
+        let Some(child) = branch.children.take(on_path) else {
+            return Ok(node);
+        };
+
+        let mut child_node = self.read_for_update(child)?;
+        let child_pp_len = child_node.partial_path().len();
+        let deeper = remaining.get(child_pp_len..).unwrap_or_default();
+        if !deeper.is_empty() {
+            let child_prefix = build_child_prefix(acc_prefix, on_path.0.as_u8(), &child_node);
+            child_node = self.collapse_strip(child_node, deeper, &child_prefix, range)?;
+        }
+
+        branch.children[on_path] = Some(Child::Node(child_node));
+
+        // If this branch has a value, it can't be flattened.
+        if branch.value.is_some() {
+            return Ok(node);
+        }
+
+        // If exactly one child remains, flatten by merging partial paths.
+        let Some((child_idx, only_child)) = branch.children.take_only_child() else {
+            return Ok(node);
+        };
+        let mut merged = self.read_for_update(only_child)?;
+        let merged_path = Path::from_nibbles_iterator(
+            branch
+                .partial_path
+                .iter()
+                .chain(std::iter::once(&child_idx.as_u8()))
+                .chain(merged.partial_path().iter())
+                .copied(),
+        );
+        merged.update_partial_path(merged_path);
+        Ok(merged)
+    }
+
     /// Reconciles a branch proof node against the in-memory proving merkle.
     ///
     /// This helper never overwrites an existing branch value. It only
@@ -1616,16 +2126,22 @@ impl Merkle<NodeStore<Mutable<Propose>, MemStore>> {
     /// ## Errors
     ///
     /// Returns an error if an existing value conflicts with the proof.
+    /// Reconciles a proof node's value against the proving trie.
+    ///
+    /// When the proof's value and the trie's value conflict (different values,
+    /// or one has a value and the other doesn't), `on_conflict` is called with
+    /// the proof node. It returns the value to store (`Some`) or `None` to
+    /// clear the value. If the conflict cannot be resolved, it returns `Err`.
     pub(crate) fn reconcile_branch_proof_node(
         &mut self,
         proof_node: &ProofNode,
-    ) -> Result<ReconcileResult, ProofError> {
-        let key_nibbles = proof_node
+        on_conflict: impl FnOnce(&ProofNode) -> Result<Option<Value>, ProofError>,
+    ) -> Result<(), ProofError> {
+        let key_nibbles: Box<[u8]> = proof_node
             .key
             .iter()
             .map(|component| component.as_u8())
-            .collect::<Vec<_>>();
-        let key_nibbles = key_nibbles.as_slice();
+            .collect();
 
         if !key_nibbles.len().is_multiple_of(2)
             && matches!(proof_node.value_digest, Some(ValueDigest::Value(_)))
@@ -1633,32 +2149,25 @@ impl Merkle<NodeStore<Mutable<Propose>, MemStore>> {
             return Err(ProofError::ValueAtOddNibbleLength);
         }
 
-        self.insert_branch_from_nibbles(key_nibbles)?;
+        self.insert_branch_from_nibbles(&key_nibbles)?;
 
-        let Some(ValueDigest::Value(proof_value)) = proof_node.value_digest.as_ref() else {
-            // Hash-only value digests and absent values are validated in later
-            // proof-hash reconstruction steps.
-            return Ok(ReconcileResult::NoValue);
+        // insert_branch_from_nibbles guarantees a branch exists at this path
+        // and that all nodes along it are in-memory, so this cannot fail.
+        let branch = Self::get_branch_from_nibbles_mut(self.nodestore.root_mut(), &proof_node.key)
+            .ok_or(ProofError::NodeNotInTrie)?;
+
+        let proof_value = match proof_node.value_digest.as_ref() {
+            Some(ValueDigest::Value(v)) => Some(v.as_ref()),
+            _ => None,
         };
 
-        let Some(node) = self.get_node_from_nibbles(key_nibbles)? else {
-            return Err(ProofError::NodeNotInTrie);
-        };
-        let Some(branch) = node.as_branch() else {
-            return Err(ProofError::NodeNotInTrie);
-        };
-
-        match branch.value.as_deref() {
-            Some(existing_value) if existing_value != proof_value.as_ref() => {
-                Err(ProofError::UnexpectedValue)
-            }
-            Some(_) => Ok(ReconcileResult::ValueAlreadyMatches),
-            None => {
-                let key_bytes: Vec<u8> = Path::from(key_nibbles).bytes_iter().collect();
-                self.insert(&key_bytes, proof_value.clone())?;
-                Ok(ReconcileResult::ValueInserted)
-            }
+        if proof_value == branch.value.as_deref() {
+            return Ok(());
         }
+
+        // Values differ — let the caller decide what to do.
+        branch.value = on_conflict(proof_node)?;
+        Ok(())
     }
 }
 

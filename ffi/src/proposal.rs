@@ -54,6 +54,12 @@ impl<'db> DbView for ProposalHandle<'db> {
 }
 
 impl ProposalHandle<'_> {
+    /// Returns a reference to the inner proposal.
+    #[must_use]
+    pub(crate) const fn proposal(&self) -> &firewood::db::Proposal<'_> {
+        &self.proposal
+    }
+
     /// Returns the root hash of the proposal.
     #[must_use]
     pub fn hash_key(&self) -> Option<crate::HashKey> {
