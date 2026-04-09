@@ -137,7 +137,9 @@ func convertMetricFamily(c *C.OwnedMetricFamily) *dto.MetricFamily {
 	cMetrics := unsafe.Slice((*C.OwnedMetric)(unsafe.Pointer(c.metrics.ptr)), c.metrics.len)
 	mf.Metric = make([]*dto.Metric, len(cMetrics))
 
-	// Determine the metric type from the first metric's value tag.
+	// Determine the metric type from the first metric's value tag. Prometheus requires
+	// all metrics in a family to have the same type, so it's sufficient to check the
+	// first of our C metrics since we maintain the same grouping.
 	if len(cMetrics) > 0 {
 		mf.Type = metricTypeFromTag(cMetrics[0].value.tag)
 	}
