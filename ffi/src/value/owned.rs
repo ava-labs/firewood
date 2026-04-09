@@ -138,6 +138,18 @@ impl<T> From<OwnedSlice<T>> for Box<[T]> {
     }
 }
 
+impl From<String> for OwnedBytes {
+    fn from(s: String) -> Self {
+        s.into_bytes().into()
+    }
+}
+
+impl<T> FromIterator<T> for OwnedSlice<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        iter.into_iter().collect::<Vec<_>>().into()
+    }
+}
+
 impl<T> Drop for OwnedSlice<T> {
     fn drop(&mut self) {
         drop(self.take_box());

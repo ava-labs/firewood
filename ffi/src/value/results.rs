@@ -10,8 +10,8 @@ use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
     ChangeProofContext, CodeIteratorHandle, CreateIteratorResult, CreateProposalResult, HashKey,
     IteratorHandle, KeyRange, NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair,
-    ProposalHandle, ProposedChangeProofContext, RangeProofContext, ReconstructedHandle,
-    VerifiedChangeProofContext,
+    OwnedRenderedMetrics, ProposalHandle, ProposedChangeProofContext, RangeProofContext,
+    ReconstructedHandle, VerifiedChangeProofContext,
 };
 
 /// The result type returned from an FFI function that returns no value but may
@@ -506,6 +506,40 @@ impl From<Result<Vec<(Key, Value)>, api::Error>> for KeyValueBatchResult {
     }
 }
 
+/// A result type returned from [`fwd_gather_rendered`] containing structured
+/// metric data.
+///
+/// [`fwd_gather_rendered`]: crate::fwd_gather_rendered
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum RenderedMetricsResult {
+    /// The metrics were successfully gathered.
+    ///
+    /// The caller must call [`fwd_free_rendered_metrics`] to free the memory
+    /// associated with this value.
+    ///
+    /// [`fwd_free_rendered_metrics`]: crate::fwd_free_rendered_metrics
+    Ok(OwnedRenderedMetrics),
+
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. Its
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl<E: fmt::Display> From<Result<OwnedRenderedMetrics, E>> for RenderedMetricsResult {
+    fn from(value: Result<OwnedRenderedMetrics, E>) -> Self {
+        match value {
+            Ok(ok) => RenderedMetricsResult::Ok(ok),
+            Err(err) => RenderedMetricsResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
 impl<'db> From<CreateIteratorResult<'db>> for IteratorResult<'db> {
     fn from(value: CreateIteratorResult<'db>) -> Self {
         IteratorResult::Ok {
@@ -748,6 +782,7 @@ impl_cresult!(
     RevisionResult<'_>,
     KeyValueBatchResult,
     KeyValueResult,
+    RenderedMetricsResult,
 );
 
 #[cfg(panic = "unwind")]
