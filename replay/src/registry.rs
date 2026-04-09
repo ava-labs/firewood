@@ -12,6 +12,6 @@ firewood_metrics::define_metrics! {
         /// Time spent in commit (ns)
         COMMIT_NS     = "replay.commit_ns",
         /// Number of commit calls
-        COMMIT_COUNT  = "replay.commit"
+        COMMIT_COUNT  = "replay.commit",
     },
 }

@@ -20,7 +20,7 @@ firewood_metrics::define_metrics! {
         /// Commit latency (ms)
         COMMIT_LATENCY_MS      = "commit_latency_ms",
         /// Number of times commit was blocked
-        COMMIT_BLOCKED         = "persist.commit_blocked"
+        COMMIT_BLOCKED         = "persist.commit_blocked",
     },
     gauges: {
         /// Current number of uncommitted proposals
@@ -34,6 +34,6 @@ firewood_metrics::define_metrics! {
         /// Number of persist permits currently available
         PERMITS_AVAILABLE      = "persist.permits_available",
         /// Maximum number of persist permits
-        MAX_PERMITS            = "persist.max_permits"
+        MAX_PERMITS            = "persist.max_permits",
     },
 }

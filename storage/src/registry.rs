@@ -38,7 +38,7 @@ firewood_metrics::define_metrics! {
         /// Count of submission queue waits
         RING_SQ_WAIT               = "ring.sq_wait",
         /// Count of partial write retries
-        RING_PARTIAL_WRITE_RETRY   = "ring.partial_write_retry"
+        RING_PARTIAL_WRITE_RETRY   = "ring.partial_write_retry",
     },
     gauges: {
         /// Current number of entries in freelist cache
@@ -46,6 +46,6 @@ firewood_metrics::define_metrics! {
         /// Current memory used by node cache (bytes)
         CACHE_MEMORY_USED    = "node.cache.memory_used",
         /// Maximum memory capacity of node cache (bytes)
-        CACHE_MEMORY_LIMIT   = "node.cache.memory_limit"
+        CACHE_MEMORY_LIMIT   = "node.cache.memory_limit",
     },
 }

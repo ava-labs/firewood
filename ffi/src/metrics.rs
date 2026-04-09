@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 use crate::rendered_metrics::MapIntoCollection;
 use crate::{OwnedRenderedMetrics, jemalloc_metrics};
 use firewood_metrics::MetricsContext;
+use firewood_metrics::{HistogramConfig, HistogramMetricConfig};
 use metrics_exporter_prometheus::{
     Matcher, NativeHistogramConfig, PrometheusBuilder, PrometheusHandle,
 };
@@ -50,19 +51,16 @@ impl<T: MetricsContextExt + ?Sized> MetricsContextExt for &mut T {
 /// This happens on a per-process basis, meaning that the metrics system cannot
 /// be initialized if it has already been set up in the same process.
 pub fn setup_metrics() -> Result<(), Box<dyn Error>> {
-    crate::registry::register();
-    firewood::registry::register();
-    firewood_storage::registry::register();
+    let mut histogram_configs = crate::registry::register();
+    histogram_configs.extend(firewood::registry::register());
+    histogram_configs.extend(firewood_storage::registry::register());
     #[cfg(feature = "block-replay")]
-    firewood_replay::registry::register();
-    jemalloc_metrics::register();
+    histogram_configs.extend(firewood_replay::registry::register());
+    jemalloc_metrics::register(); // does not export histogram configs
 
-    let builder = PrometheusBuilder::new()
-        // TEMP: #1867 will expose this inside the `register` method.
-        .set_native_histogram_for_metric(
-            Matcher::Full(crate::registry::GATHER_DURATION_SECONDS.to_owned()),
-            NativeHistogramConfig::new(2.0, 160, 1e-9).expect("valid config"),
-        );
+    let builder = histogram_configs
+        .iter()
+        .try_fold(PrometheusBuilder::new(), apply_histogram_config)?;
     let handle = builder.install_recorder()?;
 
     RECORDER
@@ -70,6 +68,33 @@ pub fn setup_metrics() -> Result<(), Box<dyn Error>> {
         .map_err(|_| "recorder already initialized")?;
 
     Ok(())
+}
+
+fn apply_histogram_config(
+    builder: PrometheusBuilder,
+    config: &HistogramMetricConfig,
+) -> Result<PrometheusBuilder, Box<dyn Error>> {
+    let matcher = Matcher::Full(config.name.to_owned());
+    Ok(match config.config {
+        HistogramConfig::Buckets(ref buckets) => {
+            builder
+                .set_buckets_for_metric(matcher, buckets)
+                .map_err(|e| format!("failed to set buckets for metric {}: {e}", config.name))?
+        }
+        HistogramConfig::Native {
+            scale,
+            max_buckets,
+            zero_threshold,
+        } => builder.set_native_histogram_for_metric(
+            matcher,
+            NativeHistogramConfig::new(scale, max_buckets, zero_threshold).map_err(|e| {
+                format!(
+                    "failed to create native histogram config for metric {}: {e}",
+                    config.name
+                )
+            })?,
+        ),
+    })
 }
 
 /// Starts metrics recorder along with an exporter over a specified port.
