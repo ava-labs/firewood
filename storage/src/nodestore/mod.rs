@@ -43,6 +43,8 @@
 
 pub(crate) mod alloc;
 pub(crate) mod hash;
+#[cfg(feature = "ethhash")]
+pub use hash::fix_account_storage_root_value;
 pub(crate) mod hash_algo;
 pub(crate) mod header;
 pub(crate) mod persist;

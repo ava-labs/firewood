@@ -106,7 +106,9 @@ impl Version {
     }
 
     const fn is_firewood_v1(self) -> bool {
+        // Check against both the current and previous version strings
         self.as_u128() == const { Self::VALID_V1_VERSIONS[0].as_u128() }
+            || self.as_u128() == const { Self::VALID_V1_VERSIONS[1].as_u128() }
     }
 
     const fn from_static(bytes: &'static [u8; 16]) -> Self {
@@ -116,7 +118,8 @@ impl Version {
     /// After making the version a static string, there is no need to use semver
     /// to parse the valid version strings since there are a finite set of valid
     /// strings.
-    const VALID_V1_VERSIONS: [Version; 16] = [
+    const VALID_V1_VERSIONS: [Version; 17] = [
+        Version::from_static(b"firewood-v1-hfix"),
         Version::from_static(b"firewood-v1\0\0\0\0\0"),
         Version::from_static(b"firewood 0.0.18\0"),
         Version::from_static(b"firewood 0.0.17\0"),

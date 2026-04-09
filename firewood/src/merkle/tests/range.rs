@@ -7,6 +7,27 @@ use firewood_storage::U4;
 
 type KeyValuePairs = Vec<(Box<[u8]>, Box<[u8]>)>;
 
+/// Build key-value pairs for range proof verification using the values actually
+/// stored in the merkle trie. In ethhash mode, account-depth values may have
+/// their storageRoot rewritten during hashing, so we must use the committed
+/// values rather than the original inputs.
+fn stored_key_values<K: AsRef<[u8]>, V: AsRef<[u8]>>(
+    merkle: &Merkle<NodeStore<Committed, MemStore>>,
+    items: impl IntoIterator<Item = (K, V)>,
+) -> KeyValuePairs {
+    items
+        .into_iter()
+        .map(|(k, v)| {
+            let key = k.as_ref();
+            let val = merkle
+                .get_value(key)
+                .unwrap()
+                .unwrap_or_else(|| v.as_ref().to_vec().into_boxed_slice());
+            (key.to_vec().into_boxed_slice(), val)
+        })
+        .collect()
+}
+
 /// Helper to build a `PathBuf` from a slice of nibble values.
 fn nibble_path(nibbles: &[u8]) -> PathBuf {
     nibbles
@@ -203,10 +224,8 @@ fn test_range_proof() {
         let start_proof = merkle.prove(items[start].0).unwrap();
         let end_proof = merkle.prove(items[end - 1].0).unwrap();
 
-        let key_values: KeyValuePairs = items[start..end]
-            .iter()
-            .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-            .collect();
+        let key_values =
+            stored_key_values(&merkle, items[start..end].iter().map(|(k, v)| (*k, *v)));
 
         let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
 
@@ -856,11 +875,8 @@ fn test_single_side_range_proof() {
             let start_proof = merkle.prove(start).unwrap();
             let end_proof = merkle.prove(items[case].0).unwrap();
 
-            let key_values: KeyValuePairs = items
-                .iter()
-                .take(case + 1)
-                .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-                .collect();
+            let key_values =
+                stored_key_values(&merkle, items.iter().take(case + 1).map(|(k, v)| (*k, *v)));
 
             let range_proof =
                 RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());

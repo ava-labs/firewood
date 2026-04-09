@@ -85,6 +85,7 @@ metrics-util = "0.20.1"
 metrics-exporter-prometheus = { version = "0.18.1", default-features = false }
 nonzero_ext = "0.3.0"
 parking_lot = "0.12.5"
+rlp = "0.6.1"
 rand_distr = "0.6.0"
 sha2 = "0.10.9"
 smallvec = { version = "1.15.1", features = ["write", "union", "const_new"] }

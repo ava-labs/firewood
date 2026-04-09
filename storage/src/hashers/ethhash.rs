@@ -40,7 +40,7 @@ impl HasUpdate for Keccak256 {
 // B is 1 if the input had an odd number of nibbles
 // CCCC is the first nibble if B is 1, otherwise it is all 0s
 
-fn nibbles_to_eth_compact<T: TriePath>(nibbles: T, is_leaf: bool) -> SmallVec<[u8; 32]> {
+pub(crate) fn nibbles_to_eth_compact<T: TriePath>(nibbles: T, is_leaf: bool) -> SmallVec<[u8; 32]> {
     // This is a bitfield that represents the first byte of the output, documented above
     bitfield! {
         struct CompactFirstByte(u8);
@@ -117,7 +117,7 @@ impl<T: Hashable> Preimage for T {
                     Some(ValueDigest::Value(bytes)) => {
                         let new_hash = Keccak256::digest(rlp::NULL_RLP).as_slice().to_vec();
                         let bytes_mut = BytesMut::from(bytes);
-                        if let Some(result) = replace_hash(bytes_mut, new_hash) {
+                        if let Some(result) = replace_hash(bytes_mut, &new_hash) {
                             rlp.append(&&*result);
                         } else {
                             rlp.append(&bytes);
@@ -199,7 +199,7 @@ impl<T: Hashable> Preimage for T {
                     };
                     trace!("replacement hash {:?}", hex::encode(&replacement_hash));
 
-                    let bytes = replace_hash(rlp_encoded_bytes, replacement_hash)
+                    let bytes = replace_hash(rlp_encoded_bytes, &replacement_hash)
                         .unwrap_or_else(|| BytesMut::from(rlp_encoded_bytes));
                     trace!("updated encoded value {:02X?}", hex::encode(&bytes));
                     bytes
@@ -238,13 +238,18 @@ impl<T: Hashable> Preimage for T {
     }
 }
 
-// TODO: we could be super fancy and just plunk the correct bytes into the existing BytesMut
-fn replace_hash<T: AsRef<[u8]>, U: AsRef<[u8]>>(bytes: T, new_hash: U) -> Option<BytesMut> {
-    // rlp_encoded_bytes needs to be decoded
+pub(crate) fn replace_hash<T: AsRef<[u8]>, U: AsRef<[u8]>>(
+    bytes: T,
+    new_hash: U,
+) -> Option<BytesMut> {
+    // Decode RLP as [nonce, balance, storageRoot, ...].
+    // Coreth may append extra trailing fields beyond the standard 4.
     let rlp = Rlp::new(bytes.as_ref());
-    let mut list = rlp.as_list().ok()?;
-    let replace = list.get_mut(2)?;
-    *replace = Vec::from(new_hash.as_ref());
+    let mut list: Vec<Vec<u8>> = rlp.as_list().ok()?;
+    let [_, _, storage_root, ..] = list.as_mut_slice() else {
+        return None;
+    };
+    *storage_root = Vec::from(new_hash.as_ref());
 
     trace!("inbound bytes: {}", hex::encode(bytes.as_ref()));
     trace!("list length was {}", list.len());

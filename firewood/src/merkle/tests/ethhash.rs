@@ -118,6 +118,168 @@ fn make_key(hex_str: &str) -> Key {
     hex::decode(hex_str).unwrap().into_boxed_slice()
 }
 
+/// Keccak256 of empty bytes — the codeHash for accounts with no contract code.
+fn empty_code_hash() -> [u8; 32] {
+    Keccak256::digest([]).into()
+}
+
+/// Keccak256 of RLP-encoded empty string (0x80) — the hash of an empty storage trie.
+fn empty_trie_root() -> [u8; 32] {
+    Keccak256::digest(rlp::NULL_RLP).into()
+}
+
+/// RLP-encode an Ethereum account value: [nonce, balance, storageRoot, codeHash].
+fn rlp_encode_account(
+    nonce: u64,
+    balance: u64,
+    storage_root: &[u8; 32],
+    code_hash: &[u8; 32],
+) -> Box<[u8]> {
+    use rlp::RlpStream;
+
+    let mut rlp = RlpStream::new_list(4);
+    rlp.append(&nonce);
+    rlp.append(&balance);
+    rlp.append(&storage_root.as_slice());
+    rlp.append(&code_hash.as_slice());
+    rlp.out().to_vec().into_boxed_slice()
+}
+
+/// Insert an account (and optional storage entries) into a trie, commit it,
+/// then read back the account value and verify the storageRoot field was
+/// updated from the original `input_storage_root`.
+fn commit_and_read_storage_root(
+    account_key: &[u8],
+    account_value: &[u8],
+    input_storage_root: &[u8; 32],
+    storage_entries: &[(&[u8], &[u8])],
+) -> Vec<u8> {
+    use rlp::Rlp;
+
+    let account_key_hash = Keccak256::digest(account_key);
+
+    let mut items = vec![(
+        Box::from(account_key_hash.as_slice()),
+        Box::from(account_value),
+    )];
+    for (suffix, value) in storage_entries {
+        let key: Box<[u8]> = [account_key_hash.as_slice(), *suffix].concat().into();
+        items.push((key, Box::from(*value)));
+    }
+
+    let merkle = init_merkle(items);
+
+    let stored = merkle
+        .get_value(account_key_hash.as_slice())
+        .unwrap()
+        .expect("account should exist");
+
+    let rlp = Rlp::new(&stored);
+    let list: Vec<Vec<u8>> = rlp.as_list().unwrap();
+    assert!(
+        list.len() >= 3,
+        "account value should have at least 3 RLP items"
+    );
+
+    let persisted_storage_root = list.into_iter().nth(2).unwrap();
+    assert_ne!(
+        persisted_storage_root.as_slice(),
+        input_storage_root.as_slice(),
+        "storageRoot should have been updated from its original value"
+    );
+    persisted_storage_root
+}
+
+/// Verify that storageRoot is autocomputed during hashing for both
+/// 4-item (standard) and 5-item (coreth with trailing empty byte) account RLP.
+#[test_case(&[1u64, 0, 0, 0]; "4 item")]
+#[test_case(&[1u64, 0, 0, 0, 0]; "5 item")]
+fn test_autocompute_hash(fields: &[u64]) {
+    use rlp::RlpStream;
+
+    let account_addr = [0u8; 20];
+    let dummy_storage_root = [0u8; 32];
+
+    let mut rlp = RlpStream::new_list(fields.len());
+    for field in fields {
+        rlp.append(field);
+    }
+    let account_value: Box<[u8]> = rlp.out().to_vec().into();
+
+    let storage_root =
+        commit_and_read_storage_root(&account_addr, &account_value, &dummy_storage_root, &[]);
+
+    assert_eq!(
+        storage_root,
+        empty_trie_root(),
+        "storageRoot should be autocomputed as empty trie root"
+    );
+}
+
+/// RLP-encode a 32-byte storage slot value.
+fn rlp_encode_storage(value: &[u8; 32]) -> Vec<u8> {
+    use rlp::RlpStream;
+
+    let mut rlp = RlpStream::new();
+    rlp.append(&value.as_slice());
+    rlp.out().to_vec()
+}
+
+/// A branch account (one storage entry) should have its storageRoot set to
+/// the hash of the single-node storage sub-trie.
+#[test]
+fn test_persisted_storage_root_one_storage_entry() {
+    let account_addr = [0u8; 20];
+    let dummy_storage_root = [0u8; 32];
+    let account_value = rlp_encode_account(0, 44, &dummy_storage_root, &empty_code_hash());
+
+    let storage_key = [1u8; 32];
+    let storage_value = rlp_encode_storage(&[2u8; 32]);
+
+    let storage_root = commit_and_read_storage_root(
+        &account_addr,
+        &account_value,
+        &dummy_storage_root,
+        &[(&storage_key, &storage_value)],
+    );
+
+    assert_ne!(
+        storage_root,
+        empty_trie_root().to_vec(),
+        "should not be empty trie root"
+    );
+}
+
+/// A branch account (two storage entries) should have its storageRoot set to
+/// the hash of the two-node storage sub-trie.
+#[test]
+fn test_persisted_storage_root_two_storage_entries() {
+    let account_addr = [0u8; 20];
+    let dummy_storage_root = [0u8; 32];
+    let account_value = rlp_encode_account(0, 44, &dummy_storage_root, &empty_code_hash());
+
+    let storage_key_a = [1u8; 32];
+    let storage_key_b = [2u8; 32];
+    let storage_value_a = rlp_encode_storage(&[0xAAu8; 32]);
+    let storage_value_b = rlp_encode_storage(&[0xBBu8; 32]);
+
+    let storage_root = commit_and_read_storage_root(
+        &account_addr,
+        &account_value,
+        &dummy_storage_root,
+        &[
+            (&storage_key_a, &storage_value_a),
+            (&storage_key_b, &storage_value_b),
+        ],
+    );
+
+    assert_ne!(
+        storage_root,
+        empty_trie_root().to_vec(),
+        "should not be empty trie root"
+    );
+}
+
 #[test]
 fn test_root_hash_random_deletions() {
     use rand::seq::SliceRandom;

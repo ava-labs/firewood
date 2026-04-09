@@ -222,8 +222,15 @@ where
                 *child = Some(Child::MaybePersisted(child_node, child_hash));
                 trace!("child now {child:?}");
             }
+
+            #[cfg(feature = "ethhash")]
+            update_account_storage_root(&mut node, &path_prefix);
         }
-        // At this point, we either have a leaf or a branch with all children hashed.
+
+        // Handle leaf account nodes (no children, at account depth).
+        #[cfg(feature = "ethhash")]
+        update_account_storage_root(&mut node, &path_prefix);
+
         // if the encoded child hash <32 bytes then we use that RLP
 
         #[cfg(feature = "ethhash")]
@@ -268,6 +275,138 @@ where
             hash_node(&fake_root, path_prefix)
         } else {
             hash_node(node, path_prefix)
+        }
+    }
+}
+
+/// Given an account node's value and its children's hashes, return the value with the
+/// storageRoot field replaced by the computed hash of the storage sub-trie.
+///
+/// For leaf accounts (no children), the storage root is the empty trie hash.
+/// For branch accounts, the storage root is computed from the children's hashes.
+///
+/// Returns `None` if the value is not well-formed account RLP.
+#[cfg(feature = "ethhash")]
+#[must_use]
+pub fn fix_account_storage_root_value(
+    value: &[u8],
+    child_hashes: &Children<Option<HashType>>,
+) -> Option<Box<[u8]>> {
+    use crate::hashers::ethhash::replace_hash;
+    use crate::node::BranchNode;
+    use rlp::RlpStream;
+    use sha3::{Digest, Keccak256};
+
+    let children_count = child_hashes.iter().filter(|(_, c)| c.is_some()).count();
+
+    let storage_root = if children_count == 0 {
+        crate::TrieHash::from(Keccak256::digest(rlp::NULL_RLP))
+    } else {
+        let mut child_hashes = child_hashes.clone();
+        if let Some((_, child)) = child_hashes.take_only_child() {
+            match child {
+                HashType::Hash(hash) => hash,
+                HashType::Rlp(rlp_bytes) => {
+                    // Single storage child with small RLP — hash the raw bytes.
+                    crate::TrieHash::from(Keccak256::digest(&*rlp_bytes))
+                }
+            }
+        } else {
+            let mut rlp = RlpStream::new_list(const { BranchNode::MAX_CHILDREN + 1 });
+            for (_, child) in &child_hashes {
+                match child {
+                    Some(HashType::Hash(hash)) => {
+                        rlp.append(&hash.as_slice());
+                    }
+                    Some(HashType::Rlp(rlp_bytes)) => {
+                        rlp.append_raw(rlp_bytes, 1);
+                    }
+                    None => {
+                        rlp.append_empty_data();
+                    }
+                }
+            }
+            rlp.append_empty_data();
+            crate::TrieHash::from(Keccak256::digest(rlp.out()))
+        }
+    };
+
+    replace_hash(value, &storage_root).map(|b| b.to_vec().into_boxed_slice())
+}
+
+/// Updates the storageRoot field in an account node's RLP-encoded value to match
+/// the actual hash of its storage sub-trie. Only acts on nodes at account depth
+/// (64 nibbles) whose values are well-formed Ethereum account RLP.
+///
+/// For branch nodes, the storage root is computed from the children's hashes.
+/// For leaf nodes (no storage sub-trie), the storage root is the empty trie hash.
+#[cfg(feature = "ethhash")]
+fn update_account_storage_root(node: &mut Node, path_prefix: &Path) {
+    use crate::hashers::ethhash::{nibbles_to_eth_compact, replace_hash};
+    use crate::node::BranchNode;
+    use rlp::RlpStream;
+    use sha3::{Digest, Keccak256};
+
+    // Both lengths are usize counts of nibbles in a trie path, so their
+    // sum cannot overflow on any platform firewood targets.
+    let total_depth = path_prefix
+        .0
+        .len()
+        .wrapping_add(node.partial_path().0.len());
+    if total_depth != 64 {
+        return;
+    }
+
+    match node {
+        Node::Branch(b) => {
+            let Some(ref old_value) = b.value else {
+                return;
+            };
+
+            let mut child_hashes = b.children_hashes();
+
+            let storage_root = if let Some((_, child)) = child_hashes.take_only_child() {
+                match child {
+                    HashType::Hash(hash) => hash,
+                    HashType::Rlp(rlp_bytes) => {
+                        let mut rlp = RlpStream::new_list(2);
+                        rlp.append(&&*nibbles_to_eth_compact(
+                            b.partial_path.as_components(),
+                            true,
+                        ));
+                        rlp.append_raw(&rlp_bytes, 1);
+                        crate::TrieHash::from(Keccak256::digest(rlp.out()))
+                    }
+                }
+            } else {
+                // Multiple children: construct branch RLP and hash it
+                let mut rlp = RlpStream::new_list(const { BranchNode::MAX_CHILDREN + 1 });
+                for (_, child) in &child_hashes {
+                    match child {
+                        Some(HashType::Hash(hash)) => {
+                            rlp.append(&hash.as_slice());
+                        }
+                        Some(HashType::Rlp(rlp_bytes)) => {
+                            rlp.append_raw(rlp_bytes, 1);
+                        }
+                        None => {
+                            rlp.append_empty_data();
+                        }
+                    }
+                }
+                rlp.append_empty_data();
+                crate::TrieHash::from(Keccak256::digest(rlp.out()))
+            };
+
+            if let Some(new_value) = replace_hash(old_value.as_ref(), &storage_root) {
+                b.value = Some(new_value.to_vec().into_boxed_slice());
+            }
+        }
+        Node::Leaf(l) => {
+            let empty_root = Keccak256::digest(rlp::NULL_RLP);
+            if let Some(new_value) = replace_hash(&l.value, empty_root) {
+                l.value = new_value.to_vec().into_boxed_slice();
+            }
         }
     }
 }

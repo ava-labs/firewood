@@ -125,10 +125,15 @@ fn test_proof() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    for (key, val) in items {
+    for (key, _val) in items {
         let proof = merkle.prove(key).unwrap();
         assert!(!proof.is_empty());
-        proof.verify(key, Some(val), &root_hash).unwrap();
+        // Read the stored value rather than using the original input because
+        // ethhash mode rewrites the storageRoot field in account-depth values
+        // during hashing. The proof must be verified against what was actually
+        // committed, not what was originally inserted.
+        let stored_val = merkle.get_value(key).unwrap().expect("key should exist");
+        proof.verify(key, Some(&stored_val), &root_hash).unwrap();
     }
 }
 
