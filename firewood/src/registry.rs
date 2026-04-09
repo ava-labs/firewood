@@ -17,8 +17,6 @@ firewood_metrics::define_metrics! {
         REMOVE                 = "remove",
         /// Number of next calls to calculate a change proof
         CHANGE_PROOF_NEXT      = "change_proof.next",
-        /// Commit latency (ms)
-        COMMIT_LATENCY_MS      = "commit_latency_ms",
         /// Number of times commit was blocked
         COMMIT_BLOCKED         = "persist.commit_blocked",
     },
