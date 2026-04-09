@@ -1354,7 +1354,9 @@ fn test_slow_adversarial_change_proof_fuzz() {
                                 let e: Vec<ProofNode> = other_proof.end_proof().as_ref().to_vec();
                                 let o: Vec<BatchOp<Key, Value>> = other_proof.batch_ops().to_vec();
                                 mutated_proof = build_change_proof(s, e, o);
-                                use_end_root = root2_b.clone();
+                                // Keep use_end_root = root2 (the default).
+                                // The requester asked for a proof to root2,
+                                // not root2_b, so verification must reject.
                                 mutation_name = "M31_wrong_db";
                             } else {
                                 continue;
