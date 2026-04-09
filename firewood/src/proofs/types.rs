@@ -149,6 +149,7 @@ pub enum ProofError {
     #[error("the proof is None as it has been consumed")]
     ProofIsNone,
 
+    // ── Range proof verification variants (from main) ──
     /// Key-value pair is outside the requested range
     #[error("key-value pair is outside the requested range")]
     KeyOutsideRange,
@@ -175,6 +176,65 @@ pub enum ProofError {
 
     #[error("the proposal for a change proof is None as it has been consumed")]
     ProposalIsNone,
+
+    // ── Change proof verification variants ──
+    /// Computed root hash after applying `batch_ops` doesn't match expected end root
+    #[error("computed root hash after applying batch_ops doesn't match the expected end root")]
+    EndRootMismatch,
+
+    /// The end proof's inclusion/exclusion result doesn't match the last
+    /// batch op's type when `batch_ops` is non-empty. A Put expects the
+    /// key to exist in `end_root` (inclusion); a Delete expects it to be
+    /// absent (exclusion). A mismatch indicates the attacker tampered with
+    /// `batch_ops` — for example, appending a spurious key changes
+    /// `last_op_key`, shifting the end proof's derived key.
+    #[error("end proof inclusion/exclusion result doesn't match last batch op type")]
+    EndProofOperationMismatch,
+
+    /// The start proof's inclusion/exclusion result doesn't match the first
+    /// batch op's type when `first_op_key == start_key`. A Put expects the
+    /// key to exist in `end_root` (inclusion); a Delete expects it to be
+    /// absent (exclusion). A mismatch indicates the attacker tampered with
+    /// `batch_ops` by adding a spurious key at `start_key`.
+    #[error("start proof inclusion/exclusion result doesn't match first batch op type")]
+    StartProofOperationMismatch,
+
+    /// A `DeleteRange` operation was found in a change proof's batch ops.
+    /// `DeleteRange` is not supported in change proofs — honest generators
+    /// only produce `Put` and `Delete` operations.
+    #[error("DeleteRange operation found in change proof")]
+    DeleteRangeFoundInChangeProof,
+
+    /// Bounded change proof with non-empty batch operations requires at
+    /// least one boundary proof for verification. Unbounded proofs
+    /// (`start_key` and `end_key` both `None`) use direct root hash
+    /// comparison and do not require boundary proofs.
+    #[error("bounded change proof requires at least one boundary proof")]
+    MissingBoundaryProof,
+
+    /// A proof node's value differs from the expected value
+    #[error("proof node value does not match the expected value at the same key")]
+    ProofNodeValueMismatch,
+
+    /// Start and end boundary proofs share no common prefix — they
+    /// disagree on the very first node. Since both proofs have already
+    /// passed hash chain verification against the same `end_root`, their
+    /// first nodes must be identical. This is unreachable without a hash
+    /// collision.
+    #[error("boundary proofs diverge at the root node")]
+    BoundaryProofsDivergeAtRoot,
+
+    /// Non-empty end proof when no end key is set and no batch operations.
+    #[error("unexpected non-empty end proof with no end key and no batch operations")]
+    UnexpectedEndProof,
+
+    /// In-range child hash mismatch between proof and proposal.
+    #[error("in-range child hash mismatch")]
+    InRangeChildMismatch,
+
+    /// Empty end proof when `end_key` is set or `batch_ops` is non-empty.
+    #[error("missing end proof: end_key is set or batch_ops is non-empty")]
+    MissingEndProof,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -288,10 +348,29 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
         verify_opt_value_digest(expected_value, self.value_digest(key, root_hash)?)
     }
 
-    /// Returns the value digest associated with the given `key` in the trie revision
-    /// with the given `root_hash`. If the key does not exist in the trie, returns `None`.
-    /// Returns an error if the proof is invalid or doesn't prove the key for the
-    /// given revision.
+    /// Verify this proof against `root_hash` for the given `key` and return the
+    /// value digest at that key.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Some(digest))` — **inclusion proof**: the key exists in the trie
+    ///   and `digest` is its value digest.
+    /// - `Ok(None)` — **exclusion proof**: the proof is valid but the key does
+    ///   not exist in the trie revision.
+    ///
+    /// # Errors
+    ///
+    /// - [`ProofError::Empty`] — the proof contains no nodes.
+    /// - [`ProofError::UnexpectedHash`] — a node's hash does not match the
+    ///   expected hash from its parent (or `root_hash` for the first node).
+    /// - [`ProofError::ValueAtOddNibbleLength`] — a node whose key has an odd
+    ///   number of nibbles carries a value digest, which is structurally invalid.
+    /// - [`ProofError::ShouldBePrefixOfProvenKey`] — an intermediate node's key
+    ///   is not a prefix of `key`.
+    /// - [`ProofError::ShouldBePrefixOfNextKey`] — a node's key is not a prefix
+    ///   of the next node's key in the proof.
+    /// - [`ProofError::NodeNotInTrie`] — the child pointer from one node to the
+    ///   next is absent, meaning the proof path does not exist in the trie.
     pub fn value_digest<K: AsRef<[u8]>>(
         &self,
         key: K,
@@ -318,20 +397,19 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
             }
 
             if let Some(next_node) = iter.peek() {
-                // Assert that every node's key is a prefix of `key`, except for the last node,
-                // whose key can be equal to or a suffix of `key` in an exclusion proof.
-                if next_nibble(node.full_path(), key.as_components()).is_none() {
+                // Assert that every non-terminal node's key is a prefix of
+                // `key`, and that the proof follows the branch toward `key`.
+                let Some(key_nibble) = next_nibble(node.full_path(), key.as_components()) else {
                     return Err(ProofError::ShouldBePrefixOfProvenKey);
-                }
-
-                // Assert that every node's key is a prefix of the next node's key.
-                let next_node_index = next_nibble(node.full_path(), next_node.full_path());
-
-                let Some(next_nibble) = next_node_index else {
-                    return Err(ProofError::ShouldBePrefixOfNextKey);
                 };
 
-                expected_hash = node.children()[next_nibble]
+                // Assert that every node's key is a prefix of the next node's
+                // key, and that the next node is on the path toward `key`.
+                if next_nibble(node.full_path(), next_node.full_path()) != Some(key_nibble) {
+                    return Err(ProofError::ShouldBePrefixOfNextKey);
+                }
+
+                expected_hash = node.children()[key_nibble]
                     .as_ref()
                     .ok_or(ProofError::NodeNotInTrie)?
                     .clone();
@@ -566,5 +644,59 @@ impl ProofType {
             ProofType::Range => "range",
             ProofType::Change => "change",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a `ProofNode` at the given nibble path with the given children and value.
+    fn make_node(
+        nibbles: &[u8],
+        parent_prefix_len: usize,
+        value: Option<&[u8]>,
+        child_hashes: Children<Option<HashType>>,
+    ) -> ProofNode {
+        let key: PathBuf = nibbles
+            .iter()
+            .map(|&b| PathComponent(firewood_storage::U4::new_masked(b)))
+            .collect();
+        ProofNode {
+            key,
+            partial_len: parent_prefix_len,
+            value_digest: value.map(|v| ValueDigest::Value(v.to_vec().into_boxed_slice())),
+            child_hashes,
+        }
+    }
+
+    /// A proof for key B (nibble 3) must not be accepted as an exclusion
+    /// proof for key C (nibble 5).
+    #[test]
+    fn proof_for_wrong_branch_is_rejected() {
+        // Leaf at nibble path [3, 0] with a value.
+        let leaf = make_node(&[3, 0], 1, Some(b"val_b"), Children::new());
+        let leaf_hash = leaf.to_hash();
+
+        // Root branch with children at nibbles 3 and 5.
+        let mut root_children: Children<Option<HashType>> = Children::new();
+        root_children[PathComponent(firewood_storage::U4::new_masked(3))] = Some(leaf_hash);
+        root_children[PathComponent(firewood_storage::U4::new_masked(5))] =
+            Some(HashType::from([0xCC; 32]));
+        let root = make_node(&[], 0, None, root_children);
+        let root_hash: TrieHash = root.to_hash().into_triehash();
+
+        let proof = Proof::new(vec![root, leaf]);
+
+        // Verifying against key [0x30] (nibble path [3, 0]) should succeed
+        // — this is the key the proof was built for.
+        assert!(proof.value_digest([0x30u8], &root_hash).is_ok());
+
+        // Verifying against key [0x50] (nibble path [5, 0]) must fail
+        // — the proof goes to nibble 3, not nibble 5.
+        assert!(matches!(
+            proof.value_digest([0x50u8], &root_hash),
+            Err(ProofError::ShouldBePrefixOfNextKey),
+        ));
     }
 }

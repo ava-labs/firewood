@@ -252,8 +252,15 @@ fn compute_outside_children(
                 entry.set_above(on_path_nibble)
             }
             .set(on_path_nibble);
+        } else if !is_left_edge {
+            // Boundary is a prefix of or exactly matches the terminal key.
+            // For the right edge, all children extend beyond end_key (they
+            // represent keys longer than end_key sharing its prefix), so
+            // they are outside the proven range.
+            result.insert(terminal.key.clone(), ChildMask::ALL);
         }
-        // Otherwise boundary matches terminal exactly — no children need marking.
+        // For the left edge when boundary matches/is-prefix-of terminal,
+        // children extend beyond start_key and are in-range — no marking.
     }
 
     Ok(result)
@@ -443,7 +450,7 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         key_values,
     )?;
 
-    verify_root_hash(
+    verify_range_proof_root_hash(
         &all_proof_nodes,
         key_values,
         proof,
@@ -480,14 +487,26 @@ fn verify_proof_node_values(
         let node_key_bytes: Vec<u8> = Path::from(key_nibbles.as_slice()).bytes_iter().collect();
         let in_range = first_key_bytes.is_none_or(|start| node_key_bytes.as_slice() >= start)
             && last_key_bytes.is_none_or(|end| node_key_bytes.as_slice() <= end);
-        if in_range
-            && key_values
-                .binary_search_by(|(k, _)| k.as_ref().cmp(node_key_bytes.as_slice()))
-                .is_err()
-        {
-            return Err(api::Error::ProofError(
-                ProofError::ProofNodeHasUnincludedValue,
-            ));
+        if in_range {
+            match key_values.binary_search_by(|(k, _)| k.as_ref().cmp(node_key_bytes.as_slice())) {
+                Err(_) => {
+                    return Err(api::Error::ProofError(
+                        ProofError::ProofNodeHasUnincludedValue,
+                    ));
+                }
+                Ok(idx) => {
+                    let proof_value = match &proof_node.value_digest {
+                        Some(ValueDigest::Value(v)) => v.as_ref(),
+                        _ => unreachable!("guarded by matches! check above"),
+                    };
+                    let Some((_, kv_value)) = key_values.get(idx) else {
+                        unreachable!("binary_search returned valid index");
+                    };
+                    if kv_value.as_ref() != proof_value {
+                        return Err(api::Error::ProofError(ProofError::ProofNodeValueMismatch));
+                    }
+                }
+            }
         }
     }
     Ok(())
@@ -495,7 +514,7 @@ fn verify_proof_node_values(
 
 /// Reconstructs the trie from key-value pairs and proof nodes, then verifies
 /// that the computed root hash matches the expected one.
-fn verify_root_hash<H: ProofCollection<Node = ProofNode>>(
+fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
     all_proof_nodes: &[&ProofNode],
     key_values: &[(impl KeyType, impl ValueType)],
     proof: &RangeProof<impl KeyType, impl ValueType, H>,
@@ -573,42 +592,17 @@ impl<T: TrieReader> Merkle<T> {
     ///
     /// Returns an error if the trie is empty or an error occurs while reading from storage.
     pub fn prove(&self, key: &[u8]) -> Result<FrozenProof, ProofError> {
-        let Some(root) = self.root() else {
-            return Err(ProofError::Empty);
-        };
+        self.root().ok_or(ProofError::Empty)?;
 
-        // Get the path to the key
-        let path_iter = self.path_iter(key)?;
-        let mut proof = Vec::new();
-        for node in path_iter {
-            let node = node?;
-            proof.push(ProofNode::from(node));
-        }
+        // PathIterator yields every node on the path from root toward
+        // `key`, including divergent nodes whose partial_path doesn't
+        // match (they prove the key's absence in exclusion proofs).
+        let proof = self
+            .path_iter(key)?
+            .map(|node| node.map(ProofNode::from))
+            .collect::<Result<_, _>>()?;
 
-        if proof.is_empty() {
-            // No nodes, even the root, are before `key`.
-            // The root alone proves the non-existence of `key`.
-            // TODO reduce duplicate code with ProofNode::from<PathIterItem>
-            let child_hashes = if let Some(branch) = root.as_branch() {
-                branch.children_hashes()
-            } else {
-                Children::new()
-            };
-
-            proof.push(ProofNode {
-                // key is expected to be in nibbles
-                key: root.partial_path().as_components().into(),
-                // partial len is the number of nibbles in the path leading to this node,
-                // which is always zero for the root node.
-                partial_len: 0,
-                value_digest: root
-                    .value()
-                    .map(|value| ValueDigest::Value(value.to_vec().into_boxed_slice())),
-                child_hashes,
-            });
-        }
-
-        Ok(Proof::new(proof.into_boxed_slice()))
+        Ok(Proof::new(proof))
     }
 
     /// Merges a sequence of key-value pairs with the base merkle trie, yielding
@@ -699,31 +693,6 @@ impl<T: TrieReader> Merkle<T> {
     ///   - I/O errors when reading nodes from storage
     ///   - Corrupted trie structure
     ///   - Invalid node references
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // Prove all keys between "alice" and "charlie"
-    /// let proof = merkle.range_proof(
-    ///     Some(b"alice"),
-    ///     Some(b"charlie"),
-    ///     None
-    /// ).await?;
-    ///
-    /// // Prove the first 100 keys starting from "alice"
-    /// let proof = merkle.range_proof(
-    ///     Some(b"alice"),
-    ///     None,
-    ///     Some(NonZeroUsize::new(100).unwrap())
-    /// ).await?;
-    ///
-    /// // Prove that no keys exist in a range
-    /// let proof = merkle.range_proof(
-    ///     Some(b"aardvark"),
-    ///     Some(b"aaron"),
-    ///     None
-    /// ).await?;
-    /// ```
     pub(super) fn range_proof(
         &self,
         start_key: Option<&[u8]>,

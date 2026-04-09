@@ -10,7 +10,7 @@ and EVM-compatible blockchains that store state in Merkle tries.
 
 **Key Characteristics:**
 
-- Written in Rust (edition 2024, MSRV 1.91.0)
+- Written in Rust (edition 2024, MSRV 1.94.0)
 - Beta-level software with evolving API
 - Compaction-less database that directly stores trie nodes on-disk
 - Not built on generic KV stores (LevelDB/RocksDB)

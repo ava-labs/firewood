@@ -323,7 +323,7 @@ pub extern "C" fn fwd_db_range_proof(
     // retain a reference to the provided database handle.
 
     crate::invoke_with_handle(db, |db| {
-        let view = db.get_root(args.root.into())?;
+        let view = db.view(args.root.into())?;
         view.range_proof(
             args.start_key
                 .as_ref()

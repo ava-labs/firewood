@@ -13,10 +13,10 @@ use firewood::{
 };
 use firewood_storage::{Committed, FileBacked, NodeStore};
 
-use crate::{BatchOp, BorrowedBytes, CView, CreateProposalResult, arc_cache::ArcCache};
+use crate::{BatchOp, BorrowedBytes, CView, CreateProposalResult};
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
-use firewood_metrics::{MetricsContext, firewood_increment};
+use firewood_metrics::MetricsContext;
 
 /// The hashing mode to use for the database.
 ///
@@ -147,14 +147,9 @@ impl DatabaseHandleArgs<'_> {
 /// These handles are passed to the other FFI functions.
 ///
 #[derive(Debug)]
-#[repr(C)]
 pub struct DatabaseHandle {
-    /// A single cached view to improve performance of reads while committing
-    cached_view: ArcCache<HashKey, dyn api::DynDbView>,
-
     /// The database
     db: Db,
-
     metrics_context: MetricsContext,
 }
 
@@ -185,7 +180,6 @@ impl DatabaseHandle {
 
         let db = Db::new(path, cfg)?;
         Ok(Self {
-            cached_view: ArcCache::new(),
             db,
             metrics_context,
         })
@@ -261,24 +255,8 @@ impl DatabaseHandle {
         self.db.reconstruct_from_view(parent, batch)
     }
 
-    pub(crate) fn get_root(&self, root: HashKey) -> Result<ArcDynDbView, api::Error> {
-        let mut cache_miss = false;
-        let view = self.cached_view.get_or_try_insert_with(root, |key| {
-            cache_miss = true;
-            self.db.view(HashKey::clone(key))
-        })?;
-
-        if cache_miss {
-            firewood_increment!(crate::registry::CACHED_VIEW_MISS, 1);
-        } else {
-            firewood_increment!(crate::registry::CACHED_VIEW_HIT, 1);
-        }
-
-        Ok(view)
-    }
-
-    pub(crate) fn clear_cached_view(&self) {
-        self.cached_view.clear();
+    pub(crate) fn view(&self, root: HashKey) -> Result<ArcDynDbView, api::Error> {
+        self.db.view(root)
     }
 
     pub(crate) fn merge_key_value_range(
