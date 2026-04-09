@@ -17,7 +17,7 @@ pub(crate) trait MapIntoCollection<T>: IntoIterator {
     }
 }
 
-impl<T, C> MapIntoCollection<T> for C where C: IntoIterator<Item = T> {}
+impl<C> MapIntoCollection<C::Item> for C where C: IntoIterator {}
 
 /// A C-compatible representation of a label pair.
 #[derive(Debug)]
