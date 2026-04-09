@@ -28,7 +28,7 @@ use bytemuck_derive::{Pod, Zeroable};
 use std::io::{Error, ErrorKind, Read};
 
 use super::alloc::FreeLists;
-use super::primitives::{LinearAddress, area_size_hash};
+use super::primitives::{AREA_SIZES_HASH, LinearAddress};
 use crate::logger::{debug, trace};
 use crate::{NodeHashAlgorithm, TrieHash};
 
@@ -346,7 +346,7 @@ impl NodeStoreHeader {
             root_address: None,
             version: Version::new(),
             free_lists: Default::default(),
-            area_size_hash: area_size_hash().into(),
+            area_size_hash: AREA_SIZES_HASH,
             node_hash_algorithm: node_hash_algorithm as u64,
             root_hash: TrieHash::empty().into(),
             cargo_version: CargoVersion::INSTANCE,
@@ -500,7 +500,7 @@ impl NodeStoreHeader {
     }
 
     fn validate_area_size_hash(&self) -> Result<(), Error> {
-        if self.area_size_hash == area_size_hash().as_slice() {
+        if self.area_size_hash == AREA_SIZES_HASH {
             Ok(())
         } else {
             Err(Error::new(
