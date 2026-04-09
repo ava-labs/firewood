@@ -197,7 +197,8 @@ func convertMetric(c *C.OwnedMetric) *dto.Metric {
 		h := (*C.OwnedNativeHistogram)(unsafe.Pointer(&c.value.anon0))
 		m.Histogram = convertNativeHistogram(h)
 	}
-
+	// default case will return an untyped metric with no value, which is valid
+	// according to the Prometheus exposition format
 	return m
 }
 
