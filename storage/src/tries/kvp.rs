@@ -506,7 +506,7 @@ mod tests {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```rust
     /// expected_hash!{
     ///     merkledb16: b"749390713e51d3e4e50ba492a669c1644a6d9cb7e48b2a14d556e7f953da92fc",
     ///     ethereum: b"2e636399fae96dc07abaf21167a34b8a5514d6594e777635987e319c76f28a75",
@@ -515,7 +515,7 @@ mod tests {
     ///
     /// or with RLP:
     ///
-    /// ```ignore
+    /// ```rust
     /// expected_hash!{
     ///     merkledb16: b"1ffe11ce995a9c07021d6f8a8c5b1817e6375dd0ea27296b91a8d48db2858bc9",
     ///     ethereum: rlp(b"c482206131"),

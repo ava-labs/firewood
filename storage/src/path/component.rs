@@ -24,9 +24,13 @@ impl PathComponent {
     /// This makes it easy to iterate over all possible children of a branch
     /// in a type-safe way. It is preferrable to do:
     ///
-    /// ```ignore
-    /// for (idx, slot) in PathComponent::ALL.into_iter().zip(branch.children.each_ref()) {
-    ///     /// use idx and slot
+    /// ```rust
+    /// # use firewood_storage::PathComponent;
+    ///
+    /// // Example child slots (one per nibble).
+    /// # let children = [(); PathComponent::LEN];
+    /// for (idx, slot) in PathComponent::ALL.into_iter().zip(children.iter()) {
+    ///     let _ = (idx, slot);
     /// }
     /// ```
     ///

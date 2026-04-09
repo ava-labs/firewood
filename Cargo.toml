@@ -18,7 +18,7 @@ license-file = "LICENSE.md"
 homepage = "https://avalabs.org"
 repository = "https://github.com/ava-labs/firewood"
 readme = "README.md"
-rust-version = "1.91.0"
+rust-version = "1.94.0"
 
 [profile.release]
 debug = true
@@ -53,6 +53,11 @@ unused_self = "allow"
 # lint for usize vs non-usize truncation.
 cast_possible_truncation = "allow"
 
+[patch.crates-io]
+metrics = { git = "https://github.com/demosdemon/metrics.git", rev = "b12dd4b4ab096147199520f9cc1b47fbd8186f10" }
+metrics-util = { git = "https://github.com/demosdemon/metrics.git", rev = "b12dd4b4ab096147199520f9cc1b47fbd8186f10" }
+metrics-exporter-prometheus = { git = "https://github.com/demosdemon/metrics.git", rev = "b12dd4b4ab096147199520f9cc1b47fbd8186f10" }
+
 [workspace.dependencies]
 # workspace local packages
 firewood = { path = "firewood", version = "0.3.1" }
@@ -77,6 +82,7 @@ integer-encoding = "4.1.0"
 log = "0.4.29"
 metrics = "0.24.3"
 metrics-util = "0.20.1"
+metrics-exporter-prometheus = { version = "0.18.1", default-features = false }
 nonzero_ext = "0.3.0"
 parking_lot = "0.12.5"
 rand_distr = "0.6.0"

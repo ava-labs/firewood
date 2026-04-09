@@ -280,6 +280,10 @@ impl RevisionManager {
         //    `current_revision()`, which takes a read lock on `in_memory_revisions`.
         //    The write lock here prevents proposals from being created against
         //    an older revision while a newer revision is mid-commit.
+        // BLOCKING: write lock on `in_memory_revisions`. Blocks all concurrent readers
+        // (current_revision, view) and any other commit attempts for the full duration of steps
+        // 1-5. In high-commit-rate scenarios with many parallel readers, lock contention here
+        // may stall reader threads until the commit critical section completes.
         let mut in_memory_revisions = self.in_memory_revisions.write();
 
         // 1. Check if the persist worker has failed.
@@ -311,6 +315,9 @@ impl RevisionManager {
             let oldest = in_memory_revisions.pop_front().expect("must be present");
             let oldest_hash = oldest.root_hash().or_default_root_hash();
             if let Some(ref hash) = oldest_hash {
+                // BLOCKING: write lock on `by_hash` while already holding the write lock on
+                // `in_memory_revisions`. Nested locking order must remain consistent (always
+                // acquire `in_memory_revisions` before `by_hash`) to avoid deadlocks.
                 self.by_hash.write().remove(hash);
             }
 
@@ -343,6 +350,8 @@ impl RevisionManager {
         // then `by_hash`, ensuring the revision is always findable during the transition.
         in_memory_revisions.push_back(committed.clone());
         if let Some(hash) = committed.root_hash().or_default_root_hash() {
+            // BLOCKING: write lock on `by_hash` (still inside the `in_memory_revisions` write
+            // lock). Same nested ordering as the reap path above; must not be inverted.
             self.by_hash.write().insert(hash, committed.clone());
         }
 
@@ -354,6 +363,10 @@ impl RevisionManager {
         // Free proposal that is being committed as well as any proposals no longer
         // referenced by anyone else. Track how many were discarded (dropped without commit).
         {
+            // BLOCKING: mutex lock on `proposals`. Held while scanning all open proposals.
+            // Duration is proportional to the number of live proposals. In pathological cases
+            // (many stale proposals) this extends the overall time the commit function runs,
+            // though it is no longer inside the `in_memory_revisions` write lock at this point.
             let mut lock = self.proposals.lock();
             let mut discarded = 0u64;
             lock.retain(|p| {
@@ -373,6 +386,10 @@ impl RevisionManager {
         }
 
         // then reparent any proposals that have this proposal as a parent
+        // BLOCKING: second acquisition of the `proposals` mutex in this function. Held while
+        // iterating all open proposals to reparent them. Re-acquiring after the first lock
+        // drop avoids long holds, but two separate acquisitions mean the proposal list could
+        // have changed between the two critical sections.
         for p in &*self.proposals.lock() {
             proposal.commit_reparent(p);
         }
@@ -393,6 +410,8 @@ impl RevisionManager {
     /// 2. Try to find it in committed revisions.
     pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, RevisionManagerError> {
         // 1. Try to find it in proposals.
+        // BLOCKING: mutex lock on `proposals` held while scanning all proposals for the target
+        // hash. Concurrent commits that need the proposals lock will queue behind this.
         let proposal = self
             .proposals
             .lock()
@@ -410,6 +429,8 @@ impl RevisionManager {
 
     pub fn add_proposal(&self, proposal: ProposedRevision) {
         let len = {
+            // BLOCKING: mutex lock on `proposals`. Short critical section (just a push), but
+            // contends with view(), commit() cleanup, and the reparent loop.
             let mut lock = self.proposals.lock();
             lock.push(proposal);
             lock.len()
@@ -424,6 +445,9 @@ impl RevisionManager {
     /// 2. Check `RootStore` (if it exists).
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
         // 1. Check the in-memory revision manager.
+        // BLOCKING: read lock on `by_hash`. Concurrent writes (commit reap/insert) will pause
+        // until readers release. Low contention in practice since reads are fast, but parking_lot
+        // RwLock favours writers, so a steady stream of commits can starve readers transiently.
         if let Some(revision) = self.by_hash.read().get(&root_hash).cloned() {
             return Ok(revision);
         }
@@ -450,6 +474,8 @@ impl RevisionManager {
     }
 
     pub fn current_revision(&self) -> CommittedRevision {
+        // BLOCKING: read lock on `in_memory_revisions`. Called on every propose() and
+        // merge_key_value_range(); blocks while a commit() holds the write lock (steps 1-5).
         self.in_memory_revisions
             .read()
             .back()
@@ -458,6 +484,12 @@ impl RevisionManager {
     }
 
     /// Acquires a lock on the header and returns a guard.
+    ///
+    /// # Blocking
+    ///
+    /// This contends with the background `PersistLoop`, which holds the header lock for the
+    /// entire duration of a `persist_to_disk` or `reap` call (both of which do disk I/O).
+    /// Callers (e.g. `Db::check`) may stall until the current persistence cycle finishes.
     pub(crate) fn locked_header(&self) -> MutexGuard<'_, NodeStoreHeader> {
         self.persist_worker.locked_header()
     }

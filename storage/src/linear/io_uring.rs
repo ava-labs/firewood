@@ -207,6 +207,10 @@ impl IoUringProxy {
         }
 
         trace!("starting io-uring write batch");
+        // BLOCKING: mutex lock on the IoUring instance. This serializes all callers of
+        // `write_batch` — only one batch can be in-flight at a time. The lock is held for the
+        // entire duration of the batch, which includes multiple submit/wait cycles with the
+        // kernel. This is the dominant serialization point for concurrent persist operations.
         let mut ring = self.0.lock();
         let mut batch = WriteBatch::new(&mut ring, fd, writes.into_iter().map(QueueEntry::new));
 
@@ -466,6 +470,11 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
         // The kernel will also return EBUSY if its internal submission queue is
         // full, in which case we break out to process completions. If the CQ
         // is empty, we may spin here until the syscall blocks.
+        //
+        // BLOCKING: this is the primary I/O wait point. The thread blocks here in the kernel
+        // until at least one write completes. Latency is bounded by the storage device round-
+        // trip time. Under high write amplification (many small nodes) this call may be the
+        // bottleneck for the entire persist cycle; the IoUring mutex above is held the whole time.
         if let Err(err) = self.submitter.submit_and_wait(1)
             && !ignore_poll_error(&err)
         {
@@ -544,6 +553,10 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
                 // update the SQ once it is full. `submit_and_wait` does not
                 // provide the correct synchronization semantics in order for
                 // us to see updates made by the SQPOLL thread.
+                //
+                // BLOCKING: parks the thread until the SQPOLL kernel thread drains enough
+                // entries from the submission queue to make space. Under sustained write
+                // pressure the SQ fills repeatedly, causing multiple stalls per batch.
                 if let Err(err) = self.submitter.squeue_wait() {
                     return if ignore_poll_error(&err) {
                         trace!("io-uring squeue_wait returned EBUSY or EINTR");

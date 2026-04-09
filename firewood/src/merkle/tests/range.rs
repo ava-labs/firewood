@@ -48,6 +48,21 @@ fn outside_children_single_node_exact_match() {
 }
 
 #[test]
+fn outside_children_single_node_exact_match_right_edge() {
+    // Boundary matches terminal exactly on right edge — all children marked outside.
+    let nodes = [proof_node(&[1, 2])];
+    let result = compute_outside_children(&nodes, Some(&[0x12]), false).unwrap();
+    // Look up the mask for the terminal node at [1, 2].
+    let mask = result[&nibble_path(&[1, 2])];
+    for i in 0..16u8 {
+        assert!(
+            mask.is_set(U4::new_masked(i)),
+            "child {i} should be outside on right edge exact match"
+        );
+    }
+}
+
+#[test]
 fn outside_children_ancestor_left_edge() {
     // Terminal key [1], boundary key 0x15 → nibbles [1, 5].
     // Terminal is ancestor of boundary. On-path nibble = 5.
@@ -218,12 +233,8 @@ fn test_bad_range_proof_out_of_order() {
     let merkle = init_merkle(items.clone());
 
     for _ in 0..10 {
-        let start = rng.random_range(0..items.len());
-        let end = rng.random_range(0..items.len() - start) + start - 1;
-
-        if end <= start {
-            continue;
-        }
+        let start = rng.random_range(0..items.len() - 2);
+        let end = rng.random_range(start + 2..items.len());
 
         let mut keys: Vec<[u8; 32]> = Vec::new();
         let mut vals: Vec<[u8; 20]> = Vec::new();
@@ -403,12 +414,8 @@ fn test_range_proof_with_non_existent_proof() {
     let merkle = init_merkle(items.clone());
 
     for _ in 0..10 {
-        let start = rng.random_range(0..items.len());
-        let end = rng.random_range(0..items.len() - start) + start - 1;
-
-        if end <= start {
-            continue;
-        }
+        let start = rng.random_range(1..items.len() - 2);
+        let end = rng.random_range(start + 1..items.len());
 
         // Short circuit if the decreased key is same with the previous key
         let first = decrease_key(items[start].0);
@@ -703,8 +710,7 @@ fn test_all_elements_proof() {
 }
 
 #[test]
-// Tests the range proof with "no" element. The first edge proof must
-// be a non-existent proof.
+// Empty key_values with a non-existent boundary key past the last entry.
 fn test_empty_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -712,28 +718,16 @@ fn test_empty_range_proof() {
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
     let merkle = init_merkle(items.clone());
+    let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    let cases = [(items.len() - 1, false)];
-    for c in &cases {
-        let first = increase_key(items[c.0].0);
-        let proof = merkle.prove(&first).unwrap();
-        assert!(!proof.is_empty());
+    let first = increase_key(items[items.len() - 1].0);
+    let proof = merkle.prove(&first).unwrap();
+    assert!(!proof.is_empty());
 
-        // key and value vectors are intentionally empty.
-        let key_values: KeyValuePairs = Vec::new();
+    let key_values: KeyValuePairs = Vec::new();
+    let range_proof = RangeProof::new(proof.clone(), proof, key_values.into_boxed_slice());
 
-        let range_proof = RangeProof::new(proof.clone(), proof, key_values.into_boxed_slice());
-
-        let root_hash = merkle.nodestore().root_hash().unwrap();
-
-        if c.1 {
-            assert!(
-                verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof,).is_err()
-            );
-        } else {
-            verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof).unwrap();
-        }
-    }
+    verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof).unwrap();
 }
 
 #[test]
@@ -775,12 +769,13 @@ fn test_gapped_range_proof() {
 
     assert!(
         verify_range_proof(
-            Some(&items[0].0),
-            Some(&items[items.len() - 1].0),
+            Some(&items[first].0),
+            Some(&items[last - 1].0),
             &root_hash,
             &range_proof,
         )
-        .is_err()
+        .is_err(),
+        "gapped entries should be detected in small trie"
     );
 }
 
@@ -1071,8 +1066,7 @@ fn test_range_proof_keys_with_shared_prefix() {
 #[test]
 // Tests a malicious proof, where the proof is more or less the
 // whole trie. This is to match corresponding test in geth.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
-fn test_bloadted_range_proof() {
+fn test_bloated_range_proof() {
     // Use a small trie
     let mut items = Vec::new();
     for i in 0..100_u32 {
@@ -1619,4 +1613,140 @@ fn test_bad_range_proof_start_after_end() {
         ),
         "expected StartAfterEnd, got {result:?}"
     );
+}
+
+#[test]
+// Tests range_proof() with a limit parameter. When limit truncates, the
+// end proof should anchor at the last returned key, not the requested end_key.
+fn test_range_proof_with_limit() {
+    let items: Vec<([u8; 32], [u8; 20])> = (0..10u32)
+        .map(|i| {
+            let mut key = [0u8; 32];
+            let mut value = [0u8; 20];
+            key[..4].copy_from_slice(&i.to_be_bytes());
+            value[..4].copy_from_slice(&(i + 100).to_be_bytes());
+            (key, value)
+        })
+        .collect();
+
+    let merkle = init_merkle(items.clone());
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    // Request range [items[0], items[9]] with limit=3. Should return items[0..3].
+    let limit = NonZeroUsize::new(3).unwrap();
+    let range_proof = merkle
+        .range_proof(Some(&items[0].0), Some(&items[9].0), Some(limit))
+        .unwrap();
+
+    assert_eq!(range_proof.key_values().len(), 3);
+
+    // The end proof should anchor at items[2] (last returned), not items[9].
+    // Verify the truncated proof against the last returned key.
+    verify_range_proof(
+        Some(&items[0].0),
+        Some(&items[2].0),
+        &root_hash,
+        &range_proof,
+    )
+    .unwrap();
+
+    // Full range (no limit) should return all 10.
+    let full_proof = merkle
+        .range_proof(Some(&items[0].0), Some(&items[9].0), None)
+        .unwrap();
+    assert_eq!(full_proof.key_values().len(), 10);
+
+    verify_range_proof(
+        Some(&items[0].0),
+        Some(&items[9].0),
+        &root_hash,
+        &full_proof,
+    )
+    .unwrap();
+}
+
+#[test]
+// Demonstrates that verify_range_proof does not verify that proof node values
+// match the corresponding values in key_values. A malicious prover can supply
+// correct proof nodes (with the real value) but incorrect key_values at an
+// intermediate proof-path position. Reconciliation silently overwrites the
+// wrong value with the proof's correct one, the hash check passes, and the
+// caller trusts the wrong key_values.
+//
+// Trie: ("b", "v1"), ("ba", "v2"), ("bc", "v3")
+// Range: ["a", "bc"]
+// The end proof for "bc" traverses the "b" node (which carries "v1").
+// We change "b"'s value in key_values to "WRONG" — verification should fail
+// but currently passes.
+fn test_bad_range_proof_value_mismatch_on_proof_path() {
+    let items = [("b", "v1"), ("ba", "v2"), ("bc", "v3")];
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    // "a" is not in the trie → exclusion proof for start
+    let start_proof = merkle.prove(b"a").unwrap();
+    // "bc" is in the trie → inclusion proof for end
+    let end_proof = merkle.prove(b"bc").unwrap();
+
+    // Tampered key_values: "b" has the wrong value, others are correct
+    let key_values: KeyValuePairs = vec![
+        (
+            b"b".to_vec().into_boxed_slice(),
+            b"WRONG".to_vec().into_boxed_slice(), // should be "v1"
+        ),
+        (
+            b"ba".to_vec().into_boxed_slice(),
+            b"v2".to_vec().into_boxed_slice(),
+        ),
+        (
+            b"bc".to_vec().into_boxed_slice(),
+            b"v3".to_vec().into_boxed_slice(),
+        ),
+    ];
+
+    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+    let result = verify_range_proof(
+        Some(b"a".as_slice()),
+        Some(b"bc".as_slice()),
+        &root_hash,
+        &range_proof,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(crate::api::Error::ProofError(
+                ProofError::ProofNodeValueMismatch
+            ))
+        ),
+        "expected ProofNodeValueMismatch, got {result:?}"
+    );
+}
+
+/// Create and validate a range proof with no left edge and an `end_key` at
+/// a branch node with children. Keys are \x10, \x20, and \x20\xab. Proof is
+/// generated from None to \x20. Children of the \x20 node should not be
+/// included in the proof.
+#[test]
+fn test_right_edge_boundary_prefix_of_terminal() {
+    let merkle = init_merkle([
+        (b"\x10" as &[u8], b"a"),
+        (b"\x20", b"b"),
+        (b"\x20\xab", b"c"),
+    ]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let proof = merkle.range_proof(None, Some(b"\x20"), None).unwrap();
+    // Proof should only have 2 keys.
+    assert_eq!(proof.key_values().len(), 2);
+    // Child of \x20 not in proof.
+    assert!(
+        !proof
+            .key_values()
+            .iter()
+            .any(|(k, _)| k.as_ref() == b"\x20\xab"),
+        "child of end key should not be included in the proof"
+    );
+    // End proof should only have 2 proof nodes.
+    assert_eq!(proof.end_proof().len(), 2);
+    verify_range_proof(None::<&[u8]>, Some(b"\x20"), &root_hash, &proof).unwrap();
 }
