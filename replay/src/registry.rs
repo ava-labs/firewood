@@ -14,6 +14,4 @@ firewood_metrics::define_metrics! {
         /// Number of commit calls
         COMMIT_COUNT  = "replay.commit"
     },
-    gauges: {},
-    histograms: {}
 }

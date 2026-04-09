@@ -48,5 +48,4 @@ firewood_metrics::define_metrics! {
         /// Maximum memory capacity of node cache (bytes)
         CACHE_MEMORY_LIMIT   = "node.cache.memory_limit"
     },
-    histograms: {}
 }

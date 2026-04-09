@@ -110,6 +110,9 @@ pub fn expensive_metrics_enabled() -> bool {
 /// Because the doc comment is used for both the constant and the describe call,
 /// the metric name and its description are guaranteed to stay in sync.
 ///
+/// All three sections (`counters`, `gauges`, `histograms`) are optional — include only the
+/// sections your module actually uses.
+///
 /// ```rust
 /// firewood_metrics::define_metrics! {
 ///     counters: {
@@ -126,59 +129,149 @@ pub fn expensive_metrics_enabled() -> bool {
 ///     }
 /// }
 /// ```
+///
+/// Sections that are not needed can be omitted entirely:
+///
+/// ```rust
+/// firewood_metrics::define_metrics! {
+///     counters: {
+///         /// Total number of commits
+///         COMMITS_TOTAL = "commits_total",
+///     },
+/// }
+/// ```
 #[macro_export]
 macro_rules! define_metrics {
-    // Full form with all three sections.
     (
+        $(
+            $section:ident: {
+                $(
+                    $(#[doc = $c_desc:literal])+
+                    $c_id:ident = $c_name:literal
+                ),* $(,)?
+            }
+        ),* $(,)?
+    ) => {
+        $crate::define_metrics! {
+            @munch
+            [] []
+            $(
+                $section: {
+                    $(
+                        $(#[doc = $c_desc])+
+                        $c_id = $c_name,
+                    )*
+                },
+            )*
+        }
+    };
+
+    (
+        @munch [ $($decl:tt)* ] [ $($body:tt)* ]
         counters: {
             $(
-                $(#[doc = $c_desc:literal])+
-                $c_id:ident = $c_name:literal
-            ),* $(,)?
+                $(#[doc = $desc:literal])+
+                $id:ident = $name:literal,
+            )*
         },
+        $($tt:tt)*
+    ) => {
+        $crate::define_metrics! {
+            @munch
+            [
+                // Metric name constants are intentionally crate-private. They are used
+                // only at recording callsites (firewood_increment!, firewood_set!) within
+                // the same crate. Exposing them as `pub` would make the metric name strings
+                // part of the crate's public API.
+                $($decl)*
+                $(
+                    #[doc = concat!($($desc),+)]
+                    pub(crate) const $id: &str = $name;
+                )*
+            ]
+            [
+                $($body)*
+                $(
+                    ::metrics::describe_counter!($name, concat!($($desc),+));
+                )*
+            ]
+            $($tt)*
+        }
+    };
+    (
+        @munch [ $($decl:tt)* ] [ $($body:tt)* ]
         gauges: {
             $(
-                $(#[doc = $g_desc:literal])+
-                $g_id:ident = $g_name:literal
-            ),* $(,)?
+                $(#[doc = $desc:literal])+
+                $id:ident = $name:literal,
+            )*
         },
+        $($tt:tt)*
+    ) => {
+        $crate::define_metrics! {
+            @munch
+            [
+                // Metric name constants are intentionally crate-private. They are used
+                // only at recording callsites (firewood_increment!, firewood_set!) within
+                // the same crate. Exposing them as `pub` would make the metric name strings
+                // part of the crate's public API.
+                $($decl)*
+                $(
+                    #[doc = concat!($($desc),+)]
+                    pub(crate) const $id: &str = $name;
+                )*
+            ]
+            [
+                $($body)*
+                $(
+                    ::metrics::describe_gauge!($name, concat!($($desc),+));
+                )*
+            ]
+            $($tt)*
+        }
+    };
+    (
+        @munch [ $($decl:tt)* ] [ $($body:tt)* ]
         histograms: {
             $(
-                $(#[doc = $h_desc:literal])+
-                $h_id:ident = $h_name:literal
-            ),* $(,)?
-        } $(,)?
+                $(#[doc = $desc:literal])+
+                $id:ident = $name:literal,
+            )*
+        },
+        $($tt:tt)*
     ) => {
-        // Metric name constants are intentionally crate-private. They are used
-        // only at recording callsites (firewood_increment!, firewood_set!) within
-        // the same crate. Exposing them as `pub` would make the metric name strings
-        // part of the crate's public API.
-        $(
-            #[doc = concat!($($c_desc),+)]
-            pub(crate) const $c_id: &str = $c_name;
-        )*
-        $(
-            #[doc = concat!($($g_desc),+)]
-            pub(crate) const $g_id: &str = $g_name;
-        )*
-        $(
-            #[doc = concat!($($h_desc),+)]
-            pub(crate) const $h_id: &str = $h_name;
-        )*
+        $crate::define_metrics! {
+            @munch
+            [
+                // Metric name constants are intentionally crate-private. They are used
+                // only at recording callsites (firewood_increment!, firewood_set!) within
+                // the same crate. Exposing them as `pub` would make the metric name strings
+                // part of the crate's public API.
+                $($decl)*
+                $(
+                    #[doc = concat!($($desc),+)]
+                    pub(crate) const $id: &str = $name;
+                )*
+            ]
+            [
+                $($body)*
+                $(
+                    ::metrics::describe_histogram!($name, concat!($($desc),+));
+                )*
+            ]
+            $($tt)*
+        }
+    };
+    (
+        @munch [ $($decl:tt)* ] [ $($body:tt)* ]
+    ) => {
+        $($decl)*
 
         /// Registers all metric descriptions with the global recorder.
         ///
         /// Call once at startup before recording any metrics.
         pub fn register() {
-            $(
-                ::metrics::describe_counter!($c_name, concat!($($c_desc),+));
-            )*
-            $(
-                ::metrics::describe_gauge!($g_name, concat!($($g_desc),+));
-            )*
-            $(
-                ::metrics::describe_histogram!($h_name, concat!($($h_desc),+));
-            )*
+            $($body)*
         }
     };
 }

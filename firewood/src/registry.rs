@@ -36,5 +36,4 @@ firewood_metrics::define_metrics! {
         /// Maximum number of persist permits
         MAX_PERMITS            = "persist.max_permits"
     },
-    histograms: {}
 }

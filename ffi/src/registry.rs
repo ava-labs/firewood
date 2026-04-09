@@ -12,7 +12,6 @@ firewood_metrics::define_metrics! {
         /// Count of range proof merges via FFI
         MERGE_COUNT      = "firewood.ffi.merge"
     },
-    gauges: {},
     histograms: {
         /// Wall-clock duration of gather_rendered_metrics calls
         GATHER_DURATION_SECONDS = "ffi.gather_duration_seconds"
