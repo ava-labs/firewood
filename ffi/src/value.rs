@@ -12,7 +12,7 @@ pub(crate) mod results;
 pub use self::borrowed::{BorrowedBatchOps, BorrowedBytes, BorrowedSlice};
 use self::display_hex::DisplayHex;
 pub use self::hash_key::HashKey;
-pub use self::kvp::{BatchOp, BorrowedKeyValuePair, OwnedKeyValueBatch, OwnedKeyValuePair};
+pub use self::kvp::{BatchOp, OwnedKeyValueBatch, OwnedKeyValuePair};
 pub use self::owned::{OwnedBytes, OwnedSlice};
 pub use self::rendered_metrics::{
     OwnedBucket, OwnedBucketSpan, OwnedClassicHistogram, OwnedLabelPair, OwnedMetric,
