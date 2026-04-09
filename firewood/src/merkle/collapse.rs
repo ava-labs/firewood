@@ -1,7 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::mem;
+use std::cmp::Ordering;
 
 use firewood_storage::{
     Child, Mutable, Node, NodeStore, Path, PathComponent, Propose, ReadableStorage,
@@ -21,20 +21,46 @@ fn child_in_range(
     start_nib: &[u8],
     end_nib: &[u8],
 ) -> bool {
-    let mut child_path = Vec::with_capacity(acc_prefix.len().saturating_add(1));
-    child_path.extend_from_slice(acc_prefix);
-    child_path.push(nibble.as_u8());
-    child_path.as_slice() >= start_nib && child_path.as_slice() <= end_nib
+    let depth = acc_prefix.len();
+    let child_nib = nibble.0.as_u8();
+
+    // Split each boundary at `depth`. The left half is compared against
+    // the same-length prefix of acc_prefix; the right half's first element
+    // (if any) is compared against child_nib to break ties.
+    let split = depth.min(start_nib.len());
+    let (start_pre, start_rest) = start_nib.split_at(split);
+    let (acc_start, _) = acc_prefix.split_at(split);
+    let above_start = match acc_start.cmp(start_pre) {
+        Ordering::Greater => true,
+        Ordering::Less => false,
+        Ordering::Equal => match start_rest.first() {
+            None => true,
+            Some(&boundary) => child_nib >= boundary,
+        },
+    };
+
+    let split = depth.min(end_nib.len());
+    let (end_pre, end_rest) = end_nib.split_at(split);
+    let (acc_end, _) = acc_prefix.split_at(split);
+    let below_end = match acc_end.cmp(end_pre) {
+        Ordering::Less => true,
+        Ordering::Greater => false,
+        Ordering::Equal => match end_rest.first() {
+            None => false,
+            Some(&boundary) => child_nib <= boundary,
+        },
+    };
+
+    above_start && below_end
 }
 
 /// Builds the accumulated nibble prefix for a child node by extending
 /// `prefix` with the descent nibble and the child's `partial_path`.
 fn build_child_prefix(prefix: &[u8], nibble: u8, node: &Node) -> Box<[u8]> {
     let pp = &node.partial_path().0;
-    let capacity = prefix
-        .len()
-        .wrapping_add(mem::size_of::<u8>())
-        .wrapping_add(pp.len());
+    // slice lengths are bounded by isize::MAX. Sum cannot overflow.
+    #[allow(clippy::arithmetic_side_effects)]
+    let capacity = prefix.len() + 1 + pp.len();
     let mut v = Vec::with_capacity(capacity);
     v.extend_from_slice(prefix);
     v.push(nibble);
