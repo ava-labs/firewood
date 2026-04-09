@@ -5,12 +5,16 @@
 
 firewood_metrics::define_metrics! {
     counters: {
-        CACHED_VIEW_MISS = "ffi.cached_view.miss"   : "Count of cached view misses",
-        CACHED_VIEW_HIT  = "ffi.cached_view.hit"    : "Count of cached view hits",
-        MERGE_COUNT      = "firewood.ffi.merge"      : "Count of range proof merges via FFI"
+        /// Count of cached view misses
+        CACHED_VIEW_MISS = "ffi.cached_view.miss",
+        /// Count of cached view hits
+        CACHED_VIEW_HIT  = "ffi.cached_view.hit",
+        /// Count of range proof merges via FFI
+        MERGE_COUNT      = "firewood.ffi.merge"
     },
     gauges: {},
     histograms: {
-        GATHER_DURATION_SECONDS = "ffi.gather_duration_seconds" : "Wall-clock duration of gather_rendered_metrics calls"
+        /// Wall-clock duration of gather_rendered_metrics calls
+        GATHER_DURATION_SECONDS = "ffi.gather_duration_seconds"
     }
 }

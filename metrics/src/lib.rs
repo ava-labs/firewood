@@ -102,24 +102,27 @@ pub fn expensive_metrics_enabled() -> bool {
 
 /// Defines metric name constants and outputs a `register()` function from a single schema.
 ///
-/// Each entry has the form `IDENT = "metric.name" : "description"` and expands to:
+/// Each entry has the form `/// description\nIDENT = "metric.name"` and expands to:
 /// - A `pub(crate) const IDENT: &str = "metric.name"` that can be referenced at recording callsites
 /// - A `::metrics::describe_counter!` / `::metrics::describe_gauge!` / `::metrics::describe_histogram!`
 ///   call in `register()`
 ///
-/// Because the same literal appears in both the constant and the describe call,
+/// Because the doc comment is used for both the constant and the describe call,
 /// the metric name and its description are guaranteed to stay in sync.
 ///
 /// ```rust
 /// firewood_metrics::define_metrics! {
 ///     counters: {
-///         COMMITS_TOTAL  = "commits_total"   : "Total number of commits",
+///         /// Total number of commits
+///         COMMITS_TOTAL  = "commits_total",
 ///     },
 ///     gauges: {
-///         ACTIVE_REVISIONS = "active_revisions" : "Current number of revisions held in memory",
+///         /// Current number of revisions held in memory
+///         ACTIVE_REVISIONS = "active_revisions",
 ///     },
 ///     histograms: {
-///         OP_DURATION_SECONDS = "op_duration_seconds" : "Duration of operations in seconds",
+///         /// Duration of operations in seconds
+///         OP_DURATION_SECONDS = "op_duration_seconds",
 ///     }
 /// }
 /// ```
@@ -129,17 +132,20 @@ macro_rules! define_metrics {
     (
         counters: {
             $(
-                $c_id:ident = $c_name:literal : $c_desc:literal
+                $(#[doc = $c_desc:literal])+
+                $c_id:ident = $c_name:literal
             ),* $(,)?
         },
         gauges: {
             $(
-                $g_id:ident = $g_name:literal : $g_desc:literal
+                $(#[doc = $g_desc:literal])+
+                $g_id:ident = $g_name:literal
             ),* $(,)?
         },
         histograms: {
             $(
-                $h_id:ident = $h_name:literal : $h_desc:literal
+                $(#[doc = $h_desc:literal])+
+                $h_id:ident = $h_name:literal
             ),* $(,)?
         } $(,)?
     ) => {
@@ -148,15 +154,15 @@ macro_rules! define_metrics {
         // the same crate. Exposing them as `pub` would make the metric name strings
         // part of the crate's public API.
         $(
-            #[doc = $c_desc]
+            #[doc = concat!($($c_desc),+)]
             pub(crate) const $c_id: &str = $c_name;
         )*
         $(
-            #[doc = $g_desc]
+            #[doc = concat!($($g_desc),+)]
             pub(crate) const $g_id: &str = $g_name;
         )*
         $(
-            #[doc = $h_desc]
+            #[doc = concat!($($h_desc),+)]
             pub(crate) const $h_id: &str = $h_name;
         )*
 
@@ -165,34 +171,14 @@ macro_rules! define_metrics {
         /// Call once at startup before recording any metrics.
         pub fn register() {
             $(
-                ::metrics::describe_counter!($c_name, $c_desc);
+                ::metrics::describe_counter!($c_name, concat!($($c_desc),+));
             )*
             $(
-                ::metrics::describe_gauge!($g_name, $g_desc);
+                ::metrics::describe_gauge!($g_name, concat!($($g_desc),+));
             )*
             $(
-                ::metrics::describe_histogram!($h_name, $h_desc);
+                ::metrics::describe_histogram!($h_name, concat!($($h_desc),+));
             )*
-        }
-    };
-
-    // Backward-compatible form without histograms: delegates to the full form.
-    (
-        counters: {
-            $(
-                $c_id:ident = $c_name:literal : $c_desc:literal
-            ),* $(,)?
-        },
-        gauges: {
-            $(
-                $g_id:ident = $g_name:literal : $g_desc:literal
-            ),* $(,)?
-        } $(,)?
-    ) => {
-        $crate::define_metrics! {
-            counters: { $($c_id = $c_name : $c_desc),* },
-            gauges:   { $($g_id = $g_name : $g_desc),* },
-            histograms: {}
         }
     };
 }

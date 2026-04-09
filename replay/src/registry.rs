@@ -5,10 +5,15 @@
 
 firewood_metrics::define_metrics! {
     counters: {
-        PROPOSE_NS    = "replay.propose_ns" : "Time spent in propose (ns)",
-        PROPOSE_COUNT = "replay.propose"    : "Number of propose calls",
-        COMMIT_NS     = "replay.commit_ns"  : "Time spent in commit (ns)",
-        COMMIT_COUNT  = "replay.commit"     : "Number of commit calls"
+        /// Time spent in propose (ns)
+        PROPOSE_NS    = "replay.propose_ns",
+        /// Number of propose calls
+        PROPOSE_COUNT = "replay.propose",
+        /// Time spent in commit (ns)
+        COMMIT_NS     = "replay.commit_ns",
+        /// Number of commit calls
+        COMMIT_COUNT  = "replay.commit"
     },
-    gauges: {}
+    gauges: {},
+    histograms: {}
 }
