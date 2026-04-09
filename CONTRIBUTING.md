@@ -29,6 +29,11 @@ After submitting a PR, we'll run all the tests and verify your code meets our su
 
 Resolve any warnings or errors before making your PR.
 
+Also, if you update any versions of packages, notably the MSRV (Minimum Supported Rust Version), you ought to update the nix ffi flake lock file to pin compatible versions of nix packages as well:
+```
+./scripts/run-just.sh update-ffi-flake
+```
+
 ## How to submit changes
 
 To create a PR, fork firewood, and use GitHub to create the PR. We typically prioritize reviews in the middle of the next work day,
