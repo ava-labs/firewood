@@ -186,7 +186,7 @@ func convertMetric(c *C.OwnedMetric) *dto.Metric {
 		m.Counter = &dto.Counter{Value: proto.Float64(float64(val))}
 	case C.OwnedMetricValue_Gauge:
 		val := *(*C.double)(unsafe.Pointer(&c.value.anon0))
-		m.Gauge = &dto.Gauge{Value: (*float64)(&val)}
+		m.Gauge = &dto.Gauge{Value: proto.Float64(float64(val))}
 	case C.OwnedMetricValue_Summary:
 		s := (*C.OwnedSummary)(unsafe.Pointer(&c.value.anon0))
 		m.Summary = convertSummary(s)
