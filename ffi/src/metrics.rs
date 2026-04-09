@@ -57,10 +57,12 @@ pub fn setup_metrics() -> Result<(), Box<dyn Error>> {
     firewood_replay::registry::register();
     jemalloc_metrics::register();
 
-    let builder = PrometheusBuilder::new().set_native_histogram_for_metric(
-        Matcher::Full(crate::registry::GATHER_DURATION_SECONDS.to_owned()),
-        NativeHistogramConfig::new(2.0, 160, 1e-9).expect("valid config"),
-    );
+    let builder = PrometheusBuilder::new()
+        // TEMP: #1867 will expose this inside the `register` method.
+        .set_native_histogram_for_metric(
+            Matcher::Full(crate::registry::GATHER_DURATION_SECONDS.to_owned()),
+            NativeHistogramConfig::new(2.0, 160, 1e-9).expect("valid config"),
+        );
     let handle = builder.install_recorder()?;
 
     RECORDER
