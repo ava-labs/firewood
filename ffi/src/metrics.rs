@@ -5,9 +5,12 @@ use std::error::Error;
 use std::net::Ipv6Addr;
 use std::sync::OnceLock;
 
-use crate::jemalloc_metrics;
+use crate::rendered_metrics::MapIntoCollection;
+use crate::{OwnedRenderedMetrics, jemalloc_metrics};
 use firewood_metrics::MetricsContext;
-use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use metrics_exporter_prometheus::{
+    Matcher, NativeHistogramConfig, PrometheusBuilder, PrometheusHandle,
+};
 use oxhttp::Server;
 use oxhttp::model::{Body, Response, StatusCode};
 use std::net::Ipv4Addr;
@@ -54,7 +57,12 @@ pub fn setup_metrics() -> Result<(), Box<dyn Error>> {
     firewood_replay::registry::register();
     jemalloc_metrics::register();
 
-    let builder = PrometheusBuilder::new();
+    let builder = PrometheusBuilder::new()
+        // TEMP: #1867 will expose this inside the `register` method.
+        .set_native_histogram_for_metric(
+            Matcher::Full(crate::registry::GATHER_DURATION_SECONDS.to_owned()),
+            NativeHistogramConfig::new(2.0, 160, 1e-9).expect("valid config"),
+        );
     let handle = builder.install_recorder()?;
 
     RECORDER
@@ -103,4 +111,14 @@ pub fn gather_metrics() -> Result<String, String> {
     };
     jemalloc_metrics::refresh();
     Ok(recorder.render())
+}
+
+pub fn gather_rendered_metrics() -> Result<OwnedRenderedMetrics, String> {
+    let recorder = RECORDER.get().ok_or("recorder not initialized")?;
+    jemalloc_metrics::refresh();
+    let start = std::time::Instant::now();
+    let result = recorder.render_snapshot_and_descriptions().map_into();
+    let elapsed = start.elapsed();
+    metrics::histogram!(crate::registry::GATHER_DURATION_SECONDS).record(elapsed.as_secs_f64());
+    Ok(result)
 }
