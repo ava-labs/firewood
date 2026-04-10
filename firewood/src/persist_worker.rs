@@ -44,7 +44,7 @@ use std::{
 };
 
 use firewood_metrics::{
-    current_metrics_context, firewood_increment, firewood_set, set_metrics_context,
+    GaugeExt, current_metrics_context, firewood_counter, firewood_gauge, set_metrics_context,
 };
 use firewood_storage::{
     Committed, FileBacked, FileIoError, HashedNodeReader, LinearAddress, NodeStore,
@@ -280,7 +280,7 @@ struct PersistChannel {
 impl PersistChannel {
     fn new(max_permits: NonZeroU64, persist_threshold: u64) -> Self {
         // Emit once at construction since `max_permits` is constant.
-        firewood_set!(crate::registry::MAX_PERMITS, max_permits.get());
+        firewood_gauge!(MAX_PERMITS).set_integer(max_permits.get());
 
         Self {
             state: Mutex::new(PersistChannelState {
@@ -335,7 +335,7 @@ impl PersistChannel {
         // releasing permits. Duration is bounded by how fast the background thread can write a
         // revision to disk. Under slow I/O this can stall commits for hundreds of milliseconds.
         while state.permits_available == 0 && !state.shutdown {
-            firewood_increment!(crate::registry::COMMIT_BLOCKED, 1);
+            firewood_counter!(COMMIT_BLOCKED).increment(1);
             self.commit_not_full.wait(&mut state);
         }
 
@@ -450,7 +450,7 @@ struct PersistChannelState {
 impl PersistChannelState {
     /// Emits the current permit gauge.
     fn emit_permits(&self) {
-        firewood_set!(crate::registry::PERMITS_AVAILABLE, self.permits_available);
+        firewood_gauge!(PERMITS_AVAILABLE).set_integer(self.permits_available);
     }
 }
 

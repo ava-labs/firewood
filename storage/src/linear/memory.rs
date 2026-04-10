@@ -12,7 +12,7 @@
 
 use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
 use crate::NodeHashAlgorithm;
-use firewood_metrics::firewood_increment;
+use firewood_metrics::firewood_counter;
 use parking_lot::Mutex;
 use std::io::Cursor;
 
@@ -61,7 +61,7 @@ impl ReadableStorage for MemStore {
     }
 
     fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
-        firewood_increment!(crate::registry::READ_NODE, 1, "from" => "memory");
+        firewood_counter!(READ_NODE, "from" => "memory").increment(1);
         let bytes = self
             .bytes
             .lock()

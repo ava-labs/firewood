@@ -141,14 +141,10 @@ impl CachedNode {
     /// This is called after cache operations to keep metrics in sync.
     /// The `current_size()` and `max_size()` methods are simple field accesses,
     /// so this is very cheap to call frequently.
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "Precision loss is acceptable for metrics; only affects values > 2^52 bytes"
-    )]
     pub(crate) fn update_cache_metrics(cache: &lru_mem::LruCache<LinearAddress, Self>) {
-        use firewood_metrics::firewood_set;
-        firewood_set!(registry::CACHE_MEMORY_USED, cache.current_size() as f64);
-        firewood_set!(registry::CACHE_MEMORY_LIMIT, cache.max_size() as f64);
+        use firewood_metrics::{GaugeExt, firewood_gauge};
+        firewood_gauge!(CACHE_MEMORY_USED).set_integer(cache.current_size());
+        firewood_gauge!(CACHE_MEMORY_LIMIT).set_integer(cache.max_size());
     }
 }
 

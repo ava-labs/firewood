@@ -26,6 +26,7 @@ use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::branch::{ReadSerializable, Serializable};
 use crate::nodestore::NodeStoreHeader;
+use firewood_metrics::firewood_counter;
 use integer_encoding::VarIntReader;
 
 use std::io::{Error, ErrorKind, Read};
@@ -252,7 +253,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
                 *free_stored_area_addr = free_head.next_free_block;
             }
 
-            firewood_metrics::firewood_increment!(crate::registry::SPACE_REUSED, index.size(), "index" => index_name(index));
+            firewood_counter!(SPACE_REUSED, "index" => index_name(index)).increment(index.size());
 
             // Return the address of the newly allocated block.
             trace!("Allocating from free list: addr: {address:?}, size: {index}");
@@ -260,7 +261,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
         }
 
         trace!("No free blocks of sufficient size {index} found");
-        firewood_metrics::firewood_increment!(crate::registry::SPACE_FROM_END, index.size(), "index" => index_name(index));
+        firewood_counter!(SPACE_FROM_END, "index" => index_name(index)).increment(index.size());
         Ok(None)
     }
 
@@ -319,8 +320,9 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
 
         let (area_size_index, _) = self.area_index_and_size(addr)?;
         trace!("Deleting node at {addr:?} of size {area_size_index}");
-        firewood_metrics::firewood_increment!(crate::registry::DELETE_NODE, 1, "index" => index_name(area_size_index));
-        firewood_metrics::firewood_increment!(crate::registry::SPACE_FREED, area_size_index.size(), "index" => index_name(area_size_index));
+        firewood_counter!(DELETE_NODE, "index" => index_name(area_size_index)).increment(1);
+        firewood_counter!(SPACE_FREED, "index" => index_name(area_size_index))
+            .increment(area_size_index.size());
 
         // The area that contained the node is now free.
         let mut stored_area_bytes = Vec::new();

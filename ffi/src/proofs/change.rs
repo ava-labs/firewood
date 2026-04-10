@@ -4,7 +4,7 @@
 use std::convert::Into;
 use std::num::NonZeroUsize;
 
-use firewood_metrics::firewood_increment;
+use firewood_metrics::firewood_counter;
 #[cfg(feature = "ethhash")]
 use firewood_storage::TrieHash;
 #[cfg(feature = "ethhash")]
@@ -250,7 +250,7 @@ impl<'db> ProposedChangeProofContext<'db> {
 
         let result = proposal_handle.commit_proposal();
         let hash = result?.map(Into::into);
-        firewood_increment!(crate::registry::MERGE_COUNT, 1, "change" => "commit");
+        firewood_counter!(MERGE_COUNT, "change" => "commit").increment(1);
         Ok(hash)
     }
 }

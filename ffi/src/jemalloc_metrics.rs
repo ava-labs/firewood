@@ -7,7 +7,7 @@
 //! through the `metrics` crate, mirroring the same stats that `metriki-jemalloc`
 //! exposes: active, allocated, metadata, mapped, resident, retained.
 
-use firewood_metrics::firewood_set;
+use firewood_metrics::GaugeExt;
 use firewood_storage::logger;
 use metrics::describe_gauge;
 use tikv_jemalloc_ctl::{epoch, stats};
@@ -72,7 +72,7 @@ pub fn refresh() {
 
     for stat in JEMALLOC_STATS {
         match (stat.read)() {
-            Ok(v) => firewood_set!(stat.name, v),
+            Ok(v) => ::metrics::gauge!(stat.name).set_integer(v),
             Err(e) => {
                 logger::warn!("failed to read jemalloc stat {}: {e}", stat.name);
             }
