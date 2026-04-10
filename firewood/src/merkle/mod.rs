@@ -6,6 +6,7 @@ pub(crate) mod tests;
 
 pub(crate) mod changes;
 pub(crate) mod childmask;
+pub(crate) mod collapse;
 mod merge;
 /// Parallel merkle
 pub mod parallel;
