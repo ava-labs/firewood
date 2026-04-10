@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775720227828,
+  "lastUpdate": 1775807002678,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -2302,6 +2302,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 82.68192902798911,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Joachim Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "db634eead1af8a9c7fd770fc64aa1a6d0f556cf2",
+          "message": "feat(metrics): export prometheus metrics as structured data (#1868)\n\n## Why this should be merged\n\nThe Go FFI layer's `Gatherer` type collects Prometheus metrics by\ncalling into\nRust to render the text format, then parsing that text back into\n`dto.MetricFamily` structs. This text round-trip is wasteful and, more\nimportantly, loses fidelity for Native Histograms — the Prometheus text\nformat\ncannot represent them without downgrading to a classic histogram.\n\nThis PR eliminates the round-trip by adding a new `fwd_gather_rendered`\nFFI\nfunction that returns structured metric data directly.\n`Gatherer.Gather()` now\ncalls this structured path. The old text-based implementation is\npreserved as\n`TextGatherer` and marked deprecated.\n\nAs a demonstration of the structured path, `ffi_gather_duration_seconds`\nis\nregistered as a Native Histogram so that its full resolution is\npreserved\nend-to-end.\n\n## How this works\n\nThe upstream `metrics-exporter-prometheus` crate only exposed a text\nrenderer.\nA [fork](https://github.com/demosdemon/metrics.git) adds\n`PrometheusHandle::render_snapshot_and_descriptions()`, which returns a\nsnapshot of the registry as structured `render::MetricFamily` values\ninstead of\na text blob. This is patched in via `[patch.crates-io]` in the workspace\n`Cargo.toml`; https://github.com/metrics-rs/metrics/pull/686 is the\nupstream PR.\n\nOn the Rust side, `ffi/src/value/rendered_metrics.rs` defines\nC-compatible\nowned types (`OwnedMetricFamily`, `OwnedMetric`, `OwnedMetricValue`,\netc.) that\nmirror the Prometheus data model, including both classic and native\nhistograms.\n`From` impls convert from the `render::*` types into these owned types.\n`fwd_gather_rendered` calls `gather_rendered_metrics`, which snapshots\nthe\nregistry, converts the result, records its own wall-clock duration as a\nNative\nHistogram observation, and returns the owned slice to the caller.\n`fwd_free_rendered_metrics` drops the slice and reclaims the memory.\n\nOn the Go side, `GatherRenderedMetrics` calls `fwd_gather_rendered`,\nwalks the\nreturned C structs via `unsafe.Pointer` casts, and constructs\n`dto.MetricFamily` protobuf values. Because all conversion happens\nbefore\n`fwd_free_rendered_metrics` is called, the C memory remains valid\nthroughout.\n\n## How this was tested\n\n- `TestGatherRenderedMetrics` (new) exercises the full structured path:\nit\n  calls `GatherRenderedMetrics` several times, locates the\n`ffi_gather_duration_seconds` Native Histogram family, and asserts that\nthe\nsample count, sample sum, schema, zero threshold, and bucket spans are\nall\n  populated correctly.\n- Existing `TestMetrics` continues to pass, covering the deprecated text\npath.\n- `cargo nextest run --workspace --features ethhash,logger\n--all-targets`\n\n## Breaking Changes\n\n- [ ] firewood\n- [ ] firewood-storage\n- [x] firewood-ffi (C api) — adds `fwd_gather_rendered` and\n`fwd_free_rendered_metrics`; new C structs for structured metric data\n- [x] firewood-go (Go api) — `Gatherer.Gather()` now uses the structured\npath; `TextGatherer` added as deprecated alias for the old behaviour\n- [ ] fwdctl",
+          "timestamp": "2026-04-09T20:38:43Z",
+          "url": "https://github.com/ava-labs/firewood/commit/db634eead1af8a9c7fd770fc64aa1a6d0f556cf2"
+        },
+        "date": 1775807002331,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 162.1678208235139,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6166.451487858945,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 117.04943797871991,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5960.049691796236,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 85.92726913210389,
             "unit": "block_accept_ms/ggas"
           }
         ]
