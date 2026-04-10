@@ -156,6 +156,22 @@ impl<T> Children<Option<T>> {
         self.into_iter()
             .filter_map(|(pc, opt)| opt.as_ref().map(|v| (pc, v)))
     }
+
+    /// If exactly one child is present, takes and returns it along with its
+    /// index. Returns `None` if zero or more than one child is present.
+    pub fn take_only_child(&mut self) -> Option<(PathComponent, T)> {
+        let mut children = self.iter_present();
+
+        // get first child, return None if not present
+        let (idx, _) = children.next()?;
+        if children.next().is_some() {
+            // second child found
+            return None;
+        }
+        drop(children);
+
+        self.take(idx).map(|child| (idx, child))
+    }
 }
 
 impl<T> Default for Children<Option<T>> {
