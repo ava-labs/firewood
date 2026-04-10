@@ -75,6 +75,20 @@ pub struct HistogramMetricConfig {
     pub config: HistogramConfig,
 }
 
+/// Strips exactly one leading ASCII space from a doc string.
+///
+/// `///` doc comments are desugared to `#[doc = " text"]` by the Rust compiler — the
+/// space before the text is an artifact of the `/// ` syntax, not part of the description.
+/// This function removes that single leading space without affecting intentional indentation
+/// (two or more leading spaces are preserved as-is).
+///
+/// Used inside [`define_metrics!`] when forwarding descriptions to the `metrics::describe_*!`
+/// family of macros.
+#[must_use]
+pub fn strip_doc_leading_space(s: &str) -> &str {
+    s.strip_prefix(' ').unwrap_or(s)
+}
+
 /// Metric configuration context for the current thread.
 ///
 /// This is set at API boundaries (e.g., FFI entrypoints) and read when deciding
@@ -241,7 +255,7 @@ macro_rules! define_metrics {
             [
                 $($body)*
                 $(
-                    ::metrics::describe_counter!($name, concat!($($desc),+));
+                    ::metrics::describe_counter!($name, $crate::strip_doc_leading_space(concat!($($desc),+)));
                 )*
             ]
             [ $($hcfg)* ]
@@ -275,7 +289,7 @@ macro_rules! define_metrics {
             [
                 $($body)*
                 $(
-                    ::metrics::describe_gauge!($name, concat!($($desc),+));
+                    ::metrics::describe_gauge!($name, $crate::strip_doc_leading_space(concat!($($desc),+)));
                 )*
             ]
             [ $($hcfg)* ]
@@ -350,7 +364,7 @@ macro_rules! define_metrics {
             ]
             [
                 $($body)*
-                ::metrics::describe_histogram!($name, concat!($($desc),+));
+                ::metrics::describe_histogram!($name, $crate::strip_doc_leading_space(concat!($($desc),+)));
             ]
             [ $($hcfg)* ]
             { $($rest)* }
@@ -377,7 +391,7 @@ macro_rules! define_metrics {
             ]
             [
                 $($body)*
-                ::metrics::describe_histogram!($name, concat!($($desc),+));
+                ::metrics::describe_histogram!($name, $crate::strip_doc_leading_space(concat!($($desc),+)));
             ]
             [
                 $($hcfg)*
@@ -415,7 +429,7 @@ macro_rules! define_metrics {
             ]
             [
                 $($body)*
-                ::metrics::describe_histogram!($name, concat!($($desc),+));
+                ::metrics::describe_histogram!($name, $crate::strip_doc_leading_space(concat!($($desc),+)));
             ]
             [
                 $($hcfg)*
