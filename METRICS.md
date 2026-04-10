@@ -31,10 +31,6 @@ uses the correct bucket strategy for each histogram.
 ```go
 import "github.com/ava-labs/firewood/ffi"
 
-// Option A – start with a built-in HTTP exporter
-if err := ffi.StartMetricsWithExporter(9000); err != nil { ... }
-
-// Option B – start without exporter; pull via the Gatherer interface
 if err := ffi.StartMetrics(); err != nil { ... }
 
 gatherer := ffi.Gatherer{}
@@ -45,7 +41,7 @@ families, err := gatherer.Gather()
 with Go-side proof-serialization histograms into a single `[]*dto.MetricFamily` slice.
 
 > **Note:** only one metrics instance can be created per process. Calling
-> `StartMetrics` or `StartMetricsWithExporter` a second time returns an error.
+> `StartMetrics` a second time returns an error.
 
 ## Expensive vs. cheap metrics
 

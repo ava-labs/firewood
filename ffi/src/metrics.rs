@@ -2,7 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::error::Error;
-use std::net::Ipv6Addr;
 use std::sync::OnceLock;
 
 use crate::rendered_metrics::MapIntoCollection;
@@ -12,10 +11,6 @@ use firewood_metrics::{MetricsContext, firewood_histogram};
 use metrics_exporter_prometheus::{
     Matcher, NativeHistogramConfig, PrometheusBuilder, PrometheusHandle,
 };
-use oxhttp::Server;
-use oxhttp::model::{Body, Response, StatusCode};
-use std::net::Ipv4Addr;
-use std::time::Duration;
 
 static RECORDER: OnceLock<PrometheusHandle> = OnceLock::new();
 
@@ -97,47 +92,6 @@ fn apply_histogram_config(
         // non_exhaustive - if new configs are added, default to returning the unmodified builder
         _ => builder,
     })
-}
-
-/// Starts metrics recorder along with an exporter over a specified port.
-/// This happens on a per-process basis, meaning that the metrics system
-/// cannot be initialized if it has already been set up in the same process.
-pub fn setup_metrics_with_exporter(metrics_port: u16) -> Result<(), Box<dyn Error>> {
-    setup_metrics()?;
-
-    let recorder = RECORDER.get().ok_or("recorder not initialized")?;
-    Server::new(move |request| {
-        if request.method() == "GET" {
-            jemalloc_metrics::refresh();
-            Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "text/plain")
-                .body(Body::from(recorder.render()))
-                .expect("failed to build response")
-        } else {
-            Response::builder()
-                .status(StatusCode::METHOD_NOT_ALLOWED)
-                .body(Body::from("Method not allowed"))
-                .expect("failed to build response")
-        }
-    })
-    .bind((Ipv4Addr::LOCALHOST, metrics_port))
-    .bind((Ipv6Addr::LOCALHOST, metrics_port))
-    .with_global_timeout(Duration::from_secs(60 * 60))
-    .with_max_concurrent_connections(2)
-    .spawn()?;
-    Ok(())
-}
-
-/// Returns the latest metrics for this process.
-///
-/// Refreshes jemalloc stats before rendering so the returned snapshot is current.
-pub fn gather_metrics() -> Result<String, String> {
-    let Some(recorder) = RECORDER.get() else {
-        return Err(String::from("recorder not initialized"));
-    };
-    jemalloc_metrics::refresh();
-    Ok(recorder.render())
 }
 
 pub fn gather_rendered_metrics() -> Result<OwnedRenderedMetrics, String> {

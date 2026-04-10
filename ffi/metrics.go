@@ -11,10 +11,6 @@ package ffi
 // #cgo nocallback fwd_free_rendered_metrics
 // #cgo noescape fwd_start_metrics
 // #cgo nocallback fwd_start_metrics
-// #cgo noescape fwd_start_metrics_with_exporter
-// #cgo nocallback fwd_start_metrics_with_exporter
-// #cgo noescape fwd_gather
-// #cgo nocallback fwd_gather
 // #cgo noescape fwd_start_logs
 // #cgo nocallback fwd_start_logs
 import "C"
@@ -22,11 +18,9 @@ import "C"
 import (
 	"fmt"
 	"runtime"
-	"strings"
 	"unsafe"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/common/expfmt"
 	"google.golang.org/protobuf/proto"
 
 	dto "github.com/prometheus/client_model/go"
@@ -64,39 +58,10 @@ func (Gatherer) Gather() ([]*dto.MetricFamily, error) {
 	return GatherRenderedMetrics()
 }
 
-// TextGatherer is a [prometheus.Gatherer] that collects metrics from the
-// firewood library by parsing text-rendered metrics.
-//
-// Deprecated: Use [Gatherer] instead, which uses structured data and avoids
-// text rendering and parsing overhead.
-type TextGatherer struct{}
-
-func (TextGatherer) Gather() ([]*dto.MetricFamily, error) {
-	metrics, err := GatherMetrics()
-	if err != nil {
-		return nil, err
-	}
-
-	reader := strings.NewReader(metrics)
-
-	var parser expfmt.TextParser
-	parsedMetrics, err := parser.TextToMetricFamilies(reader)
-	if err != nil {
-		return nil, err
-	}
-
-	lst := make([]*dto.MetricFamily, 0, len(parsedMetrics))
-	for _, v := range parsedMetrics {
-		lst = append(lst, v)
-	}
-
-	return lst, nil
-}
-
 // GatherRenderedMetrics collects structured metrics from the global recorder
 // and returns them as prometheus protobuf metric families.
 // Returns an error if the global recorder is not initialized.
-// This method must be called after StartMetrics or StartMetricsWithExporter.
+// This method must be called after [StartMetrics].
 //
 // The result merges Rust-side metrics (via the native recorder) with Go-side
 // metrics (proof serialization timing) from an independent Go prometheus registry.
@@ -332,32 +297,9 @@ func convertNativeHistogram(c *C.OwnedNativeHistogram) *dto.Histogram {
 
 // StartMetrics starts the global recorder for metrics.
 // This function only needs to be called once.
-// An error is returned if this method is called a second time, or if it is
-// called after StartMetricsWithExporter.
 // This is best used in conjunction with the [Gatherer] type to collect metrics.
 func StartMetrics() error {
 	return getErrorFromVoidResult(C.fwd_start_metrics())
-}
-
-// StartMetricsWithExporter starts the global recorder for metrics along with an
-// HTTP exporter.
-// This function only needs to be called once.
-// An error is returned if this method is called a second time, if it is
-// called after StartMetrics, or if the exporter failed to start.
-func StartMetricsWithExporter(metricsPort uint16) error {
-	return getErrorFromVoidResult(C.fwd_start_metrics_with_exporter(C.uint16_t(metricsPort)))
-}
-
-// GatherMetrics collects metrics from global recorder.
-// Returns an error if the global recorder is not initialized.
-// This method must be called after StartMetrics or StartMetricsWithExporter
-func GatherMetrics() (string, error) {
-	bytes, err := getValueFromValueResult(C.fwd_gather())
-	if err != nil {
-		return "", err
-	}
-
-	return string(bytes), nil
 }
 
 // LogConfig configures logs for this process.
