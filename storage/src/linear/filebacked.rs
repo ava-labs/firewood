@@ -26,7 +26,7 @@ use std::num::NonZero;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 
-use firewood_metrics::{GaugeExt, firewood_counter, firewood_gauge};
+use firewood_metrics::{GaugeExt, firewood_counter, firewood_gauge, firewood_histogram};
 use lru::LruCache as EntryLruCache;
 use lru_mem::LruCache as MemLruCache;
 
@@ -121,6 +121,7 @@ impl ReadableStorage for FileBacked {
 
     fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
         firewood_counter!(READ_NODE, "from" => "file").increment(1);
+        firewood_counter!(IO_READ_COUNT).increment(1);
         Ok(PredictiveReader::new(self, addr))
     }
 
@@ -189,7 +190,11 @@ impl WritableStorage for FileBacked {
         // slow device this can be tens of milliseconds. Called per-node on the non-io-uring path.
         self.fd
             .write_all_at(object, offset)
-            .map(|()| object.len())
+            .map(|()| {
+                firewood_counter!(IO_WRITE_COUNT).increment(1);
+                firewood_counter!(IO_BYTES_WRITTEN).increment(object.len() as u64);
+                object.len()
+            })
             .map_err(|e| self.file_io_error(e, offset, Some("write".to_string())))
     }
 
@@ -254,6 +259,7 @@ struct PredictiveReader<'a> {
     offset: u64,
     len: usize,
     pos: usize,
+    bytes_read: u64,
     started: std::time::Instant,
 }
 
@@ -267,6 +273,7 @@ impl<'a> PredictiveReader<'a> {
             offset: start,
             len: 0,
             pos: 0,
+            bytes_read: 0,
             started: std::time::Instant::now(),
         }
     }
@@ -274,9 +281,9 @@ impl<'a> PredictiveReader<'a> {
 
 impl Drop for PredictiveReader<'_> {
     fn drop(&mut self) {
-        let elapsed = self.started.elapsed();
-        firewood_counter!(IO_READ_MS).increment(elapsed.as_millis() as u64);
-        firewood_counter!(IO_READ_COUNT).increment(1);
+        firewood_histogram!(cheap: IO_READ_DURATION_SECONDS)
+            .record(self.started.elapsed().as_secs_f64());
+        firewood_counter!(IO_BYTES_READ).increment(self.bytes_read);
     }
 }
 
@@ -299,6 +306,7 @@ impl Read for PredictiveReader<'_> {
         let max_to_return = std::cmp::min(buf.len(), self.len - self.pos);
         buf[..max_to_return].copy_from_slice(&self.buffer[self.pos..self.pos + max_to_return]);
         self.pos += max_to_return;
+        self.bytes_read += max_to_return as u64;
         Ok(max_to_return)
     }
 }

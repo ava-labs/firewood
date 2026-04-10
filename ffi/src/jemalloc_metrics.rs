@@ -21,32 +21,32 @@ struct JemallocStat {
 
 static JEMALLOC_STATS: &[JemallocStat] = &[
     JemallocStat {
-        name: "jemalloc.active_bytes",
+        name: "jemalloc_active_bytes",
         description: "Bytes in active pages allocated by jemalloc",
         read: stats::active::read,
     },
     JemallocStat {
-        name: "jemalloc.allocated_bytes",
+        name: "jemalloc_allocated_bytes",
         description: "Total bytes allocated by the application via jemalloc",
         read: stats::allocated::read,
     },
     JemallocStat {
-        name: "jemalloc.metadata_bytes",
+        name: "jemalloc_metadata_bytes",
         description: "Bytes of jemalloc internal metadata overhead",
         read: stats::metadata::read,
     },
     JemallocStat {
-        name: "jemalloc.mapped_bytes",
+        name: "jemalloc_mapped_bytes",
         description: "Bytes in active extents mapped by the allocator",
         read: stats::mapped::read,
     },
     JemallocStat {
-        name: "jemalloc.resident_bytes",
+        name: "jemalloc_resident_bytes",
         description: "Bytes in physically resident data pages mapped by jemalloc",
         read: stats::resident::read,
     },
     JemallocStat {
-        name: "jemalloc.retained_bytes",
+        name: "jemalloc_retained_bytes",
         description: "Bytes in virtual memory mappings retained by jemalloc",
         read: stats::retained::read,
     },

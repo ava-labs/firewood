@@ -21,11 +21,13 @@ import (
 var (
 	metricsPort     = uint16(3000)
 	expectedMetrics = map[string]dto.MetricType{
-		"proposal_commit":    dto.MetricType_COUNTER,
-		"proposal_commit_ms": dto.MetricType_COUNTER,
-		"flush_nodes":        dto.MetricType_COUNTER,
-		"insert":             dto.MetricType_COUNTER,
-		"space_from_end":     dto.MetricType_COUNTER,
+		"firewood_proposal_commits_total": dto.MetricType_COUNTER,
+		// TODO: histograms aren't exported via the http exporter. this test should
+		// use the rendered metrics gatherer instead. Next PR since this is large.
+		// "firewood_proposal_commit_duration_seconds": dto.MetricType_HISTOGRAM,
+		// "firewood_flush_duration_seconds":           dto.MetricType_HISTOGRAM,
+		"firewood_node_inserts_total":           dto.MetricType_COUNTER,
+		"firewood_storage_bytes_appended_total": dto.MetricType_COUNTER,
 		// jemalloc memory allocator gauges (bytes).
 		// jemalloc_retained_bytes is omitted because it can legitimately be zero
 		// on some platforms, and we assert that gauge values are positive below.
@@ -114,12 +116,12 @@ func TestGatherRenderedMetrics(t *testing.T) {
 	var histFamily *dto.MetricFamily
 	for _, mf := range allFamilies {
 		// prometheus metric names are normalized to lowercase with underscores
-		if mf.GetName() == "ffi_gather_duration_seconds" {
+		if mf.GetName() == "firewood_gather_duration_seconds" {
 			histFamily = mf
 			break
 		}
 	}
-	r.NotNil(histFamily, "ffi_gather_duration_seconds metric not found")
+	r.NotNil(histFamily, "firewood_gather_duration_seconds metric not found")
 	r.Equal(dto.MetricType_HISTOGRAM, histFamily.GetType())
 	r.NotEmpty(histFamily.GetMetric())
 

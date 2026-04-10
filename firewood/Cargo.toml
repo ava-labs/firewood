@@ -33,7 +33,6 @@ firewood-metrics.workspace = true
 firewood-storage.workspace = true
 hex.workspace = true
 integer-encoding.workspace = true
-metrics.workspace = true
 thiserror.workspace = true
 # Regular dependencies
 typed-builder = "0.23.2"
@@ -60,7 +59,6 @@ env_logger.workspace = true
 ethereum-types.workspace = true
 firewood-storage = { workspace = true, features = ["test_utils"] }
 firewood-triehash.workspace = true
-hex-literal.workspace = true
 pprof = { workspace = true, features = ["flamegraph"] }
 rand.workspace = true
 tempfile.workspace = true
@@ -88,6 +86,3 @@ harness = false
 
 [lints]
 workspace = true
-
-[package.metadata.cargo-machete]
-ignored = ["hex-literal"]

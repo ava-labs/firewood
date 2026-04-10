@@ -1,304 +1,277 @@
 # Firewood Metrics
 
-Firewood provides comprehensive metrics for monitoring database performance, resource utilization, and operational characteristics. Metrics are defined internally without a `firewood.` prefix; the prefix is added only at export time for consistency in dashboards.
+Firewood exposes metrics following [Prometheus naming conventions][prom-naming]:
+`firewood_{subsystem}_{noun}_{unit}`. Counters always end in `_total`. Histograms
+use base-unit suffixes (`_seconds`, `_bytes`). Gauges carry no `_total` suffix.
 
-**Export Behavior**:
-
-- **FFI/Go layer**: The custom HTTP renderer converts dots to underscores for Prometheus compatibility (no prefix added)
-- **Benchmark/Prometheus**: The scrape job applies a relabel rule to prefix metric names with `firewood_` (see benchmark/setup-scripts/install-grafana.sh)
-- **Prometheus queries**: Use underscore names (e.g., `firewood_proposal_commit`) when scraped via the benchmark Prometheus configuration
+[prom-naming]: https://prometheus.io/docs/practices/naming/
 
 ## Enabling Metrics
 
-Metrics are available when Firewood is built with the `metrics` feature. By default, metrics collection is enabled in the library but needs to be explicitly started in applications.
+### Rust applications
 
-**Important**: Only one metrics instance can be created per process. Attempting to initialize metrics multiple times will result in an error.
-
-### For Rust Applications
-
-Metrics are automatically registered when the instrumented code paths are executed. To expose metrics via HTTP:
+Metrics are automatically recorded as instrumented code paths execute. Wire up
+any `metrics`-compatible recorder before starting the database. Example using
+the Prometheus exporter:
 
 ```rust
 use metrics_exporter_prometheus::PrometheusBuilder;
 
-// Set up Prometheus exporter on port 9000
 PrometheusBuilder::new()
     .install()
     .expect("failed to install Prometheus recorder");
 ```
 
-### For FFI/Go Applications
+Pass the `HistogramMetricConfig` values returned by each crate's `registry::register()`
+to `set_buckets_for_metric` / `set_native_histogram_for_metric` so that the exporter
+uses the correct bucket strategy for each histogram.
 
-In the Go FFI layer, metrics must be explicitly enabled:
+### Go / FFI applications
 
 ```go
-import "github.com/ava-labs/firewood-go-ethhash/ffi"
+import "github.com/ava-labs/firewood/ffi"
 
-// Option 1: Start metrics with HTTP exporter on a specific port
-ffi.StartMetricsWithExporter(9000)
+// Option A – start with a built-in HTTP exporter
+if err := ffi.StartMetricsWithExporter(9000); err != nil { ... }
 
-// Option 2: Start metrics without exporter (use Gatherer to access)
-ffi.StartMetrics()
+// Option B – start without exporter; pull via the Gatherer interface
+if err := ffi.StartMetrics(); err != nil { ... }
 
-// Retrieve metrics programmatically
 gatherer := ffi.Gatherer{}
-metrics, err := gatherer.Gather()
+families, err := gatherer.Gather()
 ```
 
-See the [FFI README](ffi/README.md) for more details on FFI metrics configuration.
+`ffi.GatherRenderedMetrics()` (and the `Gatherer` wrapper) merges Rust-side metrics
+with Go-side proof-serialization histograms into a single `[]*dto.MetricFamily` slice.
 
-## Available Metrics
+> **Note:** only one metrics instance can be created per process. Calling
+> `StartMetrics` or `StartMetricsWithExporter` a second time returns an error.
 
-### Database Operations
+## Expensive vs. cheap metrics
 
-#### Proposal Metrics
+Recording overhead is gated by a thread-local `MetricsContext`:
 
-- **`proposals`** (counter)
-  - Description: Total number of proposals created
-  - Use: Track proposal creation rate and throughput
+- **Cheap** – always recorded (lock-wait times, flush durations, I/O counters, etc.)
+- **Expensive** – recorded only when `MetricsContext::expensive_metrics_enabled()` is
+  true for the current thread (e.g. end-to-end proposal duration)
 
-- **`proposal.create`** (counter with `success` label)
-  - Description: Count of proposal creation operations
-  - Labels: `success=true|false`
-  - Use: Monitor proposal creation success rate
+The FFI layer sets the context on each inbound call based on caller configuration.
 
-- **`proposal.create_ms`** (counter with `success` label)
-  - Description: Time spent creating proposals in milliseconds
-  - Labels: `success=true|false`
-  - Use: Track proposal creation latency
+---
 
-- **`proposal.commit`** (counter with `success` label)
-  - Description: Count of proposal commit operations
-  - Labels: `success=true|false`
-  - Use: Monitor commit success rate
+## Metric Reference
 
-- **`proposal.commit_ms`** (counter with `success` label)
-  - Description: Time spent committing proposals in milliseconds
-  - Labels: `success=true|false`
-  - Use: Track commit latency and identify slow commits
+### Database layer (`firewood` crate)
 
-#### Revision Management
+#### Proposals
 
-- **`active_revisions`** (gauge)
-  - Description: Current number of active revisions in memory
-  - Use: Monitor memory usage and revision retention
+| Metric                                      | Type      | Labels    | Description                                           |
+| ------------------------------------------- | --------- | --------- | ----------------------------------------------------- |
+| `firewood_proposals_total`                  | counter   | `base`    | Proposals created, by base revision type              |
+| `firewood_proposals_discarded_total`        | counter   | —         | Proposals dropped without committing                  |
+| `firewood_proposals_uncommitted`            | gauge     | —         | Current count of open, uncommitted proposals          |
+| `firewood_proposal_commits_total`           | counter   | `success` | Proposal commit attempts; `success=true\|false`       |
+| `firewood_proposal_commit_duration_seconds` | histogram | `success` | End-to-end commit duration; `success=true\|false`     |
+| `firewood_proposals_reparented_total`       | counter   | —         | Proposals re-parented to a freshly committed revision |
 
-- **`max_revisions`** (gauge)
-  - Description: Maximum number of revisions configured
-  - Use: Track configuration setting
+#### Revisions
 
-### Merkle Trie Operations
+| Metric                            | Type    | Labels | Description                                         |
+| --------------------------------- | ------- | ------ | --------------------------------------------------- |
+| `firewood_revisions_active`       | gauge   | —      | Revisions currently held in memory                  |
+| `firewood_revisions_limit`        | gauge   | —      | Configured `max_revisions`                          |
+| `firewood_commits_total`          | counter | —      | Revisions durably written to disk                   |
+| `firewood_commits_blocked_total`  | counter | —      | Times commit stalled waiting for a persist permit   |
+| `firewood_nodes_pending_deletion` | gauge   | —      | Nodes queued for deletion in the committed revision |
 
-#### Insert Operations
+#### Proposal creation (expensive)
 
-- **`insert`** (counter with `merkle` label)
-  - Description: Count of insert operations by type
-  - Labels: `merkle=update|above|below|split`
-    - `update`: Value updated at existing key
-    - `above`: New node inserted above existing node
-    - `below`: New node inserted below existing node
-    - `split`: Node split during insertion
-  - Use: Understand insert patterns and trie structure evolution
+| Metric                              | Type      | Labels | Description                                                    |
+| ----------------------------------- | --------- | ------ | -------------------------------------------------------------- |
+| `firewood_propose_duration_seconds` | histogram | —      | End-to-end proposal creation including batch apply and hashing |
 
-#### Remove Operations
+#### Merkle trie operations
 
-- **`remove`** (counter with `prefix` and `result` labels)
-  - Description: Count of remove operations
-  - Labels:
-    - `prefix=true|false`: Whether operation is prefix-based removal
-    - `result=success|nonexistent`: Whether key(s) were found
-  - Use: Track deletion patterns and key existence
+| Metric                                   | Type    | Labels             | Description                                                                  |
+| ---------------------------------------- | ------- | ------------------ | ---------------------------------------------------------------------------- |
+| `firewood_node_inserts_total`            | counter | `operation`        | Insert operations by structural result (`update`, `above`, `below`, `split`) |
+| `firewood_node_removes_total`            | counter | `prefix`, `result` | Remove operations; `prefix=true\|false`, `result=success\|nonexistent`       |
+| `firewood_change_proof_iterations_total` | counter | —                  | Iterator `next()` calls during change-proof generation                       |
 
-### Storage and I/O Metrics
+#### Persist worker
 
-#### Node Reading
+| Metric                                         | Type      | Labels    | Description                                                                                 |
+| ---------------------------------------------- | --------- | --------- | ------------------------------------------------------------------------------------------- |
+| `firewood_persist_cycle_duration_seconds`      | histogram | —         | Duration of each background persist-worker cycle (cheap)                                    |
+| `firewood_persist_permits_available`           | gauge     | —         | Deferred-persistence permits currently available                                            |
+| `firewood_persist_permits_limit`               | gauge     | —         | Maximum deferred-persistence permits configured                                             |
+| `firewood_persist_root_store_total`            | counter   | `success` | Root-store persist attempts; `success=true\|false`                                          |
+| `firewood_persist_root_store_duration_seconds` | histogram | `success` | Root-store persist duration                                                                 |
+| `firewood_persist_submit_duration_seconds`     | histogram | —         | Time to hand a committed revision to the persist-worker channel (cheap, native exponential) |
 
-- **`read_node`** (counter with `from` label)
-  - Description: Count of node reads by source
-  - Labels: `from=file|memory`
-  - Use: Monitor read patterns and storage layer usage
+#### Lock-contention diagnostics (cheap, native exponential histograms)
 
-#### Cache Performance
+These measure how long callers wait to _acquire_ the lock, not how long it is held.
+High tail latencies indicate write–read contention between concurrent commits and proposals.
 
-- **`cache.node`** (counter with `mode` and `type` labels)
-  - Description: Node cache hit/miss statistics
-  - Labels:
-    - `mode`: Read operation mode
-    - `type=hit|miss`: Cache hit or miss
-  - Use: Evaluate cache effectiveness for nodes
+| Metric                                        | Type      | Description                                                                                        |
+| --------------------------------------------- | --------- | -------------------------------------------------------------------------------------------------- |
+| `firewood_commit_lock_wait_seconds`           | histogram | Wait to acquire `in_memory_revisions` write lock in `commit()`                                     |
+| `firewood_current_revision_lock_wait_seconds` | histogram | Wait to acquire `in_memory_revisions` read lock in `current_revision()` (called on every proposal) |
+| `firewood_by_hash_lock_wait_seconds`          | histogram | Wait to acquire `by_hash` read lock in `revision()`                                                |
 
-- **`cache.freelist`** (counter with `type` label)
-  - Description: Free list cache hit/miss statistics
-  - Labels: `type=hit|miss`
-  - Use: Monitor free list cache efficiency
+---
 
-- **`cache.freelist.size`** (gauge)
-  - Description: Current number of entries in the freelist cache
-  - Use: Track actual cache utilization vs configured capacity; helps diagnose low hit rates by showing if cache is filling up
+### Storage layer (`firewood-storage` crate)
 
-#### I/O Operations
+#### Space allocation (labeled by `index` = free-list size class)
 
-- **`io.read`** (counter)
-  - Description: Total number of I/O read operations
-  - Use: Track I/O operation count
+| Metric                                  | Type    | Labels  | Description                                                       |
+| --------------------------------------- | ------- | ------- | ----------------------------------------------------------------- |
+| `firewood_storage_bytes_reused_total`   | counter | `index` | Bytes satisfied from a free-list slot                             |
+| `firewood_storage_bytes_appended_total` | counter | `index` | Bytes grown at end-of-file (free list had no suitable slot)       |
+| `firewood_storage_bytes_freed_total`    | counter | `index` | Bytes returned to the free list                                   |
+| `firewood_storage_bytes_wasted_total`   | counter | `index` | Internal fragmentation per allocation: `slot_size − needed_bytes` |
+| `firewood_nodes_allocated_total`        | counter | `index` | Node allocations per size class                                   |
+| `firewood_nodes_deleted_total`          | counter | `index` | Node deletions per size class                                     |
 
-- **`io.read_ms`** (counter)
-  - Description: Total time spent in I/O reads in milliseconds
-  - Use: Identify I/O bottlenecks and disk performance issues
+#### Free lists
 
-#### Node Persistence
+| Metric                       | Type  | Labels  | Description                                  |
+| ---------------------------- | ----- | ------- | -------------------------------------------- |
+| `firewood_free_list_entries` | gauge | `index` | Current entry count per free-list size class |
 
-- **`flush_nodes`** (counter)
-  - Description: Cumulative time spent flushing nodes to disk in milliseconds (counter incremented by flush duration)
-  - Use: Monitor flush performance and identify slow disk writes; calculate average flush time using rate()
+#### Node reads
 
-### Memory Management
+| Metric                                   | Type    | Labels         | Description                                |
+| ---------------------------------------- | ------- | -------------- | ------------------------------------------ |
+| `firewood_node_reads_total`              | counter | `from`         | Node reads by source: `from=cache\|file`   |
+| `firewood_node_cache_accesses_total`     | counter | `mode`, `type` | Node cache accesses; `type=hit\|miss`      |
+| `firewood_freelist_cache_accesses_total` | counter | `type`         | Free-list cache accesses; `type=hit\|miss` |
 
-#### Space Allocation
+#### Node cache size
 
-- **`space.reused`** (counter with `index` label)
-  - Description: Bytes reused from free list
-  - Labels: `index`: Size index of allocated area
-  - Use: Track memory reuse efficiency
+| Metric                            | Type  | Labels | Description                             |
+| --------------------------------- | ----- | ------ | --------------------------------------- |
+| `firewood_node_cache_bytes`       | gauge | —      | Memory currently used by the node cache |
+| `firewood_node_cache_limit_bytes` | gauge | —      | Configured node-cache memory limit      |
+| `firewood_freelist_cache_entries` | gauge | —      | Current free-list cache entry count     |
 
-- **`space.from_end`** (counter with `index` label)
-  - Description: Bytes allocated from end of nodestore when free list was insufficient
-  - Labels: `index`: Size index of allocated area
-  - Use: Track database growth and free list effectiveness
+#### Persistence
 
-- **`space.freed`** (counter with `index` label)
-  - Description: Bytes freed back to free list
-  - Labels: `index`: Size index of freed area
-  - Use: Monitor memory reclamation
+| Metric                            | Type      | Labels | Description                                   |
+| --------------------------------- | --------- | ------ | --------------------------------------------- |
+| `firewood_flush_duration_seconds` | histogram | —      | Node flush duration per persist cycle (cheap) |
+| `firewood_reap_duration_seconds`  | histogram | —      | Old-revision reap duration (cheap)            |
+| `firewood_database_size_bytes`    | gauge     | —      | Current database file size after each flush   |
 
-#### Node Management
+#### Disk I/O
 
-- **`delete_node`** (counter with `index` label)
-  - Description: Count of nodes deleted
-  - Labels: `index`: Size index of deleted node
-  - Use: Track node deletion patterns
+| Metric                              | Type      | Labels | Description                                                                                                       |
+| ----------------------------------- | --------- | ------ | ----------------------------------------------------------------------------------------------------------------- |
+| `firewood_io_reads_total`           | counter   | —      | Number of disk read operations                                                                                    |
+| `firewood_io_writes_total`          | counter   | —      | Number of disk write operations                                                                                   |
+| `firewood_io_bytes_read_total`      | counter   | —      | Bytes read from disk                                                                                              |
+| `firewood_io_bytes_written_total`   | counter   | —      | Bytes written to disk                                                                                             |
+| `firewood_io_read_duration_seconds` | histogram | —      | Per-read latency (cheap, native exponential; spans nanoseconds for cached pages to milliseconds for cold storage) |
 
--#### Ring Buffer
+#### Root store
 
-- **`ring.full`** (counter)
-  - Description: Count of times the ring buffer became full during node flushing
-  - Use: Identify backpressure in node persistence pipeline
+| Metric                             | Type    | Labels | Description               |
+| ---------------------------------- | ------- | ------ | ------------------------- |
+| `firewood_rootstore_lookups_total` | counter | —      | Root-store fetch attempts |
 
-- **`ring.eagain_write_retry`** (counter)
-  - Description: Amount of io-uring write entries that have been re-submitted due to `EAGAIN` io error.
-  - Use: identify interrupted writes
+#### io_uring (only when `io-uring` feature is enabled)
 
-- **`ring.partial_write_retry`** (counter)
-  - Description: Amount of io-uring write entries that have been re-submitted due to partial writes.
-  - Use: identify partial writes
+| Metric                                          | Type    | Labels | Description                                      |
+| ----------------------------------------------- | ------- | ------ | ------------------------------------------------ |
+| `firewood_io_uring_ring_full_total`             | counter | —      | Times the submission queue was full              |
+| `firewood_io_uring_sq_waits_total`              | counter | —      | Submission-queue wait events                     |
+| `firewood_io_uring_eagain_retries_total`        | counter | —      | Write entries re-submitted after `EAGAIN`        |
+| `firewood_io_uring_partial_write_retries_total` | counter | —      | Write entries re-submitted after a partial write |
 
-### FFI Layer Metrics
+---
 
-These metrics are specific to the Foreign Function Interface (Go) layer:
+### FFI / Go layer (`firewood-ffi` crate + `ffi` package)
 
-#### Batch Operations
+#### Metrics gathering
 
-- **`ffi.batch`** (counter)
-  - Description: Count of batch operations completed
-  - Use: Track FFI batch throughput
+| Metric                             | Type      | Labels | Description                                                                      |
+| ---------------------------------- | --------- | ------ | -------------------------------------------------------------------------------- |
+| `firewood_gather_duration_seconds` | histogram | —      | Wall-clock duration of `GatherRenderedMetrics` calls (cheap, native exponential) |
+| `firewood_proof_merges_total`      | counter   | —      | Range-proof merge operations via FFI                                             |
 
-- **`ffi.batch_ms`** (counter)
-  - Description: Time spent processing batches in milliseconds
-  - Use: Monitor FFI batch latency
+#### Go-side proof serialization
 
-#### Proposal Operations
+These histograms are recorded in Go and are independent of the Rust recorder.
+They measure the full round-trip through the CGo boundary including any byte
+copies and pointer conversions.
 
-- **`ffi.propose`** (counter)
-  - Description: Count of proposal operations via FFI
-  - Use: Track FFI proposal throughput
+| Metric                                         | Type      | Labels       | Description                                                           |
+| ---------------------------------------------- | --------- | ------------ | --------------------------------------------------------------------- |
+| `firewood_go_proof_marshal_duration_seconds`   | histogram | `proof_type` | `MarshalBinary` duration; `proof_type=range\|change\|verified_change` |
+| `firewood_go_proof_unmarshal_duration_seconds` | histogram | `proof_type` | `UnmarshalBinary` duration; `proof_type=range\|change`                |
 
-- **`ffi.propose_ms`** (counter)
-  - Description: Time spent creating proposals via FFI in milliseconds
-  - Use: Monitor FFI proposal latency
+Buckets: `5µs, 25µs, 100µs, 500µs, 1ms, 5ms, 25ms, 100ms`
 
-#### Commit Operations
+---
 
-- **`ffi.commit`** (counter)
-  - Description: Count of commit operations via FFI
-  - Use: Track FFI commit throughput
+### Replay layer (`firewood-replay` crate)
 
-- **`ffi.commit_ms`** (counter)
-  - Description: Time spent committing via FFI in milliseconds
-  - Use: Monitor FFI commit latency
+| Metric                                     | Type      | Labels | Description                            |
+| ------------------------------------------ | --------- | ------ | -------------------------------------- |
+| `firewood_replay_propose_duration_seconds` | histogram | —      | Propose duration during replay (cheap) |
+| `firewood_replay_commit_duration_seconds`  | histogram | —      | Commit duration during replay (cheap)  |
 
-#### View Caching
+---
 
-- **`ffi.cached_view.hit`** (counter)
-  - Description: Count of cached view hits
-  - Use: Monitor view cache effectiveness
+### Allocator (`jemalloc`)
 
-- **`ffi.cached_view.miss`** (counter)
-  - Description: Count of cached view misses
-  - Use: Monitor view cache effectiveness
+Available when Firewood is built with jemalloc (FFI build). The epoch is
+advanced before each gather so values reflect the current state.
 
-## Interpreting Metrics
+| Metric                     | Type  | Description                                             |
+| -------------------------- | ----- | ------------------------------------------------------- |
+| `jemalloc_active_bytes`    | gauge | Bytes in active pages allocated by jemalloc             |
+| `jemalloc_allocated_bytes` | gauge | Total bytes allocated by the application                |
+| `jemalloc_metadata_bytes`  | gauge | jemalloc internal metadata overhead                     |
+| `jemalloc_mapped_bytes`    | gauge | Bytes in active extents mapped by the allocator         |
+| `jemalloc_resident_bytes`  | gauge | Bytes in physically resident data pages                 |
+| `jemalloc_retained_bytes`  | gauge | Bytes in virtual mappings retained (not returned to OS) |
 
-### Performance Monitoring
+---
 
-1. **Latency Tracking**: The `*_ms` metrics track operation durations. Monitor these for:
-   - Sudden increases indicating performance degradation
-   - Baseline establishment for SLA monitoring
-   - Correlation with system load
-
-2. **Throughput Monitoring**: Counter metrics without `_ms` suffix track operation counts:
-   - Rate of change indicates throughput
-   - Compare with expected load patterns
-   - Identify anomalies in operation rates
-
-### Resource Utilization
-
-1. **Cache Efficiency**:
-   - Calculate hit rate: `cache.hit / (cache.hit + cache.miss)`
-   - Target: >90% for node cache, >80% for free list cache
-   - Low hit rates may indicate insufficient cache size
-
-2. **Memory Management**:
-   - Monitor `space.reused` vs `space.from_end` ratio
-   - High `space.from_end` indicates database growth
-   - High `space.wasted` suggests fragmentation issues
-
-3. **Active Revisions**:
-   - `active_revisions` approaching `max_revisions` triggers cleanup
-   - Sustained high values may indicate memory pressure
-
-### Debugging
-
-1. **Failed Operations**:
-   - Check metrics with `success=false` label
-   - Correlate with error logs for root cause analysis
-
-2. **Ring Buffer Backpressure**:
-
-- `firewood_ring_full` (exported) counter increasing indicates persistence bottleneck
-- May require tuning of flush parameters or disk subsystem
-
-1. **Insert/Remove Patterns**:
-
-   - `firewood.insert` labels show trie structure evolution
-   - High `split` counts indicate complex key distributions
-   - Remove `nonexistent` suggests application-level issues
-
-## Example Monitoring Queries
-
-For Prometheus-based monitoring (note: metric names use underscores in queries):
+## Example PromQL queries
 
 ```promql
-# Average commit latency over 5 minutes
-rate(firewood_proposal_commit_ms[5m]) / rate(firewood_proposal_commit[5m])
+# Proposal commit p99 latency (5-minute window)
+histogram_quantile(0.99,
+  sum(rate(firewood_proposal_commit_duration_seconds_bucket[5m])) by (le)
+)
 
-# Cache hit rate
-sum(rate(firewood_cache_node{type="hit"}[5m])) /
-sum(rate(firewood_cache_node[5m]))
+# Commit throughput (commits/sec)
+rate(firewood_commits_total[1m])
+
+# Node cache hit rate
+sum(rate(firewood_node_cache_accesses_total{type="hit"}[5m]))
+  / sum(rate(firewood_node_cache_accesses_total[5m]))
+
+# Commit lock p99 wait (native histogram)
+histogram_quantile(0.99,
+  sum(rate(firewood_commit_lock_wait_seconds_bucket[5m])) by (le)
+)
+
+# Storage fragmentation ratio per size class
+rate(firewood_storage_bytes_wasted_total[5m])
+  / rate(firewood_storage_bytes_appended_total[5m])
 
 # Database growth rate (bytes/sec)
-rate(firewood_space_from_end[5m])
+rate(firewood_storage_bytes_appended_total[5m])
+
+# I/O read throughput (bytes/sec)
+rate(firewood_io_bytes_read_total[1m])
 
 # Failed commit ratio
-rate(firewood_proposal_commit{success="false"}[5m]) /
-rate(firewood_proposal_commit[5m])
+rate(firewood_proposal_commits_total{success="false"}[5m])
+  / rate(firewood_proposal_commits_total[5m])
 ```
