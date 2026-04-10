@@ -2162,28 +2162,7 @@ struct VoidResult fwd_free_revision(struct RevisionHandle *revision);
 struct VoidResult fwd_free_verified_change_proof(struct VerifiedChangeProofContext *proof);
 
 /**
- * Gather latest metrics for this process.
- *
- * # Returns
- *
- * - [`ValueResult::None`] if the gathered metrics resulted in an empty string.
- * - [`ValueResult::Some`] the gathered metrics as an [`OwnedBytes`] (with
- *   guaranteed to be utf-8 data, not null terminated).
- * - [`ValueResult::Err`] if an error occurred while retrieving the value.
- *
- * # Safety
- *
- * The caller must:
- * * call [`fwd_free_owned_bytes`] to free the memory associated with the
- *   returned error or value.
- */
-struct ValueResult fwd_gather(void);
-
-/**
  * Gather latest metrics for this process as structured data.
- *
- * Unlike [`fwd_gather`], this returns structured metric families instead of
- * a text rendering, avoiding the need to parse the Prometheus text format.
  *
  * # Returns
  *
@@ -2865,26 +2844,6 @@ struct VoidResult fwd_start_logs(struct LogArgs args);
  * - [`VoidResult::Err`] if an error occurs during initialization.
  */
 struct VoidResult fwd_start_metrics(void);
-
-/**
- * Start metrics recorder and exporter for this process.
- *
- * # Arguments
- *
- * * `metrics_port` - the port where metrics will be exposed at
- *
- * # Returns
- *
- * - [`VoidResult::Ok`] if the recorder was initialized.
- * - [`VoidResult::Err`] if an error occurs during initialization.
- *
- * # Safety
- *
- * The caller must:
- * * call [`fwd_free_owned_bytes`] to free the memory associated with the
- *   returned error (if any).
- */
-struct VoidResult fwd_start_metrics_with_exporter(uint16_t metrics_port);
 
 /**
  * Serialize a `VerifiedChangeProof` to bytes.

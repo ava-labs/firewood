@@ -1642,7 +1642,6 @@ dependencies = [
  "firewood-storage",
  "metrics",
  "metrics-exporter-prometheus",
- "oxhttp",
  "parking_lot",
  "rlp",
  "test-case",
@@ -3211,17 +3210,6 @@ name = "outref"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a80800c0488c3a21695ea981a54918fbb37abf04f4d0720c453632255e2ff0e"
-
-[[package]]
-name = "oxhttp"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "971c03797806d47915950e62816a8f365e3ddc8800310e3200ec666934d0f7c9"
-dependencies = [
- "http 1.4.0",
- "httparse",
- "url",
-]
 
 [[package]]
 name = "page_size"
