@@ -3,82 +3,35 @@
 
 //! Firewood layer metric definitions.
 
-use metrics::{describe_counter, describe_gauge};
-
-/// Number of proposals created.
-pub const PROPOSALS: &str = "proposals";
-
-/// Number of proposals created by base type.
-pub const PROPOSALS_CREATED: &str = "proposals.created";
-
-/// Number of proposals discarded (dropped without commit).
-pub const PROPOSALS_DISCARDED: &str = "proposals.discarded";
-
-/// Current number of uncommitted proposals.
-pub const PROPOSALS_UNCOMMITTED: &str = "proposals.uncommitted";
-
-/// Number of insert operations.
-pub const INSERT: &str = "insert";
-
-/// Number of remove operations.
-pub const REMOVE: &str = "remove";
-
-/// Number of next calls to calculate a change proof.
-pub const CHANGE_PROOF_NEXT: &str = "change_proof.next";
-
-/// Commit latency in milliseconds.
-pub const COMMIT_LATENCY_MS: &str = "commit_latency_ms";
-
-/// Current number of active revisions.
-pub const ACTIVE_REVISIONS: &str = "active_revisions";
-
-/// Maximum number of revisions configured.
-pub const MAX_REVISIONS: &str = "max_revisions";
-
-/// Length of the deleted list for committed revisions.
-pub const DELETED_LIST_LEN: &str = "deleted_list_len";
-
-/// Number of persist permits currently available.
-pub const PERMITS_AVAILABLE: &str = "persist.permits_available";
-
-/// Maximum number of persist permits.
-pub const MAX_PERMITS: &str = "persist.max_permits";
-
-/// Number of times commit was blocked.
-pub const COMMIT_BLOCKED: &str = "persist.commit_blocked";
-
-/// Registers all firewood metric descriptions.
-pub fn register() {
-    describe_counter!(PROPOSALS, "Number of proposals created");
-    describe_counter!(
-        PROPOSALS_CREATED,
-        "Number of proposals created by base type"
-    );
-    describe_counter!(
-        PROPOSALS_DISCARDED,
-        "Number of proposals dropped without commit"
-    );
-    describe_gauge!(
-        PROPOSALS_UNCOMMITTED,
-        "Current number of uncommitted proposals"
-    );
-    describe_counter!(INSERT, "Number of insert operations");
-    describe_counter!(REMOVE, "Number of remove operations");
-    describe_counter!(
-        CHANGE_PROOF_NEXT,
-        "Number of next calls to calculate a change proof"
-    );
-    describe_counter!(COMMIT_LATENCY_MS, "Commit latency (ms)");
-    describe_gauge!(ACTIVE_REVISIONS, "Current number of active revisions");
-    describe_gauge!(MAX_REVISIONS, "Maximum number of revisions configured");
-    describe_gauge!(
-        DELETED_LIST_LEN,
-        "Length of deleted list for committed revisions"
-    );
-    describe_gauge!(
-        PERMITS_AVAILABLE,
-        "Number of persist permits currently available"
-    );
-    describe_gauge!(MAX_PERMITS, "Maximum number of persist permits");
-    describe_counter!(COMMIT_BLOCKED, "Number of times commit was blocked");
+firewood_metrics::define_metrics! {
+    counters: {
+        /// Number of proposals created
+        PROPOSALS              = "proposals",
+        /// Number of proposals created by base type
+        PROPOSALS_CREATED      = "proposals.created",
+        /// Number of proposals dropped without commit
+        PROPOSALS_DISCARDED    = "proposals.discarded",
+        /// Number of insert operations
+        INSERT                 = "insert",
+        /// Number of remove operations
+        REMOVE                 = "remove",
+        /// Number of next calls to calculate a change proof
+        CHANGE_PROOF_NEXT      = "change_proof.next",
+        /// Number of times commit was blocked
+        COMMIT_BLOCKED         = "persist.commit_blocked",
+    },
+    gauges: {
+        /// Current number of uncommitted proposals
+        PROPOSALS_UNCOMMITTED  = "proposals.uncommitted",
+        /// Current number of active revisions
+        ACTIVE_REVISIONS       = "active_revisions",
+        /// Maximum number of revisions configured
+        MAX_REVISIONS          = "max_revisions",
+        /// Length of deleted list for committed revisions
+        DELETED_LIST_LEN       = "deleted_list_len",
+        /// Number of persist permits currently available
+        PERMITS_AVAILABLE      = "persist.permits_available",
+        /// Maximum number of persist permits
+        MAX_PERMITS            = "persist.max_permits",
+    },
 }
