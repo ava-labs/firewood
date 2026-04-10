@@ -12,7 +12,7 @@
 //! # Usage
 //!
 //! ```no_run
-//! # use firewood_metrics::firewood_increment;
+//! # use firewood_metrics::firewood_counter;
 //!
 //! mod registry {
 //!     pub const OP_COUNT: &str = "op_count_total";
@@ -20,23 +20,84 @@
 //! }
 //!
 //! let _histogram_configs = registry::register();
-//! firewood_increment!(registry::OP_COUNT, 1);
+//! firewood_counter!(OP_COUNT).increment(1);
 //! ```
 //!
 //! # Macro overview
 //!
-//! Recording macros accept an optional trailing `expensive` flag where noted:
+//! All macros resolve the metric name via `crate::registry::NAME` in the calling
+//! crate. Pass a bare identifier (e.g. `OP_COUNT`), not a path:
 //!
 //! | Macro | Description |
 //! |-------|-------------|
-//! | `firewood_increment!(name, value)` | Always increment a counter |
-//! | `firewood_increment!(name, value, expensive)` | Increment only if expensive metrics enabled |
-//! | `firewood_set!(name, value)` | Always set a gauge value |
-//! | `firewood_set!(name, value, expensive)` | Set only if expensive metrics enabled |
+//! | `firewood_counter!(NAME).increment(v)` | Always increment a counter |
+//! | `firewood_counter!(expensive: NAME).increment(v)` | Increment only if expensive metrics enabled |
+//! | `firewood_gauge!(NAME).set(v as f64)` | Always set a gauge value |
+//! | `firewood_gauge!(expensive: NAME).set(v as f64)` | Set only if expensive metrics enabled |
 //!
 //! For registration, use the [`define_metrics!`] macro in your crate's registry module.
 
 use std::cell::Cell;
+
+/// Sealed helper for [`GaugeExt`]: integer types that can be stored in a gauge as `f64`.
+///
+/// The trait is `pub` within the module so [`GaugeExt`]'s generic bound compiles, but the
+/// module itself is private, preventing external crates from adding new implementations.
+mod gauge_value {
+    pub trait GaugeValue: Copy {
+        fn as_f64(self) -> f64;
+    }
+    impl GaugeValue for u64 {
+        #[allow(clippy::cast_precision_loss)]
+        fn as_f64(self) -> f64 {
+            self as f64
+        }
+    }
+    impl GaugeValue for usize {
+        #[allow(clippy::cast_precision_loss)]
+        fn as_f64(self) -> f64 {
+            self as f64
+        }
+    }
+}
+
+/// Extension methods for [`metrics::Gauge`] that accept integer metric values.
+///
+/// [`metrics::Gauge::set`] requires `f64`. Casting integers to `f64` triggers
+/// `cast_precision_loss` at every call site. `set_integer` centralises the cast
+/// — any precision loss for values above 2^52 is intentional and acceptable for
+/// instrumentation.
+///
+/// Implemented for `u64` and `usize`; the conversion trait is sealed so external crates
+/// cannot add further implementations.
+pub trait GaugeExt {
+    /// Sets the gauge from any supported integer type, converting to `f64` internally.
+    fn set_integer<T: gauge_value::GaugeValue>(&self, value: T);
+}
+
+impl GaugeExt for metrics::Gauge {
+    fn set_integer<T: gauge_value::GaugeValue>(&self, value: T) {
+        self.set(value.as_f64());
+    }
+}
+
+/// Extension methods for [`metrics::Counter`] that accept `f64` values.
+///
+/// [`metrics::Counter::increment`] requires `u64`. This trait adds `increment_f64`
+/// for callers that compute a measurement as `f64` (e.g. a duration scaled to a
+/// desired resolution). The value is truncated to `u64`; the caller accepts that
+/// any fractional part is discarded.
+pub trait CounterExt {
+    /// Increments the counter by `value` truncated to `u64`.
+    fn increment_f64(&self, value: f64);
+}
+
+impl CounterExt for metrics::Counter {
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    fn increment_f64(&self, value: f64) {
+        self.increment(value as u64);
+    }
+}
 
 /// How a histogram metric is bucketed in the Prometheus exporter.
 ///
@@ -243,7 +304,7 @@ macro_rules! define_metrics {
             @munch
             [
                 // Metric name constants are intentionally crate-private. They are used
-                // only at recording callsites (firewood_increment!, firewood_set!) within
+                // only at recording callsites (firewood_counter!, firewood_gauge!) within
                 // the same crate. Exposing them as `pub` would make the metric name strings
                 // part of the crate's public API.
                 $($decl)*
@@ -277,7 +338,7 @@ macro_rules! define_metrics {
             @munch
             [
                 // Metric name constants are intentionally crate-private. They are used
-                // only at recording callsites (firewood_increment!, firewood_set!) within
+                // only at recording callsites (firewood_counter!, firewood_gauge!) within
                 // the same crate. Exposing them as `pub` would make the metric name strings
                 // part of the crate's public API.
                 $($decl)*
@@ -429,7 +490,7 @@ macro_rules! define_metrics {
             ]
             [
                 $($body)*
-                ::metrics::describe_histogram!($name, $crate::strip_doc_leading_space(concat!($($desc),+)));
+                ::metrics::describe_histogram!($name, concat!($($desc),+));
             ]
             [
                 $($hcfg)*
@@ -444,46 +505,16 @@ macro_rules! define_metrics {
     };
 }
 
-/// Increments a counter metric.
-///
-/// Use for values that only ever increase: commit counts, error counts, byte
-/// totals. Metric names should end in `_total` (e.g. `proposals_created_total`,
-/// `bytes_written_total`). For values that can go up or down use
-/// [`firewood_set!`] instead.
-///
-/// # Usage
-/// ```no_run
-/// # use firewood_metrics::firewood_increment;
-///
-/// mod registry {
-///     pub const PROPOSALS_CREATED_TOTAL: &str = "proposals_created_total";
-///     pub const SLOW_PATH_TOTAL: &str = "slow_path_total";
-/// }
-///
-/// firewood_increment!(registry::PROPOSALS_CREATED_TOTAL, 1);
-/// firewood_increment!(registry::PROPOSALS_CREATED_TOTAL, 1, "status" => "ok");
-/// firewood_increment!(registry::SLOW_PATH_TOTAL, 1, expensive);
-/// ```
-#[macro_export]
-macro_rules! firewood_increment {
-    ($name:expr, $value:expr, expensive) => {
-        if $crate::expensive_metrics_enabled() {
-            ::metrics::counter!($name).increment($value);
-        }
-    };
-    ($name:expr, $value:expr) => {
-        ::metrics::counter!($name).increment($value)
-    };
-    ($name:expr, $value:expr, $($labels:tt)+) => {
-        ::metrics::counter!($name, $($labels)+).increment($value)
-    };
-}
-
 /// Returns a counter handle for advanced operations.
 ///
-/// Prefer [`firewood_increment!`] for simple increment-by-N callsites.
-/// Use this when you need to call `.absolute()` or reuse the handle across
-/// multiple operations without a repeated name lookup.
+/// Use for values that only ever increase: commit counts, error counts, byte
+/// totals. For float-valued measurements use [`CounterExt::increment_f64`]. Metric names should end in `_total` (e.g. `proposals_created_total`,
+/// `bytes_written_total`). For values that can go up or down use
+/// [`firewood_gauge!`] instead.
+///
+/// The metric name is resolved as `crate::registry::NAME` in the calling crate,
+/// so pass a bare identifier — not a path. See [`firewood_histogram!`] for an
+/// explanation of why `crate::registry` is used rather than `$crate::registry`.
 ///
 /// # Usage
 /// ```no_run
@@ -491,33 +522,59 @@ macro_rules! firewood_increment {
 ///
 /// mod registry {
 ///     pub const PROPOSALS_CREATED_TOTAL: &str = "proposals_created_total";
+///     pub const SLOW_PATH_TOTAL: &str = "slow_path_total";
 /// }
 ///
-/// let counter = firewood_counter!(registry::PROPOSALS_CREATED_TOTAL);
-/// counter.increment(1);
-/// counter.absolute(100);
+/// firewood_counter!(PROPOSALS_CREATED_TOTAL).increment(1);
+/// firewood_counter!(PROPOSALS_CREATED_TOTAL, "status" => "ok").increment(1);
+/// firewood_counter!(expensive: SLOW_PATH_TOTAL).increment(1);
 /// ```
+// `crate` in the expansion refers to the invocation crate, not `firewood_metrics` — see
+// the `firewood_histogram!` doc for the full explanation of why this is intentional.
+#[expect(
+    clippy::crate_in_macro_def,
+    reason = "intentional: `crate::registry` resolves in the calling crate, not in \
+              `firewood_metrics`. See the `firewood_histogram!` doc for the full rationale."
+)]
 #[macro_export]
 macro_rules! firewood_counter {
-    ($name:expr) => {
-        ::metrics::counter!($name)
+    (expensive: $name:ident) => {
+        if $crate::expensive_metrics_enabled() {
+            ::metrics::counter!(crate::registry::$name)
+        } else {
+            ::metrics::Counter::noop()
+        }
     };
-    ($name:expr, $($labels:tt)+) => {
-        ::metrics::counter!($name, $($labels)+)
+    (expensive: $name:ident, $($labels:tt)+) => {
+        if $crate::expensive_metrics_enabled() {
+            ::metrics::counter!(crate::registry::$name, $($labels)+)
+        } else {
+            ::metrics::Counter::noop()
+        }
+    };
+    ($name:ident) => {
+        ::metrics::counter!(crate::registry::$name)
+    };
+    ($name:ident, $($labels:tt)+) => {
+        ::metrics::counter!(crate::registry::$name, $($labels)+)
     };
 }
 
-/// Sets a gauge metric value.
+/// Returns a gauge handle for advanced operations.
 ///
 /// Use for values that can go up or down: active revision counts, queue
 /// depths, cache sizes. Metric names should include the unit where applicable
 /// (e.g. `node_cache_bytes`, `active_revisions`). Do not use a `_total`
 /// suffix — that is reserved for counters. For values that only ever increase
-/// use [`firewood_increment!`] instead.
+/// use [`firewood_counter!`] instead.
+///
+/// The metric name is resolved as `crate::registry::NAME` in the calling crate,
+/// so pass a bare identifier — not a path. See [`firewood_histogram!`] for an
+/// explanation of why `crate::registry` is used rather than `$crate::registry`.
 ///
 /// # Usage
 /// ```no_run
-/// # use firewood_metrics::firewood_set;
+/// # use firewood_metrics::firewood_gauge;
 ///
 /// mod registry {
 ///     pub const ACTIVE_REVISIONS: &str = "active_revisions";
@@ -527,51 +584,105 @@ macro_rules! firewood_counter {
 ///
 /// let count = 3_u64;
 /// let size = 1024_u64;
-/// firewood_set!(registry::ACTIVE_REVISIONS, count);
-/// firewood_set!(registry::NODE_CACHE_BYTES, size, "tier" => "l1");
-/// firewood_set!(registry::PENDING_PROPOSALS, count, expensive);
+/// firewood_gauge!(ACTIVE_REVISIONS).set(count as f64);
+/// firewood_gauge!(NODE_CACHE_BYTES, "tier" => "l1").set(size as f64);
+/// firewood_gauge!(expensive: PENDING_PROPOSALS).set(count as f64);
+/// // Gauge handles also support increment/decrement:
+/// firewood_gauge!(ACTIVE_REVISIONS).increment(1.0);
+/// firewood_gauge!(ACTIVE_REVISIONS).decrement(1.0);
 /// ```
+// `crate` in the expansion refers to the invocation crate — intentional; see `firewood_histogram!`.
+#[expect(
+    clippy::crate_in_macro_def,
+    reason = "intentional: `crate::registry` resolves in the calling crate, not in \
+              `firewood_metrics`. See the `firewood_histogram!` doc for the full rationale."
+)]
 #[macro_export]
-macro_rules! firewood_set {
-    ($name:expr, $value:expr, expensive) => {
+macro_rules! firewood_gauge {
+    (expensive: $name:ident) => {
         if $crate::expensive_metrics_enabled() {
-            ::metrics::gauge!($name).set($value as f64);
+            ::metrics::gauge!(crate::registry::$name)
+        } else {
+            ::metrics::Gauge::noop()
         }
     };
-    ($name:expr, $value:expr) => {
-        ::metrics::gauge!($name).set($value as f64)
+    (expensive: $name:ident, $($labels:tt)+) => {
+        if $crate::expensive_metrics_enabled() {
+            ::metrics::gauge!(crate::registry::$name, $($labels)+)
+        } else {
+            ::metrics::Gauge::noop()
+        }
     };
-    ($name:expr, $value:expr, $($labels:tt)+) => {
-        ::metrics::gauge!($name, $($labels)+).set($value as f64)
+    ($name:ident) => {
+        ::metrics::gauge!(crate::registry::$name)
+    };
+    ($name:ident, $($labels:tt)+) => {
+        ::metrics::gauge!(crate::registry::$name, $($labels)+)
     };
 }
 
-/// Returns a gauge handle for advanced operations.
+/// Returns a histogram handle for recording a single observation.
 ///
-/// Prefer [`firewood_set!`] for simple set-value callsites. Use this when
-/// you need `.increment()` / `.decrement()` on a gauge or want to reuse the
-/// handle across multiple operations.
+/// Unlike counters and gauges, histograms always check the expensive metrics
+/// flag unless the `cheap:` prefix is used, since histogram recording typically
+/// involves more overhead (e.g. timing an operation, computing bucket counts).
+///
+/// ## Why `crate::registry` and not `$crate::registry`
+///
+/// In a `macro_rules!` expansion, `crate` refers to the crate **at the
+/// invocation site**, not the crate where the macro is defined. Using
+/// `crate::registry::$name` therefore resolves to each calling crate's own
+/// `registry` module, which is exactly what we want: each crate owns its metric
+/// name constants and the macro needs no knowledge of those paths. Using
+/// `$crate::registry` would instead look up `registry` inside
+/// `firewood_metrics` itself, which is wrong.
+///
+/// The metric name is resolved as `crate::registry::NAME` in the calling crate,
+/// so pass a bare identifier — not a path.
 ///
 /// # Usage
 /// ```no_run
-/// # use firewood_metrics::firewood_gauge;
+/// # use firewood_metrics::firewood_histogram;
 ///
 /// mod registry {
-///     pub const ACTIVE_REVISIONS: &str = "active_revisions";
+///     pub const OP_DURATION_SECONDS: &str = "op_duration_seconds";
+///     pub const GATHER_DURATION_SECONDS: &str = "gather_duration_seconds";
 /// }
 ///
-/// let gauge = firewood_gauge!(registry::ACTIVE_REVISIONS);
-/// gauge.set(10.0);
-/// gauge.increment(1.0);
-/// gauge.decrement(1.0);
+/// // Records only when expensive metrics are enabled:
+/// firewood_histogram!(OP_DURATION_SECONDS).record(1.23);
+///
+/// // Always records (e.g. for low-overhead infrastructure metrics):
+/// firewood_histogram!(cheap: GATHER_DURATION_SECONDS).record(0.01);
 /// ```
+// `crate` in the expansion refers to the invocation crate — intentional; see the doc above.
+#[expect(
+    clippy::crate_in_macro_def,
+    reason = "intentional: `crate::registry` resolves in the calling crate, not in \
+              `firewood_metrics`. The macro is designed this way so that each crate's own \
+              `registry` module is used without any path prefix at the call site."
+)]
 #[macro_export]
-macro_rules! firewood_gauge {
-    ($name:expr) => {
-        ::metrics::gauge!($name)
+macro_rules! firewood_histogram {
+    ($name:ident) => {
+        if $crate::expensive_metrics_enabled() {
+            ::metrics::histogram!(crate::registry::$name)
+        } else {
+            ::metrics::Histogram::noop()
+        }
     };
-    ($name:expr, $($labels:tt)+) => {
-        ::metrics::gauge!($name, $($labels)+)
+    ($name:ident, $($labels:tt)+) => {
+        if $crate::expensive_metrics_enabled() {
+            ::metrics::histogram!(crate::registry::$name, $($labels)+)
+        } else {
+            ::metrics::Histogram::noop()
+        }
+    };
+    (cheap: $name:ident) => {
+        ::metrics::histogram!(crate::registry::$name)
+    };
+    (cheap: $name:ident, $($labels:tt)+) => {
+        ::metrics::histogram!(crate::registry::$name, $($labels)+)
     };
 }
 

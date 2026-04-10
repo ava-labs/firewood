@@ -23,7 +23,7 @@ use crate::db::{BatchOp, UseParallel};
 use crate::merkle::Merkle;
 use crate::merkle::parallel::ParallelMerkle;
 use crate::persist_worker::{PersistError, PersistWorker};
-use firewood_metrics::{firewood_increment, firewood_set};
+use firewood_metrics::{GaugeExt, firewood_counter, firewood_gauge};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::RootStore;
 use firewood_storage::{
@@ -304,7 +304,7 @@ impl RevisionManager {
 
         let committed = proposal.as_committed();
 
-        firewood_set!(crate::registry::DELETED_LIST_LEN, committed.deleted_len());
+        firewood_gauge!(DELETED_LIST_LEN).set_integer(committed.deleted_len());
 
         // 3. Revision reaping
         // When we exceed max_revisions, remove the oldest revision from memory
@@ -334,8 +334,8 @@ impl RevisionManager {
                     break;
                 }
             }
-            firewood_set!(crate::registry::ACTIVE_REVISIONS, in_memory_revisions.len());
-            firewood_set!(crate::registry::MAX_REVISIONS, self.max_revisions);
+            firewood_gauge!(ACTIVE_REVISIONS).set_integer(in_memory_revisions.len());
+            firewood_gauge!(MAX_REVISIONS).set_integer(self.max_revisions);
         }
 
         // 4. Signal to the `PersistWorker` to persist this revision.
@@ -378,11 +378,11 @@ impl RevisionManager {
             });
 
             if discarded > 0 {
-                firewood_increment!(crate::registry::PROPOSALS_DISCARDED, discarded);
+                firewood_counter!(PROPOSALS_DISCARDED).increment(discarded);
             }
 
             // Update uncommitted proposals gauge after cleanup
-            firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, lock.len());
+            firewood_gauge!(PROPOSALS_UNCOMMITTED).set_integer(lock.len());
         }
 
         // then reparent any proposals that have this proposal as a parent
@@ -436,7 +436,7 @@ impl RevisionManager {
             lock.len()
         };
         // Update uncommitted proposals gauge after adding
-        firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, len);
+        firewood_gauge!(PROPOSALS_UNCOMMITTED).set_integer(len);
     }
 
     /// Retrieve a committed revision by its root hash.

@@ -26,7 +26,7 @@ use std::num::NonZero;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 
-use firewood_metrics::{firewood_increment, firewood_set};
+use firewood_metrics::{GaugeExt, firewood_counter, firewood_gauge};
 use lru::LruCache as EntryLruCache;
 use lru_mem::LruCache as MemLruCache;
 
@@ -120,7 +120,7 @@ impl ReadableStorage for FileBacked {
     }
 
     fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
-        firewood_increment!(crate::registry::READ_NODE, 1, "from" => "file");
+        firewood_counter!(READ_NODE, "from" => "file").increment(1);
         Ok(PredictiveReader::new(self, addr))
     }
 
@@ -138,7 +138,7 @@ impl ReadableStorage for FileBacked {
         // point — all trie traversals contend here. Impact scales with reader concurrency.
         let mut guard = self.cache.lock();
         let cached = guard.get(&addr).map(|cached_node| cached_node.0.clone());
-        firewood_increment!(crate::registry::CACHE_NODE, 1, "mode" => mode.as_str(), "type" => if cached.is_some() { "hit" } else { "miss" });
+        firewood_counter!(CACHE_NODE, "mode" => mode.as_str(), "type" => if cached.is_some() { "hit" } else { "miss" }).increment(1);
         cached
     }
 
@@ -147,8 +147,9 @@ impl ReadableStorage for FileBacked {
         // every proposal/commit. Contends with writes that also update the free-list cache.
         let mut guard = self.free_list_cache.lock();
         let cached = guard.pop(&addr);
-        firewood_increment!(crate::registry::CACHE_FREELIST, 1, "type" => if cached.is_some() { "hit" } else { "miss" });
-        firewood_set!(crate::registry::FREELIST_CACHE_SIZE, guard.len());
+        firewood_counter!(CACHE_FREELIST, "type" => if cached.is_some() { "hit" } else { "miss" })
+            .increment(1);
+        firewood_gauge!(FREELIST_CACHE_SIZE).set_integer(guard.len());
         cached
     }
 
@@ -240,7 +241,7 @@ impl WritableStorage for FileBacked {
         // with concurrent readers calling `free_list_cache()`.
         let mut guard = self.free_list_cache.lock();
         guard.put(addr, next);
-        firewood_set!(crate::registry::FREELIST_CACHE_SIZE, guard.len());
+        firewood_gauge!(FREELIST_CACHE_SIZE).set_integer(guard.len());
     }
 }
 
@@ -274,8 +275,8 @@ impl<'a> PredictiveReader<'a> {
 impl Drop for PredictiveReader<'_> {
     fn drop(&mut self) {
         let elapsed = self.started.elapsed();
-        firewood_increment!(crate::registry::IO_READ_MS, elapsed.as_millis() as u64);
-        firewood_increment!(crate::registry::IO_READ_COUNT, 1);
+        firewood_counter!(IO_READ_MS).increment(elapsed.as_millis() as u64);
+        firewood_counter!(IO_READ_COUNT).increment(1);
     }
 }
 

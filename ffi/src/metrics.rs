@@ -7,8 +7,8 @@ use std::sync::OnceLock;
 
 use crate::rendered_metrics::MapIntoCollection;
 use crate::{OwnedRenderedMetrics, jemalloc_metrics};
-use firewood_metrics::MetricsContext;
 use firewood_metrics::{HistogramConfig, HistogramMetricConfig};
+use firewood_metrics::{MetricsContext, firewood_histogram};
 use metrics_exporter_prometheus::{
     Matcher, NativeHistogramConfig, PrometheusBuilder, PrometheusHandle,
 };
@@ -146,6 +146,6 @@ pub fn gather_rendered_metrics() -> Result<OwnedRenderedMetrics, String> {
     let start = std::time::Instant::now();
     let result = recorder.render_snapshot_and_descriptions().map_into();
     let elapsed = start.elapsed();
-    metrics::histogram!(crate::registry::GATHER_DURATION_SECONDS).record(elapsed.as_secs_f64());
+    firewood_histogram!(cheap: GATHER_DURATION_SECONDS).record(elapsed.as_secs_f64());
     Ok(result)
 }

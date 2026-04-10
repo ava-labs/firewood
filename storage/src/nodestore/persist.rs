@@ -31,7 +31,7 @@ use bumpalo::Bump;
 use std::iter::FusedIterator;
 
 use crate::linear::FileIoError;
-use firewood_metrics::firewood_increment;
+use firewood_metrics::firewood_counter;
 use std::time::Instant;
 
 use crate::{MaybePersistedNode, NodeReader, WritableStorage};
@@ -192,7 +192,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         self.process_unpersisted_nodes(&mut bump, &mut node_allocator, super::INITIAL_BUMP_SIZE)?;
 
         let flush_time = flush_start.elapsed().as_millis() as u64;
-        firewood_increment!(crate::registry::FLUSH_NODES, flush_time);
+        firewood_counter!(FLUSH_NODES).increment(flush_time);
 
         Ok(())
     }
