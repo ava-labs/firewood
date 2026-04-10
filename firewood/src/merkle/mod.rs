@@ -1060,7 +1060,7 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
             (None, None) => {
                 // 1. The node is at `key`
                 node.update_value(value);
-                firewood_counter!(INSERT, "merkle" => "update").increment(1);
+                firewood_counter!(INSERT, "operation" => "update").increment(1);
                 Ok(node)
             }
             (None, Some((child_index, partial_path))) => {
@@ -1081,7 +1081,7 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
                 // Shorten the node's partial path since it has a new parent.
                 node.update_partial_path(partial_path);
                 branch.children[child_index] = Some(Child::Node(node));
-                firewood_counter!(INSERT, "merkle" => "above").increment(1);
+                firewood_counter!(INSERT, "operation" => "above").increment(1);
 
                 Ok(Node::Branch(Box::new(branch)))
             }
@@ -1103,7 +1103,7 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
                                 partial_path,
                             });
                             branch.children[child_index] = Some(Child::Node(new_leaf));
-                            firewood_counter!(INSERT, "merkle" => "below").increment(1);
+                            firewood_counter!(INSERT, "operation" => "below").increment(1);
                             return Ok(node);
                         };
                         let child = self.read_for_update(child)?;
@@ -1126,7 +1126,7 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
 
                         branch.children[child_index] = Some(Child::Node(new_leaf));
 
-                        firewood_counter!(INSERT, "merkle" => "split").increment(1);
+                        firewood_counter!(INSERT, "operation" => "split").increment(1);
                         Ok(Node::Branch(Box::new(branch)))
                     }
                 }
@@ -1156,7 +1156,7 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
                 });
                 branch.children[key_index] = Some(Child::Node(new_leaf));
 
-                firewood_counter!(INSERT, "merkle" => "split").increment(1);
+                firewood_counter!(INSERT, "operation" => "split").increment(1);
                 Ok(Node::Branch(Box::new(branch)))
             }
         }

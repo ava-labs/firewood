@@ -316,7 +316,7 @@ macro_rules! define_metrics {
             [
                 $($body)*
                 $(
-                    ::metrics::describe_counter!($name, $crate::strip_doc_leading_space(concat!($($desc),+)));
+                    $crate::__private::metrics::describe_counter!($name, $crate::strip_doc_leading_space(concat!($($desc),+)));
                 )*
             ]
             [ $($hcfg)* ]
@@ -350,7 +350,7 @@ macro_rules! define_metrics {
             [
                 $($body)*
                 $(
-                    ::metrics::describe_gauge!($name, $crate::strip_doc_leading_space(concat!($($desc),+)));
+                    $crate::__private::metrics::describe_gauge!($name, $crate::strip_doc_leading_space(concat!($($desc),+)));
                 )*
             ]
             [ $($hcfg)* ]
@@ -425,7 +425,7 @@ macro_rules! define_metrics {
             ]
             [
                 $($body)*
-                ::metrics::describe_histogram!($name, $crate::strip_doc_leading_space(concat!($($desc),+)));
+                $crate::__private::metrics::describe_histogram!($name, $crate::strip_doc_leading_space(concat!($($desc),+)));
             ]
             [ $($hcfg)* ]
             { $($rest)* }
@@ -452,7 +452,7 @@ macro_rules! define_metrics {
             ]
             [
                 $($body)*
-                ::metrics::describe_histogram!($name, $crate::strip_doc_leading_space(concat!($($desc),+)));
+                $crate::__private::metrics::describe_histogram!($name, $crate::strip_doc_leading_space(concat!($($desc),+)));
             ]
             [
                 $($hcfg)*
@@ -490,7 +490,7 @@ macro_rules! define_metrics {
             ]
             [
                 $($body)*
-                ::metrics::describe_histogram!($name, concat!($($desc),+));
+                $crate::__private::metrics::describe_histogram!($name, concat!($($desc),+));
             ]
             [
                 $($hcfg)*
@@ -540,23 +540,23 @@ macro_rules! define_metrics {
 macro_rules! firewood_counter {
     (expensive: $name:ident) => {
         if $crate::expensive_metrics_enabled() {
-            ::metrics::counter!(crate::registry::$name)
+            $crate::__private::metrics::counter!(crate::registry::$name)
         } else {
-            ::metrics::Counter::noop()
+            $crate::__private::metrics::Counter::noop()
         }
     };
     (expensive: $name:ident, $($labels:tt)+) => {
         if $crate::expensive_metrics_enabled() {
-            ::metrics::counter!(crate::registry::$name, $($labels)+)
+            $crate::__private::metrics::counter!(crate::registry::$name, $($labels)+)
         } else {
-            ::metrics::Counter::noop()
+            $crate::__private::metrics::Counter::noop()
         }
     };
     ($name:ident) => {
-        ::metrics::counter!(crate::registry::$name)
+        $crate::__private::metrics::counter!(crate::registry::$name)
     };
     ($name:ident, $($labels:tt)+) => {
-        ::metrics::counter!(crate::registry::$name, $($labels)+)
+        $crate::__private::metrics::counter!(crate::registry::$name, $($labels)+)
     };
 }
 
@@ -601,23 +601,23 @@ macro_rules! firewood_counter {
 macro_rules! firewood_gauge {
     (expensive: $name:ident) => {
         if $crate::expensive_metrics_enabled() {
-            ::metrics::gauge!(crate::registry::$name)
+            $crate::__private::metrics::gauge!(crate::registry::$name)
         } else {
-            ::metrics::Gauge::noop()
+            $crate::__private::metrics::Gauge::noop()
         }
     };
     (expensive: $name:ident, $($labels:tt)+) => {
         if $crate::expensive_metrics_enabled() {
-            ::metrics::gauge!(crate::registry::$name, $($labels)+)
+            $crate::__private::metrics::gauge!(crate::registry::$name, $($labels)+)
         } else {
-            ::metrics::Gauge::noop()
+            $crate::__private::metrics::Gauge::noop()
         }
     };
     ($name:ident) => {
-        ::metrics::gauge!(crate::registry::$name)
+        $crate::__private::metrics::gauge!(crate::registry::$name)
     };
     ($name:ident, $($labels:tt)+) => {
-        ::metrics::gauge!(crate::registry::$name, $($labels)+)
+        $crate::__private::metrics::gauge!(crate::registry::$name, $($labels)+)
     };
 }
 
@@ -666,24 +666,29 @@ macro_rules! firewood_gauge {
 macro_rules! firewood_histogram {
     ($name:ident) => {
         if $crate::expensive_metrics_enabled() {
-            ::metrics::histogram!(crate::registry::$name)
+            $crate::__private::metrics::histogram!(crate::registry::$name)
         } else {
-            ::metrics::Histogram::noop()
+            $crate::__private::metrics::Histogram::noop()
         }
     };
     ($name:ident, $($labels:tt)+) => {
         if $crate::expensive_metrics_enabled() {
-            ::metrics::histogram!(crate::registry::$name, $($labels)+)
+            $crate::__private::metrics::histogram!(crate::registry::$name, $($labels)+)
         } else {
-            ::metrics::Histogram::noop()
+            $crate::__private::metrics::Histogram::noop()
         }
     };
     (cheap: $name:ident) => {
-        ::metrics::histogram!(crate::registry::$name)
+        $crate::__private::metrics::histogram!(crate::registry::$name)
     };
     (cheap: $name:ident, $($labels:tt)+) => {
-        ::metrics::histogram!(crate::registry::$name, $($labels)+)
+        $crate::__private::metrics::histogram!(crate::registry::$name, $($labels)+)
     };
+}
+
+#[doc(hidden)]
+pub mod __private {
+    pub use ::metrics;
 }
 
 #[cfg(test)]

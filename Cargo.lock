@@ -1587,10 +1587,8 @@ dependencies = [
  "firewood-triehash",
  "hash-db",
  "hex",
- "hex-literal",
  "integer-encoding",
  "lender",
- "metrics",
  "nonzero_ext",
  "parking_lot",
  "plain_hasher",
@@ -1690,7 +1688,7 @@ dependencies = [
 name = "firewood-macros"
 version = "0.2.0"
 dependencies = [
- "metrics",
+ "firewood-metrics",
  "proc-macro2",
  "quote",
  "syn",
@@ -1711,7 +1709,6 @@ dependencies = [
  "firewood",
  "firewood-metrics",
  "firewood-storage",
- "metrics",
  "rmp-serde",
  "serde",
  "serde_bytes",

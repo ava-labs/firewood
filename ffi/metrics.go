@@ -32,6 +32,30 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
+// goMetricsRegistry holds Go-side metrics that are merged into GatherRenderedMetrics.
+// These cover operations that happen entirely in Go and are invisible to the Rust recorder.
+var goMetricsRegistry = prometheus.NewRegistry()
+
+// proofMarshalDuration tracks the duration of proof MarshalBinary calls,
+// labeled by proof_type ("range", "change", "verified_change").
+var proofMarshalDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	Name:    "firewood_go_proof_marshal_duration_seconds",
+	Help:    "Duration of Go-side proof marshal operations",
+	Buckets: []float64{5e-6, 25e-6, 1e-4, 5e-4, 1e-3, 5e-3, 25e-3, 0.1},
+}, []string{"proof_type"})
+
+// proofUnmarshalDuration tracks the duration of proof UnmarshalBinary calls,
+// labeled by proof_type ("range", "change").
+var proofUnmarshalDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	Name:    "firewood_go_proof_unmarshal_duration_seconds",
+	Help:    "Duration of Go-side proof unmarshal operations",
+	Buckets: []float64{5e-6, 25e-6, 1e-4, 5e-4, 1e-3, 5e-3, 25e-3, 0.1},
+}, []string{"proof_type"})
+
+func init() {
+	goMetricsRegistry.MustRegister(proofMarshalDuration, proofUnmarshalDuration)
+}
+
 var _ prometheus.Gatherer = (*Gatherer)(nil)
 
 type Gatherer struct{}
@@ -73,7 +97,25 @@ func (TextGatherer) Gather() ([]*dto.MetricFamily, error) {
 // and returns them as prometheus protobuf metric families.
 // Returns an error if the global recorder is not initialized.
 // This method must be called after StartMetrics or StartMetricsWithExporter.
+//
+// The result merges Rust-side metrics (via the native recorder) with Go-side
+// metrics (proof serialization timing) from an independent Go prometheus registry.
 func GatherRenderedMetrics() ([]*dto.MetricFamily, error) {
+	rustFamilies, err := gatherFromRust()
+	if err != nil {
+		return nil, err
+	}
+
+	goFamilies, err := goMetricsRegistry.Gather()
+	if err != nil {
+		return nil, err
+	}
+
+	return append(rustFamilies, goFamilies...), nil
+}
+
+// gatherFromRust collects the Rust-recorder metrics via the FFI.
+func gatherFromRust() ([]*dto.MetricFamily, error) {
 	result := C.fwd_gather_rendered()
 	switch result.tag {
 	case C.RenderedMetricsResult_Ok:

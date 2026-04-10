@@ -25,7 +25,7 @@ use std::time::Instant;
 
 use firewood::api::{self, Db as DbApi, DbView as DbViewApi, Proposal as ProposalApi};
 use firewood::db::{BatchOp, Db, Proposal};
-use firewood_metrics::firewood_counter;
+use firewood_metrics::firewood_histogram;
 use firewood_storage::InvalidTrieHashLength;
 
 pub mod registry;
@@ -249,8 +249,8 @@ fn apply_operation<'db>(
             let ops = into_batch_ops(pairs);
             let start = Instant::now();
             let proposal = DbApi::propose(db, ops)?;
-            firewood_counter!(PROPOSE_NS).increment(start.elapsed().as_nanos() as u64);
-            firewood_counter!(PROPOSE_COUNT).increment(1);
+            firewood_histogram!(cheap: PROPOSE_DURATION_SECONDS)
+                .record(start.elapsed().as_secs_f64());
             proposals.insert(returned_proposal_id, proposal);
             Ok(None)
         }
@@ -264,8 +264,8 @@ fn apply_operation<'db>(
             let start = Instant::now();
             let parent = get_proposal(proposals, proposal_id)?;
             let new_proposal = ProposalApi::propose(parent, ops)?;
-            firewood_counter!(PROPOSE_NS).increment(start.elapsed().as_nanos() as u64);
-            firewood_counter!(PROPOSE_COUNT).increment(1);
+            firewood_histogram!(cheap: PROPOSE_DURATION_SECONDS)
+                .record(start.elapsed().as_secs_f64());
             proposals.insert(returned_proposal_id, new_proposal);
             Ok(None)
         }
@@ -277,8 +277,8 @@ fn apply_operation<'db>(
             let proposal = take_proposal(proposals, proposal_id)?;
             let start = Instant::now();
             proposal.commit()?;
-            firewood_counter!(COMMIT_NS).increment(start.elapsed().as_nanos() as u64);
-            firewood_counter!(COMMIT_COUNT).increment(1);
+            firewood_histogram!(cheap: COMMIT_DURATION_SECONDS)
+                .record(start.elapsed().as_secs_f64());
             Ok(returned_hash)
         }
     }

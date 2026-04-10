@@ -26,7 +26,7 @@ use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::branch::{ReadSerializable, Serializable};
 use crate::nodestore::NodeStoreHeader;
-use firewood_metrics::firewood_counter;
+use firewood_metrics::{firewood_counter, firewood_gauge};
 use integer_encoding::VarIntReader;
 
 use std::io::{Error, ErrorKind, Read};
@@ -254,6 +254,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
             }
 
             firewood_counter!(SPACE_REUSED, "index" => index_name(index)).increment(index.size());
+            firewood_gauge!(FREE_LIST_ENTRIES, "index" => index_name(index)).decrement(1.0);
 
             // Return the address of the newly allocated block.
             trace!("Allocating from free list: addr: {address:?}, size: {index}");
@@ -300,6 +301,10 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
             None => self.allocate_from_end(area_index)?,
         };
 
+        firewood_counter!(NODES_ALLOCATED, "index" => index_name(area_index)).increment(1);
+        let waste = area_index.size().saturating_sub(stored_area_size);
+        firewood_counter!(BYTES_WASTED, "index" => index_name(area_index)).increment(waste);
+
         Ok((addr, area_index))
     }
 }
@@ -323,6 +328,7 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
         firewood_counter!(DELETE_NODE, "index" => index_name(area_size_index)).increment(1);
         firewood_counter!(SPACE_FREED, "index" => index_name(area_size_index))
             .increment(area_size_index.size());
+        firewood_gauge!(FREE_LIST_ENTRIES, "index" => index_name(area_size_index)).increment(1.0);
 
         // The area that contained the node is now free.
         let mut stored_area_bytes = Vec::new();
