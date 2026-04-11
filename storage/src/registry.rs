@@ -17,6 +17,8 @@ firewood_metrics::define_metrics! {
         NODES_ALLOCATED                = "firewood_nodes_allocated_total",
         /// Bytes of internal fragmentation per free-list size class (allocated - needed)
         BYTES_WASTED                   = "firewood_storage_bytes_wasted_total",
+        /// Count of free-list blocks split to satisfy a smaller allocation
+        FREE_LIST_SPLIT                = "firewood_storage_free_list_splits_total",
         /// Number of node reads
         READ_NODE                      = "firewood_node_reads_total",
         /// Number of node cache accesses

@@ -21,7 +21,7 @@
 //! - **`NodeData`** - Serialized node content
 
 use super::area_index_and_size;
-use super::primitives::{AreaIndex, LinearAddress, index_name};
+use super::primitives::{AreaIndex, LinearAddress, area_size_iter, index_name};
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::branch::{ReadSerializable, Serializable};
@@ -262,7 +262,6 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
         }
 
         trace!("No free blocks of sufficient size {index} found");
-        firewood_counter!(SPACE_FROM_END, "index" => index_name(index)).increment(index.size());
         Ok(None)
     }
 
@@ -273,7 +272,72 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
             .set_size(self.header.size().saturating_add(area_size));
         debug_assert!(addr.is_aligned());
         trace!("Allocating from end: addr: {addr:?}, size: {index}");
+        firewood_counter!(SPACE_FROM_END, "index" => index_name(index)).increment(area_size);
         Ok(addr)
+    }
+}
+
+impl<S: WritableStorage> NodeAllocator<'_, S> {
+    /// Attempts to satisfy an allocation for `target_index` by splitting a larger free block.
+    ///
+    /// Iterates source sizes ≥ 768 bytes in ascending order and uses the first one whose
+    /// size is an exact multiple of `target_index.size()` and whose free list is non-empty.
+    /// The source block is split into `src_size / target_size` pieces: the first is returned
+    /// to the caller; the remainder are added to the target free list.
+    ///
+    /// Only call this when `target_index.size() <= 512` and `allocate_from_freed` returned `None`.
+    #[expect(clippy::indexing_slicing)]
+    fn allocate_by_splitting(
+        &mut self,
+        target_index: AreaIndex,
+    ) -> Result<Option<LinearAddress>, FileIoError> {
+        let target_size = target_index.size();
+
+        for (src_index, src_size) in area_size_iter().filter(|&(_, s)| s >= 768) {
+            // Only split if target fits a whole number of times in the source.
+            if src_size % target_size != 0 {
+                continue;
+            }
+            // Only proceed if the source free list is non-empty.
+            if self.header.free_lists()[src_index.as_usize()].is_none() {
+                continue;
+            }
+
+            // Pop one block from the source free list.
+            let addr = self
+                .allocate_from_freed(src_index)?
+                .expect("free list was non-empty");
+
+            // Carve out pieces 1..n-1 and add them to the target free list.
+            let num_pieces = (src_size / target_size) as usize;
+            let mut stored_area_bytes = Vec::new();
+            for i in 1..num_pieces {
+                let piece_addr = addr
+                    .advance(i as u64 * target_size)
+                    .expect("split address cannot overflow");
+
+                stored_area_bytes.clear();
+                let current_head = self.header.free_lists()[target_index.as_usize()];
+                FreeArea::new(current_head).as_bytes(target_index, &mut stored_area_bytes);
+                self.storage.write(piece_addr.get(), &stored_area_bytes)?;
+                self.storage
+                    .add_to_free_list_cache(piece_addr, current_head);
+                self.header.free_lists_mut()[target_index.as_usize()] = Some(piece_addr);
+                firewood_gauge!(FREE_LIST_ENTRIES, "index" => index_name(target_index))
+                    .increment(1.0);
+            }
+
+            firewood_counter!(
+                FREE_LIST_SPLIT,
+                "target" => index_name(target_index),
+                "source" => index_name(src_index)
+            )
+            .increment(1);
+
+            return Ok(Some(addr));
+        }
+
+        Ok(None)
     }
 
     /// Returns an address that can be used to store the given `node` and updates
@@ -294,10 +358,14 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
         })?;
 
         // Attempt to allocate from a free list.
-        // If we can't allocate from a free list, allocate past the existing
-        // of the ReadableStorage.
+        // If the free list is empty and the node is small, try splitting a larger free block.
+        // Fall back to appending to the end of the file.
         let addr = match self.allocate_from_freed(area_index)? {
             Some(addr) => addr,
+            None if area_index.size() <= 512 => match self.allocate_by_splitting(area_index)? {
+                Some(addr) => addr,
+                None => self.allocate_from_end(area_index)?,
+            },
             None => self.allocate_from_end(area_index)?,
         };
 
@@ -307,9 +375,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
 
         Ok((addr, area_index))
     }
-}
 
-impl<S: WritableStorage> NodeAllocator<'_, S> {
     /// Deletes the `Node` and updates the header of the allocator.
     /// Nodes that are not persisted are just dropped.
     ///
@@ -978,5 +1044,146 @@ mod tests {
     const fn ai_const_expr_tests() {
         let _ = const { AreaIndex::new(1) };
         let _ = const { area_index!(1) };
+    }
+
+    // ---- free-list splitting tests ----
+
+    /// Write a single FreeArea of `area_size_index` at `offset` into `storage`.
+    fn write_free_block(storage: &MemStore, area_size_index: AreaIndex, offset: u64) {
+        let mut bytes = Vec::new();
+        FreeArea::new(None).as_bytes(area_size_index, &mut bytes);
+        storage.write(offset, &bytes).unwrap();
+    }
+
+    /// Build a header with `size` and a single free block at `block_addr` for `area_index`.
+    fn make_header_with_free_block(area_index: AreaIndex, block_addr: u64) -> NodeStoreHeader {
+        use crate::NodeHashAlgorithm;
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        header.set_size(block_addr + area_index.size());
+        header.free_lists_mut()[area_index.as_usize()] = LinearAddress::new(block_addr);
+        header
+    }
+
+    #[test]
+    fn split_768_into_96() {
+        // One 768-byte free block; request 90 bytes (rounds up to 96).
+        // Expected: first 96-byte piece returned; 7 more added to the 96-byte free list.
+        const AREA_768: AreaIndex = area_index!(7); // 768 bytes
+        const AREA_96: AreaIndex = area_index!(3); // 96 bytes
+
+        let memstore = MemStore::default();
+        write_free_block(&memstore, AREA_768, NodeStoreHeader::SIZE);
+        let mut header = make_header_with_free_block(AREA_768, NodeStoreHeader::SIZE);
+
+        let mut allocator = NodeAllocator::new(&memstore, &mut header);
+        let (addr, idx) = allocator.allocate_node(&[0u8; 90]).unwrap();
+
+        // First piece returned.
+        assert_eq!(addr, LinearAddress::new(NodeStoreHeader::SIZE).unwrap());
+        assert_eq!(idx, AREA_96);
+
+        // Pieces 1-7 (at offsets +96, +192, ..., +672) added to 96-byte free list.
+        // The last piece added becomes the head (LIFO prepend).
+        assert_eq!(
+            header.free_lists()[AREA_96.as_usize()],
+            LinearAddress::new(NodeStoreHeader::SIZE + 96 * 7),
+        );
+
+        // 768-byte free list consumed.
+        assert!(header.free_lists()[AREA_768.as_usize()].is_none());
+    }
+
+    #[test]
+    fn split_1024_into_512() {
+        // One 1024-byte free block; request 500 bytes (rounds up to 512).
+        // Expected: first 512-byte piece returned; 1 more added to the 512-byte free list.
+        const AREA_1024: AreaIndex = area_index!(8); // 1024 bytes
+        const AREA_512: AreaIndex = area_index!(6); // 512 bytes
+
+        let memstore = MemStore::default();
+        write_free_block(&memstore, AREA_1024, NodeStoreHeader::SIZE);
+        let mut header = make_header_with_free_block(AREA_1024, NodeStoreHeader::SIZE);
+
+        let mut allocator = NodeAllocator::new(&memstore, &mut header);
+        let (addr, idx) = allocator.allocate_node(&[0u8; 500]).unwrap();
+
+        assert_eq!(addr, LinearAddress::new(NodeStoreHeader::SIZE).unwrap());
+        assert_eq!(idx, AREA_512);
+
+        // One extra piece at offset +512.
+        assert_eq!(
+            header.free_lists()[AREA_512.as_usize()],
+            LinearAddress::new(NodeStoreHeader::SIZE + 512),
+        );
+        assert!(header.free_lists()[AREA_1024.as_usize()].is_none());
+    }
+
+    #[test]
+    fn no_split_768_into_512() {
+        // One 768-byte free block; request 500 bytes (rounds up to 512).
+        // 768 % 512 != 0, so no splitting; falls through to allocate_from_end.
+        const AREA_768: AreaIndex = area_index!(7); // 768 bytes
+        const AREA_512: AreaIndex = area_index!(6); // 512 bytes
+
+        let memstore = MemStore::default();
+        write_free_block(&memstore, AREA_768, NodeStoreHeader::SIZE);
+        let mut header = make_header_with_free_block(AREA_768, NodeStoreHeader::SIZE);
+        let end_before = header.size();
+
+        let mut allocator = NodeAllocator::new(&memstore, &mut header);
+        let (addr, idx) = allocator.allocate_node(&[0u8; 500]).unwrap();
+
+        // Allocated from end, not from the 768 block.
+        assert_eq!(addr, LinearAddress::new(end_before).unwrap());
+        assert_eq!(idx, AREA_512);
+
+        // The 768-byte free list is untouched.
+        assert_eq!(
+            header.free_lists()[AREA_768.as_usize()],
+            LinearAddress::new(NodeStoreHeader::SIZE),
+        );
+        // 512-byte free list is still empty.
+        assert!(header.free_lists()[AREA_512.as_usize()].is_none());
+    }
+
+    #[test]
+    fn split_prefers_smallest_source() {
+        // Both a 768-byte and a 1024-byte free block exist; request 128 bytes.
+        // Both divide evenly (768/128=6, 1024/128=8), but 768 is iterated first.
+        const AREA_768: AreaIndex = area_index!(7); // 768 bytes
+        const AREA_1024: AreaIndex = area_index!(8); // 1024 bytes
+        const AREA_128: AreaIndex = area_index!(4); // 128 bytes
+
+        let memstore = MemStore::default();
+        let block_768 = NodeStoreHeader::SIZE;
+        let block_1024 = NodeStoreHeader::SIZE + 768;
+        write_free_block(&memstore, AREA_768, block_768);
+        write_free_block(&memstore, AREA_1024, block_1024);
+
+        use crate::NodeHashAlgorithm;
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        header.set_size(block_1024 + 1024);
+        header.free_lists_mut()[AREA_768.as_usize()] = LinearAddress::new(block_768);
+        header.free_lists_mut()[AREA_1024.as_usize()] = LinearAddress::new(block_1024);
+
+        let mut allocator = NodeAllocator::new(&memstore, &mut header);
+        let (addr, idx) = allocator.allocate_node(&[0u8; 120]).unwrap();
+
+        // Should have split the 768 block (smallest source), returning the first 128-byte piece.
+        assert_eq!(addr, LinearAddress::new(block_768).unwrap());
+        assert_eq!(idx, AREA_128);
+
+        // 768-byte free list consumed; 1024 untouched.
+        assert!(header.free_lists()[AREA_768.as_usize()].is_none());
+        assert_eq!(
+            header.free_lists()[AREA_1024.as_usize()],
+            LinearAddress::new(block_1024),
+        );
+
+        // 5 extra 128-byte pieces in the 128-byte free list (pieces at +128, +256, +384, +512, +640).
+        assert_eq!(
+            header.free_lists()[AREA_128.as_usize()],
+            LinearAddress::new(block_768 + 128 * 5),
+        );
     }
 }

@@ -5361,6 +5361,134 @@
         }
       }
     },
+    "panel-84": {
+      "kind": "Panel",
+      "spec": {
+        "id": 84,
+        "title": "Firewood: Free List Splits by Target Index (Stacked)",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "sum by (target) (rate(avalanche_evm_firewood_firewood_storage_free_list_splits_total[$__rate_interval])) / ignoring(target) group_left() sum(rate(avalanche_evm_firewood_firewood_storage_free_list_splits_total[$__rate_interval]))",
+                      "legendFormat": "{{target}}"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": []
+              },
+              "tooltip": {
+                "mode": "multi",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "percentunit",
+                "custom": {
+                  "fillOpacity": 80,
+                  "stacking": {
+                    "mode": "percent"
+                  }
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-85": {
+      "kind": "Panel",
+      "spec": {
+        "id": 85,
+        "title": "Firewood: Free List Splits by Target \u0026 Source (Lines)",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "sum by (target, source) (rate(avalanche_evm_firewood_firewood_storage_free_list_splits_total[$__rate_interval]))",
+                      "legendFormat": "{{target}} ← {{source}}"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": []
+              },
+              "tooltip": {
+                "mode": "multi",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {},
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
     "panel-9": {
       "kind": "Panel",
       "spec": {
@@ -6377,6 +6505,32 @@
                         "name": "panel-83"
                       }
                     }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 56,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-84"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 56,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-85"
+                      }
+                    }
                   }
                 ]
               }
@@ -6409,7 +6563,7 @@
     "hideTimepicker": false,
     "fiscalYearStartMonth": 0
   },
-  "title": "Firewood: C-Chain Metrics",
+  "title": "Brandon: C-Chain Copy",
   "variables": [
     {
       "kind": "DatasourceVariable",

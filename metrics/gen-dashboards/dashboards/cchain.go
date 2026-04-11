@@ -751,6 +751,33 @@ func (c *CChain) registerSpaceAllocationPanels(b *v2.DashboardBuilder) {
 		"percentunit", 80, true).Id(82))
 	b.Panel("panel-83", byIndex("Firewood: Free List Entries by Index (Lines)",
 		"sum by (index) (avalanche_evm_firewood_firewood_free_list_entries)", "short", 0, false).Id(83))
+
+	// FREE_LIST_SPLIT has two labels (target, source), so we use two views:
+	// stacked % by target (which small sizes benefit) and lines by target+source (all pairs).
+	splitMetric := "avalanche_evm_firewood_firewood_storage_free_list_splits_total"
+	b.Panel("panel-84", v2.NewPanelBuilder().Id(84).
+		Title("Firewood: Free List Splits by Target Index (Stacked)").
+		Data(v2.NewQueryGroupBuilder().
+			Target(promQ("A",
+				fmt.Sprintf(
+					"sum by (target) (rate(%s[$__rate_interval])) / ignoring(target) group_left() sum(rate(%s[$__rate_interval]))",
+					splitMetric, splitMetric,
+				),
+				"{{target}}"))).
+		Visualization(timeseries.NewVisualizationBuilder().Unit("percentunit").
+			FillOpacity(80).
+			Stacking(stackingPercent()).
+			Legend(legendOpts(nil, common.LegendDisplayModeList)).
+			Tooltip(tooltipOpts(common.TooltipDisplayModeMulti, common.SortOrderNone))))
+	b.Panel("panel-85", v2.NewPanelBuilder().Id(85).
+		Title("Firewood: Free List Splits by Target & Source (Lines)").
+		Data(v2.NewQueryGroupBuilder().
+			Target(promQ("A",
+				fmt.Sprintf("sum by (target, source) (rate(%s[$__rate_interval]))", splitMetric),
+				"{{target}} \u2190 {{source}}"))).
+		Visualization(timeseries.NewVisualizationBuilder().
+			Legend(legendOpts(nil, common.LegendDisplayModeList)).
+			Tooltip(tooltipOpts(common.TooltipDisplayModeMulti, common.SortOrderNone))))
 }
 
 func (c *CChain) buildSpaceAllocationRow() *v2.RowBuilder {
@@ -769,5 +796,7 @@ func (c *CChain) buildSpaceAllocationRow() *v2.RowBuilder {
 			Item(gridItem("panel-80", 0, 40, 12, 8)).
 			Item(gridItem("panel-81", 12, 40, 12, 8)).
 			Item(gridItem("panel-82", 0, 48, 12, 8)).
-			Item(gridItem("panel-83", 12, 48, 12, 8)))
+			Item(gridItem("panel-83", 12, 48, 12, 8)).
+			Item(gridItem("panel-84", 0, 56, 12, 8)).
+			Item(gridItem("panel-85", 12, 56, 12, 8)))
 }
