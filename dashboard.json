@@ -7434,6 +7434,1644 @@
           "version": "13.1.0-24251769778"
         }
       }
+    },
+    "panel-70": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "prometheus",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_storage_bytes_reused_total[$__rate_interval]))",
+                      "legendFormat": "{{index}}"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Stacked area chart showing the distribution of rate for storage bytes reused across free-list size classes (index label).",
+        "id": 70,
+        "links": [],
+        "title": "Firewood: Storage Bytes Reused by Index (Stacked)",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 80,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "percent"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "percent"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "none"
+              }
+            }
+          },
+          "version": "13.1.0-24251769778"
+        }
+      }
+    },
+    "panel-71": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "prometheus",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_storage_bytes_reused_total[$__rate_interval]))",
+                      "legendFormat": "{{index}}"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Line chart showing rate for storage bytes reused with a separate line per free-list size class (index label).",
+        "id": 71,
+        "links": [],
+        "title": "Firewood: Storage Bytes Reused by Index (Lines)",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "Bps"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "none"
+              }
+            }
+          },
+          "version": "13.1.0-24251769778"
+        }
+      }
+    },
+    "panel-72": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "prometheus",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_storage_bytes_appended_total[$__rate_interval]))",
+                      "legendFormat": "{{index}}"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Stacked area chart showing the distribution of rate for storage bytes appended across free-list size classes (index label).",
+        "id": 72,
+        "links": [],
+        "title": "Firewood: Storage Bytes Appended by Index (Stacked)",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 80,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "percent"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "percent"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "none"
+              }
+            }
+          },
+          "version": "13.1.0-24251769778"
+        }
+      }
+    },
+    "panel-73": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "prometheus",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_storage_bytes_appended_total[$__rate_interval]))",
+                      "legendFormat": "{{index}}"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Line chart showing rate for storage bytes appended with a separate line per free-list size class (index label).",
+        "id": 73,
+        "links": [],
+        "title": "Firewood: Storage Bytes Appended by Index (Lines)",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "Bps"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "none"
+              }
+            }
+          },
+          "version": "13.1.0-24251769778"
+        }
+      }
+    },
+    "panel-74": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "prometheus",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_storage_bytes_freed_total[$__rate_interval]))",
+                      "legendFormat": "{{index}}"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Stacked area chart showing the distribution of rate for storage bytes freed across free-list size classes (index label).",
+        "id": 74,
+        "links": [],
+        "title": "Firewood: Storage Bytes Freed by Index (Stacked)",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 80,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "percent"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "percent"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "none"
+              }
+            }
+          },
+          "version": "13.1.0-24251769778"
+        }
+      }
+    },
+    "panel-75": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "prometheus",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_storage_bytes_freed_total[$__rate_interval]))",
+                      "legendFormat": "{{index}}"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Line chart showing rate for storage bytes freed with a separate line per free-list size class (index label).",
+        "id": 75,
+        "links": [],
+        "title": "Firewood: Storage Bytes Freed by Index (Lines)",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "Bps"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "none"
+              }
+            }
+          },
+          "version": "13.1.0-24251769778"
+        }
+      }
+    },
+    "panel-76": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "prometheus",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_storage_bytes_wasted_total[$__rate_interval]))",
+                      "legendFormat": "{{index}}"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Stacked area chart showing the distribution of rate for storage bytes wasted across free-list size classes (index label).",
+        "id": 76,
+        "links": [],
+        "title": "Firewood: Storage Bytes Wasted by Index (Stacked)",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 80,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "percent"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "percent"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "none"
+              }
+            }
+          },
+          "version": "13.1.0-24251769778"
+        }
+      }
+    },
+    "panel-77": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "prometheus",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_storage_bytes_wasted_total[$__rate_interval]))",
+                      "legendFormat": "{{index}}"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Line chart showing rate for storage bytes wasted with a separate line per free-list size class (index label).",
+        "id": 77,
+        "links": [],
+        "title": "Firewood: Storage Bytes Wasted by Index (Lines)",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "Bps"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "none"
+              }
+            }
+          },
+          "version": "13.1.0-24251769778"
+        }
+      }
+    },
+    "panel-78": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "prometheus",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_nodes_allocated_total[$__rate_interval]))",
+                      "legendFormat": "{{index}}"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Stacked area chart showing the distribution of rate for nodes allocated across free-list size classes (index label).",
+        "id": 78,
+        "links": [],
+        "title": "Firewood: Nodes Allocated by Index (Stacked)",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 80,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "percent"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "percent"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "none"
+              }
+            }
+          },
+          "version": "13.1.0-24251769778"
+        }
+      }
+    },
+    "panel-79": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "prometheus",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_nodes_allocated_total[$__rate_interval]))",
+                      "legendFormat": "{{index}}"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Line chart showing rate for nodes allocated with a separate line per free-list size class (index label).",
+        "id": 79,
+        "links": [],
+        "title": "Firewood: Nodes Allocated by Index (Lines)",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "short"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "none"
+              }
+            }
+          },
+          "version": "13.1.0-24251769778"
+        }
+      }
+    },
+    "panel-80": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "prometheus",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_nodes_deleted_total[$__rate_interval]))",
+                      "legendFormat": "{{index}}"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Stacked area chart showing the distribution of rate for nodes deleted across free-list size classes (index label).",
+        "id": 80,
+        "links": [],
+        "title": "Firewood: Nodes Deleted by Index (Stacked)",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 80,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "percent"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "percent"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "none"
+              }
+            }
+          },
+          "version": "13.1.0-24251769778"
+        }
+      }
+    },
+    "panel-81": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "prometheus",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_nodes_deleted_total[$__rate_interval]))",
+                      "legendFormat": "{{index}}"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Line chart showing rate for nodes deleted with a separate line per free-list size class (index label).",
+        "id": 81,
+        "links": [],
+        "title": "Firewood: Nodes Deleted by Index (Lines)",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "short"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "none"
+              }
+            }
+          },
+          "version": "13.1.0-24251769778"
+        }
+      }
+    },
+    "panel-82": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "prometheus",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "sum by (index) (avalanche_evm_firewood_firewood_free_list_entries)",
+                      "legendFormat": "{{index}}"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Stacked area chart showing the distribution of gauge value for free list entries across free-list size classes (index label).",
+        "id": 82,
+        "links": [],
+        "title": "Firewood: Free List Entries by Index (Stacked)",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 80,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "percent"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "percent"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "none"
+              }
+            }
+          },
+          "version": "13.1.0-24251769778"
+        }
+      }
+    },
+    "panel-83": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "prometheus",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "sum by (index) (avalanche_evm_firewood_firewood_free_list_entries)",
+                      "legendFormat": "{{index}}"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Line chart showing gauge value for free list entries with a separate line per free-list size class (index label).",
+        "id": 83,
+        "links": [],
+        "title": "Firewood: Free List Entries by Index (Lines)",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "short"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "none"
+              }
+            }
+          },
+          "version": "13.1.0-24251769778"
+        }
+      }
     }
   },
   "layout": {
@@ -8199,6 +9837,202 @@
               }
             },
             "title": "Memory"
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-70"
+                      },
+                      "height": 8,
+                      "width": 12,
+                      "x": 0,
+                      "y": 0
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-71"
+                      },
+                      "height": 8,
+                      "width": 12,
+                      "x": 12,
+                      "y": 0
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-72"
+                      },
+                      "height": 8,
+                      "width": 12,
+                      "x": 0,
+                      "y": 8
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-73"
+                      },
+                      "height": 8,
+                      "width": 12,
+                      "x": 12,
+                      "y": 8
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-74"
+                      },
+                      "height": 8,
+                      "width": 12,
+                      "x": 0,
+                      "y": 16
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-75"
+                      },
+                      "height": 8,
+                      "width": 12,
+                      "x": 12,
+                      "y": 16
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-76"
+                      },
+                      "height": 8,
+                      "width": 12,
+                      "x": 0,
+                      "y": 24
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-77"
+                      },
+                      "height": 8,
+                      "width": 12,
+                      "x": 12,
+                      "y": 24
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-78"
+                      },
+                      "height": 8,
+                      "width": 12,
+                      "x": 0,
+                      "y": 32
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-79"
+                      },
+                      "height": 8,
+                      "width": 12,
+                      "x": 12,
+                      "y": 32
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-80"
+                      },
+                      "height": 8,
+                      "width": 12,
+                      "x": 0,
+                      "y": 40
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-81"
+                      },
+                      "height": 8,
+                      "width": 12,
+                      "x": 12,
+                      "y": 40
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-82"
+                      },
+                      "height": 8,
+                      "width": 12,
+                      "x": 0,
+                      "y": 48
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-83"
+                      },
+                      "height": 8,
+                      "width": 12,
+                      "x": 12,
+                      "y": 48
+                    }
+                  }
+                ]
+              }
+            },
+            "title": "Space Allocation & Free Lists"
           }
         }
       ]
