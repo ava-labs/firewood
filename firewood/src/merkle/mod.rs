@@ -10,6 +10,7 @@ pub(crate) mod collapse;
 mod merge;
 /// Parallel merkle
 pub mod parallel;
+pub(crate) mod reconcile;
 
 use crate::api::{
     self, BatchIter, FrozenProof, FrozenRangeProof, KeyType, KeyValuePair, ValueType,
@@ -539,7 +540,10 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
     // Conflicting proof nodes (same key, different data) are rejected.
     let mut proof_node_map: HashMap<PathBuf, &ProofNode> = HashMap::new();
     for proof_node in all_proof_nodes {
-        proving_merkle.reconcile_branch_proof_node(proof_node)?;
+        proving_merkle.reconcile_branch_proof_node(proof_node, |pn| match &pn.value_digest {
+            Some(ValueDigest::Value(v)) => Ok(Some(v.clone())),
+            _ => Ok(None),
+        })?;
         match proof_node_map.entry(proof_node.key.clone()) {
             std::collections::hash_map::Entry::Occupied(existing) => {
                 if *existing.get() != *proof_node {
@@ -1267,6 +1271,46 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
         }
     }
 
+    /// Navigate to the branch at `key_nibbles` and return a mutable reference.
+    /// Returns `None` if the path doesn't lead to an in-memory branch.
+    ///
+    /// This is the mutable counterpart to `get_node_from_nibbles`. It only
+    /// works for in-memory nodes (`Child::Node`), which is guaranteed after
+    /// `insert_branch_from_nibbles`.
+    pub(crate) fn get_branch_from_nibbles_mut<'a>(
+        root: &'a mut Option<Node>,
+        key: &[PathComponent],
+    ) -> Option<&'a mut BranchNode> {
+        let node = root.as_mut()?;
+        Self::get_branch_from_nibbles_mut_helper(node, key)
+    }
+
+    fn get_branch_from_nibbles_mut_helper<'a>(
+        node: &'a mut Node,
+        key: &[PathComponent],
+    ) -> Option<&'a mut BranchNode> {
+        let branch = node.as_branch_mut()?;
+        let pp = &branch.partial_path;
+        let shared_len = key
+            .iter()
+            .zip(pp.iter())
+            .take_while(|(a, b)| a.as_u8() == **b)
+            .count();
+        if shared_len != pp.len() {
+            return None;
+        }
+        let rest = key.get(shared_len..)?;
+        let Some((&child_nibble, deeper)) = rest.split_first() else {
+            return Some(branch);
+        };
+        match &mut branch.children[child_nibble] {
+            Some(Child::Node(child_node)) => {
+                Self::get_branch_from_nibbles_mut_helper(child_node, deeper)
+            }
+            _ => None,
+        }
+    }
+
     /// Removes the value associated with the given `key`.
     /// Returns the value that was removed, if any.
     /// Otherwise returns `None`.
@@ -1554,20 +1598,10 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
     }
 }
 
-/// The outcome of reconciling a branch proof node against the in-memory trie.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReconcileResult {
-    /// The proof node had no value to reconcile (hash-only or absent).
-    NoValue,
-    /// The branch already had a matching value.
-    ValueAlreadyMatches,
-    /// A value was inserted into a branch that previously had none.
-    ValueInserted,
-}
-
 impl Merkle<NodeStore<Mutable<Propose>, MemStore>> {
     /// Returns the node mapped to by `key_nibbles` where each key element is a
     /// single nibble.
+    #[cfg(test)]
     pub(crate) fn get_node_from_nibbles(
         &self,
         key_nibbles: &[u8],
@@ -1602,65 +1636,6 @@ impl Merkle<NodeStore<Mutable<Propose>, MemStore>> {
         let root_node = self.insert_branch_helper(root_node, key_nibbles)?;
         *self.nodestore.root_mut() = root_node.into();
         Ok(())
-    }
-
-    /// Reconciles a branch proof node against the in-memory proving merkle.
-    ///
-    /// This helper never overwrites an existing branch value. It only
-    /// creates missing branch structure and inserts a value when the
-    /// branch exists without one.
-    ///
-    /// ## Arguments
-    ///
-    /// * `proof_node` - A branch proof node containing the key (as nibble
-    ///   path components) and an optional value digest to reconcile.
-    ///
-    /// ## Errors
-    ///
-    /// Returns an error if an existing value conflicts with the proof.
-    pub(crate) fn reconcile_branch_proof_node(
-        &mut self,
-        proof_node: &ProofNode,
-    ) -> Result<ReconcileResult, ProofError> {
-        let key_nibbles = proof_node
-            .key
-            .iter()
-            .map(|component| component.as_u8())
-            .collect::<Vec<_>>();
-        let key_nibbles = key_nibbles.as_slice();
-
-        if !key_nibbles.len().is_multiple_of(2)
-            && matches!(proof_node.value_digest, Some(ValueDigest::Value(_)))
-        {
-            return Err(ProofError::ValueAtOddNibbleLength);
-        }
-
-        self.insert_branch_from_nibbles(key_nibbles)?;
-
-        let Some(ValueDigest::Value(proof_value)) = proof_node.value_digest.as_ref() else {
-            // Hash-only value digests and absent values are validated in later
-            // proof-hash reconstruction steps.
-            return Ok(ReconcileResult::NoValue);
-        };
-
-        let Some(node) = self.get_node_from_nibbles(key_nibbles)? else {
-            return Err(ProofError::NodeNotInTrie);
-        };
-        let Some(branch) = node.as_branch() else {
-            return Err(ProofError::NodeNotInTrie);
-        };
-
-        match branch.value.as_deref() {
-            Some(existing_value) if existing_value != proof_value.as_ref() => {
-                Err(ProofError::UnexpectedValue)
-            }
-            Some(_) => Ok(ReconcileResult::ValueAlreadyMatches),
-            None => {
-                let key_bytes: Vec<u8> = Path::from(key_nibbles).bytes_iter().collect();
-                self.insert(&key_bytes, proof_value.clone())?;
-                Ok(ReconcileResult::ValueInserted)
-            }
-        }
     }
 }
 
