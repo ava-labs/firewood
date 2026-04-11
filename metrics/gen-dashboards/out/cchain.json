@@ -4473,7 +4473,7 @@
                       "name": "${datasource}"
                     },
                     "spec": {
-                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_storage_bytes_reused_total[$__rate_interval]))",
+                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_storage_bytes_reused_total[$__rate_interval])) / ignoring(index) group_left() sum(rate(avalanche_evm_firewood_firewood_storage_bytes_reused_total[$__rate_interval]))",
                       "legendFormat": "{{index}}"
                     }
                   },
@@ -4505,7 +4505,7 @@
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "percent",
+                "unit": "percentunit",
                 "custom": {
                   "fillOpacity": 80,
                   "stacking": {
@@ -4603,7 +4603,7 @@
                       "name": "${datasource}"
                     },
                     "spec": {
-                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_storage_bytes_appended_total[$__rate_interval]))",
+                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_storage_bytes_appended_total[$__rate_interval])) / ignoring(index) group_left() sum(rate(avalanche_evm_firewood_firewood_storage_bytes_appended_total[$__rate_interval]))",
                       "legendFormat": "{{index}}"
                     }
                   },
@@ -4635,7 +4635,7 @@
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "percent",
+                "unit": "percentunit",
                 "custom": {
                   "fillOpacity": 80,
                   "stacking": {
@@ -4733,7 +4733,7 @@
                       "name": "${datasource}"
                     },
                     "spec": {
-                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_storage_bytes_freed_total[$__rate_interval]))",
+                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_storage_bytes_freed_total[$__rate_interval])) / ignoring(index) group_left() sum(rate(avalanche_evm_firewood_firewood_storage_bytes_freed_total[$__rate_interval]))",
                       "legendFormat": "{{index}}"
                     }
                   },
@@ -4765,7 +4765,7 @@
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "percent",
+                "unit": "percentunit",
                 "custom": {
                   "fillOpacity": 80,
                   "stacking": {
@@ -4863,7 +4863,7 @@
                       "name": "${datasource}"
                     },
                     "spec": {
-                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_storage_bytes_wasted_total[$__rate_interval]))",
+                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_storage_bytes_wasted_total[$__rate_interval])) / ignoring(index) group_left() sum(rate(avalanche_evm_firewood_firewood_storage_bytes_wasted_total[$__rate_interval]))",
                       "legendFormat": "{{index}}"
                     }
                   },
@@ -4895,7 +4895,7 @@
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "percent",
+                "unit": "percentunit",
                 "custom": {
                   "fillOpacity": 80,
                   "stacking": {
@@ -4993,7 +4993,7 @@
                       "name": "${datasource}"
                     },
                     "spec": {
-                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_nodes_allocated_total[$__rate_interval]))",
+                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_nodes_allocated_total[$__rate_interval])) / ignoring(index) group_left() sum(rate(avalanche_evm_firewood_firewood_nodes_allocated_total[$__rate_interval]))",
                       "legendFormat": "{{index}}"
                     }
                   },
@@ -5025,7 +5025,7 @@
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "percent",
+                "unit": "percentunit",
                 "custom": {
                   "fillOpacity": 80,
                   "stacking": {
@@ -5123,7 +5123,7 @@
                       "name": "${datasource}"
                     },
                     "spec": {
-                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_nodes_deleted_total[$__rate_interval]))",
+                      "expr": "sum by (index) (rate(avalanche_evm_firewood_firewood_nodes_deleted_total[$__rate_interval])) / ignoring(index) group_left() sum(rate(avalanche_evm_firewood_firewood_nodes_deleted_total[$__rate_interval]))",
                       "legendFormat": "{{index}}"
                     }
                   },
@@ -5155,7 +5155,7 @@
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "percent",
+                "unit": "percentunit",
                 "custom": {
                   "fillOpacity": 80,
                   "stacking": {
@@ -5253,7 +5253,7 @@
                       "name": "${datasource}"
                     },
                     "spec": {
-                      "expr": "sum by (index) (avalanche_evm_firewood_firewood_free_list_entries)",
+                      "expr": "sum by (index) (avalanche_evm_firewood_firewood_free_list_entries) / ignoring(index) group_left() sum(avalanche_evm_firewood_firewood_free_list_entries)",
                       "legendFormat": "{{index}}"
                     }
                   },
@@ -5285,7 +5285,7 @@
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "percent",
+                "unit": "percentunit",
                 "custom": {
                   "fillOpacity": 80,
                   "stacking": {

@@ -706,38 +706,49 @@ func (c *CChain) registerSpaceAllocationPanels(b *v2.DashboardBuilder) {
 		return fmt.Sprintf("sum by (index) (rate(%s[$__rate_interval]))", metric)
 	}
 
+	// percentByIndex computes each index's share of the total rate (0–1), so that
+	// stacked panels display correct percentages in the tooltip rather than raw rates.
+	percentByIndex := func(metric string) string {
+		return fmt.Sprintf(
+			"sum by (index) (rate(%s[$__rate_interval])) / ignoring(index) group_left() sum(rate(%s[$__rate_interval]))",
+			metric, metric,
+		)
+	}
+
 	b.Panel("panel-70", byIndex("Firewood: Storage Bytes Reused by Index (Stacked)",
-		rateByIndex("avalanche_evm_firewood_firewood_storage_bytes_reused_total"), "percent", 80, true).Id(70))
+		percentByIndex("avalanche_evm_firewood_firewood_storage_bytes_reused_total"), "percentunit", 80, true).Id(70))
 	b.Panel("panel-71", byIndex("Firewood: Storage Bytes Reused by Index (Lines)",
 		rateByIndex("avalanche_evm_firewood_firewood_storage_bytes_reused_total"), "Bps", 0, false).Id(71))
 
 	b.Panel("panel-72", byIndex("Firewood: Storage Bytes Appended by Index (Stacked)",
-		rateByIndex("avalanche_evm_firewood_firewood_storage_bytes_appended_total"), "percent", 80, true).Id(72))
+		percentByIndex("avalanche_evm_firewood_firewood_storage_bytes_appended_total"), "percentunit", 80, true).Id(72))
 	b.Panel("panel-73", byIndex("Firewood: Storage Bytes Appended by Index (Lines)",
 		rateByIndex("avalanche_evm_firewood_firewood_storage_bytes_appended_total"), "Bps", 0, false).Id(73))
 
 	b.Panel("panel-74", byIndex("Firewood: Storage Bytes Freed by Index (Stacked)",
-		rateByIndex("avalanche_evm_firewood_firewood_storage_bytes_freed_total"), "percent", 80, true).Id(74))
+		percentByIndex("avalanche_evm_firewood_firewood_storage_bytes_freed_total"), "percentunit", 80, true).Id(74))
 	b.Panel("panel-75", byIndex("Firewood: Storage Bytes Freed by Index (Lines)",
 		rateByIndex("avalanche_evm_firewood_firewood_storage_bytes_freed_total"), "Bps", 0, false).Id(75))
 
 	b.Panel("panel-76", byIndex("Firewood: Storage Bytes Wasted by Index (Stacked)",
-		rateByIndex("avalanche_evm_firewood_firewood_storage_bytes_wasted_total"), "percent", 80, true).Id(76))
+		percentByIndex("avalanche_evm_firewood_firewood_storage_bytes_wasted_total"), "percentunit", 80, true).Id(76))
 	b.Panel("panel-77", byIndex("Firewood: Storage Bytes Wasted by Index (Lines)",
 		rateByIndex("avalanche_evm_firewood_firewood_storage_bytes_wasted_total"), "Bps", 0, false).Id(77))
 
 	b.Panel("panel-78", byIndex("Firewood: Nodes Allocated by Index (Stacked)",
-		rateByIndex("avalanche_evm_firewood_firewood_nodes_allocated_total"), "percent", 80, true).Id(78))
+		percentByIndex("avalanche_evm_firewood_firewood_nodes_allocated_total"), "percentunit", 80, true).Id(78))
 	b.Panel("panel-79", byIndex("Firewood: Nodes Allocated by Index (Lines)",
 		rateByIndex("avalanche_evm_firewood_firewood_nodes_allocated_total"), "short", 0, false).Id(79))
 
 	b.Panel("panel-80", byIndex("Firewood: Nodes Deleted by Index (Stacked)",
-		rateByIndex("avalanche_evm_firewood_firewood_nodes_deleted_total"), "percent", 80, true).Id(80))
+		percentByIndex("avalanche_evm_firewood_firewood_nodes_deleted_total"), "percentunit", 80, true).Id(80))
 	b.Panel("panel-81", byIndex("Firewood: Nodes Deleted by Index (Lines)",
 		rateByIndex("avalanche_evm_firewood_firewood_nodes_deleted_total"), "short", 0, false).Id(81))
 
 	b.Panel("panel-82", byIndex("Firewood: Free List Entries by Index (Stacked)",
-		"sum by (index) (avalanche_evm_firewood_firewood_free_list_entries)", "percent", 80, true).Id(82))
+		"sum by (index) (avalanche_evm_firewood_firewood_free_list_entries)"+
+			" / ignoring(index) group_left() sum(avalanche_evm_firewood_firewood_free_list_entries)",
+		"percentunit", 80, true).Id(82))
 	b.Panel("panel-83", byIndex("Firewood: Free List Entries by Index (Lines)",
 		"sum by (index) (avalanche_evm_firewood_firewood_free_list_entries)", "short", 0, false).Id(83))
 }
