@@ -651,6 +651,11 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
                         trace!("io-uring write at offset {offset} partially completed, re-queuing");
                         firewood_counter!(RING_PARTIAL_WRITE_RETRY).increment(1);
                     }
+                } else {
+                    firewood_counter!(IO_WRITE_COUNT).increment(1);
+                }
+                if written > 0 {
+                    firewood_counter!(IO_BYTES_WRITTEN).increment(written as u64);
                 }
                 let carry;
                 (self.written, carry) = self.written.overflowing_add(written);
