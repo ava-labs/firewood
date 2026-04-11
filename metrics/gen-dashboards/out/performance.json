@@ -1,0 +1,2997 @@
+{
+  "annotations": [],
+  "cursorSync": "Off",
+  "editable": true,
+  "elements": {
+    "panel-107": {
+      "kind": "Panel",
+      "spec": {
+        "id": 107,
+        "title": "Permits Available",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "avalanche_evm_firewood_persist_permits_available",
+                      "legendFormat": "Permits Available - {{namespace}}"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "avalanche_evm_firewood_persist_max_permits",
+                      "legendFormat": "Max Permits - {{namespace}}"
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "min",
+                  "max",
+                  "mean",
+                  "p95",
+                  "lastNotNull"
+                ]
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {},
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-108": {
+      "kind": "Panel",
+      "spec": {
+        "id": 108,
+        "title": "Commit Stall - Frequency and Duration",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "increase(avalanche_evm_firewood_persist_commit_blocked[5m])",
+                      "legendFormat": "Blocked Commits"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "histogram_quantile(0.99, rate(avalanche_evm_firewood_ffi_commit_ms_bucket_bucket[5m]))",
+                      "legendFormat": "Commits p99"
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "min",
+                  "max",
+                  "mean",
+                  "p95"
+                ]
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {},
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-109": {
+      "kind": "Panel",
+      "spec": {
+        "id": 109,
+        "title": "Root Store: Insert",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "sum(rate(avalanche_evm_firewood_persist_root_store_ms{success=\"true\"}\n  [$__rate_interval]))\n    /\n    sum(rate(avalanche_evm_firewood_persist_root_store{success=\"true\"}[$__rate_interval]))",
+                      "legendFormat": "Average Write Time (ms)"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": []
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {},
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-110": {
+      "kind": "Panel",
+      "spec": {
+        "id": 110,
+        "title": "Last Accepted Block",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "avalanche_snowman_last_accepted_height{\n  namespace=~\"avax-mainnet-(api|validator)-firewood\",\n  chain=\"C\"\n}",
+                      "legendFormat": "__auto"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": []
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {},
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-111": {
+      "kind": "Panel",
+      "spec": {
+        "id": 111,
+        "title": "Jemalloc Memory Usage (gb) [Broken]",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "avalanche_evm_firewood_jemalloc_active_bytes / 1024 / 1024 / 1024",
+                      "legendFormat": "__auto"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": []
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {},
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-14": {
+      "kind": "Panel",
+      "spec": {
+        "id": 14,
+        "title": "EVM vs Trie vs Write",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_eth_chain_block_executions[5m])",
+                      "legendFormat": "EVM Execution"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_eth_chain_block_trie[5m])",
+                      "legendFormat": "Trie Ops"
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_eth_chain_block_writes[5m])",
+                      "legendFormat": "Block Writes"
+                    }
+                  },
+                  "refId": "C",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_eth_chain_block_executions[5m]) + rate(avalanche_evm_eth_chain_block_trie[5m]) + rate(avalanche_evm_eth_chain_block_writes[5m])",
+                      "legendFormat": "Sum(exec, trie, writes)"
+                    }
+                  },
+                  "refId": "D",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "min",
+                  "max",
+                  "mean",
+                  "sum",
+                  "p50",
+                  "p95",
+                  "p99",
+                  "stdDev"
+                ]
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ms"
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-18": {
+      "kind": "Panel",
+      "spec": {
+        "id": 18,
+        "title": "Firewood Write Path: Propose vs Commit",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_ffi_commit_ms[5m])",
+                      "legendFormat": "Commit (disk persist)"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_ffi_propose_ms[5m])",
+                      "legendFormat": "Propose (trie update + hash)"
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "min",
+                  "max",
+                  "mean",
+                  "sum",
+                  "stdDev",
+                  "variance"
+                ]
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ms/s"
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-20": {
+      "kind": "Panel",
+      "spec": {
+        "id": 20,
+        "title": "Transaction Complexity",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_eth_chain_block_gas_used_processed[5m]) / rate(avalanche_evm_eth_chain_txs_processed[5m])",
+                      "legendFormat": "Gas/Tx"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "min",
+                  "max",
+                  "mean",
+                  "sum",
+                  "stdDev",
+                  "variance"
+                ]
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "gas/txs"
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-21": {
+      "kind": "Panel",
+      "spec": {
+        "id": 21,
+        "title": "State Access Pattern",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_eth_chain_storage_reads[5m]) / rate(avalanche_evm_eth_chain_account_reads[5m])",
+                      "legendFormat": "Storage:Account Ratio"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "mean",
+                  "stdDev",
+                  "variance"
+                ]
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {},
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-24": {
+      "kind": "Panel",
+      "spec": {
+        "id": 24,
+        "title": "Disk Read Latency",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_io_read_ms[5m]) / rate(avalanche_evm_firewood_io_read[5m])",
+                      "legendFormat": "Avg Disk Read Latency (ms)"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "min",
+                  "max",
+                  "mean",
+                  "p50",
+                  "p95",
+                  "p99",
+                  "stdDev"
+                ]
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ms"
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-26": {
+      "kind": "Panel",
+      "spec": {
+        "id": 26,
+        "title": "Trie Mutations: Insert \u0026 Remove",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_insert[5m])",
+                      "legendFormat": "Insert — {{merkle}}"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_remove[5m])",
+                      "legendFormat": "Remove — prefix:{{prefix}} result:{{result}}"
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "sortBy": "Total",
+                "sortDesc": true,
+                "calcs": [
+                  "min",
+                  "max",
+                  "mean",
+                  "sum",
+                  "stdDev",
+                  "variance"
+                ]
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ops"
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-27": {
+      "kind": "Panel",
+      "spec": {
+        "id": 27,
+        "title": "Allocator Reuse Efficiency",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "sum by (index) (rate(avalanche_evm_firewood_space_reused[5m])) / (sum by (index) (rate(avalanche_evm_firewood_space_reused[5m])) + sum by (index) (rate(avalanche_evm_firewood_space_from_end[5m])))",
+                      "legendFormat": "Size class {{index}}"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "graphMode": "area",
+              "colorMode": "value",
+              "justifyMode": "auto",
+              "textMode": "auto",
+              "wideLayout": true,
+              "showPercentChange": false,
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ]
+              },
+              "percentChangeColorMode": "standard",
+              "orientation": "auto"
+            },
+            "fieldConfig": {
+              "defaults": {},
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-28": {
+      "kind": "Panel",
+      "spec": {
+        "id": 28,
+        "title": "Gas Processed",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_eth_chain_block_gas_used_processed[5m]) / 1e6",
+                      "legendFormat": "__auto"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "min",
+                  "max",
+                  "mean",
+                  "sum",
+                  "stdDev",
+                  "variance"
+                ]
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "si: mgas/s"
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-29": {
+      "kind": "Panel",
+      "spec": {
+        "id": 29,
+        "title": "State Reads: Go vs Firewood Disk",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_eth_chain_account_reads[5m]) + rate(avalanche_evm_eth_chain_storage_reads[5m])",
+                      "legendFormat": "Go: State Reads (total)"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_io_read_ms[5m])",
+                      "legendFormat": "Firewood: Disk I/O"
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "min",
+                  "max",
+                  "mean",
+                  "p50",
+                  "p95",
+                  "p99",
+                  "stdDev"
+                ]
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ms"
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-31": {
+      "kind": "Panel",
+      "spec": {
+        "id": 31,
+        "title": "Commit Stack",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_eth_firewood_triedb_commit_time[5m])",
+                      "legendFormat": "Go: Commit"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_ffi_commit_ms[5m])",
+                      "legendFormat": "Rust: Commit (FFI)"
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_flush_nodes[5m])",
+                      "legendFormat": "Disk I/O"
+                    }
+                  },
+                  "refId": "C",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_flush_nodes[5m]) / rate(avalanche_evm_firewood_ffi_commit_ms[5m])",
+                      "legendFormat": "Disk I/O Efficiency"
+                    }
+                  },
+                  "refId": "D",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "min",
+                  "max",
+                  "mean",
+                  "p50",
+                  "p95",
+                  "p99",
+                  "stdDev"
+                ]
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ms"
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-32": {
+      "kind": "Panel",
+      "spec": {
+        "id": 32,
+        "title": "Node Cache Health",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "sum(rate(avalanche_evm_firewood_cache_node{type=\"hit\", mode=\"read\"}[5m])) \n/ \nsum(rate(avalanche_evm_firewood_cache_node{mode=\"read\"}[5m]))",
+                      "legendFormat": "Read Cache Hit Rate"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "sum(rate(avalanche_evm_firewood_cache_node{type=\"hit\", mode=\"write\"}[5m])) \n/ \nsum(rate(avalanche_evm_firewood_cache_node{mode=\"write\"}[5m]))",
+                      "legendFormat": "Write Cache Hit Rate"
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "min",
+                  "max",
+                  "mean",
+                  "sum",
+                  "stdDev",
+                  "variance"
+                ]
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {},
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-33": {
+      "kind": "Panel",
+      "spec": {
+        "id": 33,
+        "title": "Freelist Cache Hit Rate",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "sum(rate(avalanche_evm_firewood_cache_freelist{type=\"hit\"}[5m])) / sum(rate(avalanche_evm_firewood_cache_freelist[5m]))",
+                      "legendFormat": "Freelist Cache Hit Rate"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "graphMode": "area",
+              "colorMode": "value",
+              "justifyMode": "auto",
+              "textMode": "auto",
+              "wideLayout": true,
+              "showPercentChange": false,
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ]
+              },
+              "percentChangeColorMode": "standard",
+              "orientation": "auto"
+            },
+            "fieldConfig": {
+              "defaults": {},
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-41": {
+      "kind": "Panel",
+      "spec": {
+        "id": 41,
+        "title": "Commit Latency Distribution (p50 / p95 / p99)",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "histogram_quantile(0.50, sum by (le) (rate(avalanche_evm_firewood_ffi_commit_ms_bucket_bucket[5m])))",
+                      "legendFormat": "Commit p50"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "histogram_quantile(0.95, sum by (le) (rate(avalanche_evm_firewood_ffi_commit_ms_bucket_bucket[5m])))",
+                      "legendFormat": "Commit p95"
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "histogram_quantile(0.99, sum by (le) (rate(avalanche_evm_firewood_ffi_commit_ms_bucket_bucket[5m])))",
+                      "legendFormat": "Commit p99"
+                    }
+                  },
+                  "refId": "C",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "mean",
+                  "max"
+                ]
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ms"
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-42": {
+      "kind": "Panel",
+      "spec": {
+        "id": 42,
+        "title": "Propose Latency Distribution (p50 / p95 / p99)",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "histogram_quantile(0.50, sum by (le) (rate(avalanche_evm_firewood_ffi_propose_ms_bucket_bucket[5m])))",
+                      "legendFormat": "Propose p50"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "histogram_quantile(0.95, sum by (le) (rate(avalanche_evm_firewood_ffi_propose_ms_bucket_bucket[5m])))",
+                      "legendFormat": "Propose p95"
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "histogram_quantile(0.99, sum by (le) (rate(avalanche_evm_firewood_ffi_propose_ms_bucket_bucket[5m])))",
+                      "legendFormat": "Propose p99"
+                    }
+                  },
+                  "refId": "C",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "mean",
+                  "max"
+                ]
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ms"
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-44": {
+      "kind": "Panel",
+      "spec": {
+        "id": 44,
+        "title": "Go/CGO Overhead: Propose \u0026 Commit",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_triedb_hash_time[5m]) - rate(avalanche_evm_firewood_ffi_propose_ms[5m])",
+                      "legendFormat": "Propose: Go/CGO overhead"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_triedb_commit_time[5m]) - rate(avalanche_evm_firewood_ffi_commit_ms[5m])",
+                      "legendFormat": "Commit: Go/CGO overhead"
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "mean",
+                  "max"
+                ]
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ms/s"
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-45": {
+      "kind": "Panel",
+      "spec": {
+        "id": 45,
+        "title": "Proposal Queue \u0026 Revision Pressure",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "avalanche_evm_firewood_proposals_uncommitted",
+                      "legendFormat": "Uncommitted Proposals"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "avalanche_evm_firewood_active_revisions",
+                      "legendFormat": "Active Revisions"
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "avalanche_evm_firewood_max_revisions",
+                      "legendFormat": "Max Revisions (config)"
+                    }
+                  },
+                  "refId": "C",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "mean",
+                  "max",
+                  "last"
+                ]
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {},
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-46": {
+      "kind": "Panel",
+      "spec": {
+        "id": 46,
+        "title": "Error \u0026 Discard Rates",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_proposal_commit{success=\"false\"}[5m])",
+                      "legendFormat": "Commit Failures"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_proposal_create{success=\"false\"}[5m])",
+                      "legendFormat": "Propose Failures"
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_proposals_discarded[5m])",
+                      "legendFormat": "Proposals Discarded"
+                    }
+                  },
+                  "refId": "C",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "sum",
+                  "max"
+                ]
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ops"
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-47": {
+      "kind": "Panel",
+      "spec": {
+        "id": 47,
+        "title": "Commit I/O Efficiency",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_flush_nodes[5m]) / rate(avalanche_evm_firewood_ffi_commit_ms[5m])",
+                      "legendFormat": "Disk I/O fraction of commit"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "mean",
+                  "min",
+                  "max"
+                ]
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "percentunit"
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-51": {
+      "kind": "Panel",
+      "spec": {
+        "id": 51,
+        "title": "Node Read Source (Disk vs In-Memory Proposals)",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_read_node{from=\"file\"}[5m])",
+                      "legendFormat": "From disk (committed)"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_read_node{from=\"memory\"}[5m])",
+                      "legendFormat": "From memory (proposals)"
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "mean",
+                  "max"
+                ]
+              },
+              "tooltip": {
+                "mode": "multi",
+                "sort": "desc"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ops"
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-52": {
+      "kind": "Panel",
+      "spec": {
+        "id": 52,
+        "title": "Read Amplification (Physical I/O per Node Read)",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_io_read[5m]) / rate(avalanche_evm_firewood_read_node{from=\"file\"}[5m])",
+                      "legendFormat": "Physical/Logical Read Ratio"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "mean",
+                  "max"
+                ]
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {},
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-54": {
+      "kind": "Panel",
+      "spec": {
+        "id": 54,
+        "title": "Batch Latency Distribution (p50 / p95 / p99)",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "histogram_quantile(0.50, sum by (le) (rate(avalanche_evm_firewood_ffi_batch_ms_bucket_bucket[5m])))",
+                      "legendFormat": "Batch p50"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "histogram_quantile(0.95, sum by (le) (rate(avalanche_evm_firewood_ffi_batch_ms_bucket_bucket[5m])))",
+                      "legendFormat": "Batch p95"
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "histogram_quantile(0.99, sum by (le) (rate(avalanche_evm_firewood_ffi_batch_ms_bucket_bucket[5m])))",
+                      "legendFormat": "Batch p99"
+                    }
+                  },
+                  "refId": "C",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "mean",
+                  "max"
+                ]
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ms"
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-56": {
+      "kind": "Panel",
+      "spec": {
+        "id": 56,
+        "title": "Node Deletion by Area Size",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_delete_node[5m])",
+                      "legendFormat": "Delete area {{index}}"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "mean"
+                ]
+              },
+              "tooltip": {
+                "mode": "multi",
+                "sort": "desc"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ops"
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-57": {
+      "kind": "Panel",
+      "spec": {
+        "id": 57,
+        "title": "Proposal Lifecycle",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_proposals_created{base=\"db\"}[5m])",
+                      "legendFormat": "Created from DB (committed base)"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_proposals_created{base=\"proposal\"}[5m])",
+                      "legendFormat": "Created from Proposal (speculative)"
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_proposals_reparented[5m])",
+                      "legendFormat": "Reparented (rebased after commit)"
+                    }
+                  },
+                  "refId": "C",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "mean",
+                  "max"
+                ]
+              },
+              "tooltip": {
+                "mode": "multi",
+                "sort": "desc"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ops"
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-58": {
+      "kind": "Panel",
+      "spec": {
+        "id": 58,
+        "title": "Allocator Space Flow (Reuse vs Growth)",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_space_reused[5m])",
+                      "legendFormat": "Reused (from free lists)"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "rate(avalanche_evm_firewood_space_from_end[5m])",
+                      "legendFormat": "From End (file growth)"
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true,
+                "calcs": [
+                  "mean",
+                  "max"
+                ]
+              },
+              "tooltip": {
+                "mode": "multi",
+                "sort": "desc"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "decbytes"
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    }
+  },
+  "layout": {
+    "kind": "RowsLayout",
+    "spec": {
+      "rows": [
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "World Stats",
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 24,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-28"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 10,
+                      "width": 24,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-110"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Top-Level Latency",
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 24,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-14"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Read Path",
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 12,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-29"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 12,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-24"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 10,
+                      "width": 12,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-32"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 10,
+                      "width": 12,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-51"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 20,
+                      "width": 12,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-52"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Write Path",
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 24,
+                      "height": 11,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-18"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 11,
+                      "width": 12,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-31"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 11,
+                      "width": 12,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-47"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 21,
+                      "width": 12,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-108"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 21,
+                      "width": 12,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-107"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 31,
+                      "width": 12,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-26"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 31,
+                      "width": 12,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-57"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 41,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-109"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Latency Distributions",
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 12,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-41"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 12,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-42"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 10,
+                      "width": 12,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-54"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 10,
+                      "width": 12,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-56"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Allocator \u0026 Storage",
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-27"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-33"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 8,
+                      "width": 12,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-58"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 8,
+                      "width": 12,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-111"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Workload Characterization",
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-20"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-21"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "System Health \u0026 Overhead",
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 12,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-44"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 12,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-45"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 10,
+                      "width": 12,
+                      "height": 10,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-46"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "links": [],
+  "preload": false,
+  "tags": [],
+  "timeSettings": {
+    "timezone": "browser",
+    "from": "now-6h",
+    "to": "now",
+    "autoRefresh": "",
+    "autoRefreshIntervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "2h",
+      "1d"
+    ],
+    "hideTimepicker": false,
+    "fiscalYearStartMonth": 0
+  },
+  "title": "Firewood: Performance",
+  "variables": [
+    {
+      "kind": "DatasourceVariable",
+      "spec": {
+        "name": "datasource",
+        "pluginId": "prometheus",
+        "refresh": "onDashboardLoad",
+        "regex": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "label": "Data Source",
+        "hide": "dontHide",
+        "skipUrlSync": false,
+        "allowCustomValue": true
+      }
+    },
+    {
+      "kind": "AdhocVariable",
+      "group": "prometheus",
+      "datasource": {
+        "name": "${datasource}"
+      },
+      "spec": {
+        "name": "filter",
+        "baseFilters": [],
+        "filters": [
+          {
+            "key": "chain",
+            "operator": "=",
+            "value": "C",
+            "keyLabel": "chain",
+            "valueLabels": [
+              "C"
+            ],
+            "origin": "dashboard"
+          },
+          {
+            "key": "namespace",
+            "operator": "=|",
+            "value": "avax-mainnet-api-firewood",
+            "keyLabel": "namespace",
+            "valueLabels": [
+              "avax-mainnet-api-firewood",
+              "avax-mainnet-validator-firewood"
+            ],
+            "origin": "dashboard"
+          }
+        ],
+        "defaultKeys": [],
+        "label": "Filter",
+        "hide": "dontHide",
+        "skipUrlSync": false,
+        "allowCustomValue": true
+      }
+    }
+  ]
+}
