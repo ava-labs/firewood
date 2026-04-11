@@ -15,7 +15,8 @@ use crate::api::{
     self, BatchIter, FrozenProof, FrozenRangeProof, KeyType, KeyValuePair, ValueType,
 };
 use crate::iter::{MerkleKeyValueIter, PathIterator};
-use crate::merkle::changes::{ChangeProof, DiffMerkleNodeStream};
+use crate::merkle::changes::DiffMerkleNodeStream;
+use crate::proofs::change::ChangeProof;
 use crate::{Proof, ProofCollection, ProofError, ProofNode, RangeProof};
 use firewood_metrics::firewood_counter;
 use firewood_storage::MemStore;
