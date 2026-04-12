@@ -131,6 +131,27 @@ pub trait ExtendableBytes: Write {
     }
 }
 
+impl<A> ExtendableBytes for std::io::Cursor<A>
+where
+    std::io::Cursor<A>: Write,
+{
+    fn extend<T: IntoIterator<Item = u8>>(&mut self, other: T) {
+        for byte in other {
+            self.write_all(&[byte])
+                .expect("Cursor overflowed in extend");
+        }
+    }
+
+    fn extend_from_slice(&mut self, other: &[u8]) {
+        self.write_all(other)
+            .expect("Cursor overflowed in extend_from_slice");
+    }
+
+    fn push(&mut self, value: u8) {
+        self.write_all(&[value]).expect("Cursor overflowed in push");
+    }
+}
+
 impl ExtendableBytes for Vec<u8> {
     fn extend<T: IntoIterator<Item = u8>>(&mut self, other: T) {
         std::iter::Extend::extend(self, other);

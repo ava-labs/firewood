@@ -21,7 +21,7 @@
 //! - **`NodeData`** - Serialized node content
 
 use super::area_index_and_size;
-use super::primitives::{AreaIndex, LinearAddress, area_size_iter, index_name};
+use super::primitives::{AreaIndex, LinearAddress, index_name};
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::branch::{ReadSerializable, Serializable};
@@ -144,6 +144,8 @@ impl Serializable for FreeArea {
 }
 
 impl FreeArea {
+    const MAX_SIZE: usize = size_of::<u8>() + var_int_max_size::<u64>();
+
     /// Create a new `FreeArea`
     pub const fn new(next_free_block: Option<LinearAddress>) -> Self {
         Self { next_free_block }
@@ -175,9 +177,7 @@ impl FreeArea {
     /// the `FreeArea` data. This is used when freeing a node - the area size index must be
     /// preserved from the original node, not calculated from the `FreeArea` size.
     pub fn as_bytes<T: crate::node::ExtendableBytes>(self, area_index: AreaIndex, encoded: &mut T) {
-        const RESERVE_SIZE: usize = size_of::<u8>() + var_int_max_size::<u64>();
-
-        encoded.reserve(RESERVE_SIZE);
+        encoded.reserve(Self::MAX_SIZE);
         encoded.push(area_index.get());
         self.write_to(encoded);
     }
@@ -293,51 +293,41 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
     ) -> Result<Option<LinearAddress>, FileIoError> {
         let target_size = target_index.size();
 
-        for (src_index, src_size) in area_size_iter().filter(|&(_, s)| s >= 768) {
+        let Some(src_index) = AreaIndex::iter_splittable()
             // Only split if target fits a whole number of times in the source.
-            if src_size % target_size != 0 {
-                continue;
-            }
+            .filter(|&index| index.size() % target_size == 0)
             // Only proceed if the source free list is non-empty.
-            if self.header.free_lists()[src_index.as_usize()].is_none() {
-                continue;
-            }
+            .filter(|&index| self.header.free_lists()[index.as_usize()].is_some())
+            .next()
+        else {
+            return Ok(None);
+        };
 
-            // Pop one block from the source free list.
-            let addr = self
-                .allocate_from_freed(src_index)?
-                .expect("free list was non-empty");
+        let src_size = src_index.size();
 
-            // Carve out pieces 1..n-1 and add them to the target free list.
-            let num_pieces = (src_size / target_size) as usize;
-            let mut stored_area_bytes = Vec::new();
-            for i in 1..num_pieces {
-                let piece_addr = addr
-                    .advance(i as u64 * target_size)
-                    .expect("split address cannot overflow");
+        // Pop one block from the source free list.
+        let addr = self
+            .allocate_from_freed(src_index)?
+            .expect("free list was non-empty");
 
-                stored_area_bytes.clear();
-                let current_head = self.header.free_lists()[target_index.as_usize()];
-                FreeArea::new(current_head).as_bytes(target_index, &mut stored_area_bytes);
-                self.storage.write(piece_addr.get(), &stored_area_bytes)?;
-                self.storage
-                    .add_to_free_list_cache(piece_addr, current_head);
-                self.header.free_lists_mut()[target_index.as_usize()] = Some(piece_addr);
-                firewood_gauge!(FREE_LIST_ENTRIES, "index" => index_name(target_index))
-                    .increment(1.0);
-            }
-
-            firewood_counter!(
-                FREE_LIST_SPLIT,
-                "target" => index_name(target_index),
-                "source" => index_name(src_index)
-            )
-            .increment(1);
-
-            return Ok(Some(addr));
+        // Carve out pieces 1..n-1 and add them to the target free list.
+        let num_pieces = (src_size / target_size) as usize;
+        // let mut buffer = [0_u8; 11]; // max size of FreeArea with varint encoding
+        for i in 1..num_pieces {
+            let piece_addr = addr
+                .advance(i as u64 * target_size)
+                .expect("split address cannot overflow");
+            self.push_free_list(target_index, piece_addr)?;
         }
 
-        Ok(None)
+        firewood_counter!(
+            FREE_LIST_SPLIT,
+            "target" => index_name(target_index),
+            "source" => index_name(src_index)
+        )
+        .increment(1);
+
+        Ok(Some(addr))
     }
 
     /// Returns an address that can be used to store the given `node` and updates
@@ -362,10 +352,12 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
         // Fall back to appending to the end of the file.
         let addr = match self.allocate_from_freed(area_index)? {
             Some(addr) => addr,
-            None if area_index.size() <= 512 => match self.allocate_by_splitting(area_index)? {
-                Some(addr) => addr,
-                None => self.allocate_from_end(area_index)?,
-            },
+            None if area_index < AreaIndex::SPLITTABLE => {
+                match self.allocate_by_splitting(area_index)? {
+                    Some(addr) => addr,
+                    None => self.allocate_from_end(area_index)?,
+                }
+            }
             None => self.allocate_from_end(area_index)?,
         };
 
@@ -394,21 +386,24 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
         firewood_counter!(DELETE_NODE, "index" => index_name(area_size_index)).increment(1);
         firewood_counter!(SPACE_FREED, "index" => index_name(area_size_index))
             .increment(area_size_index.size());
-        firewood_gauge!(FREE_LIST_ENTRIES, "index" => index_name(area_size_index)).increment(1.0);
 
-        // The area that contained the node is now free.
-        let mut stored_area_bytes = Vec::new();
-        FreeArea::new(self.header.free_lists()[area_size_index.as_usize()])
-            .as_bytes(area_size_index, &mut stored_area_bytes);
+        self.push_free_list(area_size_index, addr)
+    }
 
-        self.storage.write(addr.into(), &stored_area_bytes)?;
-
-        self.storage
-            .add_to_free_list_cache(addr, self.header.free_lists()[area_size_index.as_usize()]);
-
-        // The newly freed block is now the head of the free list.
+    pub(crate) fn push_free_list(
+        &mut self,
+        area_size_index: AreaIndex,
+        addr: LinearAddress,
+    ) -> Result<(), FileIoError> {
+        // skip allocating a vector for very small free area
+        let mut buffer = std::io::Cursor::new([0_u8; FreeArea::MAX_SIZE]);
+        let current_head = self.header.free_lists()[area_size_index.as_usize()];
+        FreeArea::new(current_head).as_bytes(area_size_index, &mut buffer);
+        let buffer = &buffer.get_ref()[..buffer.position() as usize];
+        self.storage.write(addr.into(), buffer)?;
+        self.storage.add_to_free_list_cache(addr, current_head);
         self.header.free_lists_mut()[area_size_index.as_usize()] = Some(addr);
-
+        firewood_gauge!(FREE_LIST_ENTRIES, "index" => index_name(area_size_index)).increment(1.0);
         Ok(())
     }
 
