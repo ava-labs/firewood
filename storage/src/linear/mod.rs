@@ -14,7 +14,8 @@ use std::io::{Cursor, Read};
 use std::ops::Deref;
 use std::path::PathBuf;
 
-use crate::{CacheReadStrategy, LinearAddress, MaybePersistedNode, SharedNode};
+use crate::nodestore::NodeAllocator;
+use crate::{CacheReadStrategy, LinearAddress, MaybePersistedNode, NodeStoreHeader, SharedNode};
 pub(super) mod filebacked;
 #[cfg(feature = "io-uring")]
 mod io_uring;
@@ -251,6 +252,19 @@ pub trait WritableStorage: ReadableStorage {
 
     /// Add a new entry to the freelist cache
     fn add_to_free_list_cache(&self, _addr: LinearAddress, _next: Option<LinearAddress>) {}
+
+    /// Acquire a [`NodeAllocator`] bound to this storage and header.
+    ///
+    /// The allocator batches freelist writes and must be consumed by calling
+    /// [`NodeStore::persist`] (which calls [`NodeAllocator::finish`] internally)
+    /// or by calling [`NodeAllocator::finish`] directly after all
+    /// [`NodeStore::reap_deleted`] calls are complete.
+    fn node_allocator<'a>(&'a self, header: &'a mut NodeStoreHeader) -> NodeAllocator<'a, Self>
+    where
+        Self: Sized,
+    {
+        NodeAllocator::new(self, header)
+    }
 }
 
 pub trait OffsetReader: Read {

@@ -26,6 +26,7 @@ use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::branch::{ReadSerializable, Serializable};
 use crate::nodestore::NodeStoreHeader;
+use crate::nodestore::header::RootNodeInfo;
 use crate::nodestore::primitives::area_size_iter;
 use firewood_metrics::{GaugeExt, firewood_counter, firewood_gauge};
 use integer_encoding::VarIntReader;
@@ -209,14 +210,14 @@ use super::NodeStore;
 ///    larger free block whose size is an exact multiple of the target.
 /// 4. Extend the file (append to end).
 #[derive(Debug)]
-pub struct NodeAllocator<'a, S> {
+pub struct NodeAllocator<'a, S: ?Sized> {
     storage: &'a S,
     header: &'a mut NodeStoreHeader,
     dirty_freelists: [Vec<LinearAddress>; AreaIndex::NUM_AREA_SIZES],
 }
 
 impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
-    pub const fn new(storage: &'a S, header: &'a mut NodeStoreHeader) -> Self {
+    pub(crate) const fn new(storage: &'a S, header: &'a mut NodeStoreHeader) -> Self {
         Self {
             storage,
             header,
@@ -245,6 +246,14 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
         addr: LinearAddress,
     ) -> Result<(AreaIndex, u64), FileIoError> {
         area_index_and_size(self.storage, addr)
+    }
+
+    pub(crate) const fn size(&self) -> u64 {
+        self.header.size()
+    }
+
+    pub(crate) fn set_root_location(&mut self, root_location: Option<RootNodeInfo>) {
+        self.header.set_root_location(root_location);
     }
 
     /// Attempts to allocate a block of size `index` from the free lists.
@@ -455,6 +464,52 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
 }
 
 impl<S: WritableStorage> NodeAllocator<'_, S> {
+    /// Flushes all pending free-list changes and the header to storage.
+    ///
+    /// Writes any dirty freelist entries accumulated since the allocator was
+    /// created (from both [`NodeStore::reap_deleted`] and node allocation
+    /// during persist) in a single batched write, then writes the updated
+    /// header. This is called automatically by [`NodeStore::persist`] and
+    /// should not normally be called directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the write fails.
+    pub fn finish(mut self) -> Result<(), FileIoError> {
+        let batch = self.dirty_freelist_batch();
+        if !batch.is_empty() {
+            self.storage
+                .write_batch(batch.iter().map(|&(offset, ref buffer)| {
+                    let len = buffer.position() as usize;
+                    #[expect(clippy::indexing_slicing)]
+                    (offset, &buffer.get_ref()[..len])
+                }))?;
+        }
+        self.header.flush_to(self.storage)?;
+        Ok(())
+    }
+
+    fn dirty_freelist_batch(&mut self) -> Vec<(u64, Cursor<[u8; FreeArea::MAX_SIZE]>)> {
+        area_size_iter()
+            .zip(zip(&mut self.dirty_freelists, self.header.free_lists_mut()))
+            .flat_map(|((index, _index_size), (dirty, head))| {
+                dirty.drain(..).map({
+                    // prevent `move` of `self` into the closure
+                    let storage = self.storage;
+                    move |addr| {
+                        // buffer has the same footprint of a Vec (24 bytes) but doesn't use the heap
+                        let mut buffer = Cursor::new([0; _]);
+                        let next = head.take();
+                        FreeArea::new(next).as_bytes(index, &mut buffer);
+                        storage.add_to_free_list_cache(addr, next);
+                        *head = Some(addr);
+                        (addr.into(), buffer)
+                    }
+                })
+            })
+            .collect()
+    }
+
     /// Commits all pending free-list changes to storage in a single batched write.
     ///
     /// For every entry in `dirty_freelists` this method:
@@ -474,24 +529,7 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
     /// Returns a [`FileIoError`] if the underlying storage write fails.
     pub(crate) fn flush_freelist(&mut self) -> Result<(), FileIoError> {
         // collect all dirty freelist writes into a batch to utilize batch writing if enabled
-        let batch = area_size_iter()
-            .zip(zip(&mut self.dirty_freelists, self.header.free_lists_mut()))
-            .flat_map(|((index, _index_size), (dirty, head))| {
-                dirty.drain(..).map({
-                    // prevent `move` of `self` into the closure
-                    let storage = self.storage;
-                    move |addr| {
-                        // buffer has the same footprint of a Vec (24 bytes) but doesn't use the heap
-                        let mut buffer = Cursor::new([0_u8; FreeArea::MAX_SIZE]);
-                        let next = head.take();
-                        FreeArea::new(next).as_bytes(index, &mut buffer);
-                        storage.add_to_free_list_cache(addr, next);
-                        *head = Some(addr);
-                        (addr.into(), buffer)
-                    }
-                })
-            })
-            .collect::<Vec<(u64, _)>>();
+        let batch = self.dirty_freelist_batch();
 
         // even if `batch` is empty, the free list heads on the header must be updated
         // because we may have changed one of the pointers in `allocate_from_freelist`

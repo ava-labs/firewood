@@ -42,8 +42,10 @@ fn into_committed(
     merkle: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>,
     header: &mut NodeStoreHeader,
 ) -> Merkle<NodeStore<Committed, MemStore>> {
+    use firewood_storage::WritableStorage as _;
     let ns = merkle.into_inner().as_committed();
-    ns.persist(header).unwrap();
+    let storage = ns.get_storage();
+    ns.persist(storage.node_allocator(header)).unwrap();
     ns.into()
 }
 
