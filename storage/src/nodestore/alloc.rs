@@ -317,7 +317,7 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
             let piece_addr = addr
                 .advance(i as u64 * target_size)
                 .expect("split address cannot overflow");
-            self.push_free_list(target_index, piece_addr)?;
+            self.push_freelist(target_index, piece_addr)?;
         }
 
         firewood_counter!(
@@ -387,10 +387,10 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
         firewood_counter!(SPACE_FREED, "index" => index_name(area_size_index))
             .increment(area_size_index.size());
 
-        self.push_free_list(area_size_index, addr)
+        self.push_freelist(area_size_index, addr)
     }
 
-    pub(crate) fn push_free_list(
+    pub(crate) fn push_freelist(
         &mut self,
         area_size_index: AreaIndex,
         addr: LinearAddress,
