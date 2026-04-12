@@ -11,10 +11,6 @@ package ffi
 // #cgo nocallback fwd_free_rendered_metrics
 // #cgo noescape fwd_start_metrics
 // #cgo nocallback fwd_start_metrics
-// #cgo noescape fwd_start_metrics_with_exporter
-// #cgo nocallback fwd_start_metrics_with_exporter
-// #cgo noescape fwd_gather
-// #cgo nocallback fwd_gather
 // #cgo noescape fwd_start_logs
 // #cgo nocallback fwd_start_logs
 import "C"
@@ -22,15 +18,37 @@ import "C"
 import (
 	"fmt"
 	"runtime"
-	"strings"
 	"unsafe"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/common/expfmt"
 	"google.golang.org/protobuf/proto"
 
 	dto "github.com/prometheus/client_model/go"
 )
+
+// goMetricsRegistry holds Go-side metrics that are merged into GatherRenderedMetrics.
+// These cover operations that happen entirely in Go and are invisible to the Rust recorder.
+var goMetricsRegistry = prometheus.NewRegistry()
+
+// proofMarshalDuration tracks the duration of proof MarshalBinary calls,
+// labeled by proof_type ("range", "change", "verified_change").
+var proofMarshalDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	Name:    "firewood_go_proof_marshal_duration_seconds",
+	Help:    "Duration of Go-side proof marshal operations",
+	Buckets: []float64{5e-6, 25e-6, 1e-4, 5e-4, 1e-3, 5e-3, 25e-3, 0.1},
+}, []string{"proof_type"})
+
+// proofUnmarshalDuration tracks the duration of proof UnmarshalBinary calls,
+// labeled by proof_type ("range", "change").
+var proofUnmarshalDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	Name:    "firewood_go_proof_unmarshal_duration_seconds",
+	Help:    "Duration of Go-side proof unmarshal operations",
+	Buckets: []float64{5e-6, 25e-6, 1e-4, 5e-4, 1e-3, 5e-3, 25e-3, 0.1},
+}, []string{"proof_type"})
+
+func init() {
+	goMetricsRegistry.MustRegister(proofMarshalDuration, proofUnmarshalDuration)
+}
 
 var _ prometheus.Gatherer = (*Gatherer)(nil)
 
@@ -40,40 +58,29 @@ func (Gatherer) Gather() ([]*dto.MetricFamily, error) {
 	return GatherRenderedMetrics()
 }
 
-// TextGatherer is a [prometheus.Gatherer] that collects metrics from the
-// firewood library by parsing text-rendered metrics.
-//
-// Deprecated: Use [Gatherer] instead, which uses structured data and avoids
-// text rendering and parsing overhead.
-type TextGatherer struct{}
-
-func (TextGatherer) Gather() ([]*dto.MetricFamily, error) {
-	metrics, err := GatherMetrics()
-	if err != nil {
-		return nil, err
-	}
-
-	reader := strings.NewReader(metrics)
-
-	var parser expfmt.TextParser
-	parsedMetrics, err := parser.TextToMetricFamilies(reader)
-	if err != nil {
-		return nil, err
-	}
-
-	lst := make([]*dto.MetricFamily, 0, len(parsedMetrics))
-	for _, v := range parsedMetrics {
-		lst = append(lst, v)
-	}
-
-	return lst, nil
-}
-
 // GatherRenderedMetrics collects structured metrics from the global recorder
 // and returns them as prometheus protobuf metric families.
 // Returns an error if the global recorder is not initialized.
-// This method must be called after StartMetrics or StartMetricsWithExporter.
+// This method must be called after [StartMetrics].
+//
+// The result merges Rust-side metrics (via the native recorder) with Go-side
+// metrics (proof serialization timing) from an independent Go prometheus registry.
 func GatherRenderedMetrics() ([]*dto.MetricFamily, error) {
+	rustFamilies, err := gatherFromRust()
+	if err != nil {
+		return nil, err
+	}
+
+	goFamilies, err := goMetricsRegistry.Gather()
+	if err != nil {
+		return nil, err
+	}
+
+	return append(rustFamilies, goFamilies...), nil
+}
+
+// gatherFromRust collects the Rust-recorder metrics via the FFI.
+func gatherFromRust() ([]*dto.MetricFamily, error) {
 	result := C.fwd_gather_rendered()
 	switch result.tag {
 	case C.RenderedMetricsResult_Ok:
@@ -290,32 +297,9 @@ func convertNativeHistogram(c *C.OwnedNativeHistogram) *dto.Histogram {
 
 // StartMetrics starts the global recorder for metrics.
 // This function only needs to be called once.
-// An error is returned if this method is called a second time, or if it is
-// called after StartMetricsWithExporter.
 // This is best used in conjunction with the [Gatherer] type to collect metrics.
 func StartMetrics() error {
 	return getErrorFromVoidResult(C.fwd_start_metrics())
-}
-
-// StartMetricsWithExporter starts the global recorder for metrics along with an
-// HTTP exporter.
-// This function only needs to be called once.
-// An error is returned if this method is called a second time, if it is
-// called after StartMetrics, or if the exporter failed to start.
-func StartMetricsWithExporter(metricsPort uint16) error {
-	return getErrorFromVoidResult(C.fwd_start_metrics_with_exporter(C.uint16_t(metricsPort)))
-}
-
-// GatherMetrics collects metrics from global recorder.
-// Returns an error if the global recorder is not initialized.
-// This method must be called after StartMetrics or StartMetricsWithExporter
-func GatherMetrics() (string, error) {
-	bytes, err := getValueFromValueResult(C.fwd_gather())
-	if err != nil {
-		return "", err
-	}
-
-	return string(bytes), nil
 }
 
 // LogConfig configures logs for this process.

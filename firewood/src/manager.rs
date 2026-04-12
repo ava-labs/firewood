@@ -23,7 +23,7 @@ use crate::db::{BatchOp, UseParallel};
 use crate::merkle::Merkle;
 use crate::merkle::parallel::ParallelMerkle;
 use crate::persist_worker::{PersistError, PersistWorker};
-use firewood_metrics::{firewood_increment, firewood_set};
+use firewood_metrics::{GaugeExt, firewood_counter, firewood_gauge, firewood_histogram};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::RootStore;
 use firewood_storage::{
@@ -270,7 +270,7 @@ impl RevisionManager {
     /// Steps 1 through 5 are executed behind a lock to maintain the invariant
     /// that only one revision can commit at a time.
     #[fastrace::trace(short_name = true)]
-    #[crate::metrics("proposal.commit", "proposal commit to storage")]
+    #[crate::metrics(PROPOSAL_COMMITS)]
     pub fn commit(&self, proposal: ProposedRevision) -> Result<(), RevisionManagerError> {
         // Hold a write lock on `in_memory_revisions` for the duration of the
         // critical section (steps 1-5). This is necessary because:
@@ -284,7 +284,10 @@ impl RevisionManager {
         // (current_revision, view) and any other commit attempts for the full duration of steps
         // 1-5. In high-commit-rate scenarios with many parallel readers, lock contention here
         // may stall reader threads until the commit critical section completes.
+        let __lock_start = ::std::time::Instant::now();
         let mut in_memory_revisions = self.in_memory_revisions.write();
+        firewood_histogram!(cheap: COMMIT_LOCK_WAIT_SECONDS)
+            .record(__lock_start.elapsed().as_secs_f64());
 
         // 1. Check if the persist worker has failed.
         self.persist_worker
@@ -304,7 +307,7 @@ impl RevisionManager {
 
         let committed = proposal.as_committed();
 
-        firewood_set!(crate::registry::DELETED_LIST_LEN, committed.deleted_len());
+        firewood_gauge!(DELETED_LIST_LEN).set_integer(committed.deleted_len());
 
         // 3. Revision reaping
         // When we exceed max_revisions, remove the oldest revision from memory
@@ -334,15 +337,18 @@ impl RevisionManager {
                     break;
                 }
             }
-            firewood_set!(crate::registry::ACTIVE_REVISIONS, in_memory_revisions.len());
-            firewood_set!(crate::registry::MAX_REVISIONS, self.max_revisions);
+            firewood_gauge!(ACTIVE_REVISIONS).set_integer(in_memory_revisions.len());
+            firewood_gauge!(MAX_REVISIONS).set_integer(self.max_revisions);
         }
 
         // 4. Signal to the `PersistWorker` to persist this revision.
         let committed: CommittedRevision = committed.into();
+        let __submit_start = ::std::time::Instant::now();
         self.persist_worker
             .persist(committed.clone())
             .map_err(RevisionManagerError::PersistError)?;
+        firewood_histogram!(cheap: PERSIST_SUBMIT_DURATION_SECONDS)
+            .record(__submit_start.elapsed().as_secs_f64());
 
         // 5. Set last committed revision
         // The revision is added to `by_hash` here while it still exists in `proposals`.
@@ -378,11 +384,11 @@ impl RevisionManager {
             });
 
             if discarded > 0 {
-                firewood_increment!(crate::registry::PROPOSALS_DISCARDED, discarded);
+                firewood_counter!(PROPOSALS_DISCARDED).increment(discarded);
             }
 
             // Update uncommitted proposals gauge after cleanup
-            firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, lock.len());
+            firewood_gauge!(PROPOSALS_UNCOMMITTED).set_integer(lock.len());
         }
 
         // then reparent any proposals that have this proposal as a parent
@@ -436,7 +442,7 @@ impl RevisionManager {
             lock.len()
         };
         // Update uncommitted proposals gauge after adding
-        firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, len);
+        firewood_gauge!(PROPOSALS_UNCOMMITTED).set_integer(len);
     }
 
     /// Retrieve a committed revision by its root hash.
@@ -448,9 +454,14 @@ impl RevisionManager {
         // BLOCKING: read lock on `by_hash`. Concurrent writes (commit reap/insert) will pause
         // until readers release. Low contention in practice since reads are fast, but parking_lot
         // RwLock favours writers, so a steady stream of commits can starve readers transiently.
-        if let Some(revision) = self.by_hash.read().get(&root_hash).cloned() {
+        let __lock_start = ::std::time::Instant::now();
+        let by_hash = self.by_hash.read();
+        firewood_histogram!(cheap: BY_HASH_LOCK_WAIT_SECONDS)
+            .record(__lock_start.elapsed().as_secs_f64());
+        if let Some(revision) = by_hash.get(&root_hash).cloned() {
             return Ok(revision);
         }
+        drop(by_hash);
 
         // 2. Check `RootStore` (if it exists).
         let root_store =
@@ -476,8 +487,11 @@ impl RevisionManager {
     pub fn current_revision(&self) -> CommittedRevision {
         // BLOCKING: read lock on `in_memory_revisions`. Called on every propose() and
         // merge_key_value_range(); blocks while a commit() holds the write lock (steps 1-5).
-        self.in_memory_revisions
-            .read()
+        let __lock_start = ::std::time::Instant::now();
+        let revisions = self.in_memory_revisions.read();
+        firewood_histogram!(cheap: CURRENT_REVISION_LOCK_WAIT_SECONDS)
+            .record(__lock_start.elapsed().as_secs_f64());
+        revisions
             .back()
             .expect("there is always one revision")
             .clone()

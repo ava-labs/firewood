@@ -57,6 +57,7 @@ import (
 	"fmt"
 	"iter"
 	"runtime"
+	"time"
 	"unsafe"
 )
 
@@ -333,7 +334,10 @@ func (it *codeIterator) Free() error {
 //
 // The format is unspecified and opaque to firewood.
 func (p *RangeProof) MarshalBinary() ([]byte, error) {
-	return getValueFromValueResult(C.fwd_range_proof_to_bytes(p.handle))
+	start := time.Now()
+	result, err := getValueFromValueResult(C.fwd_range_proof_to_bytes(p.handle))
+	proofMarshalDuration.WithLabelValues("range").Observe(time.Since(start).Seconds())
+	return result, err
 }
 
 // UnmarshalBinary sets the contents of this RangeProof to be the deserialized
@@ -346,8 +350,10 @@ func (p *RangeProof) UnmarshalBinary(data []byte) error {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
+	start := time.Now()
 	handle, err := getRangeProofFromRangeProofResult(
 		C.fwd_range_proof_from_bytes(newBorrowedBytes(data, &pinner)))
+	proofUnmarshalDuration.WithLabelValues("range").Observe(time.Since(start).Seconds())
 
 	if err == nil {
 		p.handle = handle.handle
@@ -541,7 +547,10 @@ func (*ChangeProof) CodeHashes() iter.Seq2[Hash, error] {
 //
 // The format is unspecified and opaque to firewood.
 func (p *ChangeProof) MarshalBinary() ([]byte, error) {
-	return getValueFromValueResult(C.fwd_change_proof_to_bytes(p.handle))
+	start := time.Now()
+	result, err := getValueFromValueResult(C.fwd_change_proof_to_bytes(p.handle))
+	proofMarshalDuration.WithLabelValues("change").Observe(time.Since(start).Seconds())
+	return result, err
 }
 
 // UnmarshalBinary sets the contents of this ChangeProof to be the deserialized
@@ -554,8 +563,10 @@ func (p *ChangeProof) UnmarshalBinary(data []byte) error {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
+	start := time.Now()
 	handle, err := getChangeProofFromChangeProofResult(
 		C.fwd_change_proof_from_bytes(newBorrowedBytes(data, &pinner)))
+	proofUnmarshalDuration.WithLabelValues("change").Observe(time.Since(start).Seconds())
 
 	if err == nil {
 		p.handle = handle.handle
@@ -588,7 +599,10 @@ func (p *ChangeProof) Free() error {
 // The format is unspecified and opaque to firewood. It is the same format as
 // [ChangeProof.MarshalBinary].
 func (p *VerifiedChangeProof) MarshalBinary() ([]byte, error) {
-	return getValueFromValueResult(C.fwd_verified_change_proof_to_bytes(p.handle))
+	start := time.Now()
+	result, err := getValueFromValueResult(C.fwd_verified_change_proof_to_bytes(p.handle))
+	proofMarshalDuration.WithLabelValues("verified_change").Observe(time.Since(start).Seconds())
+	return result, err
 }
 
 // Free releases the resources associated with this VerifiedChangeProof.

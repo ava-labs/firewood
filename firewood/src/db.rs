@@ -18,7 +18,7 @@ use crate::iter::MerkleKeyValueIter;
 use crate::merkle::{Merkle, Value};
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
-use firewood_metrics::firewood_counter;
+use firewood_metrics::{firewood_counter, firewood_histogram};
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
     ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage, Reconstructed,
@@ -38,18 +38,6 @@ pub enum DbError {
     /// I/O error
     #[error("I/O error: {0:?}")]
     FileIo(#[from] FileIoError),
-}
-
-/// Metrics for the database.
-/// TODO: Add more metrics
-pub struct DbMetrics {
-    proposals: metrics::Counter,
-}
-
-impl std::fmt::Debug for DbMetrics {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DbMetrics").finish()
-    }
 }
 
 impl<P, S: ReadableStorage> api::DbView for NodeStore<P, S>
@@ -143,7 +131,6 @@ pub struct DbConfig {
 /// database without calling `close()` may result in committed data being lost.
 #[derive(Debug)]
 pub struct Db {
-    metrics: Arc<DbMetrics>,
     manager: RevisionManager,
     use_parallel: UseParallel,
 }
@@ -167,7 +154,7 @@ impl api::Db for Db {
 
     fn propose(&self, batch: impl IntoBatchIter) -> Result<Self::Proposal<'_>, api::Error> {
         // Proposal created from db
-        firewood_metrics::firewood_increment!(crate::registry::PROPOSALS_CREATED, 1, "base" => "db");
+        firewood_counter!(PROPOSALS_CREATED, "base" => "db").increment(1);
 
         self.propose_with_parent(batch, &self.manager.current_revision())
     }
@@ -176,9 +163,6 @@ impl api::Db for Db {
 impl Db {
     /// Create a new database instance.
     pub fn new<P: AsRef<Path>>(db_dir: P, cfg: DbConfig) -> Result<Self, api::Error> {
-        let metrics = Arc::new(DbMetrics {
-            proposals: firewood_counter!(crate::registry::PROPOSALS),
-        });
         let config_manager = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
             .node_hash_algorithm(cfg.node_hash_algorithm)
@@ -189,7 +173,6 @@ impl Db {
             .build();
         let manager = RevisionManager::new(config_manager)?;
         let db = Self {
-            metrics,
             manager,
             use_parallel: cfg.use_parallel,
         };
@@ -219,11 +202,6 @@ impl Db {
         merkle.dump_to_string().map_err(std::io::Error::other)
     }
 
-    /// Get a copy of the database metrics
-    pub fn metrics(&self) -> Arc<DbMetrics> {
-        self.metrics.clone()
-    }
-
     /// Check the database for consistency
     pub fn check(&self, opt: CheckOpt) -> CheckerReport {
         let latest_rev_nodestore = self.manager.current_revision();
@@ -243,6 +221,7 @@ impl Db {
         batch: impl IntoBatchIter,
         parent: &NodeStore<F, FileBacked>,
     ) -> Result<Proposal<'_>, api::Error> {
+        let propose_start = std::time::Instant::now();
         // Return immediately if the background thread is no longer running.
         self.manager.check_persist_error()?;
         let proposal = NodeStore::new(parent)?;
@@ -253,7 +232,7 @@ impl Db {
             Arc::new(mutable_nodestore.try_into()?);
         self.manager.add_proposal(immutable.clone());
 
-        self.metrics.proposals.increment(1);
+        firewood_histogram!(PROPOSE_DURATION_SECONDS).record(propose_start.elapsed().as_secs_f64());
 
         Ok(Proposal {
             nodestore: immutable,
@@ -492,10 +471,9 @@ impl<'db> api::Proposal for Proposal<'db> {
 }
 
 impl Proposal<'_> {
-    #[crate::metrics("proposal.create", "database proposal creation")]
     fn create_proposal(&self, batch: impl IntoBatchIter) -> Result<Self, api::Error> {
         // Proposal created based on another proposal
-        firewood_metrics::firewood_increment!(crate::registry::PROPOSALS_CREATED, 1, "base" => "proposal");
+        firewood_counter!(PROPOSALS_CREATED, "base" => "proposal").increment(1);
 
         self.db.propose_with_parent(batch, &self.nodestore)
     }

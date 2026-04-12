@@ -21,8 +21,6 @@ use crate::linear::filebacked::FileBacked;
 use crate::nodestore::{Committed, LinearAddress, NodeStore};
 use crate::{IntoHashType, TrieHash};
 
-use crate::registry;
-
 /// Type alias for a committed revision stored in the root store.
 pub type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
 
@@ -141,7 +139,7 @@ impl RootStore {
         // 2. Check if the committed revision is cached.
         if let Some(v) = revision_cache.get(hash) {
             // found in the cache
-            firewood_counter!(registry::ROOTSTORE_GET, "result" => "cached").increment(1);
+            firewood_counter!(ROOTSTORE_GET, "result" => "cached").increment(1);
             return Ok(Some(v));
         }
 
@@ -150,7 +148,7 @@ impl RootStore {
         // mutex above is still held, so this blocks all other callers for the I/O duration.
         let Some(v) = self.items.get(**hash)? else {
             // not in the datastore
-            firewood_counter!(registry::ROOTSTORE_GET, "result" => "notfound").increment(1);
+            firewood_counter!(ROOTSTORE_GET, "result" => "notfound").increment(1);
             return Ok(None);
         };
 
@@ -168,7 +166,7 @@ impl RootStore {
         // 5. Cache for future lookups.
         revision_cache.insert(hash.clone(), nodestore.clone());
 
-        firewood_counter!(registry::ROOTSTORE_GET, "result" => "fetched").increment(1);
+        firewood_counter!(ROOTSTORE_GET, "result" => "fetched").increment(1);
 
         Ok(Some(nodestore))
     }

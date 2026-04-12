@@ -52,7 +52,7 @@ use crate::IntoHashType;
 use crate::linear::{OffsetReader, ReadableNodeMode};
 use crate::logger::{debug, trace};
 use crate::node::branch::ReadSerializable as _;
-use firewood_metrics::firewood_increment;
+use firewood_metrics::{firewood_counter, firewood_histogram};
 use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::io::{Error, ErrorKind};
@@ -556,7 +556,7 @@ impl ImmutableProposal {
         {
             *guard = NodeStoreParent::Committed(committing.root_hash());
             // Track reparenting events
-            firewood_increment!(crate::registry::REPARENTED_PROPOSAL_COUNT, 1);
+            firewood_counter!(REPARENTED_PROPOSAL_COUNT).increment(1);
         }
     }
 }
@@ -1109,8 +1109,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             allocator.delete_node(node)?;
         }
 
-        let reap_time = reap_start.elapsed().as_millis() as u64;
-        firewood_increment!(crate::registry::REAP_NODES, reap_time);
+        firewood_histogram!(cheap: REAP_DURATION_SECONDS)
+            .record(reap_start.elapsed().as_secs_f64());
 
         Ok(())
     }
