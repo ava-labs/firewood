@@ -1531,7 +1531,7 @@ mod tests {
 
         // Freelist must be empty before any reaping.
         assert!(
-            header.free_lists().iter().all(|h| h.is_none()),
+            header.free_lists().iter().all(Option::is_none),
             "freelist should be empty before reaping"
         );
 
@@ -1551,7 +1551,7 @@ mod tests {
 
         // The reaped address must now appear in the freelist.
         assert!(
-            header.free_lists().iter().any(|h| h.is_some()),
+            header.free_lists().iter().any(Option::is_some),
             "freelist should have an entry for the reaped node after finish"
         );
 
@@ -1586,10 +1586,13 @@ mod tests {
 
         let addr_a = persist_leaf(0xA)?;
         let addr_b = persist_leaf(0xB)?;
-        assert_ne!(addr_a, addr_b, "two separate persists must use distinct addresses");
+        assert_ne!(
+            addr_a, addr_b,
+            "two separate persists must use distinct addresses"
+        );
 
         // Freelist is still empty — nothing has been reaped yet.
-        assert!(header.free_lists().iter().all(|h| h.is_none()));
+        assert!(header.free_lists().iter().all(Option::is_none));
 
         // Construct two expired committed stores, one per reaped address.
         let make_expired = |addr: LinearAddress| NodeStore {
@@ -1615,7 +1618,7 @@ mod tests {
 
         // Both freed addresses must now be in the freelist.
         assert!(
-            header.free_lists().iter().any(|h| h.is_some()),
+            header.free_lists().iter().any(Option::is_some),
             "freelist must have entries for both reaped nodes after batched persist"
         );
 
