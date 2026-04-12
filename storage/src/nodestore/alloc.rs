@@ -26,11 +26,12 @@ use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::branch::{ReadSerializable, Serializable};
 use crate::nodestore::NodeStoreHeader;
-use firewood_metrics::{firewood_counter, firewood_gauge};
+use crate::nodestore::primitives::area_size_iter;
+use firewood_metrics::{GaugeExt, firewood_counter, firewood_gauge};
 use integer_encoding::VarIntReader;
 
-use std::io::{Error, ErrorKind, Read};
-use std::iter::FusedIterator;
+use std::io::{Cursor, Error, ErrorKind, Read};
+use std::iter::{FusedIterator, zip};
 use std::mem::size_of;
 
 use crate::{FreeListParent, MaybePersistedNode, ReadableStorage, WritableStorage};
@@ -192,16 +193,35 @@ impl FreeArea {
 // Re-export the NodeStore types we need
 use super::NodeStore;
 
-/// Writable allocator for allocating and deleting nodes
+/// Allocator for node storage that manages free-space reuse.
+///
+/// Allocation and deletion are staged in the `dirty_freelists` buffer — one `Vec` per
+/// area size — and are not visible to on-disk state or to the persisted header until
+/// [`flush_freelist`](NodeAllocator::flush_freelist) is called. This keeps all storage
+/// writes for a single commit batched together.
+///
+/// ### Allocation priority
+///
+/// 1. Pop from the in-memory `dirty_freelists` for the exact size (reuses blocks freed
+///    during the same uncommitted batch).
+/// 2. Pop from the persisted free list stored in the [`NodeStoreHeader`].
+/// 3. For targets smaller than [`AreaIndex::SPLITTABLE`], split the smallest available
+///    larger free block whose size is an exact multiple of the target.
+/// 4. Extend the file (append to end).
 #[derive(Debug)]
 pub struct NodeAllocator<'a, S> {
     storage: &'a S,
     header: &'a mut NodeStoreHeader,
+    dirty_freelists: [Vec<LinearAddress>; AreaIndex::NUM_AREA_SIZES],
 }
 
 impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
     pub const fn new(storage: &'a S, header: &'a mut NodeStoreHeader) -> Self {
-        Self { storage, header }
+        Self {
+            storage,
+            header,
+            dirty_freelists: [const { Vec::new() }; _],
+        }
     }
 
     /// Helper to convert an `io::Error` to a `FileIoError` with context.
@@ -227,44 +247,136 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
         area_index_and_size(self.storage, addr)
     }
 
-    /// Attempts to allocate from the free lists for `index`.
+    /// Attempts to allocate a block of size `index` from the free lists.
     ///
-    /// If successful returns the address of the newly allocated area;
-    /// otherwise, returns None.
-    fn allocate_from_freed(
+    /// Checks the in-memory `dirty_freelists` first (blocks freed or split during the
+    /// current uncommitted batch), then falls back to the persisted free list head in
+    /// the [`NodeStoreHeader`].  When consuming from the persisted list the header is
+    /// updated in place so the next call sees the correct successor.
+    ///
+    /// Returns the address of the allocated block, or `None` if no free block of this
+    /// size is available.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if reading a `FreeArea` record from storage fails.
+    fn allocate_from_freelist(
         &mut self,
         index: AreaIndex,
     ) -> Result<Option<LinearAddress>, FileIoError> {
-        let free_stored_area_addr = self
-            .header
-            .free_lists_mut()
-            .get_mut(index.as_usize())
-            .expect("index is less than AreaIndex::NUM_AREA_SIZES");
-        if let Some(address) = free_stored_area_addr {
-            let address = *address;
-            if let Some(free_head) = self.storage.free_list_cache(address) {
-                trace!("free_head@{address}(cached): {free_head:?} size:{index}");
-                *free_stored_area_addr = free_head;
+        let next = if let Some(stack) = self.dirty_freelists.get_mut(index.as_usize())
+            && let Some(address) = stack.pop()
+        {
+            trace!("Allocating from dirty free list: addr: {address:?}, size: {index}");
+            Some(address)
+        } else if let Some(stack) = self.header.free_lists_mut().get_mut(index.as_usize())
+            && let Some(address) = stack.take()
+        {
+            // update the header's free list head to the next free block
+            *stack = if let Some(cached) = self.storage.free_list_cache(address) {
+                trace!("free_head@{address}(cached): {cached:?} size:{index}");
+                cached
             } else {
                 let (free_head, read_index) = FreeArea::from_storage(self.storage, address)?;
                 debug_assert_eq!(read_index, index);
+                free_head.next_free_block
+            };
 
-                // Update the free list to point to the next free block.
-                *free_stored_area_addr = free_head.next_free_block;
-            }
+            trace!("Allocating from state free list: addr: {address:?}, size: {index}");
+            Some(address)
+        } else {
+            trace!("No free blocks of sufficient size {index} found");
+            None
+        };
 
+        if next.is_some() {
             firewood_counter!(SPACE_REUSED, "index" => index_name(index)).increment(index.size());
             firewood_gauge!(FREE_LIST_ENTRIES, "index" => index_name(index)).decrement(1.0);
-
-            // Return the address of the newly allocated block.
-            trace!("Allocating from free list: addr: {address:?}, size: {index}");
-            return Ok(Some(address));
         }
 
-        trace!("No free blocks of sufficient size {index} found");
+        Ok(next)
+    }
+
+    /// Attempts to satisfy an allocation for `target_index` by splitting a larger free block.
+    ///
+    /// Only operates on targets smaller than [`AreaIndex::SPLITTABLE`] (i.e. < 768 bytes);
+    /// returns `None` immediately for larger targets.
+    ///
+    /// Iterates source sizes ≥ 768 bytes in ascending order and uses the first one whose
+    /// size is an exact multiple of `target_index.size()` and whose free list is non-empty.
+    /// The source block is split into `src_size / target_size` pieces: piece 0 is returned
+    /// to the caller; pieces 1..n are pushed onto `dirty_freelists` for the target size and
+    /// will be written to storage on the next [`flush_freelist`](NodeAllocator::flush_freelist)
+    /// call.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if consuming the source block from its free list fails.
+    fn allocate_by_splitting(
+        &mut self,
+        target_index: AreaIndex,
+    ) -> Result<Option<LinearAddress>, FileIoError> {
+        if target_index >= AreaIndex::SPLITTABLE {
+            return Ok(None);
+        }
+
+        let target_size = target_index.size();
+
+        for src_index in AreaIndex::iter_splittable() {
+            let src_size = src_index.size();
+
+            if !src_size.is_multiple_of(target_size) {
+                // Only split if target fits a whole number of times in the source.
+                continue;
+            }
+
+            let Some(addr) = self.allocate_from_freelist(src_index)? else {
+                // Only proceed if the source free list is non-empty.
+                continue;
+            };
+
+            // is_multiple_of above guarantees no division by zero
+            #[expect(clippy::arithmetic_side_effects)]
+            let num_pieces = src_size / target_size;
+            let num_sub_one = num_pieces.wrapping_sub(1);
+
+            trace!(
+                "Splitting free block: addr: {addr:?}, source size: {src_index}, target size: {target_index}, pieces: {num_pieces}"
+            );
+
+            // carve out pieces 1..num_pieces and add them to the target free list
+            #[expect(clippy::indexing_slicing)]
+            self.dirty_freelists[target_index.as_usize()].extend((1..num_pieces).map(|i| {
+                addr.advance(i.wrapping_mul(target_size))
+                    .expect("split address cannot overflow")
+            }));
+
+            firewood_gauge!(FREE_LIST_ENTRIES, "index" => index_name(target_index))
+                .increment_integer(num_sub_one);
+
+            firewood_counter!(
+                FREE_LIST_SPLIT,
+                "target" => index_name(target_index),
+                "source" => index_name(src_index)
+            )
+            .increment(1);
+
+            return Ok(Some(addr));
+        }
+
         Ok(None)
     }
 
+    /// Allocates a block of size `index` by extending the file.
+    ///
+    /// Advances the logical end-of-file recorded in `self.header` by the area size and
+    /// returns the address of the newly created region.  This is the fallback allocation
+    /// path when neither the free lists nor block splitting can satisfy the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the current node store size is zero (which would
+    /// produce an invalid address).
     fn allocate_from_end(&mut self, index: AreaIndex) -> Result<LinearAddress, FileIoError> {
         let area_size = index.size();
         let addr = LinearAddress::new(self.header.size()).expect("node store size can't be 0");
@@ -274,58 +386,6 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
         trace!("Allocating from end: addr: {addr:?}, size: {index}");
         firewood_counter!(SPACE_FROM_END, "index" => index_name(index)).increment(area_size);
         Ok(addr)
-    }
-}
-
-impl<S: WritableStorage> NodeAllocator<'_, S> {
-    /// Attempts to satisfy an allocation for `target_index` by splitting a larger free block.
-    ///
-    /// Iterates source sizes ≥ 768 bytes in ascending order and uses the first one whose
-    /// size is an exact multiple of `target_index.size()` and whose free list is non-empty.
-    /// The source block is split into `src_size / target_size` pieces: the first is returned
-    /// to the caller; the remainder are added to the target free list.
-    ///
-    /// Only call this when `target_index.size() <= 512` and `allocate_from_freed` returned `None`.
-    #[expect(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
-    fn allocate_by_splitting(
-        &mut self,
-        target_index: AreaIndex,
-    ) -> Result<Option<LinearAddress>, FileIoError> {
-        let target_size = target_index.size();
-
-        // Only split if target fits a whole number of times in the source.
-        // Only proceed if the source free list is non-empty.
-        let Some(src_index) = AreaIndex::iter_splittable().find(|&index| {
-            index.size() % target_size == 0 && self.header.free_lists()[index.as_usize()].is_some()
-        }) else {
-            return Ok(None);
-        };
-
-        let src_size = src_index.size();
-
-        // Pop one block from the source free list.
-        let addr = self
-            .allocate_from_freed(src_index)?
-            .expect("free list was non-empty");
-
-        // Carve out pieces 1..n-1 and add them to the target free list.
-        let num_pieces = (src_size / target_size) as usize;
-        // let mut buffer = [0_u8; 11]; // max size of FreeArea with varint encoding
-        for i in 1..num_pieces {
-            let piece_addr = addr
-                .advance(i as u64 * target_size)
-                .expect("split address cannot overflow");
-            self.push_freelist(target_index, piece_addr)?;
-        }
-
-        firewood_counter!(
-            FREE_LIST_SPLIT,
-            "target" => index_name(target_index),
-            "source" => index_name(src_index)
-        )
-        .increment(1);
-
-        Ok(Some(addr))
     }
 
     /// Returns an address that can be used to store the given `node` and updates
@@ -341,18 +401,20 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
         stored_area_size: u64,
     ) -> Result<LinearAddress, FileIoError> {
         // Attempt to allocate from a free list.
+        let result = self.allocate_from_freelist(area_index);
+
         // If the free list is empty and the node is small, try splitting a larger free block.
-        // Fall back to appending to the end of the file.
-        let addr = match self.allocate_from_freed(area_index)? {
-            Some(addr) => addr,
-            None if area_index < AreaIndex::SPLITTABLE => {
-                match self.allocate_by_splitting(area_index)? {
-                    Some(addr) => addr,
-                    None => self.allocate_from_end(area_index)?,
-                }
-            }
-            None => self.allocate_from_end(area_index)?,
+        let result = match result {
+            Ok(None) => self.allocate_by_splitting(area_index),
+            other => other,
         };
+
+        // Fall back to appending to the end of the file.
+        let addr = match result {
+            Ok(None) => self.allocate_from_end(area_index),
+            Ok(Some(addr)) => Ok(addr),
+            Err(err) => Err(err),
+        }?;
 
         firewood_counter!(NODES_ALLOCATED, "index" => index_name(area_index)).increment(1);
         let waste = area_index.size().saturating_sub(stored_area_size);
@@ -361,49 +423,92 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
         Ok(addr)
     }
 
-    /// Deletes the `Node` and updates the header of the allocator.
-    /// Nodes that are not persisted are just dropped.
+    /// Logically deletes `node`, returning its storage area to the free pool.
+    ///
+    /// Nodes that have never been persisted (no on-disk address) are simply dropped.
+    /// For persisted nodes the address is pushed onto `dirty_freelists`; the actual
+    /// `FreeArea` record and the updated header are written on the next
+    /// [`flush_freelist`](NodeAllocator::flush_freelist) call.
     ///
     /// # Errors
     ///
-    /// Returns a [`FileIoError`] if the area cannot be read or written.
+    /// Returns a [`FileIoError`] if reading the area's size tag from storage fails.
     pub(crate) fn delete_node(&mut self, node: MaybePersistedNode) -> Result<(), FileIoError> {
         let Some(addr) = node.as_linear_address() else {
             return Ok(());
         };
         debug_assert!(addr.is_aligned());
 
+        // NB: this is an unconditional read of a single byte from the storage layer.
         let (area_size_index, _) = self.area_index_and_size(addr)?;
         trace!("Deleting node at {addr:?} of size {area_size_index}");
         firewood_counter!(DELETE_NODE, "index" => index_name(area_size_index)).increment(1);
         firewood_counter!(SPACE_FREED, "index" => index_name(area_size_index))
             .increment(area_size_index.size());
 
-        self.push_freelist(area_size_index, addr)
-    }
-
-    #[expect(clippy::indexing_slicing)]
-    pub(crate) fn push_freelist(
-        &mut self,
-        area_size_index: AreaIndex,
-        addr: LinearAddress,
-    ) -> Result<(), FileIoError> {
-        // skip allocating a vector for very small free area
-        let mut buffer = std::io::Cursor::new([0_u8; FreeArea::MAX_SIZE]);
-        let current_head = self.header.free_lists()[area_size_index.as_usize()];
-        FreeArea::new(current_head).as_bytes(area_size_index, &mut buffer);
-        let buffer = &buffer.get_ref()[..buffer.position() as usize];
-        self.storage.write(addr.into(), buffer)?;
-        self.storage.add_to_free_list_cache(addr, current_head);
-        self.header.free_lists_mut()[area_size_index.as_usize()] = Some(addr);
+        #[expect(clippy::indexing_slicing)]
+        self.dirty_freelists[area_size_index.as_usize()].push(addr);
         firewood_gauge!(FREE_LIST_ENTRIES, "index" => index_name(area_size_index)).increment(1.0);
+
         Ok(())
     }
+}
 
+impl<S: WritableStorage> NodeAllocator<'_, S> {
+    /// Commits all pending free-list changes to storage in a single batched write.
+    ///
+    /// For every entry in `dirty_freelists` this method:
+    /// 1. Writes a [`FreeArea`] record at that address pointing to the current head of its
+    ///    size class (prepend / LIFO ordering).
+    /// 2. Updates the free-list head in `self.header` to the newly prepended address.
+    /// 3. Populates the in-memory free-list cache so subsequent reads avoid disk I/O.
+    ///
+    /// After draining all dirty entries the updated header free-list array is appended to
+    /// the same write batch so the entire commit lands in one call to
+    /// [`WritableStorage::write_batch`].  This is a no-op if `dirty_freelists` is empty,
+    /// but the header is still written so any free-list head changes made by
+    /// [`allocate_from_freelist`](NodeAllocator::allocate_from_freelist) are persisted.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the underlying storage write fails.
     pub(crate) fn flush_freelist(&mut self) -> Result<(), FileIoError> {
+        // collect all dirty freelist writes into a batch to utilize batch writing if enabled
+        let batch = area_size_iter()
+            .zip(zip(&mut self.dirty_freelists, self.header.free_lists_mut()))
+            .flat_map(|((index, _index_size), (dirty, head))| {
+                dirty.drain(..).map({
+                    // prevent `move` of `self` into the closure
+                    let storage = self.storage;
+                    move |addr| {
+                        // buffer has the same footprint of a Vec (24 bytes) but doesn't use the heap
+                        let mut buffer = Cursor::new([0_u8; FreeArea::MAX_SIZE]);
+                        let next = head.take();
+                        FreeArea::new(next).as_bytes(index, &mut buffer);
+                        storage.add_to_free_list_cache(addr, next);
+                        *head = Some(addr);
+                        (addr.into(), buffer)
+                    }
+                })
+            })
+            .collect::<Vec<(u64, _)>>();
+
+        // even if `batch` is empty, the free list heads on the header must be updated
+        // because we may have changed one of the pointers in `allocate_from_freelist`
         let free_list_bytes = bytemuck::bytes_of(self.header.free_lists());
         let free_list_offset = NodeStoreHeader::free_lists_offset();
-        self.storage.write(free_list_offset, free_list_bytes)?;
+
+        self.storage.write_batch(
+            batch
+                .iter()
+                .map(|&(offset, ref buffer)| {
+                    let len = buffer.position() as usize;
+                    #[expect(clippy::indexing_slicing)]
+                    (offset, &buffer.get_ref()[..len])
+                })
+                .chain(Some((free_list_offset, free_list_bytes))),
+        )?;
+
         Ok(())
     }
 }
@@ -719,6 +824,13 @@ mod tests {
     use rand::seq::IteratorRandom;
     use test_case::test_case;
     use test_utils::{test_write_free_area, test_write_header};
+
+    /// Create a bare header with `size` and no free lists.
+    fn make_empty_header(size: u64) -> NodeStoreHeader {
+        let mut header = NodeStoreHeader::new(crate::NodeHashAlgorithm::compile_option());
+        header.set_size(size);
+        header
+    }
 
     #[test_case(&[0x01, 0x01, 0x01, 0x2a], Some((area_index!(1), 42)); "old format")]
     // StoredArea::new(12, Area::<Node, _>::Free(FreeArea::new(None)));
@@ -1072,6 +1184,9 @@ mod tests {
         assert_eq!(addr, LinearAddress::new(NodeStoreHeader::SIZE).unwrap());
         assert_eq!(idx, AREA_96);
 
+        // Flush dirty free lists into the header before inspecting.
+        allocator.flush_freelist().unwrap();
+
         // Pieces 1-7 (at offsets +96, +192, ..., +672) added to 96-byte free list.
         // The last piece added becomes the head (LIFO prepend).
         assert_eq!(
@@ -1100,6 +1215,9 @@ mod tests {
 
         assert_eq!(addr, LinearAddress::new(NodeStoreHeader::SIZE).unwrap());
         assert_eq!(idx, AREA_512);
+
+        // Flush dirty free lists into the header before inspecting.
+        allocator.flush_freelist().unwrap();
 
         // One extra piece at offset +512.
         assert_eq!(
@@ -1167,6 +1285,9 @@ mod tests {
         assert_eq!(addr, LinearAddress::new(block_768).unwrap());
         assert_eq!(idx, AREA_128);
 
+        // Flush dirty free lists into the header before inspecting.
+        allocator.flush_freelist().unwrap();
+
         // 768-byte free list consumed; 1024 untouched.
         assert!(header.free_lists()[AREA_768.as_usize()].is_none());
         assert_eq!(
@@ -1179,5 +1300,272 @@ mod tests {
             header.free_lists()[AREA_128.as_usize()],
             LinearAddress::new(block_768 + 128 * 5),
         );
+    }
+
+    #[test]
+    fn delete_then_allocate_same_batch_reuses_deleted_address() {
+        // A node freed in the current batch should be immediately reusable within
+        // the same NodeAllocator — served from dirty_freelists rather than the
+        // persisted header list or file end.
+        const AREA_96: AreaIndex = area_index!(3); // 96 bytes
+
+        let memstore = MemStore::default();
+        let node_addr = NodeStoreHeader::SIZE;
+        // Write a valid area-index byte so delete_node can read the size.
+        write_free_block(&memstore, AREA_96, node_addr);
+
+        // No free lists: the only available space is the block we are about to delete.
+        let mut header = make_empty_header(node_addr.wrapping_add(AREA_96.size()));
+        let size_before = header.size();
+
+        let mut allocator = NodeAllocator::new(&memstore, &mut header);
+
+        let persisted = MaybePersistedNode::from(LinearAddress::new(node_addr).unwrap());
+        allocator.delete_node(persisted).unwrap();
+
+        // Allocate the same size in the same batch — must come from dirty_freelists.
+        let addr = allocator.allocate_node(AREA_96, 90).unwrap();
+
+        assert_eq!(addr, LinearAddress::new(node_addr).unwrap());
+        // File must not have grown: no allocate_from_end call was made.
+        assert_eq!(header.size(), size_before);
+    }
+
+    #[test]
+    fn delete_node_does_not_update_header_before_flush() {
+        // delete_node stages an address in dirty_freelists; the header free list
+        // pointer must not change (in storage or in memory) until flush_freelist is called.
+        use std::io::Read as _;
+
+        const AREA_96: AreaIndex = area_index!(3); // 96 bytes
+
+        let memstore = MemStore::default();
+        let node_addr = NodeStoreHeader::SIZE;
+        write_free_block(&memstore, AREA_96, node_addr);
+        let mut header = make_empty_header(node_addr.wrapping_add(AREA_96.size()));
+
+        let mut allocator = NodeAllocator::new(&memstore, &mut header);
+
+        let persisted = MaybePersistedNode::from(LinearAddress::new(node_addr).unwrap());
+        allocator.delete_node(persisted).unwrap();
+
+        // Before flush: storage at the free_lists offset must not reflect the delete.
+        // (MemStore starts zeroed; delete_node writes nothing to storage.)
+        // We read from MemStore here (immutable borrow, compatible with allocator's
+        // borrow of header) rather than accessing header directly.
+        let offset = NodeStoreHeader::free_lists_offset();
+        let mut reader = memstore.stream_from(offset).unwrap();
+        let mut stored_bytes = vec![0u8; size_of::<FreeLists>()];
+        reader.read_exact(&mut stored_bytes).unwrap();
+        let stored_free_lists: &FreeLists = bytemuck::from_bytes(&stored_bytes);
+        assert!(stored_free_lists[AREA_96.as_usize()].is_none());
+
+        allocator.flush_freelist().unwrap();
+
+        // After flush, the in-memory header reflects the staged delete.
+        assert_eq!(
+            header.free_lists()[AREA_96.as_usize()],
+            LinearAddress::new(node_addr),
+        );
+    }
+
+    #[test]
+    fn flush_freelist_lifo_chain_with_multiple_deletes() {
+        // Two nodes of the same size deleted in order A, B.
+        // flush_freelist drains front-to-back (A then B), prepending each as the
+        // new head.  Expected final chain: head → B → A → None.
+        const AREA_96: AreaIndex = area_index!(3); // 96 bytes
+
+        let memstore = MemStore::default();
+        let addr_a = NodeStoreHeader::SIZE;
+        let addr_b = addr_a.wrapping_add(AREA_96.size());
+        write_free_block(&memstore, AREA_96, addr_a);
+        write_free_block(&memstore, AREA_96, addr_b);
+        let mut header = make_empty_header(addr_b.wrapping_add(AREA_96.size()));
+
+        let mut allocator = NodeAllocator::new(&memstore, &mut header);
+
+        allocator
+            .delete_node(MaybePersistedNode::from(
+                LinearAddress::new(addr_a).unwrap(),
+            ))
+            .unwrap();
+        allocator
+            .delete_node(MaybePersistedNode::from(
+                LinearAddress::new(addr_b).unwrap(),
+            ))
+            .unwrap();
+
+        allocator.flush_freelist().unwrap();
+
+        // B was prepended last so it is the head.
+        assert_eq!(
+            header.free_lists()[AREA_96.as_usize()],
+            LinearAddress::new(addr_b),
+        );
+        // B's FreeArea record points to A.
+        let (fa_b, idx_b) =
+            FreeArea::from_storage(&memstore, LinearAddress::new(addr_b).unwrap()).unwrap();
+        assert_eq!(idx_b, AREA_96);
+        assert_eq!(fa_b.next_free_block(), LinearAddress::new(addr_a));
+        // A's FreeArea record points to nothing.
+        let (fa_a, idx_a) =
+            FreeArea::from_storage(&memstore, LinearAddress::new(addr_a).unwrap()).unwrap();
+        assert_eq!(idx_a, AREA_96);
+        assert!(fa_a.next_free_block().is_none());
+    }
+
+    #[test]
+    fn flush_freelist_empty_dirty_still_persists_header_mutations() {
+        // When dirty_freelists is empty but allocate_from_freelist mutated the
+        // in-memory header (consumed a free-list head), flush_freelist must still
+        // write the updated header to storage.
+        use std::io::Read as _;
+
+        const AREA_96: AreaIndex = area_index!(3); // 96 bytes
+
+        let memstore = MemStore::default();
+        let block_addr = NodeStoreHeader::SIZE;
+        write_free_block(&memstore, AREA_96, block_addr);
+        let mut header = make_header_with_free_block(AREA_96, block_addr);
+
+        let mut allocator = NodeAllocator::new(&memstore, &mut header);
+
+        // Consume the header entry — dirty_freelists stays empty.
+        let addr = allocator.allocate_node(AREA_96, 90).unwrap();
+        assert_eq!(addr, LinearAddress::new(block_addr).unwrap());
+
+        // flush_freelist must write the (now-None) free-list head to storage.
+        allocator.flush_freelist().unwrap();
+
+        // Read the free_lists array back from the MemStore.
+        let offset = NodeStoreHeader::free_lists_offset();
+        let mut reader = memstore.stream_from(offset).unwrap();
+        let mut stored_bytes = vec![0u8; size_of::<FreeLists>()];
+        reader.read_exact(&mut stored_bytes).unwrap();
+        let stored_free_lists: &FreeLists = bytemuck::from_bytes(&stored_bytes);
+
+        // The persisted free list for AREA_96 must be None (consumed and flushed).
+        assert!(stored_free_lists[AREA_96.as_usize()].is_none());
+    }
+
+    #[test]
+    fn split_remainder_reused_in_same_batch_without_flush() {
+        // After a split, remainder pieces land in dirty_freelists.
+        // A second allocation of the same size must draw from dirty_freelists rather
+        // than extending the file.
+        const AREA_1024: AreaIndex = area_index!(8); // 1024 bytes
+        const AREA_512: AreaIndex = area_index!(6); // 512 bytes
+
+        let memstore = MemStore::default();
+        write_free_block(&memstore, AREA_1024, NodeStoreHeader::SIZE);
+        let mut header = make_header_with_free_block(AREA_1024, NodeStoreHeader::SIZE);
+        let size_before = header.size();
+
+        let mut allocator = NodeAllocator::new(&memstore, &mut header);
+
+        let addr1 = allocator.allocate_node(AREA_512, 500).unwrap();
+        // Second allocation must not extend the file — must come from dirty_freelists.
+        let addr2 = allocator.allocate_node(AREA_512, 500).unwrap();
+
+        assert_eq!(addr1, LinearAddress::new(NodeStoreHeader::SIZE).unwrap());
+        assert_eq!(
+            addr2,
+            LinearAddress::new(NodeStoreHeader::SIZE + 512).unwrap()
+        );
+        assert_eq!(header.size(), size_before);
+    }
+
+    #[test]
+    fn delete_node_unpersisted_is_noop() {
+        // delete_node on a node with no disk address must be a complete no-op:
+        // no dirty_freelists entry staged, no header change, no file growth.
+        use crate::{LeafNode, Node, Path, SharedNode};
+
+        let memstore = MemStore::default();
+        let mut header = make_empty_header(NodeStoreHeader::SIZE);
+
+        let mut allocator = NodeAllocator::new(&memstore, &mut header);
+
+        let node = SharedNode::new(Node::Leaf(LeafNode {
+            partial_path: Path::new(),
+            value: vec![].into(),
+        }));
+        let unpersisted = MaybePersistedNode::from(node);
+        allocator.delete_node(unpersisted).unwrap();
+
+        // No free list entry was staged.
+        for fl in header.free_lists() {
+            assert!(fl.is_none());
+        }
+        assert_eq!(header.size(), NodeStoreHeader::SIZE);
+    }
+
+    #[test]
+    fn allocate_from_header_freelist_when_dirty_empty() {
+        // When dirty_freelists is empty, allocation must fall back to the persisted
+        // header free list rather than extending the file.
+        const AREA_96: AreaIndex = area_index!(3); // 96 bytes
+
+        let memstore = MemStore::default();
+        write_free_block(&memstore, AREA_96, NodeStoreHeader::SIZE);
+        let mut header = make_header_with_free_block(AREA_96, NodeStoreHeader::SIZE);
+        let size_before = header.size();
+
+        let mut allocator = NodeAllocator::new(&memstore, &mut header);
+
+        let addr = allocator.allocate_node(AREA_96, 90).unwrap();
+
+        assert_eq!(addr, LinearAddress::new(NodeStoreHeader::SIZE).unwrap());
+        // Header pointer updated in-place to the next block (None, since only one block existed).
+        assert!(header.free_lists()[AREA_96.as_usize()].is_none());
+        // File must not have grown.
+        assert_eq!(header.size(), size_before);
+    }
+
+    #[test]
+    fn flush_freelist_multiple_size_classes_no_cross_contamination() {
+        // Deleting nodes of two different sizes and flushing must update exactly
+        // the correct header slot for each size class with no cross-contamination.
+        const AREA_96: AreaIndex = area_index!(3); // 96 bytes
+        const AREA_512: AreaIndex = area_index!(6); // 512 bytes
+
+        let memstore = MemStore::default();
+        let addr_96 = NodeStoreHeader::SIZE;
+        let addr_512 = addr_96.wrapping_add(AREA_96.size());
+        write_free_block(&memstore, AREA_96, addr_96);
+        write_free_block(&memstore, AREA_512, addr_512);
+        let mut header = make_empty_header(addr_512.wrapping_add(AREA_512.size()));
+
+        let mut allocator = NodeAllocator::new(&memstore, &mut header);
+
+        allocator
+            .delete_node(MaybePersistedNode::from(
+                LinearAddress::new(addr_96).unwrap(),
+            ))
+            .unwrap();
+        allocator
+            .delete_node(MaybePersistedNode::from(
+                LinearAddress::new(addr_512).unwrap(),
+            ))
+            .unwrap();
+
+        allocator.flush_freelist().unwrap();
+
+        // Each size class must contain exactly its own deleted address.
+        assert_eq!(
+            header.free_lists()[AREA_96.as_usize()],
+            LinearAddress::new(addr_96),
+        );
+        assert_eq!(
+            header.free_lists()[AREA_512.as_usize()],
+            LinearAddress::new(addr_512),
+        );
+        // All other size classes remain empty.
+        for (i, fl) in header.free_lists().iter().enumerate() {
+            if i != AREA_96.as_usize() && i != AREA_512.as_usize() {
+                assert!(fl.is_none(), "unexpected entry at size class {i}");
+            }
+        }
     }
 }
