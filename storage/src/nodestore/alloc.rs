@@ -286,20 +286,18 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
     /// to the caller; the remainder are added to the target free list.
     ///
     /// Only call this when `target_index.size() <= 512` and `allocate_from_freed` returned `None`.
-    #[expect(clippy::indexing_slicing)]
+    #[expect(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
     fn allocate_by_splitting(
         &mut self,
         target_index: AreaIndex,
     ) -> Result<Option<LinearAddress>, FileIoError> {
         let target_size = target_index.size();
 
-        let Some(src_index) = AreaIndex::iter_splittable()
-            // Only split if target fits a whole number of times in the source.
-            .filter(|&index| index.size() % target_size == 0)
-            // Only proceed if the source free list is non-empty.
-            .filter(|&index| self.header.free_lists()[index.as_usize()].is_some())
-            .next()
-        else {
+        // Only split if target fits a whole number of times in the source.
+        // Only proceed if the source free list is non-empty.
+        let Some(src_index) = AreaIndex::iter_splittable().find(|&index| {
+            index.size() % target_size == 0 && self.header.free_lists()[index.as_usize()].is_some()
+        }) else {
             return Ok(None);
         };
 
@@ -369,7 +367,6 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the area cannot be read or written.
-    #[expect(clippy::indexing_slicing)]
     pub(crate) fn delete_node(&mut self, node: MaybePersistedNode) -> Result<(), FileIoError> {
         let Some(addr) = node.as_linear_address() else {
             return Ok(());
@@ -385,6 +382,7 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
         self.push_freelist(area_size_index, addr)
     }
 
+    #[expect(clippy::indexing_slicing)]
     pub(crate) fn push_freelist(
         &mut self,
         area_size_index: AreaIndex,
@@ -1038,7 +1036,7 @@ mod tests {
 
     // ---- free-list splitting tests ----
 
-    /// Write a single FreeArea of `area_size_index` at `offset` into `storage`.
+    /// Write a single `FreeArea` of `area_size_index` at `offset` into `storage`.
     fn write_free_block(storage: &MemStore, area_size_index: AreaIndex, offset: u64) {
         let mut bytes = Vec::new();
         FreeArea::new(None).as_bytes(area_size_index, &mut bytes);
@@ -1049,6 +1047,7 @@ mod tests {
     fn make_header_with_free_block(area_index: AreaIndex, block_addr: u64) -> NodeStoreHeader {
         use crate::NodeHashAlgorithm;
         let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        #[expect(clippy::arithmetic_side_effects)]
         header.set_size(block_addr + area_index.size());
         header.free_lists_mut()[area_index.as_usize()] = LinearAddress::new(block_addr);
         header
@@ -1141,6 +1140,8 @@ mod tests {
 
     #[test]
     fn split_prefers_smallest_source() {
+        use crate::NodeHashAlgorithm;
+
         // Both a 768-byte and a 1024-byte free block exist; request 128 bytes.
         // Both divide evenly (768/128=6, 1024/128=8), but 768 is iterated first.
         const AREA_768: AreaIndex = area_index!(7); // 768 bytes
@@ -1153,7 +1154,6 @@ mod tests {
         write_free_block(&memstore, AREA_768, block_768);
         write_free_block(&memstore, AREA_1024, block_1024);
 
-        use crate::NodeHashAlgorithm;
         let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
         header.set_size(block_1024 + 1024);
         header.free_lists_mut()[AREA_768.as_usize()] = LinearAddress::new(block_768);
