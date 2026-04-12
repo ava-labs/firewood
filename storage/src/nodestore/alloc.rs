@@ -339,14 +339,9 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
     /// Returns a [`FileIoError`] if the node cannot be allocated.
     pub(crate) fn allocate_node(
         &mut self,
-        node: &[u8],
-    ) -> Result<(LinearAddress, AreaIndex), FileIoError> {
-        let stored_area_size = node.len() as u64;
-        let area_index = AreaIndex::from_size(stored_area_size).map_err(|e| {
-            self.storage
-                .file_io_error(e, 0, Some("allocate_node".to_owned()))
-        })?;
-
+        area_index: AreaIndex,
+        stored_area_size: u64,
+    ) -> Result<LinearAddress, FileIoError> {
         // Attempt to allocate from a free list.
         // If the free list is empty and the node is small, try splitting a larger free block.
         // Fall back to appending to the end of the file.
@@ -365,7 +360,7 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
         let waste = area_index.size().saturating_sub(stored_area_size);
         firewood_counter!(BYTES_WASTED, "index" => index_name(area_index)).increment(waste);
 
-        Ok((addr, area_index))
+        Ok(addr)
     }
 
     /// Deletes the `Node` and updates the header of the allocator.
@@ -1071,7 +1066,8 @@ mod tests {
         let mut header = make_header_with_free_block(AREA_768, NodeStoreHeader::SIZE);
 
         let mut allocator = NodeAllocator::new(&memstore, &mut header);
-        let (addr, idx) = allocator.allocate_node(&[0u8; 90]).unwrap();
+        let idx = AreaIndex::from_size(90).unwrap();
+        let addr = allocator.allocate_node(idx, 90).unwrap();
 
         // First piece returned.
         assert_eq!(addr, LinearAddress::new(NodeStoreHeader::SIZE).unwrap());
@@ -1100,7 +1096,8 @@ mod tests {
         let mut header = make_header_with_free_block(AREA_1024, NodeStoreHeader::SIZE);
 
         let mut allocator = NodeAllocator::new(&memstore, &mut header);
-        let (addr, idx) = allocator.allocate_node(&[0u8; 500]).unwrap();
+        let idx = AreaIndex::from_size(500).unwrap();
+        let addr = allocator.allocate_node(idx, 500).unwrap();
 
         assert_eq!(addr, LinearAddress::new(NodeStoreHeader::SIZE).unwrap());
         assert_eq!(idx, AREA_512);
@@ -1126,7 +1123,8 @@ mod tests {
         let end_before = header.size();
 
         let mut allocator = NodeAllocator::new(&memstore, &mut header);
-        let (addr, idx) = allocator.allocate_node(&[0u8; 500]).unwrap();
+        let idx = AreaIndex::from_size(500).unwrap();
+        let addr = allocator.allocate_node(idx, 500).unwrap();
 
         // Allocated from end, not from the 768 block.
         assert_eq!(addr, LinearAddress::new(end_before).unwrap());
@@ -1162,7 +1160,8 @@ mod tests {
         header.free_lists_mut()[AREA_1024.as_usize()] = LinearAddress::new(block_1024);
 
         let mut allocator = NodeAllocator::new(&memstore, &mut header);
-        let (addr, idx) = allocator.allocate_node(&[0u8; 120]).unwrap();
+        let idx = AreaIndex::from_size(120).unwrap();
+        let addr = allocator.allocate_node(idx, 120).unwrap();
 
         // Should have split the 768 block (smallest source), returning the first 128-byte piece.
         assert_eq!(addr, LinearAddress::new(block_768).unwrap());

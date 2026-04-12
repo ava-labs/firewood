@@ -170,7 +170,7 @@ fn serialize_node_to_bump<'a>(
     let area_size_index = shared_node
         .as_bytes(&mut bytes)
         .map_err(|e| node_allocator.io_error(e, 0, Some("allocate_node".to_owned())))?;
-    let (persisted_address, _) = node_allocator.allocate_node(bytes.as_slice())?;
+    let persisted_address = node_allocator.allocate_node(area_size_index, bytes.len() as u64)?;
     bytes.shrink_to_fit();
     let slice = bytes.into_bump_slice();
     Ok((slice, persisted_address, area_size_index.size() as usize))
