@@ -176,7 +176,7 @@
 //! for normal trie operations. The proposal now contains `start_root`'s
 //! full trie structure with the batch_ops' changes applied on top.
 //!
-//! ## Phase 3 — Root hash verification ([`verify_change_proof_root_hash`])
+//! ## Phase 3 — Root hash verification (`verify_change_proof_root_hash`)
 //!
 //! The verifier forks the proposal into a mutable **proving trie**,
 //! reshapes it to match `end_root`'s boundary structure, and computes a
