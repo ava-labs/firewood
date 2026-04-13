@@ -66,7 +66,7 @@ fn test_change_proof_roundtrip() {
 }
 
 #[test_case(
-    |data| data[0..8].copy_from_slice(b"badmagic"),
+    |data| *<&mut [u8; 8]>::try_from(&mut data[0..8]).unwrap() = *b"badmagic",
     |err| matches!(err, InvalidHeader::InvalidMagic { found } if found == b"badmagic");
     "invalid magic"
 )]
@@ -197,7 +197,7 @@ fn test_incomplete_item(
     "invalid option discriminant"
 )]
 #[test_case(
-    |_, data| data[32..42].copy_from_slice(&[0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89]),
+    |_, data| *<&mut [u8; 10]>::try_from(&mut data[32..42]).unwrap() = [0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89],
     "array length",
     "byte with no MSB within 9 bytes",
     "[128, 129, 130, 131, 132, 133, 134, 135, 136, 137]";

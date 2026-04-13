@@ -104,6 +104,10 @@ impl<'a, T: AsRef<[u8]> + ?Sized> KeyValueTrieRoot<'a, T> {
             [(k, v)] => Ok(Some(Self::new_leaf(k.as_ref(), v.as_ref()))),
             _ => {
                 let mid = slice.len() / 2;
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "mid is slice.len() / 2, always in bounds"
+                )]
                 let (lhs, rhs) = slice.split_at(mid);
                 let lhs = Self::from_slice(lhs)?;
                 let rhs = Self::from_slice(rhs)?;
