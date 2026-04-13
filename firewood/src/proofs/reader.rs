@@ -43,6 +43,10 @@ impl<'a> ProofReader<'a> {
 
     pub fn read_slice(&mut self, n: usize) -> Result<&'a [u8], ReadError> {
         if self.remainder().len() >= n {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "n is checked against remainder().len() on the line above"
+            )]
             let (slice, _) = self.remainder().split_at(n);
             #[expect(clippy::arithmetic_side_effects)]
             {

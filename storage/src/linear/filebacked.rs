@@ -304,6 +304,10 @@ impl Read for PredictiveReader<'_> {
             self.pos = 0;
         }
         let max_to_return = std::cmp::min(buf.len(), self.len - self.pos);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "both slices are exactly max_to_return long"
+        )]
         buf[..max_to_return].copy_from_slice(&self.buffer[self.pos..self.pos + max_to_return]);
         self.pos += max_to_return;
         self.bytes_read += max_to_return as u64;
