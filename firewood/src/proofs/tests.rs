@@ -20,7 +20,7 @@ fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
 }
 
 #[test_case(
-    |data| data[0..8].copy_from_slice(b"badmagic"),
+    |data| *<&mut [u8; 8]>::try_from(&mut data[0..8]).unwrap() = *b"badmagic",
     |err| matches!(err, InvalidHeader::InvalidMagic { found } if found == b"badmagic");
     "invalid magic"
 )]
@@ -151,7 +151,7 @@ fn test_incomplete_item(
     "invalid option discriminant"
 )]
 #[test_case(
-    |_, data| data[32..42].copy_from_slice(&[0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89]),
+    |_, data| *<&mut [u8; 10]>::try_from(&mut data[32..42]).unwrap() = [0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89],
     "array length",
     "byte with no MSB within 9 bytes",
     "[128, 129, 130, 131, 132, 133, 134, 135, 136, 137]";
@@ -193,6 +193,38 @@ fn test_invalid_item(
                 found_found, found,
                 "unexpected `found` value, got: {found_found}, wanted: {found}"
             );
+        }
+        other => panic!("Expected ReadError::InvalidItem, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_partial_key_len_exceeds_key_len() {
+    let (proof, mut data) = create_valid_range_proof();
+
+    let node = &proof.start_proof()[0];
+    let key_len = node.key.len();
+    let original_partial_len_size = node.partial_len.required_space();
+    let invalid_partial_len: usize = key_len + 1;
+
+    let offset =
+        32 + proof.start_proof().len().required_space() + key_len.required_space() + key_len;
+
+    data.splice(
+        offset..offset + original_partial_len_size,
+        invalid_partial_len.encode_var_vec(),
+    );
+
+    match FrozenRangeProof::from_slice(&data) {
+        Err(ReadError::InvalidItem {
+            item,
+            expected,
+            found,
+            ..
+        }) => {
+            assert_eq!(item, "partial key length");
+            assert_eq!(expected, "value less than or equal to the key length");
+            assert_eq!(found, invalid_partial_len.to_string());
         }
         other => panic!("Expected ReadError::InvalidItem, got: {other:?}"),
     }
