@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775807002678,
+  "lastUpdate": 1776066804175,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -2349,6 +2349,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 85.92726913210389,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Joachim Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "49b4187759ef789cc07afd0d55b37aad52742aac",
+          "message": "feat(ffi)!: remove http and text exporter (#1913)\n\n## Why this should be merged\n\nThe `GatherRenderedMetrics` / `Gatherer` approach is now the sole\nsupported way to collect metrics from the FFI layer. The HTTP exporter\n(`fwd_start_metrics_with_exporter`) and the text-based gatherer\n(`fwd_gather` / `TextGatherer` / `GatherMetrics`) are redundant, add\nmaintenance surface, and carry a runtime dependency (`oxhttp`) that is\nno longer needed.\n\n## How this works\n\n- Removes `setup_metrics_with_exporter` and `gather_metrics` from\n`ffi/src/metrics.rs`, along with the `oxhttp` import and associated\n`std::net`/`std::time` imports.\n- Removes the `fwd_start_metrics_with_exporter` and `fwd_gather` C FFI\nfunctions from `ffi/src/lib.rs`; regenerates `firewood.h` via cbindgen.\n- Drops the `oxhttp` dependency from `ffi/Cargo.toml`.\n- Removes `StartMetricsWithExporter`, `GatherMetrics`, and\n`TextGatherer` from the Go package, along with their CGo pragmas and the\n`expfmt` import.\n- Updates `TestMetrics` to validate metrics via `GatherRenderedMetrics`\ninstead of polling the HTTP endpoint. Adds\n`firewood_flush_duration_seconds` and\n`firewood_persist_cycle_duration_seconds` histograms to the\nexpected-metrics map (previously blocked by the HTTP exporter's\ninability to expose native histograms).\n- Updates `METRICS.md` to remove all references to the HTTP exporter.\n\n## How this was tested\n\n- `cargo nextest run --workspace --features ethhash,logger\n--all-targets` — 529/529 pass.\n- `go test ./... -v -run \"TestMetrics|TestGatherRenderedMetrics\"` — both\npass.\n- `cargo clippy --workspace --features ethhash,logger --all-targets` —\nclean.\n\n## Breaking Changes\n\n- [ ] firewood\n- [ ] firewood-storage\n- [x] firewood-ffi (C api) — `fwd_start_metrics_with_exporter` and\n`fwd_gather` are removed\n- [x] firewood-go (Go api) — `StartMetricsWithExporter`,\n`GatherMetrics`, and `TextGatherer` are removed\n- [ ] fwdctl",
+          "timestamp": "2026-04-10T22:16:29Z",
+          "url": "https://github.com/ava-labs/firewood/commit/49b4187759ef789cc07afd0d55b37aad52742aac"
+        },
+        "date": 1776066803254,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 163.79121495824003,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6105.3335507338315,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 112.95623041855295,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5908.834939204668,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 80.55380545186141,
             "unit": "block_accept_ms/ggas"
           }
         ]
