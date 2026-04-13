@@ -146,7 +146,12 @@ impl Serializable for FreeArea {
 }
 
 impl FreeArea {
-    const MAX_SIZE: usize = size_of::<u8>() + var_int_max_size::<u64>();
+    /// The max size of a serialized `FreeArea` is the sum of:
+    /// - 1 byte for the area size index
+    /// - 1 byte for the free area marker (0xFF)
+    /// - the max size of the variable-length integer encoding of the next free block
+    ///   address (u64, 10 bytes max)
+    const MAX_SIZE: usize = size_of::<u8>() + size_of::<u8>() + var_int_max_size::<u64>();
 
     /// Create a new `FreeArea`
     pub const fn new(next_free_block: Option<LinearAddress>) -> Self {
@@ -402,9 +407,16 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
         Ok(addr)
     }
 
-    /// Returns an address that can be used to store the given `node` and updates
-    /// `self.header` to reflect the allocation. Doesn't actually write the node to storage.
-    /// Also returns the index of the free list the node was allocated from.
+    /// Allocates storage for a node of the given `area_index` and `stored_area_size`.
+    ///
+    /// Allocation is attempted in order:
+    /// 1. Pop a block from `dirty_freelists` for `area_index`.
+    /// 2. Pop a block from the persisted freelist head in the header.
+    /// 3. Split a larger free block (only for targets smaller than [`AreaIndex::SPLITTABLE`]).
+    /// 4. Extend the file.
+    ///
+    /// Updates `self.header` to reflect the allocation but does not write any node
+    /// data to storage.
     ///
     /// # Errors
     ///
@@ -474,26 +486,32 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
     /// Writes any dirty freelist entries accumulated since the allocator was
     /// created (from both [`NodeStore::reap_deleted`] and node allocation
     /// during persist) in a single batched write, then writes the updated
-    /// header. This is called automatically by [`NodeStore::persist`] and
-    /// should not normally be called directly.
+    /// header. This is called automatically by [`NodeStore::persist`] but
+    /// should be called if any changes are made to the allocator (such as
+    /// deleting nodes) without a subsequent persist.
     ///
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the write fails.
     pub fn finish(mut self) -> Result<(), FileIoError> {
-        let batch = self.dirty_freelist_batch();
-        if !batch.is_empty() {
-            self.storage
-                .write_batch(batch.iter().map(|&(offset, ref buffer)| {
-                    let len = buffer.position() as usize;
-                    #[expect(clippy::indexing_slicing)]
-                    (offset, &buffer.get_ref()[..len])
-                }))?;
-        }
+        self.flush_freelist()?;
         self.header.flush_to(self.storage)?;
         Ok(())
     }
 
+    /// Drains `dirty_freelists` and produces a write batch that records every
+    /// staged freed block as a [`FreeArea`] on disk.
+    ///
+    /// For each staged address the method prepends it to the in-memory freelist
+    /// head for its area size (updating `self.header`) and serializes a
+    /// [`FreeArea`] record — containing the previous head as the `next` pointer
+    /// — into a fixed-size [`Cursor`] buffer. The free-list cache is also
+    /// updated so that subsequent allocations in the same cycle can see the
+    /// newly freed block without a disk read.
+    ///
+    /// Returns a `Vec` of `(disk_offset, serialized_bytes)` pairs suitable for
+    /// passing directly to [`WritableStorage::write_batch`]. After this call
+    /// `dirty_freelists` is empty for all area sizes.
     fn dirty_freelist_batch(&mut self) -> Vec<(u64, Cursor<[u8; FreeArea::MAX_SIZE]>)> {
         area_size_iter()
             .zip(zip(&mut self.dirty_freelists, self.header.free_lists_mut()))
