@@ -302,7 +302,9 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 // root node after the batch is applied. This is equivalent to creating a proposal
 // with [Database.Propose], then committing it with [Proposal.Commit].
 //
-// Use [Put], [Delete], and [PrefixDelete] to create batch operations.
+// Use [Put], [Delete], and [PrefixDelete] to create batch operations. A [Put]
+// with an empty value stores an empty value; use [Delete] or [PrefixDelete] to
+// remove keys.
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
@@ -328,7 +330,9 @@ func (db *Database) Update(batch []BatchOp) (Hash, error) {
 // is not committed until [Proposal.Commit] is called. See [Database.Close] regarding
 // freeing proposals. All proposals should be freed before closing the database.
 //
-// Use [Put], [Delete], and [PrefixDelete] to create batch operations.
+// Use [Put], [Delete], and [PrefixDelete] to create batch operations. A [Put]
+// with an empty value stores an empty value; use [Delete] or [PrefixDelete] to
+// remove keys.
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
