@@ -257,6 +257,10 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
         self.header.set_root_location(root_location);
     }
 
+    pub(crate) fn any_dirty_freelist(&self) -> bool {
+        self.dirty_freelists.iter().any(|stack| !stack.is_empty())
+    }
+
     /// Attempts to allocate a block of size `index` from the free lists.
     ///
     /// Checks the in-memory `dirty_freelists` first (blocks freed or split during the

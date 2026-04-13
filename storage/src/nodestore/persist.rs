@@ -162,7 +162,7 @@ impl<N: NodeReader + RootReader> Iterator for UnPersistedNodeIterator<'_, N> {
 ///
 /// Returns a [`FileIoError`] if the node cannot be allocated in storage.
 fn serialize_node_to_bump<'a>(
-    bump: &'a bumpalo::Bump,
+    bump: &'a Bump,
     shared_node: &crate::SharedNode,
     node_allocator: &mut NodeAllocator<'_, impl WritableStorage>,
 ) -> Result<(&'a [u8], crate::LinearAddress, usize), FileIoError> {
@@ -206,7 +206,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Returns a [`FileIoError`] if any node cannot be serialized, allocated, or written to storage.
     fn process_unpersisted_nodes(
         &self,
-        bump: &mut bumpalo::Bump,
+        bump: &mut Bump,
         node_allocator: &mut NodeAllocator<'_, S>,
         bump_size_limit: usize,
     ) -> Result<(), FileIoError> {
@@ -231,7 +231,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             // This isn't a guarantee that we won't exceed bump_size_limit
             // but it's a good enough approximation
             let might_overflow = allocated_len > bump_size_limit.saturating_sub(idx_size);
-            if might_overflow {
+            // let the arena grow if we still have dirty freelist entries
+            if might_overflow && !node_allocator.any_dirty_freelist() {
                 // must persist freelist before writing anything
                 node_allocator.flush_freelist()?;
                 self.write_batch(allocated_objects)?;
