@@ -28,7 +28,15 @@ fn child_in_range(
     // the same-length prefix of acc_prefix; the right half's first element
     // (if any) is compared against child_nib to break ties.
     let split = depth.min(start_nib.len());
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "split is min(depth, len), always in bounds"
+    )]
     let (start_pre, start_rest) = start_nib.split_at(split);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "split is min(depth, len), always in bounds"
+    )]
     let (acc_start, _) = acc_prefix.split_at(split);
     let above_start = match acc_start.cmp(start_pre) {
         Ordering::Greater => true,
@@ -40,7 +48,15 @@ fn child_in_range(
     };
 
     let split = depth.min(end_nib.len());
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "split is min(depth, len), always in bounds"
+    )]
     let (end_pre, end_rest) = end_nib.split_at(split);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "split is min(depth, len), always in bounds"
+    )]
     let (acc_end, _) = acc_prefix.split_at(split);
     let below_end = match acc_end.cmp(end_pre) {
         Ordering::Less => true,
@@ -205,6 +221,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
             return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
         }
 
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "diverge == pp.len() <= key.len() by the check above"
+        )]
         let (_, key_rest) = key.split_at(diverge);
 
         let Some((&child_component, deeper)) = key_rest.split_first() else {

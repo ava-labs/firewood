@@ -248,7 +248,15 @@ fn test_bad_range_proof_out_of_order() {
         if index_1 == index_2 {
             continue;
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "index_1 and index_2 are in 0..end-start, which is the vec length"
+        )]
         keys.swap(index_1, index_2);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "index_1 and index_2 are in 0..end-start, which is the vec length"
+        )]
         vals.swap(index_1, index_2);
 
         let key_values: KeyValuePairs = keys
@@ -1544,7 +1552,15 @@ fn test_bad_range_proof_truncated_non_existent_edge() {
         .map(|i| {
             let mut key = [0u8; 32];
             let mut value = [0u8; 32];
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "to_be_bytes() returns [u8; 4], matching [..4]"
+            )]
             key[..4].copy_from_slice(&i.to_be_bytes());
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "to_be_bytes() returns [u8; 4], matching [..4]"
+            )]
             value[..4].copy_from_slice(&(i + 100).to_be_bytes());
             (key, value)
         })
@@ -1623,7 +1639,15 @@ fn test_range_proof_with_limit() {
         .map(|i| {
             let mut key = [0u8; 32];
             let mut value = [0u8; 20];
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "to_be_bytes() returns [u8; 4], matching [..4]"
+            )]
             key[..4].copy_from_slice(&i.to_be_bytes());
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "to_be_bytes() returns [u8; 4], matching [..4]"
+            )]
             value[..4].copy_from_slice(&(i + 100).to_be_bytes());
             (key, value)
         })

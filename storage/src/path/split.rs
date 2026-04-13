@@ -100,6 +100,10 @@ impl<A: SplitPath, B: SplitPath, C> PathCommonPrefix<A, B, C> {
 
 impl SplitPath for &[PathComponent] {
     fn split_at(self, mid: usize) -> (Self, Self) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "panics are the documented SplitPath::split_at contract"
+        )]
         self.split_at(mid)
     }
 

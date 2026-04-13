@@ -1683,6 +1683,10 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
             .position(|(a, b)| *a != *b)
             .unwrap_or_else(|| std::cmp::min(a.len(), b.len()));
 
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "split_index is min(a.len(), b.len()) or earlier, always <= a.len()"
+        )]
         let (shared, unique_a) = a.split_at(split_index);
         let unique_b = b.get(split_index..).expect("");
 
