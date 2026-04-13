@@ -1092,19 +1092,20 @@ impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
 impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Adjust the freelist to reflect the freed nodes in the oldest revision.
     ///
-    /// This method takes ownership of `self` and adds its deleted nodes to the free list
-    /// managed by the given header.
+    /// Accepts a shared [`NodeAllocator`] so that multiple revisions can be reaped
+    /// in a single batched operation before the allocator is flushed. The caller is
+    /// responsible for calling [`NodeAllocator::finish`] (or passing the allocator
+    /// to [`NodeStore::persist`]) after all reaps are complete.
     ///
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if a node cannot be deleted.
-    pub fn reap_deleted(mut self, header: &mut NodeStoreHeader) -> Result<(), FileIoError> {
+    pub fn reap_deleted(mut self, allocator: &mut NodeAllocator<'_, S>) -> Result<(), FileIoError> {
         let reap_start = Instant::now();
 
         self.storage
             .invalidate_cached_nodes(self.kind.deleted.iter());
         trace!("There are {} nodes to reap", self.kind.deleted.len());
-        let mut allocator = NodeAllocator::new(self.storage.as_ref(), header);
         for node in take(&mut self.kind.deleted) {
             allocator.delete_node(node)?;
         }
@@ -1245,7 +1246,9 @@ mod tests {
 
         let node_store = node_store.as_committed();
 
-        let err = node_store.persist(&mut header).unwrap_err();
+        let err = node_store
+            .persist(NodeAllocator::new(memstore.as_ref(), &mut header))
+            .unwrap_err();
         let err_ctx = err.context();
         assert!(err_ctx == Some("allocate_node"));
 
@@ -1345,7 +1348,7 @@ mod tests {
         let proposal = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal)?;
 
         let nodestore = proposal.as_committed();
-        nodestore.persist(&mut header)?;
+        nodestore.persist(NodeAllocator::new(nodestore.storage.as_ref(), &mut header))?;
 
         let mut proposal = NodeStore::new(&nodestore)?;
 
@@ -1382,7 +1385,7 @@ mod tests {
         }));
         let proposal = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal)?;
         let committed = proposal.as_committed();
-        committed.persist(&mut header)?;
+        committed.persist(NodeAllocator::new(committed.storage.as_ref(), &mut header))?;
 
         // Retrieve root address and hash from the header
         let root_address = header.root_address().unwrap();
@@ -1421,7 +1424,7 @@ mod tests {
         }));
         let proposal = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal)?;
         let committed = proposal.as_committed();
-        committed.persist(&mut header)?;
+        committed.persist(NodeAllocator::new(committed.storage.as_ref(), &mut header))?;
 
         let root_address = header.root_address().unwrap();
 
@@ -1502,5 +1505,123 @@ mod tests {
         let reconstructed: NodeStore<Reconstructed, _> = recon.into();
 
         assert_eq!(reconstructed.root_hash(), None);
+    }
+
+    /// Verify that reaping a committed store returns its deleted nodes to the freelist.
+    ///
+    /// After a reap + `allocator.finish()`, the header's freelist must contain
+    /// an entry for the reaped node so it can be reallocated.
+    #[test]
+    fn reap_frees_nodes_for_reallocation() -> Result<(), Box<dyn Error>> {
+        let memstore = Arc::new(MemStore::default());
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let base = NodeStore::new_empty_committed(Arc::clone(&memstore));
+
+        // Persist a leaf node so it has a valid on-disk address.
+        let mut proposal = NodeStore::new(&base)?;
+        proposal.root_mut().replace(Node::Leaf(LeafNode {
+            partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"key")),
+            value: b"value".to_vec().into_boxed_slice(),
+        }));
+        let proposal = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal)?;
+        let committed = proposal.as_committed();
+        committed.persist(NodeAllocator::new(committed.storage.as_ref(), &mut header))?;
+
+        let leaf_addr = header.root_address().expect("root was persisted");
+
+        // Freelist must be empty before any reaping.
+        assert!(
+            header.free_lists().iter().all(Option::is_none),
+            "freelist should be empty before reaping"
+        );
+
+        // Simulate an expired revision whose root is the leaf we just persisted.
+        let expired = NodeStore {
+            kind: Committed {
+                root: None,
+                deleted: vec![MaybePersistedNode::from(leaf_addr)].into_boxed_slice(),
+            },
+            storage: Arc::clone(&memstore),
+        };
+
+        // Reap the expired store and flush the allocator.
+        let mut allocator = NodeAllocator::new(memstore.as_ref(), &mut header);
+        expired.reap_deleted(&mut allocator)?;
+        allocator.finish()?;
+
+        // The reaped address must now appear in the freelist.
+        assert!(
+            header.free_lists().iter().any(Option::is_some),
+            "freelist should have an entry for the reaped node after finish"
+        );
+
+        Ok(())
+    }
+
+    /// Verify the key batching invariant: multiple reaps share a single allocator
+    /// that is consumed by the subsequent `persist`, and all freelist changes land
+    /// in a single write.
+    ///
+    /// Two nodes are persisted independently, producing two on-disk addresses.
+    /// Both are then reaped into ONE allocator which is passed to `persist`. After
+    /// the persist the freelist must contain entries for both freed nodes.
+    #[test]
+    fn batched_reap_and_persist() -> Result<(), Box<dyn Error>> {
+        let memstore = Arc::new(MemStore::default());
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let base = NodeStore::new_empty_committed(Arc::clone(&memstore));
+
+        // Helper: persist a leaf with the given partial-path nibble and return its address.
+        let mut persist_leaf = |nibble: u8| -> Result<LinearAddress, Box<dyn Error>> {
+            let mut proposal = NodeStore::new(&base)?;
+            proposal.root_mut().replace(Node::Leaf(LeafNode {
+                partial_path: Path::from(&[nibble]),
+                value: vec![nibble; 4].into_boxed_slice(),
+            }));
+            let proposal = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal)?;
+            let committed = proposal.as_committed();
+            committed.persist(NodeAllocator::new(committed.storage.as_ref(), &mut header))?;
+            Ok(header.root_address().expect("root was persisted"))
+        };
+
+        let addr_a = persist_leaf(0xA)?;
+        let addr_b = persist_leaf(0xB)?;
+        assert_ne!(
+            addr_a, addr_b,
+            "two separate persists must use distinct addresses"
+        );
+
+        // Freelist is still empty — nothing has been reaped yet.
+        assert!(header.free_lists().iter().all(Option::is_none));
+
+        // Construct two expired committed stores, one per reaped address.
+        let make_expired = |addr: LinearAddress| NodeStore {
+            kind: Committed {
+                root: None,
+                deleted: vec![MaybePersistedNode::from(addr)].into_boxed_slice(),
+            },
+            storage: Arc::clone(&memstore),
+        };
+        let expired_a = make_expired(addr_a);
+        let expired_b = make_expired(addr_b);
+
+        // Persist a new empty revision using ONE allocator that also absorbs both reaps.
+        let proposal3 = NodeStore::new(&base)?;
+        let proposal3 = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal3)?;
+        let rev3 = proposal3.as_committed();
+
+        let mut allocator = NodeAllocator::new(memstore.as_ref(), &mut header);
+        expired_a.reap_deleted(&mut allocator)?;
+        expired_b.reap_deleted(&mut allocator)?;
+        // persist consumes the allocator, flushing all accumulated freelist changes.
+        rev3.persist(allocator)?;
+
+        // Both freed addresses must now be in the freelist.
+        assert!(
+            header.free_lists().iter().any(Option::is_some),
+            "freelist must have entries for both reaped nodes after batched persist"
+        );
+
+        Ok(())
     }
 }

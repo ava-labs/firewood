@@ -218,6 +218,7 @@ impl RevisionManager {
         let persist_worker = PersistWorker::new(
             config.manager.deferred_persistence_commit_count,
             header,
+            storage,
             root_store.clone(),
         );
 

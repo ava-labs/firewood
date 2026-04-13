@@ -170,7 +170,7 @@ fn serialize_node_to_bump<'a>(
     let area_size_index = shared_node
         .as_bytes(&mut bytes)
         .map_err(|e| node_allocator.io_error(e, 0, Some("allocate_node".to_owned())))?;
-    let (persisted_address, _) = node_allocator.allocate_node(bytes.as_slice())?;
+    let persisted_address = node_allocator.allocate_node(area_size_index, bytes.len() as u64)?;
     bytes.shrink_to_fit();
     let slice = bytes.into_bump_slice();
     Ok((slice, persisted_address, area_size_index.size() as usize))
@@ -183,17 +183,15 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     ///
     /// Returns a [`FileIoError`] if any node cannot be written to storage.
     #[fastrace::trace(short_name = true)]
-    fn flush_nodes(&self, header: &mut NodeStoreHeader) -> Result<(), FileIoError> {
+    fn flush_nodes(&self, allocator: &mut NodeAllocator<'_, S>) -> Result<(), FileIoError> {
         let flush_start = Instant::now();
 
-        let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), header);
         let mut bump = Bump::with_capacity(super::INITIAL_BUMP_SIZE);
-
-        self.process_unpersisted_nodes(&mut bump, &mut node_allocator, super::INITIAL_BUMP_SIZE)?;
+        self.process_unpersisted_nodes(&mut bump, allocator, super::INITIAL_BUMP_SIZE)?;
 
         firewood_histogram!(cheap: FLUSH_DURATION_SECONDS)
             .record(flush_start.elapsed().as_secs_f64());
-        firewood_gauge!(DATABASE_SIZE_BYTES).set_integer(header.size());
+        firewood_gauge!(DATABASE_SIZE_BYTES).set_integer(allocator.size());
 
         Ok(())
     }
@@ -275,28 +273,34 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
     /// Persist the entire nodestore to storage.
     ///
+    /// Takes ownership of `allocator` so that all freelist changes accumulated
+    /// during any preceding [`NodeStore::reap_deleted`] calls are flushed
+    /// together with the node writes and header update in a single batched
+    /// operation. The allocator is consumed and its state is finalized as the
+    /// last step.
+    ///
     /// This method performs a complete persistence operation by:
-    /// 1. Flushing all nodes to storage (updates header with allocations)
-    /// 2. Setting the root address in the header
-    /// 3. Flushing the header to storage
+    /// 1. Flushing all nodes to storage (updates the allocator with new addresses)
+    /// 2. Setting the root address on the allocator
+    /// 3. Flushing all pending freelist changes and the header to storage
     ///
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if any of the persistence operations fail.
     #[fastrace::trace(short_name = true)]
-    pub fn persist(&self, header: &mut NodeStoreHeader) -> Result<(), FileIoError> {
+    pub fn persist(&self, mut allocator: NodeAllocator<'_, S>) -> Result<(), FileIoError> {
         // First persist all the nodes
-        self.flush_nodes(header)?;
+        self.flush_nodes(&mut allocator)?;
 
         // Set the root address in the header based on the persisted root
         let root_location = self.kind.root.as_ref().and_then(|child| {
             let (addr, hash) = child.persist_info()?;
             Some((addr, hash.clone().into_triehash()))
         });
-        header.set_root_location(root_location);
+        allocator.set_root_location(root_location);
 
         // Finally persist the header
-        header.flush_to(self.storage.as_ref())?;
+        allocator.finish()?;
 
         Ok(())
     }
@@ -320,7 +324,9 @@ mod tests {
         header: &mut NodeStoreHeader,
     ) -> NodeStore<Committed, MemStore> {
         let ns = ns.as_committed();
-        ns.persist(header).unwrap();
+        let storage = ns.storage.clone();
+        ns.persist(NodeAllocator::new(storage.as_ref(), header))
+            .unwrap();
         ns
     }
 

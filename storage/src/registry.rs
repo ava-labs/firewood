@@ -17,6 +17,8 @@ firewood_metrics::define_metrics! {
         NODES_ALLOCATED                = "firewood_nodes_allocated_total",
         /// Bytes of internal fragmentation per free-list size class (allocated - needed)
         BYTES_WASTED                   = "firewood_storage_bytes_wasted_total",
+        /// Count of free-list blocks split to satisfy a smaller allocation
+        FREE_LIST_SPLIT                = "firewood_storage_free_list_splits_total",
         /// Number of node reads
         READ_NODE                      = "firewood_node_reads_total",
         /// Number of node cache accesses
@@ -57,9 +59,12 @@ firewood_metrics::define_metrics! {
         FREE_LIST_ENTRIES              = "firewood_free_list_entries",
     },
     histograms: {
-        /// Duration of node flush operations
+        /// Duration of node serialization and write batching during a persist (excludes freelist
+        /// and header I/O, which is captured in firewood_persist_cycle_duration_seconds)
         FLUSH_DURATION_SECONDS         = "firewood_flush_duration_seconds" buckets([0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5]),
-        /// Duration of node reap operations
+        /// Duration of the in-memory phase of a reap operation — accumulating deleted node
+        /// addresses into the shared NodeAllocator (excludes freelist I/O, which is deferred
+        /// to the subsequent NodeAllocator::finish or NodeStore::persist call)
         REAP_DURATION_SECONDS          = "firewood_reap_duration_seconds" buckets([0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5]),
         /// Duration of individual IO read operations
         IO_READ_DURATION_SECONDS       = "firewood_io_read_duration_seconds" native(2.0, 160, 1e-9),

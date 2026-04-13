@@ -19,6 +19,8 @@ firewood_metrics::define_metrics! {
         COMMIT_BLOCKED         = "firewood_commits_blocked_total",
         /// Total commits durably written to disk
         COMMITS_TOTAL          = "firewood_commits_total",
+        /// Persist cycles that processed only reaps without a committed revision
+        REAP_ONLY_CYCLES       = "firewood_reap_only_cycles_total",
         /// Number of proposal commit operations
         PROPOSAL_COMMITS       = "firewood_proposal_commits_total",
         /// Number of root store persist operations

@@ -67,6 +67,10 @@ impl AreaIndex {
     /// The maximum area size available for allocation.
     pub const MAX_AREA_SIZE: u64 = AREA_SIZES[Self::NUM_AREA_SIZES - 1];
 
+    /// 768 and above are splittable, meaning they can be used to satisfy smaller
+    /// size requests by splitting them into multiple areas.
+    pub const SPLITTABLE: AreaIndex = AreaIndex(7);
+
     /// Create a new `AreaIndex` from a u8 value, returns None if value is out of range.
     #[inline]
     #[must_use]
@@ -138,6 +142,11 @@ impl AreaIndex {
     pub const fn size(self) -> u64 {
         #[expect(clippy::indexing_slicing)]
         AREA_SIZES[self.as_usize()]
+    }
+
+    /// Returns an iterator over all splittable area indices (those with size >= 768).
+    pub fn iter_splittable() -> impl DoubleEndedIterator<Item = AreaIndex> {
+        (Self::SPLITTABLE.0..=Self::MAX.0).map(Self)
     }
 }
 

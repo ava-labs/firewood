@@ -73,11 +73,16 @@ mod gauge_value {
 pub trait GaugeExt {
     /// Sets the gauge from any supported integer type, converting to `f64` internally.
     fn set_integer<T: gauge_value::GaugeValue>(&self, value: T);
+    /// Increments the gauge by any supported integer type, converting to `f64` internally.
+    fn increment_integer<T: gauge_value::GaugeValue>(&self, value: T);
 }
 
 impl GaugeExt for metrics::Gauge {
     fn set_integer<T: gauge_value::GaugeValue>(&self, value: T) {
         self.set(value.as_f64());
+    }
+    fn increment_integer<T: gauge_value::GaugeValue>(&self, value: T) {
+        self.increment(value.as_f64());
     }
 }
 

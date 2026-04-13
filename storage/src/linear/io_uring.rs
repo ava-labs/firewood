@@ -643,7 +643,9 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
             Ok(written) => {
                 // copy offset off the entry before adding it back to the backlog
                 let error_offset = write_entry.offset;
-                if !write_entry.buffer.is_empty() {
+                if write_entry.buffer.is_empty() {
+                    firewood_counter!(IO_WRITE_COUNT).increment(1);
+                } else {
                     // not fully written, re-queue
                     self.add_entry_to_backlog(write_entry);
                     if written != 0 {
@@ -651,6 +653,9 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
                         trace!("io-uring write at offset {offset} partially completed, re-queuing");
                         firewood_counter!(RING_PARTIAL_WRITE_RETRY).increment(1);
                     }
+                }
+                if written > 0 {
+                    firewood_counter!(IO_BYTES_WRITTEN).increment(written as u64);
                 }
                 let carry;
                 (self.written, carry) = self.written.overflowing_add(written);

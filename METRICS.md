@@ -237,10 +237,22 @@ advanced before each gather so values reflect the current state.
 
 ---
 
+## Classic vs. native histograms
+
+Firewood exposes two kinds of histograms:
+
+- **Classic histograms** – use `_bucket` / `_count` / `_sum` suffixes and require
+  `by (le)` in PromQL queries.
+- **Native (exponential) histograms** – have no `_bucket` suffix; query them
+  directly using `rate(metric[window])` without `by (le)`.
+
+Metrics annotated "(native exponential)" in the reference tables above are
+native histograms. All others are classic histograms.
+
 ## Example PromQL queries
 
 ```promql
-# Proposal commit p99 latency (5-minute window)
+# Proposal commit p99 latency — classic histogram
 histogram_quantile(0.99,
   sum(rate(firewood_proposal_commit_duration_seconds_bucket[5m])) by (le)
 )
@@ -252,9 +264,9 @@ rate(firewood_commits_total[1m])
 sum(rate(firewood_node_cache_accesses_total{type="hit"}[5m]))
   / sum(rate(firewood_node_cache_accesses_total[5m]))
 
-# Commit lock p99 wait (native histogram)
+# Commit lock p99 wait — native histogram (no _bucket suffix, no by (le))
 histogram_quantile(0.99,
-  sum(rate(firewood_commit_lock_wait_seconds_bucket[5m])) by (le)
+  sum(rate(firewood_commit_lock_wait_seconds[5m]))
 )
 
 # Storage fragmentation ratio per size class
@@ -266,6 +278,11 @@ rate(firewood_storage_bytes_appended_total[5m])
 
 # I/O read throughput (bytes/sec)
 rate(firewood_io_bytes_read_total[1m])
+
+# I/O read p99 latency — native histogram
+histogram_quantile(0.99,
+  sum(rate(firewood_io_read_duration_seconds[5m]))
+)
 
 # Failed commit ratio
 rate(firewood_proposal_commits_total{success="false"}[5m])

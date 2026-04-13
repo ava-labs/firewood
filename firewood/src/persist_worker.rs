@@ -49,7 +49,7 @@ use firewood_metrics::{
 };
 use firewood_storage::{
     Committed, FileBacked, FileIoError, HashedNodeReader, LinearAddress, NodeStore,
-    NodeStoreHeader, TrieHash,
+    NodeStoreHeader, TrieHash, WritableStorage,
 };
 use parking_lot::{Condvar, Mutex, MutexGuard};
 
@@ -124,11 +124,18 @@ pub(crate) struct PersistWorker {
 impl PersistWorker {
     /// Creates a new `PersistWorker` and starts the background thread.
     ///
+    /// `storage` is shared with the background thread so that reap and persist
+    /// operations can batch all freelist writes into a single [`NodeAllocator`]
+    /// per cycle, avoiding redundant header writes for each freed node.
+    ///
     /// Returns the worker for sending messages to the background thread.
+    ///
+    /// [`NodeAllocator`]: firewood_storage::NodeAllocator
     #[allow(clippy::large_types_passed_by_value)]
     pub(crate) fn new(
         commit_count: NonZeroU64,
         header: NodeStoreHeader,
+        storage: Arc<FileBacked>,
         root_store: Option<Arc<RootStore>>,
     ) -> Self {
         let persist_interval = NonZeroU64::new(commit_count.get().div_ceil(2))
@@ -139,6 +146,7 @@ impl PersistWorker {
             error: OnceLock::new(),
             root_store,
             header: Mutex::new(header),
+            storage,
             persist_on_shutdown: OnceLock::new(),
             channel: PersistChannel::new(commit_count, persist_threshold),
         });
@@ -155,7 +163,24 @@ impl PersistWorker {
             shared,
         }
     }
+}
 
+impl Drop for PersistWorker {
+    /// Ensures the background thread has fully exited before `PersistWorker`
+    /// is dropped.
+    ///
+    /// Closing the channel is idempotent: if `close()` was already called, this
+    /// is a no-op. Joining the handle is also idempotent — if the handle was
+    /// already taken, the join is skipped. Together these ensure that all
+    /// resources held by the background thread (including `Arc<FileBacked>`)
+    /// are released deterministically before the caller proceeds.
+    fn drop(&mut self) {
+        self.shared.channel.close();
+        self.join_handle();
+    }
+}
+
+impl PersistWorker {
     /// Sends `committed` to the background thread for persistence. This call
     /// blocks if the limit of unpersisted commits has been reached.
     ///
@@ -499,6 +524,12 @@ struct SharedState {
     /// Persisted metadata for the database.
     /// Updated on persists or when revisions are reaped.
     header: Mutex<NodeStoreHeader>,
+    /// Storage shared with the background thread. A single [`NodeAllocator`]
+    /// is created from this reference per persist cycle so that freelist
+    /// changes from all reaps and the persist are batched into one write.
+    ///
+    /// [`NodeAllocator`]: firewood_storage::NodeAllocator
+    storage: Arc<FileBacked>,
     /// Optional persistent store for historical root addresses.
     root_store: Option<Arc<RootStore>>,
     /// Revision to persist on shutdown if there are outstanding unpersisted
@@ -540,16 +571,34 @@ impl PersistLoop {
         while let Ok(mut persist_data) = self.shared.channel.pop() {
             let cycle_start = std::time::Instant::now();
 
+            let mut header = self.shared.header.lock();
+            let mut allocator = self.shared.storage.node_allocator(&mut header);
+
             for nodestore in std::mem::take(&mut persist_data.pending_reaps) {
-                self.reap(nodestore)?;
+                nodestore.reap_deleted(&mut allocator).map_err(|e| {
+                    error!("Failed to reap deleted nodes: {e}");
+                    PersistError::FileIo(Arc::new(e))
+                })?;
             }
 
             if let Some(revision) = persist_data.latest_committed.take() {
-                self.persist_to_disk(&revision)
-                    .and_then(|()| self.maybe_save_to_root_store(&revision))?;
+                revision.persist(allocator).map_err(|e| {
+                    error!("Failed to persist revision: {e}");
+                    PersistError::FileIo(Arc::new(e))
+                })?;
+                self.maybe_save_to_root_store(&revision)?;
                 firewood_counter!(COMMITS_TOTAL).increment(1);
+            } else {
+                // Reap-only cycle: no revision to persist, but freelist changes
+                // accumulated during the reaps above must be flushed to storage.
+                allocator.finish().map_err(|e| {
+                    error!("Failed to flush freelist after reap-only cycle: {e}");
+                    PersistError::FileIo(Arc::new(e))
+                })?;
+                firewood_counter!(REAP_ONLY_CYCLES).increment(1);
             }
 
+            drop(header);
             firewood_histogram!(cheap: PERSIST_CYCLE_DURATION_SECONDS)
                 .record(cycle_start.elapsed().as_secs_f64());
         }
@@ -558,38 +607,18 @@ impl PersistLoop {
         if let Some(revision) = self.shared.persist_on_shutdown.get().cloned()
             && !self.shared.channel.empty()
         {
-            self.persist_to_disk(&revision)
-                .and_then(|()| self.maybe_save_to_root_store(&revision))?;
+            let mut header = self.shared.header.lock();
+            revision
+                .persist(self.shared.storage.node_allocator(&mut header))
+                .map_err(|e| {
+                    error!("Failed to persist revision on shutdown: {e}");
+                    PersistError::FileIo(Arc::new(e))
+                })?;
+
+            self.maybe_save_to_root_store(&revision)?;
         }
 
         Ok(())
-    }
-
-    /// Persists the revision to disk.
-    fn persist_to_disk(&self, revision: &CommittedRevision) -> Result<(), PersistError> {
-        // BLOCKING: mutex lock on the shared `NodeStoreHeader`. Held for the entire duration of
-        // the disk flush (serializes all node writes + header write). Any concurrent caller of
-        // `RevisionManager::locked_header()` (e.g. `Db::check`) will stall until this returns.
-        // Under heavy I/O this can take tens to hundreds of milliseconds.
-        let mut header = self.shared.header.lock();
-        revision.persist(&mut header).map_err(|e| {
-            error!("Failed to persist revision: {e}");
-            PersistError::FileIo(Arc::new(e))
-        })
-    }
-
-    /// Adds the nodes of this revision to the free lists.
-    fn reap(&self, nodestore: NodeStore<Committed, FileBacked>) -> Result<(), PersistError> {
-        // BLOCKING: same header mutex as `persist_to_disk`. Held while writing all freed-node
-        // metadata back to the free-list in storage. Contends with any `persist_to_disk` that
-        // might be running concurrently (they cannot — both run in the single background thread —
-        // but the lock also blocks external `locked_header()` callers).
-        nodestore
-            .reap_deleted(&mut self.shared.header.lock())
-            .map_err(|e| {
-                error!("Failed to reap deleted nodes: {e}");
-                PersistError::FileIo(Arc::new(e))
-            })
     }
 
     /// Saves the revision's root address to `RootStore` if configured.
