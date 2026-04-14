@@ -1601,7 +1601,7 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
     }
 }
 
-impl Merkle<NodeStore<Mutable<Propose>, MemStore>> {
+impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     /// Returns the node mapped to by `key_nibbles` where each key element is a
     /// single nibble.
     #[cfg(test)]

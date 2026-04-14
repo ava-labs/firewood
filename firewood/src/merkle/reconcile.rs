@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood_storage::{MemStore, Mutable, NodeStore, Propose, ValueDigest};
+use firewood_storage::{Mutable, NodeStore, Propose, ReadableStorage, ValueDigest};
 
 use crate::{ProofError, ProofNode, Value, merkle::Merkle};
 
@@ -26,7 +26,7 @@ use crate::{ProofError, ProofNode, Value, merkle::Merkle};
 ///
 /// Returns an error if the proof is structurally invalid or if
 /// `on_conflict` returns `Err` while resolving a value conflict.
-impl Merkle<NodeStore<Mutable<Propose>, MemStore>> {
+impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     pub(crate) fn reconcile_branch_proof_node(
         &mut self,
         proof_node: &ProofNode,
