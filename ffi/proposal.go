@@ -109,7 +109,9 @@ func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 // The returned proposal cannot be committed until the parent proposal `p` has been
 // committed. Additionally, it must be committed or released before the [Database] is closed.
 //
-// Use [Put], [Delete], and [PrefixDelete] to create batch operations.
+// Use [Put], [Delete], and [PrefixDelete] to create batch operations. A [Put]
+// with an empty value stores an empty value; use [Delete] or [PrefixDelete] to
+// remove keys.
 func (p *Proposal) Propose(batch []BatchOp) (*Proposal, error) {
 	p.keepAliveHandle.mu.RLock()
 	defer p.keepAliveHandle.mu.RUnlock()

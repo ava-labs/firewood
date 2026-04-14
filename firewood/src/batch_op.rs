@@ -159,6 +159,17 @@ impl<T: KeyValuePair<Error = std::convert::Infallible>, E: Into<FileIoError>> Ke
 }
 
 /// A key/value pair that can be used in a batch.
+///
+/// # Empty values and tuple conversions
+///
+/// When converting from a `(key, value)` tuple, an empty value is treated as a
+/// [`BatchOp::DeleteRange`] on the key rather than a [`BatchOp::Put`] with an
+/// empty value. This is because a bare tuple has no way to distinguish between
+/// "put an empty value" and "delete by prefix".
+///
+/// To store an empty value or to express deletions explicitly, use [`BatchOp`]
+/// directly instead of a tuple. The FFI layer uses an explicit tagged enum for
+/// this reason — see the FFI `BatchOp` type for details.
 pub trait TryIntoBatch {
     /// The key type
     type Key: KeyType;
@@ -205,6 +216,9 @@ impl<K: KeyType, V: ValueType> TryIntoBatch for (K, V) {
     #[inline]
     fn try_into_batch(self) -> Result<BatchOp<Self::Key, Self::Value>, Self::Error> {
         let (key, value) = self;
+        // A tuple cannot distinguish "put empty value" from "delete by prefix",
+        // so empty values are interpreted as prefix deletions. Use `BatchOp`
+        // directly when you need to store an empty value.
         if value.as_ref().is_empty() {
             Ok(BatchOp::DeleteRange { prefix: key })
         } else {

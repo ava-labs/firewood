@@ -250,6 +250,7 @@ fn proof_path_construction_and_corruption() {
 
     // Positive: check path monotonicity (each node key is a prefix of the next)
     let nodes = proof.as_ref();
+    #[expect(clippy::disallowed_methods, reason = "window size is the literal 2")]
     for w in nodes.windows(2) {
         let cur = w[0].key.as_ref();
         let nxt = w[1].key.as_ref();

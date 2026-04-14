@@ -14,6 +14,12 @@ pub type OwnedKeyValueBatch = OwnedSlice<OwnedKeyValuePair>;
 ///
 /// This is a tagged union that explicitly distinguishes between different
 /// operation types instead of relying on nil vs empty pointer semantics.
+///
+/// Unlike the `TryIntoBatch` impl for tuples in the core library (which treats
+/// an empty value as a prefix deletion), this type preserves the operation as
+/// given: a `Put` with an empty value remains a `Put` with an empty value.
+/// Callers should use the appropriate variant (`Put`, `Delete`, `DeleteRange`)
+/// to express their intent.
 #[derive(Debug, Clone, Copy)]
 #[repr(C, usize)]
 pub enum BatchOp<'a> {
