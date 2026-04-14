@@ -50,6 +50,10 @@ impl WritableStorage for MemStore {
         if offset + object.len() > guard.len() {
             guard.resize(offset + object.len(), 0);
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "destination slice is exactly object.len() wide"
+        )]
         guard[offset..offset + object.len()].copy_from_slice(object);
         Ok(object.len())
     }

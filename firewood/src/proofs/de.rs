@@ -168,8 +168,15 @@ impl Version0 for BatchOp<Key, Value> {
 
 impl Version0 for ProofNode {
     fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
-        let key = reader.read_v0_item()?;
+        let key = reader.read_v0_item::<PathBuf>()?;
         let partial_len = reader.read_item()?;
+        if partial_len > key.len() {
+            return Err(reader.invalid_item(
+                "partial key length",
+                "value less than or equal to the key length",
+                partial_len,
+            ));
+        }
         let value_digest = reader.read_item()?;
 
         let children_map = reader.read_item::<ChildMask>()?;
