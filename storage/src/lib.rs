@@ -407,3 +407,122 @@ impl From<CheckerError> for Vec<CheckerError> {
         vec![error]
     }
 }
+
+/// Write a human-readable representation of a node value to `writer`.
+///
+/// The caller should not pass an empty `value` — this function assumes at
+/// least one byte is present and will produce a spurious ` val=` prefix
+/// for empty input.
+///
+/// With ethhash enabled, values that look like non-empty RLP lists (first
+/// byte >= 0xc0) are decoded and displayed as ` rlp=[field0,field1,...]`
+/// with hex-encoded fields truncated to 12 characters. If the value cannot
+/// be decoded as an RLP list, the raw bytes are dumped instead. Other values
+/// are displayed as plaintext (` val=...`) if they are alphanumeric UTF-8,
+/// or as truncated hex otherwise.
+///
+/// # Errors
+///
+/// Returns an error if writing to `writer` fails.
+pub fn format_node_value<W: std::io::Write + ?Sized>(
+    value: &[u8],
+    writer: &mut W,
+) -> std::io::Result<()> {
+    #[cfg(feature = "ethhash")]
+    if value.first().is_some_and(|&b| b >= 0xc0)
+        && let Ok(rlp_list) = rlp::Rlp::new(value).as_list::<Vec<u8>>()
+        && !rlp_list.is_empty()
+    {
+        write!(writer, " rlp=[")?;
+        for (i, item) in rlp_list.iter().enumerate() {
+            if i > 0 {
+                write!(writer, ",")?;
+            }
+            let hex = hex::encode(item);
+            write!(writer, "{hex:.12}")?;
+            if hex.len() > 12 {
+                writer.write_all(b"..")?;
+            }
+        }
+        write!(writer, "]")?;
+        return Ok(());
+    }
+    match std::str::from_utf8(value) {
+        Ok(string) if string.chars().all(char::is_alphanumeric) => {
+            write!(writer, " val={string:.6}")?;
+            if string.len() > 6 {
+                writer.write_all(b"...")?;
+            }
+        }
+        _ => {
+            let hex = hex::encode(value);
+            write!(writer, " val={hex:.6}")?;
+            if hex.len() > 6 {
+                writer.write_all(b"...")?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod format_node_value_tests {
+    use super::*;
+
+    fn fmt(value: &[u8]) -> String {
+        let mut buf = Vec::new();
+        format_node_value(value, &mut buf).unwrap();
+        String::from_utf8(buf).unwrap()
+    }
+
+    #[test]
+    fn alphanumeric_plaintext() {
+        assert_eq!(fmt(b"hello"), " val=hello");
+        assert_eq!(fmt(b"value1"), " val=value1");
+    }
+
+    #[test]
+    fn long_alphanumeric_truncated() {
+        assert_eq!(fmt(b"longvalue"), " val=longva...");
+    }
+
+    #[test]
+    fn non_utf8_as_hex() {
+        assert_eq!(fmt(&[0xff, 0xfe]), " val=fffe");
+    }
+
+    #[test]
+    fn long_hex_truncated() {
+        assert_eq!(fmt(&[0xde, 0xad, 0xbe, 0xef]), " val=deadbe...");
+    }
+
+    #[test]
+    fn non_alphanumeric_utf8_as_hex() {
+        // Space is not alphanumeric, so falls through to hex.
+        assert_eq!(fmt(b"hi there"), " val=686920...");
+    }
+
+    #[cfg(feature = "ethhash")]
+    #[test]
+    fn rlp_list_decoded() {
+        // RLP encode [0x01, 0x02] as a 2-item list.
+        let mut rlp = rlp::RlpStream::new_list(2);
+        rlp.append(&vec![0x01u8]);
+        rlp.append(&vec![0x02u8]);
+        let encoded = rlp.out();
+        assert_eq!(fmt(&encoded), " rlp=[01,02]");
+    }
+
+    #[cfg(feature = "ethhash")]
+    #[test]
+    fn empty_rlp_list_falls_through() {
+        // 0xc0 is an empty RLP list — as_list returns Ok([]) which we
+        // treat as non-RLP since there are no fields to display.
+        let result = fmt(&[0xc0]);
+        assert!(
+            result.starts_with(" val="),
+            "expected hex fallback, got: {result}"
+        );
+    }
+}
