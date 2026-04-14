@@ -121,7 +121,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     /// the proposal root still has the old shape. This strips non-on-path
     /// children from the root and flattens single-child branches so the
     /// root's `partial_path` matches the first proof node's key.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn collapse_root_to_path(
         &mut self,
         target: &[PathComponent],
@@ -155,7 +154,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
 
     /// `range`: `(start_nibbles, end_nibbles)` for the proven range.
     /// In-range children that are also proposal-local trigger rejection.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn collapse_branch_to_path(
         &mut self,
         from: &[PathComponent],
