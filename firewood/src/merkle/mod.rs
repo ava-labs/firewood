@@ -1271,8 +1271,10 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
         }
     }
 
-    /// Navigate to the branch at `key_nibbles` and return a mutable reference.
-    /// Returns `None` if the path doesn't lead to an in-memory branch.
+    /// Navigate to the branch at `key` and return a mutable reference.
+    /// `key` is provided as a slice of [`PathComponent`] values representing
+    /// the path to traverse. Returns `None` if the path doesn't lead to an
+    /// in-memory branch.
     ///
     /// This is the mutable counterpart to `get_node_from_nibbles`. It only
     /// works for in-memory nodes (`Child::Node`), which is guaranteed after
