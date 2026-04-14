@@ -65,6 +65,7 @@
 //! The serialization format is versioned to allow for future evolution while maintaining
 //! backward compatibility with proof verification.
 
+pub(crate) mod change;
 pub(super) mod de;
 pub(crate) mod header;
 pub(crate) mod range;
