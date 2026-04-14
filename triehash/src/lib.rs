@@ -105,9 +105,11 @@ where
     }
 
     // then move them to a vector
+    #[expect(clippy::disallowed_methods, reason = "window size is the literal 2")]
+    let windows = lens.windows(2);
     let input = input
         .into_iter()
-        .zip(lens.windows(2))
+        .zip(windows)
         .map(|((_, v), w)| (&nibbles[w[0]..w[1]], v))
         .collect::<Vec<_>>();
 
@@ -174,11 +176,9 @@ fn hex_prefix_encode(nibbles: &[u8], leaf: bool) -> impl Iterator<Item = u8> + '
         }
         bits
     };
-    once(first_byte).chain(
-        nibbles[oddness_factor..]
-            .chunks(2)
-            .map(|ch| (ch[0] << 4) | ch[1]),
-    )
+    #[expect(clippy::disallowed_methods, reason = "chunk size is the literal 2")]
+    let chunks = nibbles[oddness_factor..].chunks(2);
+    once(first_byte).chain(chunks.map(|ch| (ch[0] << 4) | ch[1]))
 }
 
 fn hash256rlp<H, A, B>(input: &[(A, B)], pre_len: usize, stream: &mut RlpStream)

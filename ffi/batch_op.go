@@ -8,6 +8,11 @@ import "C"
 
 // BatchOp represents a single batch operation to be applied to the database.
 // Create BatchOp values using the [Put], [Delete], and [PrefixDelete] functions.
+//
+// BatchOp uses an explicit tagged representation so that the intent of each
+// operation is unambiguous. In particular, a [Put] with an empty (zero-length)
+// value stores an empty value — it does NOT delete the key. Use [Delete] or
+// [PrefixDelete] to remove keys.
 type BatchOp struct {
 	tag   C.BatchOp_Tag
 	key   []byte // key for Put/Delete, prefix for DeleteRange
