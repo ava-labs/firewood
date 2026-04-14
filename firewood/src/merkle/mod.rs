@@ -275,11 +275,10 @@ fn compute_outside_children(
 /// Recursively computes the hash of a node in the proving trie, merging
 /// child hashes from proof nodes for subtrees outside the proven range.
 ///
-/// For branch nodes, children present in the in-memory trie get their hash
-/// computed recursively. Children not in the trie that are **outside** the
-/// proven range (as indicated by `outside_children`) get their hash from the
-/// corresponding proof node. Children not in the trie that are **inside** the
-/// range are left as `None`, causing a hash mismatch if they should exist.
+/// For branch nodes, in-range children that are in-memory (`Child::Node`)
+/// are hashed recursively. Persisted children (`AddressWithHash`,
+/// `MaybePersisted`) already carry their hash and are used directly.
+/// Out-of-range children get their hash from the corresponding proof node.
 fn compute_root_hash_with_proofs(
     node: &Node,
     path_prefix: &[PathComponent],
@@ -300,34 +299,38 @@ fn compute_root_hash_with_proofs(
 
     let mut child_hashes: Children<Option<HashType>> = Children::new();
 
-    // For children outside the proven range, use proof node hashes
-    if let (Some(proof_node), Some(outside)) =
-        (proof_nodes.get(&full_key), outside_children.get(&full_key))
-    {
+    let outside_mask = outside_children.get(&full_key);
+
+    // For children inside the proven range, compute hashes recursively.
+    // For children outside the range, use proof node hashes (set below).
+    let mut child_prefix: PathBuf = full_key.iter().copied().collect();
+    for (nibble, child_opt) in &branch.children {
+        let Some(child) = child_opt else { continue };
+        if outside_mask.is_some_and(|m| m.is_set(nibble.0)) {
+            continue;
+        }
+        // Persisted children already carry their hash — use it directly
+        // instead of resolving and recursing into the subtree.
+        if let Child::AddressWithHash(_, hash) | Child::MaybePersisted(_, hash) = child {
+            child_hashes[nibble] = Some(hash.clone());
+            continue;
+        }
+        let Child::Node(child_node) = child else {
+            unreachable!()
+        };
+        child_prefix.push(nibble);
+        let child_hash =
+            compute_root_hash_with_proofs(child_node, &child_prefix, proof_nodes, outside_children);
+        child_hashes[nibble] = Some(child_hash);
+        child_prefix.pop();
+    }
+
+    // For children outside the proven range, use proof node hashes.
+    if let (Some(proof_node), Some(outside)) = (proof_nodes.get(&full_key), outside_mask) {
         for (nibble, hash) in proof_node.child_hashes.iter_present() {
             if outside.is_set(nibble.0) {
                 child_hashes[nibble] = Some(hash.clone());
             }
-        }
-    }
-
-    // For children in the in-memory trie, compute hashes recursively.
-    // These children were inserted from the proven key-value pairs, so they
-    // are *inside* the proven range. A nibble cannot be both inside (present
-    // in the trie) and outside (marked in outside_children) at the same time,
-    // so this does not conflict with the proof hashes set above.
-    let mut child_prefix: PathBuf = full_key.iter().copied().collect();
-    for (nibble, child_opt) in &branch.children {
-        if let Some(Child::Node(child_node)) = child_opt {
-            child_prefix.push(nibble);
-            let child_hash = compute_root_hash_with_proofs(
-                child_node,
-                &child_prefix,
-                proof_nodes,
-                outside_children,
-            );
-            child_hashes[nibble] = Some(child_hash);
-            child_prefix.pop();
         }
     }
 
