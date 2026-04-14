@@ -934,21 +934,22 @@ impl<T: HashedNodeReader> Merkle<T> {
             .take(limit.map_or(usize::MAX, NonZeroUsize::get))
             .collect::<Result<Box<_>, FileIoError>>()?;
 
-        let end_proof = if let Some(limit) = limit
-            && limit.get() <= batch_ops.len()
-            && iter.next().is_some()
-        {
-            // limit was provided, we hit it, and there is at least one more key
-            // end proof is for the last key provided
-            batch_ops.last().map(|largest_key| &**largest_key.key())
+        // Check whether the limit cut off remaining items.
+        let hit_limit = iter.next().transpose()?.is_some();
+
+        // When the limit was hit, the end proof is for the last key in
+        // batch_ops (the actual right edge of what was produced). When
+        // all items fit, the end proof is for end_key so the verifier
+        // can check the full requested range.
+        let end_proof_key = if hit_limit {
+            batch_ops.last().map(|op| &**op.key()).or(end_key)
         } else {
-            // limit was not hit or not provided, end proof is for the requested
-            // end key so that we can prove we have all keys up to that key
-            end_key
-        }
-        .map(|end_key| self.prove(end_key))
-        .transpose()?
-        .unwrap_or_default();
+            end_key.or(batch_ops.last().map(|op| &**op.key()))
+        };
+        let end_proof = end_proof_key
+            .map(|key| self.prove(key))
+            .transpose()?
+            .unwrap_or_default();
 
         Ok(ChangeProof::new(start_proof, end_proof, batch_ops))
     }
