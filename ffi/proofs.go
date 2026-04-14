@@ -358,6 +358,7 @@ func (p *RangeProof) UnmarshalBinary(data []byte) error {
 	if err == nil {
 		p.handle = handle.handle
 		handle.handle = nil
+		runtime.SetFinalizer(p, (*RangeProof).Free)
 	}
 
 	return err
@@ -408,7 +409,13 @@ func (db *Database) ChangeProof(
 		max_length: C.uint32_t(maxLength),
 	}
 
-	return getChangeProofFromChangeProofResult(C.fwd_db_change_proof(db.handle, args))
+	proof, err := getChangeProofFromChangeProofResult(C.fwd_db_change_proof(db.handle, args))
+	if err != nil {
+		return nil, err
+	}
+
+	runtime.SetFinalizer(proof, (*ChangeProof).Free)
+	return proof, nil
 }
 
 // VerifyChangeProof verifies the provided change [proof] proves the changes
@@ -430,7 +437,13 @@ func (proof *ChangeProof) VerifyChangeProof(
 		max_length: C.uint32_t(maxLength),
 	}
 
-	return getVerifiedChangeProofFromVerifiedChangeProofResult(C.fwd_verify_change_proof(args))
+	verified, err := getVerifiedChangeProofFromVerifiedChangeProofResult(C.fwd_verify_change_proof(args))
+	if err != nil {
+		return nil, err
+	}
+
+	runtime.SetFinalizer(verified, (*VerifiedChangeProof).Free)
+	return verified, nil
 }
 
 // ProposeChangeProof creates a proposal from a VerifiedChangeProof.
@@ -486,51 +499,6 @@ func (proof *ProposedChangeProof) FindNextKey() (*NextKeyRange, error) {
 	return getNextKeyRangeFromNextKeyRangeResult(C.fwd_change_proof_find_next_key_proposed(proof.handle))
 }
 
-/*
-// VerifyAndCommitChangeProof verifies the provided change [proof] proves the changes
-// between [startRoot] and [endRoot] for keys in the range [startKey, endKey]. If
-// the proof is valid, it is committed to the database and the new root hash is
-// returned. The resulting root hash may not equal the end root if the proof was
-// truncated due to [maxLength].
-func (db *Database) VerifyAndCommitChangeProof(
-	proof *ChangeProof,
-	startRoot, endRoot Hash,
-	startKey, endKey Maybe[[]byte],
-	maxLength uint32,
-) (Hash, error) {
-	db.handleLock.RLock()
-	defer db.handleLock.RUnlock()
-	if db.handle == nil {
-		return EmptyRoot, errDBClosed
-	}
-
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	args := C.VerifyChangeProofArgs{
-		proof:      proof.handle,
-		start_root: newCHashKey(startRoot),
-		end_root:   newCHashKey(endRoot),
-		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
-		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
-		max_length: C.uint32_t(maxLength),
-	}
-
-	return getHashKeyFromHashResult(C.fwd_db_verify_and_commit_change_proof(db.handle, args))
-}
-
-
-// FindNextKey returns the next key range to fetch for this proof, if any. If the
-// proof has been fully processed, nil is returned. If an error occurs while
-// determining the next key range, that error is returned.
-//
-// FindNextKey can only be called after a successful call to [*Database.VerifyChangeProof] or
-// [*Database.VerifyAndCommitChangeProof].
-func (p *ChangeProof) FindNextKey() (*NextKeyRange, error) {
-	return getNextKeyRangeFromNextKeyRangeResult(C.fwd_change_proof_find_next_key(p.handle))
-}
-*/
-
 // CodeHashes returns an iterator for the code hashes contained in the account nodes
 // of this proof. This list may contain duplicates and is not guaranteed to be in any particular order.
 //
@@ -571,6 +539,7 @@ func (p *ChangeProof) UnmarshalBinary(data []byte) error {
 	if err == nil {
 		p.handle = handle.handle
 		handle.handle = nil
+		runtime.SetFinalizer(p, (*ChangeProof).Free)
 	}
 
 	return err
@@ -697,7 +666,9 @@ func getNextKeyRangeFromNextKeyRangeResult(result C.NextKeyRangeResult) (*NextKe
 	case C.NextKeyRangeResult_None:
 		return nil, nil
 	case C.NextKeyRangeResult_Some:
-		return newNextKeyRange(*(*C.NextKeyRange)(unsafe.Pointer(&result.anon0))), nil
+		nkr := newNextKeyRange(*(*C.NextKeyRange)(unsafe.Pointer(&result.anon0)))
+		runtime.SetFinalizer(nkr, (*NextKeyRange).Free)
+		return nkr, nil
 	case C.NextKeyRangeResult_Err:
 		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 	default:
