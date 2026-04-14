@@ -316,13 +316,14 @@ impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
                     match &*node {
                         Node::Branch(branch) => {
                             let Some(value) = branch.value.as_ref() else {
-                                // This node doesn't have a value to return.
-                                // Continue to the next node.
+                                // no value, continue to next node
                                 return None;
                             };
-                            Some((key, value.clone()))
+                            fix_account_value(key, value, &branch.children_hashes())
                         }
-                        Node::Leaf(leaf) => Some((key, leaf.value.clone())),
+                        Node::Leaf(leaf) => {
+                            fix_account_value(key, &leaf.value, &firewood_storage::Children::new())
+                        }
                     }
                 })
                 .transpose()
@@ -331,6 +332,42 @@ impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
 }
 
 impl<T: TrieReader> FusedIterator for MerkleKeyValueIter<'_, T> {}
+
+/// For ethhash account nodes (32-byte key), replace a stale or zeroed
+/// storageRoot with the correct hash computed from the node's children.
+/// This ensures range proof `key_values` match the proof nodes, which apply
+/// the same fix via `ProofNode::from()`. Without ethhash this is a no-op.
+///
+/// In debug builds, the hash is always recomputed and compared against the
+/// stored value to catch inconsistencies early. In release builds, we only
+/// recompute when the stored storageRoot is all zeros (the legacy sentinel).
+fn fix_account_value(
+    key: Key,
+    value: &[u8],
+    child_hashes: &firewood_storage::Children<Option<firewood_storage::HashType>>,
+) -> Option<(Key, Value)> {
+    #[cfg(feature = "ethhash")]
+    if key.len() == 32 {
+        let has_zeroed_storage_root = rlp::Rlp::new(value)
+            .as_list::<Vec<u8>>()
+            .ok()
+            .and_then(|list| list.get(2).cloned())
+            .is_some_and(|root| root.iter().all(|&b| b == 0));
+
+        if (has_zeroed_storage_root || cfg!(debug_assertions))
+            && let Some(fixed) =
+                firewood_storage::fix_account_storage_root_value(value, child_hashes)
+        {
+            if has_zeroed_storage_root {
+                return Some((key, fixed));
+            }
+            debug_assert_eq!(&*fixed, value, "hash mismatch on non-sentinel storageRoot");
+        }
+    }
+    // suppress unused warning when ethhash is not enabled
+    let _ = child_hashes;
+    Some((key, value.to_vec().into_boxed_slice()))
+}
 
 #[derive(Debug)]
 enum PathIteratorState<'a> {

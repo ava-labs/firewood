@@ -911,11 +911,8 @@ fn test_reverse_single_side_range_proof() {
             let start_proof = merkle.prove(items[case].0).unwrap();
             let end_proof = merkle.prove(end).unwrap();
 
-            let key_values: KeyValuePairs = items
-                .iter()
-                .skip(case)
-                .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-                .collect();
+            let key_values =
+                stored_key_values(&merkle, items.iter().skip(case).map(|(k, v)| (*k, *v)));
 
             let range_proof =
                 RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
@@ -948,10 +945,7 @@ fn test_both_sides_range_proof() {
         let start_proof = merkle.prove(start).unwrap();
         let end_proof = merkle.prove(end).unwrap();
 
-        let key_values: KeyValuePairs = items
-            .into_iter()
-            .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-            .collect();
+        let key_values = stored_key_values(&merkle, items.into_iter().map(|(k, v)| (*k, *v)));
 
         let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
 
