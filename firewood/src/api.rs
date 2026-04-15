@@ -12,7 +12,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 pub use crate::batch_op::{BatchIter, BatchOp, IntoBatchIter, KeyValuePair, TryIntoBatch};
-use crate::merkle::changes::ChangeProof;
+use crate::proofs::change::ChangeProof;
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
 /// and can be sent and shared across threads. References with
