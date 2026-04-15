@@ -1,7 +1,8 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::api::{self, BatchOp, Db as DbTrait, FrozenChangeProof, Proposal as _};
+use super::*;
+use crate::api::{self, BatchOp, Db as DbTrait, DbView, FrozenChangeProof, Proposal as _};
 use crate::db::{Db, DbConfig};
 use crate::merkle::verify_change_proof_root_hash;
 use crate::{ChangeProofVerificationContext, verify_change_proof_structure};
@@ -80,3 +81,5 @@ mod bounds;
 // root hash, so change proofs from an empty database can't be generated.
 #[cfg(feature = "ethhash")]
 mod empty;
+mod partial;
+mod structural;
