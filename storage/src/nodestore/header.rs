@@ -109,6 +109,15 @@ impl Version {
         self.as_u128() == const { Self::VALID_V1_VERSIONS[0].as_u128() }
     }
 
+    /// Returns `true` if databases written by this version need their account
+    /// storage-root hashes recomputed at proof-generation time.
+    ///
+    /// All existing versions predate the fix, so this currently returns `true`
+    /// unconditionally. A future `firewood-v1-hfix` version will return `false`.
+    pub const fn must_recompute_storage_hash(self) -> bool {
+        true
+    }
+
     const fn from_static(bytes: &'static [u8; 16]) -> Self {
         Self { bytes: *bytes }
     }
@@ -444,6 +453,13 @@ impl NodeStoreHeader {
         let (root_address, root_hash) = root_location.unzip();
         self.root_address = root_address;
         self.root_hash = root_hash.unwrap_or_else(TrieHash::empty).into();
+    }
+
+    /// Returns `true` if the database version requires recomputing account
+    /// storage-root hashes at proof-generation time.
+    #[must_use]
+    pub const fn must_recompute_storage_hash(&self) -> bool {
+        self.version.must_recompute_storage_hash()
     }
 
     /// Get the offset of the `free_lists` field for use with `offset_of`!

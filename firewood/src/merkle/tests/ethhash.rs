@@ -182,3 +182,142 @@ fn test_root_hash_random_deletions() {
         println!("i = {i}");
     }
 }
+
+/// Keccak256 of empty bytes — the codeHash for accounts with no contract code.
+fn empty_code_hash() -> [u8; 32] {
+    Keccak256::digest([]).into()
+}
+
+/// Keccak256 of RLP-encoded empty string (0x80) — the hash of an empty storage trie.
+fn empty_trie_root() -> [u8; 32] {
+    Keccak256::digest(rlp::NULL_RLP).into()
+}
+
+/// RLP-encode an Ethereum account value: [nonce, balance, storageRoot, codeHash].
+fn rlp_encode_account(
+    nonce: u64,
+    balance: u64,
+    storage_root: &[u8; 32],
+    code_hash: &[u8; 32],
+) -> Box<[u8]> {
+    use rlp::RlpStream;
+
+    let mut rlp = RlpStream::new_list(4);
+    rlp.append(&nonce);
+    rlp.append(&balance);
+    rlp.append(&storage_root.as_slice());
+    rlp.append(&code_hash.as_slice());
+    rlp.out().to_vec().into_boxed_slice()
+}
+
+/// RLP-encode a 32-byte storage slot value.
+fn rlp_encode_storage(value: &[u8; 32]) -> Vec<u8> {
+    use rlp::RlpStream;
+
+    let mut rlp = RlpStream::new();
+    rlp.append(&value.as_slice());
+    rlp.out().to_vec()
+}
+
+/// Verify that a range proof bounded to account keys contains the corrected
+/// storageRoot fields. The left account has no storage children so its
+/// storageRoot must be keccak256(0x80) (empty trie root). The right account
+/// has one storage child so its storageRoot must be the computed hash of that
+/// storage sub-trie — neither the dummy zeros nor the empty trie root.
+///
+/// The range proof spans exactly the two account keys and excludes the
+/// storage entry that lives under the right account.
+#[test]
+fn test_range_proof_accounts_have_computed_storage_root() {
+    type BoxedAccounts = Box<[(Box<[u8]>, Box<[u8]>)]>;
+
+    let dummy_storage_root = [0u8; 32];
+    let empty_root = empty_trie_root();
+
+    // Two accounts sorted by their keccak256 trie keys (left < right).
+    let mut accounts: BoxedAccounts = [[0x01u8; 20], [0x02u8; 20]]
+        .into_iter()
+        .enumerate()
+        .map(|(i, addr)| {
+            let key = Box::from(Keccak256::digest(addr).as_slice());
+            let value = rlp_encode_account(
+                i as u64,
+                (i as u64 + 1) * 100,
+                &dummy_storage_root,
+                &empty_code_hash(),
+            );
+            (key, value)
+        })
+        .collect();
+    accounts.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+    let left_key = &accounts[0].0;
+    let right_key = &accounts[1].0;
+
+    // One storage entry under the right account. Its 64-byte key is
+    // right_account_key || storage_suffix, placing it beyond the right
+    // account in trie order.
+    let storage_key: Box<[u8]> = [right_key.as_ref(), &[0xAAu8; 32]].concat().into();
+    let storage_value: Box<[u8]> = rlp_encode_storage(&[0x42u8; 32]).into();
+
+    let items: BoxedAccounts = accounts
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .chain(once((storage_key, storage_value)))
+        .collect();
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    // Build a range proof bounded to just the two account keys.
+    let range_proof = merkle
+        .range_proof(Some(left_key.as_ref()), Some(right_key.as_ref()), None)
+        .unwrap();
+
+    // The range proof must verify against the committed root hash.
+    verify_range_proof(
+        Some(left_key.as_ref()),
+        Some(right_key.as_ref()),
+        &root_hash,
+        &range_proof,
+    )
+    .unwrap();
+
+    // Exactly two key-value pairs in the proof.
+    assert_eq!(range_proof.iter().len(), 2);
+
+    // Decode and check each account's storageRoot.
+    for (key, value) in &range_proof {
+        let rlp = rlp::Rlp::new(value.as_ref());
+        let list: Vec<Vec<u8>> = rlp
+            .as_list()
+            .expect("account value should be valid RLP list");
+        assert!(
+            list.len() >= 4,
+            "account RLP should have at least 4 fields, got {} for key {:?}",
+            list.len(),
+            key.as_ref(),
+        );
+
+        let storage_root = &list[2];
+        assert_ne!(
+            storage_root.as_slice(),
+            &dummy_storage_root,
+            "storageRoot must not be the original dummy zeros",
+        );
+
+        if key.as_ref() == left_key.as_ref() {
+            // Left account has no storage children → empty trie root.
+            assert_eq!(
+                storage_root.as_slice(),
+                &empty_root,
+                "left account storageRoot should be the empty trie root",
+            );
+        } else {
+            // Right account has a storage child → real computed hash.
+            assert_ne!(
+                storage_root.as_slice(),
+                &empty_root,
+                "right account storageRoot should NOT be the empty trie root",
+            );
+        }
+    }
+}

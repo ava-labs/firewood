@@ -333,15 +333,55 @@ impl From<PathIterItem> for ProofNode {
             .len()
             .saturating_sub(item.node.partial_path().len());
 
+        let value_digest = item
+            .node
+            .value()
+            .map(|value| ValueDigest::Value(Box::from(value)));
+
+        // For account-depth nodes on databases that need storageRoot
+        // recomputation, fix the value from the node's children.
+        #[cfg(feature = "ethhash")]
+        let value_digest = {
+            debug_assert!(
+                item.must_recompute_storage_hash,
+                "must_recompute_storage_hash should always be true"
+            );
+            if item.must_recompute_storage_hash {
+                fix_account_storage_root(value_digest, &item.key_nibbles, &child_hashes)
+            } else {
+                value_digest
+            }
+        };
+
         Self {
             key: item.key_nibbles,
             partial_len,
-            value_digest: item
-                .node
-                .value()
-                .map(|value| ValueDigest::Value(value.to_vec().into_boxed_slice())),
+            value_digest,
             child_hashes,
         }
+    }
+}
+
+/// For account-depth nodes (64 nibbles), replace the storageRoot field in the
+/// value with the hash computed from the node's children. This ensures proofs
+/// from older databases contain a valid storageRoot.
+#[cfg(feature = "ethhash")]
+fn fix_account_storage_root(
+    value_digest: Option<ValueDigest<Box<[u8]>>>,
+    key_nibbles: &PathBuf,
+    child_hashes: &Children<Option<HashType>>,
+) -> Option<ValueDigest<Box<[u8]>>> {
+    if key_nibbles.len() != 64 {
+        return value_digest;
+    }
+
+    let Some(ValueDigest::Value(value)) = value_digest else {
+        return value_digest;
+    };
+
+    match firewood_storage::fix_account_storage_root_value(&value, child_hashes) {
+        Some(fixed) => Some(ValueDigest::Value(fixed)),
+        None => Some(ValueDigest::Value(value)),
     }
 }
 
