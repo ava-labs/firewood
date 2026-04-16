@@ -694,7 +694,7 @@ mod errors {
 
     /// A collection of errors encountered during an io-uring write batch.
     ///
-    /// A least one error occured for this to be returned. Incurable errors can be
+    /// A least one error occurred for this to be returned. Incurable errors can be
     /// observed via [`BatchErrors::incurable_error`].
     #[must_use]
     pub struct BatchErrors {
