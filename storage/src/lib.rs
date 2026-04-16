@@ -441,7 +441,7 @@ pub fn format_node_value<W: std::io::Write + ?Sized>(
             let hex = hex::encode(item);
             write!(writer, "{hex:.12}")?;
             if hex.len() > 12 {
-                writer.write_all(b"..")?;
+                writer.write_all(b"...")?;
             }
         }
         write!(writer, "]")?;
