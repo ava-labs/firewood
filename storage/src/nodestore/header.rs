@@ -106,16 +106,19 @@ impl Version {
     }
 
     const fn is_firewood_v1(self) -> bool {
+        // Check against both the current and previous version strings
         self.as_u128() == const { Self::VALID_V1_VERSIONS[0].as_u128() }
+            || self.as_u128() == const { Self::VALID_V1_VERSIONS[1].as_u128() }
     }
 
     /// Returns `true` if databases written by this version need their account
     /// storage-root hashes recomputed at proof-generation time.
     ///
-    /// All existing versions predate the fix, so this currently returns `true`
-    /// unconditionally. A future `firewood-v1-hfix` version will return `false`.
+    /// The `firewood-v1-hfix` version persists correct storageRoot values
+    /// during hashing, so recomputation is not needed. All older versions
+    /// require it.
     pub const fn must_recompute_storage_hash(self) -> bool {
-        true
+        self.as_u128() != const { Self::VALID_V1_VERSIONS[0].as_u128() }
     }
 
     const fn from_static(bytes: &'static [u8; 16]) -> Self {
@@ -125,7 +128,8 @@ impl Version {
     /// After making the version a static string, there is no need to use semver
     /// to parse the valid version strings since there are a finite set of valid
     /// strings.
-    const VALID_V1_VERSIONS: [Version; 16] = [
+    const VALID_V1_VERSIONS: [Version; 17] = [
+        Version::from_static(b"firewood-v1-hfix"),
         Version::from_static(b"firewood-v1\0\0\0\0\0"),
         Version::from_static(b"firewood 0.0.18\0"),
         Version::from_static(b"firewood 0.0.17\0"),
