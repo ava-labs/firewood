@@ -299,10 +299,10 @@ pub fn fix_account_storage_root_value(
         if let Some((_, child)) = child_hashes.take_only_child() {
             match child {
                 HashType::Hash(hash) => hash,
-                HashType::Rlp(rlp_bytes) => {
-                    // Single storage child with small RLP — hash the raw bytes.
-                    crate::TrieHash::from(Keccak256::digest(&*rlp_bytes))
-                }
+                HashType::Rlp(_) => unreachable!(
+                    "account-depth single storage child cannot have inline RLP: \
+                     storage leaf encoding with 32-byte keys always exceeds 32 bytes"
+                ),
             }
         } else {
             let mut rlp = RlpStream::new_list(const { BranchNode::MAX_CHILDREN + 1 });
@@ -311,9 +311,10 @@ pub fn fix_account_storage_root_value(
                     Some(HashType::Hash(hash)) => {
                         rlp.append(&hash.as_slice());
                     }
-                    Some(HashType::Rlp(rlp_bytes)) => {
-                        rlp.append_raw(rlp_bytes, 1);
-                    }
+                    Some(HashType::Rlp(_)) => unreachable!(
+                        "account-depth storage child cannot have inline RLP: \
+                         storage node encoding with 32-byte keys always exceeds 32 bytes"
+                    ),
                     None => {
                         rlp.append_empty_data();
                     }
