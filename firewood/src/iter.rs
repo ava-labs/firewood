@@ -319,8 +319,7 @@ impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
                                 // no value, continue to next node
                                 return None;
                             };
-                            let must_recompute =
-                                self.iter.merkle.must_recompute_storage_hash();
+                            let must_recompute = self.iter.merkle.must_recompute_storage_hash();
                             let child_hashes = if must_recompute && key.len() == 32 {
                                 branch.children_hashes()
                             } else {
