@@ -33,24 +33,6 @@
 //! - `childmask` (in `merkle`): Compact bitmap for tracking present children.
 //! - `magic`: Magic constants for proof format identification (internal).
 //!
-//! # Usage
-//!
-//! For most use cases, import proof types directly from the top level of the crate:
-//!
-//! ```rust,ignore
-//! use firewood::{Proof, ProofNode, RangeProof};
-//!
-//! // Verify a single key
-//! let proof: Proof<Vec<ProofNode>> = /* ... */;
-//! proof.verify(b"key", Some(b"value"), &root_hash)?;
-//!
-//! // Verify a key range
-//! let range_proof: RangeProof<Vec<u8>, Vec<u8>, Vec<ProofNode>> = /* ... */;
-//! for (key, value) in &range_proof {
-//!     // Process key-value pairs
-//! }
-//! ```
-//!
 //! # Proof Format
 //!
 //! Proofs are serialized in a compact binary format that includes:
@@ -64,6 +46,33 @@
 //!
 //! The serialization format is versioned to allow for future evolution while maintaining
 //! backward compatibility with proof verification.
+//!
+//! # Range Proof Verification Algorithm
+//!
+//! Range proof verification confirms that a contiguous set of key-value pairs
+//! exists within a specific key range of a trie with a given root hash.
+//!
+//! [`verify_range_proof`] proceeds in two phases:
+//!
+//! ## Phase 1 — Structural and boundary validation
+//!
+//! Validates that key-value pairs are strictly ascending and within the
+//! requested `[first_key, last_key]` range. Proof nodes carrying in-range
+//! values must appear in the key-value list (prevents an attacker from
+//! hiding keys that sit on a proof path). Start and end boundary proofs
+//! are verified against `root_hash` via hash chain checks.
+//!
+//! ## Phase 2 — Root hash verification
+//!
+//! A fresh in-memory **proving trie** is built from the key-value pairs.
+//! Boundary proof nodes are reconciled into it via
+//! `reconcile_branch_proof_node`, which inserts branch structure matching
+//! the original trie's layout. Value mismatches between the proof and the
+//! **proving trie** cause early rejection.
+//! `compute_root_hash_with_proofs` then computes a **hybrid root hash**:
+//! in-range children are hashed from the **proving trie**, while
+//! out-of-range children (identified by `compute_outside_children`) use
+//! hashes from the proof nodes. The result must match `root_hash`.
 
 pub(crate) mod change;
 pub(super) mod de;
