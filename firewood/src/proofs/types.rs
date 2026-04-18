@@ -341,16 +341,10 @@ impl From<PathIterItem> for ProofNode {
         // For account-depth nodes on databases that need storageRoot
         // recomputation, fix the value from the node's children.
         #[cfg(feature = "ethhash")]
-        let value_digest = {
-            debug_assert!(
-                item.must_recompute_storage_hash,
-                "must_recompute_storage_hash should always be true"
-            );
-            if item.must_recompute_storage_hash {
-                fix_account_storage_root(value_digest, &item.key_nibbles, &child_hashes)
-            } else {
-                value_digest
-            }
+        let value_digest = if item.must_recompute_storage_hash {
+            fix_account_storage_root(value_digest, &item.key_nibbles, &child_hashes)
+        } else {
+            value_digest
         };
 
         Self {

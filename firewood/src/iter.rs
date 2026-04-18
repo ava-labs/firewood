@@ -319,12 +319,14 @@ impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
                                 // no value, continue to next node
                                 return None;
                             };
-                            fix_account_value(
-                                key,
-                                value,
-                                &branch.children_hashes(),
-                                self.iter.merkle.must_recompute_storage_hash(),
-                            )
+                            let must_recompute =
+                                self.iter.merkle.must_recompute_storage_hash();
+                            let child_hashes = if must_recompute && key.len() == 32 {
+                                branch.children_hashes()
+                            } else {
+                                firewood_storage::Children::new()
+                            };
+                            fix_account_value(key, value, &child_hashes, must_recompute)
                         }
                         Node::Leaf(leaf) => fix_account_value(
                             key,
