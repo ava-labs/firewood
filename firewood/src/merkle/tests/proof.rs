@@ -125,14 +125,20 @@ fn test_proof() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
+    // Build expected values from the key-value iterator, which applies the
+    // same storageRoot fixups as proof generation.
+    let expected: std::collections::HashMap<_, _> = merkle
+        .key_value_iter_from_key(b"")
+        .map(|r| r.unwrap())
+        .collect();
+
     for (key, _val) in items {
         let proof = merkle.prove(key).unwrap();
         assert!(!proof.is_empty());
-        // Verify as inclusion proof. We don't check the exact value because
-        // proof generation may rewrite account storageRoot fields, producing
-        // a different value than get_value() returns.
-        let digest = proof.value_digest(key, &root_hash).unwrap();
-        assert!(digest.is_some(), "should be inclusion proof for {key:?}");
+        let value = expected.get(key.as_ref()).unwrap_or_else(|| {
+            panic!("key {key:?} missing from iterator");
+        });
+        proof.verify(key, Some(value.as_ref()), &root_hash).unwrap();
     }
 }
 
