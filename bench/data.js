@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1776325745533,
+  "lastUpdate": 1776671358250,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -2537,6 +2537,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 83.19110309823765,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "76cc81c7aa9e3cd76c81f733347570b1a3c70307",
+          "message": "feat(dump): improve merkle dump display for ethhash RLP values (#1933)\n\n## Why this should be merged\n\nDebugging incorrect storage roots inside account RLP values required\nbeing able to see decoded RLP fields in the merkle dump output. The\nexisting dump code only displayed values as plaintext or hex, with no\nRLP awareness.\n\n## How this works\n\nAdd RLP-aware value display via format_node_value() in firewood-storage.\nValues whose first byte is >= 0xc0 (RLP list prefix) are decoded and\ndisplayed as \"rlp=[field0,field1,...]\" with hex-encoded fields. Other\nvalues use the original plaintext-or-hex display.\n\nThe write_attributes! macro in merkle now delegates to this function,\nkeeping RLP decoding in the storage crate where the rlp dependency\nalready exists.\n\n## How this was tested\n\nExisting test suite passes. The Go TestDump test (which validates dump\noutput contains plaintext values) continues to pass.\n\n## Breaking Changes\n\nNone\n\n---------\n\nSigned-off-by: Ron Kuris <swcafe@gmail.com>\nCo-authored-by: rodrigo <77309055+RodrigoVillar@users.noreply.github.com>",
+          "timestamp": "2026-04-16T17:14:56Z",
+          "url": "https://github.com/ava-labs/firewood/commit/76cc81c7aa9e3cd76c81f733347570b1a3c70307"
+        },
+        "date": 1776671357928,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 169.6122787619091,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5895.799568872819,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 109.22659793831325,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5708.601239789174,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 75.55619061041502,
             "unit": "block_accept_ms/ggas"
           }
         ]
