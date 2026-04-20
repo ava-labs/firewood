@@ -544,25 +544,22 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
         proving_merkle.insert(key.as_ref(), value.as_ref().into())?;
     }
 
-    // Reconcile proof nodes into the proving trie and build a lookup map.
-    // "Reconcile" means adjusting the proving trie's branch structure
-    // (partial paths and child layout) to match the proof, so that hash
-    // computation produces the same trie shape as the original.
-    //
-    // The callback handles value conflicts between proof nodes and the
-    // proving trie. For range proofs:
-    //  - ValueDigest::Value: The proof node carries a value that the
-    //    proving trie doesn't have (e.g., empty range where no key-value
-    //    pairs were inserted). Accept the proof's value.
-    //  - ValueDigest::Hash: Handled inside reconcile_branch_proof_node
-    //    before the callback — hash is verified against the branch value.
-    //  - ValueDigest::None: Unreachable — if the trie has a value, the
-    //    proof node will carry Value or Hash, not None.
-    //
-    // The _ arm rejects defensively — Hash is handled before the callback,
-    // and None should not reach here for honest proofs.
     let mut proof_node_map: HashMap<PathBuf, &ProofNode> = HashMap::new();
     for proof_node in all_proof_nodes {
+        // The callback handles value conflicts between proof nodes and the
+        // proving trie. For range proofs:
+        //  - ValueDigest::Value: The proof node carries a value that the
+        //    proving trie doesn't have (e.g., empty range where no key-value
+        //    pairs were inserted). Accept the proof's value.
+        //  - ValueDigest::Hash: When the hash matches the branch value,
+        //    reconcile_branch_proof_node returns early (no callback). When
+        //    the branch has no value, None == None succeeds (no callback).
+        //    A hash mismatch with an existing branch value reaches the
+        //    callback and is rejected.
+        //  - ValueDigest::None: Unreachable — if the trie has a value, the
+        //    proof node will carry Value or Hash, not None.
+        //
+        // The _ arm rejects defensively for both Hash mismatch and None.
         proving_merkle.reconcile_branch_proof_node(proof_node, |pn| match &pn.value_digest {
             Some(ValueDigest::Value(v)) => Ok(Some(v.clone())),
             _ => Err(ProofError::UnexpectedValue),
