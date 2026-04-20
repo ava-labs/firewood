@@ -235,6 +235,10 @@ pub enum ProofError {
     /// Empty end proof when `end_key` is set or `batch_ops` is non-empty.
     #[error("missing end proof: end_key is set or batch_ops is non-empty")]
     MissingEndProof,
+
+    /// Proof node is unreachable in the proving trie during collapse                                                 
+    #[error("proof node unreachable in proving trie")]
+    ProofNodeUnreachable,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -286,11 +290,19 @@ impl Hashable for ProofNode {
         Self: 'a;
 
     fn parent_prefix_path(&self) -> Self::LeadingPath<'_> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "partial_len is validated <= key.len() during deserialization"
+        )]
         let (prefix, _) = self.key.split_at(self.partial_len);
         prefix
     }
 
     fn partial_path(&self) -> Self::PartialPath<'_> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "partial_len is validated <= key.len() during deserialization"
+        )]
         let (_, suffix) = self.key.split_at(self.partial_len);
         suffix
     }

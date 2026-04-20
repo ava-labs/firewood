@@ -771,44 +771,44 @@ pub extern "C" fn fwd_start_metrics() -> VoidResult {
     invoke(metrics::setup_metrics)
 }
 
-/// Start metrics recorder and exporter for this process.
+/// Gather latest metrics for this process as structured data.
+///
+/// # Returns
+///
+/// - [`RenderedMetricsResult::Ok`] with the rendered metrics.
+/// - [`RenderedMetricsResult::Err`] if an error occurred.
+///
+/// # Safety
+///
+/// The caller must:
+/// * call [`fwd_free_rendered_metrics`] to free the memory associated with the
+///   returned metrics.
+/// * call [`fwd_free_owned_bytes`] to free the memory associated with any
+///   returned error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_gather_rendered() -> RenderedMetricsResult {
+    invoke(metrics::gather_rendered_metrics)
+}
+
+/// Consumes the [`OwnedRenderedMetrics`] and frees the memory associated with it.
 ///
 /// # Arguments
 ///
-/// * `metrics_port` - the port where metrics will be exposed at
+/// * `metrics` - The [`OwnedRenderedMetrics`] struct to free, previously returned
+///   from [`fwd_gather_rendered`].
 ///
 /// # Returns
 ///
-/// - [`VoidResult::Ok`] if the recorder was initialized.
-/// - [`VoidResult::Err`] if an error occurs during initialization.
+/// - [`VoidResult::Ok`] if the memory was successfully freed.
+/// - [`VoidResult::Err`] if the process panics while freeing the memory.
 ///
 /// # Safety
 ///
-/// The caller must:
-/// * call [`fwd_free_owned_bytes`] to free the memory associated with the
-///   returned error (if any).
+/// The caller must ensure that the `metrics` struct is valid and that the memory
+/// it points to is uniquely owned by this object.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_start_metrics_with_exporter(metrics_port: u16) -> VoidResult {
-    invoke(move || metrics::setup_metrics_with_exporter(metrics_port))
-}
-
-/// Gather latest metrics for this process.
-///
-/// # Returns
-///
-/// - [`ValueResult::None`] if the gathered metrics resulted in an empty string.
-/// - [`ValueResult::Some`] the gathered metrics as an [`OwnedBytes`] (with
-///   guaranteed to be utf-8 data, not null terminated).
-/// - [`ValueResult::Err`] if an error occurred while retrieving the value.
-///
-/// # Safety
-///
-/// The caller must:
-/// * call [`fwd_free_owned_bytes`] to free the memory associated with the
-///   returned error or value.
-#[unsafe(no_mangle)]
-pub extern "C" fn fwd_gather() -> ValueResult {
-    invoke(metrics::gather_metrics)
+pub extern "C" fn fwd_free_rendered_metrics(metrics: OwnedRenderedMetrics) -> VoidResult {
+    invoke(move || drop(metrics))
 }
 
 /// Open a database with the given arguments.

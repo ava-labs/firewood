@@ -3,24 +3,11 @@
 
 //! Replay layer metric definitions.
 
-/// Time spent in propose (ns).
-pub const PROPOSE_NS: &str = "replay.propose_ns";
-
-/// Number of propose calls.
-pub const PROPOSE_COUNT: &str = "replay.propose";
-
-/// Time spent in commit (ns).
-pub const COMMIT_NS: &str = "replay.commit_ns";
-
-/// Number of commit calls.
-pub const COMMIT_COUNT: &str = "replay.commit";
-
-/// Registers all replay metric descriptions.
-pub fn register() {
-    use metrics::describe_counter;
-
-    describe_counter!(PROPOSE_NS, "Time spent in propose (ns)");
-    describe_counter!(PROPOSE_COUNT, "Number of propose calls");
-    describe_counter!(COMMIT_NS, "Time spent in commit (ns)");
-    describe_counter!(COMMIT_COUNT, "Number of commit calls");
+firewood_metrics::define_metrics! {
+    histograms: {
+        /// Duration of propose calls during replay
+        PROPOSE_DURATION_SECONDS = "firewood_replay_propose_duration_seconds" buckets([0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]),
+        /// Duration of commit calls during replay
+        COMMIT_DURATION_SECONDS  = "firewood_replay_commit_duration_seconds" buckets([0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]),
+    },
 }

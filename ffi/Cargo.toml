@@ -27,10 +27,9 @@ firewood-storage.workspace = true
 metrics.workspace = true
 parking_lot.workspace = true
 # Regular dependencies
-oxhttp = "0.3.1"
 tikv-jemallocator = "0.6.1"
 tikv-jemalloc-ctl = { version = "0.6.1", features = ["stats"] }
-metrics-exporter-prometheus = { version = "0.18.1", default-features = false }
+metrics-exporter-prometheus.workspace = true
 # Optional dependencies
 rlp = { version = "0.6.1", optional = true }
 env_logger = { workspace = true, optional = true }

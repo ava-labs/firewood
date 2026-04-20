@@ -8,7 +8,7 @@ use firewood::{
     api::{self, DbView, FrozenRangeProof, HashKey},
     logger::warn,
 };
-use firewood_metrics::{MetricsContext, firewood_increment};
+use firewood_metrics::{MetricsContext, firewood_counter};
 
 use crate::{
     BorrowedBytes, CodeIteratorHandle, CodeIteratorResult, DatabaseHandle, HashResult, Maybe,
@@ -238,7 +238,7 @@ impl<'db> RangeProofContext<'db> {
         };
 
         let hash = result?;
-        firewood_increment!(crate::registry::MERGE_COUNT, 1);
+        firewood_counter!(MERGE_COUNT).increment(1);
         self.proposal_state = Some(ProposalState::Committed(hash.clone()));
 
         Ok(hash)

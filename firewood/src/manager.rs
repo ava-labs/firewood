@@ -23,7 +23,7 @@ use crate::db::{BatchOp, UseParallel};
 use crate::merkle::Merkle;
 use crate::merkle::parallel::ParallelMerkle;
 use crate::persist_worker::{PersistError, PersistWorker};
-use firewood_metrics::{firewood_increment, firewood_set};
+use firewood_metrics::{GaugeExt, firewood_counter, firewood_gauge, firewood_histogram};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::RootStore;
 use firewood_storage::{
@@ -306,7 +306,7 @@ impl RevisionManager {
     /// windows so that readers (`current_revision`, `view`) are never stalled by
     /// the potentially slow step 4.
     #[fastrace::trace(short_name = true)]
-    #[crate::metrics("proposal.commit", "proposal commit to storage")]
+    #[crate::metrics(PROPOSAL_COMMITS)]
     pub fn commit(&self, proposal: ProposedRevision) -> Result<(), RevisionManagerError> {
         // BLOCKING: mutex lock on `commit_lock`. Serializes concurrent commits for the
         // full duration of steps 1-5. Unlike holding `in_memory_revisions.write()` for
@@ -314,7 +314,10 @@ impl RevisionManager {
         // `current_revision()` or `view()` — those only need a read lock on
         // `in_memory_revisions`, which remains available except during the brief
         // non-blocking windows in steps 3 and 5.
+        let __lock_start = std::time::Instant::now();
         let mut commit_guard = self.commit_lock.lock();
+        firewood_histogram!(cheap: COMMIT_LOCK_WAIT_SECONDS)
+            .record(__lock_start.elapsed().as_secs_f64());
 
         // 1. Check if the persist worker has failed.
         self.persist_worker
@@ -335,7 +338,7 @@ impl RevisionManager {
         }
 
         let committed = Arc::new(proposal.as_committed());
-        firewood_set!(crate::registry::DELETED_LIST_LEN, committed.deleted_len());
+        firewood_gauge!(DELETED_LIST_LEN).set_integer(committed.deleted_len());
 
         // 3. Revision reaping.
         self.reap_stale_revisions(&mut commit_guard)?;
@@ -376,7 +379,10 @@ impl RevisionManager {
             // Brief lock: check the count, pop the oldest if needed, remove from
             // by_hash. All three operations are fast (no I/O). Released before reap().
             let (oldest, remaining_len) = {
+                let __lock_start = std::time::Instant::now();
                 let mut in_memory_revisions = self.in_memory_revisions.lock();
+                firewood_histogram!(cheap: CURRENT_REVISION_LOCK_WAIT_SECONDS)
+                    .record(__lock_start.elapsed().as_secs_f64());
                 if in_memory_revisions.len() < self.max_revisions {
                     break;
                 }
@@ -387,7 +393,11 @@ impl RevisionManager {
                     // `in_memory_revisions`. Nested locking order must remain consistent
                     // (always acquire `in_memory_revisions` before `by_hash`) to avoid
                     // deadlocks.
-                    self.by_hash.lock().remove(hash);
+                    let __lock_start = std::time::Instant::now();
+                    let mut by_hash = self.by_hash.lock();
+                    firewood_histogram!(cheap: BY_HASH_LOCK_WAIT_SECONDS)
+                        .record(__lock_start.elapsed().as_secs_f64());
+                    by_hash.remove(hash);
                 }
                 let remaining = in_memory_revisions.len();
                 (oldest, remaining)
@@ -407,8 +417,8 @@ impl RevisionManager {
                     break;
                 }
             }
-            firewood_set!(crate::registry::ACTIVE_REVISIONS, remaining_len);
-            firewood_set!(crate::registry::MAX_REVISIONS, self.max_revisions);
+            firewood_gauge!(ACTIVE_REVISIONS).set_integer(remaining_len);
+            firewood_gauge!(MAX_REVISIONS).set_integer(self.max_revisions);
         }
 
         Ok(())
@@ -427,21 +437,31 @@ impl RevisionManager {
         // unblocked and observe the previous committed revision — which is correct, since the new
         // revision has not been published yet. Only other commit attempts are queued, via
         // `commit_lock` above.
+        let __submit_start = std::time::Instant::now();
         self.persist_worker
             .persist(committed.clone())
             .map_err(RevisionManagerError::PersistError)?;
+        firewood_histogram!(cheap: PERSIST_SUBMIT_DURATION_SECONDS)
+            .record(__submit_start.elapsed().as_secs_f64());
 
         // 5. Set last committed revision — brief lock.
         // The revision is added to `by_hash` while it still exists in `proposals`.
         // The `view()` method relies on this ordering — it checks `proposals` first,
         // then `by_hash`, ensuring the revision is always findable during the transition.
+        let __lock_start = std::time::Instant::now();
         let mut in_memory_revisions = self.in_memory_revisions.lock();
+        firewood_histogram!(cheap: CURRENT_REVISION_LOCK_WAIT_SECONDS)
+            .record(__lock_start.elapsed().as_secs_f64());
         in_memory_revisions.push_back(committed.clone());
         if let Some(hash) = committed.root_hash().or_default_root_hash() {
             // BLOCKING: mutex lock on `by_hash` while holding the mutex on
             // `in_memory_revisions`. Same nested ordering as the reap path above;
             // must not be inverted.
-            self.by_hash.lock().insert(hash, committed.clone());
+            let __lock_start = std::time::Instant::now();
+            let mut by_hash = self.by_hash.lock();
+            firewood_histogram!(cheap: BY_HASH_LOCK_WAIT_SECONDS)
+                .record(__lock_start.elapsed().as_secs_f64());
+            by_hash.insert(hash, committed.clone());
         }
 
         Ok(())
@@ -478,11 +498,11 @@ impl RevisionManager {
             });
 
             if discarded > 0 {
-                firewood_increment!(crate::registry::PROPOSALS_DISCARDED, discarded);
+                firewood_counter!(PROPOSALS_DISCARDED).increment(discarded);
             }
 
             // Update uncommitted proposals gauge after cleanup
-            firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, lock.len());
+            firewood_gauge!(PROPOSALS_UNCOMMITTED).set_integer(lock.len());
         }
 
         // then reparent any proposals that have this proposal as a parent
@@ -527,7 +547,7 @@ impl RevisionManager {
             lock.len()
         };
         // Update uncommitted proposals gauge after adding
-        firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, len);
+        firewood_gauge!(PROPOSALS_UNCOMMITTED).set_integer(len);
     }
 
     /// Retrieve a committed revision by its root hash.
@@ -539,9 +559,14 @@ impl RevisionManager {
         // BLOCKING: mutex lock on `by_hash`. The critical section is a single HashMap lookup
         // plus an Arc clone — nanoseconds. All writers hold `commit_lock`, so at most one
         // writer can ever contend with this reader.
-        if let Some(revision) = self.by_hash.lock().get(&root_hash).cloned() {
+        let __lock_start = std::time::Instant::now();
+        let by_hash = self.by_hash.lock();
+        firewood_histogram!(cheap: BY_HASH_LOCK_WAIT_SECONDS)
+            .record(__lock_start.elapsed().as_secs_f64());
+        if let Some(revision) = by_hash.get(&root_hash).cloned() {
             return Ok(revision);
         }
+        drop(by_hash);
 
         // 2. Check `RootStore` (if it exists).
         let root_store =
@@ -569,8 +594,11 @@ impl RevisionManager {
         // merge_key_value_range(). Contends only with the brief lock windows inside commit()
         // (steps 2, 3, and 5 — all fast, non-I/O). The backpressure stall in step 4 does not
         // block this call because `in_memory_revisions` is not held during that wait.
-        self.in_memory_revisions
-            .lock()
+        let __lock_start = std::time::Instant::now();
+        let revisions = self.in_memory_revisions.lock();
+        firewood_histogram!(cheap: CURRENT_REVISION_LOCK_WAIT_SECONDS)
+            .record(__lock_start.elapsed().as_secs_f64());
+        revisions
             .back()
             .expect("there is always one revision")
             .clone()

@@ -3,11 +3,13 @@
 
 //! FFI layer metric definitions.
 
-use metrics::describe_counter;
-
-pub const MERGE_COUNT: &str = "firewood.ffi.merge";
-
-/// Registers all FFI metric descriptions.
-pub fn register() {
-    describe_counter!(MERGE_COUNT, "Count of range proof merges via FFI");
+firewood_metrics::define_metrics! {
+    counters: {
+        /// Count of range proof merges via FFI
+        MERGE_COUNT = "firewood_proof_merges_total",
+    },
+    histograms: {
+        /// Wall-clock duration of gather_rendered_metrics calls
+        GATHER_DURATION_SECONDS = "firewood_gather_duration_seconds" native(2.0, 160, 1e-9),
+    },
 }

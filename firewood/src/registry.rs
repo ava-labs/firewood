@@ -3,82 +3,57 @@
 
 //! Firewood layer metric definitions.
 
-use metrics::{describe_counter, describe_gauge};
-
-/// Number of proposals created.
-pub const PROPOSALS: &str = "proposals";
-
-/// Number of proposals created by base type.
-pub const PROPOSALS_CREATED: &str = "proposals.created";
-
-/// Number of proposals discarded (dropped without commit).
-pub const PROPOSALS_DISCARDED: &str = "proposals.discarded";
-
-/// Current number of uncommitted proposals.
-pub const PROPOSALS_UNCOMMITTED: &str = "proposals.uncommitted";
-
-/// Number of insert operations.
-pub const INSERT: &str = "insert";
-
-/// Number of remove operations.
-pub const REMOVE: &str = "remove";
-
-/// Number of next calls to calculate a change proof.
-pub const CHANGE_PROOF_NEXT: &str = "change_proof.next";
-
-/// Commit latency in milliseconds.
-pub const COMMIT_LATENCY_MS: &str = "commit_latency_ms";
-
-/// Current number of active revisions.
-pub const ACTIVE_REVISIONS: &str = "active_revisions";
-
-/// Maximum number of revisions configured.
-pub const MAX_REVISIONS: &str = "max_revisions";
-
-/// Length of the deleted list for committed revisions.
-pub const DELETED_LIST_LEN: &str = "deleted_list_len";
-
-/// Number of persist permits currently available.
-pub const PERMITS_AVAILABLE: &str = "persist.permits_available";
-
-/// Maximum number of persist permits.
-pub const MAX_PERMITS: &str = "persist.max_permits";
-
-/// Number of times commit was blocked.
-pub const COMMIT_BLOCKED: &str = "persist.commit_blocked";
-
-/// Registers all firewood metric descriptions.
-pub fn register() {
-    describe_counter!(PROPOSALS, "Number of proposals created");
-    describe_counter!(
-        PROPOSALS_CREATED,
-        "Number of proposals created by base type"
-    );
-    describe_counter!(
-        PROPOSALS_DISCARDED,
-        "Number of proposals dropped without commit"
-    );
-    describe_gauge!(
-        PROPOSALS_UNCOMMITTED,
-        "Current number of uncommitted proposals"
-    );
-    describe_counter!(INSERT, "Number of insert operations");
-    describe_counter!(REMOVE, "Number of remove operations");
-    describe_counter!(
-        CHANGE_PROOF_NEXT,
-        "Number of next calls to calculate a change proof"
-    );
-    describe_counter!(COMMIT_LATENCY_MS, "Commit latency (ms)");
-    describe_gauge!(ACTIVE_REVISIONS, "Current number of active revisions");
-    describe_gauge!(MAX_REVISIONS, "Maximum number of revisions configured");
-    describe_gauge!(
-        DELETED_LIST_LEN,
-        "Length of deleted list for committed revisions"
-    );
-    describe_gauge!(
-        PERMITS_AVAILABLE,
-        "Number of persist permits currently available"
-    );
-    describe_gauge!(MAX_PERMITS, "Maximum number of persist permits");
-    describe_counter!(COMMIT_BLOCKED, "Number of times commit was blocked");
+firewood_metrics::define_metrics! {
+    counters: {
+        /// Number of proposals created by base type
+        PROPOSALS_CREATED      = "firewood_proposals_total",
+        /// Number of proposals dropped without commit
+        PROPOSALS_DISCARDED    = "firewood_proposals_discarded_total",
+        /// Number of insert operations
+        INSERT                 = "firewood_node_inserts_total",
+        /// Number of remove operations
+        REMOVE                 = "firewood_node_removes_total",
+        /// Number of next calls to calculate a change proof
+        CHANGE_PROOF_NEXT      = "firewood_change_proof_iterations_total",
+        /// Number of times commit was blocked waiting for a persist permit
+        COMMIT_BLOCKED         = "firewood_commits_blocked_total",
+        /// Total commits durably written to disk
+        COMMITS_TOTAL          = "firewood_commits_total",
+        /// Number of proposal commit operations
+        PROPOSAL_COMMITS       = "firewood_proposal_commits_total",
+        /// Number of root store persist operations
+        PERSIST_ROOT_STORE     = "firewood_persist_root_store_total",
+    },
+    gauges: {
+        /// Current number of uncommitted proposals
+        PROPOSALS_UNCOMMITTED  = "firewood_proposals_uncommitted",
+        /// Current number of active revisions
+        ACTIVE_REVISIONS       = "firewood_revisions_active",
+        /// Maximum number of revisions configured
+        MAX_REVISIONS          = "firewood_revisions_limit",
+        /// Length of deleted list for committed revisions
+        DELETED_LIST_LEN       = "firewood_nodes_pending_deletion",
+        /// Number of persist permits currently available
+        PERMITS_AVAILABLE      = "firewood_persist_permits_available",
+        /// Maximum number of persist permits
+        MAX_PERMITS            = "firewood_persist_permits_limit",
+    },
+    histograms: {
+        /// End-to-end proposal creation duration including batch apply and hashing
+        PROPOSE_DURATION_SECONDS  = "firewood_propose_duration_seconds" buckets([0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0]),
+        /// Duration of each background persist cycle
+        PERSIST_CYCLE_DURATION_SECONDS = "firewood_persist_cycle_duration_seconds" buckets([0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]),
+        /// Duration of proposal commit operations
+        PROPOSAL_COMMITS_DURATION_SECONDS = "firewood_proposal_commit_duration_seconds" buckets([0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5]),
+        /// Duration of root store persist operations
+        PERSIST_ROOT_STORE_DURATION_SECONDS = "firewood_persist_root_store_duration_seconds" buckets([0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]),
+        /// Wait time to acquire the commit_lock Mutex in commit()
+        COMMIT_LOCK_WAIT_SECONDS = "firewood_commit_lock_wait_seconds" native(2.0, 160, 1e-9),
+        /// Wait time to acquire the in_memory_revisions Mutex
+        CURRENT_REVISION_LOCK_WAIT_SECONDS = "firewood_current_revision_lock_wait_seconds" native(2.0, 160, 1e-9),
+        /// Wait time to acquire the by_hash Mutex
+        BY_HASH_LOCK_WAIT_SECONDS = "firewood_by_hash_lock_wait_seconds" native(2.0, 160, 1e-9),
+        /// Duration of submitting a revision to the persist worker channel
+        PERSIST_SUBMIT_DURATION_SECONDS = "firewood_persist_submit_duration_seconds" native(2.0, 160, 1e-9),
+    },
 }

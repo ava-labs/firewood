@@ -12,7 +12,7 @@
 
 use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
 use crate::NodeHashAlgorithm;
-use firewood_metrics::firewood_increment;
+use firewood_metrics::firewood_counter;
 use parking_lot::Mutex;
 use std::io::Cursor;
 
@@ -50,6 +50,10 @@ impl WritableStorage for MemStore {
         if offset + object.len() > guard.len() {
             guard.resize(offset + object.len(), 0);
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "destination slice is exactly object.len() wide"
+        )]
         guard[offset..offset + object.len()].copy_from_slice(object);
         Ok(object.len())
     }
@@ -61,7 +65,7 @@ impl ReadableStorage for MemStore {
     }
 
     fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
-        firewood_increment!(crate::registry::READ_NODE, 1, "from" => "memory");
+        firewood_counter!(READ_NODE, "from" => "memory").increment(1);
         let bytes = self
             .bytes
             .lock()

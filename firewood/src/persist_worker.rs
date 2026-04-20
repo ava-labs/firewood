@@ -44,7 +44,8 @@ use std::{
 };
 
 use firewood_metrics::{
-    current_metrics_context, firewood_increment, firewood_set, set_metrics_context,
+    GaugeExt, current_metrics_context, firewood_counter, firewood_gauge, firewood_histogram,
+    set_metrics_context,
 };
 use firewood_storage::{
     Committed, FileBacked, FileIoError, HashedNodeReader, LinearAddress, NodeStore,
@@ -280,7 +281,7 @@ struct PersistChannel {
 impl PersistChannel {
     fn new(max_permits: NonZeroU64, persist_threshold: u64) -> Self {
         // Emit once at construction since `max_permits` is constant.
-        firewood_set!(crate::registry::MAX_PERMITS, max_permits.get());
+        firewood_gauge!(MAX_PERMITS).set_integer(max_permits.get());
 
         Self {
             state: Mutex::new(PersistChannelState {
@@ -335,7 +336,7 @@ impl PersistChannel {
         // releasing permits. Duration is bounded by how fast the background thread can write a
         // revision to disk. Under slow I/O this can stall commits for hundreds of milliseconds.
         while state.permits_available == 0 && !state.shutdown {
-            firewood_increment!(crate::registry::COMMIT_BLOCKED, 1);
+            firewood_counter!(COMMIT_BLOCKED).increment(1);
             self.commit_not_full.wait(&mut state);
         }
 
@@ -417,7 +418,7 @@ impl PersistChannel {
         use firewood_storage::logger::warn;
         use std::time::Duration;
 
-        const WARN_INTERVAL: Duration = Duration::from_secs(60);
+        const WARN_INTERVAL: Duration = Duration::from_mins(1);
 
         let mut state = self.state.lock();
         let mut elapsed_secs = 0;
@@ -450,7 +451,7 @@ struct PersistChannelState {
 impl PersistChannelState {
     /// Emits the current permit gauge.
     fn emit_permits(&self) {
-        firewood_set!(crate::registry::PERMITS_AVAILABLE, self.permits_available);
+        firewood_gauge!(PERMITS_AVAILABLE).set_integer(self.permits_available);
     }
 }
 
@@ -537,6 +538,8 @@ impl PersistLoop {
     /// Processes pending work until shutdown or an error occurs.
     fn event_loop(&self) -> Result<(), PersistError> {
         while let Ok(mut persist_data) = self.shared.channel.pop() {
+            let cycle_start = std::time::Instant::now();
+
             for nodestore in std::mem::take(&mut persist_data.pending_reaps) {
                 self.reap(nodestore)?;
             }
@@ -544,7 +547,11 @@ impl PersistLoop {
             if let Some(revision) = persist_data.latest_committed.take() {
                 self.persist_to_disk(&revision)
                     .and_then(|()| self.maybe_save_to_root_store(&revision))?;
+                firewood_counter!(COMMITS_TOTAL).increment(1);
             }
+
+            firewood_histogram!(cheap: PERSIST_CYCLE_DURATION_SECONDS)
+                .record(cycle_start.elapsed().as_secs_f64());
         }
 
         // Persist the last unpersisted revision on shutdown
@@ -597,7 +604,7 @@ impl PersistLoop {
     }
 }
 
-#[crate::metrics("persist.root_store", "persist revision address to root store")]
+#[crate::metrics(PERSIST_ROOT_STORE)]
 fn save_to_root_store(
     store: &RootStore,
     hash: &TrieHash,

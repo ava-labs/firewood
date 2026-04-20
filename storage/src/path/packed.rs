@@ -85,6 +85,10 @@ impl SplitPath for PackedPathRef<'_> {
             // the mid consumed the prefix, if it existed
             if mid.is_multiple_of(2) {
                 // middle is split cleanly
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "mid is bounded by the assert at function entry"
+                )]
                 let (a_middle, b_middle) = self.middle.split_at(mid / 2);
                 let prefix = Self {
                     prefix: self.prefix,
@@ -100,6 +104,10 @@ impl SplitPath for PackedPathRef<'_> {
             } else {
                 // mid splits a middle component into the suffix of `prefix` and the
                 // prefix of `suffix`
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "mid is bounded by the assert at function entry"
+                )]
                 let (a_middle, b_middle) = self.middle.split_at(mid / 2);
                 let Some((&middle_byte, b_middle)) = b_middle.split_first() else {
                     // `mid` is oob of `b_middle`, which happens if self.suffix is Some,
