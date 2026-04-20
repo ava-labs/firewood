@@ -49,27 +49,8 @@ macro_rules! write_attributes {
                 .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
         }
         if !$value.is_empty() {
-            match std::str::from_utf8($value) {
-                Ok(string) if string.chars().all(char::is_alphanumeric) => {
-                    write!($writer, " val={:.6}", string)
-                        .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
-                    if string.len() > 6 {
-                        $writer.write_all(b"...").map_err(|e| {
-                            FileIoError::from_generic_no_file(e, "write attributes")
-                        })?;
-                    }
-                }
-                _ => {
-                    let hex = hex::encode($value);
-                    write!($writer, " val={:.6}", hex)
-                        .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
-                    if hex.len() > 6 {
-                        $writer.write_all(b"...").map_err(|e| {
-                            FileIoError::from_generic_no_file(e, "write attributes")
-                        })?;
-                    }
-                }
-            }
+            firewood_storage::format_node_value($value, $writer)
+                .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
         }
     };
 }
