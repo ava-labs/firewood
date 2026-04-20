@@ -53,6 +53,19 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
 
         let proof_value = match proof_node.value_digest.as_ref() {
             Some(ValueDigest::Value(v)) => Some(v.as_ref()),
+            #[cfg(not(feature = "ethhash"))]
+            Some(digest @ ValueDigest::Hash(_)) => {
+                // In merkledb mode, large values (>= 32 bytes) are stored as
+                // hashes in serialized proofs. If the branch's value hashes to
+                // the same value, the proof and trie agree — no conflict.
+                // Otherwise fall through with proof_value = None:
+                //  - branch has no value: None == None → Ok(()), no callback.
+                //  - branch has mismatched value: None != Some(v) → callback.
+                match branch.value.as_deref() {
+                    Some(v) if digest.as_ref().verify(v) => return Ok(()),
+                    _ => None,
+                }
+            }
             _ => None,
         };
 

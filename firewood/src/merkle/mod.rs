@@ -328,11 +328,21 @@ fn compute_root_hash_with_proofs(
         }
     }
 
-    let value = branch.value.as_deref().map(ValueDigest::Value);
+    // Use the branch's value if it exists. Otherwise, fall back to the
+    // proof node's value digest (which may be a Hash for out-of-range
+    // nodes where no key-value pair was inserted). The proof node's
+    // hash chain was verified by `value_digest()` during boundary proof
+    // validation, and `reconcile_branch_proof_node` verified the hash
+    // against the branch value when present. The digest is trusted.
+    let value_digest = branch.value.as_deref().map(ValueDigest::Value).or_else(|| {
+        proof_nodes
+            .get(&full_key)
+            .and_then(|pn| pn.value_digest.as_ref().map(ValueDigest::as_ref))
+    });
     HashableShunt::new(
         path_prefix,
         branch.partial_path.as_components(),
-        value,
+        value_digest,
         child_hashes,
     )
     .to_hash()
@@ -538,12 +548,24 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
     // "Reconcile" means adjusting the proving trie's branch structure
     // (partial paths and child layout) to match the proof, so that hash
     // computation produces the same trie shape as the original.
-    // Conflicting proof nodes (same key, different data) are rejected.
+    //
+    // The callback handles value conflicts between proof nodes and the
+    // proving trie. For range proofs:
+    //  - ValueDigest::Value: The proof node carries a value that the
+    //    proving trie doesn't have (e.g., empty range where no key-value
+    //    pairs were inserted). Accept the proof's value.
+    //  - ValueDigest::Hash: Handled inside reconcile_branch_proof_node
+    //    before the callback — hash is verified against the branch value.
+    //  - ValueDigest::None: Unreachable — if the trie has a value, the
+    //    proof node will carry Value or Hash, not None.
+    //
+    // The _ arm rejects defensively — Hash is handled before the callback,
+    // and None should not reach here for honest proofs.
     let mut proof_node_map: HashMap<PathBuf, &ProofNode> = HashMap::new();
     for proof_node in all_proof_nodes {
         proving_merkle.reconcile_branch_proof_node(proof_node, |pn| match &pn.value_digest {
             Some(ValueDigest::Value(v)) => Ok(Some(v.clone())),
-            _ => Ok(None),
+            _ => Err(ProofError::UnexpectedValue),
         })?;
         match proof_node_map.entry(proof_node.key.clone()) {
             std::collections::hash_map::Entry::Occupied(existing) => {

@@ -1774,3 +1774,81 @@ fn test_right_edge_boundary_prefix_of_terminal() {
     assert_eq!(proof.end_proof().len(), 2);
     verify_range_proof(None::<&[u8]>, Some(b"\x20"), &root_hash, &proof).unwrap();
 }
+
+/// Regression test: range proof verification must handle `ValueDigest::Hash`
+/// correctly. In merkledb mode (non-ethhash), values >= 32 bytes are stored
+/// as hashes in serialized proof nodes. When a branch node has both a value
+/// and children (prefix key), the deserialized proof node carries Hash
+/// instead of Value. The reconcile step must not clear the branch value
+/// when the hash matches.
+///
+/// Setup: \x10 is a prefix of \x10\x20, making \x10 a branch with a value
+/// AND children. The 32-byte value at \x10 triggers `ValueDigest::Hash` after
+/// serialization round-trip.
+#[cfg(not(feature = "ethhash"))]
+#[test]
+fn test_range_proof_with_hashed_value() {
+    // Value >= 32 bytes triggers ValueDigest::Hash in merkledb mode
+    let big_value = vec![0xab_u8; 32];
+    let merkle = init_merkle([
+        (b"\x10" as &[u8], big_value.as_slice()),
+        (b"\x10\x20", b"child"),
+        (b"\x30", b"other"),
+    ]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let proof = merkle
+        .range_proof(Some(b"\x10"), Some(b"\x30"), None)
+        .unwrap();
+
+    // Serialize and deserialize to convert large values to Hash digests,
+    // simulating a proof received from a peer over the network.
+    let mut serialized = Vec::new();
+    proof.write_to_vec(&mut serialized);
+    let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
+
+    // Confirm the start proof node carries a Hash digest after round-trip.
+    let start_node = deserialized.start_proof().as_ref().last().unwrap();
+    assert!(
+        matches!(
+            start_node.value_digest,
+            Some(firewood_storage::ValueDigest::Hash(_))
+        ),
+        "expected Hash digest for large value after deserialization, got {:?}",
+        start_node.value_digest
+    );
+
+    // This must pass — the Hash digest matches the branch value.
+    verify_range_proof(Some(b"\x10"), Some(b"\x30"), &root_hash, &deserialized).unwrap();
+}
+
+/// Regression test: empty range proof with a Hash digest at an out-of-range
+/// proof node. The proving trie has no value at that position (no key-value
+/// pairs inserted). The Hash proof node is out of range, so its value
+/// contribution comes from the parent's proof child hash — the branch value
+/// doesn't matter and reconcile should not reject.
+#[cfg(not(feature = "ethhash"))]
+#[test]
+fn test_empty_range_proof_with_hashed_value() {
+    // \x10 has a large value (>= 32 bytes), \x10\x20 makes \x10 a branch.
+    // Range is past all keys — empty key-value list.
+    let big_value = vec![0xab_u8; 32];
+    let merkle = init_merkle([
+        (b"\x10" as &[u8], big_value.as_slice()),
+        (b"\x10\x20", b"child"),
+    ]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    // Range starts past all keys — empty proof
+    let proof = merkle
+        .range_proof(Some(b"\x30"), Some(b"\x40"), None)
+        .unwrap();
+    assert!(proof.key_values().is_empty());
+
+    // Serialize/deserialize to convert Value to Hash
+    let mut serialized = Vec::new();
+    proof.write_to_vec(&mut serialized);
+    let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
+
+    // This must pass — the Hash proof node is out of range.
+    verify_range_proof(Some(b"\x30"), Some(b"\x40"), &root_hash, &deserialized).unwrap();
+}
