@@ -254,7 +254,7 @@ pub fn verify_change_proof_structure(
 
     // Check batch_ops length <= max_length
     if let Some(max_length) = max_length
-        && batch_ops.len() > max_length.into()
+        && batch_ops.len() > max_length.get()
     {
         return Err(api::Error::ProofError(
             ProofError::ProofIsLargerThanMaxLength,
