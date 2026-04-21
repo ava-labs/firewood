@@ -25,6 +25,32 @@ fn proof_node(nibbles: &[u8]) -> ProofNode {
     }
 }
 
+/// Build key-value pairs for range proof verification using values from the
+/// merkle's key-value iterator. This is necessary because proof generation may
+/// rewrite account storageRoot fields, and the iterator applies the same fix.
+/// Using `get_value()` directly would return unfixed values that don't match
+/// what the proof nodes contain.
+fn stored_key_values<K: AsRef<[u8]>, V>(
+    merkle: &Merkle<NodeStore<Committed, MemStore>>,
+    items: impl IntoIterator<Item = (K, V)>,
+) -> KeyValuePairs {
+    items
+        .into_iter()
+        .map(|(k, _)| {
+            let key = k.as_ref();
+            // Read the value from the iterator (which applies storageRoot fix)
+            // by doing a single-key range scan.
+            let (found_key, val) = merkle
+                .key_value_iter_from_key(key)
+                .next()
+                .expect("iterator should yield at least one item")
+                .expect("iterator should not error");
+            assert_eq!(found_key.as_ref(), key, "iterator returned wrong key");
+            (Box::from(key), val)
+        })
+        .collect()
+}
+
 #[test]
 fn outside_children_empty_proof() {
     let result = compute_outside_children(&[], None, true).unwrap();
@@ -203,10 +229,8 @@ fn test_range_proof() {
         let start_proof = merkle.prove(items[start].0).unwrap();
         let end_proof = merkle.prove(items[end - 1].0).unwrap();
 
-        let key_values: KeyValuePairs = items[start..end]
-            .iter()
-            .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-            .collect();
+        let key_values =
+            stored_key_values(&merkle, items[start..end].iter().map(|(k, v)| (*k, *v)));
 
         let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
 
@@ -447,10 +471,8 @@ fn test_range_proof_with_non_existent_proof() {
         let start_proof = merkle.prove(&first).unwrap();
         let end_proof = merkle.prove(&last).unwrap();
 
-        let key_values: KeyValuePairs = items[start..end]
-            .iter()
-            .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-            .collect();
+        let key_values =
+            stored_key_values(&merkle, items[start..end].iter().map(|(k, v)| (*k, *v)));
 
         let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
 
@@ -466,10 +488,7 @@ fn test_range_proof_with_non_existent_proof() {
     let start_proof = merkle.prove(first).unwrap();
     let end_proof = merkle.prove(last).unwrap();
 
-    let key_values: KeyValuePairs = items
-        .into_iter()
-        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-        .collect();
+    let key_values = stored_key_values(&merkle, items);
 
     let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
 
@@ -566,9 +585,15 @@ fn test_one_element_range_proof() {
     let proof = merkle.prove(items[start].0).unwrap();
     assert!(!proof.is_empty());
 
+    let (_, stored_val) = merkle
+        .key_value_iter_from_key(items[start].0)
+        .next()
+        .unwrap()
+        .unwrap();
+
     let key_values = vec![(
         items[start].0.to_vec().into_boxed_slice(),
-        items[start].1.to_vec().into_boxed_slice(),
+        stored_val.clone(),
     )];
 
     let range_proof = RangeProof::new(
@@ -594,7 +619,7 @@ fn test_one_element_range_proof() {
 
     let key_values_2 = vec![(
         items[start].0.to_vec().into_boxed_slice(),
-        items[start].1.to_vec().into_boxed_slice(),
+        stored_val.clone(),
     )];
 
     let range_proof_2 =
@@ -615,7 +640,7 @@ fn test_one_element_range_proof() {
 
     let key_values_3 = vec![(
         items[start].0.to_vec().into_boxed_slice(),
-        items[start].1.to_vec().into_boxed_slice(),
+        stored_val.clone(),
     )];
 
     let range_proof_3 =
@@ -633,10 +658,7 @@ fn test_one_element_range_proof() {
     let start_proof_4 = merkle.prove(&first).unwrap();
     let end_proof_4 = merkle.prove(&last).unwrap();
 
-    let key_values_4 = vec![(
-        items[start].0.to_vec().into_boxed_slice(),
-        items[start].1.to_vec().into_boxed_slice(),
-    )];
+    let key_values_4 = vec![(items[start].0.to_vec().into_boxed_slice(), stored_val)];
 
     let range_proof_4 =
         RangeProof::new(start_proof_4, end_proof_4, key_values_4.into_boxed_slice());
@@ -652,10 +674,13 @@ fn test_one_element_range_proof() {
     let start_proof_5 = merkle_mini.prove(first).unwrap();
     let end_proof_5 = merkle_mini.prove(&key).unwrap();
 
-    let key_values_5 = vec![(
-        key.to_vec().into_boxed_slice(),
-        val.to_vec().into_boxed_slice(),
-    )];
+    let (_, stored_val_mini) = merkle_mini
+        .key_value_iter_from_key(key)
+        .next()
+        .unwrap()
+        .unwrap();
+
+    let key_values_5 = vec![(key.to_vec().into_boxed_slice(), stored_val_mini)];
 
     let range_proof_5 =
         RangeProof::new(start_proof_5, end_proof_5, key_values_5.into_boxed_slice());
@@ -684,10 +709,7 @@ fn test_all_elements_proof() {
     let start_proof_2 = merkle.prove(items[start].0).unwrap();
     let end_proof_2 = merkle.prove(items[end].0).unwrap();
 
-    let key_values_2: KeyValuePairs = items
-        .iter()
-        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-        .collect();
+    let key_values_2 = stored_key_values(&merkle, items.iter().map(|(k, v)| (*k, *v)));
 
     let range_proof_2 =
         RangeProof::new(start_proof_2, end_proof_2, key_values_2.into_boxed_slice());
@@ -706,10 +728,7 @@ fn test_all_elements_proof() {
     let start_proof_3 = merkle.prove(first).unwrap();
     let end_proof_3 = merkle.prove(last).unwrap();
 
-    let key_values_3: KeyValuePairs = items
-        .iter()
-        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-        .collect();
+    let key_values_3 = stored_key_values(&merkle, items.iter().map(|(k, v)| (*k, *v)));
 
     let range_proof_3 =
         RangeProof::new(start_proof_3, end_proof_3, key_values_3.into_boxed_slice());
@@ -856,11 +875,8 @@ fn test_single_side_range_proof() {
             let start_proof = merkle.prove(start).unwrap();
             let end_proof = merkle.prove(items[case].0).unwrap();
 
-            let key_values: KeyValuePairs = items
-                .iter()
-                .take(case + 1)
-                .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-                .collect();
+            let key_values =
+                stored_key_values(&merkle, items.iter().take(case + 1).map(|(k, v)| (*k, *v)));
 
             let range_proof =
                 RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
@@ -895,11 +911,8 @@ fn test_reverse_single_side_range_proof() {
             let start_proof = merkle.prove(items[case].0).unwrap();
             let end_proof = merkle.prove(end).unwrap();
 
-            let key_values: KeyValuePairs = items
-                .iter()
-                .skip(case)
-                .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-                .collect();
+            let key_values =
+                stored_key_values(&merkle, items.iter().skip(case).map(|(k, v)| (*k, *v)));
 
             let range_proof =
                 RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
@@ -932,10 +945,7 @@ fn test_both_sides_range_proof() {
         let start_proof = merkle.prove(start).unwrap();
         let end_proof = merkle.prove(end).unwrap();
 
-        let key_values: KeyValuePairs = items
-            .into_iter()
-            .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-            .collect();
+        let key_values = stored_key_values(&merkle, items);
 
         let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
 

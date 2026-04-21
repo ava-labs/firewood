@@ -185,6 +185,11 @@ pub use firewood_storage::logger;
 /// violates some of the Rust guarantees. But, it is convenient to ensure the
 /// logger is initialized for all tests.
 ///
+/// Note: the default log level is `info`. To see `trace!` or `debug!`
+/// messages, set `RUST_LOG=trace` (or `RUST_LOG=debug`). Additionally,
+/// test output is captured by default — use `--nocapture` (cargo test) or
+/// `--show-output` (nextest) to see log output from passing tests.
+///
 /// In the event of unexpected behavior in testing, disable this first before
 /// looking elsewhere.
 fn init_logger() {
