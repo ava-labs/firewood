@@ -9,6 +9,7 @@ mod ethhash;
 // TODO: get the hashes from merkledb and verify compatibility with branch factor 256
 mod proof;
 mod range;
+mod reconcile;
 #[cfg(not(feature = "ethhash"))]
 mod triehash;
 
@@ -88,8 +89,19 @@ where
         let key = k.as_ref();
         let value = v.as_ref();
 
+        let stored = merkle.get_value(key).unwrap();
+        // In ethhash mode, account keys (32 bytes) have their storageRoot field
+        // updated during hashing, so the stored value will differ from the original.
+        #[cfg(feature = "ethhash")]
+        if key.len() == 32 {
+            assert!(
+                stored.is_some(),
+                "Failed to get account key after committing: {key:?}"
+            );
+            continue;
+        }
         assert_eq!(
-            merkle.get_value(key).unwrap().as_deref(),
+            stored.as_deref(),
             Some(value),
             "Failed to get key after committing: {key:?}"
         );
@@ -303,72 +315,6 @@ fn test_insert_branch_from_nibbles_splits_divergent_paths() {
         merkle.get_value(&[0xab]).unwrap().as_deref(),
         Some([3u8].as_slice())
     );
-}
-
-#[test]
-fn test_reconcile_branch_proof_node_creates_missing_branch_without_value() {
-    let mut merkle = create_in_memory_merkle();
-
-    let proof_node = test_branch_proof_node(&[0xa, 0xb, 0xc], None);
-
-    let result = merkle.reconcile_branch_proof_node(&proof_node).unwrap();
-    assert_eq!(result, ReconcileResult::NoValue);
-
-    let node = merkle
-        .get_node_from_nibbles(&[0xa, 0xb, 0xc])
-        .unwrap()
-        .unwrap();
-    let branch = node.as_branch().expect("expected branch node");
-    assert!(branch.value.is_none());
-}
-
-#[test]
-fn test_reconcile_branch_proof_node_sets_missing_value() {
-    let mut merkle = create_in_memory_merkle();
-    merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
-
-    let proof_node =
-        test_branch_proof_node(&[0xa, 0xb], Some(ValueDigest::Value(Box::from([7u8]))));
-
-    let result = merkle.reconcile_branch_proof_node(&proof_node).unwrap();
-    assert_eq!(result, ReconcileResult::ValueInserted);
-
-    let node = merkle.get_node_from_nibbles(&[0xa, 0xb]).unwrap().unwrap();
-    let branch = node.as_branch().expect("expected branch node");
-    assert_eq!(branch.value.as_deref(), Some([7u8].as_slice()));
-}
-
-#[test]
-fn test_reconcile_branch_proof_node_noop_when_proof_has_no_value() {
-    let mut merkle = create_in_memory_merkle();
-    merkle.insert(&[0xab], Box::from([3u8])).unwrap();
-    merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
-
-    let proof_node = test_branch_proof_node(&[0xa, 0xb], None);
-
-    let result = merkle.reconcile_branch_proof_node(&proof_node).unwrap();
-    assert_eq!(result, ReconcileResult::NoValue);
-
-    let node = merkle.get_node_from_nibbles(&[0xa, 0xb]).unwrap().unwrap();
-    let branch = node.as_branch().expect("expected branch node");
-    assert_eq!(branch.value.as_deref(), Some([3u8].as_slice()));
-}
-
-#[test]
-fn test_reconcile_branch_proof_node_fails_on_value_mismatch() {
-    let mut merkle = create_in_memory_merkle();
-    merkle.insert(&[0xab], Box::from([1u8])).unwrap();
-    merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
-
-    let proof_node =
-        test_branch_proof_node(&[0xa, 0xb], Some(ValueDigest::Value(Box::from([2u8]))));
-
-    let err = merkle.reconcile_branch_proof_node(&proof_node).unwrap_err();
-    assert!(matches!(err, ProofError::UnexpectedValue));
-
-    let node = merkle.get_node_from_nibbles(&[0xa, 0xb]).unwrap().unwrap();
-    let branch = node.as_branch().expect("expected branch node");
-    assert_eq!(branch.value.as_deref(), Some([1u8].as_slice()));
 }
 
 #[test]
@@ -962,4 +908,36 @@ fn remove_nonexistent_with_one() {
 
     assert_eq!(merkle.remove(b"does_not_exist").unwrap(), None);
     assert_eq!(&*merkle.get_value(b"do").unwrap().unwrap(), b"verb");
+}
+
+#[test]
+fn test_get_branch_from_nibbles_mut() {
+    type TestMerkle = Merkle<NodeStore<Mutable<Propose>, MemStore>>;
+    let mut merkle = create_in_memory_merkle();
+    merkle.insert(b"\xab", Box::from([1])).unwrap();
+    merkle.insert(b"\xac", Box::from([2])).unwrap();
+
+    // Branch exists at [a] — has children at b and c
+    let branch = TestMerkle::get_branch_from_nibbles_mut(
+        merkle.nodestore.root_mut(),
+        &[PathComponent::try_new(0xa).unwrap()],
+    );
+    assert!(branch.is_some());
+
+    // Nothing at [f]
+    let missing = TestMerkle::get_branch_from_nibbles_mut(
+        merkle.nodestore.root_mut(),
+        &[PathComponent::try_new(0xf).unwrap()],
+    );
+    assert!(missing.is_none());
+
+    // [a, b] is a leaf, not a branch
+    let leaf = TestMerkle::get_branch_from_nibbles_mut(
+        merkle.nodestore.root_mut(),
+        &[
+            PathComponent::try_new(0xa).unwrap(),
+            PathComponent::try_new(0xb).unwrap(),
+        ],
+    );
+    assert!(leaf.is_none());
 }
