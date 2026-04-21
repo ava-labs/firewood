@@ -216,7 +216,7 @@ fn compute_right_edge_key<'a>(
                 .is_some()
         });
     if truncated {
-        last_op_key.or(end_key)
+        last_op_key
     } else {
         end_key.or(last_op_key)
     }
