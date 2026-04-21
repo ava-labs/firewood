@@ -89,8 +89,19 @@ where
         let key = k.as_ref();
         let value = v.as_ref();
 
+        let stored = merkle.get_value(key).unwrap();
+        // In ethhash mode, account keys (32 bytes) have their storageRoot field
+        // updated during hashing, so the stored value will differ from the original.
+        #[cfg(feature = "ethhash")]
+        if key.len() == 32 {
+            assert!(
+                stored.is_some(),
+                "Failed to get account key after committing: {key:?}"
+            );
+            continue;
+        }
         assert_eq!(
-            merkle.get_value(key).unwrap().as_deref(),
+            stored.as_deref(),
             Some(value),
             "Failed to get key after committing: {key:?}"
         );

@@ -89,15 +89,8 @@ impl AreaIndex {
             return Err(Error::new(ErrorKind::OutOfMemory, AreaSizeError(n)));
         }
 
-        if n <= Self::MIN_AREA_SIZE {
-            return Ok(AreaIndex(0));
-        }
-
-        AREA_SIZES
-            .iter()
-            .position(|&size| size >= n)
-            .map(|index| AreaIndex(index as u8))
-            .ok_or_else(|| Error::new(ErrorKind::OutOfMemory, AreaSizeError(n)))
+        let index = AREA_SIZES.partition_point(|&size| size < n);
+        Ok(AreaIndex(index as u8))
     }
 
     /// Get the underlying index as u8.

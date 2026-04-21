@@ -52,27 +52,8 @@ macro_rules! write_attributes {
                 .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
         }
         if !$value.is_empty() {
-            match std::str::from_utf8($value) {
-                Ok(string) if string.chars().all(char::is_alphanumeric) => {
-                    write!($writer, " val={:.6}", string)
-                        .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
-                    if string.len() > 6 {
-                        $writer.write_all(b"...").map_err(|e| {
-                            FileIoError::from_generic_no_file(e, "write attributes")
-                        })?;
-                    }
-                }
-                _ => {
-                    let hex = hex::encode($value);
-                    write!($writer, " val={:.6}", hex)
-                        .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
-                    if hex.len() > 6 {
-                        $writer.write_all(b"...").map_err(|e| {
-                            FileIoError::from_generic_no_file(e, "write attributes")
-                        })?;
-                    }
-                }
-            }
+            firewood_storage::format_node_value($value, $writer)
+                .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
         }
     };
 }
@@ -334,11 +315,41 @@ fn compute_root_hash_with_proofs(
         }
     }
 
-    let value = branch.value.as_deref().map(ValueDigest::Value);
+    // For children in the in-memory trie, compute hashes recursively.
+    // These children were inserted from the proven key-value pairs, so they
+    // are *inside* the proven range. A nibble cannot be both inside (present
+    // in the trie) and outside (marked in outside_children) at the same time,
+    // so this does not conflict with the proof hashes set above.
+    let mut child_prefix: PathBuf = full_key.iter().copied().collect();
+    for (nibble, child_opt) in &branch.children {
+        if let Some(Child::Node(child_node)) = child_opt {
+            child_prefix.push(nibble);
+            let child_hash = compute_root_hash_with_proofs(
+                child_node,
+                &child_prefix,
+                proof_nodes,
+                outside_children,
+            );
+            child_hashes[nibble] = Some(child_hash);
+            child_prefix.pop();
+        }
+    }
+
+    // Use the branch's value if it exists. Otherwise, fall back to the
+    // proof node's value digest (which may be a Hash for out-of-range
+    // nodes where no key-value pair was inserted). The proof node's
+    // hash chain was verified by `value_digest()` during boundary proof
+    // validation, and `reconcile_branch_proof_node` verified the hash
+    // against the branch value when present. The digest is trusted.
+    let value_digest = branch.value.as_deref().map(ValueDigest::Value).or_else(|| {
+        proof_nodes
+            .get(&full_key)
+            .and_then(|pn| pn.value_digest.as_ref().map(ValueDigest::as_ref))
+    });
     HashableShunt::new(
         path_prefix,
         branch.partial_path.as_components(),
-        value,
+        value_digest,
         child_hashes,
     )
     .to_hash()
@@ -540,16 +551,25 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
         proving_merkle.insert(key.as_ref(), value.as_ref().into())?;
     }
 
-    // Reconcile proof nodes into the proving trie and build a lookup map.
-    // "Reconcile" means adjusting the proving trie's branch structure
-    // (partial paths and child layout) to match the proof, so that hash
-    // computation produces the same trie shape as the original.
-    // Conflicting proof nodes (same key, different data) are rejected.
     let mut proof_node_map: HashMap<PathBuf, &ProofNode> = HashMap::new();
     for proof_node in all_proof_nodes {
+        // The callback handles value conflicts between proof nodes and the
+        // proving trie. For range proofs:
+        //  - ValueDigest::Value: The proof node carries a value that the
+        //    proving trie doesn't have (e.g., empty range where no key-value
+        //    pairs were inserted). Accept the proof's value.
+        //  - ValueDigest::Hash: When the hash matches the branch value,
+        //    reconcile_branch_proof_node returns early (no callback). When
+        //    the branch has no value, None == None succeeds (no callback).
+        //    A hash mismatch with an existing branch value reaches the
+        //    callback and is rejected.
+        //  - ValueDigest::None: Unreachable — if the trie has a value, the
+        //    proof node will carry Value or Hash, not None.
+        //
+        // The _ arm rejects defensively for both Hash mismatch and None.
         proving_merkle.reconcile_branch_proof_node(proof_node, |pn| match &pn.value_digest {
             Some(ValueDigest::Value(v)) => Ok(Some(v.clone())),
-            _ => Ok(None),
+            _ => Err(ProofError::UnexpectedValue),
         })?;
         match proof_node_map.entry(proof_node.key.clone()) {
             std::collections::hash_map::Entry::Occupied(existing) => {

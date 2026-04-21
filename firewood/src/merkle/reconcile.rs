@@ -5,28 +5,28 @@ use firewood_storage::{Mutable, NodeStore, Propose, ReadableStorage, ValueDigest
 
 use crate::{ProofError, ProofNode, Value, merkle::Merkle};
 
-/// Reconciles a branch proof node against the in-memory proving merkle.
-///
-/// This helper creates any missing branch structure for the proof node's
-/// key, then reconciles the branch value with the proof node's value.
-/// If the values already match, it returns successfully without changes.
-/// If they differ (including when one side has a value and the other
-/// does not), `on_conflict` is invoked to decide the final branch value.
-///
-/// ## Arguments
-///
-/// * `proof_node` - A branch proof node containing the key (as nibble
-///   path components) and an optional value digest to reconcile.
-/// * `on_conflict` - Called only when the proof node's value and the
-///   existing branch value conflict. Returning `Ok(Some(value))` stores
-///   that value in the branch, `Ok(None)` clears the branch value, and
-///   `Err(...)` aborts reconciliation with that error.
-///
-/// ## Errors
-///
-/// Returns an error if the proof is structurally invalid or if
-/// `on_conflict` returns `Err` while resolving a value conflict.
 impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
+    /// Reconciles a branch proof node against the in-memory proving merkle.
+    ///
+    /// This helper creates any missing branch structure for the proof node's
+    /// key, then reconciles the branch value with the proof node's value.
+    /// If the values already match, it returns successfully without changes.
+    /// If they differ (including when one side has a value and the other
+    /// does not), `on_conflict` is invoked to decide the final branch value.
+    ///
+    /// ## Arguments
+    ///
+    /// * `proof_node` - A branch proof node containing the key (as nibble
+    ///   path components) and an optional value digest to reconcile.
+    /// * `on_conflict` - Called only when the proof node's value and the
+    ///   existing branch value conflict. Returning `Ok(Some(value))` stores
+    ///   that value in the branch, `Ok(None)` clears the branch value, and
+    ///   `Err(...)` aborts reconciliation with that error.
+    ///
+    /// ## Errors
+    ///
+    /// Returns an error if the proof is structurally invalid or if
+    /// `on_conflict` returns `Err` while resolving a value conflict.
     pub(crate) fn reconcile_branch_proof_node(
         &mut self,
         proof_node: &ProofNode,
@@ -53,6 +53,19 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
 
         let proof_value = match proof_node.value_digest.as_ref() {
             Some(ValueDigest::Value(v)) => Some(v.as_ref()),
+            #[cfg(not(feature = "ethhash"))]
+            Some(digest @ ValueDigest::Hash(_)) => {
+                // In merkledb mode, large values (>= 32 bytes) are stored as
+                // hashes in serialized proofs. If the branch's value hashes to
+                // the same value, the proof and trie agree — no conflict.
+                // Otherwise fall through with proof_value = None:
+                //  - branch has no value: None == None → Ok(()), no callback.
+                //  - branch has mismatched value: None != Some(v) → callback.
+                match branch.value.as_deref() {
+                    Some(v) if digest.as_ref().verify(v) => return Ok(()),
+                    _ => None,
+                }
+            }
             _ => None,
         };
 

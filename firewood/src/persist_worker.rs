@@ -418,7 +418,7 @@ impl PersistChannel {
         use firewood_storage::logger::warn;
         use std::time::Duration;
 
-        const WARN_INTERVAL: Duration = Duration::from_secs(60);
+        const WARN_INTERVAL: Duration = Duration::from_mins(1);
 
         let mut state = self.state.lock();
         let mut elapsed_secs = 0;
