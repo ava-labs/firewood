@@ -1852,3 +1852,62 @@ fn test_empty_range_proof_with_hashed_value() {
     // This must pass — the Hash proof node is out of range.
     verify_range_proof(Some(b"\x30"), Some(b"\x40"), &root_hash, &deserialized).unwrap();
 }
+
+/// Multi-level trie with hashed values at multiple branch depths.
+/// Tests that both in-range and out-of-range branches with Hash digests
+/// are handled correctly after serialization round-trip.
+///
+/// Trie structure:
+///   root
+///   └── "abc" (value: [0;64], Hash after serialize)      // out-of-range branch
+///       ├── "123" → leaf (value: [1;64], Hash)           // in-range
+///       └── "def" (value: [2;64], Hash after serialize)  // in-range branch
+///           └── "123" → leaf (value: [3;64], Hash)       // in-range
+///
+/// Range ["abc123"..): "abc" is out-of-range (< `start_key`), its Hash comes
+/// from the proof node fallback in `compute_root_hash_with_proofs`. "abcdef"
+/// is in-range, its Hash matches the branch value via the fast path in
+/// `reconcile_branch_proof_node`.
+#[cfg(not(feature = "ethhash"))]
+#[test]
+fn test_multi_level_range_proof_with_hashed_values() {
+    let merkle = init_merkle([
+        (b"abc" as &[u8], [0; 64].as_slice()),
+        (b"abc123", [1; 64].as_slice()),
+        (b"abcdef", [2; 64].as_slice()),
+        (b"abcdef123", [3; 64].as_slice()),
+    ]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let proof = merkle
+        .range_proof(Some(b"abc123"), Some(b"\xff"), None)
+        .unwrap();
+
+    // All 3 in-range keys should be in the proof
+    assert_eq!(proof.key_values().len(), 3);
+
+    // Serialize/deserialize to convert large values to Hash digests
+    let mut serialized = Vec::new();
+    proof.write_to_vec(&mut serialized);
+    let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
+
+    // Confirm all proof nodes with values carry Hash, not Value (all values >= 32 bytes).
+    for proof_node in deserialized
+        .start_proof()
+        .as_ref()
+        .iter()
+        .chain(deserialized.end_proof().as_ref())
+    {
+        if let Some(digest) = &proof_node.value_digest {
+            assert!(
+                matches!(digest, firewood_storage::ValueDigest::Hash(_)),
+                "expected Hash digest after deserialization, got Value at key {:?}",
+                proof_node.key
+            );
+        }
+    }
+
+    // This exercises:
+    // - "abc" out-of-range: Hash fallback in compute_root_hash_with_proofs
+    // - "abcdef" in-range: Hash fast path in reconcile_branch_proof_node
+    verify_range_proof(Some(b"abc123"), Some(b"\xff"), &root_hash, &deserialized).unwrap();
+}
