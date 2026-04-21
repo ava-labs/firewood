@@ -271,3 +271,59 @@ where
         }
     }
 }
+
+/// Given an account node's value and its children's hashes, return the value with the
+/// storageRoot field replaced by the computed hash of the storage sub-trie.
+///
+/// For leaf accounts (no children), the storage root is the empty trie hash.
+/// For branch accounts, the storage root is computed from the children's hashes.
+///
+/// Returns `None` if the value is not well-formed account RLP.
+#[cfg(feature = "ethhash")]
+#[must_use]
+pub fn fix_account_storage_root_value(
+    value: &[u8],
+    child_hashes: &Children<Option<HashType>>,
+) -> Option<Box<[u8]>> {
+    use crate::hashers::ethhash::replace_hash;
+    use crate::node::BranchNode;
+    use rlp::RlpStream;
+    use sha3::{Digest, Keccak256};
+
+    let children_count = child_hashes.iter().filter(|(_, c)| c.is_some()).count();
+
+    let storage_root = if children_count == 0 {
+        crate::TrieHash::from(Keccak256::digest(rlp::NULL_RLP))
+    } else {
+        let mut child_hashes = child_hashes.clone();
+        if let Some((_, child)) = child_hashes.take_only_child() {
+            match child {
+                HashType::Hash(hash) => hash,
+                HashType::Rlp(_) => unreachable!(
+                    "account-depth single storage child cannot have inline RLP: \
+                     storage leaf encoding with 32-byte keys always exceeds 32 bytes"
+                ),
+            }
+        } else {
+            let mut rlp = RlpStream::new_list(const { BranchNode::MAX_CHILDREN + 1 });
+            for (_, child) in &child_hashes {
+                match child {
+                    Some(HashType::Hash(hash)) => {
+                        rlp.append(&hash.as_slice());
+                    }
+                    Some(HashType::Rlp(_)) => unreachable!(
+                        "account-depth storage child cannot have inline RLP: \
+                         storage node encoding with 32-byte keys always exceeds 32 bytes"
+                    ),
+                    None => {
+                        rlp.append_empty_data();
+                    }
+                }
+            }
+            rlp.append_empty_data();
+            crate::TrieHash::from(Keccak256::digest(rlp.out()))
+        }
+    };
+
+    replace_hash(value, &storage_root).map(|b| Box::from(b.as_ref()))
+}
