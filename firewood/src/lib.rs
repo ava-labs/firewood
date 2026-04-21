@@ -156,8 +156,9 @@ pub mod proofs;
 // Re-export commonly used proof types at the crate root for ergonomic access
 pub use merkle::{Key, Value, verify_range_proof};
 pub use proofs::{
-    EmptyProofCollection, InvalidHeader, Proof, ProofCollection, ProofError, ProofNode, ProofType,
-    RangeProof, ReadError,
+    ChangeProof, ChangeProofVerificationContext, EmptyProofCollection, InvalidHeader, Proof,
+    ProofCollection, ProofError, ProofNode, ProofType, RangeProof, ReadError,
+    verify_change_proof_structure,
 };
 
 // Re-export the proc macro from firewood-macros
@@ -184,6 +185,11 @@ pub use firewood_storage::logger;
 /// This is technically black magic as it runs before `main` is invoked, which
 /// violates some of the Rust guarantees. But, it is convenient to ensure the
 /// logger is initialized for all tests.
+///
+/// Note: the default log level is `info`. To see `trace!` or `debug!`
+/// messages, set `RUST_LOG=trace` (or `RUST_LOG=debug`). Additionally,
+/// test output is captured by default — use `--nocapture` (cargo test) or
+/// `--show-output` (nextest) to see log output from passing tests.
 ///
 /// In the event of unexpected behavior in testing, disable this first before
 /// looking elsewhere.

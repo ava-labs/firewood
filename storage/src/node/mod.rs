@@ -489,6 +489,9 @@ pub struct PathIterItem {
     /// children array.
     /// None if `node` is the last node in the path.
     pub next_nibble: Option<PathComponent>,
+    /// Whether account storageRoot values need recomputation during proof
+    /// generation. Set from the database version.
+    pub must_recompute_storage_hash: bool,
 }
 
 fn read_path_with_overflow_length(
