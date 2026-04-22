@@ -494,9 +494,11 @@ fn test_out_of_range_value_change_adopted() {
 /// (shorter key < `start_key`), it is not in `batch_ops`. The proving trie
 /// must clear this stale value so the computed hash matches `end_root`.
 ///
-/// Without the fix, `reconcile_branch_proof_node` ignored the trie's value
-/// when the proof node had no value, silently leaving the stale value in the
-/// proving trie and causing `EndRootMismatch`.
+/// Previously, `reconcile_branch_proof_node` returned early when the proof
+/// node had no value, leaving the stale value in the proving trie. This
+/// caused `EndRootMismatch` during root hash verification. Now, the
+/// out-of-range callback clears the stale value so the hash matches
+/// `end_root`.
 #[test]
 fn test_change_proof_prefix_key_deleted_in_end_root() {
     let (db, _dir) = setup_db![
@@ -545,7 +547,6 @@ fn test_change_proof_prefix_key_deleted_in_end_root() {
     )
     .unwrap();
 
-    // This failed with EndRootMismatch before the fix.
     verify_and_check(&db, &proof, &ctx, root1).unwrap();
 }
 
@@ -730,4 +731,63 @@ fn test_root_value_change() {
 
     let ctx = verify_change_proof_structure(&proof, root2, None, None, None).unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
+}
+
+/// Change proof with ValueDigest::Hash at out-of-range prefix keys.
+/// In merkledb mode, values >= 32 bytes are serialized as Hash. The
+/// proving trie may not have the value at these out-of-range positions,
+/// so compute_root_hash_with_proofs must fall back to the proof node's
+/// Hash digest.
+#[cfg(not(feature = "ethhash"))]
+#[test]
+fn test_change_proof_with_hashed_out_of_range_value() {
+    let (source, _dir_source) = setup_db![
+        (b"\x10", [0u8; 64].as_slice()),
+        (b"\x10\x50", b"child"),
+        (b"\x30", b"other")
+    ];
+    let (target, _dir_target) = setup_db![
+        (b"\x10", [0u8; 64].as_slice()),
+        (b"\x10\x50", b"child"),
+        (b"\x30", b"other")
+    ];
+    let root1_target = target.root_hash().unwrap();
+
+    // Change \x10's value (out of range) and \x30 (in range).
+    source
+        .propose(vec![
+            BatchOp::Put {
+                key: b"\x10" as &[u8],
+                value: [1u8; 64].as_slice(),
+            },
+            BatchOp::Put {
+                key: b"\x30",
+                value: b"changed",
+            },
+        ])
+        .unwrap()
+        .commit()
+        .unwrap();
+    let root2 = source.root_hash().unwrap();
+
+    // Range [\x10\x50, \x30]: \x10 is out of range (prefix of start_key).
+    let proof = source
+        .change_proof(
+            root1_target.clone(),
+            root2.clone(),
+            Some(b"\x10\x50"),
+            Some(b"\x30"),
+            None,
+        )
+        .unwrap();
+
+    // Serialize/deserialize to convert large values to Hash.
+    let mut serialized = Vec::new();
+    proof.write_to_vec(&mut serialized);
+    let deserialized = crate::api::FrozenChangeProof::from_slice(&serialized).unwrap();
+
+    let ctx =
+        verify_change_proof_structure(&deserialized, root2, Some(b"\x10\x50"), Some(b"\x30"), None)
+            .unwrap();
+    verify_and_check(&target, &deserialized, &ctx, root1_target).unwrap();
 }
