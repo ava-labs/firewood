@@ -733,10 +733,10 @@ fn test_root_value_change() {
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
-/// Change proof with ValueDigest::Hash at out-of-range prefix keys.
+/// Change proof with `ValueDigest::Hash` at out-of-range prefix keys.
 /// In merkledb mode, values >= 32 bytes are serialized as Hash. The
 /// proving trie may not have the value at these out-of-range positions,
-/// so compute_root_hash_with_proofs must fall back to the proof node's
+/// so `compute_root_hash_with_proofs` must fall back to the proof node's
 /// Hash digest.
 #[cfg(not(feature = "ethhash"))]
 #[test]
