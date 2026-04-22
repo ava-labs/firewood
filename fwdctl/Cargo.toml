@@ -24,6 +24,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Workspace dependencies
+bytemuck.workspace = true
 clap = { workspace = true, features = ["cargo", "string"] }
 env_logger.workspace = true
 firewood.workspace = true
@@ -32,8 +33,10 @@ firewood-storage.workspace = true
 hex.workspace = true
 log.workspace = true
 nonzero_ext.workspace = true
+tempfile.workspace = true
 # Regular dependencies
 csv = "1.4.0"
+fjall = "=2.11.2"
 indicatif = "0.18.4"
 askama = "0.15.5"
 num-format = "0.4.4"

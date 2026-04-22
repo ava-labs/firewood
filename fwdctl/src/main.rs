@@ -12,6 +12,7 @@ pub mod check;
 pub mod create;
 pub mod delete;
 pub mod dump;
+pub mod extract;
 pub mod get;
 pub mod graph;
 pub mod insert;
@@ -111,6 +112,9 @@ enum Commands {
     Check(check::Options),
     /// Replay recorded operations from a log file
     Replay(replay::Options),
+    /// Extract a subset of revisions (by state root hash) into a new database,
+    /// preserving copy-on-write node sharing. Reads hex root hashes from stdin.
+    Extract(extract::Options),
     #[cfg(feature = "launch")]
     /// Launch AWS instance for benchmarking
     Launch(launch::Options),
@@ -133,6 +137,7 @@ fn main() -> Result<(), api::Error> {
         Commands::Graph(opts) => graph::run(opts),
         Commands::Check(opts) => check::run(opts),
         Commands::Replay(opts) => replay::run(opts),
+        Commands::Extract(opts) => extract::run(opts),
         #[cfg(feature = "launch")]
         Commands::Launch(opts) => launch::run(opts),
     }
