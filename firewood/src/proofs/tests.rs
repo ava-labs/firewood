@@ -6,6 +6,8 @@
 use integer_encoding::VarInt;
 use test_case::test_case;
 
+use firewood_storage::{Children, IntoHashType, PathComponent, TrieHash, ValueDigest};
+
 use super::{
     header::InvalidHeader,
     magic,
@@ -455,4 +457,126 @@ fn test_change_proof_invalid_item(
         }
         other => panic!("Expected ReadError::InvalidItem, got: {other:?}"),
     }
+}
+
+/// Constructs a `ProofNode` with the given nibble key, partial length, optional
+/// value, and children at the specified nibble indices.
+fn make_proof_node(
+    key_nibbles: &[u8],
+    partial_len: usize,
+    value: Option<Box<[u8]>>,
+    child_nibbles: &[u8],
+) -> ProofNode {
+    let key = key_nibbles
+        .iter()
+        .map(|&n| PathComponent::try_new(n).unwrap())
+        .collect();
+    let mut child_hashes = Children::new();
+    for &nibble in child_nibbles {
+        child_hashes[PathComponent::try_new(nibble).unwrap()] =
+            Some(TrieHash::from([0u8; 32]).into_hash_type());
+    }
+    ProofNode {
+        key,
+        partial_len,
+        value_digest: value.map(ValueDigest::Value),
+        child_hashes,
+    }
+}
+
+/// Wraps a single `ProofNode` in a minimal `FrozenRangeProof` and serializes it.
+fn make_range_proof_from_single_node(node: ProofNode) -> (FrozenRangeProof, Vec<u8>) {
+    let proof = FrozenRangeProof::new(
+        Proof::new(Box::new([node])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Box::new([]),
+    );
+    let mut serialized = Vec::new();
+    proof.write_to_vec(&mut serialized);
+    (proof, serialized)
+}
+
+/// Verifies that deserializing `serialized` and re-serializing produces the same bytes.
+fn assert_range_proof_round_trip(serialized: Vec<u8>) {
+    let parsed = FrozenRangeProof::from_slice(&serialized).expect("deserialization should succeed");
+    let mut re_serialized = Vec::new();
+    parsed.write_to_vec(&mut re_serialized);
+    assert_eq!(serialized, re_serialized, "round-trip bytes must match");
+}
+
+#[test]
+fn test_proof_node_leaf_round_trip() {
+    // Leaf: no children, no value, empty key
+    let node = make_proof_node(&[], 0, None, &[]);
+    let (_, serialized) = make_range_proof_from_single_node(node);
+    assert_range_proof_round_trip(serialized);
+}
+
+#[test]
+fn test_proof_node_single_child_round_trip() {
+    // Branch with one child at nibble index 7
+    let node = make_proof_node(&[1, 2, 3], 0, None, &[7]);
+    let (_, serialized) = make_range_proof_from_single_node(node);
+    assert_range_proof_round_trip(serialized);
+}
+
+#[test]
+fn test_proof_node_all_children_round_trip() {
+    // Branch with all 16 children present (ChildMask = 0xFFFF)
+    let all_nibbles: Vec<u8> = (0u8..16).collect();
+    let node = make_proof_node(&[0], 0, None, &all_nibbles);
+    let (_, serialized) = make_range_proof_from_single_node(node);
+    assert_range_proof_round_trip(serialized);
+}
+
+#[cfg(not(feature = "ethhash"))]
+#[test]
+fn test_value_digest_hash_round_trip() {
+    // Values >= 32 bytes are converted to a hash by make_hash() during serialization.
+    // The round-trip bytes should still match because re-serializing a Hash-variant
+    // node also produces a hash discriminant (1) rather than a value discriminant (0).
+    let value: Box<[u8]> = vec![0xABu8; 32].into_boxed_slice();
+    let node = make_proof_node(&[1, 2], 0, Some(value), &[]);
+    let (_, serialized) = make_range_proof_from_single_node(node);
+    assert_range_proof_round_trip(serialized);
+}
+
+#[test_case(
+    BatchOp::Put { key: Box::from(b"k".as_slice()), value: Box::from(b"v".as_slice()) };
+    "put"
+)]
+#[test_case(
+    BatchOp::Delete { key: Box::from(b"k".as_slice()) };
+    "delete"
+)]
+#[test_case(
+    BatchOp::DeleteRange { prefix: Box::from(b"k".as_slice()) };
+    "delete range"
+)]
+fn test_change_proof_batch_op_variant(op: BatchOp<Box<[u8]>, Box<[u8]>>) {
+    let proof = FrozenChangeProof::new(
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Box::new([op]),
+    );
+    let mut serialized = Vec::new();
+    proof.write_to_vec(&mut serialized);
+    let parsed =
+        FrozenChangeProof::from_slice(&serialized).expect("deserialization should succeed");
+    let mut re_serialized = Vec::new();
+    parsed.write_to_vec(&mut re_serialized);
+    assert_eq!(serialized, re_serialized, "round-trip bytes must match");
+}
+
+#[test]
+fn test_proof_node_partial_len_boundaries() {
+    // partial_len = 0: no shared prefix with the parent node
+    let node = make_proof_node(&[1, 2, 3, 4], 0, None, &[]);
+    let (_, serialized) = make_range_proof_from_single_node(node);
+    assert_range_proof_round_trip(serialized);
+
+    // partial_len = key.len(): entire key is shared with the parent
+    let node = make_proof_node(&[1, 2, 3, 4], 4, None, &[]);
+    let (_, serialized) = make_range_proof_from_single_node(node);
+    assert_range_proof_round_trip(serialized);
 }
