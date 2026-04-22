@@ -3,6 +3,7 @@
 
 #![expect(clippy::indexing_slicing, clippy::unwrap_used)]
 
+mod change;
 mod collapse;
 #[cfg(feature = "ethhash")]
 mod ethhash;
