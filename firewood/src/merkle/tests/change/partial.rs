@@ -60,6 +60,7 @@ fn test_partial_proof_round_trip() {
         source,
         [(b"\x10", b"c0"), (b"\x20", b"c1"), (b"\x30", b"c2")]
     );
+    assert_eq!(root1_source, root1_target);
 
     // Round 1: partial (limit=1)
     let proof1 = source

@@ -316,13 +316,23 @@ impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
                     match &*node {
                         Node::Branch(branch) => {
                             let Some(value) = branch.value.as_ref() else {
-                                // This node doesn't have a value to return.
-                                // Continue to the next node.
+                                // no value, continue to next node
                                 return None;
                             };
-                            Some((key, value.clone()))
+                            let must_recompute = self.iter.merkle.must_recompute_storage_hash();
+                            let child_hashes = if must_recompute && key.len() == 32 {
+                                branch.children_hashes()
+                            } else {
+                                firewood_storage::Children::new()
+                            };
+                            fix_account_value(key, value, &child_hashes, must_recompute)
                         }
-                        Node::Leaf(leaf) => Some((key, leaf.value.clone())),
+                        Node::Leaf(leaf) => fix_account_value(
+                            key,
+                            &leaf.value,
+                            &firewood_storage::Children::new(),
+                            self.iter.merkle.must_recompute_storage_hash(),
+                        ),
                     }
                 })
                 .transpose()
@@ -331,6 +341,28 @@ impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
 }
 
 impl<T: TrieReader> FusedIterator for MerkleKeyValueIter<'_, T> {}
+
+/// For ethhash account nodes (32-byte key) on databases that require storageRoot
+/// recomputation, replace the storageRoot with the correct hash computed from the
+/// node's children. This ensures range proof `key_values` match the proof nodes.
+/// Without ethhash this is a no-op.
+fn fix_account_value(
+    key: Key,
+    value: &[u8],
+    child_hashes: &firewood_storage::Children<Option<firewood_storage::HashType>>,
+    must_recompute: bool,
+) -> Option<(Key, Value)> {
+    #[cfg(feature = "ethhash")]
+    if must_recompute
+        && key.len() == 32
+        && let Some(fixed) = firewood_storage::fix_account_storage_root_value(value, child_hashes)
+    {
+        return Some((key, fixed));
+    }
+    // suppress unused warnings when ethhash is not enabled
+    let _ = (child_hashes, must_recompute);
+    Some((key, Box::from(value)))
+}
 
 #[derive(Debug)]
 enum PathIteratorState<'a> {
@@ -385,6 +417,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
     type Item = Result<PathIterItem, FileIoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let must_recompute = self.merkle.must_recompute_storage_hash();
         // destructuring is necessary here because we need mutable access to `state`
         // at the same time as immutable access to `merkle`.
         let Self { state, merkle } = &mut *self;
@@ -418,6 +451,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                         key_nibbles: node_key,
                         node,
                         next_nibble: None,
+                        must_recompute_storage_hash: must_recompute,
                     }));
                 }
 
@@ -434,6 +468,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                         key_nibbles: node_key,
                         node: saved_node,
                         next_nibble: None,
+                        must_recompute_storage_hash: must_recompute,
                     }));
                 };
                 let next_unmatched_key_nibble =
@@ -449,6 +484,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                             key_nibbles: node_key,
                             node: saved_node,
                             next_nibble: None,
+                            must_recompute_storage_hash: must_recompute,
                         }))
                     }
                     Some(Child::AddressWithHash(child_addr, _)) => {
@@ -464,6 +500,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                             key_nibbles: node_key,
                             node: saved_node,
                             next_nibble: Some(next_unmatched_key_nibble),
+                            must_recompute_storage_hash: must_recompute,
                         }))
                     }
                     Some(Child::Node(child)) => {
@@ -474,6 +511,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                             key_nibbles: node_key,
                             node: saved_node,
                             next_nibble: Some(next_unmatched_key_nibble),
+                            must_recompute_storage_hash: must_recompute,
                         }))
                     }
                     Some(Child::MaybePersisted(maybe_persisted, _)) => {
@@ -489,6 +527,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                             key_nibbles: node_key,
                             node: saved_node,
                             next_nibble: Some(next_unmatched_key_nibble),
+                            must_recompute_storage_hash: must_recompute,
                         }))
                     }
                 }

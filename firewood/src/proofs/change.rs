@@ -156,15 +156,15 @@ pub struct ChangeProofVerificationContext {
     pub right_edge_key: Option<Box<[u8]>>,
 }
 
+type FrozenBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
+
 /// Verify a boundary proof against `end_root` and optionally check that the
 /// proof's inclusion/exclusion result is consistent with `boundary_op`.
 ///
 /// When `boundary_op` is `Some`, a `Put` must be an inclusion proof (key
 /// present) and a `Delete` must be an exclusion proof (key absent).
 /// When `boundary_op` is `None` the key is an arbitrary range bound and
-/// both outcomes are valid.     
-type FrozenBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
-
+/// both outcomes are valid.
 fn verify_boundary_proof<C: ProofCollection>(
     proof: &Proof<C>,
     key: &[u8],
@@ -216,7 +216,7 @@ fn compute_right_edge_key<'a>(
                 .is_some()
         });
     if truncated {
-        last_op_key.or(end_key)
+        last_op_key
     } else {
         end_key.or(last_op_key)
     }
@@ -254,7 +254,7 @@ pub fn verify_change_proof_structure(
 
     // Check batch_ops length <= max_length
     if let Some(max_length) = max_length
-        && batch_ops.len() > max_length.into()
+        && batch_ops.len() > max_length.get()
     {
         return Err(api::Error::ProofError(
             ProofError::ProofIsLargerThanMaxLength,

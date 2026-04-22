@@ -1,7 +1,102 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-// Ethereum compatible hashing algorithm.
+//! # Ethereum-compatible node hashing
+//!
+//! This module implements [`Preimage`] for firewood nodes so that the resulting
+//! root hash matches what an Ethereum Modified Merkle Patricia Trie (MPT) would
+//! produce for the same key/value set. It is only compiled when the `ethhash`
+//! feature is enabled (used for Avalanche C-Chain state).
+//!
+//! ## Why this is non-trivial
+//!
+//! Firewood stores a trie of (up-to-)16-ary branch nodes with partial-path
+//! compression. Ethereum's MPT is conceptually the same, but the on-the-wire
+//! encoding differs in several ways that must all be reproduced bit-exactly or
+//! the root hash will not match:
+//!
+//! 1. **Hex-prefix / "compact" path encoding** — partial paths are packed with
+//!    a one-byte header encoding `(is_leaf, odd_nibble_count)` plus an optional
+//!    leading low nibble. See [`nibbles_to_eth_compact`].
+//! 2. **Inline children (the "<32 byte" rule)** — a child whose RLP encoding is
+//!    less than 32 bytes is embedded *inline* in the parent's RLP instead of
+//!    being replaced by its 32-byte hash. In firewood's [`HashType`] this is
+//!    the distinction between [`HashType::Hash`] and [`HashType::Rlp`].
+//!    [`Preimage::to_hash`] preserves whichever form fits (`< 32` → `Rlp`, else
+//!    `Hash`); branch encoders then inline `Rlp` children via
+//!    [`RlpStream::append_raw`] and hash-reference `Hash` children.
+//! 3. **17-element branch lists** — a branch is always RLP-encoded as
+//!    `[child_0, ..., child_15, value]`. Missing children are `0x80` (empty RLP
+//!    bytes), not omitted.
+//! 4. **Two-level state trie** — Ethereum's world state is a trie of accounts,
+//!    where each account's value is RLP `[nonce, balance, storageRoot, codeHash]`
+//!    and `storageRoot` is the root hash of a *separate* storage trie for that
+//!    account. See the account-node section below.
+//!
+//! ## Account nodes (depth 64)
+//!
+//! In firewood an "account node" is any node whose full key is exactly 64
+//! nibbles (= 32 bytes, the Keccak-256 of the account address). At that depth
+//! the node's value is account RLP, and its *children*, if any, are the
+//! storage trie for that account.
+//!
+//! Two things happen at account nodes that do not happen elsewhere:
+//!
+//! - **`storageRoot` is recomputed at hash time.** When computing a node's
+//!   hash, we always derive the `storageRoot` slot from the node's children
+//!   and splice it into the account RLP via [`replace_hash`], regardless of
+//!   whatever value is currently in that slot. This is why [`replace_hash`]
+//!   exists. The *persisted* bytes are not updated by this splice, so callers
+//!   reading the raw value may observe a stale or zero `storageRoot` even
+//!   though the trie's root hash is correct; the proof and iteration paths
+//!   re-apply the fix on read via
+//!   [`fix_account_storage_root_value`](crate::fix_account_storage_root_value).
+//! - **The single-child "fake root" trick**. An account with exactly one
+//!   storage slot looks like a firewood branch with one child, but the
+//!   equivalent Ethereum storage trie is a single leaf at the *root*. To get
+//!   the same hash, we conceptually prepend the child's branch nibble to its
+//!   partial path and re-hash it as if it were a standalone root node. See
+//!   the `children == 1` arm in [`Preimage::write`] and `hash_helper_inner`'s
+//!   `fake_root_extra_nibble` in `nodestore::hash`.
+//!
+//! ## Where the storage root gets spliced
+//!
+//! There are two sites that compute and splice `storageRoot` into account
+//! RLP, and they must stay in lockstep:
+//!
+//! 1. **At hash time**, during [`Preimage::write`]: we compute the storage-trie
+//!    hash and splice it into the RLP used for the account node's own hash.
+//!    This makes the account's contribution to the state root correct.
+//!
+//! 2. **At proof / iteration time**, in
+//!    [`fix_account_storage_root_value`](crate::fix_account_storage_root_value)
+//!    (`nodestore::hash`): the persisted account bytes may hold a stale or
+//!    zero `storageRoot` (callers supply the bytes verbatim, and hashing does
+//!    not write them back), so proof generation and key/value enumeration
+//!    re-splice the correct `storageRoot` before returning.
+//!
+//! Both sites must produce bit-identical bytes for the same inputs or
+//! proof verification will disagree with the trie's root hash.
+//! `fix_account_storage_root_value` runs at proof time where all storage-trie
+//! children are guaranteed to be 32-byte hashes (32-byte storage keys always
+//! yield encodings ≥ 32 bytes), so it treats [`HashType::Rlp`] as
+//! `unreachable!`; `Preimage::write` runs during hashing and must handle
+//! inline [`HashType::Rlp`] children.
+//!
+//! ## Reviewer checklist
+//!
+//! When reviewing changes in this module or its callers in `nodestore::hash`:
+//!
+//! - Does the change alter RLP shape? If so, verify both the multi-child branch
+//!   path *and* the single-child "fake root" path produce bit-identical output
+//!   to geth/reth for a known fixture.
+//! - Does it change where the account depth (64 nibbles) check lives? The two
+//!   splice sites must agree on the definition.
+//! - Does it change how [`HashType::Rlp`] vs [`HashType::Hash`] is chosen? The
+//!   32-byte cutoff in [`Preimage::to_hash`] must match what parent encoders
+//!   assume when calling [`RlpStream::append_raw`] vs `append`.
+//! - Does it touch [`replace_hash`]? Note that Coreth may append fields beyond
+//!   the standard 4 — the `[_, _, storage_root, ..]` pattern is deliberate.
 
 #![cfg_attr(
     feature = "ethhash",
@@ -29,17 +124,22 @@ impl HasUpdate for Keccak256 {
     }
 }
 
-// Takes a set of nibbles and converts them to a set of bytes that we can hash
-// The input consists of nibbles, but there may be an invalid nibble at the end of 0x10
-// which indicates that we need to set bit 5 of the first output byte
-// The input may also have an odd number of nibbles, in which case the first output byte
-// will have bit 4 set and the low nibble will be the low nibble of the first byte
-// Restated: 00ABCCCC
-// 0 is always 0
-// A is 1 if this is a leaf
-// B is 1 if the input had an odd number of nibbles
-// CCCC is the first nibble if B is 1, otherwise it is all 0s
-
+/// Hex-prefix encoding of a nibble path (Ethereum Yellow Paper, appendix C).
+///
+/// Produces the byte sequence used as the first element of leaf and extension
+/// nodes when RLP-encoding an MPT node. The first output byte is a header of
+/// the form `00ABCCCC`:
+///
+/// - `A` is 1 iff `is_leaf` — distinguishes leaf (`2x`/`3x`) from extension
+///   (`0x`/`1x`) nodes.
+/// - `B` is 1 iff the input has an odd number of nibbles, in which case
+///   `CCCC` is the first (orphan) nibble.
+/// - If `B` is 0, `CCCC` is zero and the remaining nibbles pack evenly into
+///   bytes.
+///
+/// Remaining nibble pairs are packed high-nibble-first into subsequent bytes.
+/// This must match geth's `hexToCompact` exactly; any deviation breaks root
+/// hash compatibility.
 fn nibbles_to_eth_compact<T: TriePath>(nibbles: T, is_leaf: bool) -> SmallVec<[u8; 32]> {
     // This is a bitfield that represents the first byte of the output, documented above
     bitfield! {
@@ -238,13 +338,27 @@ impl<T: Hashable> Preimage for T {
     }
 }
 
-// TODO: we could be super fancy and just plunk the correct bytes into the existing BytesMut
-fn replace_hash<T: AsRef<[u8]>, U: AsRef<[u8]>>(bytes: T, new_hash: U) -> Option<BytesMut> {
-    // rlp_encoded_bytes needs to be decoded
+/// Splice a new `storageRoot` into an RLP-encoded account value.
+///
+/// Decodes `bytes` as an RLP list, replaces element index 2 with `new_hash`,
+/// and re-encodes. Returns `None` if `bytes` is not a well-formed RLP list of
+/// at least 3 elements — in that case callers treat the value as opaque
+/// (non-account) data and leave it untouched.
+///
+/// The standard Ethereum account is `[nonce, balance, storageRoot, codeHash]`
+/// (4 elements). Coreth may append additional trailing fields, so the match
+/// pattern deliberately uses `[_, _, storage_root, ..]` rather than asserting
+/// a fixed length.
+pub(crate) fn replace_hash<T: AsRef<[u8]>, U: AsRef<[u8]>>(
+    bytes: T,
+    new_hash: U,
+) -> Option<BytesMut> {
     let rlp = Rlp::new(bytes.as_ref());
-    let mut list = rlp.as_list().ok()?;
-    let replace = list.get_mut(2)?;
-    *replace = Vec::from(new_hash.as_ref());
+    let mut list: Vec<Vec<u8>> = rlp.as_list().ok()?;
+    let [_, _, storage_root, ..] = list.as_mut_slice() else {
+        return None;
+    };
+    *storage_root = Vec::from(new_hash.as_ref());
 
     trace!("inbound bytes: {}", hex::encode(bytes.as_ref()));
     trace!("list length was {}", list.len());

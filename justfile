@@ -77,8 +77,8 @@ check-nix:
         echo "Error: 'nix' is not installed." >&2
         echo "" >&2
         echo "To install nix:" >&2
-        echo "  - Visit: https://github.com/DeterminateSystems/nix-installer" >&2
-        echo "  - Or run: curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | sh -s -- install" >&2
+        echo "  - Visit: https://nixos.org/download/" >&2
+        echo "  - Or run (multi-user install): curl -L https://nixos.org/nix/install | sh -s -- --daemon" >&2
         exit 1
     fi
 
