@@ -28,7 +28,7 @@ use bytemuck_derive::{Pod, Zeroable};
 use std::io::{Error, ErrorKind, Read};
 
 use super::alloc::FreeLists;
-use super::primitives::{LinearAddress, area_size_hash};
+use super::primitives::{AREA_SIZES_HASH, LinearAddress};
 use crate::logger::{debug, trace};
 use crate::{NodeHashAlgorithm, TrieHash};
 
@@ -107,6 +107,15 @@ impl Version {
 
     const fn is_firewood_v1(self) -> bool {
         self.as_u128() == const { Self::VALID_V1_VERSIONS[0].as_u128() }
+    }
+
+    /// Returns `true` if databases written by this version need their account
+    /// storage-root hashes recomputed at proof-generation time.
+    ///
+    /// All existing versions predate the fix, so this currently returns `true`
+    /// unconditionally. A future `firewood-v1-hfix` version will return `false`.
+    pub const fn must_recompute_storage_hash(self) -> bool {
+        true
     }
 
     const fn from_static(bytes: &'static [u8; 16]) -> Self {
@@ -346,7 +355,7 @@ impl NodeStoreHeader {
             root_address: None,
             version: Version::new(),
             free_lists: Default::default(),
-            area_size_hash: area_size_hash().into(),
+            area_size_hash: AREA_SIZES_HASH,
             node_hash_algorithm: node_hash_algorithm as u64,
             root_hash: TrieHash::empty().into(),
             cargo_version: CargoVersion::INSTANCE,
@@ -446,6 +455,13 @@ impl NodeStoreHeader {
         self.root_hash = root_hash.unwrap_or_else(TrieHash::empty).into();
     }
 
+    /// Returns `true` if the database version requires recomputing account
+    /// storage-root hashes at proof-generation time.
+    #[must_use]
+    pub const fn must_recompute_storage_hash(&self) -> bool {
+        self.version.must_recompute_storage_hash()
+    }
+
     /// Get the offset of the `free_lists` field for use with `offset_of`!
     #[must_use]
     pub const fn free_lists_offset() -> u64 {
@@ -500,7 +516,7 @@ impl NodeStoreHeader {
     }
 
     fn validate_area_size_hash(&self) -> Result<(), Error> {
-        if self.area_size_hash == area_size_hash().as_slice() {
+        if self.area_size_hash == AREA_SIZES_HASH {
             Ok(())
         } else {
             Err(Error::new(

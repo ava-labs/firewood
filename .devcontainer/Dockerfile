@@ -127,7 +127,8 @@ RUN . "${CARGO_HOME}/env" \
     ripgrep \
     rustfilt \
     starship \
-  && rm -rf "${CARGO_HOME}/registry" "${CARGO_HOME}/git" "${SCCACHE_DIR}"
+  && rm -rf "${CARGO_HOME}/registry" "${CARGO_HOME}/git" "${SCCACHE_DIR}" \
+  && mkdir -p "${CARGO_HOME}/registry" "${CARGO_HOME}/git" "${SCCACHE_DIR}"
 
 # Install Go tools
 RUN curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $(go env GOPATH)/bin \

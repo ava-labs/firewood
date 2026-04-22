@@ -22,7 +22,7 @@ syn = { version = "2.0", features = ["full", "extra-traits"] }
 
 [dev-dependencies]
 # Workspace dependencies
-metrics.workspace = true
+firewood-metrics.workspace = true
 # Regular dependencies
 trybuild = "1.0"
 

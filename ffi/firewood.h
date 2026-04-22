@@ -204,6 +204,12 @@ typedef struct BorrowedSlice_u8 BorrowedBytes;
  *
  * This is a tagged union that explicitly distinguishes between different
  * operation types instead of relying on nil vs empty pointer semantics.
+ *
+ * Unlike the `TryIntoBatch` impl for tuples in the core library (which treats
+ * an empty value as a prefix deletion), this type preserves the operation as
+ * given: a `Put` with an empty value remains a `Put` with an empty value.
+ * Callers should use the appropriate variant (`Put`, `Delete`, `DeleteRange`)
+ * to express their intent.
  */
 enum BatchOp_Tag {
   /**
@@ -780,6 +786,245 @@ typedef struct OwnedSlice_OwnedKeyValuePair {
  * A type alias for a rust-owned byte slice.
  */
 typedef struct OwnedSlice_OwnedKeyValuePair OwnedKeyValueBatch;
+
+/**
+ * A C-compatible representation of a label pair.
+ */
+typedef struct OwnedLabelPair {
+  OwnedBytes label;
+  OwnedBytes value;
+} OwnedLabelPair;
+
+/**
+ * A Rust-owned vector of bytes that can be passed to C code.
+ *
+ * C callers must free this memory using the respective FFI function for the
+ * concrete type (but not using the `free` function from the C standard library).
+ */
+typedef struct OwnedSlice_OwnedLabelPair {
+  struct OwnedLabelPair *ptr;
+  size_t len;
+} OwnedSlice_OwnedLabelPair;
+
+/**
+ * A C-compatible representation of a quantile.
+ */
+typedef struct OwnedQuantile {
+  double quantile;
+  double value;
+} OwnedQuantile;
+
+/**
+ * A Rust-owned vector of bytes that can be passed to C code.
+ *
+ * C callers must free this memory using the respective FFI function for the
+ * concrete type (but not using the `free` function from the C standard library).
+ */
+typedef struct OwnedSlice_OwnedQuantile {
+  struct OwnedQuantile *ptr;
+  size_t len;
+} OwnedSlice_OwnedQuantile;
+
+/**
+ * A C-compatible representation of a summary metric.
+ */
+typedef struct OwnedSummary {
+  uint64_t sample_count;
+  double sample_sum;
+  struct OwnedSlice_OwnedQuantile quantiles;
+} OwnedSummary;
+
+/**
+ * A C-compatible representation of a histogram bucket.
+ */
+typedef struct OwnedBucket {
+  uint64_t cumulative_count;
+  double upper_bound;
+} OwnedBucket;
+
+/**
+ * A Rust-owned vector of bytes that can be passed to C code.
+ *
+ * C callers must free this memory using the respective FFI function for the
+ * concrete type (but not using the `free` function from the C standard library).
+ */
+typedef struct OwnedSlice_OwnedBucket {
+  struct OwnedBucket *ptr;
+  size_t len;
+} OwnedSlice_OwnedBucket;
+
+/**
+ * A C-compatible representation of a classic histogram metric.
+ */
+typedef struct OwnedClassicHistogram {
+  uint64_t sample_count;
+  double sample_sum;
+  struct OwnedSlice_OwnedBucket buckets;
+} OwnedClassicHistogram;
+
+/**
+ * A C-compatible representation of a native histogram bucket span.
+ */
+typedef struct OwnedBucketSpan {
+  int32_t offset;
+  uint32_t length;
+} OwnedBucketSpan;
+
+/**
+ * A Rust-owned vector of bytes that can be passed to C code.
+ *
+ * C callers must free this memory using the respective FFI function for the
+ * concrete type (but not using the `free` function from the C standard library).
+ */
+typedef struct OwnedSlice_OwnedBucketSpan {
+  struct OwnedBucketSpan *ptr;
+  size_t len;
+} OwnedSlice_OwnedBucketSpan;
+
+/**
+ * A Rust-owned vector of bytes that can be passed to C code.
+ *
+ * C callers must free this memory using the respective FFI function for the
+ * concrete type (but not using the `free` function from the C standard library).
+ */
+typedef struct OwnedSlice_i64 {
+  int64_t *ptr;
+  size_t len;
+} OwnedSlice_i64;
+
+/**
+ * A C-compatible representation of a native histogram metric.
+ */
+typedef struct OwnedNativeHistogram {
+  uint64_t sample_count;
+  double sample_sum;
+  double zero_threshold;
+  int32_t schema;
+  uint64_t zero_count;
+  struct OwnedSlice_OwnedBucketSpan positive_spans;
+  struct OwnedSlice_i64 positive_deltas;
+  struct OwnedSlice_OwnedBucketSpan negative_spans;
+  struct OwnedSlice_i64 negative_deltas;
+} OwnedNativeHistogram;
+
+/**
+ * A C-compatible tagged union representing a metric value.
+ */
+enum OwnedMetricValue_Tag {
+  OwnedMetricValue_Counter,
+  OwnedMetricValue_Gauge,
+  OwnedMetricValue_Summary,
+  OwnedMetricValue_ClassicHistogram,
+  OwnedMetricValue_NativeHistogram,
+  OwnedMetricValue_Unknown,
+};
+typedef size_t OwnedMetricValue_Tag;
+
+typedef struct OwnedMetricValue {
+  OwnedMetricValue_Tag tag;
+  union {
+    struct {
+      uint64_t counter;
+    };
+    struct {
+      double gauge;
+    };
+    struct {
+      struct OwnedSummary summary;
+    };
+    struct {
+      struct OwnedClassicHistogram classic_histogram;
+    };
+    struct {
+      struct OwnedNativeHistogram native_histogram;
+    };
+  };
+} OwnedMetricValue;
+
+/**
+ * A C-compatible representation of a single metric with its labels and value.
+ */
+typedef struct OwnedMetric {
+  struct OwnedSlice_OwnedLabelPair labels;
+  struct OwnedMetricValue value;
+} OwnedMetric;
+
+/**
+ * A Rust-owned vector of bytes that can be passed to C code.
+ *
+ * C callers must free this memory using the respective FFI function for the
+ * concrete type (but not using the `free` function from the C standard library).
+ */
+typedef struct OwnedSlice_OwnedMetric {
+  struct OwnedMetric *ptr;
+  size_t len;
+} OwnedSlice_OwnedMetric;
+
+/**
+ * A C-compatible representation of a metric family.
+ */
+typedef struct OwnedMetricFamily {
+  OwnedBytes name;
+  struct Maybe_OwnedBytes help;
+  struct OwnedSlice_OwnedMetric metrics;
+} OwnedMetricFamily;
+
+/**
+ * A Rust-owned vector of bytes that can be passed to C code.
+ *
+ * C callers must free this memory using the respective FFI function for the
+ * concrete type (but not using the `free` function from the C standard library).
+ */
+typedef struct OwnedSlice_OwnedMetricFamily {
+  struct OwnedMetricFamily *ptr;
+  size_t len;
+} OwnedSlice_OwnedMetricFamily;
+
+/**
+ * A C-compatible representation of rendered metrics.
+ */
+typedef struct OwnedSlice_OwnedMetricFamily OwnedRenderedMetrics;
+
+/**
+ * A result type returned from [`fwd_gather_rendered`] containing structured
+ * metric data.
+ *
+ * [`fwd_gather_rendered`]: crate::fwd_gather_rendered
+ */
+enum RenderedMetricsResult_Tag {
+  /**
+   * The metrics were successfully gathered.
+   *
+   * The caller must call [`fwd_free_rendered_metrics`] to free the memory
+   * associated with this value.
+   *
+   * [`fwd_free_rendered_metrics`]: crate::fwd_free_rendered_metrics
+   */
+  RenderedMetricsResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. Its
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  RenderedMetricsResult_Err,
+};
+typedef size_t RenderedMetricsResult_Tag;
+
+typedef struct RenderedMetricsResult {
+  RenderedMetricsResult_Tag tag;
+  union {
+    struct {
+      OwnedRenderedMetrics ok;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} RenderedMetricsResult;
 
 /**
  * A result type returned from FFI functions that get a revision
@@ -1868,6 +2113,26 @@ struct VoidResult fwd_free_range_proof(struct RangeProofContext *proof);
 struct VoidResult fwd_free_reconstructed(struct ReconstructedHandle *reconstructed);
 
 /**
+ * Consumes the [`OwnedRenderedMetrics`] and frees the memory associated with it.
+ *
+ * # Arguments
+ *
+ * * `metrics` - The [`OwnedRenderedMetrics`] struct to free, previously returned
+ *   from [`fwd_gather_rendered`].
+ *
+ * # Returns
+ *
+ * - [`VoidResult::Ok`] if the memory was successfully freed.
+ * - [`VoidResult::Err`] if the process panics while freeing the memory.
+ *
+ * # Safety
+ *
+ * The caller must ensure that the `metrics` struct is valid and that the memory
+ * it points to is uniquely owned by this object.
+ */
+struct VoidResult fwd_free_rendered_metrics(OwnedRenderedMetrics metrics);
+
+/**
  * Consumes the [`RevisionHandle`] and frees the memory associated with it.
  *
  * # Arguments
@@ -1903,22 +2168,22 @@ struct VoidResult fwd_free_revision(struct RevisionHandle *revision);
 struct VoidResult fwd_free_verified_change_proof(struct VerifiedChangeProofContext *proof);
 
 /**
- * Gather latest metrics for this process.
+ * Gather latest metrics for this process as structured data.
  *
  * # Returns
  *
- * - [`ValueResult::None`] if the gathered metrics resulted in an empty string.
- * - [`ValueResult::Some`] the gathered metrics as an [`OwnedBytes`] (with
- *   guaranteed to be utf-8 data, not null terminated).
- * - [`ValueResult::Err`] if an error occurred while retrieving the value.
+ * - [`RenderedMetricsResult::Ok`] with the rendered metrics.
+ * - [`RenderedMetricsResult::Err`] if an error occurred.
  *
  * # Safety
  *
  * The caller must:
- * * call [`fwd_free_owned_bytes`] to free the memory associated with the
- *   returned error or value.
+ * * call [`fwd_free_rendered_metrics`] to free the memory associated with the
+ *   returned metrics.
+ * * call [`fwd_free_owned_bytes`] to free the memory associated with any
+ *   returned error.
  */
-struct ValueResult fwd_gather(void);
+struct RenderedMetricsResult fwd_gather_rendered(void);
 
 /**
  * Gets the value associated with the given key from the proposal provided.
@@ -2585,26 +2850,6 @@ struct VoidResult fwd_start_logs(struct LogArgs args);
  * - [`VoidResult::Err`] if an error occurs during initialization.
  */
 struct VoidResult fwd_start_metrics(void);
-
-/**
- * Start metrics recorder and exporter for this process.
- *
- * # Arguments
- *
- * * `metrics_port` - the port where metrics will be exposed at
- *
- * # Returns
- *
- * - [`VoidResult::Ok`] if the recorder was initialized.
- * - [`VoidResult::Err`] if an error occurs during initialization.
- *
- * # Safety
- *
- * The caller must:
- * * call [`fwd_free_owned_bytes`] to free the memory associated with the
- *   returned error (if any).
- */
-struct VoidResult fwd_start_metrics_with_exporter(uint16_t metrics_port);
 
 /**
  * Serialize a `VerifiedChangeProof` to bytes.

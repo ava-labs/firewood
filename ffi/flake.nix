@@ -9,7 +9,7 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
-    rust-overlay.url = "github:oxalica/rust-overlay";
+    rust-overlay.url = "github:oxalica/rust-overlay?ref=40e6ccc06e1245a4837cbbd6bdda64e21cc67379";
     crane.url = "github:ipetkov/crane";
     flake-utils.url = "github:numtide/flake-utils";
     golang.url = "github:ava-labs/avalanchego?dir=nix/go&ref=50585cbbdfe1af02a2c11bdc9fa77fca26e6b838";

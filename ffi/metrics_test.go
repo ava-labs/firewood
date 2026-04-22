@@ -4,14 +4,10 @@
 package ffi
 
 import (
-	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -19,13 +15,12 @@ import (
 )
 
 var (
-	metricsPort     = uint16(3000)
 	expectedMetrics = map[string]dto.MetricType{
-		"proposal_commit":    dto.MetricType_COUNTER,
-		"proposal_commit_ms": dto.MetricType_COUNTER,
-		"flush_nodes":        dto.MetricType_COUNTER,
-		"insert":             dto.MetricType_COUNTER,
-		"space_from_end":     dto.MetricType_COUNTER,
+		"firewood_proposal_commits_total":         dto.MetricType_COUNTER,
+		"firewood_flush_duration_seconds":         dto.MetricType_HISTOGRAM,
+		"firewood_persist_cycle_duration_seconds": dto.MetricType_HISTOGRAM,
+		"firewood_node_inserts_total":             dto.MetricType_COUNTER,
+		"firewood_storage_bytes_appended_total":   dto.MetricType_COUNTER,
 		// jemalloc memory allocator gauges (bytes).
 		// jemalloc_retained_bytes is omitted because it can legitimately be zero
 		// on some platforms, and we assert that gauge values are positive below.
@@ -43,7 +38,7 @@ var (
 func ensureMetricsStarted(t *testing.T) {
 	t.Helper()
 	initMetrics.Do(func() {
-		require.NoError(t, StartMetricsWithExporter(metricsPort))
+		require.NoError(t, StartMetrics())
 	})
 }
 
@@ -73,8 +68,9 @@ func newDbWithMetricsAndLogs(t *testing.T, opts ...Option) (db *Database, logPat
 	return db, activeLogPath
 }
 
-// Test calling metrics exporter along with gathering metrics
-// This lives under one test as we can only instantiate the global recorder once
+// TestMetrics verifies that expected metrics are populated after a database
+// operation. This lives under one test as we can only instantiate the global
+// recorder once.
 func TestMetrics(t *testing.T) {
 	r := require.New(t)
 
@@ -88,10 +84,74 @@ func TestMetrics(t *testing.T) {
 	// The flush_nodes metric is recorded during persistence, which happens asynchronously.
 	r.NoError(db.Close(t.Context()))
 
-	assertMetrics(t, metricsPort, expectedMetrics)
+	families, err := GatherRenderedMetrics()
+	r.NoError(err)
+	r.NotEmpty(families)
+
+	byName := make(map[string]*dto.MetricFamily, len(families))
+	for _, mf := range families {
+		byName[mf.GetName()] = mf
+	}
+
+	for name, wantType := range expectedMetrics {
+		mf, ok := byName[name]
+		r.True(ok, "metric %q not found", name)
+		r.Equal(wantType, mf.GetType(), "metric %q has wrong type", name)
+
+		// Jemalloc gauges must report positive byte counts in a running process.
+		if wantType == dto.MetricType_GAUGE && len(mf.Metric) > 0 && mf.Metric[0].Gauge != nil {
+			r.Greater(*mf.Metric[0].Gauge.Value, 0.0, "metric %q should be positive", name)
+		}
+	}
+
 	if logPath != "" {
 		r.True(assertNonEmptyFile(t, logPath))
 	}
+}
+
+func TestGatherRenderedMetrics(t *testing.T) {
+	r := require.New(t)
+
+	// Ensure the metrics recorder is initialized.
+	ensureMetricsStarted(t)
+
+	// Call gather multiple times so the histogram accumulates observations.
+	const gatherCalls = 3
+	var allFamilies []*dto.MetricFamily
+	for range gatherCalls {
+		families, err := GatherRenderedMetrics()
+		r.NoError(err)
+		r.NotEmpty(families)
+		allFamilies = families
+	}
+
+	// Find the native histogram metric for gather duration.
+	var histFamily *dto.MetricFamily
+	for _, mf := range allFamilies {
+		// prometheus metric names are normalized to lowercase with underscores
+		if mf.GetName() == "firewood_gather_duration_seconds" {
+			histFamily = mf
+			break
+		}
+	}
+	r.NotNil(histFamily, "firewood_gather_duration_seconds metric not found")
+	r.Equal(dto.MetricType_HISTOGRAM, histFamily.GetType())
+	r.NotEmpty(histFamily.GetMetric())
+
+	hist := histFamily.GetMetric()[0].GetHistogram()
+	r.NotNil(hist, "histogram field must be set")
+
+	// We called gather at least gatherCalls times; each call records one observation.
+	// The first call won't see itself, but subsequent calls see prior observations.
+	r.GreaterOrEqual(hist.GetSampleCount(), uint64(gatherCalls-1),
+		"expected at least %d observations", gatherCalls-1)
+	r.Greater(hist.GetSampleSum(), 0.0, "sample sum should be positive")
+
+	// Validate native histogram fields are populated.
+	r.NotNil(hist.Schema, "native histogram schema must be set")
+	r.NotNil(hist.ZeroThreshold, "native histogram zero_threshold must be set")
+	r.NotEmpty(hist.GetPositiveSpan(), "native histogram should have positive spans")
+	r.NotEmpty(hist.GetPositiveDelta(), "native histogram should have positive deltas")
 }
 
 func assertNonEmptyFile(t *testing.T, path string) bool {
@@ -100,46 +160,4 @@ func assertNonEmptyFile(t *testing.T, path string) bool {
 	require.NoError(t, err)
 	require.NotEmpty(t, f)
 	return true
-}
-
-func assertMetrics(t *testing.T, metricsPort uint16, expected map[string]dto.MetricType) {
-	r := require.New(t)
-	ctx := t.Context()
-
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodGet,
-		fmt.Sprintf("http://localhost:%d", metricsPort),
-		nil,
-	)
-	r.NoError(err)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	r.NoError(err)
-
-	_, err = io.ReadAll(resp.Body)
-	r.NoError(err)
-	r.NoError(resp.Body.Close())
-
-	g := Gatherer{}
-	metricsFamily, err := g.Gather()
-	r.NoError(err)
-
-	for k, v := range expected {
-		var d *dto.MetricFamily
-		for _, m := range metricsFamily {
-			if *m.Name == k {
-				d = m
-			}
-		}
-		r.NotNil(d, "metric %q not found", k)
-		r.Equal(v, *d.Type, "metric %q has wrong type", k)
-
-		// Jemalloc gauges must report positive byte counts in a running process.
-		if v == dto.MetricType_GAUGE && len(d.Metric) > 0 && d.Metric[0].Gauge != nil {
-			r.Greater(*d.Metric[0].Gauge.Value, 0.0,
-				"metric %q should be positive", k)
-		}
-	}
 }

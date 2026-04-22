@@ -12,7 +12,7 @@ use io_uring::IoUring;
 use parking_lot::Mutex;
 
 use crate::logger::{debug, trace};
-use firewood_metrics::firewood_increment;
+use firewood_metrics::firewood_counter;
 
 pub use self::errors::{BatchError, BatchErrors};
 
@@ -317,7 +317,7 @@ impl<'a> QueueEntry<'a> {
                         "io-uring write at offset {} returned EAGAIN, re-submitting",
                         self.original_offset
                     );
-                    firewood_increment!(crate::registry::ring::EAGAIN_WRITE_RETRY, 1);
+                    firewood_counter!(RING_EAGAIN_WRITE_RETRY).increment(1);
                     return Ok(0);
                 }
 
@@ -506,7 +506,7 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
         if unsafe { self.sq.push(&sqe) }.is_err() {
             self.add_entry_to_backlog(entry);
             trace!("io-uring submission queue is full");
-            firewood_increment!(crate::registry::ring::FULL, 1);
+            firewood_counter!(RING_FULL).increment(1);
             EnqueueResult::Full
         } else {
             let submission_count = entry.submission_count.wrapping_add(1);
@@ -548,7 +548,7 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
                 }
 
                 trace!("io-uring submission queue is full, waiting for space");
-                firewood_increment!(crate::registry::ring::SQ_WAIT, 1);
+                firewood_counter!(RING_SQ_WAIT).increment(1);
                 // this is our only mechanism to wait for the kernel to
                 // update the SQ once it is full. `submit_and_wait` does not
                 // provide the correct synchronization semantics in order for
@@ -649,7 +649,7 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
                     if written != 0 {
                         // if zero, we would have already logged EAGAIN above
                         trace!("io-uring write at offset {offset} partially completed, re-queuing");
-                        firewood_increment!(crate::registry::ring::PARTIAL_WRITE_RETRY, 1);
+                        firewood_counter!(RING_PARTIAL_WRITE_RETRY).increment(1);
                     }
                 }
                 let carry;
@@ -694,7 +694,7 @@ mod errors {
 
     /// A collection of errors encountered during an io-uring write batch.
     ///
-    /// A least one error occured for this to be returned. Incurable errors can be
+    /// A least one error occurred for this to be returned. Incurable errors can be
     /// observed via [`BatchErrors::incurable_error`].
     #[must_use]
     pub struct BatchErrors {
