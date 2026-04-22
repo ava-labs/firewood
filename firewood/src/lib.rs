@@ -154,7 +154,7 @@ pub mod registry;
 pub mod proofs;
 
 // Re-export commonly used proof types at the crate root for ergonomic access
-pub use merkle::{Key, Value, verify_range_proof};
+pub use merkle::{Key, Value, verify_change_proof_root_hash, verify_range_proof};
 pub use proofs::{
     ChangeProof, ChangeProofVerificationContext, EmptyProofCollection, InvalidHeader, Proof,
     ProofCollection, ProofError, ProofNode, ProofType, RangeProof, ReadError,
