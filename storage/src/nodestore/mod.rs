@@ -64,6 +64,8 @@ pub use alloc::NodeAllocator;
 pub use hash_algo::{NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError};
 pub use primitives::{AreaIndex, LinearAddress};
 // Re-export types from header module
+#[cfg(feature = "ethhash")]
+pub use hash::fix_account_storage_root_value;
 pub use header::NodeStoreHeader;
 
 /// The [`NodeStore`] handles the serialization of nodes and
@@ -123,6 +125,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
                 root: None,
             },
             storage,
+            must_recompute_storage_hash: header.must_recompute_storage_hash(),
         };
 
         if let Some(root_address) = header.root_address() {
@@ -150,6 +153,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
                 deleted: Box::default(),
                 root: None,
             },
+            must_recompute_storage_hash: true,
         }
     }
 
@@ -176,6 +180,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
                 root: None,
             },
             storage,
+            must_recompute_storage_hash: true,
         };
 
         let node = nodestore.read_node(root_address)?;
@@ -297,6 +302,7 @@ impl<S: ReadableStorage> NodeStore<Mutable<Propose>, S> {
         Ok(NodeStore {
             kind,
             storage: parent.storage.clone(),
+            must_recompute_storage_hash: parent.must_recompute_storage_hash,
         })
     }
 
@@ -328,6 +334,7 @@ impl<S: ReadableStorage> NodeStore<Mutable<Propose>, S> {
                 },
             },
             storage: parent.storage.clone(),
+            must_recompute_storage_hash: parent.must_recompute_storage_hash,
         }
     }
 }
@@ -374,6 +381,7 @@ impl<S: ReadableStorage> NodeStore<Mutable<Recon>, S> {
         Ok(NodeStore {
             kind: Mutable { root, inner: Recon },
             storage: parent.storage.clone(),
+            must_recompute_storage_hash: parent.must_recompute_storage_hash,
         })
     }
 }
@@ -415,6 +423,7 @@ impl<S: WritableStorage> NodeStore<Mutable<Propose>, S> {
                 },
             },
             storage,
+            must_recompute_storage_hash: true,
         }
     }
 }
@@ -430,6 +439,7 @@ impl<S> NodeStore<Mutable<Recon>, S> {
                 inner: Recon,
             },
             storage,
+            must_recompute_storage_hash: true,
         }
     }
 }
@@ -464,6 +474,15 @@ pub trait NodeReader {
     ///
     /// Returns a [`FileIoError`] if the node cannot be read.
     fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError>;
+
+    /// Returns `true` if account storage-root hashes must be recomputed at
+    /// proof-generation time.
+    ///
+    /// The default returns `true` (safe for all existing database versions).
+    /// [`NodeStore`] overrides this with the value read from the database header.
+    fn must_recompute_storage_hash(&self) -> bool {
+        true
+    }
 }
 
 impl<T> NodeReader for T
@@ -473,6 +492,10 @@ where
 {
     fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError> {
         self.deref().read_node(addr)
+    }
+
+    fn must_recompute_storage_hash(&self) -> bool {
+        self.deref().must_recompute_storage_hash()
     }
 }
 
@@ -626,6 +649,9 @@ pub struct NodeStore<T, S> {
     kind: T,
     /// Persisted storage to read nodes from.
     storage: Arc<S>,
+    /// Whether account storage-root hashes must be recomputed at
+    /// proof-generation time. Set from the database header version.
+    must_recompute_storage_hash: bool,
 }
 
 /// Contains state for a reconstructed revision of the trie.
@@ -710,6 +736,7 @@ impl<S: ReadableStorage> From<NodeStore<Reconstructed, S>> for NodeStore<Mutable
                 inner: Recon,
             },
             storage: val.storage,
+            must_recompute_storage_hash: val.must_recompute_storage_hash,
         }
     }
 }
@@ -722,6 +749,7 @@ impl<S: ReadableStorage> From<NodeStore<Mutable<Recon>, S>> for NodeStore<Recons
                 hash: OnceLock::new(),
             },
             storage: val.storage,
+            must_recompute_storage_hash: val.must_recompute_storage_hash,
         }
     }
 }
@@ -752,6 +780,7 @@ impl<S> Clone for NodeStore<Reconstructed, S> {
         NodeStore {
             kind: self.kind.clone(),
             storage: self.storage.clone(),
+            must_recompute_storage_hash: self.must_recompute_storage_hash,
         }
     }
 }
@@ -765,6 +794,7 @@ impl<S: WritableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<Com
                 root: val.kind.root.clone(),
             },
             storage: val.storage,
+            must_recompute_storage_hash: val.must_recompute_storage_hash,
         }
     }
 }
@@ -788,6 +818,7 @@ impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 root: self.kind.root.clone(),
             },
             storage: self.storage.clone(),
+            must_recompute_storage_hash: self.must_recompute_storage_hash,
         }
     }
 }
@@ -798,7 +829,11 @@ impl<S: ReadableStorage> TryFrom<NodeStore<Mutable<Propose>, S>>
     type Error = FileIoError;
 
     fn try_from(val: NodeStore<Mutable<Propose>, S>) -> Result<Self, Self::Error> {
-        let NodeStore { kind, storage } = val;
+        let NodeStore {
+            kind,
+            storage,
+            must_recompute_storage_hash,
+        } = val;
         let Mutable {
             root,
             inner: Propose { deleted, parent },
@@ -811,6 +846,7 @@ impl<S: ReadableStorage> TryFrom<NodeStore<Mutable<Propose>, S>>
                 root: None,
             }),
             storage,
+            must_recompute_storage_hash,
         };
 
         let Some(root) = root else {
@@ -840,17 +876,29 @@ impl<T, S: ReadableStorage> NodeReader for NodeStore<Mutable<T>, S> {
     fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError> {
         self.read_node_from_disk(addr, ReadableNodeMode::Write)
     }
+
+    fn must_recompute_storage_hash(&self) -> bool {
+        self.must_recompute_storage_hash
+    }
 }
 
 impl<S: ReadableStorage> NodeReader for NodeStore<Reconstructed, S> {
     fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError> {
         self.read_node_from_disk(addr, ReadableNodeMode::ReconRead)
     }
+
+    fn must_recompute_storage_hash(&self) -> bool {
+        self.must_recompute_storage_hash
+    }
 }
 
 impl<T: Parentable, S: ReadableStorage> NodeReader for NodeStore<T, S> {
     fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError> {
         self.read_node_from_disk(addr, ReadableNodeMode::Read)
+    }
+
+    fn must_recompute_storage_hash(&self) -> bool {
+        self.must_recompute_storage_hash
     }
 }
 

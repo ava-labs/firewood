@@ -25,6 +25,34 @@ fn proof_node(nibbles: &[u8]) -> ProofNode {
     }
 }
 
+/// Build key-value pairs for range proof verification using the key-value
+/// iterator's values rather than the original inserted values. Proof
+/// generation may rewrite account storageRoot fields (ethhash), and the
+/// iterator applies the same fix, so iterator values match what the proof
+/// nodes contain. Panics if a key is not present in the trie — callers are
+/// expected to pass keys that were just committed.
+fn stored_key_values<K: AsRef<[u8]>>(
+    merkle: &Merkle<NodeStore<Committed, MemStore>>,
+    keys: impl IntoIterator<Item = K>,
+) -> KeyValuePairs {
+    keys.into_iter()
+        .map(|k| {
+            let key = k.as_ref();
+            let (found_key, val) = merkle
+                .key_value_iter_from_key(key)
+                .next()
+                .expect("iterator should yield at least one item")
+                .expect("iterator should not error");
+            assert_eq!(
+                found_key.as_ref(),
+                key,
+                "iterator returned wrong key: wanted {key:?}, got {found_key:?}"
+            );
+            (key.to_vec().into_boxed_slice(), val)
+        })
+        .collect()
+}
+
 #[test]
 fn outside_children_empty_proof() {
     let result = compute_outside_children(&[], None, true).unwrap();
@@ -203,10 +231,7 @@ fn test_range_proof() {
         let start_proof = merkle.prove(items[start].0).unwrap();
         let end_proof = merkle.prove(items[end - 1].0).unwrap();
 
-        let key_values: KeyValuePairs = items[start..end]
-            .iter()
-            .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-            .collect();
+        let key_values = stored_key_values(&merkle, items[start..end].iter().map(|(k, _)| *k));
 
         let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
 
@@ -447,10 +472,7 @@ fn test_range_proof_with_non_existent_proof() {
         let start_proof = merkle.prove(&first).unwrap();
         let end_proof = merkle.prove(&last).unwrap();
 
-        let key_values: KeyValuePairs = items[start..end]
-            .iter()
-            .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-            .collect();
+        let key_values = stored_key_values(&merkle, items[start..end].iter().map(|(k, _)| *k));
 
         let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
 
@@ -466,10 +488,7 @@ fn test_range_proof_with_non_existent_proof() {
     let start_proof = merkle.prove(first).unwrap();
     let end_proof = merkle.prove(last).unwrap();
 
-    let key_values: KeyValuePairs = items
-        .into_iter()
-        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-        .collect();
+    let key_values = stored_key_values(&merkle, items.iter().map(|(k, _)| *k));
 
     let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
 
@@ -566,15 +585,12 @@ fn test_one_element_range_proof() {
     let proof = merkle.prove(items[start].0).unwrap();
     assert!(!proof.is_empty());
 
-    let key_values = vec![(
-        items[start].0.to_vec().into_boxed_slice(),
-        items[start].1.to_vec().into_boxed_slice(),
-    )];
+    let key_values = stored_key_values(&merkle, std::iter::once(*items[start].0));
 
     let range_proof = RangeProof::new(
         proof.clone(), // Same proof for start and end
         proof,
-        key_values.into_boxed_slice(),
+        key_values.into(),
     );
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
@@ -592,13 +608,9 @@ fn test_one_element_range_proof() {
     let start_proof_2 = merkle.prove(&first).unwrap();
     let end_proof_2 = merkle.prove(items[start].0).unwrap();
 
-    let key_values_2 = vec![(
-        items[start].0.to_vec().into_boxed_slice(),
-        items[start].1.to_vec().into_boxed_slice(),
-    )];
+    let key_values_2 = stored_key_values(&merkle, std::iter::once(*items[start].0));
 
-    let range_proof_2 =
-        RangeProof::new(start_proof_2, end_proof_2, key_values_2.into_boxed_slice());
+    let range_proof_2 = RangeProof::new(start_proof_2, end_proof_2, key_values_2.into());
 
     verify_range_proof(
         Some(&first),
@@ -613,13 +625,9 @@ fn test_one_element_range_proof() {
     let start_proof_3 = merkle.prove(items[start].0).unwrap();
     let end_proof_3 = merkle.prove(&last).unwrap();
 
-    let key_values_3 = vec![(
-        items[start].0.to_vec().into_boxed_slice(),
-        items[start].1.to_vec().into_boxed_slice(),
-    )];
+    let key_values_3 = stored_key_values(&merkle, std::iter::once(*items[start].0));
 
-    let range_proof_3 =
-        RangeProof::new(start_proof_3, end_proof_3, key_values_3.into_boxed_slice());
+    let range_proof_3 = RangeProof::new(start_proof_3, end_proof_3, key_values_3.into());
 
     verify_range_proof(
         Some(items[start].0),
@@ -633,13 +641,9 @@ fn test_one_element_range_proof() {
     let start_proof_4 = merkle.prove(&first).unwrap();
     let end_proof_4 = merkle.prove(&last).unwrap();
 
-    let key_values_4 = vec![(
-        items[start].0.to_vec().into_boxed_slice(),
-        items[start].1.to_vec().into_boxed_slice(),
-    )];
+    let key_values_4 = stored_key_values(&merkle, std::iter::once(*items[start].0));
 
-    let range_proof_4 =
-        RangeProof::new(start_proof_4, end_proof_4, key_values_4.into_boxed_slice());
+    let range_proof_4 = RangeProof::new(start_proof_4, end_proof_4, key_values_4.into());
 
     verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof_4).unwrap();
 
@@ -652,13 +656,9 @@ fn test_one_element_range_proof() {
     let start_proof_5 = merkle_mini.prove(first).unwrap();
     let end_proof_5 = merkle_mini.prove(&key).unwrap();
 
-    let key_values_5 = vec![(
-        key.to_vec().into_boxed_slice(),
-        val.to_vec().into_boxed_slice(),
-    )];
+    let key_values_5 = stored_key_values(&merkle_mini, std::iter::once(key));
 
-    let range_proof_5 =
-        RangeProof::new(start_proof_5, end_proof_5, key_values_5.into_boxed_slice());
+    let range_proof_5 = RangeProof::new(start_proof_5, end_proof_5, key_values_5.into());
 
     let root_hash_mini = merkle_mini.nodestore().root_hash().unwrap();
 
@@ -684,10 +684,7 @@ fn test_all_elements_proof() {
     let start_proof_2 = merkle.prove(items[start].0).unwrap();
     let end_proof_2 = merkle.prove(items[end].0).unwrap();
 
-    let key_values_2: KeyValuePairs = items
-        .iter()
-        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-        .collect();
+    let key_values_2 = stored_key_values(&merkle, items.iter().map(|(k, _)| *k));
 
     let range_proof_2 =
         RangeProof::new(start_proof_2, end_proof_2, key_values_2.into_boxed_slice());
@@ -706,10 +703,7 @@ fn test_all_elements_proof() {
     let start_proof_3 = merkle.prove(first).unwrap();
     let end_proof_3 = merkle.prove(last).unwrap();
 
-    let key_values_3: KeyValuePairs = items
-        .iter()
-        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-        .collect();
+    let key_values_3 = stored_key_values(&merkle, items.iter().map(|(k, _)| *k));
 
     let range_proof_3 =
         RangeProof::new(start_proof_3, end_proof_3, key_values_3.into_boxed_slice());
@@ -856,11 +850,8 @@ fn test_single_side_range_proof() {
             let start_proof = merkle.prove(start).unwrap();
             let end_proof = merkle.prove(items[case].0).unwrap();
 
-            let key_values: KeyValuePairs = items
-                .iter()
-                .take(case + 1)
-                .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-                .collect();
+            let key_values =
+                stored_key_values(&merkle, items.iter().take(case + 1).map(|(k, _)| *k));
 
             let range_proof =
                 RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
@@ -895,11 +886,7 @@ fn test_reverse_single_side_range_proof() {
             let start_proof = merkle.prove(items[case].0).unwrap();
             let end_proof = merkle.prove(end).unwrap();
 
-            let key_values: KeyValuePairs = items
-                .iter()
-                .skip(case)
-                .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-                .collect();
+            let key_values = stored_key_values(&merkle, items.iter().skip(case).map(|(k, _)| *k));
 
             let range_proof =
                 RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
@@ -932,10 +919,7 @@ fn test_both_sides_range_proof() {
         let start_proof = merkle.prove(start).unwrap();
         let end_proof = merkle.prove(end).unwrap();
 
-        let key_values: KeyValuePairs = items
-            .into_iter()
-            .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-            .collect();
+        let key_values = stored_key_values(&merkle, items.iter().map(|(k, _)| *k));
 
         let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
 
@@ -1059,10 +1043,7 @@ fn test_range_proof_keys_with_shared_prefix() {
     let start_proof = merkle.prove(&start).unwrap();
     let end_proof = merkle.prove(&end).unwrap();
 
-    let key_values: KeyValuePairs = items
-        .iter()
-        .map(|(k, v)| (k.clone().into_boxed_slice(), v.clone().into_boxed_slice()))
-        .collect();
+    let key_values = stored_key_values(&merkle, items.iter().map(|(k, _)| k.as_slice()));
 
     let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
 
@@ -1091,40 +1072,25 @@ fn test_bloated_range_proof() {
     // In the 'malicious' case, we add proofs for every single item
     // (but only one key/value pair used as leaf)
     let mut proof = Proof::empty().into_mutable();
-    let mut keys = Vec::new();
-    let mut vals = Vec::new();
-    for (i, item) in items.iter().enumerate() {
+    for item in &items {
         let cur_proof = merkle.prove(&item.0).unwrap();
         assert!(!cur_proof.is_empty());
         proof.extend(cur_proof);
-        if i == 50 {
-            keys.push(item.0.as_ref());
-            vals.push(item.1);
-        }
     }
 
-    // Create start and end proofs (same key in this case since only one key-value pair)
-    let start_proof = merkle.prove(keys[0]).unwrap();
-    let end_proof = merkle.prove(keys[keys.len() - 1]).unwrap();
+    let target = &items[50];
 
-    // Convert to the format expected by RangeProof
-    let key_values: KeyValuePairs = keys
-        .iter()
-        .zip(vals.iter())
-        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-        .collect();
+    // Create start and end proofs (same key in this case since only one key-value pair)
+    let start_proof = merkle.prove(&target.0).unwrap();
+    let end_proof = merkle.prove(&target.0).unwrap();
+
+    let key_values = stored_key_values(&merkle, std::iter::once(target.0));
 
     let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    verify_range_proof(
-        Some(keys[0]),
-        Some(keys[keys.len() - 1]),
-        &root_hash,
-        &range_proof,
-    )
-    .unwrap();
+    verify_range_proof(Some(&target.0), Some(&target.0), &root_hash, &range_proof).unwrap();
 }
 
 #[test]
@@ -1773,4 +1739,141 @@ fn test_right_edge_boundary_prefix_of_terminal() {
     // End proof should only have 2 proof nodes.
     assert_eq!(proof.end_proof().len(), 2);
     verify_range_proof(None::<&[u8]>, Some(b"\x20"), &root_hash, &proof).unwrap();
+}
+
+/// Regression test: range proof verification must handle `ValueDigest::Hash`
+/// correctly. In merkledb mode (non-ethhash), values >= 32 bytes are stored
+/// as hashes in serialized proof nodes. When a branch node has both a value
+/// and children (prefix key), the deserialized proof node carries Hash
+/// instead of Value. The reconcile step must not clear the branch value
+/// when the hash matches.
+///
+/// Setup: \x10 is a prefix of \x10\x20, making \x10 a branch with a value
+/// AND children. The 32-byte value at \x10 triggers `ValueDigest::Hash` after
+/// serialization round-trip.
+#[cfg(not(feature = "ethhash"))]
+#[test]
+fn test_range_proof_with_hashed_value() {
+    // Value >= 32 bytes triggers ValueDigest::Hash in merkledb mode
+    let big_value = vec![0xab_u8; 32];
+    let merkle = init_merkle([
+        (b"\x10" as &[u8], big_value.as_slice()),
+        (b"\x10\x20", b"child"),
+        (b"\x30", b"other"),
+    ]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let proof = merkle
+        .range_proof(Some(b"\x10"), Some(b"\x30"), None)
+        .unwrap();
+
+    // Serialize and deserialize to convert large values to Hash digests,
+    // simulating a proof received from a peer over the network.
+    let mut serialized = Vec::new();
+    proof.write_to_vec(&mut serialized);
+    let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
+
+    // Confirm the start proof node carries a Hash digest after round-trip.
+    let start_node = deserialized.start_proof().as_ref().last().unwrap();
+    assert!(
+        matches!(
+            start_node.value_digest,
+            Some(firewood_storage::ValueDigest::Hash(_))
+        ),
+        "expected Hash digest for large value after deserialization, got {:?}",
+        start_node.value_digest
+    );
+
+    // This must pass — the Hash digest matches the branch value.
+    verify_range_proof(Some(b"\x10"), Some(b"\x30"), &root_hash, &deserialized).unwrap();
+}
+
+/// Regression test: empty range proof with a Hash digest at an out-of-range
+/// proof node. The proving trie has no value at that position (no key-value
+/// pairs inserted). The Hash proof node is out of range, so its value
+/// contribution comes from the parent's proof child hash — the branch value
+/// doesn't matter and reconcile should not reject.
+#[cfg(not(feature = "ethhash"))]
+#[test]
+fn test_empty_range_proof_with_hashed_value() {
+    // \x10 has a large value (>= 32 bytes), \x10\x20 makes \x10 a branch.
+    // Range is past all keys — empty key-value list.
+    let big_value = vec![0xab_u8; 32];
+    let merkle = init_merkle([
+        (b"\x10" as &[u8], big_value.as_slice()),
+        (b"\x10\x20", b"child"),
+    ]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    // Range starts past all keys — empty proof
+    let proof = merkle
+        .range_proof(Some(b"\x30"), Some(b"\x40"), None)
+        .unwrap();
+    assert!(proof.key_values().is_empty());
+
+    // Serialize/deserialize to convert Value to Hash
+    let mut serialized = Vec::new();
+    proof.write_to_vec(&mut serialized);
+    let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
+
+    // This must pass — the Hash proof node is out of range.
+    verify_range_proof(Some(b"\x30"), Some(b"\x40"), &root_hash, &deserialized).unwrap();
+}
+
+/// Multi-level trie with hashed values at multiple branch depths.
+/// Tests that both in-range and out-of-range branches with Hash digests
+/// are handled correctly after serialization round-trip.
+///
+/// Trie structure:
+///   root
+///   └── "abc" (value: [0;64], Hash after serialize)      // out-of-range branch
+///       ├── "123" → leaf (value: [1;64], Hash)           // in-range
+///       └── "def" (value: [2;64], Hash after serialize)  // in-range branch
+///           └── "123" → leaf (value: [3;64], Hash)       // in-range
+///
+/// Range ["abc123"..): "abc" is out-of-range (< `start_key`), its Hash comes
+/// from the proof node fallback in `compute_root_hash_with_proofs`. "abcdef"
+/// is in-range, its Hash matches the branch value via the fast path in
+/// `reconcile_branch_proof_node`.
+#[cfg(not(feature = "ethhash"))]
+#[test]
+fn test_multi_level_range_proof_with_hashed_values() {
+    let merkle = init_merkle([
+        (b"abc" as &[u8], [0; 64].as_slice()),
+        (b"abc123", [1; 64].as_slice()),
+        (b"abcdef", [2; 64].as_slice()),
+        (b"abcdef123", [3; 64].as_slice()),
+    ]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let proof = merkle
+        .range_proof(Some(b"abc123"), Some(b"\xff"), None)
+        .unwrap();
+
+    // All 3 in-range keys should be in the proof
+    assert_eq!(proof.key_values().len(), 3);
+
+    // Serialize/deserialize to convert large values to Hash digests
+    let mut serialized = Vec::new();
+    proof.write_to_vec(&mut serialized);
+    let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
+
+    // Confirm all proof nodes with values carry Hash, not Value (all values >= 32 bytes).
+    for proof_node in deserialized
+        .start_proof()
+        .as_ref()
+        .iter()
+        .chain(deserialized.end_proof().as_ref())
+    {
+        if let Some(digest) = &proof_node.value_digest {
+            assert!(
+                matches!(digest, firewood_storage::ValueDigest::Hash(_)),
+                "expected Hash digest after deserialization, got Value at key {:?}",
+                proof_node.key
+            );
+        }
+    }
+
+    // This exercises:
+    // - "abc" out-of-range: Hash fallback in compute_root_hash_with_proofs
+    // - "abcdef" in-range: Hash fast path in reconcile_branch_proof_node
+    verify_range_proof(Some(b"abc123"), Some(b"\xff"), &root_hash, &deserialized).unwrap();
 }
