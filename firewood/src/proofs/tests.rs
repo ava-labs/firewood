@@ -583,6 +583,179 @@ fn test_proof_node_partial_len_boundaries() {
     assert_range_proof_round_trip(serialized);
 }
 
+// These tests use manually constructed proofs with known byte layouts.
+//
+// Layout for make_range_proof_from_single_node(make_proof_node(&[1, 2, 3], 0, None, &[])):
+//   [32]=0x01 (start_proof count)
+//   [33]=0x03 (key byte length)    [34]=0x01  [35]=0x02  [36]=0x03 (key bytes)
+//   [37]=0x00 (partial_len)        [38]=0x00  (option discriminant = None)
+//   [39]=0x00  [40]=0x00           (ChildMask = 0)
+//   [41]=0x00 (end_proof count)    [42]=0x00  (key_values count)
+//
+// Layout for make_range_proof_from_single_node(make_proof_node(&[1, 2, 3], 0, Some(b"v"), &[])):
+//   [32..37] same as above
+//   [38]=0x01 (option discriminant = Some)   [39]=0x00 (value digest discriminant = Value)
+//   [40]=0x01 (value byte length)            [41]=0x76 (b'v')
+//   [42]=0x00  [43]=0x00 (ChildMask = 0)     [44]=0x00  [45]=0x00
+//
+// Layout for make_range_proof_from_single_node(make_proof_node(&[1], 0, None, &[7])):
+//   [32]=0x01  [33]=0x01  [34]=0x01  (count, key len, key byte)
+//   [35]=0x00  [36]=0x00             (partial_len, option discriminant = None)
+//   [37]=0x80  [38]=0x00             (ChildMask — nibble 7 = bit 7 of low byte)
+//   Non-ethhash: [39..71] = TrieHash (32 bytes)
+//   Ethhash:     [39] = HashType discriminant, [40..72] = TrieHash
+
+#[test]
+fn test_invalid_path_nibble() {
+    let node = make_proof_node(&[1, 2, 3], 0, None, &[]);
+    let (_, mut data) = make_range_proof_from_single_node(node);
+    data[34] = 0x10; // first key byte set to an invalid nibble (16 > 15)
+    match FrozenRangeProof::from_slice(&data) {
+        Err(ReadError::InvalidItem { item, .. }) => assert_eq!(item, "path"),
+        other => panic!("Expected InvalidItem {{ item: \"path\" }}, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_invalid_value_digest_discriminant() {
+    let node = make_proof_node(&[1, 2, 3], 0, Some(Box::from(b"v".as_slice())), &[]);
+    let (_, mut data) = make_range_proof_from_single_node(node);
+    data[39] = 2; // invalid ValueDigest discriminant (must be 0 or 1)
+    match FrozenRangeProof::from_slice(&data) {
+        Err(ReadError::InvalidItem {
+            item,
+            expected,
+            found,
+            ..
+        }) => {
+            assert_eq!(item, "value digest discriminant");
+            assert_eq!(expected, "0 (value) or 1 (hash)");
+            assert_eq!(found, "2");
+        }
+        other => {
+            panic!("Expected InvalidItem {{ item: \"value digest discriminant\" }}, got: {other:?}")
+        }
+    }
+}
+
+#[test_case(38, "option discriminant", 1, 0; "option discriminant")]
+#[test_case(39, "children map", 2, 0; "children map zero bytes")]
+#[test_case(40, "children map", 2, 1; "children map one byte")]
+fn test_incomplete_item_known_layout(
+    truncate_at: usize,
+    item: &'static str,
+    expected_len: usize,
+    found_len: usize,
+) {
+    let node = make_proof_node(&[1, 2, 3], 0, None, &[]);
+    let (_, mut data) = make_range_proof_from_single_node(node);
+    data.truncate(truncate_at);
+    match FrozenRangeProof::from_slice(&data) {
+        Err(ReadError::IncompleteItem {
+            item: found_item,
+            expected,
+            found,
+            ..
+        }) => {
+            assert_eq!(found_item, item);
+            assert_eq!(expected, expected_len);
+            assert_eq!(found, found_len);
+        }
+        other => panic!("Expected IncompleteItem {{ item: {item:?} }}, got: {other:?}"),
+    }
+}
+
+#[cfg(not(feature = "ethhash"))]
+#[test]
+fn test_incomplete_trie_hash() {
+    let node = make_proof_node(&[1], 0, None, &[7]);
+    let (_, mut data) = make_range_proof_from_single_node(node);
+    data.truncate(39); // ChildMask ends at [38]; TrieHash starts at [39]
+    match FrozenRangeProof::from_slice(&data) {
+        Err(ReadError::IncompleteItem {
+            item,
+            expected,
+            found,
+            ..
+        }) => {
+            assert_eq!(item, "trie hash");
+            assert_eq!(expected, 32);
+            assert_eq!(found, 0);
+        }
+        other => panic!("Expected IncompleteItem {{ item: \"trie hash\" }}, got: {other:?}"),
+    }
+}
+
+#[cfg(feature = "ethhash")]
+#[test]
+fn test_incomplete_hash_type_discriminant() {
+    let node = make_proof_node(&[1], 0, None, &[7]);
+    let (_, mut data) = make_range_proof_from_single_node(node);
+    data.truncate(39); // ChildMask ends at [38]; HashType discriminant is at [39]
+    match FrozenRangeProof::from_slice(&data) {
+        Err(ReadError::IncompleteItem {
+            item,
+            expected,
+            found,
+            ..
+        }) => {
+            assert_eq!(item, "hash type discriminant");
+            assert_eq!(expected, 1);
+            assert_eq!(found, 0);
+        }
+        other => {
+            panic!("Expected IncompleteItem {{ item: \"hash type discriminant\" }}, got: {other:?}")
+        }
+    }
+}
+
+#[cfg(feature = "ethhash")]
+#[test]
+fn test_invalid_hash_type_discriminant() {
+    let node = make_proof_node(&[1], 0, None, &[7]);
+    let (_, mut data) = make_range_proof_from_single_node(node);
+    data[39] = 2; // invalid HashType discriminant (must be 0 or 1)
+    match FrozenRangeProof::from_slice(&data) {
+        Err(ReadError::InvalidItem {
+            item,
+            expected,
+            found,
+            ..
+        }) => {
+            assert_eq!(item, "hash type discriminant");
+            assert_eq!(expected, "0 (hash) or 1 (rlp)");
+            assert_eq!(found, "2");
+        }
+        other => {
+            panic!("Expected InvalidItem {{ item: \"hash type discriminant\" }}, got: {other:?}")
+        }
+    }
+}
+
+#[test]
+fn test_change_proof_incomplete_batch_op_discriminant() {
+    // Layout of create_valid_change_proof() after the 32-byte header:
+    //   [32]=0x00 (start_proof count=0)  [33]=0x00 (end_proof count=0)
+    //   [34]=0x03 (batch_ops count=3)    [35]=0x00 (first BatchOp discriminant)
+    let (_, mut data) = create_valid_change_proof();
+    data.truncate(35); // cut before the first BatchOp discriminant byte
+    match FrozenChangeProof::from_slice(&data) {
+        Err(ReadError::IncompleteItem {
+            item,
+            expected,
+            found,
+            ..
+        }) => {
+            assert_eq!(item, "option discriminant");
+            assert_eq!(expected, 1);
+            assert_eq!(found, 0);
+        }
+        other => {
+            panic!("Expected IncompleteItem {{ item: \"option discriminant\" }}, got: {other:?}")
+        }
+    }
+}
+
 /// Generates a random `ProofNode` using `rng`.
 fn generate_random_proof_node(rng: &SeededRng) -> ProofNode {
     let key_len = rng.random_range(0usize..=32);
