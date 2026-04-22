@@ -6,7 +6,9 @@
 use integer_encoding::VarInt;
 use test_case::test_case;
 
-use firewood_storage::{Children, IntoHashType, PathComponent, TrieHash, ValueDigest};
+use firewood_storage::{
+    Children, IntoHashType, PathComponent, SeededRng, TrieHash, ValueDigest, logger::debug,
+};
 
 use super::{
     header::InvalidHeader,
@@ -155,9 +157,9 @@ fn test_incomplete_item(
 ) {
     let (proof, mut data) = create_valid_range_proof();
 
-    eprintln!("data len: {}", data.len());
-    eprintln!("proof: {proof:#?}");
-    eprintln!("data: {}", hex::encode(&data));
+    debug!("data len: {}", data.len());
+    debug!("proof: {proof:#?}");
+    debug!("data: {}", hex::encode(&data));
 
     mutator(&proof, &mut data);
 
@@ -579,4 +581,165 @@ fn test_proof_node_partial_len_boundaries() {
     let node = make_proof_node(&[1, 2, 3, 4], 4, None, &[]);
     let (_, serialized) = make_range_proof_from_single_node(node);
     assert_range_proof_round_trip(serialized);
+}
+
+/// Generates a random `ProofNode` using `rng`.
+fn generate_random_proof_node(rng: &SeededRng) -> ProofNode {
+    let key_len = rng.random_range(0usize..=32);
+    let key = (0..key_len)
+        .map(|_| PathComponent::try_new(rng.random_range(0u8..16)).unwrap())
+        .collect();
+    let partial_len = if key_len == 0 {
+        0
+    } else {
+        rng.random_range(0..=key_len)
+    };
+    let value_digest = rng.random::<bool>().then(|| {
+        let val_len = rng.random_range(0usize..=64);
+        let value: Box<[u8]> = (0..val_len).map(|_| rng.random::<u8>()).collect();
+        ValueDigest::Value(value)
+    });
+    let mut child_hashes = Children::new();
+    for nibble in 0u8..16 {
+        if rng.random::<bool>() {
+            child_hashes[PathComponent::try_new(nibble).unwrap()] =
+                Some(TrieHash::from(rng.random::<[u8; 32]>()).into_hash_type());
+        }
+    }
+    ProofNode {
+        key,
+        partial_len,
+        value_digest,
+        child_hashes,
+    }
+}
+
+/// Generates a random `FrozenRangeProof` and returns it with its serialized bytes.
+///
+/// The seed used is printed to stderr by `SeededRng` so failures can be reproduced.
+fn generate_random_range_proof(rng: &SeededRng) -> (FrozenRangeProof, Vec<u8>) {
+    let start_nodes: Box<[ProofNode]> = (0..rng.random_range(0usize..=5))
+        .map(|_| generate_random_proof_node(rng))
+        .collect();
+    let end_nodes: Box<[ProofNode]> = (0..rng.random_range(0usize..=5))
+        .map(|_| generate_random_proof_node(rng))
+        .collect();
+    let key_values: Box<[_]> = (0..rng.random_range(0usize..=10))
+        .map(|_| {
+            let key_len = rng.random_range(0usize..=32);
+            let key: Box<[u8]> = (0..key_len).map(|_| rng.random::<u8>()).collect();
+            let val_len = rng.random_range(0usize..=32);
+            let val: Box<[u8]> = (0..val_len).map(|_| rng.random::<u8>()).collect();
+            (key, val)
+        })
+        .collect();
+
+    let proof = FrozenRangeProof::new(Proof::new(start_nodes), Proof::new(end_nodes), key_values);
+    let mut serialized = Vec::new();
+    proof.write_to_vec(&mut serialized);
+    (proof, serialized)
+}
+
+/// Generates a random `FrozenChangeProof` and returns it with its serialized bytes.
+fn generate_random_change_proof(rng: &SeededRng) -> (FrozenChangeProof, Vec<u8>) {
+    let start_nodes: Box<[ProofNode]> = (0..rng.random_range(0usize..=5))
+        .map(|_| generate_random_proof_node(rng))
+        .collect();
+    let end_nodes: Box<[ProofNode]> = (0..rng.random_range(0usize..=5))
+        .map(|_| generate_random_proof_node(rng))
+        .collect();
+    let batch_ops: Box<[_]> = (0..rng.random_range(0usize..=10))
+        .map(|_| {
+            let key_len = rng.random_range(0usize..=32);
+            let key: Box<[u8]> = (0..key_len).map(|_| rng.random::<u8>()).collect();
+            match rng.random_range(0u8..3) {
+                0 => {
+                    let val_len = rng.random_range(0usize..=32);
+                    let val: Box<[u8]> = (0..val_len).map(|_| rng.random::<u8>()).collect();
+                    BatchOp::Put { key, value: val }
+                }
+                1 => BatchOp::Delete { key },
+                _ => BatchOp::DeleteRange { prefix: key },
+            }
+        })
+        .collect();
+
+    let proof = FrozenChangeProof::new(Proof::new(start_nodes), Proof::new(end_nodes), batch_ops);
+    let mut serialized = Vec::new();
+    proof.write_to_vec(&mut serialized);
+    (proof, serialized)
+}
+
+#[test]
+fn test_slow_range_proof_roundtrip_fuzz() {
+    let rng = SeededRng::from_env_or_random();
+    for i in 0..100 {
+        let (proof, bytes) = generate_random_range_proof(&rng);
+        debug!("iteration {i}: proof: {proof:#?}");
+        debug!("iteration {i}: bytes: {}", hex::encode(&bytes));
+
+        let parsed = FrozenRangeProof::from_slice(&bytes).expect("generated proof should be valid");
+        let mut re_bytes = Vec::new();
+        parsed.write_to_vec(&mut re_bytes);
+        assert_eq!(bytes, re_bytes, "re-serialized bytes must match original");
+    }
+}
+
+#[test]
+fn test_slow_change_proof_roundtrip_fuzz() {
+    let rng = SeededRng::from_env_or_random();
+    for i in 0..100 {
+        let (proof, bytes) = generate_random_change_proof(&rng);
+        debug!("iteration {i}: proof: {proof:#?}");
+        debug!("iteration {i}: bytes: {}", hex::encode(&bytes));
+
+        let parsed =
+            FrozenChangeProof::from_slice(&bytes).expect("generated proof should be valid");
+        let mut re_bytes = Vec::new();
+        parsed.write_to_vec(&mut re_bytes);
+        assert_eq!(bytes, re_bytes, "re-serialized bytes must match original");
+    }
+}
+
+#[test]
+fn test_slow_malformed_proof_fuzz() {
+    let rng = SeededRng::from_env_or_random();
+    for i in 0..200 {
+        let (_, original_bytes) = generate_random_range_proof(&rng);
+        let mut data = original_bytes.clone();
+
+        // Corrupt 1–3 bytes at random positions.
+        let num_corruptions = rng.random_range(1usize..=3);
+        for _ in 0..num_corruptions {
+            if data.is_empty() {
+                break;
+            }
+            let pos = rng.random_range(0..data.len());
+            let old = data[pos];
+            let new_val = rng.random::<u8>();
+            debug!("iteration {i}: corrupted byte {pos}: {old} -> {new_val}");
+            data[pos] = new_val;
+        }
+        debug!("iteration {i}: corrupted bytes: {}", hex::encode(&data));
+
+        match FrozenRangeProof::from_slice(&data) {
+            Err(err) => {
+                debug!("iteration {i}: parse error (expected): {err}");
+            }
+            Ok(parsed) => {
+                debug!("iteration {i}: corruption produced valid proof (checking stability)");
+                // Verify idempotency: serialize(parsed) should be stable across two round-trips.
+                let mut re_bytes = Vec::new();
+                parsed.write_to_vec(&mut re_bytes);
+                let re_parsed = FrozenRangeProof::from_slice(&re_bytes)
+                    .expect("re-serialized proof should parse cleanly");
+                let mut re_re_bytes = Vec::new();
+                re_parsed.write_to_vec(&mut re_re_bytes);
+                assert_eq!(
+                    re_bytes, re_re_bytes,
+                    "re-serialized proof must be idempotent"
+                );
+            }
+        }
+    }
 }
