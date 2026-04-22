@@ -17,7 +17,7 @@ use tokio::time::{sleep, timeout};
 use super::{DeployOptions, LaunchError};
 
 /// Time to wait after launch for the instance to transition to `running`.
-const WAIT_RUNNING_TIMEOUT: Duration = Duration::from_secs(300);
+const WAIT_RUNNING_TIMEOUT: Duration = Duration::from_mins(5);
 /// Poll interval while waiting for the instance state to change.
 const POLL_INTERVAL_RUNNING: Duration = Duration::from_secs(3);
 /// Canonical's AWS account ID for official Ubuntu AMIs.

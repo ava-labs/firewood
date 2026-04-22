@@ -1262,7 +1262,7 @@ mod test {
         let committed = db.root_hash().unwrap();
         let revision = db.revision(committed).unwrap();
 
-        for (k, v) in keys.into_iter().zip(vals.into_iter()) {
+        for (k, v) in keys.into_iter().zip(vals) {
             assert_eq!(revision.val(k).unwrap().unwrap(), v);
         }
     }

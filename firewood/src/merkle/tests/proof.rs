@@ -125,10 +125,20 @@ fn test_proof() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    for (key, val) in items {
+    // Build expected values from the key-value iterator, which applies the
+    // same storageRoot fixups as proof generation.
+    let expected: std::collections::HashMap<_, _> = merkle
+        .key_value_iter_from_key(b"")
+        .map(|r| r.unwrap())
+        .collect();
+
+    for (key, _val) in items {
         let proof = merkle.prove(key).unwrap();
         assert!(!proof.is_empty());
-        proof.verify(key, Some(val), &root_hash).unwrap();
+        let value = expected.get(key.as_ref()).unwrap_or_else(|| {
+            panic!("key {key:?} missing from iterator");
+        });
+        proof.verify(key, Some(value.as_ref()), &root_hash).unwrap();
     }
 }
 

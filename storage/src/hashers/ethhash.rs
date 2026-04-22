@@ -239,7 +239,11 @@ impl<T: Hashable> Preimage for T {
 }
 
 // TODO: we could be super fancy and just plunk the correct bytes into the existing BytesMut
-fn replace_hash<T: AsRef<[u8]>, U: AsRef<[u8]>>(bytes: T, new_hash: U) -> Option<BytesMut> {
+pub(crate) fn replace_hash<T, U>(bytes: T, new_hash: U) -> Option<BytesMut>
+where
+    T: AsRef<[u8]>,
+    U: AsRef<[u8]>,
+{
     // rlp_encoded_bytes needs to be decoded
     let rlp = Rlp::new(bytes.as_ref());
     let mut list = rlp.as_list().ok()?;

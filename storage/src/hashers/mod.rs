@@ -2,6 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 #[cfg(feature = "ethhash")]
-mod ethhash;
+pub(crate) mod ethhash;
 #[cfg(not(feature = "ethhash"))]
 mod merkledb;
