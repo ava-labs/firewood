@@ -53,7 +53,8 @@ fn test_unexpected_start_proof() {
 /// The `key <= prev.key()` check rejects both duplicate and reverse-ordered keys.
 #[test_case(b"\x50", b"\x50" ; "duplicate keys rejected")]
 #[test_case(b"\xa0", b"\x50" ; "reverse order rejected")]
-fn test_crafted_keys(key_a: &[u8], key_b: &[u8]) {
+#[test_case(b"\x50", b"" ; "empty key after non-empty rejected")]
+fn test_crafted_out_of_order_or_dup_keys(key_a: &[u8], key_b: &[u8]) {
     let (db, _dir) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
     let (root1, root2) = setup_2nd_commit!(db, [(b"\x50", b"mid")]);
 
@@ -209,8 +210,6 @@ fn test_crafted_unexpected_end_proof() {
 /// Boundary proof hash chain was built for `root2` but verified against
 /// `HashKey::empty()` — the root hash in the proof nodes won't match,
 /// producing `UnexpectedHash`.
-///
-/// TODO: `ProofError::UnexpectedHash` is poorly named. The hash isn't unexpected, it's just wrong.
 #[test]
 fn test_boundary_proof_rejects_wrong_root() {
     let (db, _dir) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
