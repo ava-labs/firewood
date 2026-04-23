@@ -239,6 +239,11 @@ pub enum ProofError {
     /// Proof node is unreachable in the proving trie during collapse                                                 
     #[error("proof node unreachable in proving trie")]
     ProofNodeUnreachable,
+
+    /// Exclusion proof is incomplete — the terminal node has a child at the
+    /// boundary index, so the proof must include that child.
+    #[error("exclusion proof missing child at boundary index")]
+    ExclusionProofMissingChild,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -466,7 +471,31 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
             return Ok(last_node.value_digest());
         }
 
-        // This is an exclusion proof.
+        // Exclusion proof validation.
+        //
+        // If the last node is an ancestor of the key (its key is a strict
+        // prefix of the proven key), check whether a child exists at the
+        // next nibble. If a child exists there, the proof is incomplete —
+        // it must include that child to demonstrate the key's absence.
+        // Without the child, the verifier cannot tell whether the key
+        // exists deeper in the trie.
+        //
+        // When no child exists at the next nibble, the ancestor alone is
+        // sufficient: the absence of a child proves the key cannot exist.
+        //
+        // When the last node's key is NOT an ancestor of the key (it
+        // extends past or diverges from the key), this is the valid
+        // "divergent child" case — the node occupies the position where
+        // the key would be, proving it cannot exist.
+        //
+        // This matches AvalancheGo's verifyProofPath behavior which
+        // returns ErrExclusionProofMissingEndNodes in the ancestor case.
+        if let Some(next_idx) = next_nibble(last_node.full_path(), key.as_components())
+            && last_node.children()[next_idx].is_some()
+        {
+            return Err(ProofError::ExclusionProofMissingChild);
+        }
+
         Ok(None)
     }
 
