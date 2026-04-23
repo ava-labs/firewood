@@ -6,6 +6,7 @@ use crate::api::{self, BatchOp, Db as DbTrait, DbView, FrozenChangeProof, Propos
 use crate::db::{Db, DbConfig};
 use crate::merkle::verify_change_proof_root_hash;
 use crate::{ChangeProofVerificationContext, verify_change_proof_structure};
+use firewood_storage::PathComponentSliceExt;
 
 // ── Test infrastructure ────────────────────────────────────────────────────
 
@@ -75,6 +76,7 @@ pub(super) fn verify_and_check(
 
 // ── Test modules ──────────────────────────────────────────────────────────
 
+mod attack;
 mod bounds;
 // Empty start trie tests require ethhash: without it, the empty trie has no
 // root hash, so change proofs from an empty database can't be generated.
