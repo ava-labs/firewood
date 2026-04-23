@@ -1,0 +1,61 @@
+name: Run Firewood Benchmark
+description: Build FFI and run replay benchmark
+
+inputs:
+  source-dir: { description: "Firewood workspace dir", default: "." }
+  replay-log-url:
+    { description: "Replay log URL (https or s3)", required: true }
+  benchtime: { description: "Benchmark iterations", default: "3" }
+  rust-cache-key:
+    { description: "Rust cache key", default: "maxperf-ethhash-logger" }
+  aws-access-key-id: { description: "AWS Access Key ID", default: "" }
+  aws-secret-access-key: { description: "AWS Secret Access Key", default: "" }
+  aws-region: { description: "AWS Region", default: "us-east-1" }
+
+outputs:
+  output-file:
+    description: Benchmark output file path
+    value: ${{ steps.bench.outputs.output-file }}
+
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ inputs.source-dir }}/ffi/go.mod
+        cache-dependency-path: ${{ inputs.source-dir }}/ffi/go.sum
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: ${{ inputs.rust-cache-key }}
+        cache-all-crates: true
+        cache-workspace-crates: true
+    - shell: bash
+      run: command -v cc >/dev/null || { sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config; }
+    - shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      run: cargo fetch --locked --verbose
+    - shell: bash
+      working-directory: ${{ inputs.source-dir }}/ffi
+      run: cargo build --locked --features ethhash,logger --profile maxperf
+    - if: startsWith(inputs.replay-log-url, 's3://')
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ inputs.aws-access-key-id }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+        aws-region: ${{ inputs.aws-region }}
+    - shell: bash
+      working-directory: ${{ inputs.source-dir }}/ffi
+      env: { REPLAY_LOG_URL: "${{ inputs.replay-log-url }}" }
+      run: |
+        if [[ "$REPLAY_LOG_URL" == s3://* ]]; then aws s3 cp "$REPLAY_LOG_URL" replay.log
+        else curl -fsSL -o replay.log "$REPLAY_LOG_URL"; fi
+    - id: bench
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}/ffi
+      run: |
+        export TMPDIR=/mnt/tmp
+        sudo mkdir -p "$TMPDIR" && sudo chmod 1777 "$TMPDIR"
+        REPLAY_MAX_COMMITS=1000 REPLAY_LOG=./replay.log \
+          go test -run=^$ -bench=BenchmarkReplayLog -benchtime=${{ inputs.benchtime }}x | tee output.txt
+        echo "output-file=$(pwd)/output.txt" >> "$GITHUB_OUTPUT"
