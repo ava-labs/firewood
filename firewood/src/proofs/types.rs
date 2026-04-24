@@ -487,9 +487,6 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
         // extends past or diverges from the key), this is the valid
         // "divergent child" case — the node occupies the position where
         // the key would be, proving it cannot exist.
-        //
-        // This matches AvalancheGo's verifyProofPath behavior which
-        // returns ErrExclusionProofMissingEndNodes in the ancestor case.
         if let Some(next_idx) = next_nibble(last_node.full_path(), key.as_components())
             && last_node.children()[next_idx].is_some()
         {
