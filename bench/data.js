@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1776930133656,
+  "lastUpdate": 1777016497772,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -2725,6 +2725,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 75.77676417023878,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Joachim Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "f24b3653c57c89233025ae0dcb6809f1100c6d5b",
+          "message": "test(proofs): cover remaining deserialization failure paths (#1925)\n\n## Why this should be merged\n\nSeveral error item names produced by the deserializer had no test\ncoverage. Specifically, `\"path\"`, `\"value digest discriminant\"`,\n`\"children map\"`, `\"trie hash\"`, `\"hash type discriminant\"` (ethhash),\nand `\"option discriminant\"` as an IncompleteItem from BatchOp reads were\nentirely untested.\n\n## How this works\n\nUses manually constructed proofs with documented byte layouts to target\nprecise byte offsets, making the corruption intent self-evident. Each\ntest corrupts or truncates exactly one structural unit:\n\n- `test_invalid_path_nibble` — key byte > 15 triggers\n`path_from_unpacked_bytes` rejection\n- `test_invalid_value_digest_discriminant` — byte inside\n`Some(ValueDigest)` = 2\n- `test_incomplete_item_known_layout` — parameterized over option\ndiscriminant, ChildMask (0 bytes), and ChildMask (1 byte)\n- `test_incomplete_trie_hash` — gated on `#[cfg(not(feature =\n\"ethhash\"))]`\n- `test_incomplete_hash_type_discriminant` /\n`test_invalid_hash_type_discriminant` — gated on `#[cfg(feature =\n\"ethhash\")]`\n- `test_change_proof_incomplete_batch_op_discriminant` — truncate after\nbatch_ops count varint but before the first BatchOp discriminant byte\n\n## How this was tested\n\n    cargo nextest run -p firewood --features ethhash,logger proofs\n    cargo nextest run -p firewood --features logger proofs\n\n## Breaking Changes\n\nn/a",
+          "timestamp": "2026-04-22T19:29:36Z",
+          "url": "https://github.com/ava-labs/firewood/commit/f24b3653c57c89233025ae0dcb6809f1100c6d5b"
+        },
+        "date": 1777016497432,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 175.31669317267279,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5703.963392779038,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 107.8486076769296,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5520.726718673232,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 73.18895698763582,
             "unit": "block_accept_ms/ggas"
           }
         ]
