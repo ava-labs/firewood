@@ -330,16 +330,6 @@ fn flip_hash_bit(rng: &firewood_storage::SeededRng, hash: &mut firewood_storage:
     *hash = firewood_storage::TrieHash::from(new_bytes).into_hash_type();
 }
 
-/// Fuzz test with variable-length keys (1-4096 bytes). Short keys create
-/// shallow trie structures where:
-/// - Out-of-range value changes at start proof nodes are more likely
-///   (exercises the `packed < sk` value-check skip)
-/// - Prefix key relationships exist (key `b"\x10"` coexisting with
-///   `b"\x10\x50"`), creating branch nodes with values
-/// - Exclusion proofs with divergent children are common (exercises the
-///   `PathIterator` divergent child fix and `ExclusionProofMissingChild`
-///   check in `value_digest`)
-///
 /// 10% of proofs are serialized and deserialized before verification.
 /// In merkledb mode, values >= 32 bytes are converted to `ValueDigest::Hash`
 /// during serialization, exercising the Hash reconciliation path in
@@ -361,6 +351,15 @@ fn maybe_round_trip(
     }
 }
 
+/// Fuzz test with variable-length keys (1-4096 bytes). Short keys create
+/// shallow trie structures where:
+/// - Out-of-range value changes at start proof nodes are more likely
+///   (exercises the `packed < sk` value-check skip)
+/// - Prefix key relationships exist (key `b"\x10"` coexisting with
+///   `b"\x10\x50"`), creating branch nodes with values
+/// - Exclusion proofs with divergent children are common (exercises the
+///   `PathIterator` divergent child fix and `ExclusionProofMissingChild`
+///   check in `value_digest`)
 #[test]
 #[expect(clippy::too_many_lines)]
 fn test_slow_change_proof_fuzz_varlen() {
