@@ -75,19 +75,8 @@ fn test_slow_change_proof_fuzz() {
 
         // Generate new random key-value pairs (store owned so borrows live long enough).
         let insert_count = rng.random_range(10..=50_u32);
-        // 75% small (20-byte) values, 25% large (64-byte) values.
-        // Values >= 32 bytes trigger ValueDigest::Hash in merkledb mode
-        // after serialization, exercising the Hash reconciliation path.
-        let new_kvs: Vec<([u8; 32], Vec<u8>)> = (0..insert_count)
-            .map(|_| {
-                let key = rng.random::<[u8; 32]>();
-                let val = if rng.random_range(0..4_u32) == 0 {
-                    rng.random::<[u8; 64]>().to_vec()
-                } else {
-                    rng.random::<[u8; 20]>().to_vec()
-                };
-                (key, val)
-            })
+        let new_kvs: Vec<([u8; 32], [u8; 20])> = (0..insert_count)
+            .map(|_| (rng.random::<[u8; 32]>(), rng.random::<[u8; 20]>()))
             .collect();
         let new_keys: Vec<[u8; 32]> = new_kvs.iter().map(|(k, _)| *k).collect();
         for (key, val) in &new_kvs {
@@ -350,6 +339,28 @@ fn flip_hash_bit(rng: &firewood_storage::SeededRng, hash: &mut firewood_storage:
 /// - Exclusion proofs with divergent children are common (exercises the
 ///   `PathIterator` divergent child fix and `ExclusionProofMissingChild`
 ///   check in `value_digest`)
+///
+/// 10% of proofs are serialized and deserialized before verification.
+/// In merkledb mode, values >= 32 bytes are converted to `ValueDigest::Hash`
+/// during serialization, exercising the Hash reconciliation path in
+/// `reconcile_branch_proof_node` and the value digest fallback in
+/// `compute_root_hash_with_proofs`.
+///
+/// See `test_range_proof_with_hashed_value` and related tests in `range.rs`
+/// for deterministic coverage of the Hash path.
+fn maybe_round_trip(
+    rng: &firewood_storage::SeededRng,
+    proof: FrozenChangeProof,
+) -> FrozenChangeProof {
+    if rng.random_range(0..10_u32) == 0 {
+        let mut buf = Vec::new();
+        proof.write_to_vec(&mut buf);
+        FrozenChangeProof::from_slice(&buf).expect("round-trip deserialization should succeed")
+    } else {
+        proof
+    }
+}
+
 #[test]
 #[expect(clippy::too_many_lines)]
 fn test_slow_change_proof_fuzz_varlen() {
@@ -446,6 +457,7 @@ fn test_slow_change_proof_fuzz_varlen() {
                             None,
                         )
                         .expect("change_proof should succeed");
+                    let proof = maybe_round_trip(&rng, proof);
 
                     let ctx = verify_change_proof_structure(
                         &proof,
@@ -483,6 +495,7 @@ fn test_slow_change_proof_fuzz_varlen() {
                             None,
                         )
                         .expect("change_proof should succeed");
+                    let proof = maybe_round_trip(&rng, proof);
 
                     let ctx = verify_change_proof_structure(
                         &proof,
@@ -522,6 +535,7 @@ fn test_slow_change_proof_fuzz_varlen() {
                             None,
                         )
                         .expect("change_proof should succeed");
+                    let proof = maybe_round_trip(&rng, proof);
 
                     let ctx = verify_change_proof_structure(
                         &proof,
@@ -566,6 +580,7 @@ fn test_slow_change_proof_fuzz_varlen() {
                             None,
                         )
                         .expect("change_proof should succeed");
+                    let proof = maybe_round_trip(&rng, proof);
 
                     let ctx = verify_change_proof_structure(
                         &proof,
@@ -585,6 +600,7 @@ fn test_slow_change_proof_fuzz_varlen() {
                     let proof = db
                         .change_proof(root1.clone(), root2.clone(), None, None, None)
                         .expect("change_proof should succeed");
+                    let proof = maybe_round_trip(&rng, proof);
 
                     let ctx =
                         verify_change_proof_structure(&proof, root2.clone(), None, None, None)
@@ -683,19 +699,8 @@ fn test_slow_adversarial_change_proof_fuzz() {
         }
 
         let insert_count = rng.random_range(10..=50_u32);
-        // 75% small (20-byte) values, 25% large (64-byte) values.
-        // Values >= 32 bytes trigger ValueDigest::Hash in merkledb mode
-        // after serialization, exercising the Hash reconciliation path.
-        let new_kvs: Vec<([u8; 32], Vec<u8>)> = (0..insert_count)
-            .map(|_| {
-                let key = rng.random::<[u8; 32]>();
-                let val = if rng.random_range(0..4_u32) == 0 {
-                    rng.random::<[u8; 64]>().to_vec()
-                } else {
-                    rng.random::<[u8; 20]>().to_vec()
-                };
-                (key, val)
-            })
+        let new_kvs: Vec<([u8; 32], [u8; 20])> = (0..insert_count)
+            .map(|_| (rng.random::<[u8; 32]>(), rng.random::<[u8; 20]>()))
             .collect();
         let new_keys: Vec<[u8; 32]> = new_kvs.iter().map(|(k, _)| *k).collect();
         for (key, val) in &new_kvs {
