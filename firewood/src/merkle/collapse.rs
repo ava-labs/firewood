@@ -9,13 +9,15 @@ use firewood_storage::{
 
 use crate::{ProofError, api, merkle::Merkle};
 
-/// Returns `true` when a child at nibble `child_nib` under the accumulated
-/// prefix `acc_prefix` falls within `[start_nib, end_nib]` (inclusive).
+/// Returns `true` when a nibble at position `child_nib` under the accumulated
+/// prefix `acc_prefix` could contain keys within `[start_nib, end_nib]`.
 ///
-/// Used by [`Merkle::collapse_strip`] to distinguish in-range children
-/// (which indicate tampered `batch_ops`) from out-of-range children (which
-/// are stripped normally).
-fn child_in_range(
+/// This is a fast, nibble-level check used by [`Merkle::child_in_range`] as
+/// a first pass. It may return `true` for straddling nibbles — positions
+/// where the boundary passes through the subtree — even if no actual keys
+/// in the subtree are in range. `child_in_range` recurses into the subtree
+/// to resolve those cases.
+fn nibble_in_range(
     acc_prefix: &[u8],
     nibble: PathComponent,
     start_nib: &[u8],
@@ -287,15 +289,61 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         Ok(node)
     }
 
+    /// Returns `true` when the subtree rooted at `child` contains any key
+    /// within `[start_nib, end_nib]`.
+    ///
+    /// Reads the child node, computes its full nibble prefix, and checks
+    /// whether the key is in range. For leaves this is a direct comparison.
+    /// For branches, recurses into children whose nibble passes
+    /// [`nibble_in_range`] to resolve straddling positions.
+    ///
+    /// The caller is responsible for checking [`nibble_in_range`] and taking
+    /// the child from its slot before calling this method. The child is
+    /// consumed regardless of the result.
+    fn child_in_range(
+        &mut self,
+        child: Child,
+        acc_prefix: &[u8],
+        nibble: PathComponent,
+        start_nib: &[u8],
+        end_nib: &[u8],
+    ) -> Result<bool, api::Error> {
+        if !nibble_in_range(acc_prefix, nibble, start_nib, end_nib) {
+            return Ok(false);
+        }
+
+        let mut child_node = self.read_for_update(child)?;
+        let pfx = build_child_prefix(acc_prefix, nibble.0.as_u8(), &child_node);
+        let key_in_range = pfx.as_ref() >= start_nib && pfx.as_ref() <= end_nib;
+
+        let Some(branch) = child_node.as_branch_mut() else {
+            return Ok(key_in_range);
+        };
+
+        if key_in_range && branch.value.is_some() {
+            return Ok(true);
+        }
+
+        for (child_nibble, child_slot) in &mut branch.children {
+            let Some(inner_child) = child_slot.take() else {
+                continue;
+            };
+            if self.child_in_range(inner_child, &pfx, child_nibble, start_nib, end_nib)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Strip non-on-path children from an intermediate branch and recurse.
     /// Flattens single-child branches to match `end_root`'s path-compressed
     /// structure.
     ///
-    /// Children that are both in-range AND proposal-local (created by this
-    /// proposal's `batch_ops`) trigger `EndRootMismatch` — they indicate
-    /// tampered operations since `end_root` has no branch at this position.
-    /// In-range children inherited from the parent are legitimate unchanged
-    /// keys and are stripped normally (handled by proof hashes).
+    /// Non-on-path children containing in-range keys trigger
+    /// `EndRootMismatch` — they indicate tampered `batch_ops` since
+    /// `end_root` has no branch at this position. Non-on-path children
+    /// containing only out-of-range keys are stripped normally (accounted
+    /// for by proof hashes).
     fn collapse_strip(
         &mut self,
         mut node: Node,
@@ -313,17 +361,19 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         };
 
         for (nibble, slot) in &mut branch.children {
-            if nibble == on_path || slot.is_none() {
+            if nibble == on_path {
                 continue;
             }
 
+            let Some(child) = slot.take() else {
+                continue;
+            };
+
             if let Some((start_nib, end_nib)) = range
-                && child_in_range(acc_prefix, nibble, start_nib, end_nib)
+                && self.child_in_range(child, acc_prefix, nibble, start_nib, end_nib)?
             {
                 return Err(api::Error::ProofError(ProofError::EndRootMismatch));
             }
-
-            *slot = None;
         }
         branch.value = None;
 
@@ -373,36 +423,143 @@ mod tests {
         Merkle { nodestore }
     }
 
+    type TestMerkle = Merkle<NodeStore<Mutable<Propose>, MemStore>>;
+
+    fn branch_child(m: &mut TestMerkle, keys: &[&[u8]], nibble: u8) -> Child {
+        for key in keys {
+            m.insert(key, Box::from(b"v".as_slice())).unwrap();
+        }
+        let mut root = m.nodestore.root_mut().take().unwrap();
+        root.as_branch_mut()
+            .unwrap()
+            .children
+            .take(PathComponent::try_new(nibble).unwrap())
+            .unwrap()
+    }
+
+    fn check_child_in_range(
+        setup: impl FnOnce(&mut TestMerkle) -> Child,
+        acc_prefix: &[u8],
+        nibble: u8,
+        start_nib: &[u8],
+        end_nib: &[u8],
+        expected: bool,
+    ) {
+        let mut merkle = create_test_merkle();
+        let child = setup(&mut merkle);
+        let pc = PathComponent::try_new(nibble).unwrap();
+        let result = merkle
+            .child_in_range(child, acc_prefix, pc, start_nib, end_nib)
+            .unwrap();
+        assert_eq!(
+            result, expected,
+            "acc_prefix={acc_prefix:x?} nibble={nibble:#x} range=[{start_nib:x?}, {end_nib:x?}]"
+        );
+    }
+
     #[test]
     fn test_child_in_range() {
+        // nibble clearly out of range — returns false without reading
+        check_child_in_range(
+            |m| branch_child(m, &[b"\x50", b"\x60"], 0x5),
+            &[],
+            0x5,
+            &[0x8],
+            &[0xf],
+            false,
+        );
+
+        // leaf: nibble straddles start, full key [0,0] < start [0,1]
+        check_child_in_range(
+            |m| branch_child(m, &[b"\x00", b"\x10"], 0x0),
+            &[],
+            0x0,
+            &[0x0, 0x1],
+            &[0x1, 0x0],
+            false,
+        );
+
+        // leaf: nibble straddles start, full key [0,5] >= start [0,1]
+        check_child_in_range(
+            |m| branch_child(m, &[b"\x05", b"\x10"], 0x0),
+            &[],
+            0x0,
+            &[0x0, 0x1],
+            &[0x1, 0x0],
+            true,
+        );
+
+        // leaf: nibble straddles end, full key [3,f] > end [3,0]
+        check_child_in_range(
+            |m| branch_child(m, &[b"\x3f", b"\x10"], 0x3),
+            &[],
+            0x3,
+            &[0x1, 0x0],
+            &[0x3, 0x0],
+            false,
+        );
+
+        // branch: all children out of range ([0,0,0,0] and [0,0,5,0] both < [0,1])
+        check_child_in_range(
+            |m| branch_child(m, &[b"\x00\x00", b"\x00\x50", b"\x10"], 0x0),
+            &[],
+            0x0,
+            &[0x0, 0x1],
+            &[0x0, 0xf],
+            false,
+        );
+
+        // branch: one child in range ([0,1,0,0] >= [0,1])
+        check_child_in_range(
+            |m| branch_child(m, &[b"\x00\x00", b"\x01\x00", b"\x10"], 0x0),
+            &[],
+            0x0,
+            &[0x0, 0x1],
+            &[0x0, 0xf],
+            true,
+        );
+
+        // branch with value: key [0,0] in range [0,0]..[0,f], has value
+        check_child_in_range(
+            |m| branch_child(m, &[b"\x00", b"\x00\x50", b"\x10"], 0x0),
+            &[],
+            0x0,
+            &[0x0, 0x0],
+            &[0x0, 0xf],
+            true,
+        );
+    }
+
+    #[test]
+    fn test_nibble_in_range() {
         let pc = |n| PathComponent::try_new(n).unwrap();
 
         // inside range
-        assert!(child_in_range(&[0xa], pc(0x5), &[0xa, 0x0], &[0xa, 0xf]));
+        assert!(nibble_in_range(&[0xa], pc(0x5), &[0xa, 0x0], &[0xa, 0xf]));
         // before start
-        assert!(!child_in_range(&[0xa], pc(0x2), &[0xa, 0x5], &[0xa, 0xf]));
+        assert!(!nibble_in_range(&[0xa], pc(0x2), &[0xa, 0x5], &[0xa, 0xf]));
         // after end
-        assert!(!child_in_range(&[0xa], pc(0xf), &[0xa, 0x0], &[0xa, 0x5]));
+        assert!(!nibble_in_range(&[0xa], pc(0xf), &[0xa, 0x0], &[0xa, 0x5]));
         // at start boundary
-        assert!(child_in_range(&[0xa], pc(0x5), &[0xa, 0x5], &[0xa, 0xf]));
+        assert!(nibble_in_range(&[0xa], pc(0x5), &[0xa, 0x5], &[0xa, 0xf]));
         // at end boundary
-        assert!(child_in_range(&[0xa], pc(0x5), &[0xa, 0x0], &[0xa, 0x5]));
+        assert!(nibble_in_range(&[0xa], pc(0x5), &[0xa, 0x0], &[0xa, 0x5]));
         // acc_prefix past start — in range regardless of nibble
-        assert!(child_in_range(&[0xb], pc(0x0), &[0xa, 0x5], &[0xf, 0x0]));
+        assert!(nibble_in_range(&[0xb], pc(0x0), &[0xa, 0x5], &[0xf, 0x0]));
         // acc_prefix before end — in range regardless of nibble
-        assert!(child_in_range(&[0xa], pc(0xf), &[0x0, 0x0], &[0xb, 0x0]));
+        assert!(nibble_in_range(&[0xa], pc(0xf), &[0x0, 0x0], &[0xb, 0x0]));
         // empty prefix
-        assert!(child_in_range(&[], pc(0x5), &[0x0], &[0xf]));
-        assert!(!child_in_range(&[], pc(0x5), &[0x6], &[0xf]));
+        assert!(nibble_in_range(&[], pc(0x5), &[0x0], &[0xf]));
+        assert!(!nibble_in_range(&[], pc(0x5), &[0x6], &[0xf]));
         // start shorter than depth — child is past start
-        assert!(child_in_range(
+        assert!(nibble_in_range(
             &[0xa, 0xb],
             pc(0x0),
             &[0xa],
             &[0xa, 0xb, 0xf]
         ));
         // end shorter than depth — child is past end
-        assert!(!child_in_range(
+        assert!(!nibble_in_range(
             &[0xa, 0xb],
             pc(0x0),
             &[0xa, 0xb, 0x0],
