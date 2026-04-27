@@ -423,6 +423,113 @@ mod tests {
         Merkle { nodestore }
     }
 
+    type TestMerkle = Merkle<NodeStore<Mutable<Propose>, MemStore>>;
+
+    fn branch_child(m: &mut TestMerkle, keys: &[&[u8]], nibble: u8) -> Child {
+        for key in keys {
+            m.insert(key, Box::from(b"v".as_slice())).unwrap();
+        }
+        let mut root = m.nodestore.root_mut().take().unwrap();
+        root.as_branch_mut()
+            .unwrap()
+            .children
+            .take(PathComponent::try_new(nibble).unwrap())
+            .unwrap()
+    }
+
+    fn check_child_in_range(
+        setup: impl FnOnce(&mut TestMerkle) -> Child,
+        acc_prefix: &[u8],
+        nibble: u8,
+        start_nib: &[u8],
+        end_nib: &[u8],
+        expected: bool,
+    ) {
+        let mut merkle = create_test_merkle();
+        let child = setup(&mut merkle);
+        let pc = PathComponent::try_new(nibble).unwrap();
+        let result = merkle
+            .child_in_range(child, acc_prefix, pc, start_nib, end_nib)
+            .unwrap();
+        assert_eq!(
+            result, expected,
+            "acc_prefix={acc_prefix:x?} nibble={nibble:#x} range=[{start_nib:x?}, {end_nib:x?}]"
+        );
+    }
+
+    #[test]
+    fn test_child_in_range() {
+        // nibble clearly out of range — returns false without reading
+        check_child_in_range(
+            |m| branch_child(m, &[b"\x50", b"\x60"], 0x5),
+            &[],
+            0x5,
+            &[0x8],
+            &[0xf],
+            false,
+        );
+
+        // leaf: nibble straddles start, full key [0,0] < start [0,1]
+        check_child_in_range(
+            |m| branch_child(m, &[b"\x00", b"\x10"], 0x0),
+            &[],
+            0x0,
+            &[0x0, 0x1],
+            &[0x1, 0x0],
+            false,
+        );
+
+        // leaf: nibble straddles start, full key [0,5] >= start [0,1]
+        check_child_in_range(
+            |m| branch_child(m, &[b"\x05", b"\x10"], 0x0),
+            &[],
+            0x0,
+            &[0x0, 0x1],
+            &[0x1, 0x0],
+            true,
+        );
+
+        // leaf: nibble straddles end, full key [3,f] > end [3,0]
+        check_child_in_range(
+            |m| branch_child(m, &[b"\x3f", b"\x10"], 0x3),
+            &[],
+            0x3,
+            &[0x1, 0x0],
+            &[0x3, 0x0],
+            false,
+        );
+
+        // branch: all children out of range ([0,0,0,0] and [0,0,5,0] both < [0,1])
+        check_child_in_range(
+            |m| branch_child(m, &[b"\x00\x00", b"\x00\x50", b"\x10"], 0x0),
+            &[],
+            0x0,
+            &[0x0, 0x1],
+            &[0x0, 0xf],
+            false,
+        );
+
+        // branch: one child in range ([0,1,0,0] >= [0,1])
+        check_child_in_range(
+            |m| branch_child(m, &[b"\x00\x00", b"\x01\x00", b"\x10"], 0x0),
+            &[],
+            0x0,
+            &[0x0, 0x1],
+            &[0x0, 0xf],
+            true,
+        );
+
+        // branch with value: key [0,0] in range [0,0]..[0,f], has value
+        check_child_in_range(
+            |m| branch_child(m, &[b"\x00", b"\x00\x50", b"\x10"], 0x0),
+            &[],
+            0x0,
+            &[0x0, 0x0],
+            &[0x0, 0xf],
+            true,
+        );
+    }
+
     #[test]
     fn test_nibble_in_range() {
         let pc = |n| PathComponent::try_new(n).unwrap();
