@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1777363528055,
+  "lastUpdate": 1777449780687,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -2866,6 +2866,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 89.47355763824298,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "bernard-avalabs",
+            "username": "bernard-avalabs",
+            "email": "53795885+bernard-avalabs@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "7db3f2d8796e27e361d773ad0a4ecfddaf0298e9",
+          "message": "fix(proofs): reject truncated exclusion proofs with reachable children (#1950)\n\n## Why this should be merged\n\nThis is porting a fix from the rkuris/restructure-squashed branch that\nwas accidentally omitted in the previous PRs. Interestingly, none of our\nunit/integration tests caught this missing fix. It was only discovered\nas I was porting over the fuzz tests. I've added a new regression test\nspecifically for this case.\n\nThis PR fixes the following: An exclusion proof can be truncated by\nremoving the terminal node. If the remaining terminal node is an\nancestor of the proven key and has a child at the next nibble toward\nthat key, the truncated proof is incomplete. The verifier cannot\ndetermine whether the key exists deeper in the trie. Without the check\nadded in this PR, a truncated exclusion proof can pass both structural\nvalidation and root hash verification, allowing an attacker to mask\ntampered batch_ops in change proofs.\n\nThis check matches AvalancheGo's verifyProofPath behavior which returns\nErrExclusionProofMissingEndNodes in the ancestor case.\n\n## How this works\n\n  - Add ExclusionProofMissingChild variant to ProofError\n- In Proof::value_digest(), before returning Ok(None) for exclusion\nproofs, check if the terminal node has a child at the next nibble toward\nthe key. If it does, the proof is incomplete — return\nErr(ExclusionProofMissingChild)\n- Add regression test truncated_exclusion_proof_rejected that creates an\nexclusion proof, truncates the terminal node, and verifies rejection\n\n## How this was tested\n\n- truncated_exclusion_proof_rejected — fails without fix (returns\nOk(None)), passes with fix\n  - CI\n\n## Breaking Changes\n\n  - None",
+          "timestamp": "2026-04-24T15:37:13Z",
+          "url": "https://github.com/ava-labs/firewood/commit/7db3f2d8796e27e361d773ad0a4ecfddaf0298e9"
+        },
+        "date": 1777449779589,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 164.4927495249376,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6079.295305647481,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 112.81551994379689,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5883.779258144289,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 79.79928746024153,
             "unit": "block_accept_ms/ggas"
           }
         ]
