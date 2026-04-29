@@ -1,6 +1,6 @@
 [package]
 name = "firewood-fwdctl"
-version = "0.3.1"
+version = "0.4.0"
 edition.workspace = true
 authors = [
      "Dan Laine <daniel.laine@avalabs.org>",
@@ -35,13 +35,13 @@ nonzero_ext.workspace = true
 # Regular dependencies
 csv = "1.4.0"
 indicatif = "0.18.4"
-askama = "0.15.5"
+askama = "0.15.6"
 num-format = "0.4.4"
 aws-config = { version = "1.8", optional = true }
-aws-sdk-ec2 = { version = "1.215", optional = true }
-aws-sdk-ssm = { version = "1.106", optional = true }
-aws-sdk-sts = { version = "1.99.0", optional = true }
-aws-smithy-runtime-api = { version = "1.11", optional = true }
+aws-sdk-ec2 = { version = "1.223", optional = true }
+aws-sdk-ssm = { version = "1.109", optional = true }
+aws-sdk-sts = { version = "1.103.0", optional = true }
+aws-smithy-runtime-api = { version = "1.12", optional = true }
 base64 = { version = "0.22", optional = true }
 dirs = { version = "6.0", optional = true }
 rand = { workspace = true, optional = true }
@@ -49,7 +49,7 @@ serde = { version = "1.0.228", features = ["derive"], optional = true }
 serde_json = { version = "1.0", optional = true }
 serde_yaml = { version = "0.10", package = "serde_yaml_ng", optional = true }
 thiserror = { version = "2.0", optional = true }
-tokio = { version = "1.50", features = ["rt-multi-thread", "sync", "time"], optional = true }
+tokio = { version = "1.52", features = ["rt-multi-thread", "sync", "time"], optional = true }
 
 [features]
 ethhash = ["firewood/ethhash"]
@@ -76,7 +76,7 @@ firewood-storage = { workspace = true, features = ["test_utils"] }
 rand.workspace = true
 tempfile.workspace = true
 # Regular dependencies
-assert_cmd = "2.2.0"
+assert_cmd = "2.2.1"
 predicates = "3.1.4"
 
 [lints]
