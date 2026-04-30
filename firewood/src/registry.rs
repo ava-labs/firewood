@@ -47,11 +47,11 @@ firewood_metrics::define_metrics! {
         PROPOSAL_COMMITS_DURATION_SECONDS = "firewood_proposal_commit_duration_seconds" buckets([0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5]),
         /// Duration of root store persist operations
         PERSIST_ROOT_STORE_DURATION_SECONDS = "firewood_persist_root_store_duration_seconds" buckets([0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]),
-        /// Wait time to acquire the in_memory_revisions write lock in commit()
+        /// Wait time to acquire the commit_lock Mutex in commit()
         COMMIT_LOCK_WAIT_SECONDS = "firewood_commit_lock_wait_seconds" native(2.0, 160, 1e-9),
-        /// Wait time to acquire the in_memory_revisions read lock in current_revision()
+        /// Wait time to acquire the in_memory_revisions Mutex
         CURRENT_REVISION_LOCK_WAIT_SECONDS = "firewood_current_revision_lock_wait_seconds" native(2.0, 160, 1e-9),
-        /// Wait time to acquire the by_hash read lock in revision()
+        /// Wait time to acquire the by_hash Mutex
         BY_HASH_LOCK_WAIT_SECONDS = "firewood_by_hash_lock_wait_seconds" native(2.0, 160, 1e-9),
         /// Duration of submitting a revision to the persist worker channel
         PERSIST_SUBMIT_DURATION_SECONDS = "firewood_persist_submit_duration_seconds" native(2.0, 160, 1e-9),
