@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1777535992191,
+  "lastUpdate": 1777622513309,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -2960,6 +2960,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 75.34803873403416,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "rodrigo",
+            "username": "RodrigoVillar",
+            "email": "77309055+RodrigoVillar@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "82131879f969b2ba9682db580304979b8c8e8688",
+          "message": "chore(release): prepare for v0.4.0 (#1953)\n\n## Why this should be merged\n\nBumps from `v0.3.1` to `v0.4.0`.\n\n## How this works\n\nFollowed instructions in RELEASE.md.\n\n**Note**: `cargo upgrade --incompatible` was intentionally not included\nin this release-prep PR. Per the release instructions, incompatible\ndependency upgrades that require code changes are handled separately\nfrom release. During release prep, compatible upgrades were applied,\nwhile a few dependencies were intentionally held back:\n\n- `metrics`, `metrics-util`, and `metrics-exporter-prometheus` remain on\nthe repo’s patched fork versions.\n- `sha2`/`sha3` remain on 0.10.9 because upgrading to `0.11.x` requires\nfollow-up code changes in the hashing layer.\n\n## How this was tested\n\nCI.\n\n## Breaking Changes\n\n- [ ] firewood\n- [ ] firewood-storage\n- [ ] firewood-ffi (C api)\n- [ ] firewood-go (Go api)\n- [ ] fwdctl",
+          "timestamp": "2026-04-29T12:04:50Z",
+          "url": "https://github.com/ava-labs/firewood/commit/82131879f969b2ba9682db580304979b8c8e8688"
+        },
+        "date": 1777622512780,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 168.2612095414552,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5943.140446483157,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 113.25675212921277,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5746.394479097006,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 80.77704160678812,
             "unit": "block_accept_ms/ggas"
           }
         ]
