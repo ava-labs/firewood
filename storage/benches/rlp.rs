@@ -4,7 +4,7 @@
 //! Benchmarks comparing the in-tree `firewood_storage::rlp` module against
 //! the upstream `rlp = "0.6"` crate on the shapes firewood actually uses.
 //!
-//! Three workloads:
+//! Four workloads:
 //!
 //! 1. **`branch_encode`** — encode a 17-element list (the Ethereum MPT
 //!    branch shape: 16 32-byte child hashes + an empty value).
@@ -15,6 +15,9 @@
 //!    replace the 32-byte `storageRoot` field. This is where the new
 //!    module should win biggest because it skips the upstream crate's
 //!    `Vec<Vec<u8>>` round-trip.
+//! 4. **`decode_field3`** — extract field 3 (the code-hash) from a
+//!    pre-encoded account RLP. Mirrors the FFI proof code-hash extractor
+//!    in `ffi/src/proofs/change.rs`.
 
 #![expect(
     clippy::unwrap_used,
