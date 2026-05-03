@@ -24,7 +24,8 @@
 //!    the distinction between [`HashType::Hash`] and [`HashType::Rlp`].
 //!    [`Preimage::to_hash`] preserves whichever form fits (`< 32` → `Rlp`, else
 //!    `Hash`); branch encoders then inline `Rlp` children via
-//!    [`RlpStream::append_raw`] and hash-reference `Hash` children.
+//!    [`RlpItem::Raw`](crate::rlp::RlpItem::Raw) and hash-reference `Hash`
+//!    children via [`RlpItem::Bytes`](crate::rlp::RlpItem::Bytes).
 //! 3. **17-element branch lists** — a branch is always RLP-encoded as
 //!    `[child_0, ..., child_15, value]`. Missing children are `0x80` (empty RLP
 //!    bytes), not omitted.
@@ -44,12 +45,12 @@
 //!
 //! - **`storageRoot` is recomputed at hash time.** When computing a node's
 //!   hash, we always derive the `storageRoot` slot from the node's children
-//!   and splice it into the account RLP via [`replace_hash`], regardless of
-//!   whatever value is currently in that slot. This is why [`replace_hash`]
-//!   exists. The *persisted* bytes are not updated by this splice, so callers
-//!   reading the raw value may observe a stale or zero `storageRoot` even
-//!   though the trie's root hash is correct; the proof and iteration paths
-//!   re-apply the fix on read via
+//!   and splice it into the account RLP via
+//!   [`replace_list_field`](crate::rlp::replace_list_field), regardless of
+//!   whatever value is currently in that slot. The *persisted* bytes are not
+//!   updated by this splice, so callers reading the raw value may observe a
+//!   stale or zero `storageRoot` even though the trie's root hash is correct;
+//!   the proof and iteration paths re-apply the fix on read via
 //!   [`fix_account_storage_root_value`](crate::fix_account_storage_root_value).
 //! - **The single-child "fake root" trick**. An account with exactly one
 //!   storage slot looks like a firewood branch with one child, but the
@@ -94,26 +95,19 @@
 //!   splice sites must agree on the definition.
 //! - Does it change how [`HashType::Rlp`] vs [`HashType::Hash`] is chosen? The
 //!   32-byte cutoff in [`Preimage::to_hash`] must match what parent encoders
-//!   assume when calling [`RlpStream::append_raw`] vs `append`.
-//! - Does it touch [`replace_hash`]? Note that Coreth may append fields beyond
-//!   the standard 4 — the `[_, _, storage_root, ..]` pattern is deliberate.
-
-#![cfg_attr(
-    feature = "ethhash",
-    expect(
-        clippy::too_many_lines,
-        reason = "Found 1 occurrences after enabling the lint."
-    )
-)]
+//!   assume when emitting [`RlpItem::Raw`](crate::rlp::RlpItem::Raw) vs
+//!   [`RlpItem::Bytes`](crate::rlp::RlpItem::Bytes).
+//! - Does it touch the storage-root splice? Note that Coreth may append fields
+//!   beyond the standard 4, so [`replace_list_field`](crate::rlp::replace_list_field)
+//!   only touches index 2 and leaves any trailing fields intact.
 
 use crate::logger::warn;
+use crate::rlp::{NULL_RLP, RlpItem, encode_list, replace_list_field};
 use crate::{
     BranchNode, HashType, Hashable, Preimage, TrieHash, TriePath, ValueDigest,
     hashednode::HasUpdate, logger::trace,
 };
-use ::rlp::{NULL_RLP, Rlp, RlpStream};
 use bitfield::bitfield;
-use bytes::BytesMut;
 use sha3::{Digest, Keccak256};
 use smallvec::SmallVec;
 use std::iter::once;
@@ -206,70 +200,59 @@ impl<T: Hashable> Preimage for T {
             // we append two items, the partial_path, encoded, and the value
             // note that leaves must always have a value, so we know there
             // will be 2 items
+            let path = nibbles_to_eth_compact(self.partial_path(), true);
+            let value_bytes = self.value_digest().map(|ValueDigest::Value(bytes)| bytes);
 
-            let mut rlp = RlpStream::new_list(2);
-
-            rlp.append(&&*nibbles_to_eth_compact(self.partial_path(), true));
-
-            if is_account {
-                // we are a leaf that is at depth 32
-                match self.value_digest() {
-                    Some(ValueDigest::Value(bytes)) => {
-                        let new_hash = Keccak256::digest(NULL_RLP).as_slice().to_vec();
-                        let bytes_mut = BytesMut::from(bytes);
-                        if let Some(result) = replace_hash(bytes_mut, new_hash) {
-                            rlp.append(&&*result);
-                        } else {
-                            rlp.append(&bytes);
-                        }
-                    }
-                    None => {
-                        rlp.append_empty_data();
-                    }
-                }
+            // For accounts, splice the empty-trie storage root hash into the
+            // account RLP. If the splice fails (malformed value), fall back
+            // to the raw value.
+            let empty_root = Keccak256::digest(NULL_RLP);
+            let account_value: Option<Box<[u8]>> = if is_account {
+                value_bytes
+                    .and_then(|bytes| replace_list_field(bytes, 2, empty_root.as_slice()).ok())
             } else {
-                match self.value_digest() {
-                    Some(ValueDigest::Value(bytes)) => rlp.append(&bytes),
-                    None => rlp.append_empty_data(),
-                };
-            }
+                None
+            };
 
-            let bytes = rlp.out();
+            let value_item = match (account_value.as_deref(), value_bytes) {
+                (Some(updated), _) => RlpItem::Bytes(updated),
+                (_, Some(bytes)) => RlpItem::Bytes(bytes),
+                _ => RlpItem::Empty,
+            };
+
+            let bytes = encode_list(&[RlpItem::Bytes(&path), value_item]);
             trace!("partial path {:?}", self.partial_path().display());
             trace!("serialized leaf-rlp: {:?}", hex::encode(&bytes));
             buf.update(&bytes);
         } else {
             // for a branch, there are always 16 children and a value
             // Child::None we encode as RLP empty_data (0x80)
-            let mut rlp = RlpStream::new_list(const { BranchNode::MAX_CHILDREN + 1 });
-            for (_, child) in &child_hashes {
-                match child {
-                    Some(HashType::Hash(hash)) => rlp.append(&hash.as_slice()),
-                    Some(HashType::Rlp(rlp_bytes)) => rlp.append_raw(rlp_bytes, 1),
-                    None => rlp.append_empty_data(),
+            let mut items: [RlpItem<'_>; BranchNode::MAX_CHILDREN + 1] =
+                [RlpItem::Empty; BranchNode::MAX_CHILDREN + 1];
+            for ((_, child), slot) in (&child_hashes).into_iter().zip(items.iter_mut()) {
+                *slot = match child {
+                    Some(HashType::Hash(hash)) => RlpItem::Bytes(hash.as_slice()),
+                    Some(HashType::Rlp(rlp_bytes)) => RlpItem::Raw(rlp_bytes),
+                    None => RlpItem::Empty,
                 };
             }
 
-            // For branch nodes, we need to append the value as the 17th element in the RLP list.
-            // However, account nodes (depth 32) handle values differently - they don't store
-            // the value directly in the branch node, but rather in the account structure itself.
-            // This is because account nodes have special handling where the storage root hash
-            // gets replaced in the account data structure during serialization.
-            let digest = (!is_account).then(|| self.value_digest()).flatten();
-            if let Some(ValueDigest::Value(digest)) = digest {
-                rlp.append(&digest);
-            } else {
-                rlp.append_empty_data();
+            // For branch nodes, the 17th element is the value.
+            // Account nodes (depth 32) handle values differently — the value
+            // lives in the account RLP, not directly in the branch — so we
+            // emit Empty here and splice it in below.
+            if !is_account && let Some(ValueDigest::Value(digest)) = self.value_digest() {
+                items[BranchNode::MAX_CHILDREN] = RlpItem::Bytes(digest);
             }
-            let bytes = rlp.out();
+            let bytes = encode_list(&items);
             trace!("pass 1 bytes {:02X?}", hex::encode(&bytes));
 
             // we've collected all the children in bytes
 
-            let updated_bytes = if is_account {
+            let updated_bytes: Box<[u8]> = if is_account {
                 // need to get the value again
                 if let Some(ValueDigest::Value(rlp_encoded_bytes)) = self.value_digest() {
-                    // rlp_encoded__bytes needs to be decoded
+                    // rlp_encoded_bytes needs to be decoded
                     // TODO: Handle corruption
                     // needs to be the hash of the RLP encoding of the root node that
                     // would have existed here (instead of this account node)
@@ -287,90 +270,60 @@ impl<T: Hashable> Preimage for T {
                         {
                             HashType::Hash(hash) => hash.clone(),
                             HashType::Rlp(rlp_bytes) => {
-                                let mut rlp = RlpStream::new_list(2);
-                                rlp.append(&&*nibbles_to_eth_compact(self.partial_path(), true));
-                                rlp.append_raw(rlp_bytes, 1);
-                                let bytes = rlp.out();
+                                let path = nibbles_to_eth_compact(self.partial_path(), true);
+                                let bytes =
+                                    encode_list(&[RlpItem::Bytes(&path), RlpItem::Raw(rlp_bytes)]);
                                 TrieHash::from(Keccak256::digest(bytes))
                             }
                         }
                     } else {
-                        TrieHash::from(Keccak256::digest(bytes))
+                        TrieHash::from(Keccak256::digest(&bytes))
                     };
                     trace!("replacement hash {:?}", hex::encode(&replacement_hash));
 
-                    let bytes = replace_hash(rlp_encoded_bytes, replacement_hash)
-                        .unwrap_or_else(|| BytesMut::from(rlp_encoded_bytes));
-                    trace!("updated encoded value {:02X?}", hex::encode(&bytes));
-                    bytes
+                    let updated =
+                        replace_list_field(rlp_encoded_bytes, 2, replacement_hash.as_slice())
+                            .unwrap_or_else(|_| Box::from(rlp_encoded_bytes));
+                    trace!("updated encoded value {:02X?}", hex::encode(&updated));
+                    updated
                 } else {
                     // treat like non-account since it didn't have a value
                     warn!(
                         "Account node {:x?} without value",
                         self.full_path().display(),
                     );
-                    bytes.as_ref().into()
+                    bytes
                 }
             } else {
-                bytes.as_ref().into()
+                bytes
             };
 
             let partial_path = self.partial_path();
             if partial_path.is_empty() {
                 trace!("pass 2=bytes {:02X?}", hex::encode(&updated_bytes));
-                buf.update(updated_bytes);
+                buf.update(&updated_bytes);
             } else {
-                let mut final_bytes = RlpStream::new_list(2);
-                final_bytes.append(&&*nibbles_to_eth_compact(partial_path, is_account));
+                let path = nibbles_to_eth_compact(partial_path, is_account);
                 // if the RLP is short enough, we can use it as-is, otherwise we hash it
                 // to make the maximum length 32 bytes
-                if updated_bytes.len() > 31 && !is_account {
-                    let hashed_bytes = Keccak256::digest(updated_bytes);
-                    final_bytes.append(&hashed_bytes.as_slice());
+                let value_item = if updated_bytes.len() > 31 && !is_account {
+                    let hashed_bytes = Keccak256::digest(&updated_bytes);
+                    let final_bytes = encode_list(&[
+                        RlpItem::Bytes(&path),
+                        RlpItem::Bytes(hashed_bytes.as_slice()),
+                    ]);
+                    trace!("pass 2 bytes {:02X?}", hex::encode(&final_bytes));
+                    buf.update(&final_bytes);
+                    return;
                 } else {
-                    final_bytes.append(&updated_bytes);
-                }
-                let final_bytes = final_bytes.out();
+                    RlpItem::Bytes(&updated_bytes)
+                };
+                let final_bytes = encode_list(&[RlpItem::Bytes(&path), value_item]);
                 trace!("pass 2 bytes {:02X?}", hex::encode(&final_bytes));
-                buf.update(final_bytes);
+                buf.update(&final_bytes);
             }
         }
     }
-}
-
-/// Splice a new `storageRoot` into an RLP-encoded account value.
-///
-/// Decodes `bytes` as an RLP list, replaces element index 2 with `new_hash`,
-/// and re-encodes. Returns `None` if `bytes` is not a well-formed RLP list of
-/// at least 3 elements — in that case callers treat the value as opaque
-/// (non-account) data and leave it untouched.
-///
-/// The standard Ethereum account is `[nonce, balance, storageRoot, codeHash]`
-/// (4 elements). Coreth may append additional trailing fields, so the match
-/// pattern deliberately uses `[_, _, storage_root, ..]` rather than asserting
-/// a fixed length.
-pub(crate) fn replace_hash<T: AsRef<[u8]>, U: AsRef<[u8]>>(
-    bytes: T,
-    new_hash: U,
-) -> Option<BytesMut> {
-    let rlp = Rlp::new(bytes.as_ref());
-    let mut list: Vec<Vec<u8>> = rlp.as_list().ok()?;
-    let [_, _, storage_root, ..] = list.as_mut_slice() else {
-        return None;
-    };
-    *storage_root = Vec::from(new_hash.as_ref());
-
-    trace!("inbound bytes: {}", hex::encode(bytes.as_ref()));
-    trace!("list length was {}", list.len());
-    trace!("replacement hash {:?}", hex::encode(&new_hash));
-
-    let mut rlp = RlpStream::new_list(list.len());
-    for item in list {
-        rlp.append(&item);
-    }
-    let bytes = rlp.out();
-    trace!("updated encoded value {:02X?}", hex::encode(&bytes));
-    Some(bytes)
 }
 
 #[cfg(test)]

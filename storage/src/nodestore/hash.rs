@@ -285,9 +285,8 @@ pub fn fix_account_storage_root_value(
     value: &[u8],
     child_hashes: &Children<Option<HashType>>,
 ) -> Option<Box<[u8]>> {
-    use crate::hashers::ethhash::replace_hash;
     use crate::node::BranchNode;
-    use ::rlp::{NULL_RLP, RlpStream};
+    use crate::rlp::{NULL_RLP, RlpItem, encode_list, replace_list_field};
     use sha3::{Digest, Keccak256};
 
     let children_count = child_hashes.iter().filter(|(_, c)| c.is_some()).count();
@@ -305,25 +304,21 @@ pub fn fix_account_storage_root_value(
                 ),
             }
         } else {
-            let mut rlp = RlpStream::new_list(const { BranchNode::MAX_CHILDREN + 1 });
-            for (_, child) in &child_hashes {
-                match child {
-                    Some(HashType::Hash(hash)) => {
-                        rlp.append(&hash.as_slice());
-                    }
+            let mut items: [RlpItem<'_>; BranchNode::MAX_CHILDREN + 1] =
+                [RlpItem::Empty; BranchNode::MAX_CHILDREN + 1];
+            for ((_, child), slot) in (&child_hashes).into_iter().zip(items.iter_mut()) {
+                *slot = match child {
+                    Some(HashType::Hash(hash)) => RlpItem::Bytes(hash.as_slice()),
                     Some(HashType::Rlp(_)) => unreachable!(
                         "account-depth storage child cannot have inline RLP: \
                          storage node encoding with 32-byte keys always exceeds 32 bytes"
                     ),
-                    None => {
-                        rlp.append_empty_data();
-                    }
-                }
+                    None => RlpItem::Empty,
+                };
             }
-            rlp.append_empty_data();
-            crate::TrieHash::from(Keccak256::digest(rlp.out()))
+            crate::TrieHash::from(Keccak256::digest(encode_list(&items)))
         }
     };
 
-    replace_hash(value, &storage_root).map(|b| Box::from(b.as_ref()))
+    replace_list_field(value, 2, storage_root.as_slice()).ok()
 }
