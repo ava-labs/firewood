@@ -53,6 +53,7 @@ pub enum RlpItem<'a> {
 
 /// Encode a single byte-string item.
 #[must_use]
+#[inline]
 pub fn encode_bytes(b: &[u8]) -> Box<[u8]> {
     let mut out = Vec::with_capacity(bytes_encoded_len(b));
     write_bytes(&mut out, b);
@@ -61,6 +62,7 @@ pub fn encode_bytes(b: &[u8]) -> Box<[u8]> {
 
 /// Encode a slice of children as one RLP list. Single allocation.
 #[must_use]
+#[inline]
 pub fn encode_list(items: &[RlpItem<'_>]) -> Box<[u8]> {
     let payload_len: usize = items.iter().map(RlpItem::encoded_len).sum();
     // safe: header_len <= 9 and payload_len already fits in memory.
@@ -88,6 +90,7 @@ impl<'a> RlpList<'a> {
     /// Returns [`RlpError::ExpectedList`] if `bytes` encodes a byte string,
     /// [`RlpError::Truncated`] if the input ends mid-item, and
     /// [`RlpError::TrailingBytes`] if extra bytes follow the list.
+    #[inline]
     pub fn parse(bytes: &'a [u8]) -> Result<Self, RlpError> {
         let header = parse_header(bytes)?;
         if header.kind != ItemKind::List {
@@ -112,6 +115,7 @@ impl<'a> RlpList<'a> {
     ///
     /// Returns [`RlpError::ExpectedBytes`] if any child is itself a list,
     /// or any header-decoding error if the payload is malformed.
+    #[inline]
     pub fn fields(&self) -> Result<Vec<&'a [u8]>, RlpError> {
         let mut out = Vec::new();
         let mut rest = self.payload;
@@ -130,6 +134,7 @@ impl<'a> RlpList<'a> {
     /// Returns [`RlpError::IndexOutOfRange`] if the list has fewer than
     /// `i + 1` children, or [`RlpError::ExpectedBytes`] if the target
     /// child is itself a list.
+    #[inline]
     pub fn nth_bytes(&self, i: usize) -> Result<&'a [u8], RlpError> {
         let mut rest = self.payload;
         for _ in 0..i {
@@ -150,6 +155,7 @@ impl<'a> RlpList<'a> {
 /// Read one byte-string child from the start of a non-empty `payload`,
 /// returning the field bytes and the remainder. Errors if the next item is
 /// a list or has a malformed header.
+#[inline]
 fn next_field(payload: &[u8]) -> Result<(&[u8], &[u8]), RlpError> {
     let header = parse_header(payload)?;
     let total = header.total_len()?;
@@ -170,6 +176,7 @@ fn next_field(payload: &[u8]) -> Result<(&[u8], &[u8]), RlpError> {
 ///
 /// Returns an [`RlpError`] if `input` is malformed, is not a list, has fewer
 /// than `field_index + 1` children, or the target child is itself a list.
+#[inline]
 pub fn replace_list_field(
     input: &[u8],
     field_index: usize,
@@ -253,6 +260,7 @@ struct ItemHeader {
 }
 
 impl ItemHeader {
+    #[inline]
     fn total_len(&self) -> Result<usize, RlpError> {
         self.header_len
             .checked_add(self.payload_len)
@@ -261,6 +269,7 @@ impl ItemHeader {
 }
 
 impl RlpItem<'_> {
+    #[inline]
     fn encoded_len(&self) -> usize {
         match self {
             RlpItem::Bytes(b) => bytes_encoded_len(b),
@@ -269,6 +278,7 @@ impl RlpItem<'_> {
         }
     }
 
+    #[inline]
     fn write_into(&self, out: &mut Vec<u8>) {
         match self {
             RlpItem::Bytes(b) => write_bytes(out, b),
@@ -278,6 +288,7 @@ impl RlpItem<'_> {
     }
 }
 
+#[inline]
 fn parse_header(input: &[u8]) -> Result<ItemHeader, RlpError> {
     let &first = input.first().ok_or(RlpError::Truncated)?;
     // All `wrapping_sub`s below are bounded by their match arms.
@@ -312,6 +323,7 @@ fn parse_header(input: &[u8]) -> Result<ItemHeader, RlpError> {
     }
 }
 
+#[inline]
 fn parse_long_header(
     input: &[u8],
     len_of_len: usize,
@@ -336,6 +348,7 @@ fn parse_long_header(
     })
 }
 
+#[inline]
 fn read_be_usize(bytes: &[u8]) -> usize {
     // Caller checks `bytes.len() <= size_of::<usize>()`, so the shift never
     // loses bits.
@@ -344,6 +357,7 @@ fn read_be_usize(bytes: &[u8]) -> usize {
         .fold(0usize, |acc, &b| (acc << 8) | usize::from(b))
 }
 
+#[inline]
 fn write_bytes(out: &mut Vec<u8>, b: &[u8]) {
     if b.len() == 1 && b.first().is_some_and(|&v| v < 0x80) {
         out.extend_from_slice(b);
@@ -353,6 +367,7 @@ fn write_bytes(out: &mut Vec<u8>, b: &[u8]) {
     }
 }
 
+#[inline]
 fn bytes_encoded_len(b: &[u8]) -> usize {
     if b.len() == 1 && b.first().is_some_and(|&v| v < 0x80) {
         1
@@ -362,6 +377,7 @@ fn bytes_encoded_len(b: &[u8]) -> usize {
     }
 }
 
+#[inline]
 const fn header_len(payload_len: usize) -> usize {
     if payload_len < 56 {
         1
@@ -372,6 +388,7 @@ const fn header_len(payload_len: usize) -> usize {
 
 /// Write the RLP header for a payload. `short_base` is `0x80` for byte
 /// strings and `0xc0` for lists; the long-form base is `short_base + 55`.
+#[inline]
 fn write_header(out: &mut Vec<u8>, payload_len: usize, short_base: u8) {
     if payload_len < 56 {
         out.push(short_base.wrapping_add(payload_len as u8));
@@ -388,6 +405,7 @@ fn write_header(out: &mut Vec<u8>, payload_len: usize, short_base: u8) {
     }
 }
 
+#[inline]
 const fn minimal_be_len(n: usize) -> usize {
     if n == 0 {
         0
