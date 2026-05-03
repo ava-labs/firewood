@@ -6,9 +6,7 @@ use std::num::NonZeroUsize;
 
 use firewood_metrics::firewood_counter;
 #[cfg(feature = "ethhash")]
-use firewood_storage::TrieHash;
-#[cfg(feature = "ethhash")]
-use firewood_storage::rlp::RlpList;
+use firewood_storage::{RlpList, TrieHash};
 
 use firewood::{
     ProofError,
