@@ -285,19 +285,48 @@ impl RevisionManager {
         // 1-5. In high-commit-rate scenarios with many parallel readers, lock contention here
         // may stall reader threads until the commit critical section completes.
         let __lock_start = ::std::time::Instant::now();
-        let mut in_memory_revisions = self.in_memory_revisions.write();
+        let mut revisions_guard = self.lock_committed_revisions();
         firewood_histogram!(cheap: COMMIT_LOCK_WAIT_SECONDS)
             .record(__lock_start.elapsed().as_secs_f64());
 
-        // 1. Check if the persist worker has failed.
+        // Steps 1-5: validate, reap, persist, insert (under write lock)
+        self.commit_critical_section(&proposal, &mut revisions_guard)?;
+        drop(revisions_guard);
+        // Step 6: proposal cleanup and reparenting (lock released)
+        self.commit_cleanup(&proposal);
+        Ok(())
+    }
+
+    /// Acquire an exclusive write guard on the committed revisions queue.
+    ///
+    /// The guard prevents other commits and blocks `current_revision()` readers
+    /// until dropped. Used by [`crate::db::Proposal::commit_with_rebase`] to
+    /// hold the lock across a rebase-then-commit sequence, ensuring no other
+    /// commit can interleave between the rebase and the commit.
+    pub(crate) fn lock_committed_revisions(
+        &self,
+    ) -> parking_lot::RwLockWriteGuard<'_, VecDeque<CommittedRevision>> {
+        self.in_memory_revisions.write()
+    }
+
+    /// Validate and commit a proposal under the caller's write guard.
+    ///
+    /// Checks that the proposal's parent matches the latest revision, reaps
+    /// old revisions that exceed `max_revisions`, signals the persist worker,
+    /// and inserts the new committed revision into the queue. The caller must
+    /// hold the write lock on committed revisions and pass the locked queue in.
+    pub(crate) fn commit_critical_section(
+        &self,
+        proposal: &ProposedRevision,
+        revisions: &mut VecDeque<CommittedRevision>,
+    ) -> Result<(), RevisionManagerError> {
+        // Check if the persist worker has failed.
         self.persist_worker
             .check_error()
             .map_err(RevisionManagerError::PersistError)?;
 
-        // 2. Commit check
-        let current_revision = in_memory_revisions
-            .back()
-            .expect("there is always one revision");
+        // Commit check
+        let current_revision = revisions.back().expect("there is always one revision");
         if !proposal.parent_hash_is(current_revision.root_hash()) {
             return Err(RevisionManagerError::NotLatest {
                 provided: proposal.root_hash(),
@@ -309,18 +338,18 @@ impl RevisionManager {
 
         firewood_gauge!(DELETED_LIST_LEN).set_integer(committed.deleted_len());
 
-        // 3. Revision reaping
-        // When we exceed max_revisions, remove the oldest revision from memory
+        // Revision reaping: when we exceed max_revisions, remove the oldest revision from memory
         // and send it to the `PersistWorker`.
         // If you crash after freeing some of these, then the free list will point to nodes that are not actually free.
         // TODO: Handle the case where we get something off the free list that is not free
-        while in_memory_revisions.len() >= self.max_revisions {
-            let oldest = in_memory_revisions.pop_front().expect("must be present");
+        while revisions.len() >= self.max_revisions {
+            let oldest = revisions.pop_front().expect("must be present");
             let oldest_hash = oldest.root_hash().or_default_root_hash();
             if let Some(ref hash) = oldest_hash {
-                // BLOCKING: write lock on `by_hash` while already holding the write lock on
-                // `in_memory_revisions`. Nested locking order must remain consistent (always
-                // acquire `in_memory_revisions` before `by_hash`) to avoid deadlocks.
+                // BLOCKING: write lock on `by_hash` while already holding the
+                // revisions write lock. Nested locking order must remain
+                // consistent (always acquire revisions before `by_hash`) to
+                // avoid deadlocks.
                 self.by_hash.write().remove(hash);
             }
 
@@ -333,15 +362,15 @@ impl RevisionManager {
                     .map_err(RevisionManagerError::PersistError)?,
                 Err(original) => {
                     warn!("Oldest revision could not be reaped; still referenced");
-                    in_memory_revisions.push_front(original);
+                    revisions.push_front(original);
                     break;
                 }
             }
-            firewood_gauge!(ACTIVE_REVISIONS).set_integer(in_memory_revisions.len());
+            firewood_gauge!(ACTIVE_REVISIONS).set_integer(revisions.len());
             firewood_gauge!(MAX_REVISIONS).set_integer(self.max_revisions);
         }
 
-        // 4. Signal to the `PersistWorker` to persist this revision.
+        // Signal to the `PersistWorker` to persist this revision.
         let committed: CommittedRevision = committed.into();
         let __submit_start = ::std::time::Instant::now();
         self.persist_worker
@@ -350,22 +379,24 @@ impl RevisionManager {
         firewood_histogram!(cheap: PERSIST_SUBMIT_DURATION_SECONDS)
             .record(__submit_start.elapsed().as_secs_f64());
 
-        // 5. Set last committed revision
+        // Set last committed revision.
         // The revision is added to `by_hash` here while it still exists in `proposals`.
         // The `view()` method relies on this ordering - it checks `proposals` first,
         // then `by_hash`, ensuring the revision is always findable during the transition.
-        in_memory_revisions.push_back(committed.clone());
+        revisions.push_back(committed.clone());
         if let Some(hash) = committed.root_hash().or_default_root_hash() {
-            // BLOCKING: write lock on `by_hash` (still inside the `in_memory_revisions` write
-            // lock). Same nested ordering as the reap path above; must not be inverted.
-            self.by_hash.write().insert(hash, committed.clone());
+            // BLOCKING: write lock on `by_hash` (still inside the revisions
+            // write lock). Same nested ordering as the reap path above; must
+            // not be inverted.
+            self.by_hash.write().insert(hash, committed);
         }
 
-        // At this point, we can release the lock on the queue of in-memory
-        // revisions as we've now set the new latest committed revision.
-        drop(in_memory_revisions);
+        Ok(())
+    }
 
-        // 6. Proposal Cleanup
+    /// Proposal cleanup and reparenting.
+    /// Called after releasing the committed revisions write lock.
+    pub(crate) fn commit_cleanup(&self, proposal: &ProposedRevision) {
         // Free proposal that is being committed as well as any proposals no longer
         // referenced by anyone else. Track how many were discarded (dropped without commit).
         {
@@ -376,7 +407,7 @@ impl RevisionManager {
             let mut lock = self.proposals.lock();
             let mut discarded = 0u64;
             lock.retain(|p| {
-                let should_retain = !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1;
+                let should_retain = !Arc::ptr_eq(p, proposal) && Arc::strong_count(p) > 1;
                 if !should_retain {
                     discarded = discarded.wrapping_add(1);
                 }
@@ -401,13 +432,13 @@ impl RevisionManager {
         }
 
         if crate::logger::trace_enabled() {
+            let committed = proposal.as_committed();
+            let committed: CommittedRevision = committed.into();
             let merkle = Merkle::from(committed);
             if let Ok(s) = merkle.dump_to_string() {
                 trace!("{s}");
             }
         }
-
-        Ok(())
     }
 
     /// View the database at a specific hash.
@@ -431,6 +462,17 @@ impl RevisionManager {
 
         // 2. Try to find it in committed revisions.
         self.revision(root_hash).map(|r| r as ArcDynDbView)
+    }
+
+    /// Remove a proposal from the tracking list. Retains all proposals
+    /// except the one matching `proposal` by `Arc::ptr_eq`.
+    pub fn remove_proposal(&self, proposal: &ProposedRevision) {
+        let len = {
+            let mut lock = self.proposals.lock();
+            lock.retain(|p| !Arc::ptr_eq(p, proposal));
+            lock.len()
+        };
+        firewood_gauge!(PROPOSALS_UNCOMMITTED).set_integer(len);
     }
 
     pub fn add_proposal(&self, proposal: ProposedRevision) {

@@ -78,6 +78,16 @@ impl ProposalHandle<'_> {
         Ok(hash_key)
     }
 
+    /// Consume and commit a proposal, automatically rebasing if the parent
+    /// revision is no longer the latest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if committing or rebasing fails.
+    pub fn commit_proposal_with_rebase(self) -> Result<Option<HashKey>, api::Error> {
+        self.proposal.commit_with_rebase()
+    }
+
     /// Creates an iterator on the proposal starting from the given key.
     #[must_use]
     #[allow(clippy::missing_panics_doc)]

@@ -572,6 +572,15 @@ impl ImmutableProposal {
         }
     }
 
+    /// Returns the root hash of this proposal's parent, if the parent is committed.
+    /// Returns `None` if the parent is another proposal (not yet committed).
+    fn parent_root_hash(&self) -> Option<TrieHash> {
+        match &*self.parent.lock() {
+            NodeStoreParent::Committed(root_hash) => root_hash.clone(),
+            NodeStoreParent::Proposed(_) => None,
+        }
+    }
+
     fn commit_reparent(self: &Arc<Self>, committing: &Arc<Self>) {
         let mut guard = self.parent.lock();
         if let NodeStoreParent::Proposed(ref parent) = *guard
@@ -804,6 +813,13 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     #[must_use]
     pub fn parent_hash_is(&self, hash: Option<TrieHash>) -> bool {
         self.kind.parent_hash_is(hash)
+    }
+
+    /// Returns the root hash of this proposal's parent, if the parent is committed.
+    /// Returns `None` if the parent is another proposal (not yet committed).
+    #[must_use]
+    pub fn parent_root_hash(&self) -> Option<TrieHash> {
+        self.kind.parent_root_hash()
     }
 }
 

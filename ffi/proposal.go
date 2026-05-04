@@ -5,18 +5,20 @@ package ffi
 
 // #include <stdlib.h>
 // #include "firewood.h"
+// #cgo noescape fwd_commit_proposal
+// #cgo nocallback fwd_commit_proposal
+// #cgo noescape fwd_commit_proposal_with_rebase
+// #cgo nocallback fwd_commit_proposal_with_rebase
+// #cgo noescape fwd_free_proposal
+// #cgo nocallback fwd_free_proposal
 // #cgo noescape fwd_get_from_proposal
 // #cgo nocallback fwd_get_from_proposal
 // #cgo noescape fwd_iter_on_proposal
 // #cgo nocallback fwd_iter_on_proposal
-// #cgo noescape fwd_propose_on_proposal
-// #cgo nocallback fwd_propose_on_proposal
-// #cgo noescape fwd_commit_proposal
-// #cgo nocallback fwd_commit_proposal
 // #cgo noescape fwd_proposal_dump
 // #cgo nocallback fwd_proposal_dump
-// #cgo noescape fwd_free_proposal
-// #cgo nocallback fwd_free_proposal
+// #cgo noescape fwd_propose_on_proposal
+// #cgo nocallback fwd_propose_on_proposal
 import "C"
 
 import (
@@ -152,6 +154,38 @@ func (p *Proposal) Commit() error {
 
 		return err
 	})
+}
+
+// CommitWithRebase commits the proposal, automatically rebasing if the
+// proposal's parent is no longer the latest revision. Returns the root hash
+// of the committed revision.
+//
+// This is safe to call only once; subsequent calls will return an error.
+//
+// During this function, the latest state of the database is locked, so other
+// operations that access it (such as [Database.Get] and [Database.Propose]) will
+// block until this function returns.
+func (p *Proposal) CommitWithRebase() (Hash, error) {
+	var hash Hash
+	err := p.keepAliveHandle.disown(true /* evenOnError */, func() error {
+		if p.dropped {
+			return errDroppedProposal
+		}
+
+		p.commitLock.Lock()
+		resp := C.fwd_commit_proposal_with_rebase(p.ptr)
+		p.commitLock.Unlock()
+
+		var err error
+		hash, err = getHashKeyFromHashResult(resp)
+
+		// Prevent double free
+		p.ptr = nil
+		p.dropped = true
+
+		return err
+	})
+	return hash, err
 }
 
 // Dump returns a DOT (Graphviz) format representation of the trie structure
