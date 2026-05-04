@@ -60,7 +60,8 @@ pub use nodestore::fix_account_storage_root_value;
 pub use nodestore::{
     AreaIndex, Committed, HashedNodeReader, ImmutableProposal, LinearAddress, Mutable, MutableKind,
     NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError, NodeReader, NodeStore, NodeStoreHeader,
-    Parentable, Propose, Recon, Reconstructed, ReconstructionSource, RootReader, TrieReader,
+    Parentable, PersistScratch, Propose, Recon, Reconstructed, ReconstructionSource, RootReader,
+    TrieReader,
 };
 pub use path::{
     ComponentIter, IntoSplitPath, JoinedPath, PackedBytes, PackedPathComponents, PackedPathRef,

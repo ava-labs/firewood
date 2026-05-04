@@ -46,6 +46,40 @@ use super::{Committed, NodeStore};
 #[cfg(not(test))]
 use super::RootReader;
 
+/// Reusable scratch state for node persistence.
+///
+/// The background persist worker can hold on to this across commits so `bumpalo`
+/// keeps its chunks instead of deallocating and reallocating them on every
+/// persist.
+#[derive(Debug)]
+pub struct PersistScratch {
+    bump: Bump,
+}
+
+impl PersistScratch {
+    /// Create scratch storage sized for the common node serialization batch.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            bump: Bump::with_capacity(super::INITIAL_BUMP_SIZE),
+        }
+    }
+
+    const fn bump_mut(&mut self) -> &mut Bump {
+        &mut self.bump
+    }
+
+    fn reset(&mut self) {
+        self.bump.reset();
+    }
+}
+
+impl Default for PersistScratch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NodeStoreHeader {
     /// Persist this header to storage.
     ///
@@ -177,19 +211,25 @@ fn serialize_node_to_bump<'a>(
 }
 
 impl<S: WritableStorage> NodeStore<Committed, S> {
-    /// Persist all the nodes of a proposal to storage, updating the header with new allocations.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if any node cannot be written to storage.
+    /// Persist all nodes using caller-provided scratch storage that can be
+    /// reused across commits.
     #[fastrace::trace(short_name = true)]
-    fn flush_nodes(&self, header: &mut NodeStoreHeader) -> Result<(), FileIoError> {
+    fn flush_nodes_with_scratch(
+        &self,
+        header: &mut NodeStoreHeader,
+        scratch: &mut PersistScratch,
+    ) -> Result<(), FileIoError> {
         let flush_start = Instant::now();
 
         let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), header);
-        let mut bump = Bump::with_capacity(super::INITIAL_BUMP_SIZE);
-
-        self.process_unpersisted_nodes(&mut bump, &mut node_allocator, super::INITIAL_BUMP_SIZE)?;
+        scratch.reset();
+        let result = self.process_unpersisted_nodes(
+            scratch.bump_mut(),
+            &mut node_allocator,
+            super::INITIAL_BUMP_SIZE,
+        );
+        scratch.reset();
+        result?;
 
         firewood_histogram!(cheap: FLUSH_DURATION_SECONDS)
             .record(flush_start.elapsed().as_secs_f64());
@@ -285,8 +325,23 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Returns a [`FileIoError`] if any of the persistence operations fail.
     #[fastrace::trace(short_name = true)]
     pub fn persist(&self, header: &mut NodeStoreHeader) -> Result<(), FileIoError> {
+        let mut scratch = PersistScratch::new();
+        self.persist_with_scratch(header, &mut scratch)
+    }
+
+    /// Persist the entire nodestore using caller-provided scratch storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if any of the persistence operations fail.
+    #[fastrace::trace(short_name = true)]
+    pub fn persist_with_scratch(
+        &self,
+        header: &mut NodeStoreHeader,
+        scratch: &mut PersistScratch,
+    ) -> Result<(), FileIoError> {
         // First persist all the nodes
-        self.flush_nodes(header)?;
+        self.flush_nodes_with_scratch(header, scratch)?;
 
         // Set the root address in the header based on the persisted root
         let root_location = self.kind.root.as_ref().and_then(|child| {
@@ -307,8 +362,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 mod tests {
     use super::*;
     use crate::{
-        Child, Children, HashType, ImmutableProposal, LinearAddress, NodeHashAlgorithm, NodeStore,
-        NodeStoreHeader, Path, PathComponent, SharedNode,
+        Child, Children, HashType, HashedNodeReader, ImmutableProposal, LinearAddress,
+        NodeHashAlgorithm, NodeStore, NodeStoreHeader, Path, PathComponent, SharedNode,
         linear::memory::MemStore,
         node::{BranchNode, LeafNode, Node},
         nodestore::{Mutable, Propose},
@@ -586,5 +641,52 @@ mod tests {
             .unwrap();
         assert_eq!(*child2_node.partial_path(), Path::from(&[4, 5, 6]));
         assert_eq!(child2_node.value(), Some(&b"value2"[..]));
+    }
+
+    #[test]
+    fn test_persist_with_reused_scratch() {
+        let mem_store = MemStore::default();
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let base_committed = NodeStore::new_empty_committed(mem_store.into());
+        let mut scratch = PersistScratch::new();
+
+        let mut first_proposal = NodeStore::new(&base_committed).unwrap();
+        first_proposal
+            .root_mut()
+            .replace(create_leaf(&[1, 2, 3], b"value1"));
+        let first_immutable: NodeStore<Arc<ImmutableProposal>, _> =
+            first_proposal.try_into().unwrap();
+        let first_committed = first_immutable.as_committed();
+        first_committed
+            .persist_with_scratch(&mut header, &mut scratch)
+            .unwrap();
+
+        let mut second_proposal = NodeStore::new(&first_committed).unwrap();
+        second_proposal
+            .root_mut()
+            .replace(create_leaf(&[4, 5, 6], b"value2"));
+        let second_immutable: NodeStore<Arc<ImmutableProposal>, _> =
+            second_proposal.try_into().unwrap();
+        let second_committed = second_immutable.as_committed();
+        second_committed
+            .persist_with_scratch(&mut header, &mut scratch)
+            .unwrap();
+
+        let first_root = first_committed.kind.root.as_ref().unwrap();
+        let first_root_node = first_root
+            .as_maybe_persisted_node()
+            .as_shared_node(&first_committed)
+            .unwrap();
+        assert_eq!(*first_root_node.partial_path(), Path::from(&[1, 2, 3]));
+        assert_eq!(first_root_node.value(), Some(&b"value1"[..]));
+
+        let second_root = second_committed.kind.root.as_ref().unwrap();
+        let second_root_node = second_root
+            .as_maybe_persisted_node()
+            .as_shared_node(&second_committed)
+            .unwrap();
+        assert_eq!(*second_root_node.partial_path(), Path::from(&[4, 5, 6]));
+        assert_eq!(second_root_node.value(), Some(&b"value2"[..]));
+        assert_eq!(header.root_address(), second_committed.root_address());
     }
 }
