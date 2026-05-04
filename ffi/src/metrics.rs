@@ -61,6 +61,7 @@ pub fn setup_metrics() -> Result<(), Box<dyn Error>> {
     RECORDER
         .set(handle)
         .map_err(|_| "recorder already initialized")?;
+    firewood_metrics::mark_global_recorder_installed();
 
     Ok(())
 }

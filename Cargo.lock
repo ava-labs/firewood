@@ -1773,6 +1773,7 @@ dependencies = [
  "fastrace",
  "fastrace-opentelemetry",
  "firewood",
+ "firewood-metrics",
  "firewood-storage",
  "hex",
  "log",

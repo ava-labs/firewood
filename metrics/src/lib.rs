@@ -38,6 +38,7 @@
 //! For registration, use the [`define_metrics!`] macro in your crate's registry module.
 
 use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Sealed helper for [`GaugeExt`]: integer types that can be stored in a gauge as `f64`.
 ///
@@ -179,6 +180,8 @@ thread_local! {
     static METRICS_CONTEXT: Cell<Option<MetricsContext>> = const { Cell::new(None) };
 }
 
+static GLOBAL_RECORDER_INSTALLED: AtomicBool = AtomicBool::new(false);
+
 /// A guard that restores the previous thread-local [`MetricsContext`].
 #[derive(Debug)]
 pub struct MetricsContextGuard {
@@ -210,6 +213,20 @@ pub fn current_metrics_context() -> Option<MetricsContext> {
 #[must_use]
 pub fn expensive_metrics_enabled() -> bool {
     current_metrics_context().is_some_and(MetricsContext::expensive_metrics_enabled)
+}
+
+/// Marks the process-global metrics recorder as installed.
+///
+/// Call this immediately after successfully installing the recorder. Once set,
+/// the flag remains enabled for the rest of the process lifetime.
+pub fn mark_global_recorder_installed() {
+    GLOBAL_RECORDER_INSTALLED.store(true, Ordering::Release);
+}
+
+/// Returns whether the process-global metrics recorder has been installed.
+#[must_use]
+pub fn global_recorder_installed() -> bool {
+    GLOBAL_RECORDER_INSTALLED.load(Ordering::Acquire)
 }
 
 /// Defines metric name constants and a `register()` function from a single schema.
@@ -529,6 +546,11 @@ macro_rules! define_metrics {
 /// firewood_counter!(PROPOSALS_CREATED_TOTAL, "status" => "ok").increment(1);
 /// firewood_counter!(expensive: SLOW_PATH_TOTAL).increment(1);
 /// ```
+///
+/// Once the process-global recorder is installed, no-label callsites and callsites
+/// whose labels are all literals cache the returned handle in a per-callsite
+/// `OnceLock`. Callsites with runtime-valued labels take the uncached path because
+/// the metric identity can vary per invocation.
 // `crate` in the expansion refers to the invocation crate, not `firewood_metrics` — see
 // the `firewood_histogram!` doc for the full explanation of why this is intentional.
 #[expect(
@@ -538,23 +560,47 @@ macro_rules! define_metrics {
 )]
 #[macro_export]
 macro_rules! firewood_counter {
-    (expensive: $name:ident) => {
+    (expensive: $name:ident) => {{
         if $crate::expensive_metrics_enabled() {
+            $crate::firewood_counter!($name)
+        } else {
+            $crate::__private::metrics::Counter::noop()
+        }
+    }};
+    (expensive: $name:ident, $($labels:tt)+) => {{
+        if $crate::expensive_metrics_enabled() {
+            $crate::firewood_counter!($name, $($labels)+)
+        } else {
+            $crate::__private::metrics::Counter::noop()
+        }
+    }};
+    ($name:ident) => {{
+        static __FW_CACHED: ::std::sync::OnceLock<$crate::__private::metrics::Counter> =
+            ::std::sync::OnceLock::new();
+        if $crate::global_recorder_installed() {
+            __FW_CACHED
+                .get_or_init(|| $crate::__private::metrics::counter!(crate::registry::$name))
+                .clone()
+        } else {
             $crate::__private::metrics::counter!(crate::registry::$name)
-        } else {
-            $crate::__private::metrics::Counter::noop()
         }
-    };
-    (expensive: $name:ident, $($labels:tt)+) => {
-        if $crate::expensive_metrics_enabled() {
-            $crate::__private::metrics::counter!(crate::registry::$name, $($labels)+)
+    }};
+    ($name:ident, $($key:literal => $val:literal),+ $(,)?) => {{
+        static __FW_CACHED: ::std::sync::OnceLock<$crate::__private::metrics::Counter> =
+            ::std::sync::OnceLock::new();
+        if $crate::global_recorder_installed() {
+            __FW_CACHED
+                .get_or_init(|| {
+                    $crate::__private::metrics::counter!(
+                        crate::registry::$name,
+                        $($key => $val),+
+                    )
+                })
+                .clone()
         } else {
-            $crate::__private::metrics::Counter::noop()
+            $crate::__private::metrics::counter!(crate::registry::$name, $($key => $val),+)
         }
-    };
-    ($name:ident) => {
-        $crate::__private::metrics::counter!(crate::registry::$name)
-    };
+    }};
     ($name:ident, $($labels:tt)+) => {
         $crate::__private::metrics::counter!(crate::registry::$name, $($labels)+)
     };
@@ -591,6 +637,10 @@ macro_rules! firewood_counter {
 /// firewood_gauge!(ACTIVE_REVISIONS).increment(1.0);
 /// firewood_gauge!(ACTIVE_REVISIONS).decrement(1.0);
 /// ```
+///
+/// Once the process-global recorder is installed, no-label callsites and callsites
+/// whose labels are all literals cache the returned handle in a per-callsite
+/// `OnceLock`. See [`firewood_counter!`] for the runtime-label behavior.
 // `crate` in the expansion refers to the invocation crate — intentional; see `firewood_histogram!`.
 #[expect(
     clippy::crate_in_macro_def,
@@ -599,23 +649,47 @@ macro_rules! firewood_counter {
 )]
 #[macro_export]
 macro_rules! firewood_gauge {
-    (expensive: $name:ident) => {
+    (expensive: $name:ident) => {{
         if $crate::expensive_metrics_enabled() {
+            $crate::firewood_gauge!($name)
+        } else {
+            $crate::__private::metrics::Gauge::noop()
+        }
+    }};
+    (expensive: $name:ident, $($labels:tt)+) => {{
+        if $crate::expensive_metrics_enabled() {
+            $crate::firewood_gauge!($name, $($labels)+)
+        } else {
+            $crate::__private::metrics::Gauge::noop()
+        }
+    }};
+    ($name:ident) => {{
+        static __FW_CACHED: ::std::sync::OnceLock<$crate::__private::metrics::Gauge> =
+            ::std::sync::OnceLock::new();
+        if $crate::global_recorder_installed() {
+            __FW_CACHED
+                .get_or_init(|| $crate::__private::metrics::gauge!(crate::registry::$name))
+                .clone()
+        } else {
             $crate::__private::metrics::gauge!(crate::registry::$name)
-        } else {
-            $crate::__private::metrics::Gauge::noop()
         }
-    };
-    (expensive: $name:ident, $($labels:tt)+) => {
-        if $crate::expensive_metrics_enabled() {
-            $crate::__private::metrics::gauge!(crate::registry::$name, $($labels)+)
+    }};
+    ($name:ident, $($key:literal => $val:literal),+ $(,)?) => {{
+        static __FW_CACHED: ::std::sync::OnceLock<$crate::__private::metrics::Gauge> =
+            ::std::sync::OnceLock::new();
+        if $crate::global_recorder_installed() {
+            __FW_CACHED
+                .get_or_init(|| {
+                    $crate::__private::metrics::gauge!(
+                        crate::registry::$name,
+                        $($key => $val),+
+                    )
+                })
+                .clone()
         } else {
-            $crate::__private::metrics::Gauge::noop()
+            $crate::__private::metrics::gauge!(crate::registry::$name, $($key => $val),+)
         }
-    };
-    ($name:ident) => {
-        $crate::__private::metrics::gauge!(crate::registry::$name)
-    };
+    }};
     ($name:ident, $($labels:tt)+) => {
         $crate::__private::metrics::gauge!(crate::registry::$name, $($labels)+)
     };
@@ -655,6 +729,10 @@ macro_rules! firewood_gauge {
 /// // Always records (e.g. for low-overhead infrastructure metrics):
 /// firewood_histogram!(cheap: GATHER_DURATION_SECONDS).record(0.01);
 /// ```
+///
+/// Once the process-global recorder is installed, no-label callsites and callsites
+/// whose labels are all literals cache the returned handle in a per-callsite
+/// `OnceLock`. See [`firewood_counter!`] for the runtime-label behavior.
 // `crate` in the expansion refers to the invocation crate — intentional; see the doc above.
 #[expect(
     clippy::crate_in_macro_def,
@@ -664,23 +742,47 @@ macro_rules! firewood_gauge {
 )]
 #[macro_export]
 macro_rules! firewood_histogram {
-    ($name:ident) => {
+    ($name:ident) => {{
         if $crate::expensive_metrics_enabled() {
+            $crate::firewood_histogram!(cheap: $name)
+        } else {
+            $crate::__private::metrics::Histogram::noop()
+        }
+    }};
+    ($name:ident, $($labels:tt)+) => {{
+        if $crate::expensive_metrics_enabled() {
+            $crate::firewood_histogram!(cheap: $name, $($labels)+)
+        } else {
+            $crate::__private::metrics::Histogram::noop()
+        }
+    }};
+    (cheap: $name:ident) => {{
+        static __FW_CACHED: ::std::sync::OnceLock<$crate::__private::metrics::Histogram> =
+            ::std::sync::OnceLock::new();
+        if $crate::global_recorder_installed() {
+            __FW_CACHED
+                .get_or_init(|| $crate::__private::metrics::histogram!(crate::registry::$name))
+                .clone()
+        } else {
             $crate::__private::metrics::histogram!(crate::registry::$name)
-        } else {
-            $crate::__private::metrics::Histogram::noop()
         }
-    };
-    ($name:ident, $($labels:tt)+) => {
-        if $crate::expensive_metrics_enabled() {
-            $crate::__private::metrics::histogram!(crate::registry::$name, $($labels)+)
+    }};
+    (cheap: $name:ident, $($key:literal => $val:literal),+ $(,)?) => {{
+        static __FW_CACHED: ::std::sync::OnceLock<$crate::__private::metrics::Histogram> =
+            ::std::sync::OnceLock::new();
+        if $crate::global_recorder_installed() {
+            __FW_CACHED
+                .get_or_init(|| {
+                    $crate::__private::metrics::histogram!(
+                        crate::registry::$name,
+                        $($key => $val),+
+                    )
+                })
+                .clone()
         } else {
-            $crate::__private::metrics::Histogram::noop()
+            $crate::__private::metrics::histogram!(crate::registry::$name, $($key => $val),+)
         }
-    };
-    (cheap: $name:ident) => {
-        $crate::__private::metrics::histogram!(crate::registry::$name)
-    };
+    }};
     (cheap: $name:ident, $($labels:tt)+) => {
         $crate::__private::metrics::histogram!(crate::registry::$name, $($labels)+)
     };
@@ -777,5 +879,10 @@ mod tests {
             // Parent context is unaffected.
             assert_eq!(current_metrics_context(), Some(ctx));
         });
+    }
+
+    #[test]
+    fn global_recorder_flag_defaults_to_false() {
+        assert!(!global_recorder_installed());
     }
 }
