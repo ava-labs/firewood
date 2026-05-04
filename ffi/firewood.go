@@ -115,9 +115,9 @@ type Database struct {
 type config struct {
 	// truncate indicates whether to clear the database file if it already exists.
 	truncate bool
-	// nodeCacheSizeInBytes is the memory limit for the node cache in bytes.
+	// nodeCacheEntries is the maximum number of entries in the node cache.
 	// Must be non-zero.
-	nodeCacheSizeInBytes uint
+	nodeCacheEntries uint
 	// freeListCacheEntries is the number of entries in the freelist cache.
 	// Must be non-zero.
 	freeListCacheEntries uint
@@ -140,7 +140,7 @@ type config struct {
 
 func defaultConfig() *config {
 	return &config{
-		nodeCacheSizeInBytes:           128_000_000,
+		nodeCacheEntries:               1_500_000,
 		freeListCacheEntries:           1_000_000,
 		revisions:                      100,
 		readCacheStrategy:              OnlyCacheWrites,
@@ -159,13 +159,38 @@ func WithTruncate(truncate bool) Option {
 	}
 }
 
-// WithNodeCacheSizeInBytes sets the node cache memory limit in bytes.
+// WithNodeCacheEntries sets the maximum number of entries in the node cache.
 // Must be non-zero.
-// Default: 128 MB
+// Default: 1,500,000
+func WithNodeCacheEntries(entries uint) Option {
+	return func(c *config) {
+		c.nodeCacheEntries = entries
+	}
+}
+
+// WithNodeCacheSizeInBytes sets the node cache size from an approximate byte budget.
+//
+// Deprecated: use WithNodeCacheEntries. This compatibility option converts bytes
+// to entries using the old 128-byte-per-node estimate.
 func WithNodeCacheSizeInBytes(sizeInBytes uint) Option {
 	return func(c *config) {
-		c.nodeCacheSizeInBytes = sizeInBytes
+		c.nodeCacheEntries = cacheEntriesFromBytes(sizeInBytes)
 	}
+}
+
+func cacheEntriesFromBytes(sizeInBytes uint) uint {
+	const bytesPerNodeEstimate = 128
+	if sizeInBytes == 0 {
+		return 0
+	}
+	entries := sizeInBytes / bytesPerNodeEstimate
+	if sizeInBytes%bytesPerNodeEstimate != 0 {
+		entries++
+	}
+	if entries == 0 {
+		return 1
+	}
+	return entries
 }
 
 // WithFreeListCacheEntries sets the number of entries in the freelist cache.
@@ -272,8 +297,8 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	if conf.revisions < 2 {
 		return nil, fmt.Errorf("revisions must be >= 2, got %d", conf.revisions)
 	}
-	if conf.nodeCacheSizeInBytes < 1 {
-		return nil, fmt.Errorf("node cache size in bytes must be >= 1, got %d", conf.nodeCacheSizeInBytes)
+	if conf.nodeCacheEntries < 1 {
+		return nil, fmt.Errorf("node cache entries must be >= 1, got %d", conf.nodeCacheEntries)
 	}
 	if conf.freeListCacheEntries < 1 {
 		return nil, fmt.Errorf("free list cache entries must be >= 1, got %d", conf.freeListCacheEntries)
@@ -284,7 +309,7 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 
 	args := C.struct_DatabaseHandleArgs{
 		dir:                               newBorrowedBytes([]byte(dbDir), &pinner),
-		node_cache_memory_limit:           C.size_t(conf.nodeCacheSizeInBytes),
+		node_cache_entries:                C.size_t(conf.nodeCacheEntries),
 		free_list_cache_size:              C.size_t(conf.freeListCacheEntries),
 		revisions:                         C.size_t(conf.revisions),
 		strategy:                          C.uint8_t(conf.readCacheStrategy),

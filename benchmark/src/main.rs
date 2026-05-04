@@ -55,8 +55,8 @@ struct GlobalOpts {
     batch_size: u64,
     #[arg(short, long, default_value_t = 1000)]
     number_of_batches: u64,
-    #[arg(short, long, default_value_t = NonZeroUsize::new(192_000_000).expect("is non-zero"))]
-    cache_memory_limit: NonZeroUsize,
+    #[arg(short, long, default_value_t = NonZeroUsize::new(1_500_000).expect("is non-zero"))]
+    cache_entries: NonZeroUsize,
     #[arg(short, long, default_value_t = 128)]
     revisions: usize,
     #[cfg(feature = "prometheus")]
@@ -228,7 +228,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .expect("failed to spawn prometheus listener");
 
     let mgrcfg = RevisionManagerConfig::builder()
-        .node_cache_memory_limit(args.global_opts.cache_memory_limit)
+        .node_cache_entries(args.global_opts.cache_entries)
         .free_list_cache_size(
             NonZeroUsize::new(4 * args.global_opts.batch_size as usize).expect("batch size > 0"),
         )

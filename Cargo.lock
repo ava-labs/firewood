@@ -1902,12 +1902,12 @@ dependencies = [
  "io-uring",
  "log",
  "lru",
- "lru-mem",
  "metrics",
  "metrics-util",
  "nonzero_ext",
  "parking_lot",
  "pprof",
+ "quick_cache",
  "rand 0.10.1",
  "rlp",
  "sha2 0.10.9",
@@ -2275,10 +2275,6 @@ name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
-dependencies = [
- "ahash",
- "allocator-api2",
-]
 
 [[package]]
 name = "hashbrown"
@@ -3078,15 +3074,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lru-mem"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf5c8c26d903a41c80d4cc171940a57a4d1bc51139ebd6aad87e2f9ae3774780"
-dependencies = [
- "hashbrown 0.14.5",
-]
-
-[[package]]
 name = "lsm-tree"
 version = "2.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3838,8 +3825,10 @@ version = "0.6.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a70b1b8b47e31d0498ecbc3c5470bb931399a8bfed1fd79d1717a61ce7f96e3"
 dependencies = [
+ "ahash",
  "equivalent",
  "hashbrown 0.16.1",
+ "parking_lot",
 ]
 
 [[package]]

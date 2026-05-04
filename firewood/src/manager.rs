@@ -42,11 +42,11 @@ pub struct RevisionManagerConfig {
     #[builder(default = 128)]
     max_revisions: usize,
 
-    /// The memory limit for the node cache in bytes.
+    /// The size of the node cache in number of entries.
     ///
-    /// Defaults to 192MB (equivalent to 1,500,000 nodes × 128 bytes).
-    #[builder(default = nonzero!(192_000_000_usize))]
-    node_cache_memory_limit: NonZero<usize>,
+    /// Defaults to 1,500,000 entries.
+    #[builder(default = nonzero!(1_500_000_usize))]
+    node_cache_entries: NonZero<usize>,
 
     #[builder(default_code = "NonZero::new(1000000).expect(\"non-zero\")")]
     free_list_cache_size: NonZero<usize>,
@@ -173,7 +173,7 @@ impl RevisionManager {
         let file = config.root_dir.join(DB_FILE_NAME);
         let fb = FileBacked::new(
             file,
-            config.manager.node_cache_memory_limit,
+            config.manager.node_cache_entries,
             config.manager.free_list_cache_size,
             config.truncate,
             config.create,
@@ -920,6 +920,20 @@ mod tests {
             root_store_dir.exists(),
             "root_store directory should be created when root_store is enabled"
         );
+    }
+
+    #[test]
+    fn test_cache_config_default_entries() {
+        let config = RevisionManagerConfig::builder().build();
+        assert_eq!(config.node_cache_entries.get(), 1_500_000);
+    }
+
+    #[test]
+    fn test_cache_config_entries_override() {
+        let config = RevisionManagerConfig::builder()
+            .node_cache_entries(nonzero!(250_000_usize))
+            .build();
+        assert_eq!(config.node_cache_entries.get(), 250_000);
     }
 
     #[test]

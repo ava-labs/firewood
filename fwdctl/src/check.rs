@@ -44,12 +44,12 @@ pub struct Options {
 
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     let db_path = PathBuf::from(&opts.database.dbpath).join("firewood.db");
-    let node_cache_memory_limit = nonzero!(1usize);
+    let node_cache_entries = nonzero!(1usize);
     let free_list_cache_size = nonzero!(1usize);
 
     let fb = FileBacked::new(
         db_path,
-        node_cache_memory_limit,
+        node_cache_entries,
         free_list_cache_size,
         false,
         false,                         // don't create if missing
