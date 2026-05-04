@@ -34,7 +34,7 @@ use crate::linear::FileIoError;
 use firewood_metrics::{GaugeExt, firewood_gauge, firewood_histogram};
 use std::time::Instant;
 
-use crate::{MaybePersistedNode, NodeReader, WritableStorage};
+use crate::{AreaIndex, MaybePersistedNode, NodeReader, WritableStorage};
 
 #[cfg(test)]
 use crate::RootReader;
@@ -165,7 +165,7 @@ fn serialize_node_to_bump<'a>(
     bump: &'a bumpalo::Bump,
     shared_node: &crate::SharedNode,
     node_allocator: &mut NodeAllocator<'_, impl WritableStorage>,
-) -> Result<(&'a [u8], crate::LinearAddress, usize), FileIoError> {
+) -> Result<(&'a [u8], crate::LinearAddress, AreaIndex), FileIoError> {
     let mut bytes = bumpalo::collections::Vec::new_in(bump);
     let area_size_index = shared_node
         .as_bytes(&mut bytes)
@@ -173,7 +173,7 @@ fn serialize_node_to_bump<'a>(
     let (persisted_address, _) = node_allocator.allocate_node(bytes.as_slice())?;
     bytes.shrink_to_fit();
     let slice = bytes.into_bump_slice();
-    Ok((slice, persisted_address, area_size_index.size() as usize))
+    Ok((slice, persisted_address, area_size_index))
 }
 
 impl<S: WritableStorage> NodeStore<Committed, S> {
@@ -220,19 +220,20 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             let shared_node = node.as_shared_node(self).expect("in memory, so no IO");
 
             // Serialize the node into the bump allocator
-            let (slice, persisted_address, idx_size) =
+            let (slice, persisted_address, area_size_index) =
                 serialize_node_to_bump(bump, &shared_node, node_allocator)?;
 
             // NOTE(#1488): we need to set the address so that the parent node can
             // reference it when they are serialized within the same batch.
-            node.allocate_at(persisted_address);
-            allocated_len = allocated_len.saturating_add(idx_size);
+            node.allocate_at(persisted_address, area_size_index);
+            let area_size = area_size_index.size() as usize;
+            allocated_len = allocated_len.saturating_add(area_size);
             allocated_objects.push((slice, persisted_address, node));
 
             // we pause if we can't allocate another node of the same size as the last one
             // This isn't a guarantee that we won't exceed bump_size_limit
             // but it's a good enough approximation
-            let might_overflow = allocated_len > bump_size_limit.saturating_sub(idx_size);
+            let might_overflow = allocated_len > bump_size_limit.saturating_sub(area_size);
             if might_overflow {
                 // must persist freelist before writing anything
                 node_allocator.flush_freelist()?;

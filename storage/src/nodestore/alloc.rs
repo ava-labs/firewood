@@ -318,12 +318,16 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
     /// Returns a [`FileIoError`] if the area cannot be read or written.
     #[expect(clippy::indexing_slicing)]
     pub(crate) fn delete_node(&mut self, node: MaybePersistedNode) -> Result<(), FileIoError> {
-        let Some(addr) = node.as_linear_address() else {
+        let Some((addr, cached_area_index)) = node.storage_info() else {
             return Ok(());
         };
         debug_assert!(addr.is_aligned());
 
-        let (area_size_index, _) = self.area_index_and_size(addr)?;
+        let area_size_index = if let Some(area_size_index) = cached_area_index {
+            area_size_index
+        } else {
+            self.area_index_and_size(addr)?.0
+        };
         trace!("Deleting node at {addr:?} of size {area_size_index}");
         firewood_counter!(DELETE_NODE, "index" => index_name(area_size_index)).increment(1);
         firewood_counter!(SPACE_FREED, "index" => index_name(area_size_index))
