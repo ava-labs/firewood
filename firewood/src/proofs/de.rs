@@ -336,7 +336,12 @@ impl<'a> ReadItem<'a> for HashType {
             .map_err(|err| err.set_item("hash type discriminant"))?
         {
             0 => Ok(HashType::Hash(reader.read_item()?)),
-            1 => Ok(HashType::Rlp(reader.read_item::<&[u8]>()?.into())),
+            1 => {
+                let rlp = reader.read_item::<&[u8]>()?;
+                HashType::try_from_rlp_slice(rlp).ok_or_else(|| {
+                    reader.invalid_item("hash type rlp length", "1..=31 bytes", rlp.len())
+                })
+            }
             found => {
                 Err(reader.invalid_item("hash type discriminant", "0 (hash) or 1 (rlp)", found))
             }

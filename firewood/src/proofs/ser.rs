@@ -230,7 +230,7 @@ impl WriteItem for firewood_storage::HashType {
             }
             firewood_storage::HashType::Rlp(h) => {
                 out.push(1);
-                h.write_item(out);
+                h.as_ref().write_item(out);
             }
         }
     }
