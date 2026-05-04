@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1777622513309,
+  "lastUpdate": 1777881709392,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -3007,6 +3007,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 80.77704160678812,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]",
+            "email": "49699333+dependabot[bot]@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "172764cfb47fc7433702cbca097286d01877640d",
+          "message": "ci(deps): bump DavidAnson/markdownlint-cli2-action from 23.0.0 to 23.1.0 in the github-actions group (#1954)\n\nBumps the github-actions group with 1 update:\n[DavidAnson/markdownlint-cli2-action](https://github.com/davidanson/markdownlint-cli2-action).\n\nUpdates `DavidAnson/markdownlint-cli2-action` from 23.0.0 to 23.1.0\n<details>\n<summary>Commits</summary>\n<ul>\n<li><a\nhref=\"https://github.com/DavidAnson/markdownlint-cli2-action/commit/6b51ade7a9e4a75a7ad929842dd298a3804ebe8b\"><code>6b51ade</code></a>\nUpdate to version 23.1.0.</li>\n<li><a\nhref=\"https://github.com/DavidAnson/markdownlint-cli2-action/commit/ea6e0dad81a67897db7632a0a41b3a0e7cc03ca3\"><code>ea6e0da</code></a>\nFreshen generated index.js file.</li>\n<li><a\nhref=\"https://github.com/DavidAnson/markdownlint-cli2-action/commit/3c4c2c842cd43c2afe7cb5f2ecfe9e1623fa8d14\"><code>3c4c2c8</code></a>\nBump markdownlint-cli2 from 0.22.0 to 0.22.1</li>\n<li><a\nhref=\"https://github.com/DavidAnson/markdownlint-cli2-action/commit/3a933d45e20b54b80131d0335d61186e63e552bd\"><code>3a933d4</code></a>\nBump <code>@​actions/core</code> from 3.0.0 to 3.0.1</li>\n<li><a\nhref=\"https://github.com/DavidAnson/markdownlint-cli2-action/commit/648042e2afed596b673a8b3f8fc8fbfb48b41f43\"><code>648042e</code></a>\nFreshen generated index.js file.</li>\n<li><a\nhref=\"https://github.com/DavidAnson/markdownlint-cli2-action/commit/d1cf9823136435fde87731435bcd66fefea442e7\"><code>d1cf982</code></a>\nBump eslint from 10.2.0 to 10.2.1</li>\n<li><a\nhref=\"https://github.com/DavidAnson/markdownlint-cli2-action/commit/4db3dfc2cb719a5a152cb38efef6e2e50db98973\"><code>4db3dfc</code></a>\nBump eslint from 10.1.0 to 10.2.0</li>\n<li><a\nhref=\"https://github.com/DavidAnson/markdownlint-cli2-action/commit/70dbff992f5cf6124a6fc5bb4b56aef6f8daa232\"><code>70dbff9</code></a>\nBump eslint-plugin-unicorn from 63.0.0 to 64.0.0</li>\n<li>See full diff in <a\nhref=\"https://github.com/davidanson/markdownlint-cli2-action/compare/ce4853d43830c74c1753b39f3cf40f71c2031eb9...6b51ade7a9e4a75a7ad929842dd298a3804ebe8b\">compare\nview</a></li>\n</ul>\n</details>\n<br />\n\n\n[![Dependabot compatibility\nscore](https://dependabot-badges.githubapp.com/badges/compatibility_score?dependency-name=DavidAnson/markdownlint-cli2-action&package-manager=github_actions&previous-version=23.0.0&new-version=23.1.0)](https://docs.github.com/en/github/managing-security-vulnerabilities/about-dependabot-security-updates#about-compatibility-scores)\n\nDependabot will resolve any conflicts with this PR as long as you don't\nalter it yourself. You can also trigger a rebase manually by commenting\n`@dependabot rebase`.\n\n[//]: # (dependabot-automerge-start)\n[//]: # (dependabot-automerge-end)\n\n---\n\n<details>\n<summary>Dependabot commands and options</summary>\n<br />\n\nYou can trigger Dependabot actions by commenting on this PR:\n- `@dependabot rebase` will rebase this PR\n- `@dependabot recreate` will recreate this PR, overwriting any edits\nthat have been made to it\n- `@dependabot show <dependency name> ignore conditions` will show all\nof the ignore conditions of the specified dependency\n- `@dependabot ignore <dependency name> major version` will close this\ngroup update PR and stop Dependabot creating any more for the specific\ndependency's major version (unless you unignore this specific\ndependency's major version or upgrade to it yourself)\n- `@dependabot ignore <dependency name> minor version` will close this\ngroup update PR and stop Dependabot creating any more for the specific\ndependency's minor version (unless you unignore this specific\ndependency's minor version or upgrade to it yourself)\n- `@dependabot ignore <dependency name>` will close this group update PR\nand stop Dependabot creating any more for the specific dependency\n(unless you unignore this specific dependency or upgrade to it yourself)\n- `@dependabot unignore <dependency name>` will remove all of the ignore\nconditions of the specified dependency\n- `@dependabot unignore <dependency name> <ignore condition>` will\nremove the ignore condition of the specified dependency and ignore\nconditions\n\n\n</details>\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-05-02T23:20:53Z",
+          "url": "https://github.com/ava-labs/firewood/commit/172764cfb47fc7433702cbca097286d01877640d"
+        },
+        "date": 1777881708843,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 166.71552993776004,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5998.241437815243,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 113.65803686076708,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5800.300419003355,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 81.34260456206884,
             "unit": "block_accept_ms/ggas"
           }
         ]
