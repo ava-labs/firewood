@@ -27,16 +27,16 @@ package ffi
 // #cgo nocallback fwd_range_proof_from_bytes
 // #cgo noescape fwd_free_range_proof
 // #cgo nocallback fwd_free_range_proof
-// #cgo noescape fwd_change_proof_find_next_key
-// #cgo nocallback fwd_change_proof_find_next_key
-// #cgo noescape fwd_change_proof_from_bytes
-// #cgo nocallback fwd_change_proof_from_bytes
-// #cgo noescape fwd_change_proof_to_bytes
-// #cgo nocallback fwd_change_proof_to_bytes
 // #cgo noescape fwd_db_change_proof
 // #cgo nocallback fwd_db_change_proof
 // #cgo noescape fwd_db_verify_change_proof
 // #cgo nocallback fwd_db_verify_change_proof
+// #cgo noescape fwd_change_proof_find_next_key
+// #cgo nocallback fwd_change_proof_find_next_key
+// #cgo noescape fwd_change_proof_to_bytes
+// #cgo nocallback fwd_change_proof_to_bytes
+// #cgo noescape fwd_change_proof_from_bytes
+// #cgo nocallback fwd_change_proof_from_bytes
 // #cgo noescape fwd_free_change_proof
 // #cgo nocallback fwd_free_change_proof
 import "C"
