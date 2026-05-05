@@ -296,13 +296,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     /// whether the key is in range. For leaves this is a direct comparison.
     /// For branches, recurses into children whose nibble passes
     /// [`nibble_in_range`] to resolve straddling positions.
-    ///
-    /// The caller is responsible for checking [`nibble_in_range`] and taking
-    /// the child from its slot before calling this method. The child is
-    /// consumed regardless of the result.
     fn child_in_range(
-        &mut self,
-        child: Child,
+        &self,
+        child: &Child,
         acc_prefix: &[u8],
         nibble: PathComponent,
         start_nib: &[u8],
@@ -312,11 +308,11 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
             return Ok(false);
         }
 
-        let mut child_node = self.read_for_update(child)?;
+        let child_node = child.as_shared_node(&self.nodestore)?;
         let pfx = build_child_prefix(acc_prefix, nibble.0.as_u8(), &child_node);
         let key_in_range = pfx.as_ref() >= start_nib && pfx.as_ref() <= end_nib;
 
-        let Some(branch) = child_node.as_branch_mut() else {
+        let Some(branch) = child_node.as_branch() else {
             return Ok(key_in_range);
         };
 
@@ -324,8 +320,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
             return Ok(true);
         }
 
-        for (child_nibble, child_slot) in &mut branch.children {
-            let Some(inner_child) = child_slot.take() else {
+        for (child_nibble, child_slot) in &branch.children {
+            let Some(inner_child) = child_slot else {
                 continue;
             };
             if self.child_in_range(inner_child, &pfx, child_nibble, start_nib, end_nib)? {
@@ -365,15 +361,14 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
                 continue;
             }
 
-            let Some(child) = slot.take() else {
-                continue;
-            };
-
             if let Some((start_nib, end_nib)) = range
+                && let Some(child) = slot.as_ref()
                 && self.child_in_range(child, acc_prefix, nibble, start_nib, end_nib)?
             {
                 return Err(api::Error::ProofError(ProofError::EndRootMismatch));
             }
+
+            *slot = None;
         }
         branch.value = None;
 
@@ -449,7 +444,7 @@ mod tests {
         let child = setup(&mut merkle);
         let pc = PathComponent::try_new(nibble).unwrap();
         let result = merkle
-            .child_in_range(child, acc_prefix, pc, start_nib, end_nib)
+            .child_in_range(&child, acc_prefix, pc, start_nib, end_nib)
             .unwrap();
         assert_eq!(
             result, expected,
