@@ -243,6 +243,38 @@ fn test_truncated_bounded_range_proof_round_trip() {
 }
 
 #[test]
+// Regression: an unbounded full-range proof (start=None, end=None, no limit)
+// has an empty end_proof by construction — the generator only emits an end
+// proof when the caller supplies an end key or the result is truncated. The
+// verifier previously rejected such proofs with `NoEndProof` whenever any
+// key-values were present, which made the public verifier reject every honest
+// full-range proof produced by `Merkle::range_proof`.
+fn test_full_range_proof_round_trip() {
+    let rng = firewood_storage::SeededRng::from_env_or_random();
+
+    let set = fixed_and_pseudorandom_data(&rng, 64);
+    let mut items = set.iter().collect::<Vec<_>>();
+    items.sort_unstable();
+    let merkle = init_merkle(items.clone());
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let range_proof = merkle
+        .range_proof(None::<&[u8]>, None::<&[u8]>, None)
+        .unwrap();
+
+    assert!(
+        range_proof.start_proof().is_empty(),
+        "unbounded range proof should have empty start_proof"
+    );
+    assert!(
+        range_proof.end_proof().is_empty(),
+        "unbounded range proof should have empty end_proof"
+    );
+
+    verify_range_proof(None::<&[u8]>, None::<&[u8]>, &root_hash, &range_proof).unwrap();
+}
+
+#[test]
 // Tests normal range proof with both edge proofs as the existent proof.
 // The test cases are generated randomly.
 fn test_range_proof() {
