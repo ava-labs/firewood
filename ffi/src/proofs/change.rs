@@ -15,8 +15,8 @@ use firewood::{
 };
 
 use crate::{
-    BorrowedBytes, ChangeProofResult, DatabaseHandle, HashKey, KeyRange, Maybe, NextKeyRangeResult,
-    OwnedBytes, ValueResult, VoidResult,
+    BorrowedBytes, ChangeProofResult, DatabaseHandle, HashKey, HashResult, KeyRange, Maybe,
+    NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult,
 };
 
 #[cfg(feature = "ethhash")]
@@ -66,7 +66,7 @@ impl From<FrozenChangeProof> for ChangeProofContext {
 }
 
 impl ChangeProofContext {
-    /// Returns the underlying proof, if it hasn't been consumed.
+    /// Returns the underlying proof, if present.
     #[must_use]
     pub const fn proof(&self) -> Option<&FrozenChangeProof> {
         self.proof.as_ref()
@@ -273,15 +273,53 @@ pub extern "C" fn fwd_db_verify_change_proof<'db>(
     })
 }
 
+/// Verify and commit a change proof in a single call.
+///
+/// Verifies structural validity and root hash, creates a proposal, and
+/// commits it with automatic rebase if needed. The proof is borrowed,
+/// not consumed — it remains available for `fwd_change_proof_find_next_key`
+/// or serialization afterward.
+///
+/// # Returns
+///
+/// - [`HashResult::NullHandlePointer`] if the caller provided a null pointer
+///   to either the database or the proof.
+/// - [`HashResult::None`] if the trie has no root hash (merkledb mode only;
+///   ethhash always returns a root hash, even for an empty trie).
+/// - [`HashResult::Some`] containing the new root hash.
+/// - [`HashResult::Err`] if verification or commit failed.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_db_verify_and_commit_change_proof(
+    db: Option<&DatabaseHandle>,
+    proof: Option<&ChangeProofContext>,
+    args: CreateChangeProofArgs<'_>,
+) -> HashResult {
+    let handle = db.and_then(|db| proof.map(|p| (db, p)));
+    crate::invoke_with_handle(handle, |(db, ctx)| {
+        let proof = ctx
+            .proof()
+            .ok_or(api::Error::ProofError(ProofError::ProofIsNone))?;
+        let proposal = db.verify_change_proof(
+            proof,
+            args.start_root.into(),
+            args.end_root.into(),
+            args.start_key.into_option().as_deref(),
+            args.end_key.into_option().as_deref(),
+            NonZeroUsize::new(args.max_length as usize),
+        )?;
+        proposal.handle.commit_proposal_with_rebase()
+    })
+}
+
 /// Determine the next key range to fetch for a truncated change proof.
+///
+/// The proof is not consumed by this call. `end_key` is the original
+/// requested end key passed to the proof generator.
 ///
 /// Returns:
 /// - [`NextKeyRangeResult::None`] if there are no more keys to fetch.
 /// - [`NextKeyRangeResult::Some`] containing the next key range to fetch.
-/// - [`NextKeyRangeResult::Err`] if the proof has been consumed.
-///
-/// The proof is not consumed by this call. `end_key` is the original
-/// requested end key passed to the proof generator.
+/// - [`NextKeyRangeResult::Err`] if an error occurred.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_change_proof_find_next_key(
     proof: Option<&ChangeProofContext>,
@@ -292,8 +330,6 @@ pub extern "C" fn fwd_change_proof_find_next_key(
     })
 }
 
-/// Serialize a `FrozenChangeProof` to bytes, returning an error if the proof
-/// has been consumed (e.g., by verification or proposing).
 fn serialize_change_proof(
     proof: Option<&FrozenChangeProof>,
 ) -> Result<Option<Box<[u8]>>, api::Error> {
@@ -308,14 +344,13 @@ fn serialize_change_proof(
 /// # Arguments
 ///
 /// - `proof` - A [`ChangeProofContext`] previously returned from the create
-///   method. If the proof has been consumed by verification, this will return
-///   an error.
+///   method.
 ///
 /// # Returns
 ///
 /// - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
 /// - [`ValueResult::Some`] containing the serialized bytes if successful.
-/// - [`ValueResult::Err`] if the proof has been consumed by verification.
+/// - [`ValueResult::Err`] if serialization failed.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_change_proof_to_bytes(proof: Option<&ChangeProofContext>) -> ValueResult {
     crate::invoke_with_handle(proof, |ctx| serialize_change_proof(ctx.proof.as_ref()))
@@ -332,7 +367,8 @@ pub extern "C" fn fwd_change_proof_to_bytes(proof: Option<&ChangeProofContext>) 
 /// - [`ChangeProofResult::NullHandlePointer`] if the caller provided a null or zero-length slice.
 /// - [`ChangeProofResult::Ok`] containing a pointer to the `ChangeProofContext` if the proof
 ///   was successfully parsed. This does not imply that the proof is valid, only that it is
-///   well-formed. The verify method must be called to ensure the proof is cryptographically valid.
+///   well-formed. Use [`fwd_db_verify_change_proof`] or
+///   [`fwd_db_verify_and_commit_change_proof`] to verify the proof.
 /// - [`ChangeProofResult::Err`] containing an error message if the proof could not be parsed.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_change_proof_from_bytes(bytes: BorrowedBytes) -> ChangeProofResult {

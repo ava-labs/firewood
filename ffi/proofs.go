@@ -31,6 +31,8 @@ package ffi
 // #cgo nocallback fwd_db_change_proof
 // #cgo noescape fwd_db_verify_change_proof
 // #cgo nocallback fwd_db_verify_change_proof
+// #cgo noescape fwd_db_verify_and_commit_change_proof
+// #cgo nocallback fwd_db_verify_and_commit_change_proof
 // #cgo noescape fwd_change_proof_find_next_key
 // #cgo nocallback fwd_change_proof_find_next_key
 // #cgo noescape fwd_change_proof_to_bytes
@@ -421,6 +423,37 @@ func (db *Database) VerifyChangeProof(
 		&db.outstandingHandles,
 		&db.commitLock,
 	)
+}
+
+// VerifyAndCommitChangeProof verifies the change proof and commits it in a
+// single call. The proof is not consumed — it remains available for
+// FindNextKey or serialization afterward.
+func (db *Database) VerifyAndCommitChangeProof(
+	proof *ChangeProof,
+	startRoot, endRoot Hash,
+	startKey, endKey Maybe[[]byte],
+	maxLength uint32,
+) (Hash, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return EmptyRoot, errDBClosed
+	}
+
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	args := C.CreateChangeProofArgs{
+		start_root: newCHashKey(startRoot),
+		end_root:   newCHashKey(endRoot),
+		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
+		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
+		max_length: C.uint32_t(maxLength),
+	}
+
+	db.commitLock.Lock()
+	defer db.commitLock.Unlock()
+	return getHashKeyFromHashResult(C.fwd_db_verify_and_commit_change_proof(db.handle, proof.handle, args))
 }
 
 // FindNextKey returns the next key range to fetch for a truncated change proof,

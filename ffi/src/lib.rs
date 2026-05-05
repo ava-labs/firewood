@@ -636,7 +636,8 @@ pub extern "C" fn fwd_reconstruct_on_reconstructed<'db>(
 /// # Returns
 ///
 /// - [`HashResult::NullHandlePointer`] if the provided database handle is null.
-/// - [`HashResult::None`] if the commit resulted in an empty database.
+/// - [`HashResult::None`] if the trie has no root hash (merkledb mode only;
+///   ethhash always returns a root hash, even for an empty trie).
 /// - [`HashResult::Some`] if the commit was successful, containing the new root hash.
 /// - [`HashResult::Err`] if an error occurred while committing the batch.
 ///
@@ -667,7 +668,8 @@ pub extern "C" fn fwd_commit_proposal(proposal: Option<Box<ProposalHandle<'_>>>)
 /// # Returns
 ///
 /// - [`HashResult::NullHandlePointer`] if the provided proposal handle is null.
-/// - [`HashResult::None`] if the commit resulted in an empty database.
+/// - [`HashResult::None`] if the trie has no root hash (merkledb mode only;
+///   ethhash always returns a root hash, even for an empty trie).
 /// - [`HashResult::Some`] if the commit was successful, containing the new root hash.
 /// - [`HashResult::Err`] if an error occurred while committing or rebasing.
 ///

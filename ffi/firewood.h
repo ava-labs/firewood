@@ -1469,13 +1469,13 @@ struct VoidResult fwd_block_replay_flush(void);
 /**
  * Determine the next key range to fetch for a truncated change proof.
  *
+ * The proof is not consumed by this call. `end_key` is the original
+ * requested end key passed to the proof generator.
+ *
  * Returns:
  * - [`NextKeyRangeResult::None`] if there are no more keys to fetch.
  * - [`NextKeyRangeResult::Some`] containing the next key range to fetch.
- * - [`NextKeyRangeResult::Err`] if the proof has been consumed.
- *
- * The proof is not consumed by this call. `end_key` is the original
- * requested end key passed to the proof generator.
+ * - [`NextKeyRangeResult::Err`] if an error occurred.
  */
 struct NextKeyRangeResult fwd_change_proof_find_next_key(const struct ChangeProofContext *proof,
                                                          struct Maybe_BorrowedBytes end_key);
@@ -1492,7 +1492,8 @@ struct NextKeyRangeResult fwd_change_proof_find_next_key(const struct ChangeProo
  * - [`ChangeProofResult::NullHandlePointer`] if the caller provided a null or zero-length slice.
  * - [`ChangeProofResult::Ok`] containing a pointer to the `ChangeProofContext` if the proof
  *   was successfully parsed. This does not imply that the proof is valid, only that it is
- *   well-formed. The verify method must be called to ensure the proof is cryptographically valid.
+ *   well-formed. Use [`fwd_db_verify_change_proof`] or
+ *   [`fwd_db_verify_and_commit_change_proof`] to verify the proof.
  * - [`ChangeProofResult::Err`] containing an error message if the proof could not be parsed.
  */
 struct ChangeProofResult fwd_change_proof_from_bytes(BorrowedBytes bytes);
@@ -1503,14 +1504,13 @@ struct ChangeProofResult fwd_change_proof_from_bytes(BorrowedBytes bytes);
  * # Arguments
  *
  * - `proof` - A [`ChangeProofContext`] previously returned from the create
- *   method. If the proof has been consumed by verification, this will return
- *   an error.
+ *   method.
  *
  * # Returns
  *
  * - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
  * - [`ValueResult::Some`] containing the serialized bytes if successful.
- * - [`ValueResult::Err`] if the proof has been consumed by verification.
+ * - [`ValueResult::Err`] if serialization failed.
  */
 struct ValueResult fwd_change_proof_to_bytes(const struct ChangeProofContext *proof);
 
@@ -1599,7 +1599,8 @@ struct HashResult fwd_code_hash_iter_next(struct CodeIteratorHandle *iter);
  * # Returns
  *
  * - [`HashResult::NullHandlePointer`] if the provided database handle is null.
- * - [`HashResult::None`] if the commit resulted in an empty database.
+ * - [`HashResult::None`] if the trie has no root hash (merkledb mode only;
+ *   ethhash always returns a root hash, even for an empty trie).
  * - [`HashResult::Some`] if the commit was successful, containing the new root hash.
  * - [`HashResult::Err`] if an error occurred while committing the batch.
  *
@@ -1621,7 +1622,8 @@ struct HashResult fwd_commit_proposal(struct ProposalHandle *proposal);
  * # Returns
  *
  * - [`HashResult::NullHandlePointer`] if the provided proposal handle is null.
- * - [`HashResult::None`] if the commit resulted in an empty database.
+ * - [`HashResult::None`] if the trie has no root hash (merkledb mode only;
+ *   ethhash always returns a root hash, even for an empty trie).
  * - [`HashResult::Some`] if the commit was successful, containing the new root hash.
  * - [`HashResult::Err`] if an error occurred while committing or rebasing.
  *
@@ -1705,6 +1707,27 @@ struct ValueResult fwd_db_dump(const struct DatabaseHandle *db);
  */
 struct RangeProofResult fwd_db_range_proof(const struct DatabaseHandle *db,
                                            struct CreateRangeProofArgs args);
+
+/**
+ * Verify and commit a change proof in a single call.
+ *
+ * Verifies structural validity and root hash, creates a proposal, and
+ * commits it with automatic rebase if needed. The proof is borrowed,
+ * not consumed — it remains available for `fwd_change_proof_find_next_key`
+ * or serialization afterward.
+ *
+ * # Returns
+ *
+ * - [`HashResult::NullHandlePointer`] if the caller provided a null pointer
+ *   to either the database or the proof.
+ * - [`HashResult::None`] if the trie has no root hash (merkledb mode only;
+ *   ethhash always returns a root hash, even for an empty trie).
+ * - [`HashResult::Some`] containing the new root hash.
+ * - [`HashResult::Err`] if verification or commit failed.
+ */
+struct HashResult fwd_db_verify_and_commit_change_proof(const struct DatabaseHandle *db,
+                                                        const struct ChangeProofContext *proof,
+                                                        struct CreateChangeProofArgs args);
 
 /**
  * Verify and commit a range proof to the database.
