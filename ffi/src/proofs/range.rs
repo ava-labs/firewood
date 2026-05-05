@@ -6,7 +6,7 @@ use std::num::NonZeroUsize;
 use firewood::{
     ProofError,
     api::{self, DbView, FrozenRangeProof, HashKey},
-    logger::warn,
+    verify_range_proof,
 };
 use firewood_metrics::{MetricsContext, firewood_counter};
 
@@ -119,11 +119,6 @@ impl<'db> RangeProofContext<'db> {
     /// [`RangeProofContext::verify_and_propose`] to prepare a proposal against
     /// a specific database and [`RangeProofContext::verify_and_commit`] to
     /// commit the proof to a database.
-    ///
-    /// ## ⚠️ Unimplemented ⚠️
-    ///
-    /// Currently, this is a stub implementation that does not perform any
-    /// verification steps.
     fn verify(
         &mut self,
         root: HashKey,
@@ -146,7 +141,16 @@ impl<'db> RangeProofContext<'db> {
 
         debug_assert!(self.verification.is_none());
 
-        warn!("range proof verification not yet implemented");
+        if let Some(max) = max_length
+            && self.proof.key_values().len() > max.get()
+        {
+            return Err(api::Error::ProofError(
+                ProofError::ProofIsLargerThanMaxLength,
+            ));
+        }
+
+        verify_range_proof(start_key, end_key, &root, &self.proof)?;
+
         self.verification = Some(VerificationContext {
             root,
             start_key: start_key.map(Box::from),
