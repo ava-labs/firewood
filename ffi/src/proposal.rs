@@ -78,12 +78,12 @@ impl ProposalHandle<'_> {
         Ok(hash_key)
     }
 
-    /// Consume and commit a proposal, automatically rebasing if the parent
-    /// revision is no longer the latest.
+    /// Consume and commit a proposal, rebasing if the parent is stale.
     ///
     /// # Errors
     ///
-    /// Returns an error if committing or rebasing fails.
+    /// Returns an error if the proposal's parent revision cannot be found
+    /// or if the commit fails.
     pub fn commit_proposal_with_rebase(self) -> Result<Option<HashKey>, api::Error> {
         self.proposal.commit_with_rebase()
     }
