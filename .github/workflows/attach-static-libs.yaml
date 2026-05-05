@@ -101,21 +101,27 @@ jobs:
     steps:
       - name: Determine branch name
         id: determine_branch
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CREATE_BRANCH_NAME: ${{ github.event.inputs.create_branch_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.create_branch_name }}" ]]; then
-            export target_branch="${{ github.event.inputs.create_branch_name }}"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && -n "$CREATE_BRANCH_NAME" ]]; then
+            export target_branch="$CREATE_BRANCH_NAME"
             echo "Using workflow input as target branch: $target_branch"
             echo "target_branch=$target_branch" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.event_name }}" == "push" && "${{ github.ref_type }}" == "tag" ]]; then
+          elif [[ "$EVENT_NAME" == "push" && "$REF_TYPE" == "tag" ]]; then
             export target_branch="${GITHUB_REF#refs/tags/}"
             echo "Using tag name as target_branch: $target_branch"
             echo "target_branch=$target_branch" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.event_name }}" == "push" && "${{ github.ref_name }}" == "main" ]]; then
+          elif [[ "$EVENT_NAME" == "push" && "$REF_NAME" == "main" ]]; then
             export target_branch="main-ci" # Avoid pushing to main branch of firewood-go-ethhash repo
             echo "Using main-ci as target branch for push to main: $target_branch"
             echo "target_branch=$target_branch" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            export target_branch="${{ github.event.pull_request.head.ref }}"
+          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
+            export target_branch="$PR_HEAD_REF"
             echo "Using PR head name as target branch: $target_branch"
             echo "target_branch=$target_branch" >> "$GITHUB_OUTPUT"
           else
@@ -152,30 +158,32 @@ jobs:
         working-directory: firewood-go-ethhash
         # GITHUB_TOKEN is configured in the last actions/checkout step
         # to have read/write permissions to the firewood-go-ethhash repo.
+        env:
+          TARGET_BRANCH: ${{ steps.determine_branch.outputs.target_branch }}
         run: |
           git config --global user.name "FirewoodCI"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b ${{ steps.determine_branch.outputs.target_branch }}
+          git checkout -b "${TARGET_BRANCH}"
           echo "Updating ffi module path before pushing to alternative remote"
           pushd ffi
           go mod edit -module github.com/ava-labs/firewood-go-ethhash/ffi
           popd
           git add .
-          git commit -m "firewood ci ${{ github.sha }}: attach firewood static libs"
-          git push -u origin ${{ steps.determine_branch.outputs.target_branch }} --force
+          git commit -m "firewood ci ${GITHUB_SHA}: attach firewood static libs"
+          git push -u origin "${TARGET_BRANCH}" --force
 
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             # If the tag is a semantic version, prefix it with "ffi/" to ensure go get correctly
             # fetches the submodule. Otherwise, use the tag name as is.
             # Note: we explicitly ignore semantic versions with suffixes ie. v1.1.1-beta because
             # go get treats them as non-semantic version tags.
             # Ref: https://github.com/ava-labs/firewood/pull/991
-            if [[ "${{ github.ref_name }}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            if [[ "$GITHUB_REF_NAME" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               tag_name="ffi/${GITHUB_REF#refs/tags/}"
             else
               tag_name="${GITHUB_REF#refs/tags/}"
             fi
-            git tag -a "$tag_name" -m "firewood ci ${{ github.sha }}: attach firewood static libs"
+            git tag -a "$tag_name" -m "firewood ci ${GITHUB_SHA}: attach firewood static libs"
             git push origin "refs/tags/$tag_name"
           fi
 
@@ -222,5 +230,7 @@ jobs:
           token: ${{ secrets.FIREWOOD_GO_GITHUB_TOKEN }}
           ref: ${{ needs.push-firewood-ffi-libs.outputs.target_branch }}
       - name: Delete branch
+        env:
+          TARGET_BRANCH: ${{ needs.push-firewood-ffi-libs.outputs.target_branch }}
         run: |
-          git push origin --delete ${{ needs.push-firewood-ffi-libs.outputs.target_branch }}
+          git push origin --delete "${TARGET_BRANCH}"

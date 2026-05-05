@@ -59,6 +59,15 @@ jobs:
     steps:
       - name: Resolve benchmark config
         id: resolve
+        env:
+          INPUT_TEST: ${{ inputs.test }}
+          INPUT_CONFIG: ${{ inputs.config }}
+          INPUT_START_BLOCK: ${{ inputs.start-block }}
+          INPUT_END_BLOCK: ${{ inputs.end-block }}
+          INPUT_BLOCK_DIR_SRC: ${{ inputs.block-dir-src }}
+          INPUT_CURRENT_STATE_DIR_SRC: ${{ inputs.current-state-dir-src }}
+          INPUT_RUNNER: ${{ inputs.runner }}
+          INPUT_TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
         run: |
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
             # Common config for all scheduled runs
@@ -100,14 +109,14 @@ jobs:
           else
             # Manual dispatch - pass through inputs directly
             echo "name=manual" >> "$GITHUB_OUTPUT"
-            echo "test=${{ inputs.test }}" >> "$GITHUB_OUTPUT"
-            echo "config=${{ inputs.config }}" >> "$GITHUB_OUTPUT"
-            echo "start-block=${{ inputs.start-block }}" >> "$GITHUB_OUTPUT"
-            echo "end-block=${{ inputs.end-block }}" >> "$GITHUB_OUTPUT"
-            echo "block-dir-src=${{ inputs.block-dir-src }}" >> "$GITHUB_OUTPUT"
-            echo "current-state-dir-src=${{ inputs.current-state-dir-src }}" >> "$GITHUB_OUTPUT"
-            echo "runner=${{ inputs.runner }}" >> "$GITHUB_OUTPUT"
-            echo "timeout-minutes=${{ inputs.timeout-minutes }}" >> "$GITHUB_OUTPUT"
+            echo "test=${INPUT_TEST}" >> "$GITHUB_OUTPUT"
+            echo "config=${INPUT_CONFIG}" >> "$GITHUB_OUTPUT"
+            echo "start-block=${INPUT_START_BLOCK}" >> "$GITHUB_OUTPUT"
+            echo "end-block=${INPUT_END_BLOCK}" >> "$GITHUB_OUTPUT"
+            echo "block-dir-src=${INPUT_BLOCK_DIR_SRC}" >> "$GITHUB_OUTPUT"
+            echo "current-state-dir-src=${INPUT_CURRENT_STATE_DIR_SRC}" >> "$GITHUB_OUTPUT"
+            echo "runner=${INPUT_RUNNER}" >> "$GITHUB_OUTPUT"
+            echo "timeout-minutes=${INPUT_TIMEOUT_MINUTES}" >> "$GITHUB_OUTPUT"
           fi
 
   benchmark:

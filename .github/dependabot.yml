@@ -12,6 +12,8 @@ updates:
       time: "05:00"
       timezone: "America/Los_Angeles"
     open-pull-requests-limit: 0 # Disable non-security version updates
+    cooldown:
+      default-days: 7
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
@@ -29,3 +31,5 @@ updates:
         patterns:
           - "*"
     open-pull-requests-limit: 10 # Enable GitHub Actions updates for security
+    cooldown:
+      default-days: 7
