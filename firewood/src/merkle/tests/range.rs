@@ -214,6 +214,35 @@ fn test_missing_key_proof() {
 }
 
 #[test]
+// A truncated bounded range proof: caller asks for [start, end] with a limit
+// that is hit, so the generator anchors `end_proof` at the last returned key
+// rather than at `end`. The verifier must accept the proof when called with
+// the originally requested `(start, end)` — those are the only bounds the
+// caller has; it cannot predict the post-truncation anchor.
+fn test_truncated_bounded_range_proof_round_trip() {
+    let items: Vec<([u8; 4], [u8; 4])> = (0u32..1000)
+        .map(|i| (i.to_be_bytes(), i.to_be_bytes()))
+        .collect();
+    let merkle = init_merkle(items.iter().map(|(k, v)| (k.as_slice(), v.as_slice())));
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    // Bound covers many keys; limit forces truncation.
+    let start = items[10].0;
+    let end = items[900].0;
+    let limit = NonZeroUsize::new(8).unwrap();
+
+    let range_proof = merkle
+        .range_proof(Some(&start), Some(&end), Some(limit))
+        .unwrap();
+
+    assert_eq!(range_proof.key_values().len(), limit.get());
+
+    // Verify with the *original* requested bounds — the only ones the caller
+    // can provide. End_proof anchors at the last returned key, not `end`.
+    verify_range_proof(Some(&start), Some(&end), &root_hash, &range_proof).unwrap();
+}
+
+#[test]
 // Tests normal range proof with both edge proofs as the existent proof.
 // The test cases are generated randomly.
 fn test_range_proof() {
