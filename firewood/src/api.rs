@@ -179,7 +179,7 @@ pub enum Error {
     SiblingCommitted,
 
     /// Proof error
-    #[error("proof error")]
+    #[error("proof error: {0}")]
     ProofError(#[from] ProofError),
 
     /// An invalid root hash was provided

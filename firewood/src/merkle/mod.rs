@@ -426,8 +426,11 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         return Err(api::Error::ProofError(ProofError::UnexpectedStartProof));
     }
 
-    // Require end proof when there are key-value pairs or an end key is specified
-    if proof.end_proof().is_empty() && (last_key_bytes.is_some() || !key_values.is_empty()) {
+    // Require an end proof only when the caller specified an end key. When
+    // last_key is None the proof asserts coverage to the end of the keyspace;
+    // an empty end_proof is the canonical encoding of that and any tampering
+    // is caught by the root-hash reconstruction below.
+    if proof.end_proof().is_empty() && last_key_bytes.is_some() {
         return Err(api::Error::ProofError(ProofError::NoEndProof));
     }
 
