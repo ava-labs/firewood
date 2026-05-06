@@ -2143,4 +2143,71 @@ mod test {
         assert_eq!(v[4], needle[4] ^ 0xff);
         db.close().unwrap();
     }
+
+    /// With `CacheReadStrategy::All` populating the read cache, repeated
+    /// reads of the same key must not re-hash cached nodes. Counts the
+    /// `firewood_hash_verifications_total{type=branch|leaf}` counter
+    /// before and after a second read of the same key — it must not
+    /// increase, even though both `branches` and `leaves` verification
+    /// flags are on.
+    #[test]
+    fn test_hash_verification_skips_cache_hits() {
+        use firewood_storage::{CacheReadStrategy, HashVerification, TestRecorder};
+
+        let recorder = TestRecorder::default();
+        recorder.with_local_recorder(|| {
+            let cfg = DbConfig::builder()
+                .hash_verification(HashVerification::all())
+                .manager(
+                    RevisionManagerConfig::builder()
+                        .cache_read_strategy(CacheReadStrategy::All)
+                        .build(),
+                )
+                .build();
+            let db = TestDb::new_with_config(cfg);
+
+            let batch: Vec<BatchOp<&[u8], &[u8]>> = vec![
+                BatchOp::Put {
+                    key: b"alpha",
+                    value: b"one",
+                },
+                BatchOp::Put {
+                    key: b"beta",
+                    value: b"two",
+                },
+                BatchOp::Put {
+                    key: b"alphabet",
+                    value: b"three",
+                },
+            ];
+            db.propose(batch).unwrap().commit().unwrap();
+            db.wait_persisted();
+
+            let root_hash = db.root_hash().unwrap();
+            let rev = db.revision(root_hash).unwrap();
+
+            // First read — populates the cache and verifies on the way in.
+            assert_eq!(&*rev.val(b"alphabet").unwrap().unwrap(), b"three");
+
+            let branch_count =
+                recorder.counter_value("firewood_hash_verifications_total", &[("type", "branch")]);
+            let leaf_count =
+                recorder.counter_value("firewood_hash_verifications_total", &[("type", "leaf")]);
+
+            // Second read — every node touched should hit the cache. No
+            // additional verifications should be recorded.
+            assert_eq!(&*rev.val(b"alphabet").unwrap().unwrap(), b"three");
+
+            assert_eq!(
+                recorder.counter_value("firewood_hash_verifications_total", &[("type", "branch")]),
+                branch_count,
+                "cache hits must not re-hash branch nodes",
+            );
+            assert_eq!(
+                recorder.counter_value("firewood_hash_verifications_total", &[("type", "leaf")]),
+                leaf_count,
+                "cache hits must not re-hash leaf nodes",
+            );
+        });
+    }
 }
