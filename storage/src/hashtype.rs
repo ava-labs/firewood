@@ -5,6 +5,8 @@
 mod ethhash;
 mod trie_hash;
 
+#[cfg(feature = "ethhash")]
+pub use ethhash::RlpBytes;
 pub use trie_hash::{InvalidTrieHashLength, TrieHash};
 
 /// The type of a hash. For ethereum compatible hashes, this might be a RLP encoded

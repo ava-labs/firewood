@@ -732,6 +732,32 @@ fn test_invalid_hash_type_discriminant() {
     }
 }
 
+#[cfg(feature = "ethhash")]
+#[test_case(0; "empty rlp")]
+#[test_case(32; "hash length rlp")]
+fn test_invalid_hash_type_rlp_length(rlp_len: u8) {
+    let node = make_proof_node(&[1], 0, None, &[7]);
+    let (_, mut data) = make_range_proof_from_single_node(node);
+    data[39] = 1; // HashType::Rlp
+    data[40] = rlp_len; // RLP byte length varint
+
+    match FrozenRangeProof::from_slice(&data) {
+        Err(ReadError::InvalidItem {
+            item,
+            expected,
+            found,
+            ..
+        }) => {
+            assert_eq!(item, "hash type rlp length");
+            assert_eq!(expected, "1..=31 bytes");
+            assert_eq!(found, rlp_len.to_string());
+        }
+        other => {
+            panic!("Expected InvalidItem {{ item: \"hash type rlp length\" }}, got: {other:?}")
+        }
+    }
+}
+
 #[test]
 fn test_change_proof_incomplete_batch_op_discriminant() {
     // Layout of create_valid_change_proof() after the 32-byte header:

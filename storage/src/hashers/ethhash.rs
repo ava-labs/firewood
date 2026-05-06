@@ -108,7 +108,7 @@
 
 use crate::logger::warn;
 use crate::{
-    BranchNode, HashType, Hashable, Preimage, TrieHash, TriePath, ValueDigest,
+    BranchNode, HashType, Hashable, Preimage, RlpBytes, TrieHash, TriePath, ValueDigest,
     hashednode::HasUpdate, logger::trace,
 };
 use bitfield::bitfield;
@@ -121,6 +121,94 @@ use std::iter::once;
 impl HasUpdate for Keccak256 {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {
         sha3::Digest::update(self, data);
+    }
+}
+
+struct RlpCollector {
+    len: u8,
+    buf: [u8; RlpBytes::MAX_LEN],
+    hasher: Option<Keccak256>,
+}
+
+impl RlpCollector {
+    const fn new() -> Self {
+        Self {
+            len: 0,
+            buf: [0; RlpBytes::MAX_LEN],
+            hasher: None,
+        }
+    }
+
+    fn push_bytes(&mut self, bytes: &[u8]) {
+        if let Some(hasher) = self.hasher.as_mut() {
+            sha3::Digest::update(hasher, bytes);
+            return;
+        }
+
+        let Some(total_len) = usize::from(self.len).checked_add(bytes.len()) else {
+            let mut hasher = Keccak256::new();
+            let buffered = usize::from(self.len);
+            if buffered > 0 {
+                let buffered = self
+                    .buf
+                    .get(..buffered)
+                    .expect("collector len is bounded by inline buffer");
+                sha3::Digest::update(&mut hasher, buffered);
+            }
+            sha3::Digest::update(&mut hasher, bytes);
+            self.hasher = Some(hasher);
+            return;
+        };
+
+        if total_len <= RlpBytes::MAX_LEN {
+            let start = usize::from(self.len);
+            let out = self
+                .buf
+                .get_mut(start..total_len)
+                .expect("range is checked against inline buffer length");
+            out.iter_mut().zip(bytes).for_each(|(dst, src)| *dst = *src);
+            self.len = u8::try_from(total_len).expect("inline RLP len fits in u8");
+            return;
+        }
+
+        let mut hasher = Keccak256::new();
+        let buffered = usize::from(self.len);
+        if buffered > 0 {
+            let buffered = self
+                .buf
+                .get(..buffered)
+                .expect("collector len is bounded by inline buffer");
+            sha3::Digest::update(&mut hasher, buffered);
+        }
+        sha3::Digest::update(&mut hasher, bytes);
+        self.hasher = Some(hasher);
+    }
+
+    fn finish(self) -> HashType {
+        if let Some(hasher) = self.hasher {
+            HashType::from(TrieHash::from(hasher.finalize()))
+        } else {
+            debug_assert!(self.len > 0);
+            HashType::Rlp(RlpBytes::from_buf_and_len(self.buf, self.len))
+        }
+    }
+
+    fn as_slice(&self) -> Option<&[u8]> {
+        if self.hasher.is_some() {
+            None
+        } else {
+            Some(
+                self.buf
+                    .get(..usize::from(self.len))
+                    .expect("collector len is bounded by inline buffer"),
+            )
+        }
+    }
+}
+
+impl HasUpdate for RlpCollector {
+    fn update<T: AsRef<[u8]>>(&mut self, data: T) {
+        self.push_bytes(data.as_ref());
     }
 }
 
@@ -177,20 +265,18 @@ impl<T: Hashable> Preimage for T {
     fn to_hash(&self) -> HashType {
         // first collect the thing that would be hashed, and if it's smaller than a hash,
         // just use it directly
-        let mut collector = SmallVec::with_capacity(32);
+        let mut collector = RlpCollector::new();
         self.write(&mut collector);
 
         trace!(
             "SIZE WAS {} {}",
             self.full_path().len(),
-            hex::encode(&collector),
+            collector
+                .as_slice()
+                .map_or_else(|| "<hashed>".to_string(), hex::encode),
         );
 
-        if collector.len() >= 32 {
-            HashType::Hash(Keccak256::digest(collector).into())
-        } else {
-            HashType::Rlp(collector)
-        }
+        collector.finish()
     }
 
     fn write(&self, buf: &mut impl HasUpdate) {

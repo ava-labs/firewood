@@ -3,7 +3,6 @@
 
 use sha2::Digest as _;
 use sha3::Keccak256;
-use smallvec::SmallVec;
 use std::{
     fmt::{Display, Formatter},
     io::Read,
@@ -14,12 +13,110 @@ use crate::{
     node::{ExtendableBytes, branch::Serializable},
 };
 
+const RLP_MAX_LEN: usize = 31;
+
+/// Compact inline representation for short RLP bytes.
+#[derive(Clone, Debug)]
+pub struct RlpBytes {
+    len: u8,
+    bytes: [u8; RLP_MAX_LEN],
+}
+
+impl RlpBytes {
+    /// Maximum encoded byte length for inline Ethereum RLP payloads.
+    pub const MAX_LEN: usize = RLP_MAX_LEN;
+
+    #[must_use]
+    #[inline]
+    pub(crate) fn from_buf_and_len(bytes: [u8; RLP_MAX_LEN], len: u8) -> Self {
+        debug_assert!(len > 0);
+        debug_assert!((len as usize) <= Self::MAX_LEN);
+        Self { len, bytes }
+    }
+
+    /// Creates inline RLP bytes when the length is in the valid `1..=31` range.
+    #[must_use]
+    #[inline]
+    pub fn try_from_slice(bytes: &[u8]) -> Option<Self> {
+        if bytes.is_empty() || bytes.len() > Self::MAX_LEN {
+            return None;
+        }
+
+        let mut buf = [0; RLP_MAX_LEN];
+        let out = buf.get_mut(..bytes.len())?;
+        out.iter_mut().zip(bytes).for_each(|(dst, src)| *dst = *src);
+        Some(Self {
+            len: bytes.len() as u8,
+            bytes: buf,
+        })
+    }
+
+    /// Creates inline RLP bytes, panicking if the length is outside `1..=31`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `bytes.len()` is `0` or greater than `31`.
+    #[must_use]
+    #[track_caller]
+    #[inline]
+    pub fn from_slice(bytes: &[u8]) -> Self {
+        Self::try_from_slice(bytes).expect("RLP length must be 1..=31 bytes")
+    }
+
+    /// Returns the encoded byte length.
+    #[must_use]
+    #[inline]
+    pub const fn len_u8(&self) -> u8 {
+        self.len
+    }
+
+    /// Returns the encoded bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the internal length invariant is violated. All constructors
+    /// bound `len` to `1..=MAX_LEN`.
+    #[must_use]
+    #[inline]
+    pub fn as_slice(&self) -> &[u8] {
+        self.bytes
+            .get(..usize::from(self.len))
+            .expect("RlpBytes len is bounded by inline buffer")
+    }
+}
+
+impl PartialEq for RlpBytes {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl Eq for RlpBytes {}
+
+impl std::hash::Hash for RlpBytes {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_slice().hash(state);
+    }
+}
+
+impl AsRef<[u8]> for RlpBytes {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+impl std::ops::Deref for RlpBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
 #[derive(Clone)]
 pub enum HashOrRlp {
     Hash(TrieHash),
-    // TODO: this slice is never larger than 32 bytes so smallvec is probably not our best container
-    // the length is stored in a `usize` but it could be in a `u8` and it will never overflow
-    Rlp(SmallVec<[u8; 32]>),
+    Rlp(RlpBytes),
 }
 
 /// Manual implementation of [`Debug`](std::fmt::Debug) so that the RLP bytes
@@ -46,6 +143,24 @@ impl HashOrRlp {
     #[must_use]
     pub fn empty() -> Self {
         TrieHash::empty().into()
+    }
+
+    /// Creates a hash type from inline RLP bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `bytes.len()` is `0` or greater than `31`.
+    #[must_use]
+    #[inline]
+    pub fn from_rlp_slice(bytes: &[u8]) -> Self {
+        HashOrRlp::Rlp(RlpBytes::from_slice(bytes))
+    }
+
+    /// Creates a hash type from inline RLP bytes when the length is valid.
+    #[must_use]
+    #[inline]
+    pub fn try_from_rlp_slice(bytes: &[u8]) -> Option<Self> {
+        RlpBytes::try_from_slice(bytes).map(HashOrRlp::Rlp)
     }
 
     pub fn as_slice(&self) -> &[u8] {
@@ -115,35 +230,36 @@ impl Serializable for HashOrRlp {
             }
             HashOrRlp::Rlp(r) => {
                 debug_assert!(!r.is_empty());
-                debug_assert!(r.len() < 32);
-                vec.push(r.len() as u8);
+                vec.push(r.len_u8());
                 vec.extend_from_slice(r.as_ref());
             }
         }
     }
 
     fn from_reader<R: Read>(mut reader: R) -> Result<Self, std::io::Error> {
-        let mut bytes = [0; 32];
-
-        reader.read_exact(&mut bytes[0..1])?;
-        let Some(len) = std::num::NonZeroU8::new(bytes[0]) else {
+        let mut first = [0u8; 1];
+        reader.read_exact(&mut first)?;
+        let Some(len) = std::num::NonZeroU8::new(first[0]) else {
             // length is zero, so it's a full trie hash
-            reader.read_exact(&mut bytes)?;
-            return Ok(HashOrRlp::Hash(TrieHash::from(bytes)));
+            let mut hash = [0u8; 32];
+            reader.read_exact(&mut hash)?;
+            return Ok(HashOrRlp::Hash(TrieHash::from(hash)));
         };
 
-        let Some(bytes_mut) = bytes.get_mut(..len.get() as usize) else {
+        let len = len.get() as usize;
+        if len > RlpBytes::MAX_LEN {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("invalid RLP length; expected strictly less than 32, got {len}"),
+                format!("invalid RLP length; expected 1..=31, got {len}"),
             ));
-        };
+        }
 
-        reader.read_exact(bytes_mut)?;
-        Ok(HashOrRlp::Rlp(SmallVec::from_buf_and_len(
-            bytes,
-            len.get() as usize,
-        )))
+        let mut bytes = [0u8; RLP_MAX_LEN];
+        let out = bytes
+            .get_mut(..len)
+            .expect("length is checked before allocation");
+        reader.read_exact(out)?;
+        Ok(HashOrRlp::Rlp(RlpBytes::from_buf_and_len(bytes, len as u8)))
     }
 }
 
@@ -197,10 +313,7 @@ impl AsRef<[u8]> for HashOrRlp {
 impl std::ops::Deref for HashOrRlp {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
-        match self {
-            HashOrRlp::Hash(h) => h.as_slice(),
-            HashOrRlp::Rlp(r) => r,
-        }
+        self.as_ref()
     }
 }
 
@@ -213,5 +326,32 @@ impl Display for HashOrRlp {
                 write!(f, "{:.*}", width, hex::encode(r))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HashOrRlp, RlpBytes};
+    use crate::node::branch::Serializable;
+
+    #[test]
+    fn rlp_bytes_enforces_inline_bounds() {
+        assert!(RlpBytes::try_from_slice(&[]).is_none());
+        assert!(RlpBytes::try_from_slice(&[0u8; RlpBytes::MAX_LEN + 1]).is_none());
+
+        let bytes = [0xabu8; RlpBytes::MAX_LEN];
+        let rlp = RlpBytes::try_from_slice(&bytes).expect("31-byte RLP is valid");
+
+        assert_eq!(rlp.len_u8(), RlpBytes::MAX_LEN as u8);
+        assert_eq!(rlp.as_slice(), bytes);
+    }
+
+    #[test]
+    fn hash_or_rlp_rejects_serialized_rlp_at_hash_length() {
+        let serialized = [32u8; 33];
+        let err = HashOrRlp::from_reader(serialized.as_slice())
+            .expect_err("32-byte inline RLP must be rejected");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 }

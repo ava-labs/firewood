@@ -533,9 +533,9 @@ mod tests {
             cfg_if::cfg_if! {
                 if #[cfg(feature = "ethhash")] {
                     fn __expected_hash() -> $crate::HashType {
-                        $crate::HashType::Rlp(smallvec::SmallVec::from(
-                            &from_ascii::<{ $hexeth.len() }, { $hexeth.len() / 2 }>($hexeth)[..],
-                        ))
+                        $crate::HashType::from_rlp_slice(
+                            &from_ascii::<{ $hexeth.len() }, { $hexeth.len() / 2 }>($hexeth),
+                        )
                     }
                 } else {
                     fn __expected_hash() -> $crate::HashType {
