@@ -100,7 +100,7 @@ func (r *Revision) Iter(key []byte) (*Iterator, error) {
 
 	itResult := C.fwd_iter_on_revision(r.ptr, newBorrowedBytes(key, &pinner))
 
-	return getIteratorFromIteratorResult(itResult, r.keepAliveHandle.db)
+	return getIteratorFromIteratorResult(itResult, r.keepAliveHandle.registry)
 }
 
 // Reconstruct applies a batch of operations on top of this historical revision,
@@ -121,7 +121,7 @@ func (r *Revision) Reconstruct(batch []BatchOp) (*Reconstructed, error) {
 	kvp := newKeyValuePairsFromBatch(batch, &pinner)
 	return getReconstructedFromResult(
 		C.fwd_reconstruct_on_revision(r.ptr, kvp),
-		r.keepAliveHandle.db,
+		r.keepAliveHandle.registry,
 	)
 }
 
@@ -150,7 +150,7 @@ func (r *Revision) Dump() (string, error) {
 }
 
 // getRevisionFromResult converts a C.RevisionResult to a Revision or error.
-func getRevisionFromResult(result C.RevisionResult, db *Database) (*Revision, error) {
+func getRevisionFromResult(result C.RevisionResult, registry *keepAliveRegistry) (*Revision, error) {
 	switch result.tag {
 	case C.RevisionResult_NullHandlePointer:
 		return nil, errDBClosed
@@ -160,10 +160,10 @@ func getRevisionFromResult(result C.RevisionResult, db *Database) (*Revision, er
 		body := (*C.RevisionResult_Ok_Body)(unsafe.Pointer(&result.anon0))
 		hashKey := *(*Hash)(unsafe.Pointer(&body.root_hash._0))
 		rev := &Revision{
-			handle: createHandle(body.handle, db, func(r *C.RevisionHandle) C.VoidResult { return C.fwd_free_revision(r) }),
+			handle: createHandle(body.handle, registry, func(r *C.RevisionHandle) C.VoidResult { return C.fwd_free_revision(r) }),
 			root:   hashKey,
 		}
-		db.registerLiveHandle(&rev.keepAliveHandle, rev.handle.Drop)
+		registry.register(&rev.keepAliveHandle, rev.Drop)
 		runtime.AddCleanup(rev, drop, rev.handle)
 		return rev, nil
 	case C.RevisionResult_Err:

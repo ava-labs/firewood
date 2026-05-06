@@ -106,57 +106,19 @@ type Database struct {
 	// handle is returned and accepted by cgo functions. It MUST be treated as
 	// an opaque value without special meaning.
 	// https://en.wikipedia.org/wiki/Blinkenlights
-	handle             *C.DatabaseHandle
-	handleLock         sync.RWMutex
-	outstandingHandles sync.WaitGroup
+	handle     *C.DatabaseHandle
+	handleLock sync.RWMutex
 
-	// liveHandles tracks every outstanding [Proposal], [Revision],
-	// [Reconstructed], [Iterator], [RangeProof], and [ProposedChangeProof] that
-	// is keeping the database alive. The map value is the outer Drop function
-	// that must be invoked to release that handle (e.g. [Iterator.Drop], whose
-	// implementation also frees any borrowed batch before freeing the C
-	// handle). It is consulted only by [Database.Close] when the
-	// [WithForceCloseHandles] option is set; the WaitGroup above powers the
-	// graceful wait path.
-	liveHandlesMu sync.Mutex
-	liveHandles   map[*databaseKeepAliveHandle]func() error
+	// keepAlives tracks every outstanding [Proposal], [Revision],
+	// [Reconstructed], [Iterator], [RangeProof], and [ProposedChangeProof]
+	// that is keeping the database alive. It carries both the WaitGroup that
+	// [Database.Close] waits on and the registry of drop callbacks that
+	// [WithForceCloseHandles] uses to release handles forcibly.
+	keepAlives *keepAliveRegistry
 
 	// commitLock is used to ensure that methods accessing or modifying the latest
 	// revision do not conflict.
 	commitLock sync.Mutex
-}
-
-// registerLiveHandle records a handle's outer Drop function so that
-// [Database.Close] with [WithForceCloseHandles] can release it. Must be called
-// after [databaseKeepAliveHandle.init] and before whatever lock prevents
-// [Database.Close] from racing with this handle's construction is released.
-func (db *Database) registerLiveHandle(h *databaseKeepAliveHandle, dropFn func() error) {
-	db.liveHandlesMu.Lock()
-	defer db.liveHandlesMu.Unlock()
-	if db.liveHandles == nil {
-		db.liveHandles = make(map[*databaseKeepAliveHandle]func() error)
-	}
-	db.liveHandles[h] = dropFn
-}
-
-// unregisterLiveHandle removes a handle from the live-handle registry. It is
-// called from [databaseKeepAliveHandle.disown] (and disownLocked) once the
-// handle is no longer keeping the database alive.
-func (db *Database) unregisterLiveHandle(h *databaseKeepAliveHandle) {
-	db.liveHandlesMu.Lock()
-	defer db.liveHandlesMu.Unlock()
-	delete(db.liveHandles, h)
-}
-
-// snapshotLiveHandles returns the currently registered drop functions.
-func (db *Database) snapshotLiveHandles() []func() error {
-	db.liveHandlesMu.Lock()
-	defer db.liveHandlesMu.Unlock()
-	out := make([]func() error, 0, len(db.liveHandles))
-	for _, fn := range db.liveHandles {
-		out = append(out, fn)
-	}
-	return out
 }
 
 // config defines the internal configuration parameters used when opening a [Database].
@@ -398,7 +360,7 @@ func (db *Database) Propose(batch []BatchOp) (*Proposal, error) {
 	defer pinner.Unpin()
 
 	kvp := newKeyValuePairsFromBatch(batch, &pinner)
-	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), db, &db.commitLock)
+	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), db.keepAlives, &db.commitLock)
 }
 
 // Get retrieves the value for the given key from the most recent revision.
@@ -494,7 +456,7 @@ func (db *Database) Revision(root Hash) (*Revision, error) {
 	rev, err := getRevisionFromResult(C.fwd_get_revision(
 		db.handle,
 		newCHashKey(root),
-	), db)
+	), db.keepAlives)
 	if err != nil {
 		return nil, err
 	}
@@ -563,7 +525,7 @@ func (db *Database) Close(ctx context.Context, opts ...CloseOption) error {
 		// registering before the parent is dropped — and is then visible on
 		// the next iteration.
 		for {
-			handles := db.snapshotLiveHandles()
+			handles := db.keepAlives.snapshot()
 			if len(handles) == 0 {
 				break
 			}
@@ -577,7 +539,7 @@ func (db *Database) Close(ctx context.Context, opts ...CloseOption) error {
 
 	done := make(chan struct{})
 	go func() {
-		db.outstandingHandles.Wait()
+		db.keepAlives.wg.Wait()
 		close(done)
 	}()
 

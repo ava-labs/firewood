@@ -234,7 +234,7 @@ func (db *Database) VerifyRangeProof(
 	// WaitGroup, so graceful Close waits on them; WithForceCloseHandles will
 	// not auto-drop a still-referenced RangeProof. The change-proof family
 	// is being redesigned, so a handle[T] migration here is deferred.
-	proof.keepAliveHandle.init(db)
+	proof.keepAliveHandle.init(db.keepAlives)
 	runtime.SetFinalizer(proof, (*RangeProof).Free)
 	return nil
 }
@@ -472,7 +472,7 @@ func (db *Database) ProposeChangeProof(
 	// keep the database alive while the proof owns the embedded proposal.
 	// See note on RangeProof above re: live-handle registry exclusion and
 	// the deferred handle[T] migration (change-proof redesign in flight).
-	proposed.keepAliveHandle.init(db)
+	proposed.keepAliveHandle.init(db.keepAlives)
 	runtime.SetFinalizer(proposed, (*ProposedChangeProof).Free)
 	return proposed, nil
 }
