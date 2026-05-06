@@ -287,13 +287,13 @@ pub fn fix_account_storage_root_value(
 ) -> Option<Box<[u8]>> {
     use crate::hashers::ethhash::replace_hash;
     use crate::node::BranchNode;
-    use rlp::RlpStream;
+    use ::rlp::{NULL_RLP, RlpStream};
     use sha3::{Digest, Keccak256};
 
     let children_count = child_hashes.iter().filter(|(_, c)| c.is_some()).count();
 
     let storage_root = if children_count == 0 {
-        crate::TrieHash::from(Keccak256::digest(rlp::NULL_RLP))
+        crate::TrieHash::from(Keccak256::digest(NULL_RLP))
     } else {
         let mut child_hashes = child_hashes.clone();
         if let Some((_, child)) = child_hashes.take_only_child() {

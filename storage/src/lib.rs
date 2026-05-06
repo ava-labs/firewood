@@ -41,6 +41,9 @@ mod u4;
 /// Logger module for handling logging functionality
 pub mod logger;
 
+/// Minimal in-tree RLP encoder/decoder used by ethhash and account-value handling.
+pub mod rlp;
+
 #[macro_use]
 /// Macros module for defining macros used in the storage module
 pub mod macros;
@@ -431,8 +434,10 @@ pub fn format_node_value<W: std::io::Write + ?Sized>(
     writer: &mut W,
 ) -> std::io::Result<()> {
     #[cfg(feature = "ethhash")]
+    use ::rlp::Rlp;
+    #[cfg(feature = "ethhash")]
     if value.first().is_some_and(|&b| b >= 0xc0)
-        && let Ok(rlp_list) = rlp::Rlp::new(value).as_list::<Vec<u8>>()
+        && let Ok(rlp_list) = Rlp::new(value).as_list::<Vec<u8>>()
         && !rlp_list.is_empty()
     {
         write!(writer, " rlp=[")?;
@@ -508,8 +513,9 @@ mod format_node_value_tests {
     #[cfg(feature = "ethhash")]
     #[test]
     fn rlp_list_decoded() {
+        use ::rlp::RlpStream;
         // RLP encode [0x01, 0x02] as a 2-item list.
-        let mut rlp = rlp::RlpStream::new_list(2);
+        let mut rlp = RlpStream::new_list(2);
         rlp.append(&vec![0x01u8]);
         rlp.append(&vec![0x02u8]);
         let encoded = rlp.out();

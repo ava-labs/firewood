@@ -111,9 +111,9 @@ use crate::{
     BranchNode, HashType, Hashable, Preimage, TrieHash, TriePath, ValueDigest,
     hashednode::HasUpdate, logger::trace,
 };
+use ::rlp::{NULL_RLP, Rlp, RlpStream};
 use bitfield::bitfield;
 use bytes::BytesMut;
-use rlp::{Rlp, RlpStream};
 use sha3::{Digest, Keccak256};
 use smallvec::SmallVec;
 use std::iter::once;
@@ -215,7 +215,7 @@ impl<T: Hashable> Preimage for T {
                 // we are a leaf that is at depth 32
                 match self.value_digest() {
                     Some(ValueDigest::Value(bytes)) => {
-                        let new_hash = Keccak256::digest(rlp::NULL_RLP).as_slice().to_vec();
+                        let new_hash = Keccak256::digest(NULL_RLP).as_slice().to_vec();
                         let bytes_mut = BytesMut::from(bytes);
                         if let Some(result) = replace_hash(bytes_mut, new_hash) {
                             rlp.append(&&*result);
