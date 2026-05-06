@@ -28,10 +28,10 @@ use std::path::PathBuf;
 
 use firewood_metrics::{GaugeExt, firewood_counter, firewood_gauge, firewood_histogram};
 use lru::LruCache as EntryLruCache;
-use lru_mem::LruCache as MemLruCache;
+use quick_cache::sync::Cache as QuickCache;
 
 use crate::linear::ReadableNodeMode;
-use crate::{CacheReadStrategy, CachedNode, LinearAddress, MaybePersistedNode, SharedNode};
+use crate::{CacheReadStrategy, LinearAddress, MaybePersistedNode, SharedNode};
 
 use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
 
@@ -39,7 +39,7 @@ use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
 #[derive(Debug)]
 pub struct FileBacked {
     filename: PathBuf,
-    cache: Mutex<MemLruCache<LinearAddress, CachedNode>>,
+    cache: QuickCache<LinearAddress, SharedNode>,
     free_list_cache: Mutex<EntryLruCache<LinearAddress, Option<LinearAddress>>>,
     cache_read_strategy: CacheReadStrategy,
     node_hash_algorithm: crate::NodeHashAlgorithm,
@@ -66,7 +66,7 @@ impl FileBacked {
     /// Create or open a file at a given path
     pub fn new(
         path: PathBuf,
-        node_cache_memory_limit: NonZero<usize>,
+        node_cache_entries: NonZero<usize>,
         free_list_cache_size: NonZero<usize>,
         truncate: bool,
         create: bool,
@@ -95,7 +95,7 @@ impl FileBacked {
         })?;
 
         Ok(Self {
-            cache: Mutex::new(MemLruCache::new(node_cache_memory_limit.get())),
+            cache: QuickCache::new(node_cache_entries.get()),
             free_list_cache: Mutex::new(EntryLruCache::new(free_list_cache_size)),
             cache_read_strategy,
             filename: path,
@@ -134,11 +134,7 @@ impl ReadableStorage for FileBacked {
     }
 
     fn read_cached_node(&self, addr: LinearAddress, mode: ReadableNodeMode) -> Option<SharedNode> {
-        // BLOCKING: mutex lock on the node LRU cache. This is in the hot read path; every
-        // node lookup acquires this lock. Under concurrent readers the lock becomes a serialization
-        // point — all trie traversals contend here. Impact scales with reader concurrency.
-        let mut guard = self.cache.lock();
-        let cached = guard.get(&addr).map(|cached_node| cached_node.0.clone());
+        let cached = self.cache.get(&addr);
         firewood_counter!(CACHE_NODE, "mode" => mode.as_str(), "type" => if cached.is_some() { "hit" } else { "miss" }).increment(1);
         cached
     }
@@ -164,15 +160,11 @@ impl ReadableStorage for FileBacked {
                 // we don't cache reads
             }
             CacheReadStrategy::All => {
-                // BLOCKING: cache mutex on read path (only when CacheReadStrategy::All is set).
-                let mut guard = self.cache.lock();
-                CachedNode(node).insert_into_cache(&mut guard, addr);
+                self.cache.insert(addr, node);
             }
             CacheReadStrategy::BranchReads => {
                 if !node.is_leaf() {
-                    // BLOCKING: cache mutex on branch-read path (CacheReadStrategy::BranchReads).
-                    let mut guard = self.cache.lock();
-                    CachedNode(node).insert_into_cache(&mut guard, addr);
+                    self.cache.insert(addr, node);
                 }
             }
         }
@@ -213,17 +205,13 @@ impl WritableStorage for FileBacked {
         &self,
         nodes: impl IntoIterator<Item = MaybePersistedNode>,
     ) -> Result<(), FileIoError> {
-        // BLOCKING: cache mutex held while inserting every node in the batch. This is the write
-        // path after a persist; the lock is held for the entire batch iteration, blocking all
-        // concurrent reads that need the cache. Larger batches mean longer hold times.
-        let mut guard = self.cache.lock();
         for maybe_persisted_node in nodes {
             // Since we know the node is in Allocated state, we can get both address and shared node
             let (addr, shared_node) = maybe_persisted_node
                 .allocated_info()
                 .expect("node should be allocated");
 
-            CachedNode(shared_node).insert_into_cache(&mut guard, addr);
+            self.cache.insert(addr, shared_node);
             // The node can now be read from the general cache, so we can delete the local copy
             maybe_persisted_node.persist_at(addr);
         }
@@ -231,14 +219,9 @@ impl WritableStorage for FileBacked {
     }
 
     fn invalidate_cached_nodes<'a>(&self, nodes: impl Iterator<Item = &'a MaybePersistedNode>) {
-        // BLOCKING: cache mutex held while evicting all invalidated nodes. Same concern as
-        // `write_cached_nodes` — blocks concurrent reads for the duration of the loop.
-        let mut guard = self.cache.lock();
         for addr in nodes.filter_map(MaybePersistedNode::as_linear_address) {
-            guard.remove(&addr);
+            self.cache.remove(&addr);
         }
-        // Update cache metrics after removals
-        CachedNode::update_cache_metrics(&guard);
     }
 
     fn add_to_free_list_cache(&self, addr: LinearAddress, next: Option<LinearAddress>) {
