@@ -84,5 +84,9 @@ required-features = ["test_utils"]
 name = "proposal_reconstruct"
 harness = false
 
+[[bench]]
+name = "read_verify"
+harness = false
+
 [lints]
 workspace = true
