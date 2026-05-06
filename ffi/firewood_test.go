@@ -1569,6 +1569,111 @@ func TestCloseSucceedsWhenHandlesDroppedInTime(t *testing.T) {
 	r.NoError(<-closeDone, "Close should succeed when handles are dropped before timeout")
 }
 
+// TestCloseForceDropsOutstandingHandles verifies that Close with
+// WithForceCloseHandles releases live proposals, revisions, reconstructed
+// views, and iterators without requiring the caller to drop them first.
+func TestCloseForceDropsOutstandingHandles(t *testing.T) {
+	r := require.New(t)
+	db, err := newDatabase(t.TempDir())
+	r.NoError(err)
+
+	_, _, batch := kvForTest(4)
+
+	// Live proposal (uncommitted).
+	proposal, err := db.Propose(batch[:1])
+	r.NoError(err)
+
+	// Create a revision and an iterator on it; intentionally do not drop.
+	root, err := db.Update(batch[1:2])
+	r.NoError(err)
+	revision, err := db.Revision(root)
+	r.NoError(err)
+	revIter, err := revision.Iter(nil)
+	r.NoError(err)
+
+	// Reconstructed view from the revision.
+	reconstructed, err := revision.Reconstruct(batch[2:3])
+	r.NoError(err)
+
+	// Iterator on the proposal as well.
+	propIter, err := proposal.Iter(nil)
+	r.NoError(err)
+
+	// Force close should succeed even though nothing was dropped.
+	r.NoError(db.Close(oneSecCtx(t), WithForceCloseHandles()))
+
+	// All handles should now report as dropped on subsequent use.
+	_, err = proposal.Get([]byte("k"))
+	r.ErrorIs(err, errDroppedProposal)
+	_, err = revision.Get([]byte("k"))
+	r.ErrorIs(err, ErrDroppedRevision)
+	_, err = reconstructed.Get([]byte("k"))
+	r.ErrorIs(err, ErrDroppedReconstructed)
+	r.False(revIter.Next())
+	r.ErrorIs(revIter.Err(), errDroppedIterator)
+	r.False(propIter.Next())
+	r.ErrorIs(propIter.Err(), errDroppedIterator)
+}
+
+// TestCloseWithoutForceBlocksOnIterator verifies that an outstanding iterator
+// blocks Close in the default (non-forced) mode. Before the keep-alive
+// integration of iterators this would silently succeed and leave a dangling
+// pointer.
+func TestCloseWithoutForceBlocksOnIterator(t *testing.T) {
+	r := require.New(t)
+	db, err := newDatabase(t.TempDir())
+	r.NoError(err)
+
+	root, err := db.Update([]BatchOp{Put([]byte("k"), []byte("v"))})
+	r.NoError(err)
+	revision, err := db.Revision(root)
+	r.NoError(err)
+	it, err := revision.Iter(nil)
+	r.NoError(err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err = db.Close(ctx)
+	r.ErrorIs(err, ErrActiveKeepAliveHandles)
+
+	r.NoError(it.Drop())
+	r.NoError(revision.Drop())
+	r.NoError(db.Close(oneSecCtx(t)))
+}
+
+// TestCloseForceDropsConcurrentReader stresses force-close while a goroutine
+// reads through an iterator. The iterator's keepAliveHandle.mu serializes the
+// in-flight Next call against Drop, so neither should panic.
+func TestCloseForceDropsConcurrentReader(t *testing.T) {
+	r := require.New(t)
+	db, err := newDatabase(t.TempDir())
+	r.NoError(err)
+
+	const n = 200
+	keys, vals, batch := kvForTest(n)
+	_ = keys
+	_ = vals
+	root, err := db.Update(batch)
+	r.NoError(err)
+	revision, err := db.Revision(root)
+	r.NoError(err)
+	it, err := revision.Iter(nil)
+	r.NoError(err)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for it.Next() {
+			// Tiny slice to widen the window for the racing close.
+			_ = it.Key()
+			_ = it.Value()
+		}
+	}()
+
+	r.NoError(db.Close(oneSecCtx(t), WithForceCloseHandles()))
+	<-done
+}
+
 func TestDump(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
