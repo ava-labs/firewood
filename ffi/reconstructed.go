@@ -43,7 +43,7 @@ var ErrDroppedReconstructed = errors.New("reconstructed view already dropped")
 //
 // Cross-type: Reconstructed never touches commitLock, so there is no
 // ordering constraint with Proposal.Commit or Database.Close beyond the
-// outstandingHandles WaitGroup.
+// keep-alive registry's WaitGroup.
 
 // Reconstructed is a linear, read-only reconstructed view over a historical
 // revision.
@@ -124,7 +124,7 @@ func (r *Reconstructed) Iter(key []byte) (*Iterator, error) {
 	defer pinner.Unpin()
 
 	itResult := C.fwd_iter_on_reconstructed(r.ptr, newBorrowedBytes(key, &pinner))
-	return getIteratorFromIteratorResult(itResult, r.keepAliveHandle.db)
+	return getIteratorFromIteratorResult(itResult, r.keepAliveHandle.registry)
 }
 
 // Reconstruct applies a new batch on top of this reconstructed view.
@@ -187,19 +187,19 @@ func (r *Reconstructed) Dump() (string, error) {
 	return string(bytes), nil
 }
 
-func getReconstructedFromResult(result C.ReconstructedResult, db *Database) (*Reconstructed, error) {
+func getReconstructedFromResult(result C.ReconstructedResult, registry *keepAliveRegistry) (*Reconstructed, error) {
 	switch result.tag {
 	case C.ReconstructedResult_NullHandlePointer:
 		return nil, errDBClosed
 	case C.ReconstructedResult_Ok:
 		body := (*C.ReconstructedResult_Ok_Body)(unsafe.Pointer(&result.anon0))
 		reconstructed := &Reconstructed{
-			handle: createHandle(body.handle, db, func(h *C.ReconstructedHandle) C.VoidResult {
+			handle: createHandle(body.handle, registry, func(h *C.ReconstructedHandle) C.VoidResult {
 				return C.fwd_free_reconstructed(h)
 			}),
 			root: EmptyRoot,
 		}
-		db.registerLiveHandle(&reconstructed.keepAliveHandle, reconstructed.handle.Drop)
+		registry.register(&reconstructed.keepAliveHandle, reconstructed.Drop)
 		runtime.AddCleanup(reconstructed, drop[*C.ReconstructedHandle], reconstructed.handle)
 		return reconstructed, nil
 	case C.ReconstructedResult_Err:
