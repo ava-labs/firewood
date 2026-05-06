@@ -155,7 +155,7 @@ fn bench_decode_field_upstream(c: &mut Criterion) {
         b.iter(|| {
             let bytes = black_box(&value);
             let field = rlp::Rlp::new(bytes).at(3).and_then(|r| r.data()).unwrap();
-            black_box(field.to_vec())
+            black_box(field)
         });
     });
 }
