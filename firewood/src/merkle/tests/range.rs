@@ -275,6 +275,49 @@ fn test_full_range_proof_round_trip() {
 }
 
 #[test]
+fn test_truncated_unbounded_range_proof_round_trip() {
+    // Keys chosen so that later keys live in the subtrie below the first key.
+    let items: Vec<(&[u8], &[u8])> = vec![
+        (b"a", b"v_a"),
+        (b"aa", b"v_aa"),
+        (b"ab", b"v_ab"),
+    ];
+    let merkle = init_merkle(items.iter().copied());
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    // Truncate to 1 key with no bounds.
+    let limit = NonZeroUsize::new(1).unwrap();
+    let range_proof = merkle
+        .range_proof(None::<&[u8]>, None::<&[u8]>, Some(limit))
+        .unwrap();
+
+    assert_eq!(
+        range_proof.key_values().len(),
+        1,
+        "limit should have truncated the result to a single key-value"
+    );
+    assert!(
+        range_proof.start_proof().is_empty(),
+        "no start_key was provided, so start_proof must be empty"
+    );
+    assert!(
+        !range_proof.end_proof().is_empty(),
+        "truncation must produce a non-empty end_proof anchored at last_kv"
+    );
+
+    // The actual regression check: this verification fails on the current
+    // verifier because right_edge_anchor stays None when last_key is None,
+    // even though the end proof is an inclusion proof of `a`.
+    verify_range_proof(
+        None::<&[u8]>,
+        None::<&[u8]>,
+        &root_hash,
+        &range_proof,
+    )
+    .expect("honest truncated unbounded proof must verify");
+}
+
+#[test]
 // Tests normal range proof with both edge proofs as the existent proof.
 // The test cases are generated randomly.
 fn test_range_proof() {
