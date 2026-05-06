@@ -172,6 +172,13 @@ pub trait ReadableStorage: Debug + Sync + Send {
         &CacheReadStrategy::WritesOnly
     }
 
+    /// Return the hash-verification policy for this readable storage.
+    /// Default: only the rootstore root is verified (matches historical
+    /// behavior).
+    fn hash_verification(&self) -> crate::HashVerification {
+        crate::HashVerification::default()
+    }
+
     /// Cache a node for future reads
     fn cache_node(&self, _addr: LinearAddress, _node: SharedNode) {}
 

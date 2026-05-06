@@ -173,6 +173,74 @@ impl Display for CacheReadStrategy {
     }
 }
 
+/// What to do when a read-time hash verification fails.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum HashFailureMode {
+    /// Return a `FileIoError` from the read on mismatch. This is the
+    /// only safe behavior for production use.
+    #[default]
+    Error,
+    /// Log the mismatch at error level and return the (unverified)
+    /// node anyway. Intended for diagnostic tools that want to
+    /// enumerate every corrupt node in a known-broken database.
+    ///
+    /// Note: when the `logging` feature is not enabled, the log call
+    /// compiles to a no-op, so this mode silently swallows mismatches
+    /// (the failure counter still increments).
+    LogAndContinue,
+}
+
+/// Controls which node reads are hash-verified on the read path.
+///
+/// Defaults match historical behavior: only the root node fetched via
+/// the rootstore is verified. Use [`HashVerification::all`] to enable
+/// every check.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct HashVerification {
+    /// Verify the root node when it is reached via the rootstore.
+    pub root_from_rootstore: bool,
+    /// Verify the root node of a recent (in-memory) revision when it is
+    /// loaded from the header at open time.
+    pub root_recent: bool,
+    /// Verify branch nodes when they are resolved from a parent's
+    /// `Child::AddressWithHash`.
+    pub branches: bool,
+    /// Verify leaf nodes when they are resolved from a parent's
+    /// `Child::AddressWithHash`.
+    pub leaves: bool,
+    /// What to do when a verification fails.
+    pub on_failure: HashFailureMode,
+}
+
+impl Default for HashVerification {
+    /// Matches historical behavior: only the rootstore root is verified,
+    /// and mismatches return an error.
+    fn default() -> Self {
+        Self {
+            root_from_rootstore: true,
+            root_recent: false,
+            branches: false,
+            leaves: false,
+            on_failure: HashFailureMode::Error,
+        }
+    }
+}
+
+impl HashVerification {
+    /// Verify every read. Mismatches return an error.
+    #[must_use]
+    pub const fn all() -> Self {
+        Self {
+            root_from_rootstore: true,
+            root_recent: true,
+            branches: true,
+            leaves: true,
+            on_failure: HashFailureMode::Error,
+        }
+    }
+}
+
 /// This enum encapsulates what points to the stored area.
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum StoredAreaParent {

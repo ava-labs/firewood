@@ -31,7 +31,9 @@ use lru::LruCache as EntryLruCache;
 use lru_mem::LruCache as MemLruCache;
 
 use crate::linear::ReadableNodeMode;
-use crate::{CacheReadStrategy, CachedNode, LinearAddress, MaybePersistedNode, SharedNode};
+use crate::{
+    CacheReadStrategy, CachedNode, HashVerification, LinearAddress, MaybePersistedNode, SharedNode,
+};
 
 use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
 
@@ -42,6 +44,7 @@ pub struct FileBacked {
     cache: Mutex<MemLruCache<LinearAddress, CachedNode>>,
     free_list_cache: Mutex<EntryLruCache<LinearAddress, Option<LinearAddress>>>,
     cache_read_strategy: CacheReadStrategy,
+    hash_verification: HashVerification,
     node_hash_algorithm: crate::NodeHashAlgorithm,
     // keep before `fd` so that it is dropped first (fields are dropped in the order they are declared)
     #[cfg(feature = "io-uring")]
@@ -64,6 +67,7 @@ impl FileBacked {
     }
 
     /// Create or open a file at a given path
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         path: PathBuf,
         node_cache_memory_limit: NonZero<usize>,
@@ -71,6 +75,7 @@ impl FileBacked {
         truncate: bool,
         create: bool,
         cache_read_strategy: CacheReadStrategy,
+        hash_verification: HashVerification,
         node_hash_algorithm: crate::NodeHashAlgorithm,
     ) -> Result<Self, FileIoError> {
         let fd = OpenOptions::new()
@@ -98,6 +103,7 @@ impl FileBacked {
             cache: Mutex::new(MemLruCache::new(node_cache_memory_limit.get())),
             free_list_cache: Mutex::new(EntryLruCache::new(free_list_cache_size)),
             cache_read_strategy,
+            hash_verification,
             filename: path,
             node_hash_algorithm,
             #[cfg(feature = "io-uring")]
@@ -156,6 +162,10 @@ impl ReadableStorage for FileBacked {
 
     fn cache_read_strategy(&self) -> &CacheReadStrategy {
         &self.cache_read_strategy
+    }
+
+    fn hash_verification(&self) -> HashVerification {
+        self.hash_verification
     }
 
     fn cache_node(&self, addr: LinearAddress, node: SharedNode) {
@@ -372,6 +382,7 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
+            HashVerification::default(),
             NodeHashAlgorithm::compile_option(),
         )
         .unwrap();
@@ -415,6 +426,7 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
+            HashVerification::default(),
             NodeHashAlgorithm::compile_option(),
         )
         .unwrap();

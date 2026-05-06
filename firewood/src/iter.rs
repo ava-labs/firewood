@@ -5,8 +5,8 @@ use crate::api::{KeyType, KeyValuePair};
 use crate::merkle::{Key, Value};
 
 use firewood_storage::{
-    BranchNode, Child, FileIoError, NibblesIterator, Node, PathBuf, PathComponent, PathIterItem,
-    SharedNode, TriePathFromUnpackedBytes, TrieReader,
+    BranchNode, Child, FileIoError, NibblesIterator, Node, Path, PathBuf, PathComponent,
+    PathIterItem, SharedNode, TriePathFromUnpackedBytes, TrieReader,
 };
 use std::cmp::Ordering;
 use std::iter::FusedIterator;
@@ -127,8 +127,19 @@ impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
                                 };
 
                                 let child = match child {
-                                    Child::AddressWithHash(addr, _) => {
-                                        match self.merkle.read_node(addr) {
+                                    Child::AddressWithHash(addr, hash) => {
+                                        let policy = self.merkle.hash_verification();
+                                        let result = if policy.branches || policy.leaves {
+                                            let child_path = Path::from_nibbles_iterator(
+                                                key.iter()
+                                                    .copied()
+                                                    .chain(std::iter::once(pos.as_u8())),
+                                            );
+                                            self.merkle.read_node_verified(addr, &hash, &child_path)
+                                        } else {
+                                            self.merkle.read_node(addr)
+                                        };
+                                        match result {
                                             Ok(node) => node,
                                             Err(e) => return Some(Err(e)),
                                         }
@@ -261,7 +272,20 @@ fn get_iterator_intial_state<T: TrieReader>(
                     let child = &branch.children[next_unmatched_key_nibble];
                     node = match child {
                         None => return Ok(NodeIterState::Iterating { iter_stack }),
-                        Some(Child::AddressWithHash(addr, _)) => merkle.read_node(*addr)?,
+                        Some(Child::AddressWithHash(addr, hash)) => {
+                            let policy = merkle.hash_verification();
+                            if policy.branches || policy.leaves {
+                                let child_path = Path::from_nibbles_iterator(
+                                    matched_key_nibbles
+                                        .iter()
+                                        .copied()
+                                        .chain(std::iter::once(next_unmatched_key_nibble.as_u8())),
+                                );
+                                merkle.read_node_verified(*addr, hash, &child_path)?
+                            } else {
+                                merkle.read_node(*addr)?
+                            }
+                        }
                         Some(Child::Node(node)) => (*node).clone().into(), // TODO can we avoid cloning this?
                         Some(Child::MaybePersisted(maybe_persisted, _)) => {
                             // For MaybePersisted, we need to get the node
@@ -416,6 +440,7 @@ impl<'a, 'b, T: TrieReader> PathIterator<'a, 'b, T> {
 impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
     type Item = Result<PathIterItem, FileIoError>;
 
+    #[allow(clippy::too_many_lines)]
     fn next(&mut self) -> Option<Self::Item> {
         let must_recompute = self.merkle.must_recompute_storage_hash();
         // destructuring is necessary here because we need mutable access to `state`
@@ -487,8 +512,20 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                             must_recompute_storage_hash: must_recompute,
                         }))
                     }
-                    Some(Child::AddressWithHash(child_addr, _)) => {
-                        let child = match merkle.read_node(*child_addr) {
+                    Some(Child::AddressWithHash(child_addr, hash)) => {
+                        let policy = merkle.hash_verification();
+                        let result = if policy.branches || policy.leaves {
+                            let child_path = Path::from_nibbles_iterator(
+                                matched_key
+                                    .iter()
+                                    .copied()
+                                    .chain(std::iter::once(next_unmatched_key_nibble.as_u8())),
+                            );
+                            merkle.read_node_verified(*child_addr, hash, &child_path)
+                        } else {
+                            merkle.read_node(*child_addr)
+                        };
+                        let child = match result {
                             Ok(child) => child,
                             Err(e) => return Some(Err(e)),
                         };

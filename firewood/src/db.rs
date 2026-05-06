@@ -122,6 +122,10 @@ pub struct DbConfig {
     /// Whether to enable `RootStore`.
     #[builder(default = false)]
     pub root_store: bool,
+    /// Which node reads to hash-verify on the read path.
+    /// Default matches historical behavior: only the rootstore root is checked.
+    #[builder(default)]
+    pub hash_verification: firewood_storage::HashVerification,
 }
 
 /// A database instance.
@@ -169,6 +173,7 @@ impl Db {
             .create(cfg.create_if_missing)
             .truncate(cfg.truncate)
             .root_store(cfg.root_store)
+            .hash_verification(cfg.hash_verification)
             .manager(cfg.manager)
             .build();
         let manager = RevisionManager::new(config_manager)?;
@@ -1966,5 +1971,176 @@ mod test {
         pub fn path(&self) -> &Path {
             self.tmpdir.path()
         }
+    }
+
+    /// With `HashVerification::all()` on a clean database, every read must
+    /// succeed (no false-positive hash mismatches). This catches bugs in the
+    /// path-prefix threading through merkle/iter, since the wrong prefix would
+    /// produce a different hash and trigger a verification failure even on
+    /// uncorrupted data.
+    #[test]
+    fn test_hash_verification_all_no_false_positives() {
+        use firewood_storage::HashVerification;
+
+        let cfg = DbConfig::builder()
+            .hash_verification(HashVerification::all())
+            .build();
+        let db = TestDb::new_with_config(cfg);
+
+        let batch: Vec<BatchOp<&[u8], &[u8]>> = vec![
+            BatchOp::Put {
+                key: b"alpha",
+                value: b"one",
+            },
+            BatchOp::Put {
+                key: b"beta",
+                value: b"two",
+            },
+            BatchOp::Put {
+                key: b"alphabet",
+                value: b"three",
+            },
+            BatchOp::Put {
+                key: b"alpine",
+                value: b"four",
+            },
+        ];
+        db.propose(batch).unwrap().commit().unwrap();
+        db.wait_persisted();
+
+        let root_hash = db.root_hash().unwrap();
+        let rev = db.revision(root_hash).unwrap();
+
+        assert_eq!(&*rev.val(b"alpha").unwrap().unwrap(), b"one");
+        assert_eq!(&*rev.val(b"beta").unwrap().unwrap(), b"two");
+        assert_eq!(&*rev.val(b"alphabet").unwrap().unwrap(), b"three");
+        assert_eq!(&*rev.val(b"alpine").unwrap().unwrap(), b"four");
+    }
+
+    /// Reopening with `HashVerification::all()` after corrupting a node byte
+    /// must surface the corruption as a `FileIoError`. Searches for the value
+    /// `"corruptme"` in the file and flips a byte inside it; this mutates a
+    /// leaf node's stored value, which changes its hash and causes branch
+    /// verification to fail when the parent dereferences the leaf.
+    #[test]
+    #[allow(clippy::indexing_slicing, clippy::disallowed_methods)]
+    fn test_hash_verification_catches_corruption() {
+        use firewood_storage::HashVerification;
+        use std::io::{Read, Seek, SeekFrom, Write};
+
+        // Stage 1: create DB with default config, insert keys, commit.
+        let tmpdir = tempfile::tempdir().unwrap();
+        let dir = tmpdir.path().to_path_buf();
+        {
+            let db = Db::new(&dir, DbConfig::builder().build()).unwrap();
+            let batch: Vec<BatchOp<&[u8], &[u8]>> = vec![
+                BatchOp::Put {
+                    key: b"k1",
+                    value: b"corruptme_marker",
+                },
+                BatchOp::Put {
+                    key: b"k2",
+                    value: b"other",
+                },
+            ];
+            crate::api::Db::propose(&db, batch)
+                .unwrap()
+                .commit()
+                .unwrap();
+            db.close().unwrap();
+        }
+
+        // Stage 2: corrupt the value bytes in the file.
+        let dbfile = dir.join(crate::manager::DB_FILE_NAME);
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&dbfile)
+            .unwrap();
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents).unwrap();
+        let needle = b"corruptme_marker";
+        let pos = contents
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .expect("expected to find marker bytes in db file");
+        // flip a byte inside the value
+        let target = pos + 3;
+        contents[target] ^= 0xff;
+        file.seek(SeekFrom::Start(target as u64)).unwrap();
+        file.write_all(&[contents[target]]).unwrap();
+        drop(file);
+
+        // Stage 3: reopen with leaves=true and confirm read fails.
+        let cfg = DbConfig::builder()
+            .hash_verification(HashVerification::all())
+            .build();
+        let db = Db::new(&dir, cfg).unwrap();
+        let root_hash = db.root_hash().unwrap();
+        let rev = db.revision(root_hash).unwrap();
+        let err = rev.val(b"k1").unwrap_err();
+        assert!(
+            format!("{err}").contains("hash verification failed"),
+            "expected hash verification failure, got: {err}"
+        );
+        db.close().unwrap();
+    }
+
+    /// In `LogAndContinue` failure mode, a corrupted read returns the
+    /// (unverified) data instead of an error.
+    #[test]
+    #[allow(clippy::indexing_slicing, clippy::disallowed_methods)]
+    fn test_hash_verification_log_and_continue() {
+        use firewood_storage::{HashFailureMode, HashVerification};
+        use std::io::{Read, Seek, SeekFrom, Write};
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let dir = tmpdir.path().to_path_buf();
+        {
+            let db = Db::new(&dir, DbConfig::builder().build()).unwrap();
+            let batch: Vec<BatchOp<&[u8], &[u8]>> = vec![BatchOp::Put {
+                key: b"k1",
+                value: b"continueme_marker",
+            }];
+            crate::api::Db::propose(&db, batch)
+                .unwrap()
+                .commit()
+                .unwrap();
+            db.close().unwrap();
+        }
+
+        let dbfile = dir.join(crate::manager::DB_FILE_NAME);
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&dbfile)
+            .unwrap();
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents).unwrap();
+        let needle = b"continueme_marker";
+        let pos = contents
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .unwrap();
+        let target = pos + 4;
+        contents[target] ^= 0xff;
+        file.seek(SeekFrom::Start(target as u64)).unwrap();
+        file.write_all(&[contents[target]]).unwrap();
+        drop(file);
+
+        let mut hv = HashVerification::all();
+        hv.on_failure = HashFailureMode::LogAndContinue;
+        let cfg = DbConfig::builder().hash_verification(hv).build();
+        let db = Db::new(&dir, cfg).unwrap();
+        let root_hash = db.root_hash().unwrap();
+        let rev = db.revision(root_hash).unwrap();
+        // val should succeed despite the corruption — value bytes are
+        // returned as-is (with the flipped byte)
+        let v = rev.val(b"k1").unwrap().unwrap();
+        assert_eq!(v.len(), needle.len());
+        // first 4 bytes match, byte 4 is flipped, rest match
+        assert_eq!(&v[..4], &needle[..4]);
+        assert_eq!(v[4], needle[4] ^ 0xff);
+        db.close().unwrap();
     }
 }

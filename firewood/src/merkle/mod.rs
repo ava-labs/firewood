@@ -59,9 +59,17 @@ macro_rules! write_attributes {
 }
 
 /// Returns the value mapped to by `key` in the subtrie rooted at `node`.
+///
+/// `path_prefix` is the trie path from the root to (but not including) `node`,
+/// in nibbles. It's only extended/read when `verify` is true; in the common
+/// fast path it is left untouched. Passed by `&mut` so that one buffer at the
+/// caller is reused across the entire recursion (avoids ~80-byte `SmallVec`
+/// stack frames per level).
 fn get_helper<T: TrieReader>(
     nodestore: &T,
     node: &Node,
+    path_prefix: &mut Path,
+    verify: bool,
     key: &[u8],
 ) -> Result<Option<SharedNode>, FileIoError> {
     // 4 possibilities for the position of the `key` relative to `node`:
@@ -83,25 +91,76 @@ fn get_helper<T: TrieReader>(
         }
         (None, None) => Ok(Some(node.clone().into())), // 1. The node is at `key`
         (Some((child_index, remaining_key)), None) => {
+            let child_index_nibble = child_index;
             let child_index = PathComponent::try_new(child_index).expect("index is in bounds");
             // 3. The key is below the node (i.e. its descendant)
             match node {
                 Node::Leaf(_) => Ok(None),
-                Node::Branch(node) => match node.children[child_index].as_ref() {
+                Node::Branch(node_b) => match node_b.children[child_index].as_ref() {
                     None => Ok(None),
-                    Some(Child::Node(child)) => get_helper(nodestore, child, remaining_key),
-                    Some(Child::AddressWithHash(addr, _)) => {
-                        let child = nodestore.read_node(*addr)?;
-                        get_helper(nodestore, &child, remaining_key)
-                    }
-                    Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                        let child = maybe_persisted.as_shared_node(nodestore)?;
-                        get_helper(nodestore, &child, remaining_key)
-                    }
+                    Some(Child::Node(child)) => with_extended_path(
+                        path_prefix,
+                        node,
+                        child_index_nibble,
+                        verify,
+                        |prefix| get_helper(nodestore, child, prefix, verify, remaining_key),
+                    ),
+                    Some(Child::AddressWithHash(addr, hash)) => with_extended_path(
+                        path_prefix,
+                        node,
+                        child_index_nibble,
+                        verify,
+                        |prefix| {
+                            let child = if verify {
+                                nodestore.read_node_verified(*addr, hash, prefix)?
+                            } else {
+                                nodestore.read_node(*addr)?
+                            };
+                            get_helper(nodestore, &child, prefix, verify, remaining_key)
+                        },
+                    ),
+                    Some(Child::MaybePersisted(maybe_persisted, _)) => with_extended_path(
+                        path_prefix,
+                        node,
+                        child_index_nibble,
+                        verify,
+                        |prefix| {
+                            let child = maybe_persisted.as_shared_node(nodestore)?;
+                            get_helper(nodestore, &child, prefix, verify, remaining_key)
+                        },
+                    ),
                 },
             }
         }
     }
+}
+
+/// Run `f` with `path_prefix` extended by `node.partial_path + [child_index]`,
+/// then truncate it back to its original length. When `verify` is false,
+/// `path_prefix` is left untouched (no extend, no truncate) — the fast path.
+fn with_extended_path<R>(
+    path_prefix: &mut Path,
+    node: &Node,
+    child_index: u8,
+    verify: bool,
+    f: impl FnOnce(&mut Path) -> R,
+) -> R {
+    if !verify {
+        return f(path_prefix);
+    }
+    let original_len = path_prefix.0.len();
+    path_prefix.0.extend(node.partial_path().0.iter().copied());
+    path_prefix.0.push(child_index);
+    let result = f(path_prefix);
+    path_prefix.0.truncate(original_len);
+    result
+}
+
+/// Returns true if the verification policy requires per-read hashing of
+/// non-root (branch or leaf) nodes — i.e. the trie path needs to be tracked.
+fn needs_path<T: TrieReader>(nodestore: &T) -> bool {
+    let p = nodestore.hash_verification();
+    p.branches || p.leaves
 }
 
 #[derive(Debug)]
@@ -981,7 +1040,9 @@ impl<T: TrieReader> Merkle<T> {
         };
 
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
-        get_helper(&self.nodestore, &root, &key)
+        let verify = needs_path(&self.nodestore);
+        let mut path_prefix = Path::new();
+        get_helper(&self.nodestore, &root, &mut path_prefix, verify, &key)
     }
 
     /// Dump a node, recursively, to a dot file.
@@ -1824,7 +1885,15 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
             return Ok(None);
         };
 
-        get_helper(&self.nodestore, &root, key_nibbles)
+        let verify = needs_path(&self.nodestore);
+        let mut path_prefix = Path::new();
+        get_helper(
+            &self.nodestore,
+            &root,
+            &mut path_prefix,
+            verify,
+            key_nibbles,
+        )
     }
 
     /// Ensures a branch exists at `key_nibbles` where each key element is a
