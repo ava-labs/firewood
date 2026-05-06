@@ -35,6 +35,10 @@ firewood_metrics::define_metrics! {
         REPARENTED_PROPOSAL_COUNT      = "firewood_proposals_reparented_total",
         /// Fetch attempts from the rootstore
         ROOTSTORE_GET                  = "firewood_rootstore_lookups_total",
+        /// Read-time hash verifications performed (label `type` = rootstore | root | branch | leaf)
+        HASH_VERIFICATIONS             = "firewood_hash_verifications_total",
+        /// Read-time hash verification mismatches (label `type` = rootstore | root | branch | leaf)
+        HASH_VERIFICATION_FAILURES     = "firewood_hash_verification_failures_total",
         /// Count of EAGAIN write retries
         RING_EAGAIN_WRITE_RETRY        = "firewood_io_uring_eagain_retries_total",
         /// Count of ring buffer full events
