@@ -222,18 +222,18 @@ func (it *Iterator) Drop() error {
 var errDroppedIterator = errors.New("iterator already dropped")
 
 // getIteratorFromIteratorResult converts a C.IteratorResult to an Iterator or error.
-func getIteratorFromIteratorResult(result C.IteratorResult, db *Database) (*Iterator, error) {
+func getIteratorFromIteratorResult(result C.IteratorResult, registry *keepAliveRegistry) (*Iterator, error) {
 	switch result.tag {
 	case C.IteratorResult_NullHandlePointer:
 		return nil, errDBClosed
 	case C.IteratorResult_Ok:
 		body := (*C.IteratorResult_Ok_Body)(unsafe.Pointer(&result.anon0))
 		it := &Iterator{
-			handle: createHandle(body.handle, db, func(h *C.IteratorHandle) C.VoidResult {
+			handle: createHandle(body.handle, registry, func(h *C.IteratorHandle) C.VoidResult {
 				return C.fwd_free_iterator(h)
 			}),
 		}
-		db.registerLiveHandle(&it.keepAliveHandle, it.Drop)
+		registry.register(&it.keepAliveHandle, it.Drop)
 		// Use the embedded *handle as the cleanup arg (it must be a distinct
 		// pointer from the cleanup target). This means a finalizer-driven
 		// cleanup will skip [freeCurrentAllocation] — which only matters if

@@ -31,13 +31,13 @@ type handle[T any] struct {
 	free func(T) C.VoidResult
 }
 
-func createHandle[T any](ptr T, db *Database, free func(T) C.VoidResult) *handle[T] {
+func createHandle[T any](ptr T, registry *keepAliveRegistry, free func(T) C.VoidResult) *handle[T] {
 	h := &handle[T]{
 		ptr:     ptr,
 		free:    free,
 		dropped: false,
 	}
-	h.keepAliveHandle.init(db)
+	h.keepAliveHandle.init(registry)
 	return h
 }
 
@@ -64,6 +64,53 @@ func (h *handle[T]) Drop() error {
 	})
 }
 
+// keepAliveRegistry tracks every outstanding handle that holds a lease on a
+// database. It carries the WaitGroup that powers [Database.Close]'s graceful
+// wait, alongside a map of drop callbacks that [WithForceCloseHandles] uses
+// to release handles forcibly.
+//
+// All fields are owned by the registry; nothing else mutates them. The map
+// values are the outer-type Drop functions (e.g. [Iterator.Drop], whose
+// implementation also frees any borrowed batch).
+type keepAliveRegistry struct {
+	mu      sync.Mutex
+	wg      sync.WaitGroup
+	handles map[*databaseKeepAliveHandle]func() error
+}
+
+func newKeepAliveRegistry() *keepAliveRegistry {
+	return &keepAliveRegistry{
+		handles: make(map[*databaseKeepAliveHandle]func() error),
+	}
+}
+
+// register records a handle's outer Drop function. The caller must register
+// before whatever lock prevents [Database.Close] from racing with the
+// handle's construction is released — in practice, before the constructor
+// returns from under [Database.handleLock] (RLock).
+func (r *keepAliveRegistry) register(h *databaseKeepAliveHandle, dropFn func() error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.handles[h] = dropFn
+}
+
+func (r *keepAliveRegistry) unregister(h *databaseKeepAliveHandle) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.handles, h)
+}
+
+// snapshot returns the currently registered drop callbacks.
+func (r *keepAliveRegistry) snapshot() []func() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]func() error, 0, len(r.handles))
+	for _, fn := range r.handles {
+		out = append(out, fn)
+	}
+	return out
+}
+
 // databaseKeepAliveHandle is added to types that hold a lease on the database
 // to ensure it is not closed while those types are still in use.
 //
@@ -73,39 +120,27 @@ func (h *handle[T]) Drop() error {
 // behavior, as a part of the underling Rust object will have already been freed.
 type databaseKeepAliveHandle struct {
 	mu sync.RWMutex
-	// [Database.Close] blocks on this WaitGroup, which is set and incremented
-	// by [databaseKeepAliveHandle.init], and decremented by
-	// [databaseKeepAliveHandle.disown].
-	outstandingHandles *sync.WaitGroup
-	// db is set in tandem with outstandingHandles and is used by [disown]
-	// to deregister this handle from the database's live-handle registry.
-	// It is nil after disown decrements the WaitGroup.
-	db *Database
+	// registry is the parent database's keep-alive registry. It is set in
+	// [init] and cleared in [disownLocked]; nil indicates the handle has
+	// already been disowned.
+	registry *keepAliveRegistry
 }
 
 // init initializes the keep-alive handle to track a new outstanding handle.
-//
-// The caller must register a drop callback via [Database.registerLiveHandle]
-// before releasing whatever lock prevents [Database.Close] from racing with
-// the construction. In practice that means registering before the constructor
-// returns, while still under [Database.handleLock] (RLock) — or, for handles
-// derived from another (e.g. an Iterator created from a Revision), while
-// still under the parent handle's keep-alive mu.RLock.
-func (h *databaseKeepAliveHandle) init(db *Database) {
+func (h *databaseKeepAliveHandle) init(registry *keepAliveRegistry) {
 	// lock not necessary today, but will be necessary in the future for types
 	// that initialize the handle at some point after construction (#1429).
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if h.outstandingHandles != nil {
+	if h.registry != nil {
 		// setting the finalizer twice will also panic, so we're panicking
 		// early to provide better context
 		panic("keep-alive handle already initialized")
 	}
 
-	h.outstandingHandles = &db.outstandingHandles
-	h.db = db
-	h.outstandingHandles.Add(1)
+	h.registry = registry
+	h.registry.wg.Add(1)
 }
 
 // disown indicates that the object owning this handle is no longer keeping the
@@ -120,33 +155,24 @@ func (h *databaseKeepAliveHandle) disown(disownEvenOnErr bool, attemptDisown fun
 	defer h.mu.Unlock()
 
 	err := attemptDisown()
-
-	if (err == nil || disownEvenOnErr) && h.outstandingHandles != nil {
-		h.outstandingHandles.Done()
-		// prevent calling `Done` multiple times if disown is called again, which
-		// may happen when the finalizer runs after an explicit call to Drop or Commit.
-		h.outstandingHandles = nil
-		if h.db != nil {
-			h.db.unregisterLiveHandle(h)
-			h.db = nil
-		}
+	if err == nil || disownEvenOnErr {
+		h.disownLocked()
 	}
-
 	return err
 }
 
-// disownLocked performs the same accounting as [disown] but assumes the caller
-// already holds h.mu (write-locked). This exists for callers like
+// disownLocked performs the disown bookkeeping (Done on the WaitGroup,
+// unregister from the registry, clear the back-pointer) and assumes the
+// caller already holds h.mu. It exists for callers like
 // [Reconstructed.Reconstruct] that hold mu.Lock for a wider critical section
-// and would otherwise deadlock.
+// and would otherwise deadlock through [disown].
+//
+// Idempotent: calls after the first are no-ops until [init] runs again.
 func (h *databaseKeepAliveHandle) disownLocked() {
-	if h.outstandingHandles == nil {
+	if h.registry == nil {
 		return
 	}
-	h.outstandingHandles.Done()
-	h.outstandingHandles = nil
-	if h.db != nil {
-		h.db.unregisterLiveHandle(h)
-		h.db = nil
-	}
+	h.registry.wg.Done()
+	h.registry.unregister(h)
+	h.registry = nil
 }
