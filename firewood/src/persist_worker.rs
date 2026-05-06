@@ -49,7 +49,7 @@ use firewood_metrics::{
 };
 use firewood_storage::{
     Committed, FileBacked, FileIoError, HashedNodeReader, LinearAddress, NodeStore,
-    NodeStoreHeader, TrieHash,
+    NodeStoreHeader, PersistScratch, TrieHash,
 };
 use parking_lot::{Condvar, Mutex, MutexGuard};
 
@@ -147,7 +147,11 @@ impl PersistWorker {
         let metrics_context = current_metrics_context();
         let handle = thread::spawn(move || {
             let _guard = set_metrics_context(metrics_context);
-            PersistLoop { shared: bg_shared }.run()
+            PersistLoop {
+                shared: bg_shared,
+                scratch: PersistScratch::new(),
+            }
+            .run()
         });
 
         Self {
@@ -512,6 +516,8 @@ struct SharedState {
 struct PersistLoop {
     /// Shared state for coordination with `PersistWorker`.
     shared: Arc<SharedState>,
+    /// Scratch state reused across persists.
+    scratch: PersistScratch,
 }
 
 impl Drop for PersistLoop {
@@ -527,7 +533,7 @@ impl PersistLoop {
     ///
     /// If the event loop exits with an error, it is stored in shared state
     /// so the main thread can observe it without joining.
-    fn run(self) -> Result<(), PersistError> {
+    fn run(mut self) -> Result<(), PersistError> {
         let result = self.event_loop();
         if let Err(ref err) = result {
             self.shared.error.set(err.clone()).expect("should be empty");
@@ -536,17 +542,17 @@ impl PersistLoop {
     }
 
     /// Processes pending work until shutdown or an error occurs.
-    fn event_loop(&self) -> Result<(), PersistError> {
+    fn event_loop(&mut self) -> Result<(), PersistError> {
         while let Ok(mut persist_data) = self.shared.channel.pop() {
             let cycle_start = std::time::Instant::now();
 
             for nodestore in std::mem::take(&mut persist_data.pending_reaps) {
-                self.reap(nodestore)?;
+                Self::reap(&self.shared, nodestore)?;
             }
 
             if let Some(revision) = persist_data.latest_committed.take() {
-                self.persist_to_disk(&revision)
-                    .and_then(|()| self.maybe_save_to_root_store(&revision))?;
+                Self::persist_to_disk(&self.shared, &mut self.scratch, &revision)
+                    .and_then(|()| Self::maybe_save_to_root_store(&self.shared, &revision))?;
                 firewood_counter!(COMMITS_TOTAL).increment(1);
             }
 
@@ -558,34 +564,43 @@ impl PersistLoop {
         if let Some(revision) = self.shared.persist_on_shutdown.get().cloned()
             && !self.shared.channel.empty()
         {
-            self.persist_to_disk(&revision)
-                .and_then(|()| self.maybe_save_to_root_store(&revision))?;
+            Self::persist_to_disk(&self.shared, &mut self.scratch, &revision)
+                .and_then(|()| Self::maybe_save_to_root_store(&self.shared, &revision))?;
         }
 
         Ok(())
     }
 
     /// Persists the revision to disk.
-    fn persist_to_disk(&self, revision: &CommittedRevision) -> Result<(), PersistError> {
+    fn persist_to_disk(
+        shared: &SharedState,
+        scratch: &mut PersistScratch,
+        revision: &CommittedRevision,
+    ) -> Result<(), PersistError> {
         // BLOCKING: mutex lock on the shared `NodeStoreHeader`. Held for the entire duration of
         // the disk flush (serializes all node writes + header write). Any concurrent caller of
         // `RevisionManager::locked_header()` (e.g. `Db::check`) will stall until this returns.
         // Under heavy I/O this can take tens to hundreds of milliseconds.
-        let mut header = self.shared.header.lock();
-        revision.persist(&mut header).map_err(|e| {
-            error!("Failed to persist revision: {e}");
-            PersistError::FileIo(Arc::new(e))
-        })
+        let mut header = shared.header.lock();
+        revision
+            .persist_with_scratch(&mut header, scratch)
+            .map_err(|e| {
+                error!("Failed to persist revision: {e}");
+                PersistError::FileIo(Arc::new(e))
+            })
     }
 
     /// Adds the nodes of this revision to the free lists.
-    fn reap(&self, nodestore: NodeStore<Committed, FileBacked>) -> Result<(), PersistError> {
+    fn reap(
+        shared: &SharedState,
+        nodestore: NodeStore<Committed, FileBacked>,
+    ) -> Result<(), PersistError> {
         // BLOCKING: same header mutex as `persist_to_disk`. Held while writing all freed-node
         // metadata back to the free-list in storage. Contends with any `persist_to_disk` that
         // might be running concurrently (they cannot — both run in the single background thread —
         // but the lock also blocks external `locked_header()` callers).
         nodestore
-            .reap_deleted(&mut self.shared.header.lock())
+            .reap_deleted(&mut shared.header.lock())
             .map_err(|e| {
                 error!("Failed to reap deleted nodes: {e}");
                 PersistError::FileIo(Arc::new(e))
@@ -593,8 +608,11 @@ impl PersistLoop {
     }
 
     /// Saves the revision's root address to `RootStore` if configured.
-    fn maybe_save_to_root_store(&self, revision: &CommittedRevision) -> Result<(), PersistError> {
-        if let Some(ref store) = self.shared.root_store
+    fn maybe_save_to_root_store(
+        shared: &SharedState,
+        revision: &CommittedRevision,
+    ) -> Result<(), PersistError> {
+        if let Some(ref store) = shared.root_store
             && let (Some(hash), Some(addr)) = (revision.root_hash(), revision.root_address())
         {
             save_to_root_store(store, &hash, &addr)?;
