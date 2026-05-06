@@ -78,7 +78,11 @@ const (
 var (
 	// EmptyRoot is the zero value for [Hash]
 	EmptyRoot Hash
-	// ErrActiveKeepAliveHandles is returned when attempting to close a database with unfreed memory.
+	// ErrActiveKeepAliveHandles is returned by [Database.Close] when the
+	// supplied context is cancelled before all outstanding keep-alive handles
+	// (proposals, revisions, reconstructed views, iterators, proof handles)
+	// have been released. Pass [WithForceCloseHandles] to drop them
+	// automatically instead.
 	ErrActiveKeepAliveHandles = errors.New("cannot close database with active keep-alive handles")
 
 	errDBClosed = errors.New("firewood database already closed")
@@ -106,9 +110,53 @@ type Database struct {
 	handleLock         sync.RWMutex
 	outstandingHandles sync.WaitGroup
 
+	// liveHandles tracks every outstanding [Proposal], [Revision],
+	// [Reconstructed], [Iterator], [RangeProof], and [ProposedChangeProof] that
+	// is keeping the database alive. The map value is the outer Drop function
+	// that must be invoked to release that handle (e.g. [Iterator.Drop], whose
+	// implementation also frees any borrowed batch before freeing the C
+	// handle). It is consulted only by [Database.Close] when the
+	// [WithForceCloseHandles] option is set; the WaitGroup above powers the
+	// graceful wait path.
+	liveHandlesMu sync.Mutex
+	liveHandles   map[*databaseKeepAliveHandle]func() error
+
 	// commitLock is used to ensure that methods accessing or modifying the latest
 	// revision do not conflict.
 	commitLock sync.Mutex
+}
+
+// registerLiveHandle records a handle's outer Drop function so that
+// [Database.Close] with [WithForceCloseHandles] can release it. Must be called
+// after [databaseKeepAliveHandle.init] and before whatever lock prevents
+// [Database.Close] from racing with this handle's construction is released.
+func (db *Database) registerLiveHandle(h *databaseKeepAliveHandle, dropFn func() error) {
+	db.liveHandlesMu.Lock()
+	defer db.liveHandlesMu.Unlock()
+	if db.liveHandles == nil {
+		db.liveHandles = make(map[*databaseKeepAliveHandle]func() error)
+	}
+	db.liveHandles[h] = dropFn
+}
+
+// unregisterLiveHandle removes a handle from the live-handle registry. It is
+// called from [databaseKeepAliveHandle.disown] (and disownLocked) once the
+// handle is no longer keeping the database alive.
+func (db *Database) unregisterLiveHandle(h *databaseKeepAliveHandle) {
+	db.liveHandlesMu.Lock()
+	defer db.liveHandlesMu.Unlock()
+	delete(db.liveHandles, h)
+}
+
+// snapshotLiveHandles returns the currently registered drop functions.
+func (db *Database) snapshotLiveHandles() []func() error {
+	db.liveHandlesMu.Lock()
+	defer db.liveHandlesMu.Unlock()
+	out := make([]func() error, 0, len(db.liveHandles))
+	for _, fn := range db.liveHandles {
+		out = append(out, fn)
+	}
+	return out
 }
 
 // config defines the internal configuration parameters used when opening a [Database].
@@ -350,7 +398,7 @@ func (db *Database) Propose(batch []BatchOp) (*Proposal, error) {
 	defer pinner.Unpin()
 
 	kvp := newKeyValuePairsFromBatch(batch, &pinner)
-	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), &db.outstandingHandles, &db.commitLock)
+	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), db, &db.commitLock)
 }
 
 // Get retrieves the value for the given key from the most recent revision.
@@ -446,7 +494,7 @@ func (db *Database) Revision(root Hash) (*Revision, error) {
 	rev, err := getRevisionFromResult(C.fwd_get_revision(
 		db.handle,
 		newCHashKey(root),
-	), &db.outstandingHandles)
+	), db)
 	if err != nil {
 		return nil, err
 	}
@@ -454,23 +502,77 @@ func (db *Database) Revision(root Hash) (*Revision, error) {
 	return rev, nil
 }
 
+// CloseOption configures the behavior of [Database.Close].
+type CloseOption func(*closeConfig)
+
+type closeConfig struct {
+	forceCloseHandles bool
+}
+
+// WithForceCloseHandles makes [Database.Close] forcibly drop every outstanding
+// [Proposal], [Revision], [Reconstructed], [Iterator], [RangeProof], and
+// [ProposedChangeProof] before closing the database, instead of waiting for
+// the caller to release them.
+//
+// Any errors encountered while dropping individual handles are joined and
+// returned alongside the close error. Methods on a force-dropped handle
+// behave the same as if the caller had explicitly invoked Drop.
+func WithForceCloseHandles() CloseOption {
+	return func(c *closeConfig) {
+		c.forceCloseHandles = true
+	}
+}
+
 // Close releases the memory associated with the Database and stops the
 // background persistence thread.
 //
-// This blocks until all outstanding keep-alive handles are disowned or the
-// [context.Context] is cancelled. That is, until all Revisions and Proposals
-// created from this Database are either unreachable or one of
-// [Proposal.Commit], [Proposal.Drop], or [Revision.Drop] has been called on
-// them. Unreachable objects will be automatically released before Close returns,
-// unless an alternate GC finalizer is set on them.
+// By default Close blocks until all outstanding keep-alive handles are
+// disowned or the [context.Context] is cancelled. That is, until all
+// Revisions, Proposals, Reconstructed views, Iterators, and proof handles
+// created from this Database are either unreachable or have been explicitly
+// released via [Proposal.Commit], [Proposal.Drop], [Revision.Drop],
+// [Reconstructed.Drop], [Iterator.Drop], [RangeProof.Free], or
+// [ProposedChangeProof.Free]. Unreachable objects are released by their
+// finalizers before Close returns.
 //
-// This is safe to call multiple times; subsequent calls after the first will do
-// nothing.
-func (db *Database) Close(ctx context.Context) error {
+// Pass [WithForceCloseHandles] to forcibly drop every outstanding handle
+// instead of waiting for the caller to release them.
+//
+// This is safe to call multiple times; subsequent calls after the first will
+// do nothing.
+func (db *Database) Close(ctx context.Context, opts ...CloseOption) error {
+	cfg := closeConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	db.handleLock.Lock()
 	defer db.handleLock.Unlock()
 	if db.handle == nil {
 		return nil
+	}
+
+	var forcedDropErr error
+	if cfg.forceCloseHandles {
+		// Loop until the live-handle registry is empty. New handles cannot be
+		// constructed concurrently because handleLock.Lock is held, but a
+		// handle derived from another handle (e.g. an Iterator created from a
+		// Revision under the parent's keepAliveHandle.mu.RLock) may be added
+		// to the registry after our snapshot. The parent's mu.RLock blocks
+		// our mu.Lock in the parent's drop, so the derived handle finishes
+		// registering before the parent is dropped — and is then visible on
+		// the next iteration.
+		for {
+			handles := db.snapshotLiveHandles()
+			if len(handles) == 0 {
+				break
+			}
+			for _, dropFn := range handles {
+				if err := dropFn(); err != nil {
+					forcedDropErr = errors.Join(forcedDropErr, err)
+				}
+			}
+		}
 	}
 
 	done := make(chan struct{})
@@ -482,18 +584,18 @@ func (db *Database) Close(ctx context.Context) error {
 	select {
 	case <-done:
 	case <-ctx.Done():
-		return fmt.Errorf("%w: %w", ctx.Err(), ErrActiveKeepAliveHandles)
+		return errors.Join(forcedDropErr, fmt.Errorf("%w: %w", ctx.Err(), ErrActiveKeepAliveHandles))
 	}
 
 	db.commitLock.Lock()
 	defer db.commitLock.Unlock()
 	if err := getErrorFromVoidResult(C.fwd_close_db(db.handle)); err != nil {
-		return fmt.Errorf("unexpected error when closing database: %w", err)
+		return errors.Join(forcedDropErr, fmt.Errorf("unexpected error when closing database: %w", err))
 	}
 
 	db.handle = nil // Prevent double free
 
-	return nil
+	return forcedDropErr
 }
 
 // Dump returns a DOT (Graphviz) format representation of the trie structure

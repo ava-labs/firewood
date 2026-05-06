@@ -156,7 +156,7 @@ Update `CHANGELOG.md` accordingly.
      the Rust side already holds an independent `NodeStore` Arc. The
      keepalive only ties the iterator to the *database*, not the parent
      handle, which matches today's documented semantics.
-4. **ffi/firewood_test.go**: new tests
+5. **ffi/firewood_test.go**: new tests
    - `TestClose_ForceDropsOutstandingProposal`
    - `TestClose_ForceDropsOutstandingRevision`
    - `TestClose_ForceDropsOutstandingReconstructed`
@@ -166,8 +166,8 @@ Update `CHANGELOG.md` accordingly.
    - `TestClose_WithoutForce_StillReturnsErrActiveKeepAliveHandles` (regression)
    - `TestClose_ForceWithConcurrentGet` (stress: goroutine doing `Get`
      while `Close(ctx, WithForceCloseHandles())` runs).
-5. **CHANGELOG.md, ffi/Cargo.toml, Cargo.toml**: bump to `0.5.0`.
-6. Run `cargo fmt`, `cargo nextest run --workspace --features ethhash,logger
+6. **CHANGELOG.md, ffi/Cargo.toml, Cargo.toml**: bump to `0.5.0`.
+7. Run `cargo fmt`, `cargo nextest run --workspace --features ethhash,logger
    --all-targets`, `cargo clippy --workspace --features ethhash,logger
    --all-targets`, `cargo doc --no-deps`. Run `go test ./...` in `ffi/`.
 
@@ -179,6 +179,14 @@ Update `CHANGELOG.md` accordingly.
   `handle.Drop`, which now also deregisters from the live-handle map.
 - Not exposing the live-handle count as a public API (could be added later
   for debugging if useful).
+- **Proofs (`RangeProof`, `ProposedChangeProof`) are not migrated to
+  `handle[T]` and are not entered into the live-handle registry.** A bound
+  `proof.Free` in the registry would keep the proof reachable and prevent
+  its GC finalizer from running (`TestRangeProofFinalizerCleanup` would
+  hang). They still increment the keep-alive WaitGroup, so graceful Close
+  waits on them; `WithForceCloseHandles` will not auto-drop a
+  still-referenced proof. The change-proof family is being redesigned, so
+  the handle[T] migration is deferred until that lands.
 
 ## Risks
 
