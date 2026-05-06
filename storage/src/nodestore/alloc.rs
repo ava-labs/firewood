@@ -28,10 +28,12 @@ use crate::node::branch::{ReadSerializable, Serializable};
 use crate::nodestore::NodeStoreHeader;
 use firewood_metrics::{firewood_counter, firewood_gauge};
 use integer_encoding::VarIntReader;
+use metrics::Counter;
 
 use std::io::{Error, ErrorKind, Read};
 use std::iter::FusedIterator;
 use std::mem::size_of;
+use std::sync::OnceLock;
 
 use crate::{FreeListParent, MaybePersistedNode, ReadableStorage, WritableStorage};
 
@@ -42,6 +44,35 @@ const fn var_int_max_size<VI>() -> usize {
 
 /// `FreeLists` is an array of `Option<LinearAddress>` for each area size.
 pub type FreeLists = [Option<LinearAddress>; AreaIndex::NUM_AREA_SIZES];
+
+type AreaMetricCounters = [Counter; AreaIndex::NUM_AREA_SIZES];
+
+fn init_area_metric_counters(metric: &'static str) -> AreaMetricCounters {
+    std::array::from_fn(|index| {
+        let index = AreaIndex::new(index as u8).expect("area metric index within range");
+        metrics::counter!(metric, "index" => index_name(index))
+    })
+}
+
+/// Increment an area-indexed counter by `value`, caching the per-index `Counter`
+/// handles once the global recorder is installed. The runtime `"index"` label
+/// cannot use the literal-label cache path in `firewood_counter!`, so this keeps
+/// a per-metric array at the callsite.
+macro_rules! increment_area_counter {
+    ($metric:ident, $index:expr, $value:expr) => {{
+        static COUNTERS: OnceLock<AreaMetricCounters> = OnceLock::new();
+        let index: AreaIndex = $index;
+        if firewood_metrics::global_recorder_installed() {
+            COUNTERS
+                .get_or_init(|| init_area_metric_counters(crate::registry::$metric))
+                .get(index.as_usize())
+                .expect("area index within bounds")
+                .increment($value);
+        } else {
+            firewood_counter!($metric, "index" => index_name(index)).increment($value);
+        }
+    }};
+}
 
 /// A [`FreeArea`] is stored at the start of the area that contained a node that
 /// has been freed.
@@ -253,7 +284,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
                 *free_stored_area_addr = free_head.next_free_block;
             }
 
-            firewood_counter!(SPACE_REUSED, "index" => index_name(index)).increment(index.size());
+            increment_area_counter!(SPACE_REUSED, index, index.size());
             firewood_gauge!(FREE_LIST_ENTRIES, "index" => index_name(index)).decrement(1.0);
 
             // Return the address of the newly allocated block.
@@ -262,7 +293,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
         }
 
         trace!("No free blocks of sufficient size {index} found");
-        firewood_counter!(SPACE_FROM_END, "index" => index_name(index)).increment(index.size());
+        increment_area_counter!(SPACE_FROM_END, index, index.size());
         Ok(None)
     }
 
@@ -325,9 +356,8 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
 
         let (area_size_index, _) = self.area_index_and_size(addr)?;
         trace!("Deleting node at {addr:?} of size {area_size_index}");
-        firewood_counter!(DELETE_NODE, "index" => index_name(area_size_index)).increment(1);
-        firewood_counter!(SPACE_FREED, "index" => index_name(area_size_index))
-            .increment(area_size_index.size());
+        increment_area_counter!(DELETE_NODE, area_size_index, 1);
+        increment_area_counter!(SPACE_FREED, area_size_index, area_size_index.size());
         firewood_gauge!(FREE_LIST_ENTRIES, "index" => index_name(area_size_index)).increment(1.0);
 
         // The area that contained the node is now free.

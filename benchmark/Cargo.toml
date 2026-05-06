@@ -26,6 +26,7 @@ clap = { workspace = true, features = ['string'] }
 env_logger.workspace = true
 fastrace = { workspace = true, features = ["enable"] }
 firewood.workspace = true
+firewood-metrics.workspace = true
 firewood-storage = { workspace = true, features = ["test_utils"] }
 hex.workspace = true
 log.workspace = true
