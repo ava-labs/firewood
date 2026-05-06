@@ -271,6 +271,49 @@ Plan: add a simple criterion bench that measures `get` / iter throughput
 with each flag combination on a populated database, so we have numbers
 before recommending any non-default setting.
 
+### Measured (2026-05-06)
+
+`firewood/benches/read_verify.rs`, ethhash feature, 10K random 32-byte
+keys, 200 random reads per iteration. The in-process node cache is
+forced to its minimum (1 byte) and `cache_read_strategy` stays at
+`WritesOnly`, so reads do not hit the firewood node cache during the
+measurement; the OS page cache covers the small DB file. This is the
+realistic case for hot data, where verification overhead matters.
+
+Baseline is the default config (no branch/leaf checks).
+
+| Config            | Time per 200 reads | Overhead vs default |
+| ----------------- | ------------------ | ------------------- |
+| `default`         | 1.30 ms            | —                   |
+| `leaves`          | 1.45 ms            | +11%                |
+| `recommended`     | 1.44 ms            | +11%                |
+| `branches`        | 2.36 ms            | +82%                |
+| `branches+leaves` | 2.48 ms            | +91%                |
+| `all`             | 2.50 ms            | +92%                |
+
+Confirms the prediction: `branches` dominates because it fires on every
+hop down the trie; `leaves` is light because each get hashes at most one
+leaf. The two root flags fire only at open / rootstore lookup so they
+don't appear in steady-state read overhead — `recommended` (`leaves` +
+both root flags) costs the same as `leaves` alone.
+
+**Recommendation for operators**: enable `leaves`, `root_from_rootstore`,
+and `root_recent` — gets per-read leaf integrity, both root paths
+checked, and steady-state overhead under 15%. Leave `branches` off
+except during investigations; it nearly doubles read latency.
+
+### Known follow-up: cache hits
+
+`read_node_verified` currently hashes the node it gets back from
+`read_node`, regardless of whether that read came from disk or from the
+in-process node cache. With `CacheReadStrategy::WritesOnly` (the
+default) this is a non-issue — reads never hit the cache. But if an
+operator sets `BranchReads` or `All`, every cache hit re-verifies, which
+defeats the whole point of caching. The fix is to split the cache check
+out of the disk-read path so verification fires only on a real disk
+read. Tracking as a separate piece of work; not on the path to the FFI
+or fwdctl commits.
+
 ## Failure behavior
 
 When a hash check fails, two responses make sense in different contexts:
