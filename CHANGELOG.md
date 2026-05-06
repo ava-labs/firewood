@@ -2,6 +2,93 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-04-28
+
+### 🚀 Features
+
+- *(proofs)* 1/4 Range Proof Verification  ([#1715](https://github.com/ava-labs/firewood/pull/1715))
+- *(metrics)* Add jemalloc metrics ([#1837](https://github.com/ava-labs/firewood/pull/1837))
+- *(proofs)* 2/6 Range Proof Verification ([#1716](https://github.com/ava-labs/firewood/pull/1716))
+- *(range-proof-verification)* 4/6 complete range proof verification ([#1833](https://github.com/ava-labs/firewood/pull/1833))
+- *(metrics)* Add firewood_describe_counter! and firewood_describe_gauge! facades ([#1853](https://github.com/ava-labs/firewood/pull/1853))
+- *(change-proof)* Add change proof verification error variants and document value_digest ([#1866](https://github.com/ava-labs/firewood/pull/1866))
+- *(storage)* Autogen area sizes hash and names ([#1906](https://github.com/ava-labs/firewood/pull/1906))
+- *(metrics)* Export prometheus metrics as structured data ([#1868](https://github.com/ava-labs/firewood/pull/1868))
+- *(metrics)* [**breaking**] Overhaul metrics for Prometheus best practices ([#1912](https://github.com/ava-labs/firewood/pull/1912))
+- *(ffi)* [**breaking**] Remove http and text exporter ([#1913](https://github.com/ava-labs/firewood/pull/1913))
+- Add verify_change_proof_structure and module documentation ([#1918](https://github.com/ava-labs/firewood/pull/1918))
+- Add verify_change_proof_root_hash for change proof verification ([#1930](https://github.com/ava-labs/firewood/pull/1930))
+
+### 🐛 Bug Fixes
+
+- *(ffi)* Return error from ChangeProof. Allow MarshalBinary after verification ([#1828](https://github.com/ava-labs/firewood/pull/1828))
+- *(deferred-persistence)* Carry metrics context into worker ([#1829](https://github.com/ava-labs/firewood/pull/1829))
+- *(range-proof)* Manual audit bug fixes ([#1848](https://github.com/ava-labs/firewood/pull/1848))
+- Add `test_utils` feature when running benchmarks ([#1873](https://github.com/ava-labs/firewood/pull/1873))
+- *(proofs)* Yield divergent nodes from PathIterator for exclusion proofs ([#1875](https://github.com/ava-labs/firewood/pull/1875))
+- *(proofs)* Verify proof path follows target key branch ([#1881](https://github.com/ava-labs/firewood/pull/1881))
+- *(nix)* Update rust-overlay in nix flake for MSRV 1.94.0 ([#1888](https://github.com/ava-labs/firewood/pull/1888))
+- *(test)* Audit range.rs — fix bugs, add missing coverage, unignore bloated test ([#1895](https://github.com/ava-labs/firewood/pull/1895))
+- Verify proof node values match key_values in range proofs ([#1896](https://github.com/ava-labs/firewood/pull/1896))
+- *(proofs)* Mark right-edge terminal children as outside in compute_outside_children ([#1886](https://github.com/ava-labs/firewood/pull/1886))
+- Update nix lockfile for rust-overlay ([#1899](https://github.com/ava-labs/firewood/pull/1899))
+- *(proofs, de)* Verify partial len is within bounds ([#1920](https://github.com/ava-labs/firewood/pull/1920))
+- *(clippy)* Disallow panicking slice methods via clippy lint ([#1926](https://github.com/ava-labs/firewood/pull/1926))
+- *(ffi)* Add GC finalizers for change proof types and NextKeyRange ([#1921](https://github.com/ava-labs/firewood/pull/1921))
+- *(proofs)* 1/2 recompute storageRoot in ethhash proof generation ([#1935](https://github.com/ava-labs/firewood/pull/1935))
+- Update change proof generator end proof key logic ([#1931](https://github.com/ava-labs/firewood/pull/1931))
+- *(ci)* Replace CI Nix cache with cachix to speed up worst ffi-nix run-time case ([#1902](https://github.com/ava-labs/firewood/pull/1902))
+- *(proofs)* Reject truncated exclusion proofs with reachable children ([#1950](https://github.com/ava-labs/firewood/pull/1950))
+
+### 🚜 Refactor
+
+- *(metrics)* [**breaking**] Remove histograms ([#1847](https://github.com/ava-labs/firewood/pull/1847))
+- *(proofs)* Replace ChildMask [bool; 16] with u16 newtype ([#1849](https://github.com/ava-labs/firewood/pull/1849))
+- *(range-proofs)* Consolidate ChildrenMap into ChildMask ([#1852](https://github.com/ava-labs/firewood/pull/1852))
+- *(merkle)* [**breaking**] Reduce visibility of firewood::merkle module ([#1858](https://github.com/ava-labs/firewood/pull/1858))
+- Rename verify_root_hash to verify_range_proof_root_hash ([#1887](https://github.com/ava-labs/firewood/pull/1887))
+- *(ffi)* Remove ArcCache from DatabaseHandle ([#1891](https://github.com/ava-labs/firewood/pull/1891))
+- *(metrics)* Consolidate metric registry definitions with macro ([#1867](https://github.com/ava-labs/firewood/pull/1867))
+- Move ChangeProof from merkle/changes to proofs/change ([#1915](https://github.com/ava-labs/firewood/pull/1915))
+- Update reconcile_branch_proof_node with callback interface ([#1914](https://github.com/ava-labs/firewood/pull/1914))
+
+### 📚 Documentation
+
+- Include go docs in gh-pages ([#1819](https://github.com/ava-labs/firewood/pull/1819))
+- *(metrics)* Add usage guidance metric-naming conforming examples ([#1864](https://github.com/ava-labs/firewood/pull/1864))
+- Clarify fwdctl launch usage ([#1874](https://github.com/ava-labs/firewood/pull/1874))
+- Replace ignore doctests with runnable examples (Unix only) ([#1865](https://github.com/ava-labs/firewood/pull/1865)) ([#1878](https://github.com/ava-labs/firewood/pull/1878))
+- Document empty-value semantics for batch operations ([#1916](https://github.com/ava-labs/firewood/pull/1916))
+- *(storage/hashers)* Document ethhash design and refactor replace_hash ([#1943](https://github.com/ava-labs/firewood/pull/1943))
+
+### ⚡ Performance
+
+- *(storage)* Use binary search in AreaIndex::from_size ([#1940](https://github.com/ava-labs/firewood/pull/1940))
+
+### 🧪 Testing
+
+- *(proofs)* Add fuzz-style standalone range proof verification
+- *(proofs)* Add round-trip and FrozenChangeProof serialization tests ([#1922](https://github.com/ava-labs/firewood/pull/1922))
+- *(merkle)* Decouple tests from insert-value-equals-stored-value assumption ([#1942](https://github.com/ava-labs/firewood/pull/1942))
+- Add change proof test infrastructure with bounds and empty tests ([#1932](https://github.com/ava-labs/firewood/pull/1932))
+- Add structural validation and partial proof tests for change proofs ([#1934](https://github.com/ava-labs/firewood/pull/1934))
+- *(proofs)* Add edge case tests for valid proof structures ([#1923](https://github.com/ava-labs/firewood/pull/1923))
+- *(proofs)* Add SeededRng fuzz tests for proof round-trips ([#1924](https://github.com/ava-labs/firewood/pull/1924))
+- *(proofs)* Cover remaining deserialization failure paths ([#1925](https://github.com/ava-labs/firewood/pull/1925))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(ci)* Pedantically check all golang errors ([#1820](https://github.com/ava-labs/firewood/pull/1820))
+- *(ci)* Remove metrics check ([#1838](https://github.com/ava-labs/firewood/pull/1838))
+- *(deps)* Bump the github-actions group with 4 updates ([#1871](https://github.com/ava-labs/firewood/pull/1871))
+- Bump MSRV from 1.91.0 to 1.94.0 ([#1885](https://github.com/ava-labs/firewood/pull/1885))
+- Use RAID0 in reexecution tests ([#1884](https://github.com/ava-labs/firewood/pull/1884))
+- *(ci)* Avoid running benchmarks on normal nextest ([#1903](https://github.com/ava-labs/firewood/pull/1903))
+- Update go linter rules ([#1927](https://github.com/ava-labs/firewood/pull/1927))
+- *(deps)* Bump the github-actions group with 3 updates ([#1936](https://github.com/ava-labs/firewood/pull/1936))
+- *(storage)* Fix 'occured' -> 'occurred' in io_uring.rs doc comment ([#1937](https://github.com/ava-labs/firewood/pull/1937))
+- *(deps)* Bump devcontainers/ci from 0.3.1900000417 to 0.3.1900000449 in the github-actions group ([#1945](https://github.com/ava-labs/firewood/pull/1945))
+
 ## [0.3.1] - 2026-03-20
 
 ### 🚀 Features

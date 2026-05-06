@@ -308,3 +308,41 @@ fn roundtrip_range_proof(proof: &FrozenRangeProof) -> FrozenRangeProof {
     assert_eq!(proof, &deserialized);
     deserialized
 }
+
+/// Truncated exclusion proof must be rejected. If the terminal proof node
+/// is an ancestor of the proven key and has a child at the next nibble,
+/// the proof is incomplete — it must include that child to demonstrate
+/// the key's absence.
+#[test]
+fn truncated_exclusion_proof_rejected() {
+    // \x10 and \x20 exist. \x15 does not.
+    let merkle = init_merkle([(b"\x10" as &[u8], b"a"), (b"\x20", b"b")]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    // Full exclusion proof for \x15 — proves it doesn't exist.
+    let full_proof = merkle.prove(b"\x15").unwrap();
+    assert!(
+        full_proof
+            .value_digest(b"\x15", &root_hash)
+            .unwrap()
+            .is_none(),
+        "full proof should be a valid exclusion proof"
+    );
+
+    // Truncate: remove the terminal node.
+    let mut nodes: Vec<crate::ProofNode> = full_proof.as_ref().to_vec();
+    assert!(
+        nodes.len() >= 2,
+        "proof must have at least 2 nodes to truncate"
+    );
+    nodes.pop();
+    let truncated = crate::Proof::new(nodes.into_boxed_slice());
+
+    // The truncated proof must be rejected — the remaining terminal node
+    // has a child toward \x15 but the proof doesn't include it.
+    let result = truncated.value_digest(b"\x15", &root_hash);
+    assert!(
+        matches!(result, Err(crate::ProofError::ExclusionProofMissingChild)),
+        "truncated exclusion proof should be rejected with ExclusionProofMissingChild, got {result:?}"
+    );
+}
