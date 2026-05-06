@@ -54,7 +54,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
         false,
         false,                         // don't create if missing
         CacheReadStrategy::WritesOnly, // we scan the database once - no need to cache anything
-        firewood_storage::HashVerification::default(),
+        opts.database.hash_verification(),
         opts.database.node_hash_algorithm.into(),
     )?;
     let storage = Arc::new(fb);

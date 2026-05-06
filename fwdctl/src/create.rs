@@ -48,6 +48,7 @@ pub struct Options {
 pub(super) fn new(opts: &Options) -> DbConfig {
     DbConfig::builder()
         .node_hash_algorithm(opts.database.node_hash_algorithm.into())
+        .hash_verification(opts.database.hash_verification())
         .truncate(opts.truncate)
         .build()
 }

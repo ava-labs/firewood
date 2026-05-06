@@ -17,6 +17,7 @@ pub struct Options {
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     let cfg = DbConfig::builder()
         .node_hash_algorithm(opts.database.node_hash_algorithm.into())
+        .hash_verification(opts.database.hash_verification())
         .create_if_missing(false)
         .truncate(false);
 
