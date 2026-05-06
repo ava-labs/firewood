@@ -219,7 +219,7 @@ impl WritableStorage for FileBacked {
         let mut guard = self.cache.lock();
         for maybe_persisted_node in nodes {
             // Since we know the node is in Allocated state, we can get both address and shared node
-            let (addr, shared_node) = maybe_persisted_node
+            let (addr, shared_node, _area_index) = maybe_persisted_node
                 .allocated_info()
                 .expect("node should be allocated");
 
