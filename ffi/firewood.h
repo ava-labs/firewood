@@ -1328,6 +1328,31 @@ typedef struct DatabaseHandleArgs {
    * Note: `revisions` must be > `deferred_persistence_commit_count`.
    */
   uint64_t deferred_persistence_commit_count;
+  /**
+   * Bitmask selecting which read paths are hash-verified.
+   *
+   * A value of `0` means "use defaults" (only the rootstore root is
+   * verified — matches historical behavior). Any nonzero value is a
+   * literal bitmask of the bits below; bits not set are off:
+   *
+   * - bit 0 (`0x01`): verify the root reached via the rootstore
+   * - bit 1 (`0x02`): verify the root of a recent (in-memory) revision at open
+   * - bit 2 (`0x04`): verify branch nodes on read
+   * - bit 3 (`0x08`): verify leaf nodes on read
+   *
+   * Treating `0` as "defaults" lets existing zero-initialized C callers
+   * keep the historical behavior.
+   */
+  uint8_t hash_verification;
+  /**
+   * What to do when a hash verification fails.
+   *
+   * - `0`: return an error from the read (default; only safe choice for production)
+   * - `1`: log the failure and return the unverified node (diagnostic use only)
+   *
+   * Any other value is rejected.
+   */
+  uint8_t hash_failure_mode;
 } DatabaseHandleArgs;
 
 /**

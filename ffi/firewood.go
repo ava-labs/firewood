@@ -136,6 +136,11 @@ type config struct {
 	// revisions that can exist at a given time.
 	// Note: revisions must be > deferredPersistenceCommitCount
 	deferredPersistenceCommitCount uint64
+	// hashVerification is a bitmask selecting which read paths are hash-verified.
+	// Zero means "use defaults" (the rootstore root is verified, others off).
+	hashVerification HashVerification
+	// hashFailureMode determines what happens when a hash check fails.
+	hashFailureMode HashFailureMode
 }
 
 func defaultConfig() *config {
@@ -226,6 +231,68 @@ func WithDeferredPersistenceCommitCount(commitCount uint64) Option {
 	}
 }
 
+// HashVerification is a bitmask selecting which read paths are hash-verified.
+// Combine values with bitwise OR. The zero value tells the underlying library
+// to use its default (only the rootstore root is verified — matches historical
+// behavior).
+type HashVerification uint8
+
+const (
+	// VerifyRootFromRootstore verifies the root reached via the rootstore.
+	// On by default if any flag is explicitly set; otherwise inherits the
+	// historical default (also on).
+	VerifyRootFromRootstore HashVerification = 1 << iota
+	// VerifyRootRecent verifies the root of a recent (in-memory) revision
+	// when it is loaded at open time.
+	VerifyRootRecent
+	// VerifyBranches verifies branch nodes on each read.
+	// This is the most expensive option — it nearly doubles read latency
+	// because it fires on every hop down the trie. Recommended only for
+	// investigation, not steady-state production.
+	VerifyBranches
+	// VerifyLeaves verifies leaf nodes on read. Cheap (~10% overhead) and
+	// catches the bulk of corruption.
+	VerifyLeaves
+)
+
+// VerifyRecommended is the recommended operator policy: leaf verification
+// plus both root checks. Cheap and catches the common corruption cases.
+const VerifyRecommended = VerifyRootFromRootstore | VerifyRootRecent | VerifyLeaves
+
+// VerifyAll enables every check, including the expensive `VerifyBranches`.
+// Useful for fuzz tests and corruption investigations.
+const VerifyAll = VerifyRootFromRootstore | VerifyRootRecent | VerifyBranches | VerifyLeaves
+
+// HashFailureMode controls the response to a failed hash verification.
+type HashFailureMode uint8
+
+const (
+	// HashFailureError returns an error from the read on mismatch. The only
+	// safe choice for production.
+	HashFailureError HashFailureMode = iota
+	// HashFailureLogAndContinue logs the mismatch and returns the unverified
+	// node. For diagnostic walks of known-broken databases.
+	HashFailureLogAndContinue
+)
+
+// WithHashVerification configures which node reads are hash-verified.
+// Default: only the rootstore root is verified (historical behavior).
+//
+// See [VerifyRecommended] for the suggested operator setting.
+func WithHashVerification(v HashVerification) Option {
+	return func(c *config) {
+		c.hashVerification = v
+	}
+}
+
+// WithHashFailureMode configures the response to a failed hash verification.
+// Default: [HashFailureError].
+func WithHashFailureMode(m HashFailureMode) Option {
+	return func(c *config) {
+		c.hashFailureMode = m
+	}
+}
+
 // A CacheStrategy represents the caching strategy used by a [Database].
 type CacheStrategy uint8
 
@@ -293,6 +360,8 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 		expensive_metrics:                 C.bool(conf.expensiveMetricsEnabled),
 		node_hash_algorithm:               C.enum_NodeHashAlgorithm(nodeHashAlgorithm),
 		deferred_persistence_commit_count: C.uint64_t(conf.deferredPersistenceCommitCount),
+		hash_verification:                 C.uint8_t(conf.hashVerification),
+		hash_failure_mode:                 C.uint8_t(conf.hashFailureMode),
 	}
 
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))
