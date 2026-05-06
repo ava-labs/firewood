@@ -38,10 +38,15 @@ Partially implemented.
   presets, `WithHashVerification(...)` and `WithHashFailureMode(...)`
   options.
 
+**Landed in fwdctl:** `--verify-root-recent`, `--verify-branches`,
+`--verify-leaves`, `--verify-all`, and `--verify-on-failure=<error|continue>`
+on the shared `DatabasePath` argument set, wired into every
+`DbConfig`-using subcommand and into `check`'s direct `FileBacked::new`.
+`--verify-root-rootstore` deliberately omitted because fwdctl never
+enables the rootstore.
+
 **Still pending:**
 
-- fwdctl: `--verify-*` and `--verify-on-failure` CLI flags (separate
-  commit)
 - Cache-hit re-verification fix: `read_node_verified` currently hashes
   cache hits the same as disk reads. Defaults are unaffected
   (`WritesOnly` doesn't populate the read cache) but operators using
