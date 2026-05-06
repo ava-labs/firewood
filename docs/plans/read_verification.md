@@ -2,7 +2,7 @@
 
 ## Status
 
-Partially implemented (2026-05-06).
+Partially implemented.
 
 **Landed in core (Rust):**
 
@@ -23,13 +23,30 @@ Partially implemented (2026-05-06).
   (flipped byte → `FileIoError`), log-and-continue (corrupt data
   returned)
 
+**Landed in benchmark:** `firewood/benches/read_verify.rs` covering
+`default`, `leaves`, `branches`, `branches+leaves`, `all`, and
+`recommended` configs. Numbers in the "Measured" section below.
+
+**Landed in FFI / Go:**
+
+- `DatabaseHandleArgs.hash_verification: u8` (bitmask, 0 = use defaults)
+  and `hash_failure_mode: u8` in `ffi/src/handle.rs`; cbindgen
+  regenerated `firewood.h`.
+- Go: `HashVerification` / `HashFailureMode` types,
+  `VerifyRootFromRootstore` / `VerifyRootRecent` / `VerifyBranches` /
+  `VerifyLeaves` constants, `VerifyRecommended` and `VerifyAll`
+  presets, `WithHashVerification(...)` and `WithHashFailureMode(...)`
+  options.
+
 **Still pending:**
 
-- Criterion benchmark per flag combination (separate commit)
-- FFI: `DatabaseHandleArgs` packed-byte field + Go `WithHashVerification`
-  / `WithHashFailureMode` options (separate commit)
 - fwdctl: `--verify-*` and `--verify-on-failure` CLI flags (separate
   commit)
+- Cache-hit re-verification fix: `read_node_verified` currently hashes
+  cache hits the same as disk reads. Defaults are unaffected
+  (`WritesOnly` doesn't populate the read cache) but operators using
+  `BranchReads` or `All` would re-verify every cached node, defeating
+  the cache. Tracked but not blocking.
 
 ## Motivation
 
