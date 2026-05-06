@@ -31,13 +31,13 @@ type handle[T any] struct {
 	free func(T) C.VoidResult
 }
 
-func createHandle[T any](ptr T, wg *sync.WaitGroup, free func(T) C.VoidResult) *handle[T] {
+func createHandle[T any](ptr T, db *Database, free func(T) C.VoidResult) *handle[T] {
 	h := &handle[T]{
 		ptr:     ptr,
 		free:    free,
 		dropped: false,
 	}
-	h.keepAliveHandle.init(wg)
+	h.keepAliveHandle.init(db)
 	return h
 }
 
@@ -74,13 +74,24 @@ func (h *handle[T]) Drop() error {
 type databaseKeepAliveHandle struct {
 	mu sync.RWMutex
 	// [Database.Close] blocks on this WaitGroup, which is set and incremented
-	// by [newKeepAliveHandle], and decremented by
+	// by [databaseKeepAliveHandle.init], and decremented by
 	// [databaseKeepAliveHandle.disown].
 	outstandingHandles *sync.WaitGroup
+	// db is set in tandem with outstandingHandles and is used by [disown]
+	// to deregister this handle from the database's live-handle registry.
+	// It is nil after disown decrements the WaitGroup.
+	db *Database
 }
 
 // init initializes the keep-alive handle to track a new outstanding handle.
-func (h *databaseKeepAliveHandle) init(wg *sync.WaitGroup) {
+//
+// The caller must register a drop callback via [Database.registerLiveHandle]
+// before releasing whatever lock prevents [Database.Close] from racing with
+// the construction. In practice that means registering before the constructor
+// returns, while still under [Database.handleLock] (RLock) — or, for handles
+// derived from another (e.g. an Iterator created from a Revision), while
+// still under the parent handle's keep-alive mu.RLock.
+func (h *databaseKeepAliveHandle) init(db *Database) {
 	// lock not necessary today, but will be necessary in the future for types
 	// that initialize the handle at some point after construction (#1429).
 	h.mu.Lock()
@@ -92,7 +103,8 @@ func (h *databaseKeepAliveHandle) init(wg *sync.WaitGroup) {
 		panic("keep-alive handle already initialized")
 	}
 
-	h.outstandingHandles = wg
+	h.outstandingHandles = &db.outstandingHandles
+	h.db = db
 	h.outstandingHandles.Add(1)
 }
 
@@ -114,7 +126,27 @@ func (h *databaseKeepAliveHandle) disown(disownEvenOnErr bool, attemptDisown fun
 		// prevent calling `Done` multiple times if disown is called again, which
 		// may happen when the finalizer runs after an explicit call to Drop or Commit.
 		h.outstandingHandles = nil
+		if h.db != nil {
+			h.db.unregisterLiveHandle(h)
+			h.db = nil
+		}
 	}
 
 	return err
+}
+
+// disownLocked performs the same accounting as [disown] but assumes the caller
+// already holds h.mu (write-locked). This exists for callers like
+// [Reconstructed.Reconstruct] that hold mu.Lock for a wider critical section
+// and would otherwise deadlock.
+func (h *databaseKeepAliveHandle) disownLocked() {
+	if h.outstandingHandles == nil {
+		return
+	}
+	h.outstandingHandles.Done()
+	h.outstandingHandles = nil
+	if h.db != nil {
+		h.db.unregisterLiveHandle(h)
+		h.db = nil
+	}
 }

@@ -227,10 +227,14 @@ func (db *Database) VerifyRangeProof(
 		return err
 	}
 
-	// keep the database alive while the proof owns the embedded proposal
-	// TODO: use runtime.AddCleanup and shared handle[T] infrastructure
-	// instead of SetFinalizer, for consistency with Proposal and Revision.
-	proof.keepAliveHandle.init(&db.outstandingHandles)
+	// keep the database alive while the proof owns the embedded proposal.
+	// Proofs are intentionally NOT entered into Database.liveHandles: a
+	// bound `proof.Free` would keep `proof` reachable via the registry and
+	// prevent the GC finalizer from ever running. They still increment the
+	// WaitGroup, so graceful Close waits on them; WithForceCloseHandles will
+	// not auto-drop a still-referenced RangeProof. The change-proof family
+	// is being redesigned, so a handle[T] migration here is deferred.
+	proof.keepAliveHandle.init(db)
 	runtime.SetFinalizer(proof, (*RangeProof).Free)
 	return nil
 }
@@ -465,10 +469,10 @@ func (db *Database) ProposeChangeProof(
 		return nil, err
 	}
 
-	// keep the database alive while the proof owns the embedded proposal
-	// TODO: use runtime.AddCleanup and shared handle[T] infrastructure
-	// instead of SetFinalizer, for consistency with Proposal and Revision.
-	proposed.keepAliveHandle.init(&db.outstandingHandles)
+	// keep the database alive while the proof owns the embedded proposal.
+	// See note on RangeProof above re: live-handle registry exclusion and
+	// the deferred handle[T] migration (change-proof redesign in flight).
+	proposed.keepAliveHandle.init(db)
 	runtime.SetFinalizer(proposed, (*ProposedChangeProof).Free)
 	return proposed, nil
 }

@@ -16,6 +16,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"unsafe"
 )
 
@@ -27,18 +28,19 @@ import (
 //
 // An Iterator holds a reference to the underlying view, so it can safely outlive the
 // Revision or Proposal it was created from. The underlying state will not be released
-// until the Iterator is released.
+// until the Iterator is released. The Iterator additionally keeps the [Database]
+// alive: [Database.Close] will block on outstanding iterators (or, with
+// [WithForceCloseHandles], drop them).
 //
 // Iterator supports two modes of accessing key-value pairs. [Iterator.Next] copies
 // the key and value into Go-managed memory. [Iterator.NextBorrowed] returns slices
 // that borrow Rust-owned memory, which is faster but the slices are only valid until
 // the next call to Next, NextBorrowed, or [Iterator.Drop].
 type Iterator struct {
-	// handle is an opaque pointer to the iterator within Firewood. It should be
-	// passed to the C FFI functions that operate on iterators
-	//
-	// It is not safe to call these methods with a nil handle.
-	handle *C.IteratorHandle
+	// handle wraps the Rust iterator pointer along with a keep-alive handle on
+	// the parent database. Calls to fwd_free_iterator (via handle.Drop) will
+	// invalidate the pointer.
+	*handle[*C.IteratorHandle]
 
 	// batchSize is the number of items that are loaded at once
 	// to reduce ffi call overheads
@@ -81,14 +83,14 @@ func (it *Iterator) nextInternal() error {
 		return e
 	}
 	if it.batchSize <= 1 {
-		kv, e := getKeyValueFromResult(C.fwd_iter_next(it.handle))
+		kv, e := getKeyValueFromResult(C.fwd_iter_next(it.ptr))
 		if e != nil {
 			return e
 		}
 		it.currentPair = kv
 		it.currentResource = kv
 	} else {
-		batch, e := getKeyValueBatchFromResult(C.fwd_iter_next_n(it.handle, C.size_t(it.batchSize)))
+		batch, e := getKeyValueBatchFromResult(C.fwd_iter_next_n(it.ptr, C.size_t(it.batchSize)))
 		if e != nil {
 			return e
 		}
@@ -122,6 +124,12 @@ func (it *Iterator) SetBatchSize(batchSize int) {
 // [Iterator.Err] after iteration completes to distinguish between the two.
 // It is safe to call Next after it returns false; it will continue to return false.
 func (it *Iterator) Next() bool {
+	it.keepAliveHandle.mu.RLock()
+	defer it.keepAliveHandle.mu.RUnlock()
+	if it.dropped {
+		it.err = errDroppedIterator
+		return false
+	}
 	it.err = it.nextInternal()
 	if it.currentPair == nil || it.err != nil {
 		return false
@@ -141,6 +149,12 @@ func (it *Iterator) Next() bool {
 //
 // It returns false when the iterator is exhausted or an error occurs, same as Next.
 func (it *Iterator) NextBorrowed() bool {
+	it.keepAliveHandle.mu.RLock()
+	defer it.keepAliveHandle.mu.RUnlock()
+	if it.dropped {
+		it.err = errDroppedIterator
+		return false
+	}
 	it.err = it.nextInternal()
 	if it.currentPair == nil || it.err != nil {
 		return false
@@ -188,30 +202,46 @@ func (it *Iterator) Err() error {
 //
 // It is safe to call Drop multiple times; subsequent calls after the first are no-ops.
 func (it *Iterator) Drop() error {
-	err := it.freeCurrentAllocation()
-	if it.handle != nil {
+	return it.keepAliveHandle.disown(true /* evenOnError */, func() error {
+		err := it.freeCurrentAllocation()
+		if it.dropped {
+			return err
+		}
 		// Always free the iterator even if releasing the current KV/batch failed.
 		// The iterator holds a NodeStore ref that must be released.
-		err = errors.Join(
-			err,
-			getErrorFromVoidResult(C.fwd_free_iterator(it.handle)))
-		// prevent use-after-free/double-free
-		it.handle = nil
-	}
-	return err
+		if e := getErrorFromVoidResult(it.free(it.ptr)); e != nil {
+			err = errors.Join(err, fmt.Errorf("%w: %w", errFreeingValue, e))
+		}
+		var zero *C.IteratorHandle
+		it.ptr = zero
+		it.dropped = true
+		return err
+	})
 }
 
+var errDroppedIterator = errors.New("iterator already dropped")
+
 // getIteratorFromIteratorResult converts a C.IteratorResult to an Iterator or error.
-func getIteratorFromIteratorResult(result C.IteratorResult) (*Iterator, error) {
+func getIteratorFromIteratorResult(result C.IteratorResult, db *Database) (*Iterator, error) {
 	switch result.tag {
 	case C.IteratorResult_NullHandlePointer:
 		return nil, errDBClosed
 	case C.IteratorResult_Ok:
 		body := (*C.IteratorResult_Ok_Body)(unsafe.Pointer(&result.anon0))
-		proposal := &Iterator{
-			handle: body.handle,
+		it := &Iterator{
+			handle: createHandle(body.handle, db, func(h *C.IteratorHandle) C.VoidResult {
+				return C.fwd_free_iterator(h)
+			}),
 		}
-		return proposal, nil
+		db.registerLiveHandle(&it.keepAliveHandle, it.Drop)
+		// Use the embedded *handle as the cleanup arg (it must be a distinct
+		// pointer from the cleanup target). This means a finalizer-driven
+		// cleanup will skip [freeCurrentAllocation] — which only matters if
+		// the iterator is GC'd mid-iteration without an explicit Drop, in
+		// which case the borrowed batch is leaked. Explicit Drop and
+		// force-close both run the full Iterator.Drop and clean up properly.
+		runtime.AddCleanup(it, drop[*C.IteratorHandle], it.handle)
+		return it, nil
 	case C.IteratorResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 		return nil, err
