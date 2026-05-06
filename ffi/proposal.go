@@ -160,6 +160,9 @@ func (p *Proposal) Commit() error {
 // proposal's parent is no longer the latest revision. Returns the root hash
 // of the committed revision.
 //
+// Only this proposal is rebased. Child proposals created via [Proposal.Propose]
+// are not automatically reparented after a rebase and should not be used.
+//
 // This is safe to call only once; subsequent calls will return an error.
 //
 // During this function, the latest state of the database is locked, so other

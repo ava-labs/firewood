@@ -551,6 +551,16 @@ impl PartialEq for NodeStoreParent {
 
 impl Eq for NodeStoreParent {}
 
+/// The root hash of a proposal's committed parent, or an indication that
+/// the parent is another proposal (not yet committed).
+#[derive(Debug, Clone)]
+pub enum CommittedParentHash {
+    /// Parent is committed with this root hash (`None` for an empty trie).
+    Hash(Option<TrieHash>),
+    /// Parent is another proposal, not yet committed.
+    NotCommitted,
+}
+
 #[derive(Debug)]
 /// Contains state for a proposed revision of the trie.
 pub struct ImmutableProposal {
@@ -572,12 +582,12 @@ impl ImmutableProposal {
         }
     }
 
-    /// Returns the root hash of this proposal's parent, if the parent is committed.
-    /// Returns `None` if the parent is another proposal (not yet committed).
-    fn parent_root_hash(&self) -> Option<TrieHash> {
+    /// Returns the committed parent's root hash, or indicates the parent
+    /// is another proposal.
+    fn committed_parent_hash(&self) -> CommittedParentHash {
         match &*self.parent.lock() {
-            NodeStoreParent::Committed(root_hash) => root_hash.clone(),
-            NodeStoreParent::Proposed(_) => None,
+            NodeStoreParent::Committed(root_hash) => CommittedParentHash::Hash(root_hash.clone()),
+            NodeStoreParent::Proposed(_) => CommittedParentHash::NotCommitted,
         }
     }
 
@@ -815,11 +825,11 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         self.kind.parent_hash_is(hash)
     }
 
-    /// Returns the root hash of this proposal's parent, if the parent is committed.
-    /// Returns `None` if the parent is another proposal (not yet committed).
+    /// Returns the committed parent's root hash, or indicates the parent
+    /// is another proposal.
     #[must_use]
-    pub fn parent_root_hash(&self) -> Option<TrieHash> {
-        self.kind.parent_root_hash()
+    pub fn committed_parent_hash(&self) -> CommittedParentHash {
+        self.kind.committed_parent_hash()
     }
 }
 

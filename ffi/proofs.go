@@ -394,10 +394,10 @@ func (db *Database) ChangeProof(
 }
 
 // VerifyChangeProof verifies the change proof and creates a standard Proposal.
-// The proof is not consumed — it can still be used for FindNextKey or serialization.
+// The proof is not consumed — it can still be used for [ChangeProof.FindNextKey] or serialization.
 func (db *Database) VerifyChangeProof(
 	proof *ChangeProof,
-	startRoot, endRoot Hash,
+	endRoot Hash,
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
 ) (*Proposal, error) {
@@ -411,7 +411,6 @@ func (db *Database) VerifyChangeProof(
 	defer pinner.Unpin()
 
 	args := C.CreateChangeProofArgs{
-		start_root: newCHashKey(startRoot),
 		end_root:   newCHashKey(endRoot),
 		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
 		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
@@ -427,10 +426,10 @@ func (db *Database) VerifyChangeProof(
 
 // VerifyAndCommitChangeProof verifies the change proof and commits it in a
 // single call. The proof is not consumed — it remains available for
-// FindNextKey or serialization afterward.
+// [ChangeProof.FindNextKey] or serialization afterward.
 func (db *Database) VerifyAndCommitChangeProof(
 	proof *ChangeProof,
-	startRoot, endRoot Hash,
+	endRoot Hash,
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
 ) (Hash, error) {
@@ -444,7 +443,6 @@ func (db *Database) VerifyAndCommitChangeProof(
 	defer pinner.Unpin()
 
 	args := C.CreateChangeProofArgs{
-		start_root: newCHashKey(startRoot),
 		end_root:   newCHashKey(endRoot),
 		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
 		end_key:    newMaybeBorrowedBytes(endKey, &pinner),

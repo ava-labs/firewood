@@ -22,9 +22,9 @@ use crate::verify_change_proof_structure;
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_metrics::{firewood_counter, firewood_histogram};
 use firewood_storage::{
-    CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage, Reconstructed,
-    ReconstructionSource, TrieReader,
+    CheckOpt, CheckerReport, Committed, CommittedParentHash, FileBacked, FileIoError,
+    HashedNodeReader, ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage,
+    Reconstructed, ReconstructionSource, TrieReader,
 };
 use std::io::Write;
 use std::num::NonZeroUsize;
@@ -307,8 +307,13 @@ impl Db {
     ///
     /// Performs all three verification phases:
     /// 1. Structural validation (key ordering, range bounds, boundary proofs)
-    /// 2. Apply batch ops to the `start_root` revision to create a proposal
+    /// 2. Apply batch ops to the latest revision to create a proposal
     /// 3. Root hash verification against `end_root`
+    ///
+    /// The batch ops are applied to the latest revision rather than
+    /// `start_root` because each truncated change proof covers a
+    /// non-overlapping key range. This avoids requiring `start_root` to
+    /// still be available and reduces rebasing in `commit_with_rebase`.
     ///
     /// The proof is borrowed, not consumed — the caller retains it for
     /// `find_next_key` or serialization. Returns a standard `Proposal`
@@ -316,7 +321,6 @@ impl Db {
     pub fn verify_change_proof(
         &self,
         proof: &FrozenChangeProof,
-        start_root: HashKey,
         end_root: HashKey,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
@@ -324,7 +328,7 @@ impl Db {
     ) -> Result<Proposal<'_>, api::Error> {
         let verification =
             verify_change_proof_structure(proof, end_root.clone(), start_key, end_key, max_length)?;
-        let parent = self.manager.revision(start_root)?;
+        let parent = self.manager.current_revision();
         let proposal = self.apply_change_proof_to_parent(proof, &*parent)?;
         verify_change_proof_root_hash(proof, &verification, &proposal)?;
         Ok(proposal)
@@ -527,11 +531,19 @@ impl Proposal<'_> {
 
         if !nodestore.parent_hash_is(current.root_hash()) {
             // Parent is stale — rebase onto the current revision.
-            let parent_hash = nodestore
-                .parent_root_hash()
-                .ok_or(api::Error::ParentNotCommitted)?;
-
-            let old_parent = db.manager.revision(parent_hash)?;
+            let old_parent = match nodestore.committed_parent_hash() {
+                CommittedParentHash::NotCommitted => {
+                    return Err(api::Error::ParentNotCommitted);
+                }
+                CommittedParentHash::Hash(Some(hash)) => db.manager.revision(hash)?,
+                CommittedParentHash::Hash(None) => {
+                    // Empty trie parent — use the initial empty revision.
+                    revisions_guard
+                        .front()
+                        .expect("always one revision")
+                        .clone()
+                }
+            };
             db.manager.remove_proposal(&nodestore);
 
             let diff = DiffMerkleNodeStream::new(&*old_parent, &*nodestore, Box::default())?;

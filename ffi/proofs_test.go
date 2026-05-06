@@ -137,7 +137,7 @@ func newVerifiedChangeProof(
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(changeProof.Free()) })
 
-	proposal, err := dbB.VerifyChangeProof(changeProof, rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	proposal, err := dbB.VerifyChangeProof(changeProof, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
 
 	return proposal, rootAUpdated
@@ -543,7 +543,7 @@ func TestVerifyChangeProof(t *testing.T) {
 	t.Cleanup(func() { r.NoError(changeProof.Free()) })
 
 	// Verify the change proof and create a proposal on dbB.
-	proposal, err := dbB.VerifyChangeProof(changeProof, rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	proposal, err := dbB.VerifyChangeProof(changeProof, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(proposal.Drop()) })
 }
@@ -582,7 +582,7 @@ func TestVerifyEmptyChangeProofRange(t *testing.T) {
 	t.Cleanup(func() { r.NoError(changeProof.Free()) })
 
 	// Verify the change proof and create an empty proposal on dbB.
-	proposal, err := dbB.VerifyChangeProof(changeProof, rootB, rootAUpdated, startKey, endKey, 5)
+	proposal, err := dbB.VerifyChangeProof(changeProof, rootAUpdated, startKey, endKey, 5)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(proposal.Drop()) })
 }
@@ -609,7 +609,7 @@ func TestVerifyAndCommitChangeProof(t *testing.T) {
 	t.Cleanup(func() { r.NoError(changeProof.Free()) })
 
 	// Verify the change proof and create a proposal on dbB.
-	proposal, err := dbB.VerifyChangeProof(changeProof, root, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	proposal, err := dbB.VerifyChangeProof(changeProof, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
 
 	// Commit the proposal on dbB.
@@ -635,7 +635,7 @@ func TestChangeProofFindNextKey(t *testing.T) {
 	rootA, err := dbA.Update(batch[:5000])
 	r.NoError(err)
 
-	rootB, err := dbB.Update(batch[:5000])
+	_, err = dbB.Update(batch[:5000])
 	r.NoError(err)
 
 	// Insert the rest in the second batch
@@ -647,7 +647,7 @@ func TestChangeProofFindNextKey(t *testing.T) {
 	t.Cleanup(func() { r.NoError(proof.Free()) })
 
 	// Verify the change proof and create a proposal on dbB.
-	proposal, err := dbB.VerifyChangeProof(proof, rootB, rootAUpdated, nothing(), nothing(), changeProofLenTruncated)
+	proposal, err := dbB.VerifyChangeProof(proof, rootAUpdated, nothing(), nothing(), changeProofLenTruncated)
 	r.NoError(err)
 
 	// FindNextKey is on the proof, not the proposal.
@@ -770,7 +770,7 @@ func TestMultiRoundChangeProof(t *testing.T) {
 				t.Cleanup(func() { r.NoError(proof.Free()) })
 
 				// Verify the proof and create a proposal on dbB.
-				proposal, err := dbB.VerifyChangeProof(proof, rootB, rootAUpdated, startKey, nothing(), changeProofLenTruncated)
+				proposal, err := dbB.VerifyChangeProof(proof, rootAUpdated, startKey, nothing(), changeProofLenTruncated)
 				r.NoError(err)
 
 				// Commit the proposal.
@@ -818,7 +818,7 @@ func TestChangeProofMarshalWorksAfterVerify(t *testing.T) {
 	_, _, batch := kvForTest(10)
 	rootA, err := dbA.Update(batch[:5])
 	r.NoError(err)
-	rootB, err := dbB.Update(batch[:5])
+	_, err = dbB.Update(batch[:5])
 	r.NoError(err)
 
 	// Insert more data into dbA.
@@ -836,7 +836,7 @@ func TestChangeProofMarshalWorksAfterVerify(t *testing.T) {
 	r.NotEmpty(marshalledBefore)
 
 	// Verify the change proof.
-	proposal, err := dbB.VerifyChangeProof(changeProof, rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	proposal, err := dbB.VerifyChangeProof(changeProof, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(proposal.Drop()) })
 

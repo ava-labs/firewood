@@ -72,7 +72,7 @@ impl ChangeProofContext {
         self.proof.as_ref()
     }
 
-    /// Returns the next key range to fetch for truncated change proofs,
+    /// Returns the next key range to fetch for a change proof,
     /// or `None` if there are no more keys to fetch.
     ///
     /// Only inspects the proof structure — does not require a proposal.
@@ -84,17 +84,21 @@ impl ChangeProofContext {
         };
 
         let Some(last_op) = proof.batch_ops().last() else {
-            return Ok(None);
+            // No changes in this range. If bounded, continue from end_key.
+            return Ok(end_key.map(|ek| (Box::from(ek), None)));
         };
 
         if proof.end_proof().is_empty() {
             return Ok(None);
         }
 
-        if let Some(end_key) = end_key
-            && **last_op.key() >= *end_key
-        {
-            return Ok(None);
+        if let Some(end_key) = end_key {
+            if **last_op.key() > *end_key {
+                return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
+            }
+            if **last_op.key() == *end_key {
+                return Ok(None);
+            }
         }
 
         Ok(Some((last_op.key().clone(), end_key.map(Box::from))))
@@ -264,7 +268,6 @@ pub extern "C" fn fwd_db_verify_change_proof<'db>(
             .ok_or(api::Error::ProofError(ProofError::ProofIsNone))?;
         db.verify_change_proof(
             proof,
-            args.start_root.into(),
             args.end_root.into(),
             args.start_key.into_option().as_deref(),
             args.end_key.into_option().as_deref(),
@@ -301,7 +304,6 @@ pub extern "C" fn fwd_db_verify_and_commit_change_proof(
             .ok_or(api::Error::ProofError(ProofError::ProofIsNone))?;
         let proposal = db.verify_change_proof(
             proof,
-            args.start_root.into(),
             args.end_root.into(),
             args.start_key.into_option().as_deref(),
             args.end_key.into_option().as_deref(),

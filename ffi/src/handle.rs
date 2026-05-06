@@ -288,18 +288,17 @@ impl DatabaseHandle {
 
     /// Verify a change proof and create a proposal from it.
     ///
-    /// Performs structural validation, applies batch ops to the `start_root`
-    /// revision, and verifies the root hash against `end_root`. The proof is
-    /// borrowed, not consumed.
+    /// Performs structural validation, applies batch ops to the latest
+    /// revision, and verifies the root hash against `end_root`. The proof
+    /// is borrowed, not consumed.
     ///
     /// # Errors
     ///
-    /// Returns an error if structural validation fails, the start revision
-    /// is not found, or the root hash doesn't match `end_root`.
+    /// Returns an error if structural validation fails or the root hash
+    /// doesn't match `end_root`.
     pub fn verify_change_proof(
         &self,
         proof: &FrozenChangeProof,
-        start_root: HashKey,
         end_root: HashKey,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
@@ -307,7 +306,7 @@ impl DatabaseHandle {
     ) -> Result<CreateProposalResult<'_>, api::Error> {
         CreateProposalResult::new(self, || {
             self.db
-                .verify_change_proof(proof, start_root, end_root, start_key, end_key, max_length)
+                .verify_change_proof(proof, end_root, start_key, end_key, max_length)
         })
     }
 
