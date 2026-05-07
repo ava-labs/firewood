@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778054527409,
+  "lastUpdate": 1778141025607,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -3148,6 +3148,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 80.68312543561974,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "bernard-avalabs",
+            "username": "bernard-avalabs",
+            "email": "53795885+bernard-avalabs@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "564532753bdeca630a94ccccd719d3e62c97c165",
+          "message": "refactor(ffi): simplify change proof interface with unified Proposal type (#1966)\n\n## Why this should be merged\n\nCloses https://github.com/ava-labs/firewood/issues/1893. The current FFI\nlayer exposes a 3-step state machine (ChangeProofContext →\nVerifiedChangeProofContext → ProposedChangeProofContext) with a\ndedicated ProposedChangeProof Go type that duplicates Proposal. Go\ncallers must manage two different proposal-like types depending on\nwhether the proposal came from Database.Propose() or from change proof\nverification.\n\nThis PR unifies the interface: verification returns a standard Proposal,\nFindNextKey lives on the proof, and CommitWithRebase is a general\nProposal capability.\n\n## How this works\n\n  Core library:\n- Db::verify_change_proof() — composes structural validation, batch op\napplication, and root hash verification into a single call returning a\nstandard Proposal\n- Proposal::commit_with_rebase() — commits a proposal, automatically\nrebasing via DiffMerkleNodeStream if the parent revision is stale. Holds\nthe committed revisions write lock throughout to prevent interleaving.\n\n  FFI layer:\n- fwd_db_verify_change_proof — verifies and returns a ProposalResult\n(same type as fwd_propose_on_db)\n- fwd_db_verify_and_commit_change_proof — convenience function that\nverifies and commits in a single FFI call. The proof is borrowed, not\nconsumed. Ported from the rkuris/cp-restructure-squashed branch and\nadapted to use verify_change_proof + commit_proposal_with_rebase\ninternally.\n- fwd_change_proof_find_next_key — standalone on ChangeProofContext,\ntakes end_key as parameter\n- fwd_commit_proposal_with_rebase — commits with auto-rebase, returns\nHashResult\n\n  Go wrappers:\n  - Database.VerifyChangeProof() → *Proposal\n  - Database.VerifyAndCommitChangeProof() → (Hash, error)    \n  - ChangeProof.FindNextKey(endKey) → *NextKeyRange\n  - Proposal.CommitWithRebase() → (Hash, error)\n\nRemoved: VerifiedChangeProofContext, ProposedChangeProofContext,\nVerificationParams, their FFI functions, Go types (VerifiedChangeProof,\nProposedChangeProof), result enums, and\nDatabaseHandle::apply_change_proof_to_parent (dead code after old flow\nremoved).\n\n  Design doc deviations:\n\n- NextKeyRange.start_key type: Plan calls for Maybe<OwnedBytes>; kept as\nOwnedBytes since find_next_key always returns either a concrete key (the\nlast batch op's key) or None (no more keys to fetch). The \"start of\nkeyspace\" case is handled by returning None, not by a Nothing start key.\n- Removed DatabaseHandle::apply_change_proof_to_parent: Not in the plan,\nbut became dead code after VerifiedChangeProofContext::propose() was\nremoved. DatabaseHandle::verify_change_proof replaces it with full\nverification.\n\n  How this was tested\n\n  - CI\n\n  Breaking Changes\n\n  - firewood-ffi (C api)\n  - firewood-go (Go api)",
+          "timestamp": "2026-05-07T02:49:22Z",
+          "url": "https://github.com/ava-labs/firewood/commit/564532753bdeca630a94ccccd719d3e62c97c165"
+        },
+        "date": 1778141025066,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 164.9365697185034,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6062.936810840048,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 114.30387979710255,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5863.378261038735,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 82.23566641622064,
             "unit": "block_accept_ms/ggas"
           }
         ]
