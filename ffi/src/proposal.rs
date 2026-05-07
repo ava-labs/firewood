@@ -78,6 +78,16 @@ impl ProposalHandle<'_> {
         Ok(hash_key)
     }
 
+    /// Consume and commit a proposal, rebasing if the parent is stale.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the proposal's parent revision cannot be found
+    /// or if the commit fails.
+    pub fn commit_proposal_with_rebase(self) -> Result<Option<HashKey>, api::Error> {
+        self.proposal.commit_with_rebase()
+    }
+
     /// Creates an iterator on the proposal starting from the given key.
     #[must_use]
     #[allow(clippy::missing_panics_doc)]

@@ -75,6 +75,7 @@ pub(super) fn verify_and_check(
 
 // ── Test modules ──────────────────────────────────────────────────────────
 
+mod attack;
 mod bounds;
 mod edge_cases;
 // Empty start trie tests require ethhash: without it, the empty trie has no
