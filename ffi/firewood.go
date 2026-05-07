@@ -110,8 +110,8 @@ type Database struct {
 	handleLock sync.RWMutex
 
 	// keepAlives tracks every outstanding [Proposal], [Revision],
-	// [Reconstructed], [Iterator], [RangeProof], and [ProposedChangeProof]
-	// that is keeping the database alive. It carries both the WaitGroup that
+	// [Reconstructed], [Iterator], and [RangeProof] that is keeping the
+	// database alive. It carries both the WaitGroup that
 	// [Database.Close] waits on and the registry of drop callbacks that
 	// [WithForceCloseHandles] uses to release handles forcibly.
 	keepAlives *keepAliveRegistry
@@ -472,9 +472,9 @@ type closeConfig struct {
 }
 
 // WithForceCloseHandles makes [Database.Close] forcibly drop every outstanding
-// [Proposal], [Revision], [Reconstructed], [Iterator], [RangeProof], and
-// [ProposedChangeProof] before closing the database, instead of waiting for
-// the caller to release them.
+// [Proposal], [Revision], [Reconstructed], [Iterator], and [RangeProof]
+// before closing the database, instead of waiting for the caller to release
+// them.
 //
 // Any errors encountered while dropping individual handles are joined and
 // returned alongside the close error. Methods on a force-dropped handle
@@ -493,9 +493,8 @@ func WithForceCloseHandles() CloseOption {
 // Revisions, Proposals, Reconstructed views, Iterators, and proof handles
 // created from this Database are either unreachable or have been explicitly
 // released via [Proposal.Commit], [Proposal.Drop], [Revision.Drop],
-// [Reconstructed.Drop], [Iterator.Drop], [RangeProof.Free], or
-// [ProposedChangeProof.Free]. Unreachable objects are released by their
-// finalizers before Close returns.
+// [Reconstructed.Drop], [Iterator.Drop], or [RangeProof.Free]. Unreachable
+// objects are released by their finalizers before Close returns.
 //
 // Pass [WithForceCloseHandles] to forcibly drop every outstanding handle
 // instead of waiting for the caller to release them.
