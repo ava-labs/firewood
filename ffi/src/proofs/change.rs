@@ -242,7 +242,7 @@ pub extern "C" fn fwd_db_change_proof(
 
 /// Verify a change proof and create a standard proposal.
 ///
-/// Performs structural validation, applies batch ops to the `start_root`
+/// Performs structural validation, applies batch ops to the latest
 /// revision, and verifies the root hash against `end_root`. The proof is
 /// borrowed, not consumed — the caller retains it for `find_next_key` or
 /// serialization.
