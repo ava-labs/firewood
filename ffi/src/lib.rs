@@ -636,7 +636,8 @@ pub extern "C" fn fwd_reconstruct_on_reconstructed<'db>(
 /// # Returns
 ///
 /// - [`HashResult::NullHandlePointer`] if the provided database handle is null.
-/// - [`HashResult::None`] if the commit resulted in an empty database.
+/// - [`HashResult::None`] if the trie has no root hash (merkledb mode only;
+///   ethhash always returns a root hash, even for an empty trie).
 /// - [`HashResult::Some`] if the commit was successful, containing the new root hash.
 /// - [`HashResult::Err`] if an error occurred while committing the batch.
 ///
@@ -659,6 +660,32 @@ pub extern "C" fn fwd_commit_proposal(proposal: Option<Box<ProposalHandle<'_>>>)
     replay::record_commit(proposal_ptr, &result);
 
     result
+}
+
+/// Commit a proposal, automatically rebasing if the parent revision is no
+/// longer the latest. Consumes the proposal.
+///
+/// # Returns
+///
+/// - [`HashResult::NullHandlePointer`] if the provided proposal handle is null.
+/// - [`HashResult::None`] if the trie has no root hash (merkledb mode only;
+///   ethhash always returns a root hash, even for an empty trie).
+/// - [`HashResult::Some`] if the commit was successful, containing the new root hash.
+/// - [`HashResult::Err`] if an error occurred while committing or rebasing.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `proposal` is a valid pointer to a [`ProposalHandle`]
+/// * ensure that `proposal` is not used again after this function is called.
+/// * call [`fwd_free_owned_bytes`] to free the memory associated with the
+///   returned error ([`HashKey`] does not need to be freed as it is returned
+///   by value).
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_commit_proposal_with_rebase(
+    proposal: Option<Box<ProposalHandle<'_>>>,
+) -> HashResult {
+    invoke_with_handle(proposal, |proposal| proposal.commit_proposal_with_rebase())
 }
 
 /// Consumes the [`ProposalHandle`], cancels the proposal, and frees the memory.
