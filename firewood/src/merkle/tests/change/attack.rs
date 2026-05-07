@@ -479,20 +479,13 @@ fn test_crafted_value_at_odd_nibble_length_rejected() {
 /// should detect the inconsistency.
 #[test]
 fn test_crafted_divergence_at_depth_zero() {
-    let (source, _dir_source) = setup_db![
+    let (source, target, root1_target, _ds, _dt) = setup_source_target![
         (b"\x10", b"v0"),
         (b"\x11", b"v1"),
         (b"\xa0", b"v2"),
         (b"\xa1", b"v3")
     ];
-    let root1_source = source.root_hash().unwrap();
-    let (target, _dir_target) = setup_db![
-        (b"\x10", b"v0"),
-        (b"\x11", b"v1"),
-        (b"\xa0", b"v2"),
-        (b"\xa1", b"v3")
-    ];
-    let root1_target = target.root_hash().unwrap();
+    let root1_source = root1_target.clone();
 
     let changes: Vec<BatchOp<&[u8], &[u8]>> = vec![
         BatchOp::Put {
@@ -571,20 +564,13 @@ fn test_crafted_divergence_at_depth_zero() {
 /// the proof node at [1, 0, 5] should cause rejection.
 #[test]
 fn test_crafted_stripped_divergent_child_rejected() {
-    let (source, _dir_source) = setup_db![
+    let (source, target, root1_target, _ds, _dt) = setup_source_target![
         (b"\x10\x50", b"a"),
         (b"\x10\x58", b"b"),
         (b"\x10\x5f", b"d"),
         (b"\x30\x00", b"c")
     ];
-    let root1_source = source.root_hash().unwrap();
-    let (target, _dir_target) = setup_db![
-        (b"\x10\x50", b"a"),
-        (b"\x10\x58", b"b"),
-        (b"\x10\x5f", b"d"),
-        (b"\x30\x00", b"c")
-    ];
-    let root1_target = target.root_hash().unwrap();
+    let root1_source = root1_target.clone();
 
     source
         .propose(vec![
