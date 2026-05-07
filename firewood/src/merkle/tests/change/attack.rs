@@ -5,21 +5,32 @@
 
 use super::*;
 
+type OwnedBatchOps = Vec<BatchOp<Box<[u8]>, Box<[u8]>>>;
+
+/// Helper: returns true if the (possibly corrupted) proof is rejected by
+/// either the structural check or the root hash check.
+fn is_rejected(
+    db: &Db,
+    proof: &FrozenChangeProof,
+    end_root: api::HashKey,
+    start_key: Option<&[u8]>,
+    end_key: Option<&[u8]>,
+    start_root: api::HashKey,
+) -> bool {
+    match verify_change_proof_structure(proof, end_root, start_key, end_key, None) {
+        Err(_) => true,
+        Ok(ctx) => verify_and_check(db, proof, &ctx, start_root).is_err(),
+    }
+}
+
 #[test]
 fn test_crafted_omitted_change_detected() {
-    let (source, _dir_source) = setup_db![
+    let (source, target, root1_target, _ds, _dt) = setup_source_target![
         (b"\x10", b"v0"),
         (b"\x20", b"v1"),
         (b"\x30", b"v2"),
         (b"\x40", b"v3")
     ];
-    let (target, _dir_target) = setup_db![
-        (b"\x10", b"v0"),
-        (b"\x20", b"v1"),
-        (b"\x30", b"v2"),
-        (b"\x40", b"v3")
-    ];
-    let root1_target = target.root_hash().unwrap();
 
     let (root1_source, root2) =
         setup_2nd_commit!(source, [(b"\x20", b"changed1"), (b"\x30", b"changed2")]);
@@ -44,15 +55,18 @@ fn test_crafted_omitted_change_detected() {
 
     let ctx =
         verify_change_proof_structure(&crafted, root2, Some(b"\x10"), Some(b"\x40"), None).unwrap();
-    verify_and_check(&target, &crafted, &ctx, root1_target)
+    let err = verify_and_check(&target, &crafted, &ctx, root1_target)
         .expect_err("omitted change must be detected");
+    assert!(matches!(
+        err,
+        api::Error::ProofError(crate::ProofError::EndRootMismatch)
+    ));
 }
 
 #[test]
 fn test_crafted_forged_value_detected() {
-    let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
-    let (target, _dir_target) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
-    let root1_target = target.root_hash().unwrap();
+    let (source, target, root1_target, _ds, _dt) =
+        setup_source_target![(b"\x10", b"v0"), (b"\xa0", b"v1")];
 
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x10", b"real")]);
 
@@ -72,15 +86,17 @@ fn test_crafted_forged_value_detected() {
     );
 
     let ctx = verify_change_proof_structure(&crafted, root2, None, None, None).unwrap();
-    verify_and_check(&target, &crafted, &ctx, root1_target)
+    let err = verify_and_check(&target, &crafted, &ctx, root1_target)
         .expect_err("forged value must be detected");
+    assert!(matches!(
+        err,
+        api::Error::ProofError(crate::ProofError::UnexpectedValue)
+    ));
 }
 
 #[test]
 fn test_crafted_spurious_batch_op_detected() {
     let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
-    let (target, _dir_target) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
-    let root1_target = target.root_hash().unwrap();
 
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\xa0", b"changed")]);
 
@@ -101,12 +117,12 @@ fn test_crafted_spurious_batch_op_detected() {
         ops.into_boxed_slice(),
     );
 
-    // Structural check or root hash check catches this
-    let result = verify_change_proof_structure(&crafted, root2, None, None, None);
-    if let Ok(ctx) = result {
-        verify_and_check(&target, &crafted, &ctx, root1_target)
-            .expect_err("spurious batch op must be detected");
-    }
+    let err = verify_change_proof_structure(&crafted, root2, None, None, None)
+        .expect_err("structural check should reject spurious batch op");
+    assert!(matches!(
+        err,
+        api::Error::ProofError(crate::ProofError::ShouldBePrefixOfNextKey)
+    ));
 }
 
 /// Attacker adds a spurious Put at `start_key` when `start_key` doesn't
@@ -117,8 +133,6 @@ fn test_crafted_spurious_batch_op_detected() {
 fn test_crafted_spurious_put_at_start_key_boundary() {
     // Keys \x20 and \x90 exist. \x10 (start_key) does NOT exist.
     let (source, _dir_source) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
-    let (target, _dir_target) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
-    let root1_target = target.root_hash().unwrap();
 
     // Change \x20 on source
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x20", b"changed")]);
@@ -149,12 +163,12 @@ fn test_crafted_spurious_put_at_start_key_boundary() {
         ops.into_boxed_slice(),
     );
 
-    // Structural check or root hash check should catch this.
-    let result = verify_change_proof_structure(&crafted, root2, Some(b"\x10"), Some(b"\x90"), None);
-    if let Ok(ctx) = result {
-        verify_and_check(&target, &crafted, &ctx, root1_target)
-            .expect_err("spurious Put at start_key should be detected");
-    }
+    let err = verify_change_proof_structure(&crafted, root2, Some(b"\x10"), Some(b"\x90"), None)
+        .expect_err("structural check should reject spurious Put at start_key");
+    assert!(matches!(
+        err,
+        api::Error::ProofError(crate::ProofError::StartProofOperationMismatch)
+    ));
 }
 
 /// Attacker adds a spurious Delete at `start_key` when `start_key` EXISTS
@@ -164,8 +178,6 @@ fn test_crafted_spurious_put_at_start_key_boundary() {
 fn test_crafted_spurious_delete_at_start_key_boundary() {
     // Keys \x20 and \x90 exist. start_key \x20 EXISTS in end_root.
     let (source, _dir_source) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
-    let (target, _dir_target) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
-    let root1_target = target.root_hash().unwrap();
 
     // Change \x90 on source (not \x20 — \x20 stays in end_root).
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x90", b"changed")]);
@@ -197,11 +209,12 @@ fn test_crafted_spurious_delete_at_start_key_boundary() {
         ops.into_boxed_slice(),
     );
 
-    let result = verify_change_proof_structure(&crafted, root2, Some(b"\x20"), Some(b"\x90"), None);
-    if let Ok(ctx) = result {
-        verify_and_check(&target, &crafted, &ctx, root1_target)
-            .expect_err("spurious Delete at start_key should be detected");
-    }
+    let err = verify_change_proof_structure(&crafted, root2, Some(b"\x20"), Some(b"\x90"), None)
+        .expect_err("structural check should reject spurious Delete at start_key");
+    assert!(matches!(
+        err,
+        api::Error::ProofError(crate::ProofError::StartProofOperationMismatch)
+    ));
 }
 
 /// Spurious Put at `end_key` when `end_key` doesn't exist (exclusion end proof).
@@ -211,8 +224,6 @@ fn test_crafted_spurious_delete_at_start_key_boundary() {
 #[test]
 fn test_crafted_spurious_put_at_end_key_boundary() {
     let (source, _dir_source) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
-    let (target, _dir_target) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
-    let root1_target = target.root_hash().unwrap();
 
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x20", b"changed")]);
 
@@ -241,12 +252,13 @@ fn test_crafted_spurious_put_at_end_key_boundary() {
         ops.into_boxed_slice(),
     );
 
-    let result =
-        verify_change_proof_structure(&crafted, root2.clone(), Some(b"\x20"), Some(b"\xb0"), None);
-    if let Ok(ctx) = result {
-        verify_and_check(&target, &crafted, &ctx, root1_target)
-            .expect_err("spurious Put at end_key should be detected");
-    }
+    let err =
+        verify_change_proof_structure(&crafted, root2.clone(), Some(b"\x20"), Some(b"\xb0"), None)
+            .expect_err("structural check should reject spurious Put at end_key");
+    assert!(matches!(
+        err,
+        api::Error::ProofError(crate::ProofError::EndProofOperationMismatch)
+    ));
 }
 
 /// Spurious Delete at `end_key` when `end_key` EXISTS (inclusion end proof).
@@ -256,8 +268,6 @@ fn test_crafted_spurious_put_at_end_key_boundary() {
 #[test]
 fn test_crafted_spurious_delete_at_end_key_boundary() {
     let (source, _dir_source) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
-    let (target, _dir_target) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
-    let root1_target = target.root_hash().unwrap();
 
     // Change \x20, leave \x90 unchanged.
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x20", b"changed")]);
@@ -286,12 +296,13 @@ fn test_crafted_spurious_delete_at_end_key_boundary() {
         ops.into_boxed_slice(),
     );
 
-    let result =
-        verify_change_proof_structure(&crafted, root2.clone(), Some(b"\x20"), Some(b"\x90"), None);
-    if let Ok(ctx) = result {
-        verify_and_check(&target, &crafted, &ctx, root1_target)
-            .expect_err("spurious Delete at end_key should be detected");
-    }
+    let err =
+        verify_change_proof_structure(&crafted, root2.clone(), Some(b"\x20"), Some(b"\x90"), None)
+            .expect_err("structural check should reject spurious Delete at end_key");
+    assert!(matches!(
+        err,
+        api::Error::ProofError(crate::ProofError::EndProofOperationMismatch)
+    ));
 }
 
 /// The `start_key` value MUST be checked for inclusion proofs. If the
@@ -299,9 +310,8 @@ fn test_crafted_spurious_delete_at_end_key_boundary() {
 /// reconciliation or root hash comparison should detect the mismatch.
 #[test]
 fn test_crafted_tampered_start_key_value_detected() {
-    let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\x30", b"v1")];
-    let (target, _dir_target) = setup_db![(b"\x10", b"v0"), (b"\x30", b"v1")];
-    let root1_target = target.root_hash().unwrap();
+    let (source, target, root1_target, _ds, _dt) =
+        setup_source_target![(b"\x10", b"v0"), (b"\x30", b"v1")];
 
     let (root1_source, root2) =
         setup_2nd_commit!(source, [(b"\x10", b"changed"), (b"\x30", b"changed")]);
@@ -376,16 +386,15 @@ fn test_crafted_conflicting_proof_nodes_rejected() {
     assert!(!end_nodes.is_empty(), "end proof should have nodes");
 
     let root_node = &mut end_nodes[0];
-    for pc in firewood_storage::PathComponent::ALL {
-        if let Some(ref mut h) = root_node.child_hashes[pc] {
-            let trie_hash = h.clone().into_triehash();
-            let bytes: [u8; 32] = trie_hash.into();
-            let mut new_bytes = bytes;
-            new_bytes[0] ^= 1;
-            *h = firewood_storage::TrieHash::from(new_bytes).into_hash_type();
-            break;
-        }
-    }
+    let child_hash = root_node
+        .child_hashes
+        .iter_mut()
+        .find_map(|(_, h)| h.as_mut())
+        .expect("root node should have at least one child hash");
+    let bytes: [u8; 32] = child_hash.clone().into_triehash().into();
+    let mut new_bytes = bytes;
+    new_bytes[0] ^= 1;
+    *child_hash = firewood_storage::TrieHash::from(new_bytes).into_hash_type();
 
     let crafted = FrozenChangeProof::new(
         crate::Proof::new(valid.start_proof().as_ref().into()),
@@ -555,25 +564,192 @@ fn test_crafted_divergence_at_depth_zero() {
     );
 }
 
-// ── Adversarial tests (5-key setup with injection helpers) ──────────────
+/// Keys \x10\x50, \x10\x58, and \x10\x5f share a branch at [1, 0, 5].
+/// Deleting \x10\x50 makes the start proof an exclusion proof with
+/// divergent siblings at nibbles 8 and f. The branch survives deletion
+/// because two children remain. Stripping nibble 8's child hash from
+/// the proof node at [1, 0, 5] should cause rejection.
+#[test]
+fn test_crafted_stripped_divergent_child_rejected() {
+    let (source, _dir_source) = setup_db![
+        (b"\x10\x50", b"a"),
+        (b"\x10\x58", b"b"),
+        (b"\x10\x5f", b"d"),
+        (b"\x30\x00", b"c")
+    ];
+    let root1_source = source.root_hash().unwrap();
+    let (target, _dir_target) = setup_db![
+        (b"\x10\x50", b"a"),
+        (b"\x10\x58", b"b"),
+        (b"\x10\x5f", b"d"),
+        (b"\x30\x00", b"c")
+    ];
+    let root1_target = target.root_hash().unwrap();
 
-type OwnedBatchOps = Vec<BatchOp<Box<[u8]>, Box<[u8]>>>;
+    source
+        .propose(vec![
+            BatchOp::Delete {
+                key: b"\x10\x50" as &[u8],
+            },
+            BatchOp::Put {
+                key: b"\x30\x00",
+                value: b"z",
+            },
+        ])
+        .unwrap()
+        .commit()
+        .unwrap();
+    let root2 = source.root_hash().unwrap();
 
-/// Helper: returns true if the (possibly corrupted) proof is rejected by
-/// either the structural check or the root hash check.
-fn is_rejected(
-    db: &Db,
-    proof: &FrozenChangeProof,
-    end_root: api::HashKey,
-    start_key: Option<&[u8]>,
-    end_key: Option<&[u8]>,
-    start_root: api::HashKey,
-) -> bool {
-    match verify_change_proof_structure(proof, end_root, start_key, end_key, None) {
-        Err(_) => true,
-        Ok(ctx) => verify_and_check(db, proof, &ctx, start_root).is_err(),
-    }
+    let valid = source
+        .change_proof(
+            root1_source,
+            root2.clone(),
+            Some(b"\x10\x50"),
+            Some(b"\x30\x00"),
+            None,
+        )
+        .unwrap();
+
+    // Valid proof should pass.
+    let ctx = verify_change_proof_structure(
+        &valid,
+        root2.clone(),
+        Some(b"\x10\x50"),
+        Some(b"\x30\x00"),
+        None,
+    )
+    .unwrap();
+    verify_and_check(&target, &valid, &ctx, root1_target.clone()).unwrap();
+
+    // Find the proof node at [1, 0, 5] and strip the divergent child's
+    // hash (nibble 8, leading to \x10\x58).
+    let mut start_nodes: Vec<crate::ProofNode> = valid.start_proof().as_ref().to_vec();
+    let branch_idx = start_nodes
+        .iter()
+        .position(|n| n.key.as_byte_slice() == [1, 0, 5])
+        .expect("should have a proof node at [1, 0, 5]");
+
+    let nibble_8 = firewood_storage::PathComponent::try_new(8).unwrap();
+    start_nodes[branch_idx].child_hashes[nibble_8] = None;
+
+    let crafted = FrozenChangeProof::new(
+        crate::Proof::new(start_nodes.into_boxed_slice()),
+        crate::Proof::new(valid.end_proof().as_ref().into()),
+        valid.batch_ops().into(),
+    );
+
+    assert!(
+        is_rejected(
+            &target,
+            &crafted,
+            root2,
+            Some(b"\x10\x50"),
+            Some(b"\x30\x00"),
+            root1_target
+        ),
+        "stripping divergent child hash should cause rejection"
+    );
 }
+
+/// Security test: an attacker removes `Delete(\x05)` from `batch_ops`.
+///
+/// `\x05` is in-range (>= `start_key` `\x01`) and shares nibble 0 with the
+/// out-of-range `\x00`. If the collapse step unconditionally strips all
+/// non-on-path children (without checking for in-range keys), the proving
+/// trie is flattened to match `end_root` and the tampered proof is accepted.
+///
+/// The verifier would then commit the incomplete `batch_ops`, leaving `\x05`
+/// in their state when `end_root` says it shouldn't exist.
+#[test]
+fn test_crafted_omitted_delete_at_straddling_nibble() {
+    // start_root: \x00, \x05, \x10
+    let (db, _dir) = setup_db![(b"\x00", b"a"), (b"\x05", b"e"), (b"\x10", b"b")];
+    let root1 = db.root_hash().unwrap();
+
+    // end_root: only \x10 (both \x00 and \x05 deleted)
+    db.propose(vec![
+        BatchOp::Delete {
+            key: b"\x00" as &[u8],
+        },
+        BatchOp::Delete { key: b"\x05" },
+        BatchOp::Put {
+            key: b"\x10",
+            value: b"changed",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root2 = db.root_hash().unwrap();
+
+    // Generate the honest proof (start_key=\x01: \x00 delete is out of range)
+    let honest = db
+        .change_proof(root1.clone(), root2.clone(), Some(b"\x01"), None, None)
+        .unwrap();
+
+    // The honest proof should have Delete(\x05) and Put(\x10, "changed")
+    assert_eq!(honest.batch_ops().len(), 2);
+
+    // Craft a tampered proof: remove Delete(\x05), keep only Put(\x10)
+    let tampered = FrozenChangeProof::new(
+        crate::Proof::new(honest.start_proof().as_ref().into()),
+        crate::Proof::new(honest.end_proof().as_ref().into()),
+        Box::new([BatchOp::Put {
+            key: b"\x10".to_vec().into(),
+            value: b"changed".to_vec().into(),
+        }]),
+    );
+
+    assert!(
+        is_rejected(&db, &tampered, root2, Some(b"\x01"), None, root1),
+        "tampered proof with omitted Delete at straddling nibble should be rejected"
+    );
+}
+
+/// State injection via `collapse_root_to_path` (found by TLA+ model).
+///
+/// An attacker injects a spurious key at a different first nibble than the
+/// proof path. The collapse strips the injected key's nibble (it's
+/// "non-on-path"), so the hash computation never sees it.
+/// The range-safety check in `collapse_strip` detects the in-range child
+/// before stripping and rejects with `EndRootMismatch`.
+#[test]
+fn test_collapse_root_hides_spurious_key() {
+    let (db, _dir) = setup_db![(b"\x90", b"orig")];
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x90", b"new!")]);
+
+    let valid_proof = db
+        .change_proof(root1.clone(), root2.clone(), None, None, None)
+        .unwrap();
+
+    assert_eq!(valid_proof.batch_ops().len(), 1);
+
+    let mut ops: OwnedBatchOps = valid_proof.batch_ops().to_vec();
+    ops.insert(
+        0,
+        BatchOp::Put {
+            key: b"\x10".to_vec().into_boxed_slice(),
+            value: b"evil".to_vec().into_boxed_slice(),
+        },
+    );
+
+    let attack_proof = crate::ChangeProof::new(
+        crate::Proof::new(valid_proof.start_proof().as_ref().into()),
+        crate::Proof::new(valid_proof.end_proof().as_ref().into()),
+        ops.into_boxed_slice(),
+    );
+
+    assert!(
+        is_rejected(&db, &attack_proof, root2, None, None, root1),
+        "spurious Put at \\x10 was NOT rejected — \
+         collapse_root_to_path stripped nibble 1 (non-on-path \
+         relative to the end proof through nibble 9), hiding \
+         the injected key from the hash computation"
+    );
+}
+
+// ── Adversarial tests (5-key setup with injection helpers) ──────────────
 
 /// 5 well-separated 32-byte keys at nibbles 0x10, 0x30, 0x50, 0x70, 0x90.
 fn five_keys() -> [[u8; 32]; 5] {
@@ -885,194 +1061,5 @@ fn test_spurious_put_in_range_is_rejected() {
             value: [0xFFu8; 20].to_vec().into_boxed_slice(),
         },
         "spurious Put of in-range key 0x60 was NOT rejected",
-    );
-}
-
-/// State injection via `collapse_root_to_path` (found by TLA+ model).
-///
-/// An attacker injects a spurious key at a different first nibble than the
-/// proof path. The collapse strips the injected key's nibble (it's
-/// "non-on-path"), so the hash computation never sees it.
-/// The range-safety check in `collapse_strip` detects the in-range child
-/// before stripping and rejects with `EndRootMismatch`.
-#[test]
-fn test_collapse_root_hides_spurious_key() {
-    let (db, _dir) = setup_db![(b"\x90", b"orig")];
-    let (root1, root2) = setup_2nd_commit!(db, [(b"\x90", b"new!")]);
-
-    let valid_proof = db
-        .change_proof(root1.clone(), root2.clone(), None, None, None)
-        .unwrap();
-
-    assert_eq!(valid_proof.batch_ops().len(), 1);
-
-    let mut ops: OwnedBatchOps = valid_proof.batch_ops().to_vec();
-    ops.insert(
-        0,
-        BatchOp::Put {
-            key: b"\x10".to_vec().into_boxed_slice(),
-            value: b"evil".to_vec().into_boxed_slice(),
-        },
-    );
-
-    let attack_proof = crate::ChangeProof::new(
-        crate::Proof::new(valid_proof.start_proof().as_ref().into()),
-        crate::Proof::new(valid_proof.end_proof().as_ref().into()),
-        ops.into_boxed_slice(),
-    );
-
-    assert!(
-        is_rejected(&db, &attack_proof, root2, None, None, root1),
-        "spurious Put at \\x10 was NOT rejected — \
-         collapse_root_to_path stripped nibble 1 (non-on-path \
-         relative to the end proof through nibble 9), hiding \
-         the injected key from the hash computation"
-    );
-}
-
-/// Strip a divergent child's hash from the start proof node at a shared
-/// branch. The verifier must reject the proof because the branch hash
-/// can't be computed correctly without the sibling's contribution.                                                                                                                                                                               
-///             
-/// Keys \x10\x50, \x10\x58, and \x10\x5f share a branch at [1, 0, 5].
-/// Deleting \x10\x50 makes the start proof an exclusion proof with
-/// divergent siblings at nibbles 8 and f. The branch survives deletion
-/// because two children remain. Stripping nibble 8's child hash from
-/// the proof node at [1, 0, 5] should cause rejection.                                                                                                                                                                           
-#[test]
-fn test_crafted_stripped_divergent_child_rejected() {
-    let (source, _dir_source) = setup_db![
-        (b"\x10\x50", b"a"),
-        (b"\x10\x58", b"b"),
-        (b"\x10\x5f", b"d"),
-        (b"\x30\x00", b"c")
-    ];
-    let root1_source = source.root_hash().unwrap();
-    let (target, _dir_target) = setup_db![
-        (b"\x10\x50", b"a"),
-        (b"\x10\x58", b"b"),
-        (b"\x10\x5f", b"d"),
-        (b"\x30\x00", b"c")
-    ];
-    let root1_target = target.root_hash().unwrap();
-
-    source
-        .propose(vec![
-            BatchOp::Delete {
-                key: b"\x10\x50" as &[u8],
-            },
-            BatchOp::Put {
-                key: b"\x30\x00",
-                value: b"z",
-            },
-        ])
-        .unwrap()
-        .commit()
-        .unwrap();
-    let root2 = source.root_hash().unwrap();
-
-    let valid = source
-        .change_proof(
-            root1_source,
-            root2.clone(),
-            Some(b"\x10\x50"),
-            Some(b"\x30\x00"),
-            None,
-        )
-        .unwrap();
-
-    // Valid proof should pass.
-    let ctx = verify_change_proof_structure(
-        &valid,
-        root2.clone(),
-        Some(b"\x10\x50"),
-        Some(b"\x30\x00"),
-        None,
-    )
-    .unwrap();
-    verify_and_check(&target, &valid, &ctx, root1_target.clone()).unwrap();
-
-    // Find the proof node at [1, 0, 5] and strip the divergent child's
-    // hash (nibble 8, leading to \x10\x58).
-    let mut start_nodes: Vec<crate::ProofNode> = valid.start_proof().as_ref().to_vec();
-    let branch_idx = start_nodes
-        .iter()
-        .position(|n| n.key.as_byte_slice() == [1, 0, 5])
-        .expect("should have a proof node at [1, 0, 5]");
-
-    let nibble_8 = firewood_storage::PathComponent::try_new(8).unwrap();
-    start_nodes[branch_idx].child_hashes[nibble_8] = None;
-
-    let crafted = FrozenChangeProof::new(
-        crate::Proof::new(start_nodes.into_boxed_slice()),
-        crate::Proof::new(valid.end_proof().as_ref().into()),
-        valid.batch_ops().into(),
-    );
-
-    assert!(
-        is_rejected(
-            &target,
-            &crafted,
-            root2,
-            Some(b"\x10\x50"),
-            Some(b"\x30\x00"),
-            root1_target
-        ),
-        "stripping divergent child hash should cause rejection"
-    );
-}
-
-/// Security test: an attacker removes `Delete(\x05)` from `batch_ops`.
-///
-/// `\x05` is in-range (>= `start_key` `\x01`) and shares nibble 0 with the
-/// out-of-range `\x00`. If the collapse step unconditionally strips all
-/// non-on-path children (without checking for in-range keys), the proving
-/// trie is flattened to match `end_root` and the tampered proof is accepted.
-///
-/// The verifier would then commit the incomplete `batch_ops`, leaving `\x05`
-/// in their state when `end_root` says it shouldn't exist.
-#[test]
-fn test_crafted_omitted_delete_at_straddling_nibble() {
-    // start_root: \x00, \x05, \x10
-    let (db, _dir) = setup_db![(b"\x00", b"a"), (b"\x05", b"e"), (b"\x10", b"b")];
-    let root1 = db.root_hash().unwrap();
-
-    // end_root: only \x10 (both \x00 and \x05 deleted)
-    db.propose(vec![
-        BatchOp::Delete {
-            key: b"\x00" as &[u8],
-        },
-        BatchOp::Delete { key: b"\x05" },
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"changed",
-        },
-    ])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db.root_hash().unwrap();
-
-    // Generate the honest proof (start_key=\x01: \x00 delete is out of range)
-    let honest = db
-        .change_proof(root1.clone(), root2.clone(), Some(b"\x01"), None, None)
-        .unwrap();
-
-    // The honest proof should have Delete(\x05) and Put(\x10, "changed")
-    assert_eq!(honest.batch_ops().len(), 2);
-
-    // Craft a tampered proof: remove Delete(\x05), keep only Put(\x10)
-    let tampered = FrozenChangeProof::new(
-        crate::Proof::new(honest.start_proof().as_ref().into()),
-        crate::Proof::new(honest.end_proof().as_ref().into()),
-        Box::new([BatchOp::Put {
-            key: b"\x10".to_vec().into(),
-            value: b"changed".to_vec().into(),
-        }]),
-    );
-
-    assert!(
-        is_rejected(&db, &tampered, root2, Some(b"\x01"), None, root1),
-        "tampered proof with omitted Delete at straddling nibble should be rejected"
     );
 }
