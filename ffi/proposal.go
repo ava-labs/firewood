@@ -103,7 +103,7 @@ func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 
 	itResult := C.fwd_iter_on_proposal(p.ptr, newBorrowedBytes(key, &pinner))
 
-	return getIteratorFromIteratorResult(itResult)
+	return getIteratorFromIteratorResult(itResult, p.keepAliveHandle.registry)
 }
 
 // Propose is equivalent to [Database.Propose] except that the new proposal is
@@ -125,7 +125,7 @@ func (p *Proposal) Propose(batch []BatchOp) (*Proposal, error) {
 	defer pinner.Unpin()
 
 	kvp := newKeyValuePairsFromBatch(batch, &pinner)
-	return getProposalFromProposalResult(C.fwd_propose_on_proposal(p.ptr, kvp), p.keepAliveHandle.outstandingHandles, p.commitLock)
+	return getProposalFromProposalResult(C.fwd_propose_on_proposal(p.ptr, kvp), p.keepAliveHandle.registry, p.commitLock)
 }
 
 // Commit commits the proposal and returns any errors.
@@ -211,7 +211,7 @@ func (p *Proposal) Dump() (string, error) {
 }
 
 // getProposalFromProposalResult converts a C.ProposalResult to a Proposal or error.
-func getProposalFromProposalResult(result C.ProposalResult, wg *sync.WaitGroup, commitLock *sync.Mutex) (*Proposal, error) {
+func getProposalFromProposalResult(result C.ProposalResult, registry *keepAliveRegistry, commitLock *sync.Mutex) (*Proposal, error) {
 	switch result.tag {
 	case C.ProposalResult_NullHandlePointer:
 		return nil, errDBClosed
@@ -219,10 +219,11 @@ func getProposalFromProposalResult(result C.ProposalResult, wg *sync.WaitGroup, 
 		body := (*C.ProposalResult_Ok_Body)(unsafe.Pointer(&result.anon0))
 		hashKey := *(*Hash)(unsafe.Pointer(&body.root_hash._0))
 		proposal := &Proposal{
-			handle:     createHandle(body.handle, wg, func(p *C.ProposalHandle) C.VoidResult { return C.fwd_free_proposal(p) }),
+			handle:     createHandle(body.handle, registry, func(p *C.ProposalHandle) C.VoidResult { return C.fwd_free_proposal(p) }),
 			root:       hashKey,
 			commitLock: commitLock,
 		}
+		registry.register(&proposal.keepAliveHandle, proposal.Drop)
 		runtime.AddCleanup(proposal, drop[*C.ProposalHandle], proposal.handle)
 		return proposal, nil
 	case C.ProposalResult_Err:

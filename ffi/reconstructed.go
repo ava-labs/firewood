@@ -43,7 +43,7 @@ var ErrDroppedReconstructed = errors.New("reconstructed view already dropped")
 //
 // Cross-type: Reconstructed never touches commitLock, so there is no
 // ordering constraint with Proposal.Commit or Database.Close beyond the
-// outstandingHandles WaitGroup.
+// keep-alive registry's WaitGroup.
 
 // Reconstructed is a linear, read-only reconstructed view over a historical
 // revision.
@@ -124,7 +124,7 @@ func (r *Reconstructed) Iter(key []byte) (*Iterator, error) {
 	defer pinner.Unpin()
 
 	itResult := C.fwd_iter_on_reconstructed(r.ptr, newBorrowedBytes(key, &pinner))
-	return getIteratorFromIteratorResult(itResult)
+	return getIteratorFromIteratorResult(itResult, r.keepAliveHandle.registry)
 }
 
 // Reconstruct applies a new batch on top of this reconstructed view.
@@ -148,15 +148,14 @@ func (r *Reconstructed) Reconstruct(batch []BatchOp) error {
 	// The old handle is consumed by the FFI call regardless of outcome.
 	r.ptr = nil
 
-	newHandle, err := getReconstructedHandleFromResult(result, nil)
+	newHandle, err := getReconstructedHandleFromResult(result)
 	if err != nil {
 		// The old handle was consumed by the FFI call, so mark as dropped
 		// and disown the keep-alive lease so Database.Close is not blocked.
 		r.dropped = true
-		if r.keepAliveHandle.outstandingHandles != nil {
-			r.keepAliveHandle.outstandingHandles.Done()
-			r.keepAliveHandle.outstandingHandles = nil
-		}
+		// We already hold r.keepAliveHandle.mu (Lock) for the wider critical
+		// section, so use disownLocked to avoid re-entering mu.
+		r.keepAliveHandle.disownLocked()
 		return err
 	}
 
@@ -188,18 +187,19 @@ func (r *Reconstructed) Dump() (string, error) {
 	return string(bytes), nil
 }
 
-func getReconstructedFromResult(result C.ReconstructedResult, wg *sync.WaitGroup) (*Reconstructed, error) {
+func getReconstructedFromResult(result C.ReconstructedResult, registry *keepAliveRegistry) (*Reconstructed, error) {
 	switch result.tag {
 	case C.ReconstructedResult_NullHandlePointer:
 		return nil, errDBClosed
 	case C.ReconstructedResult_Ok:
 		body := (*C.ReconstructedResult_Ok_Body)(unsafe.Pointer(&result.anon0))
 		reconstructed := &Reconstructed{
-			handle: createHandle(body.handle, wg, func(h *C.ReconstructedHandle) C.VoidResult {
+			handle: createHandle(body.handle, registry, func(h *C.ReconstructedHandle) C.VoidResult {
 				return C.fwd_free_reconstructed(h)
 			}),
 			root: EmptyRoot,
 		}
+		registry.register(&reconstructed.keepAliveHandle, reconstructed.Drop)
 		runtime.AddCleanup(reconstructed, drop[*C.ReconstructedHandle], reconstructed.handle)
 		return reconstructed, nil
 	case C.ReconstructedResult_Err:
@@ -212,7 +212,6 @@ func getReconstructedFromResult(result C.ReconstructedResult, wg *sync.WaitGroup
 
 func getReconstructedHandleFromResult(
 	result C.ReconstructedResult,
-	_ *sync.WaitGroup,
 ) (*C.ReconstructedHandle, error) {
 	switch result.tag {
 	case C.ReconstructedResult_NullHandlePointer:

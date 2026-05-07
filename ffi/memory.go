@@ -458,7 +458,10 @@ func getDatabaseFromHandleResult(result C.HandleResult) (*Database, error) {
 	switch result.tag {
 	case C.HandleResult_Ok:
 		ptr := *(**C.DatabaseHandle)(unsafe.Pointer(&result.anon0))
-		db := &Database{handle: ptr}
+		db := &Database{
+			handle:     ptr,
+			keepAlives: newKeepAliveRegistry(),
+		}
 		return db, nil
 	case C.HandleResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
