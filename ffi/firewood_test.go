@@ -780,6 +780,63 @@ func TestProposeFromProposal(t *testing.T) {
 	}
 }
 
+// TestCommitWithRebase verifies that CommitWithRebase succeeds when the
+// proposal's parent is stale (a sibling committed first).
+func TestCommitWithRebase(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Create two sibling proposals from the same parent.
+	p1, err := db.Propose([]BatchOp{Put([]byte("key1"), []byte("val1"))})
+	r.NoError(err)
+	p2, err := db.Propose([]BatchOp{Put([]byte("key2"), []byte("val2"))})
+	r.NoError(err)
+
+	// Commit p1 — p2's parent is now stale.
+	err = p1.Commit()
+	r.NoError(err)
+
+	// CommitWithRebase on p2 — should succeed via rebase.
+	hash, err := p2.CommitWithRebase()
+	r.NoError(err)
+	r.NotEqual(EmptyRoot, hash)
+
+	// Both keys should be present.
+	got1, err := db.Get([]byte("key1"))
+	r.NoError(err)
+	r.Equal([]byte("val1"), got1)
+
+	got2, err := db.Get([]byte("key2"))
+	r.NoError(err)
+	r.Equal([]byte("val2"), got2)
+}
+
+// TestCommitWithRebaseChildNotReparented verifies that child proposals
+// are not usable after the parent is rebased via CommitWithRebase.
+func TestCommitWithRebaseChildNotReparented(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Create p1 and a child p2 on top of p1.
+	p1, err := db.Propose([]BatchOp{Put([]byte("key1"), []byte("val1"))})
+	r.NoError(err)
+	p2, err := p1.Propose([]BatchOp{Put([]byte("key2"), []byte("val2"))})
+	r.NoError(err)
+
+	// Create a sibling that commits first, making p1 stale.
+	sibling, err := db.Propose([]BatchOp{Put([]byte("key0"), []byte("val0"))})
+	r.NoError(err)
+	r.NoError(sibling.Commit())
+
+	// CommitWithRebase on p1 — rebases and commits.
+	_, err = p1.CommitWithRebase()
+	r.NoError(err)
+
+	// p2 is orphaned — its parent was replaced during rebase.
+	// Both Commit and CommitWithRebase should fail.
+	r.Error(p2.Commit())
+}
+
 func TestDeepPropose(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
