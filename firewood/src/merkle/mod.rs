@@ -417,6 +417,38 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     let left_edge = left_edge_key.map(|(k, v)| (k.as_ref(), v.as_ref()));
     let right_edge = right_edge_key.map(|(k, v)| (k.as_ref(), v.as_ref()));
 
+    // Determine the right-edge anchor key.
+    //
+    // The end_proof is one of two shapes:
+    //
+    //   * Inclusion proof of `last_kv_key`. This happens both when the proof
+    //     is truncated (a `max_length` was hit before reaching `bound`) and
+    //     when `bound` itself exists in the trie (so `bound == last_kv_key`).
+    //     In both cases the proof anchors at `last_kv_key` and must be
+    //     verified against it; using `bound` would walk a different path.
+    //
+    //   * Exclusion proof of some key past `last_kv_key` — produced for a
+    //     complete proof of `[start, bound]` when `bound` is not in the trie.
+    //     The proof anchors at `bound` (the requested upper boundary).
+    //
+    // We detect inclusion-of-last-kv by examining the terminal node: if it has
+    // a value digest and its full nibble path equals `last_kv_key`'s nibbles,
+    // it is the inclusion case and the anchor must be `last_kv_key`.
+    let right_edge_anchor: Option<&[u8]> = if let (Some(_bound), Some((last_kv_k, _))) =
+        (last_key_bytes, key_values.last())
+        && let Some(terminal) = proof.end_proof().as_ref().last()
+        && terminal.value_digest.is_some()
+        && terminal
+            .key
+            .iter()
+            .map(|c| c.as_u8())
+            .eq(NibblesIterator::new(last_kv_k.as_ref()))
+    {
+        Some(last_kv_k.as_ref())
+    } else {
+        last_key_bytes
+    };
+
     if !proof.start_proof().is_empty() {
         verify_edge(
             first_key_bytes,
@@ -428,7 +460,7 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     }
     if !proof.end_proof().is_empty() {
         verify_edge(
-            last_key_bytes,
+            right_edge_anchor,
             right_edge,
             proof.end_proof(),
             root_hash,
@@ -455,7 +487,7 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         key_values,
         proof,
         first_key_bytes,
-        last_key_bytes,
+        right_edge_anchor,
         root_hash,
     )
 }
