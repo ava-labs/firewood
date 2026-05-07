@@ -1,6 +1,6 @@
 [package]
 name = "firewood-ffi"
-version = "0.3.1"
+version = "0.4.0"
 edition.workspace = true
 authors = [
      "Aaron Buchwald <aaron.buchwald56@gmail.com>",
@@ -31,7 +31,6 @@ tikv-jemallocator = "0.6.1"
 tikv-jemalloc-ctl = { version = "0.6.1", features = ["stats"] }
 metrics-exporter-prometheus.workspace = true
 # Optional dependencies
-rlp = { version = "0.6.1", optional = true }
 env_logger = { workspace = true, optional = true }
 firewood-replay = { workspace = true, optional = true }
 
@@ -41,7 +40,7 @@ test-case.workspace = true
 
 [features]
 logger = ["dep:env_logger", "firewood/logger"]
-ethhash = ["firewood/ethhash", "rlp"]
+ethhash = ["firewood/ethhash"]
 io-uring = ["firewood/io-uring", "firewood-storage/io-uring"]
 block-replay = ["dep:firewood-replay"]
 
