@@ -311,7 +311,7 @@ pub extern "C" fn fwd_db_verify_and_commit_change_proof(
     })
 }
 
-/// Determine the next key range to fetch for a truncated change proof.
+/// Determine the next key range to fetch for a change proof.
 ///
 /// The proof is not consumed by this call. `end_key` is the original
 /// requested end key passed to the proof generator.

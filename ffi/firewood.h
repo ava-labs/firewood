@@ -1467,7 +1467,7 @@ struct HashResult fwd_batch(const struct DatabaseHandle *db, BorrowedBatchOps va
 struct VoidResult fwd_block_replay_flush(void);
 
 /**
- * Determine the next key range to fetch for a truncated change proof.
+ * Determine the next key range to fetch for a change proof.
  *
  * The proof is not consumed by this call. `end_key` is the original
  * requested end key passed to the proof generator.

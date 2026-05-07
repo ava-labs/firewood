@@ -454,7 +454,7 @@ func (db *Database) VerifyAndCommitChangeProof(
 	return getHashKeyFromHashResult(C.fwd_db_verify_and_commit_change_proof(db.handle, proof.handle, args))
 }
 
-// FindNextKey returns the next key range to fetch for a truncated change proof,
+// FindNextKey returns the next key range to fetch for a change proof,
 // or nil if there are no more keys to fetch. The proof is not consumed.
 func (proof *ChangeProof) FindNextKey(endKey Maybe[[]byte]) (*NextKeyRange, error) {
 	var pinner runtime.Pinner
