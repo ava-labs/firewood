@@ -5,9 +5,7 @@ use std::convert::Into;
 use std::num::NonZeroUsize;
 
 #[cfg(feature = "ethhash")]
-use firewood_storage::TrieHash;
-#[cfg(feature = "ethhash")]
-use rlp::Rlp;
+use firewood_storage::{RlpList, TrieHash};
 
 use firewood::{
     ProofError,
@@ -147,7 +145,7 @@ impl Iterator for CodeIteratorHandle<'_> {
                 return None;
             }
 
-            let Ok(code_hash_slice) = Rlp::new(value).at(3).and_then(|r| r.data()) else {
+            let Ok(code_hash_slice) = RlpList::parse(value).and_then(|l| l.nth_bytes(3)) else {
                 return Some(Err(api::Error::ProofError(ProofError::InvalidValueFormat)));
             };
             let code_hash: HashKey = TrieHash::try_from(code_hash_slice).ok()?.into();
