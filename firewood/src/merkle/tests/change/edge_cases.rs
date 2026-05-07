@@ -7,9 +7,8 @@ use super::*;
 
 #[test]
 fn test_empty_batch_ops_with_nonempty_proofs() {
-    let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
-    let (target, _dir_target) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
-    let root1_target = target.root_hash().unwrap();
+    let (source, target, root1_target, _ds, _dt) =
+        setup_source_target![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
 
     // Change only \x30 (outside range [\x10, \x20])
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x30", b"changed")]);
@@ -34,9 +33,8 @@ fn test_empty_batch_ops_with_nonempty_proofs() {
 
 #[test]
 fn test_odd_depth_proof_node_accepted() {
-    let (source, _dir_source) = setup_db![(b"\x12", b"v0"), (b"\x13", b"v1"), (b"\x50", b"v2")];
-    let (target, _dir_target) = setup_db![(b"\x12", b"v0"), (b"\x13", b"v1"), (b"\x50", b"v2")];
-    let root1_target = target.root_hash().unwrap();
+    let (source, target, root1_target, _ds, _dt) =
+        setup_source_target![(b"\x12", b"v0"), (b"\x13", b"v1"), (b"\x50", b"v2")];
 
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x50", b"changed")]);
 
@@ -44,7 +42,10 @@ fn test_odd_depth_proof_node_accepted() {
         .change_proof(root1_source, root2.clone(), Some(b"\x14"), None, None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
-    // \x14 doesn't exist — start proof is exclusion at an odd nibble depth.
+    assert!(
+        proof.start_proof().last().unwrap().key.len() % 2 == 1,
+        "start proof should be an exclusion proof with an odd nibble depth"
+    );
     assert!(
         proof
             .start_proof()
@@ -58,9 +59,8 @@ fn test_odd_depth_proof_node_accepted() {
 
 #[test]
 fn test_start_proof_inclusion_with_children_below() {
-    let (source, _dir_source) = setup_db![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
-    let (target, _dir_target) = setup_db![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
-    let root1_target = target.root_hash().unwrap();
+    let (source, target, root1_target, _ds, _dt) =
+        setup_source_target![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
 
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\xf0", b"changed")]);
 
@@ -68,13 +68,13 @@ fn test_start_proof_inclusion_with_children_below() {
         .change_proof(root1_source, root2.clone(), Some(b"\xab"), None, None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
-    // \xab exists and has children below — start proof is inclusion.
     assert!(
         proof
             .start_proof()
             .value_digest(b"\xab", &root2)
             .unwrap()
-            .is_some()
+            .is_some(),
+        "start proof should be an inclusion proof for \\xab"
     );
     let ctx = verify_change_proof_structure(&proof, root2, Some(b"\xab"), None, None).unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
@@ -82,9 +82,8 @@ fn test_start_proof_inclusion_with_children_below() {
 
 #[test]
 fn test_end_proof_inclusion_with_children_below() {
-    let (source, _dir_source) = setup_db![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
-    let (target, _dir_target) = setup_db![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
-    let root1_target = target.root_hash().unwrap();
+    let (source, target, root1_target, _ds, _dt) =
+        setup_source_target![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
 
     let (root1_source, root2) = setup_2nd_commit!(
         source,
@@ -110,11 +109,8 @@ fn test_end_proof_inclusion_with_children_below() {
 
 #[test]
 fn test_divergence_parent_start_key_exhausted() {
-    let (source, _dir_source) =
-        setup_db![(b"\x12\x01", b"v0"), (b"\x12\x02", b"v1"), (b"\xf0", b"v2")];
-    let (target, _dir_target) =
-        setup_db![(b"\x12\x01", b"v0"), (b"\x12\x02", b"v1"), (b"\xf0", b"v2")];
-    let root1_target = target.root_hash().unwrap();
+    let (source, target, root1_target, _ds, _dt) =
+        setup_source_target![(b"\x12\x01", b"v0"), (b"\x12\x02", b"v1"), (b"\xf0", b"v2")];
 
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\xf0", b"changed")]);
 
@@ -128,14 +124,14 @@ fn test_divergence_parent_start_key_exhausted() {
         )
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
-    // \x12 doesn't exist (only \x12\x01 and \x12\x02 do) — exclusion proof
-    // where the start key is exhausted at the parent branch.
+    // Start key is exhausted at the parent branch — exclusion proof.
     assert!(
         proof
             .start_proof()
             .value_digest(b"\x12", &root2)
             .unwrap()
-            .is_none()
+            .is_none(),
+        "start proof should be an exclusion proof for \\x12"
     );
     let ctx =
         verify_change_proof_structure(&proof, root2, Some(b"\x12"), Some(b"\xf0"), None).unwrap();
@@ -162,11 +158,8 @@ fn test_divergence_parent_start_key_exhausted() {
 // validate that \x10's children are intact.
 #[test]
 fn test_start_tail_last_node_children_checked() {
-    let (source, _dir_source) =
-        setup_db![(b"\x10\x01", b"a"), (b"\x10\x02", b"b"), (b"\x30", b"c")];
-    let (target, _dir_target) =
-        setup_db![(b"\x10\x01", b"a"), (b"\x10\x02", b"b"), (b"\x30", b"c")];
-    let root1_target = target.root_hash().unwrap();
+    let (source, target, root1_target, _ds, _dt) =
+        setup_source_target![(b"\x10\x01", b"a"), (b"\x10\x02", b"b"), (b"\x30", b"c")];
 
     // Only modify \x30 on the source; \x10's children are untouched
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x30", b"changed")]);
@@ -175,14 +168,14 @@ fn test_start_tail_last_node_children_checked() {
         .change_proof(root1_source, root2.clone(), Some(b"\x10"), None, None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
-    // \x10 itself doesn't exist (only \x10\x01 and \x10\x02) — exclusion
-    // start proof whose last node is the branch with children to verify.
+    // Exclusion proof — last node is a branch whose children must be verified.
     assert!(
         proof
             .start_proof()
             .value_digest(b"\x10", &root2)
             .unwrap()
-            .is_none()
+            .is_none(),
+        "start proof should be an exclusion proof for \\x10"
     );
     let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10"), None, None).unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
@@ -212,13 +205,13 @@ fn test_start_proof_exclusion_for_deleted_key() {
         .change_proof(root1_source, root2.clone(), Some(b"\x10"), None, None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 2); // Delete(\x10) + Put(\x30)
-    // \x10 was deleted — start proof is exclusion.
     assert!(
         proof
             .start_proof()
             .value_digest(b"\x10", &root2)
             .unwrap()
-            .is_none()
+            .is_none(),
+        "start proof should be an exclusion proof for deleted \\x10"
     );
     let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10"), None, None).unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
@@ -329,11 +322,8 @@ fn test_boundary_child_gap_closed_for_start_key() {
 /// boundary is "before" the terminal — no children are marked outside.
 #[test]
 fn test_terminal_divergence_within_partial_path() {
-    let (source, _dir_source) =
-        setup_db![(b"\x10\x50", b"a"), (b"\x10\x58", b"b"), (b"\x30", b"c")];
-    let (target, _dir_target) =
-        setup_db![(b"\x10\x50", b"a"), (b"\x10\x58", b"b"), (b"\x30", b"c")];
-    let root1_target = target.root_hash().unwrap();
+    let (source, target, root1_target, _ds, _dt) =
+        setup_source_target![(b"\x10\x50", b"a"), (b"\x10\x58", b"b"), (b"\x30", b"c")];
 
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x30", b"changed")]);
 
@@ -355,19 +345,12 @@ fn test_terminal_divergence_within_partial_path() {
 /// below 5 and marked outside.
 #[test]
 fn test_terminal_ancestor_all_children_outside() {
-    let (source, _dir_source) = setup_db![
+    let (source, target, root1_target, _ds, _dt) = setup_source_target![
         (b"\x10\x01", b"a"),
         (b"\x10\x02", b"b"),
         (b"\x10\x03", b"c"),
         (b"\x30", b"d")
     ];
-    let (target, _dir_target) = setup_db![
-        (b"\x10\x01", b"a"),
-        (b"\x10\x02", b"b"),
-        (b"\x10\x03", b"c"),
-        (b"\x30", b"d")
-    ];
-    let root1_target = target.root_hash().unwrap();
 
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x30", b"changed")]);
 
@@ -394,19 +377,12 @@ fn test_terminal_ancestor_all_children_outside() {
 /// marked outside by `compute_outside_children`.
 #[test]
 fn test_terminal_divergent_node_all_children_in_range() {
-    let (source, _dir_source) = setup_db![
+    let (source, target, root1_target, _ds, _dt) = setup_source_target![
         (b"\x10\x01", b"a"),
         (b"\x10\x02", b"b"),
         (b"\x10\x03", b"c"),
         (b"\x30", b"d")
     ];
-    let (target, _dir_target) = setup_db![
-        (b"\x10\x01", b"a"),
-        (b"\x10\x02", b"b"),
-        (b"\x10\x03", b"c"),
-        (b"\x30", b"d")
-    ];
-    let root1_target = target.root_hash().unwrap();
 
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x30", b"changed")]);
 
@@ -434,9 +410,8 @@ fn test_terminal_divergent_node_all_children_in_range() {
 /// the `\x20` node extend beyond `end_key` and must use proof hashes.
 #[test]
 fn test_right_edge_boundary_prefix_of_terminal() {
-    let (source, _dir_source) = setup_db![(b"\x10", b"a"), (b"\x20", b"b"), (b"\x20\xab", b"c")];
-    let (target, _dir_target) = setup_db![(b"\x10", b"a"), (b"\x20", b"b"), (b"\x20\xab", b"c")];
-    let root1_target = target.root_hash().unwrap();
+    let (source, target, root1_target, _ds, _dt) =
+        setup_source_target![(b"\x10", b"a"), (b"\x20", b"b"), (b"\x20\xab", b"c")];
 
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x10", b"changed")]);
 
@@ -458,17 +433,11 @@ fn test_right_edge_boundary_prefix_of_terminal() {
 /// reconciliation must adopt the proof's value (`"new_pfx"`) to match `end_root`.
 #[test]
 fn test_out_of_range_value_change_adopted() {
-    let (source, _dir_source) = setup_db![
+    let (source, target, root1_target, _ds, _dt) = setup_source_target![
         (b"\x10", b"old_pfx"),
         (b"\x10\x50", b"val0000"),
         (b"\x30", b"val1000")
     ];
-    let (target, _dir_target) = setup_db![
-        (b"\x10", b"old_pfx"),
-        (b"\x10\x50", b"val0000"),
-        (b"\x30", b"val1000")
-    ];
-    let root1_target = target.root_hash().unwrap();
 
     let (root1_source, root2) =
         setup_2nd_commit!(source, [(b"\x10", b"new_pfx"), (b"\x30", b"changed")]);
@@ -579,13 +548,13 @@ fn test_end_proof_exclusion_for_deleted_key() {
         .change_proof(root1_source, root2.clone(), None, Some(b"\x30"), None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 2); // Put(\x10) + Delete(\x30)
-    // \x30 was deleted — end proof is exclusion.
     assert!(
         proof
             .end_proof()
             .value_digest(b"\x30", &root2)
             .unwrap()
-            .is_none()
+            .is_none(),
+        "end proof should be an exclusion proof for deleted \\x30"
     );
     let ctx = verify_change_proof_structure(&proof, root2, None, Some(b"\x30"), None).unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
@@ -595,9 +564,8 @@ fn test_end_proof_exclusion_for_deleted_key() {
 /// at the same key. If that key was changed, `batch_ops` has exactly 1 entry.
 #[test]
 fn test_single_point_range() {
-    let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
-    let (target, _dir_target) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
-    let root1_target = target.root_hash().unwrap();
+    let (source, target, root1_target, _ds, _dt) =
+        setup_source_target![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
 
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x20", b"changed")]);
 
@@ -670,7 +638,20 @@ fn test_out_of_range_root_compression() {
             None,
         )
         .unwrap();
-    assert!(!proof.batch_ops().is_empty());
+    assert_eq!(proof.batch_ops().len(), 1);
+    // After deleting \x01, root compresses from partial_path [] to [1].
+    assert_eq!(
+        proof
+            .start_proof()
+            .first()
+            .unwrap()
+            .key
+            .iter()
+            .map(|c| c.as_u8())
+            .collect::<Vec<_>>(),
+        vec![1],
+        "root should compress to [1] after deletion"
+    );
 
     let ctx =
         verify_change_proof_structure(&proof, root2.clone(), Some(b"\x10"), None, None).unwrap();
@@ -708,6 +689,11 @@ fn test_out_of_range_root_expansion() {
         .change_proof(root1_source, root2.clone(), Some(b"\x10"), None, None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
+    // After inserting \x01, root expands from partial_path [1] to [].
+    assert!(
+        proof.start_proof().first().unwrap().key.is_empty(),
+        "root should expand to [] after insertion"
+    );
 
     let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10"), None, None).unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
@@ -717,9 +703,8 @@ fn test_out_of_range_root_expansion() {
 /// revisions. Tests that root-level value deltas are handled correctly.
 #[test]
 fn test_root_value_change() {
-    let (source, _dir_source) = setup_db![(b"", b"root_old"), (b"\x10", b"v0")];
-    let (target, _dir_target) = setup_db![(b"", b"root_old"), (b"\x10", b"v0")];
-    let root1_target = target.root_hash().unwrap();
+    let (source, target, root1_target, _ds, _dt) =
+        setup_source_target![(b"", b"root_old"), (b"\x10", b"v0")];
 
     let (root1_source, root2) =
         setup_2nd_commit!(source, [(b"", b"root_new"), (b"\x10", b"changed")]);
@@ -741,17 +726,11 @@ fn test_root_value_change() {
 #[cfg(not(feature = "ethhash"))]
 #[test]
 fn test_change_proof_with_hashed_out_of_range_value() {
-    let (source, _dir_source) = setup_db![
+    let (source, target, root1_target, _ds, _dt) = setup_source_target![
         (b"\x10", [0u8; 64].as_slice()),
         (b"\x10\x50", b"child"),
         (b"\x30", b"other")
     ];
-    let (target, _dir_target) = setup_db![
-        (b"\x10", [0u8; 64].as_slice()),
-        (b"\x10\x50", b"child"),
-        (b"\x30", b"other")
-    ];
-    let root1_target = target.root_hash().unwrap();
 
     // Change \x10's value (out of range) and \x30 (in range).
     source
