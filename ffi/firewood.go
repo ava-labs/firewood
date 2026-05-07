@@ -85,6 +85,15 @@ var (
 	// automatically instead.
 	ErrActiveKeepAliveHandles = errors.New("cannot close database with active keep-alive handles")
 
+	// ErrForceCloseNoProgress is returned by [Database.Close] when
+	// [WithForceCloseHandles] is set but the live-handle registry stops
+	// shrinking. This indicates a bug in the keep-alive bookkeeping —
+	// every successful drop unregisters the handle, so under normal
+	// operation the registry drains within a small bounded number of
+	// passes. Close still attempts the underlying database close on a
+	// best-effort basis when this is returned.
+	ErrForceCloseNoProgress = errors.New("force-close failed to make progress draining live handles")
+
 	errDBClosed = errors.New("firewood database already closed")
 )
 
@@ -476,9 +485,14 @@ type closeConfig struct {
 // before closing the database, instead of waiting for the caller to release
 // them.
 //
-// Any errors encountered while dropping individual handles are joined and
-// returned alongside the close error. Methods on a force-dropped handle
-// behave the same as if the caller had explicitly invoked Drop.
+// Each handle's Drop is called once. Drop unregisters the handle from the
+// keep-alive registry unconditionally, even if the underlying C-side free
+// errors — so a failing free cannot stall the close. Any drop errors are
+// joined and returned, and the underlying database close is still attempted
+// on a best-effort basis.
+//
+// Methods on a force-dropped handle behave the same as if the caller had
+// explicitly invoked Drop.
 func WithForceCloseHandles() CloseOption {
 	return func(c *closeConfig) {
 		c.forceCloseHandles = true
@@ -494,13 +508,25 @@ func WithForceCloseHandles() CloseOption {
 // created from this Database are either unreachable or have been explicitly
 // released via [Proposal.Commit], [Proposal.Drop], [Revision.Drop],
 // [Reconstructed.Drop], [Iterator.Drop], or [RangeProof.Free]. Unreachable
-// objects are released by their finalizers before Close returns.
+// objects are released by their finalizers before Close returns. If the
+// context expires first, [ErrActiveKeepAliveHandles] is returned and
+// [C.fwd_close_db] is not called.
 //
 // Pass [WithForceCloseHandles] to forcibly drop every outstanding handle
-// instead of waiting for the caller to release them.
+// instead of waiting for the caller to release them. The force-drop loop
+// honours ctx: if it expires while drops are still in flight, Close returns
+// the accumulated errors joined with [ErrActiveKeepAliveHandles] and does
+// not call [C.fwd_close_db] — the database is left open so the caller can
+// retry with a fresh context. When force-drop completes within ctx, Close
+// calls [C.fwd_close_db] on a best-effort basis even if individual drops
+// errored: leaving the database open after force-drop has already torn down
+// its dependents is strictly worse than attempting the close, since the
+// file lock and background thread would otherwise leak with no recovery
+// path. Any drop errors are joined with the close result and returned. See
+// [WithForceCloseHandles] for details.
 //
-// This is safe to call multiple times; subsequent calls after the first will
-// do nothing.
+// Safe to call multiple times; subsequent calls after the first are no-ops
+// and return nil.
 func (db *Database) Close(ctx context.Context, opts ...CloseOption) error {
 	cfg := closeConfig{}
 	for _, opt := range opts {
@@ -515,48 +541,107 @@ func (db *Database) Close(ctx context.Context, opts ...CloseOption) error {
 
 	var forcedDropErr error
 	if cfg.forceCloseHandles {
-		// Loop until the live-handle registry is empty. New handles cannot be
-		// constructed concurrently because handleLock.Lock is held, but a
-		// handle derived from another handle (e.g. an Iterator created from a
-		// Revision under the parent's keepAliveHandle.mu.RLock) may be added
-		// to the registry after our snapshot. The parent's mu.RLock blocks
-		// our mu.Lock in the parent's drop, so the derived handle finishes
-		// registering before the parent is dropped — and is then visible on
-		// the next iteration.
-		for {
-			handles := db.keepAlives.snapshot()
-			if len(handles) == 0 {
-				break
-			}
-			for _, dropFn := range handles {
-				if err := dropFn(); err != nil {
-					forcedDropErr = errors.Join(forcedDropErr, err)
-				}
-			}
+		forcedDropErr = db.forceDropAll(ctx)
+		if ctx.Err() != nil {
+			// Force-drop bailed early because ctx expired. The registry
+			// may still contain live handles, so calling fwd_close_db
+			// would free the Db out from under their Rust-side
+			// counterparts. Surface the error and leave the Db open;
+			// the caller can retry Close with a fresh context.
+			return errors.Join(forcedDropErr, fmt.Errorf("%w: %w", ctx.Err(), ErrActiveKeepAliveHandles))
 		}
 	}
 
-	done := make(chan struct{})
-	go func() {
-		db.keepAlives.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-ctx.Done():
-		return errors.Join(forcedDropErr, fmt.Errorf("%w: %w", ctx.Err(), ErrActiveKeepAliveHandles))
+	if err := db.waitForKeepAlives(ctx); err != nil {
+		// Graceful path: bookkeeping says handles are still live. Don't
+		// touch fwd_close_db — we'd be freeing the Db out from under
+		// objects whose Rust-side counterparts borrow it.
+		return errors.Join(forcedDropErr, err)
 	}
 
 	db.commitLock.Lock()
 	defer db.commitLock.Unlock()
 	if err := getErrorFromVoidResult(C.fwd_close_db(db.handle)); err != nil {
+		// Best-effort: clear db.handle so a retry of Close is a no-op
+		// rather than re-entering with a possibly-freed pointer.
+		db.handle = nil
 		return errors.Join(forcedDropErr, fmt.Errorf("unexpected error when closing database: %w", err))
 	}
 
 	db.handle = nil // Prevent double free
 
 	return forcedDropErr
+}
+
+// forceDropAll drains the keep-alive registry by repeatedly snapshotting and
+// dropping every registered handle. Caller must hold db.handleLock.Lock.
+//
+// The ctx is checked between passes and between individual drops. If it
+// expires partway through, the loop returns with whatever errors have
+// accumulated; the caller is responsible for noticing ctx.Err() and not
+// proceeding to fwd_close_db (the registry may still hold live handles
+// whose Rust-side counterparts borrow the Db).
+//
+// Termination argument (absent ctx cancellation):
+//   - handleLock.Lock blocks any new top-level handle constructor (Propose,
+//     Revision, Reconstruct, …), so the only way new entries appear in the
+//     registry during this loop is via in-flight derivation from a parent
+//     handle (e.g. an Iterator constructed from a Revision under the
+//     parent's keepAliveHandle.mu.RLock).
+//   - Each handle's Drop takes the parent's mu.Lock inside disown. That
+//     Lock serializes after any in-flight RLock holder, so by the time a
+//     parent's drop returns, every child whose constructor was racing has
+//     finished registering and is visible on the next snapshot.
+//   - Drop also disowns unconditionally (see [handle.Drop]), so each entry
+//     in the snapshot exits the registry on this pass regardless of whether
+//     its C-side free errored.
+//
+// Together these guarantee strict shrinkage: the registry size is bounded by
+// the original count plus all transitive descendants, which is finite. The
+// progress check is a defensive guard against future regressions of those
+// invariants — if a pass ever fails to shrink the registry we bail rather
+// than spin forever.
+func (db *Database) forceDropAll(ctx context.Context) error {
+	var dropErr error
+	for {
+		if err := ctx.Err(); err != nil {
+			return dropErr
+		}
+		handles := db.keepAlives.snapshot()
+		if len(handles) == 0 {
+			return dropErr
+		}
+		before := len(handles)
+		for _, dropFn := range handles {
+			if ctx.Err() != nil {
+				return dropErr
+			}
+			if err := dropFn(); err != nil {
+				dropErr = errors.Join(dropErr, err)
+			}
+		}
+		after := len(db.keepAlives.snapshot())
+		if after >= before {
+			return errors.Join(dropErr, fmt.Errorf("%w: %d handles remain after pass over %d", ErrForceCloseNoProgress, after, before))
+		}
+	}
+}
+
+// waitForKeepAlives blocks until the keep-alive WaitGroup drains or ctx
+// fires. Returns nil on drain, a wrapped [ErrActiveKeepAliveHandles] on
+// cancellation. Caller must hold db.handleLock.Lock.
+func (db *Database) waitForKeepAlives(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		db.keepAlives.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("%w: %w", ctx.Err(), ErrActiveKeepAliveHandles)
+	}
 }
 
 // Dump returns a DOT (Graphviz) format representation of the trie structure

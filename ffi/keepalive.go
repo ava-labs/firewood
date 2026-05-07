@@ -45,21 +45,34 @@ func drop[T any](h *handle[T]) {
 	_ = h.Drop()
 }
 
+// Drop releases the C-side resource and disowns this handle from the parent
+// database's keep-alive registry.
+//
+// Disowning is unconditional: even if the underlying free call returns an
+// error, the handle is still removed from the registry and the WaitGroup is
+// decremented. The C pointer is also cleared before the free call, so a
+// subsequent Drop is a no-op rather than a retry against a possibly-corrupt
+// pointer. Any free error is surfaced to the caller, which is then
+// responsible for deciding what to do — but the caller does not need to
+// worry about the database hanging on shutdown because a free errored.
+//
+// Idempotent: subsequent calls after the first return nil.
 func (h *handle[T]) Drop() error {
-	return h.keepAliveHandle.disown(false /* evenOnError */, func() error {
+	return h.keepAliveHandle.disown(true /* evenOnError */, func() error {
 		if h.dropped {
 			return nil
 		}
 
-		if err := getErrorFromVoidResult(h.free(h.ptr)); err != nil {
-			return fmt.Errorf("%w: %w", errFreeingValue, err)
-		}
-
-		// Prevent double free
+		// Mark dropped and clear the pointer *before* calling free, so that
+		// even if free errors we never call it twice on the same pointer.
+		ptr := h.ptr
 		var zero T
 		h.ptr = zero
 		h.dropped = true
 
+		if err := getErrorFromVoidResult(h.free(ptr)); err != nil {
+			return fmt.Errorf("%w: %w", errFreeingValue, err)
+		}
 		return nil
 	})
 }
@@ -101,6 +114,12 @@ func (r *keepAliveRegistry) unregister(h *databaseKeepAliveHandle) {
 }
 
 // snapshot returns the currently registered drop callbacks.
+//
+// The returned slice is a snapshot: entries reflect handles registered at
+// the moment of the call. New registrations after snapshot returns are not
+// included; deregistrations after snapshot returns do not remove entries.
+// Callers driving force-close should re-snapshot after invoking the returned
+// drops to pick up any handles whose registration was racing with the call.
 func (r *keepAliveRegistry) snapshot() []func() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -146,6 +165,12 @@ func (h *databaseKeepAliveHandle) init(registry *keepAliveRegistry) {
 // disown indicates that the object owning this handle is no longer keeping the
 // database alive. If [attemptDisown] returns an error, disowning will only occur
 // if [disownEvenOnErr] is true.
+//
+// Most callers should pass [disownEvenOnErr]=true: keeping the handle in the
+// registry on a free error means the parent database can never gracefully
+// close, since [Database.Close] waits on a WaitGroup whose counter only
+// decrements via disown. Pass false only when the caller has a concrete
+// recovery path for the failed free.
 //
 // This method is safe to call multiple times; subsequent calls after the first
 // will continue to invoke [attemptDisown] but will not decrement the wait group
