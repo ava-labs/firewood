@@ -11,7 +11,7 @@ use firewood::{
     db::{Db, DbConfig},
     manager::RevisionManagerConfig,
 };
-use firewood_storage::{Committed, FileBacked, NodeStore};
+use firewood_storage::{Committed, FileBacked, HashFailureMode, HashVerification, NodeStore};
 
 use crate::{BatchOp, BorrowedBytes, CView, CreateProposalResult};
 
@@ -107,9 +107,56 @@ pub struct DatabaseHandleArgs<'a> {
     ///
     /// Note: `revisions` must be > `deferred_persistence_commit_count`.
     pub deferred_persistence_commit_count: u64,
+
+    /// Bitmask selecting which read paths are hash-verified.
+    ///
+    /// A value of `0` means "use defaults" (only the rootstore root is
+    /// verified — matches historical behavior). Any nonzero value is a
+    /// literal bitmask of the bits below; bits not set are off:
+    ///
+    /// - bit 0 (`0x01`): verify the root reached via the rootstore
+    /// - bit 1 (`0x02`): verify the root of a recent (in-memory) revision at open
+    /// - bit 2 (`0x04`): verify branch nodes on read
+    /// - bit 3 (`0x08`): verify leaf nodes on read
+    ///
+    /// Treating `0` as "defaults" lets existing zero-initialized C callers
+    /// keep the historical behavior.
+    pub hash_verification: u8,
+
+    /// What to do when a hash verification fails.
+    ///
+    /// - `0`: return an error from the read (default; only safe choice for production)
+    /// - `1`: log the failure and return the unverified node (diagnostic use only)
+    ///
+    /// Any other value is rejected.
+    pub hash_failure_mode: u8,
 }
 
 impl DatabaseHandleArgs<'_> {
+    fn as_hash_verification(&self) -> Result<HashVerification, api::Error> {
+        let on_failure = match self.hash_failure_mode {
+            0 => HashFailureMode::Error,
+            1 => HashFailureMode::LogAndContinue,
+            _ => return Err(invalid_data("invalid hash_failure_mode")),
+        };
+        let bits = self.hash_verification;
+        let hv = if bits == 0 {
+            HashVerification {
+                on_failure,
+                ..HashVerification::default()
+            }
+        } else {
+            HashVerification {
+                root_from_rootstore: bits & 0x01 != 0,
+                root_recent: bits & 0x02 != 0,
+                branches: bits & 0x04 != 0,
+                leaves: bits & 0x08 != 0,
+                on_failure,
+            }
+        };
+        Ok(hv)
+    }
+
     fn as_rev_manager_config(&self) -> Result<RevisionManagerConfig, api::Error> {
         let cache_read_strategy = match self.strategy {
             0 => firewood::manager::CacheReadStrategy::WritesOnly,
@@ -167,6 +214,7 @@ impl DatabaseHandle {
             .truncate(args.truncate)
             .manager(args.as_rev_manager_config()?)
             .root_store(args.root_store)
+            .hash_verification(args.as_hash_verification()?)
             .build();
 
         let path = args

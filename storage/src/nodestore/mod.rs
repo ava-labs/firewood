@@ -98,9 +98,48 @@ use std::sync::Arc;
 
 use crate::hashednode::hash_node;
 use crate::node::Node;
+
+/// Hash `node` at `path` and compare against `expected`. Always counted in
+/// `HASH_VERIFICATIONS{type=site}`. On mismatch, behavior depends on
+/// `on_failure`: `Error` returns a `FileIoError`; `LogAndContinue` logs
+/// and returns `Ok(())`.
+///
+/// Callers are responsible for checking the relevant flag before calling;
+/// this function unconditionally hashes.
+pub(crate) fn verify_node_hash(
+    on_failure: HashFailureMode,
+    node: &Node,
+    expected: &HashType,
+    path: &Path,
+    addr: LinearAddress,
+    site: &'static str,
+) -> Result<(), FileIoError> {
+    firewood_counter!(HASH_VERIFICATIONS, "type" => site).increment(1);
+    let computed = hash_node(node, path);
+    if computed == *expected {
+        return Ok(());
+    }
+    firewood_counter!(HASH_VERIFICATION_FAILURES, "type" => site).increment(1);
+    match on_failure {
+        HashFailureMode::Error => Err(FileIoError::new(
+            Error::other("hash verification failed"),
+            None,
+            addr.get(),
+            None,
+        )),
+        HashFailureMode::LogAndContinue => {
+            crate::logger::error!(
+                "hash verification failed at addr {} (site={site}): expected {expected:?}, computed {computed:?}",
+                addr.get()
+            );
+            Ok(())
+        }
+    }
+}
 use crate::node::persist::MaybePersistedNode;
 use crate::{
-    CacheReadStrategy, Child, FileIoError, HashType, Path, ReadableStorage, SharedNode, TrieHash,
+    CacheReadStrategy, Child, FileIoError, HashFailureMode, HashType, Path, ReadableStorage,
+    SharedNode, TrieHash,
 };
 
 use super::linear::WritableStorage;
@@ -130,7 +169,21 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
         if let Some(root_address) = header.root_address() {
             let root_hash = if let Some(hash) = header.root_hash() {
-                hash.into_hash_type()
+                let expected = hash.into_hash_type();
+                let policy = nodestore.storage.hash_verification();
+                if policy.root_recent {
+                    let node =
+                        nodestore.read_node_from_disk(root_address, ReadableNodeMode::Open)?;
+                    verify_node_hash(
+                        policy.on_failure,
+                        &node,
+                        &expected,
+                        &Path(SmallVec::default()),
+                        root_address,
+                        "root",
+                    )?;
+                }
+                expected
             } else {
                 debug!("No root hash in header; computing from disk");
                 nodestore
@@ -185,17 +238,19 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
         let node = nodestore.read_node(root_address)?;
 
-        if hash_node(node.as_ref(), &Path::new()) == root_hash {
-            nodestore.kind.root = Some(Child::AddressWithHash(root_address, root_hash));
-            Ok(nodestore)
-        } else {
-            Err(FileIoError::new(
-                std::io::Error::other("hash verification failed"),
-                None,
-                root_address.get(),
-                None,
-            ))
+        let policy = nodestore.storage.hash_verification();
+        if policy.root_from_rootstore {
+            verify_node_hash(
+                policy.on_failure,
+                node.as_ref(),
+                &root_hash,
+                &Path::new(),
+                root_address,
+                "rootstore",
+            )?;
         }
+        nodestore.kind.root = Some(Child::AddressWithHash(root_address, root_hash));
+        Ok(nodestore)
     }
 
     /// Returns the length of the deleted list for this `NodeStore`.
@@ -483,6 +538,40 @@ pub trait NodeReader {
     fn must_recompute_storage_hash(&self) -> bool {
         true
     }
+
+    /// Returns the hash-verification policy in effect for this reader.
+    /// Default: historical behavior (no extra branch/leaf checks).
+    fn hash_verification(&self) -> crate::HashVerification {
+        crate::HashVerification::default()
+    }
+
+    /// Read the node at `addr`, optionally verifying its hash against
+    /// `expected` based on the verification policy. `path` is the
+    /// trie-path prefix to this node (required for ethhash). Cache hits
+    /// are not re-verified.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the node cannot be read, or if
+    /// verification fails and `on_failure` is `Error`.
+    fn read_node_verified(
+        &self,
+        addr: LinearAddress,
+        expected: &HashType,
+        path: &Path,
+    ) -> Result<SharedNode, FileIoError> {
+        let node = self.read_node(addr)?;
+        let policy = self.hash_verification();
+        let (want, site) = if node.is_leaf() {
+            (policy.leaves, "leaf")
+        } else {
+            (policy.branches, "branch")
+        };
+        if want {
+            verify_node_hash(policy.on_failure, &node, expected, path, addr, site)?;
+        }
+        Ok(node)
+    }
 }
 
 impl<T> NodeReader for T
@@ -496,6 +585,10 @@ where
 
     fn must_recompute_storage_hash(&self) -> bool {
         self.deref().must_recompute_storage_hash()
+    }
+
+    fn hash_verification(&self) -> crate::HashVerification {
+        self.deref().hash_verification()
     }
 }
 
@@ -906,6 +999,19 @@ impl<T, S: ReadableStorage> NodeReader for NodeStore<Mutable<T>, S> {
     fn must_recompute_storage_hash(&self) -> bool {
         self.must_recompute_storage_hash
     }
+
+    fn hash_verification(&self) -> crate::HashVerification {
+        self.storage.hash_verification()
+    }
+
+    fn read_node_verified(
+        &self,
+        addr: LinearAddress,
+        expected: &HashType,
+        path: &Path,
+    ) -> Result<SharedNode, FileIoError> {
+        self.read_node_verified_from_disk(addr, expected, path, ReadableNodeMode::Write)
+    }
 }
 
 impl<S: ReadableStorage> NodeReader for NodeStore<Reconstructed, S> {
@@ -916,6 +1022,19 @@ impl<S: ReadableStorage> NodeReader for NodeStore<Reconstructed, S> {
     fn must_recompute_storage_hash(&self) -> bool {
         self.must_recompute_storage_hash
     }
+
+    fn hash_verification(&self) -> crate::HashVerification {
+        self.storage.hash_verification()
+    }
+
+    fn read_node_verified(
+        &self,
+        addr: LinearAddress,
+        expected: &HashType,
+        path: &Path,
+    ) -> Result<SharedNode, FileIoError> {
+        self.read_node_verified_from_disk(addr, expected, path, ReadableNodeMode::ReconRead)
+    }
 }
 
 impl<T: Parentable, S: ReadableStorage> NodeReader for NodeStore<T, S> {
@@ -925,6 +1044,19 @@ impl<T: Parentable, S: ReadableStorage> NodeReader for NodeStore<T, S> {
 
     fn must_recompute_storage_hash(&self) -> bool {
         self.must_recompute_storage_hash
+    }
+
+    fn hash_verification(&self) -> crate::HashVerification {
+        self.storage.hash_verification()
+    }
+
+    fn read_node_verified(
+        &self,
+        addr: LinearAddress,
+        expected: &HashType,
+        path: &Path,
+    ) -> Result<SharedNode, FileIoError> {
+        self.read_node_verified_from_disk(addr, expected, path, ReadableNodeMode::Read)
     }
 }
 
@@ -1080,6 +1212,44 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
 
         let (node, _) = self.read_node_with_num_bytes_from_disk(addr)?;
 
+        self.cache_after_read(addr, &node);
+
+        Ok(node)
+    }
+
+    /// Like [`Self::read_node_from_disk`], but verifies the node's hash against
+    /// `expected` when the relevant policy flag is set. Cache hits are
+    /// returned without re-verification — a node in cache was either written
+    /// by this process or already verified the first time it was read.
+    pub(crate) fn read_node_verified_from_disk(
+        &self,
+        addr: LinearAddress,
+        expected: &HashType,
+        path: &Path,
+        mode: ReadableNodeMode,
+    ) -> Result<SharedNode, FileIoError> {
+        if let Some(node) = self.storage.read_cached_node(addr, mode) {
+            return Ok(node);
+        }
+
+        let (node, _) = self.read_node_with_num_bytes_from_disk(addr)?;
+
+        let policy = self.storage.hash_verification();
+        let (want, site) = if node.is_leaf() {
+            (policy.leaves, "leaf")
+        } else {
+            (policy.branches, "branch")
+        };
+        if want {
+            verify_node_hash(policy.on_failure, &node, expected, path, addr, site)?;
+        }
+
+        self.cache_after_read(addr, &node);
+
+        Ok(node)
+    }
+
+    fn cache_after_read(&self, addr: LinearAddress, node: &SharedNode) {
         match self.storage.cache_read_strategy() {
             CacheReadStrategy::All => {
                 self.storage.cache_node(addr, node.clone());
@@ -1091,8 +1261,6 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
             }
             CacheReadStrategy::WritesOnly => {}
         }
-
-        Ok(node)
     }
 
     pub(crate) fn read_node_with_num_bytes_from_disk(
@@ -1364,6 +1532,7 @@ mod tests {
             false,
             true,
             CacheReadStrategy::WritesOnly,
+            crate::HashVerification::default(),
             NodeHashAlgorithm::compile_option(),
         )?);
         let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
@@ -1443,6 +1612,7 @@ mod tests {
             false,
             true,
             CacheReadStrategy::WritesOnly,
+            crate::HashVerification::default(),
             NodeHashAlgorithm::compile_option(),
         )?);
         let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
@@ -1482,6 +1652,7 @@ mod tests {
             false,
             true,
             CacheReadStrategy::WritesOnly,
+            crate::HashVerification::default(),
             NodeHashAlgorithm::compile_option(),
         )?);
         let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());

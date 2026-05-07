@@ -195,6 +195,7 @@ mod tests {
                 false,
                 true,
                 CacheReadStrategy::WritesOnly,
+                crate::HashVerification::default(),
                 NodeHashAlgorithm::compile_option(),
             )
             .unwrap(),
@@ -232,6 +233,7 @@ mod tests {
                 false,
                 true,
                 CacheReadStrategy::WritesOnly,
+                crate::HashVerification::default(),
                 NodeHashAlgorithm::compile_option(),
             )
             .unwrap(),
