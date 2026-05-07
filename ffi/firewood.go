@@ -79,9 +79,9 @@ var (
 	// EmptyRoot is the zero value for [Hash]
 	EmptyRoot Hash
 	// ErrActiveKeepAliveHandles is returned by [Database.Close] when the
-	// supplied context is cancelled before all outstanding keep-alive handles
-	// (proposals, revisions, reconstructed views, iterators, proof handles)
-	// have been released. Pass [WithForceCloseHandles] to drop them
+	// supplied context is cancelled before all outstanding keep-alive
+	// handles ([Proposal], [Revision], [Reconstructed], [Iterator]) have
+	// been released. Pass [WithForceCloseHandles] to drop them
 	// automatically instead.
 	ErrActiveKeepAliveHandles = errors.New("cannot close database with active keep-alive handles")
 
@@ -119,10 +119,11 @@ type Database struct {
 	handleLock sync.RWMutex
 
 	// keepAlives tracks every outstanding [Proposal], [Revision],
-	// [Reconstructed], [Iterator], and [RangeProof] that is keeping the
-	// database alive. It carries both the WaitGroup that
-	// [Database.Close] waits on and the registry of drop callbacks that
-	// [WithForceCloseHandles] uses to release handles forcibly.
+	// [Reconstructed], and [Iterator] — the types that hold a borrow on
+	// the underlying Rust database and therefore must not outlive it.
+	// It carries both the WaitGroup that [Database.Close] waits on and
+	// the registry of drop callbacks that [WithForceCloseHandles] uses
+	// to release handles forcibly.
 	keepAlives *keepAliveRegistry
 
 	// commitLock is used to ensure that methods accessing or modifying the latest
@@ -481,9 +482,8 @@ type closeConfig struct {
 }
 
 // WithForceCloseHandles makes [Database.Close] forcibly drop every outstanding
-// [Proposal], [Revision], [Reconstructed], [Iterator], and [RangeProof]
-// before closing the database, instead of waiting for the caller to release
-// them.
+// [Proposal], [Revision], [Reconstructed], and [Iterator] before closing the
+// database, instead of waiting for the caller to release them.
 //
 // Each handle's Drop is called once. Drop unregisters the handle from the
 // keep-alive registry unconditionally, even if the underlying C-side free
@@ -503,14 +503,14 @@ func WithForceCloseHandles() CloseOption {
 // background persistence thread.
 //
 // By default Close blocks until all outstanding keep-alive handles are
-// disowned or the [context.Context] is cancelled. That is, until all
-// Revisions, Proposals, Reconstructed views, Iterators, and proof handles
-// created from this Database are either unreachable or have been explicitly
-// released via [Proposal.Commit], [Proposal.Drop], [Revision.Drop],
-// [Reconstructed.Drop], [Iterator.Drop], or [RangeProof.Free]. Unreachable
-// objects are released by their finalizers before Close returns. If the
-// context expires first, [ErrActiveKeepAliveHandles] is returned and
-// [C.fwd_close_db] is not called.
+// disowned or the [context.Context] is cancelled. That is, until every
+// [Proposal], [Revision], [Reconstructed], and [Iterator] created from
+// this Database is either unreachable or has been explicitly released via
+// [Proposal.Commit], [Proposal.Drop], [Revision.Drop], [Reconstructed.Drop],
+// or [Iterator.Drop]. Unreachable objects are released by their finalizers
+// before Close returns. If the context expires first,
+// [ErrActiveKeepAliveHandles] is returned and [C.fwd_close_db] is not
+// called.
 //
 // Pass [WithForceCloseHandles] to forcibly drop every outstanding handle
 // instead of waiting for the caller to release them. The force-drop loop
