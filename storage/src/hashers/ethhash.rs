@@ -140,7 +140,7 @@ impl HasUpdate for Keccak256 {
 /// Remaining nibble pairs are packed high-nibble-first into subsequent bytes.
 /// This must match geth's `hexToCompact` exactly; any deviation breaks root
 /// hash compatibility.
-fn nibbles_to_eth_compact<T: TriePath>(nibbles: T, is_leaf: bool) -> SmallVec<[u8; 32]> {
+pub(crate) fn nibbles_to_eth_compact<T: TriePath>(nibbles: T, is_leaf: bool) -> SmallVec<[u8; 32]> {
     // This is a bitfield that represents the first byte of the output, documented above
     bitfield! {
         struct CompactFirstByte(u8);
@@ -217,7 +217,7 @@ impl<T: Hashable> Preimage for T {
                     Some(ValueDigest::Value(bytes)) => {
                         let new_hash = Keccak256::digest(NULL_RLP).as_slice().to_vec();
                         let bytes_mut = BytesMut::from(bytes);
-                        if let Some(result) = replace_hash(bytes_mut, new_hash) {
+                        if let Some(result) = replace_hash(bytes_mut, &new_hash) {
                             rlp.append(&&*result);
                         } else {
                             rlp.append(&bytes);
@@ -299,7 +299,7 @@ impl<T: Hashable> Preimage for T {
                     };
                     trace!("replacement hash {:?}", hex::encode(&replacement_hash));
 
-                    let bytes = replace_hash(rlp_encoded_bytes, replacement_hash)
+                    let bytes = replace_hash(rlp_encoded_bytes, &replacement_hash)
                         .unwrap_or_else(|| BytesMut::from(rlp_encoded_bytes));
                     trace!("updated encoded value {:02X?}", hex::encode(&bytes));
                     bytes
