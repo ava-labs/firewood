@@ -1707,9 +1707,7 @@ func TestCloseForceDropsConcurrentReader(t *testing.T) {
 	r.NoError(err)
 
 	const n = 200
-	keys, vals, batch := kvForTest(n)
-	_ = keys
-	_ = vals
+	_, _, batch := kvForTest(n)
 	root, err := db.Update(batch)
 	r.NoError(err)
 	revision, err := db.Revision(root)
