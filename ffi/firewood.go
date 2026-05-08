@@ -85,16 +85,16 @@ var (
 	// automatically instead.
 	ErrActiveKeepAliveHandles = errors.New("cannot close database with active keep-alive handles")
 
-	// ErrForceCloseNoProgress is returned by [Database.Close] when
+	errDBClosed = errors.New("firewood database already closed")
+
+	// errForceCloseNoProgress is returned by [Database.Close] when
 	// [WithForceCloseHandles] is set but the live-handle registry stops
 	// shrinking. This indicates a bug in the keep-alive bookkeeping —
 	// every successful drop unregisters the handle, so under normal
 	// operation the registry drains within a small bounded number of
-	// passes. Close still attempts the underlying database close on a
-	// best-effort basis when this is returned.
-	ErrForceCloseNoProgress = errors.New("force-close failed to make progress draining live handles")
-
-	errDBClosed = errors.New("firewood database already closed")
+	// passes. Unexported because callers have no recovery path beyond
+	// reporting the bug.
+	errForceCloseNoProgress = errors.New("force-close failed to make progress draining live handles")
 )
 
 // Database is an FFI wrapper for the Rust Firewood database.
@@ -548,7 +548,7 @@ func (db *Database) Close(ctx context.Context, opts ...CloseOption) error {
 			// would free the Db out from under their Rust-side
 			// counterparts. Surface the error and leave the Db open;
 			// the caller can retry Close with a fresh context.
-			return errors.Join(forcedDropErr, fmt.Errorf("%w: %w", ctx.Err(), ErrActiveKeepAliveHandles))
+			return errors.Join(forcedDropErr, fmt.Errorf("%w: %w", ErrActiveKeepAliveHandles, ctx.Err()))
 		}
 	}
 
@@ -561,14 +561,14 @@ func (db *Database) Close(ctx context.Context, opts ...CloseOption) error {
 
 	db.commitLock.Lock()
 	defer db.commitLock.Unlock()
-	if err := getErrorFromVoidResult(C.fwd_close_db(db.handle)); err != nil {
-		// Best-effort: clear db.handle so a retry of Close is a no-op
-		// rather than re-entering with a possibly-freed pointer.
-		db.handle = nil
+	// Clear db.handle before fwd_close_db so any retry of Close is a no-op
+	// rather than re-entering with a possibly-freed pointer, regardless of
+	// whether the close succeeds or errors.
+	handle := db.handle
+	db.handle = nil
+	if err := getErrorFromVoidResult(C.fwd_close_db(handle)); err != nil {
 		return errors.Join(forcedDropErr, fmt.Errorf("unexpected error when closing database: %w", err))
 	}
-
-	db.handle = nil // Prevent double free
 
 	return forcedDropErr
 }
@@ -607,12 +607,11 @@ func (db *Database) forceDropAll(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return dropErr
 		}
-		handles := db.keepAlives.snapshot()
-		if len(handles) == 0 {
+		drops, before := db.keepAlives.snapshot()
+		if before == 0 {
 			return dropErr
 		}
-		before := len(handles)
-		for _, dropFn := range handles {
+		for dropFn := range drops {
 			if ctx.Err() != nil {
 				return dropErr
 			}
@@ -620,9 +619,9 @@ func (db *Database) forceDropAll(ctx context.Context) error {
 				dropErr = errors.Join(dropErr, err)
 			}
 		}
-		after := len(db.keepAlives.snapshot())
+		after := db.keepAlives.size()
 		if after >= before {
-			return errors.Join(dropErr, fmt.Errorf("%w: %d handles remain after pass over %d", ErrForceCloseNoProgress, after, before))
+			return errors.Join(dropErr, fmt.Errorf("%w: %d handles remain after pass over %d", errForceCloseNoProgress, after, before))
 		}
 	}
 }
@@ -640,7 +639,7 @@ func (db *Database) waitForKeepAlives(ctx context.Context) error {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		return fmt.Errorf("%w: %w", ctx.Err(), ErrActiveKeepAliveHandles)
+		return fmt.Errorf("%w: %w", ErrActiveKeepAliveHandles, ctx.Err())
 	}
 }
 

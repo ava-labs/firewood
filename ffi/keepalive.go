@@ -9,6 +9,7 @@ import "C"
 
 import (
 	"fmt"
+	"iter"
 	"sync"
 )
 
@@ -113,21 +114,38 @@ func (r *keepAliveRegistry) unregister(h *databaseKeepAliveHandle) {
 	delete(r.handles, h)
 }
 
-// snapshot returns the currently registered drop callbacks.
+// snapshot returns an iterator over the currently registered drop callbacks
+// along with the count of entries snapshotted.
 //
-// The returned slice is a snapshot: entries reflect handles registered at
-// the moment of the call. New registrations after snapshot returns are not
-// included; deregistrations after snapshot returns do not remove entries.
-// Callers driving force-close should re-snapshot after invoking the returned
-// drops to pick up any handles whose registration was racing with the call.
-func (r *keepAliveRegistry) snapshot() []func() error {
+// The iterator yields a copy of the map taken under the registry lock at
+// snapshot time, so callers may invoke drop callbacks (which re-enter the
+// registry to unregister) without deadlocking. New registrations after
+// snapshot returns are not yielded; deregistrations after snapshot returns
+// do not remove yielded entries. Callers driving force-close should
+// re-snapshot after iterating to pick up any handles whose registration was
+// racing with the call.
+func (r *keepAliveRegistry) snapshot() (iter.Seq[func() error], int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]func() error, 0, len(r.handles))
+	copied := make([]func() error, 0, len(r.handles))
 	for _, fn := range r.handles {
-		out = append(out, fn)
+		copied = append(copied, fn)
 	}
-	return out
+	seq := func(yield func(func() error) bool) {
+		for _, fn := range copied {
+			if !yield(fn) {
+				return
+			}
+		}
+	}
+	return seq, len(copied)
+}
+
+// size returns the current number of registered handles.
+func (r *keepAliveRegistry) size() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.handles)
 }
 
 // databaseKeepAliveHandle is added to types that hold a lease on the database
