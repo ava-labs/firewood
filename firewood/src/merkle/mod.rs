@@ -496,10 +496,11 @@ pub(crate) fn reject_odd_nibble_value_digests(proof_nodes: &[ProofNode]) -> Resu
 ///   `Inclusive(Some(last_kv))`. The end-proof anchors directly at
 ///   `last_kv`. Covered by
 ///   `test_dropped_trailing_key_accepted_as_partial_coverage`.
-/// * **Everything else** — terminal is a strict prefix of `last_kv` with
-///   an on-path child set, terminal has no value digest, `end_proof`
-///   empty, or `key_values` empty — → `Inclusive(fallback_last)`,
-///   anchored at the caller's requested bound. Covered by
+/// * **Everything else** — terminal value-node with `K < last_kv` (whether
+///   `K` is a strict prefix of `last_kv` or a divergent lex-less node),
+///   terminal has no value digest, `end_proof` empty, or `key_values`
+///   empty — → `Inclusive(fallback_last)`, anchored at the caller's
+///   requested bound. Covered by
 ///   `test_terminal_strict_prefix_of_last_kv_verifies` and
 ///   `test_tampered_in_range_value_rejected`.
 ///
@@ -551,8 +552,8 @@ pub(crate) fn right_edge<'a>(
     };
 
     // Terminal anchors at a real byte key only when it carries a value
-    // digest. (Callers reject end_proof terminals whose nibble path is
-    // odd-length but carry a value before reaching here — see
+    // digest. (Callers reject *any* end_proof node whose nibble path is
+    // odd-length but carries a value before reaching here — see
     // [`reject_odd_nibble_value_digests`] — so we don't re-check parity.)
     if terminal.value_digest.is_some() {
         let nibs: Vec<u8> = terminal.key.iter().map(|c| c.as_u8()).collect();
@@ -583,10 +584,11 @@ pub(crate) fn right_edge<'a>(
 ///    `last_key`; partial coverage is a valid outcome, not an error.
 /// 3. **Boundary proof verification**: Cryptographically verify the start
 ///    proof against `first_key`. The right edge is verified against the
-///    *proof-derived* anchor — which may be `last_kv` or the caller's
-///    `last_key`, depending on whether the right boundary is inclusive
-///    or exclusive. For the exclusive case only, the cryptographic check
-///    is folded into the hash reconstruction below instead.
+///    *proof-derived* right boundary — for the inclusive case via
+///    `verify_edge` against either `last_kv` or the caller's `last_key`
+///    (whichever the proof anchors at), and for the exclusive case via
+///    the hash reconstruction below, where the anchor is the end-proof
+///    terminal's full key.
 /// 4. **Trie reconstruction**: Build an in-memory Merkle trie from the key-value pairs
 ///    and reconcile it with proof nodes
 /// 5. **Root hash comparison**: Verify the reconstructed trie's root hash matches the
