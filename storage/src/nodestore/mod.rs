@@ -109,6 +109,17 @@ use super::linear::WritableStorage;
 /// Set to the maximum area size to minimize allocations for large nodes.
 const INITIAL_BUMP_SIZE: usize = AreaIndex::MAX_AREA_SIZE as usize;
 
+impl<S> NodeStore<Committed, S> {
+    /// Returns the [`CommittedId`] that uniquely identifies this committed
+    /// revision. This is the identity used to validate a proposal's parent
+    /// at commit time; root hash alone would not distinguish hash-equal
+    /// revisions like the two ends of an A→B→A round-trip.
+    #[must_use]
+    pub const fn committed_id(&self) -> CommittedId {
+        self.kind.id
+    }
+}
+
 impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Creates a new `NodeStore` using the provided header and storage.
     ///
@@ -123,6 +134,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
             kind: Committed {
                 deleted: Box::default(),
                 root: None,
+                id: CommittedId::next(),
             },
             storage,
             must_recompute_storage_hash: header.must_recompute_storage_hash(),
@@ -152,6 +164,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
             kind: Committed {
                 deleted: Box::default(),
                 root: None,
+                id: CommittedId::next(),
             },
             must_recompute_storage_hash: true,
         }
@@ -178,6 +191,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
             kind: Committed {
                 deleted: Box::default(),
                 root: None,
+                id: CommittedId::next(),
             },
             storage,
             must_recompute_storage_hash: true,
@@ -250,19 +264,28 @@ impl Parentable for Arc<ImmutableProposal> {
 
 impl<S> NodeStore<Arc<ImmutableProposal>, S> {
     /// When an immutable proposal commits, we need to reparent any proposal that
-    /// has the committed proposal as it's parent
-    pub fn commit_reparent(&self, other: &NodeStore<Arc<ImmutableProposal>, S>) {
-        other.kind.commit_reparent(&self.kind);
+    /// has the committed proposal as it's parent.
+    ///
+    /// `new_id` is the [`CommittedId`] of the new committed revision produced
+    /// from `self` (the just-committed proposal).
+    pub fn commit_reparent(
+        &self,
+        other: &NodeStore<Arc<ImmutableProposal>, S>,
+        new_id: CommittedId,
+    ) {
+        other.kind.commit_reparent(&self.kind, new_id);
     }
 }
 
 impl Parentable for Committed {
     fn as_nodestore_parent(&self) -> NodeStoreParent {
-        NodeStoreParent::Committed(
-            self.root
+        NodeStoreParent::Committed {
+            hash: self
+                .root
                 .as_ref()
                 .and_then(|root| root.hash().cloned().map(HashType::into_triehash)),
-        )
+            id: self.id,
+        }
     }
     fn root_hash(&self) -> Option<TrieHash> {
         self.root
@@ -419,7 +442,14 @@ impl<S: WritableStorage> NodeStore<Mutable<Propose>, S> {
                 root: None,
                 inner: Propose {
                     deleted: Vec::default(),
-                    parent: NodeStoreParent::Committed(None),
+                    parent: NodeStoreParent::Committed {
+                        hash: None,
+                        // Sentinel id used only for the empty-trie placeholder
+                        // returned by `new_empty_proposal`; this proposal has
+                        // no real parent revision to identify, so it can never
+                        // commit through `commit_critical_section`.
+                        id: CommittedId::next(),
+                    },
                 },
             },
             storage,
@@ -526,24 +556,56 @@ pub trait RootReader {
     fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode>;
 }
 
+/// Monotonic, process-local identifier for a committed revision. Two
+/// committed revisions can share a root hash (e.g. an A→B→A round-trip) but
+/// always have distinct ids, so this is what proposals capture to identify
+/// their committed parent. Unlike root address, ids are assigned
+/// synchronously at commit time — they don't race with the persist worker.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CommittedId(u64);
+
+impl CommittedId {
+    /// Allocate a fresh id from the process-global counter.
+    #[must_use]
+    pub fn next() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
 /// A committed revision of a merkle trie.
 #[derive(Debug, Clone)]
 pub struct Committed {
     deleted: Box<[MaybePersistedNode]>,
     root: Option<Child>,
+    id: CommittedId,
 }
 
 #[derive(Clone, Debug)]
 pub enum NodeStoreParent {
     Proposed(Arc<ImmutableProposal>),
-    Committed(Option<TrieHash>),
+    /// Committed parent. `id` pins identity beyond hash equality: two committed
+    /// revisions can share a `hash` (e.g. an A→B→A round-trip) but always have
+    /// distinct ids, so a proposal whose parent has a stale `id` must NOT be
+    /// commitable against a hash-equal sibling. Address would also be unique
+    /// per revision, but it is assigned asynchronously by the persist worker
+    /// and races with proposal creation, so we use a synchronously-assigned
+    /// monotonic id instead.
+    Committed {
+        hash: Option<TrieHash>,
+        id: CommittedId,
+    },
 }
 
 impl PartialEq for NodeStoreParent {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (NodeStoreParent::Proposed(a), NodeStoreParent::Proposed(b)) => Arc::ptr_eq(a, b),
-            (NodeStoreParent::Committed(a), NodeStoreParent::Committed(b)) => a == b,
+            (
+                NodeStoreParent::Committed { hash: ah, id: ai },
+                NodeStoreParent::Committed { hash: bh, id: bi },
+            ) => ah == bh && ai == bi,
             _ => false,
         }
     }
@@ -573,11 +635,21 @@ pub struct ImmutableProposal {
 }
 
 impl ImmutableProposal {
-    /// Returns true if the parent of this proposal is committed and has the given hash.
+    /// Returns true if the parent of this proposal is the committed revision
+    /// identified by `id`.
+    ///
+    /// `id` is fully unique per committed revision, so hash comparison would
+    /// be redundant. (We still keep the hash in [`NodeStoreParent::Committed`]
+    /// for the rebase path, which looks up the old parent revision by hash.)
+    /// Hash equality alone is not sufficient: a database can produce two
+    /// committed revisions with the same root hash (an A→B→A round trip),
+    /// and a proposal built off the first "A" must not be commitable against
+    /// the second "A" — the deleted list still refers to the *first* A's
+    /// nodes, which may already have been freed and reallocated.
     #[must_use]
-    fn parent_hash_is(&self, hash: Option<TrieHash>) -> bool {
+    fn parent_id_is(&self, id: CommittedId) -> bool {
         match &*self.parent.lock() {
-            NodeStoreParent::Committed(root_hash) => *root_hash == hash,
+            NodeStoreParent::Committed { id: parent_id, .. } => *parent_id == id,
             NodeStoreParent::Proposed(_) => false,
         }
     }
@@ -586,17 +658,27 @@ impl ImmutableProposal {
     /// is another proposal.
     fn committed_parent_hash(&self) -> CommittedParentHash {
         match &*self.parent.lock() {
-            NodeStoreParent::Committed(root_hash) => CommittedParentHash::Hash(root_hash.clone()),
+            NodeStoreParent::Committed { hash, .. } => CommittedParentHash::Hash(hash.clone()),
             NodeStoreParent::Proposed(_) => CommittedParentHash::NotCommitted,
         }
     }
 
-    fn commit_reparent(self: &Arc<Self>, committing: &Arc<Self>) {
+    /// Reparent any of `self`'s parent pointers that still reference
+    /// `committing` (a proposal that just became committed) to point at the
+    /// new committed revision instead.
+    ///
+    /// `new_id` is the [`CommittedId`] assigned to the new committed
+    /// revision; the caller must pass the same id that was used when the
+    /// proposal was converted via [`NodeStore::as_committed`].
+    fn commit_reparent(self: &Arc<Self>, committing: &Arc<Self>, new_id: CommittedId) {
         let mut guard = self.parent.lock();
         if let NodeStoreParent::Proposed(ref parent) = *guard
             && Arc::ptr_eq(parent, committing)
         {
-            *guard = NodeStoreParent::Committed(committing.root_hash());
+            *guard = NodeStoreParent::Committed {
+                hash: committing.root_hash(),
+                id: new_id,
+            };
             // Track reparenting events
             firewood_counter!(REPARENTED_PROPOSAL_COUNT).increment(1);
         }
@@ -811,6 +893,7 @@ impl<S: WritableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<Com
             kind: Committed {
                 deleted: val.kind.deleted.clone(),
                 root: val.kind.root.clone(),
+                id: CommittedId::next(),
             },
             storage: val.storage,
             must_recompute_storage_hash: val.must_recompute_storage_hash,
@@ -819,10 +902,13 @@ impl<S: WritableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<Com
 }
 
 impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
-    /// Re-export the `parent_hash_is` function of [`ImmutableProposal`].
+    /// Re-export the `parent_id_is` function of [`ImmutableProposal`].
+    ///
+    /// See [`ImmutableProposal::parent_id_is`] for why `id` is the right
+    /// identity to check (and why hash equality alone is not enough).
     #[must_use]
-    pub fn parent_hash_is(&self, hash: Option<TrieHash>) -> bool {
-        self.kind.parent_hash_is(hash)
+    pub fn parent_id_is(&self, id: CommittedId) -> bool {
+        self.kind.parent_id_is(id)
     }
 
     /// Returns the committed parent's root hash, or indicates the parent
@@ -842,6 +928,7 @@ impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
             kind: Committed {
                 deleted: self.kind.deleted.clone(),
                 root: self.kind.root.clone(),
+                id: CommittedId::next(),
             },
             storage: self.storage.clone(),
             must_recompute_storage_hash: self.must_recompute_storage_hash,
@@ -1274,7 +1361,10 @@ mod tests {
         let r1: NodeStore<Arc<ImmutableProposal>, _> = r1.try_into().unwrap();
         {
             let parent = r1.kind.parent.lock();
-            assert!(matches!(*parent, NodeStoreParent::Committed(None)));
+            assert!(matches!(
+                *parent,
+                NodeStoreParent::Committed { hash: None, .. }
+            ));
         }
 
         // create an empty r2, check that it's parent is the proposed version r1
@@ -1286,11 +1376,11 @@ mod tests {
         }
 
         // reparent r2
-        r1.commit_reparent(&r2);
+        r1.commit_reparent(&r2, CommittedId::next());
 
         // now check r2's parent, should match the hash of r1 (which is still None)
         let parent = r2.kind.parent.lock();
-        if let NodeStoreParent::Committed(hash) = &*parent {
+        if let NodeStoreParent::Committed { hash, .. } = &*parent {
             assert_eq!(*hash, r1.root_hash());
             assert_eq!(*hash, None);
         } else {

@@ -529,7 +529,7 @@ impl Proposal<'_> {
         let mut revisions_guard = db.manager.lock_committed_revisions();
         let current = revisions_guard.back().expect("always one revision");
 
-        if !nodestore.parent_hash_is(current.root_hash()) {
+        if !nodestore.parent_id_is(current.committed_id()) {
             // Parent is stale — rebase onto the current revision.
             let old_parent = match nodestore.committed_parent_hash() {
                 CommittedParentHash::NotCommitted => {
@@ -555,10 +555,11 @@ impl Proposal<'_> {
         }
 
         let hash = api::DbView::root_hash(&*nodestore);
-        db.manager
+        let new_id = db
+            .manager
             .commit_critical_section(&nodestore, &mut revisions_guard)?;
         drop(revisions_guard);
-        db.manager.commit_cleanup(&nodestore);
+        db.manager.commit_cleanup(&nodestore, new_id);
         Ok(hash)
     }
 
