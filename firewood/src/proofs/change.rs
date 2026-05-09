@@ -13,7 +13,7 @@ use crate::{
 /// trie with given start root hash, the resulting trie will have the given end root hash. It
 /// consists of the following:
 /// - A start proof: proves that the smallest key does/doesn't exist
-/// - An end proof: proves the the largest key does/doesn't exist
+/// - An end proof: proves that the largest key does/doesn't exist
 /// - The actual `BatchOp`s that specify the difference between the start and end tries.
 pub struct ChangeProof<K: AsRef<[u8]> + Debug, V: AsRef<[u8]> + Debug, H> {
     start_proof: Proof<H>,

@@ -434,12 +434,14 @@ fn compute_root_hash_with_proofs(
     .to_hash()
 }
 
-/// Reject any proof node that carries a `Value` digest at an odd-length
+/// Reject any proof node that carries a value digest (either
+/// [`ValueDigest::Value`] or [`ValueDigest::Hash`]) at an odd-length
 /// nibble path. Byte keys are always even-nibble, so a value at an
-/// odd-length path can't correspond to any real key in the trie. This is
-/// a cheap structural sanity check that callers run on a proof's nodes
-/// before any anchoring decision is made — see e.g. the call before
-/// [`right_edge`] in `verify_range_proof`.
+/// odd-length path can't correspond to any real key in the trie — this
+/// is the same invariant [`Proof::value_digest`] enforces while walking
+/// a proof. This is a cheap structural sanity check that callers run on
+/// a proof's nodes before any anchoring decision is made — see e.g. the
+/// call before [`right_edge`] in `verify_range_proof`.
 pub(crate) fn reject_odd_nibble_value_digests(proof_nodes: &[ProofNode]) -> Result<(), ProofError> {
     for node in proof_nodes {
         if !node.key.len().is_multiple_of(2) && node.value_digest.is_some() {
@@ -580,9 +582,11 @@ pub(crate) fn right_edge<'a>(
 ///    the actual bound the end-proof anchors at. This may be smaller than
 ///    `last_key`; partial coverage is a valid outcome, not an error.
 /// 3. **Boundary proof verification**: Cryptographically verify the start
-///    proof against `first_key`. The right edge is *not* re-verified against
-///    the caller's `last_key`; its cryptographic check is folded into the
-///    hash reconstruction below via the proof-derived anchor.
+///    proof against `first_key`. The right edge is verified against the
+///    *proof-derived* anchor — which may be `last_kv` or the caller's
+///    `last_key`, depending on whether the right boundary is inclusive
+///    or exclusive. For the exclusive case only, the cryptographic check
+///    is folded into the hash reconstruction below instead.
 /// 4. **Trie reconstruction**: Build an in-memory Merkle trie from the key-value pairs
 ///    and reconcile it with proof nodes
 /// 5. **Root hash comparison**: Verify the reconstructed trie's root hash matches the
