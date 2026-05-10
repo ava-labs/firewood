@@ -82,8 +82,11 @@ impl ChangeProofContext {
         };
 
         let Some(last_op) = proof.batch_ops().last() else {
-            // No changes in this range. If bounded, continue from end_key.
-            return Ok(end_key.map(|ek| (Box::from(ek), None)));
+            // Zero diffs across the requested range — the proof confirms the
+            // range is fully accounted for, so there's nothing more to fetch.
+            // Returning `end_key` here would expand scope past the original
+            // request and has no forward-progress meaning to the caller.
+            return Ok(None);
         };
 
         if proof.end_proof().is_empty() {

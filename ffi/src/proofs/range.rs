@@ -291,6 +291,19 @@ impl<'db> RangeProofContext<'db> {
             return Ok(None);
         }
 
+        // A non-empty end_proof alone doesn't mean the proof was truncated:
+        // a bounded request always carries an end_proof for the requested
+        // end_key, even when the limit wasn't hit. The unambiguous signal is
+        // whether the number of key/value pairs reached the requested limit.
+        // If it didn't (or no limit was specified), the proof is exhaustive
+        // within [last_key, end_key] and there's nothing more to fetch.
+        let truncated = verification
+            .max_length
+            .is_some_and(|max| self.proof.key_values().len() >= max.get());
+        if !truncated {
+            return Ok(None);
+        }
+
         Ok(Some((last_key.clone(), verification.end_key.clone())))
     }
 

@@ -670,6 +670,100 @@ func TestChangeProofFindNextKey(t *testing.T) {
 	r.NoError(nextRange.Free())
 }
 
+// TestChangeProofFindNextKeyBoundedNoDiffs verifies that when a bounded
+// change-proof request covers a range with zero diffs, FindNextKey returns
+// nil rather than echoing the requested end key as the next start key. The
+// caller would have no forward progress otherwise.
+func TestChangeProofFindNextKeyBoundedNoDiffs(t *testing.T) {
+	r := require.New(t)
+	dbA := newTestDatabase(t)
+	dbB := newTestDatabase(t)
+
+	keys, _, batch := kvForTest(100)
+	rootA, err := dbA.Update(batch[:50])
+	r.NoError(err)
+	_, err = dbB.Update(batch[:50])
+	r.NoError(err)
+
+	// All diffs between rootA and rootAUpdated live in keys[50:].
+	rootAUpdated, err := dbA.Update(batch[50:])
+	r.NoError(err)
+
+	// Request a change proof bounded entirely within keys[:50] — there are
+	// no diffs in this range.
+	startKey := something(keys[10])
+	endKey := something(keys[20])
+	proof, err := dbA.ChangeProof(rootA, rootAUpdated, startKey, endKey, changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(proof.Free()) })
+
+	_, err = dbB.VerifyChangeProof(proof, rootAUpdated, startKey, endKey, changeProofLenUnbounded)
+	r.NoError(err)
+
+	nextRange, err := proof.FindNextKey(endKey)
+	r.NoError(err)
+	r.Nil(nextRange, "FindNextKey should return nil for a bounded range with zero diffs")
+}
+
+// TestChangeProofFindNextKeyEndAtRightmost verifies that when the requested
+// end key equals the rightmost key actually delivered by the proof,
+// FindNextKey returns nil.
+func TestChangeProofFindNextKeyEndAtRightmost(t *testing.T) {
+	r := require.New(t)
+	dbA := newTestDatabase(t)
+	dbB := newTestDatabase(t)
+
+	keys, _, batch := kvForTest(100)
+	rootA, err := dbA.Update(batch[:50])
+	r.NoError(err)
+	_, err = dbB.Update(batch[:50])
+	r.NoError(err)
+
+	rootAUpdated, err := dbA.Update(batch[50:])
+	r.NoError(err)
+
+	// Bound the request at the rightmost diff key (keys[99] in sorted order).
+	endKey := something(keys[len(keys)-1])
+	proof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), endKey, changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(proof.Free()) })
+
+	_, err = dbB.VerifyChangeProof(proof, rootAUpdated, nothing(), endKey, changeProofLenUnbounded)
+	r.NoError(err)
+
+	nextRange, err := proof.FindNextKey(endKey)
+	r.NoError(err)
+	r.Nil(nextRange, "FindNextKey should return nil when last_op == end_key")
+}
+
+// TestRangeProofFindNextKeyEndPastTrie verifies that a bounded range proof
+// whose end key sits past the actual rightmost trie key reports no further
+// keys to fetch — the proof is exhaustive within the requested range, so
+// FindNextKey must not fabricate a continuation past the end.
+func TestRangeProofFindNextKeyEndPastTrie(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	_, _, batch := kvForTest(10)
+	root, err := db.Update(batch)
+	r.NoError(err)
+
+	// End key past any real key in the trie.
+	endKey := something([]byte{0xFF, 0xFF, 0xFF, 0xFF})
+
+	// Use a generous limit so it isn't hit. With 10 keys and a limit of 100,
+	// the proof covers the full trie and its end_proof is a non-existence
+	// proof for endKey.
+	proof := newVerifiedRangeProof(t, db, root, nothing(), endKey, 100)
+
+	// FindNextKey requires a prepared proposal or commit.
+	r.NoError(db.VerifyRangeProof(proof, nothing(), endKey, root, 100))
+
+	nextRange, err := proof.FindNextKey()
+	r.NoError(err)
+	r.Nil(nextRange, "FindNextKey should return nil when the proof exhausted the trie within the requested range")
+}
+
 func TestChangeProofProposalKeepAlive(t *testing.T) {
 	tests := []struct {
 		name    string
