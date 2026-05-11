@@ -264,7 +264,7 @@ impl Parentable for Arc<ImmutableProposal> {
 
 impl<S> NodeStore<Arc<ImmutableProposal>, S> {
     /// When an immutable proposal commits, we need to reparent any proposal that
-    /// has the committed proposal as it's parent.
+    /// has the committed proposal as its parent.
     ///
     /// `new_id` is the [`CommittedId`] of the new committed revision produced
     /// from `self` (the just-committed proposal).
@@ -588,7 +588,7 @@ pub enum NodeStoreParent {
     /// Committed parent. `id` pins identity beyond hash equality: two committed
     /// revisions can share a `hash` (e.g. an A→B→A round-trip) but always have
     /// distinct ids, so a proposal whose parent has a stale `id` must NOT be
-    /// commitable against a hash-equal sibling. Address would also be unique
+    /// committable against a hash-equal sibling. Address would also be unique
     /// per revision, but it is assigned asynchronously by the persist worker
     /// and races with proposal creation, so we use a synchronously-assigned
     /// monotonic id instead.
@@ -643,7 +643,7 @@ impl ImmutableProposal {
     /// for the rebase path, which looks up the old parent revision by hash.)
     /// Hash equality alone is not sufficient: a database can produce two
     /// committed revisions with the same root hash (an A→B→A round trip),
-    /// and a proposal built off the first "A" must not be commitable against
+    /// and a proposal built off the first "A" must not be committable against
     /// the second "A" — the deleted list still refers to the *first* A's
     /// nodes, which may already have been freed and reallocated.
     #[must_use]
@@ -902,10 +902,16 @@ impl<S: WritableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<Com
 }
 
 impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
-    /// Re-export the `parent_id_is` function of [`ImmutableProposal`].
+    /// Returns true if the parent of this proposal is the committed revision
+    /// identified by `id`.
     ///
-    /// See [`ImmutableProposal::parent_id_is`] for why `id` is the right
-    /// identity to check (and why hash equality alone is not enough).
+    /// `id` is fully unique per committed revision, so hash comparison would
+    /// be redundant. Hash equality alone is not sufficient: a database can
+    /// produce two committed revisions with the same root hash (an A→B→A
+    /// round trip), and a proposal built off the first "A" must not be
+    /// committable against the second "A" — the deleted list still refers
+    /// to the *first* A's nodes, which may already have been freed and
+    /// reallocated.
     #[must_use]
     pub fn parent_id_is(&self, id: CommittedId) -> bool {
         self.kind.parent_id_is(id)
@@ -916,6 +922,18 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     #[must_use]
     pub fn committed_parent_hash(&self) -> CommittedParentHash {
         self.kind.committed_parent_hash()
+    }
+
+    /// Returns a fresh, empty committed view sharing this proposal's storage.
+    ///
+    /// Intended for diffing against an empty parent in `commit_with_rebase`
+    /// when the proposal's recorded committed parent was an empty trie.
+    /// Using a synthetic empty view avoids relying on the manager's revisions
+    /// queue, whose front entry is not guaranteed to be the initial empty
+    /// revision once `max_revisions` is exceeded.
+    #[must_use]
+    pub fn empty_committed_sibling(&self) -> NodeStore<Committed, S> {
+        NodeStore::new_empty_committed(self.storage.clone())
     }
 }
 

@@ -29,6 +29,12 @@
 //!   `CommittedId`s. A proposal pinned to the first "A" must rebase rather
 //!   than commit directly against the second "A" — its deleted list refers
 //!   to nodes from the first A, which may already have been freed.
+//!
+//! - `test_empty_parent_rebase_after_reap`: a proposal whose recorded
+//!   committed parent is the initial empty trie commits via rebase after
+//!   enough other commits have reaped the initial empty revision out of
+//!   the manager's queue. The empty-parent diff must use a synthetic empty
+//!   view rather than `revisions_guard.front()` (which is no longer empty).
 
 use std::thread;
 
@@ -378,4 +384,89 @@ fn test_round_trip_rejects_stale_parent() {
     // Reopen forces persist before check() to avoid `UnpersistedRoot` races.
     let db = db.reopen();
     assert_check_clean(&db, "post-round-trip");
+}
+
+/// A proposal built off the initial empty revision (`Hash(None)` parent),
+/// commits cleanly via rebase even after enough unrelated commits have
+/// reaped the initial empty revision from the manager's revisions queue.
+///
+/// Without a synthetic empty view, the rebase diff would use
+/// `revisions_guard.front()` as the "old parent", but by the time the
+/// proposal commits the front entry is no longer empty — the diff would
+/// then mis-compute the rebased batch (treating other revisions' keys as
+/// deletions). With the fix, an empty `Committed` view is constructed
+/// on the fly, so the diff yields exactly the proposal's puts and the
+/// rebased commit preserves all prior state.
+#[test]
+fn test_empty_parent_rebase_after_reap() {
+    // Tighten max_revisions so a small number of commits suffices to
+    // overflow and reap the initial empty revision.
+    const TIGHT_MAX_REVISIONS: usize = 4;
+
+    let db = TestDb::new_with_config(
+        DbConfig::builder()
+            .manager(
+                RevisionManagerConfig::builder()
+                    .max_revisions(TIGHT_MAX_REVISIONS)
+                    .build(),
+            )
+            .build(),
+    );
+
+    // Proposal P off the initial empty revision (parent hash = None).
+    let p_key = vec![0xaau8; 32];
+    let p_val = vec![0x11, 0x22, 0x33];
+    let proposal = db
+        .propose(vec![BatchOp::Put {
+            key: p_key.clone(),
+            value: p_val.clone(),
+        }])
+        .expect("propose off empty");
+
+    // Commit enough unrelated revisions to exceed TIGHT_MAX_REVISIONS so
+    // the initial empty revision is reaped out of the front of the queue.
+    let filler_count = TIGHT_MAX_REVISIONS.wrapping_add(2);
+    let mut filler_keys = Vec::with_capacity(filler_count);
+    for i in 0..filler_count {
+        let mut k = vec![0u8; 32];
+        #[expect(clippy::indexing_slicing, reason = "k is a 32-byte vec")]
+        {
+            k[0] = 0x80; // distinct first nibble from p_key (0xaa)
+            k[31] = i as u8;
+        }
+        let v = vec![i as u8; 8];
+        filler_keys.push((k.clone(), v.clone()));
+        db.propose(vec![BatchOp::Put { key: k, value: v }])
+            .expect("propose filler")
+            .commit()
+            .expect("commit filler");
+    }
+
+    // P's parent is now stale (initial empty revision, possibly reaped).
+    // commit_with_rebase must use a synthetic empty parent for diffing and
+    // produce exactly [Put(p_key, p_val)] as the rebased batch.
+    proposal
+        .commit_with_rebase()
+        .expect("empty-parent rebase must succeed after reap");
+
+    // Final revision must contain P's key AND every filler key.
+    let final_hash = <crate::db::Db as crate::api::Db>::root_hash(&db).unwrap();
+    let view = <crate::db::Db as crate::api::Db>::revision(&db, final_hash).unwrap();
+    assert_eq!(
+        view.val(&p_key).unwrap().as_deref(),
+        Some(p_val.as_slice()),
+        "proposal's key must survive empty-parent rebase"
+    );
+    for (k, v) in &filler_keys {
+        assert_eq!(
+            view.val(k).unwrap().as_deref(),
+            Some(v.as_slice()),
+            "filler key must not be dropped by rebase"
+        );
+    }
+    drop(view);
+
+    // Reopen forces persist before check() to avoid `UnpersistedRoot` races.
+    let db = db.reopen();
+    assert_check_clean(&db, "post-empty-parent-rebase");
 }
