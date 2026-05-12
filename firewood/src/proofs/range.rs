@@ -116,8 +116,7 @@ pub fn verify_range_proof_structure(
 /// Determine the next key range to fetch after this range proof.
 ///
 /// Returns `None` when the originally-requested range is fully accounted
-/// for; otherwise returns `Some((last_key, end_key))`. See the plan in
-/// `dazzling-prefix-walrus.md` for the rule this function implements.
+/// for; otherwise returns `Some((last_key, end_key))`.
 ///
 /// # Errors
 ///
@@ -143,19 +142,6 @@ pub fn find_next_key_after_range_proof(
         && **last_key >= **end_key
     {
         // reached or exceeded the end key, so we are done
-        return Ok(None);
-    }
-
-    // A non-empty end_proof alone doesn't mean the proof was truncated:
-    // a bounded request always carries an end_proof for the requested
-    // end_key, even when the limit wasn't hit. The unambiguous signal is
-    // whether the number of key/value pairs reached the requested limit.
-    // If it didn't (or no limit was specified), the proof is exhaustive
-    // within [last_key, end_key] and there's nothing more to fetch.
-    let truncated = verification
-        .max_length
-        .is_some_and(|max| proof.key_values().len() >= max.get());
-    if !truncated {
         return Ok(None);
     }
 
