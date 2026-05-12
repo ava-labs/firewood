@@ -425,3 +425,122 @@ kₘ itself, which was already accumulated — no keys are lost.
 *Under Option B (heuristic)*: find_next_key may return None in
 Case 5 when the response is actually truncated — violating
 completeness. Keys in (kₘ, e] would be silently lost.
+
+## 4. Why the Ambiguity Cannot Be Resolved by the Prover
+
+A natural question is whether the proof generator can avoid producing
+ambiguous proofs, eliminating the need for conservative behavior on
+the verifier side.
+
+The prover knows whether it truncated. In the exhaustive case, it
+generates end_proof by calling prove(e). In the truncated case, it
+calls prove(kₘ). The ambiguity arises when prove(e) and prove(kₘ)
+produce identical proofs — which happens in the exclusion-divergent
+case where the path toward e diverges at kₘ's node.
+
+In this case, both prove(e) and prove(kₘ) follow the exact same
+trie path: they enter through the same child slots at each branch
+and terminate at the same node (kₘ's node). The resulting proof
+node sequences are byte-identical. The prover cannot produce a
+structurally different proof for prove(e) because there is no
+alternative path to follow — the trie structure dictates the proof.
+
+Possible mitigations and why they fail:
+
+- **Use a different anchor** (e.g., succ(kₘ) instead of e): the
+  path toward succ(kₘ) may also terminate at kₘ's node. If kₘ is
+  a leaf, succ(kₘ) enters through kₘ's partial path, finds no
+  child for the next nibble, and stops at kₘ — same terminal, same
+  ambiguity.
+
+- **Include additional proof nodes beyond the divergence**: there
+  are no additional nodes to include. The divergence point is where
+  the trie path ends — the child slot needed by e's next nibble
+  does not exist.
+
+The ambiguity is therefore a fundamental property of Merkle proofs
+in compressed tries: two different target keys can produce
+identical proofs when the trie path diverges at a valued node. No
+change to the proof generator can eliminate this without extending
+the proof format.
+
+This confirms that the verifier must handle the ambiguity. Option A
+(conservative continuation with succ(kₘ)) is the sound approach
+that requires no format changes.
+
+## 5. Model Checking Results
+
+The arguments in Section 3 are verified by TLA+ model checking. The
+models use BF=2 (binary trie), MaxDepth=2 (keys of length 2 nibbles),
+and NumValues=1. The prover's truncation limit is nondeterministic —
+TLC exhaustively explores all possible truncation choices at each step.
+
+### 4.1 Model Structure
+
+The TLA+ spec (`FindNextKey.tla`) models:
+
+- **Trie**: all possible tries over the key space (from CompressedTrie.tla).
+- **Prover**: generates honest range proofs for [cursor, e] but may
+  truncate at any limit from 1 to |keys_in_range|. The truncation
+  limit is a nondeterministic variable that TLC explores exhaustively.
+- **Syncer loop**: a state machine with variables (cursor, accumulated,
+  done). Each step fetches a proof, accumulates key_values, and calls
+  find_next_key to decide the next cursor or termination.
+- **find_next_key**: implements the case analysis from Section 3.2-3.4.
+
+The key operator:
+
+```
+FindNextKeyOptionA(proof, endKey) ==
+    IF m = 0 THEN None                        \* Case 1
+    ELSE IF lastKv = endKey THEN None          \* Case 2
+    ELSE IF ~TerminalHasValue THEN None        \* Case 3
+    ELSE IF terminalKey ≠ lastKv THEN None     \* Case 4
+    ELSE Succ(lastKv)                          \* Case 5: ambiguous
+```
+
+Properties checked:
+- **Completeness** (invariant): done ⇒ accumulated = K(T) ∩ [s, e].
+- **Liveness** (temporal): ◇done (the syncer eventually terminates).
+
+### 4.2 Option A: Verified Correct
+
+| Parameter   | Value |
+|-------------|-------|
+| BF          | 2     |
+| MaxDepth    | 2     |
+| NumValues   | 1     |
+| States      | 1,224 distinct |
+| Result      | **No violations.** Completeness and liveness hold. |
+
+A larger model (MaxDepth=4, 20 possible keys) is running to increase
+confidence.
+
+### 4.3 Heuristic Counterexamples
+
+Each heuristic is modeled by replacing FindNextKeyOptionA with a
+variant that implements the heuristic in the ambiguous case (Case 5).
+TLC finds a completeness violation for each.
+
+**All three heuristics fail on the same counterexample:**
+
+| Variable    | Value |
+|-------------|-------|
+| Trie        | K(T) = {⟨1,0⟩, ⟨1,1⟩} |
+| Range       | [⟨0,0⟩, ⟨1,1⟩] |
+| Prover limit | 1 (returns only ⟨1,0⟩) |
+| kₘ          | ⟨1,0⟩ |
+| Expected    | {⟨1,0⟩, ⟨1,1⟩} |
+| Accumulated | {⟨1,0⟩} — key ⟨1,1⟩ lost |
+
+The prover honestly returns the first key in range with limit=1.
+Each heuristic incorrectly concludes the response is exhaustive:
+
+- **Heuristic 1** (m < n → exhaustive): m=1 < requestedN=2 → None.
+  Fails because the prover used its own limit (1), not the requested
+  limit (2).
+- **Heuristic 2** (m=1 → exhaustive): m=1 → None. Fails because
+  limit=1 always produces m=1, whether truncated or exhaustive.
+- **Heuristic 3** (kₘ not prefix of e → exhaustive): ⟨1,0⟩ is not a
+  prefix of ⟨1,1⟩ → None. Fails because the prefix relationship
+  between kₘ and e is unrelated to truncation status.
