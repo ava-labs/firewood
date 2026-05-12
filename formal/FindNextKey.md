@@ -18,6 +18,7 @@ truncation behavior.
 
 After each fetch, the syncer must decide whether the range is fully
 covered or whether more fetches are needed. Getting this wrong causes:
+
 - **Infinite loops**: continuing to fetch when the range is already covered.
 - **Missing data**: stopping early when keys remain unfetched.
 
@@ -42,6 +43,7 @@ appear in T.
 ### 2.2 Request
 
 A range proof request is a tuple R = (s, e, n) where:
+
 - s ∈ K ∪ {−∞}: start of range
 - e ∈ K ∪ {+∞}: end of range
 - n ∈ ℕ⁺ ∪ {+∞}: maximum number of key-value pairs to return (+∞ = no limit)
@@ -218,15 +220,20 @@ re-examine the trie.
    `find_next_key` must operate correctly in the presence of these
    ambiguities.
 
-
 ## 3. Decision Function
 
 `find_next_key` takes a verified range proof response and the
 original end_key e, and returns either:
+
 - **None**: the range [s, e] is fully covered. No more fetches needed.
-- **Some(kₘ, e)**: the range was partially covered through kₘ.
-  Continue fetching from [kₘ, e]. The end_key e is always echoed
-  back unchanged — the function never modifies the upper bound.
+- **Some(s', e)**: continue fetching from [s', e]. The end_key e is
+  always echoed back unchanged. The current implementation uses
+  s' = kₘ. Option A (Section 3.4) proposes s' = succ(kₘ) to
+  guarantee liveness.
+
+We define **succ(k)** as the lexicographic successor of key k — the
+smallest key strictly greater than k (e.g., k with a 0x00 byte
+appended).
 
 The function assumes the proof has already been verified (Section 2.5).
 Conditions such as kₘ > e are rejected during verification and cannot
@@ -235,22 +242,19 @@ reach `find_next_key`.
 ### 3.1 Inputs
 
 The function can rely on:
+
 - **From the verified proof**: key_values (and thus m and kₘ),
-  start_proof, end_proof, its terminal node, and t(end_proof). These
-  are verified against root hash h and can be trusted.
+  start_proof, and end_proof. These are verified against root hash h
+  and can be trusted. The terminal node and t(end_proof) are derived
+  from end_proof (Section 2.3).
 - **From the verifier's own state**: s and e (the range the verifier
   requested). These are known to the verifier, not derived from the
   proof.
 - The post-verification properties established in Section 2.5.
 
-The function cannot rely on:
-- The trie T itself.
-- Whether the prover truncated or exhausted the response.
-- The target key the prover used to generate end_proof.
-- The prover honoring the requested limit n. The prover may return
-  fewer keys than n for any reason (its own limits, network
-  constraints, or policy). Therefore, comparing m to n does not
-  reliably distinguish truncation from exhaustion.
+The function cannot rely on the trie T, the prover's truncation
+status, the target key of end_proof, or the prover honoring the
+requested limit n (Section 1, Section 2.5).
 
 ### 3.2 Unambiguous Cases
 
@@ -267,29 +271,29 @@ contains all keys in [s, kₘ] with no gaps. Since kₘ = e, this
 covers the entire requested range [s, e].
 Return: **None**.
 
-**Case 3: Terminal node has no value.**
+**Case 3: m > 0, kₘ ≠ e, terminal node has no value.**
 The end_proof is an exclusion proof. An honest truncated response
 always produces an inclusion proof of kₘ (since kₘ ∈ K(T)), so
 exclusion implies exhaustive (Section 2.5).
 Return: **None**.
 
-**Case 4: Terminal node has value, t(end_proof) ≠ kₘ.**
+**Case 4: m > 0, kₘ ≠ e, terminal node has value, t(end_proof) ≠ kₘ.**
 An honest truncated response would have t(end_proof) = kₘ. Since
 t(end_proof) ≠ kₘ, the response is exhaustive (Section 2.5).
 Return: **None**.
 
 ### 3.3 The Ambiguous Case
 
-**Case 5: Terminal node has value, t(end_proof) = kₘ, and kₘ < e.**
+**Case 5: m > 0, kₘ < e, terminal node has value, t(end_proof) = kₘ.**
 
 This is the truncation ambiguity from Section 2.5. The proof is
 consistent with:
+
 - Truncation: the prover hit the limit at kₘ and generated an
   inclusion proof of kₘ. There may be more keys in (kₘ, e].
 - Exhaustion: the prover returned all keys in [s, e] and the
-  end_proof happens to terminate at kₘ (either because e = kₘ,
-  which is excluded by kₘ < e, or because an exclusion-divergent
-  proof of e landed on kₘ's node).
+  end_proof is an exclusion-divergent proof of e that landed on
+  kₘ's node (Section 2.5).
 
 The verifier cannot distinguish these from the proof alone.
 
@@ -298,10 +302,6 @@ The verifier cannot distinguish these from the proof alone.
 The verifier has no information from the proof alone that
 distinguishes truncation from exhaustion in Case 5. We consider
 three approaches:
-
-We define **succ(k)** as the lexicographic successor of key k — the
-smallest key strictly greater than k (e.g., k with a 0x00 byte
-appended).
 
 **Option A: Return Some(succ(kₘ), e) in the ambiguous case.**
 
@@ -318,26 +318,52 @@ accumulated).
 *Safety*: kₘ was already included in the current key_values and
 verified. Advancing past it loses no data.
 
-*Liveness*: succ(kₘ) > kₘ ≥ k₁ ≥ s, so s' > s strictly. Each
-iteration advances the start key, and the range [s, e] is finite,
-so the syncer must terminate.
+*Liveness*: succ(kₘ) > kₘ ≥ s, so s' > s strictly. Each iteration
+advances the start key, and the range [s, e] is finite, so the
+syncer must terminate. Returning kₘ instead of succ(kₘ) does not
+guarantee s' > s: if the prover returns kₘ = s again on the next
+fetch, the syncer makes no progress.
 
 This costs at most one extra round-trip per ambiguous response.
 
-**Option B: Heuristic on proof structure (issue #1989's proposal).**
+**Option B: Heuristic on proof structure.**
 
-Use properties of the end_proof's terminal node (e.g., whether kₘ
-is a prefix of e, the number of returned keys) to guess whether the
-response is truncated or exhaustive.
+Issue #1989 proposes resolving the ambiguous case using three
+heuristics derived from the proof structure:
 
-*Safety*: unsound. As shown in Section 2.5, the terminal node's
-properties do not reliably distinguish the cases. The heuristic may
-return None when the response is actually truncated, causing keys
-in (kₘ, e] to be silently lost (completeness violation).
+1. **Put vs Delete**: if the last operation is a Put and
+   t(end_proof) > kₘ, assume exhaustive. The reasoning: a
+   a truncated Put generates an end_proof for target kₘ which
+   terminates at kₘ's leaf, giving t(end_proof) = kₘ. If t(end_proof) > kₘ, the
+   proof was built for a key past kₘ, suggesting exhaustion.
+   For Delete operations, the heuristic is inconclusive.
 
-*Liveness*: the heuristic may return Some(kₘ, e) (with kₘ, not
-succ(kₘ)) when the response is exhaustive. If the prover returns
-the same response, the syncer loops indefinitely.
+2. **Prefix check**: if t(end_proof) = kₘ and kₘ is NOT a strict
+   prefix of e, assume truncated. The reasoning: for an exhaustive
+   proof to land at exactly kₘ, the path toward e would have to
+   stop at kₘ, which requires kₘ to lie on e's path (i.e., kₘ is
+   a prefix of e). If kₘ is not a prefix, assume truncation.
+
+3. **Single-operation tiebreaker**: if the above heuristics are
+   inconclusive and m = 1, assume exhaustive (return None).
+   Otherwise assume truncated (return Some(kₘ, e)). The reasoning:
+   a single operation is more likely to represent a complete
+   response than a truncated one.
+
+*Safety*: unsound. Heuristic 1 is correct but unnecessary — the
+condition t(end_proof) > kₘ is already handled by Case 4 (Section
+3.2), so it provides no additional information in the ambiguous
+case. Heuristic 2 fails when kₘ is not a prefix of e but the
+response is actually truncated (the prover truncated at kₘ by
+coincidence). Heuristic 3 fails when the prover truncates at
+limit = 1. In both failing cases, the heuristic returns None for
+a truncated response, causing keys in (kₘ, e] to be silently lost
+(completeness violation).
+
+*Liveness*: the heuristics return Some(kₘ, e) (with kₘ, not
+succ(kₘ)) when they conclude truncation. If the response was
+actually exhaustive and the prover returns the same response on
+the next fetch, the syncer loops indefinitely.
 
 **Using the requested limit n as a heuristic.**
 
@@ -349,6 +375,7 @@ n, which an untrusted prover may not do.
 The verifier can enforce m ≤ n (reject proofs with more keys than
 requested). But it cannot enforce m = min(n, |R|), because |R| is
 unknown to the verifier. A prover that returns m < n could be:
+
 - Exhaustive: |R| < n, so all keys were returned.
 - Truncating below n: |R| ≥ n, but the prover chose to return fewer.
 
@@ -359,60 +386,44 @@ signal, and using it as one risks completeness violations.
 ### 3.5 Counterexamples to Proposed Heuristics
 
 This section provides concrete counterexamples to the heuristics
-proposed in issue #1989 and in Ron's fix fe064255a. All
-counterexamples assume the ambiguous case (Case 5): terminal node
-has a value, t(end_proof) = kₘ, and kₘ < e.
+from Option B (Section 3.4) and the limit-based heuristic. All
+counterexamples assume the ambiguous case (Case 5): m > 0, kₘ < e,
+terminal node has a value, and t(end_proof) = kₘ.
 
-**Heuristic 1: Compare m to requested limit n.**
+**Heuristic B1 (Put vs Delete):** If the last operation is a Put
+and t(end_proof) > kₘ, assume exhaustive.
 
-If m < n, assume exhaustive (return None). If m = n, assume
-truncated (return Some).
+This is unnecessary — the condition t(end_proof) > kₘ is already
+handled by Case 4 (Section 3.2). In Case 5, t(end_proof) = kₘ by
+definition, so this heuristic never fires.
+
+**Heuristic B2 (Prefix check):** If kₘ is NOT a strict prefix of e,
+assume exhaustive. Otherwise assume truncated.
+
+*Counterexample (completeness violation)*: The trie has keys
+{\x10\x30, \x10\x35} in [s, \x10\x40]. The prover uses limit = 1,
+returning \x10\x30. kₘ = \x10\x30 is NOT a prefix of e = \x10\x40.
+The heuristic assumes exhaustive and returns None. Key \x10\x35 is
+lost.
+
+**Heuristic B3 (Single-operation tiebreaker):** When B2 is
+inconclusive (kₘ is a strict prefix of e), if m = 1, assume
+exhaustive (return None). Otherwise assume truncated.
+
+*Counterexample (completeness violation)*: The trie has keys
+{\x10, \x10\x10} in [s, \x10\x30]. The prover uses limit = 1,
+returning only \x10 with an inclusion end_proof of \x10. kₘ = \x10
+is a prefix of e = \x10\x30 (B2 inconclusive). m = 1, so the
+tiebreaker returns None. Key \x10\x10 is lost.
+
+**Limit heuristic:** If m < n (fewer keys returned than requested),
+assume exhaustive.
 
 *Counterexample (completeness violation)*: The verifier requests
 [s, e] with n = 10. The prover has 15 keys in range but applies
 its own limit of 5, returning m = 5 keys with an inclusion
 end_proof of kₘ. The verifier sees m = 5 < n = 10 and concludes
 exhaustive. Returns None. 10 keys in (kₘ, e] are lost.
-
-**Heuristic 2: If the last operation is a Put and m = 1, assume
-exhaustive.**
-
-The reasoning: a single Put that matches the end_proof terminal
-suggests the prover had only one key to return.
-
-*Counterexample (completeness violation)*: The trie has keys
-{k₁, k₂, k₃} in [s, e]. The prover uses limit = 1, returning
-only k₁ with an inclusion end_proof of k₁. m = 1, last op is
-Put. The heuristic returns None. Keys k₂ and k₃ are lost.
-
-**Heuristic 3: If kₘ is a strict prefix of e, assume truncated.
-Otherwise assume exhaustive.**
-
-The reasoning: if kₘ is a prefix of e, the prover likely stopped
-short. If not, the proof likely covers through e.
-
-*Counterexample (completeness violation)*: The trie has keys
-{\x10, \x10\x10} in [s, \x10\x30]. The prover uses limit = 1,
-returning only \x10 with an inclusion end_proof of \x10. kₘ = \x10
-is a prefix of e = \x10\x30, so the heuristic returns Some — correct
-in this case. But reverse the scenario: the trie has only {\x10} in
-[s, \x10\x30], and the prover returns \x10 exhaustively. kₘ = \x10
-is still a prefix of e, so the heuristic returns Some — an
-unnecessary round-trip, but not a violation.
-
-Now consider: trie has keys {\x10\x30, \x10\x35} in [s, \x10\x40].
-The prover uses limit = 1, returning \x10\x30. kₘ = \x10\x30 is NOT
-a prefix of e = \x10\x40. The heuristic assumes exhaustive and
-returns None. Key \x10\x35 is lost.
-
-**Heuristic 4: Use t(end_proof) > kₘ to detect exhaustion.**
-
-If the end_proof's terminal key exceeds kₘ, assume exhaustive.
-
-*This is Cases 3 and 4 from Section 3.2* — these are sound and
-already handled as unambiguous cases. The heuristic is correct here.
-The problem is that it provides no help in Case 5 where
-t(end_proof) = kₘ, which is the ambiguous case.
 
 ### 3.6 Correctness Properties
 
@@ -423,8 +434,8 @@ ambiguous case).
 **Liveness**: The syncer terminates after a finite number of fetches.
 
 *Argument under Option A*: The only case returning Some is Case 5,
-which returns s' = succ(kₘ). Since kₘ ≥ k₁ ≥ s (key_values covers
-[s, ...]) and succ(kₘ) > kₘ, we have s' > s strictly. Each
+which returns s' = succ(kₘ). Since kₘ ≥ s (Section 2.4, key_values
+are in [s, e]) and succ(kₘ) > kₘ, we have s' > s strictly. Each
 iteration strictly advances the start key over a finite range [s, e],
 so the syncer must eventually reach Case 1 (m = 0) or Case 2
 (kₘ = e) and return None.
@@ -452,16 +463,17 @@ ambiguous proofs, eliminating the need for conservative behavior on
 the verifier side.
 
 The prover knows whether it truncated. In the exhaustive case, it
-generates end_proof by calling prove(e). In the truncated case, it
-calls prove(kₘ). The ambiguity arises when prove(e) and prove(kₘ)
-produce identical proofs — which happens in the exclusion-divergent
-case where the path toward e diverges at kₘ's node.
+generates end_proof for target key e. In the truncated case, it
+generates end_proof for target key kₘ. The ambiguity arises when
+Merkle proofs for target e and target kₘ are identical — which
+happens in the exclusion-divergent case where the path toward e
+diverges at kₘ's node.
 
-In this case, both prove(e) and prove(kₘ) follow the exact same
-trie path: they enter through the same child slots at each branch
-and terminate at the same node (kₘ's node). The resulting proof
-node sequences are byte-identical. The prover cannot produce a
-structurally different proof for prove(e) because there is no
+In this case, proofs for both targets follow the exact same trie
+path: they enter through the same child slots at each branch and
+terminate at the same node (kₘ's node). The resulting proof node
+sequences are byte-identical. The prover cannot produce a
+structurally different proof for target e because there is no
 alternative path to follow — the trie structure dictates the proof.
 
 Possible mitigations and why they fail:
@@ -494,7 +506,7 @@ models use BF=2 (binary trie), MaxDepth=2 (keys of length 2 nibbles),
 and NumValues=1. The prover's truncation limit is nondeterministic —
 TLC exhaustively explores all possible truncation choices at each step.
 
-### 4.1 Model Structure
+### 5.1 Model Structure
 
 The TLA+ spec (`FindNextKey.tla`) models:
 
@@ -509,7 +521,7 @@ The TLA+ spec (`FindNextKey.tla`) models:
 
 The key operator:
 
-```
+```text
 FindNextKeyOptionA(proof, endKey) ==
     IF m = 0 THEN None                        \* Case 1
     ELSE IF lastKv = endKey THEN None          \* Case 2
@@ -519,47 +531,60 @@ FindNextKeyOptionA(proof, endKey) ==
 ```
 
 Properties checked:
+
 - **Completeness** (invariant): done ⇒ accumulated = K(T) ∩ [s, e].
 - **Liveness** (temporal): ◇done (the syncer eventually terminates).
 
-### 4.2 Option A: Verified Correct
+### 5.2 Option A: Verified Correct
 
-| Parameter   | Value |
-|-------------|-------|
-| BF          | 2     |
-| MaxDepth    | 2     |
-| NumValues   | 1     |
-| States      | 1,224 distinct |
-| Result      | **No violations.** Completeness and liveness hold. |
+| Parameter | Value |
+| --- | --- |
+| BF | 2 |
+| MaxDepth | 2 |
+| NumValues | 1 |
+| States | 1,224 distinct |
+| Result | **No violations.** Completeness and liveness hold. |
 
-A larger model (MaxDepth=4, 20 possible keys) is running to increase
-confidence.
-
-### 4.3 Heuristic Counterexamples
+### 5.3 Heuristic Counterexamples
 
 Each heuristic is modeled by replacing FindNextKeyOptionA with a
 variant that implements the heuristic in the ambiguous case (Case 5).
 TLC finds a completeness violation for each.
 
-**All three heuristics fail on the same counterexample:**
+**The limit heuristic, B2, and B3 all fail on the same counterexample:**
 
-| Variable    | Value |
-|-------------|-------|
-| Trie        | K(T) = {⟨1,0⟩, ⟨1,1⟩} |
-| Range       | [⟨0,0⟩, ⟨1,1⟩] |
+| Variable | Value |
+| --- | --- |
+| Trie | K(T) = {⟨1,0⟩, ⟨1,1⟩} |
+| Range | [⟨0,0⟩, ⟨1,1⟩] |
 | Prover limit | 1 (returns only ⟨1,0⟩) |
-| kₘ          | ⟨1,0⟩ |
-| Expected    | {⟨1,0⟩, ⟨1,1⟩} |
+| kₘ | ⟨1,0⟩ |
+| Expected | {⟨1,0⟩, ⟨1,1⟩} |
 | Accumulated | {⟨1,0⟩} — key ⟨1,1⟩ lost |
 
 The prover honestly returns the first key in range with limit=1.
 Each heuristic incorrectly concludes the response is exhaustive:
 
-- **Heuristic 1** (m < n → exhaustive): m=1 < requestedN=2 → None.
-  Fails because the prover used its own limit (1), not the requested
-  limit (2).
-- **Heuristic 2** (m=1 → exhaustive): m=1 → None. Fails because
-  limit=1 always produces m=1, whether truncated or exhaustive.
-- **Heuristic 3** (kₘ not prefix of e → exhaustive): ⟨1,0⟩ is not a
-  prefix of ⟨1,1⟩ → None. Fails because the prefix relationship
-  between kₘ and e is unrelated to truncation status.
+- **Limit heuristic** (m < n → exhaustive): m=1 < requestedN=2 →
+  None. Fails because the prover used its own limit (1), not the
+  requested limit (2).
+- **B3** (m=1 → exhaustive): m=1 → None. Fails because limit=1
+  always produces m=1, whether truncated or exhaustive.
+- **B2** (kₘ not prefix of e → exhaustive): ⟨1,0⟩ is not a prefix
+  of ⟨1,1⟩ → None. Fails because the prefix relationship between kₘ
+  and e is unrelated to truncation status.
+
+## 6. Conclusion
+
+The end_proof in a range proof response creates a fundamental
+ambiguity: when the terminal node has a value and t(end_proof) = kₘ,
+the verifier cannot determine whether the response is truncated or
+exhaustive. This ambiguity is structural — it cannot be resolved by
+the prover, by heuristics on the proof structure, or by comparing
+the number of returned keys to the requested limit.
+
+The sound approach is Option A: in the ambiguous case, return
+Some(succ(kₘ), e). This guarantees both liveness (strict progress
+on each iteration) and completeness (None is returned only when
+exhaustion is certain). The cost is at most one extra round-trip
+per ambiguous response.
