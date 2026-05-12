@@ -8,6 +8,14 @@ disjoint ranges and fetches each range independently, possibly from
 different remote peers. A single range may require multiple fetches if
 the remote peer limits the number of key-value pairs per response.
 
+The remote peer is **untrusted**. It may be honest, faulty, or
+adversarial. The syncer relies on Merkle proof verification against a
+known root hash to establish the correctness of each response. The
+peer cannot forge data (the proof must be consistent with the root
+hash), but it can withhold data by truncating the response at any
+point. The syncer must operate correctly regardless of the peer's
+truncation behavior.
+
 After each fetch, the syncer must decide whether the range is fully
 covered or whether more fetches are needed. Getting this wrong causes:
 - **Infinite loops**: continuing to fetch when the range is already covered.
@@ -331,11 +339,22 @@ in (kₘ, e] to be silently lost (completeness violation).
 succ(kₘ)) when the response is exhaustive. If the prover returns
 the same response, the syncer loops indefinitely.
 
-Note: comparing m to the requested limit n (as proposed in Ron's
-fix fe064255a) has the same issues. The prover may return fewer
-than n keys for reasons unrelated to exhaustion (its own limits,
-network constraints, or policy). Therefore m < n does not reliably
-indicate exhaustion.
+**Using the requested limit n as a heuristic.**
+
+One might hope to use the requested limit n as trusted information:
+if m < n, the prover returned fewer than requested, suggesting
+exhaustion. However, this requires trusting that the prover honors
+n, which an untrusted prover may not do.
+
+The verifier can enforce m ≤ n (reject proofs with more keys than
+requested). But it cannot enforce m = min(n, |R|), because |R| is
+unknown to the verifier. A prover that returns m < n could be:
+- Exhaustive: |R| < n, so all keys were returned.
+- Truncating below n: |R| ≥ n, but the prover chose to return fewer.
+
+Both produce a valid proof with m < n. The verifier cannot
+distinguish them. Therefore m < n is not a reliable exhaustion
+signal, and using it as one risks completeness violations.
 
 ### 3.5 Counterexamples to Proposed Heuristics
 
