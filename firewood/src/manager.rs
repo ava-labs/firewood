@@ -124,15 +124,6 @@ pub(crate) struct RevisionManager {
 
     /// Worker responsible for persisting revisions to disk.
     persist_worker: PersistWorker,
-
-    /// File backing shared with all nodestores managed here.
-    ///
-    /// Retained so that `revision()` can synthesize an empty committed
-    /// nodestore when the caller requests the default empty-trie hash but no
-    /// in-memory revision matches. An empty trie has no on-disk root node and
-    /// therefore cannot be indexed in `RootStore`, so the lookup must be
-    /// resolved without consulting `RootStore`.
-    storage: Arc<FileBacked>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -238,7 +229,6 @@ impl RevisionManager {
             threadpool: OnceLock::new(),
             root_store,
             persist_worker,
-            storage,
         };
 
         // On startup, we always write the latest revision to RootStore
@@ -500,11 +490,8 @@ impl RevisionManager {
     /// Retrieve a committed revision by its root hash.
     /// To retrieve a revision involves a few steps:
     /// 1. Check the in-memory revision manager.
-    /// 2. If the caller requested the default empty-trie hash, synthesize an
-    ///    empty committed nodestore. An empty trie has no on-disk root node
-    ///    and therefore no `LinearAddress` to record in `RootStore`, so the
-    ///    persistence layer can never produce this revision and we must not
-    ///    consult `RootStore` for it. (TOB-FIREWOOD-7)
+    /// 2. If the caller requested the default empty-trie hash, return an
+    ///    empty committed nodestore.
     /// 3. Check `RootStore` (if it exists).
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
         // 1. Check the in-memory revision manager.
@@ -520,11 +507,12 @@ impl RevisionManager {
         }
         drop(by_hash);
 
-        // 2. Default empty-trie short-circuit.
+        // 2. Default empty-trie short-circuit. An empty trie has no on-disk
+        //    root node, so `RootStore` can never produce it; synthesize one
+        //    against the file backing carried by any committed revision.
         if HashKey::default_root_hash().as_ref() == Some(&root_hash) {
-            return Ok(Arc::new(NodeStore::new_empty_committed(
-                self.storage.clone(),
-            )));
+            let storage = self.current_revision().storage().clone();
+            return Ok(Arc::new(NodeStore::new_empty_committed(storage)));
         }
 
         // 3. Check `RootStore` (if it exists).
@@ -1039,8 +1027,6 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    /// Regression test for TOB-FIREWOOD-7.
-    ///
     /// Under `ethhash`, an empty committed revision is exposed via the
     /// Ethereum empty-trie hash but never indexed in `RootStore` (an empty
     /// trie has no on-disk root node, so there is no `LinearAddress` to
@@ -1091,8 +1077,15 @@ mod tests {
             manager.commit(proposal).unwrap();
         }
 
-        // Empty hash should still resolve, even though the revision has been
-        // reaped from the in-memory queue.
+        // Verify the empty revision has actually been evicted from the
+        // in-memory index — otherwise the next assertion would just be
+        // testing the step-1 path again.
+        assert!(
+            !manager.by_hash.read().contains_key(&empty_hash),
+            "precondition: empty-trie revision must have been evicted from by_hash"
+        );
+
+        // Empty hash should still resolve via the default-hash short-circuit.
         let revision = manager
             .revision(empty_hash.clone())
             .expect("empty-trie revision must resolve via the default-hash short-circuit");
