@@ -315,26 +315,6 @@ fn compute_root_hash_with_proofs(
         }
     }
 
-    // For children in the in-memory trie, compute hashes recursively.
-    // These children were inserted from the proven key-value pairs, so they
-    // are *inside* the proven range. A nibble cannot be both inside (present
-    // in the trie) and outside (marked in outside_children) at the same time,
-    // so this does not conflict with the proof hashes set above.
-    let mut child_prefix: PathBuf = full_key.iter().copied().collect();
-    for (nibble, child_opt) in &branch.children {
-        if let Some(Child::Node(child_node)) = child_opt {
-            child_prefix.push(nibble);
-            let child_hash = compute_root_hash_with_proofs(
-                child_node,
-                &child_prefix,
-                proof_nodes,
-                outside_children,
-            );
-            child_hashes[nibble] = Some(child_hash);
-            child_prefix.pop();
-        }
-    }
-
     // Use the branch's value if it exists. Otherwise, fall back to the
     // proof node's value digest (which may be a Hash for out-of-range
     // nodes where no key-value pair was inserted). The proof node's

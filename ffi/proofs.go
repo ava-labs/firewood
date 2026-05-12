@@ -29,26 +29,18 @@ package ffi
 // #cgo nocallback fwd_free_range_proof
 // #cgo noescape fwd_db_change_proof
 // #cgo nocallback fwd_db_change_proof
-// #cgo noescape fwd_verify_change_proof
-// #cgo nocallback fwd_verify_change_proof
-// #cgo noescape fwd_db_propose_change_proof
-// #cgo nocallback fwd_db_propose_change_proof
-// #cgo noescape fwd_db_commit_change_proof
-// #cgo nocallback fwd_db_commit_change_proof
-// #cgo noescape fwd_change_proof_find_next_key_proposed
-// #cgo nocallback fwd_change_proof_find_next_key_proposed
+// #cgo noescape fwd_db_verify_change_proof
+// #cgo nocallback fwd_db_verify_change_proof
+// #cgo noescape fwd_db_verify_and_commit_change_proof
+// #cgo nocallback fwd_db_verify_and_commit_change_proof
+// #cgo noescape fwd_change_proof_find_next_key
+// #cgo nocallback fwd_change_proof_find_next_key
 // #cgo noescape fwd_change_proof_to_bytes
 // #cgo nocallback fwd_change_proof_to_bytes
 // #cgo noescape fwd_change_proof_from_bytes
 // #cgo nocallback fwd_change_proof_from_bytes
 // #cgo noescape fwd_free_change_proof
 // #cgo nocallback fwd_free_change_proof
-// #cgo noescape fwd_verified_change_proof_to_bytes
-// #cgo nocallback fwd_verified_change_proof_to_bytes
-// #cgo noescape fwd_free_verified_change_proof
-// #cgo nocallback fwd_free_verified_change_proof
-// #cgo noescape fwd_free_proposed_change_proof
-// #cgo nocallback fwd_free_proposed_change_proof
 import "C"
 
 import (
@@ -109,23 +101,6 @@ type RangeProof struct {
 // ChangeProof represents a proof of changes between two roots for a range of keys.
 type ChangeProof struct {
 	handle *C.ChangeProofContext
-}
-
-// VerifiedChangeProof is a ChangeProof that has been verified.
-type VerifiedChangeProof struct {
-	handle *C.VerifiedChangeProofContext
-}
-
-// ProposedChangeProof contains a proposal for the ChangeProof.
-//
-// Because this type holds a reference to the database, the database must be
-// kept alive until the proof is committed or freed. This is managed by the
-// keepAliveHandle, which prevents [Database.Close] from completing while this
-// proof is still alive.
-type ProposedChangeProof struct {
-	handle          *C.ProposedChangeProofContext
-	db              *Database
-	keepAliveHandle databaseKeepAliveHandle
 }
 
 // NextKeyRange represents a range of keys to fetch from the database. The start
@@ -418,85 +393,76 @@ func (db *Database) ChangeProof(
 	return proof, nil
 }
 
-// VerifyChangeProof verifies the provided change [proof] proves the changes
-// between [startRoot] and [endRoot] for keys in the range [startKey, endKey].
-func (proof *ChangeProof) VerifyChangeProof(
-	startRoot, endRoot Hash,
+// VerifyChangeProof verifies the change proof and creates a standard Proposal.
+// The proof is not consumed — it can still be used for [ChangeProof.FindNextKey] or serialization.
+func (db *Database) VerifyChangeProof(
+	proof *ChangeProof,
+	endRoot Hash,
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
-) (*VerifiedChangeProof, error) {
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	args := C.VerifyChangeProofArgs{
-		proof:      proof.handle,
-		start_root: newCHashKey(startRoot),
-		end_root:   newCHashKey(endRoot),
-		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
-		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
-		max_length: C.uint32_t(maxLength),
-	}
-
-	verified, err := getVerifiedChangeProofFromVerifiedChangeProofResult(C.fwd_verify_change_proof(args))
-	if err != nil {
-		return nil, err
-	}
-
-	runtime.SetFinalizer(verified, (*VerifiedChangeProof).Free)
-	return verified, nil
-}
-
-// ProposeChangeProof creates a proposal from a VerifiedChangeProof.
-func (db *Database) ProposeChangeProof(
-	proof *VerifiedChangeProof,
-) (*ProposedChangeProof, error) {
+) (*Proposal, error) {
 	db.handleLock.RLock()
 	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
 
-	args := C.ProposedChangeProofArgs{
-		proof: proof.handle,
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	args := C.CreateChangeProofArgs{
+		end_root:   newCHashKey(endRoot),
+		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
+		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
+		max_length: C.uint32_t(maxLength),
 	}
 
-	proposed, err := getProposedChangeProofFromProposedChangeProofResult(db, C.fwd_db_propose_change_proof(db.handle, args))
-	if err != nil {
-		return nil, err
-	}
-
-	// keep the database alive while the proof owns the embedded proposal
-	// TODO: use runtime.AddCleanup and shared handle[T] infrastructure
-	// instead of SetFinalizer, for consistency with Proposal and Revision.
-	proposed.keepAliveHandle.init(&db.outstandingHandles)
-	runtime.SetFinalizer(proposed, (*ProposedChangeProof).Free)
-	return proposed, nil
+	return getProposalFromProposalResult(
+		C.fwd_db_verify_change_proof(db.handle, proof.handle, args),
+		&db.outstandingHandles,
+		&db.commitLock,
+	)
 }
 
-func (proof *ProposedChangeProof) CommitChangeProof() (Hash, error) {
-	proof.db.handleLock.RLock()
-	defer proof.db.handleLock.RUnlock()
-	if proof.db.handle == nil {
+// VerifyAndCommitChangeProof verifies the change proof and commits it in a
+// single call. The proof is not consumed — it remains available for
+// [ChangeProof.FindNextKey] or serialization afterward.
+func (db *Database) VerifyAndCommitChangeProof(
+	proof *ChangeProof,
+	endRoot Hash,
+	startKey, endKey Maybe[[]byte],
+	maxLength uint32,
+) (Hash, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
 		return EmptyRoot, errDBClosed
 	}
 
-	args := C.CommittedChangeProofArgs{
-		proof: proof.handle,
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	args := C.CreateChangeProofArgs{
+		end_root:   newCHashKey(endRoot),
+		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
+		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
+		max_length: C.uint32_t(maxLength),
 	}
 
-	var hash Hash
-	err := proof.keepAliveHandle.disown(true /* evenOnError */, func() error {
-		proof.db.commitLock.Lock()
-		defer proof.db.commitLock.Unlock()
-		var err error
-		hash, err = getHashKeyFromHashResult(C.fwd_db_commit_change_proof(args))
-		return err
-	})
-	return hash, err
+	db.commitLock.Lock()
+	defer db.commitLock.Unlock()
+	return getHashKeyFromHashResult(C.fwd_db_verify_and_commit_change_proof(db.handle, proof.handle, args))
 }
 
-func (proof *ProposedChangeProof) FindNextKey() (*NextKeyRange, error) {
-	return getNextKeyRangeFromNextKeyRangeResult(C.fwd_change_proof_find_next_key_proposed(proof.handle))
+// FindNextKey returns the next key range to fetch for a change proof,
+// or nil if there are no more keys to fetch. The proof is not consumed.
+func (proof *ChangeProof) FindNextKey(endKey Maybe[[]byte]) (*NextKeyRange, error) {
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	return getNextKeyRangeFromNextKeyRangeResult(
+		C.fwd_change_proof_find_next_key(proof.handle, newMaybeBorrowedBytes(endKey, &pinner)),
+	)
 }
 
 // CodeHashes returns an iterator for the code hashes contained in the account nodes
@@ -561,54 +527,6 @@ func (p *ChangeProof) Free() error {
 	p.handle = nil
 
 	return nil
-}
-
-// MarshalBinary returns a serialized representation of this VerifiedChangeProof.
-//
-// The format is unspecified and opaque to firewood. It is the same format as
-// [ChangeProof.MarshalBinary].
-func (p *VerifiedChangeProof) MarshalBinary() ([]byte, error) {
-	start := time.Now()
-	result, err := getValueFromValueResult(C.fwd_verified_change_proof_to_bytes(p.handle))
-	proofMarshalDuration.WithLabelValues("verified_change").Observe(time.Since(start).Seconds())
-	return result, err
-}
-
-// Free releases the resources associated with this VerifiedChangeProof.
-//
-// It is safe to call Free more than once; subsequent calls after the first
-// will be no-ops.
-func (p *VerifiedChangeProof) Free() error {
-	if p.handle == nil {
-		return nil
-	}
-
-	if err := getErrorFromVoidResult(C.fwd_free_verified_change_proof(p.handle)); err != nil {
-		return err
-	}
-
-	p.handle = nil
-
-	return nil
-}
-
-// Free releases the resources associated with this ProposedChangeProof.
-//
-// It is safe to call Free more than once; subsequent calls after the first
-// will be no-ops.
-func (p *ProposedChangeProof) Free() error {
-	return p.keepAliveHandle.disown(false /* evenOnError */, func() error {
-		if p.handle == nil {
-			return nil
-		}
-
-		if err := getErrorFromVoidResult(C.fwd_free_proposed_change_proof(p.handle)); err != nil {
-			return err
-		}
-
-		p.handle = nil
-		return nil
-	})
 }
 
 // StartKey returns the inclusive start key of this key range.
@@ -730,35 +648,5 @@ func getChangeProofFromChangeProofResult(result C.ChangeProofResult) (*ChangePro
 		return nil, err
 	default:
 		return nil, fmt.Errorf("unknown C.ChangeProofResult tag: %d", result.tag)
-	}
-}
-
-func getVerifiedChangeProofFromVerifiedChangeProofResult(result C.VerifiedChangeProofResult) (*VerifiedChangeProof, error) {
-	switch result.tag {
-	case C.VerifiedChangeProofResult_NullHandlePointer:
-		return nil, errDBClosed
-	case C.VerifiedChangeProofResult_Ok:
-		ptr := *(**C.VerifiedChangeProofContext)(unsafe.Pointer(&result.anon0))
-		return &VerifiedChangeProof{handle: ptr}, nil
-	case C.VerifiedChangeProofResult_Err:
-		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
-		return nil, err
-	default:
-		return nil, fmt.Errorf("unknown C.VerifiedChangeProofResult tag: %d", result.tag)
-	}
-}
-
-func getProposedChangeProofFromProposedChangeProofResult(db *Database, result C.ProposedChangeProofResult) (*ProposedChangeProof, error) {
-	switch result.tag {
-	case C.ProposedChangeProofResult_NullHandlePointer:
-		return nil, errDBClosed
-	case C.ProposedChangeProofResult_Ok:
-		ptr := *(**C.ProposedChangeProofContext)(unsafe.Pointer(&result.anon0))
-		return &ProposedChangeProof{handle: ptr, db: db}, nil
-	case C.ProposedChangeProofResult_Err:
-		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
-		return nil, err
-	default:
-		return nil, fmt.Errorf("unknown C.ProposedChangeProofResult tag: %d", result.tag)
 	}
 }

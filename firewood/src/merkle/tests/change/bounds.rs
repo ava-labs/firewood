@@ -41,6 +41,42 @@ fn test_verify(start_key: Option<&[u8]>, end_key: Option<&[u8]>, change_key: &[u
     assert_eq!(target.root_hash().unwrap(), root2);
 }
 
+/// Delete a key outside the requested range while changing one inside it.
+/// The start boundary (`b"\x01"`) falls between the deleted key (`b"\x00"`)
+/// and the changed key (`b"\x10"`), so the delete is out-of-range and the
+/// proof must still verify.
+#[test]
+fn test_inherited_key_at_start_boundary_accepted() {
+    let (db, _dir) = setup_db![(b"\x00", b"a"), (b"\x10", b"b")];
+    let root1 = db.root_hash().unwrap();
+    db.propose(vec![
+        BatchOp::Delete {
+            key: b"\x00" as &[u8],
+        },
+        BatchOp::Put {
+            key: b"\x10",
+            value: b"changed",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root2 = db.root_hash().unwrap();
+
+    let proof = db
+        .change_proof(
+            root1.clone(),
+            root2.clone(),
+            Some(b"\x01".as_ref()),
+            None,
+            None,
+        )
+        .unwrap();
+
+    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x01"), None, None).unwrap();
+    verify_and_check(&db, &proof, &ctx, root1).unwrap();
+}
+
 /// When `requested_end_key` is set and the proof is complete (not truncated),
 /// the right edge proof anchors at `requested_end_key`, not the last batch key.
 #[test]
