@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778487199883,
+  "lastUpdate": 1778573181639,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -3289,6 +3289,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 75.31363773809785,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "bernard-avalabs",
+            "username": "bernard-avalabs",
+            "email": "53795885+bernard-avalabs@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "324ea853af2d87604e9d9841757a486226d79d37",
+          "message": "test: add edge case tests for change proof verification (#1946)\n\n## Why this should be merged\n                  \nContinuation of the change proof verification merge. Adds 21 edge case\nintegration tests for the change proof verification pipeline, covering\nboundary conditions found during code review and TLA+ model checking.\n                  \n## How this works\n                  \nAdd tests/change/edge_cases.rs with tests covering:\n   \n- Empty batch ops with non-empty boundary proofs (out-of-range change)\n  - Odd nibble depth proof nodes (structural validation)\n- Inclusion proofs with children below — prefix keys where the boundary\nkey is a branch with value and children (start and end sides)\n- Key exhaustion — start key exhausted at parent branch, divergent node\n- Exclusion proofs for deleted keys (start and end sides)\n- Disjoint proof — query range excludes all changes, out-of-range value\nskipping\n- Divergent child gap — exclusion proof with sibling under shared branch\n- Terminal divergence within partial path (compute_outside_children Case\nA)\n- Terminal ancestor with all children outside (compute_outside_children\nCase B)\n- Terminal divergent node with all children in range\n- Right edge boundary as prefix of terminal — end key is prefix of\nexisting key\n- Out-of-range value change adopted — reconcile callback adopts proof\nvalue for out-of-range ancestor\n- Prefix key deleted in end_root — out-of-range deletion, callback\nclears stale value (regression)\n- Single-point range — start_key == end_key\n- Root compression — out-of-range deletion compresses root partial path\n(found by TLA+)\n- Root expansion — out-of-range insertion expands root partial path\n  - Root value change — empty key value delta\n- ValueDigest::Hash at out-of-range prefix key — merkledb-mode test\nverifying the Hash fix in reconcile_branch_proof_node and\ncompute_root_hash_with_proofs (serialized/deserialized proof)\n## How this was tested\n  - CI\n## Breaking Changes\n  - None\n\n---------\n\nSigned-off-by: bernard-avalabs <53795885+bernard-avalabs@users.noreply.github.com>\nCo-authored-by: Copilot <175728472+Copilot@users.noreply.github.com>",
+          "timestamp": "2026-05-11T15:57:21Z",
+          "url": "https://github.com/ava-labs/firewood/commit/324ea853af2d87604e9d9841757a486226d79d37"
+        },
+        "date": 1778573180830,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 161.26681057926191,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6200.903933103486,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 118.42646006561334,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5990.897226463724,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 88.08665553116894,
             "unit": "block_accept_ms/ggas"
           }
         ]
