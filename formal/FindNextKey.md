@@ -213,127 +213,157 @@ re-examine the trie.
 
 ## 3. Decision Function
 
-```
-find_next_key(L, E, P, batch_ops) → None | Some(L, E)
-```
+`find_next_key` takes a verified range proof response and the
+original end_key e, and returns either:
+- **None**: the range [s, e] is fully covered. No more fetches needed.
+- **Some(kₘ, e)**: the range was partially covered through kₘ.
+  Continue fetching from [kₘ, e]. The end_key e is always echoed
+  back unchanged — the function never modifies the upper bound.
 
-### 3.1 Preconditions
-- L ≤ E (if both defined)
-- L ≤ P (the last key can't exceed what the proof covers)
+The function assumes the proof has already been verified (Section 2.5).
+Conditions such as kₘ > e are rejected during verification and cannot
+reach `find_next_key`.
 
-### 3.2 Cases
+### 3.1 Inputs
 
-**Case 1: Empty batch_ops** (no data in range)
-- If end_proof is empty → Done (empty trie or no keys in range)
-- If end_proof is non-empty → Done (proof confirms range is empty)
-- Return: `None`
+The function can rely on:
+- **From the verified proof**: key_values (and thus m and kₘ),
+  start_proof, end_proof, its terminal node, and t(end_proof). These
+  are verified against root hash h and can be trusted.
+- **From the verifier's own state**: s and e (the range the verifier
+  requested). These are known to the verifier, not derived from the
+  proof.
+- The post-verification properties established in Section 2.5.
 
-**Case 2: L = E** (last key equals requested bound)
-- The proof reached the requested end. No more keys to fetch.
-- Return: `None`
+The function cannot rely on:
+- The trie T itself.
+- Whether the prover truncated or exhausted the response.
+- The target key the prover used to generate end_proof.
+- The prover honoring the requested limit n. The prover may return
+  fewer keys than n for any reason (its own limits, network
+  constraints, or policy). Therefore, comparing m to n does not
+  reliably distinguish truncation from exhaustion.
 
-**Case 3: P > L** (proof structurally reaches past last key)
-- The end_proof was generated for a key beyond L.
-- This means the proof covers [s, P) or [s, P], and all keys between L and P
-  are accounted for (either absent from the trie or explicitly included).
-- Return: `None`
+### 3.2 Unambiguous Cases
 
-**Case 4: P = L** (proof terminal equals last key)
-- The end_proof is an inclusion proof of L. This is the truncation signature.
-- However, it could also occur when L happens to be the last key in the trie
-  within the requested range (and the prover generates an inclusion proof at L
-  because there's nothing beyond L to walk to within [s, E]).
-- **Ambiguity**: truncated vs. coincidentally exhaustive at L.
+From the analysis in Section 2.5, the following cases allow `find_next_key`
+to determine the truncation status:
 
-### 3.3 Resolving Ambiguity in Case 4
+**Case 1: m = 0** (empty key_values).
+The response is exhaustive (Section 2.5, property 3).
+Return: **None**.
 
-When P = L and L < E, we cannot determine from the proof alone whether:
-(a) The prover was truncated at L and there are more keys in (L, E], or
-(b) There are no more keys in (L, E] and the prover's end_proof happens
-    to anchor at L.
+**Case 2: kₘ = e** (last returned key equals requested bound).
+The completeness property (Section 2.4) guarantees key_values
+contains all keys in [s, kₘ] with no gaps. Since kₘ = e, this
+covers the entire requested range [s, e].
+Return: **None**.
 
-**Proposed heuristic** (from issue #1989):
-- If the last op is a Put and |batch_ops| = 1 → assume exhaustive (Done)
-- Otherwise → assume truncated (Continue)
+**Case 3: Terminal node has no value.**
+The end_proof is an exclusion proof. An honest truncated response
+always produces an inclusion proof of kₘ (since kₘ ∈ K(T)), so
+exclusion implies exhaustive (Section 2.5).
+Return: **None**.
 
-**Limitation**: This is a heuristic, not a proof. It can be wrong in both
-directions:
-- A limit=1 request always returns |batch_ops|=1, so it looks exhaustive
-  even when truncated.
-- A coincidentally single-op proof looks exhaustive when the range has more data.
+**Case 4: Terminal node has value, t(end_proof) ≠ kₘ.**
+An honest truncated response would have t(end_proof) = kₘ. Since
+t(end_proof) ≠ kₘ, the response is exhaustive (Section 2.5).
+Return: **None**.
 
-### 3.4 Structural Solution
+### 3.3 The Ambiguous Case
 
-The ambiguity exists because the proof format does not encode whether
-truncation occurred. Two possible fixes:
+**Case 5: Terminal node has value, t(end_proof) = kₘ, and kₘ < e.**
 
-**Option A: Add a truncation flag to the proof.**
-The prover sets `truncated = true` when it hits the limit. The verifier
-passes this through to `find_next_key`. No heuristics needed.
+This is the truncation ambiguity from Section 2.5. The proof is
+consistent with:
+- Truncation: the prover hit the limit at kₘ and generated an
+  inclusion proof of kₘ. There may be more keys in (kₘ, e].
+- Exhaustion: the prover returned all keys in [s, e] and the
+  end_proof happens to terminate at kₘ (either because e = kₘ,
+  which is excluded by kₘ < e, or because an exclusion-divergent
+  proof of e landed on kₘ's node).
 
-**Option B: Use `max_length` as the signal.**
-If the caller knows the limit `n` that was used, and `|batch_ops| < n`,
-the proof is exhaustive. If `|batch_ops| = n`, it may be truncated.
-This is what Ron's fix (fe064255a) does for range proofs.
+The verifier cannot distinguish these from the proof alone.
 
-Option B has the "coincidental match" problem: `|batch_ops| = n` doesn't
-guarantee truncation (there might be exactly `n` keys in range). But it's
-conservative — it returns Continue, which is safe (extra request, no data loss).
+### 3.4 Resolving the Ambiguous Case
 
-## 4. Correctness Properties
+The verifier has no information from the proof alone that
+distinguishes truncation from exhaustion in Case 5. We consider
+three approaches:
 
-### Property 1: Progress
-If `find_next_key` returns `Some(s', e')`, then s' > s. The next request
-covers a strictly smaller range. This prevents infinite loops.
+We define **succ(k)** as the lexicographic successor of key k — the
+smallest key strictly greater than k (e.g., k with a 0x00 byte
+appended).
 
-**Proof**: s' = L ≥ s (since L is in [s, E]). If L = s, then no keys were
-returned in (s, E], which means batch_ops is empty → Case 1 → returns None.
-Contradiction. So L > s, and s' = L > s. ∎
+**Option A: Return Some(succ(kₘ), e) in the ambiguous case.**
 
-### Property 2: Completeness
-If `find_next_key` returns `None`, then the union of all batch_ops from all
-requests covers every key in the original requested range [s₀, E].
+When the verifier cannot determine the truncation status, it
+conservatively assumes truncation and returns Some(succ(kₘ), e).
+The next fetch requests [succ(kₘ), e], which excludes kₘ (already
+accumulated).
 
-**Sketch**: Each request covers [sᵢ, E]. The proof for request i is verified
-against the trie root hash, confirming the returned keys are correct for [sᵢ, E].
-When find_next_key returns None (Case 1, 2, or 3), the proof confirms no more
-keys exist in (L, E]. Combined with the returned keys in [sᵢ, L], the range
-[sᵢ, E] is fully covered.
+- If the response was actually exhaustive: the next fetch returns
+  m = 0 (no keys in (kₘ, e]) → Case 1 → None. Terminates.
+- If the response was actually truncated: the next fetch returns
+  keys in (kₘ, e]. Progress is made.
 
-Case 4 (P = L, heuristic) may incorrectly return None when there are more keys.
-This is the gap in the correctness argument.
+*Safety*: kₘ was already included in the current key_values and
+verified. Advancing past it loses no data.
 
-### Property 3: Safety
-If `find_next_key` returns `Some(L, E)`, no keys in [s, L] are missed. They
-were all included in the current proof's batch_ops (verified by the Merkle proof).
+*Liveness*: succ(kₘ) > kₘ ≥ k₁ ≥ s, so s' > s strictly. Each
+iteration advances the start key, and the range [s, e] is finite,
+so the syncer must terminate.
 
-## 5. Formal Model (TLA+)
+This costs at most one extra round-trip per ambiguous response.
 
-A TLA+ model could verify these properties by:
-1. Modeling the trie as a set of key-value pairs
-2. Modeling the prover as generating honest proofs (possibly truncated by limit)
-3. Modeling the syncer loop: request → verify → find_next_key → repeat
-4. Checking that the syncer eventually terminates and covers all keys
+**Option B: Heuristic on proof structure (issue #1989's proposal).**
 
-The state space is the cross product of:
-- All sparse tries (up to MaxPopulated keys)
-- All (start, end, limit) request parameters
-- The syncer's accumulated key set
+Use properties of the end_proof's terminal node (e.g., whether kₘ
+is a prefix of e, the number of returned keys) to guess whether the
+response is truncated or exhaustive.
 
-The invariant is:
-- If the syncer terminates, its accumulated keys = trie's keys in [s₀, E]
-- The syncer always terminates (no infinite loops)
+*Safety*: unsound. As shown in Section 2.5, the terminal node's
+properties do not reliably distinguish the cases. The heuristic may
+return None when the response is actually truncated, causing keys
+in (kₘ, e] to be silently lost (completeness violation).
 
-## 6. Open Questions
+*Liveness*: the heuristic may return Some(kₘ, e) (with kₘ, not
+succ(kₘ)) when the response is exhaustive. If the prover returns
+the same response, the syncer loops indefinitely.
 
-1. **Is the heuristic in Case 4 acceptable?** Option B (using max_length) avoids
-   the heuristic entirely for range proofs. For change proofs, max_length is not
-   currently available at the find_next_key call site.
+Note: comparing m to the requested limit n (as proposed in Ron's
+fix fe064255a) has the same issues. The prover may return fewer
+than n keys for reasons unrelated to exhaustion (its own limits,
+network constraints, or policy). Therefore m < n does not reliably
+indicate exhaustion.
 
-2. **Should `find_next_key` receive `max_length` as input?** This would let it
-   apply Option B uniformly. The current FFI signature doesn't pass it.
+### 3.5 Correctness Properties
 
-3. **Is there a case where the prover generates P = L for a non-truncated proof
-   when L < E?** If so, Option B (|batch_ops| < n → exhaustive) would incorrectly
-   return Continue, which is safe but wasteful. If not, P = L always means
-   truncation, and no heuristic is needed.
+We state three properties that a correct `find_next_key` must satisfy,
+and evaluate them under Option A (return Some(succ(kₘ), e) in the
+ambiguous case).
+
+**Liveness**: The syncer terminates after a finite number of fetches.
+
+*Argument under Option A*: The only case returning Some is Case 5,
+which returns s' = succ(kₘ). Since kₘ ≥ k₁ ≥ s (key_values covers
+[s, ...]) and succ(kₘ) > kₘ, we have s' > s strictly. Each
+iteration strictly advances the start key over a finite range [s, e],
+so the syncer must eventually reach Case 1 (m = 0) or Case 2
+(kₘ = e) and return None.
+
+**Completeness**: When the syncer terminates, the union of all
+key_values across all fetches equals K(T) ∩ [s, e]. No keys are
+missed.
+
+*Argument under Option A*: find_next_key returns None only in
+Cases 1-4. In each of these cases, Section 2.5 establishes the
+response is exhaustive, so all keys in [s, e] are covered.
+find_next_key never returns None in Case 5 — it always returns
+Some(succ(kₘ), e). Therefore None is only returned when exhaustion
+is certain. Between iterations, advancing to succ(kₘ) skips only
+kₘ itself, which was already accumulated — no keys are lost.
+
+*Under Option B (heuristic)*: find_next_key may return None in
+Case 5 when the response is actually truncated — violating
+completeness. Keys in (kₘ, e] would be silently lost.
