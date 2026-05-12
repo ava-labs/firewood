@@ -91,6 +91,12 @@ impl<'db> ReconstructedHandle<'db> {
     ///
     /// Each clone owns its own handle and may be dropped independently. The
     /// two distinct handles may be used independently.
+    ///
+    /// Callers should only perform read operations on the clone and drop it
+    /// before performing further writes. Calling [`Self::reconstruct`] on the
+    /// clone (or on any sibling) while another clone is alive is expensive: it
+    /// forces a deep clone of the root node instead of the zero-copy move that
+    /// the uncloned path takes.
     #[must_use]
     pub fn clone_view(&self) -> Self {
         Self::new(self.reconstructed.clone(), self.handle)
