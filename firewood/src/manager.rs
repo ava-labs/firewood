@@ -509,7 +509,7 @@ impl RevisionManager {
 
         // 2. Default empty-trie short-circuit. An empty trie has no on-disk
         //    root node, so `RootStore` can never produce it; synthesize one
-        //    against the file backing carried by any committed revision.
+        //    against the file backing carried by the latest committed revision.
         if HashKey::default_root_hash().as_ref() == Some(&root_hash) {
             let storage = self.current_revision().storage().clone();
             return Ok(Arc::new(NodeStore::new_empty_committed(storage)));
