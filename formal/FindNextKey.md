@@ -337,9 +337,67 @@ than n keys for reasons unrelated to exhaustion (its own limits,
 network constraints, or policy). Therefore m < n does not reliably
 indicate exhaustion.
 
-### 3.5 Correctness Properties
+### 3.5 Counterexamples to Proposed Heuristics
 
-We state three properties that a correct `find_next_key` must satisfy,
+This section provides concrete counterexamples to the heuristics
+proposed in issue #1989 and in Ron's fix fe064255a. All
+counterexamples assume the ambiguous case (Case 5): terminal node
+has a value, t(end_proof) = kₘ, and kₘ < e.
+
+**Heuristic 1: Compare m to requested limit n.**
+
+If m < n, assume exhaustive (return None). If m = n, assume
+truncated (return Some).
+
+*Counterexample (completeness violation)*: The verifier requests
+[s, e] with n = 10. The prover has 15 keys in range but applies
+its own limit of 5, returning m = 5 keys with an inclusion
+end_proof of kₘ. The verifier sees m = 5 < n = 10 and concludes
+exhaustive. Returns None. 10 keys in (kₘ, e] are lost.
+
+**Heuristic 2: If the last operation is a Put and m = 1, assume
+exhaustive.**
+
+The reasoning: a single Put that matches the end_proof terminal
+suggests the prover had only one key to return.
+
+*Counterexample (completeness violation)*: The trie has keys
+{k₁, k₂, k₃} in [s, e]. The prover uses limit = 1, returning
+only k₁ with an inclusion end_proof of k₁. m = 1, last op is
+Put. The heuristic returns None. Keys k₂ and k₃ are lost.
+
+**Heuristic 3: If kₘ is a strict prefix of e, assume truncated.
+Otherwise assume exhaustive.**
+
+The reasoning: if kₘ is a prefix of e, the prover likely stopped
+short. If not, the proof likely covers through e.
+
+*Counterexample (completeness violation)*: The trie has keys
+{\x10, \x10\x10} in [s, \x10\x30]. The prover uses limit = 1,
+returning only \x10 with an inclusion end_proof of \x10. kₘ = \x10
+is a prefix of e = \x10\x30, so the heuristic returns Some — correct
+in this case. But reverse the scenario: the trie has only {\x10} in
+[s, \x10\x30], and the prover returns \x10 exhaustively. kₘ = \x10
+is still a prefix of e, so the heuristic returns Some — an
+unnecessary round-trip, but not a violation.
+
+Now consider: trie has keys {\x10\x30, \x10\x35} in [s, \x10\x40].
+The prover uses limit = 1, returning \x10\x30. kₘ = \x10\x30 is NOT
+a prefix of e = \x10\x40. The heuristic assumes exhaustive and
+returns None. Key \x10\x35 is lost.
+
+**Heuristic 4: Use t(end_proof) > kₘ to detect exhaustion.**
+
+If the end_proof's terminal key exceeds kₘ, assume exhaustive.
+
+*This is Cases 3 and 4 from Section 3.2* — these are sound and
+already handled as unambiguous cases. The heuristic is correct here.
+The problem is that it provides no help in Case 5 where
+t(end_proof) = kₘ, which is the ambiguous case.
+
+### 3.6 Correctness Properties
+
+We state two properties that a correct `find_next_key` must satisfy,
 and evaluate them under Option A (return Some(succ(kₘ), e) in the
 ambiguous case).
 
