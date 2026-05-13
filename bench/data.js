@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778573181639,
+  "lastUpdate": 1778659535672,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -3336,6 +3336,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 88.08665553116894,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "beeb1f92053d09f1762f3e7fd20db0fd565bb569",
+          "message": "refactor(proofs): move range/change proof verification helpers from FFI to firewood (#1990)\n\n## Why this should be merged\n\nffi should just be doing marshaling to C/go.\n\n## How this works\n\nPure relocation, no logic changes. Centralizes verification-context\ntypes and `find_next_key` core logic in the firewood crate so the FFI\nlayer can stay focused on handle management and C-interop concerns.\n\nSpecifically:\n\n* Move `KeyRange` typedef from `ffi/src/proofs/range.rs` to\n`firewood::proofs::range`. Re-exported at firewood crate root and from\n`firewood_ffi::proofs` for backward-compatible imports.\n* Move FFI's private `VerificationContext` to firewood as\n`RangeProofVerificationContext`, mirroring the existing\n`ChangeProofVerificationContext` shape.\n* Move the range-proof structural-verify stub (`warn!(...)`) into\nfirewood as `verify_range_proof_structure`, mirroring\n`verify_change_proof_structure`.\n* Move the bodies of `RangeProofContext::find_next_key` and\n`ChangeProofContext::find_next_key` into firewood as\n`find_next_key_after_range_proof` and\n`find_next_key_after_change_proof`. FFI methods now delegate; the\nrange-proof side keeps an FFI-only proposal-state early-return\noptimization wrapper.\n\n## How this was tested\n\nNo test changes. All existing tests pass at 664/664. This is a\npreparatory move for the upcoming `find_next_key` correctness fix (see\nissue #1989).\n\n## Breaking Changes\n\nNone",
+          "timestamp": "2026-05-12T23:26:45Z",
+          "url": "https://github.com/ava-labs/firewood/commit/beeb1f92053d09f1762f3e7fd20db0fd565bb569"
+        },
+        "date": 1778659535303,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 168.54028994502156,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5933.299392840749,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 109.85404802974111,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5744.614987486586,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 76.4190835193564,
             "unit": "block_accept_ms/ggas"
           }
         ]
