@@ -286,20 +286,27 @@ impl DatabaseHandle {
             .change_proof(start_hash, end_hash, start_key, end_key, limit)
     }
 
-    /// Applies the `BatchOp`s of a change proof to the parent.
+    /// Verify a change proof and create a proposal from it.
+    ///
+    /// Performs structural validation, applies batch ops to the latest
+    /// revision, and verifies the root hash against `end_root`. The proof
+    /// is borrowed, not consumed.
     ///
     /// # Errors
     ///
-    /// Returns a `LatestIsEmpty` error if the trie is empty. A range proof should be used in
-    /// this case.
-    pub fn apply_change_proof_to_parent(
+    /// Returns an error if structural validation fails or the root hash
+    /// doesn't match `end_root`.
+    pub fn verify_change_proof(
         &self,
-        start_hash: HashKey,
-        change_proof: &FrozenChangeProof,
+        proof: &FrozenChangeProof,
+        end_root: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
     ) -> Result<CreateProposalResult<'_>, api::Error> {
         CreateProposalResult::new(self, || {
-            let parent = &self.db.revision(start_hash)?;
-            self.db.apply_change_proof_to_parent(change_proof, parent)
+            self.db
+                .verify_change_proof(proof, end_root, start_key, end_key, max_length)
         })
     }
 

@@ -591,7 +591,7 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
     // and replace it with a copy where the storageRoot field is zeroed.
     // This surgically targets only the value bytes, avoiding collateral
     // damage to node hashes. Then re-open so all reads come from disk.
-    let storage = merkle.nodestore().get_storage();
+    let storage = merkle.nodestore().storage().clone();
     for (k, _) in &*accounts {
         let stored = merkle.get_value(k.as_ref()).unwrap().unwrap();
         let zeroed = zero_storage_root_in_rlp(&stored, &dummy_storage_root);

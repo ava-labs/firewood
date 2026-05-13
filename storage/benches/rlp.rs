@@ -28,7 +28,7 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use firewood_storage::rlp as fwd_rlp;
+use firewood_storage::{RlpItem, RlpList, encode_list, replace_list_field};
 
 // ---------- fixtures ----------
 
@@ -75,11 +75,11 @@ fn bench_branch_encode_ours(c: &mut Criterion) {
     let children = branch_children();
     c.bench_function("branch_encode/ours", |b| {
         b.iter(|| {
-            let mut items = [fwd_rlp::RlpItem::Empty; 17];
+            let mut items = [RlpItem::Empty; 17];
             for (slot, child) in items.iter_mut().zip(black_box(&children).iter()) {
-                *slot = fwd_rlp::RlpItem::Bytes(child.as_slice());
+                *slot = RlpItem::Bytes(child.as_slice());
             }
-            black_box(fwd_rlp::encode_list(&items))
+            black_box(encode_list(&items))
         });
     });
 }
@@ -104,9 +104,9 @@ fn bench_leaf_encode_ours(c: &mut Criterion) {
     let value = [0xccu8; 32];
     c.bench_function("leaf_encode/ours", |b| {
         b.iter(|| {
-            black_box(fwd_rlp::encode_list(&[
-                fwd_rlp::RlpItem::Bytes(black_box(path)),
-                fwd_rlp::RlpItem::Bytes(black_box(value).as_slice()),
+            black_box(encode_list(&[
+                RlpItem::Bytes(black_box(path)),
+                RlpItem::Bytes(black_box(value).as_slice()),
             ]))
         });
     });
@@ -140,9 +140,7 @@ fn bench_storage_root_replace_ours(c: &mut Criterion) {
     let new_root = [0xddu8; 32];
     c.bench_function("storage_root_replace/ours", |b| {
         b.iter(|| {
-            black_box(
-                fwd_rlp::replace_list_field(black_box(&value), 2, black_box(&new_root)).unwrap(),
-            )
+            black_box(replace_list_field(black_box(&value), 2, black_box(&new_root)).unwrap())
         });
     });
 }
@@ -165,7 +163,7 @@ fn bench_decode_field_ours(c: &mut Criterion) {
     c.bench_function("decode_field3/ours", |b| {
         b.iter(|| {
             let bytes = black_box(&value);
-            let list = fwd_rlp::RlpList::parse(bytes).unwrap();
+            let list = RlpList::parse(bytes).unwrap();
             let field = list.nth_bytes(3).unwrap();
             black_box(field)
         });

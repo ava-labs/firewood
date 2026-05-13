@@ -51,15 +51,6 @@ pub enum RlpItem<'a> {
     Empty,
 }
 
-/// Encode a single byte-string item.
-#[must_use]
-#[inline]
-pub fn encode_bytes(b: &[u8]) -> Box<[u8]> {
-    let mut out = Vec::with_capacity(bytes_encoded_len(b));
-    write_bytes(&mut out, b);
-    out.into_boxed_slice()
-}
-
 /// Encode a slice of children as one RLP list. Single allocation.
 #[must_use]
 #[inline]
@@ -425,6 +416,12 @@ const fn minimal_be_len(n: usize) -> usize {
 mod tests {
     use super::*;
     use test_case::test_case;
+
+    fn encode_bytes(b: &[u8]) -> Box<[u8]> {
+        let mut out = Vec::with_capacity(bytes_encoded_len(b));
+        write_bytes(&mut out, b);
+        out.into_boxed_slice()
+    }
 
     // ---------- single-item byte-string encoding ----------
 

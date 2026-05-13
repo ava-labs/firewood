@@ -10,8 +10,7 @@ use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
     ChangeProofContext, CodeIteratorHandle, CreateIteratorResult, CreateProposalResult, HashKey,
     IteratorHandle, KeyRange, NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair,
-    OwnedRenderedMetrics, ProposalHandle, ProposedChangeProofContext, RangeProofContext,
-    ReconstructedHandle, VerifiedChangeProofContext,
+    OwnedRenderedMetrics, ProposalHandle, RangeProofContext, ReconstructedHandle,
 };
 
 /// The result type returned from an FFI function that returns no value but may
@@ -270,40 +269,6 @@ pub enum ChangeProofResult {
     /// the proof is valid, only that it is well-formed. The verify method must
     /// be called to ensure the proof is cryptographically valid.
     Ok(Box<ChangeProofContext>),
-    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
-    /// value is guaranteed to contain only valid UTF-8.
-    ///
-    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
-    /// associated with this error.
-    ///
-    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
-    Err(OwnedBytes),
-}
-
-#[derive(Debug)]
-#[repr(C, usize)]
-pub enum VerifiedChangeProofResult {
-    /// The caller provided a null pointer to the input handle.
-    NullHandlePointer,
-    // The proof was successfully verified.
-    Ok(Box<VerifiedChangeProofContext>),
-    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
-    /// value is guaranteed to contain only valid UTF-8.
-    ///
-    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
-    /// associated with this error.
-    ///
-    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
-    Err(OwnedBytes),
-}
-
-#[derive(Debug)]
-#[repr(C, usize)]
-pub enum ProposedChangeProofResult<'db> {
-    /// The caller provided a null pointer to the input handle.
-    NullHandlePointer,
-    /// A proposal was successfully created for this proof.
-    Ok(Box<ProposedChangeProofContext<'db>>),
     /// An error occurred and the message is returned as an [`OwnedBytes`]. If
     /// value is guaranteed to contain only valid UTF-8.
     ///
@@ -667,26 +632,6 @@ impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult {
     }
 }
 
-impl From<Result<VerifiedChangeProofContext, api::Error>> for VerifiedChangeProofResult {
-    fn from(value: Result<VerifiedChangeProofContext, api::Error>) -> Self {
-        match value {
-            Ok(context) => VerifiedChangeProofResult::Ok(Box::new(context)),
-            Err(err) => VerifiedChangeProofResult::Err(err.to_string().into_bytes().into()),
-        }
-    }
-}
-
-impl<'db> From<Result<ProposedChangeProofContext<'db>, api::Error>>
-    for ProposedChangeProofResult<'db>
-{
-    fn from(value: Result<ProposedChangeProofContext<'db>, api::Error>) -> Self {
-        match value {
-            Ok(context) => ProposedChangeProofResult::Ok(Box::new(context)),
-            Err(err) => ProposedChangeProofResult::Err(err.to_string().into_bytes().into()),
-        }
-    }
-}
-
 /// Helper trait to handle the different result types returned from FFI functions.
 ///
 /// Once Try trait is stable, we can use that instead of this trait:
@@ -753,8 +698,6 @@ impl_null_handle_result!(
     HashResult,
     RangeProofResult<'_>,
     ChangeProofResult,
-    VerifiedChangeProofResult,
-    ProposedChangeProofResult<'_>,
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
@@ -772,8 +715,6 @@ impl_cresult!(
     HandleResult,
     RangeProofResult<'_>,
     ChangeProofResult,
-    VerifiedChangeProofResult,
-    ProposedChangeProofResult<'_>,
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
