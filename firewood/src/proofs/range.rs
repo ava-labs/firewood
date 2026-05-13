@@ -87,7 +87,7 @@ impl<K, V, H> std::fmt::Debug for RangeProof<K, V, H>
 where
     K: std::fmt::Debug,
     V: std::fmt::Debug,
-    H: crate::proofs::types::ProofCollection,
+    H: ProofCollection,
     H::Node: std::fmt::Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

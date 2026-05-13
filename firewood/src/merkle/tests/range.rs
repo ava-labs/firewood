@@ -81,7 +81,7 @@ fn outside_children_single_node_exact_match_right_edge() {
     let nodes = [proof_node(&[1, 2])];
     let result = compute_outside_children(
         &nodes,
-        EdgeBoundary::Right(RightBoundary::Inclusive(Some(&[0x12]))),
+        EdgeBoundary::Right(RightBoundary::InRange(Some(&[0x12]))),
     )
     .unwrap();
     // Look up the mask for the terminal node at [1, 2].
@@ -119,7 +119,7 @@ fn outside_children_ancestor_right_edge() {
     let nodes = [proof_node(&[1])];
     let result = compute_outside_children(
         &nodes,
-        EdgeBoundary::Right(RightBoundary::Inclusive(Some(&[0x15]))),
+        EdgeBoundary::Right(RightBoundary::InRange(Some(&[0x15]))),
     )
     .unwrap();
     let mask = result[&nibble_path(&[1])];
@@ -181,7 +181,7 @@ fn outside_children_two_nodes_right_edge() {
     // Right edge: children > 5 on parent are outside.
     let nodes = [proof_node(&[1]), proof_node(&[1, 5])];
     let result =
-        compute_outside_children(&nodes, EdgeBoundary::Right(RightBoundary::Inclusive(None)))
+        compute_outside_children(&nodes, EdgeBoundary::Right(RightBoundary::InRange(None)))
             .unwrap();
     let mask = result[&nibble_path(&[1])];
     for i in 0..16u8 {
@@ -438,7 +438,7 @@ fn test_divergent_terminal_past_last_kv() {
 //
 // The current code uses `EdgeBoundary::Left(start_key)` (always inclusive
 // on the left edge); if the existing logic implicitly handles this case
-// correctly, this test passes. If it doesn't, we'd need a `LeftExclusive`
+// correctly, this test passes. If it doesn't, we'd need a `LeftOutOfRange`
 // variant for symmetry.
 fn test_divergent_terminal_before_first_kv() {
     let items: &[(&[u8], &[u8])] = &[(b"\x05", b"a"), (b"\x10", b"b")];
