@@ -11,8 +11,9 @@
 //! 4. Both boundaries are non-existent
 //! 5. No bounds (complete proof)
 //!
-//! Runs 100 independent iterations, each with a freshly seeded RNG. On failure,
-//! the printed seed can be passed via `FIREWOOD_TEST_SEED` to reproduce.
+//! Runs 25 iterations in debug builds and 250 in release builds, each with a
+//! freshly seeded RNG. On failure, the printed seed can be passed via
+//! `FIREWOOD_TEST_SEED` to reproduce.
 
 use super::super::*;
 use super::verify_and_check;
@@ -60,17 +61,18 @@ fn test_slow_change_proof_fuzz() {
         db.propose(start_batch).unwrap().commit().unwrap();
         let root1 = db.root_hash().unwrap();
 
-        // Build the end trie: delete ~15% of keys, insert ~15% new keys.
-        let delete_step = (start_keys.len() / 7).max(1);
+        // Build the end trie: each key has a ~1-in-7 chance of being deleted
+        // (expected ~14%), then insert 10-50 new keys.
         let mut end_batch: Vec<BatchOp<&[u8], &[u8]>> = Vec::new();
 
-        // Delete every delete_step-th key.
         let mut deleted_indices = Vec::new();
-        for i in (0..start_keys.len()).step_by(delete_step + 1) {
-            end_batch.push(BatchOp::Delete {
-                key: start_keys[i].as_ref(),
-            });
-            deleted_indices.push(i);
+        for (i, key) in start_keys.iter().enumerate() {
+            if rng.random_range(0..7_u32) == 0 {
+                end_batch.push(BatchOp::Delete {
+                    key: key.as_ref(),
+                });
+                deleted_indices.push(i);
+            }
         }
 
         // Generate new random key-value pairs (store owned so borrows live long enough).
@@ -142,7 +144,8 @@ fn test_slow_change_proof_fuzz() {
 
                 // 20% — start boundary is a non-existent (decreased) key.
                 36..56 => {
-                    if end_keys.len() < 2 {
+                    // `random_range(1..len-1)` requires len >= 3.
+                    if end_keys.len() < 3 {
                         continue;
                     }
                     let si = rng.random_range(1..end_keys.len() - 1);
@@ -218,7 +221,8 @@ fn test_slow_change_proof_fuzz() {
 
                 // 20% — both boundaries are non-existent keys.
                 76..96 => {
-                    if end_keys.len() < 2 {
+                    // `random_range(1..len-1)` requires len >= 3.
+                    if end_keys.len() < 3 {
                         continue;
                     }
                     let si = rng.random_range(1..end_keys.len() - 1);
@@ -364,7 +368,7 @@ fn maybe_round_trip(
 #[expect(clippy::too_many_lines)]
 fn test_slow_change_proof_fuzz_varlen() {
     // When FIREWOOD_TEST_SEED is set, run only that single seed (for
-    // reproducing CI failures). Otherwise, run 100 random iterations.
+    // reproducing CI failures). Otherwise, run random iterations.
     // Debug assertions significantly slow down each iteration; use fewer
     // iterations in debug builds so the test finishes in reasonable time.
     let iterations = if cfg!(debug_assertions) { 25 } else { 250 };
@@ -383,7 +387,7 @@ fn test_slow_change_proof_fuzz_varlen() {
         let key_count = rng.random_range(16..=512_u32) as usize;
         let start_kvs = generate_random_kvs(&rng, key_count);
         let mut start_keys: Vec<Vec<u8>> = start_kvs.iter().map(|(k, _)| k.clone()).collect();
-        start_keys.sort();
+        start_keys.sort_unstable();
         start_keys.dedup();
 
         let dir = tempfile::tempdir().unwrap();
@@ -400,16 +404,16 @@ fn test_slow_change_proof_fuzz_varlen() {
         db.propose(start_batch).unwrap().commit().unwrap();
         let root1 = db.root_hash().unwrap();
 
-        // Build the end trie: delete ~15% of keys, insert ~15% new keys.
-        let delete_step = (start_keys.len() / 7).max(1);
+        // Build the end trie: each key has a ~1-in-7 chance of being deleted
+        // (expected ~14%), then insert 10-50 new keys.
         let mut end_batch: Vec<BatchOp<Vec<u8>, Vec<u8>>> = Vec::new();
 
         let mut deleted_indices = Vec::new();
-        for i in (0..start_keys.len()).step_by(delete_step + 1) {
-            end_batch.push(BatchOp::Delete {
-                key: start_keys[i].clone(),
-            });
-            deleted_indices.push(i);
+        for (i, key) in start_keys.iter().enumerate() {
+            if rng.random_range(0..7_u32) == 0 {
+                end_batch.push(BatchOp::Delete { key: key.clone() });
+                deleted_indices.push(i);
+            }
         }
 
         let insert_count = rng.random_range(10..=50_u32) as usize;
@@ -433,7 +437,7 @@ fn test_slow_change_proof_fuzz_varlen() {
             .map(|(_, k)| k.clone())
             .chain(new_keys.iter().cloned())
             .collect();
-        end_keys.sort();
+        end_keys.sort_unstable();
         end_keys.dedup();
 
         for _ in 0..50 {
@@ -473,7 +477,8 @@ fn test_slow_change_proof_fuzz_varlen() {
 
                 // 20% -- start boundary is a non-existent (decreased) key.
                 36..56 => {
-                    if end_keys.len() < 2 {
+                    // `random_range(1..len-1)` requires len >= 3.
+                    if end_keys.len() < 3 {
                         continue;
                     }
                     let si = rng.random_range(1..end_keys.len() - 1);
@@ -551,7 +556,8 @@ fn test_slow_change_proof_fuzz_varlen() {
 
                 // 20% -- both boundaries are non-existent keys.
                 76..96 => {
-                    if end_keys.len() < 2 {
+                    // `random_range(1..len-1)` requires len >= 3.
+                    if end_keys.len() < 3 {
                         continue;
                     }
                     let si = rng.random_range(1..end_keys.len() - 1);
@@ -686,15 +692,17 @@ fn test_slow_adversarial_change_proof_fuzz() {
         trace!("start trie dump:\n{}", db.dump_to_string().unwrap());
 
         // ── Build end trie ────────────────────────────────────────────
-        let delete_step = (start_keys.len() / 7).max(1);
+        // Each key has a ~1-in-7 chance of being deleted (expected ~14%).
         let mut end_batch: Vec<BatchOp<&[u8], &[u8]>> = Vec::new();
 
         let mut deleted_indices = Vec::new();
-        for i in (0..start_keys.len()).step_by(delete_step + 1) {
-            end_batch.push(BatchOp::Delete {
-                key: start_keys[i].as_ref(),
-            });
-            deleted_indices.push(i);
+        for (i, key) in start_keys.iter().enumerate() {
+            if rng.random_range(0..7_u32) == 0 {
+                end_batch.push(BatchOp::Delete {
+                    key: key.as_ref(),
+                });
+                deleted_indices.push(i);
+            }
         }
 
         let insert_count = rng.random_range(10..=50_u32);
@@ -801,7 +809,8 @@ fn test_slow_adversarial_change_proof_fuzz() {
                 }
                 // Start boundary non-existent.
                 36..56 => {
-                    if end_keys.len() < 2 {
+                    // `random_range(1..len-1)` requires len >= 3.
+                    if end_keys.len() < 3 {
                         continue;
                     }
                     let si = rng.random_range(1..end_keys.len() - 1);
@@ -849,7 +858,8 @@ fn test_slow_adversarial_change_proof_fuzz() {
                 }
                 // Both boundaries non-existent.
                 76..96 => {
-                    if end_keys.len() < 2 {
+                    // `random_range(1..len-1)` requires len >= 3.
+                    if end_keys.len() < 3 {
                         continue;
                     }
                     let si = rng.random_range(1..end_keys.len() - 1);

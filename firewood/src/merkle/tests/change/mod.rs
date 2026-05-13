@@ -99,9 +99,10 @@ mod edge_cases;
 // root hash, so change proofs from an empty database can't be generated.
 #[cfg(feature = "ethhash")]
 mod empty;
-// Fuzz tests are disabled in ethhash mode because PR #1935 recomputes
-// storageRoot in proof generation but change proof verification doesn't
-// account for this yet, causing value mismatches during reconciliation.
+// TODO: fuzz tests currently fail with `ProofError::UnexpectedValue` in
+// ethhash mode, possibly due to recent changes to ethhash-specific handling.
+// Requires further investigation. Tests disabled until this issue has been
+// addressed.
 #[cfg(not(feature = "ethhash"))]
 mod fuzz;
 mod partial;
