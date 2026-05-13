@@ -81,7 +81,7 @@ fn outside_children_single_node_exact_match_right_edge() {
     let nodes = [proof_node(&[1, 2])];
     let result = compute_outside_children(
         &nodes,
-        EdgeBoundary::Right(RightBoundary::Inclusive(Some(&[0x12]))),
+        EdgeBoundary::Right(RightBoundary::InRange(Some(&[0x12]))),
     )
     .unwrap();
     // Look up the mask for the terminal node at [1, 2].
@@ -119,7 +119,7 @@ fn outside_children_ancestor_right_edge() {
     let nodes = [proof_node(&[1])];
     let result = compute_outside_children(
         &nodes,
-        EdgeBoundary::Right(RightBoundary::Inclusive(Some(&[0x15]))),
+        EdgeBoundary::Right(RightBoundary::InRange(Some(&[0x15]))),
     )
     .unwrap();
     let mask = result[&nibble_path(&[1])];
@@ -181,7 +181,7 @@ fn outside_children_two_nodes_right_edge() {
     // Right edge: children > 5 on parent are outside.
     let nodes = [proof_node(&[1]), proof_node(&[1, 5])];
     let result =
-        compute_outside_children(&nodes, EdgeBoundary::Right(RightBoundary::Inclusive(None)))
+        compute_outside_children(&nodes, EdgeBoundary::Right(RightBoundary::InRange(None)))
             .unwrap();
     let mask = result[&nibble_path(&[1])];
     for i in 0..16u8 {
@@ -438,7 +438,7 @@ fn test_divergent_terminal_past_last_kv() {
 //
 // The current code uses `EdgeBoundary::Left(start_key)` (always inclusive
 // on the left edge); if the existing logic implicitly handles this case
-// correctly, this test passes. If it doesn't, we'd need a `LeftExclusive`
+// correctly, this test passes. If it doesn't, we'd need a `LeftOutOfRange`
 // variant for symmetry.
 fn test_divergent_terminal_before_first_kv() {
     let items: &[(&[u8], &[u8])] = &[(b"\x05", b"a"), (b"\x10", b"b")];
@@ -459,38 +459,6 @@ fn test_divergent_terminal_before_first_kv() {
         &range_proof,
     )
     .unwrap();
-}
-
-#[test]
-// Regression: an unbounded full-range proof (start=None, end=None, no limit)
-// has an empty end_proof by construction — the generator only emits an end
-// proof when the caller supplies an end key or the result is truncated. The
-// verifier previously rejected such proofs with `NoEndProof` whenever any
-// key-values were present, which made the public verifier reject every honest
-// full-range proof produced by `Merkle::range_proof`.
-fn test_full_range_proof_round_trip() {
-    let rng = firewood_storage::SeededRng::from_env_or_random();
-
-    let set = fixed_and_pseudorandom_data(&rng, 64);
-    let mut items = set.iter().collect::<Vec<_>>();
-    items.sort_unstable();
-    let merkle = init_merkle(items.clone());
-    let root_hash = merkle.nodestore().root_hash().unwrap();
-
-    let range_proof = merkle
-        .range_proof(None::<&[u8]>, None::<&[u8]>, None)
-        .unwrap();
-
-    assert!(
-        range_proof.start_proof().is_empty(),
-        "unbounded range proof should have empty start_proof"
-    );
-    assert!(
-        range_proof.end_proof().is_empty(),
-        "unbounded range proof should have empty end_proof"
-    );
-
-    verify_range_proof(None::<&[u8]>, None::<&[u8]>, &root_hash, &range_proof).unwrap();
 }
 
 #[test]

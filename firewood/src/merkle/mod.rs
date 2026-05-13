@@ -187,27 +187,32 @@ pub(crate) enum EdgeBoundary<'a> {
 
 /// The right edge of a range proof.
 ///
-/// `Exclusive` holds a `Cow` because the only path that produces it —
+/// `OutOfRange` holds a `Cow` because the only path that produces it —
 /// `right_edge` for a terminal value-node whose full key exceeds
 /// `last_kv` — derives the boundary by reconstructing the terminal's
-/// full byte key from its nibble path, which is owned. `Inclusive`
+/// full byte key from its nibble path, which is owned. `InRange`
 /// always borrows from caller-supplied slices.
+///
+/// Note: "in-range" / "out-of-range" describes whether the boundary
+/// key itself belongs to the proven range. This is independent from
+/// the inclusion-proof vs. exclusion-proof distinction at the proof
+/// layer (which is about whether a key exists in the trie).
 #[derive(Debug)]
 pub(crate) enum RightBoundary<'a> {
-    /// Inclusive at `end_key` (or no upper bound if `None`). `end_key`
-    /// itself is part of the proven range.
-    Inclusive(Option<&'a [u8]>),
-    /// Exclusive at `end_key`. `end_key` always exists for this variant
-    /// — it sits at the end-proof's terminal node — and is *not* part
-    /// of the proven range.
-    Exclusive(Cow<'a, [u8]>),
+    /// The boundary key (or no upper bound if `None`) is part of the
+    /// proven range — the right end is "closed" at `end_key`.
+    InRange(Option<&'a [u8]>),
+    /// The boundary key is *not* part of the proven range — the right
+    /// end is "open" at `end_key`. `end_key` always exists for this
+    /// variant; it sits at the end-proof's terminal node.
+    OutOfRange(Cow<'a, [u8]>),
 }
 
 impl RightBoundary<'_> {
     fn boundary_key(&self) -> Option<&[u8]> {
         match self {
-            RightBoundary::Inclusive(k) => *k,
-            RightBoundary::Exclusive(k) => Some(k.as_ref()),
+            RightBoundary::InRange(k) => *k,
+            RightBoundary::OutOfRange(k) => Some(k.as_ref()),
         }
     }
 }
@@ -225,7 +230,7 @@ impl EdgeBoundary<'_> {
     }
 
     const fn is_right_exclusive(&self) -> bool {
-        matches!(self, EdgeBoundary::Right(RightBoundary::Exclusive(_)))
+        matches!(self, EdgeBoundary::Right(RightBoundary::OutOfRange(_)))
     }
 }
 
@@ -239,7 +244,7 @@ impl EdgeBoundary<'_> {
 /// on-path nibble at the terminal proof node, since there is no subsequent
 /// proof node to derive it from.
 ///
-/// For [`RightBoundary::Exclusive`], the boundary itself sits at the
+/// For [`RightBoundary::OutOfRange`], the boundary itself sits at the
 /// proof's terminal node and is *not* part of the proven range. The on-path
 /// child at the terminal's parent leads only to that terminal, so we mark
 /// it outside in addition to the usual "children with index > the on-path
@@ -250,11 +255,11 @@ fn compute_outside_children(
     proof_nodes: &[ProofNode],
     boundary: EdgeBoundary<'_>,
 ) -> Result<HashMap<PathBuf, ChildMask>, ProofError> {
-    // Invariant from `right_edge`: `RightBoundary::Exclusive(K)` is only
+    // Invariant from `right_edge`: `RightBoundary::OutOfRange(K)` is only
     // constructed when `K` is the end-proof's terminal full key (and
     // `K > last_kv`). Pin that here so a future change to `right_edge`
     // that breaks it surfaces immediately in tests.
-    if let EdgeBoundary::Right(RightBoundary::Exclusive(boundary_key)) = &boundary {
+    if let EdgeBoundary::Right(RightBoundary::OutOfRange(boundary_key)) = &boundary {
         debug_assert!(
             proof_nodes.last().is_some_and(|terminal| {
                 terminal
@@ -263,7 +268,7 @@ fn compute_outside_children(
                     .map(|c| c.as_u8())
                     .eq(NibblesIterator::new(boundary_key.as_ref()))
             }),
-            "RightBoundary::Exclusive must match the end-proof terminal's full nibble path",
+            "RightBoundary::OutOfRange must match the end-proof terminal's full nibble path",
         );
     }
 
@@ -442,7 +447,7 @@ fn compute_root_hash_with_proofs(
 /// a proof. This is a cheap structural sanity check that callers run on
 /// a proof's nodes before any anchoring decision is made — see e.g. the
 /// call before [`right_edge`] in `verify_range_proof`.
-pub(crate) fn reject_odd_nibble_value_digests(proof_nodes: &[ProofNode]) -> Result<(), ProofError> {
+fn reject_odd_nibble_value_digests(proof_nodes: &[ProofNode]) -> Result<(), ProofError> {
     for node in proof_nodes {
         if !node.key.len().is_multiple_of(2) && node.value_digest.is_some() {
             return Err(ProofError::ValueAtOddNibbleLength);
@@ -453,7 +458,7 @@ pub(crate) fn reject_odd_nibble_value_digests(proof_nodes: &[ProofNode]) -> Resu
 
 /// Compute the right edge of the proven range — the boundary key the
 /// end-proof actually anchors at, and whether that boundary is inclusive
-/// (in-range) or exclusive (out-of-range).
+/// in-range or out-of-range relative to the proven range.
 ///
 /// A previous heuristic on this code path was: "if the end-proof terminal
 /// has a value digest AND its nibble path equals `nibbles(last_kv)`, anchor
@@ -480,26 +485,26 @@ pub(crate) fn reject_odd_nibble_value_digests(proof_nodes: &[ProofNode]) -> Resu
 /// [`RightBoundary`] whose variant encodes inclusivity. The caller treats
 /// each variant as follows:
 ///
-/// * [`RightBoundary::Inclusive`] — runs the full `verify_edge` against
+/// * [`RightBoundary::InRange`] — runs the full `verify_edge` against
 ///   the boundary to cryptographically anchor the proof.
-/// * [`RightBoundary::Exclusive`] — skips `verify_edge`; the anchor check
-///   is folded into the hash reconstruction via the exclusive-boundary
+/// * [`RightBoundary::OutOfRange`] — skips `verify_edge`; the anchor check
+///   is folded into the hash reconstruction via the out-of-range-boundary
 ///   path in [`compute_outside_children`].
 ///
 /// The classification:
 ///
 /// * **Terminal value-node, full key `K > last_kv`** →
-///   `Exclusive(Cow::Owned(K))`. The proof structurally proves
+///   `OutOfRange(Cow::Owned(K))`. The proof structurally proves
 ///   `[first, K)`; `last_kv` is in that range, `K` is not. Covered by
 ///   `test_divergent_terminal_past_last_kv`.
 /// * **Terminal value-node, full key `K == last_kv`** →
-///   `Inclusive(Some(last_kv))`. The end-proof anchors directly at
+///   `InRange(Some(last_kv))`. The end-proof anchors directly at
 ///   `last_kv`. Covered by
 ///   `test_dropped_trailing_key_accepted_as_partial_coverage`.
 /// * **Everything else** — terminal value-node with `K < last_kv` (whether
 ///   `K` is a strict prefix of `last_kv` or a divergent lex-less node),
 ///   terminal has no value digest, `end_proof` empty, or `key_values`
-///   empty — → `Inclusive(fallback_last)`, anchored at the caller's
+///   empty — → `InRange(fallback_last)`, anchored at the caller's
 ///   requested bound. Covered by
 ///   `test_terminal_strict_prefix_of_last_kv_verifies` and
 ///   `test_tampered_in_range_value_rejected`.
@@ -534,7 +539,7 @@ pub(crate) fn reject_odd_nibble_value_digests(proof_nodes: &[ProofNode]) -> Resu
 ///
 /// # Asymmetry with the left edge
 ///
-/// There is no `LeftExclusive` counterpart to `RightBoundary::Exclusive`.
+/// There is no `LeftOutOfRange` counterpart to `RightBoundary::OutOfRange`.
 /// The mirror construction (`terminal_full_key < first_kv` via a divergent
 /// leaf in `prove(first_key)`) is empirically handled by the existing
 /// [`EdgeBoundary::Left`] path; see `test_divergent_terminal_before_first_kv`.
@@ -542,13 +547,13 @@ pub(crate) fn reject_odd_nibble_value_digests(proof_nodes: &[ProofNode]) -> Resu
 /// construction, present in `key_values`, so there is no off-path single-node
 /// subtree past `first_kv` that could synthesize incorrectly during hash
 /// reconstruction.
-pub(crate) fn right_edge<'a>(
+fn right_edge<'a>(
     end_proof: &[ProofNode],
     last_kv: Option<&'a [u8]>,
     fallback_last: Option<&'a [u8]>,
 ) -> RightBoundary<'a> {
     let (Some(terminal), Some(last_kv_k)) = (end_proof.last(), last_kv) else {
-        return RightBoundary::Inclusive(fallback_last);
+        return RightBoundary::InRange(fallback_last);
     };
 
     // Terminal anchors at a real byte key only when it carries a value
@@ -560,14 +565,14 @@ pub(crate) fn right_edge<'a>(
         let terminal_full_key: Vec<u8> = Path::from(nibs.as_slice()).bytes_iter().collect();
         match terminal_full_key.as_slice().cmp(last_kv_k) {
             std::cmp::Ordering::Greater => {
-                return RightBoundary::Exclusive(Cow::Owned(terminal_full_key));
+                return RightBoundary::OutOfRange(Cow::Owned(terminal_full_key));
             }
-            std::cmp::Ordering::Equal => return RightBoundary::Inclusive(Some(last_kv_k)),
+            std::cmp::Ordering::Equal => return RightBoundary::InRange(Some(last_kv_k)),
             std::cmp::Ordering::Less => { /* fall through to fallback */ }
         }
     }
 
-    RightBoundary::Inclusive(fallback_last)
+    RightBoundary::InRange(fallback_last)
 }
 
 /// Verify that a range proof is valid for the specified key range and root hash.
@@ -584,15 +589,31 @@ pub(crate) fn right_edge<'a>(
 ///    `last_key`; partial coverage is a valid outcome, not an error.
 /// 3. **Boundary proof verification**: Cryptographically verify the start
 ///    proof against `first_key`. The right edge is verified against the
-///    *proof-derived* right boundary — for the inclusive case via
+///    *proof-derived* right boundary — when the boundary is in-range, via
 ///    `verify_edge` against either `last_kv` or the caller's `last_key`
-///    (whichever the proof anchors at), and for the exclusive case via
-///    the hash reconstruction below, where the anchor is the end-proof
+///    (whichever the proof anchors at); when the boundary is out-of-range,
+///    via the hash reconstruction below, where the anchor is the end-proof
 ///    terminal's full key.
 /// 4. **Trie reconstruction**: Build an in-memory Merkle trie from the key-value pairs
 ///    and reconcile it with proof nodes
 /// 5. **Root hash comparison**: Verify the reconstructed trie's root hash matches the
 ///    expected hash
+///
+/// # Partial coverage
+///
+/// A successful return does **not** guarantee that the proof covered the
+/// caller's full requested range `[first_key, last_key]`. The proof
+/// generator may have truncated the response (e.g. hit a max-length limit),
+/// in which case the proven range is `[first_key, key_values.last()]` with
+/// `key_values.last() < last_key`. This is a valid outcome of verification,
+/// not an error.
+///
+/// Callers who need the full requested range must compare
+/// `proof.key_values().last()` against their requested `last_key` after a
+/// successful verification. If the proven right edge is short, re-request
+/// `(key_values.last(), last_key]` and verify that next slice. Iterating
+/// this loop is the canonical way to assemble full-range coverage from
+/// truncated proofs.
 ///
 /// # Errors
 ///
@@ -646,11 +667,8 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         return Err(api::Error::ProofError(ProofError::UnexpectedStartProof));
     }
 
-    // Require an end proof only when the caller specified an end key. When
-    // last_key is None the proof asserts coverage to the end of the keyspace;
-    // an empty end_proof is the canonical encoding of that and any tampering
-    // is caught by the root-hash reconstruction below.
-    if proof.end_proof().is_empty() && last_key_bytes.is_some() {
+    // Require end proof when there are key-value pairs or an end key is specified
+    if proof.end_proof().is_empty() && (last_key_bytes.is_some() || !key_values.is_empty()) {
         return Err(api::Error::ProofError(ProofError::NoEndProof));
     }
 
@@ -676,33 +694,33 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     }
 
     // Right edge:
-    //   * Inclusive (terminal == last_kv, or fallback to the caller's
+    //   * InRange (terminal == last_kv, or fallback to the caller's
     //     requested bound): run full `verify_edge`. This is what
     //     cryptographically anchors the proof at `last_kv`'s value when
     //     the proof's terminal sits at or above `last_kv`, since the
     //     hash-reconstruction path treats `last_kv`'s on-path child as
     //     outside-the-range and would otherwise miss a tampered `last_kv`
     //     value.
-    //   * Exclusive (terminal_full_key > last_kv): skip
+    //   * OutOfRange (terminal_full_key > last_kv): skip
     //     `proof.verify(...)` — the proof was structurally generated for
     //     a deeper bound, and the cryptographic check is folded into the
-    //     hash reconstruction via the exclusive-boundary path in
+    //     hash reconstruction via the out-of-range-boundary path in
     //     `compute_outside_children`. We still keep the ordering sanity
     //     check.
     let last_kv_bytes = key_values.last().map(|(k, _)| k.as_ref());
     let right_boundary = right_edge(proof.end_proof().as_ref(), last_kv_bytes, last_key_bytes);
     match &right_boundary {
-        RightBoundary::Inclusive(bound) => {
+        RightBoundary::InRange(bound) => {
             verify_edge(*bound, right_edge_kv, proof.end_proof(), root_hash, false)?;
         }
-        RightBoundary::Exclusive(bound) => {
-            // `right_edge` only returns `Exclusive(K)` when `K > last_kv`
+        RightBoundary::OutOfRange(bound) => {
+            // `right_edge` only returns `OutOfRange(K)` when `K > last_kv`
             // strictly (terminal value-node past last_kv). The runtime
             // check below catches a broken contract; the debug_assert pins
             // the intended invariant.
             debug_assert!(
                 right_edge_kv.is_none_or(|(edge_key, _)| bound.as_ref() > edge_key),
-                "RightBoundary::Exclusive must be strictly greater than last_kv",
+                "RightBoundary::OutOfRange must be strictly greater than last_kv",
             );
             if let Some((edge_key, _)) = right_edge_kv
                 && bound.as_ref() < edge_key
@@ -744,8 +762,8 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
 /// them, making the root hash correct.
 ///
 /// The right edge of the in-range comparison comes from `right_boundary`:
-/// `Inclusive(b)` includes `b`, `Exclusive(b)` excludes it,
-/// `Inclusive(None)` has no upper bound.
+/// `InRange(b)` includes `b`, `OutOfRange(b)` excludes it,
+/// `InRange(None)` has no upper bound.
 fn verify_proof_node_values(
     proof_nodes: &[&ProofNode],
     first_key_bytes: Option<&[u8]>,
@@ -769,9 +787,9 @@ fn verify_proof_node_values(
             .collect();
         let node_key_bytes: Vec<u8> = Path::from(key_nibbles.as_slice()).bytes_iter().collect();
         let within_right = match right_boundary {
-            RightBoundary::Inclusive(None) => true,
-            RightBoundary::Inclusive(Some(end)) => node_key_bytes.as_slice() <= *end,
-            RightBoundary::Exclusive(end) => node_key_bytes.as_slice() < end.as_ref(),
+            RightBoundary::InRange(None) => true,
+            RightBoundary::InRange(Some(end)) => node_key_bytes.as_slice() <= *end,
+            RightBoundary::OutOfRange(end) => node_key_bytes.as_slice() < end.as_ref(),
         };
         let in_range =
             within_right && first_key_bytes.is_none_or(|start| node_key_bytes.as_slice() >= start);
@@ -800,7 +818,7 @@ fn verify_proof_node_values(
 /// that the computed root hash matches the expected one.
 ///
 /// `right_boundary` describes the right edge of the proven range. When the
-/// variant is [`RightBoundary::Exclusive`], the boundary key sits at the
+/// variant is [`RightBoundary::OutOfRange`], the boundary key sits at the
 /// end-proof's terminal node and is treated as outside the proven range.
 fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
     all_proof_nodes: &[&ProofNode],
@@ -1043,7 +1061,7 @@ pub fn verify_change_proof_root_hash(
     )?;
     for (key, flags) in compute_outside_children(
         end_nodes,
-        EdgeBoundary::Right(RightBoundary::Inclusive(
+        EdgeBoundary::Right(RightBoundary::InRange(
             verification.right_edge_key.as_deref(),
         )),
     )? {
