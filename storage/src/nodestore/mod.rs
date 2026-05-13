@@ -965,6 +965,10 @@ impl<S: ReadableStorage> From<Arc<NodeStore<Reconstructed<S>, S>>>
         // cloning the in-memory subtree attached to it. We accept this fallback so callers
         // don't have to guarantee uniqueness, while still exploiting the cheaper move path
         // whenever possible.
+        if Arc::strong_count(&val) > 1 {
+            debug!("Reconstruct fell back to shared-Arc clone path");
+        }
+
         Self::from(Arc::unwrap_or_clone(val))
     }
 }
