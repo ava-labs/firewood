@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778659535672,
+  "lastUpdate": 1778746620252,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -3383,6 +3383,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 76.4190835193564,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "062b8f68a186d73fb437b9443a1e80d8f466cd42",
+          "message": "fix(range-proof): use last_kv_key as right-edge anchor for inclusion-style end_proofs (#1970)\n\n## Why this should be merged\n\nValid truncated range proofs fail verification in many cases.\n\n## How this works\n\nPass the right-edge anchor key (rather than the caller's requested\nbound) to verify_edge and verify_range_proof_root_hash when the\nend_proof is an inclusion proof of the last key-value entry. This covers\ntwo cases:\n\n  * Truncated proofs, where a max_length was hit before reaching bound.\n* Complete proofs whose bound exists in the trie (bound == last_kv_key).\n\nIn both cases the end_proof's terminal node has a value digest and its\nfull path equals nibbles(last_kv_key); using bound would walk a\ndifferent descent path and trip ShouldBePrefixOfNextKey from\ncompute_outside_children. The exclusion case (bound not in trie) keeps\nusing bound as the anchor.\n\n## How this was tested\n\nAdds a regression test that constructs a truncated bounded range proof\nand verifies it against the originally requested (start, end). Also adds\na custom Debug impl on Proof that indexes proof nodes, since this was\nneeded to diagnose the bug; ChangeProof and RangeProof get matching\nmanual Debug impls because their derived Debug bound on inner Proof<H>\nwould otherwise be unsatisfiable.\n\n## Breaking Changes\n\nNone",
+          "timestamp": "2026-05-13T16:06:27Z",
+          "url": "https://github.com/ava-labs/firewood/commit/062b8f68a186d73fb437b9443a1e80d8f466cd42"
+        },
+        "date": 1778746619828,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 148.7124488807505,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6724.386610040157,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 133.79844978887908,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6480.524996385554,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 104.734167757335,
             "unit": "block_accept_ms/ggas"
           }
         ]
