@@ -440,7 +440,7 @@ pub struct Proposal<'db> {
     db: &'db Db,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 /// A user-visible reconstructed view.
 pub struct ReconstructedView<'db> {
     nodestore: Arc<NodeStore<Reconstructed<FileBacked>, FileBacked>>,
@@ -452,23 +452,6 @@ impl ReconstructedView<'_> {
     #[must_use]
     pub fn view(&self) -> ArcDynDbView {
         self.nodestore.clone()
-    }
-}
-
-impl Clone for ReconstructedView<'_> {
-    /// Produces an independent view that shares the underlying `NodeStore` via
-    /// the inner `Arc`. The returned view can be used independently of this one.
-    ///
-    /// Calling [`api::Reconstructible::reconstruct`] on either view while
-    /// another view shares the same reconstructed state is supported but
-    /// expensive: it forces a deep clone of the root node instead of the
-    /// zero-copy move used when the view is uniquely owned. Drop unneeded
-    /// clones before reconstructing when write performance matters.
-    fn clone(&self) -> Self {
-        Self {
-            nodestore: self.nodestore.clone(),
-            db: self.db,
-        }
     }
 }
 
