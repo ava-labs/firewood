@@ -174,14 +174,14 @@ func (r *Reconstructed) Reconstruct(batch []BatchOp) error {
 }
 
 // Clone returns an independent [Reconstructed] handle that shares the
-// underlying view with the receiver. The two handles can be used and
-// freed independently.
+// underlying view with the receiver. The two handles can be used, reconstructed,
+// and freed independently.
 //
-// Callers should only perform read operations on the clone and drop it
-// before performing further writes. Calling [Reconstructed.Reconstruct]
-// on the clone (or on any sibling) while another clone is alive is
-// expensive: it forces a deep clone of the root node instead of the
-// zero-copy move that the uncloned path takes.
+// Calling [Reconstructed.Reconstruct] on either handle while another handle
+// shares the same reconstructed state is supported but expensive: it forces a
+// deep clone of the root node instead of the zero-copy move used when the
+// handle is uniquely owned. Drop unneeded clones before reconstructing when
+// write performance matters.
 func (r *Reconstructed) Clone() (*Reconstructed, error) {
 	r.keepAliveHandle.mu.RLock()
 	defer r.keepAliveHandle.mu.RUnlock()

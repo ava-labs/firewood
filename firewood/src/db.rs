@@ -459,11 +459,11 @@ impl Clone for ReconstructedView<'_> {
     /// Produces an independent view that shares the underlying `NodeStore` via
     /// the inner `Arc`. The returned view can be used independently of this one.
     ///
-    /// Callers should only perform read operations on the clone and drop it
-    /// before performing further writes. Calling [`api::Reconstructible::reconstruct`]
-    /// on the clone (or on any sibling) while another clone is alive is
-    /// expensive: it forfeits the zero-copy move on the reconstructed parent
-    /// and forces a deep clone of the root node.
+    /// Calling [`api::Reconstructible::reconstruct`] on either view while
+    /// another view shares the same reconstructed state is supported but
+    /// expensive: it forces a deep clone of the root node instead of the
+    /// zero-copy move used when the view is uniquely owned. Drop unneeded
+    /// clones before reconstructing when write performance matters.
     fn clone(&self) -> Self {
         Self {
             nodestore: self.nodestore.clone(),
