@@ -90,7 +90,7 @@ pub struct RangeProofVerificationContext {
 ///
 /// Enforces `max_length` against the proof's key-value count, then runs
 /// the cryptographic range-proof verification via
-/// [`verify_range_proof`](crate::merkle::verify_range_proof).
+/// [`verify_range_proof`].
 ///
 /// # Errors
 ///
