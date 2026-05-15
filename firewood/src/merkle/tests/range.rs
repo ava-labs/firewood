@@ -268,8 +268,13 @@ fn test_full_range_proof_verifies_unbounded() {
     assert!(range_proof.start_proof().is_empty());
     assert!(range_proof.end_proof().is_empty());
 
-    verify_range_proof::<_>(Option::<&[u8]>::None, Option::<&[u8]>::None, &root_hash, &range_proof)
-        .unwrap();
+    verify_range_proof::<_>(
+        Option::<&[u8]>::None,
+        Option::<&[u8]>::None,
+        &root_hash,
+        &range_proof,
+    )
+    .unwrap();
 }
 
 #[test]
