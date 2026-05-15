@@ -203,7 +203,7 @@ func (db *Database) VerifyRangeProof(
 	}
 
 	// keep the database alive while the proof owns the embedded proposal.
-	// Proofs are intentionally NOT entered into Database.liveHandles: a
+	// Proofs are intentionally NOT entered into Database.keepAlives: a
 	// bound `proof.Free` would keep `proof` reachable via the registry and
 	// prevent the GC finalizer from ever running. They still increment the
 	// WaitGroup, so graceful Close waits on them; WithForceCloseHandles will
