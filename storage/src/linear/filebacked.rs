@@ -91,7 +91,7 @@ impl FileBacked {
             inner: err,
             filename: Some(path.clone()),
             offset: 0,
-            context: Some("io_uring setup".to_string()),
+            context: Some("io_uring setup".to_owned()),
         })?;
 
         Ok(Self {
