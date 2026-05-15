@@ -79,22 +79,16 @@ var (
 	// EmptyRoot is the zero value for [Hash]
 	EmptyRoot Hash
 	// ErrActiveKeepAliveHandles is returned by [Database.Close] when the
-	// supplied context is cancelled before all outstanding keep-alive
-	// handles ([Proposal], [Revision], [Reconstructed], [Iterator]) have
-	// been released. Pass [WithForceCloseHandles] to drop them
-	// automatically instead.
+	// supplied context is cancelled before every outstanding handle that
+	// holds a keep-alive lease on the database has been released. That
+	// set includes [Proposal], [Revision], [Reconstructed], [Iterator],
+	// and verified [RangeProof] instances (which retain a lease until
+	// [RangeProof.Free] runs). Pass [WithForceCloseHandles] to drop the
+	// registered handle types automatically; [RangeProof] is not
+	// auto-dropped and must still be released by the caller.
 	ErrActiveKeepAliveHandles = errors.New("cannot close database with active keep-alive handles")
 
 	errDBClosed = errors.New("firewood database already closed")
-
-	// errForceCloseNoProgress is returned by [Database.Close] when
-	// [WithForceCloseHandles] is set but the live-handle registry stops
-	// shrinking. This indicates a bug in the keep-alive bookkeeping —
-	// every successful drop unregisters the handle, so under normal
-	// operation the registry drains within a small bounded number of
-	// passes. Unexported because callers have no recovery path beyond
-	// reporting the bug.
-	errForceCloseNoProgress = errors.New("force-close failed to make progress draining live handles")
 )
 
 // Database is an FFI wrapper for the Rust Firewood database.
@@ -119,11 +113,13 @@ type Database struct {
 	handleLock sync.RWMutex
 
 	// keepAlives tracks every outstanding [Proposal], [Revision],
-	// [Reconstructed], and [Iterator] — the types that hold a borrow on
-	// the underlying Rust database and therefore must not outlive it.
-	// It carries both the WaitGroup that [Database.Close] waits on and
-	// the registry of drop callbacks that [WithForceCloseHandles] uses
-	// to release handles forcibly.
+	// [Reconstructed], [Iterator], and verified [RangeProof] — the
+	// types that hold a borrow on the underlying Rust database and
+	// therefore must not outlive it. It carries both the WaitGroup that
+	// [Database.Close] waits on and the registry of drop callbacks that
+	// [WithForceCloseHandles] uses to release the registered subset
+	// forcibly. [RangeProof] participates in the WaitGroup but is not
+	// registered for force-drop (see VerifyRangeProof for why).
 	keepAlives *keepAliveRegistry
 
 	// commitLock is used to ensure that methods accessing or modifying the latest
@@ -483,13 +479,21 @@ type closeConfig struct {
 
 // WithForceCloseHandles makes [Database.Close] forcibly drop every outstanding
 // [Proposal], [Revision], [Reconstructed], and [Iterator] before closing the
-// database, instead of waiting for the caller to release them.
+// database, instead of waiting for the caller to release them. Verified
+// [RangeProof] handles are not auto-dropped — they must be released via
+// [RangeProof.Free] before Close can complete.
 //
 // Each handle's Drop is called once. Drop unregisters the handle from the
 // keep-alive registry unconditionally, even if the underlying C-side free
 // errors — so a failing free cannot stall the close. Any drop errors are
 // joined and returned, and the underlying database close is still attempted
 // on a best-effort basis.
+//
+// While force-close is in progress, attempts to construct derived handles
+// (for example via [Proposal.Propose] or [Revision.Iter]) fail with
+// [errDBClosed]: the registry is closed atomically with the snapshot, so a
+// child constructor that would otherwise race the close is rejected rather
+// than leaking past it.
 //
 // Methods on a force-dropped handle behave the same as if the caller had
 // explicitly invoked Drop.
@@ -504,25 +508,32 @@ func WithForceCloseHandles() CloseOption {
 //
 // By default Close blocks until all outstanding keep-alive handles are
 // disowned or the [context.Context] is cancelled. That is, until every
-// [Proposal], [Revision], [Reconstructed], and [Iterator] created from
-// this Database is either unreachable or has been explicitly released via
-// [Proposal.Commit], [Proposal.Drop], [Revision.Drop], [Reconstructed.Drop],
-// or [Iterator.Drop]. Unreachable objects are released by their finalizers
+// [Proposal], [Revision], [Reconstructed], [Iterator], and verified
+// [RangeProof] created from this Database is either unreachable or has
+// been explicitly released via [Proposal.Commit], [Proposal.Drop],
+// [Revision.Drop], [Reconstructed.Drop], [Iterator.Drop], or
+// [RangeProof.Free]. Unreachable objects are released by their finalizers
 // before Close returns. If the context expires first,
 // [ErrActiveKeepAliveHandles] is returned and [C.fwd_close_db] is not
 // called.
 //
-// Pass [WithForceCloseHandles] to forcibly drop every outstanding handle
-// instead of waiting for the caller to release them. The force-drop loop
-// honours ctx: if it expires while drops are still in flight, Close returns
-// the accumulated errors joined with [ErrActiveKeepAliveHandles] and does
-// not call [C.fwd_close_db] — the database is left open so the caller can
-// retry with a fresh context. When force-drop completes within ctx, Close
-// calls [C.fwd_close_db] on a best-effort basis even if individual drops
-// errored: leaving the database open after force-drop has already torn down
-// its dependents is strictly worse than attempting the close, since the
-// file lock and background thread would otherwise leak with no recovery
-// path. Any drop errors are joined with the close result and returned. See
+// Pass [WithForceCloseHandles] to forcibly drop every registered outstanding
+// handle instead of waiting for the caller to release them. Force-close
+// closes the keep-alive registry atomically with the snapshot it drops, so
+// any derived-handle constructor (e.g. [Proposal.Propose], [Revision.Iter])
+// racing the close either finishes before the snapshot or finds the
+// registry closed and bails out. Force-close honours ctx: if it expires
+// while drops are still in flight, Close returns the accumulated errors
+// joined with [ErrActiveKeepAliveHandles] and does not call
+// [C.fwd_close_db] — the database is left open so the caller can retry
+// with a fresh context. When force-drop completes within ctx, Close calls
+// [C.fwd_close_db] on a best-effort basis even if individual drops
+// errored: leaving the database open after force-drop has already torn
+// down its dependents is strictly worse than attempting the close, since
+// the file lock and background thread would otherwise leak with no
+// recovery path. [RangeProof] handles are not auto-dropped by force-close
+// and must still be released by the caller before Close can complete. Any
+// drop errors are joined with the close result and returned. See
 // [WithForceCloseHandles] for details.
 //
 // Safe to call multiple times; subsequent calls after the first are no-ops
@@ -541,7 +552,7 @@ func (db *Database) Close(ctx context.Context, opts ...CloseOption) error {
 
 	var forcedDropErr error
 	if cfg.forceCloseHandles {
-		forcedDropErr = db.forceDropAll(ctx)
+		forcedDropErr = db.keepAlives.closeAndForceDrop(ctx)
 		if ctx.Err() != nil {
 			// Force-drop bailed early because ctx expired. The registry
 			// may still contain live handles, so calling fwd_close_db
@@ -571,59 +582,6 @@ func (db *Database) Close(ctx context.Context, opts ...CloseOption) error {
 	}
 
 	return forcedDropErr
-}
-
-// forceDropAll drains the keep-alive registry by repeatedly snapshotting and
-// dropping every registered handle. Caller must hold db.handleLock.Lock.
-//
-// The ctx is checked between passes and between individual drops. If it
-// expires partway through, the loop returns with whatever errors have
-// accumulated; the caller is responsible for noticing ctx.Err() and not
-// proceeding to fwd_close_db (the registry may still hold live handles
-// whose Rust-side counterparts borrow the Db).
-//
-// Termination argument (absent ctx cancellation):
-//   - handleLock.Lock blocks any new top-level handle constructor (Propose,
-//     Revision, Reconstruct, …), so the only way new entries appear in the
-//     registry during this loop is via in-flight derivation from a parent
-//     handle (e.g. an Iterator constructed from a Revision under the
-//     parent's keepAliveHandle.mu.RLock).
-//   - Each handle's Drop takes the parent's mu.Lock inside disown. That
-//     Lock serializes after any in-flight RLock holder, so by the time a
-//     parent's drop returns, every child whose constructor was racing has
-//     finished registering and is visible on the next snapshot.
-//   - Drop also disowns unconditionally (see [handle.Drop]), so each entry
-//     in the snapshot exits the registry on this pass regardless of whether
-//     its C-side free errored.
-//
-// Together these guarantee strict shrinkage: the registry size is bounded by
-// the original count plus all transitive descendants, which is finite. The
-// progress check is a defensive guard against future regressions of those
-// invariants — if a pass ever fails to shrink the registry we bail rather
-// than spin forever.
-func (db *Database) forceDropAll(ctx context.Context) error {
-	var dropErr error
-	for {
-		if err := ctx.Err(); err != nil {
-			return dropErr
-		}
-		drops, before := db.keepAlives.snapshot()
-		if before == 0 {
-			return dropErr
-		}
-		for dropFn := range drops {
-			if ctx.Err() != nil {
-				return dropErr
-			}
-			if err := dropFn(); err != nil {
-				dropErr = errors.Join(dropErr, err)
-			}
-		}
-		after := db.keepAlives.size()
-		if after >= before {
-			return errors.Join(dropErr, fmt.Errorf("%w: %d handles remain after pass over %d", errForceCloseNoProgress, after, before))
-		}
-	}
 }
 
 // waitForKeepAlives blocks until the keep-alive WaitGroup drains or ctx

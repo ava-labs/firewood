@@ -223,7 +223,12 @@ func getProposalFromProposalResult(result C.ProposalResult, registry *keepAliveR
 			root:       hashKey,
 			commitLock: commitLock,
 		}
-		registry.register(&proposal.keepAliveHandle, proposal.Drop)
+		if !registry.register(&proposal.keepAliveHandle, proposal.Drop) {
+			// Registry closed by force-close in flight; drop the C handle
+			// we just received so the WaitGroup increment from init clears.
+			_ = proposal.Drop()
+			return nil, errDBClosed
+		}
 		runtime.AddCleanup(proposal, drop[*C.ProposalHandle], proposal.handle)
 		return proposal, nil
 	case C.ProposalResult_Err:

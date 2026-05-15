@@ -163,7 +163,12 @@ func getRevisionFromResult(result C.RevisionResult, registry *keepAliveRegistry)
 			handle: createHandle(body.handle, registry, func(r *C.RevisionHandle) C.VoidResult { return C.fwd_free_revision(r) }),
 			root:   hashKey,
 		}
-		registry.register(&rev.keepAliveHandle, rev.Drop)
+		if !registry.register(&rev.keepAliveHandle, rev.Drop) {
+			// Registry closed by force-close in flight; drop the C handle
+			// we just received so the WaitGroup increment from init clears.
+			_ = rev.Drop()
+			return nil, errDBClosed
+		}
 		runtime.AddCleanup(rev, drop, rev.handle)
 		return rev, nil
 	case C.RevisionResult_Err:

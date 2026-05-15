@@ -8,8 +8,9 @@ package ffi
 import "C"
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	"iter"
 	"sync"
 )
 
@@ -87,9 +88,16 @@ func (h *handle[T]) Drop() error {
 // values are the outer-type Drop functions (e.g. [Iterator.Drop], whose
 // implementation also frees any borrowed batch).
 type keepAliveRegistry struct {
-	mu      sync.Mutex
-	wg      sync.WaitGroup
+	mu sync.Mutex
+	wg sync.WaitGroup
+	// handles maps a registered keep-alive handle to its outer Drop
+	// function. Entries are added in [register] and removed in [unregister]
+	// (typically called from [databaseKeepAliveHandle.disownLocked]).
 	handles map[*databaseKeepAliveHandle]func() error
+	// closed is set by [closeAndForceDrop] and prevents any subsequent
+	// registration. Once closed, [register] returns false; the caller is
+	// expected to immediately Drop the handle so its wg counter clears.
+	closed bool
 }
 
 func newKeepAliveRegistry() *keepAliveRegistry {
@@ -98,14 +106,18 @@ func newKeepAliveRegistry() *keepAliveRegistry {
 	}
 }
 
-// register records a handle's outer Drop function. The caller must register
-// before whatever lock prevents [Database.Close] from racing with the
-// handle's construction is released — in practice, before the constructor
-// returns from under [Database.handleLock] (RLock).
-func (r *keepAliveRegistry) register(h *databaseKeepAliveHandle, dropFn func() error) {
+// register records a handle's outer Drop function. Returns false if the
+// registry has been closed via [closeAndForceDrop]; in that case the caller
+// must immediately invoke the handle's Drop so the WaitGroup increment from
+// [databaseKeepAliveHandle.init] is matched and the C handle is freed.
+func (r *keepAliveRegistry) register(h *databaseKeepAliveHandle, dropFn func() error) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closed {
+		return false
+	}
 	r.handles[h] = dropFn
+	return true
 }
 
 func (r *keepAliveRegistry) unregister(h *databaseKeepAliveHandle) {
@@ -114,38 +126,48 @@ func (r *keepAliveRegistry) unregister(h *databaseKeepAliveHandle) {
 	delete(r.handles, h)
 }
 
-// snapshot returns an iterator over the currently registered drop callbacks
-// along with the count of entries snapshotted.
+// closeAndForceDrop closes the registry to new registrations and invokes
+// the Drop callback for every currently-registered handle. It is the
+// implementation behind [WithForceCloseHandles].
 //
-// The iterator yields a copy of the map taken under the registry lock at
-// snapshot time, so callers may invoke drop callbacks (which re-enter the
-// registry to unregister) without deadlocking. New registrations after
-// snapshot returns are not yielded; deregistrations after snapshot returns
-// do not remove yielded entries. Callers driving force-close should
-// re-snapshot after iterating to pick up any handles whose registration was
-// racing with the call.
-func (r *keepAliveRegistry) snapshot() (iter.Seq[func() error], int) {
+// Atomicity: the closed flag is set and the snapshot is taken under the
+// same critical section, so any [register] call that observes the registry
+// as still open will be visible in the snapshot, and any call that observes
+// it as closed will refuse and Drop itself. This removes the race a
+// snapshot-and-retry loop would have with derived-handle constructors
+// (e.g. [Proposal.Propose], [Revision.Iter]) that hold only the parent's
+// keepAliveHandle.mu.RLock rather than [Database.handleLock].
+//
+// Drop callbacks are invoked without the registry lock held; they
+// re-enter the lock via [unregister] inside disownLocked, which is why
+// the snapshot is taken eagerly.
+//
+// ctx is checked between Drop calls. If it expires, accumulated drop
+// errors are returned joined with the context cause; the registry stays
+// closed regardless.
+func (r *keepAliveRegistry) closeAndForceDrop(ctx context.Context) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	copied := make([]func() error, 0, len(r.handles))
-	for _, fn := range r.handles {
-		copied = append(copied, fn)
+	if r.closed {
+		r.mu.Unlock()
+		return nil
 	}
-	seq := func(yield func(func() error) bool) {
-		for _, fn := range copied {
-			if !yield(fn) {
-				return
-			}
+	r.closed = true
+	drops := make([]func() error, 0, len(r.handles))
+	for _, fn := range r.handles {
+		drops = append(drops, fn)
+	}
+	r.mu.Unlock()
+
+	var dropErr error
+	for _, fn := range drops {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(dropErr, err)
+		}
+		if err := fn(); err != nil {
+			dropErr = errors.Join(dropErr, err)
 		}
 	}
-	return seq, len(copied)
-}
-
-// size returns the current number of registered handles.
-func (r *keepAliveRegistry) size() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.handles)
+	return dropErr
 }
 
 // databaseKeepAliveHandle is added to types that hold a lease on the database
