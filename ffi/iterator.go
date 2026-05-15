@@ -31,6 +31,14 @@ import (
 // forget to Drop. With the iterator-specific state owned by this inner
 // type, the registry's dropFn is bound to *iteratorHandle, the wrapper is
 // independently reclaimable, and the cleanup path works as advertised.
+// freer is the contract for an FFI-owned pair or batch returned by
+// fwd_iter_next / fwd_iter_next_n: a single free() that releases the
+// underlying Rust allocation. The concrete types are [ownedKeyValue]
+// and [ownedKeyValueBatch], both file-private to the FFI package.
+type freer interface {
+	free() error
+}
+
 type iteratorHandle struct {
 	handle[*C.IteratorHandle]
 
@@ -40,7 +48,7 @@ type iteratorHandle struct {
 	// and as part of Drop. Mutated by [Iterator.nextInternal] under
 	// lease.mu.RLock; read and cleared by Drop under
 	// lease.mu.Lock.
-	currentResource interface{ free() error }
+	currentResource freer
 }
 
 func (ih *iteratorHandle) freeCurrentAllocation() error {
