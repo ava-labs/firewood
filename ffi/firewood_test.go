@@ -1699,7 +1699,7 @@ func TestCloseWithoutForceBlocksOnIterator(t *testing.T) {
 }
 
 // TestCloseForceDropsConcurrentReader stresses force-close while a goroutine
-// reads through an iterator. The iterator's keepAliveHandle.mu serializes the
+// reads through an iterator. The iterator's lease.mu serializes the
 // in-flight Next call against Drop, so neither should panic.
 func TestCloseForceDropsConcurrentReader(t *testing.T) {
 	r := require.New(t)
