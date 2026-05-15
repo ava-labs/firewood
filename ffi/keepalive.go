@@ -158,8 +158,11 @@ func (r *keepAliveRegistry) closeAndForceDrop(ctx context.Context) error {
 
 	var dropErr error
 	for _, fn := range drops {
-		if err := ctx.Err(); err != nil {
-			return errors.Join(dropErr, err)
+		if ctx.Err() != nil {
+			// Caller (Close) detects ctx cancellation itself and wraps it
+			// with ErrActiveKeepAliveHandles; returning ctx.Err() here would
+			// double-wrap when Close joins the two.
+			return dropErr
 		}
 		if err := fn(); err != nil {
 			dropErr = errors.Join(dropErr, err)
