@@ -71,8 +71,8 @@ func (p *Proposal) Root() Hash {
 // Get retrieves the value for the given key.
 // If the key does not exist, it returns nil.
 func (p *Proposal) Get(key []byte) ([]byte, error) {
-	p.keepAliveHandle.mu.RLock()
-	defer p.keepAliveHandle.mu.RUnlock()
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
 	if p.ptr == nil {
 		return nil, errDroppedProposal
 	}
@@ -92,8 +92,8 @@ func (p *Proposal) Get(key []byte) ([]byte, error) {
 //
 // It returns an error if this Proposal has already been committed or released.
 func (p *Proposal) Iter(key []byte) (*Iterator, error) {
-	p.keepAliveHandle.mu.RLock()
-	defer p.keepAliveHandle.mu.RUnlock()
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
 	if p.dropped {
 		return nil, errDroppedProposal
 	}
@@ -103,7 +103,7 @@ func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 
 	itResult := C.fwd_iter_on_proposal(p.ptr, newBorrowedBytes(key, &pinner))
 
-	return getIteratorFromIteratorResult(itResult, p.keepAliveHandle.registry)
+	return getIteratorFromIteratorResult(itResult, p.lease.registry)
 }
 
 // Propose is equivalent to [Database.Propose] except that the new proposal is
@@ -115,8 +115,8 @@ func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 // with an empty value stores an empty value; use [Delete] or [PrefixDelete] to
 // remove keys.
 func (p *Proposal) Propose(batch []BatchOp) (*Proposal, error) {
-	p.keepAliveHandle.mu.RLock()
-	defer p.keepAliveHandle.mu.RUnlock()
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
 	if p.ptr == nil {
 		return nil, errDroppedProposal
 	}
@@ -125,7 +125,7 @@ func (p *Proposal) Propose(batch []BatchOp) (*Proposal, error) {
 	defer pinner.Unpin()
 
 	kvp := newKeyValuePairsFromBatch(batch, &pinner)
-	return getProposalFromProposalResult(C.fwd_propose_on_proposal(p.ptr, kvp), p.keepAliveHandle.registry, p.commitLock)
+	return getProposalFromProposalResult(C.fwd_propose_on_proposal(p.ptr, kvp), p.lease.registry, p.commitLock)
 }
 
 // Commit commits the proposal and returns any errors.
@@ -138,7 +138,7 @@ func (p *Proposal) Propose(batch []BatchOp) (*Proposal, error) {
 // operations that access it (such as [Database.Get] and [Database.Propose]) will
 // block until this function returns.
 func (p *Proposal) Commit() error {
-	return p.keepAliveHandle.disown(true /* evenOnError */, func() error {
+	return p.lease.release(true /* evenOnError */, func() error {
 		if p.dropped {
 			return errDroppedProposal
 		}
@@ -170,7 +170,7 @@ func (p *Proposal) Commit() error {
 // block until this function returns.
 func (p *Proposal) CommitWithRebase() (Hash, error) {
 	var hash Hash
-	err := p.keepAliveHandle.disown(true /* evenOnError */, func() error {
+	err := p.lease.release(true /* evenOnError */, func() error {
 		if p.dropped {
 			return errDroppedProposal
 		}
@@ -196,8 +196,8 @@ func (p *Proposal) CommitWithRebase() (Hash, error) {
 //
 // Returns errDroppedProposal if this Proposal has already been committed or released.
 func (p *Proposal) Dump() (string, error) {
-	p.keepAliveHandle.mu.RLock()
-	defer p.keepAliveHandle.mu.RUnlock()
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
 	if p.dropped {
 		return "", errDroppedProposal
 	}
@@ -223,11 +223,8 @@ func getProposalFromProposalResult(result C.ProposalResult, registry *keepAliveR
 			root:       hashKey,
 			commitLock: commitLock,
 		}
-		if !registry.register(&proposal.keepAliveHandle, proposal.Drop) {
-			// Registry closed by force-close in flight; drop the C handle
-			// we just received so the WaitGroup increment from init clears.
-			_ = proposal.Drop()
-			return nil, errDBClosed
+		if err := registry.register(&proposal.lease, proposal.Drop); err != nil {
+			return nil, err
 		}
 		runtime.AddCleanup(proposal, drop[*C.ProposalHandle], proposal.handle)
 		return proposal, nil

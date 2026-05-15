@@ -90,12 +90,12 @@ type RangeProof struct {
 	// `C.fwd_db_verify_and_commit_range_proof` or `C.fwd_free_range_proof`.
 	handle *C.RangeProofContext
 
-	// keepAliveHandle keeps the database alive while this range proof
-	// owns an embedded proposal. It is initialized when the range proof is
-	// verified with a database handle ([Database.VerifyRangeProof]) and not by
-	// unmarshalling or when [RangeProof.Verify] is used. It is disowned after
-	// [Database.VerifyAndCommitRangeProof] or [RangeProof.Free].
-	keepAliveHandle databaseKeepAliveHandle
+	// lease keeps the database alive while this range proof owns an
+	// embedded proposal. It is initialized when the range proof is
+	// verified with a database handle ([Database.VerifyRangeProof]) and not
+	// by unmarshalling or when [RangeProof.Verify] is used. It is released
+	// after [Database.VerifyAndCommitRangeProof] or [RangeProof.Free].
+	lease lease
 }
 
 // ChangeProof represents a proof of changes between two roots for a range of keys.
@@ -209,7 +209,7 @@ func (db *Database) VerifyRangeProof(
 	// WaitGroup, so graceful Close waits on them; WithForceCloseHandles will
 	// not auto-drop a still-referenced RangeProof. The change-proof family
 	// is being redesigned, so a handle[T] migration here is deferred.
-	proof.keepAliveHandle.init(db.keepAlives)
+	proof.lease.init(db.keepAlives)
 	runtime.SetFinalizer(proof, (*RangeProof).Free)
 	return nil
 }
@@ -243,7 +243,7 @@ func (db *Database) VerifyAndCommitRangeProof(
 	}
 
 	var hash Hash
-	err := proof.keepAliveHandle.disown(true /* evenOnError */, func() error {
+	err := proof.lease.release(true /* releaseOnError */, func() error {
 		var err error
 		db.commitLock.Lock()
 		defer db.commitLock.Unlock()
@@ -348,7 +348,7 @@ func (p *RangeProof) UnmarshalBinary(data []byte) error {
 // It is safe to call Free more than once; subsequent calls after the first
 // will be no-ops.
 func (p *RangeProof) Free() error {
-	return p.keepAliveHandle.disown(false /* evenOnError */, func() error {
+	return p.lease.release(false /* releaseOnError */, func() error {
 		if p.handle == nil {
 			return nil
 		}

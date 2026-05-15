@@ -31,7 +31,7 @@ var ErrDroppedReconstructed = errors.New("reconstructed view already dropped")
 
 // Lock ordering for Reconstructed:
 //
-//	keepAliveHandle.mu (A)  before  rootMu (B)
+//	lease.mu (A)  before  rootMu (B)
 //
 // Every method that acquires both locks does so in A-then-B order:
 //
@@ -67,9 +67,9 @@ type Reconstructed struct {
 // Unlike other methods, Root remains usable after [Reconstructed.Drop] and
 // returns the last cached root (or [EmptyRoot] if the root was never computed).
 func (r *Reconstructed) Root() Hash {
-	// Lock order: keepAliveHandle.mu before rootMu, matching Reconstruct().
-	r.keepAliveHandle.mu.RLock()
-	defer r.keepAliveHandle.mu.RUnlock()
+	// Lock order: lease.mu before rootMu, matching Reconstruct().
+	r.lease.mu.RLock()
+	defer r.lease.mu.RUnlock()
 
 	r.rootMu.Lock()
 	defer r.rootMu.Unlock()
@@ -95,8 +95,8 @@ func (r *Reconstructed) Root() Hash {
 
 // Get retrieves the value for the given key in this reconstructed view.
 func (r *Reconstructed) Get(key []byte) ([]byte, error) {
-	r.keepAliveHandle.mu.RLock()
-	defer r.keepAliveHandle.mu.RUnlock()
+	r.lease.mu.RLock()
+	defer r.lease.mu.RUnlock()
 
 	if r.dropped {
 		return nil, ErrDroppedReconstructed
@@ -113,8 +113,8 @@ func (r *Reconstructed) Get(key []byte) ([]byte, error) {
 
 // Iter creates an iterator over the reconstructed view.
 func (r *Reconstructed) Iter(key []byte) (*Iterator, error) {
-	r.keepAliveHandle.mu.RLock()
-	defer r.keepAliveHandle.mu.RUnlock()
+	r.lease.mu.RLock()
+	defer r.lease.mu.RUnlock()
 
 	if r.dropped {
 		return nil, ErrDroppedReconstructed
@@ -124,7 +124,7 @@ func (r *Reconstructed) Iter(key []byte) (*Iterator, error) {
 	defer pinner.Unpin()
 
 	itResult := C.fwd_iter_on_reconstructed(r.ptr, newBorrowedBytes(key, &pinner))
-	return getIteratorFromIteratorResult(itResult, r.keepAliveHandle.registry)
+	return getIteratorFromIteratorResult(itResult, r.lease.registry)
 }
 
 // Reconstruct applies a new batch on top of this reconstructed view.
@@ -133,8 +133,8 @@ func (r *Reconstructed) Iter(key []byte) (*Iterator, error) {
 // On error, the receiver is no longer usable and its resources are fully released;
 // calling [Reconstructed.Drop] is not required (but safe as a no-op).
 func (r *Reconstructed) Reconstruct(batch []BatchOp) error {
-	r.keepAliveHandle.mu.Lock()
-	defer r.keepAliveHandle.mu.Unlock()
+	r.lease.mu.Lock()
+	defer r.lease.mu.Unlock()
 
 	if r.dropped {
 		return ErrDroppedReconstructed
@@ -153,15 +153,15 @@ func (r *Reconstructed) Reconstruct(batch []BatchOp) error {
 		// The old handle was consumed by the FFI call, so mark as dropped
 		// and disown the keep-alive lease so Database.Close is not blocked.
 		r.dropped = true
-		// We already hold r.keepAliveHandle.mu (Lock) for the wider critical
-		// section, so use disownLocked to avoid re-entering mu.
-		r.keepAliveHandle.disownLocked()
+		// We already hold r.lease.mu (Lock) for the wider critical
+		// section, so use releaseLocked to avoid re-entering mu.
+		r.lease.releaseLocked()
 		return err
 	}
 
 	r.ptr = newHandle
 
-	// Lock order matches Root(): keepAliveHandle.mu (already held) before rootMu.
+	// Lock order matches Root(): lease.mu (already held) before rootMu.
 	r.rootMu.Lock()
 	r.root = EmptyRoot
 	r.rootSet = false
@@ -172,8 +172,8 @@ func (r *Reconstructed) Reconstruct(batch []BatchOp) error {
 
 // Dump returns a DOT (Graphviz) representation of this reconstructed view.
 func (r *Reconstructed) Dump() (string, error) {
-	r.keepAliveHandle.mu.RLock()
-	defer r.keepAliveHandle.mu.RUnlock()
+	r.lease.mu.RLock()
+	defer r.lease.mu.RUnlock()
 
 	if r.dropped {
 		return "", ErrDroppedReconstructed
@@ -199,11 +199,8 @@ func getReconstructedFromResult(result C.ReconstructedResult, registry *keepAliv
 			}),
 			root: EmptyRoot,
 		}
-		if !registry.register(&reconstructed.keepAliveHandle, reconstructed.Drop) {
-			// Registry closed by force-close in flight; drop the C handle
-			// we just received so the WaitGroup increment from init clears.
-			_ = reconstructed.Drop()
-			return nil, errDBClosed
+		if err := registry.register(&reconstructed.lease, reconstructed.Drop); err != nil {
+			return nil, err
 		}
 		runtime.AddCleanup(reconstructed, drop[*C.ReconstructedHandle], reconstructed.handle)
 		return reconstructed, nil

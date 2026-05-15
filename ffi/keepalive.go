@@ -14,6 +14,19 @@ import (
 	"sync"
 )
 
+// Lock ordering inside the keep-alive infrastructure:
+//
+//	lease.mu (per-handle)  before  keepAliveRegistry.mu (per-database)
+//
+// Concretely: every [lease.release] / [lease.releaseLocked] call holds
+// lease.mu while invoking [keepAliveRegistry.remove], which briefly takes
+// registry.mu. Going the other way (register first, then lease.mu) is
+// what [keepAliveRegistry.register] does on the closed-registry path —
+// but it drops registry.mu before invoking dropFn, so there is no
+// simultaneous nested acquisition. [closeAndForceDrop] takes registry.mu
+// only for the snapshot, releases it, and then invokes dropFns, which
+// re-enter registry.mu via remove. No path holds both locks at once.
+
 type handle[T any] struct {
 	// handle is an opaque pointer to the underlying Rust object. It should be
 	// passed to the C FFI functions that operate on this type.
@@ -25,10 +38,9 @@ type handle[T any] struct {
 	ptr     T
 	dropped bool
 
-	// keepAliveHandle is used to keep the database alive while this object is
-	// in use. It is initialized when the object is created and disowned after
-	// [X.Close] is called.
-	keepAliveHandle databaseKeepAliveHandle
+	// lease keeps the parent database alive while this handle is in use. It is
+	// initialized when the handle is created and released when [Drop] is called.
+	lease lease
 
 	free func(T) C.VoidResult
 }
@@ -39,7 +51,7 @@ func createHandle[T any](ptr T, registry *keepAliveRegistry, free func(T) C.Void
 		free:    free,
 		dropped: false,
 	}
-	h.keepAliveHandle.init(registry)
+	h.lease.init(registry)
 	return h
 }
 
@@ -47,20 +59,20 @@ func drop[T any](h *handle[T]) {
 	_ = h.Drop()
 }
 
-// Drop releases the C-side resource and disowns this handle from the parent
-// database's keep-alive registry.
+// Drop releases the C-side resource and releases this handle's lease on
+// the parent database.
 //
-// Disowning is unconditional: even if the underlying free call returns an
-// error, the handle is still removed from the registry and the WaitGroup is
-// decremented. The C pointer is also cleared before the free call, so a
-// subsequent Drop is a no-op rather than a retry against a possibly-corrupt
-// pointer. Any free error is surfaced to the caller, which is then
-// responsible for deciding what to do — but the caller does not need to
-// worry about the database hanging on shutdown because a free errored.
+// Release is unconditional: even if the underlying free call returns an
+// error, the lease is still released. The C pointer is cleared before the
+// free call, so a subsequent Drop is a no-op rather than a retry against
+// a possibly-corrupt pointer. Any free error is surfaced to the caller,
+// which is then responsible for deciding what to do — but the caller does
+// not need to worry about the database hanging on shutdown because a free
+// errored.
 //
 // Idempotent: subsequent calls after the first return nil.
 func (h *handle[T]) Drop() error {
-	return h.keepAliveHandle.disown(true /* evenOnError */, func() error {
+	return h.lease.release(true /* releaseOnError */, func() error {
 		if h.dropped {
 			return nil
 		}
@@ -80,54 +92,64 @@ func (h *handle[T]) Drop() error {
 }
 
 // keepAliveRegistry tracks every outstanding handle that holds a lease on a
-// database. It carries the WaitGroup that powers [Database.Close]'s graceful
-// wait, alongside a map of drop callbacks that [WithForceCloseHandles] uses
-// to release handles forcibly.
+// database. It owns the WaitGroup that powers [Database.Close]'s graceful
+// wait alongside a map of drop callbacks that [WithForceCloseHandles] uses
+// to release leases forcibly.
 //
-// All fields are owned by the registry; nothing else mutates them. The map
-// values are the outer-type Drop functions (e.g. [Iterator.Drop], whose
-// implementation also frees any borrowed batch).
+// All bookkeeping (WaitGroup + map) lives here; the lease type holds only
+// a back-reference for release. Map values are outer-type Drop functions
+// (e.g. [Iterator.Drop], whose implementation also frees any borrowed batch).
 type keepAliveRegistry struct {
 	mu sync.Mutex
 	wg sync.WaitGroup
-	// handles maps a registered keep-alive handle to its outer Drop
-	// function. Entries are added in [register] and removed in [unregister]
-	// (typically called from [databaseKeepAliveHandle.disownLocked]).
-	handles map[*databaseKeepAliveHandle]func() error
+	// handles maps a registered lease to its outer Drop function. Entries
+	// are added in [register] and removed in [remove] (called from
+	// [lease.releaseLocked]).
+	handles map[*lease]func() error
 	// closed is set by [closeAndForceDrop] and prevents any subsequent
-	// registration. Once closed, [register] returns false; the caller is
-	// expected to immediately Drop the handle so its wg counter clears.
+	// registration. Once closed, [register] invokes the dropFn itself and
+	// returns errDBClosed so the caller does not need to clean up.
 	closed bool
 }
 
 func newKeepAliveRegistry() *keepAliveRegistry {
 	return &keepAliveRegistry{
-		handles: make(map[*databaseKeepAliveHandle]func() error),
+		handles: make(map[*lease]func() error),
 	}
 }
 
-// register records a handle's outer Drop function. Returns false if the
-// registry has been closed via [closeAndForceDrop]; in that case the caller
-// must immediately invoke the handle's Drop so the WaitGroup increment from
-// [databaseKeepAliveHandle.init] is matched and the C handle is freed.
-func (r *keepAliveRegistry) register(h *databaseKeepAliveHandle, dropFn func() error) bool {
+// register records the outer Drop callback for an already-initialized
+// lease.
+//
+// If the registry has been closed via [closeAndForceDrop], register
+// invokes dropFn itself (so the WaitGroup increment from [lease.init] is
+// matched and the C handle is freed) and returns errDBClosed joined with
+// any error the synchronous drop produced. Callers do not need to clean
+// up on register failure — they just propagate the error.
+func (r *keepAliveRegistry) register(l *lease, dropFn func() error) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.closed {
-		return false
+		r.mu.Unlock()
+		if dropErr := dropFn(); dropErr != nil {
+			return errors.Join(errDBClosed, dropErr)
+		}
+		return errDBClosed
 	}
-	r.handles[h] = dropFn
-	return true
+	r.handles[l] = dropFn
+	r.mu.Unlock()
+	return nil
 }
 
-func (r *keepAliveRegistry) unregister(h *databaseKeepAliveHandle) {
+// remove deletes a lease from the registry without invoking its dropFn.
+// Called from [lease.releaseLocked] on explicit disown.
+func (r *keepAliveRegistry) remove(l *lease) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.handles, h)
+	delete(r.handles, l)
+	r.mu.Unlock()
 }
 
 // closeAndForceDrop closes the registry to new registrations and invokes
-// the Drop callback for every currently-registered handle. It is the
+// the Drop callback for every currently-registered lease. It is the
 // implementation behind [WithForceCloseHandles].
 //
 // Atomicity: the closed flag is set and the snapshot is taken under the
@@ -136,10 +158,10 @@ func (r *keepAliveRegistry) unregister(h *databaseKeepAliveHandle) {
 // it as closed will refuse and Drop itself. This removes the race a
 // snapshot-and-retry loop would have with derived-handle constructors
 // (e.g. [Proposal.Propose], [Revision.Iter]) that hold only the parent's
-// keepAliveHandle.mu.RLock rather than [Database.handleLock].
+// lease.mu.RLock rather than [Database.handleLock].
 //
 // Drop callbacks are invoked without the registry lock held; they
-// re-enter the lock via [unregister] inside disownLocked, which is why
+// re-enter the lock via [remove] inside releaseLocked, which is why
 // the snapshot is taken eagerly.
 //
 // Drainable on retry: if ctx expires partway through, accumulated drop
@@ -171,74 +193,82 @@ func (r *keepAliveRegistry) closeAndForceDrop(ctx context.Context) error {
 	return dropErr
 }
 
-// databaseKeepAliveHandle is added to types that hold a lease on the database
-// to ensure it is not closed while those types are still in use.
+// lease represents a single outstanding handle's claim on the parent
+// database. It exists so that operations on the wrapping handle can be
+// serialized against [Database.Close] / [WithForceCloseHandles]: every
+// public method on a Proposal, Revision, Reconstructed, or Iterator
+// takes mu.RLock for the duration of the call, and force-drop takes
+// mu.Lock via [release] before tearing down the C handle.
 //
-// This is necessary to prevent use-after-free bugs where a type holding a
-// reference to the database outlives the database itself. Even attempting to
-// free those objects after the database has been closed will lead to undefined
-// behavior, as a part of the underling Rust object will have already been freed.
-type databaseKeepAliveHandle struct {
+// All bookkeeping (the WaitGroup, the registry map) lives in
+// [keepAliveRegistry]; the lease holds only a back-reference so that
+// [releaseLocked] can find the registry it needs to decrement.
+type lease struct {
 	mu sync.RWMutex
-	// registry is the parent database's keep-alive registry. It is set in
-	// [init] and cleared in [disownLocked]; nil indicates the handle has
-	// already been disowned.
+	// registry is the parent database's keep-alive registry. Set in
+	// [init], cleared in [releaseLocked]; nil indicates the lease has
+	// already been released.
 	registry *keepAliveRegistry
 }
 
-// init initializes the keep-alive handle to track a new outstanding handle.
-func (h *databaseKeepAliveHandle) init(registry *keepAliveRegistry) {
-	// lock not necessary today, but will be necessary in the future for types
-	// that initialize the handle at some point after construction (#1429).
-	h.mu.Lock()
-	defer h.mu.Unlock()
+// init attaches this lease to the parent registry's WaitGroup. The
+// registry's wg counter is incremented here; [release] / [releaseLocked]
+// decrement it.
+func (l *lease) init(registry *keepAliveRegistry) {
+	// Lock not strictly necessary today (a lease is owned exclusively by
+	// its constructing goroutine until init returns) but harmless, and
+	// required for types that initialize the lease at some point after
+	// construction (#1429).
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
-	if h.registry != nil {
-		// setting the finalizer twice will also panic, so we're panicking
-		// early to provide better context
-		panic("keep-alive handle already initialized")
+	if l.registry != nil {
+		// init must be called exactly once per lease. Reaching this is
+		// always a package bug — either a constructor re-used a lease or
+		// two goroutines raced on a lease that should be single-owner.
+		panic("lease already initialized")
 	}
 
-	h.registry = registry
-	h.registry.wg.Add(1)
+	l.registry = registry
+	l.registry.wg.Add(1)
 }
 
-// disown indicates that the object owning this handle is no longer keeping the
-// database alive. If [attemptDisown] returns an error, disowning will only occur
-// if [disownEvenOnErr] is true.
+// release runs attemptDisown and, if it returns nil (or
+// releaseOnError is true), releases the lease via [releaseLocked].
 //
-// Most callers should pass [disownEvenOnErr]=true: keeping the handle in the
-// registry on a free error means the parent database can never gracefully
-// close, since [Database.Close] waits on a WaitGroup whose counter only
-// decrements via disown. Pass false only when the caller has a concrete
+// Most callers should pass releaseOnError=true: keeping the lease alive
+// on a free error means the parent database can never gracefully close,
+// since [Database.Close] waits on a WaitGroup whose counter only
+// decrements via release. Pass false only when the caller has a concrete
 // recovery path for the failed free.
 //
-// This method is safe to call multiple times; subsequent calls after the first
-// will continue to invoke [attemptDisown] but will not decrement the wait group
-// unless [databaseKeepAliveHandle.init] was called again in the meantime.
-func (h *databaseKeepAliveHandle) disown(disownEvenOnErr bool, attemptDisown func() error) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+// Safe to call multiple times; subsequent calls after the first continue
+// to invoke attemptDisown but do not double-decrement the WaitGroup
+// unless [init] runs again in between.
+func (l *lease) release(releaseOnError bool, attemptDisown func() error) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
 	err := attemptDisown()
-	if err == nil || disownEvenOnErr {
-		h.disownLocked()
+	if err == nil || releaseOnError {
+		l.releaseLocked()
 	}
 	return err
 }
 
-// disownLocked performs the disown bookkeeping (Done on the WaitGroup,
-// unregister from the registry, clear the back-pointer) and assumes the
-// caller already holds h.mu. It exists for callers like
-// [Reconstructed.Reconstruct] that hold mu.Lock for a wider critical section
-// and would otherwise deadlock through [disown].
+// releaseLocked is the single bookkeeping point: decrements the
+// registry's WaitGroup, removes this lease from the registry, and
+// clears the registry back-pointer. Caller must hold l.mu.
 //
-// Idempotent: calls after the first are no-ops until [init] runs again.
-func (h *databaseKeepAliveHandle) disownLocked() {
-	if h.registry == nil {
+// Exists for callers like [Reconstructed.Reconstruct] that hold mu.Lock
+// for a wider critical section and would otherwise deadlock through
+// [release]. Idempotent: calls after the first are no-ops until [init]
+// runs again.
+func (l *lease) releaseLocked() {
+	if l.registry == nil {
 		return
 	}
-	h.registry.wg.Done()
-	h.registry.unregister(h)
-	h.registry = nil
+	l.registry.wg.Done()
+	l.registry.remove(l)
+	l.registry = nil
 }
