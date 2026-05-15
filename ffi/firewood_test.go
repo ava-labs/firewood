@@ -1716,6 +1716,7 @@ func TestCloseForceDropsConcurrentReader(t *testing.T) {
 	r.NoError(err)
 
 	done := make(chan struct{})
+	var iterErr error
 	go func() {
 		defer close(done)
 		for it.Next() {
@@ -1723,10 +1724,17 @@ func TestCloseForceDropsConcurrentReader(t *testing.T) {
 			_ = it.Key()
 			_ = it.Value()
 		}
+		iterErr = it.Err()
 	}()
 
 	r.NoError(db.Close(oneSecCtx(t), WithForceCloseHandles()))
 	<-done
+	// Either the iteration drained naturally (nil) or force-close won and
+	// the iterator was dropped mid-flight (errDroppedIterator). Both are
+	// valid outcomes for this race; anything else is a regression.
+	if iterErr != nil {
+		r.ErrorIs(iterErr, errDroppedIterator)
+	}
 }
 
 func TestDump(t *testing.T) {
