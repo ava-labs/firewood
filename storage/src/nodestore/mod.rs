@@ -56,6 +56,7 @@ use firewood_metrics::{firewood_counter, firewood_histogram};
 use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::io::{Error, ErrorKind};
+use std::num::NonZeroU64;
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -562,15 +563,23 @@ pub trait RootReader {
 /// their committed parent. Unlike root address, ids are assigned
 /// synchronously at commit time — they don't race with the persist worker.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct CommittedId(u64);
+pub struct CommittedId(NonZeroU64);
 
 impl CommittedId {
     /// Allocate a fresh id from the process-global counter.
+    ///
+    /// # Panics
+    ///
+    /// Panics on overflow: the counter is a `NonZeroU64` and we never want to
+    /// silently wrap and collide with an earlier id. At 1 ns per commit
+    /// hitting the wrap takes ≈585 years, so a panic here means a bug, not
+    /// a workload we need to handle.
     #[must_use]
     pub fn next() -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(1);
-        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+        let raw = NEXT.fetch_add(1, Ordering::Relaxed);
+        Self(NonZeroU64::new(raw).expect("CommittedId counter overflowed u64"))
     }
 }
 
@@ -882,21 +891,6 @@ impl<S> Clone for NodeStore<Reconstructed, S> {
             kind: self.kind.clone(),
             storage: self.storage.clone(),
             must_recompute_storage_hash: self.must_recompute_storage_hash,
-        }
-    }
-}
-
-/// Commit a proposal to a new revision of the trie
-impl<S: WritableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<Committed, S> {
-    fn from(val: NodeStore<ImmutableProposal, S>) -> Self {
-        NodeStore {
-            kind: Committed {
-                deleted: val.kind.deleted.clone(),
-                root: val.kind.root.clone(),
-                id: CommittedId::next(),
-            },
-            storage: val.storage,
-            must_recompute_storage_hash: val.must_recompute_storage_hash,
         }
     }
 }

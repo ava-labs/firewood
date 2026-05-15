@@ -60,7 +60,12 @@ const COMMITS_PER_THREAD: usize = 32;
 /// concurrent rebases interleave.
 const KEYS_PER_BATCH: usize = 16;
 
-/// Tighten `max_revisions` so reaping kicks in during the test.
+/// Tighten `max_revisions` so reaping kicks in during the concurrent tests.
+///
+/// Not shared with [`test_empty_parent_rebase_after_reap`], which uses a
+/// smaller constant locally: the concurrent tests' persist worker can't
+/// keep up if this is dropped below ~16, so a single shared low value is
+/// not viable.
 const MAX_REVISIONS: usize = 16;
 
 // Keys must be 32 bytes (64 nibbles) so the checker accepts them under
@@ -92,8 +97,13 @@ fn test_db_with_tight_revisions() -> TestDb {
     )
 }
 
-/// Run `db.check()` and assert no errors other than `AreaLeaks`.
-fn assert_check_clean(db: &TestDb, label: &str) {
+/// Run `db.check()` and assert no errors other than `AreaLeaks` (which is
+/// noisy and unrelated). `tolerate_unpersisted` allows callers running
+/// against an in-memory state — where the persist worker may still be
+/// behind the latest committed root — to ignore [`CheckerError::UnpersistedRoot`].
+/// After [`TestDb::reopen`], pass `false`: a reopened db must have a
+/// persisted root.
+fn assert_check_clean(db: &TestDb, label: &str, tolerate_unpersisted: bool) {
     let report = db.check(CheckOpt {
         hash_check: true,
         progress_bar: None,
@@ -102,6 +112,7 @@ fn assert_check_clean(db: &TestDb, label: &str) {
         .errors
         .iter()
         .filter(|e| !matches!(e, CheckerError::AreaLeaks(_)))
+        .filter(|e| !(tolerate_unpersisted && matches!(e, CheckerError::UnpersistedRoot)))
         .collect();
     assert!(real_errors.is_empty(), "{label}: {real_errors:?}");
 }
@@ -172,12 +183,16 @@ fn test_concurrent_commit_with_rebase_no_freelist_corruption() {
     });
 
     assert_disjoint_keys_present(&db, "post-concurrency");
-    assert_check_clean(&db, "post-concurrency");
+    // Pre-reopen check runs against the in-memory state; the persist worker
+    // may still be behind the latest committed root, so tolerate
+    // `UnpersistedRoot`.
+    assert_check_clean(&db, "post-concurrency", true);
 
-    // Reopen to surface any deferred-persistence corruption.
+    // Reopen to surface any deferred-persistence corruption. After reopen,
+    // `UnpersistedRoot` would indicate a real bug.
     let db = db.reopen();
     assert_disjoint_keys_present(&db, "post-reopen");
-    assert_check_clean(&db, "post-reopen");
+    assert_check_clean(&db, "post-reopen", false);
 }
 
 /// Many concurrent proposals built off the same parent, each modifying
@@ -265,7 +280,7 @@ fn test_concurrent_rebase_overlapping_paths() {
     // Close + reopen forces deferred persistence to flush; freelist
     // corruption surfaces here.
     let db = db.reopen();
-    assert_check_clean(&db, "post-reopen");
+    assert_check_clean(&db, "post-reopen", false);
 }
 
 /// Two proposals built off the same parent that produce the same `Put`. The
@@ -312,7 +327,7 @@ fn test_trivial_rebase_succeeds_without_corruption() {
     // Reopen forces the persist worker to flush before we run check();
     // otherwise the checker may race the worker and report `UnpersistedRoot`.
     let db = db.reopen();
-    assert_check_clean(&db, "post-trivial-rebase");
+    assert_check_clean(&db, "post-trivial-rebase", false);
 }
 
 /// A→B→A: commit `Put(K, V)`, then `Delete(K)`, then `Put(K, V)`. The first
@@ -383,7 +398,7 @@ fn test_round_trip_rejects_stale_parent() {
 
     // Reopen forces persist before check() to avoid `UnpersistedRoot` races.
     let db = db.reopen();
-    assert_check_clean(&db, "post-round-trip");
+    assert_check_clean(&db, "post-round-trip", false);
 }
 
 /// A proposal built off the initial empty revision (`Hash(None)` parent),
@@ -399,8 +414,10 @@ fn test_round_trip_rejects_stale_parent() {
 /// rebased commit preserves all prior state.
 #[test]
 fn test_empty_parent_rebase_after_reap() {
-    // Tighten max_revisions so a small number of commits suffices to
-    // overflow and reap the initial empty revision.
+    // A tighter `max_revisions` than the concurrent tests use: those need
+    // a higher cap so the persist worker can keep up, but here we just
+    // need a small N so a handful of fillers reaps the initial empty
+    // revision out of the queue.
     const TIGHT_MAX_REVISIONS: usize = 4;
 
     let db = TestDb::new_with_config(
@@ -468,5 +485,5 @@ fn test_empty_parent_rebase_after_reap() {
 
     // Reopen forces persist before check() to avoid `UnpersistedRoot` races.
     let db = db.reopen();
-    assert_check_clean(&db, "post-empty-parent-rebase");
+    assert_check_clean(&db, "post-empty-parent-rebase", false);
 }

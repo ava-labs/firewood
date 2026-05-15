@@ -316,6 +316,14 @@ impl RevisionManager {
     /// old revisions that exceed `max_revisions`, signals the persist worker,
     /// and inserts the new committed revision into the queue. The caller must
     /// hold the write lock on committed revisions and pass the locked queue in.
+    ///
+    /// Returns the [`CommittedId`] of the revision the proposal now lives in:
+    /// either the freshly-inserted revision for a regular commit, or the
+    /// current latest revision's id when the proposal was absorbed by the
+    /// trivial fast path (proposal root hash equals the latest revision's).
+    /// The caller passes this id to [`Self::commit_cleanup`], which uses it
+    /// to reparent any sibling proposals that pointed at the just-committed
+    /// proposal.
     pub(crate) fn commit_critical_section(
         &self,
         proposal: &ProposedRevision,
