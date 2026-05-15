@@ -199,7 +199,12 @@ func getReconstructedFromResult(result C.ReconstructedResult, registry *keepAliv
 			}),
 			root: EmptyRoot,
 		}
-		registry.register(&reconstructed.keepAliveHandle, reconstructed.Drop)
+		if !registry.register(&reconstructed.keepAliveHandle, reconstructed.Drop) {
+			// Registry closed by force-close in flight; drop the C handle
+			// we just received so the WaitGroup increment from init clears.
+			_ = reconstructed.Drop()
+			return nil, errDBClosed
+		}
 		runtime.AddCleanup(reconstructed, drop[*C.ReconstructedHandle], reconstructed.handle)
 		return reconstructed, nil
 	case C.ReconstructedResult_Err:

@@ -279,7 +279,12 @@ func getIteratorFromIteratorResult(result C.IteratorResult, registry *keepAliveR
 		// closure is bound to ih (not the *Iterator wrapper). This is
 		// what lets the cleanup below fire when the user drops their
 		// last reference to the wrapper without an explicit Drop.
-		registry.register(&ih.keepAliveHandle, ih.Drop)
+		if !registry.register(&ih.keepAliveHandle, ih.Drop) {
+			// Registry closed by force-close in flight; drop the C handle
+			// we just received so the WaitGroup increment from init clears.
+			_ = ih.Drop()
+			return nil, errDBClosed
+		}
 		it := &Iterator{iteratorHandle: ih}
 		// Cleanup arg is ih, which is a distinct pointer from it and
 		// has no back-reference to it, satisfying AddCleanup's
