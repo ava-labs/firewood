@@ -411,11 +411,18 @@ impl RevisionManager {
         let mut lock = self.proposals.lock();
         let mut discarded = 0u64;
         lock.retain(|p| {
-            let should_retain = !Arc::ptr_eq(p, proposal) && Arc::strong_count(p) > 1;
-            if !should_retain {
-                discarded = discarded.wrapping_add(1);
+            // The proposal being committed leaves the list but isn't a
+            // discard — it was successfully committed. Only abandoned
+            // proposals (no external strong refs) count toward
+            // PROPOSALS_DISCARDED.
+            if Arc::ptr_eq(p, proposal) {
+                return false;
             }
-            should_retain
+            if Arc::strong_count(p) <= 1 {
+                discarded = discarded.wrapping_add(1);
+                return false;
+            }
+            true
         });
 
         if discarded > 0 {
