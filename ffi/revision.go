@@ -66,8 +66,8 @@ type Revision struct {
 //
 // It returns ErrDroppedRevision if this revision has already been released.
 func (r *Revision) Get(key []byte) ([]byte, error) {
-	r.keepAliveHandle.mu.RLock()
-	defer r.keepAliveHandle.mu.RUnlock()
+	r.lease.mu.RLock()
+	defer r.lease.mu.RUnlock()
 	if r.dropped {
 		return nil, ErrDroppedRevision
 	}
@@ -89,8 +89,8 @@ func (r *Revision) Get(key []byte) ([]byte, error) {
 //
 // It returns [ErrDroppedRevision] if this revision has already been released.
 func (r *Revision) Iter(key []byte) (*Iterator, error) {
-	r.keepAliveHandle.mu.RLock()
-	defer r.keepAliveHandle.mu.RUnlock()
+	r.lease.mu.RLock()
+	defer r.lease.mu.RUnlock()
 	if r.dropped {
 		return nil, ErrDroppedRevision
 	}
@@ -100,7 +100,7 @@ func (r *Revision) Iter(key []byte) (*Iterator, error) {
 
 	itResult := C.fwd_iter_on_revision(r.ptr, newBorrowedBytes(key, &pinner))
 
-	return getIteratorFromIteratorResult(itResult, r.keepAliveHandle.registry)
+	return getIteratorFromIteratorResult(itResult, r.lease.registry)
 }
 
 // Reconstruct applies a batch of operations on top of this historical revision,
@@ -109,8 +109,8 @@ func (r *Revision) Iter(key []byte) (*Iterator, error) {
 // The returned view is not committed to the database and is not visible via
 // [Database.Revision] or [Database.Root].
 func (r *Revision) Reconstruct(batch []BatchOp) (*Reconstructed, error) {
-	r.keepAliveHandle.mu.RLock()
-	defer r.keepAliveHandle.mu.RUnlock()
+	r.lease.mu.RLock()
+	defer r.lease.mu.RUnlock()
 	if r.dropped {
 		return nil, ErrDroppedRevision
 	}
@@ -121,7 +121,7 @@ func (r *Revision) Reconstruct(batch []BatchOp) (*Reconstructed, error) {
 	kvp := newKeyValuePairsFromBatch(batch, &pinner)
 	return getReconstructedFromResult(
 		C.fwd_reconstruct_on_revision(r.ptr, kvp),
-		r.keepAliveHandle.registry,
+		r.lease.registry,
 	)
 }
 
@@ -135,8 +135,8 @@ func (r *Revision) Root() Hash {
 //
 // Returns ErrDroppedRevision if this revision has already been released.
 func (r *Revision) Dump() (string, error) {
-	r.keepAliveHandle.mu.RLock()
-	defer r.keepAliveHandle.mu.RUnlock()
+	r.lease.mu.RLock()
+	defer r.lease.mu.RUnlock()
 	if r.dropped {
 		return "", ErrDroppedRevision
 	}
@@ -163,11 +163,8 @@ func getRevisionFromResult(result C.RevisionResult, registry *keepAliveRegistry)
 			handle: createHandle(body.handle, registry, func(r *C.RevisionHandle) C.VoidResult { return C.fwd_free_revision(r) }),
 			root:   hashKey,
 		}
-		if !registry.register(&rev.keepAliveHandle, rev.Drop) {
-			// Registry closed by force-close in flight; drop the C handle
-			// we just received so the WaitGroup increment from init clears.
-			_ = rev.Drop()
-			return nil, errDBClosed
+		if err := registry.register(&rev.lease, rev.Drop); err != nil {
+			return nil, err
 		}
 		runtime.AddCleanup(rev, drop, rev.handle)
 		return rev, nil

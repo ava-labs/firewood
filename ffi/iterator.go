@@ -38,8 +38,8 @@ type iteratorHandle struct {
 	// from fwd_iter_next / fwd_iter_next_n. It must be freed before the
 	// next FFI call (so a borrowed batch isn't invalidated mid-iteration)
 	// and as part of Drop. Mutated by [Iterator.nextInternal] under
-	// keepAliveHandle.mu.RLock; read and cleared by Drop under
-	// keepAliveHandle.mu.Lock.
+	// lease.mu.RLock; read and cleared by Drop under
+	// lease.mu.Lock.
 	currentResource interface{ free() error }
 }
 
@@ -67,7 +67,7 @@ func (ih *iteratorHandle) freeCurrentAllocation() error {
 // independently reclaimable; otherwise the cleanup safety net could never
 // fire.
 func (ih *iteratorHandle) Drop() error {
-	return ih.keepAliveHandle.disown(true /* evenOnError */, func() error {
+	return ih.lease.release(true /* releaseOnError */, func() error {
 		err := ih.freeCurrentAllocation()
 		if ih.dropped {
 			return err
@@ -184,8 +184,8 @@ func (it *Iterator) SetBatchSize(batchSize int) {
 // [Iterator.Err] after iteration completes to distinguish between the two.
 // It is safe to call Next after it returns false; it will continue to return false.
 func (it *Iterator) Next() bool {
-	it.keepAliveHandle.mu.RLock()
-	defer it.keepAliveHandle.mu.RUnlock()
+	it.lease.mu.RLock()
+	defer it.lease.mu.RUnlock()
 	if it.dropped {
 		it.err = errDroppedIterator
 		return false
@@ -209,8 +209,8 @@ func (it *Iterator) Next() bool {
 //
 // It returns false when the iterator is exhausted or an error occurs, same as Next.
 func (it *Iterator) NextBorrowed() bool {
-	it.keepAliveHandle.mu.RLock()
-	defer it.keepAliveHandle.mu.RUnlock()
+	it.lease.mu.RLock()
+	defer it.lease.mu.RUnlock()
 	if it.dropped {
 		it.err = errDroppedIterator
 		return false
@@ -274,16 +274,13 @@ func getIteratorFromIteratorResult(result C.IteratorResult, registry *keepAliveR
 				},
 			},
 		}
-		ih.keepAliveHandle.init(registry)
+		ih.lease.init(registry)
 		// it.Drop is promoted from *iteratorHandle, so the registered
 		// closure is bound to ih (not the *Iterator wrapper). This is
 		// what lets the cleanup below fire when the user drops their
 		// last reference to the wrapper without an explicit Drop.
-		if !registry.register(&ih.keepAliveHandle, ih.Drop) {
-			// Registry closed by force-close in flight; drop the C handle
-			// we just received so the WaitGroup increment from init clears.
-			_ = ih.Drop()
-			return nil, errDBClosed
+		if err := registry.register(&ih.lease, ih.Drop); err != nil {
+			return nil, err
 		}
 		it := &Iterator{iteratorHandle: ih}
 		// Cleanup arg is ih, which is a distinct pointer from it and
