@@ -148,7 +148,7 @@ func (r *Reconstructed) Reconstruct(batch []BatchOp) error {
 	// The old handle is consumed by the FFI call regardless of outcome.
 	r.ptr = nil
 
-	newHandle, err := getReconstructedHandleFromResult(result)
+	newHandle, err := decodeReconstructedResult(result)
 	if err != nil {
 		// The old handle was consumed by the FFI call, so mark as dropped
 		// and disown the keep-alive lease so Database.Close is not blocked.
@@ -187,34 +187,12 @@ func (r *Reconstructed) Dump() (string, error) {
 	return string(bytes), nil
 }
 
-func getReconstructedFromResult(result C.ReconstructedResult, registry *keepAliveRegistry) (*Reconstructed, error) {
-	switch result.tag {
-	case C.ReconstructedResult_NullHandlePointer:
-		return nil, errDBClosed
-	case C.ReconstructedResult_Ok:
-		body := (*C.ReconstructedResult_Ok_Body)(unsafe.Pointer(&result.anon0))
-		reconstructed := &Reconstructed{
-			handle: createHandle(body.handle, registry, func(h *C.ReconstructedHandle) C.VoidResult {
-				return C.fwd_free_reconstructed(h)
-			}),
-			root: EmptyRoot,
-		}
-		if err := registry.register(&reconstructed.lease, reconstructed.Drop); err != nil {
-			return nil, err
-		}
-		runtime.AddCleanup(reconstructed, drop[*C.ReconstructedHandle], reconstructed.handle)
-		return reconstructed, nil
-	case C.ReconstructedResult_Err:
-		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
-		return nil, err
-	default:
-		return nil, fmt.Errorf("unknown C.ReconstructedResult tag: %d", result.tag)
-	}
-}
-
-func getReconstructedHandleFromResult(
-	result C.ReconstructedResult,
-) (*C.ReconstructedHandle, error) {
+// decodeReconstructedResult unwraps a C.ReconstructedResult to the raw
+// C handle, converting tag-encoded variants into Go errors. Used both by
+// the wrapping constructor [getReconstructedFromResult] and by
+// [Reconstructed.Reconstruct], which swaps the inner pointer without
+// allocating a new wrapper.
+func decodeReconstructedResult(result C.ReconstructedResult) (*C.ReconstructedHandle, error) {
 	switch result.tag {
 	case C.ReconstructedResult_NullHandlePointer:
 		return nil, errDBClosed
@@ -222,9 +200,26 @@ func getReconstructedHandleFromResult(
 		body := (*C.ReconstructedResult_Ok_Body)(unsafe.Pointer(&result.anon0))
 		return body.handle, nil
 	case C.ReconstructedResult_Err:
-		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
-		return nil, err
+		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 	default:
 		return nil, fmt.Errorf("unknown C.ReconstructedResult tag: %d", result.tag)
 	}
+}
+
+func getReconstructedFromResult(result C.ReconstructedResult, registry *keepAliveRegistry) (*Reconstructed, error) {
+	cHandle, err := decodeReconstructedResult(result)
+	if err != nil {
+		return nil, err
+	}
+	reconstructed := &Reconstructed{
+		handle: createHandle(cHandle, registry, func(h *C.ReconstructedHandle) C.VoidResult {
+			return C.fwd_free_reconstructed(h)
+		}),
+		root: EmptyRoot,
+	}
+	if err := registry.register(&reconstructed.lease, reconstructed.Drop); err != nil {
+		return nil, err
+	}
+	runtime.AddCleanup(reconstructed, drop[*C.ReconstructedHandle], reconstructed.handle)
+	return reconstructed, nil
 }
