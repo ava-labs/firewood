@@ -20,6 +20,10 @@ jobs:
           shared-key: "maxperf-ethhash-logger-test_utils"
           cache-all-crates: true
           cache-workspace-crates: true
+          # TEMP:
+          # see: https://github.com/rust-lang/rustup/issues/4856
+          # see: https://github.com/Swatinem/rust-cache/issues/341
+          cache-bin: false
       - name: Cargo Fetch (run `cargo generate-lockfile` if this fails)
         run: cargo fetch --locked --verbose
       - name: Build

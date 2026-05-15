@@ -51,6 +51,10 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2 -> v2.9.1
         with:
           shared-key: ${{ matrix.target }}
+          # TEMP:
+          # see: https://github.com/rust-lang/rustup/issues/4856
+          # see: https://github.com/Swatinem/rust-cache/issues/341
+          cache-bin: false
 
       - name: Add target for cross-compilation
         run: rustup target add ${{ matrix.target }}

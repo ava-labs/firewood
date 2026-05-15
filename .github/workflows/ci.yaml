@@ -50,6 +50,10 @@ jobs:
           shared-key: ${{ matrix.profile-key }}
           cache-all-crates: true
           cache-workspace-crates: true
+          # TEMP:
+          # see: https://github.com/rust-lang/rustup/issues/4856
+          # see: https://github.com/Swatinem/rust-cache/issues/341
+          cache-bin: false
       # Require Cargo.lock to be up to date and ensure the registry cache is populated
       - name: Cargo Fetch (run `cargo generate-lockfile` if this fails)
         run: cargo fetch --locked --verbose
