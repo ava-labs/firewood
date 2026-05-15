@@ -142,15 +142,13 @@ func (r *keepAliveRegistry) unregister(h *databaseKeepAliveHandle) {
 // re-enter the lock via [unregister] inside disownLocked, which is why
 // the snapshot is taken eagerly.
 //
-// ctx is checked between Drop calls. If it expires, accumulated drop
-// errors are returned joined with the context cause; the registry stays
-// closed regardless.
+// Drainable on retry: if ctx expires partway through, accumulated drop
+// errors are returned and the registry stays closed, but handles that
+// were not yet dropped remain in the map. A subsequent call re-snapshots
+// the remainder and continues draining, so a caller that hits a context
+// deadline can retry [Database.Close] with a fresh context to finish.
 func (r *keepAliveRegistry) closeAndForceDrop(ctx context.Context) error {
 	r.mu.Lock()
-	if r.closed {
-		r.mu.Unlock()
-		return nil
-	}
 	r.closed = true
 	drops := make([]func() error, 0, len(r.handles))
 	for _, fn := range r.handles {
