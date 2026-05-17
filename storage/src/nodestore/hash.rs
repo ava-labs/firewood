@@ -290,9 +290,7 @@ pub fn fix_account_storage_root_value(
     use crate::rlp::{NULL_RLP, RlpItem, encode_list, replace_list_field};
     use sha3::{Digest, Keccak256};
 
-    let children_count = child_hashes.iter().filter(|(_, c)| c.is_some()).count();
-
-    let storage_root = if children_count == 0 {
+    let storage_root = if child_hashes.count() == 0 {
         crate::TrieHash::from(Keccak256::digest(NULL_RLP))
     } else {
         let mut child_hashes = child_hashes.clone();
@@ -327,7 +325,7 @@ fn single_child_storage_root(child: HashType) -> crate::TrieHash {
 }
 
 #[cfg(not(feature = "ethhash"))]
-fn single_child_storage_root(child: HashType) -> crate::TrieHash {
+const fn single_child_storage_root(child: HashType) -> crate::TrieHash {
     // Without ethhash, `HashType` is `TrieHash`.
     child
 }

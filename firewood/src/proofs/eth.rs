@@ -53,12 +53,14 @@ const ACCOUNT_DEPTH_NIBBLES: usize = 64;
 /// only fires on the account node itself.
 ///
 /// Returns a single buffer for leaves and for branches with empty partial
-/// paths. Returns two buffers (`[inner_branch, outer_extension]`) when a
-/// firewood node combines a non-empty partial path with a children-bearing
-/// branch whose RLP exceeds 31 bytes: an MPT verifier needs both the
-/// extension node it walks and the branch node the extension references by
-/// hash. The inline-extension case (branch RLP < 32 bytes, or any account
-/// node) collapses into a single self-contained buffer.
+/// paths. Returns two buffers when a firewood node combines a non-empty
+/// partial path with a children-bearing branch whose RLP exceeds 31 bytes:
+/// an MPT verifier needs both the extension node it walks and the branch
+/// node the extension references by hash. The two buffers are returned in
+/// **proof walk order** `[outer_extension, inner_branch]` so callers can
+/// concatenate the result into a root-to-leaf proof list without
+/// reordering. The inline-extension case (branch RLP < 32 bytes, or any
+/// account node) collapses into a single self-contained buffer.
 #[must_use]
 pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
     // `partial_len` is validated against `key.len()` during deserialization,
@@ -71,13 +73,8 @@ pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
     // fires.
     let is_account = cfg!(feature = "ethhash") && key.len() == ACCOUNT_DEPTH_NIBBLES;
     let value_bytes = node.value_digest.as_ref().and_then(ValueDigest::value);
-    let child_count = node
-        .child_hashes
-        .iter()
-        .filter(|(_, c)| c.is_some())
-        .count();
 
-    if child_count == 0 {
+    if node.child_hashes.count() == 0 {
         // Leaf. For account leaves, splice the empty-trie storage root into
         // the account RLP value; the on-disk value may carry a stale or zero
         // storageRoot on pre-hfix databases.
@@ -103,7 +100,7 @@ pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
     let mut items: [RlpItem<'_>; BranchNode::MAX_CHILDREN + 1] =
         [RlpItem::Empty; BranchNode::MAX_CHILDREN + 1];
     for ((_, child), slot) in (&node.child_hashes).into_iter().zip(items.iter_mut()) {
-        *slot = child_to_rlp_item(child.as_ref());
+        *slot = proof_child_rlp_item(child.as_ref());
     }
     // The 17th element is the value. Account nodes carry their value in
     // account RLP that gets spliced in below, not in the branch slot.
@@ -114,10 +111,15 @@ pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
 
     // For account nodes, the state trie sees a leaf with value = account RLP.
     // Compute the storage trie's root from this node's children and splice
-    // it into the account RLP value at field index 2.
+    // it into the account RLP value at field index 2. If the splice fails
+    // (malformed account RLP), fall back to the raw account RLP rather than
+    // to the value-less branch encoding; this mirrors the ethhash hasher's
+    // fallback at ethhash.rs:234-236 so a verifier sees the same bytes the
+    // hasher hashed.
     let inner_bytes: Box<[u8]> = if is_account {
-        match value_bytes.and_then(|v| fix_account_storage_root_value(v, &node.child_hashes)) {
-            Some(spliced) => spliced,
+        match value_bytes {
+            Some(v) => fix_account_storage_root_value(v, &node.child_hashes)
+                .unwrap_or_else(|| Box::from(v)),
             None => branch_bytes,
         }
     } else {
@@ -131,17 +133,18 @@ pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
     let compact_path = nibbles_to_eth_compact(partial_path, is_account);
 
     if inner_bytes.len() > 31 && !is_account {
-        // Extension wraps a hashed branch. Verifier needs both: the outer
-        // extension (which references the inner by hash) and the inner
-        // (which the verifier keccaks to confirm the reference).
+        // Extension wraps a hashed branch. Returned in proof walk order
+        // [outer, inner]: a root-to-leaf verifier first follows the parent's
+        // child reference to `outer` (an extension), then follows `outer`'s
+        // own child reference (keccak(inner)) to `inner`.
         let hash = Keccak256::digest(&inner_bytes);
         let outer = encode_list(&[
             RlpItem::Bytes(&compact_path),
             RlpItem::Bytes(hash.as_slice()),
         ]);
         let mut out: SmallVec<[Box<[u8]>; 2]> = SmallVec::new();
-        out.push(inner_bytes);
         out.push(outer);
+        out.push(inner_bytes);
         out
     } else {
         // Inline form: the inner bytes fit (or this is an account, which
@@ -197,8 +200,15 @@ pub fn synth_storage_leaf_rlp(storage_child: &ProofNode) -> Option<Box<[u8]>> {
     ]))
 }
 
+/// Encode one child slot of a branch as an [`RlpItem`] for proof emission.
+///
+/// Distinct from `firewood_storage::nodestore::hash::child_to_rlp_item`,
+/// which is account-depth-only and treats inline-RLP children as
+/// `unreachable!()`. This emitter runs at any depth, so it must surface
+/// inline-RLP children as `RlpItem::Raw` (verbatim inlining) for a
+/// verifier to walk them.
 #[cfg(feature = "ethhash")]
-fn child_to_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
+fn proof_child_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
     match child {
         Some(HashType::Hash(hash)) => RlpItem::Bytes(hash.as_slice()),
         Some(HashType::Rlp(rlp_bytes)) => RlpItem::Raw(rlp_bytes),
@@ -207,7 +217,7 @@ fn child_to_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
 }
 
 #[cfg(not(feature = "ethhash"))]
-fn child_to_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
+fn proof_child_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
     // Without ethhash, HashType is just a 32-byte TrieHash and there is no
     // inline-RLP form; every present child is referenced by hash.
     match child {
@@ -339,14 +349,8 @@ mod tests {
         let bytes = proof_node_to_mpt_rlp(&node);
         assert_eq!(bytes.len(), 2, "long-inner branch emits two buffers");
 
-        let inner = RlpList::parse(&bytes[0]).unwrap();
-        assert_eq!(
-            inner.fields().unwrap().len(),
-            17,
-            "inner buffer is the 17-element branch list"
-        );
-
-        let outer = RlpList::parse(&bytes[1]).unwrap();
+        // Buffers are returned in proof walk order: outer first, inner second.
+        let outer = RlpList::parse(&bytes[0]).unwrap();
         let outer_fields = outer.fields().unwrap();
         assert_eq!(outer_fields.len(), 2, "outer is a 2-element extension");
         assert_eq!(
@@ -354,8 +358,16 @@ mod tests {
             32,
             "extension's child reference is a 32-byte hash"
         );
+
+        let inner = RlpList::parse(&bytes[1]).unwrap();
+        assert_eq!(
+            inner.fields().unwrap().len(),
+            17,
+            "inner buffer is the 17-element branch list"
+        );
+
         // The hash referenced in the outer must equal keccak(inner).
-        let inner_hash = Keccak256::digest(&bytes[0]);
+        let inner_hash = Keccak256::digest(&bytes[1]);
         assert_eq!(outer_fields[1], inner_hash.as_slice());
     }
 

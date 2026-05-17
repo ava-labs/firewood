@@ -110,7 +110,8 @@ impl<T: AsRef<[u8]>> ValueDigest<T> {
     }
 
     /// Returns the inner bytes if this digest carries a value, or `None` if
-    /// it carries only a hash (`#[cfg(not(feature = "ethhash"))]` only).
+    /// it carries only a hash. The `Hash` variant only exists in non-ethhash
+    /// builds, so in ethhash builds this function always returns `Some`.
     pub fn value(&self) -> Option<&[u8]> {
         match self {
             Self::Value(v) => Some(v.as_ref()),
