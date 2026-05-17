@@ -397,7 +397,7 @@ impl NodeStoreHeader {
         trace!("Checking if node hash algorithm flag matches storage...");
         self.validate_node_hash_algorithm(expected_node_hash_algorithm)?;
 
-        if self.version == Version::VALID_V1_VERSIONS[0] {
+        if self.version.is_firewood_v1() {
             debug!(
                 "Database was created with firewood version {}",
                 self.firewood_version_str()

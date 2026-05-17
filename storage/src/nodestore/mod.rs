@@ -153,7 +153,10 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
                 deleted: Box::default(),
                 root: None,
             },
-            must_recompute_storage_hash: true,
+            // Fresh in-memory store: writes go through current code, which
+            // persists correct storageRoots at hash time, so proofs do not
+            // need to recompute them.
+            must_recompute_storage_hash: header::Version::new().must_recompute_storage_hash(),
         }
     }
 
@@ -173,6 +176,9 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         root_address: LinearAddress,
         storage: Arc<S>,
     ) -> Result<Self, FileIoError> {
+        // Read the on-disk version so account-storage-root recomputation at
+        // proof time happens iff the persisted data predates the hfix.
+        let header = NodeStoreHeader::read_from_storage(&*storage)?;
         // first construct a nodestore without a root
         let mut nodestore = NodeStore {
             kind: Committed {
@@ -180,7 +186,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
                 root: None,
             },
             storage,
-            must_recompute_storage_hash: true,
+            must_recompute_storage_hash: header.must_recompute_storage_hash(),
         };
 
         let node = nodestore.read_node(root_address)?;
@@ -422,7 +428,9 @@ impl<S: WritableStorage> NodeStore<Mutable<Propose>, S> {
                 },
             },
             storage,
-            must_recompute_storage_hash: true,
+            // Fresh proposal: writes go through current code, which persists
+            // correct storageRoots at hash time.
+            must_recompute_storage_hash: header::Version::new().must_recompute_storage_hash(),
         }
     }
 }
@@ -438,7 +446,8 @@ impl<S> NodeStore<Mutable<Recon>, S> {
                 inner: Recon,
             },
             storage,
-            must_recompute_storage_hash: true,
+            // Fresh reconstruction store: writes go through current code.
+            must_recompute_storage_hash: header::Version::new().must_recompute_storage_hash(),
         }
     }
 }

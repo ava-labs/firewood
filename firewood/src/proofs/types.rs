@@ -341,7 +341,7 @@ impl From<PathIterItem> for ProofNode {
         let value_digest = item
             .node
             .value()
-            .map(|value| ValueDigest::Value(value.to_vec().into_boxed_slice()));
+            .map(|value| ValueDigest::Value(Box::from(value)));
 
         // For account-depth nodes on databases that need storageRoot
         // recomputation, fix the value from the node's children. Newer

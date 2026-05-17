@@ -137,9 +137,10 @@ where
         trace!("hashing {node:?} at {path_prefix:?}");
         if let Node::Branch(ref mut b) = node {
             // special case code for ethereum hashes at the account level
+            // Both lengths are usize counts of nibbles in a trie path, so their
+            // sum cannot overflow on any platform firewood targets.
             #[cfg(feature = "ethhash")]
-            let make_fake_root = if path_prefix.0.len().saturating_add(b.partial_path.0.len()) == 64
-            {
+            let make_fake_root = if path_prefix.0.len().wrapping_add(b.partial_path.0.len()) == 64 {
                 // looks like we're at an account branch
                 // tally up how many hashes we need to deal with
                 let ClassifiedChildren {
