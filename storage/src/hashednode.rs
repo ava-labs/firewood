@@ -109,6 +109,16 @@ impl<T: AsRef<[u8]>> ValueDigest<T> {
         }
     }
 
+    /// Returns the inner bytes if this digest carries a value, or `None` if
+    /// it carries only a hash (`#[cfg(not(feature = "ethhash"))]` only).
+    pub fn value(&self) -> Option<&[u8]> {
+        match self {
+            Self::Value(v) => Some(v.as_ref()),
+            #[cfg(not(feature = "ethhash"))]
+            Self::Hash(_) => None,
+        }
+    }
+
     /// Convert the value to a hash if it is not already a hash.
     ///
     /// If the value is less than 32 bytes, it will be passed through as is
