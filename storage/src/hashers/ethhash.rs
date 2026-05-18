@@ -109,7 +109,6 @@ use crate::{
     hashednode::HasUpdate, logger::trace,
 };
 use sha3::{Digest, Keccak256};
-use smallvec::SmallVec;
 
 impl HasUpdate for Keccak256 {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {
@@ -117,84 +116,76 @@ impl HasUpdate for Keccak256 {
     }
 }
 
-struct RlpCollector {
-    len: u8,
-    buf: [u8; RlpBytes::MAX_LEN],
-    hasher: Option<Keccak256>,
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Hashing's Keccak256 (~360 B) dwarfs Collecting's inline buf (~32 B); \
+              boxing would add an allocation on every hashed node for negligible savings"
+)]
+enum RlpCollector {
+    Collecting {
+        len: usize,
+        buf: [u8; RlpBytes::MAX_LEN],
+    },
+    Hashing(Keccak256),
 }
 
 impl RlpCollector {
     const fn new() -> Self {
-        Self {
+        Self::Collecting {
             len: 0,
             buf: [0; RlpBytes::MAX_LEN],
-            hasher: None,
         }
     }
 
     fn push_bytes(&mut self, bytes: &[u8]) {
-        if let Some(hasher) = self.hasher.as_mut() {
-            sha3::Digest::update(hasher, bytes);
-            return;
-        }
-
-        let Some(total_len) = usize::from(self.len).checked_add(bytes.len()) else {
-            let mut hasher = Keccak256::new();
-            let buffered = usize::from(self.len);
-            if buffered > 0 {
-                let buffered = self
-                    .buf
-                    .get(..buffered)
-                    .expect("collector len is bounded by inline buffer");
-                sha3::Digest::update(&mut hasher, buffered);
+        let (len, buf) = match self {
+            Self::Hashing(hasher) => {
+                sha3::Digest::update(hasher, bytes);
+                return;
             }
-            sha3::Digest::update(&mut hasher, bytes);
-            self.hasher = Some(hasher);
-            return;
+            Self::Collecting { len, buf } => (len, buf),
         };
 
-        if total_len <= RlpBytes::MAX_LEN {
-            let start = usize::from(self.len);
-            let out = self
-                .buf
-                .get_mut(start..total_len)
+        if let Some(total_len) = len.checked_add(bytes.len())
+            && total_len <= RlpBytes::MAX_LEN
+        {
+            let out = buf
+                .get_mut(*len..total_len)
                 .expect("range is checked against inline buffer length");
             out.iter_mut().zip(bytes).for_each(|(dst, src)| *dst = *src);
-            self.len = u8::try_from(total_len).expect("inline RLP len fits in u8");
+            *len = total_len;
             return;
         }
 
         let mut hasher = Keccak256::new();
-        let buffered = usize::from(self.len);
-        if buffered > 0 {
-            let buffered = self
-                .buf
-                .get(..buffered)
+        if *len > 0 {
+            let buffered = buf
+                .get(..*len)
                 .expect("collector len is bounded by inline buffer");
             sha3::Digest::update(&mut hasher, buffered);
         }
         sha3::Digest::update(&mut hasher, bytes);
-        self.hasher = Some(hasher);
+        *self = Self::Hashing(hasher);
     }
 
     fn finish(self) -> HashType {
-        if let Some(hasher) = self.hasher {
-            HashType::from(TrieHash::from(hasher.finalize()))
-        } else {
-            debug_assert!(self.len > 0);
-            HashType::Rlp(RlpBytes::from_buf_and_len(self.buf, self.len))
+        match self {
+            Self::Hashing(hasher) => HashType::from(TrieHash::from(hasher.finalize())),
+            Self::Collecting { len, buf } => {
+                debug_assert!(len > 0);
+                let len = u8::try_from(len).expect("inline RLP len fits in u8");
+                HashType::Rlp(RlpBytes::from_buf_and_len(buf, len))
+            }
         }
     }
 
     fn as_slice(&self) -> Option<&[u8]> {
-        if self.hasher.is_some() {
-            None
-        } else {
-            Some(
-                self.buf
-                    .get(..usize::from(self.len))
+        match self {
+            Self::Hashing(_) => None,
+            Self::Collecting { len, buf } => Some(
+                buf.get(..*len)
                     .expect("collector len is bounded by inline buffer"),
-            )
+            ),
         }
     }
 }
@@ -203,55 +194,6 @@ impl HasUpdate for RlpCollector {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {
         self.push_bytes(data.as_ref());
     }
-}
-
-/// Hex-prefix encoding of a nibble path (Ethereum Yellow Paper, appendix C).
-///
-/// Produces the byte sequence used as the first element of leaf and extension
-/// nodes when RLP-encoding an MPT node. The first output byte is a header of
-/// the form `00ABCCCC`:
-///
-/// - `A` is 1 iff `is_leaf` — distinguishes leaf (`2x`/`3x`) from extension
-///   (`0x`/`1x`) nodes.
-/// - `B` is 1 iff the input has an odd number of nibbles, in which case
-///   `CCCC` is the first (orphan) nibble.
-/// - If `B` is 0, `CCCC` is zero and the remaining nibbles pack evenly into
-///   bytes.
-///
-/// Remaining nibble pairs are packed high-nibble-first into subsequent bytes.
-/// This must match geth's `hexToCompact` exactly; any deviation breaks root
-/// hash compatibility.
-fn nibbles_to_eth_compact<T: TriePath>(nibbles: T, is_leaf: bool) -> SmallVec<[u8; 32]> {
-    // This is a bitfield that represents the first byte of the output, documented above
-    bitfield! {
-        struct CompactFirstByte(u8);
-        impl Debug;
-        impl new;
-        u8;
-        is_leaf, set_is_leaf: 5;
-        odd_nibbles, set_odd_nibbles: 4;
-        low_nibble, set_low_nibble: 3, 0;
-    }
-
-    let nibbles = nibbles.as_component_slice();
-
-    let mut first_byte = CompactFirstByte(0);
-    first_byte.set_is_leaf(is_leaf);
-
-    let (maybe_low_nibble, nibble_pairs) = nibbles.as_rchunks::<2>();
-    if let &[low_nibble] = maybe_low_nibble {
-        // we have an odd number of nibbles
-        first_byte.set_odd_nibbles(true);
-        first_byte.set_low_nibble(low_nibble.as_u8());
-    } else {
-        // as_rchunks can only return 0 or 1 element in the first slice if N is 2
-        debug_assert!(maybe_low_nibble.is_empty());
-    }
-
-    // now assemble everything: the first byte, and the nibble pairs compacted back together
-    once(first_byte.0)
-        .chain(nibble_pairs.iter().map(|&[hi, lo]| hi.join(lo)))
-        .collect()
 }
 
 impl<T: Hashable> Preimage for T {
