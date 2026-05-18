@@ -13,13 +13,28 @@ use crate::{
 /// trie with given start root hash, the resulting trie will have the given end root hash. It
 /// consists of the following:
 /// - A start proof: proves that the smallest key does/doesn't exist
-/// - An end proof: proves the the largest key does/doesn't exist
+/// - An end proof: proves that the largest key does/doesn't exist
 /// - The actual `BatchOp`s that specify the difference between the start and end tries.
-#[derive(Debug)]
 pub struct ChangeProof<K: AsRef<[u8]> + Debug, V: AsRef<[u8]> + Debug, H> {
     start_proof: Proof<H>,
     end_proof: Proof<H>,
     batch_ops: Box<[BatchOp<K, V>]>,
+}
+
+impl<K, V, H> std::fmt::Debug for ChangeProof<K, V, H>
+where
+    K: AsRef<[u8]> + Debug,
+    V: AsRef<[u8]> + Debug,
+    H: ProofCollection,
+    H::Node: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChangeProof")
+            .field("start_proof", &self.start_proof)
+            .field("end_proof", &self.end_proof)
+            .field("batch_ops", &self.batch_ops)
+            .finish()
+    }
 }
 
 impl<K, V, H> ChangeProof<K, V, H>
@@ -157,6 +172,46 @@ pub struct ChangeProofVerificationContext {
 }
 
 type FrozenBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
+
+/// Determine the next key range to fetch after this change proof.
+///
+/// Inspects the proof structure only — does not require a proposal.
+/// `end_key` is the original requested upper bound passed to the proof
+/// generator.
+///
+/// Returns `None` if the proof confirms there are no more keys in the
+/// requested range; otherwise returns `Some((last_op.key, end_key))` as
+/// a continuation.
+///
+/// # Errors
+///
+/// Returns [`ProofError::EndKeyLessThanLastKey`] when `last_op.key` is
+/// strictly greater than `end_key` — this indicates the proof was
+/// generated against a different `end_key` than the one supplied here.
+pub fn find_next_key_after_change_proof(
+    proof: &FrozenChangeProof,
+    end_key: Option<&[u8]>,
+) -> Result<Option<super::range::KeyRange>, api::Error> {
+    let Some(last_op) = proof.batch_ops().last() else {
+        // No changes in this range. If bounded, continue from end_key.
+        return Ok(end_key.map(|ek| (Box::from(ek), None)));
+    };
+
+    if proof.end_proof().is_empty() {
+        return Ok(None);
+    }
+
+    if let Some(end_key) = end_key {
+        if **last_op.key() > *end_key {
+            return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
+        }
+        if **last_op.key() == *end_key {
+            return Ok(None);
+        }
+    }
+
+    Ok(Some((last_op.key().clone(), end_key.map(Box::from))))
+}
 
 /// Verify a boundary proof against `end_root` and optionally check that the
 /// proof's inclusion/exclusion result is consistent with `boundary_op`.

@@ -15,14 +15,16 @@ use crate::api::{
     KeyType, KeyValuePair, OptionalHashKeyExt,
 };
 use crate::iter::MerkleKeyValueIter;
-use crate::merkle::{Merkle, Value};
+use crate::merkle::changes::DiffMerkleNodeStream;
+use crate::merkle::{Merkle, Value, verify_change_proof_root_hash};
+use crate::verify_change_proof_structure;
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_metrics::{firewood_counter, firewood_histogram};
 use firewood_storage::{
-    CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage, Reconstructed,
-    ReconstructionSource, TrieReader,
+    CheckOpt, CheckerReport, Committed, CommittedParentHash, FileBacked, FileIoError,
+    HashedNodeReader, ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage,
+    Reconstructed, ReconstructionSource, TrieReader,
 };
 use std::io::Write;
 use std::num::NonZeroUsize;
@@ -301,6 +303,37 @@ impl Db {
         self.propose_with_parent(batch_ops, merkle.nodestore())
     }
 
+    /// Verify a change proof and create a proposal from it.
+    ///
+    /// Performs all three verification phases:
+    /// 1. Structural validation (key ordering, range bounds, boundary proofs)
+    /// 2. Apply batch ops to the latest revision to create a proposal
+    /// 3. Root hash verification against `end_root`
+    ///
+    /// The batch ops are applied to the latest revision rather than
+    /// `start_root` because each truncated change proof covers a
+    /// non-overlapping key range. This avoids requiring `start_root` to
+    /// still be available and reduces rebasing in `commit_with_rebase`.
+    ///
+    /// The proof is borrowed, not consumed — the caller retains it for
+    /// `find_next_key` or serialization. Returns a standard `Proposal`
+    /// ready for commit.
+    pub fn verify_change_proof(
+        &self,
+        proof: &FrozenChangeProof,
+        end_root: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<Proposal<'_>, api::Error> {
+        let verification =
+            verify_change_proof_structure(proof, end_root.clone(), start_key, end_key, max_length)?;
+        let parent = self.manager.current_revision();
+        let proposal = self.apply_change_proof_to_parent(proof, &*parent)?;
+        verify_change_proof_root_hash(proof, &verification, &proposal)?;
+        Ok(proposal)
+    }
+
     /// Reconstruct a view from a parent view by applying batch operations.
     ///
     /// Reconstruction is currently always applied serially.
@@ -310,11 +343,11 @@ impl Db {
     /// Returns an error if reconstruction fails.
     pub fn reconstruct_from_view<P>(
         &self,
-        parent: &NodeStore<P, FileBacked>,
+        parent: &Arc<NodeStore<P, FileBacked>>,
         batch: impl IntoBatchIter,
     ) -> Result<ReconstructedView<'_>, api::Error>
     where
-        P: ReconstructionSource,
+        P: ReconstructionSource<FileBacked>,
         NodeStore<P, FileBacked>: TrieReader,
     {
         let next_nodestore = parent.reconstruction_child()?;
@@ -336,7 +369,7 @@ impl Db {
     /// Returns an error if reconstruction fails.
     fn reconstruct_from_reconstructed(
         &self,
-        parent: Arc<NodeStore<Reconstructed, FileBacked>>,
+        parent: Arc<NodeStore<Reconstructed<FileBacked>, FileBacked>>,
         batch: impl IntoBatchIter,
     ) -> Result<ReconstructedView<'_>, api::Error> {
         let next_nodestore = parent.into();
@@ -410,7 +443,7 @@ pub struct Proposal<'db> {
 #[derive(Debug)]
 /// A user-visible reconstructed view.
 pub struct ReconstructedView<'db> {
-    nodestore: Arc<NodeStore<Reconstructed, FileBacked>>,
+    nodestore: Arc<NodeStore<Reconstructed<FileBacked>, FileBacked>>,
     db: &'db Db,
 }
 
@@ -471,6 +504,70 @@ impl<'db> api::Proposal for Proposal<'db> {
 }
 
 impl Proposal<'_> {
+    /// Commit the proposal, automatically rebasing if the parent revision
+    /// is no longer the latest.
+    ///
+    /// Acquires the committed revisions write lock, checks if the proposal's
+    /// parent matches the current revision, and if not, diffs the proposal
+    /// against its original parent to reconstruct the batch ops, re-proposes
+    /// them against the current revision, and commits the new proposal.
+    ///
+    /// The write lock is held throughout to prevent other commits from
+    /// interleaving between the rebase and commit.
+    ///
+    /// Returns the root hash of the committed revision, or `None` if the
+    /// committed trie is empty.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the committed revisions queue is empty, which cannot happen
+    /// because the queue is initialized with one revision at database creation.
+    pub fn commit_with_rebase(self) -> Result<Option<api::HashKey>, api::Error> {
+        let mut nodestore = self.nodestore;
+        let db = self.db;
+
+        let mut revisions_guard = db.manager.lock_committed_revisions();
+        let current = revisions_guard.back().expect("always one revision");
+
+        if !nodestore.parent_id_is(current.committed_id()) {
+            // Parent is stale — rebase onto the current revision.
+            let old_parent = match nodestore.committed_parent_hash() {
+                CommittedParentHash::NotCommitted => {
+                    return Err(api::Error::ParentNotCommitted);
+                }
+                CommittedParentHash::Hash(Some(hash)) => Some(db.manager.revision(hash)?),
+                CommittedParentHash::Hash(None) => None,
+            };
+            db.manager.remove_proposal(&nodestore);
+
+            // Empty trie parent — diff against a synthetic empty view.
+            // Avoids depending on the manager's revisions queue, whose front
+            // entry is not guaranteed to still be empty once `max_revisions`
+            // has been exceeded.
+            let empty_parent;
+            let old_parent_ref: &NodeStore<Committed, FileBacked> = if let Some(rev) = &old_parent {
+                rev
+            } else {
+                empty_parent = nodestore.empty_committed_sibling();
+                &empty_parent
+            };
+            let diff = DiffMerkleNodeStream::new(old_parent_ref, &*nodestore, Box::default())?;
+            let batch_ops: Vec<BatchOp<crate::merkle::Key, crate::merkle::Value>> =
+                diff.collect::<Result<_, _>>()?;
+
+            let new_proposal = db.propose_with_parent(batch_ops, &**current)?;
+            nodestore = new_proposal.nodestore;
+        }
+
+        let hash = api::DbView::root_hash(&*nodestore);
+        let new_id = db
+            .manager
+            .commit_critical_section(&nodestore, &mut revisions_guard)?;
+        drop(revisions_guard);
+        db.manager.commit_cleanup(&nodestore, new_id);
+        Ok(hash)
+    }
+
     fn create_proposal(&self, batch: impl IntoBatchIter) -> Result<Self, api::Error> {
         // Proposal created based on another proposal
         firewood_counter!(PROPOSALS_CREATED, "base" => "proposal").increment(1);
@@ -493,7 +590,7 @@ impl Proposal<'_> {
 
 impl api::DbView for ReconstructedView<'_> {
     type Iter<'view>
-        = MerkleKeyValueIter<'view, NodeStore<Reconstructed, FileBacked>>
+        = MerkleKeyValueIter<'view, NodeStore<Reconstructed<FileBacked>, FileBacked>>
     where
         Self: 'view;
 
@@ -645,10 +742,10 @@ mod test {
         ];
 
         let parallel_reconstructed = parallel_db
-            .reconstruct_from_view(parallel_historical.as_ref(), reconstruct_batch.clone())
+            .reconstruct_from_view(&parallel_historical, reconstruct_batch.clone())
             .unwrap();
         let serial_reconstructed = serial_db
-            .reconstruct_from_view(serial_historical.as_ref(), reconstruct_batch)
+            .reconstruct_from_view(&serial_historical, reconstruct_batch)
             .unwrap();
 
         assert_eq!(
@@ -707,7 +804,7 @@ mod test {
 
         let reconstructed = db
             .reconstruct_from_view(
-                historical.as_ref(),
+                &historical,
                 vec![BatchOp::Put {
                     key: b"base",
                     value: b"v1",
