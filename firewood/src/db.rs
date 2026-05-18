@@ -884,6 +884,41 @@ mod test {
     }
 
     #[test]
+    fn test_reconstruct_clone_of_clone() {
+        let db = TestDb::new();
+
+        // Build a base committed revision.
+        let initial = db
+            .propose(vec![BatchOp::Put {
+                key: b"base",
+                value: b"v0",
+            }])
+            .unwrap();
+        initial.commit().unwrap();
+        let historical_hash = db.root_hash().unwrap();
+        let historical = db.revision(historical_hash).unwrap();
+
+        // Build a reconstructed view on top of the historical revision.
+        let original = db
+            .reconstruct_from_view(
+                &historical,
+                vec![BatchOp::Put {
+                    key: b"shared",
+                    value: b"v1",
+                }],
+            )
+            .unwrap();
+        let original_root = original.root_hash();
+
+        let first_clone = original.clone();
+        let second_clone = first_clone.clone();
+
+        // Verify that the first and second clones are usable
+        assert_eq!(original_root, first_clone.root_hash());
+        assert_eq!(original_root, second_clone.root_hash());
+    }
+
+    #[test]
     fn test_reconstruct_clone_outlives_original() {
         let db = TestDb::new();
 
