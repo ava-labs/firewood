@@ -208,7 +208,7 @@ impl<T: Hashable> Preimage for T {
             self.full_path().len(),
             collector
                 .as_slice()
-                .map_or_else(|| "<hashed>".to_string(), hex::encode),
+                .map_or_else(|| "<hashed>".to_owned(), hex::encode),
         );
 
         collector.finish()
