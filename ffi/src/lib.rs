@@ -625,12 +625,6 @@ pub extern "C" fn fwd_reconstruct_on_reconstructed<'db>(
 /// view with the input handle. Both handles can be used, reconstructed, and
 /// freed independently.
 ///
-/// Calling [`fwd_reconstruct_on_reconstructed`] on either handle while another
-/// handle shares the same reconstructed state is supported but expensive: it
-/// forces a deep clone of the root node instead of the zero-copy move used when
-/// the handle is uniquely owned. Free unneeded clones before reconstructing
-/// when write performance matters.
-///
 /// # Arguments
 ///
 /// * `handle` - The reconstructed handle returned by [`fwd_reconstruct_on_revision`],

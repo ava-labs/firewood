@@ -955,9 +955,7 @@ impl<S: ReadableStorage> From<Arc<NodeStore<Reconstructed<S>, S>>>
         // reconstructed root out without cloning.
         // The fallback (shared-Arc) path is reachable in two ways:
         //   1. A caller produced sibling views via `ReconstructedView::clone` and is keeping
-        //      another sibling alive across this call. This is a supported pattern for handing
-        //      out independent read-only views, but reconstructing while a sibling is alive
-        //      lands here; callers are documented to drop the clone before writing.
+        //      another sibling alive across this call.
         //   2. A caller is iterating over the reconstructed view (the iterator holds an Arc
         //      clone via `ReconstructedView::view`) while also deriving the next reconstructed
         //      state.
@@ -965,10 +963,6 @@ impl<S: ReadableStorage> From<Arc<NodeStore<Reconstructed<S>, S>>>
         // cloning the in-memory subtree attached to it. We accept this fallback so callers
         // don't have to guarantee uniqueness, while still exploiting the cheaper move path
         // whenever possible.
-        if Arc::strong_count(&val) > 1 {
-            debug!("Reconstruct fell back to shared-Arc clone path");
-        }
-
         Self::from(Arc::unwrap_or_clone(val))
     }
 }
