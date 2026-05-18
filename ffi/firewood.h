@@ -1527,8 +1527,8 @@ struct ValueResult fwd_change_proof_to_bytes(const struct ChangeProofContext *pr
  *
  * # Arguments
  *
- * * `handle` - The reconstructed handle returned by [`fwd_reconstruct_on_revision`] or
- *   [`fwd_reconstruct_on_reconstructed`].
+ * * `handle` - The reconstructed handle returned by [`fwd_reconstruct_on_revision`],
+ *   [`fwd_reconstruct_on_reconstructed`], or a previous call to [`fwd_clone_reconstructed`].
  *
  * # Returns
  *
