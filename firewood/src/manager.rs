@@ -18,7 +18,7 @@ use firewood_storage::logger::{trace, warn};
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
 
-use crate::api::{self, ArcDynDbView, HashKey, IntoBatchIter, OptionalHashKeyExt};
+use crate::api::{self, ArcDynDbView, HashKey, HashKeyExt, IntoBatchIter, OptionalHashKeyExt};
 use crate::db::{BatchOp, UseParallel};
 use crate::merkle::Merkle;
 use crate::merkle::parallel::ParallelMerkle;
@@ -27,8 +27,9 @@ use firewood_metrics::{GaugeExt, firewood_counter, firewood_gauge, firewood_hist
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::RootStore;
 use firewood_storage::{
-    BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, Mutable,
-    MutableKind, NodeHashAlgorithm, NodeStore, NodeStoreHeader, Propose, Recon, TrieHash,
+    BranchNode, Committed, CommittedId, FileBacked, FileIoError, HashedNodeReader,
+    ImmutableProposal, Mutable, MutableKind, NodeHashAlgorithm, NodeStore, NodeStoreHeader,
+    Propose, Recon, TrieHash,
 };
 
 pub(crate) const DB_FILE_NAME: &str = "firewood.db";
@@ -285,42 +286,83 @@ impl RevisionManager {
         // 1-5. In high-commit-rate scenarios with many parallel readers, lock contention here
         // may stall reader threads until the commit critical section completes.
         let __lock_start = ::std::time::Instant::now();
-        let mut in_memory_revisions = self.in_memory_revisions.write();
+        let mut revisions_guard = self.lock_committed_revisions();
         firewood_histogram!(cheap: COMMIT_LOCK_WAIT_SECONDS)
             .record(__lock_start.elapsed().as_secs_f64());
 
-        // 1. Check if the persist worker has failed.
+        // Steps 1-5: validate, reap, persist, insert (under write lock)
+        let new_id = self.commit_critical_section(&proposal, &mut revisions_guard)?;
+        drop(revisions_guard);
+        // Step 6: proposal cleanup and reparenting (lock released)
+        self.commit_cleanup(&proposal, new_id);
+        Ok(())
+    }
+
+    /// Acquire an exclusive write guard on the committed revisions queue.
+    ///
+    /// The guard prevents other commits and blocks `current_revision()` readers
+    /// until dropped. Used by [`crate::db::Proposal::commit_with_rebase`] to
+    /// hold the lock across a rebase-then-commit sequence, ensuring no other
+    /// commit can interleave between the rebase and the commit.
+    pub(crate) fn lock_committed_revisions(
+        &self,
+    ) -> parking_lot::RwLockWriteGuard<'_, VecDeque<CommittedRevision>> {
+        self.in_memory_revisions.write()
+    }
+
+    /// Validate and commit a proposal under the caller's write guard.
+    ///
+    /// Checks that the proposal's parent matches the latest revision, reaps
+    /// old revisions that exceed `max_revisions`, signals the persist worker,
+    /// and inserts the new committed revision into the queue. The caller must
+    /// hold the write lock on committed revisions and pass the locked queue in.
+    ///
+    /// Returns the [`CommittedId`] of the revision the proposal now lives in:
+    /// either the freshly-inserted revision for a regular commit, or the
+    /// current latest revision's id when the proposal was absorbed by the
+    /// trivial fast path (proposal root hash equals the latest revision's).
+    /// The caller passes this id to [`Self::commit_cleanup`], which uses it
+    /// to reparent any sibling proposals that pointed at the just-committed
+    /// proposal.
+    pub(crate) fn commit_critical_section(
+        &self,
+        proposal: &ProposedRevision,
+        revisions: &mut VecDeque<CommittedRevision>,
+    ) -> Result<CommittedId, RevisionManagerError> {
+        // Check if the persist worker has failed.
         self.persist_worker
             .check_error()
             .map_err(RevisionManagerError::PersistError)?;
 
-        // 2. Commit check
-        let current_revision = in_memory_revisions
-            .back()
-            .expect("there is always one revision");
-        if !proposal.parent_hash_is(current_revision.root_hash()) {
+        let current_revision = revisions.back().expect("there is always one revision");
+        if !proposal.parent_id_is(current_revision.committed_id()) {
             return Err(RevisionManagerError::NotLatest {
                 provided: proposal.root_hash(),
                 expected: current_revision.root_hash(),
             });
         }
 
+        if proposal.root_hash() == current_revision.root_hash() {
+            firewood_counter!(PROPOSAL_COMMITS_TRIVIAL).increment(1);
+            return Ok(current_revision.committed_id());
+        }
+
         let committed = proposal.as_committed();
 
         firewood_gauge!(DELETED_LIST_LEN).set_integer(committed.deleted_len());
 
-        // 3. Revision reaping
-        // When we exceed max_revisions, remove the oldest revision from memory
+        // Revision reaping: when we exceed max_revisions, remove the oldest revision from memory
         // and send it to the `PersistWorker`.
         // If you crash after freeing some of these, then the free list will point to nodes that are not actually free.
         // TODO: Handle the case where we get something off the free list that is not free
-        while in_memory_revisions.len() >= self.max_revisions {
-            let oldest = in_memory_revisions.pop_front().expect("must be present");
+        while revisions.len() >= self.max_revisions {
+            let oldest = revisions.pop_front().expect("must be present");
             let oldest_hash = oldest.root_hash().or_default_root_hash();
             if let Some(ref hash) = oldest_hash {
-                // BLOCKING: write lock on `by_hash` while already holding the write lock on
-                // `in_memory_revisions`. Nested locking order must remain consistent (always
-                // acquire `in_memory_revisions` before `by_hash`) to avoid deadlocks.
+                // BLOCKING: write lock on `by_hash` while already holding the
+                // revisions write lock. Nested locking order must remain
+                // consistent (always acquire revisions before `by_hash`) to
+                // avoid deadlocks.
                 self.by_hash.write().remove(hash);
             }
 
@@ -333,15 +375,17 @@ impl RevisionManager {
                     .map_err(RevisionManagerError::PersistError)?,
                 Err(original) => {
                     warn!("Oldest revision could not be reaped; still referenced");
-                    in_memory_revisions.push_front(original);
+                    revisions.push_front(original);
                     break;
                 }
             }
-            firewood_gauge!(ACTIVE_REVISIONS).set_integer(in_memory_revisions.len());
+            firewood_gauge!(ACTIVE_REVISIONS).set_integer(revisions.len());
             firewood_gauge!(MAX_REVISIONS).set_integer(self.max_revisions);
         }
 
-        // 4. Signal to the `PersistWorker` to persist this revision.
+        let new_id = committed.committed_id();
+
+        // Signal to the `PersistWorker` to persist this revision.
         let committed: CommittedRevision = committed.into();
         let __submit_start = ::std::time::Instant::now();
         self.persist_worker
@@ -350,64 +394,78 @@ impl RevisionManager {
         firewood_histogram!(cheap: PERSIST_SUBMIT_DURATION_SECONDS)
             .record(__submit_start.elapsed().as_secs_f64());
 
-        // 5. Set last committed revision
+        // Set last committed revision.
         // The revision is added to `by_hash` here while it still exists in `proposals`.
         // The `view()` method relies on this ordering - it checks `proposals` first,
         // then `by_hash`, ensuring the revision is always findable during the transition.
-        in_memory_revisions.push_back(committed.clone());
+        revisions.push_back(committed.clone());
         if let Some(hash) = committed.root_hash().or_default_root_hash() {
-            // BLOCKING: write lock on `by_hash` (still inside the `in_memory_revisions` write
-            // lock). Same nested ordering as the reap path above; must not be inverted.
-            self.by_hash.write().insert(hash, committed.clone());
+            // BLOCKING: write lock on `by_hash` (still inside the revisions
+            // write lock). Same nested ordering as the reap path above; must
+            // not be inverted.
+            self.by_hash.write().insert(hash, committed);
         }
 
-        // At this point, we can release the lock on the queue of in-memory
-        // revisions as we've now set the new latest committed revision.
-        drop(in_memory_revisions);
+        Ok(new_id)
+    }
 
-        // 6. Proposal Cleanup
-        // Free proposal that is being committed as well as any proposals no longer
-        // referenced by anyone else. Track how many were discarded (dropped without commit).
-        {
-            // BLOCKING: mutex lock on `proposals`. Held while scanning all open proposals.
-            // Duration is proportional to the number of live proposals. In pathological cases
-            // (many stale proposals) this extends the overall time the commit function runs,
-            // though it is no longer inside the `in_memory_revisions` write lock at this point.
-            let mut lock = self.proposals.lock();
-            let mut discarded = 0u64;
-            lock.retain(|p| {
-                let should_retain = !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1;
-                if !should_retain {
-                    discarded = discarded.wrapping_add(1);
-                }
-                should_retain
-            });
-
-            if discarded > 0 {
-                firewood_counter!(PROPOSALS_DISCARDED).increment(discarded);
+    /// Proposal cleanup and reparenting.
+    /// Called after releasing the committed revisions write lock.
+    ///
+    /// `new_id` is the [`CommittedId`] children of `proposal` should reparent
+    /// onto — the value returned by [`Self::commit_critical_section`].
+    pub(crate) fn commit_cleanup(&self, proposal: &ProposedRevision, new_id: CommittedId) {
+        // Free the proposal being committed and any proposals no longer referenced
+        // by anyone else, then reparent the survivors that referenced this proposal.
+        // Both phases run under a single lock acquisition so the reparented set is
+        // exactly the survivors of cleanup — no other thread can insert or remove
+        // proposals between the two phases.
+        //
+        // BLOCKING: mutex lock on `proposals`. Held while scanning all open proposals
+        // (cleanup) and then iterating survivors (reparent). Duration is proportional
+        // to the number of live proposals. In pathological cases (many stale proposals)
+        // this extends the overall time the commit function runs, though it is no
+        // longer inside the `in_memory_revisions` write lock at this point.
+        let mut lock = self.proposals.lock();
+        let mut discarded = 0u64;
+        lock.retain(|p| {
+            // The proposal being committed leaves the list but isn't a
+            // discard — it was successfully committed. Only abandoned
+            // proposals (no external strong refs) count toward
+            // PROPOSALS_DISCARDED.
+            if Arc::ptr_eq(p, proposal) {
+                return false;
             }
+            if Arc::strong_count(p) <= 1 {
+                discarded = discarded.wrapping_add(1);
+                return false;
+            }
+            true
+        });
 
-            // Update uncommitted proposals gauge after cleanup
-            firewood_gauge!(PROPOSALS_UNCOMMITTED).set_integer(lock.len());
+        if discarded > 0 {
+            firewood_counter!(PROPOSALS_DISCARDED).increment(discarded);
         }
 
-        // then reparent any proposals that have this proposal as a parent
-        // BLOCKING: second acquisition of the `proposals` mutex in this function. Held while
-        // iterating all open proposals to reparent them. Re-acquiring after the first lock
-        // drop avoids long holds, but two separate acquisitions mean the proposal list could
-        // have changed between the two critical sections.
-        for p in &*self.proposals.lock() {
-            proposal.commit_reparent(p);
+        // Update uncommitted proposals gauge after cleanup
+        firewood_gauge!(PROPOSALS_UNCOMMITTED).set_integer(lock.len());
+
+        // Reparent any surviving proposals that have this proposal as a parent.
+        // `commit_reparent` only locks each proposal's own `parent` field, not
+        // `self.proposals`, so calling it under the outer lock cannot deadlock.
+        for p in lock.iter() {
+            proposal.commit_reparent(p, new_id);
         }
+        drop(lock);
 
         if crate::logger::trace_enabled() {
+            let committed = proposal.as_committed();
+            let committed: CommittedRevision = committed.into();
             let merkle = Merkle::from(committed);
             if let Ok(s) = merkle.dump_to_string() {
                 trace!("{s}");
             }
         }
-
-        Ok(())
     }
 
     /// View the database at a specific hash.
@@ -433,6 +491,17 @@ impl RevisionManager {
         self.revision(root_hash).map(|r| r as ArcDynDbView)
     }
 
+    /// Remove a proposal from the tracking list. Retains all proposals
+    /// except the one matching `proposal` by `Arc::ptr_eq`.
+    pub fn remove_proposal(&self, proposal: &ProposedRevision) {
+        let len = {
+            let mut lock = self.proposals.lock();
+            lock.retain(|p| !Arc::ptr_eq(p, proposal));
+            lock.len()
+        };
+        firewood_gauge!(PROPOSALS_UNCOMMITTED).set_integer(len);
+    }
+
     pub fn add_proposal(&self, proposal: ProposedRevision) {
         let len = {
             // BLOCKING: mutex lock on `proposals`. Short critical section (just a push), but
@@ -448,7 +517,9 @@ impl RevisionManager {
     /// Retrieve a committed revision by its root hash.
     /// To retrieve a revision involves a few steps:
     /// 1. Check the in-memory revision manager.
-    /// 2. Check `RootStore` (if it exists).
+    /// 2. If the caller requested the default empty-trie hash, return an
+    ///    empty committed nodestore.
+    /// 3. Check `RootStore` (if it exists).
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
         // 1. Check the in-memory revision manager.
         // BLOCKING: read lock on `by_hash`. Concurrent writes (commit reap/insert) will pause
@@ -463,7 +534,15 @@ impl RevisionManager {
         }
         drop(by_hash);
 
-        // 2. Check `RootStore` (if it exists).
+        // 2. Default empty-trie short-circuit. An empty trie has no on-disk
+        //    root node, so `RootStore` can never produce it; synthesize one
+        //    against the file backing carried by the latest committed revision.
+        if HashKey::default_root_hash().as_ref() == Some(&root_hash) {
+            let storage = self.current_revision().storage().clone();
+            return Ok(Arc::new(NodeStore::new_empty_committed(storage)));
+        }
+
+        // 3. Check `RootStore` (if it exists).
         let root_store =
             self.root_store
                 .as_ref()
@@ -579,9 +658,9 @@ impl RevisionManager {
 
     /// Serial batch application for reconstruction chains.
     pub(crate) fn apply_batch_recon(
-        mutable_nodestore: NodeStore<Mutable<Recon>, FileBacked>,
+        mutable_nodestore: NodeStore<Mutable<Recon<FileBacked>>, FileBacked>,
         batch: impl IntoBatchIter,
-    ) -> Result<NodeStore<Mutable<Recon>, FileBacked>, api::Error> {
+    ) -> Result<NodeStore<Mutable<Recon<FileBacked>>, FileBacked>, api::Error> {
         Self::apply_batch_serial(mutable_nodestore, batch)
     }
 
@@ -973,5 +1052,70 @@ mod tests {
 
         let result = RevisionManager::new(config);
         assert!(result.is_ok());
+    }
+
+    /// Under `ethhash`, an empty committed revision is exposed via the
+    /// Ethereum empty-trie hash but never indexed in `RootStore` (an empty
+    /// trie has no on-disk root node, so there is no `LinearAddress` to
+    /// record). Once the in-memory entry is evicted from `by_hash`,
+    /// `revision()` previously fell through to `RootStore::get` and returned
+    /// `RevisionNotFound`. The fix synthesizes an empty committed nodestore
+    /// when the caller asks for the default empty-trie hash.
+    #[cfg(feature = "ethhash")]
+    #[test]
+    fn test_revision_empty_root_after_eviction() {
+        use firewood_storage::{LeafNode, NibblesIterator, Node, Path};
+
+        let empty_hash =
+            HashKey::default_root_hash().expect("ethhash exposes a default empty-trie hash");
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let config = ConfigManager::builder()
+            .root_dir(db_dir.as_ref().to_path_buf())
+            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+            .create(true)
+            .manager(
+                // Smallest legal queue: max_revisions must exceed
+                // deferred_persistence_commit_count (default 1). Two slots is
+                // enough for the initial empty revision to be reaped after a
+                // pair of non-empty commits.
+                RevisionManagerConfig::builder().max_revisions(2).build(),
+            )
+            .build();
+
+        let manager = RevisionManager::new(config).unwrap();
+
+        // Sanity: the fresh manager indexes the empty revision under the
+        // default hash.
+        assert!(manager.revision(empty_hash.clone()).is_ok());
+
+        // Commit two non-empty revisions to push the empty one out of the
+        // in-memory queue and out of `by_hash`.
+        for i in 0..2u8 {
+            let base = manager.current_revision();
+            let mut proposal = NodeStore::new(&*base).unwrap();
+            *proposal.root_mut() = Some(Node::Leaf(LeafNode {
+                partial_path: Path::from_nibbles_iterator(NibblesIterator::new(&[i])),
+                value: Box::new([i]),
+            }));
+            let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _>> =
+                Arc::new(proposal.try_into().unwrap());
+            manager.add_proposal(proposal.clone());
+            manager.commit(proposal).unwrap();
+        }
+
+        // Verify the empty revision has actually been evicted from the
+        // in-memory index — otherwise the next assertion would just be
+        // testing the step-1 path again.
+        assert!(
+            !manager.by_hash.read().contains_key(&empty_hash),
+            "precondition: empty-trie revision must have been evicted from by_hash"
+        );
+
+        // Empty hash should still resolve via the default-hash short-circuit.
+        let revision = manager
+            .revision(empty_hash.clone())
+            .expect("empty-trie revision must resolve via the default-hash short-circuit");
+        assert!(revision.root_address().is_none());
     }
 }

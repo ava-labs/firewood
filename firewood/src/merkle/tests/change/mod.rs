@@ -6,6 +6,7 @@ use crate::api::{self, BatchOp, Db as DbTrait, DbView, FrozenChangeProof, Propos
 use crate::db::{Db, DbConfig};
 use crate::merkle::verify_change_proof_root_hash;
 use crate::{ChangeProofVerificationContext, verify_change_proof_structure};
+use firewood_storage::PathComponentSliceExt;
 
 // ── Test infrastructure ────────────────────────────────────────────────────
 
@@ -56,6 +57,22 @@ macro_rules! setup_2nd_commit {
     }};
 }
 
+/// Create two databases with the same initial key/value pairs, returning
+/// both databases and the target's root hash.
+///
+/// ```rust,no_run
+/// let (source, target, root1_target, _ds, _dt) =
+///     setup_source_target![(b"\x10", b"v0"), (b"\x20", b"v1")];
+/// ```
+macro_rules! setup_source_target {
+    [$(($key:expr, $val:expr)),+ $(,)?] => {{
+        let (source, dir_s) = setup_db![$(($key, $val)),+];
+        let (target, dir_t) = setup_db![$(($key, $val)),+];
+        let root1 = target.root_hash().unwrap();
+        (source, target, root1, dir_s, dir_t)
+    }};
+}
+
 /// Verify a change proof end-to-end: structural check + root hash check.
 ///
 /// Builds a proposal (`start_root` + `batch_ops`) and verifies its in-range
@@ -75,7 +92,9 @@ pub(super) fn verify_and_check(
 
 // ── Test modules ──────────────────────────────────────────────────────────
 
+mod attack;
 mod bounds;
+mod edge_cases;
 // Empty start trie tests require ethhash: without it, the empty trie has no
 // root hash, so change proofs from an empty database can't be generated.
 #[cfg(feature = "ethhash")]

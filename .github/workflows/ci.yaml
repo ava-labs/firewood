@@ -32,7 +32,7 @@ jobs:
             profile-args: ""
           - profile-key: debug-no-features
             profile-args: ""
-            os: macos-latest
+            os: macos-26
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
           - profile-key: debug-all-features
@@ -88,7 +88,7 @@ jobs:
             profile-args: ""
           - profile-key: debug-no-features
             profile-args: ""
-            os: macos-latest
+            os: macos-26
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
           - profile-key: debug-all-features
@@ -121,7 +121,7 @@ jobs:
             profile-args: ""
           - profile-key: debug-no-features
             profile-args: ""
-            os: macos-latest
+            os: macos-26
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
           - profile-key: debug-all-features
@@ -152,7 +152,7 @@ jobs:
             profile-args: ""
           - profile-key: debug-no-features
             profile-args: ""
-            os: macos-latest
+            os: macos-26
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
           - profile-key: debug-all-features
@@ -182,7 +182,7 @@ jobs:
             profile-args: ""
           - profile-key: debug-no-features
             profile-args: ""
-            os: macos-latest
+            os: macos-26
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
           - profile-key: debug-all-features
@@ -213,7 +213,7 @@ jobs:
           save-if: "false"
           shared-key: "debug-no-features"
       - name: md check
-        uses: DavidAnson/markdownlint-cli2-action@6b51ade7a9e4a75a7ad929842dd298a3804ebe8b # @v23.1.0
+        uses: DavidAnson/markdownlint-cli2-action@ded1f9488f68a970bc66ea5619e13e9b52e601cd # @v23.2.0
         with:
           globs: |
             *.md
@@ -221,6 +221,7 @@ jobs:
             !CHANGELOG.md
             !target/**
             !.github/**
+            !.claude/**
       - name: doc generation
         run: RUSTDOCFLAGS="-D warnings" cargo doc --locked --document-private-items --no-deps
 
@@ -243,7 +244,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-26]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable

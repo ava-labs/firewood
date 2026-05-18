@@ -135,6 +135,8 @@ pub enum NBlocks {
     TenK = 10_000,
     #[value(name = "1m")]
     OneM = 1_000_000,
+    #[value(name = "33m")]
+    ThirtyThreeM = 33_000_000,
     #[value(name = "50m")]
     FiftyM = 50_000_000,
     #[value(name = "77m")]
@@ -145,6 +147,8 @@ pub enum NBlocks {
 pub enum Config {
     Firewood,
     FirewoodArchive,
+    #[value(name = "pathdb")]
+    PathDB,
     Archive,
     Default,
 }
@@ -160,6 +164,7 @@ impl NBlocks {
         match self {
             Self::TenK => "10k",
             Self::OneM => "1m",
+            Self::ThirtyThreeM => "33m",
             Self::FiftyM => "50m",
             Self::SeventySevenM => "77m",
         }
@@ -172,6 +177,7 @@ impl Config {
         match self {
             Self::Firewood => "firewood",
             Self::FirewoodArchive => "firewood-archive",
+            Self::PathDB => "pathdb",
             Self::Archive => "archive",
             Self::Default => "default",
         }

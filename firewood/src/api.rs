@@ -162,6 +162,10 @@ pub enum Error {
     #[error("Internal error")]
     InternalError(Box<dyn std::error::Error + Send + Sync>),
 
+    /// Cannot rebase a proposal whose parent is not a committed revision
+    #[error("cannot rebase: proposal parent is not committed")]
+    ParentNotCommitted,
+
     /// Range too small
     #[error("Range too small")]
     RangeTooSmall,
@@ -179,7 +183,7 @@ pub enum Error {
     SiblingCommitted,
 
     /// Proof error
-    #[error("proof error")]
+    #[error("proof error: {0}")]
     ProofError(#[from] ProofError),
 
     /// An invalid root hash was provided
