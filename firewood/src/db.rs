@@ -843,7 +843,7 @@ mod test {
         // Build a reconstructed view on top of the historical revision.
         let original = db
             .reconstruct_from_view(
-                historical.as_ref(),
+                &historical,
                 vec![BatchOp::Put {
                     key: b"shared",
                     value: b"v1",
@@ -896,7 +896,7 @@ mod test {
         let historical = db.revision(historical_hash).unwrap();
 
         let original = db
-            .reconstruct_from_view(historical.as_ref(), Vec::<BatchOp<&[u8], &[u8]>>::new())
+            .reconstruct_from_view(&historical, Vec::<BatchOp<&[u8], &[u8]>>::new())
             .unwrap();
         let cloned = original.clone();
         let expected_root = original.root_hash();
