@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778746620252,
+  "lastUpdate": 1779092639172,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -3430,6 +3430,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 104.734167757335,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "8ea36c75c43fd0cb95903a152f0ed019840f0ce9",
+          "message": "refactor(storage): lift nibbles_to_eth_compact into eth_encoding module (#2003)\n\n## Why this should be merged\n\nMove the hex-prefix (compact) path encoder out of the `ethhash`-gated\nhasher and into a new unconditionally compiled `storage::eth_encoding`\nmodule. The function is pure and has no feature-specific dependencies;\nits previous gating was incidental to where it lived.\n\nThis is groundwork for an `eth_getProof`-compatible proof emitter, which\nneeds to emit canonical MPT-RLP node bytes regardless of which hasher\nthe underlying trie was built with. Forcing the emitter to live behind\n`#[cfg(feature = \\\"ethhash\\\")]` just to reach this helper would add\nwalls\nwe'd then have to tear down.\n\nIt also lines up with the broader direction of replacing the `ethhash`\ncompile-time feature flag with a runtime mode knob: pulling pure\nencoding helpers out of the gated module shrinks what the feature\nactually has to guard, so the eventual flag removal is a smaller change.\n\n## How this works\n\n- New `storage/src/eth_encoding.rs` holds `nibbles_to_eth_compact` and\n  its existing unit tests.\n- `storage/src/lib.rs` registers `pub mod eth_encoding`.\n- `storage/src/hashers/ethhash.rs` imports the helper from its new\n  location and drops the local copy and tests.\n\nNo behavior change.\n\n## How this was tested\n\n- ``cargo build -p firewood-storage`` (default features)\n- ``cargo build -p firewood-storage --features ethhash``\n- ``cargo nextest run -p firewood-storage --features ethhash,logger\neth_encoding`` — all 6 lifted test cases pass.\n- ``cargo clippy -p firewood-storage --features ethhash,logger\n--all-targets`` — clean.\n- ``cargo fmt --check`` — clean.\n\n## Breaking Changes\n\nNone.",
+          "timestamp": "2026-05-17T23:07:10Z",
+          "url": "https://github.com/ava-labs/firewood/commit/8ea36c75c43fd0cb95903a152f0ed019840f0ce9"
+        },
+        "date": 1779092638121,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 168.93833858770338,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5919.319488754506,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 110.23237693078589,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5729.571609437605,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 76.91309366765847,
             "unit": "block_accept_ms/ggas"
           }
         ]
