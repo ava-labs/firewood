@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779092639172,
+  "lastUpdate": 1779179175132,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -3477,6 +3477,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 76.91309366765847,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "rodrigo",
+            "username": "RodrigoVillar",
+            "email": "77309055+RodrigoVillar@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "e575a2964f7959845c6da5eff093dafd030273d7",
+          "message": "feat: add ability to clone reconstructed revisions (#1991)\n\n## Why this should be merged\n\nWhile benchmarking our Firewood archival nodes, we came across an error\nwhen making an `eth_estimateGas` API call that required block\nreexecution. After some investigation, the root cause was determined to\nbe triggered by the following code:\n\n\nhttps://github.com/ava-labs/avalanchego/blob/c5d4e6c31db451fb2e6d8a7fd178c19004985765/graft/evm/firewood/reconstructed_state.go#L73-L77\n\nWe currently return `nil` because reconstructed revisions cannot be\nshared while `state.Database` (the interface that\n`reconstructedStateAccessor` satisfies) has the following documentation\nfor `CopyTrie`:\n\n```go\n// CopyTrie returns an independent copy of the given trie.\nCopyTrie(Trie) Trie\n```\n\nGiven that `eth_estimateGas` and similar methods call on `CopyTrie()`,\nthere should be a way to create a new `reconstructedAccountTrie` while\nalso not having two tries share the same reconstructed revision.\n\n## How this works\n\nAdds a `Clone()` method to the reconstructed pointer type, which returns\na new, independent reconstructed revision. This independent\nreconstructed revision can then be used for the implementation of\n`CopyTrie()`.\n\n*Note*: an alternative approach that was suggested was to just return a\nnew instance of `reconstructedAccountTrie` via copy-by-reference. While\nthis approach also solves the bug fix, this explicitly violates the\ninvariant set in `CopyTrie()`, setting up a footgun I would **strongly\nprefer** not to introduce into AvalancheGo.\n\n## How this was tested\n\nCI + added additional UTs in Go and Rust verifying that cloned\nreconstructed revisions are independent of the reconstructed revision\nthey are cloned from.\n\nI also have a PoC in AvalancheGo which utilizes this fix, and have\nverified that all usages of `CopyTrie()` are read-only.\n\n## Breaking Changes\n\n- [ ] firewood\n- [ ] firewood-storage\n- [ ] firewood-ffi (C api)\n- [ ] firewood-go (Go api)\n- [ ] fwdctl",
+          "timestamp": "2026-05-18T19:59:06Z",
+          "url": "https://github.com/ava-labs/firewood/commit/e575a2964f7959845c6da5eff093dafd030273d7"
+        },
+        "date": 1779179173975,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 160.98448547376012,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6211.778713067332,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 120.55659719041158,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5997.541008088686,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 89.56365009141798,
             "unit": "block_accept_ms/ggas"
           }
         ]
