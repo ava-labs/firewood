@@ -1,282 +1,65 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-//! Fuzz-style test: generates a random start trie, applies random changes to
-//! produce an end trie, generates a change proof between them, then verifies
-//! the proof under five scenarios:
+//! Comprehensive change-proof fuzz test.
 //!
-//! 1. Both boundary keys are existing keys
-//! 2. Start boundary is a non-existent (decreased) key
-//! 3. End boundary is a non-existent (increased) key
-//! 4. Both boundaries are non-existent
-//! 5. No bounds (complete proof)
+//! Each outer iteration generates a random start trie with a per-key shape
+//! mix, builds an end trie by applying random Put/Delete operations, then
+//! runs many inner iterations. Each inner iteration generates a change proof
+//! under one of five boundary scenarios, verifies that the valid proof
+//! passes, then applies one of 31 mutations and asserts the mutated proof
+//! is rejected.
+//!
+//! ## KV shape mix (per key, independent)
+//!
+//! - 50% — 32-byte key, 1-31 byte value (`ValueDigest::Value` path)
+//! - 30% — 32-byte key, 32-128 byte value (`ValueDigest::Hash` path after
+//!   serialization in merkledb mode)
+//! - 20% — variable-length key (1-4096 bytes), variable-length value
+//!   (1-4096 bytes) — exercises shallow tries, prefix-key relationships,
+//!   and divergent-child exclusion proofs
+//!
+//! ## Boundary scenarios (weighted)
+//!
+//! 1. (36%) Both boundary keys are existing end-state keys
+//! 2. (20%) Start boundary is a non-existent (decreased) key
+//! 3. (20%) End boundary is a non-existent (increased) key
+//! 4. (20%) Both boundaries are non-existent keys
+//! 5. (4%)  No bounds (complete proof)
+//!
+//! ## Mutation groups (weighted, every iteration)
+//!
+//! - 30% — batch op mutations (omit/add/swap keys and values)
+//! - 25% — exclusion proof attacks (truncate, clear child, graft, swap)
+//! - 15% — out-of-range structural (corrupt sibling hash, remove intermediate)
+//! - 10% — replay/cross-revision (wrong root, reversed, different DB)
+//! -  5% — boundary proof structural (truncate, swap, empty)
+//! - 15% — combined: force double-exclusion + group 4/5 mutation
 //!
 //! Runs 25 iterations in debug builds and 250 in release builds, each with a
 //! freshly seeded RNG. On failure, the printed seed can be passed via
 //! `FIREWOOD_TEST_SEED` to reproduce.
+//!
+//! # Reproducing failures
+//!
+//! ```sh
+//! FIREWOOD_TEST_SEED=<seed> cargo nextest run -p firewood --features logger \
+//!   -E 'test(test_slow_change_proof_fuzz)' --profile ci
+//! ```
+//!
+//! For detailed diagnostics, enable the `logger` feature and set `RUST_LOG`:
+//!
+//! - `RUST_LOG=DEBUG` — shows scenario selection, boundary keys, mutation
+//!   applied, and whether each mutation was rejected (and by which phase).
+//! - `RUST_LOG=TRACE` — additionally dumps the full start/end tries (DOT
+//!   format), all proof nodes, and batch ops before and after mutation.
 
 use super::super::*;
 use super::verify_and_check;
-use crate::api::{BatchOp, Db as DbTrait, FrozenChangeProof, Proposal as _};
+use crate::api::{BatchOp, Db as DbTrait, FrozenChangeProof, HashKey, Proposal as _};
 use crate::db::{Db, DbConfig};
 use crate::{ChangeProof, Proof, verify_change_proof_structure};
 use firewood_storage::logger::{debug, trace};
-
-#[test]
-#[expect(clippy::too_many_lines)]
-fn test_slow_change_proof_fuzz() {
-    // When FIREWOOD_TEST_SEED is set, run only that single seed (for
-    // reproducing CI failures). Otherwise, run random iterations.
-    // Debug assertions significantly slow down each iteration; use fewer
-    // iterations in debug builds so the test finishes in reasonable time.
-    let iterations = if cfg!(debug_assertions) { 25 } else { 250 };
-    let seeds: Vec<u64> = if let Ok(s) = std::env::var("FIREWOOD_TEST_SEED") {
-        vec![s.parse().expect("FIREWOOD_TEST_SEED must be a u64")]
-    } else {
-        let outer_rng = firewood_storage::SeededRng::from_random();
-        (0..iterations).map(|_| outer_rng.next_u64()).collect()
-    };
-
-    for (run, &seed) in seeds.iter().enumerate() {
-        eprintln!("run {run}: seed={seed} (export FIREWOOD_TEST_SEED={seed} to reproduce)");
-        let rng = firewood_storage::SeededRng::new(seed);
-
-        // Build the start trie from 64-2048 random keys.
-        let key_count = rng.random_range(64..=2048_u32);
-        let start_data = fixed_and_pseudorandom_data(&rng, key_count);
-        let mut start_keys: Vec<[u8; 32]> = start_data.keys().copied().collect();
-        start_keys.sort_unstable();
-
-        let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(dir.path(), DbConfig::builder().build()).unwrap();
-
-        // Commit the start revision.
-        let start_batch: Vec<BatchOp<&[u8], &[u8]>> = start_data
-            .iter()
-            .map(|(k, v)| BatchOp::Put {
-                key: k.as_ref(),
-                value: v.as_ref(),
-            })
-            .collect();
-        db.propose(start_batch).unwrap().commit().unwrap();
-        let root1 = db.root_hash().unwrap();
-
-        // Build the end trie: each key has a ~1-in-7 chance of being deleted
-        // (expected ~14%), then insert 10-50 new keys.
-        let mut end_batch: Vec<BatchOp<&[u8], &[u8]>> = Vec::new();
-
-        let mut deleted_indices = Vec::new();
-        for (i, key) in start_keys.iter().enumerate() {
-            if rng.random_range(0..7_u32) == 0 {
-                end_batch.push(BatchOp::Delete {
-                    key: key.as_ref(),
-                });
-                deleted_indices.push(i);
-            }
-        }
-
-        // Generate new random key-value pairs (store owned so borrows live long enough).
-        let insert_count = rng.random_range(10..=50_u32);
-        let new_kvs: Vec<([u8; 32], [u8; 20])> = (0..insert_count)
-            .map(|_| (rng.random::<[u8; 32]>(), rng.random::<[u8; 20]>()))
-            .collect();
-        let new_keys: Vec<[u8; 32]> = new_kvs.iter().map(|(k, _)| *k).collect();
-        for (key, val) in &new_kvs {
-            end_batch.push(BatchOp::Put {
-                key: key.as_ref(),
-                value: val.as_ref(),
-            });
-        }
-
-        db.propose(end_batch).unwrap().commit().unwrap();
-        let root2 = db.root_hash().unwrap();
-
-        // Build the list of keys that exist in the end state.
-        let mut end_keys: Vec<[u8; 32]> = start_keys
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !deleted_indices.contains(i))
-            .map(|(_, k)| *k)
-            .chain(new_keys.iter().copied())
-            .collect();
-        end_keys.sort_unstable();
-        end_keys.dedup();
-
-        // Run 50 random verification scenarios with weighted selection.
-        // Scenarios 0-3 pick random boundary keys, so they benefit from
-        // repetition. Scenario 4 (no bounds) is deterministic for a given
-        // trie pair, so we give it low weight.
-        for _ in 0..50 {
-            let scenario = rng.random_range(0..100_u32);
-            match scenario {
-                // 36% — both boundaries are existing end-state keys.
-                0..36 => {
-                    if end_keys.len() < 2 {
-                        continue;
-                    }
-                    let si = rng.random_range(0..end_keys.len() - 1);
-                    let ei = rng.random_range(si + 1..end_keys.len());
-                    let start_key = &end_keys[si];
-                    let end_key = &end_keys[ei];
-
-                    let proof = db
-                        .change_proof(
-                            root1.clone(),
-                            root2.clone(),
-                            Some(start_key.as_ref()),
-                            Some(end_key.as_ref()),
-                            None,
-                        )
-                        .expect("change_proof should succeed");
-
-                    let ctx = verify_change_proof_structure(
-                        &proof,
-                        root2.clone(),
-                        Some(start_key.as_ref()),
-                        Some(end_key.as_ref()),
-                        None,
-                    )
-                    .expect("structural check should pass (scenario 0)");
-
-                    verify_and_check(&db, &proof, &ctx, root1.clone())
-                        .expect("verify should pass (scenario 0)");
-                }
-
-                // 20% — start boundary is a non-existent (decreased) key.
-                36..56 => {
-                    // `random_range(1..len-1)` requires len >= 3.
-                    if end_keys.len() < 3 {
-                        continue;
-                    }
-                    let si = rng.random_range(1..end_keys.len() - 1);
-                    let ei = rng.random_range(si..end_keys.len());
-                    let decreased = decrease_key(&end_keys[si]);
-                    // Skip if decreased collides with the previous key.
-                    if decreased >= end_keys[si] || (si > 0 && decreased == end_keys[si - 1]) {
-                        continue;
-                    }
-                    let end_key = &end_keys[ei];
-
-                    let proof = db
-                        .change_proof(
-                            root1.clone(),
-                            root2.clone(),
-                            Some(decreased.as_ref()),
-                            Some(end_key.as_ref()),
-                            None,
-                        )
-                        .expect("change_proof should succeed");
-
-                    let ctx = verify_change_proof_structure(
-                        &proof,
-                        root2.clone(),
-                        Some(decreased.as_ref()),
-                        Some(end_key.as_ref()),
-                        None,
-                    )
-                    .expect("structural check should pass (scenario 1)");
-
-                    verify_and_check(&db, &proof, &ctx, root1.clone())
-                        .expect("verify should pass (scenario 1)");
-                }
-
-                // 20% — end boundary is a non-existent (increased) key.
-                56..76 => {
-                    if end_keys.len() < 2 {
-                        continue;
-                    }
-                    let si = rng.random_range(0..end_keys.len() - 1);
-                    let ei = rng.random_range(si..end_keys.len() - 1);
-                    let increased = increase_key(&end_keys[ei]);
-                    // Skip if increased collides with the next key or overflows.
-                    if increased <= end_keys[ei]
-                        || (ei + 1 < end_keys.len() && increased == end_keys[ei + 1])
-                    {
-                        continue;
-                    }
-                    let start_key = &end_keys[si];
-
-                    let proof = db
-                        .change_proof(
-                            root1.clone(),
-                            root2.clone(),
-                            Some(start_key.as_ref()),
-                            Some(increased.as_ref()),
-                            None,
-                        )
-                        .expect("change_proof should succeed");
-
-                    let ctx = verify_change_proof_structure(
-                        &proof,
-                        root2.clone(),
-                        Some(start_key.as_ref()),
-                        Some(increased.as_ref()),
-                        None,
-                    )
-                    .expect("structural check should pass (scenario 2)");
-
-                    verify_and_check(&db, &proof, &ctx, root1.clone())
-                        .expect("verify should pass (scenario 2)");
-                }
-
-                // 20% — both boundaries are non-existent keys.
-                76..96 => {
-                    // `random_range(1..len-1)` requires len >= 3.
-                    if end_keys.len() < 3 {
-                        continue;
-                    }
-                    let si = rng.random_range(1..end_keys.len() - 1);
-                    let ei = rng.random_range(si..end_keys.len() - 1);
-                    let decreased = decrease_key(&end_keys[si]);
-                    let increased = increase_key(&end_keys[ei]);
-                    if decreased >= end_keys[si]
-                        || (si > 0 && decreased == end_keys[si - 1])
-                        || increased <= end_keys[ei]
-                        || (ei + 1 < end_keys.len() && increased == end_keys[ei + 1])
-                    {
-                        continue;
-                    }
-
-                    let proof = db
-                        .change_proof(
-                            root1.clone(),
-                            root2.clone(),
-                            Some(decreased.as_ref()),
-                            Some(increased.as_ref()),
-                            None,
-                        )
-                        .expect("change_proof should succeed");
-
-                    let ctx = verify_change_proof_structure(
-                        &proof,
-                        root2.clone(),
-                        Some(decreased.as_ref()),
-                        Some(increased.as_ref()),
-                        None,
-                    )
-                    .expect("structural check should pass (scenario 3)");
-
-                    verify_and_check(&db, &proof, &ctx, root1.clone())
-                        .expect("verify should pass (scenario 3)");
-                }
-
-                // 4% — no bounds, complete proof.
-                _ => {
-                    let proof = db
-                        .change_proof(root1.clone(), root2.clone(), None, None, None)
-                        .expect("change_proof should succeed");
-
-                    let ctx =
-                        verify_change_proof_structure(&proof, root2.clone(), None, None, None)
-                            .expect("structural check should pass (scenario 4)");
-
-                    verify_and_check(&db, &proof, &ctx, root1.clone())
-                        .expect("verify should pass (scenario 4)");
-                }
-            }
-        }
-    }
-}
 
 /// Increment a variable-length key by 1. Returns `None` on overflow (all 0xFF).
 fn increase_key_vec(key: &[u8]) -> Option<Vec<u8>> {
@@ -304,7 +87,34 @@ fn decrease_key_vec(key: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
-// ── Adversarial fuzz test helpers ──────────────────────────────────────────
+/// Generate a single key-value pair with a per-key shape mix:
+/// - 50% — 32-byte key, 1-31 byte value (`ValueDigest::Value`)
+/// - 30% — 32-byte key, 32-128 byte value (`ValueDigest::Hash` after serialization)
+/// - 20% — variable-length key (1-4096 bytes), variable-length value (1-4096 bytes)
+fn generate_kv(rng: &firewood_storage::SeededRng) -> (Vec<u8>, Vec<u8>) {
+    let shape = rng.random_range(0..10_u32);
+    match shape {
+        0..5 => {
+            let key: [u8; 32] = rng.random();
+            let val_len = rng.random_range(1..=31_usize);
+            let val: Vec<u8> = (0..val_len).map(|_| rng.random()).collect();
+            (key.to_vec(), val)
+        }
+        5..8 => {
+            let key: [u8; 32] = rng.random();
+            let val_len = rng.random_range(32..=128_usize);
+            let val: Vec<u8> = (0..val_len).map(|_| rng.random()).collect();
+            (key.to_vec(), val)
+        }
+        _ => {
+            let key_len = rng.random_range(1..=4096_usize);
+            let val_len = rng.random_range(1..=4096_usize);
+            let key: Vec<u8> = (0..key_len).map(|_| rng.random()).collect();
+            let val: Vec<u8> = (0..val_len).map(|_| rng.random()).collect();
+            (key, val)
+        }
+    }
+}
 
 type Key = Box<[u8]>;
 type Value = Box<[u8]>;
@@ -355,18 +165,469 @@ fn maybe_round_trip(
     }
 }
 
-/// Fuzz test with variable-length keys (1-4096 bytes). Short keys create
-/// shallow trie structures where:
-/// - Out-of-range value changes at start proof nodes are more likely
-///   (exercises the `packed < sk` value-check skip)
-/// - Prefix key relationships exist (key `b"\x10"` coexisting with
-///   `b"\x10\x50"`), creating branch nodes with values
-/// - Exclusion proofs with divergent children are common (exercises the
-///   `PathIterator` divergent child fix and `ExclusionProofMissingChild`
-///   check in `value_digest`)
+/// Loop-local state threaded into panic messages so a CI failure
+/// carries enough context to reproduce the iteration and identify which
+/// mutation slipped through.
+struct TestLocator<'a> {
+    seed: u64,
+    run: usize,
+    /// The 0..100 boundary-scenario draw — see [`pick_proof_for_scenario`].
+    scenario: u32,
+    /// The 0..100 mutation-group draw.
+    group: u32,
+    /// The specific mutation that was applied (e.g. `"M7_spurious_delete"`).
+    mutation: &'a str,
+}
+
+impl std::fmt::Display for TestLocator<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "seed={}, run={}, scenario={}, group={}, mutation={}",
+            self.seed, self.run, self.scenario, self.group, self.mutation,
+        )
+    }
+}
+
+/// A change proof generated for a boundary scenario, together with the
+/// boundary keys that produced it. The boundary keys are `None` only for
+/// the no-bounds scenario.
+struct ProofWithBounds {
+    proof: FrozenChangeProof,
+    start_key: Option<Vec<u8>>,
+    end_key: Option<Vec<u8>>,
+}
+
+/// The primary trie under test. Holds the `start_root`/`end_root` pair
+/// every change proof is generated for, plus a 3rd revision
+/// (`replay_root`) used as a wrong end-root in the M29 mutation.
+struct PrimaryTrie {
+    db: Db,
+    _dir: tempfile::TempDir,
+    start_root: HashKey,
+    end_root: HashKey,
+    replay_root: HashKey,
+    /// Sorted, deduplicated keys committed to `start_root`. Used as
+    /// the source for M7 spurious-delete candidates.
+    start_keys: Vec<Vec<u8>>,
+    /// Sorted, deduplicated keys present in `end_root`. Used as the
+    /// source for boundary-key selection in every scenario.
+    end_keys: Vec<Vec<u8>>,
+}
+
+/// An independent trie used by the M31 cross-DB replay mutation to
+/// produce a valid-looking proof against an unrelated state.
+struct CrossDbTrie {
+    db: Db,
+    _dir: tempfile::TempDir,
+    start_root: HashKey,
+    end_root: HashKey,
+}
+
+/// State produced once per outer iteration.
+struct TrieFixture {
+    primary: PrimaryTrie,
+    cross_db: CrossDbTrie,
+}
+
+fn build_trie_fixture(rng: &firewood_storage::SeededRng) -> TrieFixture {
+    TrieFixture {
+        primary: build_primary_trie(rng),
+        cross_db: build_cross_db_trie(&rng.seeded_fork()),
+    }
+}
+
+fn build_primary_trie(rng: &firewood_storage::SeededRng) -> PrimaryTrie {
+    // ── Build start trie ──────────────────────────────────────────
+    // The start trie is the initial committed state. Its root hash is
+    // `start_root` and every change proof in this iteration proves the
+    // transition `start_root` → `end_root`.
+    //
+    // `generate_kv` yields a mix of fixed-32-byte and variable-length
+    // keys; varlen keys can collide so a dedup is required before we
+    // use `start_keys` as the boundary-key source for the M7 mutation.
+    let key_count = rng.random_range(16..=2048_u32) as usize;
+    let kvs: Vec<(Vec<u8>, Vec<u8>)> = (0..key_count).map(|_| generate_kv(rng)).collect();
+    let mut start_keys: Vec<Vec<u8>> = kvs.iter().map(|(k, _)| k.clone()).collect();
+    start_keys.sort_unstable();
+    start_keys.dedup();
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::new(dir.path(), DbConfig::builder().build()).unwrap();
+
+    let start_batch: Vec<BatchOp<&[u8], &[u8]>> = kvs
+        .iter()
+        .map(|(k, v)| BatchOp::Put {
+            key: k.as_ref(),
+            value: v.as_ref(),
+        })
+        .collect();
+    db.propose(start_batch).unwrap().commit().unwrap();
+    let start_root = db.root_hash().unwrap();
+    debug!(
+        "start trie: {key_count} input keys, {} unique, start_root={start_root:?}",
+        start_keys.len()
+    );
+    trace!("start trie dump:\n{}", db.dump_to_string().unwrap());
+
+    // ── Build end trie ────────────────────────────────────────────
+    // The end trie is the state after applying a random batch of
+    // deletes and inserts to the start trie. Its root hash is
+    // `end_root`, the target every change proof commits to.
+    //
+    // Each start key has a ~1-in-7 chance of being deleted (expected
+    // ~14%), and 10-50 fresh entries are inserted on top.
+    let mut end_batch: Vec<BatchOp<Vec<u8>, Vec<u8>>> = Vec::new();
+    let mut deleted_indices = Vec::new();
+    for (i, key) in start_keys.iter().enumerate() {
+        if rng.random_range(0..7_u32) == 0 {
+            end_batch.push(BatchOp::Delete { key: key.clone() });
+            deleted_indices.push(i);
+        }
+    }
+
+    let insert_count = rng.random_range(10..=50_u32) as usize;
+    let new_kvs: Vec<(Vec<u8>, Vec<u8>)> = (0..insert_count).map(|_| generate_kv(rng)).collect();
+    let new_keys: Vec<Vec<u8>> = new_kvs.iter().map(|(k, _)| k.clone()).collect();
+    for (key, val) in &new_kvs {
+        end_batch.push(BatchOp::Put {
+            key: key.clone(),
+            value: val.clone(),
+        });
+    }
+
+    db.propose(end_batch).unwrap().commit().unwrap();
+    let end_root = db.root_hash().unwrap();
+    debug!(
+        "end trie: deleted={}, inserted={insert_count}, end_root={end_root:?}",
+        deleted_indices.len()
+    );
+    trace!("end trie dump:\n{}", db.dump_to_string().unwrap());
+
+    // ── Build end-state key list ──────────────────────────────────
+    // The end-state key list is the sorted, deduplicated set of keys
+    // present in the end trie (start keys minus deletions, plus the
+    // fresh inserts). The inner loop draws boundary keys from this
+    // list to define the range each change proof covers.
+    let mut end_keys: Vec<Vec<u8>> = start_keys
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !deleted_indices.contains(i))
+        .map(|(_, k)| k.clone())
+        .chain(new_keys.iter().cloned())
+        .collect();
+    end_keys.sort_unstable();
+    end_keys.dedup();
+
+    // ── 3rd revision for replay tests ─────────────────────────────
+    // A further commit on top of `end_root`, producing a new root
+    // `replay_root`. The M29 mutation substitutes `replay_root` in
+    // place of `end_root` during verification; the proof should be
+    // rejected because it doesn't commit to this alternate root.
+    let extra_kvs: Vec<(Vec<u8>, Vec<u8>)> = (0..10).map(|_| generate_kv(rng)).collect();
+    let extra_batch: Vec<BatchOp<&[u8], &[u8]>> = extra_kvs
+        .iter()
+        .map(|(k, v)| BatchOp::Put {
+            key: k.as_ref(),
+            value: v.as_ref(),
+        })
+        .collect();
+    db.propose(extra_batch).unwrap().commit().unwrap();
+    let replay_root = db.root_hash().unwrap();
+    debug!("3rd revision replay_root={replay_root:?}");
+
+    PrimaryTrie {
+        db,
+        _dir: dir,
+        start_root,
+        end_root,
+        replay_root,
+        start_keys,
+        end_keys,
+    }
+}
+
+fn build_cross_db_trie(rng: &firewood_storage::SeededRng) -> CrossDbTrie {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::new(dir.path(), DbConfig::builder().build()).unwrap();
+
+    let key_count = rng.random_range(16..=2048_u32) as usize;
+    let kvs: Vec<(Vec<u8>, Vec<u8>)> = (0..key_count).map(|_| generate_kv(rng)).collect();
+    let batch: Vec<BatchOp<&[u8], &[u8]>> = kvs
+        .iter()
+        .map(|(k, v)| BatchOp::Put {
+            key: k.as_ref(),
+            value: v.as_ref(),
+        })
+        .collect();
+    db.propose(batch).unwrap().commit().unwrap();
+    let start_root = db.root_hash().unwrap();
+
+    let extra_kvs: Vec<(Vec<u8>, Vec<u8>)> = (0..20).map(|_| generate_kv(rng)).collect();
+    let extra_batch: Vec<BatchOp<&[u8], &[u8]>> = extra_kvs
+        .iter()
+        .map(|(k, v)| BatchOp::Put {
+            key: k.as_ref(),
+            value: v.as_ref(),
+        })
+        .collect();
+    db.propose(extra_batch).unwrap().commit().unwrap();
+    let end_root = db.root_hash().unwrap();
+
+    CrossDbTrie {
+        db,
+        _dir: dir,
+        start_root,
+        end_root,
+    }
+}
+
+/// Pick a boundary scenario and generate a valid change proof for it.
+///
+/// Returns `None` when the scenario's constraints can't be satisfied for
+/// this trie shape (e.g. too few keys to pick distinct indices, or a
+/// neighbor key cannot be constructed). The caller should treat `None` as
+/// a skip and move to the next iteration.
+///
+/// `scenario` is a value in `0..100` whose weight bands map to:
+/// - `0..36`  — both boundaries existing keys
+/// - `36..56` — start boundary is a non-existent neighbor (decreased)
+/// - `56..76` — end boundary is a non-existent neighbor (increased)
+/// - `76..96` — both boundaries non-existent neighbors
+/// - `96..100` — no bounds (whole-trie proof)
+#[expect(clippy::arithmetic_side_effects)]
+fn pick_proof_for_scenario(
+    rng: &firewood_storage::SeededRng,
+    db: &Db,
+    start_root: &HashKey,
+    end_root: &HashKey,
+    end_keys: &[Vec<u8>],
+    scenario: u32,
+) -> Option<ProofWithBounds> {
+    match scenario {
+        // Both boundaries are existing end-state keys. Pick two
+        // distinct indices `si < ei` from `end_keys` and use those
+        // keys directly as the inclusive bounds.
+        0..36 => {
+            if end_keys.len() < 2 {
+                return None;
+            }
+            let si = rng.random_range(0..end_keys.len() - 1);
+            let ei = rng.random_range(si + 1..end_keys.len());
+            let sk = end_keys[si].clone();
+            let ek = end_keys[ei].clone();
+            let p = db
+                .change_proof(
+                    start_root.clone(),
+                    end_root.clone(),
+                    Some(&sk),
+                    Some(&ek),
+                    None,
+                )
+                .expect("change_proof should succeed");
+            Some(ProofWithBounds {
+                proof: p,
+                start_key: Some(sk),
+                end_key: Some(ek),
+            })
+        }
+        // Start boundary is a non-existent key just below an existing
+        // one. Pick an interior `si` (1..len-1) and decrement
+        // `end_keys[si]` so the result lands in the gap between
+        // `end_keys[si-1]` and `end_keys[si]` — exclusive of both.
+        // This forces an exclusion proof at the left boundary.
+        36..56 => {
+            // `random_range(1..len-1)` requires len >= 3.
+            if end_keys.len() < 3 {
+                return None;
+            }
+            let si = rng.random_range(1..end_keys.len() - 1);
+            let ei = rng.random_range(si..end_keys.len());
+            // Skip if `end_keys[si]` decrements through to a fully
+            // saturated underflow (e.g. all-0x00 key — impossible to
+            // neighbor below).
+            let decreased = decrease_key_vec(&end_keys[si])?;
+            // Skip if the decremented key collides with the
+            // predecessor (which is in the trie). The
+            // `decreased >= end_keys[si]` branch is defensive —
+            // `decrease_key_vec` never returns a value at-or-above its
+            // input.
+            if decreased >= end_keys[si] || (si > 0 && decreased == end_keys[si - 1]) {
+                return None;
+            }
+            let ek = end_keys[ei].clone();
+            let p = db
+                .change_proof(
+                    start_root.clone(),
+                    end_root.clone(),
+                    Some(&decreased),
+                    Some(&ek),
+                    None,
+                )
+                .expect("change_proof should succeed");
+            Some(ProofWithBounds {
+                proof: p,
+                start_key: Some(decreased),
+                end_key: Some(ek),
+            })
+        }
+        // End boundary is a non-existent key just above an existing
+        // one. Symmetric to scenario 1: pick `ei` such that
+        // incrementing `end_keys[ei]` lands in the gap before
+        // `end_keys[ei+1]`. Forces an exclusion proof at the right
+        // boundary.
+        56..76 => {
+            if end_keys.len() < 2 {
+                return None;
+            }
+            let si = rng.random_range(0..end_keys.len() - 1);
+            let ei = rng.random_range(si..end_keys.len() - 1);
+            // None on full overflow (e.g. all-0xFF key).
+            let increased = increase_key_vec(&end_keys[ei])?;
+            // Skip if the incremented key collides with the successor
+            // (in-trie).
+            if increased <= end_keys[ei]
+                || (ei + 1 < end_keys.len() && increased == end_keys[ei + 1])
+            {
+                return None;
+            }
+            let sk = end_keys[si].clone();
+            let p = db
+                .change_proof(
+                    start_root.clone(),
+                    end_root.clone(),
+                    Some(&sk),
+                    Some(&increased),
+                    None,
+                )
+                .expect("change_proof should succeed");
+            Some(ProofWithBounds {
+                proof: p,
+                start_key: Some(sk),
+                end_key: Some(increased),
+            })
+        }
+        // Both boundaries are non-existent neighbor keys. Combines the
+        // constraints of scenarios 1 and 2: forces exclusion proofs at
+        // both ends simultaneously.
+        76..96 => {
+            // `random_range(1..len-1)` requires len >= 3.
+            if end_keys.len() < 3 {
+                return None;
+            }
+            let si = rng.random_range(1..end_keys.len() - 1);
+            let ei = rng.random_range(si..end_keys.len() - 1);
+            let decreased = decrease_key_vec(&end_keys[si])?;
+            let increased = increase_key_vec(&end_keys[ei])?;
+            if decreased >= end_keys[si]
+                || (si > 0 && decreased == end_keys[si - 1])
+                || increased <= end_keys[ei]
+                || (ei + 1 < end_keys.len() && increased == end_keys[ei + 1])
+            {
+                return None;
+            }
+            let p = db
+                .change_proof(
+                    start_root.clone(),
+                    end_root.clone(),
+                    Some(&decreased),
+                    Some(&increased),
+                    None,
+                )
+                .expect("change_proof should succeed");
+            Some(ProofWithBounds {
+                proof: p,
+                start_key: Some(decreased),
+                end_key: Some(increased),
+            })
+        }
+        // No bounds — proof covers the entire key space.
+        _ => {
+            let p = db
+                .change_proof(start_root.clone(), end_root.clone(), None, None, None)
+                .expect("change_proof should succeed");
+            Some(ProofWithBounds {
+                proof: p,
+                start_key: None,
+                end_key: None,
+            })
+        }
+    }
+}
+
+/// Run structural + root-hash verification on a mutated proof and panic
+/// if either accepts it.
+///
+/// A mutation may be rejected by the structural check (the proof shape
+/// itself is invalid) or by the root-hash check (the proof shape is
+/// valid but doesn't commit to `end_root`). Either rejection counts.
+///
+/// `locator` is interpolated into the panic message so a CI failure
+/// carries enough state to reproduce.
+fn assert_proof_rejected(
+    db: &Db,
+    mutated_proof: &FrozenChangeProof,
+    start_root: HashKey,
+    end_root: HashKey,
+    start_key: Option<&[u8]>,
+    end_key: Option<&[u8]>,
+    locator: &TestLocator<'_>,
+) {
+    debug!(
+        "mutation={} \
+         mutated_batch_ops={} mutated_start_proof={} mutated_end_proof={}",
+        locator.mutation,
+        mutated_proof.batch_ops().len(),
+        mutated_proof.start_proof().as_ref().len(),
+        mutated_proof.end_proof().as_ref().len(),
+    );
+    trace!("mutated batch_ops: {:#?}", mutated_proof.batch_ops());
+    trace!(
+        "mutated start_proof: {:#?}",
+        mutated_proof.start_proof().as_ref()
+    );
+    trace!(
+        "mutated end_proof: {:#?}",
+        mutated_proof.end_proof().as_ref()
+    );
+
+    let structural_result =
+        verify_change_proof_structure(mutated_proof, end_root.clone(), start_key, end_key, None);
+    let rejected = match &structural_result {
+        Err(e) => {
+            debug!("rejected by structural check: {e}");
+            true
+        }
+        Ok(ctx) => {
+            let root_result = verify_and_check(db, mutated_proof, ctx, start_root);
+            if let Err(e) = &root_result {
+                debug!("rejected by root hash check: {e}");
+                true
+            } else {
+                debug!(
+                    "NOT REJECTED — mutation {} passed verification!",
+                    locator.mutation
+                );
+                false
+            }
+        }
+    };
+
+    assert!(
+        rejected,
+        "proof was NOT rejected! {locator}, \
+         batch_ops={}, start_proof_len={}, end_proof_len={}, \
+         structural_ok={}, end_root={end_root:?}",
+        mutated_proof.batch_ops().len(),
+        mutated_proof.start_proof().as_ref().len(),
+        mutated_proof.end_proof().as_ref().len(),
+        structural_result.is_ok(),
+    );
+}
+
 #[test]
 #[expect(clippy::too_many_lines)]
-fn test_slow_change_proof_fuzz_varlen() {
+fn test_slow_change_proof_fuzz() {
     // When FIREWOOD_TEST_SEED is set, run only that single seed (for
     // reproducing CI failures). Otherwise, run random iterations.
     // Debug assertions significantly slow down each iteration; use fewer
@@ -379,518 +640,44 @@ fn test_slow_change_proof_fuzz_varlen() {
         (0..iterations).map(|_| outer_rng.next_u64()).collect()
     };
 
+    // Each outer iteration tests one randomly-generated pair of
+    // committed tries (start_root, end_root): it builds the fixture
+    // once, then runs 50 inner iterations. Each inner iteration picks
+    // a boundary scenario, generates a change proof, verifies the
+    // proof is accepted, and then verifies a mutated copy is rejected.
     for (run, &seed) in seeds.iter().enumerate() {
         eprintln!("run {run}: seed={seed} (export FIREWOOD_TEST_SEED={seed} to reproduce)");
         let rng = firewood_storage::SeededRng::new(seed);
 
-        // Build the start trie from variable-length random keys.
-        let key_count = rng.random_range(16..=512_u32) as usize;
-        let start_kvs = generate_random_kvs(&rng, key_count);
-        let mut start_keys: Vec<Vec<u8>> = start_kvs.iter().map(|(k, _)| k.clone()).collect();
-        start_keys.sort_unstable();
-        start_keys.dedup();
+        let fixture = build_trie_fixture(&rng);
+        let TrieFixture { primary, cross_db } = &fixture;
+        let PrimaryTrie {
+            db,
+            start_root,
+            end_root,
+            replay_root,
+            start_keys,
+            end_keys,
+            ..
+        } = primary;
+        let CrossDbTrie {
+            db: db2,
+            start_root: db2_start_root,
+            end_root: db2_end_root,
+            ..
+        } = cross_db;
 
-        let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(dir.path(), DbConfig::builder().build()).unwrap();
-
-        // Commit the start revision.
-        let start_batch: Vec<BatchOp<&[u8], &[u8]>> = start_kvs
-            .iter()
-            .map(|(k, v)| BatchOp::Put {
-                key: k.as_ref(),
-                value: v.as_ref(),
-            })
-            .collect();
-        db.propose(start_batch).unwrap().commit().unwrap();
-        let root1 = db.root_hash().unwrap();
-
-        // Build the end trie: each key has a ~1-in-7 chance of being deleted
-        // (expected ~14%), then insert 10-50 new keys.
-        let mut end_batch: Vec<BatchOp<Vec<u8>, Vec<u8>>> = Vec::new();
-
-        let mut deleted_indices = Vec::new();
-        for (i, key) in start_keys.iter().enumerate() {
-            if rng.random_range(0..7_u32) == 0 {
-                end_batch.push(BatchOp::Delete { key: key.clone() });
-                deleted_indices.push(i);
-            }
-        }
-
-        let insert_count = rng.random_range(10..=50_u32) as usize;
-        let new_kvs = generate_random_kvs(&rng, insert_count);
-        let new_keys: Vec<Vec<u8>> = new_kvs.iter().map(|(k, _)| k.clone()).collect();
-        for (key, val) in &new_kvs {
-            end_batch.push(BatchOp::Put {
-                key: key.clone(),
-                value: val.clone(),
-            });
-        }
-
-        db.propose(end_batch).unwrap().commit().unwrap();
-        let root2 = db.root_hash().unwrap();
-
-        // Build the sorted list of keys in the end state.
-        let mut end_keys: Vec<Vec<u8>> = start_keys
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !deleted_indices.contains(i))
-            .map(|(_, k)| k.clone())
-            .chain(new_keys.iter().cloned())
-            .collect();
-        end_keys.sort_unstable();
-        end_keys.dedup();
-
-        for _ in 0..50 {
-            let scenario = rng.random_range(0..100_u32);
-            match scenario {
-                // 36% -- both boundaries are existing end-state keys.
-                0..36 => {
-                    if end_keys.len() < 2 {
-                        continue;
-                    }
-                    let si = rng.random_range(0..end_keys.len() - 1);
-                    let ei = rng.random_range(si + 1..end_keys.len());
-
-                    let proof = db
-                        .change_proof(
-                            root1.clone(),
-                            root2.clone(),
-                            Some(&end_keys[si]),
-                            Some(&end_keys[ei]),
-                            None,
-                        )
-                        .expect("change_proof should succeed");
-                    let proof = maybe_round_trip(&rng, proof);
-
-                    let ctx = verify_change_proof_structure(
-                        &proof,
-                        root2.clone(),
-                        Some(&end_keys[si]),
-                        Some(&end_keys[ei]),
-                        None,
-                    )
-                    .expect("structural check should pass (scenario 0)");
-
-                    verify_and_check(&db, &proof, &ctx, root1.clone())
-                        .expect("verify should pass (scenario 0)");
-                }
-
-                // 20% -- start boundary is a non-existent (decreased) key.
-                36..56 => {
-                    // `random_range(1..len-1)` requires len >= 3.
-                    if end_keys.len() < 3 {
-                        continue;
-                    }
-                    let si = rng.random_range(1..end_keys.len() - 1);
-                    let ei = rng.random_range(si..end_keys.len());
-                    let Some(decreased) = decrease_key_vec(&end_keys[si]) else {
-                        continue;
-                    };
-                    if decreased >= end_keys[si] || (si > 0 && decreased == end_keys[si - 1]) {
-                        continue;
-                    }
-
-                    let proof = db
-                        .change_proof(
-                            root1.clone(),
-                            root2.clone(),
-                            Some(&decreased),
-                            Some(&end_keys[ei]),
-                            None,
-                        )
-                        .expect("change_proof should succeed");
-                    let proof = maybe_round_trip(&rng, proof);
-
-                    let ctx = verify_change_proof_structure(
-                        &proof,
-                        root2.clone(),
-                        Some(&decreased),
-                        Some(&end_keys[ei]),
-                        None,
-                    )
-                    .expect("structural check should pass (scenario 1)");
-
-                    verify_and_check(&db, &proof, &ctx, root1.clone())
-                        .expect("verify should pass (scenario 1)");
-                }
-
-                // 20% -- end boundary is a non-existent (increased) key.
-                56..76 => {
-                    if end_keys.len() < 2 {
-                        continue;
-                    }
-                    let si = rng.random_range(0..end_keys.len() - 1);
-                    let ei = rng.random_range(si..end_keys.len() - 1);
-                    let Some(increased) = increase_key_vec(&end_keys[ei]) else {
-                        continue;
-                    };
-                    if increased <= end_keys[ei]
-                        || (ei + 1 < end_keys.len() && increased == end_keys[ei + 1])
-                    {
-                        continue;
-                    }
-
-                    let proof = db
-                        .change_proof(
-                            root1.clone(),
-                            root2.clone(),
-                            Some(&end_keys[si]),
-                            Some(&increased),
-                            None,
-                        )
-                        .expect("change_proof should succeed");
-                    let proof = maybe_round_trip(&rng, proof);
-
-                    let ctx = verify_change_proof_structure(
-                        &proof,
-                        root2.clone(),
-                        Some(&end_keys[si]),
-                        Some(&increased),
-                        None,
-                    )
-                    .expect("structural check should pass (scenario 2)");
-
-                    verify_and_check(&db, &proof, &ctx, root1.clone())
-                        .expect("verify should pass (scenario 2)");
-                }
-
-                // 20% -- both boundaries are non-existent keys.
-                76..96 => {
-                    // `random_range(1..len-1)` requires len >= 3.
-                    if end_keys.len() < 3 {
-                        continue;
-                    }
-                    let si = rng.random_range(1..end_keys.len() - 1);
-                    let ei = rng.random_range(si..end_keys.len() - 1);
-                    let Some(decreased) = decrease_key_vec(&end_keys[si]) else {
-                        continue;
-                    };
-                    let Some(increased) = increase_key_vec(&end_keys[ei]) else {
-                        continue;
-                    };
-                    if decreased >= end_keys[si]
-                        || (si > 0 && decreased == end_keys[si - 1])
-                        || increased <= end_keys[ei]
-                        || (ei + 1 < end_keys.len() && increased == end_keys[ei + 1])
-                    {
-                        continue;
-                    }
-
-                    let proof = db
-                        .change_proof(
-                            root1.clone(),
-                            root2.clone(),
-                            Some(&decreased),
-                            Some(&increased),
-                            None,
-                        )
-                        .expect("change_proof should succeed");
-                    let proof = maybe_round_trip(&rng, proof);
-
-                    let ctx = verify_change_proof_structure(
-                        &proof,
-                        root2.clone(),
-                        Some(&decreased),
-                        Some(&increased),
-                        None,
-                    )
-                    .expect("structural check should pass (scenario 3)");
-
-                    verify_and_check(&db, &proof, &ctx, root1.clone())
-                        .expect("verify should pass (scenario 3)");
-                }
-
-                // 4% -- no bounds, complete proof.
-                _ => {
-                    let proof = db
-                        .change_proof(root1.clone(), root2.clone(), None, None, None)
-                        .expect("change_proof should succeed");
-                    let proof = maybe_round_trip(&rng, proof);
-
-                    let ctx =
-                        verify_change_proof_structure(&proof, root2.clone(), None, None, None)
-                            .expect("structural check should pass (scenario 4)");
-
-                    verify_and_check(&db, &proof, &ctx, root1.clone())
-                        .expect("verify should pass (scenario 4)");
-                }
-            }
-        }
-    }
-}
-
-// ── Adversarial change proof fuzz test ────────────────────────────────────
-
-/// Adversarial fuzz test: generates valid change proofs, then applies random
-/// mutations (corruptions) and asserts that verification always rejects them.
-///
-/// # Reproducing failures
-///
-/// Each iteration prints a seed to stderr. To reproduce a specific failure:
-///
-/// ```sh
-/// FIREWOOD_TEST_SEED=<seed> cargo nextest run -p firewood --features logger \
-///   -E 'test(adversarial_change_proof_fuzz)' --profile ci
-/// ```
-///
-/// For detailed diagnostics, enable the `logger` feature and set `RUST_LOG`:
-///
-/// - `RUST_LOG=DEBUG` — shows scenario selection, boundary keys, mutation
-///   applied, and whether each mutation was rejected (and by which phase).
-/// - `RUST_LOG=TRACE` — additionally dumps the full start/end tries (DOT
-///   format), all proof nodes, and batch ops before and after mutation.
-///
-/// The failure message includes the seed, scenario, group, mutation name,
-/// and proof dimensions to help narrow down the issue.
-///
-/// # Mutation groups (by weight)
-///
-///   30% — batch op mutations (omit/add/swap keys and values)
-///   25% — exclusion proof attacks (truncate, clear child, graft, swap)
-///   15% — out-of-range structural (corrupt sibling hash, remove intermediate)
-///   10% — replay/cross-revision (wrong root, reversed, different DB)
-///    5% — boundary proof structural (truncate, swap, empty)
-///   15% — combined: force double-exclusion + group 4/5 mutation
-#[test]
-#[expect(clippy::too_many_lines)]
-fn test_slow_adversarial_change_proof_fuzz() {
-    // When FIREWOOD_TEST_SEED is set, run only that single seed (for
-    // reproducing CI failures). Otherwise, run random iterations.
-    let iterations = if cfg!(debug_assertions) { 10 } else { 100 };
-    let seeds: Vec<u64> = if let Ok(s) = std::env::var("FIREWOOD_TEST_SEED") {
-        vec![s.parse().expect("FIREWOOD_TEST_SEED must be a u64")]
-    } else {
-        let outer_rng = firewood_storage::SeededRng::from_random();
-        (0..iterations).map(|_| outer_rng.next_u64()).collect()
-    };
-
-    for (run, &seed) in seeds.iter().enumerate() {
-        eprintln!(
-            "adversarial run {run}: seed={seed} (export FIREWOOD_TEST_SEED={seed} to reproduce)"
-        );
-        let rng = firewood_storage::SeededRng::new(seed);
-
-        // ── Build start trie ──────────────────────────────────────────
-        let key_count = rng.random_range(64..=2048_u32);
-        let start_data = fixed_and_pseudorandom_data(&rng, key_count);
-        let mut start_keys: Vec<[u8; 32]> = start_data.keys().copied().collect();
-        start_keys.sort_unstable();
-
-        let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(dir.path(), DbConfig::builder().build()).unwrap();
-
-        let start_batch: Vec<BatchOp<&[u8], &[u8]>> = start_data
-            .iter()
-            .map(|(k, v)| BatchOp::Put {
-                key: k.as_ref(),
-                value: v.as_ref(),
-            })
-            .collect();
-        db.propose(start_batch).unwrap().commit().unwrap();
-        let root1 = db.root_hash().unwrap();
-        debug!("start trie: {key_count} keys, root1={root1:?}");
-        trace!("start trie dump:\n{}", db.dump_to_string().unwrap());
-
-        // ── Build end trie ────────────────────────────────────────────
-        // Each key has a ~1-in-7 chance of being deleted (expected ~14%).
-        let mut end_batch: Vec<BatchOp<&[u8], &[u8]>> = Vec::new();
-
-        let mut deleted_indices = Vec::new();
-        for (i, key) in start_keys.iter().enumerate() {
-            if rng.random_range(0..7_u32) == 0 {
-                end_batch.push(BatchOp::Delete {
-                    key: key.as_ref(),
-                });
-                deleted_indices.push(i);
-            }
-        }
-
-        let insert_count = rng.random_range(10..=50_u32);
-        let new_kvs: Vec<([u8; 32], [u8; 20])> = (0..insert_count)
-            .map(|_| (rng.random::<[u8; 32]>(), rng.random::<[u8; 20]>()))
-            .collect();
-        let new_keys: Vec<[u8; 32]> = new_kvs.iter().map(|(k, _)| *k).collect();
-        for (key, val) in &new_kvs {
-            end_batch.push(BatchOp::Put {
-                key: key.as_ref(),
-                value: val.as_ref(),
-            });
-        }
-
-        db.propose(end_batch).unwrap().commit().unwrap();
-        let root2 = db.root_hash().unwrap();
-        debug!(
-            "end trie: deleted={}, inserted={insert_count}, root2={root2:?}",
-            deleted_indices.len()
-        );
-        trace!("end trie dump:\n{}", db.dump_to_string().unwrap());
-
-        // ── Build end-state key list ──────────────────────────────────
-        let mut end_keys: Vec<[u8; 32]> = start_keys
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !deleted_indices.contains(i))
-            .map(|(_, k)| *k)
-            .chain(new_keys.iter().copied())
-            .collect();
-        end_keys.sort_unstable();
-        end_keys.dedup();
-
-        // ── 3rd revision for replay tests ─────────────────────────────
-        let extra_kvs: Vec<([u8; 32], [u8; 20])> = (0..10)
-            .map(|_| (rng.random::<[u8; 32]>(), rng.random::<[u8; 20]>()))
-            .collect();
-        let extra_batch: Vec<BatchOp<&[u8], &[u8]>> = extra_kvs
-            .iter()
-            .map(|(k, v)| BatchOp::Put {
-                key: k.as_ref(),
-                value: v.as_ref(),
-            })
-            .collect();
-        db.propose(extra_batch).unwrap().commit().unwrap();
-        let root3 = db.root_hash().unwrap();
-        debug!("3rd revision root3={root3:?}");
-
-        // ── 2nd independent DB for replay tests ──────────────────────
-        let dir2 = tempfile::tempdir().unwrap();
-        let db2 = Db::new(dir2.path(), DbConfig::builder().build()).unwrap();
-        let rng2 = rng.seeded_fork();
-        let start_data2 = fixed_and_pseudorandom_data(&rng2, key_count);
-        let batch2: Vec<BatchOp<&[u8], &[u8]>> = start_data2
-            .iter()
-            .map(|(k, v)| BatchOp::Put {
-                key: k.as_ref(),
-                value: v.as_ref(),
-            })
-            .collect();
-        db2.propose(batch2).unwrap().commit().unwrap();
-        let root1_b = db2.root_hash().unwrap();
-        let extra2: Vec<([u8; 32], [u8; 20])> = (0..20)
-            .map(|_| (rng2.random::<[u8; 32]>(), rng2.random::<[u8; 20]>()))
-            .collect();
-        let batch2b: Vec<BatchOp<&[u8], &[u8]>> = extra2
-            .iter()
-            .map(|(k, v)| BatchOp::Put {
-                key: k.as_ref(),
-                value: v.as_ref(),
-            })
-            .collect();
-        db2.propose(batch2b).unwrap().commit().unwrap();
-        let root2_b = db2.root_hash().unwrap();
-
-        // ── Inner loop: generate valid proof, mutate, assert rejection ─
+        // ── Inner loop: positive verification + mutation rejection ────
         for _ in 0..50 {
             let scenario = rng.random_range(0..100_u32);
 
-            let (proof, start_key, end_key): (
-                FrozenChangeProof,
-                Option<[u8; 32]>,
-                Option<[u8; 32]>,
-            ) = match scenario {
-                // Both boundaries exist.
-                0..36 => {
-                    if end_keys.len() < 2 {
-                        continue;
-                    }
-                    let si = rng.random_range(0..end_keys.len() - 1);
-                    let ei = rng.random_range(si + 1..end_keys.len());
-                    let sk = end_keys[si];
-                    let ek = end_keys[ei];
-                    let p = db
-                        .change_proof(
-                            root1.clone(),
-                            root2.clone(),
-                            Some(sk.as_ref()),
-                            Some(ek.as_ref()),
-                            None,
-                        )
-                        .expect("change_proof should succeed");
-                    (p, Some(sk), Some(ek))
-                }
-                // Start boundary non-existent.
-                36..56 => {
-                    // `random_range(1..len-1)` requires len >= 3.
-                    if end_keys.len() < 3 {
-                        continue;
-                    }
-                    let si = rng.random_range(1..end_keys.len() - 1);
-                    let ei = rng.random_range(si..end_keys.len());
-                    let decreased = decrease_key(&end_keys[si]);
-                    if decreased >= end_keys[si] || (si > 0 && decreased == end_keys[si - 1]) {
-                        continue;
-                    }
-                    let ek = end_keys[ei];
-                    let p = db
-                        .change_proof(
-                            root1.clone(),
-                            root2.clone(),
-                            Some(decreased.as_ref()),
-                            Some(ek.as_ref()),
-                            None,
-                        )
-                        .expect("change_proof should succeed");
-                    (p, Some(decreased), Some(ek))
-                }
-                // End boundary non-existent.
-                56..76 => {
-                    if end_keys.len() < 2 {
-                        continue;
-                    }
-                    let si = rng.random_range(0..end_keys.len() - 1);
-                    let ei = rng.random_range(si..end_keys.len() - 1);
-                    let increased = increase_key(&end_keys[ei]);
-                    if increased <= end_keys[ei]
-                        || (ei + 1 < end_keys.len() && increased == end_keys[ei + 1])
-                    {
-                        continue;
-                    }
-                    let sk = end_keys[si];
-                    let p = db
-                        .change_proof(
-                            root1.clone(),
-                            root2.clone(),
-                            Some(sk.as_ref()),
-                            Some(increased.as_ref()),
-                            None,
-                        )
-                        .expect("change_proof should succeed");
-                    (p, Some(sk), Some(increased))
-                }
-                // Both boundaries non-existent.
-                76..96 => {
-                    // `random_range(1..len-1)` requires len >= 3.
-                    if end_keys.len() < 3 {
-                        continue;
-                    }
-                    let si = rng.random_range(1..end_keys.len() - 1);
-                    let ei = rng.random_range(si..end_keys.len() - 1);
-                    let decreased = decrease_key(&end_keys[si]);
-                    let increased = increase_key(&end_keys[ei]);
-                    if decreased >= end_keys[si]
-                        || (si > 0 && decreased == end_keys[si - 1])
-                        || increased <= end_keys[ei]
-                        || (ei + 1 < end_keys.len() && increased == end_keys[ei + 1])
-                    {
-                        continue;
-                    }
-                    let p = db
-                        .change_proof(
-                            root1.clone(),
-                            root2.clone(),
-                            Some(decreased.as_ref()),
-                            Some(increased.as_ref()),
-                            None,
-                        )
-                        .expect("change_proof should succeed");
-                    (p, Some(decreased), Some(increased))
-                }
-                // No bounds.
-                _ => {
-                    let p = db
-                        .change_proof(root1.clone(), root2.clone(), None, None, None)
-                        .expect("change_proof should succeed");
-                    (p, None, None)
-                }
+            let Some(ProofWithBounds {
+                proof,
+                start_key,
+                end_key,
+            }) = pick_proof_for_scenario(&rng, db, start_root, end_root, end_keys, scenario)
+            else {
+                continue;
             };
 
             let scenario_desc = match scenario {
@@ -903,8 +690,8 @@ fn test_slow_adversarial_change_proof_fuzz() {
             debug!(
                 "scenario={scenario}({scenario_desc}) start_key={} end_key={} \
                  batch_ops={} start_proof={} end_proof={}",
-                start_key.as_ref().map_or("None".into(), hex::encode),
-                end_key.as_ref().map_or("None".into(), hex::encode),
+                start_key.as_deref().map_or("None".into(), hex::encode),
+                end_key.as_deref().map_or("None".into(), hex::encode),
                 proof.batch_ops().len(),
                 proof.start_proof().as_ref().len(),
                 proof.end_proof().as_ref().len(),
@@ -913,21 +700,47 @@ fn test_slow_adversarial_change_proof_fuzz() {
             debug!("start_proof: {:?}", proof.start_proof().as_ref());
             debug!("end_proof: {:?}", proof.end_proof().as_ref());
 
+            // ── Positive verification ─────────────────────────────────
+            // Apply optional serialize round-trip (10% of proofs) before
+            // positive verification. In merkledb mode, values >= 32 bytes
+            // get converted to ValueDigest::Hash during serialization,
+            // exercising the Hash reconciliation path.
+            let proof = maybe_round_trip(&rng, proof);
+            let positive_ctx = verify_change_proof_structure(
+                &proof,
+                end_root.clone(),
+                start_key.as_deref(),
+                end_key.as_deref(),
+                None,
+            )
+            .unwrap_or_else(|e| {
+                panic!(
+                    "positive structural check should pass: \
+                     seed={seed}, run={run}, scenario={scenario}({scenario_desc}): {e}"
+                )
+            });
+            verify_and_check(db, &proof, &positive_ctx, start_root.clone()).unwrap_or_else(|e| {
+                panic!(
+                    "positive root hash check should pass: \
+                     seed={seed}, run={run}, scenario={scenario}({scenario_desc}): {e}"
+                )
+            });
+
             // Pick mutation group.
             let group = rng.random_range(0..100_u32);
 
             let mutation_name: &str;
             let mutated_proof: FrozenChangeProof;
-            let mut use_start_key: Option<Vec<u8>> = start_key.as_ref().map(|k| k.to_vec());
-            let mut use_end_key: Option<Vec<u8>> = end_key.as_ref().map(|k| k.to_vec());
-            let mut use_end_root = root2.clone();
-            let mut use_start_root = root1.clone();
+            let mut use_start_key: Option<Vec<u8>> = start_key.clone();
+            let mut use_end_key: Option<Vec<u8>> = end_key.clone();
+            let mut use_end_root = end_root.clone();
+            let mut use_start_root = start_root.clone();
             let use_db: &Db;
 
             match group {
                 // ── Group 1: Batch op mutations (30%) ─────────────────
                 0..30 => {
-                    use_db = &db;
+                    use_db = db;
                     let mut ops: Vec<BatchOp<Key, Value>> = proof.batch_ops().to_vec();
                     if ops.is_empty() {
                         continue;
@@ -1069,28 +882,31 @@ fn test_slow_adversarial_change_proof_fuzz() {
                         // M7: Add spurious Delete for a key that exists in
                         // both the start and end tries within the proven range.
                         _ => {
-                            let sk = start_key.as_ref().map(AsRef::as_ref);
-                            let ek = end_key.as_ref().map(AsRef::as_ref);
-                            let candidates: Vec<[u8; 32]> = end_keys
+                            let sk = start_key.as_deref();
+                            let ek = end_key.as_deref();
+                            let candidates: Vec<&Vec<u8>> = end_keys
                                 .iter()
                                 .filter(|k| {
                                     let in_range = sk.is_none_or(|s| k.as_slice() >= s)
                                         && ek.is_none_or(|e| k.as_slice() <= e);
                                     in_range
-                                        && start_keys.binary_search(k).is_ok()
+                                        && start_keys.binary_search(*k).is_ok()
                                         && !ops.iter().any(|op| op.key().as_ref() == k.as_slice())
                                 })
-                                .copied()
                                 .collect();
                             if candidates.is_empty() {
                                 continue;
                             }
-                            let new_key = candidates[rng.random_range(0..candidates.len())];
-                            let key_box: Key = new_key.to_vec().into_boxed_slice();
+                            let new_key = candidates[rng.random_range(0..candidates.len())].clone();
                             let pos = ops
-                                .binary_search_by(|op| op.key().as_ref().cmp(&new_key[..]))
+                                .binary_search_by(|op| op.key().as_ref().cmp(new_key.as_slice()))
                                 .unwrap_or_else(|i| i);
-                            ops.insert(pos, BatchOp::Delete { key: key_box });
+                            ops.insert(
+                                pos,
+                                BatchOp::Delete {
+                                    key: new_key.into_boxed_slice(),
+                                },
+                            );
                             mutation_name = "M7_spurious_delete";
                         }
                     }
@@ -1102,7 +918,7 @@ fn test_slow_adversarial_change_proof_fuzz() {
 
                 // ── Group 4: Exclusion proof attacks (25%) ────────────
                 30..55 => {
-                    use_db = &db;
+                    use_db = db;
                     let start_nodes: Vec<ProofNode> = proof.start_proof().as_ref().to_vec();
                     let end_nodes: Vec<ProofNode> = proof.end_proof().as_ref().to_vec();
                     let ops: Vec<BatchOp<Key, Value>> = proof.batch_ops().to_vec();
@@ -1272,7 +1088,7 @@ fn test_slow_adversarial_change_proof_fuzz() {
 
                 // ── Group 5: Out-of-range structural (15%) ────────────
                 55..70 => {
-                    use_db = &db;
+                    use_db = db;
                     let start_nodes: Vec<ProofNode> = proof.start_proof().as_ref().to_vec();
                     let end_nodes: Vec<ProofNode> = proof.end_proof().as_ref().to_vec();
                     let ops: Vec<BatchOp<Key, Value>> = proof.batch_ops().to_vec();
@@ -1358,29 +1174,29 @@ fn test_slow_adversarial_change_proof_fuzz() {
 
                     let sub = rng.random_range(0..3_u32);
                     match sub {
-                        // M29: Wrong end_root (use root3)
+                        // M29: Wrong end_root (use replay_root)
                         0 => {
-                            use_db = &db;
+                            use_db = db;
                             mutated_proof = build_change_proof(start_nodes, end_nodes, ops);
-                            use_end_root = root3.clone();
+                            use_end_root = replay_root.clone();
                             mutation_name = "M29_wrong_end_root";
                         }
-                        // M30: Reversed roots — use root2 as start and root1 as end
+                        // M30: Reversed roots — use end_root as start and start_root as end
                         1 => {
-                            use_db = &db;
+                            use_db = db;
                             mutated_proof = build_change_proof(start_nodes, end_nodes, ops);
-                            use_start_root = root2.clone();
-                            use_end_root = root1.clone();
+                            use_start_root = end_root.clone();
+                            use_end_root = start_root.clone();
                             mutation_name = "M30_reversed_roots";
                         }
                         // M31: Proof from different DB
                         _ => {
-                            use_db = &db;
+                            use_db = db;
                             if let Ok(other_proof) = db2.change_proof(
-                                root1_b.clone(),
-                                root2_b.clone(),
-                                start_key.as_ref().map(AsRef::as_ref),
-                                end_key.as_ref().map(AsRef::as_ref),
+                                db2_start_root.clone(),
+                                db2_end_root.clone(),
+                                start_key.as_deref(),
+                                end_key.as_deref(),
                                 None,
                             ) {
                                 if other_proof.batch_ops().len() < 2 {
@@ -1390,9 +1206,9 @@ fn test_slow_adversarial_change_proof_fuzz() {
                                 let e: Vec<ProofNode> = other_proof.end_proof().as_ref().to_vec();
                                 let o: Vec<BatchOp<Key, Value>> = other_proof.batch_ops().to_vec();
                                 mutated_proof = build_change_proof(s, e, o);
-                                // Keep use_end_root = root2 (the default).
-                                // The requester asked for a proof to root2,
-                                // not root2_b, so verification must reject.
+                                // Keep use_end_root = end_root (the default).
+                                // The requester asked for a proof to end_root,
+                                // not db2_end_root, so verification must reject.
                                 mutation_name = "M31_wrong_db";
                             } else {
                                 continue;
@@ -1403,7 +1219,7 @@ fn test_slow_adversarial_change_proof_fuzz() {
 
                 // ── Group 2: Boundary proof structural (5%) ───────────
                 80..85 => {
-                    use_db = &db;
+                    use_db = db;
                     // Empty batch_ops means no in-range state to verify,
                     // so proof mutations are harmless.
                     if proof.batch_ops().is_empty() {
@@ -1456,14 +1272,18 @@ fn test_slow_adversarial_change_proof_fuzz() {
 
                 // ── Combined: force double-exclusion + group 4/5 (15%) ─
                 _ => {
-                    use_db = &db;
+                    use_db = db;
                     if end_keys.len() < 3 {
                         continue;
                     }
                     let si = rng.random_range(1..end_keys.len() - 1);
                     let ei = rng.random_range(si..end_keys.len() - 1);
-                    let decreased = decrease_key(&end_keys[si]);
-                    let increased = increase_key(&end_keys[ei]);
+                    let Some(decreased) = decrease_key_vec(&end_keys[si]) else {
+                        continue;
+                    };
+                    let Some(increased) = increase_key_vec(&end_keys[ei]) else {
+                        continue;
+                    };
                     if decreased >= end_keys[si]
                         || (si > 0 && decreased == end_keys[si - 1])
                         || increased <= end_keys[ei]
@@ -1473,16 +1293,16 @@ fn test_slow_adversarial_change_proof_fuzz() {
                     }
                     let double_proof = db
                         .change_proof(
-                            root1.clone(),
-                            root2.clone(),
-                            Some(decreased.as_ref()),
-                            Some(increased.as_ref()),
+                            start_root.clone(),
+                            end_root.clone(),
+                            Some(&decreased),
+                            Some(&increased),
                             None,
                         )
                         .expect("change_proof should succeed");
 
-                    use_start_key = Some(decreased.to_vec());
-                    use_end_key = Some(increased.to_vec());
+                    use_start_key = Some(decreased);
+                    use_end_key = Some(increased);
 
                     let start_nodes: Vec<ProofNode> = double_proof.start_proof().as_ref().to_vec();
                     let end_nodes: Vec<ProofNode> = double_proof.end_proof().as_ref().to_vec();
@@ -1541,58 +1361,21 @@ fn test_slow_adversarial_change_proof_fuzz() {
             }
 
             // ── Assert rejection ──────────────────────────────────────
-            debug!(
-                "group={group} mutation={mutation_name} \
-                 mutated_batch_ops={} mutated_start_proof={} mutated_end_proof={}",
-                mutated_proof.batch_ops().len(),
-                mutated_proof.start_proof().as_ref().len(),
-                mutated_proof.end_proof().as_ref().len(),
-            );
-            trace!("mutated batch_ops: {:#?}", mutated_proof.batch_ops());
-            trace!(
-                "mutated start_proof: {:#?}",
-                mutated_proof.start_proof().as_ref()
-            );
-            trace!(
-                "mutated end_proof: {:#?}",
-                mutated_proof.end_proof().as_ref()
-            );
-
-            let structural_result = verify_change_proof_structure(
+            let locator = TestLocator {
+                seed,
+                run,
+                scenario,
+                group,
+                mutation: mutation_name,
+            };
+            assert_proof_rejected(
+                use_db,
                 &mutated_proof,
-                use_end_root.clone(),
+                use_start_root,
+                use_end_root,
                 use_start_key.as_deref(),
                 use_end_key.as_deref(),
-                None,
-            );
-            let rejected = match &structural_result {
-                Err(e) => {
-                    debug!("rejected by structural check: {e}");
-                    true
-                }
-                Ok(ctx) => {
-                    let root_result =
-                        verify_and_check(use_db, &mutated_proof, ctx, use_start_root.clone());
-                    if let Err(e) = &root_result {
-                        debug!("rejected by root hash check: {e}");
-                        true
-                    } else {
-                        debug!("NOT REJECTED — mutation {mutation_name} passed verification!");
-                        false
-                    }
-                }
-            };
-
-            assert!(
-                rejected,
-                "mutation {mutation_name} was NOT rejected! \
-                 seed={seed}, run={run}, scenario={scenario}, group={group}, \
-                 batch_ops={}, start_proof_len={}, end_proof_len={}, \
-                 structural_ok={}, end_root={use_end_root:?}",
-                mutated_proof.batch_ops().len(),
-                mutated_proof.start_proof().as_ref().len(),
-                mutated_proof.end_proof().as_ref().len(),
-                structural_result.is_ok(),
+                &locator,
             );
         }
     }
