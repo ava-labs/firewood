@@ -7,8 +7,8 @@
 //! mix, builds an end trie by applying random Put/Delete operations, then
 //! runs many inner iterations. Each inner iteration generates a change proof
 //! under one of five boundary scenarios, verifies that the valid proof
-//! passes, then applies one of 31 mutations and asserts the mutated proof
-//! is rejected.
+//! passes, then applies one of 31 named mutations (counting start/end
+//! variants separately) and asserts the mutated proof is rejected.
 //!
 //! ## KV shape mix (per key, independent)
 //!
@@ -21,11 +21,11 @@
 //!
 //! ## Boundary scenarios (weighted)
 //!
-//! 1. (36%) Both boundary keys are existing end-state keys
-//! 2. (20%) Start boundary is a non-existent (decreased) key
-//! 3. (20%) End boundary is a non-existent (increased) key
-//! 4. (20%) Both boundaries are non-existent keys
-//! 5. (4%)  No bounds (complete proof)
+//! 1. (`0..36`,   36%) Both boundary keys are existing end-state keys
+//! 2. (`36..56`,  20%) Start boundary is a non-existent (decreased) key
+//! 3. (`56..76`,  20%) End boundary is a non-existent (increased) key
+//! 4. (`76..96`,  20%) Both boundaries are non-existent keys
+//! 5. (`96..100`,  4%) No bounds (complete proof)
 //!
 //! ## Mutation groups (weighted, every iteration)
 //!
@@ -34,7 +34,7 @@
 //! - 15% — out-of-range structural (corrupt sibling hash, remove intermediate)
 //! - 10% — replay/cross-revision (wrong root, reversed, different DB)
 //! -  5% — boundary proof structural (truncate, swap, empty)
-//! - 15% — combined: force double-exclusion + group 4/5 mutation
+//! - 15% — combined: force double-exclusion + exclusion/structural mutation
 //!
 //! Runs 25 iterations in debug builds and 250 in release builds, each with a
 //! freshly seeded RNG. On failure, the printed seed can be passed via
@@ -116,8 +116,83 @@ fn generate_kv(rng: &firewood_storage::SeededRng) -> (Vec<u8>, Vec<u8>) {
     }
 }
 
-type Key = Box<[u8]>;
-type Value = Box<[u8]>;
+/// Pick a random index of a `BatchOp` matching the given variant pattern.
+///
+/// Used inside the mutation inner loop. `continue`s to the next iteration
+/// when no op matches (e.g. picking a Put index when only Deletes remain).
+/// Must be invoked directly inside the inner `for`/`loop`. A closure or
+/// helper function would intercept the `continue`.
+macro_rules! pick_op_index {
+    ($rng:expr, $ops:expr, $variant:pat) => {{
+        let indices: Vec<usize> = $ops
+            .iter()
+            .enumerate()
+            .filter(|(_, op)| matches!(op, $variant))
+            .map(|(i, _)| i)
+            .collect();
+        if indices.is_empty() {
+            continue;
+        }
+        indices[$rng.random_range(0..indices.len())]
+    }};
+}
+
+/// Destructure a proof into the three owned parts that the mutation
+/// cases work with: start-proof nodes, end-proof nodes, and batch ops.
+macro_rules! proof_parts {
+    ($proof:expr) => {{
+        let start_nodes: Vec<ProofNode> = $proof.start_proof().as_ref().to_vec();
+        let end_nodes: Vec<ProofNode> = $proof.end_proof().as_ref().to_vec();
+        let ops: Vec<BatchOp<Key, Value>> = $proof.batch_ops().to_vec();
+        (start_nodes, end_nodes, ops)
+    }};
+}
+
+/// Clear the first present child-hash slot in `$node`, or `continue` the
+/// inner loop if no child hashes are present. Must be invoked directly
+/// inside the inner `for`/`loop`. See [`pick_op_index`] for the caveat.
+macro_rules! clear_first_child_hash {
+    ($node:expr) => {{
+        let mut found = false;
+        for pc in PathComponent::ALL {
+            if $node.child_hashes[pc].is_some() {
+                $node.child_hashes.replace(pc, None);
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            continue;
+        }
+    }};
+}
+
+/// Apply `$action` to a present child hash in `$node`, scanning from a
+/// random starting offset so the choice is uniformly distributed across
+/// the present slots. `continue`s the inner loop if no child hashes are
+/// present. Must be invoked directly inside the inner `for`/`loop`.
+/// See [`pick_op_index`] for the caveat.
+macro_rules! mutate_random_child_hash {
+    ($rng:expr, $node:expr, |$h:ident| $action:expr) => {{
+        let mut found = false;
+        let start_pc = $rng.random_range(0..16_u8);
+        for offset in 0..16_u8 {
+            // `% 16` confines the index to the 16-slot child array.
+            // `wrapping_add` quiets `clippy::arithmetic_side_effects`; the
+            // sum can never actually wrap because both operands are < 16.
+            let pc_idx = start_pc.wrapping_add(offset) % 16;
+            let pc = PathComponent::ALL[pc_idx as usize];
+            if let Some(ref mut $h) = $node.child_hashes[pc] {
+                $action;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            continue;
+        }
+    }};
+}
 
 /// Build a `FrozenChangeProof` from mutable parts.
 fn build_change_proof(
@@ -190,19 +265,22 @@ impl std::fmt::Display for TestLocator<'_> {
 }
 
 /// A change proof generated for a boundary scenario, together with the
-/// boundary keys that produced it. The boundary keys are `None` only for
-/// the no-bounds scenario.
+/// boundary keys that produced it. `scenario_desc` carries a short
+/// label for debug logging and panic messages; `start_key` and `end_key`
+/// are `None` only for the no-bounds scenario.
 struct ProofWithBounds {
     proof: FrozenChangeProof,
     start_key: Option<Vec<u8>>,
     end_key: Option<Vec<u8>>,
+    scenario_desc: &'static str,
 }
 
-/// The primary trie under test. Holds the `start_root`/`end_root` pair
+/// The primary trie under test. Holds the `start_root`/`end_root` roots
 /// every change proof is generated for, plus a 3rd revision
-/// (`replay_root`) used as a wrong end-root in the M29 mutation.
+/// (`replay_root`) used as a wrong end-root in M29.
 struct PrimaryTrie {
     db: Db,
+    /// Held to keep the temp directory alive while `db` is in use.
     _dir: tempfile::TempDir,
     start_root: HashKey,
     end_root: HashKey,
@@ -219,17 +297,22 @@ struct PrimaryTrie {
 /// produce a valid-looking proof against an unrelated state.
 struct CrossDbTrie {
     db: Db,
+    /// Held to keep the temp directory alive while `db` is in use.
     _dir: tempfile::TempDir,
     start_root: HashKey,
     end_root: HashKey,
 }
 
-/// State produced once per outer iteration.
+/// State produced once per outer iteration: a `PrimaryTrie` whose
+/// `start_root`/`end_root` pair the change proofs are generated for,
+/// and an unrelated `CrossDbTrie` used only by the M31 mutation.
 struct TrieFixture {
     primary: PrimaryTrie,
     cross_db: CrossDbTrie,
 }
 
+/// Construct the per-outer-iteration state: a primary trie (the proof's
+/// subject) plus an independent cross-DB trie used only by M31.
 fn build_trie_fixture(rng: &firewood_storage::SeededRng) -> TrieFixture {
     TrieFixture {
         primary: build_primary_trie(rng),
@@ -237,6 +320,9 @@ fn build_trie_fixture(rng: &firewood_storage::SeededRng) -> TrieFixture {
     }
 }
 
+/// Build the primary trie: commit a random start state, apply random
+/// deletes and inserts to produce `end_root`, and commit a 3rd revision
+/// (`replay_root`) used by M29.
 fn build_primary_trie(rng: &firewood_storage::SeededRng) -> PrimaryTrie {
     // ── Build start trie ──────────────────────────────────────────
     // The start trie is the initial committed state. Its root hash is
@@ -347,10 +433,13 @@ fn build_primary_trie(rng: &firewood_storage::SeededRng) -> PrimaryTrie {
     }
 }
 
+/// Build an unrelated trie used only as a source of valid-looking
+/// change proofs for the M31 cross-DB mutation.
 fn build_cross_db_trie(rng: &firewood_storage::SeededRng) -> CrossDbTrie {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::new(dir.path(), DbConfig::builder().build()).unwrap();
 
+    // ── Build start state ─────────────────────────────────────────
     let key_count = rng.random_range(16..=2048_u32) as usize;
     let kvs: Vec<(Vec<u8>, Vec<u8>)> = (0..key_count).map(|_| generate_kv(rng)).collect();
     let batch: Vec<BatchOp<&[u8], &[u8]>> = kvs
@@ -362,7 +451,11 @@ fn build_cross_db_trie(rng: &firewood_storage::SeededRng) -> CrossDbTrie {
         .collect();
     db.propose(batch).unwrap().commit().unwrap();
     let start_root = db.root_hash().unwrap();
+    debug!("cross-db start: {key_count} keys, start_root={start_root:?}");
 
+    // ── Build end state ───────────────────────────────────────────
+    // 20 fresh entries — enough to ensure non-empty `batch_ops` in the
+    // proofs M31 builds, which is its only requirement.
     let extra_kvs: Vec<(Vec<u8>, Vec<u8>)> = (0..20).map(|_| generate_kv(rng)).collect();
     let extra_batch: Vec<BatchOp<&[u8], &[u8]>> = extra_kvs
         .iter()
@@ -373,6 +466,7 @@ fn build_cross_db_trie(rng: &firewood_storage::SeededRng) -> CrossDbTrie {
         .collect();
     db.propose(extra_batch).unwrap().commit().unwrap();
     let end_root = db.root_hash().unwrap();
+    debug!("cross-db end: end_root={end_root:?}");
 
     CrossDbTrie {
         db,
@@ -395,7 +489,7 @@ fn build_cross_db_trie(rng: &firewood_storage::SeededRng) -> CrossDbTrie {
 /// - `56..76` — end boundary is a non-existent neighbor (increased)
 /// - `76..96` — both boundaries non-existent neighbors
 /// - `96..100` — no bounds (whole-trie proof)
-#[expect(clippy::arithmetic_side_effects)]
+#[expect(clippy::arithmetic_side_effects, clippy::too_many_lines)]
 fn pick_proof_for_scenario(
     rng: &firewood_storage::SeededRng,
     db: &Db,
@@ -429,6 +523,7 @@ fn pick_proof_for_scenario(
                 proof: p,
                 start_key: Some(sk),
                 end_key: Some(ek),
+                scenario_desc: "both_exist",
             })
         }
         // Start boundary is a non-existent key just below an existing
@@ -443,15 +538,11 @@ fn pick_proof_for_scenario(
             }
             let si = rng.random_range(1..end_keys.len() - 1);
             let ei = rng.random_range(si..end_keys.len());
-            // Skip if `end_keys[si]` decrements through to a fully
-            // saturated underflow (e.g. all-0x00 key — impossible to
-            // neighbor below).
+            // Skip when no usable neighbor below `end_keys[si]` exists.
+            // `?` returns None on an all-zero key. The `>=` clause is
+            // defensive. The `==` clause skips collision with the in-trie
+            // predecessor.
             let decreased = decrease_key_vec(&end_keys[si])?;
-            // Skip if the decremented key collides with the
-            // predecessor (which is in the trie). The
-            // `decreased >= end_keys[si]` branch is defensive —
-            // `decrease_key_vec` never returns a value at-or-above its
-            // input.
             if decreased >= end_keys[si] || (si > 0 && decreased == end_keys[si - 1]) {
                 return None;
             }
@@ -469,6 +560,7 @@ fn pick_proof_for_scenario(
                 proof: p,
                 start_key: Some(decreased),
                 end_key: Some(ek),
+                scenario_desc: "start_nonexistent",
             })
         }
         // End boundary is a non-existent key just above an existing
@@ -482,10 +574,11 @@ fn pick_proof_for_scenario(
             }
             let si = rng.random_range(0..end_keys.len() - 1);
             let ei = rng.random_range(si..end_keys.len() - 1);
-            // None on full overflow (e.g. all-0xFF key).
+            // Skip when no usable neighbor above `end_keys[ei]` exists.
+            // `?` returns None on an all-0xFF key. The `<=` clause is
+            // defensive. The `==` clause skips collision with the in-trie
+            // successor.
             let increased = increase_key_vec(&end_keys[ei])?;
-            // Skip if the incremented key collides with the successor
-            // (in-trie).
             if increased <= end_keys[ei]
                 || (ei + 1 < end_keys.len() && increased == end_keys[ei + 1])
             {
@@ -505,6 +598,7 @@ fn pick_proof_for_scenario(
                 proof: p,
                 start_key: Some(sk),
                 end_key: Some(increased),
+                scenario_desc: "end_nonexistent",
             })
         }
         // Both boundaries are non-existent neighbor keys. Combines the
@@ -517,6 +611,10 @@ fn pick_proof_for_scenario(
             }
             let si = rng.random_range(1..end_keys.len() - 1);
             let ei = rng.random_range(si..end_keys.len() - 1);
+            // Skip when no usable neighbor exists on either side.
+            // `?` returns None on all-zero or all-0xFF keys. The `>=`/`<=`
+            // clauses are defensive. The `==` clauses skip collisions with
+            // the in-trie predecessor and successor.
             let decreased = decrease_key_vec(&end_keys[si])?;
             let increased = increase_key_vec(&end_keys[ei])?;
             if decreased >= end_keys[si]
@@ -539,6 +637,7 @@ fn pick_proof_for_scenario(
                 proof: p,
                 start_key: Some(decreased),
                 end_key: Some(increased),
+                scenario_desc: "both_nonexistent",
             })
         }
         // No bounds — proof covers the entire key space.
@@ -550,6 +649,7 @@ fn pick_proof_for_scenario(
                 proof: p,
                 start_key: None,
                 end_key: None,
+                scenario_desc: "no_bounds",
             })
         }
     }
@@ -581,13 +681,13 @@ fn assert_proof_rejected(
         mutated_proof.start_proof().as_ref().len(),
         mutated_proof.end_proof().as_ref().len(),
     );
-    trace!("mutated batch_ops: {:#?}", mutated_proof.batch_ops());
+    trace!("mutated batch_ops: {:?}", mutated_proof.batch_ops());
     trace!(
-        "mutated start_proof: {:#?}",
+        "mutated start_proof: {:?}",
         mutated_proof.start_proof().as_ref()
     );
     trace!(
-        "mutated end_proof: {:#?}",
+        "mutated end_proof: {:?}",
         mutated_proof.end_proof().as_ref()
     );
 
@@ -626,7 +726,7 @@ fn assert_proof_rejected(
 }
 
 #[test]
-#[expect(clippy::too_many_lines)]
+#[expect(clippy::arithmetic_side_effects, clippy::too_many_lines)]
 fn test_slow_change_proof_fuzz() {
     // When FIREWOOD_TEST_SEED is set, run only that single seed (for
     // reproducing CI failures). Otherwise, run random iterations.
@@ -675,18 +775,12 @@ fn test_slow_change_proof_fuzz() {
                 proof,
                 start_key,
                 end_key,
+                scenario_desc,
             }) = pick_proof_for_scenario(&rng, db, start_root, end_root, end_keys, scenario)
             else {
                 continue;
             };
 
-            let scenario_desc = match scenario {
-                0..36 => "both_exist",
-                36..56 => "start_nonexistent",
-                56..76 => "end_nonexistent",
-                76..96 => "both_nonexistent",
-                _ => "no_bounds",
-            };
             debug!(
                 "scenario={scenario}({scenario_desc}) start_key={} end_key={} \
                  batch_ops={} start_proof={} end_proof={}",
@@ -696,9 +790,9 @@ fn test_slow_change_proof_fuzz() {
                 proof.start_proof().as_ref().len(),
                 proof.end_proof().as_ref().len(),
             );
-            trace!("batch_ops: {:#?}", proof.batch_ops());
-            debug!("start_proof: {:?}", proof.start_proof().as_ref());
-            debug!("end_proof: {:?}", proof.end_proof().as_ref());
+            trace!("batch_ops: {:?}", proof.batch_ops());
+            trace!("start_proof: {:?}", proof.start_proof().as_ref());
+            trace!("end_proof: {:?}", proof.end_proof().as_ref());
 
             // ── Positive verification ─────────────────────────────────
             // Apply optional serialize round-trip (10% of proofs) before
@@ -726,22 +820,25 @@ fn test_slow_change_proof_fuzz() {
                 )
             });
 
-            // Pick mutation group.
             let group = rng.random_range(0..100_u32);
 
-            let mutation_name: &str;
+            // The verification context defaults to the proof's own bounds
+            // and roots. Specific mutations override:
+            //   - `use_start_root`: M30 only.
+            //   - `use_end_root`:   M29 and M30.
+            //   - `use_start_key`/`use_end_key`: the combined block only.
+            // All other arms leave these at their defaults.
+            let mutation_name: &'static str;
             let mutated_proof: FrozenChangeProof;
             let mut use_start_key: Option<Vec<u8>> = start_key.clone();
             let mut use_end_key: Option<Vec<u8>> = end_key.clone();
             let mut use_end_root = end_root.clone();
             let mut use_start_root = start_root.clone();
-            let use_db: &Db;
 
             match group {
-                // ── Group 1: Batch op mutations (30%) ─────────────────
+                // ── Batch op mutations (30%) ──────────────────────────────────────────
                 0..30 => {
-                    use_db = db;
-                    let mut ops: Vec<BatchOp<Key, Value>> = proof.batch_ops().to_vec();
+                    let (start_nodes, end_nodes, mut ops) = proof_parts!(proof);
                     if ops.is_empty() {
                         continue;
                     }
@@ -750,51 +847,29 @@ fn test_slow_change_proof_fuzz() {
                     match sub {
                         // M1: Omit a Put
                         0 => {
-                            let put_indices: Vec<usize> = ops
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, op)| matches!(op, BatchOp::Put { .. }))
-                                .map(|(i, _)| i)
-                                .collect();
-                            if put_indices.is_empty() {
-                                continue;
-                            }
-                            let idx = put_indices[rng.random_range(0..put_indices.len())];
+                            let idx = pick_op_index!(rng, ops, BatchOp::Put { .. });
                             ops.remove(idx);
                             mutation_name = "M1_omit_put";
                         }
                         // M2: Omit a Delete
                         1 => {
-                            let del_indices: Vec<usize> = ops
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, op)| matches!(op, BatchOp::Delete { .. }))
-                                .map(|(i, _)| i)
-                                .collect();
-                            if del_indices.is_empty() {
-                                continue;
-                            }
-                            let idx = del_indices[rng.random_range(0..del_indices.len())];
+                            let idx = pick_op_index!(rng, ops, BatchOp::Delete { .. });
                             ops.remove(idx);
                             mutation_name = "M2_omit_delete";
                         }
                         // M3: Swap a value
                         2 => {
-                            let put_indices: Vec<usize> = ops
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, op)| matches!(op, BatchOp::Put { .. }))
-                                .map(|(i, _)| i)
-                                .collect();
-                            if put_indices.is_empty() {
-                                continue;
-                            }
-                            let idx = put_indices[rng.random_range(0..put_indices.len())];
+                            let idx = pick_op_index!(rng, ops, BatchOp::Put { .. });
                             let key = ops[idx].key().clone();
                             let old_val = match &ops[idx] {
                                 BatchOp::Put { value, .. } => value.clone(),
                                 _ => unreachable!(),
                             };
+                            // XOR the first 20 bytes of `old_val` with a
+                            // non-zero mask. If `old_val` is longer than
+                            // 20 bytes, the result is truncated to 20 —
+                            // still a "different value", so the mutation
+                            // remains valid.
                             let mask: [u8; 20] = loop {
                                 let m: [u8; 20] = rng.random();
                                 if m != [0u8; 20] {
@@ -806,10 +881,10 @@ fn test_slow_change_proof_fuzz() {
                                 .zip(mask.iter())
                                 .map(|(a, b)| a ^ b)
                                 .collect();
-                            debug!(
+                            trace!(
                                 "M3: key={} old_val={} new_val={}",
-                                hex::encode(&*key),
-                                hex::encode(&*old_val),
+                                hex::encode(&key),
+                                hex::encode(&old_val),
                                 hex::encode(&new_val),
                             );
                             ops[idx] = BatchOp::Put {
@@ -820,37 +895,19 @@ fn test_slow_change_proof_fuzz() {
                         }
                         // M4: Put → Delete
                         3 => {
-                            let put_indices: Vec<usize> = ops
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, op)| matches!(op, BatchOp::Put { .. }))
-                                .map(|(i, _)| i)
-                                .collect();
-                            if put_indices.is_empty() {
-                                continue;
-                            }
-                            let idx = put_indices[rng.random_range(0..put_indices.len())];
+                            let idx = pick_op_index!(rng, ops, BatchOp::Put { .. });
                             let key = ops[idx].key().clone();
                             ops[idx] = BatchOp::Delete { key };
                             mutation_name = "M4_put_to_delete";
                         }
                         // M5: Delete → Put
                         4 => {
-                            let del_indices: Vec<usize> = ops
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, op)| matches!(op, BatchOp::Delete { .. }))
-                                .map(|(i, _)| i)
-                                .collect();
-                            if del_indices.is_empty() {
-                                continue;
-                            }
-                            let idx = del_indices[rng.random_range(0..del_indices.len())];
+                            let idx = pick_op_index!(rng, ops, BatchOp::Delete { .. });
                             let key = ops[idx].key().clone();
                             let new_val: [u8; 20] = rng.random();
-                            debug!(
+                            trace!(
                                 "M5: key={} new_val={}",
-                                hex::encode(&*key),
+                                hex::encode(&key),
                                 hex::encode(new_val),
                             );
                             ops[idx] = BatchOp::Put {
@@ -911,17 +968,12 @@ fn test_slow_change_proof_fuzz() {
                         }
                     }
 
-                    let start_nodes: Vec<ProofNode> = proof.start_proof().as_ref().to_vec();
-                    let end_nodes: Vec<ProofNode> = proof.end_proof().as_ref().to_vec();
                     mutated_proof = build_change_proof(start_nodes, end_nodes, ops);
                 }
 
-                // ── Group 4: Exclusion proof attacks (25%) ────────────
+                // ── Exclusion proof attacks (25%) ───────────────────────────────
                 30..55 => {
-                    use_db = db;
-                    let start_nodes: Vec<ProofNode> = proof.start_proof().as_ref().to_vec();
-                    let end_nodes: Vec<ProofNode> = proof.end_proof().as_ref().to_vec();
-                    let ops: Vec<BatchOp<Key, Value>> = proof.batch_ops().to_vec();
+                    let (start_nodes, end_nodes, ops) = proof_parts!(proof);
 
                     let has_start = !start_nodes.is_empty();
                     let has_end = !end_nodes.is_empty();
@@ -952,33 +1004,13 @@ fn test_slow_change_proof_fuzz() {
                             if has_start {
                                 let mut nodes = start_nodes.clone();
                                 let last = nodes.last_mut().unwrap();
-                                let mut found = false;
-                                for pc in PathComponent::ALL {
-                                    if last.child_hashes[pc].is_some() {
-                                        last.child_hashes.replace(pc, None);
-                                        found = true;
-                                        break;
-                                    }
-                                }
-                                if !found {
-                                    continue;
-                                }
+                                clear_first_child_hash!(last);
                                 mutated_proof = build_change_proof(nodes, end_nodes, ops);
                                 mutation_name = "M21_clear_child_start";
                             } else {
                                 let mut nodes = end_nodes.clone();
                                 let last = nodes.last_mut().unwrap();
-                                let mut found = false;
-                                for pc in PathComponent::ALL {
-                                    if last.child_hashes[pc].is_some() {
-                                        last.child_hashes.replace(pc, None);
-                                        found = true;
-                                        break;
-                                    }
-                                }
-                                if !found {
-                                    continue;
-                                }
+                                clear_first_child_hash!(last);
                                 mutated_proof = build_change_proof(start_nodes, nodes, ops);
                                 mutation_name = "M21_clear_child_end";
                             }
@@ -1040,17 +1072,7 @@ fn test_slow_change_proof_fuzz() {
                             }
                             let mut nodes = end_nodes.clone();
                             let last = nodes.last_mut().unwrap();
-                            let mut found = false;
-                            for pc in PathComponent::ALL {
-                                if let Some(ref mut h) = last.child_hashes[pc] {
-                                    flip_hash_bit(&rng, h);
-                                    found = true;
-                                    break;
-                                }
-                            }
-                            if !found {
-                                continue;
-                            }
+                            mutate_random_child_hash!(rng, last, |h| flip_hash_bit(&rng, h));
                             mutated_proof = build_change_proof(start_nodes, nodes, ops);
                             mutation_name = "M24_corrupt_end_last";
                         }
@@ -1069,29 +1091,16 @@ fn test_slow_change_proof_fuzz() {
                             };
                             let mut nodes = start_nodes.clone();
                             let node = &mut nodes[idx];
-                            let mut found = false;
-                            for pc in PathComponent::ALL {
-                                if let Some(ref mut h) = node.child_hashes[pc] {
-                                    flip_hash_bit(&rng, h);
-                                    found = true;
-                                    break;
-                                }
-                            }
-                            if !found {
-                                continue;
-                            }
+                            mutate_random_child_hash!(rng, node, |h| flip_hash_bit(&rng, h));
                             mutated_proof = build_change_proof(nodes, end_nodes, ops);
                             mutation_name = "M25_corrupt_shared_node";
                         }
                     }
                 }
 
-                // ── Group 5: Out-of-range structural (15%) ────────────
+                // ── Out-of-range structural (15%) ───────────────────────────────
                 55..70 => {
-                    use_db = db;
-                    let start_nodes: Vec<ProofNode> = proof.start_proof().as_ref().to_vec();
-                    let end_nodes: Vec<ProofNode> = proof.end_proof().as_ref().to_vec();
-                    let ops: Vec<BatchOp<Key, Value>> = proof.batch_ops().to_vec();
+                    let (start_nodes, end_nodes, ops) = proof_parts!(proof);
 
                     let sub = rng.random_range(0..2_u32);
                     match sub {
@@ -1101,40 +1110,14 @@ fn test_slow_change_proof_fuzz() {
                                 let mut nodes = start_nodes.clone();
                                 let idx = rng.random_range(0..nodes.len());
                                 let node = &mut nodes[idx];
-                                let mut found = false;
-                                let start_pc = rng.random_range(0..16_u8);
-                                for offset in 0..16_u8 {
-                                    let pc_idx = (start_pc + offset) % 16;
-                                    let pc = PathComponent::ALL[pc_idx as usize];
-                                    if let Some(ref mut h) = node.child_hashes[pc] {
-                                        flip_hash_bit(&rng, h);
-                                        found = true;
-                                        break;
-                                    }
-                                }
-                                if !found {
-                                    continue;
-                                }
+                                mutate_random_child_hash!(rng, node, |h| flip_hash_bit(&rng, h));
                                 mutated_proof = build_change_proof(nodes, end_nodes, ops);
                                 mutation_name = "M27_corrupt_sibling_start";
                             } else if !end_nodes.is_empty() {
                                 let mut nodes = end_nodes.clone();
                                 let idx = rng.random_range(0..nodes.len());
                                 let node = &mut nodes[idx];
-                                let mut found = false;
-                                let start_pc = rng.random_range(0..16_u8);
-                                for offset in 0..16_u8 {
-                                    let pc_idx = (start_pc + offset) % 16;
-                                    let pc = PathComponent::ALL[pc_idx as usize];
-                                    if let Some(ref mut h) = node.child_hashes[pc] {
-                                        flip_hash_bit(&rng, h);
-                                        found = true;
-                                        break;
-                                    }
-                                }
-                                if !found {
-                                    continue;
-                                }
+                                mutate_random_child_hash!(rng, node, |h| flip_hash_bit(&rng, h));
                                 mutated_proof = build_change_proof(start_nodes, nodes, ops);
                                 mutation_name = "M27_corrupt_sibling_end";
                             } else {
@@ -1162,36 +1145,41 @@ fn test_slow_change_proof_fuzz() {
                     }
                 }
 
-                // ── Group 6: Replay / cross-revision (10%) ────────────
+                // ── Replay / cross-revision (10%) ───────────────────────────────
                 70..80 => {
                     // Need non-empty batch_ops for meaningful cross-revision checks.
                     if proof.batch_ops().len() < 2 {
                         continue;
                     }
-                    let start_nodes: Vec<ProofNode> = proof.start_proof().as_ref().to_vec();
-                    let end_nodes: Vec<ProofNode> = proof.end_proof().as_ref().to_vec();
-                    let ops: Vec<BatchOp<Key, Value>> = proof.batch_ops().to_vec();
+                    let (start_nodes, end_nodes, ops) = proof_parts!(proof);
 
                     let sub = rng.random_range(0..3_u32);
                     match sub {
-                        // M29: Wrong end_root (use replay_root)
+                        // M29: Verify the proof against `replay_root` (a
+                        // later revision of `db`) instead of `end_root`.
+                        // The proof commits to `end_root`, so the mismatch
+                        // is the attack.
                         0 => {
-                            use_db = db;
                             mutated_proof = build_change_proof(start_nodes, end_nodes, ops);
                             use_end_root = replay_root.clone();
                             mutation_name = "M29_wrong_end_root";
                         }
-                        // M30: Reversed roots — use end_root as start and start_root as end
+                        // M30: Swap start_root and end_root for
+                        // verification. The proof commits to the original
+                        // (start_root, end_root) direction; the reversed
+                        // pair must be detected as inconsistent.
                         1 => {
-                            use_db = db;
                             mutated_proof = build_change_proof(start_nodes, end_nodes, ops);
                             use_start_root = end_root.clone();
                             use_end_root = start_root.clone();
                             mutation_name = "M30_reversed_roots";
                         }
-                        // M31: Proof from different DB
+                        // M31: Build a proof against `db2` (an unrelated
+                        // trie) committing to `db2_end_root`. Leaving
+                        // `use_end_root` at the default `end_root` makes
+                        // the verifier check the proof against the wrong
+                        // root; the mismatch is the attack.
                         _ => {
-                            use_db = db;
                             if let Ok(other_proof) = db2.change_proof(
                                 db2_start_root.clone(),
                                 db2_end_root.clone(),
@@ -1202,13 +1190,8 @@ fn test_slow_change_proof_fuzz() {
                                 if other_proof.batch_ops().len() < 2 {
                                     continue;
                                 }
-                                let s: Vec<ProofNode> = other_proof.start_proof().as_ref().to_vec();
-                                let e: Vec<ProofNode> = other_proof.end_proof().as_ref().to_vec();
-                                let o: Vec<BatchOp<Key, Value>> = other_proof.batch_ops().to_vec();
+                                let (s, e, o) = proof_parts!(other_proof);
                                 mutated_proof = build_change_proof(s, e, o);
-                                // Keep use_end_root = end_root (the default).
-                                // The requester asked for a proof to end_root,
-                                // not db2_end_root, so verification must reject.
                                 mutation_name = "M31_wrong_db";
                             } else {
                                 continue;
@@ -1217,17 +1200,14 @@ fn test_slow_change_proof_fuzz() {
                     }
                 }
 
-                // ── Group 2: Boundary proof structural (5%) ───────────
+                // ── Boundary proof structural (5%) ──────────────────────────────
                 80..85 => {
-                    use_db = db;
                     // Empty batch_ops means no in-range state to verify,
                     // so proof mutations are harmless.
                     if proof.batch_ops().is_empty() {
                         continue;
                     }
-                    let start_nodes: Vec<ProofNode> = proof.start_proof().as_ref().to_vec();
-                    let end_nodes: Vec<ProofNode> = proof.end_proof().as_ref().to_vec();
-                    let ops: Vec<BatchOp<Key, Value>> = proof.batch_ops().to_vec();
+                    let (start_nodes, end_nodes, ops) = proof_parts!(proof);
 
                     let sub = rng.random_range(0..4_u32);
                     match sub {
@@ -1270,9 +1250,8 @@ fn test_slow_change_proof_fuzz() {
                     }
                 }
 
-                // ── Combined: force double-exclusion + group 4/5 (15%) ─
+                // ── Combined: force double-exclusion + corruption (15%) ─
                 _ => {
-                    use_db = db;
                     if end_keys.len() < 3 {
                         continue;
                     }
@@ -1304,9 +1283,7 @@ fn test_slow_change_proof_fuzz() {
                     use_start_key = Some(decreased);
                     use_end_key = Some(increased);
 
-                    let start_nodes: Vec<ProofNode> = double_proof.start_proof().as_ref().to_vec();
-                    let end_nodes: Vec<ProofNode> = double_proof.end_proof().as_ref().to_vec();
-                    let ops: Vec<BatchOp<Key, Value>> = double_proof.batch_ops().to_vec();
+                    let (start_nodes, end_nodes, ops) = proof_parts!(double_proof);
 
                     if start_nodes.is_empty() || end_nodes.is_empty() {
                         continue;
@@ -1314,7 +1291,7 @@ fn test_slow_change_proof_fuzz() {
 
                     let sub = rng.random_range(0..3_u32);
                     match sub {
-                        // Truncate start exclusion proof
+                        // M32: Truncate the double-exclusion start proof
                         0 => {
                             if start_nodes.len() < 2 {
                                 continue;
@@ -1322,36 +1299,25 @@ fn test_slow_change_proof_fuzz() {
                             let mut nodes = start_nodes;
                             nodes.pop();
                             mutated_proof = build_change_proof(nodes, end_nodes, ops);
-                            mutation_name = "combined_truncate_start";
+                            mutation_name = "M32_combined_truncate_start";
                         }
-                        // Corrupt a child hash in end proof
+                        // M33: Corrupt a child hash in the end proof
                         1 => {
                             let mut nodes = end_nodes;
                             let idx = rng.random_range(0..nodes.len());
                             let node = &mut nodes[idx];
-                            let mut found = false;
-                            for pc in PathComponent::ALL {
-                                if let Some(ref mut h) = node.child_hashes[pc] {
-                                    flip_hash_bit(&rng, h);
-                                    found = true;
-                                    break;
-                                }
-                            }
-                            if !found {
-                                continue;
-                            }
+                            mutate_random_child_hash!(rng, node, |h| flip_hash_bit(&rng, h));
                             mutated_proof = build_change_proof(start_nodes, nodes, ops);
-                            mutation_name = "combined_corrupt_end_child";
+                            mutation_name = "M33_combined_corrupt_end_child";
                         }
-                        // Corrupt start proof value
+                        // M34: Remove a value from a start-proof node
                         _ => {
-                            // Remove a value from a start proof node (if any).
                             let idx = start_nodes.iter().position(|n| n.value_digest.is_some());
                             if let Some(idx) = idx {
                                 let mut nodes = start_nodes;
                                 nodes[idx].value_digest = None;
                                 mutated_proof = build_change_proof(nodes, end_nodes, ops);
-                                mutation_name = "combined_remove_value";
+                                mutation_name = "M34_combined_remove_value";
                             } else {
                                 continue;
                             }
@@ -1369,7 +1335,7 @@ fn test_slow_change_proof_fuzz() {
                 mutation: mutation_name,
             };
             assert_proof_rejected(
-                use_db,
+                db,
                 &mutated_proof,
                 use_start_root,
                 use_end_root,
