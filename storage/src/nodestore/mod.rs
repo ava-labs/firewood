@@ -49,6 +49,7 @@ pub(crate) mod persist;
 pub(crate) mod primitives;
 
 use crate::IntoHashType;
+use crate::arc_swap_triomphe::TriompheArc;
 use crate::linear::{OffsetReader, ReadableNodeMode};
 use crate::logger::{debug, trace};
 use crate::node::branch::ReadSerializable as _;
@@ -56,6 +57,7 @@ use firewood_metrics::{firewood_counter, firewood_histogram};
 use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::io::{Error, ErrorKind};
+use std::num::NonZeroU64;
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -109,6 +111,17 @@ use super::linear::WritableStorage;
 /// Set to the maximum area size to minimize allocations for large nodes.
 const INITIAL_BUMP_SIZE: usize = AreaIndex::MAX_AREA_SIZE as usize;
 
+impl<S> NodeStore<Committed, S> {
+    /// Returns the [`CommittedId`] that uniquely identifies this committed
+    /// revision. This is the identity used to validate a proposal's parent
+    /// at commit time; root hash alone would not distinguish hash-equal
+    /// revisions like the two ends of an A→B→A round-trip.
+    #[must_use]
+    pub const fn committed_id(&self) -> CommittedId {
+        self.kind.id
+    }
+}
+
 impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Creates a new `NodeStore` using the provided header and storage.
     ///
@@ -123,6 +136,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
             kind: Committed {
                 deleted: Box::default(),
                 root: None,
+                id: CommittedId::next(),
             },
             storage,
             must_recompute_storage_hash: header.must_recompute_storage_hash(),
@@ -152,6 +166,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
             kind: Committed {
                 deleted: Box::default(),
                 root: None,
+                id: CommittedId::next(),
             },
             must_recompute_storage_hash: true,
         }
@@ -178,6 +193,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
             kind: Committed {
                 deleted: Box::default(),
                 root: None,
+                id: CommittedId::next(),
             },
             storage,
             must_recompute_storage_hash: true,
@@ -249,19 +265,28 @@ impl Parentable for Arc<ImmutableProposal> {
 
 impl<S> NodeStore<Arc<ImmutableProposal>, S> {
     /// When an immutable proposal commits, we need to reparent any proposal that
-    /// has the committed proposal as it's parent
-    pub fn commit_reparent(&self, other: &NodeStore<Arc<ImmutableProposal>, S>) {
-        other.kind.commit_reparent(&self.kind);
+    /// has the committed proposal as its parent.
+    ///
+    /// `new_id` is the [`CommittedId`] of the new committed revision produced
+    /// from `self` (the just-committed proposal).
+    pub fn commit_reparent(
+        &self,
+        other: &NodeStore<Arc<ImmutableProposal>, S>,
+        new_id: CommittedId,
+    ) {
+        other.kind.commit_reparent(&self.kind, new_id);
     }
 }
 
 impl Parentable for Committed {
     fn as_nodestore_parent(&self) -> NodeStoreParent {
-        NodeStoreParent::Committed(
-            self.root
+        NodeStoreParent::Committed {
+            hash: self
+                .root
                 .as_ref()
                 .and_then(|root| root.hash().cloned().map(HashType::into_triehash)),
-        )
+            id: self.id,
+        }
     }
     fn root_hash(&self) -> Option<TrieHash> {
         self.root
@@ -356,17 +381,24 @@ impl<K: MutableKind, S: ReadableStorage> NodeStore<Mutable<K>, S> {
     }
 }
 
-impl<S: ReadableStorage> NodeStore<Mutable<Recon>, S> {
+impl<S: ReadableStorage> NodeStore<Mutable<Recon<S>>, S> {
     /// Create a new mutable nodestore for reconstruction from a read-capable parent.
     ///
     /// Unlike [`NodeStore::new`], this constructor does not require `Parentable`.
     /// It is intended for linear reconstruction flows (e.g. historical or reconstructed views)
     /// that should not participate in proposal parent/reparent semantics.
     ///
+    /// `parent_anchor` is the committed revision to retain so it cannot be
+    /// reaped while this reconstruction (and any `Reconstructed` derived from
+    /// it) is alive. It is propagated to [`Reconstructed::parent_anchor`].
+    ///
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the parent root cannot be read.
-    pub(crate) fn new_for_reconstruction<T>(parent: &NodeStore<T, S>) -> Result<Self, FileIoError>
+    pub(crate) fn new_for_reconstruction<T>(
+        parent: &NodeStore<T, S>,
+        parent_anchor: Arc<NodeStore<Committed, S>>,
+    ) -> Result<Self, FileIoError>
     where
         NodeStore<T, S>: TrieReader,
     {
@@ -378,27 +410,36 @@ impl<S: ReadableStorage> NodeStore<Mutable<Recon>, S> {
         };
 
         Ok(NodeStore {
-            kind: Mutable { root, inner: Recon },
+            kind: Mutable {
+                root,
+                inner: Recon { parent_anchor },
+            },
             storage: parent.storage.clone(),
             must_recompute_storage_hash: parent.must_recompute_storage_hash,
         })
     }
 }
 
-impl<T: ReconstructionSource, S: ReadableStorage> NodeStore<T, S>
+impl<T: ReconstructionSource<S>, S: ReadableStorage> NodeStore<T, S>
 where
     NodeStore<T, S>: TrieReader,
+    Self: Sized,
 {
     /// Create a mutable reconstruction child from a committed or reconstructed parent.
     ///
     /// This constructor is restricted to [`Committed`] and [`Reconstructed`] nodestores
     /// via the [`ReconstructionSource`] bound, preventing reconstruction from proposals.
+    /// The caller's `Arc` is used (or its anchor inherited) to pin the committed
+    /// revision against reaping for the lifetime of the resulting view.
     ///
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the parent root cannot be read.
-    pub fn reconstruction_child(&self) -> Result<NodeStore<Mutable<Recon>, S>, FileIoError> {
-        NodeStore::new_for_reconstruction(self)
+    pub fn reconstruction_child(
+        self: &Arc<Self>,
+    ) -> Result<NodeStore<Mutable<Recon<S>>, S>, FileIoError> {
+        let anchor = T::committed_anchor(self);
+        NodeStore::new_for_reconstruction(self, anchor)
     }
 }
 
@@ -418,7 +459,14 @@ impl<S: WritableStorage> NodeStore<Mutable<Propose>, S> {
                 root: None,
                 inner: Propose {
                     deleted: Vec::default(),
-                    parent: NodeStoreParent::Committed(None),
+                    parent: NodeStoreParent::Committed {
+                        hash: None,
+                        // Sentinel id used only for the empty-trie placeholder
+                        // returned by `new_empty_proposal`; this proposal has
+                        // no real parent revision to identify, so it can never
+                        // commit through `commit_critical_section`.
+                        id: CommittedId::next(),
+                    },
                 },
             },
             storage,
@@ -427,15 +475,18 @@ impl<S: WritableStorage> NodeStore<Mutable<Propose>, S> {
     }
 }
 
-impl<S> NodeStore<Mutable<Recon>, S> {
-    /// Creates a new, empty, reconstruction [`NodeStore`].
-    /// This is used during testing of reconstruction workflows.
+impl<S: ReadableStorage> NodeStore<Mutable<Recon<S>>, S> {
+    /// Creates a new, empty, reconstruction [`NodeStore`] backed by a fresh
+    /// empty committed parent. Used by tests of reconstruction workflows;
+    /// production reconstructions always go through
+    /// [`NodeStore::reconstruction_child`] with a real `Committed` source.
     #[cfg(any(test, feature = "test_utils"))]
-    pub const fn new_empty_recon(storage: Arc<S>) -> Self {
+    pub fn new_empty_recon(storage: Arc<S>) -> Self {
+        let parent_anchor = Arc::new(NodeStore::new_empty_committed(Arc::clone(&storage)));
         NodeStore {
             kind: Mutable {
                 root: None,
-                inner: Recon,
+                inner: Recon { parent_anchor },
             },
             storage,
             must_recompute_storage_hash: true,
@@ -456,14 +507,36 @@ pub trait HashedNodeReader: TrieReader {
 pub trait TrieReader: NodeReader + RootReader {}
 impl<T> TrieReader for T where T: NodeReader + RootReader {}
 
-/// Marker trait for nodestore states that can serve as the source for reconstruction.
+/// Trait for nodestore states that can serve as the source for reconstruction.
 ///
 /// Only [`Committed`] and [`Reconstructed`] implement this trait. Proposals
 /// ([`Arc<ImmutableProposal>`] and [`Mutable<Propose>`]) are excluded because
 /// reconstruction chains should only branch from persisted or already-reconstructed state.
-pub trait ReconstructionSource {}
-impl ReconstructionSource for Committed {}
-impl ReconstructionSource for Reconstructed {}
+///
+/// The associated [`committed_anchor`](Self::committed_anchor) method extracts
+/// (or clones) the committed revision that should be pinned by any derived
+/// `Reconstructed`, given the caller's `Arc` to the parent nodestore.
+pub trait ReconstructionSource<S> {
+    /// Produce the committed anchor for a `Reconstructed` derived from this
+    /// parent. For [`Committed`] parents this clones the caller's `Arc`; for
+    /// [`Reconstructed`] parents this clones the parent's existing anchor so
+    /// every derived `Reconstructed` pins the same original committed root.
+    fn committed_anchor(arc: &Arc<NodeStore<Self, S>>) -> Arc<NodeStore<Committed, S>>
+    where
+        Self: Sized;
+}
+
+impl<S: ReadableStorage> ReconstructionSource<S> for Committed {
+    fn committed_anchor(arc: &Arc<NodeStore<Self, S>>) -> Arc<NodeStore<Committed, S>> {
+        Arc::clone(arc)
+    }
+}
+
+impl<S: ReadableStorage> ReconstructionSource<S> for Reconstructed<S> {
+    fn committed_anchor(arc: &Arc<NodeStore<Self, S>>) -> Arc<NodeStore<Committed, S>> {
+        Arc::clone(&arc.kind.parent_anchor)
+    }
+}
 
 /// Reads nodes from a merkle trie.
 pub trait NodeReader {
@@ -525,24 +598,64 @@ pub trait RootReader {
     fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode>;
 }
 
+/// Monotonic, process-local identifier for a committed revision. Two
+/// committed revisions can share a root hash (e.g. an A→B→A round-trip) but
+/// always have distinct ids, so this is what proposals capture to identify
+/// their committed parent. Unlike root address, ids are assigned
+/// synchronously at commit time — they don't race with the persist worker.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CommittedId(NonZeroU64);
+
+impl CommittedId {
+    /// Allocate a fresh id from the process-global counter.
+    ///
+    /// # Panics
+    ///
+    /// Panics on overflow: the counter is a `NonZeroU64` and we never want to
+    /// silently wrap and collide with an earlier id. At 1 ns per commit
+    /// hitting the wrap takes ≈585 years, so a panic here means a bug, not
+    /// a workload we need to handle.
+    #[must_use]
+    pub fn next() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let raw = NEXT.fetch_add(1, Ordering::Relaxed);
+        Self(NonZeroU64::new(raw).expect("CommittedId counter overflowed u64"))
+    }
+}
+
 /// A committed revision of a merkle trie.
 #[derive(Debug, Clone)]
 pub struct Committed {
     deleted: Box<[MaybePersistedNode]>,
     root: Option<Child>,
+    id: CommittedId,
 }
 
 #[derive(Clone, Debug)]
 pub enum NodeStoreParent {
     Proposed(Arc<ImmutableProposal>),
-    Committed(Option<TrieHash>),
+    /// Committed parent. `id` pins identity beyond hash equality: two committed
+    /// revisions can share a `hash` (e.g. an A→B→A round-trip) but always have
+    /// distinct ids, so a proposal whose parent has a stale `id` must NOT be
+    /// committable against a hash-equal sibling. Address would also be unique
+    /// per revision, but it is assigned asynchronously by the persist worker
+    /// and races with proposal creation, so we use a synchronously-assigned
+    /// monotonic id instead.
+    Committed {
+        hash: Option<TrieHash>,
+        id: CommittedId,
+    },
 }
 
 impl PartialEq for NodeStoreParent {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (NodeStoreParent::Proposed(a), NodeStoreParent::Proposed(b)) => Arc::ptr_eq(a, b),
-            (NodeStoreParent::Committed(a), NodeStoreParent::Committed(b)) => a == b,
+            (
+                NodeStoreParent::Committed { hash: ah, id: ai },
+                NodeStoreParent::Committed { hash: bh, id: bi },
+            ) => ah == bh && ai == bi,
             _ => false,
         }
     }
@@ -572,11 +685,21 @@ pub struct ImmutableProposal {
 }
 
 impl ImmutableProposal {
-    /// Returns true if the parent of this proposal is committed and has the given hash.
+    /// Returns true if the parent of this proposal is the committed revision
+    /// identified by `id`.
+    ///
+    /// `id` is fully unique per committed revision, so hash comparison would
+    /// be redundant. (We still keep the hash in [`NodeStoreParent::Committed`]
+    /// for the rebase path, which looks up the old parent revision by hash.)
+    /// Hash equality alone is not sufficient: a database can produce two
+    /// committed revisions with the same root hash (an A→B→A round trip),
+    /// and a proposal built off the first "A" must not be committable against
+    /// the second "A" — the deleted list still refers to the *first* A's
+    /// nodes, which may already have been freed and reallocated.
     #[must_use]
-    fn parent_hash_is(&self, hash: Option<TrieHash>) -> bool {
+    fn parent_id_is(&self, id: CommittedId) -> bool {
         match &*self.parent.lock() {
-            NodeStoreParent::Committed(root_hash) => *root_hash == hash,
+            NodeStoreParent::Committed { id: parent_id, .. } => *parent_id == id,
             NodeStoreParent::Proposed(_) => false,
         }
     }
@@ -585,17 +708,27 @@ impl ImmutableProposal {
     /// is another proposal.
     fn committed_parent_hash(&self) -> CommittedParentHash {
         match &*self.parent.lock() {
-            NodeStoreParent::Committed(root_hash) => CommittedParentHash::Hash(root_hash.clone()),
+            NodeStoreParent::Committed { hash, .. } => CommittedParentHash::Hash(hash.clone()),
             NodeStoreParent::Proposed(_) => CommittedParentHash::NotCommitted,
         }
     }
 
-    fn commit_reparent(self: &Arc<Self>, committing: &Arc<Self>) {
+    /// Reparent any of `self`'s parent pointers that still reference
+    /// `committing` (a proposal that just became committed) to point at the
+    /// new committed revision instead.
+    ///
+    /// `new_id` is the [`CommittedId`] assigned to the new committed
+    /// revision; the caller must pass the same id that was used when the
+    /// proposal was converted via [`NodeStore::as_committed`].
+    fn commit_reparent(self: &Arc<Self>, committing: &Arc<Self>, new_id: CommittedId) {
         let mut guard = self.parent.lock();
         if let NodeStoreParent::Proposed(ref parent) = *guard
             && Arc::ptr_eq(parent, committing)
         {
-            *guard = NodeStoreParent::Committed(committing.root_hash());
+            *guard = NodeStoreParent::Committed {
+                hash: committing.root_hash(),
+                id: new_id,
+            };
             // Track reparenting events
             firewood_counter!(REPARENTED_PROPOSAL_COUNT).increment(1);
         }
@@ -675,16 +808,37 @@ pub struct NodeStore<T, S> {
 /// Contains state for a reconstructed revision of the trie.
 /// These are unparented, and only contain an in-memory root.
 ///
-/// The root node is stored as a [`SharedNode`] at construction time.
-/// The root hash is computed lazily on the first call to
-/// [`HashedNodeReader::root_hash`] and cached in a [`OnceLock`] for
-/// lock-free access on subsequent reads.
-#[derive(Debug, Clone)]
-pub struct Reconstructed {
-    /// The root node, wrapped in a [`SharedNode`] at construction.
-    node: Option<SharedNode>,
+/// The root node is held in an [`arc_swap::ArcSwapAny`] so that
+/// [`HashedNodeReader::root_hash`] can replace it atomically with the
+/// fully-hashed version produced by hashing (children rewritten from
+/// `Child::Node` to `Child::MaybePersisted`). Reconstruction chains that
+/// never request the hash never pay for the swap.
+#[derive(Debug)]
+pub struct Reconstructed<S> {
+    /// The current root node. `None` for an empty trie; otherwise an
+    /// atomically-swappable `SharedNode`. After the first `root_hash` call
+    /// the swapped-in value's children are all `Child::MaybePersisted`.
+    root: Option<arc_swap::ArcSwapAny<TriompheArc<Node>>>,
     /// Lazily computed root hash (write-once, then lock-free reads).
     hash: OnceLock<TrieHash>,
+    /// Strong reference to the committed revision whose disk addresses this
+    /// view (transitively) references. Holding it prevents the
+    /// `RevisionManager` from reaping that revision while this `Reconstructed`
+    /// is alive.
+    pub(crate) parent_anchor: Arc<NodeStore<Committed, S>>,
+}
+
+impl<S> Clone for Reconstructed<S> {
+    fn clone(&self) -> Self {
+        Self {
+            root: self
+                .root
+                .as_ref()
+                .map(|swap| arc_swap::ArcSwapAny::new(swap.load_full())),
+            hash: self.hash.clone(),
+            parent_anchor: Arc::clone(&self.parent_anchor),
+        }
+    }
 }
 
 /// Proposal-specific fields for a mutable nodestore.
@@ -696,9 +850,17 @@ pub struct Propose {
 }
 
 /// Reconstruction-specific marker for a mutable nodestore.
-/// Zero-size: no delete list and no parent are needed for linear reconstruction chains.
+///
+/// Carries the committed-revision anchor inherited from the source
+/// `Reconstructed` (or `Committed`) so the new `Reconstructed` produced by
+/// `From<Mutable<Recon<S>>>` can retain the same pin. No delete list or
+/// parent-proposal field is needed; reconstruction chains do not participate
+/// in the future-delete log.
 #[derive(Debug)]
-pub struct Recon;
+pub struct Recon<S> {
+    /// See [`Reconstructed::parent_anchor`].
+    pub(crate) parent_anchor: Arc<NodeStore<Committed, S>>,
+}
 
 /// Behaviour that differs between proposal and reconstruction mutable nodestores.
 ///
@@ -723,7 +885,7 @@ impl MutableKind for Propose {
     }
 }
 
-impl MutableKind for Recon {
+impl<S: std::fmt::Debug + Send + Sync> MutableKind for Recon<S> {
     #[inline]
     fn track_deleted(&mut self, _node: MaybePersistedNode) {
         // Reconstruction views are ephemeral; no delete list to maintain.
@@ -746,12 +908,21 @@ pub struct Mutable<Kind> {
 /// create a mutable root node for a new Reconstructed
 /// with this root.
 /// For reconstruct on reconstruct, this avoids cloning
-impl<S: ReadableStorage> From<NodeStore<Reconstructed, S>> for NodeStore<Mutable<Recon>, S> {
-    fn from(val: NodeStore<Reconstructed, S>) -> Self {
+impl<S: ReadableStorage> From<NodeStore<Reconstructed<S>, S>> for NodeStore<Mutable<Recon<S>>, S> {
+    fn from(val: NodeStore<Reconstructed<S>, S>) -> Self {
+        // Consume the ArcSwap to get back the SharedNode, then unwrap_or_clone to extract
+        // an owned Node. In the linear M->R->M->R chain the SharedNode is uniquely held,
+        // so this is a free move.
+        let root = val
+            .kind
+            .root
+            .map(|swap| triomphe::Arc::unwrap_or_clone(swap.into_inner().into_inner()));
         NodeStore {
             kind: Mutable {
-                root: val.kind.node.map(triomphe::Arc::unwrap_or_clone),
-                inner: Recon,
+                root,
+                inner: Recon {
+                    parent_anchor: val.kind.parent_anchor,
+                },
             },
             storage: val.storage,
             must_recompute_storage_hash: val.must_recompute_storage_hash,
@@ -759,12 +930,16 @@ impl<S: ReadableStorage> From<NodeStore<Reconstructed, S>> for NodeStore<Mutable
     }
 }
 
-impl<S: ReadableStorage> From<NodeStore<Mutable<Recon>, S>> for NodeStore<Reconstructed, S> {
-    fn from(val: NodeStore<Mutable<Recon>, S>) -> Self {
+impl<S: ReadableStorage> From<NodeStore<Mutable<Recon<S>>, S>> for NodeStore<Reconstructed<S>, S> {
+    fn from(val: NodeStore<Mutable<Recon<S>>, S>) -> Self {
         NodeStore {
             kind: Reconstructed {
-                node: val.kind.root.map(triomphe::Arc::new),
+                root: val
+                    .kind
+                    .root
+                    .map(|n| arc_swap::ArcSwapAny::new(TriompheArc::new(triomphe::Arc::new(n)))),
                 hash: OnceLock::new(),
+                parent_anchor: val.kind.inner.parent_anchor,
             },
             storage: val.storage,
             must_recompute_storage_hash: val.must_recompute_storage_hash,
@@ -772,19 +947,22 @@ impl<S: ReadableStorage> From<NodeStore<Mutable<Recon>, S>> for NodeStore<Recons
     }
 }
 
-impl<S: ReadableStorage> From<Arc<NodeStore<Reconstructed, S>>> for NodeStore<Mutable<Recon>, S> {
-    fn from(val: Arc<NodeStore<Reconstructed, S>>) -> Self {
+impl<S: ReadableStorage> From<Arc<NodeStore<Reconstructed<S>, S>>>
+    for NodeStore<Mutable<Recon<S>>, S>
+{
+    fn from(val: Arc<NodeStore<Reconstructed<S>, S>>) -> Self {
         // Fast path: if this Arc is uniquely owned, `try_unwrap` is O(1) and lets us move the
         // reconstructed root out without cloning.
-        // Why this Arc might be shared: a caller could keep another handle alive (e.g. iterating
-        // over a reconstructed view while also deriving the next reconstructed state), which makes
-        // `try_unwrap` fail even though conversion is still valid.
-        // Fallback cost: when shared, we must clone the `NodeStore<Reconstructed, S>`, which
-        // clones the root `SharedNode` arc and then `Arc::unwrap_or_clone` extracts the `Node`.
-        // This shared-Arc fallback does not match our known reconstruction use cases, where the
-        // previous reconstructed handle is typically consumed before building the next one.
-        // We do this to avoid forcing callers to guarantee uniqueness while still exploiting the
-        // cheaper move path whenever possible.
+        // The fallback (shared-Arc) path is reachable in two ways:
+        //   1. A caller produced sibling views via `ReconstructedView::clone` and is keeping
+        //      another sibling alive across this call.
+        //   2. A caller is iterating over the reconstructed view (the iterator holds an Arc
+        //      clone via `ReconstructedView::view`) while also deriving the next reconstructed
+        //      state.
+        // Fallback cost: producing an owned root from the shared Arc requires recursively
+        // cloning the in-memory subtree attached to it. We accept this fallback so callers
+        // don't have to guarantee uniqueness, while still exploiting the cheaper move path
+        // whenever possible.
         Self::from(Arc::unwrap_or_clone(val))
     }
 }
@@ -793,7 +971,7 @@ impl<S: ReadableStorage> From<Arc<NodeStore<Reconstructed, S>>> for NodeStore<Mu
 ///
 /// This clones the [`SharedNode`] arc (cheap ref-count bump) and the
 /// [`OnceLock`] hash (cloned if already computed, empty otherwise).
-impl<S> Clone for NodeStore<Reconstructed, S> {
+impl<S> Clone for NodeStore<Reconstructed<S>, S> {
     fn clone(&self) -> Self {
         NodeStore {
             kind: self.kind.clone(),
@@ -803,25 +981,20 @@ impl<S> Clone for NodeStore<Reconstructed, S> {
     }
 }
 
-/// Commit a proposal to a new revision of the trie
-impl<S: WritableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<Committed, S> {
-    fn from(val: NodeStore<ImmutableProposal, S>) -> Self {
-        NodeStore {
-            kind: Committed {
-                deleted: val.kind.deleted.clone(),
-                root: val.kind.root.clone(),
-            },
-            storage: val.storage,
-            must_recompute_storage_hash: val.must_recompute_storage_hash,
-        }
-    }
-}
-
 impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
-    /// Re-export the `parent_hash_is` function of [`ImmutableProposal`].
+    /// Returns true if the parent of this proposal is the committed revision
+    /// identified by `id`.
+    ///
+    /// `id` is fully unique per committed revision, so hash comparison would
+    /// be redundant. Hash equality alone is not sufficient: a database can
+    /// produce two committed revisions with the same root hash (an A→B→A
+    /// round trip), and a proposal built off the first "A" must not be
+    /// committable against the second "A" — the deleted list still refers
+    /// to the *first* A's nodes, which may already have been freed and
+    /// reallocated.
     #[must_use]
-    pub fn parent_hash_is(&self, hash: Option<TrieHash>) -> bool {
-        self.kind.parent_hash_is(hash)
+    pub fn parent_id_is(&self, id: CommittedId) -> bool {
+        self.kind.parent_id_is(id)
     }
 
     /// Returns the committed parent's root hash, or indicates the parent
@@ -829,6 +1002,18 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     #[must_use]
     pub fn committed_parent_hash(&self) -> CommittedParentHash {
         self.kind.committed_parent_hash()
+    }
+
+    /// Returns a fresh, empty committed view sharing this proposal's storage.
+    ///
+    /// Intended for diffing against an empty parent in `commit_with_rebase`
+    /// when the proposal's recorded committed parent was an empty trie.
+    /// Using a synthetic empty view avoids relying on the manager's revisions
+    /// queue, whose front entry is not guaranteed to be the initial empty
+    /// revision once `max_revisions` is exceeded.
+    #[must_use]
+    pub fn empty_committed_sibling(&self) -> NodeStore<Committed, S> {
+        NodeStore::new_empty_committed(self.storage.clone())
     }
 }
 
@@ -841,6 +1026,7 @@ impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
             kind: Committed {
                 deleted: self.kind.deleted.clone(),
                 root: self.kind.root.clone(),
+                id: CommittedId::next(),
             },
             storage: self.storage.clone(),
             must_recompute_storage_hash: self.must_recompute_storage_hash,
@@ -907,7 +1093,7 @@ impl<T, S: ReadableStorage> NodeReader for NodeStore<Mutable<T>, S> {
     }
 }
 
-impl<S: ReadableStorage> NodeReader for NodeStore<Reconstructed, S> {
+impl<S: ReadableStorage> NodeReader for NodeStore<Reconstructed<S>, S> {
     fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError> {
         self.read_node_from_disk(addr, ReadableNodeMode::ReconRead)
     }
@@ -967,9 +1153,12 @@ impl<S: ReadableStorage> RootReader for NodeStore<Arc<ImmutableProposal>, S> {
     }
 }
 
-impl<S: ReadableStorage> RootReader for NodeStore<Reconstructed, S> {
+impl<S: ReadableStorage> RootReader for NodeStore<Reconstructed<S>, S> {
     fn root_node(&self) -> Option<SharedNode> {
-        self.kind.node.clone()
+        self.kind
+            .root
+            .as_ref()
+            .map(|swap| swap.load_full().into_inner())
     }
 
     fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
@@ -994,31 +1183,42 @@ where
 
 // This implements HashedNodeReader, can never be persisted,
 // and the root_hash is computed lazily via OnceLock.
-impl<S: ReadableStorage> HashedNodeReader for NodeStore<Reconstructed, S>
+impl<S: ReadableStorage> HashedNodeReader for NodeStore<Reconstructed<S>, S>
 where
-    NodeStore<Reconstructed, S>: TrieReader,
+    NodeStore<Reconstructed<S>, S>: TrieReader,
 {
     fn root_address(&self) -> Option<LinearAddress> {
         // Reconstructed views are read-only overlays and are never persisted.
         None
     }
 
-    // Lazily compute and cache the hash. We don't use parallel hash
-    // calculations here because reconstructed views don't benefit as much
-    // from spinning up multiple threads.
+    // Lazily compute and cache the hash. The hashed root (with children rewritten
+    // to `Child::MaybePersisted`) is swapped back into `self.kind.root` so any
+    // subsequent fork-then-reconstruct walks Arc-shared children instead of
+    // deep-cloning every `Child::Node` subtree. We don't parallelise the hash
+    // because reconstructed views don't benefit much from multiple threads.
     fn root_hash(&self) -> Option<TrieHash> {
-        let node = self.kind.node.as_ref()?;
         if let Some(hash) = self.kind.hash.get() {
             return Some(hash.clone());
         }
-        let node_val: Node = Node::clone(node);
+        let swap = self.kind.root.as_ref()?;
+        let current = swap.load_full();
+        let node_val: Node = Node::clone(&current);
         #[cfg(feature = "ethhash")]
-        let (_, hash) = self.hash_helper(node_val, Path::new()).ok()?;
+        let (hashed_mp, hash) = self.hash_helper(node_val, Path::new()).ok()?;
         #[cfg(not(feature = "ethhash"))]
-        let (_, hash) =
+        let (hashed_mp, hash) =
             NodeStore::<Mutable<Propose>, S>::hash_helper(node_val, Path::new()).ok()?;
+        // Extract the in-memory SharedNode from the freshly-built MaybePersistedNode
+        // (always the `Unpersisted` variant here, so this is a Mutex lock + Arc clone,
+        // no I/O). Replace the unhashed root with the fully-hashed one. If another
+        // thread raced us, the loser's swap overwrites with an equivalent tree; both
+        // contain the same trie content, only the children's form differs
+        // (`Child::Node` vs `Child::MaybePersisted`) and both are valid reads.
+        let hashed_shared = hashed_mp.as_shared_node(self).ok()?;
+        swap.store(TriompheArc::new(hashed_shared));
         let hash = hash.into_triehash();
-        // If another thread raced us, discard ours — both computed the same value.
+        // If another thread raced us on the hash too, discard ours — same value.
         let _ = self.kind.hash.set(hash.clone());
         Some(hash)
     }
@@ -1045,14 +1245,14 @@ fn area_index_and_size<S: ReadableStorage>(
         storage.file_io_error(
             Error::new(ErrorKind::InvalidData, e),
             addr.get(),
-            Some("area_index_and_size".to_string()),
+            Some("area_index_and_size".to_owned()),
         )
     })?)
     .ok_or_else(|| {
         storage.file_io_error(
             Error::new(ErrorKind::InvalidData, "invalid area index"),
             addr.get(),
-            Some("area_index_and_size".to_string()),
+            Some("area_index_and_size".to_owned()),
         )
     })?;
 
@@ -1111,7 +1311,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
         let node: SharedNode = Node::from_reader(&mut area_stream)
             .map_err(|e| {
                 self.storage
-                    .file_io_error(e, actual_addr, Some("read_node_from_disk".to_string()))
+                    .file_io_error(e, actual_addr, Some("read_node_from_disk".to_owned()))
             })?
             .into();
         let length = area_stream
@@ -1121,7 +1321,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
                 self.storage.file_io_error(
                     Error::other("Reader offset went backwards"),
                     actual_addr,
-                    Some("read_node_with_num_bytes_from_disk".to_string()),
+                    Some("read_node_with_num_bytes_from_disk".to_owned()),
                 )
             })?;
         Ok((node, length.saturating_add(1))) // add 1 for the area size index byte
@@ -1273,7 +1473,10 @@ mod tests {
         let r1: NodeStore<Arc<ImmutableProposal>, _> = r1.try_into().unwrap();
         {
             let parent = r1.kind.parent.lock();
-            assert!(matches!(*parent, NodeStoreParent::Committed(None)));
+            assert!(matches!(
+                *parent,
+                NodeStoreParent::Committed { hash: None, .. }
+            ));
         }
 
         // create an empty r2, check that it's parent is the proposed version r1
@@ -1285,11 +1488,11 @@ mod tests {
         }
 
         // reparent r2
-        r1.commit_reparent(&r2);
+        r1.commit_reparent(&r2, CommittedId::next());
 
         // now check r2's parent, should match the hash of r1 (which is still None)
         let parent = r2.kind.parent.lock();
-        if let NodeStoreParent::Committed(hash) = &*parent {
+        if let NodeStoreParent::Committed { hash, .. } = &*parent {
             assert_eq!(*hash, r1.root_hash());
             assert_eq!(*hash, None);
         } else {
@@ -1523,7 +1726,7 @@ mod tests {
             value: b"value".to_vec().into_boxed_slice(),
         }));
 
-        let reconstructed: NodeStore<Reconstructed, _> = recon.into();
+        let reconstructed: NodeStore<Reconstructed<_>, _> = recon.into();
 
         assert_eq!(reconstructed.root_address(), None);
     }
@@ -1538,7 +1741,7 @@ mod tests {
             value: b"value".to_vec().into_boxed_slice(),
         }));
 
-        let reconstructed: NodeStore<Reconstructed, _> = recon.into();
+        let reconstructed: NodeStore<Reconstructed<_>, _> = recon.into();
 
         // Conversion should not eagerly hash reconstructed roots.
         assert!(reconstructed.kind.hash.get().is_none());
@@ -1554,7 +1757,7 @@ mod tests {
             value: b"value".to_vec().into_boxed_slice(),
         }));
 
-        let reconstructed: NodeStore<Reconstructed, _> = recon.into();
+        let reconstructed: NodeStore<Reconstructed<_>, _> = recon.into();
 
         // Before hashing, the OnceLock is empty
         assert!(reconstructed.kind.hash.get().is_none());
@@ -1572,8 +1775,96 @@ mod tests {
         let storage = Arc::new(MemStore::default());
         let recon = NodeStore::new_empty_recon(Arc::clone(&storage));
 
-        let reconstructed: NodeStore<Reconstructed, _> = recon.into();
+        let reconstructed: NodeStore<Reconstructed<_>, _> = recon.into();
 
         assert_eq!(reconstructed.root_hash(), None);
+    }
+
+    #[test]
+    fn reconstructed_root_hash_rewrites_root_children() {
+        // After root_hash() runs, the swapped-in root must have no Child::Node
+        // children — they should all be Child::MaybePersisted. hash_helper works
+        // bottom-up, so if no Child::Node remains at the root, none remains below.
+        let storage = Arc::new(MemStore::default());
+        let mut recon = NodeStore::new_empty_recon(Arc::clone(&storage));
+
+        let mut children = Children::new();
+        children[PathComponent::ALL[0x0]] = Some(Child::Node(Node::Leaf(LeafNode {
+            partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"abc")),
+            value: b"v0".to_vec().into_boxed_slice(),
+        })));
+        children[PathComponent::ALL[0xF]] = Some(Child::Node(Node::Leaf(LeafNode {
+            partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"xyz")),
+            value: b"vf".to_vec().into_boxed_slice(),
+        })));
+        recon.root_mut().replace(Node::Branch(Box::new(BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children,
+        })));
+
+        let reconstructed: NodeStore<Reconstructed<_>, _> = recon.into();
+
+        // Sanity: pre-hash, the root branch has at least one Child::Node.
+        let before = reconstructed.root_node().expect("root present");
+        let Node::Branch(b) = &*before else {
+            panic!("root must be a branch");
+        };
+        assert!(
+            b.children
+                .iter_present()
+                .any(|(_, c)| matches!(c, Child::Node(_))),
+            "fixture must start with at least one Child::Node"
+        );
+        drop(before);
+
+        assert!(reconstructed.root_hash().is_some());
+
+        // After root_hash, no Child::Node remains at the root.
+        let after = reconstructed.root_node().expect("root present");
+        let Node::Branch(b) = &*after else {
+            panic!("root must still be a branch");
+        };
+        for (_, child) in b.children.iter_present() {
+            assert!(
+                !matches!(child, Child::Node(_)),
+                "root child still Child::Node after root_hash: {child:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn reconstructed_pins_committed_parent() {
+        // A Reconstructed must hold a strong Arc to its committed parent so
+        // the RevisionManager cannot reap the revision (and free its on-disk
+        // nodes) while a derived view is still alive.
+        let storage = Arc::new(MemStore::default());
+        let committed = Arc::new(NodeStore::new_empty_committed(Arc::clone(&storage)));
+        assert_eq!(Arc::strong_count(&committed), 1);
+
+        let recon = NodeStore::<Mutable<Recon<_>>, _>::new_for_reconstruction(
+            &*committed,
+            Arc::clone(&committed),
+        )
+        .unwrap();
+        assert_eq!(
+            Arc::strong_count(&committed),
+            2,
+            "Mutable<Recon> should pin the committed parent"
+        );
+
+        let reconstructed: NodeStore<Reconstructed<_>, _> = recon.into();
+        assert_eq!(
+            Arc::strong_count(&committed),
+            2,
+            "Reconstructed inherits the same pin (no extra clone)"
+        );
+
+        drop(reconstructed);
+        assert_eq!(
+            Arc::strong_count(&committed),
+            1,
+            "dropping the Reconstructed releases the pin"
+        );
     }
 }

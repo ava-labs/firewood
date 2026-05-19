@@ -59,7 +59,8 @@
 use std::num::NonZeroUsize;
 
 use crate::api::{self, FrozenRangeProof, HashKey};
-use firewood_storage::logger::warn;
+use crate::merkle::verify_range_proof;
+use crate::proofs::ProofError;
 
 use super::types::{Proof, ProofCollection};
 
@@ -87,24 +88,33 @@ pub struct RangeProofVerificationContext {
 /// [`RangeProofVerificationContext`] capturing the verification parameters
 /// for use by downstream logic.
 ///
-/// ## ⚠️ Unimplemented ⚠️
-///
-/// Currently a stub: structural verification is not yet implemented. The
-/// returned context records the supplied parameters so that callers
-/// downstream of `verify_*` can still consume them. Tracked separately.
+/// Enforces `max_length` against the proof's key-value count, then runs
+/// the cryptographic range-proof verification via
+/// [`verify_range_proof`].
 ///
 /// # Errors
 ///
-/// Reserved for the implemented form; the current stub does not return
-/// errors.
+/// Returns [`api::Error::ProofError`] with
+/// [`ProofError::ProofIsLargerThanMaxLength`] if the proof contains more
+/// key-value pairs than `max_length` permits, or any error surfaced by
+/// the underlying range-proof verification.
 pub fn verify_range_proof_structure(
-    _proof: &FrozenRangeProof,
+    proof: &FrozenRangeProof,
     root: HashKey,
     start_key: Option<&[u8]>,
     end_key: Option<&[u8]>,
     max_length: Option<NonZeroUsize>,
 ) -> Result<RangeProofVerificationContext, api::Error> {
-    warn!("range proof verification not yet implemented");
+    if let Some(max) = max_length
+        && proof.key_values().len() > max.get()
+    {
+        return Err(api::Error::ProofError(
+            ProofError::ProofIsLargerThanMaxLength,
+        ));
+    }
+
+    verify_range_proof(start_key, end_key, &root, proof)?;
+
     Ok(RangeProofVerificationContext {
         root,
         start_key: start_key.map(Box::from),
@@ -166,11 +176,27 @@ pub fn find_next_key_after_range_proof(
 /// - State synchronization between nodes
 /// - Light client verification
 /// - Efficient auditing of specific key ranges
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub struct RangeProof<K, V, H> {
     start_proof: Proof<H>,
     end_proof: Proof<H>,
     key_values: Box<[(K, V)]>,
+}
+
+impl<K, V, H> std::fmt::Debug for RangeProof<K, V, H>
+where
+    K: std::fmt::Debug,
+    V: std::fmt::Debug,
+    H: ProofCollection,
+    H::Node: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RangeProof")
+            .field("start_proof", &self.start_proof)
+            .field("end_proof", &self.end_proof)
+            .field("key_values", &self.key_values)
+            .finish()
+    }
 }
 
 impl<K, V, H> RangeProof<K, V, H>

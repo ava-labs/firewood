@@ -22,6 +22,7 @@
 use std::fmt::{Display, Formatter, LowerHex, Result};
 use std::ops::Range;
 
+mod arc_swap_triomphe;
 mod checker;
 mod hashednode;
 mod hashedshunt;
@@ -40,6 +41,10 @@ mod u4;
 
 /// Logger module for handling logging functionality
 pub mod logger;
+
+/// Ethereum MPT path encoding primitives shared by the ethhash hasher and the
+/// `eth_getProof`-compatible proof emitter.
+pub mod eth_encoding;
 
 /// Minimal in-tree RLP encoder/decoder used by ethhash and account-value handling.
 pub(crate) mod rlp;
@@ -61,10 +66,10 @@ pub use node::{BranchNode, Child, Children, ChildrenSlots, LeafNode, Node, PathI
 #[cfg(feature = "ethhash")]
 pub use nodestore::fix_account_storage_root_value;
 pub use nodestore::{
-    AreaIndex, Committed, CommittedParentHash, HashedNodeReader, ImmutableProposal, LinearAddress,
-    Mutable, MutableKind, NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError, NodeReader,
-    NodeStore, NodeStoreHeader, Parentable, Propose, Recon, Reconstructed, ReconstructionSource,
-    RootReader, TrieReader,
+    AreaIndex, Committed, CommittedId, CommittedParentHash, HashedNodeReader, ImmutableProposal,
+    LinearAddress, Mutable, MutableKind, NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError,
+    NodeReader, NodeStore, NodeStoreHeader, Parentable, Propose, Recon, Reconstructed,
+    ReconstructionSource, RootReader, TrieReader,
 };
 pub use path::{
     ComponentIter, IntoSplitPath, JoinedPath, PackedBytes, PackedPathComponents, PackedPathRef,

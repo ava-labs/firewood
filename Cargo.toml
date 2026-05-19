@@ -41,6 +41,7 @@ explicit_deref_methods = "warn"
 missing_const_for_fn = "warn"
 arithmetic_side_effects = "warn"
 undocumented_unsafe_blocks = "deny"
+str_to_string = "warn"
 # lower the priority of pedantic to allow overriding the lints it includes
 pedantic = { level = "warn", priority = -1 }
 # These lints are from pedantic but allowed. They are a bit too pedantic and
@@ -60,12 +61,12 @@ metrics-exporter-prometheus = { git = "https://github.com/demosdemon/metrics.git
 
 [workspace.dependencies]
 # workspace local packages
-firewood = { path = "firewood", version = "0.4.0" }
-firewood-macros = { path = "firewood-macros", version = "0.3.0" }
-firewood-storage = { path = "storage", version = "0.4.0" }
-firewood-ffi = { path = "ffi", version = "0.4.0" }
-firewood-metrics = { path = "metrics", version = "0.4.0" }
-firewood-replay = { path = "replay", version = "0.4.0" }
+firewood = { path = "firewood", version = "0.5.0" }
+firewood-macros = { path = "firewood-macros", version = "0.4.0" }
+firewood-storage = { path = "storage", version = "0.5.0" }
+firewood-ffi = { path = "ffi", version = "0.5.0" }
+firewood-metrics = { path = "metrics", version = "0.5.0" }
+firewood-replay = { path = "replay", version = "0.5.0" }
 
 # no longer bumping with workspace
 firewood-triehash = { path = "triehash", version = "0.0.16" }
