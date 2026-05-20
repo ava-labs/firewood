@@ -919,18 +919,18 @@ fn test_slow_malformed_proof_fuzz() {
 
 #[test]
 fn test_lex_successor_empty_key() {
-    assert_eq!(&*lex_successor(b""), &[0x00][..]);
+    assert_eq!(lex_successor(b"").as_ref(), [0x00].as_slice());
 }
 
 #[test]
 fn test_lex_successor_single_byte() {
-    assert_eq!(&*lex_successor(b"\x10"), &[0x10, 0x00][..]);
+    assert_eq!(lex_successor(b"\x10").as_ref(), [0x10, 0x00].as_slice());
 }
 
 #[test]
 fn test_lex_successor_max_byte() {
     // No overflow: `succ([0xff])` is just `[0xff, 0x00]`.
-    assert_eq!(&*lex_successor(b"\xff"), &[0xff, 0x00][..]);
+    assert_eq!(lex_successor(b"\xff").as_ref(), [0xff, 0x00].as_slice());
 }
 
 #[test]
@@ -952,5 +952,8 @@ fn test_lex_successor_no_key_in_between() {
     // (also >= succ(k)). No byte string lies strictly between k and
     // succ(k). Exercise on a multi-byte input distinct from
     // `test_lex_successor_single_byte`.
-    assert_eq!(&*lex_successor(b"abc"), &[b'a', b'b', b'c', 0x00][..]);
+    assert_eq!(
+        lex_successor(b"abc").as_ref(),
+        [b'a', b'b', b'c', 0x00].as_slice()
+    );
 }

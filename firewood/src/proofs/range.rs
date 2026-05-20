@@ -58,12 +58,13 @@
 
 use std::num::NonZeroUsize;
 
-use firewood_storage::{Hashable, NibblesIterator, Path, TriePath};
+use firewood_storage::{Hashable, PathBuf, TriePath, TriePathFromPackedBytes};
 
 use crate::api::{self, FrozenRangeProof, HashKey};
 use crate::merkle::verify_range_proof;
 use crate::proofs::ProofError;
 
+use super::lex_successor;
 use super::types::{Proof, ProofCollection};
 
 /// `(start_key, end_key)` describing the next key range to fetch after a
@@ -202,7 +203,7 @@ pub fn find_next_key_after_range_proof(
     // Case 4: terminal's key differs from `last_key` → exhaustive.
     if !terminal
         .full_path()
-        .path_eq(Path(NibblesIterator::new(last_key.as_ref()).collect()).as_components())
+        .path_eq(&PathBuf::path_from_packed_bytes(last_key.as_ref()))
     {
         return Ok(None);
     }
@@ -211,7 +212,7 @@ pub fn find_next_key_after_range_proof(
     // `lex_successor` ensures the syncer advances even if the prover
     // replies identically.
     Ok(Some((
-        super::lex_successor(last_key),
+        lex_successor(last_key),
         verification.end_key.clone(),
     )))
 }
@@ -379,7 +380,7 @@ mod tests {
     #![expect(clippy::unwrap_used, reason = "Tests can use unwrap")]
     #![expect(clippy::indexing_slicing, reason = "Tests can use indexing")]
 
-    use firewood_storage::{Children, PathComponent, TrieHash, U4, ValueDigest};
+    use firewood_storage::{Children, TrieHash, ValueDigest};
 
     use super::super::types::ProofNode;
     use super::*;
@@ -390,31 +391,16 @@ mod tests {
     /// end_key` (malformed) branches.
     const FAR_END_KEY: &[u8] = b"\xff\xff";
 
-    /// Convert a byte slice to its nibble representation (high nibble of each
-    /// byte first, then low nibble).
-    fn bytes_to_nibbles(bytes: &[u8]) -> Vec<u8> {
-        let mut nibs = Vec::with_capacity(bytes.len().saturating_mul(2));
-        for b in bytes {
-            nibs.push(b >> 4);
-            nibs.push(b & 0x0F);
-        }
-        nibs
-    }
-
-    /// Build a terminal `ProofNode` at the given nibble path. If `value`
-    /// is `Some`, the node carries a value digest wrapping those bytes;
-    /// otherwise the node represents an exclusion-shaped terminal with
-    /// no value.
-    fn make_terminal(nibbles: &[u8], value: Option<&[u8]>) -> ProofNode {
-        let key = nibbles
-            .iter()
-            .map(|&n| PathComponent(U4::new_masked(n)))
-            .collect();
-        let value_digest = value.map(|v| ValueDigest::Value(Box::from(v)));
+    /// Build a terminal `ProofNode` at the path corresponding to
+    /// `key_bytes` (bytes are unpacked into nibbles via
+    /// `PathBuf::path_from_packed_bytes`). If `value` is `Some`, the
+    /// node carries a value digest wrapping those bytes; otherwise the
+    /// node represents an exclusion-shaped terminal with no value.
+    fn make_terminal(key_bytes: &[u8], value: Option<&[u8]>) -> ProofNode {
         ProofNode {
-            key,
+            key: PathBuf::path_from_packed_bytes(key_bytes),
             partial_len: 0,
-            value_digest,
+            value_digest: value.map(|v| ValueDigest::Value(Box::from(v))),
             child_hashes: Children::new(),
         }
     }
@@ -482,7 +468,7 @@ mod tests {
         // the range [start, end_key] is fully covered.
         let proof = make_range_proof(
             &[(b"key1", b"v1")],
-            Some(make_terminal(&bytes_to_nibbles(b"key1"), Some(b"v"))),
+            Some(make_terminal(b"key1", Some(b"v"))),
         );
         let verification = make_verification(Some(b"key1"));
         assert_eq!(
@@ -497,7 +483,7 @@ mod tests {
         // have rejected this; the function surfaces an error.
         let proof = make_range_proof(
             &[(b"key2", b"v2")],
-            Some(make_terminal(&bytes_to_nibbles(b"key2"), Some(b"v"))),
+            Some(make_terminal(b"key2", Some(b"v"))),
         );
         let verification = make_verification(Some(b"key1"));
         let result = find_next_key_after_range_proof(&proof, &verification);
@@ -512,10 +498,7 @@ mod tests {
         // Case 3: terminal carries no value. A truncated proof would
         // put last_key's value at the terminal, so an exclusion shape
         // here means the prover covered the whole range.
-        let proof = make_range_proof(
-            &[(b"key1", b"v1")],
-            Some(make_terminal(&bytes_to_nibbles(b"key1"), None)),
-        );
+        let proof = make_range_proof(&[(b"key1", b"v1")], Some(make_terminal(b"key1", None)));
         let verification = make_verification(Some(FAR_END_KEY));
         assert_eq!(
             find_next_key_after_range_proof(&proof, &verification).unwrap(),
@@ -530,7 +513,7 @@ mod tests {
         // at the terminal, so this shape implies exhaustive coverage.
         let proof = make_range_proof(
             &[(b"key1", b"v1")],
-            Some(make_terminal(&bytes_to_nibbles(b"key9"), Some(b"v"))),
+            Some(make_terminal(b"key9", Some(b"v"))),
         );
         let verification = make_verification(Some(FAR_END_KEY));
         assert_eq!(
@@ -552,7 +535,7 @@ mod tests {
         let last_key: &[u8] = b"key1";
         let proof = make_range_proof(
             &[(last_key, b"v1")],
-            Some(make_terminal(&bytes_to_nibbles(last_key), Some(b"v"))),
+            Some(make_terminal(last_key, Some(b"v"))),
         );
         let verification = make_verification(Some(FAR_END_KEY));
         let result = find_next_key_after_range_proof(&proof, &verification).unwrap();
