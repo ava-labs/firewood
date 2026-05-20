@@ -94,6 +94,7 @@ pub(super) fn verify_and_check(
 
 mod attack;
 mod bounds;
+mod continuation;
 mod edge_cases;
 // Empty start trie tests require ethhash: without it, the empty trie has no
 // root hash, so change proofs from an empty database can't be generated.

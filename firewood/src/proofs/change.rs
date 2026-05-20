@@ -3,11 +3,15 @@
 
 use std::{fmt::Debug, num::NonZeroUsize};
 
+use firewood_storage::{Hashable, PathBuf, TriePath, TriePathFromPackedBytes};
+
 use crate::{
     Proof, ProofCollection, ProofError,
     api::{self, FrozenChangeProof, HashKey},
     db::BatchOp,
 };
+
+use super::lex_successor;
 
 /// A change proof can demonstrate that by applying the provided array of `BatchOp`s to a Merkle
 /// trie with given start root hash, the resulting trie will have the given end root hash. It
@@ -175,42 +179,134 @@ type FrozenBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
 
 /// Determine the next key range to fetch after this change proof.
 ///
-/// Inspects the proof structure only — does not require a proposal.
-/// `end_key` is the original requested upper bound passed to the proof
-/// generator.
+/// Returns `None` when the proof's structure proves the requested range
+/// is exhaustively covered. Returns
+/// `Some((lex_successor(last_key), end_key))` for the structurally
+/// ambiguous shape (Case 5 for Put, or any non-malformed Delete shape) —
+/// the conservative continuation strictly advances the cursor past
+/// `last_key` so the next fetch makes guaranteed forward progress.
 ///
-/// Returns `None` if the proof confirms there are no more keys in the
-/// requested range; otherwise returns `Some((last_op.key, end_key))` as
-/// a continuation.
+/// As a preflight, an empty `end_proof` (which signals exhaustive
+/// coverage with no boundary proof emitted) short-circuits to `None`
+/// before the case analysis below.
+///
+/// # Cases
+///
+/// - **Case 1**: `batch_ops` is empty. The proof contains no diffs for
+///   the requested range, so there is nothing more to fetch. → `None`.
+/// - **Case 2**: `last_key == end_key`. The proof's last returned key
+///   reaches the requested upper bound; the range `[start, end_key]`
+///   is fully covered. → `None`.
+///
+/// For Put `last_op` (`last_key` is present in the end revision), the
+/// remaining cases mirror the range-proof analysis:
+///
+/// - **Case 3**: the `end_proof`'s terminal node carries no value (an
+///   exclusion proof). A truncated proof would carry `last_key`'s
+///   value at the terminal, so an exclusion shape means exhaustive.
+///   → `None`.
+/// - **Case 4**: the `end_proof`'s terminal carries a value, but at a
+///   key different from `last_key`. A truncated proof would put
+///   `last_key` itself at the terminal, so a different key there
+///   means exhaustive. → `None`.
+/// - **Case 5**: the `end_proof`'s terminal carries a value at exactly
+///   `last_key`'s path. Structurally ambiguous between a truncated
+///   inclusion of `last_key` and an exhaustive exclusion of `end_key`
+///   whose terminal lies at `last_key`'s node. Conservative
+///   continuation. → `Some((lex_successor(last_key), end_key))`.
+///
+/// For Delete `last_op` (`last_key` is absent from the end revision),
+/// the truncated `end_proof` is an exclusion proof of `last_key` in
+/// the end revision, which is structurally indistinguishable from an
+/// exhaustive exclusion of `end_key` for the non-malformed shapes.
+/// The algorithm collapses these to a single conservative
+/// continuation:
+///
+/// - **Delete malformed**: terminal carries a value at exactly
+///   `last_key`'s path. This contradicts `last_key`'s absence from
+///   the end revision. The change-proof verifier catches this
+///   upstream via the same condition; we surface the same error for
+///   defense in depth.
+///   → `Err(EndProofOperationMismatch)`.
+/// - **Delete other**: any other Delete shape (no value, or value at a
+///   different key) is structurally ambiguous between truncated and
+///   exhaustive. → `Some((lex_successor(last_key), end_key))`.
 ///
 /// # Errors
 ///
-/// Returns [`ProofError::EndKeyLessThanLastKey`] when `last_op.key` is
-/// strictly greater than `end_key` — this indicates the proof was
-/// generated against a different `end_key` than the one supplied here.
+/// - [`ProofError::EndKeyLessThanLastKey`] when `last_key` is strictly
+///   greater than `end_key` — a malformed-proof condition that
+///   verification should have caught upstream.
+/// - [`ProofError::EndProofOperationMismatch`] when `last_op` is
+///   Delete but the `end_proof`'s terminal carries a value at
+///   `last_key`'s path — also malformed; verifier should have caught.
+///
+/// # Panics
+///
+/// Panics if `last_op` is a `DeleteRange`. `verify_change_proof_structure`
+/// rejects `DeleteRange` ops, so a verified proof cannot reach this
+/// branch.
 pub fn find_next_key_after_change_proof(
     proof: &FrozenChangeProof,
     end_key: Option<&[u8]>,
 ) -> Result<Option<super::range::KeyRange>, api::Error> {
+    // Case 1: empty `batch_ops` → no diffs in range; range is exhausted.
     let Some(last_op) = proof.batch_ops().last() else {
-        // No changes in this range. If bounded, continue from end_key.
-        return Ok(end_key.map(|ek| (Box::from(ek), None)));
-    };
-
-    if proof.end_proof().is_empty() {
         return Ok(None);
-    }
+    };
+    let last_key: &[u8] = last_op.key().as_ref();
 
-    if let Some(end_key) = end_key {
-        if **last_op.key() > *end_key {
+    if let Some(ek) = end_key {
+        // Malformed: `last_key > end_key`; verifier should have caught this.
+        if last_key > ek {
             return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
         }
-        if **last_op.key() == *end_key {
+        // Case 2: `last_key` reaches `end_key`.
+        if last_key == ek {
             return Ok(None);
         }
     }
 
-    Ok(Some((last_op.key().clone(), end_key.map(Box::from))))
+    // Preflight: empty `end_proof` signals exhaustive coverage.
+    let Some(terminal) = proof.end_proof().last() else {
+        return Ok(None);
+    };
+
+    let terminal_at_last_key = terminal
+        .full_path()
+        .path_eq(&PathBuf::path_from_packed_bytes(last_key));
+
+    match last_op {
+        BatchOp::Put { .. } => {
+            // Case 3: terminal has no value → exhaustive.
+            if terminal.value_digest.is_none() {
+                return Ok(None);
+            }
+            // Case 4: terminal at different key → exhaustive.
+            if !terminal_at_last_key {
+                return Ok(None);
+            }
+            // Case 5: ambiguous → fall through to conservative continuation.
+        }
+        BatchOp::Delete { .. } => {
+            // Malformed: Delete `last_key` means `last_key` is absent
+            // from the end revision, so the terminal can't carry a
+            // value at `last_key`'s path.
+            if terminal.value_digest.is_some() && terminal_at_last_key {
+                return Err(api::Error::ProofError(
+                    ProofError::EndProofOperationMismatch,
+                ));
+            }
+            // All other Delete shapes are structurally ambiguous →
+            // fall through to conservative continuation.
+        }
+        BatchOp::DeleteRange { .. } => {
+            unreachable!("DeleteRange is rejected by change-proof verification");
+        }
+    }
+
+    // Conservative continuation: cursor strictly past `last_key`.
+    Ok(Some((lex_successor(last_key), end_key.map(Box::from))))
 }
 
 /// Verify a boundary proof against `end_root` and optionally check that the
@@ -456,8 +552,200 @@ mod tests {
     #![expect(clippy::unwrap_used, reason = "Tests can use unwrap")]
     #![expect(clippy::indexing_slicing, reason = "Tests can use indexing")]
 
+    use firewood_storage::{Children, ValueDigest};
+
     use super::*;
+    use crate::ProofNode;
     use crate::merkle::{Key, Value};
+
+    /// An `end_key` larger than any test key, used when the test should
+    /// not exercise the `last_key == end_key` (Case 2) or `last_key >
+    /// end_key` (malformed) branches.
+    const FAR_END_KEY: &[u8] = b"\xff\xff";
+
+    /// Build a terminal `ProofNode` at the path corresponding to
+    /// `key_bytes`. If `value` is `Some`, the node carries a value
+    /// digest wrapping those bytes; otherwise the node represents an
+    /// exclusion-shaped terminal with no value.
+    fn make_terminal(key_bytes: &[u8], value: Option<&[u8]>) -> ProofNode {
+        ProofNode {
+            key: PathBuf::path_from_packed_bytes(key_bytes),
+            partial_len: 0,
+            value_digest: value.map(|v| ValueDigest::Value(Box::from(v))),
+            child_hashes: Children::new(),
+        }
+    }
+
+    /// Build a `BatchOp::Put` operation for `key` and `value`.
+    fn make_put(key: &[u8], value: &[u8]) -> BatchOp<Key, Value> {
+        BatchOp::Put {
+            key: Box::from(key),
+            value: Box::from(value),
+        }
+    }
+
+    /// Build a `BatchOp::Delete` operation for `key`.
+    fn make_delete(key: &[u8]) -> BatchOp<Key, Value> {
+        BatchOp::Delete {
+            key: Box::from(key),
+        }
+    }
+
+    /// Build a `FrozenChangeProof` from explicit batch ops and an
+    /// optional terminal node for the `end_proof`. The `start_proof`
+    /// is always empty (irrelevant to `find_next_key`'s decisions).
+    fn make_change_proof(
+        batch_ops: Vec<BatchOp<Key, Value>>,
+        end_terminal: Option<ProofNode>,
+    ) -> FrozenChangeProof {
+        ChangeProof::new(
+            Proof::new(Box::default()),
+            Proof::new(end_terminal.into_iter().collect()),
+            batch_ops.into_boxed_slice(),
+        )
+    }
+
+    #[test]
+    fn test_find_next_key_change_empty_batch_ops() {
+        // Case 1: empty `batch_ops` → no diffs in range.
+        let proof = make_change_proof(vec![], None);
+        assert_eq!(
+            find_next_key_after_change_proof(&proof, Some(FAR_END_KEY)).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_find_next_key_change_empty_end_proof() {
+        // Empty `end_proof` → exhaustive.
+        let proof = make_change_proof(vec![make_put(b"key1", b"v1")], None);
+        assert_eq!(
+            find_next_key_after_change_proof(&proof, Some(FAR_END_KEY)).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_find_next_key_change_last_equals_end() {
+        // Case 2: last_key reaches end_key.
+        let proof = make_change_proof(
+            vec![make_put(b"key1", b"v1")],
+            Some(make_terminal(b"key1", Some(b"v"))),
+        );
+        assert_eq!(
+            find_next_key_after_change_proof(&proof, Some(b"key1")).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_find_next_key_change_last_greater_than_end() {
+        // Malformed: last_key > end_key → Err.
+        let proof = make_change_proof(
+            vec![make_put(b"key2", b"v2")],
+            Some(make_terminal(b"key2", Some(b"v"))),
+        );
+        assert!(matches!(
+            find_next_key_after_change_proof(&proof, Some(b"key1")),
+            Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey))
+        ));
+    }
+
+    #[test]
+    fn test_find_next_key_change_put_terminal_no_value() {
+        // Case 3 (Put): terminal has no value → exhaustive.
+        let proof = make_change_proof(
+            vec![make_put(b"key1", b"v1")],
+            Some(make_terminal(b"key1", None)),
+        );
+        assert_eq!(
+            find_next_key_after_change_proof(&proof, Some(FAR_END_KEY)).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_find_next_key_change_put_terminal_value_different_key() {
+        // Case 4 (Put): terminal at a key different from last_key.
+        let proof = make_change_proof(
+            vec![make_put(b"key1", b"v1")],
+            Some(make_terminal(b"key9", Some(b"v"))),
+        );
+        assert_eq!(
+            find_next_key_after_change_proof(&proof, Some(FAR_END_KEY)).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_find_next_key_change_put_terminal_value_at_last_key() {
+        // Case 5 (Put): ambiguous shape → conservative continuation.
+        let last_key: &[u8] = b"key1";
+        let proof = make_change_proof(
+            vec![make_put(last_key, b"v1")],
+            Some(make_terminal(last_key, Some(b"v"))),
+        );
+        let result = find_next_key_after_change_proof(&proof, Some(FAR_END_KEY)).unwrap();
+        let (cursor, returned_end) = result.expect("ambiguous shape must return Some");
+        assert!(
+            cursor.as_ref() > last_key,
+            "cursor {cursor:?} must be > {last_key:?}"
+        );
+        assert_eq!(returned_end.as_deref(), Some(FAR_END_KEY));
+    }
+
+    #[test]
+    fn test_find_next_key_change_delete_terminal_no_value() {
+        // Delete with terminal carrying no value: structurally
+        // ambiguous between truncated and exhaustive → conservative.
+        let last_key: &[u8] = b"key1";
+        let proof = make_change_proof(
+            vec![make_delete(last_key)],
+            Some(make_terminal(last_key, None)),
+        );
+        let result = find_next_key_after_change_proof(&proof, Some(FAR_END_KEY)).unwrap();
+        let (cursor, returned_end) = result.expect("Delete must return Some");
+        assert!(
+            cursor.as_ref() > last_key,
+            "cursor {cursor:?} must be > {last_key:?}"
+        );
+        assert_eq!(returned_end.as_deref(), Some(FAR_END_KEY));
+    }
+
+    #[test]
+    fn test_find_next_key_change_delete_terminal_value_different_key() {
+        // Delete with terminal at a sibling leaf carrying a value:
+        // structurally ambiguous → conservative.
+        let last_key: &[u8] = b"key1";
+        let proof = make_change_proof(
+            vec![make_delete(last_key)],
+            Some(make_terminal(b"key9", Some(b"v"))),
+        );
+        let result = find_next_key_after_change_proof(&proof, Some(FAR_END_KEY)).unwrap();
+        let (cursor, returned_end) = result.expect("Delete must return Some");
+        assert!(
+            cursor.as_ref() > last_key,
+            "cursor {cursor:?} must be > {last_key:?}"
+        );
+        assert_eq!(returned_end.as_deref(), Some(FAR_END_KEY));
+    }
+
+    #[test]
+    fn test_find_next_key_change_delete_terminal_value_at_last_key() {
+        // Malformed Delete: terminal carries a value at last_key's
+        // path, contradicting last_key's absence from the end revision.
+        // Should surface the same error the verifier raises.
+        let proof = make_change_proof(
+            vec![make_delete(b"key1")],
+            Some(make_terminal(b"key1", Some(b"v"))),
+        );
+        assert!(matches!(
+            find_next_key_after_change_proof(&proof, Some(FAR_END_KEY)),
+            Err(api::Error::ProofError(
+                ProofError::EndProofOperationMismatch
+            ))
+        ));
+    }
 
     #[test]
     fn test_change_proof_iterator() {
