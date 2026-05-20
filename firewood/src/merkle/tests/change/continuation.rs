@@ -118,11 +118,10 @@ fn test_find_next_key_change_two_round_termination() {
 //
 // The start revision contains `{0x05, 0x80}`; the end revision
 // deletes `0x05`, leaving `{0x80}`. Requesting range `[0x00, 0x10]`
-// produces
-// `batch_ops = [Delete 0x05]` and an `end_proof` whose terminal lies
-// at the (single remaining) `0x80` leaf with value — terminal_key
-// `0x80` differs from `last_key 0x05`, so this is the "Delete +
-// terminal at different key" shape.
+// produces `batch_ops = [Delete 0x05]` and an `end_proof` whose
+// terminal lies at the (single remaining) `0x80` leaf with value —
+// terminal_key `0x80` differs from `last_key 0x05`, so this is the
+// "Delete + terminal at different key" shape.
 //
 // The algorithm cannot tell whether the proof was truncated (an
 // exclusion of `0x05` that landed on `0x80`'s sibling leaf) or
