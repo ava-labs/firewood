@@ -2170,34 +2170,29 @@ fn test_multi_level_range_proof_with_hashed_values() {
 fn test_find_next_key_exhaustive_divergent_at_last_kv() {
     use crate::{find_next_key_after_range_proof, verify_range_proof_structure};
 
-    let merkle = init_merkle([(&b"\x05"[..], &b"v"[..])]);
+    let merkle = init_merkle([(b"\x05".as_slice(), b"v".as_slice())]);
     let root_hash = merkle.nodestore().root_hash().unwrap();
     let proof = merkle
-        .range_proof(Some(b"\x00".as_slice()), Some(b"\x10".as_slice()), None)
+        .range_proof(Some(b"\x00"), Some(b"\x10"), None)
         .unwrap();
     assert_eq!(proof.key_values().len(), 1);
     assert_eq!(proof.key_values()[0].0.as_ref(), b"\x05");
 
-    let verification = verify_range_proof_structure(
-        &proof,
-        root_hash,
-        Some(b"\x00".as_slice()),
-        Some(b"\x10".as_slice()),
-        None,
-    )
-    .unwrap();
+    let verification =
+        verify_range_proof_structure(&proof, root_hash, Some(b"\x00"), Some(b"\x10"), None)
+            .unwrap();
 
     let result = find_next_key_after_range_proof(&proof, &verification).unwrap();
     let (cursor, returned_end) = result.expect("Case 5 must return Some");
 
     // Liveness: cursor strictly greater than last_kv.
     assert!(
-        cursor.as_ref() > &b"\x05"[..],
+        cursor.as_ref() > b"\x05".as_slice(),
         "cursor {:?} must be > 0x05",
         cursor.as_ref()
     );
     // End key echoed back unchanged.
-    assert_eq!(returned_end.as_deref(), Some(&b"\x10"[..]));
+    assert_eq!(returned_end.as_deref(), Some(b"\x10".as_slice()));
 }
 
 #[test]
@@ -2220,18 +2215,18 @@ fn test_find_next_key_exhaustive_divergent_at_last_kv() {
 fn test_find_next_key_two_round_termination() {
     use crate::{find_next_key_after_range_proof, verify_range_proof_structure};
 
-    let merkle = init_merkle([(&b"\x05"[..], &b"v"[..])]);
+    let merkle = init_merkle([(b"\x05".as_slice(), b"v".as_slice())]);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     // Round 1.
     let proof1 = merkle
-        .range_proof(Some(b"\x00".as_slice()), Some(b"\x10".as_slice()), None)
+        .range_proof(Some(b"\x00"), Some(b"\x10"), None)
         .unwrap();
     let verification1 = verify_range_proof_structure(
         &proof1,
         root_hash.clone(),
-        Some(b"\x00".as_slice()),
-        Some(b"\x10".as_slice()),
+        Some(b"\x00"),
+        Some(b"\x10"),
         None,
     )
     .unwrap();

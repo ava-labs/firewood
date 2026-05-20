@@ -175,17 +175,17 @@ pub fn find_next_key_after_range_proof(
     verification: &RangeProofVerificationContext,
 ) -> Result<Option<KeyRange>, api::Error> {
     // Case 1: empty `key_values` → no keys in range.
-    let Some((last_key, _)) = proof.key_values().last() else {
+    let Some(last_key) = proof.key_values().last().map(|(k, _)| k.as_ref()) else {
         return Ok(None);
     };
 
     if let Some(ek) = verification.end_key.as_deref() {
         // Malformed: `last_key > end_key`; verifier should have caught this.
-        if **last_key > *ek {
+        if last_key > ek {
             return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
         }
         // Case 2: `last_key` reaches `end_key`.
-        if **last_key == *ek {
+        if last_key == ek {
             return Ok(None);
         }
     }
@@ -200,10 +200,11 @@ pub fn find_next_key_after_range_proof(
         return Ok(None);
     }
 
-    // Case 4: terminal's key differs from `last_key` → exhaustive.
+    // Case 4: terminal's nibble path differs from `last_key` unpacked
+    // into nibbles → exhaustive.
     if !terminal
         .full_path()
-        .path_eq(&PathBuf::path_from_packed_bytes(last_key.as_ref()))
+        .path_eq(&PathBuf::path_from_packed_bytes(last_key))
     {
         return Ok(None);
     }
@@ -412,16 +413,12 @@ mod tests {
         key_values: &[(&[u8], &[u8])],
         end_terminal: Option<ProofNode>,
     ) -> FrozenRangeProof {
-        let end_proof = match end_terminal {
-            Some(node) => Proof::new(Box::<[ProofNode]>::from([node])),
-            None => Proof::new(Box::<[ProofNode]>::from([])),
-        };
         FrozenRangeProof::new(
-            Proof::new(Box::<[ProofNode]>::from([])),
-            end_proof,
+            Proof::new(Box::default()),
+            Proof::new(end_terminal.into_iter().collect()),
             key_values
                 .iter()
-                .map(|(k, v)| (Box::from(*k), Box::from(*v)))
+                .map(|&(k, v)| (Box::from(k), Box::from(v)))
                 .collect(),
         )
     }
