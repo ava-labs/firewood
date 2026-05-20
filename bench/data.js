@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779179175132,
+  "lastUpdate": 1779265387570,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -3524,6 +3524,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 89.56365009141798,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "AminR443",
+            "username": "AminR443",
+            "email": "amin.rezaei@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "a417098a0798495be0d7082ac98d54883df42d0c",
+          "message": "perf(storage): fill predictive read buffer for unaligned reads (#1964)\n\n## Why this should be merged\n\nPredictiveReader currently limits unaligned reads to the remaining bytes\nin the current 1 KiB boundary, which can cause smaller-than-necessary\npread calls and reduce the benefit of predictive buffering.\n\n## How this works\n\nThe file-backed predictive reader now always reads into the full\npredictive buffer when refilling, regardless of the current file offset.\nLogical reader offset accounting is unchanged and still advances based\non bytes consumed by callers.\n\n## How this was tested\n\nUT.\n\n## Performance Evaluation and Numbers\n\nThis is tested with PREDICTIVE_READ_BUFFER_SIZE set to [512, 1024, 2048,\n4096], the best option out of those are 1024. So, will just keep it to\nthat, but however, removing the `bytes_left_in_page` logic still helps.\nSo this is not dead.\n\nPerformance win in my experiment is around 10-12%, when deferred persist\ncount is set to 4096.\n\n## Breaking Changes\n\n- [ ] firewood\n- [ ] firewood-storage\n- [ ] firewood-ffi (C api)\n- [ ] firewood-go (Go api)\n- [ ] fwdctl",
+          "timestamp": "2026-05-20T05:23:05Z",
+          "url": "https://github.com/ava-labs/firewood/commit/a417098a0798495be0d7082ac98d54883df42d0c"
+        },
+        "date": 1779265386418,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 165.73629808209847,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6033.681285101734,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 114.27987953601354,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5834.726023610737,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 81.70304816969252,
             "unit": "block_accept_ms/ggas"
           }
         ]
