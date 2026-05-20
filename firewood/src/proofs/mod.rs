@@ -310,6 +310,22 @@ pub use self::types::{
     EmptyProofCollection, Proof, ProofCollection, ProofError, ProofNode, ProofType,
 };
 
+/// Returns the lexicographic successor of `key`: the smallest byte string
+/// strictly greater than `key` under lex ordering on variable-length keys.
+///
+/// The successor is `key` with a single `0x00` byte appended. The empty
+/// key's successor is `[0x00]`. Every byte string has a well-defined
+/// successor under this ordering, so the function is total.
+///
+/// Used by `find_next_key_after_*_proof` to express "the range remaining
+/// after this proof starts strictly above `last_key`."
+pub(crate) fn lex_successor(key: &[u8]) -> Box<[u8]> {
+    let mut succ = Vec::with_capacity(key.len().saturating_add(1));
+    succ.extend_from_slice(key);
+    succ.push(0);
+    succ.into_boxed_slice()
+}
+
 pub(super) mod magic {
     //! Magic constants for proof format identification.
     //!

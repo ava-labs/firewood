@@ -12,7 +12,7 @@ use firewood_storage::{
 
 use super::{
     header::InvalidHeader,
-    magic,
+    lex_successor, magic,
     reader::ReadError,
     types::{Proof, ProofNode, ProofType},
 };
@@ -915,4 +915,42 @@ fn test_slow_malformed_proof_fuzz() {
             }
         }
     }
+}
+
+#[test]
+fn test_lex_successor_empty_key() {
+    assert_eq!(&*lex_successor(b""), &[0x00][..]);
+}
+
+#[test]
+fn test_lex_successor_single_byte() {
+    assert_eq!(&*lex_successor(b"\x10"), &[0x10, 0x00][..]);
+}
+
+#[test]
+fn test_lex_successor_max_byte() {
+    // No overflow: `succ([0xff])` is just `[0xff, 0x00]`.
+    assert_eq!(&*lex_successor(b"\xff"), &[0xff, 0x00][..]);
+}
+
+#[test]
+fn test_lex_successor_is_strictly_greater() {
+    let keys: &[&[u8]] = &[b"", b"\x00", b"\x10", b"\xff", b"abc"];
+    for k in keys {
+        let s = lex_successor(k);
+        assert!(s.as_ref() > *k, "succ({k:?}) = {s:?} is not > input");
+    }
+}
+
+#[test]
+fn test_lex_successor_no_key_in_between() {
+    // succ(k) is k with 0x00 appended — the lexicographically smallest
+    // extension. Any other byte string strictly greater than k must
+    // either differ from k in its first len(k) bytes (so it differs
+    // before reaching the appended 0x00 and is therefore >= succ(k))
+    // or extend k with a non-empty suffix whose first byte is >= 0x00
+    // (also >= succ(k)). No byte string lies strictly between k and
+    // succ(k). Exercise on a multi-byte input distinct from
+    // `test_lex_successor_single_byte`.
+    assert_eq!(&*lex_successor(b"abc"), &[b'a', b'b', b'c', 0x00][..]);
 }

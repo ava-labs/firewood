@@ -2150,3 +2150,114 @@ fn test_multi_level_range_proof_with_hashed_values() {
     // - "abcdef" in-range: Hash fast path in reconcile_branch_proof_node
     verify_range_proof(Some(b"abc123"), Some(b"\xff"), &root_hash, &deserialized).unwrap();
 }
+
+#[test]
+// Real-proof test for `find_next_key_after_range_proof`'s Case 5.
+//
+// Trie has a single key `0x05`. Requesting range [0x00, 0x10] produces
+// an honest, exhaustive proof: key_values = [(0x05, "v")], and the
+// end_proof's terminal is the trie's single leaf (cumulative key 0x05,
+// carrying the value), reached because the walk for 0x10 diverges
+// within that leaf's compressed path. The terminal therefore carries
+// last_kv's value at last_kv's path — Case 5 (see
+// `find_next_key_after_range_proof`'s docstring).
+//
+// The function cannot distinguish this from a truncated inclusion of
+// 0x05, so it conservatively returns
+// Some(lex_successor(0x05), 0x10). The follow-up fetch then returns
+// no keys (handled by the two-round termination test below),
+// accepting one extra round-trip in exchange for soundness.
+fn test_find_next_key_exhaustive_divergent_at_last_kv() {
+    use crate::{find_next_key_after_range_proof, verify_range_proof_structure};
+
+    let merkle = init_merkle([(&b"\x05"[..], &b"v"[..])]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let proof = merkle
+        .range_proof(Some(b"\x00".as_slice()), Some(b"\x10".as_slice()), None)
+        .unwrap();
+    assert_eq!(proof.key_values().len(), 1);
+    assert_eq!(proof.key_values()[0].0.as_ref(), b"\x05");
+
+    let verification = verify_range_proof_structure(
+        &proof,
+        root_hash,
+        Some(b"\x00".as_slice()),
+        Some(b"\x10".as_slice()),
+        None,
+    )
+    .unwrap();
+
+    let result = find_next_key_after_range_proof(&proof, &verification).unwrap();
+    let (cursor, returned_end) = result.expect("Case 5 must return Some");
+
+    // Liveness: cursor strictly greater than last_kv.
+    assert!(
+        cursor.as_ref() > &b"\x05"[..],
+        "cursor {:?} must be > 0x05",
+        cursor.as_ref()
+    );
+    // End key echoed back unchanged.
+    assert_eq!(returned_end.as_deref(), Some(&b"\x10"[..]));
+}
+
+#[test]
+// Real-proof test for two-round termination.
+//
+// Syncer-style flow:
+//   Round 1: range_proof([0x00, 0x10]) yields the Case 5 shape from
+//            `test_find_next_key_exhaustive_divergent_at_last_kv`.
+//            find_next_key returns Some((lex_successor(0x05), 0x10)).
+//   Round 2: range_proof([lex_successor(0x05), 0x10]) yields no
+//            key_values because nothing past 0x05 exists in the trie
+//            within the requested range. find_next_key returns None
+//            via Case 1.
+//
+// Termination in exactly two rounds confirms forward progress — the
+// `lex_successor`-based cursor advances strictly past last_kv, so the
+// syncer cannot loop on the same response. This is the liveness
+// property the simple algorithm guarantees (and the regression
+// safeguard against issue #1989's infinite-loop bug).
+fn test_find_next_key_two_round_termination() {
+    use crate::{find_next_key_after_range_proof, verify_range_proof_structure};
+
+    let merkle = init_merkle([(&b"\x05"[..], &b"v"[..])]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    // Round 1.
+    let proof1 = merkle
+        .range_proof(Some(b"\x00".as_slice()), Some(b"\x10".as_slice()), None)
+        .unwrap();
+    let verification1 = verify_range_proof_structure(
+        &proof1,
+        root_hash.clone(),
+        Some(b"\x00".as_slice()),
+        Some(b"\x10".as_slice()),
+        None,
+    )
+    .unwrap();
+    let (next_start, next_end) = find_next_key_after_range_proof(&proof1, &verification1)
+        .unwrap()
+        .expect("round 1 must return Some for the Case 5 ambiguous shape");
+
+    // Round 2: feed the cursor back as the new range.
+    let proof2 = merkle
+        .range_proof(Some(next_start.as_ref()), next_end.as_deref(), None)
+        .unwrap();
+    assert!(
+        proof2.key_values().is_empty(),
+        "no keys past 0x05 should exist in the trie"
+    );
+    let verification2 = verify_range_proof_structure(
+        &proof2,
+        root_hash,
+        Some(next_start.as_ref()),
+        next_end.as_deref(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        find_next_key_after_range_proof(&proof2, &verification2).unwrap(),
+        None,
+        "round 2 must return None — Case 1 (empty key_values)"
+    );
+}

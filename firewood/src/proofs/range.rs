@@ -58,6 +58,8 @@
 
 use std::num::NonZeroUsize;
 
+use firewood_storage::{Hashable, NibblesIterator, Path, TriePath};
+
 use crate::api::{self, FrozenRangeProof, HashKey};
 use crate::merkle::verify_range_proof;
 use crate::proofs::ProofError;
@@ -125,37 +127,93 @@ pub fn verify_range_proof_structure(
 
 /// Determine the next key range to fetch after this range proof.
 ///
-/// Returns `None` when the originally-requested range is fully accounted
-/// for; otherwise returns `Some((last_key, end_key))`.
+/// Returns `None` when the proof's structure proves the requested range is
+/// exhaustively covered. Returns `Some((lex_successor(last_key), end_key))`
+/// when the `end_proof`'s terminal carries a value at exactly
+/// `last_key`'s path, which is the structurally ambiguous shape — the
+/// proof is consistent with both a truncated inclusion proof of
+/// `last_key` and an exhaustive exclusion of `end_key` whose terminal
+/// lies at `last_key`'s node. The conservative continuation strictly
+/// advances the cursor past `last_key` so the next fetch makes
+/// guaranteed forward progress.
+///
+/// As a preflight, an empty `end_proof` (which signals exhaustive
+/// coverage with no boundary proof emitted) short-circuits to `None`
+/// before the case analysis below.
+///
+/// # Cases
+///
+/// - **Case 1**: `key_values` is empty. The proof contains no keys for
+///   the requested range, so there is nothing more to fetch. → `None`.
+/// - **Case 2**: `last_key == end_key`. The proof's last returned key
+///   reaches the requested upper bound; the range `[start, end_key]`
+///   is fully covered. → `None`.
+/// - **Case 3**: the `end_proof`'s terminal node carries no value (an
+///   exclusion proof). A truncated proof would carry `last_key`'s
+///   value at the terminal, so an exclusion shape means the prover
+///   produced an exhaustive proof. → `None`.
+/// - **Case 4**: the `end_proof`'s terminal carries a value, but at a
+///   key different from `last_key`. A truncated proof would put
+///   `last_key` itself at the terminal, so a different key there
+///   means the prover produced an exhaustive proof. → `None`.
+/// - **Case 5**: the `end_proof`'s terminal carries a value at exactly
+///   `last_key`'s path. This shape is consistent with both a
+///   truncated proof (inclusion of `last_key`) and an exhaustive
+///   proof (exclusion of `end_key` whose terminal lies at
+///   `last_key`'s node). The implementation cannot distinguish these
+///   from the terminal alone, so it conservatively assumes more data
+///   may remain. → `Some((lex_successor(last_key), end_key))`.
 ///
 /// # Errors
 ///
-/// Currently does not return errors; the signature is `Result` for parity
-/// with the change-proof counterpart and to allow future error paths.
+/// Returns [`ProofError::EndKeyLessThanLastKey`] when `last_key` is
+/// strictly greater than `end_key` — a malformed-proof condition that
+/// verification should have caught upstream.
 pub fn find_next_key_after_range_proof(
     proof: &FrozenRangeProof,
     verification: &RangeProofVerificationContext,
 ) -> Result<Option<KeyRange>, api::Error> {
-    // TODO(#352): proper implementation, this naively returns the last key
-    // in the range, which is correct, but not ideal.
+    // Case 1: empty `key_values` → no keys in range.
     let Some((last_key, _)) = proof.key_values().last() else {
-        // no key-values in the proof, so we are done
         return Ok(None);
     };
 
-    if proof.end_proof().is_empty() {
-        // unbounded, so we are done
+    if let Some(ek) = verification.end_key.as_deref() {
+        // Malformed: `last_key > end_key`; verifier should have caught this.
+        if **last_key > *ek {
+            return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
+        }
+        // Case 2: `last_key` reaches `end_key`.
+        if **last_key == *ek {
+            return Ok(None);
+        }
+    }
+
+    // Preflight: empty `end_proof` signals exhaustive coverage.
+    let Some(terminal) = proof.end_proof().last() else {
+        return Ok(None);
+    };
+
+    // Case 3: terminal has no value (exclusion proof) → exhaustive.
+    if terminal.value_digest.is_none() {
         return Ok(None);
     }
 
-    if let Some(ref end_key) = verification.end_key
-        && **last_key >= **end_key
+    // Case 4: terminal's key differs from `last_key` → exhaustive.
+    if !terminal
+        .full_path()
+        .path_eq(Path(NibblesIterator::new(last_key.as_ref()).collect()).as_components())
     {
-        // reached or exceeded the end key, so we are done
         return Ok(None);
     }
 
-    Ok(Some((last_key.clone(), verification.end_key.clone())))
+    // Case 5: structurally ambiguous. Conservative continuation via
+    // `lex_successor` ensures the syncer advances even if the prover
+    // replies identically.
+    Ok(Some((
+        super::lex_successor(last_key),
+        verification.end_key.clone(),
+    )))
 }
 
 /// A range proof is a cryptographic proof that demonstrates a contiguous set of key-value pairs
@@ -321,9 +379,192 @@ mod tests {
     #![expect(clippy::unwrap_used, reason = "Tests can use unwrap")]
     #![expect(clippy::indexing_slicing, reason = "Tests can use indexing")]
 
+    use firewood_storage::{Children, PathComponent, TrieHash, U4, ValueDigest};
+
+    use super::super::types::ProofNode;
+    use super::*;
     use crate::api::TryIntoBatch;
 
-    use super::*;
+    /// An `end_key` larger than any test key, used when the test should
+    /// not exercise the `last_key == end_key` (Case 2) or `last_key >
+    /// end_key` (malformed) branches.
+    const FAR_END_KEY: &[u8] = b"\xff\xff";
+
+    /// Convert a byte slice to its nibble representation (high nibble of each
+    /// byte first, then low nibble).
+    fn bytes_to_nibbles(bytes: &[u8]) -> Vec<u8> {
+        let mut nibs = Vec::with_capacity(bytes.len().saturating_mul(2));
+        for b in bytes {
+            nibs.push(b >> 4);
+            nibs.push(b & 0x0F);
+        }
+        nibs
+    }
+
+    /// Build a terminal `ProofNode` at the given nibble path. If `value`
+    /// is `Some`, the node carries a value digest wrapping those bytes;
+    /// otherwise the node represents an exclusion-shaped terminal with
+    /// no value.
+    fn make_terminal(nibbles: &[u8], value: Option<&[u8]>) -> ProofNode {
+        let key = nibbles
+            .iter()
+            .map(|&n| PathComponent(U4::new_masked(n)))
+            .collect();
+        let value_digest = value.map(|v| ValueDigest::Value(Box::from(v)));
+        ProofNode {
+            key,
+            partial_len: 0,
+            value_digest,
+            child_hashes: Children::new(),
+        }
+    }
+
+    /// Build a `FrozenRangeProof` from explicit key-value pairs and an
+    /// optional terminal node for the `end_proof`. The `start_proof` is
+    /// always empty (irrelevant to `find_next_key`'s decisions).
+    fn make_range_proof(
+        key_values: &[(&[u8], &[u8])],
+        end_terminal: Option<ProofNode>,
+    ) -> FrozenRangeProof {
+        let end_proof = match end_terminal {
+            Some(node) => Proof::new(Box::<[ProofNode]>::from([node])),
+            None => Proof::new(Box::<[ProofNode]>::from([])),
+        };
+        FrozenRangeProof::new(
+            Proof::new(Box::<[ProofNode]>::from([])),
+            end_proof,
+            key_values
+                .iter()
+                .map(|(k, v)| (Box::from(*k), Box::from(*v)))
+                .collect(),
+        )
+    }
+
+    /// Build a `RangeProofVerificationContext` with the given `end_key`.
+    /// `root`, `start_key`, and `max_length` are set to values that
+    /// `find_next_key_after_range_proof` does not consult.
+    fn make_verification(end_key: Option<&[u8]>) -> RangeProofVerificationContext {
+        RangeProofVerificationContext {
+            root: TrieHash::from([0u8; 32]),
+            start_key: None,
+            end_key: end_key.map(Box::from),
+            max_length: None,
+        }
+    }
+
+    #[test]
+    fn test_find_next_key_empty_key_values() {
+        // Case 1: empty key_values means the prover returned nothing in
+        // range, so there's nothing more to fetch.
+        let proof = make_range_proof(&[], None);
+        let verification = make_verification(Some(FAR_END_KEY));
+        assert_eq!(
+            find_next_key_after_range_proof(&proof, &verification).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_find_next_key_empty_end_proof() {
+        // Empty end_proof: the generator emitted no boundary proof,
+        // which signals an exhaustive response. Returns None.
+        let proof = make_range_proof(&[(b"key1", b"v1")], None);
+        let verification = make_verification(Some(FAR_END_KEY));
+        assert_eq!(
+            find_next_key_after_range_proof(&proof, &verification).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_find_next_key_last_equals_end() {
+        // Case 2: last_key matches the requested end_key exactly, so
+        // the range [start, end_key] is fully covered.
+        let proof = make_range_proof(
+            &[(b"key1", b"v1")],
+            Some(make_terminal(&bytes_to_nibbles(b"key1"), Some(b"v"))),
+        );
+        let verification = make_verification(Some(b"key1"));
+        assert_eq!(
+            find_next_key_after_range_proof(&proof, &verification).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_find_next_key_last_greater_than_end() {
+        // Malformed input: last_key > end_key. The verifier should
+        // have rejected this; the function surfaces an error.
+        let proof = make_range_proof(
+            &[(b"key2", b"v2")],
+            Some(make_terminal(&bytes_to_nibbles(b"key2"), Some(b"v"))),
+        );
+        let verification = make_verification(Some(b"key1"));
+        let result = find_next_key_after_range_proof(&proof, &verification);
+        assert!(matches!(
+            result,
+            Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey))
+        ));
+    }
+
+    #[test]
+    fn test_find_next_key_terminal_no_value() {
+        // Case 3: terminal carries no value. A truncated proof would
+        // put last_key's value at the terminal, so an exclusion shape
+        // here means the prover covered the whole range.
+        let proof = make_range_proof(
+            &[(b"key1", b"v1")],
+            Some(make_terminal(&bytes_to_nibbles(b"key1"), None)),
+        );
+        let verification = make_verification(Some(FAR_END_KEY));
+        assert_eq!(
+            find_next_key_after_range_proof(&proof, &verification).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_find_next_key_terminal_value_different_key() {
+        // Case 4: terminal carries a value but at a key different from
+        // last_key. A truncated proof would put last_key specifically
+        // at the terminal, so this shape implies exhaustive coverage.
+        let proof = make_range_proof(
+            &[(b"key1", b"v1")],
+            Some(make_terminal(&bytes_to_nibbles(b"key9"), Some(b"v"))),
+        );
+        let verification = make_verification(Some(FAR_END_KEY));
+        assert_eq!(
+            find_next_key_after_range_proof(&proof, &verification).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_find_next_key_terminal_value_at_last_key() {
+        // Case 5: terminal carries last_key's value at last_key's path.
+        // This is the structurally ambiguous shape — it's consistent
+        // with both a truncated inclusion of last_key and an
+        // exhaustive proof whose terminal for end_key lies at
+        // last_key's node. The function cannot distinguish them, so
+        // it conservatively returns Some((lex_successor(last_key),
+        // end_key)) with cursor strictly greater than last_key
+        // (liveness — guarantees the syncer makes forward progress).
+        let last_key: &[u8] = b"key1";
+        let proof = make_range_proof(
+            &[(last_key, b"v1")],
+            Some(make_terminal(&bytes_to_nibbles(last_key), Some(b"v"))),
+        );
+        let verification = make_verification(Some(FAR_END_KEY));
+        let result = find_next_key_after_range_proof(&proof, &verification).unwrap();
+        let (cursor, returned_end) = result.expect("ambiguous shape must return Some");
+        // Liveness: cursor strictly greater than last_key.
+        assert!(
+            cursor.as_ref() > last_key,
+            "cursor {cursor:?} must be > {last_key:?}"
+        );
+        // End key echoed back unchanged.
+        assert_eq!(returned_end.as_deref(), Some(FAR_END_KEY));
+    }
 
     #[test]
     fn test_range_proof_iterator() {
