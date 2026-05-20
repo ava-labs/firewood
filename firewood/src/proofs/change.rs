@@ -240,12 +240,9 @@ type FrozenBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
 /// - [`ProofError::EndProofOperationMismatch`] when `last_op` is
 ///   Delete but the `end_proof`'s terminal carries a value at
 ///   `last_key`'s path — also malformed; verifier should have caught.
-///
-/// # Panics
-///
-/// Panics if `last_op` is a `DeleteRange`. `verify_change_proof_structure`
-/// rejects `DeleteRange` ops, so a verified proof cannot reach this
-/// branch.
+/// - [`ProofError::DeleteRangeFoundInChangeProof`] when `last_op` is
+///   a `DeleteRange`. `verify_change_proof_structure` rejects these
+///   upstream; this is defense in depth.
 pub fn find_next_key_after_change_proof(
     proof: &FrozenChangeProof,
     end_key: Option<&[u8]>,
@@ -301,7 +298,13 @@ pub fn find_next_key_after_change_proof(
             // fall through to conservative continuation.
         }
         BatchOp::DeleteRange { .. } => {
-            unreachable!("DeleteRange is rejected by change-proof verification");
+            // `DeleteRange` ops are rejected by
+            // `verify_change_proof_structure`; a verified proof can't
+            // reach this branch. Surface the same error for defense
+            // in depth.
+            return Err(api::Error::ProofError(
+                ProofError::DeleteRangeFoundInChangeProof,
+            ));
         }
     }
 
