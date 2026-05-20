@@ -383,8 +383,8 @@ mod tests {
 
     use firewood_storage::{Children, TrieHash, ValueDigest};
 
-    use super::super::types::ProofNode;
     use super::*;
+    use crate::ProofNode;
     use crate::api::TryIntoBatch;
 
     /// An `end_key` larger than any test key, used when the test should
