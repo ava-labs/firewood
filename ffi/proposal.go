@@ -73,7 +73,7 @@ func (p *Proposal) Root() Hash {
 func (p *Proposal) Get(key []byte) ([]byte, error) {
 	p.lease.mu.RLock()
 	defer p.lease.mu.RUnlock()
-	if p.ptr == nil {
+	if p.dropped {
 		return nil, errDroppedProposal
 	}
 
@@ -117,7 +117,7 @@ func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 func (p *Proposal) Propose(batch []BatchOp) (*Proposal, error) {
 	p.lease.mu.RLock()
 	defer p.lease.mu.RUnlock()
-	if p.ptr == nil {
+	if p.dropped {
 		return nil, errDroppedProposal
 	}
 
