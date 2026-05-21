@@ -105,7 +105,7 @@ impl Version {
         u128::from_ne_bytes(self.bytes)
     }
 
-    const fn is_firewood_v1(self) -> bool {
+    const fn has_extended_header_fields(self) -> bool {
         // Check against both the current and previous version strings
         self.as_u128() == const { Self::VALID_V1_VERSIONS[0].as_u128() }
             || self.as_u128() == const { Self::VALID_V1_VERSIONS[1].as_u128() }
@@ -397,7 +397,7 @@ impl NodeStoreHeader {
         trace!("Checking if node hash algorithm flag matches storage...");
         self.validate_node_hash_algorithm(expected_node_hash_algorithm)?;
 
-        if self.version.is_firewood_v1() {
+        if self.version.has_extended_header_fields() {
             debug!(
                 "Database was created with firewood version {}",
                 self.firewood_version_str()
@@ -442,7 +442,7 @@ impl NodeStoreHeader {
     /// This is None if the database was created before v0.1.0.
     #[must_use]
     pub(crate) fn root_hash(&self) -> Option<TrieHash> {
-        if self.version.is_firewood_v1() && self.root_address.is_some() {
+        if self.version.has_extended_header_fields() && self.root_address.is_some() {
             Some(TrieHash::from(self.root_hash))
         } else {
             None
@@ -476,7 +476,7 @@ impl NodeStoreHeader {
     /// if available.
     #[must_use]
     pub const fn cargo_version(&self) -> Option<&CargoVersion> {
-        if self.version.is_firewood_v1() {
+        if self.version.has_extended_header_fields() {
             Some(&self.cargo_version)
         } else {
             None
@@ -486,7 +486,7 @@ impl NodeStoreHeader {
     /// Get the git describe string of `firewood` used to create this database,
     #[must_use]
     pub const fn git_describe(&self) -> Option<&GitDescribe> {
-        if self.version.is_firewood_v1() {
+        if self.version.has_extended_header_fields() {
             Some(&self.git_describe)
         } else {
             None

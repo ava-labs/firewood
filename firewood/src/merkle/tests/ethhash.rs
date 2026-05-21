@@ -308,10 +308,19 @@ fn test_persisted_storage_root_one_storage_entry() {
         &[(&storage_key, &storage_value)],
     );
 
-    assert_ne!(
-        storage_root,
-        empty_trie_root().to_vec(),
-        "should not be empty trie root"
+    // Expected value: root hash of a standalone storage trie containing
+    // just (storage_key, storage_value). Building it the same way the
+    // ethhash hasher would lets us assert against a concrete hash rather
+    // than just "not empty".
+    let expected = init_merkle([(storage_key.as_slice(), storage_value.as_slice())])
+        .nodestore()
+        .root_hash()
+        .expect("standalone storage trie should have a root");
+
+    assert_eq!(
+        storage_root.as_slice(),
+        expected.as_ref(),
+        "storageRoot must match the hash of a standalone single-entry storage trie",
     );
 }
 
@@ -338,10 +347,18 @@ fn test_persisted_storage_root_two_storage_entries() {
         ],
     );
 
-    assert_ne!(
-        storage_root,
-        empty_trie_root().to_vec(),
-        "should not be empty trie root"
+    let expected = init_merkle([
+        (storage_key_a.as_slice(), storage_value_a.as_slice()),
+        (storage_key_b.as_slice(), storage_value_b.as_slice()),
+    ])
+    .nodestore()
+    .root_hash()
+    .expect("standalone storage trie should have a root");
+
+    assert_eq!(
+        storage_root.as_slice(),
+        expected.as_ref(),
+        "storageRoot must match the hash of a standalone two-entry storage trie",
     );
 }
 
