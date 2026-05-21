@@ -212,12 +212,12 @@ func getReconstructedFromResult(result C.ReconstructedResult, registry *keepAliv
 		return nil, err
 	}
 	reconstructed := &Reconstructed{
-		handle: createHandle(cHandle, registry, func(h *C.ReconstructedHandle) C.VoidResult {
+		handle: newHandle(cHandle, func(h *C.ReconstructedHandle) C.VoidResult {
 			return C.fwd_free_reconstructed(h)
 		}),
 		root: EmptyRoot,
 	}
-	if err := registry.register(&reconstructed.lease, reconstructed.Drop); err != nil {
+	if err := reconstructed.lease.attach(registry, reconstructed.Drop); err != nil {
 		return nil, err
 	}
 	runtime.AddCleanup(reconstructed, drop[*C.ReconstructedHandle], reconstructed.handle)

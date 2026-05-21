@@ -160,10 +160,10 @@ func getRevisionFromResult(result C.RevisionResult, registry *keepAliveRegistry)
 		body := (*C.RevisionResult_Ok_Body)(unsafe.Pointer(&result.anon0))
 		hashKey := *(*Hash)(unsafe.Pointer(&body.root_hash._0))
 		rev := &Revision{
-			handle: createHandle(body.handle, registry, func(r *C.RevisionHandle) C.VoidResult { return C.fwd_free_revision(r) }),
+			handle: newHandle(body.handle, func(r *C.RevisionHandle) C.VoidResult { return C.fwd_free_revision(r) }),
 			root:   hashKey,
 		}
-		if err := registry.register(&rev.lease, rev.Drop); err != nil {
+		if err := rev.lease.attach(registry, rev.Drop); err != nil {
 			return nil, err
 		}
 		runtime.AddCleanup(rev, drop, rev.handle)
