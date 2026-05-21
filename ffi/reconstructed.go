@@ -78,7 +78,7 @@ func (r *Reconstructed) Root() Hash {
 		return r.root
 	}
 
-	if r.ptr == nil {
+	if r.dropped {
 		return EmptyRoot
 	}
 
