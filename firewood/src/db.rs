@@ -343,11 +343,11 @@ impl Db {
     /// Returns an error if reconstruction fails.
     pub fn reconstruct_from_view<P>(
         &self,
-        parent: &NodeStore<P, FileBacked>,
+        parent: &Arc<NodeStore<P, FileBacked>>,
         batch: impl IntoBatchIter,
     ) -> Result<ReconstructedView<'_>, api::Error>
     where
-        P: ReconstructionSource,
+        P: ReconstructionSource<FileBacked>,
         NodeStore<P, FileBacked>: TrieReader,
     {
         let next_nodestore = parent.reconstruction_child()?;
@@ -369,7 +369,7 @@ impl Db {
     /// Returns an error if reconstruction fails.
     fn reconstruct_from_reconstructed(
         &self,
-        parent: Arc<NodeStore<Reconstructed, FileBacked>>,
+        parent: Arc<NodeStore<Reconstructed<FileBacked>, FileBacked>>,
         batch: impl IntoBatchIter,
     ) -> Result<ReconstructedView<'_>, api::Error> {
         let next_nodestore = parent.into();
@@ -440,10 +440,10 @@ pub struct Proposal<'db> {
     db: &'db Db,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 /// A user-visible reconstructed view.
 pub struct ReconstructedView<'db> {
-    nodestore: Arc<NodeStore<Reconstructed, FileBacked>>,
+    nodestore: Arc<NodeStore<Reconstructed<FileBacked>, FileBacked>>,
     db: &'db Db,
 }
 
@@ -529,24 +529,29 @@ impl Proposal<'_> {
         let mut revisions_guard = db.manager.lock_committed_revisions();
         let current = revisions_guard.back().expect("always one revision");
 
-        if !nodestore.parent_hash_is(current.root_hash()) {
+        if !nodestore.parent_id_is(current.committed_id()) {
             // Parent is stale — rebase onto the current revision.
             let old_parent = match nodestore.committed_parent_hash() {
                 CommittedParentHash::NotCommitted => {
                     return Err(api::Error::ParentNotCommitted);
                 }
-                CommittedParentHash::Hash(Some(hash)) => db.manager.revision(hash)?,
-                CommittedParentHash::Hash(None) => {
-                    // Empty trie parent — use the initial empty revision.
-                    revisions_guard
-                        .front()
-                        .expect("always one revision")
-                        .clone()
-                }
+                CommittedParentHash::Hash(Some(hash)) => Some(db.manager.revision(hash)?),
+                CommittedParentHash::Hash(None) => None,
             };
             db.manager.remove_proposal(&nodestore);
 
-            let diff = DiffMerkleNodeStream::new(&*old_parent, &*nodestore, Box::default())?;
+            // Empty trie parent — diff against a synthetic empty view.
+            // Avoids depending on the manager's revisions queue, whose front
+            // entry is not guaranteed to still be empty once `max_revisions`
+            // has been exceeded.
+            let empty_parent;
+            let old_parent_ref: &NodeStore<Committed, FileBacked> = if let Some(rev) = &old_parent {
+                rev
+            } else {
+                empty_parent = nodestore.empty_committed_sibling();
+                &empty_parent
+            };
+            let diff = DiffMerkleNodeStream::new(old_parent_ref, &*nodestore, Box::default())?;
             let batch_ops: Vec<BatchOp<crate::merkle::Key, crate::merkle::Value>> =
                 diff.collect::<Result<_, _>>()?;
 
@@ -555,10 +560,11 @@ impl Proposal<'_> {
         }
 
         let hash = api::DbView::root_hash(&*nodestore);
-        db.manager
+        let new_id = db
+            .manager
             .commit_critical_section(&nodestore, &mut revisions_guard)?;
         drop(revisions_guard);
-        db.manager.commit_cleanup(&nodestore);
+        db.manager.commit_cleanup(&nodestore, new_id);
         Ok(hash)
     }
 
@@ -584,7 +590,7 @@ impl Proposal<'_> {
 
 impl api::DbView for ReconstructedView<'_> {
     type Iter<'view>
-        = MerkleKeyValueIter<'view, NodeStore<Reconstructed, FileBacked>>
+        = MerkleKeyValueIter<'view, NodeStore<Reconstructed<FileBacked>, FileBacked>>
     where
         Self: 'view;
 
@@ -736,10 +742,10 @@ mod test {
         ];
 
         let parallel_reconstructed = parallel_db
-            .reconstruct_from_view(parallel_historical.as_ref(), reconstruct_batch.clone())
+            .reconstruct_from_view(&parallel_historical, reconstruct_batch.clone())
             .unwrap();
         let serial_reconstructed = serial_db
-            .reconstruct_from_view(serial_historical.as_ref(), reconstruct_batch)
+            .reconstruct_from_view(&serial_historical, reconstruct_batch)
             .unwrap();
 
         assert_eq!(
@@ -798,7 +804,7 @@ mod test {
 
         let reconstructed = db
             .reconstruct_from_view(
-                historical.as_ref(),
+                &historical,
                 vec![BatchOp::Put {
                     key: b"base",
                     value: b"v1",
@@ -817,6 +823,124 @@ mod test {
 
         assert_eq!(&*reconstructed.val(b"base").unwrap().unwrap(), b"v1");
         assert_eq!(&*reconstructed.val(b"next").unwrap().unwrap(), b"v2");
+    }
+
+    #[test]
+    fn test_reconstruct_clone_is_independent() {
+        let db = TestDb::new();
+
+        // Build a base committed revision.
+        let initial = db
+            .propose(vec![BatchOp::Put {
+                key: b"base",
+                value: b"v0",
+            }])
+            .unwrap();
+        initial.commit().unwrap();
+        let historical_hash = db.root_hash().unwrap();
+        let historical = db.revision(historical_hash).unwrap();
+
+        // Build a reconstructed view on top of the historical revision.
+        let original = db
+            .reconstruct_from_view(
+                &historical,
+                vec![BatchOp::Put {
+                    key: b"shared",
+                    value: b"v1",
+                }],
+            )
+            .unwrap();
+        let original_root = original.root_hash();
+
+        // Verify that a cloned reconstructed revision has the same state as the original.
+        let cloned = original.clone();
+        assert_eq!(cloned.root_hash(), original_root);
+        assert_eq!(&*cloned.val(b"base").unwrap().unwrap(), b"v0");
+        assert_eq!(&*cloned.val(b"shared").unwrap().unwrap(), b"v1");
+
+        // Mutating the clone via reconstruct does not affect the original.
+        let new_cloned = cloned
+            .reconstruct(vec![BatchOp::Put {
+                key: b"clone_only",
+                value: b"v2",
+            }])
+            .unwrap();
+        assert_eq!(&*new_cloned.val(b"clone_only").unwrap().unwrap(), b"v2");
+        assert_eq!(original.val(b"clone_only").unwrap(), None);
+        assert_eq!(original.root_hash(), original_root);
+
+        // Mutating the original via reconstruct does not affect the clone.
+        let original_next = original
+            .reconstruct(vec![BatchOp::Put {
+                key: b"original_only",
+                value: b"v3",
+            }])
+            .unwrap();
+        assert_eq!(
+            &*original_next.val(b"original_only").unwrap().unwrap(),
+            b"v3"
+        );
+        assert_eq!(new_cloned.val(b"original_only").unwrap(), None);
+    }
+
+    #[test]
+    fn test_reconstruct_clone_of_clone() {
+        let db = TestDb::new();
+
+        // Build a base committed revision.
+        let initial = db
+            .propose(vec![BatchOp::Put {
+                key: b"base",
+                value: b"v0",
+            }])
+            .unwrap();
+        initial.commit().unwrap();
+        let historical_hash = db.root_hash().unwrap();
+        let historical = db.revision(historical_hash).unwrap();
+
+        // Build a reconstructed view on top of the historical revision.
+        let original = db
+            .reconstruct_from_view(
+                &historical,
+                vec![BatchOp::Put {
+                    key: b"shared",
+                    value: b"v1",
+                }],
+            )
+            .unwrap();
+        let original_root = original.root_hash();
+
+        let first_clone = original.clone();
+        let second_clone = first_clone.clone();
+
+        // Verify that the first and second clones are usable
+        assert_eq!(original_root, first_clone.root_hash());
+        assert_eq!(original_root, second_clone.root_hash());
+    }
+
+    #[test]
+    fn test_reconstruct_clone_outlives_original() {
+        let db = TestDb::new();
+
+        let key = b"k";
+        let value = b"v";
+        let initial = db.propose(vec![BatchOp::Put { key, value }]).unwrap();
+        initial.commit().unwrap();
+
+        let historical_hash = db.root_hash().unwrap();
+        let historical = db.revision(historical_hash).unwrap();
+
+        let original = db
+            .reconstruct_from_view(&historical, Vec::<BatchOp<&[u8], &[u8]>>::new())
+            .unwrap();
+        let cloned = original.clone();
+        let expected_root = original.root_hash();
+
+        drop(original);
+
+        // The clone is fully functional after the original is dropped.
+        assert_eq!(cloned.root_hash(), expected_root);
+        assert_eq!(&*cloned.val(b"k").unwrap().unwrap(), b"v");
     }
 
     #[test]
