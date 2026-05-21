@@ -206,11 +206,12 @@ func (db *Database) VerifyRangeProof(
 	// Proofs are intentionally NOT entered into Database.keepAlives: a
 	// bound `proof.Free` would keep `proof` reachable via the registry and
 	// prevent the GC finalizer from ever running. They still increment the
-	// WaitGroup, so graceful Close waits on them; WithForceCloseHandles will
-	// not auto-drop a still-referenced RangeProof. The change-proof family
-	// is being redesigned, so the runtime.AddCleanup migration tracked in
-	// https://github.com/ava-labs/firewood/issues/1539 is deferred for both
-	// proof types.
+	// outstanding-handle count, so graceful Close waits on them;
+	// WithForceCloseHandles will not auto-drop a still-referenced
+	// RangeProof. The change-proof family is being redesigned, so the
+	// runtime.AddCleanup migration tracked in
+	// https://github.com/ava-labs/firewood/issues/1539 is deferred for
+	// both proof types.
 	proof.lease.attachUnregistered(db.keepAlives)
 	runtime.SetFinalizer(proof, (*RangeProof).Free)
 	return nil
