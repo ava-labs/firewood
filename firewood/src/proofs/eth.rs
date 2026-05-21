@@ -65,7 +65,7 @@ const ACCOUNT_DEPTH_NIBBLES: usize = 64;
 pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
     // `partial_len` is validated against `key.len()` during deserialization,
     // so the slice from `partial_len..` is always in range; the `unwrap_or`
-    // is just to satisfy clippy's panic-on-slice lint.
+    // is just to satisfy clippy::indexing_slicing.
     let key: &[PathComponent] = node.key.as_ref();
     let partial_path = key.get(node.partial_len..).unwrap_or(&[]);
     // The account-node concept only exists in ethhash mode. Without that
