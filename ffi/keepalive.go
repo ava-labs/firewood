@@ -20,12 +20,12 @@ import (
 //
 // Concretely: every [lease.release] / [lease.releaseLocked] call holds
 // lease.mu while invoking [keepAliveRegistry.remove], which briefly takes
-// registry.mu. Going the other way (register first, then lease.mu) is
-// what [keepAliveRegistry.register] does on the closed-registry path —
-// but it drops registry.mu before invoking dropFn, so there is no
-// simultaneous nested acquisition. [closeAndForceDrop] takes registry.mu
-// only for the snapshot, releases it, and then invokes dropFns, which
-// re-enter registry.mu via remove. No path holds both locks at once.
+// registry.mu. Going the other way (registry first, then lease.mu) is
+// what [lease.attach] does on the closed-registry path — but it drops
+// registry.mu before invoking dropFn, so there is no simultaneous nested
+// acquisition. [closeAndForceDrop] takes registry.mu only for the
+// snapshot, releases it, and then invokes dropFns, which re-enter
+// registry.mu via remove. No path holds both locks at once.
 
 type handle[T any] struct {
 	// handle is an opaque pointer to the underlying Rust object. It should be
@@ -45,14 +45,16 @@ type handle[T any] struct {
 	free func(T) C.VoidResult
 }
 
-func createHandle[T any](ptr T, registry *keepAliveRegistry, free func(T) C.VoidResult) *handle[T] {
-	h := &handle[T]{
+// newHandle constructs an inactive handle: the C pointer and free
+// function are set, but the lease is not yet attached to any registry.
+// Callers must invoke [lease.attach] before the handle becomes visible,
+// or the wg/dropFn invariants will be broken.
+func newHandle[T any](ptr T, free func(T) C.VoidResult) *handle[T] {
+	return &handle[T]{
 		ptr:     ptr,
 		free:    free,
 		dropped: false,
 	}
-	h.lease.init(registry)
-	return h
 }
 
 func drop[T any](h *handle[T]) {
@@ -116,28 +118,6 @@ func newKeepAliveRegistry() *keepAliveRegistry {
 	return &keepAliveRegistry{
 		handles: make(map[*lease]func() error),
 	}
-}
-
-// register records the outer Drop callback for an already-initialized
-// lease.
-//
-// If the registry has been closed via [closeAndForceDrop], register
-// invokes dropFn itself (so the WaitGroup increment from [lease.init] is
-// matched and the C handle is freed) and returns errDBClosed joined with
-// any error the synchronous drop produced. Callers do not need to clean
-// up on register failure — they just propagate the error.
-func (r *keepAliveRegistry) register(l *lease, dropFn func() error) error {
-	r.mu.Lock()
-	if r.closed {
-		r.mu.Unlock()
-		if dropErr := dropFn(); dropErr != nil {
-			return errors.Join(errDBClosed, dropErr)
-		}
-		return errDBClosed
-	}
-	r.handles[l] = dropFn
-	r.mu.Unlock()
-	return nil
 }
 
 // remove deletes a lease from the registry without invoking its dropFn.
@@ -211,26 +191,69 @@ type lease struct {
 	registry *keepAliveRegistry
 }
 
-// init attaches this lease to the parent registry's WaitGroup. The
-// registry's wg counter is incremented here; [release] / [releaseLocked]
-// decrement it.
-func (l *lease) init(registry *keepAliveRegistry) {
-	// Lock not strictly necessary today (a lease is owned exclusively by
-	// its constructing goroutine until init returns) but harmless, and
-	// required for types that initialize the lease at some point after
-	// construction (#1429).
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
+// attach atomically registers this lease with both the registry's
+// WaitGroup and its drop map under a single registry.mu critical
+// section. Either both succeed, or — on a registry that has already
+// been closed via [closeAndForceDrop] — dropFn is invoked, the wg is
+// NOT incremented, and errDBClosed is returned (joined with any error
+// dropFn produced).
+//
+// This is the single entry point for activating a new lease. Holding
+// the wg without being in the drop map is the latent failure mode that
+// [closeAndForceDrop] cannot recover from, so the two-step init+register
+// sequence is unsafe; attach does both atomically.
+//
+// Caller does not need to hold lease.mu — a fresh lease isn't visible
+// to anyone else until attach returns. Caller does not need to clean
+// up on error: on the closed-registry path attach invokes dropFn itself.
+func (l *lease) attach(registry *keepAliveRegistry, dropFn func() error) error {
+	registry.mu.Lock()
+	if registry.closed {
+		registry.mu.Unlock()
+		// Call dropFn outside registry.mu to preserve the lease.mu →
+		// registry.mu lock order (dropFn → handle.Drop → lease.release
+		// takes lease.mu, which would then take registry.mu via remove).
+		// No wg.Add ran, so no wg.Done is needed.
+		if err := dropFn(); err != nil {
+			return errors.Join(errDBClosed, err)
+		}
+		return errDBClosed
+	}
 	if l.registry != nil {
-		// init must be called exactly once per lease. Reaching this is
+		registry.mu.Unlock()
+		// attach must be called exactly once per lease. Reaching this is
 		// always a package bug — either a constructor re-used a lease or
 		// two goroutines raced on a lease that should be single-owner.
-		panic("lease already initialized")
+		panic("lease already attached")
 	}
-
+	registry.wg.Add(1)
+	registry.handles[l] = dropFn
 	l.registry = registry
-	l.registry.wg.Add(1)
+	registry.mu.Unlock()
+	return nil
+}
+
+// attachUnregistered increments the registry's WaitGroup but does NOT
+// add this lease to the drop map. It exists for [RangeProof], which
+// intentionally stays outside the registry so its runtime.SetFinalizer
+// can collect the proof — a bound Free in the registry map would keep
+// the proof reachable forever. Consequently [WithForceCloseHandles]
+// will not auto-drop a still-referenced RangeProof; graceful
+// [Database.Close] still waits on the wg.
+//
+// Callers must serialize against [Database.Close] (e.g. via
+// db.handleLock.RLock) before invoking this — there is no closed-registry
+// guard here. The change-proof family is being redesigned, so a
+// handle[T] migration here is deferred.
+func (l *lease) attachUnregistered(registry *keepAliveRegistry) {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+
+	if l.registry != nil {
+		panic("lease already attached")
+	}
+	registry.wg.Add(1)
+	l.registry = registry
 }
 
 // release runs attemptDisown and, if it returns nil (or
@@ -244,7 +267,7 @@ func (l *lease) init(registry *keepAliveRegistry) {
 //
 // Safe to call multiple times; subsequent calls after the first continue
 // to invoke attemptDisown but do not double-decrement the WaitGroup
-// unless [init] runs again in between.
+// unless [attach] or [attachUnregistered] runs again in between.
 func (l *lease) release(releaseOnError bool, attemptDisown func() error) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
