@@ -208,7 +208,9 @@ func (db *Database) VerifyRangeProof(
 	// prevent the GC finalizer from ever running. They still increment the
 	// WaitGroup, so graceful Close waits on them; WithForceCloseHandles will
 	// not auto-drop a still-referenced RangeProof. The change-proof family
-	// is being redesigned, so a handle[T] migration here is deferred.
+	// is being redesigned, so the runtime.AddCleanup migration tracked in
+	// https://github.com/ava-labs/firewood/issues/1539 is deferred for both
+	// proof types.
 	proof.lease.attachUnregistered(db.keepAlives)
 	runtime.SetFinalizer(proof, (*RangeProof).Free)
 	return nil
@@ -348,7 +350,7 @@ func (p *RangeProof) UnmarshalBinary(data []byte) error {
 // It is safe to call Free more than once; subsequent calls after the first
 // will be no-ops.
 func (p *RangeProof) Free() error {
-	return p.lease.release(false /* releaseOnError */, func() error {
+	return p.lease.release(true /* releaseOnError */, func() error {
 		if p.handle == nil {
 			return nil
 		}

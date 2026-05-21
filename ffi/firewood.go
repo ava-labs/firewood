@@ -483,17 +483,15 @@ type closeConfig struct {
 // [RangeProof] handles are not auto-dropped — they must be released via
 // [RangeProof.Free] before Close can complete.
 //
-// Each handle's Drop is called once. Drop unregisters the handle from the
-// keep-alive registry unconditionally, even if the underlying C-side free
-// errors — so a failing free cannot stall the close. Any drop errors are
-// joined and returned, and the underlying database close is still attempted
-// on a best-effort basis.
+// Each handle is dropped once even if its underlying free errors, so a
+// failing free cannot stall the close. Any drop errors are joined and
+// returned, and the underlying database close is still attempted on a
+// best-effort basis.
 //
 // While force-close is in progress, attempts to construct derived handles
-// (for example via [Proposal.Propose] or [Revision.Iter]) fail with
-// [errDBClosed]: the registry is closed atomically with the snapshot, so a
-// child constructor that would otherwise race the close is rejected rather
-// than leaking past it.
+// (for example via [Proposal.Propose] or [Revision.Iter]) fail with an
+// error indicating the database is closed: a child constructor that would
+// otherwise race the close is rejected rather than leaking past it.
 //
 // Methods on a force-dropped handle behave the same as if the caller had
 // explicitly invoked Drop.
@@ -517,24 +515,10 @@ func WithForceCloseHandles() CloseOption {
 // [ErrActiveKeepAliveHandles] is returned and [C.fwd_close_db] is not
 // called.
 //
-// Pass [WithForceCloseHandles] to forcibly drop every registered outstanding
-// handle instead of waiting for the caller to release them. Force-close
-// closes the keep-alive registry atomically with the snapshot it drops, so
-// any derived-handle constructor (e.g. [Proposal.Propose], [Revision.Iter])
-// racing the close either finishes before the snapshot or finds the
-// registry closed and bails out. Force-close honours ctx: if it expires
-// while drops are still in flight, Close returns the accumulated errors
-// joined with [ErrActiveKeepAliveHandles] and does not call
-// [C.fwd_close_db] — the database is left open so the caller can retry
-// with a fresh context. When force-drop completes within ctx, Close calls
-// [C.fwd_close_db] on a best-effort basis even if individual drops
-// errored: leaving the database open after force-drop has already torn
-// down its dependents is strictly worse than attempting the close, since
-// the file lock and background thread would otherwise leak with no
-// recovery path. [RangeProof] handles are not auto-dropped by force-close
-// and must still be released by the caller before Close can complete. Any
-// drop errors are joined with the close result and returned. See
-// [WithForceCloseHandles] for details.
+// Pass [WithForceCloseHandles] to forcibly drop every outstanding handle
+// instead of waiting for the caller to release them. See
+// [WithForceCloseHandles] for details on its semantics, including how ctx
+// cancellation is reported and which handle types are not auto-dropped.
 //
 // Safe to call multiple times; subsequent calls after the first are no-ops
 // and return nil.
@@ -586,7 +570,8 @@ func (db *Database) Close(ctx context.Context, opts ...CloseOption) error {
 
 // waitForKeepAlives blocks until the keep-alive WaitGroup drains or ctx
 // fires. Returns nil on drain, a wrapped [ErrActiveKeepAliveHandles] on
-// cancellation. Caller must hold db.handleLock.Lock.
+// cancellation. Caller should hold db.handleLock.Lock to prevent creating
+// more handles.
 func (db *Database) waitForKeepAlives(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {

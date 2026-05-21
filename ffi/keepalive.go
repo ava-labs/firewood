@@ -105,12 +105,12 @@ type keepAliveRegistry struct {
 	mu sync.Mutex
 	wg sync.WaitGroup
 	// handles maps a registered lease to its outer Drop function. Entries
-	// are added in [register] and removed in [remove] (called from
+	// are added in [lease.attach] and removed in [remove] (called from
 	// [lease.releaseLocked]).
 	handles map[*lease]func() error
 	// closed is set by [closeAndForceDrop] and prevents any subsequent
-	// registration. Once closed, [register] invokes the dropFn itself and
-	// returns errDBClosed so the caller does not need to clean up.
+	// registration. Once closed, [lease.attach] invokes the dropFn itself
+	// and returns errDBClosed so the caller does not need to clean up.
 	closed bool
 }
 
@@ -133,12 +133,12 @@ func (r *keepAliveRegistry) remove(l *lease) {
 // implementation behind [WithForceCloseHandles].
 //
 // Atomicity: the closed flag is set and the snapshot is taken under the
-// same critical section, so any [register] call that observes the registry
-// as still open will be visible in the snapshot, and any call that observes
-// it as closed will refuse and Drop itself. This removes the race a
-// snapshot-and-retry loop would have with derived-handle constructors
-// (e.g. [Proposal.Propose], [Revision.Iter]) that hold only the parent's
-// lease.mu.RLock rather than [Database.handleLock].
+// same critical section, so any [lease.attach] call that observes the
+// registry as still open will be visible in the snapshot, and any call
+// that observes it as closed will refuse and Drop itself. This removes
+// the race a snapshot-and-retry loop would have with derived-handle
+// constructors (e.g. [Proposal.Propose], [Revision.Iter]) that hold only
+// the parent's lease.mu.RLock rather than [Database.handleLock].
 //
 // Drop callbacks are invoked without the registry lock held; they
 // re-enter the lock via [remove] inside releaseLocked, which is why
@@ -215,7 +215,7 @@ func (l *lease) attach(registry *keepAliveRegistry, dropFn func() error) error {
 		// takes lease.mu, which would then take registry.mu via remove).
 		// No wg.Add ran, so no wg.Done is needed.
 		if err := dropFn(); err != nil {
-			return errors.Join(errDBClosed, err)
+			return fmt.Errorf("%w: %w", errDBClosed, err)
 		}
 		return errDBClosed
 	}
@@ -285,8 +285,8 @@ func (l *lease) release(releaseOnError bool, attemptDisown func() error) error {
 //
 // Exists for callers like [Reconstructed.Reconstruct] that hold mu.Lock
 // for a wider critical section and would otherwise deadlock through
-// [release]. Idempotent: calls after the first are no-ops until [init]
-// runs again.
+// [release]. Idempotent: calls after the first are no-ops until
+// [lease.attach] or [lease.attachUnregistered] runs again.
 func (l *lease) releaseLocked() {
 	if l.registry == nil {
 		return

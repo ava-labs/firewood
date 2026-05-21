@@ -68,12 +68,6 @@ func (ih *iteratorHandle) freeCurrentAllocation() error {
 // It is safe to call Drop multiple times and from multiple goroutines;
 // subsequent calls after the first are no-ops. Disowning is unconditional:
 // see [handle.Drop] for the reasoning behind that choice.
-//
-// Drop is defined on [iteratorHandle] rather than directly on *Iterator so
-// the registered drop callback (and thus the registry's long-lived
-// reference) is bound to *iteratorHandle, leaving the wrapper
-// independently reclaimable; otherwise the cleanup safety net could never
-// fire.
 func (ih *iteratorHandle) Drop() error {
 	return ih.lease.release(true /* releaseOnError */, func() error {
 		err := ih.freeCurrentAllocation()
@@ -290,12 +284,8 @@ func getIteratorFromIteratorResult(result C.IteratorResult, registry *keepAliveR
 			return nil, err
 		}
 		it := &Iterator{iteratorHandle: ih}
-		// Cleanup arg is ih, which is a distinct pointer from it and
-		// has no back-reference to it, satisfying AddCleanup's
-		// "cleanup must not refer to ptr" contract. The cleanup runs
-		// the full iteratorHandle.Drop, including freeCurrentAllocation,
-		// so a finalizer-driven cleanup releases everything an explicit
-		// Drop would.
+		// Cleanup arg is ih (distinct from it, no back-reference) per
+		// AddCleanup's contract; see [iteratorHandle] for the rationale.
 		runtime.AddCleanup(it, iteratorCleanup, ih)
 		return it, nil
 	case C.IteratorResult_Err:
