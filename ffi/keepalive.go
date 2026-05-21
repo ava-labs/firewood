@@ -19,13 +19,14 @@ import (
 //	lease.mu (per-handle)  before  keepAliveRegistry.mu (per-database)
 //
 // Concretely: every [lease.release] / [lease.releaseLocked] call holds
-// lease.mu while invoking [keepAliveRegistry.remove], which briefly takes
-// registry.mu. Going the other way (registry first, then lease.mu) is
-// what [lease.attach] does on the closed-registry path — but it drops
-// registry.mu before invoking dropFn, so there is no simultaneous nested
-// acquisition. [closeAndForceDrop] takes registry.mu only for the
-// snapshot, releases it, and then invokes dropFns, which re-enter
-// registry.mu via remove. No path holds both locks at once.
+// lease.mu while invoking [keepAliveRegistry.removeAndDecr], which
+// briefly takes registry.mu. Going the other way (registry first, then
+// lease.mu) is what [lease.attach] does on the closed-registry path —
+// but it drops registry.mu before invoking dropFn, so there is no
+// simultaneous nested acquisition. [closeAndForceDrop] takes registry.mu
+// only for the snapshot, releases it, and then invokes dropFns, which
+// re-enter registry.mu via removeAndDecr. No path holds both locks at
+// once.
 
 type handle[T any] struct {
 	// handle is an opaque pointer to the underlying Rust object. It should be
@@ -38,8 +39,9 @@ type handle[T any] struct {
 	ptr     T
 	dropped bool
 
-	// lease keeps the parent database alive while this handle is in use. It is
-	// initialized when the handle is created and released when [Drop] is called.
+	// lease keeps the parent database alive while this handle is in use.
+	// It is initialized by [lease.attach] after [newHandle] returns, and
+	// released when [Drop] is called.
 	lease lease
 
 	free func(T) C.VoidResult
@@ -48,7 +50,7 @@ type handle[T any] struct {
 // newHandle constructs an inactive handle: the C pointer and free
 // function are set, but the lease is not yet attached to any registry.
 // Callers must invoke [lease.attach] before the handle becomes visible,
-// or the wg/dropFn invariants will be broken.
+// or the registry's count/dropFn invariants will be broken.
 func newHandle[T any](ptr T, free func(T) C.VoidResult) *handle[T] {
 	return &handle[T]{
 		ptr:     ptr,
@@ -94,19 +96,33 @@ func (h *handle[T]) Drop() error {
 }
 
 // keepAliveRegistry tracks every outstanding handle that holds a lease on a
-// database. It owns the WaitGroup that powers [Database.Close]'s graceful
-// wait alongside a map of drop callbacks that [WithForceCloseHandles] uses
-// to release leases forcibly.
+// database. It owns the outstanding-handle count that powers
+// [Database.Close]'s graceful wait alongside a map of drop callbacks that
+// [WithForceCloseHandles] uses to release leases forcibly.
 //
-// All bookkeeping (WaitGroup + map) lives here; the lease type holds only
-// a back-reference for release. Map values are outer-type Drop functions
-// (e.g. [Iterator.Drop], whose implementation also frees any borrowed batch).
+// All bookkeeping (count + waiters + map) lives here; the lease type
+// holds only a back-reference for release. Map values are outer-type
+// Drop functions (e.g. [Iterator.Drop], whose implementation also frees
+// any borrowed batch).
+//
+// The count+waiters mechanism replaces sync.WaitGroup. WaitGroup.Wait
+// has no context, so the conventional ctx-aware wrapper spawns a
+// goroutine per call; if ctx fires first that goroutine leaks until
+// every outstanding handle eventually releases — and the failure mode
+// [Close] is trying to surface is exactly "handles never release". The
+// explicit count drains via per-call channels that are unregistered on
+// ctx cancellation, so a failed-and-retried Close costs nothing.
 type keepAliveRegistry struct {
 	mu sync.Mutex
-	wg sync.WaitGroup
+	// count is the number of outstanding leases. Bumped by [lease.attach]
+	// and [lease.attachUnregistered]; decremented by [lease.releaseLocked].
+	count int
+	// waiters are channels closed when count drops to zero. Each call to
+	// [waitDrained] appends one and removes it on ctx cancellation.
+	waiters []chan struct{}
 	// handles maps a registered lease to its outer Drop function. Entries
-	// are added in [lease.attach] and removed in [remove] (called from
-	// [lease.releaseLocked]).
+	// are added in [lease.attach] and removed in [removeAndDecr] (called
+	// from [lease.releaseLocked]).
 	handles map[*lease]func() error
 	// closed is set by [closeAndForceDrop] and prevents any subsequent
 	// registration. Once closed, [lease.attach] invokes the dropFn itself
@@ -120,12 +136,62 @@ func newKeepAliveRegistry() *keepAliveRegistry {
 	}
 }
 
-// remove deletes a lease from the registry without invoking its dropFn.
-// Called from [lease.releaseLocked] on explicit disown.
-func (r *keepAliveRegistry) remove(l *lease) {
+// removeAndDecr deletes a lease from the registry and decrements the
+// outstanding-handle count. If the count reaches zero, any pending
+// waiters are released. Called from [lease.releaseLocked] on disown.
+func (r *keepAliveRegistry) removeAndDecr(l *lease) {
 	r.mu.Lock()
 	delete(r.handles, l)
+	r.decrLocked()
 	r.mu.Unlock()
+}
+
+// decrLocked decrements the outstanding-handle count and releases any
+// pending waiters when it reaches zero. Caller must hold r.mu.
+func (r *keepAliveRegistry) decrLocked() {
+	r.count--
+	if r.count == 0 {
+		for _, w := range r.waiters {
+			close(w)
+		}
+		r.waiters = nil
+	}
+}
+
+// waitDrained blocks until the outstanding-handle count reaches zero or
+// ctx is cancelled. Returns nil on drain, ctx.Err() on cancellation.
+//
+// No goroutine is spawned per call: the waiter is a single channel
+// closed by [decrLocked] when count hits zero. On ctx cancellation the
+// channel is unregistered from the waiters slice so the registry does
+// not retain a reference to it.
+func (r *keepAliveRegistry) waitDrained(ctx context.Context) error {
+	r.mu.Lock()
+	if r.count == 0 {
+		r.mu.Unlock()
+		return nil
+	}
+	w := make(chan struct{})
+	r.waiters = append(r.waiters, w)
+	r.mu.Unlock()
+
+	select {
+	case <-w:
+		return nil
+	case <-ctx.Done():
+		r.mu.Lock()
+		// w may already have been closed concurrently with ctx firing,
+		// in which case it's no longer in r.waiters. Both paths are
+		// fine — find-and-remove handles either case.
+		for i, x := range r.waiters {
+			if x == w {
+				r.waiters = append(r.waiters[:i], r.waiters[i+1:]...)
+				break
+			}
+		}
+		r.mu.Unlock()
+		return ctx.Err()
+	}
 }
 
 // closeAndForceDrop closes the registry to new registrations and invokes
@@ -141,8 +207,8 @@ func (r *keepAliveRegistry) remove(l *lease) {
 // the parent's lease.mu.RLock rather than [Database.handleLock].
 //
 // Drop callbacks are invoked without the registry lock held; they
-// re-enter the lock via [remove] inside releaseLocked, which is why
-// the snapshot is taken eagerly.
+// re-enter the lock via [removeAndDecr] inside releaseLocked, which is
+// why the snapshot is taken eagerly.
 //
 // Drainable on retry: if ctx expires partway through, accumulated drop
 // errors are returned and the registry stays closed, but handles that
@@ -180,28 +246,28 @@ func (r *keepAliveRegistry) closeAndForceDrop(ctx context.Context) error {
 // takes mu.RLock for the duration of the call, and force-drop takes
 // mu.Lock via [release] before tearing down the C handle.
 //
-// All bookkeeping (the WaitGroup, the registry map) lives in
-// [keepAliveRegistry]; the lease holds only a back-reference so that
-// [releaseLocked] can find the registry it needs to decrement.
+// All bookkeeping (the outstanding-handle count, the registry map)
+// lives in [keepAliveRegistry]; the lease holds only a back-reference
+// so that [releaseLocked] can find the registry it needs to decrement.
 type lease struct {
 	mu sync.RWMutex
-	// registry is the parent database's keep-alive registry. Set in
-	// [init], cleared in [releaseLocked]; nil indicates the lease has
-	// already been released.
+	// registry is the parent database's keep-alive registry. Set by
+	// [lease.attach] or [lease.attachUnregistered], cleared in
+	// [releaseLocked]; nil indicates the lease has already been released.
 	registry *keepAliveRegistry
 }
 
 // attach atomically registers this lease with both the registry's
-// WaitGroup and its drop map under a single registry.mu critical
-// section. Either both succeed, or — on a registry that has already
-// been closed via [closeAndForceDrop] — dropFn is invoked, the wg is
-// NOT incremented, and errDBClosed is returned (joined with any error
-// dropFn produced).
+// outstanding-handle count and its drop map under a single registry.mu
+// critical section. Either both succeed, or — on a registry that has
+// already been closed via [closeAndForceDrop] — dropFn is invoked, the
+// count is NOT incremented, and errDBClosed is returned (joined with
+// any error dropFn produced).
 //
 // This is the single entry point for activating a new lease. Holding
-// the wg without being in the drop map is the latent failure mode that
-// [closeAndForceDrop] cannot recover from, so the two-step init+register
-// sequence is unsafe; attach does both atomically.
+// the count without being in the drop map is the latent failure mode
+// that [closeAndForceDrop] cannot recover from, so the increment and
+// the map insert must happen under the same critical section.
 //
 // Caller does not need to hold lease.mu — a fresh lease isn't visible
 // to anyone else until attach returns. Caller does not need to clean
@@ -212,8 +278,8 @@ func (l *lease) attach(registry *keepAliveRegistry, dropFn func() error) error {
 		registry.mu.Unlock()
 		// Call dropFn outside registry.mu to preserve the lease.mu →
 		// registry.mu lock order (dropFn → handle.Drop → lease.release
-		// takes lease.mu, which would then take registry.mu via remove).
-		// No wg.Add ran, so no wg.Done is needed.
+		// takes lease.mu, which would then take registry.mu via
+		// removeAndDecr). No count++ ran, so no decrement is needed.
 		if err := dropFn(); err != nil {
 			return fmt.Errorf("%w: %w", errDBClosed, err)
 		}
@@ -226,20 +292,20 @@ func (l *lease) attach(registry *keepAliveRegistry, dropFn func() error) error {
 		// two goroutines raced on a lease that should be single-owner.
 		panic("lease already attached")
 	}
-	registry.wg.Add(1)
+	registry.count++
 	registry.handles[l] = dropFn
 	l.registry = registry
 	registry.mu.Unlock()
 	return nil
 }
 
-// attachUnregistered increments the registry's WaitGroup but does NOT
-// add this lease to the drop map. It exists for [RangeProof], which
-// intentionally stays outside the registry so its runtime.SetFinalizer
-// can collect the proof — a bound Free in the registry map would keep
-// the proof reachable forever. Consequently [WithForceCloseHandles]
-// will not auto-drop a still-referenced RangeProof; graceful
-// [Database.Close] still waits on the wg.
+// attachUnregistered increments the registry's outstanding-handle count
+// but does NOT add this lease to the drop map. It exists for
+// [RangeProof], which intentionally stays outside the registry so its
+// runtime.SetFinalizer can collect the proof — a bound Free in the
+// registry map would keep the proof reachable forever. Consequently
+// [WithForceCloseHandles] will not auto-drop a still-referenced
+// RangeProof; graceful [Database.Close] still waits on the count.
 //
 // Callers must serialize against [Database.Close] (e.g. via
 // db.handleLock.RLock) before invoking this — there is no closed-registry
@@ -252,7 +318,7 @@ func (l *lease) attachUnregistered(registry *keepAliveRegistry) {
 	if l.registry != nil {
 		panic("lease already attached")
 	}
-	registry.wg.Add(1)
+	registry.count++
 	l.registry = registry
 }
 
@@ -261,13 +327,13 @@ func (l *lease) attachUnregistered(registry *keepAliveRegistry) {
 //
 // Most callers should pass releaseOnError=true: keeping the lease alive
 // on a free error means the parent database can never gracefully close,
-// since [Database.Close] waits on a WaitGroup whose counter only
-// decrements via release. Pass false only when the caller has a concrete
-// recovery path for the failed free.
+// since [Database.Close] waits on a count that only decrements via
+// release. Pass false only when the caller has a concrete recovery path
+// for the failed free.
 //
 // Safe to call multiple times; subsequent calls after the first continue
-// to invoke attemptDisown but do not double-decrement the WaitGroup
-// unless [attach] or [attachUnregistered] runs again in between.
+// to invoke attemptDisown but do not double-decrement the count unless
+// [attach] or [attachUnregistered] runs again in between.
 func (l *lease) release(releaseOnError bool, attemptDisown func() error) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -280,8 +346,9 @@ func (l *lease) release(releaseOnError bool, attemptDisown func() error) error {
 }
 
 // releaseLocked is the single bookkeeping point: decrements the
-// registry's WaitGroup, removes this lease from the registry, and
-// clears the registry back-pointer. Caller must hold l.mu.
+// registry's outstanding-handle count, removes this lease from the
+// registry, and clears the registry back-pointer. Caller must hold
+// l.mu.
 //
 // Exists for callers like [Reconstructed.Reconstruct] that hold mu.Lock
 // for a wider critical section and would otherwise deadlock through
@@ -291,7 +358,6 @@ func (l *lease) releaseLocked() {
 	if l.registry == nil {
 		return
 	}
-	l.registry.wg.Done()
-	l.registry.remove(l)
+	l.registry.removeAndDecr(l)
 	l.registry = nil
 }

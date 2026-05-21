@@ -115,11 +115,12 @@ type Database struct {
 	// keepAlives tracks every outstanding [Proposal], [Revision],
 	// [Reconstructed], [Iterator], and verified [RangeProof] — the
 	// types that hold a borrow on the underlying Rust database and
-	// therefore must not outlive it. It carries both the WaitGroup that
-	// [Database.Close] waits on and the registry of drop callbacks that
-	// [WithForceCloseHandles] uses to release the registered subset
-	// forcibly. [RangeProof] participates in the WaitGroup but is not
-	// registered for force-drop (see VerifyRangeProof for why).
+	// therefore must not outlive it. It carries both the
+	// outstanding-handle count that [Database.Close] waits on and the
+	// registry of drop callbacks that [WithForceCloseHandles] uses to
+	// release the registered subset forcibly. [RangeProof] participates
+	// in the count but is not registered for force-drop (see
+	// VerifyRangeProof for why).
 	keepAlives *keepAliveRegistry
 
 	// commitLock is used to ensure that methods accessing or modifying the latest
@@ -568,22 +569,15 @@ func (db *Database) Close(ctx context.Context, opts ...CloseOption) error {
 	return forcedDropErr
 }
 
-// waitForKeepAlives blocks until the keep-alive WaitGroup drains or ctx
-// fires. Returns nil on drain, a wrapped [ErrActiveKeepAliveHandles] on
-// cancellation. Caller should hold db.handleLock.Lock to prevent creating
-// more handles.
+// waitForKeepAlives blocks until the outstanding-handle count reaches
+// zero or ctx fires. Returns nil on drain, a wrapped
+// [ErrActiveKeepAliveHandles] on cancellation. Caller should hold
+// db.handleLock.Lock to prevent creating more handles.
 func (db *Database) waitForKeepAlives(ctx context.Context) error {
-	done := make(chan struct{})
-	go func() {
-		db.keepAlives.wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("%w: %w", ErrActiveKeepAliveHandles, ctx.Err())
+	if err := db.keepAlives.waitDrained(ctx); err != nil {
+		return fmt.Errorf("%w: %w", ErrActiveKeepAliveHandles, err)
 	}
+	return nil
 }
 
 // Dump returns a DOT (Graphviz) format representation of the trie structure

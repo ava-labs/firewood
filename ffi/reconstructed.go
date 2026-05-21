@@ -43,7 +43,7 @@ var ErrDroppedReconstructed = errors.New("reconstructed view already dropped")
 //
 // Cross-type: Reconstructed never touches commitLock, so there is no
 // ordering constraint with Proposal.Commit or Database.Close beyond the
-// keep-alive registry's WaitGroup.
+// keep-alive registry's outstanding-handle count.
 
 // Reconstructed is a linear, read-only reconstructed view over a historical
 // revision.
