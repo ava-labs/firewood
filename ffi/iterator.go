@@ -282,12 +282,11 @@ func getIteratorFromIteratorResult(result C.IteratorResult, registry *keepAliveR
 				},
 			},
 		}
-		ih.lease.init(registry)
-		// it.Drop is promoted from *iteratorHandle, so the registered
+		// ih.Drop is promoted from *iteratorHandle, so the registered
 		// closure is bound to ih (not the *Iterator wrapper). This is
 		// what lets the cleanup below fire when the user drops their
 		// last reference to the wrapper without an explicit Drop.
-		if err := registry.register(&ih.lease, ih.Drop); err != nil {
+		if err := ih.lease.attach(registry, ih.Drop); err != nil {
 			return nil, err
 		}
 		it := &Iterator{iteratorHandle: ih}

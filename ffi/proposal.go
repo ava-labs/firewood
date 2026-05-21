@@ -219,11 +219,11 @@ func getProposalFromProposalResult(result C.ProposalResult, registry *keepAliveR
 		body := (*C.ProposalResult_Ok_Body)(unsafe.Pointer(&result.anon0))
 		hashKey := *(*Hash)(unsafe.Pointer(&body.root_hash._0))
 		proposal := &Proposal{
-			handle:     createHandle(body.handle, registry, func(p *C.ProposalHandle) C.VoidResult { return C.fwd_free_proposal(p) }),
+			handle:     newHandle(body.handle, func(p *C.ProposalHandle) C.VoidResult { return C.fwd_free_proposal(p) }),
 			root:       hashKey,
 			commitLock: commitLock,
 		}
-		if err := registry.register(&proposal.lease, proposal.Drop); err != nil {
+		if err := proposal.lease.attach(registry, proposal.Drop); err != nil {
 			return nil, err
 		}
 		runtime.AddCleanup(proposal, drop[*C.ProposalHandle], proposal.handle)

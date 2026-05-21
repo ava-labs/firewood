@@ -209,7 +209,7 @@ func (db *Database) VerifyRangeProof(
 	// WaitGroup, so graceful Close waits on them; WithForceCloseHandles will
 	// not auto-drop a still-referenced RangeProof. The change-proof family
 	// is being redesigned, so a handle[T] migration here is deferred.
-	proof.lease.init(db.keepAlives)
+	proof.lease.attachUnregistered(db.keepAlives)
 	runtime.SetFinalizer(proof, (*RangeProof).Free)
 	return nil
 }
