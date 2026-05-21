@@ -372,7 +372,6 @@ fn test_persisted_storage_root_two_storage_entries() {
 /// storage entry that lives under the right account.
 #[test]
 fn test_range_proof_accounts_have_computed_storage_root() {
-    use crate::RangeProof;
     type BoxedAccounts = Box<[(Box<[u8]>, Box<[u8]>)]>;
 
     let dummy_storage_root = [0u8; 32];
@@ -399,7 +398,8 @@ fn test_range_proof_accounts_have_computed_storage_root() {
 
     // One storage entry under the right account. Its 64-byte key is
     // right_account_key || storage_suffix, placing it beyond the right
-    // account in trie order.
+    // account in trie order, so a range proof bounded by right_key
+    // naturally excludes it.
     let storage_key: Box<[u8]> = [right_key.as_ref(), &[0xAAu8; 32]].concat().into();
     let storage_value: Box<[u8]> = rlp_encode_storage(&[0x42u8; 32]).into();
 
@@ -411,23 +411,11 @@ fn test_range_proof_accounts_have_computed_storage_root() {
     let merkle = init_merkle(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    // Build a range proof bounded to just the two account keys.
-    let start_proof = merkle.prove(left_key.as_ref()).unwrap();
-    let end_proof = merkle.prove(right_key.as_ref()).unwrap();
-
-    // Read committed values for the two account keys only (not the storage entry).
-    let key_values: BoxedAccounts = accounts
-        .iter()
-        .map(|(k, _)| {
-            let val = merkle
-                .get_value(k.as_ref())
-                .unwrap()
-                .expect("account key should exist");
-            (k.to_vec().into_boxed_slice(), val)
-        })
-        .collect();
-
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values);
+    // Build a range proof over [left_key, right_key]. The storage entry
+    // sorts after right_key, so the iterator stops before reaching it.
+    let range_proof = merkle
+        .range_proof(Some(left_key.as_ref()), Some(right_key.as_ref()), None)
+        .unwrap();
 
     // The range proof must verify against the committed root hash.
     verify_range_proof(
