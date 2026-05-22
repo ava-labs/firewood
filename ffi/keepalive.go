@@ -215,6 +215,12 @@ func (r *keepAliveRegistry) waitDrained(ctx context.Context) error {
 // were not yet dropped remain in the map. A subsequent call re-snapshots
 // the remainder and continues draining, so a caller that hits a context
 // deadline can retry [Database.Close] with a fresh context to finish.
+//
+// Invariant: the `closed` flag gates [lease.attach] (new registrations),
+// not re-entry to this function. Do NOT add an early `if r.closed
+// { return }` here — that would break the retry-after-ctx-cancel path,
+// since a partially-drained registry is exactly the state where a fresh
+// context needs to resume draining the remaining handles.
 func (r *keepAliveRegistry) closeAndForceDrop(ctx context.Context) error {
 	r.mu.Lock()
 	r.closed = true
