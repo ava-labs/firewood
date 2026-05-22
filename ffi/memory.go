@@ -169,7 +169,7 @@ func (b *ownedBytes) Free() error {
 	}
 
 	if err := getErrorFromVoidResult(C.fwd_free_owned_bytes(b.owned)); err != nil {
-		return fmt.Errorf("%w: %w", errFreeingValue, err)
+		return errors.Join(errFreeingValue, err)
 	}
 
 	b.owned = C.OwnedBytes{}
@@ -231,7 +231,10 @@ func (b *ownedBytes) intoError() error {
 	err := errors.New(string(b.CopiedBytes()))
 
 	if err2 := b.Free(); err2 != nil {
-		return fmt.Errorf("%w: %w (original error: %w)", errFreeingValue, err, err2)
+		// err is the payload error; err2 is the free failure. Joining
+		// preserves errors.Is matching against both errFreeingValue and
+		// the underlying payload error for callers.
+		return errors.Join(err, errFreeingValue, err2)
 	}
 
 	return err
@@ -307,7 +310,7 @@ func getValueFromValueResult(result C.ValueResult) ([]byte, error) {
 		ownedBytes := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0)))
 		bytes := ownedBytes.CopiedBytes()
 		if err := ownedBytes.Free(); err != nil {
-			return nil, fmt.Errorf("%w: %w", errFreeingValue, err)
+			return nil, errors.Join(errFreeingValue, err)
 		}
 		return bytes, nil
 	case C.ValueResult_Err:
@@ -349,7 +352,7 @@ func (b *ownedKeyValueBatch) free() error {
 	}
 
 	if err := getErrorFromVoidResult(C.fwd_free_owned_key_value_batch(b.owned)); err != nil {
-		return fmt.Errorf("%w: %w", errFreeingValue, err)
+		return errors.Join(errFreeingValue, err)
 	}
 
 	b.owned = C.OwnedKeyValueBatch{}
@@ -388,7 +391,7 @@ func (kv *ownedKeyValue) free() error {
 		return nil
 	}
 	if err := getErrorFromVoidResult(C.fwd_free_owned_kv_pair(kv.owned)); err != nil {
-		return fmt.Errorf("%w: %w", errFreeingValue, err)
+		return errors.Join(errFreeingValue, err)
 	}
 	// zero out fields to avoid accidental reuse/double free
 	kv.owned = C.OwnedKeyValuePair{}
