@@ -64,26 +64,16 @@ Updating the Rust MSRV requires edits in two places:
 just release-step-update-rust-dependencies
 ```
 
-The recipe runs `cargo upgrade`, `cargo upgrade --incompatible`, `cargo update
---verbose`, and the test suite to verify nothing broke.
+This delegates to `cargo xtask update-rust-dependencies`, which automatically
+detects crates listed under `[patch.crates-io]` in `Cargo.toml` and excludes
+them from `cargo upgrade`. Patched crates reference a specific git revision and
+cannot be upgraded via the registry; update them separately when needed.
 
-Crates listed under `[patch.crates-io]` in `Cargo.toml` reference specific git
-revisions and cannot be upgraded through the registry. Exclude them explicitly
-when running `cargo upgrade`:
-
-```shell
-cargo upgrade --exclude <patched-crate-name>
-```
-
-Check `[patch.crates-io]` in `Cargo.toml` to see the current set of patched
-crates. Update them separately by adjusting the revision in `Cargo.toml` and
-opening a dedicated PR.
-
-If an incompatible upgrade requires code changes that are out of scope for the
-release, exclude it and track the work in a new GitHub issue:
+If the upgrade fails because a dependency requires code changes that are out of
+scope for the release, exclude it and track the work in a new GitHub issue:
 
 ```shell
-cargo upgrade --incompatible --exclude <dependency-name>
+cargo xtask update-rust-dependencies --exclude <dependency-name>
 ```
 
 Open an issue titled `chore(deps): upgrade <dependency-name> to <version>`.
@@ -120,7 +110,8 @@ current version; do not bump it during workspace releases.
 
 ### Determining whether a change is breaking
 
-Use [`cargo-semver-checks`](https://github.com/obi1kenobi/cargo-semver-checks)
+Use `cargo-semver-checks` (runs automatically on PRs, see
+[`.github/workflows/semver-checks.yaml`](.github/workflows/semver-checks.yaml))
 to detect Rust API-level breaking changes in `firewood` and `firewood-storage`.
 This check is **informational and inconclusive in the negative direction**: a
 passing result does not guarantee compatibility, because it does not cover
@@ -253,8 +244,8 @@ The crates.io workflow does **not** run until the GitHub release is published.
 
 Publishing triggers the crates.io workflow ([`.github/workflows/publish.yaml`](.github/workflows/publish.yaml)),
 which obtains a short-lived OIDC token from crates.io (trusted publishing is
-pre-configured for this workflow) and publishes each crate in topological
-dependency order, automatically skipping:
+pre-configured for this workflow) and runs `cargo xtask publish-crates`.
+It publishes crates in topological order and automatically skips:
 
 - Crates whose current version is already published.
 - Crates that transitively depend on a `[patch.crates-io]` git reference
