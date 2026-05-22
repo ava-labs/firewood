@@ -1,0 +1,25 @@
+name: SemVer Checks
+
+on:
+  pull_request:
+
+jobs:
+  semver-checks:
+    name: Detect Rust API breaking changes
+    # Only run on the canonical repo — forks don't need this and lack the cache.
+    if: github.repository == 'ava-labs/firewood'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2 -> v2.9.1
+        with:
+          shared-key: semver-checks
+          save-if: "false"
+      - name: Check semver compatibility
+        uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # @v2
+        with:
+          # firewood-ffi is a staticlib — its Rust API is not consumed by dependents.
+          # firewood-triehash is a test helper with no stability guarantees.
+          # firewood-macros, firewood-benchmark, firewood-replay: no public API.
+          package: firewood,firewood-storage
