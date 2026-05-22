@@ -1672,6 +1672,52 @@ func TestCloseForceDropsOutstandingHandles(t *testing.T) {
 	r.ErrorIs(propIter.Err(), errDroppedIterator)
 }
 
+// TestCloseForceWithCancelledContextThenRetry verifies the retry path
+// when WithForceCloseHandles is paired with a context that fires before
+// closeAndForceDrop finishes draining. The Db must stay open across the
+// failed attempt (no fwd_close_db while leases are still live), and a
+// subsequent Close with a fresh context must succeed and drop everything.
+func TestCloseForceWithCancelledContextThenRetry(t *testing.T) {
+	r := require.New(t)
+	db, err := newDatabase(t.TempDir())
+	r.NoError(err)
+
+	const n = 4
+	_, _, batch := kvForTest(n)
+	proposals := make([]*Proposal, n)
+	for i := range proposals {
+		p, err := db.Propose(batch[i : i+1])
+		r.NoError(err)
+		proposals[i] = p
+	}
+
+	// Pre-cancelled context: closeAndForceDrop sets registry.closed = true
+	// but bails before any dropFn runs. The Db must NOT be freed — its
+	// keep-alive handles are still live.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err = db.Close(ctx, WithForceCloseHandles())
+	r.ErrorIs(err, ErrActiveKeepAliveHandles)
+	r.ErrorIs(err, context.Canceled)
+
+	// Db is still open: a live proposal's Get must still succeed (no
+	// drop ran, so p.dropped is false, and the underlying Db handle is
+	// still valid).
+	_, err = proposals[0].Get([]byte("nope"))
+	r.NoError(err, "Db must not have been freed while drops were unfinished")
+
+	// Retry with a fresh context: closeAndForceDrop re-snapshots the
+	// still-registered handles and drains them. fwd_close_db then runs
+	// and the Db closes cleanly.
+	r.NoError(db.Close(oneSecCtx(t), WithForceCloseHandles()))
+
+	// Every proposal is now reported as dropped.
+	for i, p := range proposals {
+		_, err := p.Get([]byte("nope"))
+		r.ErrorIs(err, errDroppedProposal, "proposal %d should be dropped after retry", i)
+	}
+}
+
 // TestCloseWithoutForceBlocksOnIterator verifies that an outstanding iterator
 // blocks Close in the default (non-forced) mode. Before the keep-alive
 // integration of iterators this would silently succeed and leave a dangling
