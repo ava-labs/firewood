@@ -10,7 +10,6 @@ import "C"
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 )
 
@@ -89,7 +88,7 @@ func (h *handle[T]) Drop() error {
 		h.dropped = true
 
 		if err := getErrorFromVoidResult(h.free(ptr)); err != nil {
-			return fmt.Errorf("%w: %w", errFreeingValue, err)
+			return errors.Join(errFreeingValue, err)
 		}
 		return nil
 	})
@@ -287,7 +286,7 @@ func (l *lease) attach(registry *keepAliveRegistry, dropFn func() error) error {
 		// takes lease.mu, which would then take registry.mu via
 		// removeAndDecr). No count++ ran, so no decrement is needed.
 		if err := dropFn(); err != nil {
-			return fmt.Errorf("%w: %w", errDBClosed, err)
+			return errors.Join(errDBClosed, err)
 		}
 		return errDBClosed
 	}

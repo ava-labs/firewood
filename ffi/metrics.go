@@ -16,6 +16,7 @@ package ffi
 import "C"
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"unsafe"
@@ -87,7 +88,7 @@ func gatherFromRust() ([]*dto.MetricFamily, error) {
 		owned := *(*C.OwnedRenderedMetrics)(unsafe.Pointer(&result.anon0))
 		families := convertRenderedMetrics(owned)
 		if freeErr := getErrorFromVoidResult(C.fwd_free_rendered_metrics(owned)); freeErr != nil {
-			return nil, fmt.Errorf("%w: %w", errFreeingValue, freeErr)
+			return nil, errors.Join(errFreeingValue, freeErr)
 		}
 		return families, nil
 	case C.RenderedMetricsResult_Err:
