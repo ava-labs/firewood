@@ -6,8 +6,12 @@ providing inline feedback — in addition to general best practices.
 ## Rust
 
 - **Overflow arithmetic**: Reject `saturating_*` or `checked_*` for operations that are
-  provably impossible to overflow — they add runtime cost for no benefit. Scrutinize
-  `wrapping_*` for operations where wrapping would silently produce incorrect results.
+  provably impossible to overflow — they add runtime cost for no benefit. When the
+  `arithmetic_side_effects` lint fires, prefer `wrapping_*` over suppressing the lint
+  with `#[expect(clippy::arithmetic_side_effects)]` — `wrapping_add(1)` is cleaner than
+  a multi-line suppression block. Scrutinize `wrapping_*` on values where wrapping would
+  silently produce incorrect results (e.g., financial or cryptographic quantities); use
+  `#[expect(clippy::arithmetic_side_effects)]` with a reason comment for those cases.
 - **`unwrap()`**: Hard reject outside `#[cfg(test)]` modules. Also reject
   `#[allow(clippy::unwrap_used)]` and `#[expect(clippy::unwrap_used)]` outside test
   modules.

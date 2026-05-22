@@ -24,6 +24,7 @@ use std::ops::Range;
 
 mod arc_swap_triomphe;
 mod checker;
+mod cycle;
 mod hashednode;
 mod hashedshunt;
 mod hashers;
@@ -57,6 +58,7 @@ pub mod macros;
 pub mod registry;
 // re-export these so callers don't need to know where they are
 pub use checker::{CheckOpt, CheckerReport, DBStats, FreeListsStats, TrieStats};
+pub use cycle::CycleDetected;
 pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use hashedshunt::HashableShunt;
 pub use hashtype::{HashType, IntoHashType, InvalidTrieHashLength, TrieHash};

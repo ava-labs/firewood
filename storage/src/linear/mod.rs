@@ -82,6 +82,28 @@ impl FileIoError {
     pub(crate) fn context(&self) -> Option<&str> {
         self.context.as_deref()
     }
+
+    /// Creates a [`FileIoError`] that wraps a detected trie cycle.
+    ///
+    /// The structured [`crate::CycleDetected`] is recoverable via [`FileIoError::as_cycle_detected`].
+    #[must_use]
+    pub fn from_cycle(cycle: crate::CycleDetected) -> Self {
+        Self {
+            inner: std::io::Error::new(std::io::ErrorKind::InvalidData, cycle),
+            filename: None,
+            offset: 0,
+            context: None,
+        }
+    }
+
+    /// Returns the [`crate::CycleDetected`] payload if this error originated
+    /// from trie cycle detection, otherwise `None`.
+    #[must_use]
+    pub fn as_cycle_detected(&self) -> Option<&crate::CycleDetected> {
+        self.inner
+            .get_ref()
+            .and_then(|e| e.downcast_ref::<crate::CycleDetected>())
+    }
 }
 
 impl std::error::Error for FileIoError {
@@ -92,18 +114,19 @@ impl std::error::Error for FileIoError {
 
 impl std::fmt::Display for FileIoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{inner} at offset {offset} of file '{filename}' {context}",
-            inner = self.inner,
-            offset = self.offset,
-            filename = self
-                .filename
-                .as_ref()
-                .unwrap_or(&PathBuf::from("[unknown]"))
-                .display(),
-            context = self.context.as_ref().unwrap_or(&String::new())
-        )
+        write!(f, "{}", self.inner)?;
+        if let Some(filename) = self.filename.as_deref() {
+            write!(
+                f,
+                " at offset {} of file '{}'",
+                self.offset,
+                filename.display()
+            )?;
+        }
+        if let Some(ctx) = &self.context {
+            write!(f, " {ctx}")?;
+        }
+        Ok(())
     }
 }
 
@@ -263,5 +286,37 @@ where
 {
     fn offset(&self) -> u64 {
         self.position()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::unwrap_used)]
+
+    use super::*;
+    use crate::{CycleDetected, LinearAddress, PathBuf};
+
+    #[test]
+    fn cycle_detected_roundtrips_through_file_io_error() {
+        let addr = LinearAddress::new(16).unwrap();
+        let cycle = CycleDetected {
+            address: addr,
+            path_to_first_visit: PathBuf::new(),
+            path_to_revisit: PathBuf::new(),
+        };
+        let err = FileIoError::from_cycle(cycle);
+        assert!(err.as_cycle_detected().is_some());
+        assert_eq!(err.as_cycle_detected().unwrap().address, addr);
+    }
+
+    #[test]
+    fn regular_io_error_is_not_a_cycle() {
+        let err = FileIoError::new(
+            std::io::Error::new(std::io::ErrorKind::NotFound, "missing"),
+            None,
+            0,
+            None,
+        );
+        assert!(err.as_cycle_detected().is_none());
     }
 }

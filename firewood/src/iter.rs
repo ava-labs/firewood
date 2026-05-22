@@ -5,11 +5,19 @@ use crate::api::{KeyType, KeyValuePair};
 use crate::merkle::{Key, Value};
 
 use firewood_storage::{
-    BranchNode, Child, FileIoError, NibblesIterator, Node, PathBuf, PathComponent, PathIterItem,
-    SharedNode, TriePathFromUnpackedBytes, TrieReader,
+    BranchNode, Child, CycleDetected, FileIoError, LinearAddress, NibblesIterator, Node, PathBuf,
+    PathComponent, PathIterItem, SharedNode, TriePathFromUnpackedBytes, TrieReader,
 };
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::iter::FusedIterator;
+
+/// Maximum trie depth allowed during iteration.
+///
+/// This acts as a secondary defense against pathologically deep (but not cyclic) tries,
+/// preventing stack exhaustion or runaway allocation. A well-formed Firewood trie should
+/// never approach this depth.
+const MAX_TRIE_DEPTH: usize = 1024;
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode {
@@ -65,6 +73,11 @@ enum NodeIterState {
 pub struct MerkleNodeIter<'a, T> {
     state: NodeIterState,
     merkle: &'a T,
+    /// Maps each visited disk address to the trie nibble-path at which it was
+    /// first seen. Checked before every `read_node` call so that back-edges
+    /// (cycles) are detected and returned as [`FileIoError`]s rather than
+    /// causing infinite iteration.
+    visited: HashMap<LinearAddress, PathBuf>,
 }
 
 impl From<Key> for NodeIterState {
@@ -80,6 +93,7 @@ impl<'a, T: TrieReader> MerkleNodeIter<'a, T> {
         Self {
             state: NodeIterState::from(key),
             merkle,
+            visited: HashMap::new(),
         }
     }
 }
@@ -91,9 +105,12 @@ impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
         'outer: loop {
             match &mut self.state {
                 NodeIterState::StartFromKey(key) => {
-                    match get_iterator_intial_state(self.merkle, key) {
+                    match get_iterator_initial_state(self.merkle, key, &mut self.visited) {
                         Ok(state) => self.state = state,
-                        Err(e) => return Some(Err(e)),
+                        Err(e) => {
+                            self.state = NodeIterState::Iterating { iter_stack: vec![] };
+                            return Some(Err(e));
+                        }
                     }
                 }
                 NodeIterState::Iterating { iter_stack } => {
@@ -103,7 +120,11 @@ impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
                                 match &*node {
                                     Node::Leaf(_) => {}
                                     Node::Branch(branch) => {
-                                        // `node` is a branch node. Visit its children next.
+                                        // Push Visited unconditionally so this node is always
+                                        // yielded. The Visited-arm guard (below) fires on the
+                                        // next call if the stack is already at MAX_TRIE_DEPTH,
+                                        // preventing descent into children while still returning
+                                        // the node itself.
                                         iter_stack.push(IterationNode::Visited {
                                             key: key.clone(),
                                             children_iter: Box::new(as_enumerated_children_iter(
@@ -126,21 +147,16 @@ impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
                                     continue;
                                 };
 
-                                let child = match child {
-                                    Child::AddressWithHash(addr, _) => {
-                                        match self.merkle.read_node(addr) {
-                                            Ok(node) => node,
-                                            Err(e) => return Some(Err(e)),
-                                        }
-                                    }
-                                    Child::Node(node) => node.clone().into(),
-                                    Child::MaybePersisted(maybe_persisted, _) => {
-                                        // For MaybePersisted, we need to get the node
-                                        match maybe_persisted.as_shared_node(self.merkle) {
-                                            Ok(node) => node,
-                                            Err(e) => return Some(Err(e)),
-                                        }
-                                    }
+                                let child_path_prefix = build_child_path_prefix(key, pos);
+
+                                let child = match resolve_child(
+                                    self.merkle,
+                                    child,
+                                    child_path_prefix,
+                                    &mut self.visited,
+                                ) {
+                                    Ok(node) => node,
+                                    Err(e) => return Some(Err(e)),
                                 };
 
                                 let child_partial_path = child.partial_path().iter().copied();
@@ -158,6 +174,12 @@ impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
                                 // Visit it again after visiting its `child`.
                                 iter_stack.push(iter_node);
 
+                                if iter_stack.len() >= MAX_TRIE_DEPTH {
+                                    iter_stack.clear();
+                                    return Some(Err(depth_exceeded_error(
+                                        "MerkleNodeIter depth guard",
+                                    )));
+                                }
                                 iter_stack.push(IterationNode::Unvisited {
                                     key: child_key,
                                     node: child,
@@ -178,14 +200,23 @@ impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
 impl<T: TrieReader> FusedIterator for MerkleNodeIter<'_, T> {}
 
 /// Returns the initial state for an iterator over the given `merkle` which starts at `key`.
-fn get_iterator_intial_state<T: TrieReader>(
+///
+/// The `visited` map is populated with the disk address of every node loaded
+/// during the seek phase so that the main iteration loop can detect back-edges.
+/// The root node's address (if any) is recorded before entering the seek loop,
+/// so cycles that point directly back to the root are detected as well.
+fn get_iterator_initial_state<T: TrieReader>(
     merkle: &T,
     key: &[u8],
+    visited: &mut HashMap<LinearAddress, PathBuf>,
 ) -> Result<NodeIterState, FileIoError> {
     let Some(root) = merkle.root_node() else {
         // This merkle is empty.
         return Ok(NodeIterState::Iterating { iter_stack: vec![] });
     };
+
+    prepopulate_root_in_visited(merkle, visited);
+
     let mut node = root;
 
     // Invariant: `matched_key_nibbles` is the path before `node`'s
@@ -258,16 +289,23 @@ fn get_iterator_intial_state<T: TrieReader>(
                         ),
                     });
 
+                    // Allow one extra level in the seek phase so the seek starting node
+                    // (placed as Unvisited) can be at depth MAX_TRIE_DEPTH and yielded by
+                    // the main loop before its depth guard fires.
+                    if iter_stack.len() > MAX_TRIE_DEPTH {
+                        return Err(depth_exceeded_error(
+                            "MerkleNodeIter seek phase depth guard",
+                        ));
+                    }
+
+                    let child_path_prefix =
+                        build_child_path_prefix(&matched_key_nibbles, next_unmatched_key_nibble);
+
                     let child = &branch.children[next_unmatched_key_nibble];
-                    node = match child {
-                        None => return Ok(NodeIterState::Iterating { iter_stack }),
-                        Some(Child::AddressWithHash(addr, _)) => merkle.read_node(*addr)?,
-                        Some(Child::Node(node)) => (*node).clone().into(), // TODO can we avoid cloning this?
-                        Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                            // For MaybePersisted, we need to get the node
-                            maybe_persisted.as_shared_node(merkle)?
-                        }
+                    let Some(child) = child else {
+                        return Ok(NodeIterState::Iterating { iter_stack });
                     };
+                    node = resolve_child(merkle, child.clone(), child_path_prefix, visited)?;
 
                     matched_key_nibbles.push(next_unmatched_key_nibble.as_u8());
                 }
@@ -376,6 +414,16 @@ enum PathIteratorState<'a> {
         matched_key: Vec<u8>,
         unmatched_key: NibblesIterator<'a>,
         node: SharedNode,
+        /// Maps each visited disk address to the trie nibble-path at which it
+        /// was first seen. Checked before every `read_node` call so that
+        /// back-edges (cycles) are detected rather than causing infinite
+        /// iteration.
+        visited: HashMap<LinearAddress, PathBuf>,
+        /// Number of descent steps taken so far. Provides a secondary guard
+        /// against pathologically deep (but not strictly cyclic) tries,
+        /// including in-memory (`Child::Node`) children that have no disk
+        /// address and therefore are not recorded in `visited`.
+        depth: usize,
     },
     Exhausted,
 }
@@ -402,12 +450,17 @@ impl<'a, 'b, T: TrieReader> PathIterator<'a, 'b, T> {
             });
         };
 
+        let mut visited = HashMap::new();
+        prepopulate_root_in_visited(merkle, &mut visited);
+
         Ok(Self {
             merkle,
             state: PathIteratorState::Iterating {
                 matched_key: vec![],
                 unmatched_key: NibblesIterator::new(key),
                 node: root,
+                visited,
+                depth: 0,
             },
         })
     }
@@ -428,6 +481,8 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                 matched_key,
                 unmatched_key,
                 node,
+                visited,
+                depth,
             } => {
                 let partial_path = match &**node {
                     Node::Branch(branch) => &branch.partial_path,
@@ -474,11 +529,12 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                 let next_unmatched_key_nibble =
                     PathComponent::try_new(next_unmatched_key_nibble).expect("valid nibble");
 
+                let child_path_prefix =
+                    build_child_path_prefix(matched_key, next_unmatched_key_nibble);
+
                 let child = &branch.children[next_unmatched_key_nibble];
                 match child {
                     None => {
-                        // There's no child at the index of the next nibble in the key.
-                        // There's no node at `key` in this trie so we're done.
                         self.state = PathIteratorState::Exhausted;
                         Some(Ok(PathIterItem {
                             key_nibbles: node_key,
@@ -487,42 +543,22 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                             must_recompute_storage_hash,
                         }))
                     }
-                    Some(Child::AddressWithHash(child_addr, _)) => {
-                        let child = match merkle.read_node(*child_addr) {
-                            Ok(child) => child,
-                            Err(e) => return Some(Err(e)),
+                    Some(child) => {
+                        let child_node = match load_and_track_child(
+                            merkle,
+                            child,
+                            child_path_prefix,
+                            depth,
+                            visited,
+                        ) {
+                            Ok(n) => n,
+                            Err(e) => {
+                                self.state = PathIteratorState::Exhausted;
+                                return Some(Err(e));
+                            }
                         };
-
                         matched_key.push(next_unmatched_key_nibble.as_u8());
-                        *node = child;
-
-                        Some(Ok(PathIterItem {
-                            key_nibbles: node_key,
-                            node: saved_node,
-                            next_nibble: Some(next_unmatched_key_nibble),
-                            must_recompute_storage_hash,
-                        }))
-                    }
-                    Some(Child::Node(child)) => {
-                        matched_key.push(next_unmatched_key_nibble.as_u8());
-                        *node = child.clone().into();
-
-                        Some(Ok(PathIterItem {
-                            key_nibbles: node_key,
-                            node: saved_node,
-                            next_nibble: Some(next_unmatched_key_nibble),
-                            must_recompute_storage_hash,
-                        }))
-                    }
-                    Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                        let child = match maybe_persisted.as_shared_node(merkle) {
-                            Ok(child) => child,
-                            Err(e) => return Some(Err(e)),
-                        };
-
-                        matched_key.push(next_unmatched_key_nibble.as_u8());
-                        *node = child;
-
+                        *node = child_node;
                         Some(Ok(PathIterItem {
                             key_nibbles: node_key,
                             node: saved_node,
@@ -568,6 +604,140 @@ where
     (Ordering::Equal, unmatched_key_nibbles_iter)
 }
 
+/// Builds the nibble-path prefix for a child node given the parent's nibble key and the
+/// edge component that leads to the child.
+fn build_child_path_prefix(nibbles: &[u8], edge: PathComponent) -> PathBuf {
+    nibbles
+        .iter()
+        .map(|&n| PathComponent::try_new(n).expect("nibble in iteration key is 0–15"))
+        .chain(Some(edge))
+        .collect()
+}
+
+/// Constructs a depth-exceeded [`FileIoError`] tagged with the provided `context` string.
+fn depth_exceeded_error(context: &'static str) -> FileIoError {
+    FileIoError::from_generic_no_file(
+        std::io::Error::other(format!("trie depth limit {MAX_TRIE_DEPTH} reached")),
+        context,
+    )
+}
+
+/// Pre-populates `visited` with the root's disk address (if the root is persisted) so
+/// that any child pointer that points back to the root is detected as a cycle.
+fn prepopulate_root_in_visited<T: TrieReader>(
+    merkle: &T,
+    visited: &mut HashMap<LinearAddress, PathBuf>,
+) {
+    if let Some(addr) = merkle
+        .root_as_maybe_persisted_node()
+        .and_then(|mp| mp.as_linear_address())
+    {
+        visited.entry(addr).or_default();
+    }
+}
+
+/// Loads a child node, performing a cycle check and recording the node's disk address in
+/// `visited`. Used by both [`MerkleNodeIter`] and [`get_iterator_initial_state`].
+fn resolve_child<T: TrieReader>(
+    merkle: &T,
+    child: Child,
+    child_path_prefix: PathBuf,
+    visited: &mut HashMap<LinearAddress, PathBuf>,
+) -> Result<SharedNode, FileIoError> {
+    match child {
+        Child::AddressWithHash(addr, _) => {
+            if let Some(first_path) = visited.get(&addr) {
+                return Err(FileIoError::from_cycle(CycleDetected::new(
+                    addr,
+                    first_path.clone(),
+                    child_path_prefix,
+                )));
+            }
+            let node = merkle.read_node(addr)?;
+            visited.insert(addr, child_path_prefix);
+            Ok(node)
+        }
+        Child::Node(node) => Ok(node.clone().into()),
+        Child::MaybePersisted(ref mp, _) => {
+            if let Some(addr) = mp.as_linear_address() {
+                if let Some(first_path) = visited.get(&addr) {
+                    return Err(FileIoError::from_cycle(CycleDetected::new(
+                        addr,
+                        first_path.clone(),
+                        child_path_prefix,
+                    )));
+                }
+                let node = mp.as_shared_node(merkle)?;
+                visited.insert(addr, child_path_prefix);
+                Ok(node)
+            } else {
+                mp.as_shared_node(merkle)
+            }
+        }
+    }
+}
+
+/// Loads a child node for [`PathIterator`], performing cycle checks and depth guards for
+/// disk-backed nodes, and incrementing the depth counter on success.
+fn load_and_track_child<T: TrieReader>(
+    merkle: &T,
+    child: &Child,
+    child_path_prefix: PathBuf,
+    depth: &mut usize,
+    visited: &mut HashMap<LinearAddress, PathBuf>,
+) -> Result<SharedNode, FileIoError> {
+    match child {
+        Child::AddressWithHash(addr, _) => {
+            let addr = *addr;
+            if let Some(first_path) = visited.get(&addr).cloned() {
+                return Err(FileIoError::from_cycle(CycleDetected::new(
+                    addr,
+                    first_path,
+                    child_path_prefix,
+                )));
+            }
+            if *depth >= MAX_TRIE_DEPTH {
+                return Err(depth_exceeded_error("PathIterator depth guard"));
+            }
+            let node = merkle.read_node(addr)?;
+            visited.insert(addr, child_path_prefix);
+            *depth = depth.wrapping_add(1);
+            Ok(node)
+        }
+        Child::Node(node) => {
+            if *depth >= MAX_TRIE_DEPTH {
+                return Err(depth_exceeded_error("PathIterator depth guard"));
+            }
+            *depth = depth.wrapping_add(1);
+            Ok(node.clone().into())
+        }
+        Child::MaybePersisted(mp, _) => {
+            if let Some(addr) = mp.as_linear_address() {
+                if let Some(first_path) = visited.get(&addr).cloned() {
+                    return Err(FileIoError::from_cycle(CycleDetected::new(
+                        addr,
+                        first_path,
+                        child_path_prefix,
+                    )));
+                }
+                if *depth >= MAX_TRIE_DEPTH {
+                    return Err(depth_exceeded_error("PathIterator depth guard"));
+                }
+                let node = mp.as_shared_node(merkle)?;
+                visited.insert(addr, child_path_prefix);
+                *depth = depth.wrapping_add(1);
+                Ok(node)
+            } else {
+                if *depth >= MAX_TRIE_DEPTH {
+                    return Err(depth_exceeded_error("PathIterator depth guard"));
+                }
+                *depth = depth.wrapping_add(1);
+                mp.as_shared_node(merkle)
+            }
+        }
+    }
+}
+
 /// Returns an iterator that returns (`pos`,`child`) for each non-empty child of `branch`,
 /// where `pos` is the position of the child in `branch`'s children array.
 fn as_enumerated_children_iter(
@@ -584,11 +754,7 @@ pub(crate) fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter)
     let mut data = Vec::with_capacity(nibbles.size_hint().0 / 2);
 
     while let (Some(hi), Some(lo)) = (nibbles.next(), nibbles.next()) {
-        let byte = hi
-            .checked_shl(4)
-            .and_then(|v| v.checked_add(lo))
-            .expect("Nibble overflow while constructing byte");
-        data.push(byte);
+        data.push((hi << 4) | lo);
     }
 
     data.into_boxed_slice()
@@ -1460,5 +1626,586 @@ mod tests {
         // the first result must not be the leaf node
         let (key, _) = iter.next().unwrap().unwrap();
         assert_ne!(&*key, &[0x00, 0x00, 0x00, 0xFF][..]);
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod cycle_tests {
+    use super::*;
+    use firewood_storage::{
+        BranchNode, Child, HashType, IntoHashType, LeafNode, LinearAddress, MaybePersistedNode,
+        Node, Path, PathComponent, SharedNode, TrieHash,
+    };
+    use std::collections::HashMap;
+
+    /// A fake trie reader that maps `LinearAddress` → `SharedNode`.
+    ///
+    /// The root node is supplied separately so that its address can be exposed
+    /// via `root_as_maybe_persisted_node`, enabling the root address to be
+    /// pre-recorded in the `visited` map.
+    struct FakeTrieReader {
+        root_addr: LinearAddress,
+        root_node: SharedNode,
+        nodes: HashMap<LinearAddress, SharedNode>,
+    }
+
+    impl FakeTrieReader {
+        fn new(root_addr: LinearAddress, root_node: SharedNode) -> Self {
+            Self {
+                root_addr,
+                root_node,
+                nodes: HashMap::new(),
+            }
+        }
+
+        fn insert(&mut self, addr: LinearAddress, node: SharedNode) {
+            self.nodes.insert(addr, node);
+        }
+    }
+
+    impl firewood_storage::NodeReader for FakeTrieReader {
+        fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError> {
+            self.nodes.get(&addr).cloned().ok_or_else(|| {
+                FileIoError::from_generic_no_file(
+                    std::io::Error::new(std::io::ErrorKind::NotFound, format!("no node at {addr}")),
+                    "FakeTrieReader::read_node",
+                )
+            })
+        }
+    }
+
+    impl firewood_storage::RootReader for FakeTrieReader {
+        fn root_node(&self) -> Option<SharedNode> {
+            Some(self.root_node.clone())
+        }
+
+        fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
+            Some(MaybePersistedNode::from(self.root_addr))
+        }
+    }
+
+    fn dummy_hash() -> HashType {
+        TrieHash::from([0u8; 32]).into_hash_type()
+    }
+
+    fn make_leaf() -> SharedNode {
+        SharedNode::from(Node::Leaf(LeafNode {
+            partial_path: Path::new(),
+            value: Box::default(),
+        }))
+    }
+
+    fn make_branch_with_child(child_pos: u8, child_addr: LinearAddress) -> SharedNode {
+        let mut branch = BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children: firewood_storage::Children::new(),
+        };
+        let pos = PathComponent::try_new(child_pos).unwrap();
+        branch.children[pos] = Some(Child::AddressWithHash(child_addr, dummy_hash()));
+        SharedNode::from(Node::Branch(Box::new(branch)))
+    }
+
+    fn make_branch_with_two_children(
+        pos0: u8,
+        addr0: LinearAddress,
+        pos1: u8,
+        addr1: LinearAddress,
+    ) -> SharedNode {
+        let mut branch = BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children: firewood_storage::Children::new(),
+        };
+        let pc0 = PathComponent::try_new(pos0).unwrap();
+        let pc1 = PathComponent::try_new(pos1).unwrap();
+        branch.children[pc0] = Some(Child::AddressWithHash(addr0, dummy_hash()));
+        branch.children[pc1] = Some(Child::AddressWithHash(addr1, dummy_hash()));
+        SharedNode::from(Node::Branch(Box::new(branch)))
+    }
+
+    fn is_cycle_error(result: &Result<(Key, SharedNode), FileIoError>) -> bool {
+        match result {
+            Err(e) => e.as_cycle_detected().is_some(),
+            Ok(_) => false,
+        }
+    }
+
+    fn is_path_iter_cycle_error(result: &Result<PathIterItem, FileIoError>) -> bool {
+        match result {
+            Err(e) => e.as_cycle_detected().is_some(),
+            Ok(_) => false,
+        }
+    }
+
+    /// `root_addr=64`, child[0] = AddressWithHash(64, ...)  — self-loop
+    #[test]
+    fn merkle_iter_detects_self_loop() {
+        let root_addr = LinearAddress::new(64).unwrap();
+        let root_node = make_branch_with_child(0, root_addr);
+
+        let mut reader = FakeTrieReader::new(root_addr, root_node);
+        reader.insert(root_addr, reader.root_node.clone());
+
+        let mut iter = MerkleNodeIter::new(&reader, Box::new([]));
+
+        // First item is the root itself (returned before descending into children).
+        let first = iter.next();
+        assert!(first.is_some());
+        assert!(
+            first.unwrap().is_ok(),
+            "root should be returned successfully"
+        );
+
+        // Next call should detect the cycle on child[0] → root.
+        let second = iter.next();
+        assert!(
+            second.is_some(),
+            "expected a cycle error, got None (iterator terminated)"
+        );
+        assert!(
+            is_cycle_error(&second.unwrap()),
+            "expected CycleDetected error"
+        );
+    }
+
+    /// `root_addr=64`, child[0]=128; addr128.child[0]=64 — two-node cycle
+    #[test]
+    fn merkle_iter_detects_two_node_cycle() {
+        let root_addr = LinearAddress::new(64).unwrap();
+        let child_a_addr = LinearAddress::new(128).unwrap();
+
+        let root_node = make_branch_with_child(0, child_a_addr);
+        let child_a_node = make_branch_with_child(0, root_addr);
+
+        let mut reader = FakeTrieReader::new(root_addr, root_node);
+        reader.insert(root_addr, reader.root_node.clone());
+        reader.insert(child_a_addr, child_a_node);
+
+        let mut iter = MerkleNodeIter::new(&reader, Box::new([]));
+
+        // Root is yielded first.
+        assert!(iter.next().unwrap().is_ok(), "root Ok");
+        // child_a is yielded next.
+        assert!(iter.next().unwrap().is_ok(), "child_a Ok");
+        // child_a's child[0] points back to root → cycle.
+        let result = iter.next();
+        assert!(result.is_some(), "expected cycle error, got None");
+        assert!(is_cycle_error(&result.unwrap()), "expected CycleDetected");
+    }
+
+    /// root → `child_a(128)` → `child_b(192)` → `child_a(128)`
+    /// Verify `path_to_first_visit` is non-empty and `path_to_revisit` is longer.
+    #[test]
+    #[expect(
+        clippy::similar_names,
+        reason = "child_a_* and child_b_* are intentionally parallel names for clarity"
+    )]
+    fn merkle_iter_cycle_error_includes_path_context() {
+        let root_addr = LinearAddress::new(64).unwrap();
+        let child_a_addr = LinearAddress::new(128).unwrap();
+        let child_b_addr = LinearAddress::new(192).unwrap();
+
+        let root_node = make_branch_with_child(0, child_a_addr);
+        let child_a_node = make_branch_with_child(0, child_b_addr);
+        // child_b's child[0] points back to child_a — cycle back to child_a
+        let child_b_node = make_branch_with_child(0, child_a_addr);
+
+        let mut reader = FakeTrieReader::new(root_addr, root_node);
+        reader.insert(root_addr, reader.root_node.clone());
+        reader.insert(child_a_addr, child_a_node);
+        reader.insert(child_b_addr, child_b_node);
+
+        let mut iter = MerkleNodeIter::new(&reader, Box::new([]));
+
+        // Root, child_a, child_b are all returned successfully.
+        assert!(iter.next().unwrap().is_ok(), "root Ok");
+        assert!(iter.next().unwrap().is_ok(), "child_a Ok");
+        assert!(iter.next().unwrap().is_ok(), "child_b Ok");
+
+        // Next should be a cycle error for child_b → child_a.
+        let result = iter.next().expect("expected a cycle error result");
+        let err = result.expect_err("expected Err");
+        let cycle = err
+            .as_cycle_detected()
+            .expect("expected CycleDetected payload");
+
+        assert_eq!(
+            cycle.address, child_a_addr,
+            "cycle detected at wrong address"
+        );
+        // child_a was first seen via nibble 0 from root: path length = 1 (one edge component).
+        assert_eq!(
+            cycle.path_to_first_visit.len(),
+            1,
+            "path_to_first_visit should be exactly one nibble (root→child_a edge)"
+        );
+        // Back-edge from child_b to child_a: root[0]→child_a[0]→child_b[0] = 3 components.
+        assert_eq!(
+            cycle.path_to_revisit.len(),
+            3,
+            "path_to_revisit should be three nibbles (root→child_a→child_b→child_a edge)"
+        );
+    }
+
+    /// `root_addr=64`, root.child[0]=128(leaf), root.child[1]=256(leaf) — acyclic
+    #[test]
+    fn merkle_iter_no_false_positive_on_acyclic_trie() {
+        let root_addr = LinearAddress::new(64).unwrap();
+        let left_addr = LinearAddress::new(128).unwrap();
+        let right_addr = LinearAddress::new(256).unwrap();
+
+        let root_node = make_branch_with_two_children(0, left_addr, 1, right_addr);
+        let left_node = make_leaf();
+        let right_node = make_leaf();
+
+        let mut reader = FakeTrieReader::new(root_addr, root_node);
+        reader.insert(root_addr, reader.root_node.clone());
+        reader.insert(left_addr, left_node);
+        reader.insert(right_addr, right_node);
+
+        let mut iter = MerkleNodeIter::new(&reader, Box::new([]));
+
+        // All three nodes should be returned without error.
+        let results: Vec<_> = std::iter::from_fn(|| iter.next()).take(10).collect();
+
+        for result in &results {
+            assert!(result.is_ok(), "expected Ok, got cycle error: {result:?}");
+        }
+        assert_eq!(results.len(), 3, "expected exactly 3 nodes in acyclic trie");
+    }
+
+    /// Verify that cycle detection fires in the seek phase (`get_iterator_intial_state`)
+    /// when a non-empty seek key causes the iterator to descend into disk-addressed children.
+    ///
+    /// Trie: `root_addr=64`, child[0]=128; addr128.child[0]=64 — two-node cycle.
+    /// Seek key `[0x00, 0x00]` forces the seek loop to descend from root into `child_a`,
+    /// which would then try to descend back into root, triggering the cycle error.
+    #[test]
+    fn merkle_iter_seek_phase_detects_cycle() {
+        let root_addr = LinearAddress::new(64).unwrap();
+        let child_a_addr = LinearAddress::new(128).unwrap();
+
+        let root_node = make_branch_with_child(0, child_a_addr);
+        let child_a_node = make_branch_with_child(0, root_addr);
+
+        let mut reader = FakeTrieReader::new(root_addr, root_node);
+        reader.insert(root_addr, reader.root_node.clone());
+        reader.insert(child_a_addr, child_a_node);
+
+        // Non-empty seek key forces the seek phase to descend into disk-addressed children.
+        let mut iter = MerkleNodeIter::new(&reader, Box::new([0x00, 0x00]));
+
+        // The seek phase descends root → child_a → (tries to go back to root) → CycleDetected.
+        let result = iter.next();
+        assert!(
+            result.is_some(),
+            "expected a cycle error from the seek phase, got None"
+        );
+        assert!(
+            is_cycle_error(&result.unwrap()),
+            "expected CycleDetected error from seek phase"
+        );
+    }
+
+    fn make_branch_with_maybe_persisted_child(
+        child_pos: u8,
+        child_addr: LinearAddress,
+    ) -> SharedNode {
+        let mut branch = BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children: firewood_storage::Children::new(),
+        };
+        let pos = PathComponent::try_new(child_pos).unwrap();
+        branch.children[pos] = Some(Child::MaybePersisted(
+            MaybePersistedNode::from(child_addr),
+            dummy_hash(),
+        ));
+        SharedNode::from(Node::Branch(Box::new(branch)))
+    }
+
+    /// Verify that cycle detection fires when child edges use `Child::MaybePersisted`
+    /// rather than `Child::AddressWithHash`.
+    ///
+    /// Trie: `root_addr=64`, root.child[0] = MaybePersisted(128); addr128.child[0] = MaybePersisted(64).
+    #[test]
+    fn merkle_iter_detects_cycle_via_maybe_persisted() {
+        let root_addr = LinearAddress::new(64).unwrap();
+        let child_a_addr = LinearAddress::new(128).unwrap();
+
+        let root_node = make_branch_with_maybe_persisted_child(0, child_a_addr);
+        let child_a_node = make_branch_with_maybe_persisted_child(0, root_addr);
+
+        let mut reader = FakeTrieReader::new(root_addr, root_node);
+        reader.insert(root_addr, reader.root_node.clone());
+        reader.insert(child_a_addr, child_a_node);
+
+        let mut iter = MerkleNodeIter::new(&reader, Box::new([]));
+
+        // Root is yielded first.
+        assert!(iter.next().unwrap().is_ok(), "root Ok");
+        // child_a is yielded next.
+        assert!(iter.next().unwrap().is_ok(), "child_a Ok");
+        // child_a's child[0] (MaybePersisted) points back to root → cycle.
+        let result = iter.next();
+        assert!(result.is_some(), "expected cycle error, got None");
+        assert!(
+            is_cycle_error(&result.unwrap()),
+            "expected CycleDetected via MaybePersisted"
+        );
+    }
+
+    /// `PathIterator`: root (addr=16) → child (addr=128) → root (back-edge).
+    /// Seek key `[0x00, 0x00]` forces a descent through `child_addr`; on the next
+    /// call the back-edge to root is detected.
+    #[test]
+    fn path_iter_detects_cycle() {
+        let root_addr = LinearAddress::new(16).unwrap();
+        let child_addr = LinearAddress::new(128).unwrap();
+
+        // root.child[0] → child, child.child[0] → root (cycle).
+        let root_node = make_branch_with_child(0, child_addr);
+        let child_node = make_branch_with_child(0, root_addr);
+
+        let mut reader = FakeTrieReader::new(root_addr, root_node);
+        reader.insert(root_addr, reader.root_node.clone());
+        reader.insert(child_addr, child_node);
+
+        // Nibble path for `[0x00, 0x00]` = [0,0,0,0]; descends along child[0].
+        let key = [0x00u8, 0x00];
+        let mut iter = PathIterator::new(&reader, &key).unwrap();
+
+        // Collect up to 10 items; we expect an Err somewhere before that.
+        let results: Vec<_> = std::iter::from_fn(|| iter.next()).take(10).collect();
+
+        assert!(
+            results.iter().any(is_path_iter_cycle_error),
+            "expected at least one CycleDetected error in path iter results, got: {results:?}",
+        );
+
+        // Verify the cycle error contains the correct path context.
+        // The cycle back-edge points to root_addr, which was pre-recorded at
+        // the empty path (before any descent).
+        let cycle_err = results
+            .iter()
+            .find_map(|r| r.as_ref().err()?.as_cycle_detected())
+            .expect("expected a CycleDetected payload");
+        assert_eq!(
+            cycle_err.address, root_addr,
+            "cycle should be detected at root_addr"
+        );
+        assert!(
+            cycle_err.path_to_first_visit.is_empty(),
+            "root was first seen at the empty path, so path_to_first_visit should be empty"
+        );
+        assert!(
+            !cycle_err.path_to_revisit.is_empty(),
+            "path_to_revisit (the back-edge path) should be non-empty"
+        );
+    }
+
+    /// `PathIterator` must not produce a false positive on an acyclic trie.
+    ///
+    /// Trie: root (addr=64) → left (addr=128, leaf), root.child[1] → right (addr=256, leaf).
+    /// Seek with key `[0x10]` (nibbles [1,0]) which descends via child[1] → right.
+    #[test]
+    fn path_iter_no_false_positive_on_acyclic_trie() {
+        let root_addr = LinearAddress::new(64).unwrap();
+        let left_addr = LinearAddress::new(128).unwrap();
+        let right_addr = LinearAddress::new(256).unwrap();
+
+        let root_node = make_branch_with_two_children(0, left_addr, 1, right_addr);
+        let left_node = make_leaf();
+        let right_node = make_leaf();
+
+        let mut reader = FakeTrieReader::new(root_addr, root_node);
+        reader.insert(root_addr, reader.root_node.clone());
+        reader.insert(left_addr, left_node);
+        reader.insert(right_addr, right_node);
+
+        // Seek key [0x10] (nibbles [1, 0]) descends via child[1] → right (leaf).
+        let key = [0x10u8];
+        let mut iter = PathIterator::new(&reader, &key).unwrap();
+
+        let results: Vec<_> = std::iter::from_fn(|| iter.next()).take(10).collect();
+
+        for result in &results {
+            assert!(
+                result.is_ok(),
+                "unexpected error on acyclic trie: {result:?}"
+            );
+        }
+        // root + right leaf = exactly 2 nodes on the path
+        assert_eq!(results.len(), 2, "expected exactly 2 nodes on the path");
+    }
+
+    /// Builds a chain of `length` branch nodes, each pointing via child[0] to the next.
+    /// The last node in the chain points to an address that is NOT in the reader, so
+    /// attempting to load it produces a "not found" error — but both depth guards fire
+    /// before that address is ever passed to `read_node`.
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "test helper; i ≤ MAX_TRIE_DEPTH + 1 ≈ 1025 so (i + 1) * 16 ≤ 16432 << u64::MAX"
+    )]
+    fn make_all_branches_chain(length: usize) -> (FakeTrieReader, LinearAddress) {
+        assert!(length >= 2);
+        // addr(i): node at 0-based index i gets LinearAddress (i + 1) * 16.
+        // addr(length) is the "beyond chain" address — never inserted in the reader.
+        let addr = |i: usize| LinearAddress::new((i + 1) as u64 * 16).unwrap();
+        let root_addr = addr(0);
+        let root_node = make_branch_with_child(0, addr(1));
+        let mut reader = FakeTrieReader::new(root_addr, root_node.clone());
+        reader.insert(root_addr, root_node);
+        for i in 1..length {
+            reader.insert(addr(i), make_branch_with_child(0, addr(i + 1)));
+        }
+        (reader, root_addr)
+    }
+
+    fn is_depth_exceeded_error(e: &FileIoError) -> bool {
+        e.as_cycle_detected().is_none() && e.kind() == std::io::ErrorKind::Other
+    }
+
+    /// Regression test: when the seek phase pushes exactly `MAX_TRIE_DEPTH` Visited
+    /// entries onto the stack, the branch at the seek position must be yielded
+    /// before the depth guard fires for its children.
+    ///
+    /// Prior to the fix the `Unvisited` arm fired the depth guard before returning
+    /// the node, silently dropping it.
+    #[test]
+    fn merkle_iter_seek_phase_branch_at_max_depth_is_yielded() {
+        let (reader, _) = make_all_branches_chain(MAX_TRIE_DEPTH + 1);
+        // Seek key with exactly MAX_TRIE_DEPTH nibbles (= MAX_TRIE_DEPTH/2 bytes).
+        // The seek loop traverses MAX_TRIE_DEPTH branches (one nibble each), pushing
+        // MAX_TRIE_DEPTH Visited entries, then places the node at depth MAX_TRIE_DEPTH
+        // on the stack as Unvisited.
+        let key = vec![0u8; MAX_TRIE_DEPTH / 2];
+        let mut iter = MerkleNodeIter::new(&reader, key.into_boxed_slice());
+
+        let first = iter
+            .next()
+            .expect("iterator should not be immediately empty");
+        assert!(
+            first.is_ok(),
+            "branch at seek depth {MAX_TRIE_DEPTH} should be yielded, not silently dropped; got: {first:?}"
+        );
+    }
+
+    /// Verify that `MerkleNodeIter` returns a depth-exceeded error after
+    /// `MAX_TRIE_DEPTH` levels of descent, rather than panicking or looping.
+    #[test]
+    fn merkle_iter_depth_guard_fires_at_max_depth() {
+        let (reader, _) = make_all_branches_chain(MAX_TRIE_DEPTH + 1);
+        let mut iter = MerkleNodeIter::new(&reader, Box::new([]));
+
+        let depth_err = std::iter::from_fn(|| iter.next())
+            .find(std::result::Result::is_err)
+            .expect("expected a depth guard error before iterator exhausted");
+
+        let err = depth_err.expect_err("expected Err");
+        assert!(
+            is_depth_exceeded_error(&err),
+            "expected a depth-exceeded error, got: {err}"
+        );
+    }
+
+    /// Verify that `PathIterator` returns a depth-exceeded error after
+    /// `MAX_TRIE_DEPTH` levels of descent.
+    #[test]
+    fn path_iter_depth_guard_fires_at_max_depth() {
+        let (reader, _) = make_all_branches_chain(MAX_TRIE_DEPTH + 1);
+        // One nibble per descent; need > MAX_TRIE_DEPTH nibbles = MAX_TRIE_DEPTH/2 + 1 bytes.
+        let key = vec![0u8; MAX_TRIE_DEPTH / 2 + 1];
+        let mut iter = PathIterator::new(&reader, &key).unwrap();
+
+        let depth_err = std::iter::from_fn(|| iter.next())
+            .find(std::result::Result::is_err)
+            .expect("expected a depth guard error before iterator exhausted");
+
+        let err = depth_err.expect_err("expected Err");
+        assert!(
+            is_depth_exceeded_error(&err),
+            "expected a depth-exceeded error, got: {err}"
+        );
+    }
+
+    /// Verify that `MerkleNodeIter` terminates (returns `None`) after a seek-phase cycle
+    /// error rather than producing a second, semantically incorrect `CycleDetected`.
+    #[test]
+    fn merkle_iter_seek_phase_error_terminates() {
+        let root_addr = LinearAddress::new(64).unwrap();
+        let child_a_addr = LinearAddress::new(128).unwrap();
+
+        let root_node = make_branch_with_child(0, child_a_addr);
+        let child_a_node = make_branch_with_child(0, root_addr);
+
+        let mut reader = FakeTrieReader::new(root_addr, root_node);
+        reader.insert(root_addr, reader.root_node.clone());
+        reader.insert(child_a_addr, child_a_node);
+
+        let mut iter = MerkleNodeIter::new(&reader, Box::new([0x00, 0x00]));
+
+        let result = iter.next();
+        assert!(
+            result.is_some(),
+            "expected a cycle error from the seek phase"
+        );
+        assert!(
+            is_cycle_error(&result.unwrap()),
+            "expected CycleDetected error from seek phase"
+        );
+
+        assert!(
+            iter.next().is_none(),
+            "iterator must return None after a seek-phase error"
+        );
+    }
+
+    /// Verify that `MerkleNodeIter` terminates (returns `None`) after the depth guard fires
+    /// rather than continuing to iterate siblings of the depth-exceeded child.
+    #[test]
+    fn merkle_iter_depth_guard_terminates() {
+        let (reader, _) = make_all_branches_chain(MAX_TRIE_DEPTH + 1);
+        let mut iter = MerkleNodeIter::new(&reader, Box::new([]));
+
+        let depth_err = std::iter::from_fn(|| iter.next())
+            .find(std::result::Result::is_err)
+            .expect("expected a depth guard error before iterator exhausted");
+
+        let err = depth_err.expect_err("expected Err");
+        assert!(
+            is_depth_exceeded_error(&err),
+            "expected depth-exceeded error, got: {err}"
+        );
+
+        assert!(
+            iter.next().is_none(),
+            "MerkleNodeIter must return None after the depth guard fires"
+        );
+    }
+
+    /// Verify that `PathIterator` terminates (returns `None`) after the depth guard fires.
+    #[test]
+    fn path_iter_depth_guard_terminates() {
+        let (reader, _) = make_all_branches_chain(MAX_TRIE_DEPTH + 1);
+        let key = vec![0u8; MAX_TRIE_DEPTH / 2 + 1];
+        let mut iter = PathIterator::new(&reader, &key).unwrap();
+
+        let depth_err = std::iter::from_fn(|| iter.next())
+            .find(std::result::Result::is_err)
+            .expect("expected a depth guard error before iterator exhausted");
+
+        let err = depth_err.expect_err("expected Err");
+        assert!(
+            is_depth_exceeded_error(&err),
+            "expected depth-exceeded error, got: {err}"
+        );
+
+        assert!(
+            iter.next().is_none(),
+            "PathIterator must return None after the depth guard fires"
+        );
     }
 }
