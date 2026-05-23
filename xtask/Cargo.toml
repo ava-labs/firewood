@@ -14,6 +14,7 @@ rust-version.workspace = true
 anyhow = "1.0.102"
 cargo_metadata = "0.23.1"
 clap.workspace = true
+toml = "1.1.2"
 
 [lints]
 workspace = true

@@ -172,19 +172,7 @@ release-step-update-rust-dependencies:
     set -euo pipefail
     echo "Checking that cargo-edit is installed and up-to-date..."
     cargo install --locked cargo-edit
-
-    echo "Upgrading all cargo dependencies in the workspace..."
-    cargo upgrade
-    # MAY FAIL: temporarily comment out if resolving updates requires significant code changes
-    echo "Upgrading all incompatible cargo dependencies in the workspace..." >&2
-    echo "NOTICE: This step may fail if incompatible upgrades require code changes." >&2
-    cargo upgrade --incompatible
-    echo "Updating Cargo.lock with upgraded dependencies..."
-    cargo update --verbose
-
-    echo "Executing tests to ensure upgrades did not break anything..."
-    cargo test --workspace --all-targets -F logger
-    cargo test --workspace --all-targets -F ethhash,logger
+    cargo xtask update-rust-dependencies
 
 # RELEASE PREP: refresh changelog
 release-step-refresh-changelog tag:

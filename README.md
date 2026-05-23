@@ -123,6 +123,12 @@ can be found in the [benchmark setup scripts](benchmark/setup-scripts).
 If you want to build and test the ffi layer for another platform,
 you can find those instructions in the [ffi README](ffi/README.md).
 
+Development tasks are managed by [`cargo xtask`](xtask/README.md):
+
+```shell
+cargo xtask --help
+```
+
 ## Ethereum compatibility
 
 By default, Firewood builds with hashes compatible with [merkledb](https://github.com/ava-labs/avalanchego/tree/master/x/merkledb),

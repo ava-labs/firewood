@@ -104,6 +104,22 @@ Any tagged enums added to the FFI api where the union body contains a pointer mu
 
 The `fwdctl` tool provides command-line operations on databases. See `fwdctl/README.md`.
 
+### xtask
+
+The `xtask` crate is the development task runner for Firewood. Run it via:
+
+```shell
+cargo xtask <subcommand> [options]
+cargo xtask --help         # list all subcommands
+```
+
+Key subcommands:
+
+- `cargo xtask update-rust-dependencies` — upgrade Cargo deps, excluding patched crates
+- `cargo xtask publish-crates` — publish unpublished workspace crates to crates.io
+
+See [`xtask/README.md`](xtask/README.md) for guidance on adding new subcommands.
+
 ## Coding Conventions and Constraints
 
 For more information on coding conventions and constraints, please refer to [CONTRIBUTING.md](./CONTRIBUTING.md)

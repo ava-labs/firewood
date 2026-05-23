@@ -11,7 +11,6 @@ pub fn cargo_bin() -> PathBuf {
 }
 
 /// Runs a cargo subcommand, inheriting stdout/stderr. Returns the exit status.
-#[expect(unused, reason = "next PR will use this function")]
 pub fn run_cargo<I, S>(args: I) -> anyhow::Result<ExitStatus>
 where
     I: IntoIterator<Item = S>,
