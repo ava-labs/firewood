@@ -38,7 +38,7 @@ use crate::proofs::types::ProofNode;
 
 /// Path length in nibbles at which a node is treated as an Ethereum account
 /// (Keccak-256 of a 20-byte address).
-const ACCOUNT_DEPTH_NIBBLES: usize = 64;
+pub(crate) const ACCOUNT_DEPTH_NIBBLES: usize = 64;
 
 /// Emit one or two canonical MPT-RLP nodes for `node`.
 ///
@@ -78,7 +78,10 @@ pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
     if node.child_hashes.count() == 0 {
         // Leaf. For account leaves, splice the empty-trie storage root into
         // the account RLP value; the on-disk value may carry a stale or zero
-        // storageRoot on pre-hfix databases.
+        // storageRoot on pre-hfix databases. We always splice rather than
+        // conditioning on the source DB version: the keccak cost is
+        // negligible next to the trie-walk I/O, and threading an hfix flag
+        // down to the emitter isn't worth the API surface.
         let compact_path = nibbles_to_eth_compact(partial_path, true);
         let account_value: Option<Box<[u8]>> = if is_account {
             value_bytes.and_then(|bytes| {
@@ -156,6 +159,37 @@ pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
             RlpItem::Bytes(&inner_bytes),
         ])]
     }
+}
+
+/// Emit the byte-string whose Keccak-256 equals an account's `storageRoot`
+/// field for the multi-storage-child case.
+///
+/// In firewood the account node and its storage trie root are the *same*
+/// node — `child_hashes` are the storage trie's children. The canonical
+/// MPT encoding of that root is a 17-element branch with no value slot,
+/// and its keccak is what [`fix_account_storage_root_value`] splices into
+/// the account leaf.
+///
+/// # Returns
+///
+/// `Some(bytes)` when `account_node` has two or more storage children;
+/// `None` otherwise. Callers handle the other shapes separately: no
+/// storage → empty proof; one storage child → [`synth_storage_leaf_rlp`].
+#[must_use]
+pub fn account_storage_root_rlp(account_node: &ProofNode) -> Option<Box<[u8]>> {
+    if account_node.child_hashes.count() < 2 {
+        return None;
+    }
+    let mut items: [RlpItem<'_>; BranchNode::MAX_CHILDREN + 1] =
+        [RlpItem::Empty; BranchNode::MAX_CHILDREN + 1];
+    for ((_, child), slot) in (&account_node.child_hashes)
+        .into_iter()
+        .zip(items.iter_mut())
+    {
+        *slot = proof_child_rlp_item(child.as_ref());
+    }
+    // The 17th slot stays empty: at the storage trie root there is no value.
+    Some(encode_list(&items))
 }
 
 /// Build the synthetic storage-trie leaf for the "account with exactly one
