@@ -27,7 +27,6 @@ where
 }
 
 /// Loads workspace cargo metadata with `--locked`.
-#[expect(unused, reason = "next PR will use this function")]
 pub fn load_metadata() -> anyhow::Result<Metadata> {
     MetadataCommand::new()
         .cargo_path(cargo_bin())
