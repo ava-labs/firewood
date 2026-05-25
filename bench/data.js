@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779437879859,
+  "lastUpdate": 1779697614096,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -3665,6 +3665,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 74.09349631553164,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "f24340be051450eae0f4a6f53fc9479e83ffcb4d",
+          "message": "fix(storage): 2/2 persist computed storageRoot in account node values (#1938)\n\n## Why this should be merged\n\nWhen hashing in ethhash mode, the storageRoot field in Ethereum account\nnodes was only replaced ephemerally during hash computation but never\nwritten back to the node's stored value. This caused invalid\neth_getProof responses and a potential DoS vector for proof\nverification.\n\n## How this works\n\nDuring the hashing phase in hash_helper_inner, compute the storage\nsub-trie root hash and update the account node's RLP-encoded value\nbefore the node is persisted to disk. The hash computation itself is\nunaffected since Preimage::write() idempotently re-computes the same\nreplacement. The update logic is extracted into a standalone\nupdate_account_storage_root function for clarity.\n\nFor proofs generated from older databases (before firewood-v1-hfix),\ndynamically compute the correct storageRoot when building ProofNodes so\nthat proofs are verifiable by downstream clients.\n\nAlso:\n- Relax replace_hash to accept 3+ item RLP lists (coreth appends a\ntrailing empty byte, producing 5-item account values)\n- Bump database header version to firewood-v1-hfix so databases created\nwith the fix can be distinguished from unfixed ones\n- Export fix_account_storage_root_value for use by proof generation\n\n## How this was tested\n\n- Add test_autocompute_hash covering both 4-item and 5-item account RLP\n- Add test_persisted_storage_root verifying one/two storage entries\n- Add test_range_proof_fixes_legacy_zeroed_storage_root simulating a\npre-fix database with clobbered storageRoot bytes\n\n## Breaking Changes\n\nNone",
+          "timestamp": "2026-05-21T20:11:09Z",
+          "url": "https://github.com/ava-labs/firewood/commit/f24340be051450eae0f4a6f53fc9479e83ffcb4d"
+        },
+        "date": 1779697613099,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 170.62364155517125,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5860.8525224603745,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 109.78732992022402,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5673.004288230629,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 75.57807968633074,
             "unit": "block_accept_ms/ggas"
           }
         ]
