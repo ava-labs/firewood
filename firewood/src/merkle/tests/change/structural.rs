@@ -228,7 +228,10 @@ fn test_boundary_proof_rejects_wrong_root() {
     .unwrap_err();
     assert!(matches!(
         err,
-        api::Error::ProofError(crate::ProofError::UnexpectedHash)
+        api::Error::ProofError(crate::ProofError::EdgeProofHashMismatch {
+            edge: crate::proofs::ProofEdge::Left,
+            ..
+        })
     ));
 }
 

@@ -18,6 +18,7 @@ use crate::api::{
 };
 use crate::iter::{MerkleKeyValueIter, PathIterator};
 use crate::merkle::changes::DiffMerkleNodeStream;
+use crate::proofs::ProofEdge;
 use crate::proofs::change::ChangeProof;
 use crate::{
     ChangeProofVerificationContext, Proof, ProofCollection, ProofError, ProofNode, RangeProof,
@@ -156,13 +157,33 @@ fn verify_edge<H: ProofCollection + ?Sized>(
         }
     }
 
+    let edge = if bound_is_lower {
+        ProofEdge::Left
+    } else {
+        ProofEdge::Right
+    };
+    let annotate = |e: api::Error| match e {
+        api::Error::ProofError(ProofError::UnexpectedHash { expected, actual }) => {
+            api::Error::ProofError(ProofError::EdgeProofHashMismatch {
+                edge,
+                expected,
+                actual,
+            })
+        }
+        other => other,
+    };
+
     // Verify the proof for this edge
     if let Some(bound) = requested_bound {
         let expected_value: Option<&[u8]> =
             edge_kv.and_then(|(key, value)| (bound == key).then_some(value));
-        edge_proof.verify(bound, expected_value, root_hash)?;
+        edge_proof
+            .verify(bound, expected_value, root_hash)
+            .map_err(|e| annotate(api::Error::ProofError(e)))?;
     } else if let Some((edge_key, edge_value)) = edge_kv {
-        edge_proof.verify(edge_key, Some(edge_value), root_hash)?;
+        edge_proof
+            .verify(edge_key, Some(edge_value), root_hash)
+            .map_err(|e| annotate(api::Error::ProofError(e)))?;
     }
 
     Ok(())
@@ -895,8 +916,12 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
     let computed =
         compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children);
 
-    if computed != root_hash.clone().into_hash_type() {
-        return Err(api::Error::ProofError(ProofError::UnexpectedHash));
+    let expected = root_hash.clone().into_hash_type();
+    if computed != expected {
+        return Err(api::Error::ProofError(ProofError::UnexpectedHash {
+            expected,
+            actual: computed,
+        }));
     }
 
     Ok(())
