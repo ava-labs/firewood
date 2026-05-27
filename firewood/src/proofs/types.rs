@@ -48,7 +48,7 @@
 )]
 
 #[cfg(feature = "ethhash")]
-use firewood_storage::HashableShunt;
+use firewood_storage::{HashableShunt, JoinedPath};
 use firewood_storage::{
     Children, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator, Path,
     PathBuf, PathComponent, PathIterItem, Preimage, SplitPath, TrieHash, TriePath, ValueDigest,
@@ -333,26 +333,12 @@ fn proof_node_hash<N: Hashable>(node: &N, fake_root: bool) -> HashType {
         // A single storage child under an account is hashed as the storage-trie
         // root, so the account child nibble moves from the parent prefix into
         // this node's partial path.
-        let parent_prefix: PathBuf = node.parent_prefix_path().components().collect();
-        if let Some(fake_partial_start) = parent_prefix.len().checked_sub(1) {
-            let (Some(prefix), Some(suffix)) = (
-                parent_prefix.get(..fake_partial_start),
-                parent_prefix.get(fake_partial_start..),
-            ) else {
-                return node.to_hash();
-            };
-            let fake_partial: PathBuf = suffix
-                .iter()
-                .copied()
-                .chain(node.partial_path().components())
-                .collect();
-            return HashableShunt::new(
-                prefix,
-                fake_partial.as_slice(),
-                node.value_digest(),
-                node.children(),
-            )
-            .to_hash();
+        let parent = node.parent_prefix_path().into_split_path();
+        if let Some(prefix_len) = parent.len().checked_sub(1) {
+            let (prefix, last) = parent.split_at(prefix_len);
+            let folded = JoinedPath::new(last, node.partial_path().into_split_path());
+            return HashableShunt::new(prefix, folded, node.value_digest(), node.children())
+                .to_hash();
         }
     }
 

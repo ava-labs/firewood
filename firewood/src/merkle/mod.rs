@@ -26,9 +26,9 @@ use firewood_metrics::firewood_counter;
 use firewood_storage::MemStore;
 use firewood_storage::{
     BranchNode, Child, Children, FileIoError, HashType, HashableShunt, HashedNodeReader,
-    ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, Mutable, MutableKind,
-    NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, Propose, ReadableStorage,
-    SharedNode, TrieHash, TrieReader, U4, ValueDigest,
+    ImmutableProposal, IntoHashType, JoinedPath, LeafNode, MaybePersistedNode, Mutable,
+    MutableKind, NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, Propose,
+    ReadableStorage, SharedNode, TrieHash, TrieReader, U4, ValueDigest,
 };
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -394,7 +394,6 @@ fn compute_root_hash_with_proofs(
     let mut child_hashes: Children<Option<HashType>> = Children::new();
 
     let outside_mask = outside_children.get(&full_key);
-    #[cfg(feature = "ethhash")]
     let single_account_child = single_effective_account_child(
         &full_key,
         branch,
@@ -425,16 +424,7 @@ fn compute_root_hash_with_proofs(
             &child_prefix,
             proof_nodes,
             outside_children,
-            {
-                #[cfg(feature = "ethhash")]
-                {
-                    single_account_child == Some(nibble)
-                }
-                #[cfg(not(feature = "ethhash"))]
-                {
-                    false
-                }
-            },
+            single_account_child == Some(nibble),
         );
         child_hashes[nibble] = Some(child_hash);
         child_prefix.pop();
@@ -481,13 +471,22 @@ fn hash_proof_node_parts<'a>(
         // Match ethhash account hashing for a single storage child: the child
         // becomes the storage-trie root, with the account child nibble folded
         // into its partial path.
-        let fake_partial: PathBuf = once(*nibble).chain(partial_path.iter().copied()).collect();
-        return HashableShunt::new(prefix, fake_partial.as_slice(), value_digest, child_hashes)
-            .to_hash();
+        let folded = JoinedPath::new(std::slice::from_ref(nibble), partial_path);
+        return HashableShunt::new(prefix, folded, value_digest, child_hashes).to_hash();
     }
 
     let _ = fake_root;
     HashableShunt::new(path_prefix, partial_path, value_digest, child_hashes).to_hash()
+}
+
+#[cfg(not(feature = "ethhash"))]
+fn single_effective_account_child(
+    _full_key: &[PathComponent],
+    _branch: &BranchNode,
+    _proof_node: Option<&ProofNode>,
+    _outside_mask: Option<&ChildMask>,
+) -> Option<PathComponent> {
+    None
 }
 
 #[cfg(feature = "ethhash")]
@@ -501,32 +500,30 @@ fn single_effective_account_child(
         return None;
     }
 
-    // Count the child set after merging reconstructed in-range children with
-    // out-of-range hashes supplied by proof nodes.
+    // The two scans cover disjoint nibble sets by construction: in-range
+    // children (!outside_mask) and proof-node children (outside_mask).
     let mut only_child = None;
-    let mut count = 0usize;
-    let mut record = |nibble| {
-        if only_child != Some(nibble) {
-            only_child = Some(nibble);
-            count = count.saturating_add(1);
-        }
-    };
-
     for (nibble, child) in &branch.children {
         if child.is_some() && !outside_mask.is_some_and(|mask| mask.is_set(nibble.0)) {
-            record(nibble);
+            if only_child.is_some() {
+                return None;
+            }
+            only_child = Some(nibble);
         }
     }
 
     if let (Some(proof_node), Some(outside_mask)) = (proof_node, outside_mask) {
         for (nibble, _) in proof_node.child_hashes.iter_present() {
             if outside_mask.is_set(nibble.0) {
-                record(nibble);
+                if only_child.is_some() {
+                    return None;
+                }
+                only_child = Some(nibble);
             }
         }
     }
 
-    if count == 1 { only_child } else { None }
+    only_child
 }
 
 /// Reject any proof node that carries a value digest (either
