@@ -47,6 +47,8 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
+#[cfg(feature = "ethhash")]
+use firewood_storage::HashableShunt;
 use firewood_storage::{
     Children, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator, Path,
     PathBuf, PathComponent, PathIterItem, Preimage, SplitPath, TrieHash, TriePath, ValueDigest,
@@ -325,6 +327,47 @@ impl Hashable for ProofNode {
     }
 }
 
+fn proof_node_hash<N: Hashable>(node: &N, fake_root: bool) -> HashType {
+    #[cfg(feature = "ethhash")]
+    if fake_root {
+        // A single storage child under an account is hashed as the storage-trie
+        // root, so the account child nibble moves from the parent prefix into
+        // this node's partial path.
+        let parent_prefix: PathBuf = node.parent_prefix_path().components().collect();
+        if let Some(fake_partial_start) = parent_prefix.len().checked_sub(1) {
+            let (Some(prefix), Some(suffix)) = (
+                parent_prefix.get(..fake_partial_start),
+                parent_prefix.get(fake_partial_start..),
+            ) else {
+                return node.to_hash();
+            };
+            let fake_partial: PathBuf = suffix
+                .iter()
+                .copied()
+                .chain(node.partial_path().components())
+                .collect();
+            return HashableShunt::new(
+                prefix,
+                fake_partial.as_slice(),
+                node.value_digest(),
+                node.children(),
+            )
+            .to_hash();
+        }
+    }
+
+    let _ = fake_root;
+    node.to_hash()
+}
+
+#[cfg(feature = "ethhash")]
+fn is_single_child_account_node<N: Hashable>(
+    node: &N,
+    children: &Children<Option<HashType>>,
+) -> bool {
+    node.full_path().len() == 64 && children.count() == 1
+}
+
 impl From<PathIterItem> for ProofNode {
     fn from(item: PathIterItem) -> Self {
         let child_hashes = if let Some(branch) = item.node.as_branch() {
@@ -456,12 +499,14 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
         };
 
         let mut expected_hash = root_hash.clone().into_hash_type();
+        let mut fake_root = false;
 
         let mut iter = self.0.as_ref().iter().peekable();
         while let Some(node) = iter.next() {
-            if node.to_hash() != expected_hash {
+            if proof_node_hash(node, fake_root) != expected_hash {
                 return Err(ProofError::UnexpectedHash);
             }
+            fake_root = false;
 
             // Assert that only nodes whose keys are an even number of nibbles
             // have a `value_digest`.
@@ -482,10 +527,16 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
                     return Err(ProofError::ShouldBePrefixOfNextKey);
                 }
 
-                expected_hash = node.children()[key_nibble]
+                let children = node.children();
+                expected_hash = children[key_nibble]
                     .as_ref()
                     .ok_or(ProofError::NodeNotInTrie)?
                     .clone();
+
+                #[cfg(feature = "ethhash")]
+                {
+                    fake_root = is_single_child_account_node(node, &children);
+                }
             }
         }
 

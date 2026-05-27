@@ -648,3 +648,77 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
     )
     .unwrap();
 }
+
+#[test]
+fn test_limit_truncated_range_proof_inside_single_storage_child_account() {
+    let dummy_storage_root = [0u8; 32];
+    let account_key: Box<[u8]> = [0x10u8; 32].into();
+    let storage_key: Box<[u8]> = [account_key.as_ref(), &[0xAAu8; 32]].concat().into();
+    let following_key: Box<[u8]> = [0xFFu8; 32].into();
+
+    let account_value = rlp_encode_account(1, 100, &dummy_storage_root, &empty_code_hash());
+    let storage_value: Box<[u8]> = rlp_encode_storage(&[0x42u8; 32]).into();
+    let following_value = rlp_encode_account(2, 200, &dummy_storage_root, &empty_code_hash());
+
+    let merkle = init_merkle([
+        (account_key.as_ref(), account_value.as_ref()),
+        (storage_key.as_ref(), storage_value.as_ref()),
+        (following_key.as_ref(), following_value.as_ref()),
+    ]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let range_proof = merkle
+        .range_proof(None, None, std::num::NonZeroUsize::new(2))
+        .unwrap();
+    assert_eq!(range_proof.key_values().len(), 2);
+    assert_eq!(range_proof.key_values()[0].0.as_ref(), account_key.as_ref());
+    assert_eq!(range_proof.key_values()[1].0.as_ref(), storage_key.as_ref());
+    assert!(!range_proof.end_proof().is_empty());
+
+    verify_range_proof::<_>(None::<&[u8]>, None::<&[u8]>, &root_hash, &range_proof).unwrap();
+
+    let mut serialized = Vec::new();
+    range_proof.write_to_vec(&mut serialized);
+    let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
+    verify_range_proof::<_>(None::<&[u8]>, None::<&[u8]>, &root_hash, &deserialized).unwrap();
+}
+
+#[test]
+fn test_limit_truncated_range_proof_inside_multi_storage_child_account() {
+    let dummy_storage_root = [0u8; 32];
+    let account_key: Box<[u8]> = [0x10u8; 32].into();
+    let storage_key_a: Box<[u8]> = [account_key.as_ref(), &[0x10u8; 32]].concat().into();
+    let storage_key_b: Box<[u8]> = [account_key.as_ref(), &[0x20u8; 32]].concat().into();
+    let following_key: Box<[u8]> = [0xFFu8; 32].into();
+
+    let account_value = rlp_encode_account(1, 100, &dummy_storage_root, &empty_code_hash());
+    let storage_value_a: Box<[u8]> = rlp_encode_storage(&[0x42u8; 32]).into();
+    let storage_value_b: Box<[u8]> = rlp_encode_storage(&[0x43u8; 32]).into();
+    let following_value = rlp_encode_account(2, 200, &dummy_storage_root, &empty_code_hash());
+
+    let merkle = init_merkle([
+        (account_key.as_ref(), account_value.as_ref()),
+        (storage_key_a.as_ref(), storage_value_a.as_ref()),
+        (storage_key_b.as_ref(), storage_value_b.as_ref()),
+        (following_key.as_ref(), following_value.as_ref()),
+    ]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let range_proof = merkle
+        .range_proof(None, None, std::num::NonZeroUsize::new(2))
+        .unwrap();
+    assert_eq!(range_proof.key_values().len(), 2);
+    assert_eq!(range_proof.key_values()[0].0.as_ref(), account_key.as_ref());
+    assert_eq!(
+        range_proof.key_values()[1].0.as_ref(),
+        storage_key_a.as_ref()
+    );
+    assert!(!range_proof.end_proof().is_empty());
+
+    verify_range_proof::<_>(None::<&[u8]>, None::<&[u8]>, &root_hash, &range_proof).unwrap();
+
+    let mut serialized = Vec::new();
+    range_proof.write_to_vec(&mut serialized);
+    let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
+    verify_range_proof::<_>(None::<&[u8]>, None::<&[u8]>, &root_hash, &deserialized).unwrap();
+}
