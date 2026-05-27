@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779783461254,
+  "lastUpdate": 1779870760337,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -3759,6 +3759,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 74.7410474147578,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "efd97e642b3531a36286d120c110ab2738600a2a",
+          "message": "chore: fix nightly clippy warnings (#2019)\n\n## Summary\n- Applied `cargo +nightly clippy --fix` across the workspace.\n- Replaced `assert!(a == b)` / `debug_assert!(a == b)` with `assert_eq!`\n/ `debug_assert_eq!` (`manual_assert_eq`).\n- Replaced manual `Option`-zipping (`.and_then(|x| y.map(|y| (x, y)))`)\nwith `Option::zip` (`manual_option_zip`).\n\n## How this was tested\n- `cargo +nightly clippy --workspace --features ethhash,logger\n--all-targets` — no warnings\n- `cargo nextest run --workspace --features ethhash,logger\n--all-targets` — 732 passed\n- `cargo doc --no-deps`\n- `cargo fmt`",
+          "timestamp": "2026-05-26T19:34:32Z",
+          "url": "https://github.com/ava-labs/firewood/commit/efd97e642b3531a36286d120c110ab2738600a2a"
+        },
+        "date": 1779870759607,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 162.45656210422243,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6155.491579087214,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 116.94324533185168,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5950.287401592779,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 84.8274628823114,
             "unit": "block_accept_ms/ggas"
           }
         ]
