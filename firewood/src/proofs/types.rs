@@ -47,12 +47,12 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-#[cfg(feature = "ethhash")]
-use firewood_storage::{HashableShunt, JoinedPath};
 use firewood_storage::{
     Children, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator, Path,
     PathBuf, PathComponent, PathIterItem, Preimage, SplitPath, TrieHash, TriePath, ValueDigest,
 };
+#[cfg(feature = "ethhash")]
+use firewood_storage::{HashableShunt, JoinedPath};
 use thiserror::Error;
 
 use crate::merkle::Value;

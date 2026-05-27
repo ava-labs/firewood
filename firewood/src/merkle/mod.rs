@@ -23,12 +23,14 @@ use crate::{
     ChangeProofVerificationContext, Proof, ProofCollection, ProofError, ProofNode, RangeProof,
 };
 use firewood_metrics::firewood_counter;
+#[cfg(feature = "ethhash")]
+use firewood_storage::JoinedPath;
 use firewood_storage::MemStore;
 use firewood_storage::{
     BranchNode, Child, Children, FileIoError, HashType, HashableShunt, HashedNodeReader,
-    ImmutableProposal, IntoHashType, JoinedPath, LeafNode, MaybePersistedNode, Mutable,
-    MutableKind, NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, Propose,
-    ReadableStorage, SharedNode, TrieHash, TrieReader, U4, ValueDigest,
+    ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, Mutable, MutableKind,
+    NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, Propose, ReadableStorage,
+    SharedNode, TrieHash, TrieReader, U4, ValueDigest,
 };
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -480,7 +482,7 @@ fn hash_proof_node_parts<'a>(
 }
 
 #[cfg(not(feature = "ethhash"))]
-fn single_effective_account_child(
+const fn single_effective_account_child(
     _full_key: &[PathComponent],
     _branch: &BranchNode,
     _proof_node: Option<&ProofNode>,
