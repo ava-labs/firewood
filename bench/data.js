@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779870760337,
+  "lastUpdate": 1779956995032,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -3806,6 +3806,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 84.8274628823114,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "f577fe15107157082c0db67b7b59909e83e758ca",
+          "message": "build(ffi): vendor golangci-lint as go tool, drop third-party action (#2026)\n\n## Why this should be merged\n\nTwo goals:\n\n1. **Allow local reproduction of the CI golangci-lint step.** The\n`golangci/golangci-lint-action` GitHub Action precludes this. Vendoring\nthe linter as a Go tool dependency lets a contributor run the exact same\nlint locally with `./ffi/scripts/lint.sh`.\n2. **Stop pulling third-party TypeScript** (the action) into our supply\nchain, which we are poorly equipped to audit.\n\nBonus: the current step is `version: latest`, so the linter binary (and\nits transitive deps) silently floats from one run to the next. Vendoring\npins it.\n\nThis follows the avalanchego pattern:\n-\n[`tools/external/go.mod`](https://github.com/ava-labs/avalanchego/blob/master/tools/external/go.mod#L22)\n— tool deps live in a separate module to avoid polluting the main\nmodule's dependency graph.\n-\n[`scripts/lint.sh`](https://github.com/ava-labs/avalanchego/blob/master/scripts/lint.sh#L48)\n/\n[`scripts/run_tool.sh`](https://github.com/ava-labs/avalanchego/blob/master/scripts/run_tool.sh)\n— thin wrappers around `go tool -modfile=...`.\n\nAlso tightens `.github/dependabot.yml` to **security-only** updates for\n`github-actions` (mirroring the existing cargo policy), matching\navalanchego's approach where dependabot only opens PRs for security\nfixes.\n\n## How this works\n\n- New module `ffi/tools/external/go.mod` pinning\n`github.com/golangci/golangci-lint/v2 v2.9.0` as a `tool` dependency\n(same version avalanchego is on).\n- `ffi/scripts/run_tool.sh` — `GOWORK=off go tool\n-modfile=ffi/tools/external/go.mod \"$@\"`. `GOWORK=off` because\n`-modfile` is incompatible with workspace mode, and Go walks parent dirs\nlooking for `go.work` — so we set the env var defensively, not because\nthere's a `go.work` today.\n- `ffi/scripts/lint.sh` — `./scripts/run_tool.sh golangci-lint run\n--config .golangci.yaml ./...`, scoped to `ffi/`.\n- `.github/workflows/ci.yaml`: the `Run golangci-lint` step is now `run:\n./ffi/scripts/lint.sh` instead of `uses:\ngolangci/golangci-lint-action@...`. The existing `actions/setup-go` step\npicks up `ffi/tools/external/go.sum` for module caching alongside\n`ffi/go.sum`.\n- `.github/dependabot.yml`: `github-actions` `open-pull-requests-limit:\n10` → `0`. Dependabot still raises advisories; routine bump PRs go away.\n- `.claude/skills/firewood-review/SKILL.md`: reviewer skill now invokes\n`./scripts/lint.sh` instead of `golangci-lint` from `PATH`;\ncompatibility precondition swaps `golangci-lint` for `go`.\n\n## How this was tested\n\n- `./ffi/scripts/lint.sh` locally → `0 issues.`\n- Confirmed `go.mod` builds and resolves under `GOWORK=off`.\n\n## First-run cost\n\nFresh checkouts (and fresh CI caches) pay a ~2–4 min one-time cost to\ncompile `golangci-lint` from source. Subsequent runs hit\n`~/.cache/go-build` and are equivalent to running the prebuilt binary\ndirectly. CI's `actions/setup-go` cache keeps it warm across runs.",
+          "timestamp": "2026-05-27T20:37:54Z",
+          "url": "https://github.com/ava-labs/firewood/commit/f577fe15107157082c0db67b7b59909e83e758ca"
+        },
+        "date": 1779956993917,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 158.29311881807396,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6317.394005922005,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 125.82579570764165,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6091.234328226781,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 95.9150561588708,
             "unit": "block_accept_ms/ggas"
           }
         ]
