@@ -31,10 +31,11 @@ import (
 // forget to Drop. With the iterator-specific state owned by this inner
 // type, the registry's dropFn is bound to *iteratorHandle, the wrapper is
 // independently reclaimable, and the cleanup path works as advertised.
+
 // freer is the contract for an FFI-owned pair or batch returned by
 // fwd_iter_next / fwd_iter_next_n: a single free() that releases the
 // underlying Rust allocation. The concrete types are [ownedKeyValue]
-// and [ownedKeyValueBatch], both file-private to the FFI package.
+// and [ownedKeyValueBatch], both unexported in the ffi package.
 type freer interface {
 	free() error
 }
@@ -74,14 +75,14 @@ func (ih *iteratorHandle) Drop() error {
 		if ih.dropped {
 			return err
 		}
-		// Always free the iterator even if releasing the current KV/batch
-		// failed. The iterator holds a NodeStore ref that must be released.
-		if e := getErrorFromVoidResult(ih.free(ih.ptr)); e != nil {
+		// Mark dropped before freeing so a panic in free cannot leave a
+		// retry able to double-free ptr.
+		ptr := ih.ptr
+		ih.ptr = nil
+		ih.dropped = true
+		if e := getErrorFromVoidResult(ih.free(ptr)); e != nil {
 			err = errors.Join(err, fmt.Errorf("%w: %w", errFreeingValue, e))
 		}
-		var zero *C.IteratorHandle
-		ih.ptr = zero
-		ih.dropped = true
 		return err
 	})
 }
@@ -109,6 +110,10 @@ func iteratorCleanup(ih *iteratorHandle) {
 // the key and value into Go-managed memory. [Iterator.NextBorrowed] returns slices
 // that borrow Rust-owned memory, which is faster but the slices are only valid until
 // the next call to Next, NextBorrowed, or [Iterator.Drop].
+//
+// An Iterator is single-reader: Next, NextBorrowed, Key, Value, and Err must
+// not be called concurrently. Drop is the exception and is safe from another
+// goroutine, including force-close.
 type Iterator struct {
 	// iteratorHandle owns the Rust iterator pointer, the keep-alive handle on
 	// the parent database, and the currently-borrowed FFI batch/KV. Calls
@@ -223,7 +228,6 @@ func (it *Iterator) NextBorrowed() bool {
 	}
 	it.currentKey = it.currentPair.key.BorrowedBytes()
 	it.currentValue = it.currentPair.value.BorrowedBytes()
-	it.err = nil
 	return true
 }
 
