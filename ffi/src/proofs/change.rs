@@ -233,18 +233,12 @@ pub extern "C" fn fwd_change_proof_find_next_key(
     })
 }
 
-/// Returns an iterator over the code hashes contained in the change proof's
-/// batch operations. The iterator must be freed after use.
+/// Returns an iterator over the code hashes contained in the change proof.
+/// The iterator must be freed after use.
 ///
-/// Can be called at any time after the proof has been created — verification
-/// is not required, since extraction is purely RLP parsing of the values
-/// already present in the proof.
-///
-/// Note: this method is only relevant for Ethereum tries. The iterator may
-/// yield duplicates and is not guaranteed to be in any particular order. Only
-/// code hashes referenced by `BatchOp::Put` entries (i.e., the post-state of
-/// accounts touched by the proof) are yielded; `Delete` and `DeleteRange`
-/// entries carry no value and are skipped.
+/// Only `BatchOp::Put` entries contribute code hashes; `Delete` and
+/// `DeleteRange` entries are skipped. Can be called at any time after
+/// the proof has been created.
 ///
 /// # Arguments
 ///
