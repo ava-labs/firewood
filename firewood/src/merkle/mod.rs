@@ -30,6 +30,10 @@ use firewood_storage::{
     NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, Propose, ReadableStorage,
     SharedNode, TrieHash, TrieReader, U4, ValueDigest,
 };
+#[cfg(feature = "ethhash")]
+use firewood_storage::{
+    hash_node_as_storage_trie_root_for_node, hash_node_as_storage_trie_root_parts,
+};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -364,14 +368,33 @@ fn compute_outside_children(
 /// are hashed recursively. Persisted children (`AddressWithHash`,
 /// `MaybePersisted`) already carry their hash and are used directly.
 /// Out-of-range children get their hash from the corresponding proof node.
+///
+/// `fake_root` is set by the parent when this node is the single storage
+/// child of an account at depth 64; its hash must be computed as a
+/// standalone storage-trie root via the shared fold helper, matching what
+/// live hashing did when the node was first written.
 fn compute_root_hash_with_proofs(
     node: &Node,
     path_prefix: &[PathComponent],
     proof_nodes: &HashMap<PathBuf, &ProofNode>,
     outside_children: &HashMap<PathBuf, ChildMask>,
-) -> HashType {
+    #[cfg(feature = "ethhash")] fake_root: bool,
+) -> Result<HashType, ProofError> {
     let branch = match node {
-        Node::Leaf(_) => return HashableShunt::from_node(path_prefix, node).to_hash(),
+        Node::Leaf(_) => {
+            #[cfg(feature = "ethhash")]
+            if fake_root {
+                let (branch_nibble, account_prefix) = path_prefix
+                    .split_last()
+                    .ok_or(ProofError::InvalidStorageTrieRootPath)?;
+                return Ok(hash_node_as_storage_trie_root_for_node(
+                    account_prefix,
+                    *branch_nibble,
+                    node,
+                ));
+            }
+            return Ok(HashableShunt::from_node(path_prefix, node).to_hash());
+        }
         Node::Branch(branch) => branch,
     };
 
@@ -382,9 +405,14 @@ fn compute_root_hash_with_proofs(
         .copied()
         .collect();
 
-    let mut child_hashes: Children<Option<HashType>> = Children::new();
-
     let outside_mask = outside_children.get(&full_key);
+    let proof_node = proof_nodes.get(&full_key);
+
+    #[cfg(feature = "ethhash")]
+    let single_storage_child =
+        single_effective_account_child(&full_key, branch, proof_node.copied(), outside_mask);
+
+    let mut child_hashes: Children<Option<HashType>> = Children::new();
 
     // For children inside the proven range, compute hashes recursively.
     // For children outside the range, use proof node hashes (set below).
@@ -404,15 +432,30 @@ fn compute_root_hash_with_proofs(
             unreachable!()
         };
         child_prefix.push(nibble);
-        let child_hash =
-            compute_root_hash_with_proofs(child_node, &child_prefix, proof_nodes, outside_children);
+        #[cfg(feature = "ethhash")]
+        let child_hash = compute_root_hash_with_proofs(
+            child_node,
+            &child_prefix,
+            proof_nodes,
+            outside_children,
+            // Apply the storage-trie-root fold iff this child is the
+            // account's lone storage child.
+            single_storage_child == Some(nibble),
+        )?;
+        #[cfg(not(feature = "ethhash"))]
+        let child_hash = compute_root_hash_with_proofs(
+            child_node,
+            &child_prefix,
+            proof_nodes,
+            outside_children,
+        )?;
         child_hashes[nibble] = Some(child_hash);
         child_prefix.pop();
     }
 
     // For children outside the proven range, use proof node hashes.
-    if let (Some(proof_node), Some(outside)) = (proof_nodes.get(&full_key), outside_mask) {
-        for (nibble, hash) in proof_node.child_hashes.iter_present() {
+    if let (Some(pn), Some(outside)) = (proof_node, outside_mask) {
+        for (nibble, hash) in pn.child_hashes.iter_present() {
             if outside.is_set(nibble.0) {
                 child_hashes[nibble] = Some(hash.clone());
             }
@@ -425,18 +468,79 @@ fn compute_root_hash_with_proofs(
     // hash chain was verified by `value_digest()` during boundary proof
     // validation, and `reconcile_branch_proof_node` verified the hash
     // against the branch value when present. The digest is trusted.
-    let value_digest = branch.value.as_deref().map(ValueDigest::Value).or_else(|| {
-        proof_nodes
-            .get(&full_key)
-            .and_then(|pn| pn.value_digest.as_ref().map(ValueDigest::as_ref))
-    });
-    HashableShunt::new(
+    let value_digest =
+        branch.value.as_deref().map(ValueDigest::Value).or_else(|| {
+            proof_node.and_then(|pn| pn.value_digest.as_ref().map(ValueDigest::as_ref))
+        });
+
+    #[cfg(feature = "ethhash")]
+    if fake_root {
+        let (branch_nibble, account_prefix) = path_prefix
+            .split_last()
+            .ok_or(ProofError::InvalidStorageTrieRootPath)?;
+        return Ok(hash_node_as_storage_trie_root_parts(
+            account_prefix,
+            *branch_nibble,
+            branch.partial_path.as_components(),
+            value_digest,
+            child_hashes,
+        ));
+    }
+
+    Ok(HashableShunt::new(
         path_prefix,
         branch.partial_path.as_components(),
         value_digest,
         child_hashes,
     )
-    .to_hash()
+    .to_hash())
+}
+
+/// At a depth-64 account branch, return the slot of the single effective
+/// storage child (the fake-root case live hashing applies), or `None`.
+///
+/// An "effective" child is either an in-range branch child or an
+/// out-of-range child carried by the proof node — together they reflect
+/// the true on-disk shape. Proof verification only; live hashing has its
+/// own detection in `hash_helper_inner`.
+#[cfg(feature = "ethhash")]
+fn single_effective_account_child(
+    full_key: &[PathComponent],
+    branch: &BranchNode,
+    proof_node: Option<&ProofNode>,
+    outside_mask: Option<&ChildMask>,
+) -> Option<PathComponent> {
+    if full_key.len() != 64 {
+        return None;
+    }
+
+    let mut only_child: Option<PathComponent> = None;
+    let mut set_one = |nibble: PathComponent| -> Result<(), ()> {
+        if only_child.is_some() {
+            Err(())
+        } else {
+            only_child = Some(nibble);
+            Ok(())
+        }
+    };
+
+    // In-range branch children (those NOT marked as outside).
+    for (nibble, child) in &branch.children {
+        let in_range = !outside_mask.is_some_and(|m| m.is_set(nibble.0));
+        if child.is_some() && in_range && set_one(nibble).is_err() {
+            return None;
+        }
+    }
+    // Out-of-range children, taken from the proof node.
+    if let (Some(pn), Some(mask)) = (proof_node, outside_mask) {
+        for (nibble, _) in pn.child_hashes.iter_present() {
+            if mask.is_set(nibble.0) && set_one(nibble).is_err() {
+                return None;
+            }
+        }
+    }
+
+    only_child
 }
 
 /// Reject any proof node that carries a value digest (either
@@ -892,8 +996,12 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
         return Err(api::Error::ProofError(ProofError::Empty));
     };
 
+    #[cfg(feature = "ethhash")]
     let computed =
-        compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children);
+        compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children, false)?;
+    #[cfg(not(feature = "ethhash"))]
+    let computed =
+        compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children)?;
 
     if computed != root_hash.clone().into_hash_type() {
         return Err(api::Error::ProofError(ProofError::UnexpectedHash));
@@ -1081,8 +1189,12 @@ pub fn verify_change_proof_root_hash(
         .root()
         .expect("a non-empty proof reconciliation always leaves behind a root node");
 
+    #[cfg(feature = "ethhash")]
     let computed =
-        compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children);
+        compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children, false)?;
+    #[cfg(not(feature = "ethhash"))]
+    let computed =
+        compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children)?;
 
     if computed != verification.end_root.clone().into_hash_type() {
         return Err(api::Error::ProofError(ProofError::EndRootMismatch));

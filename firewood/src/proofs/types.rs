@@ -47,6 +47,8 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
+#[cfg(feature = "ethhash")]
+use firewood_storage::hash_node_as_storage_trie_root_parts;
 use firewood_storage::{
     Children, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator, Path,
     PathBuf, PathComponent, PathIterItem, Preimage, SplitPath, TrieHash, TriePath, ValueDigest,
@@ -244,6 +246,16 @@ pub enum ProofError {
     /// boundary index, so the proof must include that child.
     #[error("exclusion proof missing child at boundary index")]
     ExclusionProofMissingChild,
+
+    /// A node was flagged for the storage-trie-root fold (i.e., it is the
+    /// single storage child of a depth-64 account branch) but its path
+    /// prefix is too short to contain the account's 64-nibble key plus the
+    /// child's 1-nibble slot. This indicates either a malformed proof
+    /// (`partial_len` of a storage child doesn't match its depth) or an
+    /// internal invariant violation in the verifier.
+    #[cfg(feature = "ethhash")]
+    #[error("invalid storage-trie-root path: prefix shorter than expected")]
+    InvalidStorageTrieRootPath,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -323,6 +335,33 @@ impl Hashable for ProofNode {
     fn children(&self) -> Children<Option<HashType>> {
         self.child_hashes.clone()
     }
+}
+
+/// Compute the hash a proof-walk expects for a node. When
+/// `as_storage_trie_root` is true, the node is hashed via the shared
+/// storage-trie-root fold helper — used for the storage child of an
+/// account branch at depth 64 with exactly one storage child. Otherwise
+/// the default `Hashable::to_hash` is used.
+fn compute_node_hash_for_proof<N: Hashable>(
+    node: &N,
+    #[cfg(feature = "ethhash")] as_storage_trie_root: bool,
+) -> Result<HashType, ProofError> {
+    #[cfg(feature = "ethhash")]
+    if as_storage_trie_root {
+        let (branch_nibble, account_prefix) = node
+            .parent_prefix_path()
+            .into_split_path()
+            .split_last()
+            .ok_or(ProofError::InvalidStorageTrieRootPath)?;
+        return Ok(hash_node_as_storage_trie_root_parts(
+            account_prefix,
+            branch_nibble,
+            node.partial_path().into_split_path(),
+            node.value_digest(),
+            node.children(),
+        ));
+    }
+    Ok(node.to_hash())
 }
 
 impl From<PathIterItem> for ProofNode {
@@ -456,11 +495,26 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
         };
 
         let mut expected_hash = root_hash.clone().into_hash_type();
+        // True when the previous iteration's node was a depth-64 account
+        // branch with exactly one storage child. The current node's hash
+        // must be computed as a standalone storage-trie root via the shared
+        // fold helper, matching what live hashing did when the node was
+        // first written.
+        #[cfg(feature = "ethhash")]
+        let mut hash_as_storage_root = false;
 
         let mut iter = self.0.as_ref().iter().peekable();
         while let Some(node) = iter.next() {
-            if node.to_hash() != expected_hash {
+            #[cfg(feature = "ethhash")]
+            let actual_hash = compute_node_hash_for_proof(node, hash_as_storage_root)?;
+            #[cfg(not(feature = "ethhash"))]
+            let actual_hash = compute_node_hash_for_proof(node)?;
+            if actual_hash != expected_hash {
                 return Err(ProofError::UnexpectedHash);
+            }
+            #[cfg(feature = "ethhash")]
+            {
+                hash_as_storage_root = false;
             }
 
             // Assert that only nodes whose keys are an even number of nibbles
@@ -482,10 +536,20 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
                     return Err(ProofError::ShouldBePrefixOfNextKey);
                 }
 
-                expected_hash = node.children()[key_nibble]
+                let children = node.children();
+                expected_hash = children[key_nibble]
                     .as_ref()
                     .ok_or(ProofError::NodeNotInTrie)?
                     .clone();
+
+                // If this node is a depth-64 account branch with exactly one
+                // storage child, the next node IS that storage child and must
+                // be hashed as a standalone storage-trie root on the next
+                // iteration.
+                #[cfg(feature = "ethhash")]
+                {
+                    hash_as_storage_root = node.full_path().len() == 64 && children.count() == 1;
+                }
             }
         }
 

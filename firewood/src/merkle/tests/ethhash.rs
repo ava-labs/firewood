@@ -184,7 +184,7 @@ fn test_root_hash_random_deletions() {
 }
 
 /// Keccak256 of empty bytes — the codeHash for accounts with no contract code.
-fn empty_code_hash() -> [u8; 32] {
+pub(super) fn empty_code_hash() -> [u8; 32] {
     Keccak256::digest([]).into()
 }
 
@@ -194,7 +194,7 @@ fn empty_trie_root() -> [u8; 32] {
 }
 
 /// RLP-encode an Ethereum account value: [nonce, balance, storageRoot, codeHash].
-fn rlp_encode_account(
+pub(super) fn rlp_encode_account(
     nonce: u64,
     balance: u64,
     storage_root: &[u8; 32],
@@ -211,7 +211,7 @@ fn rlp_encode_account(
 }
 
 /// RLP-encode a 32-byte storage slot value.
-fn rlp_encode_storage(value: &[u8; 32]) -> Vec<u8> {
+pub(super) fn rlp_encode_storage(value: &[u8; 32]) -> Vec<u8> {
     use rlp::RlpStream;
 
     let mut rlp = RlpStream::new();
@@ -647,4 +647,93 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
         &range_proof,
     )
     .unwrap();
+}
+
+/// A limit-truncated range proof bounded inside an account's storage trie,
+/// covering the account + the first storage child. Truncation creates an
+/// out-of-range tail handled by the end-proof.
+///
+/// Runs for both:
+/// - One storage child (verifier must apply the storage-trie-root fold to
+///   match the on-disk hash).
+/// - Two storage children (verifier must NOT apply the fold even though
+///   only one storage child is in-range; the boundary detection has to
+///   count both in-range and out-of-range proof children).
+#[test_case(&[0xAAu8] ; "single_storage_child")]
+#[test_case(&[0x10u8, 0x20u8] ; "multi_storage_child")]
+fn test_limit_truncated_range_proof_inside_account_with_storage_children(
+    storage_suffix_first_bytes: &[u8],
+) {
+    let dummy_storage_root = [0u8; 32];
+    let account_key: Box<[u8]> = [0x10u8; 32].into();
+    let storage_keys: Vec<Box<[u8]>> = storage_suffix_first_bytes
+        .iter()
+        .map(|&first| {
+            let mut suffix = [0u8; 32];
+            suffix[0] = first;
+            [account_key.as_ref(), &suffix].concat().into()
+        })
+        .collect();
+    let following_key: Box<[u8]> = [0xFFu8; 32].into();
+
+    let account_value = rlp_encode_account(1, 100, &dummy_storage_root, &empty_code_hash());
+    let storage_values: Vec<Box<[u8]>> = (0u8..)
+        .take(storage_keys.len())
+        .map(|i| rlp_encode_storage(&[0x42u8.saturating_add(i); 32]).into())
+        .collect();
+    let following_value = rlp_encode_account(2, 200, &dummy_storage_root, &empty_code_hash());
+
+    let mut items: Vec<(&[u8], &[u8])> = vec![(account_key.as_ref(), account_value.as_ref())];
+    for (k, v) in storage_keys.iter().zip(storage_values.iter()) {
+        items.push((k.as_ref(), v.as_ref()));
+    }
+    items.push((following_key.as_ref(), following_value.as_ref()));
+
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let range_proof = merkle
+        .range_proof(None, None, std::num::NonZeroUsize::new(2))
+        .unwrap();
+    assert_eq!(range_proof.key_values().len(), 2);
+    assert_eq!(range_proof.key_values()[0].0.as_ref(), account_key.as_ref());
+    assert_eq!(
+        range_proof.key_values()[1].0.as_ref(),
+        storage_keys[0].as_ref()
+    );
+    assert!(!range_proof.end_proof().is_empty());
+
+    verify_range_proof::<_>(None::<&[u8]>, None::<&[u8]>, &root_hash, &range_proof).unwrap();
+
+    let mut serialized = Vec::new();
+    range_proof.write_to_vec(&mut serialized);
+    let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
+    verify_range_proof::<_>(None::<&[u8]>, None::<&[u8]>, &root_hash, &deserialized).unwrap();
+}
+
+/// A full unbounded range proof over a single-storage-child account. No
+/// truncation — exercises the fold path whenever the verifier rebuilds the
+/// storage child in-range, not only when a limit truncates the proof.
+#[test]
+fn test_full_range_proof_single_storage_child_account_no_truncation() {
+    let dummy_storage_root = [0u8; 32];
+    let account_key: Box<[u8]> = [0x10u8; 32].into();
+    let storage_key: Box<[u8]> = [account_key.as_ref(), &[0xAAu8; 32]].concat().into();
+
+    let account_value = rlp_encode_account(1, 100, &dummy_storage_root, &empty_code_hash());
+    let storage_value: Box<[u8]> = rlp_encode_storage(&[0x42u8; 32]).into();
+
+    let merkle = init_merkle([
+        (account_key.as_ref(), account_value.as_ref()),
+        (storage_key.as_ref(), storage_value.as_ref()),
+    ]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    // Full, unbounded range proof with no key limit.
+    let range_proof = merkle.range_proof(None, None, None).unwrap();
+    assert_eq!(range_proof.key_values().len(), 2);
+    assert_eq!(range_proof.key_values()[0].0.as_ref(), account_key.as_ref());
+    assert_eq!(range_proof.key_values()[1].0.as_ref(), storage_key.as_ref());
+
+    verify_range_proof::<_>(None::<&[u8]>, None::<&[u8]>, &root_hash, &range_proof).unwrap();
 }
