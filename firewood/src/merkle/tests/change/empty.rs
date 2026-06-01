@@ -153,7 +153,7 @@ fn test_empty_start_trie_prefix_keys() {
     verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
 }
 
-use super::super::ethhash::{empty_code_hash, rlp_encode_account, rlp_encode_storage};
+use crate::merkle::tests::ethhash::{empty_code_hash, rlp_encode_account, rlp_encode_storage};
 
 /// Build a 64-byte key whose first 32 bytes are `account_key` and whose
 /// 33rd byte is `byte_32` (the rest zero). Used to construct storage keys
