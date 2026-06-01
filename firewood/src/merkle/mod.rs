@@ -559,27 +559,23 @@ fn single_effective_account_child(
     }
 
     let mut only_child: Option<PathComponent> = None;
-    let mut set_one = |nibble: PathComponent| -> Result<(), ()> {
-        if only_child.is_some() {
-            Err(())
-        } else {
-            only_child = Some(nibble);
-            Ok(())
-        }
-    };
-
     // In-range branch children (those NOT marked as outside).
     for (nibble, child) in &branch.children {
-        let in_range = !outside_mask.is_some_and(|m| m.is_set(nibble.0));
-        if child.is_some() && in_range && set_one(nibble).is_err() {
-            return None;
+        if child.is_some() && !outside_mask.is_some_and(|m| m.is_set(nibble.0)) {
+            if only_child.is_some() {
+                return None;
+            }
+            only_child = Some(nibble);
         }
     }
     // Out-of-range children, taken from the proof node.
     if let (Some(pn), Some(mask)) = (proof_node, outside_mask) {
         for (nibble, _) in pn.child_hashes.iter_present() {
-            if mask.is_set(nibble.0) && set_one(nibble).is_err() {
-                return None;
+            if mask.is_set(nibble.0) {
+                if only_child.is_some() {
+                    return None;
+                }
+                only_child = Some(nibble);
             }
         }
     }
