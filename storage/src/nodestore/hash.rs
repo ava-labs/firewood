@@ -298,9 +298,9 @@ pub fn hash_node_as_storage_trie_root_for_node(
 ///
 /// - 0 children → empty trie root (`keccak256(0x80)`)
 /// - 1 child → that child's hash directly. The caller is responsible for having
-///   produced that hash via [`hash_node_as_storage_trie_root_parts`] (which folds
+///   produced that hash via `hash_node_as_storage_trie_root_parts` (which folds
 ///   the account's branch nibble into the child's partial path so the child hashes
-///   as a standalone storage-trie root).
+///   as a standalone storage-trie root). Only relevant under the `ethhash` feature.
 /// - ≥2 children → the 17-element branch RLP, hashed.
 ///
 /// At account depth (64 nibbles) storage keys are 32 bytes, so every child
