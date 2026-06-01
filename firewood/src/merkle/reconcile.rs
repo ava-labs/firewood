@@ -3,9 +3,9 @@
 
 use firewood_storage::{Mutable, NodeStore, Propose, ReadableStorage, ValueDigest};
 
-use crate::{ProofError, ProofNode, Value, merkle::Merkle};
 #[cfg(feature = "ethhash")]
 use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
+use crate::{ProofError, ProofNode, Value, merkle::Merkle};
 
 impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     /// Reconciles a branch proof node against the in-memory proving merkle.
