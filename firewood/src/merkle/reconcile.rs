@@ -4,6 +4,8 @@
 use firewood_storage::{Mutable, NodeStore, Propose, ReadableStorage, ValueDigest};
 
 use crate::{ProofError, ProofNode, Value, merkle::Merkle};
+#[cfg(feature = "ethhash")]
+use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
 
 impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     /// Reconciles a branch proof node against the in-memory proving merkle.
@@ -81,7 +83,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         // `Preimage::write` always recomputes storageRoot from the current
         // children at hash time, but byte equality fails.
         #[cfg(feature = "ethhash")]
-        if proof_node.key.len() == 64
+        if proof_node.key.len() == ACCOUNT_DEPTH_NIBBLES
             && let (Some(pv), Some(bv)) = (proof_value, branch.value.as_deref())
             && account_values_equal_except_storage_root(pv, bv)
         {

@@ -19,6 +19,8 @@ use crate::api::{
 use crate::iter::{MerkleKeyValueIter, PathIterator};
 use crate::merkle::changes::DiffMerkleNodeStream;
 use crate::proofs::change::ChangeProof;
+#[cfg(feature = "ethhash")]
+use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
 use crate::{
     ChangeProofVerificationContext, Proof, ProofCollection, ProofError, ProofNode, RangeProof,
 };
@@ -510,7 +512,7 @@ fn single_effective_account_child(
     proof_node: Option<&ProofNode>,
     outside_mask: Option<&ChildMask>,
 ) -> Option<PathComponent> {
-    if full_key.len() != 64 {
+    if full_key.len() != ACCOUNT_DEPTH_NIBBLES {
         return None;
     }
 
