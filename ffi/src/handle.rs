@@ -73,7 +73,7 @@ pub struct DatabaseHandleArgs<'a> {
 
     /// The maximum number of revisions to keep.
     ///
-    /// Must be > `deferred_persistence_commit_count`.
+    /// Must be > `max_revision_recovery_lag`.
     pub revisions: usize,
 
     /// The cache read strategy to use.
@@ -104,10 +104,11 @@ pub struct DatabaseHandleArgs<'a> {
     /// Opening returns an error if this does not match the compile-time feature.
     pub node_hash_algorithm: NodeHashAlgorithm,
 
-    /// The maximum number of unpersisted revisions that can exist at a given time.
+    /// The maximum number of latest committed revisions that may need to be
+    /// recommitted after a crash.
     ///
-    /// Note: `revisions` must be > `deferred_persistence_commit_count`.
-    pub deferred_persistence_commit_count: u64,
+    /// Note: `revisions` must be > `max_revision_recovery_lag`.
+    pub max_revision_recovery_lag: u64,
 }
 
 impl DatabaseHandleArgs<'_> {
@@ -120,8 +121,8 @@ impl DatabaseHandleArgs<'_> {
         };
         let free_list_cache_size = NonZeroUsize::new(self.free_list_cache_size)
             .ok_or_else(|| invalid_data("free list cache size should be non-zero"))?;
-        let commit_count = NonZeroU64::new(self.deferred_persistence_commit_count)
-            .ok_or(api::Error::ZeroCommitCount)?;
+        let max_revision_recovery_lag = NonZeroU64::new(self.max_revision_recovery_lag)
+            .ok_or(api::Error::ZeroRevisionRecoveryLag)?;
 
         let memory_limit = NonZeroUsize::new(self.node_cache_memory_limit);
 
@@ -130,7 +131,7 @@ impl DatabaseHandleArgs<'_> {
                 .max_revisions(self.revisions)
                 .cache_read_strategy(cache_read_strategy)
                 .free_list_cache_size(free_list_cache_size)
-                .deferred_persistence_commit_count(commit_count);
+                .max_revision_recovery_lag(max_revision_recovery_lag);
 
             if let Some(memory_limit) = memory_limit {
                 builder.node_cache_memory_limit(memory_limit).build()
