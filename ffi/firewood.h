@@ -835,6 +835,172 @@ typedef struct ProposalResult {
 } ProposalResult;
 
 /**
+ * A Rust-owned vector of bytes that can be passed to C code.
+ *
+ * C callers must free this memory using the respective FFI function for the
+ * concrete type (but not using the `free` function from the C standard library).
+ */
+typedef struct OwnedSlice_OwnedBytes {
+  OwnedBytes *ptr;
+  size_t len;
+} OwnedSlice_OwnedBytes;
+
+/**
+ * An owned, C-friendly per-slot storage proof inside an [`EthProofOwned`].
+ */
+typedef struct EthStorageProofOwned {
+  /**
+   * The requested 32-byte slot key, echoed back from the caller's input.
+   */
+  uint8_t key[32];
+  /**
+   * The stored slot value, or [`Maybe::None`] for an exclusion proof.
+   */
+  struct Maybe_OwnedBytes value;
+  /**
+   * MPT-RLP-encoded storage-trie nodes, root-to-leaf order. Empty when the
+   * account has no storage at all.
+   */
+  struct OwnedSlice_OwnedBytes proof;
+} EthStorageProofOwned;
+
+/**
+ * A Rust-owned vector of bytes that can be passed to C code.
+ *
+ * C callers must free this memory using the respective FFI function for the
+ * concrete type (but not using the `free` function from the C standard library).
+ */
+typedef struct OwnedSlice_EthStorageProofOwned {
+  struct EthStorageProofOwned *ptr;
+  size_t len;
+} OwnedSlice_EthStorageProofOwned;
+
+/**
+ * An owned, C-friendly `eth_getProof` result.
+ *
+ * Mirrors [`firewood::EthProof`] but with FFI-safe owned buffers. All byte
+ * arrays are heap-owned by Rust and must be freed by passing the enclosing
+ * value to [`fwd_free_eth_proof`].
+ */
+typedef struct EthProofOwned {
+  /**
+   * Account transaction count.
+   */
+  uint64_t nonce;
+  /**
+   * Account balance, zero-padded big-endian.
+   */
+  uint8_t balance[32];
+  /**
+   * Keccak-256 of the account's contract code (empty-code hash if none).
+   */
+  uint8_t code_hash[32];
+  /**
+   * Storage trie root as embedded in the account leaf (empty-trie root for
+   * absent accounts).
+   */
+  uint8_t storage_hash[32];
+  /**
+   * MPT-RLP-encoded account-trie nodes, root-to-leaf order.
+   */
+  struct OwnedSlice_OwnedBytes account_proof;
+  /**
+   * Per-slot storage proofs, one entry per requested key, in input order.
+   */
+  struct OwnedSlice_EthStorageProofOwned storage_proofs;
+} EthProofOwned;
+
+/**
+ * A result type returned from [`fwd_eth_get_proof`].
+ *
+ * The caller must call [`fwd_free_eth_proof`] to free the memory associated
+ * with a returned [`EthProofOwned`] when it is no longer needed.
+ *
+ * [`fwd_eth_get_proof`]: crate::fwd_eth_get_proof
+ * [`fwd_free_eth_proof`]: crate::fwd_free_eth_proof
+ */
+enum EthProofResult_Tag {
+  /**
+   * The caller provided a null pointer to the revision handle.
+   */
+  EthProofResult_NullHandlePointer,
+  /**
+   * The database is not running in ethereum hash mode, so an
+   * `eth_getProof`-compatible proof cannot be produced.
+   */
+  EthProofResult_NotSupported,
+  /**
+   * The proof was successfully produced.
+   */
+  EthProofResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. Its
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  EthProofResult_Err,
+};
+typedef size_t EthProofResult_Tag;
+
+typedef struct EthProofResult {
+  EthProofResult_Tag tag;
+  union {
+    struct {
+      struct EthProofOwned *ok;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} EthProofResult;
+
+/**
+ * A borrowed byte slice. Used to represent data that was passed in from C
+ * callers and will not be freed or retained by Rust code.
+ */
+typedef struct BorrowedSlice_BorrowedBytes {
+  /**
+   * A pointer to the slice of bytes. This can be null if the slice is empty.
+   *
+   * If the pointer is not null, it must point to a valid slice of `len`
+   * elements sized and aligned for `T`.
+   *
+   * As a note, [`NonNull`] is not appropriate here because [`NonNull`] pointer
+   * provenance requires mutable access to the pointer, which is not an invariant
+   * we want to enforce here. We want (and require) the pointer to be immutable.
+   *
+   * [`NonNull`]: std::ptr::NonNull
+   */
+  const BorrowedBytes *ptr;
+  /**
+   * The length of the slice. It is ignored if the pointer is null; however,
+   * if the pointer is not null, it must be equal to the number of elements
+   * pointed to by `ptr`.
+   */
+  size_t len;
+} BorrowedSlice_BorrowedBytes;
+
+/**
+ * A type alias for a borrowed slice of borrowed byte slices (a 2D byte array).
+ *
+ * C callers can use this to pass in an array of byte slices, e.g. a list of
+ * 32-byte storage keys for [`fwd_eth_get_proof`]. Neither the outer array nor
+ * the inner slices are freed by Rust code.
+ *
+ * C callers must ensure that the pointer, if not null, points to a valid slice
+ * of [`BorrowedBytes`] of length `len`, and that each inner slice is itself
+ * valid. Everything must remain valid for the duration of the C function call
+ * that was passed this slice.
+ *
+ * [`fwd_eth_get_proof`]: crate::fwd_eth_get_proof
+ */
+typedef struct BorrowedSlice_BorrowedBytes BorrowedBytes2D;
+
+/**
  * Owned version of `KeyValuePair`, returned to ffi callers.
  *
  * C callers must free this using [`crate::fwd_free_owned_kv_pair`],
@@ -1869,6 +2035,49 @@ struct VoidResult fwd_db_verify_range_proof(const struct DatabaseHandle *db,
                                             struct VerifyRangeProofArgs args);
 
 /**
+ * Produce an `eth_getProof`-compatible proof for an account and a set of
+ * storage slots against the given revision.
+ *
+ * The returned proof bytes are canonical RLP-encoded Ethereum MPT nodes that a
+ * verifier such as go-ethereum's `trie.VerifyProof` accepts. Absent accounts
+ * come back with zero account scalars plus the empty-code and empty-trie
+ * hashes; the proof bytes distinguish inclusion from exclusion.
+ *
+ * # Arguments
+ *
+ * - `revision` - The revision handle to prove against.
+ * - `account_key` - The account's 32-byte trie key (`keccak256(address)`).
+ * - `storage_keys` - An array of 32-byte slot trie keys
+ *   (`keccak256(slot)`), in the order the proofs should be returned.
+ *
+ * Callers are responsible for keccak-hashing addresses and slots into their
+ * 32-byte trie-key forms before calling this function.
+ *
+ * # Returns
+ *
+ * - [`EthProofResult::NullHandlePointer`] if `revision` is null.
+ * - [`EthProofResult::NotSupported`] if the database is not running in
+ *   ethereum hash mode.
+ * - [`EthProofResult::Ok`] containing the proof on success.
+ * - [`EthProofResult::Err`] containing an error message otherwise (including
+ *   when a key is not exactly 32 bytes long).
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `revision` is a valid pointer to a [`RevisionHandle`].
+ * * ensure that `account_key` is a valid [`BorrowedBytes`] and each entry of
+ *   `storage_keys` is a valid [`BorrowedBytes`].
+ * * call [`fwd_free_eth_proof`] to free a returned [`EthProofOwned`], and
+ *   [`fwd_free_owned_bytes`] to free a returned error message.
+ *
+ * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+ */
+struct EthProofResult fwd_eth_get_proof(const struct RevisionHandle *revision,
+                                        BorrowedBytes account_key,
+                                        BorrowedBytes2D storage_keys);
+
+/**
  * Frees the memory associated with a `ChangeProofContext`.
  *
  * # Arguments
@@ -1881,6 +2090,21 @@ struct VoidResult fwd_db_verify_range_proof(const struct DatabaseHandle *db,
  * - [`VoidResult::Err`] if the process panics while freeing the memory.
  */
 struct VoidResult fwd_free_change_proof(struct ChangeProofContext *proof);
+
+/**
+ * Frees the memory associated with an [`EthProofOwned`].
+ *
+ * # Arguments
+ *
+ * * `proof` - The [`EthProofOwned`] to free, previously returned from
+ *   [`fwd_eth_get_proof`].
+ *
+ * # Returns
+ *
+ * - [`VoidResult::Ok`] if the memory was successfully freed.
+ * - [`VoidResult::Err`] if the process panics while freeing the memory.
+ */
+struct VoidResult fwd_free_eth_proof(struct EthProofOwned *proof);
 
 /**
  * Consumes the [`IteratorHandle`], destroys the iterator, and frees the memory.
