@@ -54,15 +54,13 @@ impl From<firewood::EthProof> for EthProofOwned {
             storage_hash: proof.storage_hash,
             account_proof: proof
                 .account_proof
-                .into_vec()
                 .into_iter()
-                .map(Into::into)
+                .map(OwnedBytes::from)
                 .collect(),
             storage_proofs: proof
                 .storage_proofs
-                .into_vec()
                 .into_iter()
-                .map(Into::into)
+                .map(EthStorageProofOwned::from)
                 .collect(),
         }
     }
@@ -73,12 +71,7 @@ impl From<firewood::EthStorageProof> for EthStorageProofOwned {
         Self {
             key: storage.key,
             value: storage.value.map(OwnedBytes::from).into(),
-            proof: storage
-                .proof
-                .into_vec()
-                .into_iter()
-                .map(Into::into)
-                .collect(),
+            proof: storage.proof.into_iter().map(OwnedBytes::from).collect(),
         }
     }
 }
