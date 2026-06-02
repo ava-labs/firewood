@@ -56,7 +56,8 @@ use thiserror::Error;
 use crate::merkle::Value;
 
 /// Which edge of a range proof was being verified when an error occurred.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ProofEdge {
     /// The start (lower-bound) proof.
     Left,
@@ -481,6 +482,14 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
     ///   of the next node's key in the proof.
     /// - [`ProofError::NodeNotInTrie`] — the child pointer from one node to the
     ///   next is absent, meaning the proof path does not exist in the trie.
+    ///
+    /// # Note
+    ///
+    /// Callers verifying a range or change proof's edge proof (e.g.
+    /// `verify_edge`, `verify_boundary_proof`) intercept
+    /// [`ProofError::UnexpectedHash`] from this walk and surface
+    /// [`ProofError::EdgeProofHashMismatch`] instead, annotated with which edge
+    /// tripped.
     pub fn value_digest<K: AsRef<[u8]>>(
         &self,
         key: K,

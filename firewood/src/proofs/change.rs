@@ -232,6 +232,8 @@ fn verify_boundary_proof<C: ProofCollection>(
     let result = match proof.value_digest(key, end_root) {
         Ok(result) => result,
         Err(ProofError::Empty) => None,
+        // Any `UnexpectedHash` from this boundary `value_digest` walk is by
+        // construction an edge-proof failure — re-stamp it with which edge.
         Err(ProofError::UnexpectedHash { expected, actual }) => {
             return Err(api::Error::ProofError(ProofError::EdgeProofHashMismatch {
                 edge,

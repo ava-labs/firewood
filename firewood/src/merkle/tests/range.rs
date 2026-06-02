@@ -1779,7 +1779,7 @@ fn test_range_proof_left_edge_hash_mismatch() {
         matches!(
             err,
             api::Error::ProofError(crate::ProofError::EdgeProofHashMismatch {
-                edge: crate::proofs::ProofEdge::Left,
+                edge: crate::ProofEdge::Left,
                 ..
             })
         ),
@@ -1826,7 +1826,7 @@ fn test_range_proof_right_edge_hash_mismatch() {
         matches!(
             err,
             api::Error::ProofError(crate::ProofError::EdgeProofHashMismatch {
-                edge: crate::proofs::ProofEdge::Right,
+                edge: crate::ProofEdge::Right,
                 ..
             })
         ),
