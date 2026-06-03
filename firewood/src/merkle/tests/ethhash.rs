@@ -734,15 +734,13 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
 ///   count both in-range and out-of-range proof children).
 #[test_case(&[0xAAu8] ; "single_storage_child")]
 #[test_case(&[0x10u8, 0x20u8] ; "multi_storage_child")]
-fn test_limit_truncated_range_proof_inside_account_with_storage_children(
-    storage_suffix_first_bytes: &[u8],
-) {
+fn test_limit_truncated_range_proof_inside_account_with_storage_children(slot_first_bytes: &[u8]) {
     let AccountTrie {
         merkle,
         root_hash,
         account_key,
         storage_keys,
-    } = build_account_trie(storage_suffix_first_bytes);
+    } = build_account_trie(slot_first_bytes);
 
     let range_proof = merkle
         .range_proof(None, None, std::num::NonZeroUsize::new(2))
@@ -795,13 +793,13 @@ fn test_full_range_proof_single_storage_child_account_no_truncation() {
 /// double-folding an out-of-range lone child.
 #[test_case(&[0xAAu8] ; "zero_in_range_single_child")]
 #[test_case(&[0x10u8, 0x30u8, 0x60u8] ; "zero_in_range_multi_child")]
-fn test_zero_in_range_storage_children_account_child_not_folded(storage_suffix_first_bytes: &[u8]) {
+fn test_zero_in_range_storage_children_account_child_not_folded(slot_first_bytes: &[u8]) {
     let AccountTrie {
         merkle,
         root_hash,
         account_key,
         ..
-    } = build_account_trie(storage_suffix_first_bytes);
+    } = build_account_trie(slot_first_bytes);
 
     // limit=1 → only the account is in-range; all storage children are
     // out-of-range, represented only by hashes in the account proof node.

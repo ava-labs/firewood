@@ -552,10 +552,8 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
             let computed = compute_node_hash_for_proof(node, hash_as_storage_root);
             #[cfg(not(feature = "ethhash"))]
             let computed = compute_node_hash_for_proof(node);
-            // `None` means the node was flagged for the storage-trie-root fold
-            // but has an empty parent prefix (a malformed `partial_len`). Its
-            // plain hash can't match the parent's expected child hash, so it is
-            // rejected as an unexpected hash rather than panicking.
+            // A malformed node yields `None`; reject it as an unexpected hash
+            // rather than panicking.
             let Some(actual_hash) = computed else {
                 return Err(ProofError::UnexpectedHash {
                     expected: expected_hash,

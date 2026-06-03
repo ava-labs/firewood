@@ -9,13 +9,15 @@
 use crate::hashednode::hash_node;
 use crate::linear::FileIoError;
 use crate::logger::trace;
-use crate::node::Node;
+use crate::node::{BranchNode, Node};
+use crate::rlp::{NULL_RLP, RlpItem, encode_list, replace_list_field};
 use crate::{
     Child, Children, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage, SharedNode,
     TrieHash,
 };
 #[cfg(feature = "ethhash")]
 use crate::{HashableShunt, JoinedPath, PathComponent, SplitPath, ValueDigest};
+use sha3::{Digest, Keccak256};
 
 use super::NodeReader;
 
@@ -311,10 +313,6 @@ pub fn hash_node_as_storage_trie_root_for_node(
 /// returns the child hash unchanged.
 #[must_use]
 fn compute_storage_trie_root(child_hashes: &Children<Option<HashType>>) -> TrieHash {
-    use crate::node::BranchNode;
-    use crate::rlp::{NULL_RLP, RlpItem, encode_list};
-    use sha3::{Digest, Keccak256};
-
     if child_hashes.count() == 0 {
         return TrieHash::from(Keccak256::digest(NULL_RLP));
     }
@@ -342,7 +340,6 @@ pub fn fix_account_storage_root_value(
     value: &[u8],
     child_hashes: &Children<Option<HashType>>,
 ) -> Option<Box<[u8]>> {
-    use crate::rlp::replace_list_field;
     let storage_root = compute_storage_trie_root(child_hashes);
     replace_list_field(value, 2, storage_root.as_slice()).ok()
 }
@@ -434,7 +431,6 @@ const fn single_child_storage_root(child: HashType) -> crate::TrieHash {
 /// `storage/src/hashers/ethhash.rs::Preimage::write`).
 #[cfg(feature = "ethhash")]
 fn child_to_rlp_item(child: Option<&HashType>) -> crate::rlp::RlpItem<'_> {
-    use crate::rlp::RlpItem;
     match child {
         Some(HashType::Hash(hash)) => RlpItem::Bytes(hash.as_slice()),
         Some(HashType::Rlp(_)) => unreachable!(
@@ -447,7 +443,6 @@ fn child_to_rlp_item(child: Option<&HashType>) -> crate::rlp::RlpItem<'_> {
 
 #[cfg(not(feature = "ethhash"))]
 fn child_to_rlp_item(child: Option<&HashType>) -> crate::rlp::RlpItem<'_> {
-    use crate::rlp::RlpItem;
     match child {
         Some(hash) => RlpItem::Bytes(hash.as_slice()),
         None => RlpItem::Empty,
