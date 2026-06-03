@@ -47,6 +47,10 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
+#[cfg(feature = "ethhash")]
+use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
+#[cfg(feature = "ethhash")]
+use firewood_storage::hash_node_as_storage_trie_root_parts;
 use firewood_storage::{
     Children, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator, Path,
     PathBuf, PathComponent, PathIterItem, Preimage, SplitPath, TrieHash, TriePath, ValueDigest,
@@ -363,6 +367,38 @@ impl Hashable for ProofNode {
     }
 }
 
+/// Compute the hash a proof-walk expects for a node. When
+/// `as_storage_trie_root` is true, the node is hashed via the shared
+/// storage-trie-root fold helper — used for the storage child of an
+/// account branch at depth 64 with exactly one storage child. Otherwise
+/// the default `Hashable::to_hash` is used.
+///
+/// Returns `Some(hash)` if the node's hash can be computed, and `None` if it
+/// can't — which happens only when the fold is requested but the node has an
+/// empty parent prefix (`partial_len == 0`). This can be due to a malformed
+/// proof whose storage-child node sets `partial_len` to 0 on the wire.
+fn compute_node_hash_for_proof<N: Hashable>(
+    node: &N,
+    #[cfg(feature = "ethhash")] as_storage_trie_root: bool,
+) -> Option<HashType> {
+    #[cfg(feature = "ethhash")]
+    if as_storage_trie_root {
+        // `as_storage_trie_root` means the caller identified this node as the
+        // single storage child of a depth-64 account, so its parent prefix is
+        // normally the 64-nibble account key plus this child's 1-nibble slot.
+        let (branch_nibble, account_prefix) =
+            node.parent_prefix_path().into_split_path().split_last()?;
+        return Some(hash_node_as_storage_trie_root_parts(
+            account_prefix,
+            branch_nibble,
+            node.partial_path().into_split_path(),
+            node.value_digest(),
+            node.children(),
+        ));
+    }
+    Some(node.to_hash())
+}
+
 impl From<PathIterItem> for ProofNode {
     fn from(item: PathIterItem) -> Self {
         let child_hashes = if let Some(branch) = item.node.as_branch() {
@@ -502,10 +538,30 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
         };
 
         let mut expected_hash = root_hash.clone().into_hash_type();
+        // True when the previous iteration's node was a depth-64 account
+        // branch with exactly one storage child. The current node's hash
+        // must be computed as a standalone storage-trie root via the shared
+        // fold helper, matching what live hashing did when the node was
+        // first written.
+        #[cfg(feature = "ethhash")]
+        let mut hash_as_storage_root = false;
 
         let mut iter = self.0.as_ref().iter().peekable();
         while let Some(node) = iter.next() {
-            let actual_hash = node.to_hash();
+            #[cfg(feature = "ethhash")]
+            let computed = compute_node_hash_for_proof(node, hash_as_storage_root);
+            #[cfg(not(feature = "ethhash"))]
+            let computed = compute_node_hash_for_proof(node);
+            // `None` means the node was flagged for the storage-trie-root fold
+            // but has an empty parent prefix (a malformed `partial_len`). Its
+            // plain hash can't match the parent's expected child hash, so it is
+            // rejected as an unexpected hash rather than panicking.
+            let Some(actual_hash) = computed else {
+                return Err(ProofError::UnexpectedHash {
+                    expected: expected_hash,
+                    actual: node.to_hash(),
+                });
+            };
             if actual_hash != expected_hash {
                 return Err(ProofError::UnexpectedHash {
                     expected: expected_hash,
@@ -532,10 +588,21 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
                     return Err(ProofError::ShouldBePrefixOfNextKey);
                 }
 
-                expected_hash = node.children()[key_nibble]
+                let children = node.children();
+                expected_hash = children[key_nibble]
                     .as_ref()
                     .ok_or(ProofError::NodeNotInTrie)?
                     .clone();
+
+                // If this node is a depth-64 account branch with exactly one
+                // storage child, the next node IS that storage child and must
+                // be hashed as a standalone storage-trie root on the next
+                // iteration.
+                #[cfg(feature = "ethhash")]
+                {
+                    hash_as_storage_root =
+                        node.full_path().len() == ACCOUNT_DEPTH_NIBBLES && children.count() == 1;
+                }
             }
         }
 
@@ -812,6 +879,45 @@ mod tests {
             value_digest: value.map(|v| ValueDigest::Value(v.to_vec().into_boxed_slice())),
             child_hashes,
         }
+    }
+
+    /// Regression: a storage-child proof node with `partial_len == 0` (empty
+    /// parent prefix) at the single-storage-child fold position must be
+    /// rejected cleanly, not panic. `partial_len` is an independent wire field,
+    /// so even though ethhash keys are fixed-size, an attacker can keep the key
+    /// the correct size and tamper only `partial_len`.
+    #[cfg(feature = "ethhash")]
+    #[test]
+    fn fold_rejects_zero_partial_len_storage_child_without_panic() {
+        use firewood_storage::U4;
+
+        // Account branch at depth 64 (64 nibbles) with exactly one child at nibble 1.
+        let account_nibbles: Vec<u8> = vec![1u8; 64];
+        // Storage child: full 128-nibble key (account ++ branch nibble ++ slot),
+        // i.e. the correct fixed size — but with a tampered parent-prefix length.
+        let mut child_nibbles = account_nibbles.clone();
+        child_nibbles.push(1); // branch nibble
+        child_nibbles.extend([0u8; 63]);
+        let storage_child = make_node(&child_nibbles, 0, Some(b"v"), Children::new());
+
+        let mut account_children: Children<Option<HashType>> = Children::new();
+        account_children[PathComponent(U4::new_masked(1))] = Some(HashType::from([0xABu8; 32]));
+        let account = make_node(&account_nibbles, 0, None, account_children);
+        let root_hash: TrieHash = account.to_hash().into_triehash();
+
+        let proof = Proof::new(vec![account, storage_child]);
+
+        // Proven key bytes whose nibble expansion equals `child_nibbles`:
+        // [0x11; 32] => 64 nibbles of 1, then 0x10 => nibbles 1,0, then zeros.
+        let mut proven_key = vec![0x11u8; 32];
+        proven_key.push(0x10);
+        proven_key.extend([0x00u8; 31]);
+
+        // Must return a clean error, not panic.
+        assert!(matches!(
+            proof.value_digest(proven_key.as_slice(), &root_hash),
+            Err(ProofError::UnexpectedHash { .. })
+        ));
     }
 
     /// A proof for key B (nibble 3) must not be accepted as an exclusion
