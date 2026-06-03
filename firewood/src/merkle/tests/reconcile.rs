@@ -80,3 +80,79 @@ fn test_reconcile_branch_proof_node_rejects_conflict_via_callback() {
     let branch = node.as_branch().expect("expected branch node");
     assert_eq!(branch.value.as_deref(), Some([1u8].as_slice()));
 }
+
+#[cfg(feature = "ethhash")]
+#[test]
+fn test_reconcile_branch_proof_node_accepts_account_storage_root_mismatch() {
+    use firewood_storage::{RlpItem, encode_list};
+
+    let account_key = [0x11u8; 32];
+    let account_nibbles: Vec<_> = NibblesIterator::new(&account_key).collect();
+
+    let proof_value = encode_list(&[
+        RlpItem::Bytes(&[0x01]),
+        RlpItem::Bytes(&[0x02]),
+        RlpItem::Bytes(&[0xaa; 32]),
+        RlpItem::Bytes(&[0xbb; 32]),
+    ]);
+    let branch_value = encode_list(&[
+        RlpItem::Bytes(&[0x01]),
+        RlpItem::Bytes(&[0x02]),
+        RlpItem::Bytes(&[0xcc; 32]),
+        RlpItem::Bytes(&[0xbb; 32]),
+    ]);
+
+    let mut merkle = create_in_memory_merkle();
+    merkle.insert(&account_key, branch_value.clone()).unwrap();
+
+    let proof_node = test_branch_proof_node(
+        &account_nibbles,
+        Some(ValueDigest::Value(proof_value.clone())),
+    );
+
+    merkle
+        .reconcile_branch_proof_node(&proof_node, |_| {
+            panic!("storageRoot-only mismatch should not be treated as a conflict")
+        })
+        .unwrap();
+
+    let node = merkle
+        .get_node_from_nibbles(&account_nibbles)
+        .unwrap()
+        .unwrap();
+    let branch = node.as_branch().expect("expected branch node");
+    assert_eq!(branch.value.as_deref(), Some(branch_value.as_ref()));
+}
+
+#[cfg(feature = "ethhash")]
+#[test]
+fn test_reconcile_branch_proof_node_rejects_account_non_storage_root_mismatch() {
+    use firewood_storage::{RlpItem, encode_list};
+
+    let account_key = [0x22u8; 32];
+    let account_nibbles: Vec<_> = NibblesIterator::new(&account_key).collect();
+
+    let proof_value = encode_list(&[
+        RlpItem::Bytes(&[0x01]),
+        RlpItem::Bytes(&[0x02]),
+        RlpItem::Bytes(&[0xaa; 32]),
+        RlpItem::Bytes(&[0xbb; 32]),
+    ]);
+    let branch_value = encode_list(&[
+        RlpItem::Bytes(&[0x09]),
+        RlpItem::Bytes(&[0x02]),
+        RlpItem::Bytes(&[0xaa; 32]),
+        RlpItem::Bytes(&[0xbb; 32]),
+    ]);
+
+    let mut merkle = create_in_memory_merkle();
+    merkle.insert(&account_key, branch_value).unwrap();
+
+    let proof_node =
+        test_branch_proof_node(&account_nibbles, Some(ValueDigest::Value(proof_value)));
+
+    let err = merkle
+        .reconcile_branch_proof_node(&proof_node, |_| Err(ProofError::UnexpectedValue))
+        .unwrap_err();
+    assert!(matches!(err, ProofError::UnexpectedValue));
+}

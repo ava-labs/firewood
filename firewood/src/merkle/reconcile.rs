@@ -3,6 +3,9 @@
 
 use firewood_storage::{Mutable, NodeStore, Propose, ReadableStorage, ValueDigest};
 
+#[cfg(feature = "ethhash")]
+use firewood_storage::RlpList;
+
 use crate::{ProofError, ProofNode, Value, merkle::Merkle};
 
 impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
@@ -69,7 +72,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
             _ => None,
         };
 
-        if proof_value == branch.value.as_deref() {
+        if values_match_for_reconcile(&key_nibbles, proof_value, branch.value.as_deref()) {
             return Ok(());
         }
 
@@ -77,4 +80,59 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         branch.value = on_conflict(proof_node)?;
         Ok(())
     }
+}
+
+fn values_match_for_reconcile(
+    key_nibbles: &[u8],
+    proof_value: Option<&[u8]>,
+    branch_value: Option<&[u8]>,
+) -> bool {
+    if proof_value == branch_value {
+        return true;
+    }
+
+    #[cfg(feature = "ethhash")]
+    {
+        let (Some(proof_value), Some(branch_value)) = (proof_value, branch_value) else {
+            return false;
+        };
+        account_values_match_except_storage_root(key_nibbles, proof_value, branch_value)
+    }
+
+    #[cfg(not(feature = "ethhash"))]
+    {
+        let _ = key_nibbles;
+        false
+    }
+}
+
+#[cfg(feature = "ethhash")]
+fn account_values_match_except_storage_root(
+    key_nibbles: &[u8],
+    proof_value: &[u8],
+    branch_value: &[u8],
+) -> bool {
+    const ACCOUNT_DEPTH_NIBBLES: usize = 64;
+    const STORAGE_ROOT_FIELD: usize = 2;
+
+    if key_nibbles.len() != ACCOUNT_DEPTH_NIBBLES {
+        return false;
+    }
+
+    let Ok(proof_fields) = RlpList::parse(proof_value).and_then(|list| list.fields()) else {
+        return false;
+    };
+    let Ok(branch_fields) = RlpList::parse(branch_value).and_then(|list| list.fields()) else {
+        return false;
+    };
+
+    proof_fields.len() > STORAGE_ROOT_FIELD
+        && proof_fields.len() == branch_fields.len()
+        && proof_fields
+            .iter()
+            .zip(branch_fields.iter())
+            .enumerate()
+            .all(|(index, (proof_field, branch_field))| {
+                index == STORAGE_ROOT_FIELD || proof_field == branch_field
+            })
 }

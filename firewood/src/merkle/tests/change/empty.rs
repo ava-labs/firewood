@@ -9,6 +9,39 @@
 
 use super::*;
 
+#[cfg(feature = "ethhash")]
+fn rlp_encode_account(
+    nonce: u64,
+    balance: u64,
+    storage_root: &[u8; 32],
+    code_hash: &[u8; 32],
+) -> Box<[u8]> {
+    use rlp::RlpStream;
+
+    let mut rlp = RlpStream::new_list(4);
+    rlp.append(&nonce);
+    rlp.append(&balance);
+    rlp.append(&storage_root.as_slice());
+    rlp.append(&code_hash.as_slice());
+    rlp.out().to_vec().into_boxed_slice()
+}
+
+#[cfg(feature = "ethhash")]
+fn rlp_encode_storage(value: &[u8; 32]) -> Box<[u8]> {
+    use rlp::RlpStream;
+
+    let mut rlp = RlpStream::new();
+    rlp.append(&value.as_slice());
+    rlp.out().to_vec().into_boxed_slice()
+}
+
+#[cfg(feature = "ethhash")]
+fn empty_code_hash() -> [u8; 32] {
+    use sha3::{Digest, Keccak256};
+
+    Keccak256::digest([]).into()
+}
+
 /// Empty start trie, single key inserted. Complete proof (no bounds).
 #[test]
 fn test_empty_start_trie_single_key_no_bounds() {
@@ -24,6 +57,62 @@ fn test_empty_start_trie_single_key_no_bounds() {
     let empty_root_target = target.root_hash().unwrap();
 
     verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
+}
+
+#[test]
+fn test_change_proof_partial_storage_children_against_empty() {
+    let account_key: Box<[u8]> = [0x10u8; 32].into();
+    let storage_key_a: Box<[u8]> = [account_key.as_ref(), &[0x10u8; 32]].concat().into();
+    let storage_key_b: Box<[u8]> = [account_key.as_ref(), &[0x20u8; 32]].concat().into();
+    let end_between_storage_children: Box<[u8]> =
+        [account_key.as_ref(), &[0x18u8; 32]].concat().into();
+
+    let dummy_storage_root = [0u8; 32];
+    let account_value = rlp_encode_account(1, 100, &dummy_storage_root, &empty_code_hash());
+    let storage_value_a = rlp_encode_storage(&[0xaa; 32]);
+    let storage_value_b = rlp_encode_storage(&[0xbb; 32]);
+
+    let (source, _source_dir) = setup_db![];
+    let empty_root = source.root_hash().unwrap();
+    source
+        .propose(vec![
+            BatchOp::Put {
+                key: account_key.as_ref(),
+                value: account_value.as_ref(),
+            },
+            BatchOp::Put {
+                key: storage_key_a.as_ref(),
+                value: storage_value_a.as_ref(),
+            },
+            BatchOp::Put {
+                key: storage_key_b.as_ref(),
+                value: storage_value_b.as_ref(),
+            },
+        ])
+        .unwrap()
+        .commit()
+        .unwrap();
+    let root2 = source.root_hash().unwrap();
+
+    let cases = [
+        (None, Some(end_between_storage_children.as_ref())),
+        (
+            Some(account_key.as_ref()),
+            Some(end_between_storage_children.as_ref()),
+        ),
+    ];
+
+    for (start_key, end_key) in cases {
+        let proof = source
+            .change_proof(empty_root.clone(), root2.clone(), start_key, end_key, None)
+            .unwrap();
+        let ctx =
+            verify_change_proof_structure(&proof, root2.clone(), start_key, end_key, None).unwrap();
+
+        let (target, _target_dir) = setup_db![];
+        let empty_root_target = target.root_hash().unwrap();
+        verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
+    }
 }
 
 /// Empty start trie, multiple keys inserted, bounded range with inclusion
