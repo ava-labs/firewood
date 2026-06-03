@@ -430,7 +430,7 @@ const fn single_child_storage_root(child: HashType) -> crate::TrieHash {
 /// Mirrors the dispatch the ethhash hasher does inline (see
 /// `storage/src/hashers/ethhash.rs::Preimage::write`).
 #[cfg(feature = "ethhash")]
-fn child_to_rlp_item(child: Option<&HashType>) -> crate::rlp::RlpItem<'_> {
+fn child_to_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
     match child {
         Some(HashType::Hash(hash)) => RlpItem::Bytes(hash.as_slice()),
         Some(HashType::Rlp(_)) => unreachable!(
@@ -442,7 +442,7 @@ fn child_to_rlp_item(child: Option<&HashType>) -> crate::rlp::RlpItem<'_> {
 }
 
 #[cfg(not(feature = "ethhash"))]
-fn child_to_rlp_item(child: Option<&HashType>) -> crate::rlp::RlpItem<'_> {
+fn child_to_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
     match child {
         Some(hash) => RlpItem::Bytes(hash.as_slice()),
         None => RlpItem::Empty,
