@@ -83,10 +83,11 @@ fn test_reconcile_branch_proof_node_rejects_conflict_via_callback() {
     assert_eq!(branch.value.as_deref(), Some([1u8].as_slice()));
 }
 
-/// Pins the contract of the `ethhash` account relaxation in
-/// `reconcile_branch_proof_node`: at the account depth (64 nibbles), two
-/// account values that differ *only* in `storageRoot` (field 2) reconcile
-/// without conflict, but a difference in any other field still conflicts.
+/// Checks that the `ethhash` account relaxation in
+/// `reconcile_branch_proof_node` is exactly as narrow as intended: at account
+/// depth (64 nibbles), two account values that differ *only* in `storageRoot`
+/// (field 2) reconcile without conflict, while a difference in any other field
+/// still conflicts.
 ///
 /// This exercises the helper directly, without constructing any proofs.
 #[cfg(feature = "ethhash")]
