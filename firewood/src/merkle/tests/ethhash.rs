@@ -184,7 +184,7 @@ fn test_root_hash_random_deletions() {
 }
 
 /// Keccak256 of empty bytes — the codeHash for accounts with no contract code.
-fn empty_code_hash() -> [u8; 32] {
+pub(super) fn empty_code_hash() -> [u8; 32] {
     Keccak256::digest([]).into()
 }
 
@@ -194,7 +194,7 @@ fn empty_trie_root() -> [u8; 32] {
 }
 
 /// RLP-encode an Ethereum account value: [nonce, balance, storageRoot, codeHash].
-fn rlp_encode_account(
+pub(super) fn rlp_encode_account(
     nonce: u64,
     balance: u64,
     storage_root: &[u8; 32],
@@ -211,7 +211,7 @@ fn rlp_encode_account(
 }
 
 /// RLP-encode a 32-byte storage slot value.
-fn rlp_encode_storage(value: &[u8; 32]) -> Vec<u8> {
+pub(super) fn rlp_encode_storage(value: &[u8; 32]) -> Vec<u8> {
     use rlp::RlpStream;
 
     let mut rlp = RlpStream::new();
