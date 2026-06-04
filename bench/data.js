@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780475936145,
+  "lastUpdate": 1780561758107,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -4088,6 +4088,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 89.73729972729309,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "904dc5c5a474059f959412e0d41b80d64ad02f16",
+          "message": "feat(proofs): 4/7 add AccountFields decoder and rlp byte-string parse helpers (#2051)\n\n## Why this should be merged\n\nTo answer Ethereum's `eth_getProof` against a firewood revision we must\ndecode\nthe four standard account scalars (nonce / balance / storageRoot /\ncodeHash)\nout of an account node's RLP value. This adds that decoder plus the\nsmall RLP\nbyte-string parsing primitives it needs — the bottom of the eth_getProof\nstack\nthe higher layers build on.\n\n## How this works\n\n- `storage::rlp` gains `parse_be_uint` and `parse_fixed` for the common\nRLP-byte-string → fixed-array conversions, with new `RlpError::TooLong`\nand\n  `RlpError::WrongLength` variants. `parse_be_uint` right-aligns a\n  variable-length big-endian byte string into `[u8; N]`; `parse_fixed`\n  enforces exact length.\n- `firewood::proofs::eth` adds `AccountFields` with a `from_rlp`\nconstructor\n  that decodes ethereum account RLP into nonce / balance / storageRoot /\ncodeHash. It uses `slice::first_chunk::<4>()` to grab the four standard\nfields, ignoring any trailing entries — tolerating coreth's 5-item shape\n  (trailing empty byte).\n- Decoder errors surface as `api::Error::InternalError`; the inner\n  `AccountDecodeError` stays private behind the trait-object boundary.\n- All new code is always-compiled (no `#[cfg(feature = \"ethhash\")]`\nwalls) to\n  ease the later migration to a runtime ethhash flag.\n\n## How this was tested\n\n`cargo nextest run` + `cargo clippy` + `cargo doc --no-deps` on the\nworkspace\nwith `--features ethhash,logger`.\n\n## Breaking Changes\n\nNone. Promotes some `storage::rlp` items to `pub`; no existing\nsignatures change.",
+          "timestamp": "2026-06-02T19:00:22Z",
+          "url": "https://github.com/ava-labs/firewood/commit/904dc5c5a474059f959412e0d41b80d64ad02f16"
+        },
+        "date": 1780561757018,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 170.52565347038754,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5864.22030731965,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 110.67440675460823,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5674.158562168505,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 76.84978392235496,
             "unit": "block_accept_ms/ggas"
           }
         ]
