@@ -4,6 +4,7 @@
 use firewood::api;
 use firewood_metrics::MetricsContext;
 
+use crate::reconstructed::ReconstructedHandle;
 use crate::revision::RevisionHandle;
 use crate::{
     BorrowedBytes, BorrowedBytes2D, EthProofResult, Maybe, OwnedBytes, OwnedSlice, VoidResult,
@@ -92,6 +93,30 @@ fn to_trie_key(bytes: &[u8]) -> Result<[u8; 32], api::Error> {
     })
 }
 
+/// Shared body for the `fwd_eth_get_proof*` entry points: parse the keys and
+/// call the core proof function against `handle`. Returns
+/// [`EthProofResult::NullHandlePointer`] when `handle` is `None`.
+fn eth_get_proof_on<H>(
+    handle: Option<&H>,
+    account_key: BorrowedBytes<'_>,
+    storage_keys: BorrowedBytes2D<'_>,
+) -> EthProofResult
+where
+    H: api::DbView + crate::MetricsContextExt + ?Sized,
+{
+    crate::invoke_with_handle(
+        handle,
+        move |view| -> Result<firewood::EthProof, api::Error> {
+            let account_key = to_trie_key(account_key.as_slice())?;
+            let storage_keys = storage_keys
+                .iter()
+                .map(|key| to_trie_key(key.as_slice()))
+                .collect::<Result<Vec<[u8; 32]>, _>>()?;
+            firewood::eth_get_proof(view, &account_key, &storage_keys)
+        },
+    )
+}
+
 /// Produce an `eth_getProof`-compatible proof for an account and a set of
 /// storage slots against the given revision.
 ///
@@ -135,17 +160,54 @@ pub extern "C" fn fwd_eth_get_proof(
     account_key: BorrowedBytes,
     storage_keys: BorrowedBytes2D,
 ) -> EthProofResult {
-    crate::invoke_with_handle(
-        revision,
-        move |rev| -> Result<firewood::EthProof, api::Error> {
-            let account_key = to_trie_key(account_key.as_slice())?;
-            let storage_keys = storage_keys
-                .iter()
-                .map(|key| to_trie_key(key.as_slice()))
-                .collect::<Result<Vec<[u8; 32]>, _>>()?;
-            firewood::eth_get_proof(rev, &account_key, &storage_keys)
-        },
-    )
+    eth_get_proof_on(revision, account_key, storage_keys)
+}
+
+/// Produce an `eth_getProof`-compatible proof for an account and a set of
+/// storage slots against a reconstructed view (an intermediate view an archive
+/// node reconstructs between persisted states).
+///
+/// The returned proof bytes are canonical RLP-encoded Ethereum MPT nodes that a
+/// verifier such as go-ethereum's `trie.VerifyProof` accepts. Absent accounts
+/// come back with zero account scalars plus the empty-code and empty-trie
+/// hashes; the proof bytes distinguish inclusion from exclusion.
+///
+/// # Arguments
+///
+/// - `reconstructed` - The reconstructed view handle to prove against.
+/// - `account_key` - The account's 32-byte trie key (`keccak256(address)`).
+/// - `storage_keys` - An array of 32-byte slot trie keys (`keccak256(slot)`),
+///   in the order the proofs should be returned.
+///
+/// Callers are responsible for keccak-hashing addresses and slots into their
+/// 32-byte trie-key forms before calling this function.
+///
+/// # Returns
+///
+/// - [`EthProofResult::NullHandlePointer`] if `reconstructed` is null.
+/// - [`EthProofResult::NotSupported`] if the database is not running in
+///   ethereum hash mode.
+/// - [`EthProofResult::Ok`] containing the proof on success.
+/// - [`EthProofResult::Err`] containing an error message otherwise (including
+///   when a key is not exactly 32 bytes long).
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `reconstructed` is a valid pointer to a [`ReconstructedHandle`].
+/// * ensure that `account_key` is a valid [`BorrowedBytes`] and each entry of
+///   `storage_keys` is a valid [`BorrowedBytes`].
+/// * call [`fwd_free_eth_proof`] to free a returned [`EthProofOwned`], and
+///   [`fwd_free_owned_bytes`] to free a returned error message.
+///
+/// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_eth_get_proof_on_reconstructed(
+    reconstructed: Option<&ReconstructedHandle<'_>>,
+    account_key: BorrowedBytes,
+    storage_keys: BorrowedBytes2D,
+) -> EthProofResult {
+    eth_get_proof_on(reconstructed, account_key, storage_keys)
 }
 
 /// Frees the memory associated with an [`EthProofOwned`].

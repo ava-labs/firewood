@@ -2238,6 +2238,50 @@ struct EthProofResult fwd_eth_get_proof(const struct RevisionHandle *revision,
                                         BorrowedBytes2D storage_keys);
 
 /**
+ * Produce an `eth_getProof`-compatible proof for an account and a set of
+ * storage slots against a reconstructed view (an intermediate view an archive
+ * node reconstructs between persisted states).
+ *
+ * The returned proof bytes are canonical RLP-encoded Ethereum MPT nodes that a
+ * verifier such as go-ethereum's `trie.VerifyProof` accepts. Absent accounts
+ * come back with zero account scalars plus the empty-code and empty-trie
+ * hashes; the proof bytes distinguish inclusion from exclusion.
+ *
+ * # Arguments
+ *
+ * - `reconstructed` - The reconstructed view handle to prove against.
+ * - `account_key` - The account's 32-byte trie key (`keccak256(address)`).
+ * - `storage_keys` - An array of 32-byte slot trie keys (`keccak256(slot)`),
+ *   in the order the proofs should be returned.
+ *
+ * Callers are responsible for keccak-hashing addresses and slots into their
+ * 32-byte trie-key forms before calling this function.
+ *
+ * # Returns
+ *
+ * - [`EthProofResult::NullHandlePointer`] if `reconstructed` is null.
+ * - [`EthProofResult::NotSupported`] if the database is not running in
+ *   ethereum hash mode.
+ * - [`EthProofResult::Ok`] containing the proof on success.
+ * - [`EthProofResult::Err`] containing an error message otherwise (including
+ *   when a key is not exactly 32 bytes long).
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `reconstructed` is a valid pointer to a [`ReconstructedHandle`].
+ * * ensure that `account_key` is a valid [`BorrowedBytes`] and each entry of
+ *   `storage_keys` is a valid [`BorrowedBytes`].
+ * * call [`fwd_free_eth_proof`] to free a returned [`EthProofOwned`], and
+ *   [`fwd_free_owned_bytes`] to free a returned error message.
+ *
+ * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+ */
+struct EthProofResult fwd_eth_get_proof_on_reconstructed(const struct ReconstructedHandle *reconstructed,
+                                                         BorrowedBytes account_key,
+                                                         BorrowedBytes2D storage_keys);
+
+/**
  * Frees the memory associated with a `ChangeProofContext`.
  *
  * # Arguments

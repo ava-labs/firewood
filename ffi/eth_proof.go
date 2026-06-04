@@ -7,6 +7,8 @@ package ffi
 // #include "firewood.h"
 // #cgo noescape fwd_eth_get_proof
 // #cgo nocallback fwd_eth_get_proof
+// #cgo noescape fwd_eth_get_proof_on_reconstructed
+// #cgo nocallback fwd_eth_get_proof_on_reconstructed
 // #cgo noescape fwd_free_eth_proof
 // #cgo nocallback fwd_free_eth_proof
 import "C"
@@ -18,14 +20,15 @@ import (
 	"unsafe"
 )
 
-// ErrEthProofNotSupported is returned by [Revision.EthGetProof] when the
-// database is not running in Ethereum hash mode and therefore cannot produce
-// an eth_getProof-compatible proof.
+// ErrEthProofNotSupported is returned by [Revision.EthGetProof] and
+// [Reconstructed.EthGetProof] when the database is not running in Ethereum hash
+// mode and therefore cannot produce an eth_getProof-compatible proof.
 var ErrEthProofNotSupported = errors.New("eth_getProof requires ethereum hash mode")
 
-// EthAccountProof is the result of [Revision.EthGetProof]: the four account
-// scalars plus the RLP-encoded account-trie nodes proving them, and one
-// [EthStorageProof] per requested storage slot.
+// EthAccountProof is the result of [Revision.EthGetProof] and
+// [Reconstructed.EthGetProof]: the four account scalars plus the RLP-encoded
+// account-trie nodes proving them, and one [EthStorageProof] per requested
+// storage slot.
 //
 // The proof byte slices are canonical RLP-encoded Ethereum MPT nodes, suitable
 // for verification with go-ethereum's trie.VerifyProof against the revision
@@ -82,13 +85,53 @@ func (r *Revision) EthGetProof(accountKey []byte, slotKeys [][]byte) (*EthAccoun
 		return nil, ErrDroppedRevision
 	}
 
+	return ethGetProofCall(accountKey, slotKeys, func(a C.BorrowedBytes, s C.BorrowedBytes2D) C.EthProofResult {
+		return C.fwd_eth_get_proof(r.ptr, a, s)
+	})
+}
+
+// ethGetProofCall marshals the keys (pinned for the duration of call), invokes
+// call with the resulting borrowed views, and decodes the result. call must
+// perform exactly one fwd_eth_get_proof* invocation.
+func ethGetProofCall(
+	accountKey []byte,
+	slotKeys [][]byte,
+	call func(C.BorrowedBytes, C.BorrowedBytes2D) C.EthProofResult,
+) (*EthAccountProof, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
 	cAccountKey := newBorrowedBytes(accountKey, &pinner)
 	cStorageKeys := newBorrowedBytes2D(slotKeys, &pinner)
 
-	return getEthProofFromResult(C.fwd_eth_get_proof(r.ptr, cAccountKey, cStorageKeys))
+	return getEthProofFromResult(call(cAccountKey, cStorageKeys))
+}
+
+// EthGetProof produces an eth_getProof-compatible proof for the account at
+// accountKey and each storage slot in slotKeys, evaluated against this
+// reconstructed view.
+//
+// Both accountKey and every entry of slotKeys must be 32-byte trie keys: the
+// caller is responsible for keccak-hashing addresses and storage slots into
+// their trie-key forms (firewood stores accounts at keccak256(address) and
+// slots at keccak256(address) ++ keccak256(slot)).
+//
+// Absent accounts come back with zero account scalars plus the empty-code and
+// empty-trie hashes; the proof bytes themselves distinguish inclusion from
+// exclusion to a verifier.
+//
+// It returns [ErrEthProofNotSupported] if the database is not in Ethereum hash
+// mode, and [ErrDroppedReconstructed] if this view has already been released.
+func (r *Reconstructed) EthGetProof(accountKey []byte, slotKeys [][]byte) (*EthAccountProof, error) {
+	r.keepAliveHandle.mu.RLock()
+	defer r.keepAliveHandle.mu.RUnlock()
+	if r.dropped {
+		return nil, ErrDroppedReconstructed
+	}
+
+	return ethGetProofCall(accountKey, slotKeys, func(a C.BorrowedBytes, s C.BorrowedBytes2D) C.EthProofResult {
+		return C.fwd_eth_get_proof_on_reconstructed(r.ptr, a, s)
+	})
 }
 
 // newBorrowedBytes2D builds a BorrowedBytes2D referencing each slice in slices.
