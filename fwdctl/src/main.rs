@@ -48,6 +48,7 @@ impl From<NodeHashAlgorithm> for firewood_storage::NodeHashAlgorithm {
 }
 
 #[derive(Clone, Debug, Parser)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct DatabasePath {
     /// The database path. Defaults to firewood
     #[arg(
@@ -69,6 +70,74 @@ pub struct DatabasePath {
         help = "The node hash algorithm to use when opening the database",
     )]
     pub node_hash_algorithm: NodeHashAlgorithm,
+
+    /// Verify the root node hash when loading a recent (in-memory)
+    /// revision at open time. Off by default.
+    #[arg(long)]
+    pub verify_root_recent: bool,
+
+    /// Verify branch nodes on read. Expensive — nearly doubles read
+    /// latency. Recommended only for investigations.
+    #[arg(long)]
+    pub verify_branches: bool,
+
+    /// Verify leaf nodes on read. Cheap (~10% overhead) and catches the
+    /// bulk of corruption.
+    #[arg(long)]
+    pub verify_leaves: bool,
+
+    /// Shorthand for enabling every verification flag.
+    #[arg(long, conflicts_with_all = ["verify_root_recent", "verify_branches", "verify_leaves"])]
+    pub verify_all: bool,
+
+    /// What to do when a hash verification fails. Use `continue` when
+    /// diagnosing a known-broken database to surface every corrupt node
+    /// instead of stopping at the first.
+    #[arg(long, value_enum, default_value_t = VerifyOnFailure::Error)]
+    pub verify_on_failure: VerifyOnFailure,
+}
+
+/// Failure mode for read-time hash verification.
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+pub enum VerifyOnFailure {
+    /// Return an error from the read on mismatch (default).
+    #[default]
+    Error,
+    /// Log the mismatch and return the unverified node.
+    Continue,
+}
+
+impl From<VerifyOnFailure> for firewood_storage::HashFailureMode {
+    fn from(v: VerifyOnFailure) -> Self {
+        match v {
+            VerifyOnFailure::Error => firewood_storage::HashFailureMode::Error,
+            VerifyOnFailure::Continue => firewood_storage::HashFailureMode::LogAndContinue,
+        }
+    }
+}
+
+impl DatabasePath {
+    /// Translate the CLI verification flags into a `HashVerification` policy.
+    /// `--verify-all` is a shorthand that overrides the individual flags.
+    /// The `root_from_rootstore` flag stays at its default (on) — fwdctl
+    /// does not enable the rootstore so this flag never fires anyway.
+    #[must_use]
+    pub fn hash_verification(&self) -> firewood_storage::HashVerification {
+        let on_failure = self.verify_on_failure.into();
+        if self.verify_all {
+            return firewood_storage::HashVerification {
+                on_failure,
+                ..firewood_storage::HashVerification::all()
+            };
+        }
+        firewood_storage::HashVerification {
+            root_recent: self.verify_root_recent,
+            branches: self.verify_branches,
+            leaves: self.verify_leaves,
+            on_failure,
+            ..firewood_storage::HashVerification::default()
+        }
+    }
 }
 
 #[derive(Parser)]

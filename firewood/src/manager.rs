@@ -81,6 +81,10 @@ pub struct ConfigManager {
     /// Whether to enable `RootStore`.
     #[builder(default = false)]
     pub root_store: bool,
+    /// Which node reads to hash-verify on the read path.
+    /// Default matches historical behavior: only the rootstore root is checked.
+    #[builder(default)]
+    pub hash_verification: firewood_storage::HashVerification,
     /// Revision manager configuration.
     #[builder(default = RevisionManagerConfig::builder().build())]
     pub manager: RevisionManagerConfig,
@@ -179,6 +183,7 @@ impl RevisionManager {
             config.truncate,
             config.create,
             config.manager.cache_read_strategy,
+            config.hash_verification,
             config.node_hash_algorithm,
         )?;
 
