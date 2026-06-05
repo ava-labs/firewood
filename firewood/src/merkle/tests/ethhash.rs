@@ -224,9 +224,7 @@ pub(super) fn rlp_encode_storage(value: &[u8; 32]) -> Vec<u8> {
 /// Build a storage-slot key: `account_key` plus a 32-byte suffix of
 /// `first_suffix_byte` followed by zeros. At depth 64 the account branch fans
 /// out on the next nibble, so the high nibble of `first_suffix_byte` selects
-/// which child slot this entry occupies. Callers must give each slot a distinct
-/// high nibble; otherwise two slots collide into one child and branch deeper,
-/// silently changing the storage-child count the fold tests depend on.
+/// which child slot this entry occupies.
 pub(super) fn account_storage_key(account_key: &[u8], first_suffix_byte: u8) -> Box<[u8]> {
     let mut suffix = [0u8; 32];
     suffix[0] = first_suffix_byte;
