@@ -78,7 +78,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
 
         // Ethhash account values may differ from the proof's value in just
         // the `storageRoot` field. This happens when the proposal was built
-        // from a subset of the account's storage children — live hashing
+        // from a subset of the account's storage children: live hashing
         // splices in a partial storageRoot, while the proof carries the
         // full on-disk value. Both produce the same final hash because
         // `Preimage::write` always recomputes storageRoot from the current
@@ -102,7 +102,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
 /// recomputes that field from the current children, so the on-disk byte
 /// difference is invisible in the final hash.
 ///
-/// Logs a warning when either side fails to parse as account RLP — the
+/// Logs a warning when either side fails to parse as account RLP. The
 /// resulting `false` return falls through to `on_conflict`, which surfaces
 /// the conflict as `UnexpectedValue`. The warning gives operators a clearer
 /// signal that the underlying cause is malformed data, not a value mismatch.

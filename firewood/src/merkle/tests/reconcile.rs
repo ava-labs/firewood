@@ -127,7 +127,7 @@ fn test_reconcile_branch_proof_node_account_storage_root_relaxation(
         assert!(matches!(result.unwrap_err(), ProofError::UnexpectedValue));
     }
 
-    // Shared post-condition: the branch value is untouched either way — the
+    // Shared post-condition: the branch value is untouched either way. The
     // relaxation returns before assignment, and on_conflict's Err propagates
     // before it.
     let node = merkle

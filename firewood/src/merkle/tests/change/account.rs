@@ -87,7 +87,7 @@ enum Bound {
 /// - `left_half_end_bound_only` and `left_edge_both_bounds` keep the account in
 ///   range with a storage subset → trigger the defect (fail pre-fix).
 /// - `right_half_start_bound_only` puts the account out of range via the start
-///   bound, so its value is never compared — a guard that passes with and
+///   bound, so its value is never compared: a guard that passes with and
 ///   without the fix.
 #[test_case(Bound::None, Bound::MidStorage ; "left_half_end_bound_only")]
 #[test_case(Bound::AtAccount, Bound::MidStorage ; "left_edge_both_bounds")]
@@ -95,7 +95,7 @@ enum Bound {
 fn test_change_proof_partial_storage_children_against_empty(start_bound: Bound, end_bound: Bound) {
     let (source, _dir_source, empty_root, root2) = source_with_four_storage_children();
 
-    // Mid-storage probe — between the storage children at suffixes 0x30 and 0x60.
+    // Mid-storage probe between the storage children at suffixes 0x30 and 0x60.
     let mid_storage = key_under_account(&ACCOUNT_KEY, 0x40);
     let resolve = |bound: Bound| -> Option<&[u8]> {
         match bound {
@@ -196,7 +196,7 @@ fn test_change_proof_arbitrary_order_right_then_left_converges() {
     );
 
     // Step 2: apply LEFT half on top. The account value is in this batch's
-    // batch_ops — gets added to the existing depth-64 branch (which already
+    // batch_ops, so it gets added to the existing depth-64 branch (which already
     // has S2/S3/S4 from the right batch), live hashing recomputes storageRoot
     // from the now-full child set.
     let parent = target.revision(after_right_root).unwrap();
@@ -215,7 +215,7 @@ fn test_change_proof_arbitrary_order_right_then_left_converges() {
 }
 
 /// Both a start and an end boundary land inside one account's storage
-/// trie — start between storage[1] (0x30) and storage[2] (0x60), end between
+/// trie: start between storage[1] (0x30) and storage[2] (0x60), end between
 /// storage[2] and storage[3] (0xC0). The account sorts before the start bound
 /// so it is out-of-range and only the middle storage child (0x60) is in range.
 /// Because the account is out-of-range its value is never compared, so this is
@@ -256,7 +256,7 @@ fn test_change_proof_both_bounds_inside_account_storage() {
 /// key, before its first storage slot at suffix 0x10) excludes ALL of its
 /// storage children. The proposal inserts the account with no storage children,
 /// so live hashing gives it the *empty* storageRoot while the proof carries the
-/// full one — the zero-storage extreme of the partial-storage case. It
+/// full one. This is the zero-storage extreme of the partial-storage case. It
 /// **triggers the defect**: `UnexpectedValue` before the
 /// `account_values_equal_except_storage_root` relaxation, passes after.
 /// Verified against an empty target.
