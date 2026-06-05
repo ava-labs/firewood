@@ -536,8 +536,7 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
             } else {
                 Some(node.to_hash())
             };
-            // A malformed node yields `None`; reject it as an unexpected hash
-            // rather than panicking.
+            // A malformed node yields `None`; reject it as an unexpected hash.
             let Some(actual_hash) = computed else {
                 return Err(ProofError::UnexpectedHash {
                     expected: expected_hash,
@@ -856,14 +855,13 @@ mod tests {
         }
     }
 
-    /// Regression: a storage-child proof node with `partial_len == 0` (empty
-    /// parent prefix) at the single-storage-child fold position must be
-    /// rejected cleanly, not panic. `partial_len` is an independent wire field,
-    /// so even though ethhash keys are fixed-size, an attacker can keep the key
-    /// the correct size and tamper only `partial_len`.
+    /// A storage-child proof node at the single-storage-child fold position with
+    /// `partial_len == 0` (empty parent prefix) is rejected with `UnexpectedHash`.
+    /// `partial_len` is an independent wire field, so a proof can carry a
+    /// correctly sized key and set only `partial_len` to 0.
     #[cfg(feature = "ethhash")]
     #[test]
-    fn fold_rejects_zero_partial_len_storage_child_without_panic() {
+    fn fold_rejects_zero_partial_len_storage_child() {
         use firewood_storage::U4;
 
         // Account branch at depth 64 (64 nibbles) with exactly one child at nibble 1.
@@ -888,7 +886,6 @@ mod tests {
         proven_key.push(0x10);
         proven_key.extend([0x00u8; 31]);
 
-        // Must return a clean error, not panic.
         assert!(matches!(
             proof.value_digest(proven_key.as_slice(), &root_hash),
             Err(ProofError::UnexpectedHash { .. })

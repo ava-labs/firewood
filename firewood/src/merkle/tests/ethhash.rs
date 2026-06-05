@@ -221,9 +221,12 @@ pub(super) fn rlp_encode_storage(value: &[u8; 32]) -> Vec<u8> {
     rlp.out().to_vec()
 }
 
-/// Build a storage-slot key under `account_key`: the account key followed by
-/// a 32-byte suffix whose first byte is `first_suffix_byte` (which selects
-/// the account-branch child slot) and whose remaining bytes are zero.
+/// Build a storage-slot key: `account_key` plus a 32-byte suffix of
+/// `first_suffix_byte` followed by zeros. At depth 64 the account branch fans
+/// out on the next nibble, so the high nibble of `first_suffix_byte` selects
+/// which child slot this entry occupies. Callers must give each slot a distinct
+/// high nibble; otherwise two slots collide into one child and branch deeper,
+/// silently changing the storage-child count the fold tests depend on.
 pub(super) fn account_storage_key(account_key: &[u8], first_suffix_byte: u8) -> Box<[u8]> {
     let mut suffix = [0u8; 32];
     suffix[0] = first_suffix_byte;
@@ -251,21 +254,24 @@ struct AccountTrie {
     merkle: Merkle<NodeStore<Committed, MemStore>>,
     root_hash: TrieHash,
     account_key: Box<[u8]>,
-    /// Storage-slot keys, in `slot_first_bytes` order.
-    storage_keys: Vec<Box<[u8]>>,
+    storage_keys: Box<[Box<[u8]>]>,
 }
 
-/// Build a committed trie of: an account at `[0x10; 32]`, one storage slot per
-/// byte in `slot_first_bytes` (each at `account_key ++ [byte, 0…]`, value
-/// `rlp_encode_storage([0x42 + i; 32])`), and a trailing account at `[0xFF; 32]`.
-/// The account values carry a placeholder storageRoot; live hashing recomputes
-/// the real one.
-fn build_account_trie(slot_first_bytes: &[u8]) -> AccountTrie {
+/// Build a committed trie: an account at `[0x10; 32]` with one storage slot per
+/// entry in `storage_child_nibbles` (each at `account_key ++ [nibble << 4, 0…]`,
+/// value `rlp_encode_storage([0x42 + i; 32])`), plus a trailing account at
+/// `[0xFF; 32]` so the proof has a right tail. The account values carry a
+/// placeholder storageRoot; live hashing recomputes the real one.
+///
+/// Each entry is the account-branch child the slot lands in, so the entry count
+/// is the storage-child count K the fold keys off: K=1 means the verifier must
+/// fold, K≥2 means it must not. Entries must be distinct (one child each).
+fn build_account_trie(storage_child_nibbles: &[u8]) -> AccountTrie {
     let dummy_storage_root = [0u8; 32];
     let account_key: Box<[u8]> = [0x10u8; 32].into();
-    let storage_keys: Vec<Box<[u8]>> = slot_first_bytes
+    let storage_keys: Box<[Box<[u8]>]> = storage_child_nibbles
         .iter()
-        .map(|&first| account_storage_key(account_key.as_ref(), first))
+        .map(|&nibble| account_storage_key(account_key.as_ref(), nibble << 4))
         .collect();
     let following_key: Box<[u8]> = [0xFFu8; 32].into();
 
@@ -732,15 +738,17 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
 /// - Two storage children (verifier must NOT apply the fold even though
 ///   only one storage child is in-range; the boundary detection has to
 ///   count both in-range and out-of-range proof children).
-#[test_case(&[0xAAu8] ; "single_storage_child")]
-#[test_case(&[0x10u8, 0x20u8] ; "multi_storage_child")]
-fn test_limit_truncated_range_proof_inside_account_with_storage_children(slot_first_bytes: &[u8]) {
+#[test_case(&[0xAu8] ; "single_storage_child")]
+#[test_case(&[0x1u8, 0x2u8] ; "multi_storage_child")]
+fn test_limit_truncated_range_proof_inside_account_with_storage_children(
+    storage_child_nibbles: &[u8],
+) {
     let AccountTrie {
         merkle,
         root_hash,
         account_key,
         storage_keys,
-    } = build_account_trie(slot_first_bytes);
+    } = build_account_trie(storage_child_nibbles);
 
     let range_proof = merkle
         .range_proof(None, None, std::num::NonZeroUsize::new(2))
@@ -761,24 +769,22 @@ fn test_limit_truncated_range_proof_inside_account_with_storage_children(slot_fi
 /// storage child in-range, not only when a limit truncates the proof.
 #[test]
 fn test_full_range_proof_single_storage_child_account_no_truncation() {
-    let dummy_storage_root = [0u8; 32];
-    let account_key: Box<[u8]> = [0x10u8; 32].into();
-    let storage_key = account_storage_key(account_key.as_ref(), 0xAA);
+    let AccountTrie {
+        merkle,
+        root_hash,
+        account_key,
+        storage_keys,
+    } = build_account_trie(&[0xA]);
 
-    let account_value = rlp_encode_account(1, 100, &dummy_storage_root, &empty_code_hash());
-    let storage_value: Box<[u8]> = rlp_encode_storage(&[0x42u8; 32]).into();
-
-    let merkle = init_merkle([
-        (account_key.as_ref(), account_value.as_ref()),
-        (storage_key.as_ref(), storage_value.as_ref()),
-    ]);
-    let root_hash = merkle.nodestore().root_hash().unwrap();
-
-    // Full, unbounded range proof with no key limit.
+    // Full, unbounded range proof with no key limit. The account, its lone
+    // storage child, and the trailing account are all in-range.
     let range_proof = merkle.range_proof(None, None, None).unwrap();
-    assert_eq!(range_proof.key_values().len(), 2);
+    assert_eq!(range_proof.key_values().len(), 3);
     assert_eq!(range_proof.key_values()[0].0.as_ref(), account_key.as_ref());
-    assert_eq!(range_proof.key_values()[1].0.as_ref(), storage_key.as_ref());
+    assert_eq!(
+        range_proof.key_values()[1].0.as_ref(),
+        storage_keys[0].as_ref()
+    );
 
     assert_range_proof_roundtrips(None, None, &root_hash, &range_proof);
 }
@@ -791,15 +797,15 @@ fn test_full_range_proof_single_storage_child_account_no_truncation() {
 /// out-of-range and never recursed into. Passes regardless of the
 /// verifier-side fold; guards a future dispatch refactor against
 /// double-folding an out-of-range lone child.
-#[test_case(&[0xAAu8] ; "zero_in_range_single_child")]
-#[test_case(&[0x10u8, 0x30u8, 0x60u8] ; "zero_in_range_multi_child")]
-fn test_zero_in_range_storage_children_account_child_not_folded(slot_first_bytes: &[u8]) {
+#[test_case(&[0xAu8] ; "zero_in_range_single_child")]
+#[test_case(&[0x1u8, 0x3u8, 0x6u8] ; "zero_in_range_multi_child")]
+fn test_zero_in_range_storage_children_account_child_not_folded(storage_child_nibbles: &[u8]) {
     let AccountTrie {
         merkle,
         root_hash,
         account_key,
         ..
-    } = build_account_trie(slot_first_bytes);
+    } = build_account_trie(storage_child_nibbles);
 
     // limit=1 → only the account is in-range; all storage children are
     // out-of-range, represented only by hashes in the account proof node.
@@ -823,7 +829,7 @@ fn test_left_bounded_range_proof_single_storage_child_account() {
         root_hash,
         account_key,
         storage_keys,
-    } = build_account_trie(&[0xAA]);
+    } = build_account_trie(&[0xA]);
     let storage_key = &storage_keys[0];
 
     // `start` sorts after the 32-byte account key but before its 0xAA-suffixed
@@ -852,10 +858,10 @@ fn test_left_bounded_range_proof_single_storage_child_account() {
 /// and out-of-range (copied-from-proof) children — so K≥2 ⇒ the fold must NOT
 /// apply. Covers the left-edge-only and both-edges shapes, which uniform-random
 /// ranges never produce.
-#[test_case(&[0x10u8, 0x80u8], 0x40, None ; "left_edge_only")]
-#[test_case(&[0x10u8, 0x40u8, 0x80u8], 0x30, Some(0x60) ; "both_edges")]
+#[test_case(&[0x1u8, 0x8u8], 0x40, None ; "left_edge_only")]
+#[test_case(&[0x1u8, 0x4u8, 0x8u8], 0x30, Some(0x60) ; "both_edges")]
 fn test_bounded_multi_storage_child_union(
-    slot_first_bytes: &[u8],
+    storage_child_nibbles: &[u8],
     start_byte: u8,
     end_byte: Option<u8>,
 ) {
@@ -864,7 +870,7 @@ fn test_bounded_multi_storage_child_union(
         root_hash,
         account_key,
         storage_keys,
-    } = build_account_trie(slot_first_bytes);
+    } = build_account_trie(storage_child_nibbles);
 
     let start = account_storage_key(account_key.as_ref(), start_byte);
     let end = end_byte.map(|b| account_storage_key(account_key.as_ref(), b));
