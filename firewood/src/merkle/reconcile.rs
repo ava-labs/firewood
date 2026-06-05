@@ -1,11 +1,10 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood_storage::{Mutable, NodeStore, Propose, ReadableStorage, ValueDigest};
-#[cfg(feature = "ethhash")]
-use firewood_storage::{logger::warn, replace_list_field};
+use firewood_storage::{
+    Mutable, NodeStore, Propose, ReadableStorage, ValueDigest, logger::warn, replace_list_field,
+};
 
-#[cfg(feature = "ethhash")]
 use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
 use crate::{ProofError, ProofNode, Value, merkle::Merkle};
 
@@ -84,8 +83,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         // full on-disk value. Both produce the same final hash because
         // `Preimage::write` always recomputes storageRoot from the current
         // children at hash time, but byte equality fails.
-        #[cfg(feature = "ethhash")]
-        if proof_node.key.len() == ACCOUNT_DEPTH_NIBBLES
+        if cfg!(feature = "ethhash")
+            && proof_node.key.len() == ACCOUNT_DEPTH_NIBBLES
             && let (Some(pv), Some(bv)) = (proof_value, branch.value.as_deref())
             && account_values_equal_except_storage_root(pv, bv)
         {
@@ -107,7 +106,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
 /// resulting `false` return falls through to `on_conflict`, which surfaces
 /// the conflict as `UnexpectedValue`. The warning gives operators a clearer
 /// signal that the underlying cause is malformed data, not a value mismatch.
-#[cfg(feature = "ethhash")]
 fn account_values_equal_except_storage_root(a: &[u8], b: &[u8]) -> bool {
     let zeros = [0u8; 32];
     match (
