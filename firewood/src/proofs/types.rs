@@ -47,9 +47,7 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-#[cfg(feature = "ethhash")]
 use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
-#[cfg(feature = "ethhash")]
 use firewood_storage::hash_node_as_storage_trie_root_parts;
 use firewood_storage::{
     Children, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator, Path,
@@ -367,36 +365,23 @@ impl Hashable for ProofNode {
     }
 }
 
-/// Compute the hash a proof-walk expects for a node. When
-/// `as_storage_trie_root` is true, the node is hashed via the shared
-/// storage-trie-root fold helper — used for the storage child of an
-/// account branch at depth 64 with exactly one storage child. Otherwise
-/// the default `Hashable::to_hash` is used.
+/// Hash `node` as a standalone storage-trie root via the shared fold helper:
+/// the account branch's nibble is folded onto the front of the child's partial
+/// path, matching what live hashing wrote. Used for the lone storage child of a
+/// depth-64 account branch.
 ///
-/// Returns `Some(hash)` if the node's hash can be computed, and `None` if it
-/// can't — which happens only when the fold is requested but the node has an
-/// empty parent prefix (`partial_len == 0`). This can be due to a malformed
-/// proof whose storage-child node sets `partial_len` to 0 on the wire.
-fn compute_node_hash_for_proof<N: Hashable>(
-    node: &N,
-    #[cfg(feature = "ethhash")] as_storage_trie_root: bool,
-) -> Option<HashType> {
-    #[cfg(feature = "ethhash")]
-    if as_storage_trie_root {
-        // `as_storage_trie_root` means the caller identified this node as the
-        // single storage child of a depth-64 account, so its parent prefix is
-        // normally the 64-nibble account key plus this child's 1-nibble slot.
-        let (branch_nibble, account_prefix) =
-            node.parent_prefix_path().into_split_path().split_last()?;
-        return Some(hash_node_as_storage_trie_root_parts(
-            account_prefix,
-            branch_nibble,
-            node.partial_path().into_split_path(),
-            node.value_digest(),
-            node.children(),
-        ));
-    }
-    Some(node.to_hash())
+/// `None` only when the node's parent prefix is empty (`partial_len == 0`),
+/// which a real storage child never has, so it signals a malformed proof.
+fn compute_node_hash_as_storage_trie_root<N: Hashable>(node: &N) -> Option<HashType> {
+    let (branch_nibble, account_prefix) =
+        node.parent_prefix_path().into_split_path().split_last()?;
+    Some(hash_node_as_storage_trie_root_parts(
+        account_prefix,
+        branch_nibble,
+        node.partial_path().into_split_path(),
+        node.value_digest(),
+        node.children(),
+    ))
 }
 
 impl From<PathIterItem> for ProofNode {
@@ -538,20 +523,19 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
         };
 
         let mut expected_hash = root_hash.clone().into_hash_type();
-        // True when the previous iteration's node was a depth-64 account
-        // branch with exactly one storage child. The current node's hash
-        // must be computed as a standalone storage-trie root via the shared
-        // fold helper, matching what live hashing did when the node was
-        // first written.
-        #[cfg(feature = "ethhash")]
+
+        // Indicates whether the current node is hashed as a standalone storage-trie
+        // root: set to true one iteration prior to reaching the lone storage child
+        // of a depth-64 account branch.
         let mut hash_as_storage_root = false;
 
         let mut iter = self.0.as_ref().iter().peekable();
         while let Some(node) = iter.next() {
-            #[cfg(feature = "ethhash")]
-            let computed = compute_node_hash_for_proof(node, hash_as_storage_root);
-            #[cfg(not(feature = "ethhash"))]
-            let computed = compute_node_hash_for_proof(node);
+            let computed = if cfg!(feature = "ethhash") && hash_as_storage_root {
+                compute_node_hash_as_storage_trie_root(node)
+            } else {
+                Some(node.to_hash())
+            };
             // A malformed node yields `None`; reject it as an unexpected hash
             // rather than panicking.
             let Some(actual_hash) = computed else {
@@ -592,15 +576,8 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
                     .ok_or(ProofError::NodeNotInTrie)?
                     .clone();
 
-                // If this node is a depth-64 account branch with exactly one
-                // storage child, the next node IS that storage child and must
-                // be hashed as a standalone storage-trie root on the next
-                // iteration.
-                #[cfg(feature = "ethhash")]
-                {
-                    hash_as_storage_root =
-                        node.full_path().len() == ACCOUNT_DEPTH_NIBBLES && children.count() == 1;
-                }
+                hash_as_storage_root =
+                    node.full_path().len() == ACCOUNT_DEPTH_NIBBLES && children.count() == 1;
             }
         }
 

@@ -20,7 +20,6 @@ use crate::iter::{MerkleKeyValueIter, PathIterator};
 use crate::merkle::changes::DiffMerkleNodeStream;
 use crate::proofs::ProofEdge;
 use crate::proofs::change::ChangeProof;
-#[cfg(feature = "ethhash")]
 use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
 use crate::{
     ChangeProofVerificationContext, Proof, ProofCollection, ProofError, ProofNode, RangeProof,
@@ -33,7 +32,6 @@ use firewood_storage::{
     NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, Propose, ReadableStorage,
     SharedNode, TrieHash, TrieReader, U4, ValueDigest,
 };
-#[cfg(feature = "ethhash")]
 use firewood_storage::{
     hash_node_as_storage_trie_root_for_node, hash_node_as_storage_trie_root_parts,
 };
@@ -419,7 +417,6 @@ fn compute_root_hash_with_proofs(
 /// account boundaries when this node is the account's lone storage child;
 /// the fold matches what live hashing produced when the storage trie was
 /// first written.
-#[cfg(feature = "ethhash")]
 fn compute_root_hash_as_storage_trie_root(
     node: &Node,
     account_prefix: &[PathComponent],
@@ -502,24 +499,19 @@ fn build_branch_parts<'b>(
             unreachable!()
         };
         child_prefix.push(nibble);
-        let child_hash = match single_storage_child {
-            // Apply the storage-trie-root fold for the account's lone
-            // storage child; the dispatch lives here at the parent so the
-            // child's recursive call doesn't need to carry a flag.
-            #[cfg(feature = "ethhash")]
-            Some(slot) if slot == nibble => compute_root_hash_as_storage_trie_root(
+        // Apply the storage-trie-root fold for the account's lone storage
+        // child; the dispatch lives here at the parent so the child's recursive
+        // call doesn't need to carry a flag.
+        let child_hash = if cfg!(feature = "ethhash") && single_storage_child == Some(nibble) {
+            compute_root_hash_as_storage_trie_root(
                 child_node,
                 &full_key,
                 nibble,
                 proof_nodes,
                 outside_children,
-            ),
-            _ => compute_root_hash_with_proofs(
-                child_node,
-                &child_prefix,
-                proof_nodes,
-                outside_children,
-            ),
+            )
+        } else {
+            compute_root_hash_with_proofs(child_node, &child_prefix, proof_nodes, outside_children)
         };
         child_hashes[nibble] = Some(child_hash);
         child_prefix.pop();
@@ -558,15 +550,15 @@ fn build_branch_parts<'b>(
 /// An "effective" child is either an in-range branch child or an
 /// out-of-range child carried by the proof node — together they reflect
 /// the true on-disk shape. Proof verification only; live hashing has its
-/// own detection in `hash_helper_inner`.
-#[cfg(feature = "ethhash")]
+/// own detection in `hash_helper_inner`. Without `ethhash` there is no
+/// account-branch fold, so this always returns `None`.
 fn single_effective_account_child(
     full_key: &[PathComponent],
     branch: &BranchNode,
     proof_node: Option<&ProofNode>,
     outside_mask: Option<&ChildMask>,
 ) -> Option<PathComponent> {
-    if full_key.len() != ACCOUNT_DEPTH_NIBBLES {
+    if !cfg!(feature = "ethhash") || full_key.len() != ACCOUNT_DEPTH_NIBBLES {
         return None;
     }
 
@@ -593,20 +585,6 @@ fn single_effective_account_child(
     }
 
     only_child
-}
-
-/// Without `ethhash` there is no account-branch fold, so there is never a
-/// single effective storage child. This stub lets the recursion call site
-/// stay free of duplicated `#[cfg]` arms (the fold match arm is gated, the
-/// fallback is shared).
-#[cfg(not(feature = "ethhash"))]
-const fn single_effective_account_child(
-    _full_key: &[PathComponent],
-    _branch: &BranchNode,
-    _proof_node: Option<&ProofNode>,
-    _outside_mask: Option<&ChildMask>,
-) -> Option<PathComponent> {
-    None
 }
 
 /// Reject any proof node that carries a value digest (either

@@ -68,9 +68,6 @@ pub use nodestore::{
     LinearAddress, Mutable, MutableKind, NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError,
     NodeReader, NodeStore, NodeStoreHeader, Parentable, Propose, Recon, Reconstructed,
     ReconstructionSource, RootReader, TrieReader, fix_account_storage_root_value,
-};
-#[cfg(feature = "ethhash")]
-pub use nodestore::{
     hash_node_as_storage_trie_root_for_node, hash_node_as_storage_trie_root_parts,
 };
 pub use path::{

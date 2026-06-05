@@ -15,7 +15,6 @@ use crate::{
     Child, Children, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage, SharedNode,
     TrieHash,
 };
-#[cfg(feature = "ethhash")]
 use crate::{HashableShunt, JoinedPath, PathComponent, SplitPath, ValueDigest};
 use sha3::{Digest, Keccak256};
 
@@ -275,7 +274,6 @@ where
 /// extracts that function's parts — the partial path, value digest, and child
 /// hashes — from a [`Node`] directly: a branch contributes its value and its
 /// children's hashes, a leaf contributes its value and no children.
-#[cfg(feature = "ethhash")]
 pub fn hash_node_as_storage_trie_root_for_node(
     account_full_prefix: &[PathComponent],
     branch_nibble: PathComponent,
@@ -356,7 +354,6 @@ pub fn fix_account_storage_root_value(
 ///
 /// Single source of truth for the storage-trie-root fold; prefer this over
 /// inline folding so live hashing and proof verification cannot drift.
-#[cfg(feature = "ethhash")]
 pub fn hash_node_as_storage_trie_root_parts<Prefix: SplitPath, Partial: SplitPath>(
     account_full_prefix: Prefix,
     branch_nibble: PathComponent,
