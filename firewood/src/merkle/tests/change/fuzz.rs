@@ -746,9 +746,7 @@ fn test_slow_change_proof_fuzz() {
     // number of seconds has elapsed. Same parse-or-panic convention as
     // FIREWOOD_TEST_SEED. Useful for long local soak runs.
     let soak_until = std::env::var("FIREWOOD_TEST_SOAK_SECONDS").ok().map(|s| {
-        let secs: u64 = s
-            .parse()
-            .expect("FIREWOOD_TEST_SOAK_SECONDS must be a u64");
+        let secs: u64 = s.parse().expect("FIREWOOD_TEST_SOAK_SECONDS must be a u64");
         std::time::Instant::now() + std::time::Duration::from_secs(secs)
     });
     let soak_rng = firewood_storage::SeededRng::from_random();
@@ -881,12 +879,37 @@ fn test_slow_change_proof_fuzz() {
                         // M1: Omit a Put
                         0 => {
                             let idx = pick_op_index!(rng, ops, BatchOp::Put { .. });
+                            // Only omit an op when a Put still follows it. A
+                            // change proof's provable range is anchored by the
+                            // last Put; a trailing run of deletes is
+                            // unprovable — the proof cannot attest that deletes
+                            // preceding the last provided op were present (two
+                            // deletes sharing a prefix are indistinguishable
+                            // from a smaller valid range). So if nothing but
+                            // deletes follow, dropping this op yields a still-
+                            // valid proof over a smaller range, not a tamper.
+                            // (NB: this same gap affects `find_next_key`, which
+                            // is a separate problem to document.)
+                            if !ops[idx + 1..]
+                                .iter()
+                                .any(|op| matches!(op, BatchOp::Put { .. }))
+                            {
+                                continue;
+                            }
                             ops.remove(idx);
                             mutation_name = "M1_omit_put";
                         }
                         // M2: Omit a Delete
                         1 => {
                             let idx = pick_op_index!(rng, ops, BatchOp::Delete { .. });
+                            // See M1: a trailing run of deletes is unprovable,
+                            // so only omit when a Put still follows.
+                            if !ops[idx + 1..]
+                                .iter()
+                                .any(|op| matches!(op, BatchOp::Put { .. }))
+                            {
+                                continue;
+                            }
                             ops.remove(idx);
                             mutation_name = "M2_omit_delete";
                         }
@@ -905,9 +928,9 @@ fn test_slow_change_proof_fuzz() {
                             // the verifier correctly accepts, which then trips
                             // the must-reject assertion spuriously.
                             let new_val: Vec<u8> = match old_val.split_first() {
-                                Some((first, rest)) => {
-                                    std::iter::once(first ^ 0x1).chain(rest.iter().copied()).collect()
-                                }
+                                Some((first, rest)) => std::iter::once(first ^ 0x1)
+                                    .chain(rest.iter().copied())
+                                    .collect(),
                                 None => vec![0x1],
                             };
                             trace!(
