@@ -898,22 +898,18 @@ fn test_slow_change_proof_fuzz() {
                                 BatchOp::Put { value, .. } => value.clone(),
                                 _ => unreachable!(),
                             };
-                            // XOR the first 20 bytes of `old_val` with a
-                            // non-zero mask. If `old_val` is longer than
-                            // 20 bytes, the result is truncated to 20 —
-                            // still a "different value", so the mutation
-                            // remains valid.
-                            let mask: [u8; 20] = loop {
-                                let m: [u8; 20] = rng.random();
-                                if m != [0u8; 20] {
-                                    break m;
+                            // Flip the first byte (or set a single byte for an
+                            // empty value) so the new value always differs
+                            // from the old one. Picking a fresh random value
+                            // risked matching the original — a no-op "swap"
+                            // the verifier correctly accepts, which then trips
+                            // the must-reject assertion spuriously.
+                            let new_val: Vec<u8> = match old_val.split_first() {
+                                Some((first, rest)) => {
+                                    std::iter::once(first ^ 0x1).chain(rest.iter().copied()).collect()
                                 }
+                                None => vec![0x1],
                             };
-                            let new_val: Vec<u8> = old_val
-                                .iter()
-                                .zip(mask.iter())
-                                .map(|(a, b)| a ^ b)
-                                .collect();
                             trace!(
                                 "M3: key={} old_val={} new_val={}",
                                 hex::encode(&key),
