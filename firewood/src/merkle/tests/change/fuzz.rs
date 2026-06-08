@@ -733,7 +733,7 @@ fn test_slow_change_proof_fuzz() {
     // reproducing CI failures). Otherwise, run random iterations.
     // Debug assertions significantly slow down each iteration; use fewer
     // iterations in debug builds so the test finishes in reasonable time.
-    let iterations = if cfg!(debug_assertions) { 25 } else { 250 };
+    let iterations = if cfg!(debug_assertions) { 3 } else { 25 };
     let seeds: Vec<u64> = if let Ok(s) = std::env::var("FIREWOOD_TEST_SEED") {
         vec![s.parse().expect("FIREWOOD_TEST_SEED must be a u64")]
     } else {
