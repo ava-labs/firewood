@@ -407,7 +407,8 @@ and this spec is its originating design artifact.
 
 ## Best practices applied (from the mdbook catalog review)
 
-Distilled from `~/src/mdbooks.code-maven.com/mdbooks.yaml` (~120 mdBooks):
+Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.code-maven.com/blob/95511782560de7bd1268f2f0af424a13fdd07f80/mdbooks.yaml)
+(~120 mdBooks):
 
 - `book.toml` + `src/SUMMARY.md` convention (universal).
 - `mdbook-mermaid` for diagrams (Embedded Rust Book, Polkadot SDK Best Practices).
