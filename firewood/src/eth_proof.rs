@@ -431,6 +431,13 @@ mod tests {
         assert!(NodeHashAlgorithm::compile_option().is_ethereum());
     }
 
+    /// `KECCAK_EMPTY` is a hardcoded literal; confirm it really is
+    /// `keccak256("")`, the empty-code hash an eth verifier expects.
+    #[test]
+    fn keccak_empty_matches_keccak_of_empty_input() {
+        assert_eq!(keccak(b""), KECCAK_EMPTY);
+    }
+
     #[test]
     fn absent_account_returns_zero_fields_and_proof_bytes() {
         // Empty trie; ask for any account.
@@ -449,12 +456,13 @@ mod tests {
     #[test]
     fn present_account_no_storage_decodes_fields() {
         let key = [0x22u8; 32];
-        let value = account_rlp(7, &[0x12, 0x34]);
+        let balance = [0x12, 0x34];
+        let value = account_rlp(7, &balance);
         let merkle = init_merkle([(key.as_slice(), value.as_ref())]);
         let proof = eth_get_proof(merkle.nodestore(), &key, &[]).unwrap();
         assert_eq!(proof.nonce, 7);
-        // 0x1234 right-aligned in 32 bytes.
-        assert_eq!(proof.balance[30..], [0x12, 0x34]);
+        // balance is right-aligned in 32 bytes.
+        assert_eq!(proof.balance[30..], balance);
         assert_eq!(proof.code_hash, KECCAK_EMPTY);
         // Account with no storage entries → storage root is the empty trie
         // root after firewood's hashing fixup.
