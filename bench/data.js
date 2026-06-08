@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780648341955,
+  "lastUpdate": 1780907434689,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -4276,6 +4276,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 49.21014761875479,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "rodrigo",
+            "username": "RodrigoVillar",
+            "email": "77309055+RodrigoVillar@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "d2257bd648167709a65b1cbc220f44d6cf080b2e",
+          "message": "chore: add TODO checker (#2044)\n\n## Why this should be merged\n\nCloses #1603 by adding a TODO/FIXME checker to CI.\n\n## How this works\n\nThis PR consists of two commits:\n\n-\n[d200ead](https://github.com/ava-labs/firewood/pull/2044/commits/d200eadbbf9b7da3c837286c038cb82707e93c3a):\nadds the TODO/FIXME checker. Running `./scripts/check-todos.sh --help`\nprovides a good summary of what this tool does:\n```\nUsage: scripts/check-todos.sh [-h|--help]\n\nScans tracked .rs and .go files for TODO/FIXME markers and the Rust todo!()\nmacro, and reports any that are not annotated with an owner or GitHub issue.\n\nA marker is valid when it is immediately followed by a non-empty parenthesized\nannotation:\n\n  TODO(owner or GH issue)   e.g. TODO(#1603), TODO(@foo), FIXME(rust-lang/rust#143874)\n  todo!(\"...\")              e.g. todo!(\"#1603: implement this\")\n\nExit status: 0 when no violations, 1 otherwise.\n```\n\n-\n[eaed37d](https://github.com/ava-labs/firewood/pull/2044/commits/eaed37de51398ecd43bdb644d4caf3415ffe7e3d):\nsatisfies the linter by adding issues/owners to all TODOs/FIXMEs. The\nowner of an issue was determined via `git log` with the intent being to\nattach the owner who introduced the issue in-code. For owners not on the\nFirewood team, I deferred to creating issues for these issues.\n\nIn the future, we can add stricter rules to this check (e.g. all\nTODOs/FIXMEs must have a GH issue attached to them); however, this is a\ngood start to making sure all TODOs/FIXMEs in the Firewood repository\nhave sufficient context (either via an issue or an owner).\n\n## How this was tested\n\nCase where there are TODO violations:\nhttps://github.com/ava-labs/firewood/actions/runs/26830137698/job/79108776074?pr=2044\n\nCase where there are no violations:\nhttps://github.com/ava-labs/firewood/actions/runs/26837932459/job/79136793249?pr=2044\n\n## Breaking Changes\n\n- [ ] firewood\n- [ ] firewood-storage\n- [ ] firewood-ffi (C api)\n- [ ] firewood-go (Go api)\n- [ ] fwdctl",
+          "timestamp": "2026-06-05T17:37:57Z",
+          "url": "https://github.com/ava-labs/firewood/commit/d2257bd648167709a65b1cbc220f44d6cf080b2e"
+        },
+        "date": 1780907434201,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 166.8697062016549,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5992.699470517092,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 110.23148417351459,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5802.8789422442715,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 76.95107942366349,
             "unit": "block_accept_ms/ggas"
           }
         ]
