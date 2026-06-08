@@ -23,7 +23,7 @@ use crate::proofs::change::ChangeProof;
 use crate::{
     ChangeProofVerificationContext, Proof, ProofCollection, ProofError, ProofNode, RangeProof,
 };
-use firewood_metrics::firewood_counter;
+use firewood_metrics::{firewood_counter, firewood_histogram};
 use firewood_storage::MemStore;
 use firewood_storage::{
     BranchNode, Child, Children, FileIoError, HashType, HashableShunt, HashedNodeReader,
@@ -1289,6 +1289,8 @@ impl<T: TrieReader> Merkle<T> {
         .transpose()?
         .unwrap_or_default();
 
+        firewood_histogram!(PROOF_KEYS, "kind" => "range").record(key_values.len() as f64);
+
         Ok(RangeProof::new(start_proof, end_proof, key_values))
     }
 
@@ -1488,6 +1490,8 @@ impl<T: HashedNodeReader> Merkle<T> {
             .map(|key| self.prove(key))
             .transpose()?
             .unwrap_or_default();
+
+        firewood_histogram!(PROOF_KEYS, "kind" => "change").record(batch_ops.len() as f64);
 
         Ok(ChangeProof::new(start_proof, end_proof, batch_ops))
     }
