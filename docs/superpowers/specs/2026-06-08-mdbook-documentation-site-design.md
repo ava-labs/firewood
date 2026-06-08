@@ -16,8 +16,18 @@ The book ships with an Introduction, a fully-authored Getting Started guide for
 initializing development environments, and a Designs subsystem that establishes a
 peer-reviewable, RFC-style workflow for proposing designs and promoting them to
 living "active" documentation once implemented. Additional sections (Concepts,
-AvalancheGo/EVM Integration, Operations & Benchmarking, Reference) are scaffolded
-with intentional stubs.
+AvalancheGo/EVM Integration, Operations & Benchmarking, Reference, Meta) are
+scaffolded with intentional stubs.
+
+> [!NOTE]
+> **Bootstrapping note.** This spec does not itself follow the design-doc convention
+> it establishes — it lives under `docs/superpowers/specs/` rather than
+> `docs/src/designs/proposed/NNNN-*.md`. This is the bootstrap problem: the
+> proposed-design workflow, templates, and `new-design` tooling do not exist until
+> this work lands, so the process cannot be applied to the document that defines it.
+> Once the documentation system is implemented, the design of the documentation
+> system itself lives in the book's `meta/` section (see below), and this spec is
+> recorded there as the originating artifact.
 
 ## Goals
 
@@ -28,6 +38,9 @@ with intentional stubs.
 - Establish a design-doc workflow: propose → peer review → land → implement →
   promote to living documentation.
 - Author a complete multi-environment developer setup guide.
+- Make the book self-documenting: a `meta/` section documents the documentation
+  system itself and scaffolds repository-process docs (release, contributing, code
+  review).
 - Scaffold remaining sections so they look intentional and are easy to expand.
 
 ## Non-Goals
@@ -81,7 +94,9 @@ output into a subdirectory.
 5. **Backfill scope:** Templates + one fully-written seed (`on-disk format &
    addressing`) + stubs/TODO index for the rest.
 6. **Extra sections (all scaffolded):** Concepts/Architecture, AvalancheGo/EVM
-   Integration, Operations & Benchmarking, Contributing & Reference.
+   Integration, Operations & Benchmarking, Reference (generated artifacts), and Meta
+   (self-documenting docs + repository-process docs: release, contributing, code
+   review).
 7. **Preprocessors:** `mdbook-mermaid` (diagrams) and `mdbook-admonish` (callouts);
    their generated CSS/JS assets are committed to the repo.
 8. **Install commands in docs:** The authored developer guide may include concrete
@@ -118,8 +133,12 @@ docs/
     │   └── README.md          # stub: AvalancheGo / libevm via FFI
     ├── operations/
     │   └── README.md          # stub: fwdctl, benchmarks, dashboards; folds in benchmark/docs/*
-    └── reference/
-        └── README.md          # link-out hub: rustdoc ↗, godoc ↗, benchmarks ↗, CONTRIBUTING/RELEASE/CODE_REVIEW
+    ├── reference/
+    │   └── README.md          # link-out hub for GENERATED artifacts: rustdoc ↗, godoc ↗, benchmarks ↗
+    └── meta/
+        ├── README.md          # section landing: about this repo & these docs
+        ├── documentation.md   # AUTHORED: how the docs work (mdbook, preprocessors, build/serve, authoring)
+        └── release.md         # stub: release process (links/migrates RELEASE.md); + contributing/code-review pointers
 ```
 
 ### Architecture diagram asset (relocation)
@@ -143,6 +162,7 @@ book output automatically.
 /integration/ …         → book pages
 /operations/ …          → book pages
 /reference/ …           → book pages
+/meta/ …                → book pages (about the repo & these docs)
 /rustdoc/index.html     → redirect to firewood
 /rustdoc/firewood/      → cargo doc (relocated from /firewood/)
 /rustdoc/<other-crate>/ → one dir per workspace crate (see Background for the full set)
@@ -360,8 +380,30 @@ admonish callout indicating it is a scaffold to expand.
   duplicating content and avoids those files' site descriptions going stale against
   the new layout. Migrating their content into the book is a follow-up. The
   `operations/` landing page links to `/bench/` for the live dashboards.
-- `reference/` — link-out hub (rustdoc ↗, godoc ↗, benchmarks ↗, CONTRIBUTING /
-  RELEASE / CODE_REVIEW).
+- `reference/` — link-out hub for *generated* artifacts only (rustdoc ↗, godoc ↗,
+  benchmarks ↗). Repository-process docs (CONTRIBUTING / RELEASE / CODE_REVIEW) live
+  in the `meta/` section, not here.
+
+### Meta section (self-documenting)
+
+The `meta/` section makes the book document its own machinery and the repository's
+processes:
+
+- **`meta/documentation.md` (authored).** Seeded with the mdBook setup: the toolchain
+  and preprocessors, the `docs/` layout, how to build/serve locally (`just book-serve`
+  / `book-build` / `book-check`), how to add or edit a page and update `SUMMARY.md`,
+  and a pointer to the design-doc workflow. This is the self-documenting core — a new
+  contributor learns how the docs work from the docs themselves. It links to
+  `getting-started/dev-environment.md` for tool installation rather than repeating it.
+- **Repository-function scaffolds (stubs).** `meta/release.md` documents the release
+  process (for the MVP it links to the canonical `RELEASE.md`; migrating the content
+  into the book is a follow-up), alongside stubbed pointers to `CONTRIBUTING.md` and
+  `CODE_REVIEW.md`. The section is structured so additional repository functions are
+  easy to add.
+
+This section resolves the bootstrapping note from the Summary: once implemented,
+`meta/documentation.md` is the living record of how the documentation system works,
+and this spec is its originating design artifact.
 
 ## Best practices applied (from the mdbook catalog review)
 
@@ -414,7 +456,12 @@ Distilled from `~/src/mdbooks.code-maven.com/mdbooks.yaml` (~120 mdBooks):
       `active/on-disk-format-and-addressing.md` seed, an `active/README.md` index
       with a backfill TODO list, and a `proposed/README.md` index.
 - [ ] `concepts/`, `integration/`, `operations/`, and `reference/` stubs each have an
-      intentional landing page and appear in `SUMMARY.md`.
+      intentional landing page and appear in `SUMMARY.md`; `reference/` links only to
+      generated artifacts (rustdoc/godoc/benchmarks).
+- [ ] A `meta/` section exists with an **authored** `documentation.md` (how the docs
+      work: tooling, layout, build/serve, authoring, design workflow) and stubbed
+      repository-function pages (`release.md` plus pointers to CONTRIBUTING /
+      CODE_REVIEW); the process-doc link-outs are in `meta/`, not `reference/`.
 - [ ] `justfile` gains `book-serve`, `book-build`, `book-check`, and `new-design`.
 - [ ] Generated admonish/mermaid assets are committed.
 - [ ] `architecture.svg` is moved to `docs/src/assets/` and the root `README.md`
