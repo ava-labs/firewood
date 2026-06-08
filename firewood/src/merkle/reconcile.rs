@@ -83,6 +83,13 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         // full on-disk value. Both produce the same final hash because
         // `Preimage::write` always recomputes storageRoot from the current
         // children at hash time, but byte equality fails.
+        //
+        // This early-return relaxes the per-node comparison to skip
+        // `storageRoot`. This is safe regardless of how the divergence arose
+        // since `Preimage::write` recomputes `storageRoot` before the final
+        // root-hash check in `verify_change_proof_root_hash`. The relaxation
+        // only avoids a spurious per-node `UnexpectedValue` and never widens
+        // what proofs are accepted.
         if cfg!(feature = "ethhash")
             && proof_node.key.len() == ACCOUNT_DEPTH_NIBBLES
             && let (Some(pv), Some(bv)) = (proof_value, branch.value.as_deref())
@@ -101,6 +108,11 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
 /// on every field except `storageRoot` (index 2). `Preimage::write` always
 /// recomputes that field from the current children, so the on-disk byte
 /// difference is invisible in the final hash.
+///
+/// This is a hashing-equivalence check, not a general account-equality
+/// predicate: it is only valid because `Preimage::write` re-derives
+/// `storageRoot` from the children. Do not call it anywhere that does not
+/// recompute `storageRoot`, or it would treat two different accounts as equal.
 ///
 /// Logs a warning when either side fails to parse as account RLP. The
 /// resulting `false` return falls through to `on_conflict`, which surfaces

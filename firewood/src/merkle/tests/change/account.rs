@@ -84,13 +84,13 @@ enum Bound {
 /// The defect is **right-edge only**: storage children sort after the account
 /// key, so only an end boundary can truncate an account's storage while the
 /// account stays in range.
-/// - `left_half_end_bound_only` and `left_edge_both_bounds` keep the account in
-///   range with a storage subset → trigger the defect (fail pre-fix).
+/// - `left_half_end_bound_only` and `start_at_account_end_mid_storage` keep the
+///   account in range with a storage subset → trigger the defect (fail pre-fix).
 /// - `right_half_start_bound_only` puts the account out of range via the start
 ///   bound, so its value is never compared: a guard that passes with and
 ///   without the fix.
 #[test_case(Bound::None, Bound::MidStorage ; "left_half_end_bound_only")]
-#[test_case(Bound::AtAccount, Bound::MidStorage ; "left_edge_both_bounds")]
+#[test_case(Bound::AtAccount, Bound::MidStorage ; "start_at_account_end_mid_storage")]
 #[test_case(Bound::MidStorage, Bound::None ; "right_half_start_bound_only")]
 fn test_change_proof_partial_storage_children_against_empty(start_bound: Bound, end_bound: Bound) {
     let (source, _dir_source, empty_root, root2) = source_with_four_storage_children();
@@ -266,6 +266,49 @@ fn test_change_proof_account_in_range_no_storage_in_range() {
 
     // end sits between the account key and its first storage slot (suffix
     // 0x10), so the account is in range but none of its storage children are.
+    let end = key_under_account(&ACCOUNT_KEY, 0x00);
+
+    let proof = source
+        .change_proof(
+            empty_root.clone(),
+            root2.clone(),
+            None,
+            Some(end.as_ref()),
+            None,
+        )
+        .unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2.clone(), None, Some(end.as_ref()), None)
+        .unwrap();
+
+    let (target, _dir_target) = setup_db![];
+    let empty_root_target = target.root_hash().unwrap();
+    verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
+}
+
+/// K=1 boundary: an account with a single storage child, which can never be a
+/// *partial* subset (it is fully in range or fully excluded). The end bound
+/// here sits just before the lone storage slot (suffix 0x10), so the account
+/// is in range with zero storage children: the proposal hashes the empty
+/// storageRoot while the proof carries the single-child one. **Triggers the
+/// defect** (`UnexpectedValue` before the
+/// `account_values_equal_except_storage_root` relaxation, passes after).
+#[test]
+fn test_change_proof_single_storage_child_truncated() {
+    let storage_key = key_under_account(&ACCOUNT_KEY, 0x10);
+    let storage_value = rlp_encode_storage(&[1u8; 32]);
+    let account_value = rlp_encode_account(1, 100, &[0u8; 32], &empty_code_hash());
+
+    let (source, _dir_source) = setup_db![];
+    let (empty_root, root2) = setup_2nd_commit!(
+        source,
+        [
+            (ACCOUNT_KEY.as_ref(), account_value.as_ref()),
+            (storage_key.as_ref(), storage_value.as_ref()),
+        ]
+    );
+
+    // end sits between the account key and its single storage slot (suffix
+    // 0x10), so the account is in range but its one storage child is not.
     let end = key_under_account(&ACCOUNT_KEY, 0x00);
 
     let proof = source
