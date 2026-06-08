@@ -22,7 +22,6 @@ use crate::api::{DbView, Error, HashKey, HashKeyExt};
 use crate::proofs::ProofError;
 use crate::proofs::eth::{
     ACCOUNT_DEPTH_NIBBLES, AccountFields, account_storage_root_rlp, proof_node_to_mpt_rlp,
-    synth_storage_leaf_rlp,
 };
 use crate::proofs::types::ProofNode;
 
@@ -186,6 +185,20 @@ where
 /// Build one entry of [`EthProof::storage_proofs`] for `slot_key` under an
 /// already-resolved `account_node`.
 ///
+/// The storage-trie root's shape is fixed by how many distinct first storage
+/// nibbles the account fans out to, not by the slot count:
+///
+///   * no child nibbles: the account has no storage, so the proof is empty
+///     and the value absent.
+///   * exactly 1 child nibble: the account's lone child is itself the storage
+///     root (see [`storage_root_node_rlp`]).
+///   * 2+ child nibbles: firewood folds the storage branch into the account
+///     node, so there is no on-disk branch node; the root is synthesized from
+///     the account's child hashes (see [`account_storage_root_rlp`]).
+///
+/// In every non-empty case the descent nodes returned by
+/// [`DbView::single_key_proof`] follow the root, each referenced by hash.
+///
 /// # Returns
 ///
 /// An [`EthStorageProof`] whose `proof` bytes verify against the account's
@@ -205,10 +218,9 @@ fn build_storage_proof<V>(
 where
     V: DbView + ?Sized,
 {
-    // No storage children: storage_hash is the empty trie root, so the
-    // proof is empty and the value is absent.
-    let child_count = account_node.child_hashes.count();
-    if child_count == 0 {
+    // No storage: empty proof, absent value. Returns early because the rest
+    // of the function walks a storage descent there is no point fetching.
+    if account_node.child_hashes.count() == 0 {
         return Ok(EthStorageProof {
             key: *slot_key,
             ..EthStorageProof::default()
@@ -223,50 +235,7 @@ where
         .filter(|n| n.key.as_ref().len() > ACCOUNT_DEPTH_NIBBLES)
         .collect();
 
-    if child_count == 1 {
-        // Single-storage-child: the entire storage trie is one synthesized
-        // leaf whose keccak is `storage_hash`. If the natural proof didn't
-        // descend (the requested slot's first storage nibble differs from
-        // the stored child's), do an extra descent to recover the child.
-        let owned_child: Option<ProofNode> = if storage_nodes.is_empty() {
-            fetch_only_storage_child(view, account_key, account_node)?
-        } else {
-            None
-        };
-        let stored_child: Option<&ProofNode> =
-            storage_nodes.first().copied().or(owned_child.as_ref());
-
-        let proof: Box<[Box<[u8]>]> = stored_child
-            .and_then(synth_storage_leaf_rlp)
-            .map(|b| [b].into())
-            .unwrap_or_default();
-
-        // Inclusion iff the lone leaf's full key equals the requested slot.
-        let value = stored_child
-            .filter(|c| c.key.as_ref().len() == STORAGE_LEAF_DEPTH_NIBBLES)
-            .filter(|c| nibbles_match_packed(c.key.as_ref(), &full_key))
-            .and_then(|c| c.value_digest.as_ref().and_then(ValueDigest::value))
-            .map(Into::into);
-
-        return Ok(EthStorageProof {
-            key: *slot_key,
-            value,
-            proof,
-        });
-    }
-
-    // Multi-child storage trie: prepend the trie root's branch RLP
-    // (computed from `account_node`'s children) so the verifier can hash
-    // it to `storage_hash`, then walk each depth-65+ proof node.
-    let proof: Box<[Box<[u8]>]> = account_storage_root_rlp(account_node)
-        .into_iter()
-        .chain(
-            storage_nodes
-                .iter()
-                .copied()
-                .flat_map(proof_node_to_mpt_rlp),
-        )
-        .collect();
+    let proof = construct_root_proof(view, account_key, account_node, &storage_nodes)?;
 
     let value = storage_nodes
         .last()
@@ -280,6 +249,80 @@ where
         value,
         proof,
     })
+}
+
+/// Build the storage-proof bytes for an account with at least one storage
+/// child nibble: the storage-trie root followed by the descent nodes from
+/// `storage_nodes`, in root-to-leaf order.
+///
+/// Dispatches on the root's shape (see [`build_storage_proof`]): a single
+/// child nibble means the account's lone child is itself the root; 2+ child
+/// nibbles means the root is a branch synthesized from the account's child
+/// hashes ([`account_storage_root_rlp`]).
+///
+/// # Errors
+///
+/// Propagates any [`Error`] from [`fetch_only_storage_child`] when recovering
+/// the lone child for a single-nibble exclusion proof.
+fn construct_root_proof<V>(
+    view: &V,
+    account_key: &[u8; 32],
+    account_node: &ProofNode,
+    storage_nodes: &[&ProofNode],
+) -> Result<Box<[Box<[u8]>]>, Error>
+where
+    V: DbView + ?Sized,
+{
+    if account_node.child_hashes.count() == 1 {
+        // Single child nibble: the lone child is the storage root. When the
+        // requested slot's first nibble differs from the stored child's, the
+        // natural descent stops at the account node and never reaches that
+        // root; fetch the lone child so the verifier still receives the root
+        // needed to prove absence.
+        let owned_root: Option<ProofNode> = if storage_nodes.is_empty() {
+            fetch_only_storage_child(view, account_key, account_node)?
+        } else {
+            None
+        };
+        let storage_root = storage_nodes.first().copied().or(owned_root.as_ref());
+
+        Ok(storage_root
+            .map(|root| {
+                // Firewood consumes one nibble at the account->child edge, so
+                // this lone child's `ProofNode` reports its partial path one
+                // nibble short. Fold that nibble back in (mirroring the
+                // hasher's `children == 1` arm in
+                // storage/src/hashers/ethhash.rs) before encoding, so the
+                // emitted root's keccak matches the account's `storageHash`.
+                let folded = ProofNode {
+                    partial_len: root.partial_len.wrapping_sub(1),
+                    ..root.clone()
+                };
+                proof_node_to_mpt_rlp(&folded)
+            })
+            .into_iter()
+            .flatten()
+            .chain(
+                storage_nodes
+                    .iter()
+                    .copied()
+                    .skip(1)
+                    .flat_map(proof_node_to_mpt_rlp),
+            )
+            .collect())
+    } else {
+        // 2+ child nibbles: synthesized branch root, then the descent nodes.
+        // `account_storage_root_rlp` is `Some` for any count >= 2.
+        Ok(account_storage_root_rlp(account_node)
+            .into_iter()
+            .chain(
+                storage_nodes
+                    .iter()
+                    .copied()
+                    .flat_map(proof_node_to_mpt_rlp),
+            )
+            .collect())
+    }
 }
 
 /// Build per-slot entries for the "account is absent / has no storage" case:
@@ -441,17 +484,20 @@ mod tests {
         let entry = &proof.storage_proofs[0];
         assert_eq!(entry.key, slot_key);
         assert_eq!(entry.value.as_deref(), Some(b"stored-value".as_slice()));
-        assert_eq!(entry.proof.len(), 1, "single-slot trie → one synth leaf");
-        // The synth leaf bytes' keccak equals storage_hash.
-        assert_eq!(keccak(&entry.proof[0]), proof.storage_hash);
+        assert_eq!(
+            entry.proof.len(),
+            1,
+            "single-slot trie → storage root is the lone leaf node"
+        );
+        assert_storage_entry_verifies(entry, &proof.storage_hash);
 
         // Exclusion: ask for a different slot under the same account.
         let other = [0xbbu8; 32];
         let proof = eth_get_proof(merkle.nodestore(), &account_key, &[other]).unwrap();
         let entry = &proof.storage_proofs[0];
         assert_eq!(entry.value, None);
-        assert_eq!(entry.proof.len(), 1, "still emits the lone synth leaf");
-        assert_eq!(keccak(&entry.proof[0]), proof.storage_hash);
+        assert_eq!(entry.proof.len(), 1, "still emits the lone leaf node");
+        assert_storage_entry_verifies(entry, &proof.storage_hash);
     }
 
     /// Walk an MPT proof root-to-leaf, returning the value bytes recovered
@@ -508,6 +554,34 @@ mod tests {
         }
         // Ran out of proof buffers before resolving — exclusion proof.
         None
+    }
+
+    /// Assert a storage proof entry verifies end-to-end against the account's
+    /// `storage_hash`: every node hash-chains from the root, and walking the
+    /// slot key recovers exactly the value the entry reports (the stored bytes
+    /// for an inclusion proof, `None` for an exclusion proof).
+    ///
+    /// This is the full property a real `eth_getProof` verifier checks, and
+    /// what these tests assert. A root-hash spot-check
+    /// (`keccak(proof[0]) == storage_hash`) only proves the first node is
+    /// right; walking through to the leaf is what proves the interior nodes
+    /// actually connect the root to the claimed value.
+    fn assert_storage_entry_verifies(entry: &EthStorageProof, storage_hash: &[u8; 32]) {
+        if !entry.proof.is_empty() {
+            assert_eq!(
+                keccak(&entry.proof[0]),
+                *storage_hash,
+                "first storage proof node must hash to storageRoot for slot {:?}",
+                entry.key
+            );
+        }
+        let recovered = mpt_proof_value(&entry.proof, storage_hash, &entry.key);
+        assert_eq!(
+            recovered.as_deref(),
+            entry.value.as_deref(),
+            "storage proof for slot {:?} must verify to its reported value",
+            entry.key
+        );
     }
 
     /// Decode an MPT compact-encoded path. Returns the nibbles and a flag
@@ -619,10 +693,84 @@ mod tests {
             proof.storage_proofs[1].value.as_deref(),
             Some(b"val-b".as_slice())
         );
-        // The first byte of each storage proof must hash to storage_hash.
+        // Each storage proof must verify end-to-end against storage_hash.
         for entry in &proof.storage_proofs {
             assert!(!entry.proof.is_empty());
-            assert_eq!(keccak(&entry.proof[0]), proof.storage_hash);
+            assert_storage_entry_verifies(entry, &proof.storage_hash);
+        }
+    }
+
+    #[test]
+    fn present_account_two_slots_shared_first_nibble() {
+        // Two storage slots that share their first storage nibble. Firewood
+        // path-compresses them under a single account child, so the account
+        // node has exactly one child nibble — but the storage trie root is a
+        // real subtree (extension/branch), not a single leaf.
+        const VAL_A: &[u8] = b"val-a";
+        const VAL_B: &[u8] = b"val-b";
+
+        let account_key = [0x55u8; 32];
+        let acc_val = account_rlp(3, &[]);
+
+        let slot_a = [0x00u8; 32];
+        let mut slot_b = [0x00u8; 32];
+        slot_b[0] = 0x01;
+        assert_eq!(
+            slot_a[0] >> 4,
+            slot_b[0] >> 4,
+            "slots must share their first storage nibble"
+        );
+
+        let mut full_a = account_key.to_vec();
+        full_a.extend_from_slice(&slot_a);
+        let mut full_b = account_key.to_vec();
+        full_b.extend_from_slice(&slot_b);
+
+        let merkle = init_merkle([
+            (account_key.as_slice(), acc_val.as_ref()),
+            (full_a.as_slice(), VAL_A),
+            (full_b.as_slice(), VAL_B),
+        ]);
+
+        // Inclusion: both slots are present and must verify end-to-end.
+        let proof = eth_get_proof(merkle.nodestore(), &account_key, &[slot_a, slot_b]).unwrap();
+        assert_eq!(proof.storage_proofs.len(), 2);
+        assert_eq!(
+            proof.storage_proofs[0].value.as_deref(),
+            Some(VAL_A),
+            "slot_a is present and must yield an inclusion proof"
+        );
+        assert_eq!(
+            proof.storage_proofs[1].value.as_deref(),
+            Some(VAL_B),
+            "slot_b is present and must yield an inclusion proof"
+        );
+        for entry in &proof.storage_proofs {
+            assert!(
+                !entry.proof.is_empty(),
+                "present slot must carry a non-empty storage proof"
+            );
+            assert_storage_entry_verifies(entry, &proof.storage_hash);
+        }
+
+        // Exclusion in the same shape, two ways:
+        //  * `miss_shared` shares the first storage nibble (0x0), so the
+        //    natural descent enters the subtree and stops at the divergence.
+        //  * `miss_other` has a different first nibble (0xf), so the descent
+        //    stops at the account node and the lone subtree root must be
+        //    fetched separately to prove absence.
+        let mut miss_shared = [0x00u8; 32];
+        miss_shared[0] = 0x02;
+        let miss_other = [0xffu8; 32];
+        let proof =
+            eth_get_proof(merkle.nodestore(), &account_key, &[miss_shared, miss_other]).unwrap();
+        for entry in &proof.storage_proofs {
+            assert_eq!(
+                entry.value, None,
+                "missing slot {:?} has no value",
+                entry.key
+            );
+            assert_storage_entry_verifies(entry, &proof.storage_hash);
         }
     }
 }
