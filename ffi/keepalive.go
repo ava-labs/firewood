@@ -10,6 +10,7 @@ import "C"
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 )
 
@@ -88,7 +89,7 @@ func (h *handle[T]) Drop() error {
 		h.dropped = true
 
 		if err := getErrorFromVoidResult(h.free(ptr)); err != nil {
-			return errors.Join(errFreeingValue, err)
+			return fmt.Errorf("%w: %w", errFreeingValue, err)
 		}
 		return nil
 	})
@@ -140,9 +141,9 @@ func newKeepAliveRegistry() *keepAliveRegistry {
 // waiters are released. Called from [lease.releaseLocked] on disown.
 func (r *keepAliveRegistry) removeAndDecr(l *lease) {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	delete(r.handles, l)
 	r.decrLocked()
-	r.mu.Unlock()
 }
 
 // decrLocked decrements the outstanding-handle count and releases any
@@ -339,11 +340,19 @@ func (l *lease) attachUnregistered(registry *keepAliveRegistry) {
 // Safe to call multiple times; subsequent calls after the first continue
 // to invoke attemptDisown but do not double-decrement the count unless
 // [attach] or [attachUnregistered] runs again in between.
-func (l *lease) release(releaseOnError bool, attemptDisown func() error) error {
+func (l *lease) release(releaseOnError bool, attemptDisown func() error) (err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	err := attemptDisown()
+	// Release on panic too, so a panicking callback cannot strand the
+	// lease and block Close forever.
+	defer func() {
+		if p := recover(); p != nil {
+			l.releaseLocked()
+			panic(p)
+		}
+	}()
+	err = attemptDisown()
 	if err == nil || releaseOnError {
 		l.releaseLocked()
 	}

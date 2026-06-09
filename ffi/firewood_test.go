@@ -1659,17 +1659,34 @@ func TestCloseForceDropsOutstandingHandles(t *testing.T) {
 	// Force close should succeed even though nothing was dropped.
 	r.NoError(db.Close(oneSecCtx(t), WithForceCloseHandles()))
 
-	// All handles should now report as dropped on subsequent use.
-	_, err = proposal.Get([]byte("k"))
-	r.ErrorIs(err, errDroppedProposal)
-	_, err = revision.Get([]byte("k"))
-	r.ErrorIs(err, ErrDroppedRevision)
-	_, err = reconstructed.Get([]byte("k"))
-	r.ErrorIs(err, ErrDroppedReconstructed)
-	r.False(revIter.Next())
-	r.ErrorIs(revIter.Err(), errDroppedIterator)
-	r.False(propIter.Next())
-	r.ErrorIs(propIter.Err(), errDroppedIterator)
+	type view interface {
+		Get([]byte) ([]byte, error)
+	}
+	tests := []struct {
+		name   string
+		handle view
+		want   error
+	}{
+		{"proposal", proposal, errDroppedProposal},
+		{"revision", revision, ErrDroppedRevision},
+		{"reconstructed", reconstructed, ErrDroppedReconstructed},
+	}
+	for _, tc := range tests {
+		_, got := tc.handle.Get([]byte("k"))
+		r.ErrorIs(got, tc.want, tc.name)
+	}
+
+	iters := []struct {
+		name string
+		it   *Iterator
+	}{
+		{"revIter", revIter},
+		{"propIter", propIter},
+	}
+	for _, tc := range iters {
+		r.False(tc.it.Next(), tc.name)
+		r.ErrorIs(tc.it.Err(), errDroppedIterator, tc.name)
+	}
 }
 
 // TestCloseForceWithCancelledContextThenRetry verifies the retry path
@@ -1781,6 +1798,208 @@ func TestCloseForceDropsConcurrentReader(t *testing.T) {
 	if iterErr != nil {
 		r.ErrorIs(iterErr, errDroppedIterator)
 	}
+}
+
+// TestCloseForceNoHandlesCancelledCtx checks that force-close with no
+// outstanding handles succeeds even under an already-cancelled context.
+func TestCloseForceNoHandlesCancelledCtx(t *testing.T) {
+	db, err := newDatabase(t.TempDir())
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	require.NoError(t, db.Close(ctx, WithForceCloseHandles()))
+}
+
+// TestLeaseReleaseRecoversPanic checks that a panic in the release callback
+// still drops the lease and re-raises, so a panicking free cannot block Close.
+func TestLeaseReleaseRecoversPanic(t *testing.T) {
+	reg := newKeepAliveRegistry()
+
+	var l lease
+	require.NoError(t, l.attach(reg, func() error { return nil }))
+	require.Equal(t, 1, reg.count)
+
+	const panicVal = "boom"
+	func() {
+		defer func() {
+			require.Equal(t, panicVal, recover())
+		}()
+		_ = l.release(true, func() error {
+			panic(panicVal)
+		})
+	}()
+
+	require.Zero(t, reg.count, "lease must be released even when the callback panics")
+}
+
+// TestKeepAliveRegistryAttachAfterClose checks that attaching to a closed
+// registry runs the drop callback, returns errDBClosed, and leaves the count
+// unchanged. The callback's own error is joined when present.
+func TestKeepAliveRegistryAttachAfterClose(t *testing.T) {
+	freeErr := errors.New("free failed")
+	tests := []struct {
+		name    string
+		dropErr error
+	}{
+		{"drop succeeds", nil},
+		{"drop fails", freeErr},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := newKeepAliveRegistry()
+			require.NoError(t, reg.closeAndForceDrop(t.Context()))
+
+			var (
+				l       lease
+				dropped bool
+			)
+			err := l.attach(reg, func() error {
+				dropped = true
+				return tc.dropErr
+			})
+			require.ErrorIs(t, err, errDBClosed)
+			if tc.dropErr != nil {
+				require.ErrorIs(t, err, tc.dropErr)
+			}
+			require.True(t, dropped, "attach must run the drop callback on a closed registry")
+			require.Zero(t, reg.count, "attach must not increment count on a closed registry")
+		})
+	}
+}
+
+// TestIteratorFreesImplicitly checks that an undropped iterator is released by
+// its finalizer, unblocking Close. Covered on its own because Iterator has a
+// distinct AddCleanup wiring (iteratorCleanup bound to the inner handle).
+func TestIteratorFreesImplicitly(t *testing.T) {
+	db, err := newDatabase(t.TempDir())
+	require.NoError(t, err)
+
+	_, err = db.Update([]BatchOp{Put(keyForTest(1), valForTest(1))})
+	require.NoError(t, err)
+	rev, err := db.LatestRevision()
+	require.NoError(t, err)
+	it, err := rev.Iter(nil)
+	require.NoError(t, err)
+	// Drop the revision so the iterator is the only outstanding handle.
+	require.NoError(t, rev.Drop())
+
+	done := make(chan struct{})
+	go func() {
+		require.NoError(t, db.Close(oneSecCtx(t)))
+		close(done)
+	}()
+
+	// Close must block while the iterator is still reachable.
+	select {
+	case <-done:
+		require.FailNow(t, "Close returned while the iterator was still reachable")
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// Drop the only reference and let the finalizer release the iterator.
+	runtime.KeepAlive(it)
+	it = nil //nolint:ineffassign // drop the reference so GC can reap it
+	runtime.GC()
+
+	<-done
+}
+
+// TestReconstructedFreesImplicitly checks that an undropped reconstructed view
+// is released by its finalizer, unblocking Close.
+func TestReconstructedFreesImplicitly(t *testing.T) {
+	db, err := newDatabase(t.TempDir())
+	require.NoError(t, err)
+
+	_, _, batch := kvForTest(2)
+	root, err := db.Update(batch[:1])
+	require.NoError(t, err)
+	rev, err := db.Revision(root)
+	require.NoError(t, err)
+	recon, err := rev.Reconstruct(batch[1:2])
+	require.NoError(t, err)
+	// Drop the revision so the reconstructed view is the only outstanding handle.
+	require.NoError(t, rev.Drop())
+
+	done := make(chan struct{})
+	go func() {
+		require.NoError(t, db.Close(oneSecCtx(t)))
+		close(done)
+	}()
+
+	// Close must block while the reconstructed view is still reachable.
+	select {
+	case <-done:
+		require.FailNow(t, "Close returned while the reconstructed view was still reachable")
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// Drop the only reference and let the finalizer release the view.
+	runtime.KeepAlive(recon)
+	recon = nil //nolint:ineffassign // drop the reference so GC can reap it
+	runtime.GC()
+
+	<-done
+}
+
+// TestCloseForceDoesNotDropRangeProof pins the documented limitation that
+// force-close does not auto-drop a verified RangeProof. The proof is counted
+// but not in the drop map, so Close blocks until the proof is freed.
+func TestCloseForceDoesNotDropRangeProof(t *testing.T) {
+	db := newTestDatabase(t)
+	_, _, batch := kvForTest(50)
+	root, err := db.Update(batch)
+	require.NoError(t, err)
+
+	proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
+	require.NoError(t, db.VerifyRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated))
+
+	require.ErrorIs(t,
+		db.Close(oneSecCtx(t), WithForceCloseHandles()),
+		ErrActiveKeepAliveHandles,
+		"force-close must not auto-drop a verified RangeProof",
+	)
+
+	// Freeing the proof releases the count and unblocks Close.
+	require.NoError(t, proof.Free())
+	require.NoError(t, db.Close(oneSecCtx(t), WithForceCloseHandles()))
+}
+
+// TestCloseAndForceDropPartialThenRetry exercises the partial-drain path: a
+// context that cancels mid-drain leaves the rest registered, and a retry with a
+// fresh context drains them. Driven at the registry level for determinism.
+func TestCloseAndForceDropPartialThenRetry(t *testing.T) {
+	reg := newKeepAliveRegistry()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	const n = 3
+	var dropped int
+	for range n {
+		l := &lease{}
+		require.NoError(t, l.attach(reg, func() error {
+			return l.release(true, func() error {
+				dropped++
+				// Cancel after the first drop so closeAndForceDrop stops with
+				// the remaining leases still registered.
+				cancel()
+				return nil
+			})
+		}))
+	}
+	require.Equal(t, n, reg.count)
+
+	// First pass drops one handle, then bails on the cancelled context.
+	require.NoError(t, reg.closeAndForceDrop(ctx))
+	require.Equal(t, 1, dropped, "only one handle drops before ctx cancels")
+	require.Equal(t, n-1, reg.count, "remaining handles stay registered")
+	require.True(t, reg.closed, "registry stays closed across the partial drain")
+
+	// Retry with a fresh context drains the rest.
+	require.NoError(t, reg.closeAndForceDrop(t.Context()))
+	require.Equal(t, n, dropped)
+	require.Zero(t, reg.count)
 }
 
 func TestDump(t *testing.T) {
