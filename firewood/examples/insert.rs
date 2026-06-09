@@ -31,8 +31,8 @@ struct Args {
     read_verify_percent: u16,
     #[arg(short, long)]
     seed: Option<u64>,
-    #[arg(short, long, default_value_t = NonZeroUsize::new(192_000_000).expect("is non-zero"))]
-    cache_memory_limit: NonZeroUsize,
+    #[arg(short, long, default_value_t = NonZeroUsize::new(1_500_000).expect("is non-zero"))]
+    cache_entries: NonZeroUsize,
     #[arg(short, long, default_value_t = true)]
     truncate: bool,
     #[arg(short, long, default_value_t = 128)]
@@ -55,7 +55,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
     let mgrcfg = RevisionManagerConfig::builder()
-        .node_cache_memory_limit(args.cache_memory_limit)
+        .node_cache_entries(args.cache_entries)
         .max_revisions(args.revisions)
         .build();
     let cfg = DbConfig::builder()

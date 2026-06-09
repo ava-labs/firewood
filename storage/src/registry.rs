@@ -47,10 +47,6 @@ firewood_metrics::define_metrics! {
     gauges: {
         /// Current number of entries in freelist cache
         FREELIST_CACHE_SIZE            = "firewood_freelist_cache_entries",
-        /// Current memory used by node cache (bytes)
-        CACHE_MEMORY_USED              = "firewood_node_cache_bytes",
-        /// Maximum memory capacity of node cache (bytes)
-        CACHE_MEMORY_LIMIT             = "firewood_node_cache_limit_bytes",
         /// Current database file size (bytes)
         DATABASE_SIZE_BYTES            = "firewood_database_size_bytes",
         /// Number of entries per free-list size class

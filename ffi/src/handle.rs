@@ -60,11 +60,11 @@ pub struct DatabaseHandleArgs<'a> {
     /// enable `root_store`.
     pub root_store: bool,
 
-    /// The optional memory limit for the node cache in bytes.
+    /// The optional size of the node cache in number of entries.
     ///
     /// Set to `0` to leave this unset and rely on the default configured in
     /// `RevisionManagerConfig`.
-    pub node_cache_memory_limit: usize,
+    pub node_cache_entries: usize,
 
     /// The size of the free list cache.
     ///
@@ -123,7 +123,7 @@ impl DatabaseHandleArgs<'_> {
         let commit_count = NonZeroU64::new(self.deferred_persistence_commit_count)
             .ok_or(api::Error::ZeroCommitCount)?;
 
-        let memory_limit = NonZeroUsize::new(self.node_cache_memory_limit);
+        let cache_entries = NonZeroUsize::new(self.node_cache_entries);
 
         let config = {
             let builder = RevisionManagerConfig::builder()
@@ -132,8 +132,8 @@ impl DatabaseHandleArgs<'_> {
                 .free_list_cache_size(free_list_cache_size)
                 .deferred_persistence_commit_count(commit_count);
 
-            if let Some(memory_limit) = memory_limit {
-                builder.node_cache_memory_limit(memory_limit).build()
+            if let Some(cache_entries) = cache_entries {
+                builder.node_cache_entries(cache_entries).build()
             } else {
                 builder.build()
             }
