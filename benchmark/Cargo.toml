@@ -1,6 +1,6 @@
 [package]
 name = "firewood-benchmark"
-version = "0.4.0"
+version = "0.5.0"
 edition.workspace = true
 authors = [
      "Aaron Buchwald <aaron.buchwald56@gmail.com>",
@@ -42,7 +42,7 @@ opentelemetry-otlp = { version = "=0.31.0", features = ["grpc-tonic"] }
 opentelemetry-proto = "=0.31.0"
 opentelemetry_sdk = "=0.31.0"
 pretty-duration = "0.1.1"
-tikv-jemallocator = "0.6.1"
+tikv-jemallocator = "0.7.0"
 
 [dependencies.tokio]
 optional = true
