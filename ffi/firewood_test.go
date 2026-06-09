@@ -1800,6 +1800,20 @@ func TestCloseForceDropsConcurrentReader(t *testing.T) {
 	}
 }
 
+// TestErrDroppedSentinels pins the contract that every dropped-handle
+// error wraps the shared [ErrDropped] sentinel, so callers can match any
+// of them — e.g. after a force-close — with a single errors.Is.
+func TestErrDroppedSentinels(t *testing.T) {
+	for _, err := range []error{
+		ErrDroppedRevision,
+		ErrDroppedReconstructed,
+		errDroppedProposal,
+		errDroppedIterator,
+	} {
+		require.ErrorIs(t, err, ErrDropped, "%v must wrap ErrDropped", err)
+	}
+}
+
 // TestCloseForceNoHandlesCancelledCtx checks that force-close with no
 // outstanding handles succeeds even under an already-cancelled context.
 func TestCloseForceNoHandlesCancelledCtx(t *testing.T) {

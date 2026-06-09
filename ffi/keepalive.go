@@ -28,6 +28,14 @@ import (
 // re-enter registry.mu via removeAndDecr. No path holds both locks at
 // once.
 
+// ErrDropped is the shared sentinel wrapped by every dropped-handle error
+// in this package: [ErrDroppedRevision], [ErrDroppedReconstructed], and the
+// unexported proposal and iterator equivalents. Callers that don't care
+// which handle type was invalidated — for example after
+// [WithForceCloseHandles] drops every outstanding handle — can match all
+// of them with errors.Is(err, ErrDropped).
+var ErrDropped = errors.New("already dropped")
+
 type handle[T any] struct {
 	// handle is an opaque pointer to the underlying Rust object. It should be
 	// passed to the C FFI functions that operate on this type.
