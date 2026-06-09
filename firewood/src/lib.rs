@@ -157,7 +157,7 @@ pub mod proofs;
 pub use merkle::{Key, Value, verify_change_proof_root_hash, verify_range_proof};
 pub use proofs::{
     ChangeProof, ChangeProofVerificationContext, EmptyProofCollection, InvalidHeader, KeyRange,
-    Proof, ProofCollection, ProofError, ProofNode, ProofType, RangeProof,
+    Proof, ProofCollection, ProofEdge, ProofError, ProofNode, ProofType, RangeProof,
     RangeProofVerificationContext, ReadError, find_next_key_after_change_proof,
     find_next_key_after_range_proof, verify_change_proof_structure, verify_range_proof_structure,
 };
@@ -178,7 +178,9 @@ mod batch_op;
 pub use firewood_storage::logger;
 
 #[cfg(all(test, feature = "logger"))]
-#[ctor::ctor]
+// SAFETY: Called pre-main in test builds only. Does not panic (try_init + ok),
+// uses thread-safe logger initialization, and only reads env vars (safe pre-main).
+#[ctor::ctor(unsafe)]
 /// `ctor` will ensure this function is invoked before any tests are run so we
 /// can initialize the logger consistently across all tests without having to
 /// manually call it in each test.

@@ -73,6 +73,9 @@ jobs:
           strict: true
       - name: Format
         run: cargo fmt -- --check
+      # Fails on TODO/FIXME markers lacking an owner or issue (see issue #1603).
+      - name: Check TODO/FIXME annotations
+        run: ./scripts/check-todos.sh
 
   rust-lint-pr-comments:
     # caveat emptor: actions-rs/clippy-check can only write comments on pull requests
@@ -254,17 +257,16 @@ jobs:
           shared-key: "debug-no-features"
       - name: Build Firewood FFI
         working-directory: ffi
-        run: cargo build --locked --release
+        run: cargo build --locked
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
           go-version-file: "ffi/go.mod"
-          cache-dependency-path: "ffi/go.sum"
+          cache-dependency-path: |
+            ffi/go.sum
+            ffi/tools/external/go.sum
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # @v7 -> v9.2.0
-        with:
-          version: latest
-          working-directory: ffi
+        run: ./ffi/scripts/lint.sh
       - name: Test Go FFI bindings
         working-directory: ffi
         # cgocheck2 is expensive but provides complete pointer checks
