@@ -485,9 +485,10 @@ type closeConfig struct {
 // [RangeProof.Free] before Close can complete.
 //
 // Each handle is dropped once even if its underlying free errors, so a
-// failing free cannot stall the close. Any drop errors are joined and
-// returned, and the underlying database close is still attempted on a
-// best-effort basis.
+// failing free cannot stall the close. Drops run sequentially under each
+// handle's lock, so an in-flight reader can delay the close past the
+// deadline. Drop errors are joined and returned, and the database close
+// is still attempted on a best-effort basis.
 //
 // While force-close is in progress, attempts to construct derived handles
 // (for example via [Proposal.Propose] or [Revision.Iter]) fail with an
@@ -538,16 +539,11 @@ func (db *Database) Close(ctx context.Context, opts ...CloseOption) error {
 	var forcedDropErr error
 	if cfg.forceCloseHandles {
 		forcedDropErr = db.keepAlives.closeAndForceDrop(ctx)
-		if ctx.Err() != nil {
-			// Force-drop bailed early because ctx expired. The registry
-			// may still contain live handles, so calling fwd_close_db
-			// would free the Db out from under their Rust-side
-			// counterparts. Surface the error and leave the Db open;
-			// the caller can retry Close with a fresh context.
-			return errors.Join(forcedDropErr, fmt.Errorf("%w: %w", ErrActiveKeepAliveHandles, ctx.Err()))
-		}
 	}
 
+	// waitForKeepAlives decides whether handles remain: nil once the count
+	// drains (even if ctx is already cancelled), ErrActiveKeepAliveHandles
+	// otherwise.
 	if err := db.waitForKeepAlives(ctx); err != nil {
 		// Graceful path: bookkeeping says handles are still live. Don't
 		// touch fwd_close_db — we'd be freeing the Db out from under

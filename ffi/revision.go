@@ -166,7 +166,7 @@ func getRevisionFromResult(result C.RevisionResult, registry *keepAliveRegistry)
 		if err := rev.lease.attach(registry, rev.Drop); err != nil {
 			return nil, err
 		}
-		runtime.AddCleanup(rev, drop, rev.handle)
+		runtime.AddCleanup(rev, drop[*C.RevisionHandle], rev.handle)
 		return rev, nil
 	case C.RevisionResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
