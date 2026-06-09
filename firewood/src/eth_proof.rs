@@ -394,6 +394,26 @@ fn nibbles_match_packed(nibbles: &[PathComponent], packed: &[u8]) -> bool {
     nibbles.iter().copied().eq(packed_ref)
 }
 
+/// The negative half of [`eth_get_proof`]'s runtime mode gate: a merkledb-mode
+/// (non-ethhash) build must refuse to emit eth proofs. The positive half lives
+/// in the `ethhash`-gated `tests` module below.
+#[cfg(all(test, not(feature = "ethhash")))]
+mod merkledb_gate_tests {
+    use super::*;
+    use crate::merkle::tests::init_merkle;
+
+    #[test]
+    fn eth_get_proof_rejected_without_ethhash() {
+        let merkle = init_merkle(std::iter::empty::<(&[u8], &[u8])>());
+        let err = eth_get_proof(merkle.nodestore(), &[0u8; 32], &[])
+            .expect_err("merkledb-mode database must not emit eth proofs");
+        assert!(
+            matches!(err, Error::FeatureNotSupported(_)),
+            "expected FeatureNotSupported, got {err:?}"
+        );
+    }
+}
+
 #[cfg(all(test, feature = "ethhash"))]
 #[expect(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
@@ -423,9 +443,9 @@ mod tests {
         ])
     }
 
-    /// Confirm a non-ethhash build refuses to emit eth proofs. (We're under
-    /// `cfg(feature = "ethhash")`, so the gate's *negative* path is exercised
-    /// only by the workspace's non-ethhash test profile.)
+    /// Confirm an ethhash build passes the runtime mode gate. The gate's
+    /// *negative* path is covered by `merkledb_gate_tests` below, which only
+    /// compiles without the `ethhash` feature.
     #[test]
     fn mode_gate_passes_under_ethhash() {
         assert!(NodeHashAlgorithm::compile_option().is_ethereum());
