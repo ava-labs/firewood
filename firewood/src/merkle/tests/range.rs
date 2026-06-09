@@ -217,7 +217,7 @@ fn test_missing_key_proof() {
     for key in ["a", "j", "l", "z"] {
         let proof = merkle.prove(key.as_ref()).unwrap();
         assert!(!proof.is_empty());
-        assert!(proof.len() == 1);
+        assert_eq!(proof.len(), 1);
 
         proof.verify(key, None::<&[u8]>, &root_hash).unwrap();
     }
@@ -1732,6 +1732,105 @@ fn test_bad_range_proof_value_at_odd_nibble() {
     assert!(
         result.is_err(),
         "proof with value at odd nibble length should be rejected"
+    );
+}
+
+// Tampering an edge proof's terminal value node corrupts its hash relative to
+// the hash its parent commits to, so `verify_range_proof` rejects it with
+// `EdgeProofHashMismatch`. These two tests pin that the annotation names the
+// edge that actually tripped: corrupting the start proof reports `Left`, the
+// end proof reports `Right`. Without them, swapping `ProofEdge::{Left,Right}`
+// at the `verify_edge` call sites would go unnoticed.
+#[test]
+fn test_range_proof_left_edge_hash_mismatch() {
+    let items = [("aa", "v1"), ("bb", "v2"), ("cc", "v3")];
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let end_proof = merkle.prove(b"cc").unwrap();
+
+    // Corrupt only the start (left) edge proof's terminal node.
+    let mut corrupt_start = merkle.prove(b"aa").unwrap().into_mutable();
+    if let Some(node) = corrupt_start.last_mut() {
+        node.value_digest = Some(ValueDigest::Value(b"tampered".to_vec().into()));
+    }
+    let corrupt_start = corrupt_start.into_immutable();
+
+    let key_values: KeyValuePairs = items
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_bytes().to_vec().into_boxed_slice(),
+                v.as_bytes().to_vec().into_boxed_slice(),
+            )
+        })
+        .collect();
+
+    let range_proof = RangeProof::new(corrupt_start, end_proof, key_values.into_boxed_slice());
+
+    let err = verify_range_proof(
+        Some(b"aa".as_slice()),
+        Some(b"cc".as_slice()),
+        &root_hash,
+        &range_proof,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            api::Error::ProofError(crate::ProofError::EdgeProofHashMismatch {
+                edge: crate::ProofEdge::Left,
+                ..
+            })
+        ),
+        "expected Left EdgeProofHashMismatch, got: {err:?}"
+    );
+}
+
+#[test]
+fn test_range_proof_right_edge_hash_mismatch() {
+    let items = [("aa", "v1"), ("bb", "v2"), ("cc", "v3")];
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let start_proof = merkle.prove(b"aa").unwrap();
+
+    // Corrupt only the end (right) edge proof's terminal node; the start proof
+    // stays honest so the left edge passes and the failure lands on the right.
+    let mut corrupt_end = merkle.prove(b"cc").unwrap().into_mutable();
+    if let Some(node) = corrupt_end.last_mut() {
+        node.value_digest = Some(ValueDigest::Value(b"tampered".to_vec().into()));
+    }
+    let corrupt_end = corrupt_end.into_immutable();
+
+    let key_values: KeyValuePairs = items
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_bytes().to_vec().into_boxed_slice(),
+                v.as_bytes().to_vec().into_boxed_slice(),
+            )
+        })
+        .collect();
+
+    let range_proof = RangeProof::new(start_proof, corrupt_end, key_values.into_boxed_slice());
+
+    let err = verify_range_proof(
+        Some(b"aa".as_slice()),
+        Some(b"cc".as_slice()),
+        &root_hash,
+        &range_proof,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            api::Error::ProofError(crate::ProofError::EdgeProofHashMismatch {
+                edge: crate::ProofEdge::Right,
+                ..
+            })
+        ),
+        "expected Right EdgeProofHashMismatch, got: {err:?}"
     );
 }
 
