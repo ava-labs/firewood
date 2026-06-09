@@ -262,7 +262,7 @@ fn get_iterator_intial_state<T: TrieReader>(
                     node = match child {
                         None => return Ok(NodeIterState::Iterating { iter_stack }),
                         Some(Child::AddressWithHash(addr, _)) => merkle.read_node(*addr)?,
-                        Some(Child::Node(node)) => (*node).clone().into(), // TODO can we avoid cloning this?
+                        Some(Child::Node(node)) => (*node).clone().into(), // TODO(rkuris) can we avoid cloning this?
                         Some(Child::MaybePersisted(maybe_persisted, _)) => {
                             // For MaybePersisted, we need to get the node
                             maybe_persisted.as_shared_node(merkle)?
@@ -313,13 +313,13 @@ impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
         self.iter.find_map(|result| {
             result
                 .map(|(key, node)| {
+                    let must_recompute = self.iter.merkle.must_recompute_storage_hash();
                     match &*node {
                         Node::Branch(branch) => {
                             let Some(value) = branch.value.as_ref() else {
                                 // no value, continue to next node
                                 return None;
                             };
-                            let must_recompute = self.iter.merkle.must_recompute_storage_hash();
                             let child_hashes = if must_recompute && key.len() == 32 {
                                 branch.children_hashes()
                             } else {
@@ -331,7 +331,7 @@ impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
                             key,
                             &leaf.value,
                             &firewood_storage::Children::new(),
-                            self.iter.merkle.must_recompute_storage_hash(),
+                            must_recompute,
                         ),
                     }
                 })
@@ -417,7 +417,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
     type Item = Result<PathIterItem, FileIoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let must_recompute = self.merkle.must_recompute_storage_hash();
+        let must_recompute_storage_hash = self.merkle.must_recompute_storage_hash();
         // destructuring is necessary here because we need mutable access to `state`
         // at the same time as immutable access to `merkle`.
         let Self { state, merkle } = &mut *self;
@@ -451,7 +451,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                         key_nibbles: node_key,
                         node,
                         next_nibble: None,
-                        must_recompute_storage_hash: must_recompute,
+                        must_recompute_storage_hash,
                     }));
                 }
 
@@ -468,7 +468,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                         key_nibbles: node_key,
                         node: saved_node,
                         next_nibble: None,
-                        must_recompute_storage_hash: must_recompute,
+                        must_recompute_storage_hash,
                     }));
                 };
                 let next_unmatched_key_nibble =
@@ -484,7 +484,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                             key_nibbles: node_key,
                             node: saved_node,
                             next_nibble: None,
-                            must_recompute_storage_hash: must_recompute,
+                            must_recompute_storage_hash,
                         }))
                     }
                     Some(Child::AddressWithHash(child_addr, _)) => {
@@ -500,7 +500,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                             key_nibbles: node_key,
                             node: saved_node,
                             next_nibble: Some(next_unmatched_key_nibble),
-                            must_recompute_storage_hash: must_recompute,
+                            must_recompute_storage_hash,
                         }))
                     }
                     Some(Child::Node(child)) => {
@@ -511,7 +511,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                             key_nibbles: node_key,
                             node: saved_node,
                             next_nibble: Some(next_unmatched_key_nibble),
-                            must_recompute_storage_hash: must_recompute,
+                            must_recompute_storage_hash,
                         }))
                     }
                     Some(Child::MaybePersisted(maybe_persisted, _)) => {
@@ -527,7 +527,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                             key_nibbles: node_key,
                             node: saved_node,
                             next_nibble: Some(next_unmatched_key_nibble),
-                            must_recompute_storage_hash: must_recompute,
+                            must_recompute_storage_hash,
                         }))
                     }
                 }
@@ -810,7 +810,7 @@ mod tests {
     #[test]
     fn key_value_iterate_empty() {
         let merkle = create_test_merkle();
-        let iter = merkle.key_value_iter_from_key(b"x".to_vec().into_boxed_slice());
+        let iter = merkle.key_value_iter_from_key(b"x");
         assert_iterator_is_exhausted(iter);
     }
 
@@ -1058,7 +1058,7 @@ mod tests {
 
         // Test with start key
         for i in 0..=max {
-            let mut iter = merkle.key_value_iter_from_key(vec![i].into_boxed_slice());
+            let mut iter = merkle.key_value_iter_from_key(&[i]);
             for j in 0..=max {
                 let expected_key = vec![i, j];
                 let expected_value = vec![i, j];
@@ -1187,7 +1187,7 @@ mod tests {
             merkle.insert(key, key.clone().into_boxed_slice()).unwrap();
         }
 
-        let mut iter = merkle.key_value_iter_from_key(vec![intermediate].into_boxed_slice());
+        let mut iter = merkle.key_value_iter_from_key(&[intermediate]);
 
         let first_expected = key_values[1].as_slice();
         let first = iter.next().unwrap().unwrap();
@@ -1233,7 +1233,7 @@ mod tests {
         let start = keys.iter().position(|key| key[0] == branch_path).unwrap();
         let keys = &keys[start..];
 
-        let mut iter = merkle.key_value_iter_from_key(vec![branch_path].into_boxed_slice());
+        let mut iter = merkle.key_value_iter_from_key(&[branch_path]);
 
         for key in keys {
             let next = iter.next().unwrap().unwrap();
@@ -1281,7 +1281,7 @@ mod tests {
         let start = keys.iter().position(|key| key == &branch_key).unwrap();
         let keys = &keys[start..];
 
-        let mut iter = merkle.key_value_iter_from_key(branch_key.into_boxed_slice());
+        let mut iter = merkle.key_value_iter_from_key(&branch_key);
 
         for key in keys {
             let next = iter.next().unwrap().unwrap();
@@ -1311,7 +1311,7 @@ mod tests {
 
         let keys = &keys[(missing as usize)..];
 
-        let mut iter = merkle.key_value_iter_from_key(vec![missing].into_boxed_slice());
+        let mut iter = merkle.key_value_iter_from_key(&[missing]);
 
         for key in keys {
             let next = iter.next().unwrap().unwrap();
@@ -1337,7 +1337,7 @@ mod tests {
             merkle.insert(&key, key.clone().into()).unwrap();
         });
 
-        let iter = merkle.key_value_iter_from_key(vec![start_key].into_boxed_slice());
+        let iter = merkle.key_value_iter_from_key(&[start_key]);
 
         assert_iterator_is_exhausted(iter);
     }
@@ -1358,7 +1358,7 @@ mod tests {
             })
             .collect();
 
-        let mut iter = merkle.key_value_iter_from_key(vec![start_key].into_boxed_slice());
+        let mut iter = merkle.key_value_iter_from_key(&[start_key]);
 
         for key in keys {
             let next = iter.next().unwrap().unwrap();
@@ -1390,7 +1390,7 @@ mod tests {
 
         let keys = &keys[((missing >> 4) as usize)..];
 
-        let mut iter = merkle.key_value_iter_from_key(vec![missing].into_boxed_slice());
+        let mut iter = merkle.key_value_iter_from_key(&[missing]);
 
         for key in keys {
             let next = iter.next().unwrap().unwrap();
@@ -1409,7 +1409,7 @@ mod tests {
         let mut merkle = create_test_merkle();
         merkle.insert(&key, key.into()).unwrap();
 
-        let iter = merkle.key_value_iter_from_key(greater_key);
+        let iter = merkle.key_value_iter_from_key(&greater_key);
 
         assert_iterator_is_exhausted(iter);
     }
@@ -1434,7 +1434,7 @@ mod tests {
 
         let keys = &keys[((greatest >> 4) as usize)..];
 
-        let mut iter = merkle.key_value_iter_from_key(vec![greatest].into_boxed_slice());
+        let mut iter = merkle.key_value_iter_from_key(&[greatest]);
 
         for key in keys {
             let next = iter.next().unwrap().unwrap();

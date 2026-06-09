@@ -63,11 +63,13 @@ use std::time::Instant;
 
 // Re-export types from alloc module
 pub use alloc::NodeAllocator;
+pub use hash::{
+    fix_account_storage_root_value, hash_node_as_storage_trie_root_for_node,
+    hash_node_as_storage_trie_root_parts,
+};
 pub use hash_algo::{NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError};
 pub use primitives::{AreaIndex, LinearAddress};
 // Re-export types from header module
-#[cfg(feature = "ethhash")]
-pub use hash::fix_account_storage_root_value;
 pub use header::NodeStoreHeader;
 
 /// The [`NodeStore`] handles the serialization of nodes and
@@ -168,7 +170,10 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
                 root: None,
                 id: CommittedId::next(),
             },
-            must_recompute_storage_hash: true,
+            // Fresh in-memory store: writes go through current code, which
+            // persists correct storageRoots at hash time, so proofs do not
+            // need to recompute them.
+            must_recompute_storage_hash: header::Version::new().must_recompute_storage_hash(),
         }
     }
 
@@ -188,6 +193,9 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         root_address: LinearAddress,
         storage: Arc<S>,
     ) -> Result<Self, FileIoError> {
+        // Read the on-disk version so account-storage-root recomputation at
+        // proof time happens iff the persisted data predates the hfix.
+        let header = NodeStoreHeader::read_from_storage(&*storage)?;
         // first construct a nodestore without a root
         let mut nodestore = NodeStore {
             kind: Committed {
@@ -196,7 +204,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
                 id: CommittedId::next(),
             },
             storage,
-            must_recompute_storage_hash: true,
+            must_recompute_storage_hash: header.must_recompute_storage_hash(),
         };
 
         let node = nodestore.read_node(root_address)?;
@@ -234,7 +242,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 /// This means that the nodestore can have children.
 /// Only [`ImmutableProposal`] and [Committed] implement this trait.
 /// [`Mutable<Propose>`] and [`Mutable<Recon>`] do not implement this trait because they are not valid parents.
-/// TODO: Maybe this can be renamed to `ImmutableNodestore`
+/// TODO(rkuris): Maybe this can be renamed to `ImmutableNodestore`
 pub trait Parentable {
     /// Returns the parent of this nodestore.
     fn as_nodestore_parent(&self) -> NodeStoreParent;
@@ -470,7 +478,9 @@ impl<S: WritableStorage> NodeStore<Mutable<Propose>, S> {
                 },
             },
             storage,
-            must_recompute_storage_hash: true,
+            // Fresh proposal: writes go through current code, which persists
+            // correct storageRoots at hash time.
+            must_recompute_storage_hash: header::Version::new().must_recompute_storage_hash(),
         }
     }
 }
@@ -489,7 +499,8 @@ impl<S: ReadableStorage> NodeStore<Mutable<Recon<S>>, S> {
                 inner: Recon { parent_anchor },
             },
             storage,
-            must_recompute_storage_hash: true,
+            // Fresh reconstruction store: writes go through current code.
+            must_recompute_storage_hash: header::Version::new().must_recompute_storage_hash(),
         }
     }
 }
@@ -1127,7 +1138,7 @@ impl<T, S: ReadableStorage> RootReader for NodeStore<Mutable<T>, S> {
 
 impl<S: ReadableStorage> RootReader for NodeStore<Committed, S> {
     fn root_node(&self) -> Option<SharedNode> {
-        // TODO: If the read_node fails, we just say there is no root; this is incorrect
+        // TODO(rkuris): If the read_node fails, we just say there is no root; this is incorrect
         self.kind
             .root
             .as_ref()
@@ -1234,7 +1245,7 @@ impl<T: HashedNodeReader> HashedNodeReader for &T {
     }
 }
 
-// TODO: return only the index since we can easily get the size from the index
+// TODO(rkuris): return only the index since we can easily get the size from the index
 fn area_index_and_size<S: ReadableStorage>(
     storage: &S,
     addr: LinearAddress,
@@ -1395,7 +1406,7 @@ where
     NodeStore<T, S>: NodeReader,
 {
     // Find the area index and size of the stored area at the given address if the area is valid.
-    // TODO: there should be a way to read stored area directly instead of try reading as a free area then as a node
+    // TODO(#2050): there should be a way to read stored area directly instead of try reading as a free area then as a node
     pub(crate) fn read_leaked_area(
         &self,
         address: LinearAddress,
@@ -1436,7 +1447,7 @@ mod tests {
 
     #[test]
     fn test_area_size_to_index() {
-        // TODO: rustify using: for size in AREA_SIZES
+        // TODO(rkuris): rustify using: for size in AREA_SIZES
         for (i, area_size) in area_size_iter() {
             // area size is at top of range
             assert_eq!(AreaIndex::from_size(area_size).unwrap(), i);
@@ -1523,7 +1534,7 @@ mod tests {
 
         let err = node_store.persist(&mut header).unwrap_err();
         let err_ctx = err.context();
-        assert!(err_ctx == Some("allocate_node"));
+        assert_eq!(err_ctx, Some("allocate_node"));
 
         let io_err = err
             .source()

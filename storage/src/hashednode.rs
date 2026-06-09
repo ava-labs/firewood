@@ -12,7 +12,7 @@ impl<'a, P: SplitPath> HashableShunt<'a, P, &'a [PathComponent]> {
         match node {
             Node::Branch(node) => {
                 // All child hashes should be filled in.
-                // TODO danlaine: Enforce this with the type system.
+                // TODO(#2052): Enforce this with the type system.
                 debug_assert!(
                     node.children
                         .iter()
@@ -106,6 +106,17 @@ impl<T: AsRef<[u8]>> ValueDigest<T> {
             Self::Value(v) => ValueDigest::Value(v.as_ref()),
             #[cfg(not(feature = "ethhash"))]
             Self::Hash(h) => ValueDigest::Hash(h.clone()),
+        }
+    }
+
+    /// Returns the inner bytes if this digest carries a value, or `None` if
+    /// it carries only a hash. The `Hash` variant only exists in non-ethhash
+    /// builds, so in ethhash builds this function always returns `Some`.
+    pub fn value(&self) -> Option<&[u8]> {
+        match self {
+            Self::Value(v) => Some(v.as_ref()),
+            #[cfg(not(feature = "ethhash"))]
+            Self::Hash(_) => None,
         }
     }
 

@@ -9,10 +9,14 @@
 use crate::hashednode::hash_node;
 use crate::linear::FileIoError;
 use crate::logger::trace;
-use crate::node::Node;
-use crate::{Child, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage, SharedNode};
-#[cfg(feature = "ethhash")]
-use crate::{Children, PathComponent};
+use crate::node::{BranchNode, Node};
+use crate::rlp::{NULL_RLP, RlpItem, encode_list, replace_list_field};
+use crate::{
+    Child, Children, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage, SharedNode,
+    TrieHash,
+};
+use crate::{HashableShunt, JoinedPath, PathComponent, SplitPath, ValueDigest};
+use sha3::{Digest, Keccak256};
 
 use super::NodeReader;
 
@@ -131,15 +135,16 @@ where
         #[cfg(feature = "ethhash")] &self,
         mut node: Node,
         mut path_prefix: PathGuard<'_>,
-        #[cfg(feature = "ethhash")] fake_root_extra_nibble: Option<u8>,
+        #[cfg(feature = "ethhash")] fake_root_extra_nibble: Option<PathComponent>,
     ) -> Result<(MaybePersistedNode, HashType), FileIoError> {
         // If this is a branch, find all unhashed children and recursively hash them.
         trace!("hashing {node:?} at {path_prefix:?}");
         if let Node::Branch(ref mut b) = node {
             // special case code for ethereum hashes at the account level
+            // Both lengths are usize counts of nibbles in a trie path, so their
+            // sum cannot overflow on any platform firewood targets.
             #[cfg(feature = "ethhash")]
-            let make_fake_root = if path_prefix.0.len().saturating_add(b.partial_path.0.len()) == 64
-            {
+            let make_fake_root = if path_prefix.0.len().wrapping_add(b.partial_path.0.len()) == 64 {
                 // looks like we're at an account branch
                 // tally up how many hashes we need to deal with
                 let ClassifiedChildren {
@@ -149,26 +154,26 @@ where
                 trace!("hashed {hashed:?} unhashed {unhashed:?}");
                 // we were left with one hashed node that must be rehashed
                 if let [(child_idx, (child_node, child_hash))] = &mut hashed[..] {
-                    // read MaybePersistedNode as a SharedNode so we can hash and update it
-                    let mut hashable_node = child_node.as_shared_node(&self)?.deref().clone();
+                    let shared = child_node.as_shared_node(&self)?;
                     let hash = {
                         let mut path_guard = PathGuard::new(&mut path_prefix);
                         path_guard.0.extend(b.partial_path.0.iter().copied());
                         if unhashed.is_empty() {
-                            hashable_node.update_partial_path(Path::from_nibbles_iterator(
-                                std::iter::once(child_idx.as_u8())
-                                    .chain(hashable_node.partial_path().0.iter().copied()),
-                            ));
+                            hash_node_as_storage_trie_root_for_node(
+                                path_guard.as_components(),
+                                *child_idx,
+                                &shared,
+                            )
                         } else {
                             path_guard.0.push(child_idx.as_u8());
+                            hash_node(&shared, &path_guard)
                         }
-                        hash_node(&hashable_node, &path_guard)
                     };
                     **child_hash = hash;
                 }
                 // handle the single-child case for an account special below
                 if hashed.is_empty() && unhashed.len() == 1 {
-                    Some(unhashed.last().expect("only one").0.as_u8())
+                    Some(unhashed.last().expect("only one").0)
                 } else {
                     None
                 }
@@ -223,20 +228,18 @@ where
                 trace!("child now {child:?}");
             }
         }
+
+        // For account-depth nodes (branch or leaf), persist the computed
+        // storageRoot into the node's RLP-encoded value.
+        #[cfg(feature = "ethhash")]
+        update_account_storage_root(&mut node, &path_prefix);
+
         // At this point, we either have a leaf or a branch with all children hashed.
         // if the encoded child hash <32 bytes then we use that RLP
 
         #[cfg(feature = "ethhash")]
-        // if we have a child that is the only child of an account branch, we will hash this child as if it
-        // is a root node. This means we have to take the nibble from the parent and prefix it to the partial path
         let hash = if let Some(nibble) = fake_root_extra_nibble {
-            let mut fake_root = node.clone();
-            trace!("old node: {fake_root:?}");
-            fake_root.update_partial_path(Path::from_nibbles_iterator(
-                std::iter::once(nibble).chain(fake_root.partial_path().0.iter().copied()),
-            ));
-            trace!("new node: {fake_root:?}");
-            hash_node(&fake_root, &path_prefix)
+            hash_node_as_storage_trie_root_for_node(path_prefix.as_components(), nibble, &node)
         } else {
             hash_node(&node, &path_prefix)
         };
@@ -253,23 +256,74 @@ where
         path_prefix: &Path,
         have_peers: bool,
     ) -> HashType {
-        if path_prefix.0.len() == 65 && !have_peers {
-            // This is the special case when this node is the only child of an account
-            //  - 64 nibbles for account + 1 nibble for its position in account branch node
-            let mut fake_root = node.clone();
-            fake_root.update_partial_path(Path::from_nibbles_iterator(
-                path_prefix
-                    .0
-                    .last()
-                    .into_iter()
-                    .chain(fake_root.partial_path().0.iter())
-                    .copied(),
-            ));
-            hash_node(&fake_root, path_prefix)
+        let components = path_prefix.as_components();
+        // 64 nibbles for the account prefix + 1 for this node's slot in the
+        // account branch = 65. !have_peers means this is the only storage child.
+        if components.len() == 65 && !have_peers {
+            let (branch_nibble, account_prefix) = components
+                .split_last()
+                .expect("len == 65 implies non-empty");
+            hash_node_as_storage_trie_root_for_node(account_prefix, *branch_nibble, node)
         } else {
             hash_node(node, path_prefix)
         }
     }
+}
+
+/// Convenience wrapper around [`hash_node_as_storage_trie_root_parts`] that
+/// extracts that function's parts — the partial path, value digest, and child
+/// hashes — from a [`Node`] directly: a branch contributes its value and its
+/// children's hashes, a leaf contributes its value and no children.
+pub fn hash_node_as_storage_trie_root_for_node(
+    account_full_prefix: &[PathComponent],
+    branch_nibble: PathComponent,
+    node: &Node,
+) -> HashType {
+    let (value_digest, children) = match node {
+        Node::Branch(b) => (
+            b.value.as_deref().map(ValueDigest::Value),
+            b.children_hashes(),
+        ),
+        Node::Leaf(l) => (Some(ValueDigest::Value(l.value.as_ref())), Children::new()),
+    };
+    hash_node_as_storage_trie_root_parts(
+        account_full_prefix,
+        branch_nibble,
+        node.partial_path().as_components(),
+        value_digest,
+        children,
+    )
+}
+
+/// Compute the root hash of an Ethereum storage trie from an account branch's
+/// already-hashed children.
+///
+/// - 0 children → empty trie root (`keccak256(0x80)`)
+/// - 1 child → that child's hash directly. The caller is responsible for having
+///   produced that hash via `hash_node_as_storage_trie_root_parts` (which folds
+///   the account's branch nibble into the child's partial path so the child hashes
+///   as a standalone storage-trie root). Only relevant under the `ethhash` feature.
+/// - ≥2 children → the 17-element branch RLP, hashed.
+///
+/// At account depth (64 nibbles) storage keys are 32 bytes, so every child
+/// encoding exceeds 32 bytes and the inline-RLP variant of [`HashType`] cannot
+/// occur. Without `ethhash`, `HashType` is `TrieHash` and the single-child case
+/// returns the child hash unchanged.
+#[must_use]
+fn compute_storage_trie_root(child_hashes: &Children<Option<HashType>>) -> TrieHash {
+    if child_hashes.count() == 0 {
+        return TrieHash::from(Keccak256::digest(NULL_RLP));
+    }
+    let mut child_hashes = child_hashes.clone();
+    if let Some((_, child)) = child_hashes.take_only_child() {
+        return single_child_storage_root(child);
+    }
+    let mut items: [RlpItem<'_>; BranchNode::MAX_CHILDREN + 1] =
+        [RlpItem::Empty; BranchNode::MAX_CHILDREN + 1];
+    for ((_, child), slot) in (&child_hashes).into_iter().zip(items.iter_mut()) {
+        *slot = child_to_rlp_item(child.as_ref());
+    }
+    TrieHash::from(Keccak256::digest(encode_list(&items)))
 }
 
 /// Given an account node's value and its children's hashes, return the value with the
@@ -279,46 +333,115 @@ where
 /// For branch accounts, the storage root is computed from the children's hashes.
 ///
 /// Returns `None` if the value is not well-formed account RLP.
-#[cfg(feature = "ethhash")]
 #[must_use]
 pub fn fix_account_storage_root_value(
     value: &[u8],
     child_hashes: &Children<Option<HashType>>,
 ) -> Option<Box<[u8]>> {
-    use crate::node::BranchNode;
-    use crate::rlp::{NULL_RLP, RlpItem, encode_list, replace_list_field};
-    use sha3::{Digest, Keccak256};
-
-    let children_count = child_hashes.iter().filter(|(_, c)| c.is_some()).count();
-
-    let storage_root = if children_count == 0 {
-        crate::TrieHash::from(Keccak256::digest(NULL_RLP))
-    } else {
-        let mut child_hashes = child_hashes.clone();
-        if let Some((_, child)) = child_hashes.take_only_child() {
-            match child {
-                HashType::Hash(hash) => hash,
-                HashType::Rlp(_) => unreachable!(
-                    "account-depth single storage child cannot have inline RLP: \
-                     storage leaf encoding with 32-byte keys always exceeds 32 bytes"
-                ),
-            }
-        } else {
-            let mut items: [RlpItem<'_>; BranchNode::MAX_CHILDREN + 1] =
-                [RlpItem::Empty; BranchNode::MAX_CHILDREN + 1];
-            for ((_, child), slot) in (&child_hashes).into_iter().zip(items.iter_mut()) {
-                *slot = match child {
-                    Some(HashType::Hash(hash)) => RlpItem::Bytes(hash.as_slice()),
-                    Some(HashType::Rlp(_)) => unreachable!(
-                        "account-depth storage child cannot have inline RLP: \
-                         storage node encoding with 32-byte keys always exceeds 32 bytes"
-                    ),
-                    None => RlpItem::Empty,
-                };
-            }
-            crate::TrieHash::from(Keccak256::digest(encode_list(&items)))
-        }
-    };
-
+    let storage_root = compute_storage_trie_root(child_hashes);
     replace_list_field(value, 2, storage_root.as_slice()).ok()
+}
+
+/// Hash a node as the standalone root of an Ethereum storage trie.
+///
+/// In Ethereum, an account with exactly one storage entry has a storage trie
+/// consisting of just that leaf, whose partial path is the full 64-nibble
+/// storage key. Firewood stores that leaf as a child of the account branch
+/// at depth 64, with only 63 nibbles of partial path — the first nibble is
+/// the parent's child-slot index. This function folds the missing nibble
+/// back onto the front of the child's partial path and hashes the result as
+/// if the child were a standalone root.
+///
+/// Single source of truth for the storage-trie-root fold; prefer this over
+/// inline folding so live hashing and proof verification cannot drift.
+pub fn hash_node_as_storage_trie_root_parts<Prefix: SplitPath, Partial: SplitPath>(
+    account_full_prefix: Prefix,
+    branch_nibble: PathComponent,
+    partial_path: Partial,
+    value_digest: Option<ValueDigest<&[u8]>>,
+    children: Children<Option<HashType>>,
+) -> HashType {
+    let folded = JoinedPath::new(std::slice::from_ref(&branch_nibble), partial_path);
+    HashableShunt::new(account_full_prefix, folded, value_digest, children).to_hash()
+}
+
+/// Persist the computed storageRoot into an account node's RLP-encoded value,
+/// in place. Only acts on nodes at account depth (64 nibbles) whose values are
+/// well-formed Ethereum account RLP.
+///
+/// For branch accounts, the storage root is computed from the children's hashes.
+/// For leaf accounts (no storage sub-trie), the storage root is the empty trie hash.
+#[cfg(feature = "ethhash")]
+fn update_account_storage_root(node: &mut Node, path_prefix: &Path) {
+    // Both lengths are usize counts of nibbles in a trie path, so their
+    // sum cannot overflow on any platform firewood targets.
+    let total_depth = path_prefix
+        .0
+        .len()
+        .wrapping_add(node.partial_path().0.len());
+    if total_depth != 64 {
+        return;
+    }
+
+    match node {
+        Node::Branch(b) => {
+            let Some(old_value) = b.value.as_ref() else {
+                return;
+            };
+            let child_hashes = b.children_hashes();
+            if let Some(new_value) = fix_account_storage_root_value(old_value, &child_hashes) {
+                b.value = Some(new_value);
+            }
+        }
+        Node::Leaf(l) => {
+            let empty_children: Children<Option<HashType>> = Children::new();
+            if let Some(new_value) = fix_account_storage_root_value(&l.value, &empty_children) {
+                l.value = new_value;
+            }
+        }
+    }
+}
+
+/// Extract the `TrieHash` for the single-storage-child case. At account
+/// depth storage child encodings always exceed 32 bytes (32-byte keys), so
+/// the inline-RLP variant cannot occur in ethhash mode; without ethhash
+/// every child is already a hash.
+#[cfg(feature = "ethhash")]
+fn single_child_storage_root(child: HashType) -> crate::TrieHash {
+    match child {
+        HashType::Hash(hash) => hash,
+        HashType::Rlp(_) => unreachable!(
+            "account-depth single storage child cannot have inline RLP: \
+             storage leaf encoding with 32-byte keys always exceeds 32 bytes"
+        ),
+    }
+}
+
+#[cfg(not(feature = "ethhash"))]
+const fn single_child_storage_root(child: HashType) -> crate::TrieHash {
+    // Without ethhash, `HashType` is `TrieHash`.
+    child
+}
+
+/// Encode one child slot of an account's storage branch as an [`RlpItem`].
+/// Mirrors the dispatch the ethhash hasher does inline (see
+/// `storage/src/hashers/ethhash.rs::Preimage::write`).
+#[cfg(feature = "ethhash")]
+fn child_to_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
+    match child {
+        Some(HashType::Hash(hash)) => RlpItem::Bytes(hash.as_slice()),
+        Some(HashType::Rlp(_)) => unreachable!(
+            "account-depth storage child cannot have inline RLP: \
+             storage node encoding with 32-byte keys always exceeds 32 bytes"
+        ),
+        None => RlpItem::Empty,
+    }
+}
+
+#[cfg(not(feature = "ethhash"))]
+fn child_to_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
+    match child {
+        Some(hash) => RlpItem::Bytes(hash.as_slice()),
+        None => RlpItem::Empty,
+    }
 }
