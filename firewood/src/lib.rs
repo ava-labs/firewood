@@ -178,7 +178,7 @@ mod batch_op;
 pub use firewood_storage::logger;
 
 #[cfg(all(test, feature = "logger"))]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 /// `ctor` will ensure this function is invoked before any tests are run so we
 /// can initialize the logger consistently across all tests without having to
 /// manually call it in each test.
