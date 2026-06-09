@@ -199,7 +199,7 @@ where
         }
         let trie_stats = self
             .root_as_maybe_persisted_node()
-            .and_then(|node| self.root_hash().map(|root_hash| (node, root_hash)))
+            .zip(self.root_hash())
             .and_then(|(root, root_hash)| {
                 if let Some(root_address) = root.as_linear_address() {
                     let (trie_stats, trie_errors) = self.visit_trie(
@@ -618,7 +618,7 @@ impl<S: WritableStorage> NodeStore<Mutable<Propose>, S> {
                     if let CheckerError::AreaLeaks(ranges) = &error {
                         {
                             let _leaked_areas = self.split_all_leaked_ranges(ranges, None);
-                            // TODO: add _leaked_areas to the free list
+                            // TODO(#2048): add _leaked_areas to the free list
                         }
                         unfixable.push((error, None));
                     } else {
@@ -722,7 +722,7 @@ where
         }
 
         // we assume that all areas are aligned to `MIN_AREA_SIZE`, in which case leaked ranges can always be split into free areas perfectly
-        debug_assert!(current_addr == *leaked_range.end);
+        debug_assert_eq!(current_addr, *leaked_range.end);
         leaked
     }
 }
