@@ -263,7 +263,8 @@ func (it *Iterator) Err() error {
 	return it.err
 }
 
-var errDroppedIterator = errors.New("iterator already dropped")
+// errDroppedIterator wraps [ErrDropped].
+var errDroppedIterator = fmt.Errorf("iterator %w", ErrDropped)
 
 // getIteratorFromIteratorResult converts a C.IteratorResult to an Iterator or error.
 func getIteratorFromIteratorResult(result C.IteratorResult, registry *keepAliveRegistry) (*Iterator, error) {

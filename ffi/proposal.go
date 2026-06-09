@@ -22,14 +22,14 @@ package ffi
 import "C"
 
 import (
-	"errors"
 	"fmt"
 	"runtime"
 	"sync"
 	"unsafe"
 )
 
-var errDroppedProposal = errors.New("proposal already dropped")
+// errDroppedProposal wraps [ErrDropped].
+var errDroppedProposal = fmt.Errorf("proposal %w", ErrDropped)
 
 // Proposal represents a set of proposed changes to be committed to the database.
 // Proposals are created via [Database.Propose] or [Proposal.Propose], and must be

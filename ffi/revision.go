@@ -25,7 +25,8 @@ import (
 )
 
 var (
-	ErrDroppedRevision       = errors.New("revision already dropped")
+	// ErrDroppedRevision wraps [ErrDropped].
+	ErrDroppedRevision       = fmt.Errorf("revision %w", ErrDropped)
 	ErrRevisionNotFound      = errors.New("revision not found")
 	ErrEndRevisionNotFound   = errors.New("end revision not found")
 	ErrStartRevisionNotFound = errors.New("start revision not found")

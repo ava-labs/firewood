@@ -22,14 +22,14 @@ package ffi
 import "C"
 
 import (
-	"errors"
 	"fmt"
 	"runtime"
 	"sync"
 	"unsafe"
 )
 
-var ErrDroppedReconstructed = errors.New("reconstructed view already dropped")
+// ErrDroppedReconstructed wraps [ErrDropped].
+var ErrDroppedReconstructed = fmt.Errorf("reconstructed view %w", ErrDropped)
 
 // Lock ordering for Reconstructed:
 //
