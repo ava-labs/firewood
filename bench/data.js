@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780993147319,
+  "lastUpdate": 1780993666012,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -4417,6 +4417,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 47.02702391142449,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "137802be9b330bd63de0c156bec0814000d2d928",
+          "message": "feat(launch): add validator scenario bootstrapping from S3 state snapshot (#2071)\n\n## Why this should be merged\n\nAdds a way to stand up a Fuji avalanchego node from a pre-synced state\nsnapshot\ninstead of bootstrapping from genesis, so a validator can come up\nquickly\nagainst known state.\n\n## How this works\n\nAdds two shared stages to `benchmark/launch/launch-stages.yaml` and a\nnew\n`validator` scenario that chains them after the standard build stages.\nNo Rust\nchanges are needed since `--scenario` is a free-form string.\n\n- **`download-node-state`** — `s5cmd`-copies `db/`, `chainData/`, and\n`configs/`\n  from `s3://firewood-fuji-state-sync` (overridable via\n  `--variable state_bucket=<bucket>`) into the avalanchego data dir\n(`--variable data_dir`, default `/mnt/nvme/ubuntu/data`). The snapshot\nlayout\nmaps directly onto avalanchego's `--data-dir` sub-defaults. The bucket's\n`staking/` identity is intentionally skipped so the node generates a\nfresh\n  NodeID on first boot.\n\nThe snapshot was produced by an **archive** node (`pruning-enabled:\nfalse`),\nwhich makes coreth open firewood in archival mode and maintain a\n`root_store/`\nindex. The stage rewrites the C-chain config to pruning mode + tuned\nparams\n  and removes the restored `root_store/` so it is not reopened:\n\n  | key | value | variable |\n  | --- | --- | --- |\n  | `pruning-enabled` | `true` | `pruning_enabled` |\n  | `state-history` | `32768` | `state_history` |\n  | `commit-interval` | `64` | `commit_interval` |\n\n(all overridable via `--variable`; `state-scheme: firewood` is\npreserved).\n- **`run-validator`** — starts avalanchego on `--network-id=fuji`\nagainst the\n  restored data dir, foregrounded to `/var/log/bootstrap.log` so\n  `--follow follow-with-progress` can stream startup.\n\nUsage:\n\n```sh\nfwdctl launch deploy --scenario validator \\\n  --instance-type i4i.xlarge --region us-east-1 --sg <sg-id> \\\n  --follow follow-with-progress\n```\n\n## How this was tested\n\n- Rendered the scenario end-to-end with `--dry-run\nplan-with-cloud-init`.\n- Launched an `i4i.xlarge` in `us-east-1`, restored the ~328 GB\nsnapshot, and\n  confirmed the node starts and validates on Fuji.\n- Verified the config-rewrite jq filter against the real C-chain\n`config.json`\nproduces `pruning-enabled=true`, `state-history=32768`,\n`commit-interval=64`\n  while preserving `state-scheme=firewood`.\n- `stage_config` unit tests pass; `markdownlint-cli2` passes on the\nupdated README.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+          "timestamp": "2026-06-09T00:41:00Z",
+          "url": "https://github.com/ava-labs/firewood/commit/137802be9b330bd63de0c156bec0814000d2d928"
+        },
+        "date": 1780993664994,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 159.11864392007217,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6284.618667956446,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 122.0018933599397,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6067.276396842817,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 91.27518594227415,
             "unit": "block_accept_ms/ggas"
           }
         ]
