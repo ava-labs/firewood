@@ -112,8 +112,8 @@ pub struct EthStorageProof {
 ///   ethereum hash mode.
 /// - Any [`Error`] surfaced by [`DbView::single_key_proof`] while fetching
 ///   the underlying firewood proofs.
-/// - [`Error::InternalError`] wrapping an account-RLP decode error if the
-///   on-disk account value cannot be parsed.
+/// - [`Error::IO`] (kind `InvalidData`) wrapping an account-RLP decode
+///   error if the on-disk account value cannot be parsed.
 pub fn eth_get_proof<V>(
     view: &V,
     account_key: &[u8; 32],

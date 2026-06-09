@@ -26,6 +26,8 @@
 //! collapses encoded bytes into a hash, this module keeps the bytes so a
 //! verifier can walk them.
 
+use std::io::{Error, ErrorKind};
+
 use firewood_storage::eth_encoding::nibbles_to_eth_compact;
 use firewood_storage::{
     BranchNode, Children, HashType, PathComponent, RlpError, RlpItem, RlpList, ValueDigest,
@@ -34,6 +36,7 @@ use firewood_storage::{
 use sha3::{Digest, Keccak256};
 use smallvec::{SmallVec, smallvec};
 
+use crate::api;
 use crate::proofs::types::ProofNode;
 
 /// Path length in nibbles at which a node is treated as an Ethereum account
@@ -194,8 +197,9 @@ pub fn account_storage_root_rlp(account_node: &ProofNode) -> Option<Box<[u8]>> {
 }
 
 /// Structured errors raised while decoding an account RLP value. Wrapped
-/// into [`crate::api::Error::InternalError`] at the public boundary so the
-/// firewood API surface keeps a single error type.
+/// into [`api::Error::IO`] with [`ErrorKind::InvalidData`] at the public
+/// boundary so the decode detail survives `Display` (the `InternalError`
+/// variant's `Display` is the bare "Internal error" and would drop it).
 #[derive(Debug, thiserror::Error)]
 enum AccountDecodeError {
     #[error("malformed account RLP: {0}")]
@@ -206,9 +210,9 @@ enum AccountDecodeError {
     Field(&'static str, RlpError),
 }
 
-impl From<AccountDecodeError> for crate::api::Error {
+impl From<AccountDecodeError> for api::Error {
     fn from(e: AccountDecodeError) -> Self {
-        crate::api::Error::InternalError(Box::new(e))
+        Error::new(ErrorKind::InvalidData, e).into()
     }
 }
 
@@ -235,10 +239,11 @@ impl AccountFields {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::api::Error::InternalError`] if the RLP is malformed,
-    /// the field count is wrong, `nonce` is more than 8 bytes, `balance` is
-    /// more than 32 bytes, or either hash field is not exactly 32 bytes.
-    pub fn from_rlp(rlp_bytes: &[u8]) -> Result<Self, crate::api::Error> {
+    /// Returns [`api::Error::IO`] (kind `InvalidData`) if the RLP is
+    /// malformed, the field count is wrong, `nonce` is more than 8 bytes,
+    /// `balance` is more than 32 bytes, or either hash field is not exactly
+    /// 32 bytes.
+    pub fn from_rlp(rlp_bytes: &[u8]) -> Result<Self, api::Error> {
         Self::from_rlp_inner(rlp_bytes).map_err(Into::into)
     }
 
@@ -513,14 +518,24 @@ mod tests {
     }
 
     #[test]
-    fn decode_account_public_wraps_internal_error() {
-        // The public API surface returns api::Error, wrapping AccountDecodeError.
+    fn decode_account_public_wraps_invalid_data() {
+        // The public API surface returns api::Error::IO(InvalidData), whose
+        // Display carries the decode detail through (InternalError's would
+        // drop it).
         let bytes = firewood_storage::encode_list(&[
             RlpItem::Bytes(&[0x01]),
             RlpItem::Bytes(&[0x02]),
             RlpItem::Bytes(&[0x03]),
         ]);
         let err = AccountFields::from_rlp(&bytes).expect_err("3 fields should fail");
-        assert!(matches!(err, crate::api::Error::InternalError(_)));
+        assert!(
+            matches!(&err, api::Error::IO(e) if e.kind() == ErrorKind::InvalidData),
+            "expected IO(InvalidData), got {err:?}"
+        );
+        assert!(
+            err.to_string()
+                .contains("account RLP has 3 fields, expected at least 4"),
+            "decode detail must survive Display, got {err}"
+        );
     }
 }
