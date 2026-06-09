@@ -84,12 +84,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         // `Preimage::write` always recomputes storageRoot from the current
         // children at hash time, but byte equality fails.
         //
-        // This early-return relaxes the per-node comparison to skip
-        // `storageRoot`. This is safe regardless of how the divergence arose
-        // since `Preimage::write` recomputes `storageRoot` before the final
-        // root-hash check in `verify_change_proof_root_hash`. The relaxation
-        // only avoids a spurious per-node `UnexpectedValue` and never widens
-        // what proofs are accepted.
+        // This early-return is safe regardless of how the divergence arose: the
+        // caller (`verify_change_proof_root_hash`) still gates acceptance on the
+        // final root-hash check, so relaxing here only avoids a spurious per-node
+        // `UnexpectedValue`. It never widens what proofs are accepted.
         if cfg!(feature = "ethhash")
             && proof_node.key.len() == ACCOUNT_DEPTH_NIBBLES
             && let (Some(pv), Some(bv)) = (proof_value, branch.value.as_deref())
