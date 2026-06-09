@@ -138,7 +138,7 @@ func (p *Proposal) Propose(batch []BatchOp) (*Proposal, error) {
 // operations that access it (such as [Database.Get] and [Database.Propose]) will
 // block until this function returns.
 func (p *Proposal) Commit() error {
-	return p.lease.release(true /* releaseOnError */, func() error {
+	return p.lease.release(func() error {
 		if p.dropped {
 			return errDroppedProposal
 		}
@@ -170,7 +170,7 @@ func (p *Proposal) Commit() error {
 // block until this function returns.
 func (p *Proposal) CommitWithRebase() (Hash, error) {
 	var hash Hash
-	err := p.lease.release(true /* releaseOnError */, func() error {
+	err := p.lease.release(func() error {
 		if p.dropped {
 			return errDroppedProposal
 		}

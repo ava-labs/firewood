@@ -70,7 +70,7 @@ func (ih *iteratorHandle) freeCurrentAllocation() error {
 // subsequent calls after the first are no-ops. Disowning is unconditional:
 // see [handle.Drop] for the reasoning behind that choice.
 func (ih *iteratorHandle) Drop() error {
-	return ih.lease.release(true /* releaseOnError */, func() error {
+	return ih.lease.release(func() error {
 		err := ih.freeCurrentAllocation()
 		if ih.dropped {
 			return err

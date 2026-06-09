@@ -246,7 +246,7 @@ func (db *Database) VerifyAndCommitRangeProof(
 	}
 
 	var hash Hash
-	err := proof.lease.release(true /* releaseOnError */, func() error {
+	err := proof.lease.release(func() error {
 		var err error
 		db.commitLock.Lock()
 		defer db.commitLock.Unlock()
@@ -351,7 +351,7 @@ func (p *RangeProof) UnmarshalBinary(data []byte) error {
 // It is safe to call Free more than once; subsequent calls after the first
 // will be no-ops.
 func (p *RangeProof) Free() error {
-	return p.lease.release(true /* releaseOnError */, func() error {
+	return p.lease.release(func() error {
 		if p.handle == nil {
 			return nil
 		}
