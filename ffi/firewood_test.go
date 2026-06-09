@@ -1826,7 +1826,7 @@ func TestLeaseReleaseRecoversPanic(t *testing.T) {
 		defer func() {
 			require.Equal(t, panicVal, recover())
 		}()
-		_ = l.release(true, func() error {
+		_ = l.release(func() error {
 			panic(panicVal)
 		})
 	}()
@@ -1979,7 +1979,7 @@ func TestCloseAndForceDropPartialThenRetry(t *testing.T) {
 	for range n {
 		l := &lease{}
 		require.NoError(t, l.attach(reg, func() error {
-			return l.release(true, func() error {
+			return l.release(func() error {
 				dropped++
 				// Cancel after the first drop so closeAndForceDrop stops with
 				// the remaining leases still registered.

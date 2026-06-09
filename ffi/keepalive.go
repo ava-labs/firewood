@@ -76,7 +76,7 @@ func drop[T any](h *handle[T]) {
 //
 // Idempotent: subsequent calls after the first return nil.
 func (h *handle[T]) Drop() error {
-	return h.lease.release(true /* releaseOnError */, func() error {
+	return h.lease.release(func() error {
 		if h.dropped {
 			return nil
 		}
@@ -150,6 +150,13 @@ func (r *keepAliveRegistry) removeAndDecr(l *lease) {
 // pending waiters when it reaches zero. Caller must hold r.mu.
 func (r *keepAliveRegistry) decrLocked() {
 	r.count--
+	if r.count < 0 {
+		// A negative count means a lease was released twice without an
+		// intervening attach — the bookkeeping that keeps Close from
+		// freeing the Db under live handles is broken, so fail loudly
+		// here rather than let a later Close proceed with handles alive.
+		panic("ffi: keep-alive handle count underflow (lease released twice)")
+	}
 	if r.count == 0 {
 		for _, w := range r.waiters {
 			close(w)
@@ -233,9 +240,10 @@ func (r *keepAliveRegistry) closeAndForceDrop(ctx context.Context) error {
 	var dropErr error
 	for _, fn := range drops {
 		if ctx.Err() != nil {
-			// Caller (Close) detects ctx cancellation itself and wraps it
-			// with ErrActiveKeepAliveHandles; returning ctx.Err() here would
-			// double-wrap when Close joins the two.
+			// Stop draining; the handles not yet dropped stay registered, so
+			// the caller's subsequent waitForKeepAlives reports them as
+			// still live. Returning ctx.Err() here would double-wrap when
+			// Close joins the two errors.
 			return dropErr
 		}
 		if err := fn(); err != nil {
@@ -328,19 +336,17 @@ func (l *lease) attachUnregistered(registry *keepAliveRegistry) {
 	l.registry = registry
 }
 
-// release runs attemptDisown and, if it returns nil (or
-// releaseOnError is true), releases the lease via [releaseLocked].
+// release runs attemptDisown and releases the lease via [releaseLocked].
 //
-// Most callers should pass releaseOnError=true: keeping the lease alive
-// on a free error means the parent database can never gracefully close,
-// since [Database.Close] waits on a count that only decrements via
-// release. Pass false only when the caller has a concrete recovery path
-// for the failed free.
+// The release is unconditional — even when attemptDisown errors or
+// panics. Keeping the lease alive on a free error would mean the parent
+// database can never gracefully close, since [Database.Close] waits on a
+// count that only decrements via release.
 //
 // Safe to call multiple times; subsequent calls after the first continue
 // to invoke attemptDisown but do not double-decrement the count unless
 // [attach] or [attachUnregistered] runs again in between.
-func (l *lease) release(releaseOnError bool, attemptDisown func() error) (err error) {
+func (l *lease) release(attemptDisown func() error) (err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -353,9 +359,7 @@ func (l *lease) release(releaseOnError bool, attemptDisown func() error) (err er
 		}
 	}()
 	err = attemptDisown()
-	if err == nil || releaseOnError {
-		l.releaseLocked()
-	}
+	l.releaseLocked()
 	return err
 }
 
