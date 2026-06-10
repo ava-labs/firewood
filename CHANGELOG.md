@@ -2,6 +2,56 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-06-09
+
+### 🚀 Features
+
+- *(proofs)* Emit canonical Ethereum MPT-RLP from ProofNode ([#2004](https://github.com/ava-labs/firewood/pull/2004))
+- *(storage)* Add NodeHashAlgorithm::is_ethereum predicate ([#2014](https://github.com/ava-labs/firewood/pull/2014))
+- *(ffi)* Code-hash iterator for change proofs ([#2033](https://github.com/ava-labs/firewood/pull/2033))
+- Add update convenience API ([#2029](https://github.com/ava-labs/firewood/pull/2029))
+- *(proofs)* 4/7 add AccountFields decoder and rlp byte-string parse helpers ([#2051](https://github.com/ava-labs/firewood/pull/2051))
+- *(metrics)* Add firewood_proof_keys histogram for proof sizes ([#2069](https://github.com/ava-labs/firewood/pull/2069))
+- *(launch)* Add validator scenario bootstrapping from S3 state snapshot ([#2071](https://github.com/ava-labs/firewood/pull/2071))
+
+### 🐛 Bug Fixes
+
+- *(storage)* 2/2 persist computed storageRoot in account node values ([#1938](https://github.com/ava-labs/firewood/pull/1938))
+- *(proofs)* Annotate edge-proof hash mismatches with Left/Right edge ([#2028](https://github.com/ava-labs/firewood/pull/2028))
+- Set background in Firewood architecture diagram ([#2065](https://github.com/ava-labs/firewood/pull/2065))
+- *(proofs)* Hash single storage child as storage-trie root ([#2058](https://github.com/ava-labs/firewood/pull/2058))
+- *(launch)* Repair grafana/prometheus metrics pipeline on launched instances ([#2070](https://github.com/ava-labs/firewood/pull/2070))
+
+### 💼 Other
+
+- *(ffi)* Run the ffi tests in debug mode ([#1562](https://github.com/ava-labs/firewood/pull/1562))
+- *(ffi)* Vendor golangci-lint as go tool, drop third-party action ([#2026](https://github.com/ava-labs/firewood/pull/2026))
+
+### 🚜 Refactor
+
+- Take &[u8] in key_value_iter_from_key ([#2041](https://github.com/ava-labs/firewood/pull/2041))
+
+### 📚 Documentation
+
+- *(changelog)* Detect breaking-change PR labels in CHANGELOG automatically ([#2016](https://github.com/ava-labs/firewood/pull/2016))
+- *(release)* Document undocumented steps, add versioning policy ([#2017](https://github.com/ava-labs/firewood/pull/2017))
+
+### ⚡ Performance
+
+- *(storage)* Fill predictive read buffer for unaligned reads ([#1964](https://github.com/ava-labs/firewood/pull/1964))
+
+### 🧪 Testing
+
+- *(fwdctl)* Refactor CLI test setup ([#2037](https://github.com/ava-labs/firewood/pull/2037))
+
+### ⚙️ Miscellaneous Tasks
+
+- Gate canonical-repo workflows on github.repository ([#2011](https://github.com/ava-labs/firewood/pull/2011))
+- Fix nightly clippy warnings ([#2019](https://github.com/ava-labs/firewood/pull/2019))
+- Bump go to 1.25.10 ([#2036](https://github.com/ava-labs/firewood/pull/2036))
+- Add 33m-33.5m benchmark ([#2038](https://github.com/ava-labs/firewood/pull/2038))
+- Add TODO checker ([#2044](https://github.com/ava-labs/firewood/pull/2044))
+
 ## [0.5.0] - 2026-05-19
 
 ### 🚀 Features
@@ -18,8 +68,8 @@ All notable changes to this project will be documented in this file.
 - *(manager)* Resolve empty-trie revision under ethhash without RootStore (TOB-FIREWOOD-7) ([#1982](https://github.com/ava-labs/firewood/pull/1982))
 - *(range-proof)* Use last_kv_key as right-edge anchor for inclusion-style end_proofs ([#1970](https://github.com/ava-labs/firewood/pull/1970))
 - *(manager)* Hold proposals lock across cleanup and reparent (TOB-FIREWOOD-6) ([#1981](https://github.com/ava-labs/firewood/pull/1981))
-- *(manager)* Use CommittedId for parent identity, skip trivial commits ([#1987](https://github.com/ava-labs/firewood/pull/1987))
-- *(storage)* Pin committed parent in Reconstructed to prevent reaping ([#2000](https://github.com/ava-labs/firewood/pull/2000))
+- *(manager)* [**breaking** firewood-storage] Use CommittedId for parent identity, skip trivial commits ([#1987](https://github.com/ava-labs/firewood/pull/1987))
+- *(storage)* [**breaking** firewood, firewood-ffi, firewood-storage] Pin committed parent in Reconstructed to prevent reaping ([#2000](https://github.com/ava-labs/firewood/pull/2000))
 
 ### 🚜 Refactor
 
@@ -88,10 +138,10 @@ All notable changes to this project will be documented in this file.
 
 ### 🚜 Refactor
 
-- *(metrics)* [**breaking**] Remove histograms ([#1847](https://github.com/ava-labs/firewood/pull/1847))
+- *(metrics)* [**breaking** firewood-go] Remove histograms ([#1847](https://github.com/ava-labs/firewood/pull/1847))
 - *(proofs)* Replace ChildMask [bool; 16] with u16 newtype ([#1849](https://github.com/ava-labs/firewood/pull/1849))
 - *(range-proofs)* Consolidate ChildrenMap into ChildMask ([#1852](https://github.com/ava-labs/firewood/pull/1852))
-- *(merkle)* [**breaking**] Reduce visibility of firewood::merkle module ([#1858](https://github.com/ava-labs/firewood/pull/1858))
+- *(merkle)* [**breaking** firewood] Reduce visibility of firewood::merkle module ([#1858](https://github.com/ava-labs/firewood/pull/1858))
 - Rename verify_root_hash to verify_range_proof_root_hash ([#1887](https://github.com/ava-labs/firewood/pull/1887))
 - *(ffi)* Remove ArcCache from DatabaseHandle ([#1891](https://github.com/ava-labs/firewood/pull/1891))
 - *(metrics)* Consolidate metric registry definitions with macro ([#1867](https://github.com/ava-labs/firewood/pull/1867))

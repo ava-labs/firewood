@@ -47,6 +47,8 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
+use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
+use firewood_storage::hash_node_as_storage_trie_root_parts;
 use firewood_storage::{
     Children, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator, Path,
     PathBuf, PathComponent, PathIterItem, Preimage, SplitPath, TrieHash, TriePath, ValueDigest,
@@ -54,6 +56,25 @@ use firewood_storage::{
 use thiserror::Error;
 
 use crate::merkle::Value;
+
+/// Which edge of a range proof was being verified when an error occurred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ProofEdge {
+    /// The start (lower-bound) proof.
+    Left,
+    /// The end (upper-bound) proof.
+    Right,
+}
+
+impl std::fmt::Display for ProofEdge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProofEdge::Left => f.write_str("left"),
+            ProofEdge::Right => f.write_str("right"),
+        }
+    }
+}
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -63,9 +84,28 @@ pub enum ProofError {
     #[error("non-monotonic range increase")]
     NonMonotonicIncreaseRange,
 
-    /// Unexpected hash
-    #[error("unexpected hash")]
-    UnexpectedHash,
+    /// A node's hash did not match the hash expected by its parent (or the
+    /// root hash for the first proof node).
+    #[error("hash mismatch (expected {expected}, was {actual})")]
+    UnexpectedHash {
+        /// Hash the verifier expected (from the parent node or `root_hash`).
+        expected: HashType,
+        /// Hash actually computed from the proof node.
+        actual: HashType,
+    },
+
+    /// Hash mismatch while verifying one of a range or change proof's edge
+    /// proofs. Carries which edge tripped, so callers can tell a tampered
+    /// start boundary apart from a tampered end boundary.
+    #[error("hash mismatch on {edge} edge proof (expected {expected}, was {actual})")]
+    EdgeProofHashMismatch {
+        /// Which edge of the proof failed.
+        edge: ProofEdge,
+        /// Hash the verifier expected.
+        expected: HashType,
+        /// Hash actually computed from the edge proof node.
+        actual: HashType,
+    },
 
     /// Unexpected value
     #[error("unexpected value")]
@@ -325,6 +365,25 @@ impl Hashable for ProofNode {
     }
 }
 
+/// Hash `node` as a standalone storage-trie root via the shared fold helper:
+/// the account branch's nibble is folded onto the front of the child's partial
+/// path, matching what live hashing wrote. Used for the lone storage child of a
+/// depth-64 account branch.
+///
+/// `None` only when the node's parent prefix is empty (`partial_len == 0`),
+/// which a real storage child never has, so it signals a malformed proof.
+fn compute_node_hash_as_storage_trie_root<N: Hashable>(node: &N) -> Option<HashType> {
+    let (branch_nibble, account_prefix) =
+        node.parent_prefix_path().into_split_path().split_last()?;
+    Some(hash_node_as_storage_trie_root_parts(
+        account_prefix,
+        branch_nibble,
+        node.partial_path().into_split_path(),
+        node.value_digest(),
+        node.children(),
+    ))
+}
+
 impl From<PathIterItem> for ProofNode {
     fn from(item: PathIterItem) -> Self {
         let child_hashes = if let Some(branch) = item.node.as_branch() {
@@ -344,7 +403,9 @@ impl From<PathIterItem> for ProofNode {
             .map(|value| ValueDigest::Value(Box::from(value)));
 
         // For account-depth nodes on databases that need storageRoot
-        // recomputation, fix the value from the node's children.
+        // recomputation, fix the value from the node's children. Newer
+        // databases (firewood-v1-hfix) persist the correct storageRoot during
+        // hashing, so we skip the RLP decode/re-encode on those.
         #[cfg(feature = "ethhash")]
         let value_digest = if item.must_recompute_storage_hash {
             fix_account_storage_root(value_digest, &item.key_nibbles, &child_hashes)
@@ -363,7 +424,7 @@ impl From<PathIterItem> for ProofNode {
 
 /// For account-depth nodes (64 nibbles), replace the storageRoot field in the
 /// value with the hash computed from the node's children. This ensures proofs
-/// from older databases contain a valid storageRoot.
+/// from older databases (before firewood-v1-hfix) contain a valid storageRoot.
 #[cfg(feature = "ethhash")]
 fn fix_account_storage_root(
     value_digest: Option<ValueDigest<Box<[u8]>>>,
@@ -442,6 +503,14 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
     ///   of the next node's key in the proof.
     /// - [`ProofError::NodeNotInTrie`] — the child pointer from one node to the
     ///   next is absent, meaning the proof path does not exist in the trie.
+    ///
+    /// # Note
+    ///
+    /// Callers verifying a range or change proof's edge proof (e.g.
+    /// `verify_edge`, `verify_boundary_proof`) intercept
+    /// [`ProofError::UnexpectedHash`] from this walk and surface
+    /// [`ProofError::EdgeProofHashMismatch`] instead, annotated with which edge
+    /// tripped.
     pub fn value_digest<K: AsRef<[u8]>>(
         &self,
         key: K,
@@ -455,10 +524,30 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
 
         let mut expected_hash = root_hash.clone().into_hash_type();
 
+        // Indicates whether the current node is hashed as a standalone storage-trie
+        // root: set to true one iteration prior to reaching the lone storage child
+        // of a depth-64 account branch.
+        let mut hash_as_storage_root = false;
+
         let mut iter = self.0.as_ref().iter().peekable();
         while let Some(node) = iter.next() {
-            if node.to_hash() != expected_hash {
-                return Err(ProofError::UnexpectedHash);
+            let computed = if cfg!(feature = "ethhash") && hash_as_storage_root {
+                compute_node_hash_as_storage_trie_root(node)
+            } else {
+                Some(node.to_hash())
+            };
+            // A malformed node yields `None`; reject it as an unexpected hash.
+            let Some(actual_hash) = computed else {
+                return Err(ProofError::UnexpectedHash {
+                    expected: expected_hash,
+                    actual: node.to_hash(),
+                });
+            };
+            if actual_hash != expected_hash {
+                return Err(ProofError::UnexpectedHash {
+                    expected: expected_hash,
+                    actual: actual_hash,
+                });
             }
 
             // Assert that only nodes whose keys are an even number of nibbles
@@ -480,10 +569,14 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
                     return Err(ProofError::ShouldBePrefixOfNextKey);
                 }
 
-                expected_hash = node.children()[key_nibble]
+                let children = node.children();
+                expected_hash = children[key_nibble]
                     .as_ref()
                     .ok_or(ProofError::NodeNotInTrie)?
                     .clone();
+
+                hash_as_storage_root =
+                    node.full_path().len() == ACCOUNT_DEPTH_NIBBLES && children.count() == 1;
             }
         }
 
@@ -760,6 +853,43 @@ mod tests {
             value_digest: value.map(|v| ValueDigest::Value(v.to_vec().into_boxed_slice())),
             child_hashes,
         }
+    }
+
+    /// A storage-child proof node at the single-storage-child fold position with
+    /// `partial_len == 0` (empty parent prefix) is rejected with `UnexpectedHash`.
+    /// `partial_len` is an independent wire field, so a proof can carry a
+    /// correctly sized key and set only `partial_len` to 0.
+    #[cfg(feature = "ethhash")]
+    #[test]
+    fn fold_rejects_zero_partial_len_storage_child() {
+        use firewood_storage::U4;
+
+        // Account branch at depth 64 (64 nibbles) with exactly one child at nibble 1.
+        let account_nibbles: Vec<u8> = vec![1u8; 64];
+        // Storage child: full 128-nibble key (account ++ branch nibble ++ slot),
+        // i.e. the correct fixed size — but with a tampered parent-prefix length.
+        let mut child_nibbles = account_nibbles.clone();
+        child_nibbles.push(1); // branch nibble
+        child_nibbles.extend([0u8; 63]);
+        let storage_child = make_node(&child_nibbles, 0, Some(b"v"), Children::new());
+
+        let mut account_children: Children<Option<HashType>> = Children::new();
+        account_children[PathComponent(U4::new_masked(1))] = Some(HashType::from([0xABu8; 32]));
+        let account = make_node(&account_nibbles, 0, None, account_children);
+        let root_hash: TrieHash = account.to_hash().into_triehash();
+
+        let proof = Proof::new(vec![account, storage_child]);
+
+        // Proven key bytes whose nibble expansion equals `child_nibbles`:
+        // [0x11; 32] => 64 nibbles of 1, then 0x10 => nibbles 1,0, then zeros.
+        let mut proven_key = vec![0x11u8; 32];
+        proven_key.push(0x10);
+        proven_key.extend([0x00u8; 31]);
+
+        assert!(matches!(
+            proof.value_digest(proven_key.as_slice(), &root_hash),
+            Err(ProofError::UnexpectedHash { .. })
+        ));
     }
 
     /// A proof for key B (nibble 3) must not be accepted as an exclusion

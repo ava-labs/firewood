@@ -18,17 +18,22 @@ use crate::api::{
 };
 use crate::iter::{MerkleKeyValueIter, PathIterator};
 use crate::merkle::changes::DiffMerkleNodeStream;
+use crate::proofs::ProofEdge;
 use crate::proofs::change::ChangeProof;
+use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
 use crate::{
     ChangeProofVerificationContext, Proof, ProofCollection, ProofError, ProofNode, RangeProof,
 };
-use firewood_metrics::firewood_counter;
+use firewood_metrics::{HistogramExt, firewood_counter, firewood_histogram};
 use firewood_storage::MemStore;
 use firewood_storage::{
     BranchNode, Child, Children, FileIoError, HashType, HashableShunt, HashedNodeReader,
     ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, Mutable, MutableKind,
     NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, Propose, ReadableStorage,
     SharedNode, TrieHash, TrieReader, U4, ValueDigest,
+};
+use firewood_storage::{
+    hash_node_as_storage_trie_root_for_node, hash_node_as_storage_trie_root_parts,
 };
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -133,11 +138,13 @@ fn verify_edge<H: ProofCollection + ?Sized>(
     edge_kv: Option<(&[u8], &[u8])>,
     edge_proof: &Proof<H>,
     root_hash: &TrieHash,
-    bound_is_lower: bool,
+    edge: ProofEdge,
 ) -> Result<(), api::Error> {
     if edge_proof.is_empty() {
         return Ok(());
     }
+
+    let bound_is_lower = matches!(edge, ProofEdge::Left);
 
     // Validate bound vs edge key ordering
     if let (Some(bound), Some((edge_key, _))) = (requested_bound, edge_kv) {
@@ -156,13 +163,28 @@ fn verify_edge<H: ProofCollection + ?Sized>(
         }
     }
 
+    // Any `UnexpectedHash` bubbling up from this edge's `verify()` walk is
+    // by construction an edge-proof failure — re-stamp it with which edge.
+    let annotate = |e: ProofError| match e {
+        ProofError::UnexpectedHash { expected, actual } => ProofError::EdgeProofHashMismatch {
+            edge,
+            expected,
+            actual,
+        },
+        other => other,
+    };
+
     // Verify the proof for this edge
     if let Some(bound) = requested_bound {
         let expected_value: Option<&[u8]> =
             edge_kv.and_then(|(key, value)| (bound == key).then_some(value));
-        edge_proof.verify(bound, expected_value, root_hash)?;
+        edge_proof
+            .verify(bound, expected_value, root_hash)
+            .map_err(|e| api::Error::ProofError(annotate(e)))?;
     } else if let Some((edge_key, edge_value)) = edge_kv {
-        edge_proof.verify(edge_key, Some(edge_value), root_hash)?;
+        edge_proof
+            .verify(edge_key, Some(edge_value), root_hash)
+            .map_err(|e| api::Error::ProofError(annotate(e)))?;
     }
 
     Ok(())
@@ -357,24 +379,93 @@ fn compute_outside_children(
     Ok(result)
 }
 
-/// Recursively computes the hash of a node in the proving trie, merging
-/// child hashes from proof nodes for subtrees outside the proven range.
+/// Compute the hash of a node in the proving trie, merging child hashes
+/// from proof nodes for subtrees outside the proven range.
 ///
 /// For branch nodes, in-range children that are in-memory (`Child::Node`)
 /// are hashed recursively. Persisted children (`AddressWithHash`,
 /// `MaybePersisted`) already carry their hash and are used directly.
 /// Out-of-range children get their hash from the corresponding proof node.
+///
+/// Hashes the node as a normal trie node. Under `ethhash`, when this node
+/// is the single storage child of an account at depth 64, the parent
+/// instead invokes `compute_root_hash_as_storage_trie_root` to apply the
+/// storage-trie-root fold.
 fn compute_root_hash_with_proofs(
     node: &Node,
     path_prefix: &[PathComponent],
     proof_nodes: &HashMap<PathBuf, &ProofNode>,
     outside_children: &HashMap<PathBuf, ChildMask>,
 ) -> HashType {
-    let branch = match node {
-        Node::Leaf(_) => return HashableShunt::from_node(path_prefix, node).to_hash(),
-        Node::Branch(branch) => branch,
-    };
+    match node {
+        Node::Leaf(_) => HashableShunt::from_node(path_prefix, node).to_hash(),
+        Node::Branch(branch) => {
+            let parts = build_branch_parts(branch, path_prefix, proof_nodes, outside_children);
+            HashableShunt::new(
+                path_prefix,
+                parts.partial_path,
+                parts.value_digest,
+                parts.child_hashes,
+            )
+            .to_hash()
+        }
+    }
+}
 
+/// Compute the hash of a node as a standalone storage-trie root, applying
+/// the account-branch-nibble fold. Invoked by the parent at depth-64
+/// account boundaries when this node is the account's lone storage child;
+/// the fold matches what live hashing produced when the storage trie was
+/// first written.
+fn compute_root_hash_as_storage_trie_root(
+    node: &Node,
+    account_prefix: &[PathComponent],
+    branch_nibble: PathComponent,
+    proof_nodes: &HashMap<PathBuf, &ProofNode>,
+    outside_children: &HashMap<PathBuf, ChildMask>,
+) -> HashType {
+    match node {
+        Node::Leaf(_) => {
+            hash_node_as_storage_trie_root_for_node(account_prefix, branch_nibble, node)
+        }
+        Node::Branch(branch) => {
+            let path_prefix: PathBuf = account_prefix
+                .iter()
+                .copied()
+                .chain(once(branch_nibble))
+                .collect();
+            let parts = build_branch_parts(branch, &path_prefix, proof_nodes, outside_children);
+            hash_node_as_storage_trie_root_parts(
+                account_prefix,
+                branch_nibble,
+                parts.partial_path,
+                parts.value_digest,
+                parts.child_hashes,
+            )
+        }
+    }
+}
+
+/// Hashable parts of a branch node assembled by `build_branch_parts`. The
+/// caller applies the final hash via either `HashableShunt::new` (normal)
+/// or `hash_node_as_storage_trie_root_parts` (the single-storage-child
+/// fold used at depth-64 account boundaries under `ethhash`).
+struct BranchParts<'b> {
+    partial_path: &'b [PathComponent],
+    value_digest: Option<ValueDigest<&'b [u8]>>,
+    child_hashes: Children<Option<HashType>>,
+}
+
+/// Recursive worker for the two `compute_root_hash_with_proofs` entry
+/// points. Walks `branch`'s children (recursing into in-range subtrees,
+/// copying proof-node hashes for out-of-range slots) and returns the parts
+/// the caller needs to hash this node by either terminal helper.
+fn build_branch_parts<'b>(
+    branch: &'b BranchNode,
+    path_prefix: &[PathComponent],
+    proof_nodes: &HashMap<PathBuf, &'b ProofNode>,
+    outside_children: &HashMap<PathBuf, ChildMask>,
+) -> BranchParts<'b> {
     // Build full key for this node: path_prefix ++ partial_path
     let full_key: PathBuf = path_prefix
         .iter()
@@ -382,9 +473,13 @@ fn compute_root_hash_with_proofs(
         .copied()
         .collect();
 
-    let mut child_hashes: Children<Option<HashType>> = Children::new();
-
     let outside_mask = outside_children.get(&full_key);
+    let proof_node = proof_nodes.get(&full_key);
+
+    let single_storage_child =
+        single_effective_account_child(&full_key, branch, proof_node.copied(), outside_mask);
+
+    let mut child_hashes: Children<Option<HashType>> = Children::new();
 
     // For children inside the proven range, compute hashes recursively.
     // For children outside the range, use proof node hashes (set below).
@@ -404,15 +499,27 @@ fn compute_root_hash_with_proofs(
             unreachable!()
         };
         child_prefix.push(nibble);
-        let child_hash =
-            compute_root_hash_with_proofs(child_node, &child_prefix, proof_nodes, outside_children);
+        // Apply the storage-trie-root fold for the account's lone storage
+        // child; the dispatch lives here at the parent so the child's recursive
+        // call doesn't need to carry a flag.
+        let child_hash = if cfg!(feature = "ethhash") && single_storage_child == Some(nibble) {
+            compute_root_hash_as_storage_trie_root(
+                child_node,
+                &full_key,
+                nibble,
+                proof_nodes,
+                outside_children,
+            )
+        } else {
+            compute_root_hash_with_proofs(child_node, &child_prefix, proof_nodes, outside_children)
+        };
         child_hashes[nibble] = Some(child_hash);
         child_prefix.pop();
     }
 
     // For children outside the proven range, use proof node hashes.
-    if let (Some(proof_node), Some(outside)) = (proof_nodes.get(&full_key), outside_mask) {
-        for (nibble, hash) in proof_node.child_hashes.iter_present() {
+    if let (Some(pn), Some(outside)) = (proof_node, outside_mask) {
+        for (nibble, hash) in pn.child_hashes.iter_present() {
             if outside.is_set(nibble.0) {
                 child_hashes[nibble] = Some(hash.clone());
             }
@@ -425,18 +532,59 @@ fn compute_root_hash_with_proofs(
     // hash chain was verified by `value_digest()` during boundary proof
     // validation, and `reconcile_branch_proof_node` verified the hash
     // against the branch value when present. The digest is trusted.
-    let value_digest = branch.value.as_deref().map(ValueDigest::Value).or_else(|| {
-        proof_nodes
-            .get(&full_key)
-            .and_then(|pn| pn.value_digest.as_ref().map(ValueDigest::as_ref))
-    });
-    HashableShunt::new(
-        path_prefix,
-        branch.partial_path.as_components(),
+    let value_digest =
+        branch.value.as_deref().map(ValueDigest::Value).or_else(|| {
+            proof_node.and_then(|pn| pn.value_digest.as_ref().map(ValueDigest::as_ref))
+        });
+
+    BranchParts {
+        partial_path: branch.partial_path.as_components(),
         value_digest,
         child_hashes,
-    )
-    .to_hash()
+    }
+}
+
+/// At a depth-64 account branch, return the slot of the single effective
+/// storage child (the fake-root case live hashing applies), or `None`.
+///
+/// An "effective" child is either an in-range branch child or an
+/// out-of-range child carried by the proof node — together they reflect
+/// the true on-disk shape. Proof verification only; live hashing has its
+/// own detection in `hash_helper_inner`. Without `ethhash` there is no
+/// account-branch fold, so this always returns `None`.
+fn single_effective_account_child(
+    full_key: &[PathComponent],
+    branch: &BranchNode,
+    proof_node: Option<&ProofNode>,
+    outside_mask: Option<&ChildMask>,
+) -> Option<PathComponent> {
+    if !cfg!(feature = "ethhash") || full_key.len() != ACCOUNT_DEPTH_NIBBLES {
+        return None;
+    }
+
+    let mut only_child: Option<PathComponent> = None;
+    // In-range branch children (those NOT marked as outside).
+    for (nibble, _) in branch.children.iter_present() {
+        if !outside_mask.is_some_and(|m| m.is_set(nibble.0)) {
+            if only_child.is_some() {
+                return None;
+            }
+            only_child = Some(nibble);
+        }
+    }
+    // Out-of-range children, taken from the proof node.
+    if let (Some(pn), Some(mask)) = (proof_node, outside_mask) {
+        for (nibble, _) in pn.child_hashes.iter_present() {
+            if mask.is_set(nibble.0) {
+                if only_child.is_some() {
+                    return None;
+                }
+                only_child = Some(nibble);
+            }
+        }
+    }
+
+    only_child
 }
 
 /// Reject any proof node that carries a value digest (either
@@ -694,7 +842,7 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
             left_edge_kv,
             proof.start_proof(),
             root_hash,
-            true,
+            ProofEdge::Left,
         )?;
     }
 
@@ -716,7 +864,13 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     let right_boundary = right_edge(proof.end_proof().as_ref(), last_kv_bytes, last_key_bytes);
     match &right_boundary {
         RightBoundary::InRange(bound) => {
-            verify_edge(*bound, right_edge_kv, proof.end_proof(), root_hash, false)?;
+            verify_edge(
+                *bound,
+                right_edge_kv,
+                proof.end_proof(),
+                root_hash,
+                ProofEdge::Right,
+            )?;
         }
         RightBoundary::OutOfRange(bound) => {
             // `right_edge` only returns `OutOfRange(K)` when `K > last_kv`
@@ -850,17 +1004,21 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
         //    proving trie doesn't have (e.g., empty range where no key-value
         //    pairs were inserted). Accept the proof's value.
         //  - ValueDigest::Hash: When the hash matches the branch value,
-        //    reconcile_branch_proof_node returns early (no callback). When
-        //    the branch has no value, None == None succeeds (no callback).
-        //    A hash mismatch with an existing branch value reaches the
-        //    callback and is rejected.
+        //    reconcile_branch_proof_node returns early (no callback). When the
+        //    branch has no value, the node is out of range — its subtree is
+        //    represented by the proof's stored hash, so we accept it with no
+        //    value (`Ok(None)`). A hash mismatch against an *existing* branch
+        //    value is a real conflict and is rejected. (In-range range-proof
+        //    keys are always present in `key_values`, so a missing branch
+        //    value here can only be out of range.)
         //  - ValueDigest::None: Unreachable — if the trie has a value, the
         //    proof node will carry Value or Hash, not None.
-        //
-        // The _ arm rejects defensively for both Hash mismatch and None.
-        proving_merkle.reconcile_branch_proof_node(proof_node, |pn| match &pn.value_digest {
-            Some(ValueDigest::Value(v)) => Ok(Some(v.clone())),
-            _ => Err(ProofError::UnexpectedValue),
+        proving_merkle.reconcile_branch_proof_node(proof_node, |pn, branch_value| {
+            match &pn.value_digest {
+                Some(ValueDigest::Value(v)) => Ok(Some(v.clone())),
+                _ if branch_value.is_none() => Ok(None),
+                _ => Err(ProofError::UnexpectedValue),
+            }
         })?;
         match proof_node_map.entry(proof_node.key.clone()) {
             std::collections::hash_map::Entry::Occupied(existing) => {
@@ -895,8 +1053,12 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
     let computed =
         compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children);
 
-    if computed != root_hash.clone().into_hash_type() {
-        return Err(api::Error::ProofError(ProofError::UnexpectedHash));
+    let expected = root_hash.clone().into_hash_type();
+    if computed != expected {
+        return Err(api::Error::ProofError(ProofError::UnexpectedHash {
+            expected,
+            actual: computed,
+        }));
     }
 
     Ok(())
@@ -975,13 +1137,16 @@ pub fn verify_change_proof_root_hash(
         .unwrap_or_default();
 
     for proof_node in start_nodes {
-        proving_merkle.reconcile_branch_proof_node(proof_node, |pn| {
+        proving_merkle.reconcile_branch_proof_node(proof_node, |pn, _branch_value| {
             let node_nibbles: Vec<u8> = pn.key.iter().map(|c| c.as_u8()).collect();
             // A start proof node is in-range if its key >= start_key. This
             // covers both inclusion proofs (key == start_key) and exclusion
             // proofs where the terminal node overshoots start_key to the
-            // nearest existing key. Value conflicts at in-range positions
-            // are real errors — the proposal already has the correct value.
+            // nearest existing key. Reaching this guard at an in-range
+            // position is always a real error: the proposal already holds the
+            // correct value, so the only way the proof node and branch
+            // disagree is tampering — e.g. a dropped in-range `Put` whose
+            // boundary proof still carries the omitted key's hash.
             if node_nibbles >= start_key_nibbles {
                 Err(ProofError::UnexpectedValue)
             } else {
@@ -1004,7 +1169,7 @@ pub fn verify_change_proof_root_hash(
         .unwrap_or_default();
 
     for proof_node in end_nodes {
-        proving_merkle.reconcile_branch_proof_node(proof_node, |pn| {
+        proving_merkle.reconcile_branch_proof_node(proof_node, |pn, _branch_value| {
             let node_nibbles: Vec<u8> = pn.key.iter().map(|c| c.as_u8()).collect();
             // Symmetric to the start proof: an end proof node is in-range
             // if its key <= end_key (covers exclusion proofs where the
@@ -1158,12 +1323,8 @@ impl<T: TrieReader> Merkle<T> {
         PathIterator::new(&self.nodestore, key)
     }
 
-    pub(super) fn key_value_iter_from_key<K: AsRef<[u8]>>(
-        &self,
-        key: K,
-    ) -> MerkleKeyValueIter<'_, T> {
-        // TODO danlaine: change key to &[u8]
-        MerkleKeyValueIter::from_key(&self.nodestore, key.as_ref())
+    pub(super) fn key_value_iter_from_key(&self, key: &[u8]) -> MerkleKeyValueIter<'_, T> {
+        MerkleKeyValueIter::from_key(&self.nodestore, key)
     }
 
     /// Generate a cryptographic proof for a range of key-value pairs in the Merkle trie.
@@ -1264,6 +1425,8 @@ impl<T: TrieReader> Merkle<T> {
         .map(|end_key| self.prove(end_key))
         .transpose()?
         .unwrap_or_default();
+
+        firewood_histogram!(PROOF_KEYS, "kind" => "range").record_integer(key_values.len());
 
         Ok(RangeProof::new(start_proof, end_proof, key_values))
     }
@@ -1464,6 +1627,8 @@ impl<T: HashedNodeReader> Merkle<T> {
             .map(|key| self.prove(key))
             .transpose()?
             .unwrap_or_default();
+
+        firewood_histogram!(PROOF_KEYS, "kind" => "change").record_integer(batch_ops.len());
 
         Ok(ChangeProof::new(start_proof, end_proof, batch_ops))
     }
@@ -1962,7 +2127,7 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
     ) -> Result<Option<Node>, FileIoError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`, in which case we need to delete this node and all its children.
-        // 2. The key is above the node (i.e. its ancestor), so the parent needs to be restructured (TODO).
+        // 2. The key is above the node (i.e. its ancestor), so the parent needs to be restructured (TODO(rkuris)).
         // 3. The key is below the node (i.e. its descendant), so continue traversing the trie.
         // 4. Neither is an ancestor of the other, in which case there's no work to do.
         let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());

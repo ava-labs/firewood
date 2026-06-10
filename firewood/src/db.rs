@@ -118,7 +118,7 @@ pub struct DbConfig {
     pub manager: RevisionManagerConfig,
     // Whether to perform parallel proposal creation. If set to BatchSize, then firewood
     // performs parallel proposal creation if the batch is >= to the BatchSize value.
-    // TODO: Experimentally determine the right value for BatchSize.
+    // TODO(bernard-avalabs): Experimentally determine the right value for BatchSize.
     #[builder(default = UseParallel::BatchSize(8))]
     pub use_parallel: UseParallel,
     /// Whether to enable `RootStore`.
@@ -763,6 +763,59 @@ mod test {
     }
 
     #[test]
+    fn test_update_commits_batch_and_returns_root() {
+        let db = TestDb::new();
+
+        let root = db
+            .update(vec![BatchOp::Put {
+                key: b"k",
+                value: b"v",
+            }])
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(db.root_hash().as_ref(), Some(&root));
+
+        let historical = db.revision(root.clone()).unwrap();
+        assert_eq!(&*historical.val(b"k").unwrap().unwrap(), b"v");
+
+        let next_root = db
+            .update(vec![BatchOp::Put {
+                key: b"k",
+                value: b"v2",
+            }])
+            .unwrap()
+            .unwrap();
+
+        assert_ne!(root, next_root);
+        assert_eq!(&*historical.val(b"k").unwrap().unwrap(), b"v");
+        assert_eq!(
+            &*db.revision(next_root).unwrap().val(b"k").unwrap().unwrap(),
+            b"v2"
+        );
+    }
+
+    #[test]
+    fn test_update_returns_empty_root_after_delete_all() {
+        let db = TestDb::new();
+
+        db.update(vec![BatchOp::Put {
+            key: b"k",
+            value: b"v",
+        }])
+        .unwrap();
+
+        let root = db
+            .update(vec![BatchOp::<&[u8], &[u8]>::Delete {
+                key: b"k".as_slice(),
+            }])
+            .unwrap();
+
+        assert_eq!(root, TrieHash::default_root_hash());
+        assert_eq!(db.root_hash(), TrieHash::default_root_hash());
+    }
+
+    #[test]
     fn test_proposal_reads() {
         let db = TestDb::new();
         let batch = vec![BatchOp::Put {
@@ -971,7 +1024,7 @@ mod test {
         let db = db.replace();
         let final_root = db.root_hash();
         println!("{final_root:?}");
-        assert!(final_root == initial_root);
+        assert_eq!(final_root, initial_root);
     }
 
     #[test]
@@ -1808,7 +1861,7 @@ mod test {
 
         let mut version = [0_u8; 16];
         file.read_exact_at(&mut version, 0).unwrap();
-        assert_eq!(&version, b"firewood-v1\0\0\0\0\0");
+        assert_eq!(&version, b"firewood-v1-hfix");
 
         // overwrite the magic string to simulate an older version
         file.write_all_at(b"firewood 0.0.18\0", 0).unwrap();
