@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780993666012,
+  "lastUpdate": 1781080049240,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -4464,6 +4464,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 91.27518594227415,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "8057a8cffaad411ee1143fcc68af4d0c3a5a3839",
+          "message": "fix(proofs): reject change proof that drops an in-range Put behind a left-edge exclusion boundary (#2064)\n\nFixes the soundness gap tracked in #2008.\n\n## Why this should be merged\n\nChange-proof verification *accepted* a tampered proof that drops an\nin-range `Put` from `batch_ops` when the dropped key sits at the\nleft-edge exclusion boundary. Both the structural and root-hash checks\npassed, so a malicious peer could omit a real mutation and still produce\na proof that verifies against the honest root.\n\n## How this works\n\nIn merkledb mode, values ≥ 32 bytes are serialized as\n`ValueDigest::Hash`. `reconcile_branch_proof_node`'s Hash-digest arm\nfell through to the `proof_value == branch.value` (`None == None`)\nshort-circuit when the branch held no value, returning `Ok(())` without\nconsulting `on_conflict`. A dropped in-range `Put` leaves the proving\ntrie's branch empty while the boundary proof still carries the omitted\nkey's hash, so the in-range guard (`node_nibbles >= start_key →\nUnexpectedValue`) was bypassed.\n\nFix: when the proof asserts a (hashed) value the branch does not satisfy\n— including an empty branch — defer to `on_conflict` instead of treating\nit as agreement. `on_conflict` now also receives the branch's current\nvalue (`Option<&[u8]>`) so the range-proof closure can still distinguish\nan out-of-range node (no branch value → accept the proof's stored hash)\nfrom a real mismatch (reject).\n\nethhash and small-value merkledb were already safe — they reach\n`on_conflict` via the `Value` digest arm.\n\n## How this was tested\n\n- `cargo nextest run --workspace --features ethhash,logger\n--all-targets` — 752 pass.\n- `cargo clippy --workspace --features ethhash,logger --all-targets` —\nclean.\n- `cargo doc --no-deps` — builds.\n- The original soundness repro (merkledb fuzz seed\n`16855342578241928557`, scenario `M1_omit_put`) now rejects. The fuzzer\nthat exercises it lives on #1951's branch and is not yet on `main`, so\nthis PR carries the targeted reconcile unit tests; #1951 proves it\nend-to-end and lands separately.\n\n## Breaking Changes\n\nNone. `reconcile_branch_proof_node` is `pub(crate)`; the `on_conflict`\nsignature gained a parameter but has no external callers.",
+          "timestamp": "2026-06-09T23:43:18Z",
+          "url": "https://github.com/ava-labs/firewood/commit/8057a8cffaad411ee1143fcc68af4d0c3a5a3839"
+        },
+        "date": 1781080048169,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 169.67909283424422,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5893.477996000828,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 73.55776081766093,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5772.426650243974,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 45.690717741904976,
             "unit": "block_accept_ms/ggas"
           }
         ]
