@@ -641,31 +641,37 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
 - **Multi-renderer output path.** Enabling both the `html` and `linkcheck` renderers
   moves HTML output to `docs/book/html/`; the CI copy step and any local tooling must
   target that path, not `docs/book/`. Captured in build step 4.
-- **Tool choice & possible cross-repo adoption (open question).** A peer reviewer
-  (SWE-M over both Firewood and AvalancheGo) asked whether two mdBook "specs" could
-  merge into a single repo. AvalancheGo has no docs-site framework today (no
-  `book.toml`/`SUMMARY.md`, no MkDocs/Docusaurus), so there is nothing to merge now;
-  the question is forward-looking — *if the Firewood book goes well, should AvalancheGo
-  adopt the same tooling, and is mdBook the right choice for a Go project?*
-  - **For Firewood, mdBook is the right tool:** native to the Rust ecosystem, pairs
-    naturally with rustdoc, single-binary, Markdown + `SUMMARY.md`, minimal ceremony.
-  - **The SSG's implementation language is irrelevant to the documented project's
-    language** — mdBook consumes Markdown and does not care that AvalancheGo is Go. The
-    "idiomatic Go" pull is toward [Hugo](https://gohugo.io/) (written in Go, very fast,
-    Docsy theme) or [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/)
-    (Python, the most popular pure-docs tool, richer features such as versioned docs and
-    mega-nav). A project the size of AvalancheGo may legitimately prefer one of those
-    for their feature depth.
-  - **They do not "integrate" with each other.** mdBook has no native multi-book /
-    sub-book concept (one `SUMMARY.md` = one book), and different generators do not
-    compose. "Merging two books into one repo/site" is therefore a **CI-staging +
-    cross-linking** concern — stage each independently built site into one Pages
-    artifact under distinct path prefixes and cross-link — exactly the pattern this
-    design already uses for rustdoc/godoc/benchmarks. It is not a tool feature and not a
-    reason to change Firewood's choice.
-  - **Recommendation:** treat the Firewood book as the pilot; do not let AvalancheGo's
-    hypothetical adoption dictate Firewood's tooling. Revisit a shared-tooling decision
-    if/when AvalancheGo actually starts a docs site, at which point cross-linking (not
-    merging) is the integration path regardless of which tool each repo picks. **This
-    is the open question to close with the peer reviewer** — confirm interpretation (a)
-    above is what they meant.
+- **Firewood as a future sub-book of an AvalancheGo doc book (answered; deferred).**
+  A peer reviewer (SWE-M over both Firewood and AvalancheGo) asked whether two mdBook
+  books could merge into a single repo. *Clarified intent:* a hypothetical future in
+  which AvalancheGo stands up its own documentation book and Firewood's book becomes a
+  **sub-component / sub-book of that parent AvalancheGo book** (AvalancheGo as the
+  parent, Firewood nested beneath it). **This does not change the current spec**, and is
+  explicitly deferred: it is a future concern that depends on unanswered questions on
+  the AvalancheGo side. AvalancheGo has no docs-site framework today (no
+  `book.toml`/`SUMMARY.md`, no MkDocs/Docusaurus), so there is no parent book to nest
+  under and no tooling decision to align with yet. The reasoning that lets us defer
+  safely without painting ourselves into a corner:
+  - **mdBook has no native multi-book / sub-book nesting** (one `SUMMARY.md` defines
+    exactly one book; `{{#include}}` pulls source snippets, not whole books). So even if
+    AvalancheGo adopts mdBook, "Firewood as a sub-book" would be realized by
+    **CI-staging + cross-linking** — building each book independently and assembling them
+    under distinct path prefixes in one deployed site, with cross-links between them —
+    the pattern this design already uses to stage rustdoc/godoc/benchmarks alongside the
+    book. It is not a native tool feature.
+  - **Keeping Firewood's book self-contained and independently deployable preserves the
+    option.** Because the book builds and deploys on its own with relative internal
+    links (no dependency on a parent), it can later be staged under an AvalancheGo parent
+    with no structural rework — only `SUMMARY.md` framing and cross-links would change.
+    Nothing in this MVP forecloses the nesting future.
+  - **AvalancheGo's tooling choice is theirs to make and is irrelevant to Firewood's.**
+    The SSG's implementation language does not constrain the documented project's
+    language; if AvalancheGo prefers a Go-idiomatic generator
+    ([Hugo](https://gohugo.io/)) or the popular [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/),
+    cross-generator composition is still CI-staging + cross-linking, not merging. So the
+    nesting question can be answered then, on AvalancheGo's terms, without revisiting
+    Firewood's choice now.
+  - **Conclusion:** mdBook is the right tool for Firewood (native to the Rust ecosystem,
+    pairs with rustdoc, minimal ceremony); the sub-book integration is a tractable
+    future CI-staging exercise rather than a design constraint on this work; revisit it
+    if and when AvalancheGo starts its own book.
