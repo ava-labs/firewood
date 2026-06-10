@@ -72,7 +72,9 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     };
 
     let mut header = NodeStoreHeader::read_from_storage(storage.as_ref())?;
-    let nodestore = NodeStore::open(&header, storage)?;
+    // Open with delete tracking enabled: the checker repairs free lists, which
+    // requires it regardless of how the database is normally run.
+    let nodestore = NodeStore::open(&header, storage, true)?;
     let check_report = nodestore.check(&header, check_ops);
 
     println!("Errors ({}): ", check_report.errors.len());

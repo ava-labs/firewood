@@ -195,7 +195,14 @@ impl RevisionManager {
             }
             Err(err) => return Err(err.into()),
         };
-        let nodestore = Arc::new(NodeStore::open(&header, storage.clone())?);
+        // `root_store` enables archival mode: old nodes are preserved on disk
+        // for historical queries, so disable delete tracking and skip the
+        // future-delete log (#2015).
+        let nodestore = Arc::new(NodeStore::open(
+            &header,
+            storage.clone(),
+            !config.root_store,
+        )?);
         let root_store = config
             .root_store
             .then(|| {
@@ -539,7 +546,10 @@ impl RevisionManager {
         //    against the file backing carried by the latest committed revision.
         if HashKey::default_root_hash().as_ref() == Some(&root_hash) {
             let storage = self.current_revision().storage().clone();
-            return Ok(Arc::new(NodeStore::new_empty_committed(storage)));
+            return Ok(Arc::new(NodeStore::new_empty_committed(
+                storage,
+                self.root_store.is_none(),
+            )));
         }
 
         // 3. Check `RootStore` (if it exists).

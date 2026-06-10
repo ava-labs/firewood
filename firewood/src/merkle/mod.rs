@@ -989,7 +989,7 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
 ) -> Result<(), api::Error> {
     // Build in-memory merkle from key-value pairs
     let memstore = MemStore::default();
-    let nodestore = NodeStore::new_empty_proposal(memstore.into());
+    let nodestore = NodeStore::new_empty_proposal(memstore.into(), true);
     let mut proving_merkle: Merkle<NodeStore<Mutable<Propose>, MemStore>> = Merkle::from(nodestore);
 
     for (key, value) in key_values {

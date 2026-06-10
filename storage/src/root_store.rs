@@ -161,6 +161,9 @@ impl RootStore {
             hash.clone().into_hash_type(),
             addr,
             self.storage.clone(),
+            // `RootStore` only exists when the database was opened in
+            // archival mode, where deleted nodes are never tracked.
+            false,
         )?);
 
         // 5. Cache for future lookups.
@@ -203,8 +206,9 @@ mod tests {
         let root_store_dir = tmpdir.as_ref().join("root_store");
         let root_store = RootStore::new(root_store_dir, file_backed.clone(), false).unwrap();
 
-        // Create a revision to cache.
-        let revision = Arc::new(NodeStore::new_empty_committed(file_backed.clone()));
+        // Create a revision to cache. `RootStore` implies archival mode,
+        // where deleted nodes are never tracked.
+        let revision = Arc::new(NodeStore::new_empty_committed(file_backed.clone(), false));
 
         let hash = TrieHash::from_bytes([1; 32]);
         root_store

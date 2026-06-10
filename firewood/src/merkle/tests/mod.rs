@@ -72,7 +72,7 @@ where
         NodeHashAlgorithm::compile_option(),
     ));
     let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
-    let base = Merkle::from(NodeStore::new_empty_committed(memstore.clone()));
+    let base = Merkle::from(NodeStore::new_empty_committed(memstore.clone(), true));
     let mut merkle = base.fork().unwrap();
 
     for (k, v) in iter.clone() {
@@ -200,7 +200,7 @@ fn insert_one() {
 fn create_in_memory_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
     let memstore = MemStore::default();
 
-    let nodestore = NodeStore::new_empty_proposal(memstore.into());
+    let nodestore = NodeStore::new_empty_proposal(memstore.into(), true);
 
     Merkle { nodestore }
 }

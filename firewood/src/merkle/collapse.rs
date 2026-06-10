@@ -414,7 +414,7 @@ mod tests {
 
     fn create_test_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
         let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_proposal(memstore.into());
+        let nodestore = NodeStore::new_empty_proposal(memstore.into(), true);
         Merkle { nodestore }
     }
 
