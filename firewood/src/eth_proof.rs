@@ -191,7 +191,7 @@ where
 ///   * no child nibbles: the account has no storage, so the proof is empty
 ///     and the value absent.
 ///   * exactly 1 child nibble: the account's lone child is itself the storage
-///     root (see [`storage_root_node_rlp`]).
+///     root (see [`account_storage_root_rlp`]).
 ///   * 2+ child nibbles: firewood folds the storage branch into the account
 ///     node, so there is no on-disk branch node; the root is synthesized from
 ///     the account's child hashes (see [`account_storage_root_rlp`]).
