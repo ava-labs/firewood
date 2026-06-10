@@ -612,66 +612,17 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
       reference is updated accordingly; the book renders the diagram.
 - [ ] `markdownlint-cli2 .` passes.
 
-## Risks & open questions
+## Accepted trade-off
 
 - **Broken external deep links to `/firewood/<crate>`.** Relocating rustdoc to
-  `/rustdoc/` breaks existing bookmarks/SEO to
-  `https://ava-labs.github.io/firewood/firewood/...`. Mitigation: the `/rustdoc/`
-  redirect index. Per-crate redirect stubs at the old paths are explicitly out of
-  scope (accepted 404s for the cleaner root UX); a CI step writing such stubs remains
-  a documented future option if the breakage proves painful.
-- **`mdbook-admonish` is not in `taiki-e/install-action`.** Resolved: install it via
-  `cargo binstall` (with `cargo-binstall` itself provided by `taiki-e/install-action`),
-  pinned to an explicit version. Because assets are installed fresh from this binary at
-  build time (not vendored), the only requirement is that this pin matches the version
-  the `book.toml` `[preprocessor.admonish]` config expects. Verify `cargo-binstall` has
-  a prebuilt artifact for the chosen `mdbook-admonish` version at implementation time;
+  `/rustdoc/` breaks existing bookmarks/SEO to `…/firewood/firewood/…`. Mitigated by the
+  `/rustdoc/` redirect index; per-crate redirect stubs at the old paths are out of scope
+  (accepted 404s for the cleaner root UX) and remain a documented future option if the
+  breakage proves painful.
+
+### Verify at implementation time
+
+- `cargo-binstall` has a prebuilt artifact for the pinned `mdbook-admonish` version;
   otherwise fall back to a versioned GitHub Releases download.
-- **`site-url` and local serve.** `site-url = "/firewood/"` affects only the generated
-  404 page; normal pages use relative links and render correctly both locally and at
-  the `/firewood/` base. No special local-serve handling is required for normal pages.
-  Verify the 404 page links resolve on the deployed base.
-- **Preprocessor asset handling.** Assets are not vendored; they are installed fresh
-  from the pinned `mdbook-mermaid`/`mdbook-admonish` binaries on every build (CI build
-  step 3 and the `just book-assets` recipe). This eliminates the committed-CSS drift
-  risk entirely — there is no checked-in asset to fall out of sync. The residual
-  requirement is that contributors have the preprocessor binaries installed locally
-  (already Getting-Started prerequisites) and that the `install` subcommands are wired
-  into the build recipes so a fresh checkout builds without a manual step.
-- **Multi-renderer output path.** Enabling both the `html` and `linkcheck` renderers
-  moves HTML output to `docs/book/html/`; the CI copy step and any local tooling must
-  target that path, not `docs/book/`. Captured in build step 4.
-- **Firewood as a future sub-book of an AvalancheGo doc book (answered; deferred).**
-  A peer reviewer (SWE-M over both Firewood and AvalancheGo) asked whether two mdBook
-  books could merge into a single repo. *Clarified intent:* a hypothetical future in
-  which AvalancheGo stands up its own documentation book and Firewood's book becomes a
-  **sub-component / sub-book of that parent AvalancheGo book** (AvalancheGo as the
-  parent, Firewood nested beneath it). **This does not change the current spec**, and is
-  explicitly deferred: it is a future concern that depends on unanswered questions on
-  the AvalancheGo side. AvalancheGo has no docs-site framework today (no
-  `book.toml`/`SUMMARY.md`, no MkDocs/Docusaurus), so there is no parent book to nest
-  under and no tooling decision to align with yet. The reasoning that lets us defer
-  safely without painting ourselves into a corner:
-  - **mdBook has no native multi-book / sub-book nesting** (one `SUMMARY.md` defines
-    exactly one book; `{{#include}}` pulls source snippets, not whole books). So even if
-    AvalancheGo adopts mdBook, "Firewood as a sub-book" would be realized by
-    **CI-staging + cross-linking** — building each book independently and assembling them
-    under distinct path prefixes in one deployed site, with cross-links between them —
-    the pattern this design already uses to stage rustdoc/godoc/benchmarks alongside the
-    book. It is not a native tool feature.
-  - **Keeping Firewood's book self-contained and independently deployable preserves the
-    option.** Because the book builds and deploys on its own with relative internal
-    links (no dependency on a parent), it can later be staged under an AvalancheGo parent
-    with no structural rework — only `SUMMARY.md` framing and cross-links would change.
-    Nothing in this MVP forecloses the nesting future.
-  - **AvalancheGo's tooling choice is theirs to make and is irrelevant to Firewood's.**
-    The SSG's implementation language does not constrain the documented project's
-    language; if AvalancheGo prefers a Go-idiomatic generator
-    ([Hugo](https://gohugo.io/)) or the popular [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/),
-    cross-generator composition is still CI-staging + cross-linking, not merging. So the
-    nesting question can be answered then, on AvalancheGo's terms, without revisiting
-    Firewood's choice now.
-  - **Conclusion:** mdBook is the right tool for Firewood (native to the Rust ecosystem,
-    pairs with rustdoc, minimal ceremony); the sub-book integration is a tractable
-    future CI-staging exercise rather than a design constraint on this work; revisit it
-    if and when AvalancheGo starts its own book.
+- The generated 404 page's absolute links resolve on the `/firewood/` Pages base
+  (`site-url`); normal pages use relative links and need no special handling.
