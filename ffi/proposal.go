@@ -223,6 +223,7 @@ func getProposalFromProposalResult(result C.ProposalResult, registry *keepAliveR
 			root:       hashKey,
 			commitLock: commitLock,
 		}
+		// attach calls proposal.Drop on the closed-registry path; nothing else to clean up.
 		if err := proposal.lease.attach(registry, proposal.Drop); err != nil {
 			return nil, err
 		}

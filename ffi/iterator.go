@@ -67,9 +67,11 @@ func (ih *iteratorHandle) freeCurrentAllocation() error {
 // becomes unreachable without an explicit Drop.
 //
 // It is safe to call Drop multiple times and from multiple goroutines;
-// subsequent calls after the first are no-ops. Disowning is unconditional:
-// see [handle.Drop] for the reasoning behind that choice.
+// subsequent calls after the first are no-ops.
 func (ih *iteratorHandle) Drop() error {
+	// Disowning is unconditional — see handle[T].Drop for the reasoning
+	// behind that choice. (Not in the godoc: this type is embedded in the
+	// exported Iterator, and links to unexported types don't render.)
 	return ih.lease.release(func() error {
 		err := ih.freeCurrentAllocation()
 		if ih.dropped {

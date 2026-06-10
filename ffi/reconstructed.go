@@ -234,6 +234,7 @@ func getReconstructedFromResult(result C.ReconstructedResult, registry *keepAliv
 		}),
 		root: EmptyRoot,
 	}
+	// attach calls reconstructed.Drop on the closed-registry path; nothing else to clean up.
 	if err := reconstructed.lease.attach(registry, reconstructed.Drop); err != nil {
 		return nil, err
 	}
