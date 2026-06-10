@@ -546,6 +546,13 @@ func (p *ChangeProof) UnmarshalBinary(data []byte) error {
 
 // Free releases the resources associated with this ChangeProof.
 //
+// Unlike [RangeProof], a ChangeProof holds no database reference on the
+// Rust side (it is pure proof data), so it does not participate in the
+// keep-alive count and an outstanding ChangeProof does not block
+// [Database.Close]. This is the intended model for both proof types:
+// the plan is for RangeProof to also stop holding a database reference,
+// not for ChangeProof to grow one.
+//
 // It is safe to call Free more than once; subsequent calls after the first
 // will be no-ops.
 func (p *ChangeProof) Free() error {

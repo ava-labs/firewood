@@ -485,10 +485,10 @@ type closeConfig struct {
 // [RangeProof.Free] before Close can complete.
 //
 // Each handle is dropped once even if its underlying free errors, so a
-// failing free cannot stall the close. Drops run sequentially under each
-// handle's lock, so an in-flight reader can delay the close past the
-// deadline. Drop errors are joined and returned, and the database close
-// is still attempted on a best-effort basis.
+// failing free cannot stall the close. Dropping a handle can still wait
+// for an in-flight operation on it to finish, so a slow reader can delay
+// the close past the deadline. Drop errors are joined and returned, and
+// the database close is still attempted on a best-effort basis.
 //
 // While force-close is in progress, attempts to construct derived handles
 // (for example via [Proposal.Propose] or [Revision.Iter]) fail with an

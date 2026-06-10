@@ -164,6 +164,7 @@ func getRevisionFromResult(result C.RevisionResult, registry *keepAliveRegistry)
 			handle: newHandle(body.handle, func(r *C.RevisionHandle) C.VoidResult { return C.fwd_free_revision(r) }),
 			root:   hashKey,
 		}
+		// attach calls rev.Drop on the closed-registry path; nothing else to clean up.
 		if err := rev.lease.attach(registry, rev.Drop); err != nil {
 			return nil, err
 		}

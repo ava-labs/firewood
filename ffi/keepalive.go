@@ -177,9 +177,9 @@ func (r *keepAliveRegistry) decrLocked() {
 // ctx is cancelled. Returns nil on drain, ctx.Err() on cancellation.
 //
 // No goroutine is spawned per call: the waiter is a single channel
-// closed by [decrLocked] when count hits zero. On ctx cancellation the
-// channel is unregistered from the waiters slice so the registry does
-// not retain a reference to it.
+// closed by [keepAliveRegistry.decrLocked] when count hits zero. On ctx
+// cancellation the channel is unregistered from the waiters slice so the
+// registry does not retain a reference to it.
 func (r *keepAliveRegistry) waitDrained(ctx context.Context) error {
 	r.mu.Lock()
 	if r.count == 0 {
