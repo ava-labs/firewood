@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781166834549,
+  "lastUpdate": 1781167047630,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -4605,6 +4605,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 50.53160233504614,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "726353246a209b12404c98de1da4a7e8907566ca",
+          "message": "feat(proofs): 5/7 add eth_get_proof entry point producing eth_getProof-compatible proofs (#2053)\n\n## Why this should be merged\n\nThe high-level entry point that turns firewood's native proofs into an\n`eth_getProof`-shaped result: the four account scalars plus RLP-encoded\nMPT\nnodes for the account and each requested storage slot.\n\n## How this works\n\n- New `firewood::eth_proof` module with `eth_get_proof`, `EthProof`, and\n  `EthStorageProof`. Failures surface as `api::Error`; there is no\n  module-specific error type.\n- Gates at runtime on\n`NodeHashAlgorithm::compile_option().is_ethereum()`,\n  returning `Error::FeatureNotSupported` under merkledb mode.\n- Absent accounts (including the empty-trie `ProofError::Empty` case)\nsurface\nas zero fields plus the empty-code and empty-trie-root hashes, with the\nexclusion-proof bytes when one exists — matching geth's `eth_getProof`\nshape\n(no `AccountNotFound` error). `EthProof::default` carries the\nabsent-account\nconstants (`KECCAK_EMPTY` for `code_hash`; `HashKey::default_root_hash`\nfor\n`storage_hash`) so the function builds its value in a single expression.\n- Multi-storage-child accounts: `storage_proofs[*].proof[0]` is the\naccount\n  node's 17-element branch RLP (via the new\n`proofs::eth::account_storage_root_rlp` helper), whose keccak matches\nthe\n  storageRoot spliced into the account leaf.\n- Single-storage-child accounts: `storage_proofs[*].proof` is the\nsynthesized\nleaf bytes via `synth_storage_leaf_rlp`; an extra `single_key_proof`\ndescent\nis issued when the requested slot's first storage nibble differs from\nthe\n  stored child's.\n- Proof byte arrays use `Box<[Box<[u8]>]>` (built once via `collect`,\nnever\nmutated) rather than `Vec`, saving the capacity field and signalling\nintent\n  to FFI/callers.\n\n## How this was tested\n\n7 unit tests covering: mode-gate present, empty-trie absent account,\nexclusion\nproof on a non-empty trie, present account with no storage, single-slot\ninclusion + exclusion, multi-child branching, and an end-to-end MPT\nverifier\nwalking from `root_hash` to the account leaf. Full workspace nextest +\nclippy +\ndoc with `--features ethhash,logger`.\n\n## Breaking Changes\n\nNone. Purely additive to firewood (new `eth_proof` module and\nre-exports).",
+          "timestamp": "2026-06-10T15:44:56Z",
+          "url": "https://github.com/ava-labs/firewood/commit/726353246a209b12404c98de1da4a7e8907566ca"
+        },
+        "date": 1781167047166,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 159.99230889848153,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6250.300448095421,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 120.7205193039099,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6034.366366952442,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 91.4365484332914,
             "unit": "block_accept_ms/ggas"
           }
         ]
