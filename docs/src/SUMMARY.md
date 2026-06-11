@@ -13,6 +13,7 @@
 # Design Documents
 
 - [Design Documents](designs/README.md)
+  - [State Sync](designs/2026-06-11-state-sync.md)
   - [Firewood mdBook Documentation Site](designs/2026-06-17-mdbook-documentation-site.md)
   - [Template](designs/template.md)
 
