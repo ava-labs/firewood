@@ -14,6 +14,7 @@
 
 - [Design Documents](designs/README.md)
   - [State Sync](designs/2026-06-11-state-sync.md)
+  - [State Sync: Phased Delivery Plan](designs/2026-06-11-state-sync-phases.md)
   - [Firewood mdBook Documentation Site](designs/2026-06-17-mdbook-documentation-site.md)
   - [Template](designs/template.md)
 

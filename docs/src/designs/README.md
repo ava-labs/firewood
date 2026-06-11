@@ -28,6 +28,7 @@ location:
 | Design | Proposed | Status |
 | --- | --- | --- |
 | [State Sync: migrating avalanchego database/merkle/sync orchestration into Firewood](2026-06-11-state-sync.md) | 2026-06-11 | proposed |
+| [State Sync: Phased Delivery Plan](2026-06-11-state-sync-phases.md) | 2026-06-11 | proposed |
 | [Firewood mdBook Documentation Site](2026-06-17-mdbook-documentation-site.md) | 2026-06-17 | active |
 
 Subsystems not yet documented as designs are tracked in
