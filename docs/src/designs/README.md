@@ -27,6 +27,7 @@ location:
 
 | Design | Proposed | Status |
 | --- | --- | --- |
+| [State Sync: migrating avalanchego database/merkle/sync orchestration into Firewood](2026-06-11-state-sync.md) | 2026-06-11 | proposed |
 | [Firewood mdBook Documentation Site](2026-06-17-mdbook-documentation-site.md) | 2026-06-17 | active |
 
 Subsystems not yet documented as designs are tracked in
@@ -41,7 +42,7 @@ the in-repo `frontmatter-strip` preprocessor:
 | --- | --- | --- |
 | `title` | yes | Human-readable design title. |
 | `status` | yes | `draft`, `proposed`, `active`, `superseded`, or `rejected`. |
-| `category` | yes | The Firewood subsystem(s) the design touches: `storage`, `ffi`, `revision-management`, `hashing`, `proposals`, `docs`, or `tooling`. A design spanning several lists them, e.g. `[storage, hashing]`. Extend the list as new subsystems gain designs. |
+| `category` | yes | The Firewood subsystem(s) the design touches: `storage`, `ffi`, `revision-management`, `hashing`, `proposals`, `sync`, `docs`, or `tooling`. A design spanning several lists them, e.g. `[storage, hashing]`. Extend the list as new subsystems gain designs. |
 | `authors` | yes | List of GitHub handles. |
 | `tracking-issue` | no | An `owner/repo#N` reference to the issue or PR tracking the work. |
 
