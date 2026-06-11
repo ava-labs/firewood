@@ -9,7 +9,8 @@ use askama::Template;
 use clap::Args;
 use firewood::api;
 use firewood_storage::{
-    CacheReadStrategy, CheckOpt, DBStats, FileBacked, NodeStore, NodeStoreHeader,
+    CacheReadStrategy, CheckOpt, DBStats, DeletedNodeTracking, FileBacked, NodeStore,
+    NodeStoreHeader,
 };
 use indicatif::{ProgressBar, ProgressFinish, ProgressStyle};
 use nonzero_ext::nonzero;
@@ -74,7 +75,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     let mut header = NodeStoreHeader::read_from_storage(storage.as_ref())?;
     // Open with delete tracking enabled: the checker repairs free lists, which
     // requires it regardless of how the database is normally run.
-    let nodestore = NodeStore::open(&header, storage, true)?;
+    let nodestore = NodeStore::open(&header, storage, DeletedNodeTracking::Enabled)?;
     let check_report = nodestore.check(&header, check_ops);
 
     println!("Errors ({}): ", check_report.errors.len());

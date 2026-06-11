@@ -130,10 +130,8 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// The header should be read using [`NodeStoreHeader::read_from_storage`] before calling this.
     /// This separation allows callers to manage the header lifecycle independently.
     ///
-    /// `track_deleted` controls whether proposals record removed and replaced
-    /// nodes in the future-delete log so their space can later be reclaimed.
-    /// Pass `false` when the log will never be consumed (e.g. archival mode,
-    /// where old nodes are preserved on disk for historical queries). It is
+    /// `deleted_node_tracking` controls whether proposals record removed and
+    /// replaced nodes in the future-delete log; see [`DeletedNodeTracking`]. It is
     /// propagated to every nodestore derived from this one.
     ///
     /// # Errors
@@ -142,7 +140,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     pub fn open(
         header: &NodeStoreHeader,
         storage: Arc<S>,
-        track_deleted: bool,
+        deleted_node_tracking: DeletedNodeTracking,
     ) -> Result<Self, FileIoError> {
         let mut nodestore = Self {
             kind: Committed {
@@ -152,7 +150,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
             },
             storage,
             must_recompute_storage_hash: header.must_recompute_storage_hash(),
-            track_deleted,
+            deleted_node_tracking,
         };
 
         if let Some(root_address) = header.root_address() {
@@ -173,10 +171,13 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
     /// Create a new, empty, Committed [`NodeStore`].
     ///
-    /// `track_deleted` controls whether proposals build the future-delete log;
-    /// see [`NodeStore::open`].
+    /// `deleted_node_tracking` controls whether proposals build the future-delete
+    /// log; see [`DeletedNodeTracking`].
     #[must_use]
-    pub fn new_empty_committed(storage: Arc<S>, track_deleted: bool) -> Self {
+    pub fn new_empty_committed(
+        storage: Arc<S>,
+        deleted_node_tracking: DeletedNodeTracking,
+    ) -> Self {
         Self {
             storage,
             kind: Committed {
@@ -188,7 +189,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
             // persists correct storageRoots at hash time, so proofs do not
             // need to recompute them.
             must_recompute_storage_hash: header::Version::new().must_recompute_storage_hash(),
-            track_deleted,
+            deleted_node_tracking,
         }
     }
 
@@ -207,7 +208,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         root_hash: HashType,
         root_address: LinearAddress,
         storage: Arc<S>,
-        track_deleted: bool,
+        deleted_node_tracking: DeletedNodeTracking,
     ) -> Result<Self, FileIoError> {
         // Read the on-disk version so account-storage-root recomputation at
         // proof time happens iff the persisted data predates the hfix.
@@ -221,7 +222,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
             },
             storage,
             must_recompute_storage_hash: header.must_recompute_storage_hash(),
-            track_deleted,
+            deleted_node_tracking,
         };
 
         let node = nodestore.read_node(root_address)?;
@@ -337,7 +338,7 @@ impl<S: ReadableStorage> NodeStore<Mutable<Propose>, S> {
         let root = if let Some(ref root) = parent.kind.root() {
             // Record the replaced root in the future-delete log, unless delete
             // tracking is off because the log will never be consumed.
-            if parent.track_deleted {
+            if parent.deleted_node_tracking.is_enabled() {
                 deleted.push(root.clone());
             }
             let root = triomphe::Arc::unwrap_or_clone(root.as_shared_node(parent)?);
@@ -356,7 +357,7 @@ impl<S: ReadableStorage> NodeStore<Mutable<Propose>, S> {
             kind,
             storage: parent.storage.clone(),
             must_recompute_storage_hash: parent.must_recompute_storage_hash,
-            track_deleted: parent.track_deleted,
+            deleted_node_tracking: parent.deleted_node_tracking,
         })
     }
 
@@ -365,7 +366,7 @@ impl<S: ReadableStorage> NodeStore<Mutable<Propose>, S> {
     /// No-op when delete tracking is disabled, since the future-delete log
     /// would never be consumed.
     pub fn delete_node(&mut self, node: MaybePersistedNode) {
-        if self.track_deleted {
+        if self.deleted_node_tracking.is_enabled() {
             trace!("Pending delete at {node:?}");
             self.kind.inner.deleted.push(node);
         }
@@ -381,7 +382,7 @@ impl<S: ReadableStorage> NodeStore<Mutable<Propose>, S> {
     /// No-op when delete tracking is disabled, since the future-delete log
     /// would never be consumed.
     pub fn delete_nodes(&mut self, nodes: &[MaybePersistedNode]) {
-        if self.track_deleted {
+        if self.deleted_node_tracking.is_enabled() {
             self.kind.inner.deleted.extend_from_slice(nodes);
         }
     }
@@ -399,7 +400,7 @@ impl<S: ReadableStorage> NodeStore<Mutable<Propose>, S> {
             },
             storage: parent.storage.clone(),
             must_recompute_storage_hash: parent.must_recompute_storage_hash,
-            track_deleted: parent.track_deleted,
+            deleted_node_tracking: parent.deleted_node_tracking,
         }
     }
 }
@@ -420,7 +421,7 @@ impl<K: MutableKind, S: ReadableStorage> NodeStore<Mutable<K>, S> {
         // Skip building the future-delete log when delete tracking is off
         // (it would never be consumed). This branch is on an immutable flag
         // and is perfectly predicted.
-        if self.track_deleted {
+        if self.deleted_node_tracking.is_enabled() {
             self.kind.inner.track_deleted(node);
         }
         Ok(triomphe::Arc::unwrap_or_clone(arc_wrapped_node))
@@ -462,7 +463,7 @@ impl<S: ReadableStorage> NodeStore<Mutable<Recon<S>>, S> {
             },
             storage: parent.storage.clone(),
             must_recompute_storage_hash: parent.must_recompute_storage_hash,
-            track_deleted: parent.track_deleted,
+            deleted_node_tracking: parent.deleted_node_tracking,
         })
     }
 }
@@ -501,9 +502,9 @@ impl<S: WritableStorage> NodeStore<Mutable<Propose>, S> {
     /// Creates a new, empty, [`NodeStore`].
     /// This is used during testing and during the creation of an in-memory merkle for proofs.
     ///
-    /// `track_deleted` controls whether proposals build the future-delete log;
-    /// see [`NodeStore::open`].
-    pub fn new_empty_proposal(storage: Arc<S>, track_deleted: bool) -> Self {
+    /// `deleted_node_tracking` controls whether proposals build the future-delete
+    /// log; see [`DeletedNodeTracking`].
+    pub fn new_empty_proposal(storage: Arc<S>, deleted_node_tracking: DeletedNodeTracking) -> Self {
         NodeStore {
             kind: Mutable {
                 root: None,
@@ -523,7 +524,7 @@ impl<S: WritableStorage> NodeStore<Mutable<Propose>, S> {
             // Fresh proposal: writes go through current code, which persists
             // correct storageRoots at hash time.
             must_recompute_storage_hash: header::Version::new().must_recompute_storage_hash(),
-            track_deleted,
+            deleted_node_tracking,
         }
     }
 }
@@ -535,7 +536,10 @@ impl<S: ReadableStorage> NodeStore<Mutable<Recon<S>>, S> {
     /// [`NodeStore::reconstruction_child`] with a real `Committed` source.
     #[cfg(any(test, feature = "test_utils"))]
     pub fn new_empty_recon(storage: Arc<S>) -> Self {
-        let parent_anchor = Arc::new(NodeStore::new_empty_committed(Arc::clone(&storage), true));
+        let parent_anchor = Arc::new(NodeStore::new_empty_committed(
+            Arc::clone(&storage),
+            DeletedNodeTracking::Enabled,
+        ));
         NodeStore {
             kind: Mutable {
                 root: None,
@@ -546,7 +550,7 @@ impl<S: ReadableStorage> NodeStore<Mutable<Recon<S>>, S> {
             must_recompute_storage_hash: header::Version::new().must_recompute_storage_hash(),
             // Reconstruction views never participate in the future-delete
             // log, so this value is irrelevant here.
-            track_deleted: true,
+            deleted_node_tracking: DeletedNodeTracking::Enabled,
         }
     }
 }
@@ -865,7 +869,30 @@ pub struct NodeStore<T, S> {
     /// and propagated to every derived nodestore. Disabled when the log would
     /// never be consumed (e.g. archival mode, where old nodes are preserved on
     /// disk for historical queries), so proposals skip building it entirely.
-    track_deleted: bool,
+    deleted_node_tracking: DeletedNodeTracking,
+}
+
+/// Whether removed and replaced nodes are recorded in the future-delete log
+/// so their space can later be reclaimed.
+///
+/// Set at the [`NodeStore`] root constructors and propagated to every derived
+/// nodestore. Pass [`DeletedNodeTracking::Disabled`] when the log would never be
+/// consumed (e.g. archival mode, where old nodes are preserved on disk for
+/// historical queries), so proposals skip building it entirely.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeletedNodeTracking {
+    /// Record removed and replaced nodes in the future-delete log.
+    Enabled,
+    /// Skip building the future-delete log.
+    Disabled,
+}
+
+impl DeletedNodeTracking {
+    /// Returns true if deleted nodes should be recorded in the future-delete log.
+    #[must_use]
+    pub const fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
 }
 
 /// Contains state for a reconstructed revision of the trie.
@@ -989,7 +1016,7 @@ impl<S: ReadableStorage> From<NodeStore<Reconstructed<S>, S>> for NodeStore<Muta
             },
             storage: val.storage,
             must_recompute_storage_hash: val.must_recompute_storage_hash,
-            track_deleted: val.track_deleted,
+            deleted_node_tracking: val.deleted_node_tracking,
         }
     }
 }
@@ -1007,7 +1034,7 @@ impl<S: ReadableStorage> From<NodeStore<Mutable<Recon<S>>, S>> for NodeStore<Rec
             },
             storage: val.storage,
             must_recompute_storage_hash: val.must_recompute_storage_hash,
-            track_deleted: val.track_deleted,
+            deleted_node_tracking: val.deleted_node_tracking,
         }
     }
 }
@@ -1042,7 +1069,7 @@ impl<S> Clone for NodeStore<Reconstructed<S>, S> {
             kind: self.kind.clone(),
             storage: self.storage.clone(),
             must_recompute_storage_hash: self.must_recompute_storage_hash,
-            track_deleted: self.track_deleted,
+            deleted_node_tracking: self.deleted_node_tracking,
         }
     }
 }
@@ -1079,7 +1106,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     /// revision once `max_revisions` is exceeded.
     #[must_use]
     pub fn empty_committed_sibling(&self) -> NodeStore<Committed, S> {
-        NodeStore::new_empty_committed(self.storage.clone(), self.track_deleted)
+        NodeStore::new_empty_committed(self.storage.clone(), self.deleted_node_tracking)
     }
 }
 
@@ -1096,7 +1123,7 @@ impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
             },
             storage: self.storage.clone(),
             must_recompute_storage_hash: self.must_recompute_storage_hash,
-            track_deleted: self.track_deleted,
+            deleted_node_tracking: self.deleted_node_tracking,
         }
     }
 }
@@ -1111,7 +1138,7 @@ impl<S: ReadableStorage> TryFrom<NodeStore<Mutable<Propose>, S>>
             kind,
             storage,
             must_recompute_storage_hash,
-            track_deleted,
+            deleted_node_tracking,
         } = val;
         let Mutable {
             root,
@@ -1126,7 +1153,7 @@ impl<S: ReadableStorage> TryFrom<NodeStore<Mutable<Propose>, S>>
             }),
             storage,
             must_recompute_storage_hash,
-            track_deleted,
+            deleted_node_tracking,
         };
 
         let Some(root) = root else {
@@ -1535,7 +1562,7 @@ mod tests {
     fn test_reparent() {
         // create an empty base revision
         let memstore = MemStore::default();
-        let base = NodeStore::new_empty_committed(memstore.into(), true);
+        let base = NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         // create an empty r1, check that it's parent is the empty committed version
         let r1 = NodeStore::new(&base).unwrap();
@@ -1573,7 +1600,8 @@ mod tests {
     fn test_slow_giant_node() {
         let memstore = Arc::new(MemStore::default());
         let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
-        let empty_root = NodeStore::new_empty_committed(Arc::clone(&memstore), true);
+        let empty_root =
+            NodeStore::new_empty_committed(Arc::clone(&memstore), DeletedNodeTracking::Enabled);
 
         let mut node_store = NodeStore::new(&empty_root).unwrap();
 
@@ -1638,7 +1666,7 @@ mod tests {
             NodeHashAlgorithm::compile_option(),
         )?);
         let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
-        let nodestore = NodeStore::open(&header, storage, true)?;
+        let nodestore = NodeStore::open(&header, storage, DeletedNodeTracking::Enabled)?;
 
         let mut proposal = NodeStore::new(&nodestore)?;
 
@@ -1717,7 +1745,7 @@ mod tests {
             NodeHashAlgorithm::compile_option(),
         )?);
         let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
-        let base = NodeStore::open(&header, Arc::clone(&storage), true)?;
+        let base = NodeStore::open(&header, Arc::clone(&storage), DeletedNodeTracking::Enabled)?;
 
         // Create a proposal with a leaf node and persist it
         let mut proposal = NodeStore::new(&base)?;
@@ -1734,7 +1762,12 @@ mod tests {
         let root_hash = header.root_hash().unwrap().into_hash_type();
 
         // Reconstruct using with_root
-        let restored = NodeStore::with_root(root_hash.clone(), root_address, storage, true)?;
+        let restored = NodeStore::with_root(
+            root_hash.clone(),
+            root_address,
+            storage,
+            DeletedNodeTracking::Enabled,
+        )?;
         assert_eq!(restored.root_hash(), Some(root_hash.into_triehash()));
         assert_eq!(restored.root_address(), Some(root_address));
 
@@ -1756,7 +1789,7 @@ mod tests {
             NodeHashAlgorithm::compile_option(),
         )?);
         let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
-        let base = NodeStore::open(&header, Arc::clone(&storage), true)?;
+        let base = NodeStore::open(&header, Arc::clone(&storage), DeletedNodeTracking::Enabled)?;
 
         // Create a proposal with a leaf node and persist it
         let mut proposal = NodeStore::new(&base)?;
@@ -1772,7 +1805,12 @@ mod tests {
 
         // Use a bogus hash
         let bad_hash = HashType::from([0xAB; 32]);
-        let result = NodeStore::with_root(bad_hash, root_address, storage, true);
+        let result = NodeStore::with_root(
+            bad_hash,
+            root_address,
+            storage,
+            DeletedNodeTracking::Enabled,
+        );
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
@@ -1908,7 +1946,10 @@ mod tests {
         // the RevisionManager cannot reap the revision (and free its on-disk
         // nodes) while a derived view is still alive.
         let storage = Arc::new(MemStore::default());
-        let committed = Arc::new(NodeStore::new_empty_committed(Arc::clone(&storage), true));
+        let committed = Arc::new(NodeStore::new_empty_committed(
+            Arc::clone(&storage),
+            DeletedNodeTracking::Enabled,
+        ));
         assert_eq!(Arc::strong_count(&committed), 1);
 
         let recon = NodeStore::<Mutable<Recon<_>>, _>::new_for_reconstruction(

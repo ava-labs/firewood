@@ -18,7 +18,7 @@ use weak_table::WeakValueHashMap;
 use derive_where::derive_where;
 
 use crate::linear::filebacked::FileBacked;
-use crate::nodestore::{Committed, LinearAddress, NodeStore};
+use crate::nodestore::{Committed, DeletedNodeTracking, LinearAddress, NodeStore};
 use crate::{IntoHashType, TrieHash};
 
 /// Type alias for a committed revision stored in the root store.
@@ -163,7 +163,7 @@ impl RootStore {
             self.storage.clone(),
             // `RootStore` only exists when the database was opened in
             // archival mode, where deleted nodes are never tracked.
-            false,
+            DeletedNodeTracking::Disabled,
         )?);
 
         // 5. Cache for future lookups.
@@ -208,7 +208,10 @@ mod tests {
 
         // Create a revision to cache. `RootStore` implies archival mode,
         // where deleted nodes are never tracked.
-        let revision = Arc::new(NodeStore::new_empty_committed(file_backed.clone(), false));
+        let revision = Arc::new(NodeStore::new_empty_committed(
+            file_backed.clone(),
+            DeletedNodeTracking::Disabled,
+        ));
 
         let hash = TrieHash::from_bytes([1; 32]);
         root_store

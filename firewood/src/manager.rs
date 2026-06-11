@@ -27,9 +27,9 @@ use firewood_metrics::{GaugeExt, firewood_counter, firewood_gauge, firewood_hist
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::RootStore;
 use firewood_storage::{
-    BranchNode, Committed, CommittedId, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, Mutable, MutableKind, NodeHashAlgorithm, NodeStore, NodeStoreHeader,
-    Propose, Recon, TrieHash,
+    BranchNode, Committed, CommittedId, DeletedNodeTracking, FileBacked, FileIoError,
+    HashedNodeReader, ImmutableProposal, Mutable, MutableKind, NodeHashAlgorithm, NodeStore,
+    NodeStoreHeader, Propose, Recon, TrieHash,
 };
 
 pub(crate) const DB_FILE_NAME: &str = "firewood.db";
@@ -196,12 +196,17 @@ impl RevisionManager {
             Err(err) => return Err(err.into()),
         };
         // `root_store` enables archival mode: old nodes are preserved on disk
-        // for historical queries, so disable delete tracking and skip the
-        // future-delete log (#2015).
+        // for historical queries, so disable delete node tracking and skip the
+        // future-delete log.
+        let deleted_node_tracking = if config.root_store {
+            DeletedNodeTracking::Disabled
+        } else {
+            DeletedNodeTracking::Enabled
+        };
         let nodestore = Arc::new(NodeStore::open(
             &header,
             storage.clone(),
-            !config.root_store,
+            deleted_node_tracking,
         )?);
         let root_store = config
             .root_store
@@ -546,9 +551,14 @@ impl RevisionManager {
         //    against the file backing carried by the latest committed revision.
         if HashKey::default_root_hash().as_ref() == Some(&root_hash) {
             let storage = self.current_revision().storage().clone();
+            let deleted_node_tracking = if self.root_store.is_some() {
+                DeletedNodeTracking::Disabled
+            } else {
+                DeletedNodeTracking::Enabled
+            };
             return Ok(Arc::new(NodeStore::new_empty_committed(
                 storage,
-                self.root_store.is_none(),
+                deleted_node_tracking,
             )));
         }
 
