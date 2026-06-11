@@ -73,9 +73,14 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     };
 
     let mut header = NodeStoreHeader::read_from_storage(storage.as_ref())?;
-    // Open with delete tracking enabled: the checker repairs free lists, which
-    // requires it regardless of how the database is normally run.
-    let nodestore = NodeStore::open(&header, storage, DeletedNodeTracking::Enabled)?;
+    // The checker never builds proposals, so this value is currently unused.
+    // Match how the database is normally run by checking if the RootStore directory exists.
+    let deleted_node_tracking = if opts.database.dbpath.join("root_store").is_dir() {
+        DeletedNodeTracking::Disabled
+    } else {
+        DeletedNodeTracking::Enabled
+    };
+    let nodestore = NodeStore::open(&header, storage, deleted_node_tracking)?;
     let check_report = nodestore.check(&header, check_ops);
 
     println!("Errors ({}): ", check_report.errors.len());

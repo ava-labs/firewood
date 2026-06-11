@@ -195,9 +195,7 @@ impl RevisionManager {
             }
             Err(err) => return Err(err.into()),
         };
-        // `root_store` enables archival mode: old nodes are preserved on disk
-        // for historical queries, so disable delete node tracking and skip the
-        // future-delete log.
+
         let deleted_node_tracking = if config.root_store {
             DeletedNodeTracking::Disabled
         } else {
