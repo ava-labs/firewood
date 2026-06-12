@@ -225,9 +225,11 @@ pub fn find_next_key_after_range_proof(
 /// key order.
 ///
 /// Each prefix names a non-empty subtree the end proof shows between the proven
-/// right edge and the requested end. Together they hold every remaining key, so
-/// the first prefix is where the next request can start. The last one may
-/// straddle the requested end. Empty when the proof covers the request.
+/// right edge and the requested end. Together they hold every remaining key,
+/// and the spans between them are proven empty. The next request still starts
+/// just after the right edge, so its merge deletes any stale local keys in
+/// those spans. The last prefix may straddle the requested end. Empty when the
+/// proof covers the request.
 ///
 /// A prefix of odd length ends mid-byte: its smallest key pads the last nibble
 /// with zero, and [`prefix_upper_bound`] gives its exclusive end.
