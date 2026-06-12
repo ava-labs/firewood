@@ -5,9 +5,10 @@
 //! `docs/src/designs/2026-06-11-state-sync.md`, "Hole selection").
 //!
 //! No Db, no I/O, no locking — just the coverage/in-flight maps and the
-//! work-handout policy: an even `1/task_limit` seed fan-out, then
-//! largest-cold-hole refeed. Recording proof results arrives in the next
-//! commit, and the Db-coupled driver (`Syncer`) after that.
+//! work-handout policy: an even `1/task_limit` seed fan-out, contiguous
+//! per-lineage sweeps via truncation continuations, a shed at a
+//! proof-chosen cut whenever a worker is idle, and largest-cold-hole refeed.
+//! The Db-coupled driver (`Syncer`) arrives in a later commit.
 
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
@@ -19,6 +20,8 @@ use rangemap::RangeSet;
 
 use super::endpoint::Endpoint;
 use super::endpoint::Width;
+
+pub(crate) mod complete;
 
 /// Opaque identifier correlating a handed-out work region with its eventual
 /// proof submission. `SyncState` issues ids monotonically from
@@ -84,6 +87,27 @@ pub(crate) enum NextWork {
     /// Coverage tiles the whole keyspace and nothing is in flight. The
     /// Db-coupled caller decides Done vs `CoverageRootMismatch`.
     CoverageComplete,
+}
+
+/// Errors surfaced by state sync.
+///
+/// Every variant is fatal to the sync: abandon it and restart. Only
+/// externally-triggerable conditions are errors; every internal invariant
+/// is a `debug_assert!`.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub(crate) enum SyncError {
+    /// The work id is unknown or already retired: the caller submitted an id
+    /// it no longer holds, such as a duplicate submission.
+    #[error("unknown or already-retired work id {}", .0.as_u64())]
+    StaleWorkId(WorkId),
+    /// The truncation key reported for a work item lies outside its
+    /// requested range: the proof/find-next-key layer broke its contract.
+    /// Checked in release (not just debug-asserted) because acting on a bad
+    /// key would either panic inside the coverage map (reversed range) or
+    /// silently claim coverage the proof never proved.
+    #[error("truncation key for work id {} lies outside the requested range", .0.as_u64())]
+    TruncationKeyOutOfRange(WorkId),
 }
 
 /// Pure sync bookkeeping: no Db, no I/O, no locking. The Db-coupled wrapper
