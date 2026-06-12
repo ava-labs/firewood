@@ -8,7 +8,7 @@
 //! work-handout policy: an even `1/task_limit` seed fan-out, contiguous
 //! per-lineage sweeps via truncation continuations, a shed guard that
 //! re-exposes dense regions to helpers, and largest-cold-hole refeed. The
-//! Db-coupled driver (`Syncer`) arrives in a later commit.
+//! Db-coupled driver is [`super::syncer::Syncer`].
 
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
@@ -42,18 +42,10 @@ impl From<u64> for WorkId {
 /// truncations of one lineage. Truncation count measures actual observed
 /// work (keys served) independent of keyspace width, so it catches the
 /// dense-but-narrow region that a span threshold structurally misses.
-#[allow(
-    dead_code,
-    reason = "consumed by the Syncer submit path in a later commit"
-)]
 pub(crate) const SHED_TRUNCATION_LIMIT: u32 = 4;
 
 /// One outstanding work region.
 #[derive(Debug, Clone)]
-#[allow(
-    dead_code,
-    reason = "consumed by the Syncer submit path in a later commit"
-)]
 pub(crate) struct InFlight {
     /// Exactly the half-open range handed out; the proof request is the
     /// inclusive `range.start ..= range.end` (see [`request_bounds`]).
@@ -69,10 +61,6 @@ pub(crate) struct InFlight {
 
 /// Result of [`SyncState::next_work`].
 #[derive(Debug, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "consumed by the Syncer submit path in a later commit"
-)]
 pub(crate) enum NextWork {
     /// A new region to work.
     Work {
@@ -95,10 +83,6 @@ pub(crate) enum NextWork {
 /// `find_next_key_after_range_proof`: `None` becomes [`ProofExtent::Full`],
 /// `Some((l, _))` becomes [`ProofExtent::Truncated`] with `last_key = l`.
 #[derive(Debug, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "consumed by the Syncer submit path in a later commit"
-)]
 pub(crate) enum ProofExtent {
     /// The proof covered the entire requested range.
     Full,
@@ -112,10 +96,6 @@ pub(crate) enum ProofExtent {
 
 /// Result of [`SyncState::complete`].
 #[derive(Debug, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "consumed by the Syncer submit path in a later commit"
-)]
 pub(crate) enum Completed {
     /// Region fully covered; id retired.
     Exhausted,
@@ -130,18 +110,16 @@ pub(crate) enum Completed {
     },
 }
 
-/// Errors surfaced by the pure sync state machine.
+/// Errors surfaced by state sync.
 ///
 /// Only externally-triggerable conditions are errors; every internal
-/// invariant is a `debug_assert!`. The Db-coupled driver (a later commit)
-/// extends this enum with its own variants.
+/// invariant is a `debug_assert!`. The pure layer (`SyncState`) constructs
+/// only [`SyncError::StaleWorkId`] and [`SyncError::TruncationKeyOutOfRange`];
+/// the remaining variants come from the Db-coupled driver
+/// ([`super::syncer::Syncer`]).
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
-#[allow(
-    dead_code,
-    reason = "consumed by the Syncer submit path in a later commit"
-)]
-pub(crate) enum SyncError {
+pub enum SyncError {
     /// The work id is unknown or already retired (e.g. a duplicate
     /// submission after a timeout re-fetch). Callers drop this.
     #[error("unknown or already-retired work id {}", .0.as_u64())]
@@ -153,6 +131,21 @@ pub(crate) enum SyncError {
     /// silently claim coverage the proof never proved.
     #[error("truncation key for work id {} lies outside the requested range", .0.as_u64())]
     TruncationKeyOutOfRange(WorkId),
+    /// Coverage tiles the whole keyspace but the committed root does not
+    /// match the target — an internal invariant violation, never a peer
+    /// fault. Distinct so callers can abandon and restart the whole sync.
+    #[error("coverage complete but committed root {actual:?} != target {target}")]
+    CoverageRootMismatch {
+        /// The fixed root hash the sync was started toward.
+        target: TrieHash,
+        /// The latest committed root that failed to match it.
+        actual: Option<TrieHash>,
+    },
+    /// Internal database/API failure (never the peer's fault). The work
+    /// item stays reserved under the same id; the caller chooses whether
+    /// and how to retry.
+    #[error(transparent)]
+    Api(#[from] crate::api::Error),
 }
 
 /// Map a stored half-open region to the INCLUSIVE proof-request bounds.
@@ -163,10 +156,6 @@ pub(crate) enum SyncError {
 /// start proof under a `None` bound (`UnexpectedStartProof`) — `Some([])`
 /// makes the generator emit a root proof instead, which is not
 /// wire-compatible.
-#[allow(
-    dead_code,
-    reason = "consumed by the Syncer submit path in a later commit"
-)]
 pub(crate) fn request_bounds(range: &Range<Endpoint>) -> (Option<&[u8]>, Option<&[u8]>) {
     let start = match &range.start {
         Endpoint::Key(k) if k.is_empty() => None,
@@ -184,17 +173,13 @@ pub(crate) fn request_bounds(range: &Range<Endpoint>) -> (Option<&[u8]>, Option<
 }
 
 /// Pure sync bookkeeping: no Db, no I/O, no locking. The Db-coupled wrapper
-/// (`Syncer`) arrives in a later commit.
+/// is [`super::syncer::Syncer`].
 ///
 /// Coverage and in-flight space are tracked in two interval maps over
 /// [`Endpoint`]; *cold* space (unfetched, not in flight) is implicit:
 /// `gaps(coverage) − requested`. The number of outstanding items is always
 /// `work.len()` — there is deliberately no separate counter to desync.
 #[derive(Debug)]
-#[allow(
-    dead_code,
-    reason = "consumed by the Syncer submit path in a later commit"
-)]
 pub(crate) struct SyncState {
     /// Root hash being synced to. Fixed in Phase 1.
     target: TrieHash,
@@ -220,10 +205,6 @@ pub(crate) struct SyncState {
     seed_cursor: Endpoint,
 }
 
-#[allow(
-    dead_code,
-    reason = "consumed by the Syncer submit path in a later commit"
-)]
 impl SyncState {
     /// Create a fresh sync toward `target` with at most `task_limit`
     /// concurrently outstanding work items.
@@ -567,10 +548,6 @@ impl SyncState {
 /// width `w` takes at most about `log2(w · 2^16) + 1` handouts, while
 /// helper-parallelism granularity stays far finer than any realistic
 /// `task_limit`.
-#[allow(
-    dead_code,
-    reason = "consumed by the Syncer submit path in a later commit"
-)]
 fn min_split_span() -> Span {
     endpoint::span(
         &Endpoint::Key([0x00, 0x00].into()),

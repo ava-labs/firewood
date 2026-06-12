@@ -9,12 +9,16 @@
 //! decides what work to hand out next, and commits verified proofs as real
 //! revisions, while the caller (avalanchego) remains the transport. This
 //! module provides the [`Endpoint`](crate::sync::Endpoint) key type and its
-//! binary-fraction split arithmetic, plus the pure `SyncState` coverage
-//! machine (work handout, truncation continuations, shed and refeed); a
-//! later commit adds the Db-coupled submit path.
+//! binary-fraction split arithmetic, the pure `SyncState` coverage machine
+//! (work handout, truncation continuations, shed and refeed), and the
+//! Db-coupled [`Syncer`](crate::sync::Syncer) driver created by
+//! [`start_sync`](crate::sync::start_sync), which verifies and commits
+//! submitted range proofs and detects completion.
 
 pub(crate) mod endpoint;
 mod state;
+mod syncer;
 
 pub use endpoint::Endpoint;
-pub use state::WorkId;
+pub use state::{SyncError, WorkId};
+pub use syncer::{GetWork, MAX_PROOF_KEYS, Submit, Syncer, WorkItem, start_sync};
