@@ -18,6 +18,8 @@
 pub(crate) mod endpoint;
 mod state;
 mod syncer;
+#[cfg(test)]
+mod tests;
 
 pub use endpoint::Endpoint;
 pub use state::{SyncError, WorkId};

@@ -641,7 +641,7 @@ impl<'a> api::Reconstructible for ReconstructedView<'a> {
 }
 
 #[cfg(test)]
-mod test {
+pub(crate) mod test {
     #![expect(clippy::unwrap_used)]
 
     use core::iter::Take;
@@ -2162,7 +2162,7 @@ mod test {
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
-    pub(super) struct TestDb {
+    pub(crate) struct TestDb {
         db: Option<Db>,
         tmpdir: tempfile::TempDir,
         dbconfig: DbConfig,
