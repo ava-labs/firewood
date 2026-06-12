@@ -1761,6 +1761,7 @@ dependencies = [
  "plain_hasher",
  "pprof",
  "rand 0.10.1",
+ "rangemap",
  "rayon",
  "rlp",
  "sha3",
@@ -3964,6 +3965,12 @@ checksum = "f703f4665700daf5512dcca5f43afa6af89f09db47fb56be587f80636bda2d41"
 dependencies = [
  "rand_core 0.9.5",
 ]
+
+[[package]]
+name = "rangemap"
+version = "1.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "973443cf09a9c8656b574a866ab68dfa19f0867d0340648c7d2f6a71b8a8ea68"
 
 [[package]]
 name = "rapidhash"

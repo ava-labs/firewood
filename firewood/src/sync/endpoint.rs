@@ -88,13 +88,6 @@ impl<T: Into<Box<[u8]>>> From<T> for Endpoint {
 /// `b == k ++ 0x00`), in which case the remainder `[successor(k), b)` is
 /// empty and the region is fully covered — callers must treat the empty
 /// remainder as completion, not hand it out as work.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "consumed by the SyncState machinery in a later commit"
-    )
-)]
 pub(crate) fn successor(key: &[u8]) -> Box<[u8]> {
     key.iter().copied().chain(std::iter::once(0)).collect()
 }
@@ -130,13 +123,6 @@ pub(crate) fn successor(key: &[u8]) -> Box<[u8]> {
 /// Note the trim minimizes length along the midpoint's *own* prefixes; an
 /// even shorter key inside `(a, b)` that is not a prefix of the midpoint may
 /// exist. This affects only balance, never correctness.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "consumed by the SyncState machinery in a later commit"
-    )
-)]
 pub(crate) fn midpoint(a: &Endpoint, b: &Endpoint) -> Option<Endpoint> {
     if frac_cmp(a, b) != Ordering::Less {
         // Zero fraction width (or equal/reversed endpoints): nothing strictly
@@ -187,13 +173,6 @@ pub(crate) fn midpoint(a: &Endpoint, b: &Endpoint) -> Option<Endpoint> {
 /// still owed": `owed = N, N-1, …, 2`) tiles `[a, b)` into `N` slices with
 /// no gap or overlap. For `N = 16` over the whole keyspace the boundaries
 /// land exactly on the nibble seeds `0x10, 0x20, …, 0xf0`.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "consumed by the SyncState machinery in a later commit"
-    )
-)]
 pub(crate) fn even_slice_point(a: &Endpoint, b: &Endpoint, owed: usize) -> Option<Endpoint> {
     if owed == 1 {
         // A 1-way split has no interior boundary: the final slice takes the
@@ -252,13 +231,6 @@ pub(crate) struct Span {
 ///
 /// Equal or reversed endpoints, and zero-fraction-width intervals (see the
 /// module docs), all yield the canonical zero span.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "consumed by the SyncState machinery in a later commit"
-    )
-)]
 pub(crate) fn span(a: &Endpoint, b: &Endpoint) -> Span {
     if frac_cmp(a, b) != Ordering::Less {
         return Span::default();

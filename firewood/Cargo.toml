@@ -33,6 +33,7 @@ firewood-metrics.workspace = true
 firewood-storage.workspace = true
 hex.workspace = true
 integer-encoding.workspace = true
+rangemap.workspace = true
 thiserror.workspace = true
 # Regular dependencies
 typed-builder = "0.23.2"
