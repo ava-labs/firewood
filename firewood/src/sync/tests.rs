@@ -6,8 +6,10 @@
 //! These complement the pure-layer tests in `super::state` and the
 //! single-submit seam tests in `super::syncer`: everything here drives
 //! multi-step flows against real databases — a hostile-proof corpus with a
-//! retry-to-success epilogue ([`hostile`]) and shedding with real truncated
-//! proofs.
+//! retry-to-success epilogue ([`hostile`]), restart-from-scratch idempotency
+//! ([`restart`]), concurrent worker pools under reap pressure
+//! ([`concurrent`]), shedding with real truncated proofs, and a randomized
+//! round-trip property test ([`random`]).
 
 #![expect(
     clippy::arithmetic_side_effects,
@@ -18,6 +20,8 @@ use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 
 use firewood_macros::hash_mode;
+use firewood_storage::CheckOpt;
+use firewood_storage::CheckerError;
 use firewood_storage::EthHash;
 use firewood_storage::HashMode;
 use firewood_storage::MerkleDbHash;
@@ -25,16 +29,21 @@ use firewood_storage::SeededRng;
 
 use super::GetWork;
 use super::Submit;
+use super::SyncError;
 use super::Syncer;
+use super::WorkId;
 use super::WorkItem;
 use super::start_sync;
 use crate::api::Db as _;
 use crate::api::DbView as _;
 use crate::api::FrozenRangeProof;
 use crate::api::HashKey;
+use crate::api::{self};
 use crate::db::BatchOp;
 use crate::db::Db;
+use crate::db::DbConfig;
 use crate::db::test::TestDb;
+use crate::manager::RevisionManagerConfig;
 
 /// 32-byte big-endian-indexed key: 24 zero bytes then `i`. Sized like an
 /// Ethereum account key so the checker accepts it in both hash modes
@@ -52,6 +61,10 @@ fn val(i: u64) -> Vec<u8> {
 fn limit(n: usize) -> NonZeroUsize {
     NonZeroUsize::new(n).expect("test limits are nonzero")
 }
+
+/// Maximum length of generated trie keys: a 64-byte key is the longest
+/// Ethereum storage key.
+const MAX_KEY_LEN: usize = 64;
 
 /// A source database committed with known content; `target` is its root.
 struct Source<H: HashMode> {
@@ -101,6 +114,13 @@ fn to_bytes(proof: &FrozenRangeProof) -> Vec<u8> {
     out
 }
 
+/// Read a key from the latest committed revision of `db`.
+fn latest_val<H: HashMode>(db: &Db<H>, key: &[u8]) -> Option<crate::merkle::Value> {
+    let root = db.root_hash().expect("database is non-empty");
+    let view = db.revision(root).expect("latest revision exists");
+    view.val(key).expect("read the key")
+}
+
 /// Outcome counters from a serial drive.
 struct DriveStats {
     /// Total successful submits, including the kv-less absence proofs that
@@ -120,7 +140,8 @@ struct DriveStats {
 /// outstanding item), on `InvalidProof` (the fetcher is honest), and past
 /// `max_submits` total submits (progress bound — converts a stall into a
 /// failure). Stops early after exactly `stop_after` successful submits when
-/// given, dropping any held items (abandoned in-flight reservations).
+/// given, dropping any held items (abandoned in-flight reservations — the
+/// restart tests depend on this).
 fn drive_with<H: HashMode>(
     syncer: &Syncer<'_>,
     src: &Source<H>,
@@ -180,6 +201,24 @@ fn drive_serial<H: HashMode>(
     drive_with(syncer, src, proof_limit, max_submits, None, VecDeque::new())
 }
 
+/// [`drive_with`] from scratch, stopping after exactly `stop_after`
+/// successful submits (held items dropped).
+fn drive_serial_partial<H: HashMode>(
+    syncer: &Syncer<'_>,
+    src: &Source<H>,
+    proof_limit: Option<NonZeroUsize>,
+    stop_after: usize,
+) -> DriveStats {
+    drive_with(
+        syncer,
+        src,
+        proof_limit,
+        usize::MAX,
+        Some(stop_after),
+        VecDeque::new(),
+    )
+}
+
 /// Root equality plus full key/value iteration equality (the iteration
 /// gives better failure diagnostics than the root alone — and proves stale
 /// destination keys were deleted, not merely out-hashed).
@@ -207,6 +246,24 @@ fn assert_synced<H: HashMode>(dst: &Db<H>, src: &Source<H>) {
         assert_eq!(expected, actual, "key/value divergence after sync");
     }
     assert_eq!(dst_root, src.target, "destination root must equal target");
+}
+
+/// Run `db.check()` and assert no errors other than `AreaLeaks`.
+/// `tolerate_unpersisted` allows callers running against in-memory state
+/// (the persist worker may trail the latest committed root) to also ignore
+/// `UnpersistedRoot`; after a reopen, pass `false`.
+fn assert_check_clean<H: HashMode>(db: &Db<H>, label: &str, tolerate_unpersisted: bool) {
+    let report = db.check(CheckOpt {
+        hash_check: true,
+        progress_bar: None,
+    });
+    let real_errors: Vec<_> = report
+        .errors
+        .iter()
+        .filter(|e| !matches!(e, CheckerError::AreaLeaks(_)))
+        .filter(|e| !(tolerate_unpersisted && matches!(e, CheckerError::UnpersistedRoot)))
+        .collect();
+    assert!(real_errors.is_empty(), "{label}: {real_errors:?}");
 }
 
 /// First work item of a fresh `task_limit = 1` syncer: the whole keyspace.
@@ -763,5 +820,521 @@ mod hostile {
         }
 
         complete_after_rejections(&syncer, &src, &dst, item, Some(limit(8)));
+    }
+}
+
+/// Restart-from-scratch idempotency: dropping a syncer loses all in-memory
+/// coverage bookkeeping; a fresh syncer over the same database must converge
+/// from committed revisions alone, correcting divergent values and deleting
+/// stale keys as proofs re-cover their ranges.
+mod restart {
+    use test_case::test_case;
+
+    use super::*;
+
+    /// A stale key absent from the source, scattered across the keyspace
+    /// via its first byte (source keys all start with 0x00).
+    fn stale_key(i: u64) -> Vec<u8> {
+        const SCATTER: [u8; 5] = [0x20, 0x55, 0x90, 0xcc, 0xee];
+        let mut k = vec![0u8; 24];
+        k[0] = SCATTER[(i % 5) as usize];
+        k.extend_from_slice(&i.to_be_bytes());
+        k
+    }
+
+    // Drop-point rationale: 0 = pure restart (degenerate), 1 = after the
+    // first commit, 3/7 = mid-sweep (reservation dropped mid-lineage),
+    // 12 = deep into the sweep — much of the keyspace covered in syncer
+    // #1's head, none of it durable as bookkeeping, only as committed
+    // revisions; the restart must converge from revisions alone.
+    #[hash_mode]
+    #[test_case(0)]
+    #[test_case(1)]
+    #[test_case(3)]
+    #[test_case(7)]
+    #[test_case(12)]
+    fn restart_completes_after_partial_sync<H: HashMode>(drop_point: usize) {
+        let src = source_n::<H>(200);
+        let dst = TestDb::<H>::new();
+        // Pre-populate divergent state: 50 overlapping keys with WRONG
+        // values plus 30 stale keys absent from the source. Completion
+        // must correct the former and delete the latter.
+        let mut divergent: Vec<BatchOp<Vec<u8>, Vec<u8>>> = (0..50u64)
+            .map(|i| BatchOp::Put {
+                key: key32(i * 4),
+                value: b"divergent".to_vec(),
+            })
+            .collect();
+        let stale_keys: Vec<Vec<u8>> = (0..30u64).map(stale_key).collect();
+        divergent.extend(stale_keys.iter().map(|k| BatchOp::Put {
+            key: k.clone(),
+            value: b"stale".to_vec(),
+        }));
+        dst.update(divergent).expect("pre-populate the destination");
+
+        // Syncer #1: partial drive, then dropped mid-flight (in-memory
+        // coverage lost; any in-flight reservation abandoned).
+        {
+            let syncer = start_sync(&*dst, src.target.clone(), limit(1));
+            let stats = drive_serial_partial(&syncer, &src, Some(limit(16)), drop_point);
+            assert_eq!(stats.submits, drop_point);
+        }
+        // Syncer #2: fresh bookkeeping, same destination and target.
+        {
+            let syncer = start_sync(&*dst, src.target.clone(), limit(1));
+            drive_serial(&syncer, &src, Some(limit(16)), 256);
+            assert_eq!(syncer.finish(), Some(src.target.clone()));
+        }
+        assert_synced(&dst, &src);
+        for (i, k) in stale_keys.iter().enumerate() {
+            assert!(
+                latest_val(&dst, k).is_none(),
+                "stale key {i} must be deleted by completion"
+            );
+        }
+        assert_eq!(
+            latest_val(&dst, &key32(4)).as_deref(),
+            Some(val(4).as_slice()),
+            "overlapping key must carry the source value"
+        );
+        // Warm-start tail assertion: a third syncer over the now-complete
+        // destination reports Done on the FIRST get_work, with zero fetches.
+        {
+            let syncer = start_sync(&*dst, src.target.clone(), limit(1));
+            assert!(matches!(syncer.get_work(), Ok(GetWork::Done)));
+        }
+        // Commit-heavy test: check, reopen, recheck (concurrent_rebase
+        // pattern).
+        assert_check_clean(&dst, "post-restart", true);
+        let dst = dst.reopen();
+        assert_synced(&dst, &src);
+        assert_check_clean(&dst, "post-reopen", false);
+    }
+
+    #[hash_mode]
+    #[test]
+    fn restart_deletes_stale_keys_in_covered_range<H: HashMode>() {
+        // Sharper merge-stale-deletion shape: sync fully once, inject
+        // garbage directly into the destination (simulating
+        // crash-recovered divergence inside already-covered ranges), then
+        // re-sync to the same target — completion must DELETE the garbage
+        // (the merge deletes in-range keys absent from the proof).
+        let src = source_n::<H>(100);
+        let dst = TestDb::<H>::new();
+        {
+            let syncer = start_sync(&*dst, src.target.clone(), limit(1));
+            drive_serial(&syncer, &src, Some(limit(16)), 256);
+            assert_eq!(syncer.finish(), Some(src.target.clone()));
+        }
+        let garbage_new = key32(1_000_000);
+        let garbage_scattered = stale_key(3);
+        dst.update(vec![
+            BatchOp::Put {
+                key: key32(7),
+                value: b"clobbered".to_vec(),
+            },
+            BatchOp::Put {
+                key: garbage_new.clone(),
+                value: b"garbage".to_vec(),
+            },
+            BatchOp::Put {
+                key: garbage_scattered.clone(),
+                value: b"garbage".to_vec(),
+            },
+        ])
+        .expect("inject garbage");
+        assert_ne!(
+            dst.root_hash(),
+            Some(src.target.clone()),
+            "garbage must diverge the root"
+        );
+
+        {
+            let syncer = start_sync(&*dst, src.target.clone(), limit(1));
+            drive_serial(&syncer, &src, Some(limit(16)), 256);
+            assert_eq!(syncer.finish(), Some(src.target.clone()));
+        }
+        assert_synced(&dst, &src);
+        assert!(
+            latest_val(&dst, &garbage_new).is_none(),
+            "in-range garbage key must be deleted"
+        );
+        assert!(
+            latest_val(&dst, &garbage_scattered).is_none(),
+            "scattered garbage key must be deleted"
+        );
+        assert_eq!(
+            latest_val(&dst, &key32(7)).as_deref(),
+            Some(val(7).as_slice()),
+            "clobbered key must be restored to the source value"
+        );
+    }
+}
+
+/// Concurrent worker pools driving one shared `Syncer` (the FFI pool shape),
+/// per the `db/tests/concurrent_rebase.rs` thread-scope precedent. No
+/// wall-clock waits anywhere: `get_work` is non-blocking and idempotent, so
+/// workers yield-spin on `Wait` with a bounded counter that converts a real
+/// deadlock into a deterministic failure.
+mod concurrent {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    use super::*;
+
+    const SPIN_LIMIT: u64 = 1_000_000;
+
+    /// Resubmit on `RevisionNotFound`, bounded and counted.
+    ///
+    /// `submit` has no internal retry, and every `SyncError` is fatal to a
+    /// real sync. Under the slow soak's deliberately pathological config
+    /// (`max_revisions = 16`, 8 workers),
+    /// `Err(SyncError::Api(RevisionNotFound))` can surface when the
+    /// proposal's parent revision is reaped mid-submit. The region stays
+    /// reserved under the same id, so this test-only harness resubmits to
+    /// keep the soak running; it is not a supported recovery.
+    fn submit_with_resubmit_on_reap(
+        syncer: &Syncer<'_>,
+        id: WorkId,
+        proof: &FrozenRangeProof,
+        reap_resubmits: &AtomicUsize,
+    ) -> Submit {
+        let mut failures = 0u32;
+        loop {
+            match syncer.submit(id, proof) {
+                Ok(outcome) => return outcome,
+                Err(SyncError::Api(api::Error::RevisionNotFound { .. })) => {
+                    failures += 1;
+                    // failures = 1 initial submit + (failures - 1) resubmits.
+                    assert!(
+                        failures <= 16,
+                        "RevisionNotFound persisted through {} resubmits",
+                        failures - 1
+                    );
+                    reap_resubmits.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(e) => panic!("unexpected submit error: {e}"),
+            }
+        }
+    }
+
+    /// Honest worker loop: acquire, sweep to exhaustion, repeat until Done.
+    fn honest_worker<H: HashMode>(
+        syncer: &Syncer<'_>,
+        src: &Source<H>,
+        proof_limit: Option<NonZeroUsize>,
+    ) {
+        let mut waits = 0u64;
+        loop {
+            match syncer.get_work().expect("no invariant violations") {
+                GetWork::Done => return,
+                GetWork::Wait => {
+                    waits += 1;
+                    assert!(waits < SPIN_LIMIT, "deadlock suspected after {waits} waits");
+                    std::thread::yield_now();
+                }
+                GetWork::Work(mut item) => loop {
+                    let proof = fetch(src, &item, proof_limit);
+                    match syncer.submit(item.id, &proof).expect("honest submit") {
+                        Submit::Continue(next) => item = next,
+                        Submit::Exhausted => break,
+                        Submit::InvalidProof(e) => panic!("honest proof rejected: {e}"),
+                    }
+                },
+            }
+        }
+    }
+
+    #[hash_mode]
+    #[test]
+    fn concurrent_workers_complete_sync<H: HashMode>() {
+        const THREADS: usize = 4;
+        let src = source_n::<H>(1000);
+        let dst = TestDb::<H>::new();
+        let syncer = start_sync(&*dst, src.target.clone(), limit(THREADS));
+        std::thread::scope(|s| {
+            let handles: Vec<_> = (0..THREADS)
+                .map(|_| s.spawn(|| honest_worker(&syncer, &src, Some(limit(32)))))
+                .collect();
+            for handle in handles {
+                handle.join().expect("worker panicked");
+            }
+        });
+        // Every worker exited via Done; the syncer agrees.
+        assert!(matches!(syncer.get_work(), Ok(GetWork::Done)));
+        assert_eq!(syncer.finish(), Some(src.target.clone()));
+        assert_synced(&dst, &src);
+        assert_check_clean(&dst, "post-concurrency", true);
+        let dst = dst.reopen();
+        assert_synced(&dst, &src);
+        assert_check_clean(&dst, "post-reopen", false);
+    }
+
+    /// Hostile worker for the slow soak: serves a valid-but-wrong-root
+    /// proof on every 7th sweep iteration (which must be absorbed as
+    /// `InvalidProof` under concurrency), then the genuine one. Returns
+    /// `(sweep_iterations, invalids_absorbed)`.
+    fn hostile_worker<H: HashMode>(
+        syncer: &Syncer<'_>,
+        src: &Source<H>,
+        imposter: &Source<H>,
+        proof_limit: Option<NonZeroUsize>,
+        reap_resubmits: &AtomicUsize,
+    ) -> (u64, u64) {
+        let mut waits = 0u64;
+        let mut iterations = 0u64;
+        let mut invalids = 0u64;
+        loop {
+            match syncer.get_work().expect("no invariant violations") {
+                GetWork::Done => return (iterations, invalids),
+                GetWork::Wait => {
+                    waits += 1;
+                    assert!(waits < SPIN_LIMIT, "deadlock suspected after {waits} waits");
+                    std::thread::yield_now();
+                }
+                GetWork::Work(mut item) => loop {
+                    iterations += 1;
+                    if iterations.is_multiple_of(7) {
+                        let bad = fetch(imposter, &item, proof_limit);
+                        match submit_with_resubmit_on_reap(syncer, item.id, &bad, reap_resubmits) {
+                            Submit::InvalidProof(_) => invalids += 1,
+                            other => panic!("wrong-root proof accepted: {other:?}"),
+                        }
+                    }
+                    let proof = fetch(src, &item, proof_limit);
+                    match submit_with_resubmit_on_reap(syncer, item.id, &proof, reap_resubmits) {
+                        Submit::Continue(next) => item = next,
+                        Submit::Exhausted => break,
+                        Submit::InvalidProof(e) => panic!("honest proof rejected: {e}"),
+                    }
+                },
+            }
+        }
+    }
+
+    #[hash_mode]
+    #[test]
+    fn test_slow_concurrent_workers_reap_and_hostile_soak<H: HashMode>() {
+        const THREADS: usize = 8;
+        // Tight enough that reaping fires during the soak (the
+        // concurrent_rebase floor: the persist worker cannot keep up below
+        // ~16). The resulting RevisionNotFound pressure on submit is
+        // OPPORTUNISTIC: on fast hardware the reap race may never win the
+        // verify->commit window, and the harness asserts nothing about the
+        // count; when contention does produce the error,
+        // `submit_with_resubmit_on_reap` resubmits and fails loudly if the
+        // soak ever stops converging.
+        const MAX_REVISIONS: usize = 16;
+        const KEYS: u64 = 20_000;
+
+        let src = source_n::<H>(KEYS);
+        // Same keys, different values: every node differs, so any proof
+        // from this source fails verification against the target.
+        let imposter = source_with::<H>(
+            (0..KEYS)
+                .map(|i| (key32(i), format!("wrong{i}").into_bytes()))
+                .collect(),
+        );
+        let dst = TestDb::<H>::new_with_config(
+            DbConfig::builder()
+                .manager(
+                    RevisionManagerConfig::builder()
+                        .max_revisions(MAX_REVISIONS)
+                        .build(),
+                )
+                .build(),
+        );
+        let syncer = start_sync(&*dst, src.target.clone(), limit(THREADS));
+        let reap_resubmits = AtomicUsize::new(0);
+
+        let results: Vec<(u64, u64)> = std::thread::scope(|s| {
+            let handles: Vec<_> = (0..THREADS)
+                .map(|_| {
+                    s.spawn(|| {
+                        hostile_worker(&syncer, &src, &imposter, Some(limit(64)), &reap_resubmits)
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("worker panicked"))
+                .collect()
+        });
+
+        for (idx, (iterations, invalids)) in results.iter().enumerate() {
+            assert!(
+                *iterations < 7 || *invalids >= 1,
+                "worker {idx} ran {iterations} sweep iterations but absorbed no InvalidProof"
+            );
+        }
+        let total_invalid: u64 = results.iter().map(|&(_, invalids)| invalids).sum();
+        assert!(total_invalid >= 1, "no hostile injection fired");
+        eprintln!(
+            "soak: {total_invalid} InvalidProof absorptions, {} RevisionNotFound resubmits",
+            reap_resubmits.load(Ordering::Relaxed)
+        );
+
+        assert!(matches!(syncer.get_work(), Ok(GetWork::Done)));
+        assert_eq!(syncer.finish(), Some(src.target.clone()));
+        assert_synced(&dst, &src);
+        assert_check_clean(&dst, "post-soak", true);
+        let dst = dst.reopen();
+        assert_synced(&dst, &src);
+        assert_check_clean(&dst, "post-reopen", false);
+    }
+}
+
+/// Randomized end-to-end property test: random source shapes, generation
+/// limits, task limits, and a randomly interleaved driver exploring
+/// refeed/wakeup orderings the deterministic tests cannot. The oracle is
+/// [`assert_synced`] (root equality plus full iteration); `db.check()` is
+/// deliberately skipped here — variable-length keys upset the Ethereum
+/// hash-mode checker, and root-vs-source equality is the cryptographic oracle.
+mod random {
+    use super::*;
+
+    #[derive(Debug, Clone, Copy)]
+    enum KeyShape {
+        Dense32,
+        UniformRandom32,
+        SharedPrefixClusters,
+        VariableLen,
+    }
+
+    fn make_kvs(rng: &SeededRng, shape: KeyShape, n: u64) -> Vec<(Vec<u8>, Vec<u8>)> {
+        // Shared 16-byte prefixes for `SharedPrefixClusters`.
+        let prefixes: Vec<[u8; 16]> = (0..4).map(|_| rng.random()).collect();
+        let mut map = std::collections::BTreeMap::new();
+        for i in 0..n {
+            let key = match shape {
+                KeyShape::Dense32 => key32(i),
+                KeyShape::UniformRandom32 => rng.random::<[u8; 32]>().to_vec(),
+                KeyShape::SharedPrefixClusters => {
+                    let mut k = prefixes[rng.random_range(0..prefixes.len())].to_vec();
+                    let tail: [u8; 16] = rng.random();
+                    k.extend_from_slice(&tail);
+                    k
+                }
+                KeyShape::VariableLen => {
+                    let len = rng.random_range(1..=MAX_KEY_LEN);
+                    let mut k = vec![0u8; len];
+                    rng.fill_bytes(&mut k);
+                    k
+                }
+            };
+            // Random keys may collide; the map dedups (last value wins), so
+            // the source simply ends up slightly smaller than `n`.
+            map.insert(key, val(i));
+        }
+        map.into_iter().collect()
+    }
+
+    fn run_random_case<H: HashMode>(rng: &SeededRng, case: usize, max_n: u64) {
+        let n = match rng.random_range(0..4u32) {
+            0 => 0,
+            1 => 1,
+            2 => 2,
+            _ => rng.random_range(3..=max_n),
+        };
+        let shapes = [
+            KeyShape::Dense32,
+            KeyShape::UniformRandom32,
+            KeyShape::SharedPrefixClusters,
+            KeyShape::VariableLen,
+        ];
+        let shape = shapes[rng.random_range(0..shapes.len())];
+        // 1 is the worst-case truncation: every full-size proof continues.
+        let gen_limits = [Some(1usize), Some(2), Some(7), Some(33), Some(256), None];
+        let gen_limit = gen_limits[rng.random_range(0..gen_limits.len())].map(limit);
+        let task_limits = [1usize, 2, 5];
+        let task_limit = task_limits[rng.random_range(0..task_limits.len())];
+        // The SeededRng banner printed at construction is the repro seed;
+        // this diagnostic pins which case within the run failed.
+        let diag = format!(
+            "case {case}: n={n} shape={shape:?} gen_limit={gen_limit:?} task_limit={task_limit}"
+        );
+
+        let kvs = make_kvs(rng, shape, n);
+        let src_db = TestDb::<H>::new();
+        if !kvs.is_empty() {
+            let batch: Vec<BatchOp<Vec<u8>, Vec<u8>>> = kvs
+                .iter()
+                .cloned()
+                .map(|(key, value)| BatchOp::Put { key, value })
+                .collect();
+            src_db.update(batch).expect("populate the source");
+        }
+        let Some(target) = src_db.root_hash() else {
+            // MerkleDB empty source: there is no root hash to sync toward,
+            // so the protocol cannot express this case. (The Ethereum hash
+            // mode has an empty-root constant; see below.)
+            return;
+        };
+        let dst = TestDb::<H>::new();
+        let syncer = start_sync(&*dst, target.clone(), limit(task_limit));
+        if kvs.is_empty() {
+            // Ethereum empty source: the destination is already at the
+            // empty root, so the warm path reports Done with zero fetches.
+            assert!(matches!(syncer.get_work(), Ok(GetWork::Done)), "{diag}");
+            assert_eq!(syncer.finish(), Some(target), "{diag}");
+            return;
+        }
+        let src = Source { db: src_db, target };
+
+        // Interleaved driver: at each step randomly either acquire (when
+        // below capacity) or submit a randomly chosen held item.
+        let mut held: Vec<WorkItem> = Vec::new();
+        let mut steps = 0u32;
+        loop {
+            steps += 1;
+            assert!(steps < 10_000, "{diag}: exceeded the step cap");
+            let want_acquire =
+                held.len() < task_limit && (held.is_empty() || rng.random_range(0..2u32) == 0);
+            if want_acquire {
+                match syncer.get_work().expect("no invariant violations") {
+                    GetWork::Work(item) => {
+                        held.push(item);
+                        continue;
+                    }
+                    GetWork::Done => break,
+                    GetWork::Wait => {
+                        // Nothing to hand out while this driver holds every
+                        // outstanding item: fall through and submit one.
+                        assert!(!held.is_empty(), "{diag}: Wait with nothing held");
+                    }
+                }
+            }
+            let item = held.swap_remove(rng.random_range(0..held.len()));
+            let proof = fetch(&src, &item, gen_limit);
+            match syncer.submit(item.id, &proof).expect("honest submit") {
+                Submit::Continue(next) => held.push(next),
+                Submit::Exhausted => {}
+                Submit::InvalidProof(e) => panic!("{diag}: honest proof rejected: {e}"),
+            }
+        }
+        // Done can be observed while stragglers are still held (the root
+        // already matches); dropping them abandons benign reservations.
+        drop(held);
+        assert_eq!(syncer.finish(), Some(src.target.clone()), "{diag}");
+        assert_synced(&dst, &src);
+    }
+
+    #[hash_mode]
+    #[test]
+    fn random_sync_round_trips<H: HashMode>() {
+        let rng = SeededRng::from_env_or_random();
+        for case in 0..6 {
+            run_random_case::<H>(&rng, case, 400);
+        }
+    }
+
+    #[hash_mode]
+    #[test]
+    fn test_slow_random_sync_round_trips<H: HashMode>() {
+        // n up to 3000 for scale (truncation-heavy sweeps over real tries).
+        let rng = SeededRng::from_env_or_random();
+        for case in 0..40 {
+            run_random_case::<H>(&rng, case, 3_000);
+        }
     }
 }
