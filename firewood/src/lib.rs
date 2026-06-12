@@ -157,6 +157,10 @@ pub mod proofs;
 /// `eth_getProof`-compatible proof export.
 pub mod eth_proof;
 
+/// State-sync orchestration: the network-ignorant core of the static
+/// range-proof sync described in `docs/src/designs/2026-06-11-state-sync.md`.
+pub mod sync;
+
 // Re-export commonly used proof types at the crate root for ergonomic access
 pub use eth_proof::EthProof;
 pub use eth_proof::EthStorageProof;

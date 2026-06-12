@@ -6,6 +6,13 @@ msrv = "1.94"
 allow-unwrap-in-tests = true
 allow-indexing-slicing-in-tests = true
 
+# Operators on these types cannot overflow: subtraction returns an Option and
+# division takes a nonzero divisor.
+arithmetic-side-effects-allowed = [
+  "sync::endpoint::Endpoint",
+  "sync::endpoint::Width",
+]
+
 doc-valid-idents = [
   "MerkleDB",
   # this list must end with ".." so that it does not truncate the default list
