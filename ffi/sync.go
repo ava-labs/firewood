@@ -11,20 +11,85 @@ package ffi
 // #cgo nocallback fwd_free_sync
 // #cgo noescape fwd_finish_sync
 // #cgo nocallback fwd_finish_sync
+// #cgo noescape fwd_get_work
+// #cgo nocallback fwd_get_work
+// #cgo noescape fwd_submit_work
+// #cgo nocallback fwd_submit_work
 import "C"
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"runtime"
+	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
-// defaultSyncTaskLimit is the default cap on concurrently outstanding work
-// regions.
+// Lock ordering for the state-sync worker pool. Never acquire a
+// lower-numbered lock while holding a higher-numbered one:
+//
+//	| Order         | Lock                       | Held where                                          |
+//	|---------------|----------------------------|-----------------------------------------------------|
+//	| 1 (outermost) | pool mu (syncPool.mu)      | acquire (incl. fwd_get_work via Sync.getWork),      |
+//	|               |                            | every Signal/Broadcast site, the done/err flags     |
+//	| 2             | lease.mu (RLock)           | inside the getWork/submitWork wrappers;             |
+//	|               |                            | write-locked by Finish/Drop                         |
+//	| 3 (innermost) | Rust SyncState mutex +     | inside the C calls                                  |
+//	|               | revision read locks        |                                                     |
+//
+// fwd_get_work IS called under the pool mu (lock 1 -> 2 -> 3); fwd_submit_work
+// must NOT be called under the pool mu (lock 2 -> 3 only) — it does real
+// verification + commit work and would serialize the pool. Finish/Drop take
+// only lock 2 (write), so they are safe against in-flight getWork/submitWork
+// calls, but they must not run while Run is executing: parked workers do not
+// hold lock 2 and would not be woken by Drop — cancelling Run's ctx is the
+// only sanctioned way to stop a running sync. A Drop racing Run anyway
+// degrades gracefully: the next getWork/submitWork returns errSyncDropped,
+// which aborts the pool cleanly.
+
+// defaultSyncTaskLimit is the default worker count for [Sync.Run] and the
+// default cap on concurrently outstanding work regions.
 const defaultSyncTaskLimit = 16
 
-var errSyncDropped = errors.New("sync already finished or dropped")
+var (
+	errSyncDropped = errors.New("sync already finished or dropped")
+
+	// ErrCoverageRootMismatch is returned (wrapped, test with [errors.Is])
+	// from [Sync.Run] when coverage tiles the whole keyspace but the
+	// committed root does not match the target: an internal invariant
+	// violation, never a peer fault. The recommended caller reaction is to
+	// restart the entire sync.
+	ErrCoverageRootMismatch = errors.New("sync coverage complete but root does not match target")
+)
+
+// FetchFunc fetches the serialized range proof for one inclusive key range
+// from a peer. Firewood never sees the network; this callback IS the network.
+//
+//   - startKey/endKey: INCLUSIVE proof-request bounds; a Maybe with no value
+//     means unbounded in that direction. Pass them through to the peer
+//     request unchanged: an absent bound must be forwarded as the protocol's
+//     "no bound", never as a present empty key (the proof generator emits a
+//     different, unverifiable shape for an explicit empty start key).
+//   - attempt: 0 on the first try for this exact range; incremented each
+//     time the previous response for this range failed verification
+//     (InvalidProof). attempt > 0 means: pick a DIFFERENT peer.
+//   - prevErr: nil when attempt == 0; otherwise the (opaque) rejection
+//     detail for the previous attempt, for logging.
+//
+// Alongside the proof, return a report function bound to the peer that
+// served it, or nil to skip feedback. The pool calls report exactly once,
+// after submitting the proof and outside any pool lock: with nil when the
+// proof was accepted, or with the rejection detail when it failed
+// verification. It is not called when the submit fails for an internal
+// reason (not the peer's fault) or when the sync stops before submitting.
+// Use it to score the peer and, on acceptance, to queue follow-up work such
+// as fetching the bytecode for the proof's code hashes.
+//
+// Returning an error aborts the entire sync; "no peers available" style
+// give-up policy belongs to the caller, not the pool.
+type FetchFunc func(ctx context.Context, startKey, endKey Maybe[[]byte], attempt int, prevErr error) (proof []byte, report func(error), err error)
 
 // syncConfig collects the [SyncOption] settings for [Database.StartSync].
 type syncConfig struct {
@@ -34,7 +99,8 @@ type syncConfig struct {
 // SyncOption configures [Database.StartSync].
 type SyncOption func(*syncConfig)
 
-// WithTaskLimit sets the cap on concurrently outstanding work regions. Zero is rejected by [Database.StartSync].
+// WithTaskLimit sets the number of pool workers, which is also the cap on
+// concurrently outstanding work regions. Zero is rejected by [Database.StartSync].
 // Default: 16.
 func WithTaskLimit(n uint32) SyncOption {
 	return func(c *syncConfig) {
@@ -43,7 +109,7 @@ func WithTaskLimit(n uint32) SyncOption {
 }
 
 // Sync is an in-progress state sync of a [Database] toward a fixed target
-// root. Create with [Database.StartSync] and release
+// root. Create with [Database.StartSync], drive with [Sync.Run], and release
 // with [Sync.Finish] (returns the final root) or Drop (promoted from the
 // underlying handle; for abandoned syncs). An abandoned sync leaves only
 // ordinary committed revisions behind.
@@ -60,9 +126,11 @@ type Sync struct {
 	// this handle, so it should not be used after those calls.
 	*handle[*C.SyncHandle]
 
-	// taskLimit is the cap on outstanding work regions, fixed at StartSync
-	// time.
+	// taskLimit is the worker count for Run, fixed at StartSync time.
 	taskLimit uint32
+
+	// ran makes Run single-shot.
+	ran atomic.Bool
 }
 
 // StartSync begins a state sync of this database toward target, with at most
@@ -110,8 +178,12 @@ func getSyncFromSyncStartResult(result C.SyncStartResult, registry *keepAliveReg
 }
 
 // Finish releases the sync handle and returns the latest committed root, for
-// the caller to compare against the target. Idempotent with Drop: whichever
-// runs first releases the handle, and a Finish after either returns an error.
+// the caller to compare against the target. Meaningful once [Sync.Run] has
+// returned nil, but callable anytime. Idempotent with Drop: whichever runs
+// first releases the handle, and a Finish after either returns an error.
+//
+// Finish must not be called while [Sync.Run] is executing; cancel Run's ctx
+// and wait for it to return first.
 func (s *Sync) Finish() (Hash, error) {
 	var hash Hash
 	err := s.lease.release(func() error {
@@ -129,4 +201,361 @@ func (s *Sync) Finish() (Hash, error) {
 		return err
 	})
 	return hash, err
+}
+
+// work is one decoded C.SyncWorkItem: a region of the keyspace reserved for
+// one worker. The bounds are the EXACT inclusive proof-request bounds to
+// forward to a peer.
+type work struct {
+	// id correlates this region with its eventual submitWork call.
+	id uint64
+	// startKey is the inclusive lower request bound; no value = unbounded.
+	// Decoded from an EMPTY start_key on the wire (lossless: a work range
+	// never has an empty-but-present lower bound).
+	startKey Maybe[[]byte]
+	// endKey is the inclusive upper request bound; no value = unbounded.
+	endKey Maybe[[]byte]
+	// wakeupNeighbor is true iff shareable cold work remains right now: the
+	// pool should wake exactly one parked worker (Signal, not Broadcast).
+	wakeupNeighbor bool
+}
+
+// newWorkFromC copies a C.SyncWorkItem into Go memory and frees the C key
+// allocations immediately (no per-item finalizers; this runs once per
+// region, not per key).
+func newWorkFromC(item C.SyncWorkItem) (*work, error) {
+	w := &work{id: uint64(item.id), wakeupNeighbor: bool(item.wakeup_neighbor)}
+
+	start := newOwnedBytes(item.start_key)
+	startBytes := start.CopiedBytes()
+	err := start.Free()
+	if len(startBytes) > 0 {
+		w.startKey = Some(startBytes)
+	} else {
+		// EMPTY start_key means "no lower bound"; it MUST cross to the
+		// protocol as an absent bound, never as a present empty key.
+		w.startKey = Nothing[[]byte]()
+	}
+
+	if item.end_key.tag == C.Maybe_OwnedBytes_Some_OwnedBytes {
+		end := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&item.end_key.anon0)))
+		w.endKey = Some(end.CopiedBytes())
+		err = errors.Join(err, end.Free())
+	} else {
+		w.endKey = Nothing[[]byte]()
+	}
+
+	return w, err
+}
+
+// getWorkOutcome is the decoded tag of a C.GetWorkResult.
+type getWorkOutcome uint8
+
+const (
+	// gotWait is the zero value so error paths default to the inert outcome;
+	// callers must check the error before the outcome.
+	gotWait getWorkOutcome = iota
+	gotWork
+	gotDone
+)
+
+// submitOutcome is the decoded tag of a C.SubmitResult.
+type submitOutcome uint8
+
+const (
+	// submitFailed is the zero value so error paths default to the fatal
+	// outcome; callers must check the error before the outcome.
+	submitFailed submitOutcome = iota
+	submitContinue
+	submitExhausted
+	submitInvalid
+)
+
+// syncWorkSource abstracts the FFI work/submit pair so the pool can be
+// unit-tested against a scripted in-Go fake (no cgo in the loop). *Sync is
+// the production implementation.
+type syncWorkSource interface {
+	getWork() (getWorkOutcome, *work, error)
+	submitWork(id uint64, proof []byte) (submitOutcome, *work, error)
+}
+
+// getWork asks Firewood for a new region (the only C.fwd_get_work callsite).
+// It never parks and is safe and idempotent to re-call, so the pool calls it
+// while holding the pool mutex (see the lock-ordering table).
+func (s *Sync) getWork() (getWorkOutcome, *work, error) {
+	s.lease.mu.RLock()
+	defer s.lease.mu.RUnlock()
+	if s.dropped {
+		return gotWait, nil, errSyncDropped
+	}
+
+	result := C.fwd_get_work(s.ptr)
+	switch result.tag {
+	case C.GetWorkResult_NullHandlePointer:
+		return gotWait, nil, errSyncDropped
+	case C.GetWorkResult_Work:
+		w, err := newWorkFromC(*(*C.SyncWorkItem)(unsafe.Pointer(&result.anon0)))
+		if err != nil {
+			return gotWait, nil, err
+		}
+		return gotWork, w, nil
+	case C.GetWorkResult_Wait:
+		return gotWait, nil, nil
+	case C.GetWorkResult_Done:
+		return gotDone, nil, nil
+	case C.GetWorkResult_CoverageRootMismatch:
+		detail := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+		return gotWait, nil, fmt.Errorf("%w: %w", ErrCoverageRootMismatch, detail)
+	case C.GetWorkResult_Err:
+		return gotWait, nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+	default:
+		return gotWait, nil, fmt.Errorf("unknown C.GetWorkResult tag: %d", result.tag)
+	}
+}
+
+// submitWork submits serialized proof bytes for the region reserved under id
+// (the only C.fwd_submit_work callsite). It does real verification + commit
+// work, so it must NOT be called under the pool mutex.
+//
+// Outcomes: submitInvalid is NON-fatal (peer fault; same region, SAME id —
+// re-fetch from a different peer; the error carries the rejection detail).
+// submitFailed is fatal to the sync: a stale id also lands there, and
+// resubmitting a stale id can never succeed.
+func (s *Sync) submitWork(id uint64, proof []byte) (submitOutcome, *work, error) {
+	s.lease.mu.RLock()
+	defer s.lease.mu.RUnlock()
+	if s.dropped {
+		return submitFailed, nil, errSyncDropped
+	}
+
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	result := C.fwd_submit_work(s.ptr, C.uint64_t(id), newBorrowedBytes(proof, &pinner))
+	switch result.tag {
+	case C.SubmitResult_NullHandlePointer:
+		return submitFailed, nil, errSyncDropped
+	case C.SubmitResult_Continue:
+		w, err := newWorkFromC(*(*C.SyncWorkItem)(unsafe.Pointer(&result.anon0)))
+		if err != nil {
+			return submitFailed, nil, err
+		}
+		return submitContinue, w, nil
+	case C.SubmitResult_Exhausted:
+		return submitExhausted, nil, nil
+	case C.SubmitResult_InvalidProof:
+		return submitInvalid, nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+	case C.SubmitResult_Err:
+		return submitFailed, nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+	default:
+		return submitFailed, nil, fmt.Errorf("unknown C.SubmitResult tag: %d", result.tag)
+	}
+}
+
+// Run spawns the configured number of worker goroutines up front and drives
+// the sync to completion. It blocks until the sync is done (returns nil), an
+// internal error occurs (first error wins; see [ErrCoverageRootMismatch]),
+// or ctx is cancelled (returns ctx's error). Run may be called at most once,
+// and [Sync.Finish]/Drop must not be called until Run has returned;
+// cancelling ctx is the only sanctioned way to stop a running sync.
+//
+// Sync commits happen Rust-side (rebase-on-commit) and do not take this
+// package's database commit lock. Callers must not write to the database
+// during a sync: an outside commit can make Run fail with
+// [ErrCoverageRootMismatch].
+func (s *Sync) Run(ctx context.Context, fetch FetchFunc) error {
+	if fetch == nil {
+		return errors.New("nil FetchFunc")
+	}
+	if !s.ran.CompareAndSwap(false, true) {
+		return errors.New("sync Run may only be called once")
+	}
+	return runPool(ctx, s, fetch, s.taskLimit)
+}
+
+// syncPool is the fixed worker pool driving one sync run. One mutex, one
+// condvar, two flags — see the lock-ordering table at the top of this file
+// and `docs/src/designs/2026-06-11-state-sync.md` ("Lost-wakeup correctness").
+type syncPool struct {
+	src    syncWorkSource
+	fetch  FetchFunc
+	cancel context.CancelFunc
+
+	mu   sync.Mutex
+	cond *sync.Cond // over mu
+	done bool       // a worker observed Done
+	err  error      // first internal/fetch error; non-nil only when aborting
+}
+
+// runPool is [Sync.Run] minus the single-shot guard, split out so tests can
+// drive the pool against a scripted syncWorkSource. taskLimit must be >= 1:
+// with 0 workers there is nothing to wait for and the result is a vacuous
+// nil. The public API guarantees this (fwd_start_sync rejects a zero
+// task_limit, so a [Sync] always carries a nonzero one).
+func runPool(ctx context.Context, src syncWorkSource, fetch FetchFunc, taskLimit uint32) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	p := &syncPool{src: src, fetch: fetch, cancel: cancel}
+	p.cond = sync.NewCond(&p.mu)
+
+	// ctx cancellation must wake parked workers. AfterFunc takes mu before
+	// Broadcast, so the same two-lock argument as the shed Signal applies: a
+	// worker is either pre-park (it re-checks ctx.Err() under mu) or already
+	// parked (it receives the Broadcast). No lost cancellation.
+	stop := context.AfterFunc(ctx, func() {
+		p.mu.Lock()
+		p.cond.Broadcast()
+		p.mu.Unlock()
+	})
+	defer stop()
+
+	var wg sync.WaitGroup
+	for range taskLimit { // taskLimit goroutines, up front
+		wg.Go(func() {
+			p.worker(ctx)
+		})
+	}
+	wg.Wait()
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	switch {
+	case p.err != nil:
+		return p.err // first error wins (incl. ErrCoverageRootMismatch)
+	case p.done:
+		return nil // sync complete
+	default:
+		return ctx.Err() // parent cancellation
+	}
+}
+
+// fail records the first error and wakes everyone. Once the sync is done,
+// errors from workers still fetching or submitting are moot and ignored. The
+// caller must hold mu.
+func (p *syncPool) fail(err error) {
+	if p.done {
+		return
+	}
+	if p.err == nil {
+		p.err = err
+	}
+	p.cancel()         // unblocks in-flight fetches; AfterFunc also Broadcasts
+	p.cond.Broadcast() // wake parked workers immediately
+}
+
+// worker is one pool goroutine: acquire a region, sweep it to exhaustion,
+// repeat until done/error/cancellation.
+func (p *syncPool) worker(ctx context.Context) {
+	for {
+		w, ok := p.acquire(ctx)
+		if !ok {
+			return
+		}
+		if !p.sweep(ctx, w) {
+			return
+		}
+		// Region exhausted — go help a neighbor (reacquire).
+	}
+}
+
+// acquire returns the next region, or ok=false when the worker should exit
+// (done, error, or cancellation).
+func (p *syncPool) acquire(ctx context.Context) (*work, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for { // ── REQUIREMENT 3: re-check LOOP, never a single if. ──
+		if p.done || p.err != nil || ctx.Err() != nil {
+			return nil, false
+		}
+		// ── REQUIREMENT 1: fwd_get_work is called while holding mu, so the
+		// predicate read (C1) and the park (C2) share one mu critical
+		// section. fwd_get_work's documented contract (pure function of the
+		// durable SyncState, never parks, idempotent to re-call) is what
+		// makes this legal.
+		outcome, w, err := p.src.getWork()
+		if err != nil {
+			p.fail(fmt.Errorf("get sync work: %w", err))
+			return nil, false
+		}
+		switch outcome {
+		case gotDone:
+			p.done = true
+			p.cancel()         // stop fetches still in flight elsewhere
+			p.cond.Broadcast() // wake every parked worker so it can exit
+			return nil, false
+		case gotWork:
+			if w.wakeupNeighbor {
+				p.cond.Signal() // more cold work exists: wake ONE helper
+			}
+			return w, true
+		case gotWait:
+			p.cond.Wait() // park: atomically releases mu, reacquires on wake
+		}
+	}
+}
+
+// sweep drives one region to exhaustion. It returns false when the worker
+// should exit (done/abort/cancellation), true to reacquire.
+func (p *syncPool) sweep(ctx context.Context, w *work) bool {
+	attempt, prevErr := 0, error(nil)
+	for {
+		// Exit early between chunks if the sync finished or aborted
+		// (benign-straggler window: an in-flight submit still lands).
+		p.mu.Lock()
+		stop := p.done || p.err != nil
+		p.mu.Unlock()
+		if stop || ctx.Err() != nil {
+			return false
+		}
+
+		proof, report, err := p.fetch(ctx, w.startKey, w.endKey, attempt, prevErr)
+		if err != nil {
+			p.mu.Lock()
+			p.fail(err)
+			p.mu.Unlock()
+			return false
+		}
+
+		// NOT under mu (documented FFI contract): submit does real verify +
+		// commit work and holds no Go lock while doing it.
+		outcome, next, err := p.src.submitWork(w.id, proof)
+		if report != nil {
+			switch outcome {
+			case submitContinue, submitExhausted:
+				report(nil)
+			case submitInvalid:
+				report(err)
+			case submitFailed:
+			}
+		}
+		switch outcome {
+		case submitContinue:
+			w, attempt, prevErr = next, 0, nil
+			if w.wakeupNeighbor {
+				// ── REQUIREMENT 2: the producer publishes the shed cold
+				// chunk to SyncState under the Rust mutex INSIDE submit (F1),
+				// and submitWork has already returned — releasing that mutex
+				// — before we take mu to Signal (F2). F1 happens-before F2
+				// by construction; nothing more is needed.
+				p.mu.Lock()
+				p.cond.Signal()
+				p.mu.Unlock()
+			}
+		case submitExhausted:
+			return true // region done — reacquire
+		case submitInvalid:
+			// Hostile or buggy peer: same region, SAME id, zero Rust-side
+			// state change. Re-fetch from a different peer; no retry cap
+			// here — give-up policy belongs to the fetcher (it returns an
+			// error to abort the sync).
+			attempt++
+			prevErr = err
+		case submitFailed:
+			p.mu.Lock()
+			p.fail(fmt.Errorf("submit sync work %d: %w", w.id, err))
+			p.mu.Unlock()
+			return false
+		}
+	}
 }
