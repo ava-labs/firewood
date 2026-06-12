@@ -186,6 +186,59 @@ func TestSyncInvalidProofRetry(t *testing.T) {
 	})
 }
 
+// TestSyncRestartAfterCancel is the Go-side crash-restart lifecycle through
+// the real FFI: a fetcher cancels the sync's ctx after a fixed number of
+// fetches, Run returns the ctx error, and a NEW handle on the same database
+// restarts from committed revisions alone and completes to the target root.
+// (Restart-from-partial-coverage nuances are owned by the Rust suite; this
+// proves the handle lifecycle.)
+func TestSyncRestartAfterCancel(t *testing.T) {
+	r := require.New(t)
+	src := newTestDatabase(t)
+	keys, vals, batch := kvForTest(500)
+	srcRoot, err := src.Update(batch)
+	r.NoError(err)
+
+	dst := newTestDatabase(t)
+	s1, err := dst.StartSync(srcRoot, WithTaskLimit(2))
+	r.NoError(err)
+	t.Cleanup(func() { _ = s1.Drop() })
+
+	// The fetcher cancels the ctx on the 5th fetch: a deterministic
+	// mid-sync interruption (500 keys at 16 per proof need far more than 5
+	// fetches, so the first run can never complete instead).
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	inner := syncFetcher(src, srcRoot, 16)
+	var fetches atomic.Int64
+	fetch := func(fctx context.Context, startKey, endKey Maybe[[]byte], attempt int, prevErr error) ([]byte, error) {
+		if fetches.Add(1) == 5 {
+			cancel()
+			return nil, fctx.Err()
+		}
+		return inner(fctx, startKey, endKey, attempt, prevErr)
+	}
+	r.ErrorIs(s1.Run(ctx, fetch), context.Canceled)
+	// Abandon the interrupted sync; only committed revisions survive.
+	r.NoError(s1.Drop())
+
+	s2, err := dst.StartSync(srcRoot, WithTaskLimit(2))
+	r.NoError(err)
+	t.Cleanup(func() { _ = s2.Drop() })
+	r.NoError(s2.Run(t.Context(), syncFetcher(src, srcRoot, 16)))
+
+	root, err := s2.Finish()
+	r.NoError(err)
+	r.Equal(srcRoot, root)
+
+	// Root equality is the cryptographic check; spot-check a sample anyway.
+	for i := 0; i < len(keys); i += 83 {
+		got, err := dst.Get(keys[i])
+		r.NoError(err)
+		r.Equal(vals[i], got)
+	}
+}
+
 func TestSyncFetchErrorAborts(t *testing.T) {
 	r := require.New(t)
 	src := newTestDatabase(t)
