@@ -21,9 +21,10 @@ pub use self::rendered_metrics::{
 };
 pub(crate) use self::results::{CResult, NullHandleResult};
 pub use self::results::{
-    ChangeProofResult, CodeIteratorResult, HandleResult, HashResult, IteratorResult,
+    ChangeProofResult, CodeIteratorResult, GetWorkResult, HandleResult, HashResult, IteratorResult,
     KeyValueBatchResult, KeyValueResult, NextKeyRangeResult, ProposalResult, RangeProofResult,
-    ReconstructedResult, RenderedMetricsResult, RevisionResult, ValueResult, VoidResult,
+    ReconstructedResult, RenderedMetricsResult, RevisionResult, SubmitResult, SyncStartResult,
+    ValueResult, VoidResult,
 };
 
 /// Maybe is a C-compatible optional type using a tagged union pattern.

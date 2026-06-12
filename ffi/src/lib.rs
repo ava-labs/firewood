@@ -43,6 +43,7 @@ mod registry;
 #[cfg(feature = "block-replay")]
 mod replay;
 mod revision;
+mod sync;
 mod value;
 
 use firewood::api::DbView;
@@ -56,6 +57,7 @@ pub use crate::proofs::*;
 pub use crate::proposal::*;
 pub use crate::reconstructed::*;
 pub use crate::revision::*;
+pub use crate::sync::*;
 pub use crate::value::*;
 
 #[global_allocator]

@@ -12,6 +12,14 @@
 
 
 /**
+ * Maximum key/value pairs per submitted proof; proofs exceeding this are
+ * rejected as invalid. Go callers should pass this as the key limit in
+ * peer requests. Sized so the transport's byte budget, not the key count,
+ * is the binding limit (see `firewood::sync::MAX_PROOF_KEYS`).
+ */
+#define FWD_SYNC_MAX_PROOF_KEYS 32768
+
+/**
  * The hashing mode to use for the database.
  *
  * This determines the cryptographic hash function and trie structure used.
@@ -68,6 +76,16 @@ typedef struct RangeProofContext RangeProofContext;
 typedef struct ReconstructedHandle ReconstructedHandle;
 
 typedef struct RevisionHandle RevisionHandle;
+
+/**
+ * An opaque handle to an in-progress state sync toward a fixed target root.
+ *
+ * Created by [`fwd_start_sync`]; freed by [`fwd_finish_sync`] or
+ * [`fwd_free_sync`]. Borrows the database handle: the database must not be
+ * closed while this handle is live (the Go wrapper enforces this with a
+ * keep-alive handle).
+ */
+typedef struct SyncHandle SyncHandle;
 
 /**
  * A database hash key, used in FFI functions that require hashes.
@@ -1278,6 +1296,117 @@ typedef struct RevisionResult {
 } RevisionResult;
 
 /**
+ * A region of the keyspace handed to one sync worker. The bounds are the
+ * EXACT inclusive proof-request bounds to forward to a peer (unlike
+ * `NextKeyRange`, whose end is exclusive — do not copy decode logic between
+ * the two).
+ */
+typedef struct SyncWorkItem {
+  /**
+   * Correlates this region with its eventual [`fwd_submit_work`] call.
+   */
+  uint64_t id;
+  /**
+   * Inclusive lower bound of the proof request. EMPTY means "no lower
+   * bound" (request from the start of the keyspace). This encoding is
+   * lossless: a work range never has an empty-but-present lower bound.
+   *
+   * The caller MUST translate empty to the protocol's "no start key"
+   * (`Nothing`), never to a present empty key: the proof generator emits
+   * a different (and unverifiable) shape for an explicit empty start key.
+   *
+   * The caller must free with [`fwd_free_owned_bytes`].
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  OwnedBytes start_key;
+  /**
+   * Inclusive upper bound of the proof request; `None` means unbounded.
+   * If present, the caller must free with [`fwd_free_owned_bytes`].
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  struct Maybe_OwnedBytes end_key;
+  /**
+   * True iff shareable cold work remains right now: the caller should
+   * wake exactly one parked worker (`Signal`, not `Broadcast`).
+   */
+  bool wakeup_neighbor;
+} SyncWorkItem;
+
+/**
+ * A result type returned from [`fwd_get_work`].
+ *
+ * [`fwd_get_work`]: crate::fwd_get_work
+ */
+enum GetWorkResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  /**
+   * The caller provided a null pointer to a sync handle.
+   */
+  GetWorkResult_NullHandlePointer,
+  /**
+   * A new region to work. The caller frees the key members with
+   * [`fwd_free_owned_bytes`].
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  GetWorkResult_Work,
+  /**
+   * Nothing to hand out now; not done. Park and re-check after a wakeup.
+   */
+  GetWorkResult_Wait,
+  /**
+   * Latest committed root == target. Sync is complete.
+   */
+  GetWorkResult_Done,
+  /**
+   * Coverage tiles the keyspace but the committed root does not match the
+   * target: an internal invariant violation (never a peer fault). Distinct
+   * from `Err` so the caller can recognize it and restart the whole sync.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with the detail message.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  GetWorkResult_CoverageRootMismatch,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`].
+   * The value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  GetWorkResult_Err,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum GetWorkResult_Tag GetWorkResult_Tag;
+#else
+typedef size_t GetWorkResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
+
+typedef struct GetWorkResult {
+  GetWorkResult_Tag tag;
+  union {
+    struct {
+      struct SyncWorkItem work;
+    };
+    struct {
+      OwnedBytes coverage_root_mismatch;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} GetWorkResult;
+
+/**
  * A result type returned from iterator FFI functions
  */
 enum KeyValueResult_Tag
@@ -1577,6 +1706,129 @@ typedef struct LogArgs {
    */
   BorrowedBytes filter_level;
 } LogArgs;
+
+/**
+ * A result type returned from [`fwd_start_sync`].
+ *
+ * [`fwd_start_sync`]: crate::fwd_start_sync
+ */
+enum SyncStartResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  /**
+   * The caller provided a null pointer to a database handle.
+   */
+  SyncStartResult_NullHandlePointer,
+  /**
+   * Sync started. Free with [`fwd_finish_sync`] or [`fwd_free_sync`].
+   *
+   * [`fwd_finish_sync`]: crate::fwd_finish_sync
+   * [`fwd_free_sync`]: crate::fwd_free_sync
+   */
+  SyncStartResult_Ok,
+  /**
+   * An error occurred (e.g. `task_limit == 0`) and the message is
+   * returned as an [`OwnedBytes`]. The value is guaranteed to contain
+   * only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  SyncStartResult_Err,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum SyncStartResult_Tag SyncStartResult_Tag;
+#else
+typedef size_t SyncStartResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
+
+typedef struct SyncStartResult {
+  SyncStartResult_Tag tag;
+  union {
+    struct {
+      struct SyncHandle *ok;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} SyncStartResult;
+
+/**
+ * A result type returned from [`fwd_submit_work`].
+ *
+ * [`fwd_submit_work`]: crate::fwd_submit_work
+ */
+enum SubmitResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  /**
+   * The caller provided a null pointer to a sync handle.
+   */
+  SubmitResult_NullHandlePointer,
+  /**
+   * Same region, next chunk; fresh id, same worker. The caller frees the
+   * key members with [`fwd_free_owned_bytes`].
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  SubmitResult_Continue,
+  /**
+   * Region fully covered — call [`fwd_get_work`] again.
+   *
+   * [`fwd_get_work`]: crate::fwd_get_work
+   */
+  SubmitResult_Exhausted,
+  /**
+   * Proof rejected (unparseable, structurally invalid, or wrong root):
+   * the PEER's fault. The region stays reserved under the SAME id with
+   * zero state mutation — re-fetch the same bounds from a different peer.
+   * Detail string is opaque in v1; the caller must free it with
+   * [`fwd_free_owned_bytes`].
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  SubmitResult_InvalidProof,
+  /**
+   * Internal error (not the peer). For transient failures (e.g. an
+   * `Api` error mid-commit) the region stays reserved under the same id
+   * and a plain resubmit recovers; a stale or unknown id also lands
+   * here, and there nothing is reserved — resubmitting the same id can
+   * never succeed, so treat `Err` as fatal rather than retrying on it.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  SubmitResult_Err,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum SubmitResult_Tag SubmitResult_Tag;
+#else
+typedef size_t SubmitResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
+
+typedef struct SubmitResult {
+  SubmitResult_Tag tag;
+  union {
+    struct {
+      struct SyncWorkItem continue_;
+    };
+    struct {
+      OwnedBytes invalid_proof;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} SubmitResult;
 
 /**
  * Puts the given key-value pairs into the database.
@@ -2021,6 +2273,33 @@ struct VoidResult fwd_db_verify_range_proof(const struct DatabaseHandle *db,
                                             struct VerifyRangeProofArgs args);
 
 /**
+ * Consume the sync handle and return the latest committed root hash for
+ * the caller to confirm against the target. Meaningful once
+ * [`fwd_get_work`] returned `Done`, but callable anytime — an abandoned
+ * sync leaves only ordinary revisions (see `docs/plans/state-sync.md`,
+ * Lifecycle). Returns [`HashResult::None`] if the database is empty.
+ *
+ * # Returns
+ *
+ * - [`HashResult::NullHandlePointer`] if `sync` is null.
+ * - [`HashResult::None`] if the database is empty.
+ * - [`HashResult::Some`] with the latest committed root hash.
+ * - [`HashResult::Err`] if the process panics while freeing the handle.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `sync` is a valid pointer to a [`SyncHandle`].
+ * * not use `sync` after this call, and not call this concurrently with
+ *   any other function on the same handle.
+ * * call [`fwd_free_owned_bytes`] to free the memory associated with a
+ *   returned error.
+ *
+ * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+ */
+struct HashResult fwd_finish_sync(struct SyncHandle *sync);
+
+/**
  * Frees the memory associated with a `ChangeProofContext`.
  *
  * # Arguments
@@ -2220,6 +2499,26 @@ struct VoidResult fwd_free_rendered_metrics(OwnedRenderedMetrics metrics);
 struct VoidResult fwd_free_revision(struct RevisionHandle *revision);
 
 /**
+ * Free the sync handle without reporting the root (drop-without-finish).
+ * Used by the Go cleanup path; equivalent to [`fwd_finish_sync`] with the
+ * result ignored.
+ *
+ * # Returns
+ *
+ * - [`VoidResult::NullHandlePointer`] if `sync` is null.
+ * - [`VoidResult::Ok`] if the handle was successfully freed.
+ * - [`VoidResult::Err`] if the process panics while freeing the memory.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `sync` is a valid pointer to a [`SyncHandle`].
+ * * not use `sync` after this call, and not call this concurrently with
+ *   any other function on the same handle.
+ */
+struct VoidResult fwd_free_sync(struct SyncHandle *sync);
+
+/**
  * Gather latest metrics for this process as structured data.
  *
  * # Returns
@@ -2373,6 +2672,53 @@ struct ValueResult fwd_get_latest(const struct DatabaseHandle *db, BorrowedBytes
  * [`RevisionHandle`]: crate::revision::RevisionHandle
  */
 struct RevisionResult fwd_get_revision(const struct DatabaseHandle *db, struct HashKey root);
+
+/**
+ * Hand the calling worker a new region to sync, or report `Wait`/`Done`.
+ *
+ * # Contract (load-bearing — the Go condvar pool depends on this verbatim)
+ *
+ * The `Work`/`Wait`/`Done` answer is a pure function of the durable
+ * `SyncState`: this call never parks (it may briefly block on internal
+ * locks — reading the latest root waits out an in-flight commit's rebase
+ * window), performs no I/O or network access, and is safe and
+ * idempotent to re-call — re-calling after `Wait` or `Done` without an
+ * intervening [`fwd_submit_work`] is always legal and returns a consistent
+ * answer. Callers therefore may (and the Go pool MUST) evaluate it while
+ * holding their own park/wake mutex, in a re-check loop around the wait.
+ *
+ * # Locking (Go-side discipline)
+ *
+ * - `fwd_get_work` IS called while holding the Go pool mutex `mu`.
+ * - [`fwd_submit_work`] must NOT be called under `mu`.
+ *
+ * # Returns
+ *
+ * - [`GetWorkResult::NullHandlePointer`] if `sync` is null.
+ * - [`GetWorkResult::Work`] with a new region to fetch and submit.
+ * - [`GetWorkResult::Wait`] if nothing can be handed out right now.
+ * - [`GetWorkResult::Done`] if the latest committed root equals the target.
+ * - [`GetWorkResult::CoverageRootMismatch`] on the internal invariant
+ *   violation (restart the whole sync).
+ * - [`GetWorkResult::Err`] on any other internal error.
+ *
+ * # Thread Safety
+ *
+ * Safe to call concurrently with [`fwd_submit_work`] and other
+ * `fwd_get_work` calls on the same handle (internal mutex). NOT safe to
+ * call concurrently with [`fwd_finish_sync`]/[`fwd_free_sync`] on the same
+ * handle.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `sync` is a valid pointer to a [`SyncHandle`].
+ * * free the key members of a returned [`SyncWorkItem`] with
+ *   [`fwd_free_owned_bytes`], and likewise any returned error.
+ *
+ * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+ */
+struct GetWorkResult fwd_get_work(const struct SyncHandle *sync);
 
 /**
  * Retrieves the next item from the iterator.
@@ -2902,3 +3248,82 @@ struct VoidResult fwd_start_logs(struct LogArgs args);
  * - [`VoidResult::Err`] if an error occurs during initialization.
  */
 struct VoidResult fwd_start_metrics(void);
+
+/**
+ * Begin a state sync of the database toward `target` with at most
+ * `task_limit` concurrently outstanding work items.
+ *
+ * # Returns
+ *
+ * - [`SyncStartResult::NullHandlePointer`] if `db` is null.
+ * - [`SyncStartResult::Ok`] with the sync handle.
+ * - [`SyncStartResult::Err`] if `task_limit == 0`.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `db` is a valid pointer to a [`DatabaseHandle`].
+ * * free the returned handle with [`fwd_finish_sync`] or [`fwd_free_sync`]
+ *   before closing the database with [`fwd_close_db`].
+ * * call [`fwd_free_owned_bytes`] to free the memory associated with a
+ *   returned error.
+ *
+ * [`fwd_close_db`]: crate::fwd_close_db
+ * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+ */
+struct SyncStartResult fwd_start_sync(const struct DatabaseHandle *db,
+                                      struct HashKey target,
+                                      uint32_t task_limit);
+
+/**
+ * Submit serialized range-proof bytes for the region identified by `id`.
+ *
+ * Verifies the proof against the region's bounds and target hash, commits
+ * the verified key-values as a new revision (`commit_with_rebase`), and
+ * updates the coverage map. See [`SubmitResult`] for the outcomes;
+ * [`SubmitResult::InvalidProof`] (peer fault: keep the same `id`, re-fetch
+ * from another peer) is distinct from [`SubmitResult::Err`] (internal
+ * fault: the region also stays reserved under the same `id`, and a plain
+ * resubmit recovers transient failures).
+ *
+ * A stale or unknown `id` (e.g. a duplicate submission) returns
+ * [`SubmitResult::Err`]; the earlier submission's commit was idempotent so
+ * this is harmless. One corner: unparseable proof bytes are classified as
+ * [`SubmitResult::InvalidProof`] before the `id` is consulted, so a stale
+ * `id` paired with garbage bytes reports `InvalidProof` even though
+ * nothing is reserved under that `id` anymore.
+ *
+ * # Locking (Go-side discipline)
+ *
+ * Must NOT be called while holding the Go pool mutex `mu`: this call does
+ * real verification + commit work and would serialize the pool; the
+ * lost-wakeup proof only requires [`fwd_get_work`] under `mu`.
+ *
+ * # Returns
+ *
+ * - [`SubmitResult::NullHandlePointer`] if `sync` is null.
+ * - [`SubmitResult::Continue`] with the same region's next chunk.
+ * - [`SubmitResult::Exhausted`] if the region is fully covered.
+ * - [`SubmitResult::InvalidProof`] if the proof was rejected (peer fault).
+ * - [`SubmitResult::Err`] on an internal error.
+ *
+ * # Thread Safety
+ *
+ * Safe to call concurrently with [`fwd_get_work`] and other
+ * `fwd_submit_work` calls on the same handle. NOT safe concurrently with
+ * [`fwd_finish_sync`]/[`fwd_free_sync`].
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `sync` is a valid pointer to a [`SyncHandle`].
+ * * ensure that `proof` is valid for [`BorrowedBytes`].
+ * * free the key members of a returned [`SyncWorkItem`] with
+ *   [`fwd_free_owned_bytes`], and likewise any returned error or rejection
+ *   detail.
+ *
+ * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+ */
+struct SubmitResult fwd_submit_work(const struct SyncHandle *sync,
+                                    uint64_t id,
+                                    BorrowedBytes proof);

@@ -272,6 +272,18 @@ impl DatabaseHandle {
         })
     }
 
+    /// Begin a state sync of this database toward `target` with at most
+    /// `task_limit` concurrently outstanding work items.
+    ///
+    /// Delegates to [`firewood::sync::start_sync`].
+    pub(crate) fn start_sync(
+        &self,
+        target: HashKey,
+        task_limit: NonZeroUsize,
+    ) -> firewood::sync::Syncer<'_> {
+        firewood::sync::start_sync(&self.db, target, task_limit)
+    }
+
     /// Create a Change Proof between two revisions specified by the start and end hash.
     ///
     /// Delegates to [`firewood::db::Db::change_proof`].
@@ -350,6 +362,8 @@ impl crate::MetricsContextExt for DatabaseHandle {
     }
 }
 
-fn invalid_data(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> api::Error {
+pub(crate) fn invalid_data(
+    error: impl Into<Box<dyn std::error::Error + Send + Sync>>,
+) -> api::Error {
     api::Error::IO(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
