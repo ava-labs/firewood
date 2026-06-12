@@ -6,6 +6,9 @@ use std::fmt;
 use firewood::Key;
 use firewood::Value;
 use firewood::api;
+use firewood::sync::GetWork;
+use firewood::sync::Submit;
+use firewood::sync::SyncError;
 
 use crate::ChangeProofContext;
 use crate::CodeIteratorHandle;
@@ -23,6 +26,8 @@ use crate::OwnedRenderedMetrics;
 use crate::ProposalHandle;
 use crate::RangeProofContext;
 use crate::ReconstructedHandle;
+use crate::SyncHandle;
+use crate::SyncWorkItem;
 use crate::revision::GetRevisionResult;
 use crate::revision::RevisionHandle;
 
@@ -663,6 +668,147 @@ impl<'db, E: fmt::Display> From<Result<ReconstructedHandle<'db>, E>> for Reconst
     }
 }
 
+/// A result type returned from [`fwd_start_sync`].
+///
+/// [`fwd_start_sync`]: crate::fwd_start_sync
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum SyncStartResult<'db> {
+    /// The caller provided a null pointer to a database handle.
+    NullHandlePointer,
+    /// Sync started. Free with [`fwd_finish_sync`] or [`fwd_free_sync`].
+    ///
+    /// [`fwd_finish_sync`]: crate::fwd_finish_sync
+    /// [`fwd_free_sync`]: crate::fwd_free_sync
+    Ok(Box<SyncHandle<'db>>),
+    /// An error occurred (e.g. `task_limit == 0`) and the message is
+    /// returned as an [`OwnedBytes`]. The value is guaranteed to contain
+    /// only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl<'db, E: fmt::Display> From<Result<SyncHandle<'db>, E>> for SyncStartResult<'db> {
+    fn from(value: Result<SyncHandle<'db>, E>) -> Self {
+        match value {
+            Ok(handle) => SyncStartResult::Ok(Box::new(handle)),
+            Err(err) => SyncStartResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+/// A result type returned from [`fwd_get_work`].
+///
+/// [`fwd_get_work`]: crate::fwd_get_work
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum GetWorkResult {
+    /// The caller provided a null pointer to a sync handle.
+    NullHandlePointer,
+    /// A new region to work. The caller frees the key members with
+    /// [`fwd_free_owned_bytes`].
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Work(SyncWorkItem),
+    /// Nothing to hand out now; not done. Park and re-check after a wakeup.
+    Wait,
+    /// Latest committed root == target. Sync is complete.
+    Done,
+    /// Coverage tiles the keyspace but the committed root does not match the
+    /// target: an internal invariant violation (never a peer fault). Distinct
+    /// from `Err` so the caller can recognize it and restart the whole sync.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with the detail message.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    CoverageRootMismatch(OwnedBytes),
+    /// An error occurred and the message is returned as an [`OwnedBytes`].
+    /// The value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl From<Result<GetWork, SyncError>> for GetWorkResult {
+    fn from(value: Result<GetWork, SyncError>) -> Self {
+        match value {
+            Ok(GetWork::Work(item)) => GetWorkResult::Work(item.into()),
+            Ok(GetWork::Wait) => GetWorkResult::Wait,
+            Ok(GetWork::Done) => GetWorkResult::Done,
+            Ok(other) => GetWorkResult::Err(
+                format!("unsupported get_work outcome: {other:?}")
+                    .into_bytes()
+                    .into(),
+            ),
+            Err(err @ SyncError::CoverageRootMismatch { .. }) => {
+                GetWorkResult::CoverageRootMismatch(err.to_string().into_bytes().into())
+            }
+            Err(err) => GetWorkResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+/// A result type returned from [`fwd_submit_work`].
+///
+/// [`fwd_submit_work`]: crate::fwd_submit_work
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum SubmitResult {
+    /// The caller provided a null pointer to a sync handle.
+    NullHandlePointer,
+    /// Same region, next chunk; fresh id, same worker. The caller frees the
+    /// key members with [`fwd_free_owned_bytes`].
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Continue(SyncWorkItem),
+    /// Region fully covered — call [`fwd_get_work`] again.
+    ///
+    /// [`fwd_get_work`]: crate::fwd_get_work
+    Exhausted,
+    /// Proof rejected (unparseable, structurally invalid, or wrong root):
+    /// the PEER's fault. The region stays reserved under the SAME id with
+    /// zero state mutation — re-fetch the same bounds from a different peer.
+    /// Detail string is opaque; the caller must free it with
+    /// [`fwd_free_owned_bytes`].
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    InvalidProof(OwnedBytes),
+    /// Internal error (not the peer), including a stale or unknown id.
+    /// Fatal: abandon the sync and restart it.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl From<Result<Submit, SyncError>> for SubmitResult {
+    fn from(value: Result<Submit, SyncError>) -> Self {
+        match value {
+            Ok(Submit::Continue(item)) => SubmitResult::Continue(item.into()),
+            Ok(Submit::Exhausted) => SubmitResult::Exhausted,
+            Ok(Submit::InvalidProof(err)) => {
+                SubmitResult::InvalidProof(err.to_string().into_bytes().into())
+            }
+            Ok(other) => SubmitResult::Err(
+                format!("unsupported submit outcome: {other:?}")
+                    .into_bytes()
+                    .into(),
+            ),
+            Err(err) => SubmitResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
 impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult {
     fn from(value: Result<api::FrozenChangeProof, api::Error>) -> Self {
         match value {
@@ -757,6 +903,9 @@ impl_null_handle_result!(
     RevisionResult<'_>,
     KeyValueBatchResult,
     KeyValueResult,
+    SyncStartResult<'_>,
+    GetWorkResult,
+    SubmitResult,
 );
 
 impl_cresult!(
@@ -776,6 +925,9 @@ impl_cresult!(
     KeyValueBatchResult,
     KeyValueResult,
     RenderedMetricsResult,
+    SyncStartResult<'_>,
+    GetWorkResult,
+    SubmitResult,
 );
 
 #[cfg(panic = "unwind")]

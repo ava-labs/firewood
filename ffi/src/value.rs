@@ -35,6 +35,7 @@ pub(crate) use self::results::CResult;
 pub use self::results::ChangeProofResult;
 pub use self::results::CodeIteratorResult;
 pub use self::results::EthProofResult;
+pub use self::results::GetWorkResult;
 pub use self::results::HandleResult;
 pub use self::results::HashResult;
 pub use self::results::IteratorResult;
@@ -47,6 +48,8 @@ pub use self::results::RangeProofResult;
 pub use self::results::ReconstructedResult;
 pub use self::results::RenderedMetricsResult;
 pub use self::results::RevisionResult;
+pub use self::results::SubmitResult;
+pub use self::results::SyncStartResult;
 pub use self::results::ValueResult;
 pub use self::results::VoidResult;
 
