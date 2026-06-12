@@ -8,7 +8,7 @@
 //! work-handout policy: an even `1/task_limit` seed fan-out, contiguous
 //! per-lineage sweeps via truncation continuations, a shed at a
 //! proof-chosen cut whenever a worker is idle, and largest-cold-hole refeed.
-//! The Db-coupled driver (`Syncer`) arrives in a later commit.
+//! The Db-coupled driver is [`super::syncer::Syncer`].
 
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
@@ -96,7 +96,7 @@ pub(crate) enum NextWork {
 /// is a `debug_assert!`.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
-pub(crate) enum SyncError {
+pub enum SyncError {
     /// The work id is unknown or already retired: the caller submitted an id
     /// it no longer holds, such as a duplicate submission.
     #[error("unknown or already-retired work id {}", .0.as_u64())]
@@ -108,10 +108,24 @@ pub(crate) enum SyncError {
     /// silently claim coverage the proof never proved.
     #[error("truncation key for work id {} lies outside the requested range", .0.as_u64())]
     TruncationKeyOutOfRange(WorkId),
+    /// Never a peer fault; see [`super::Syncer::get_work`].
+    #[error(
+        "committed root {} does not match target {target} after full coverage",
+        actual.as_ref().map_or_else(|| "(empty)".to_owned(), ToString::to_string)
+    )]
+    CoverageRootMismatch {
+        /// The fixed root hash the sync was started toward.
+        target: TrieHash,
+        /// The latest committed root that failed to match it.
+        actual: Option<TrieHash>,
+    },
+    /// Internal database/API failure (never the peer's fault).
+    #[error(transparent)]
+    Api(#[from] crate::api::Error),
 }
 
 /// Pure sync bookkeeping: no Db, no I/O, no locking. The Db-coupled wrapper
-/// (`Syncer`) arrives in a later commit.
+/// is [`super::syncer::Syncer`].
 ///
 /// *Cold* space (unfetched and not in flight) is not stored; it is
 /// `gaps(coverage) − requested`.

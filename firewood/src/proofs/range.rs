@@ -240,10 +240,6 @@ pub fn find_next_key_after_range_proof(
 ///
 /// Returns [`ProofError::ShouldBePrefixOfNextKey`] if `verification` came from
 /// a different proof whose end proof is not a root-to-leaf path.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "state sync, the only caller, is not yet merged")
-)]
 pub(crate) fn remaining_subtrees_after_range_proof(
     proof: &FrozenRangeProof,
     verification: &RangeProofVerificationContext,

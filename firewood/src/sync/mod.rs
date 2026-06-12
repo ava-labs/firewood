@@ -9,18 +9,14 @@
 //! decides what work to hand out next, and commits verified proofs as real
 //! revisions, while the caller (avalanchego) remains the transport.
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "only the state machine, itself unused outside tests, calls the endpoint arithmetic"
-    )
-)]
 pub(crate) mod endpoint;
-#[expect(
-    dead_code,
-    reason = "nothing outside the module's tests drives the state machine"
-)]
 mod state;
+mod syncer;
 
+pub use state::SyncError;
 pub use state::WorkId;
+pub use syncer::GetWork;
+pub use syncer::Submit;
+pub use syncer::Syncer;
+pub use syncer::WorkItem;
+pub use syncer::start_sync;
