@@ -33,6 +33,7 @@ firewood-metrics.workspace = true
 firewood-storage.workspace = true
 hex.workspace = true
 integer-encoding.workspace = true
+rangemap.workspace = true
 thiserror.workspace = true
 # Regular dependencies
 arity-arrays = { version = "0.2.0", default-features = false, features = ["16"] }

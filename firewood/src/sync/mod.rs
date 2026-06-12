@@ -13,7 +13,14 @@
     not(test),
     expect(
         dead_code,
-        reason = "nothing outside the module's tests calls the endpoint arithmetic"
+        reason = "only the state machine, itself unused outside tests, calls the endpoint arithmetic"
     )
 )]
 pub(crate) mod endpoint;
+#[expect(
+    dead_code,
+    reason = "nothing outside the module's tests drives the state machine"
+)]
+mod state;
+
+pub use state::WorkId;
