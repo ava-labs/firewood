@@ -973,7 +973,7 @@ impl<'a> api::Reconstructible for ReconstructedView<'a> {
 }
 
 #[cfg(test)]
-mod test {
+pub(crate) mod test {
     use core::iter::Take;
     use std::collections::HashMap;
     use std::iter::Peekable;
@@ -2815,7 +2815,7 @@ mod test {
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
-    pub(super) struct TestDb<H: HashMode> {
+    pub(crate) struct TestDb<H: HashMode> {
         db: Option<Db<H>>,
         tmpdir: tempfile::TempDir,
         dbconfig: DbConfig,
