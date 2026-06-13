@@ -52,21 +52,21 @@ pub enum Endpoint {
 }
 
 impl Endpoint {
+    /// The start of the keyspace: the empty key, the minimal [`Endpoint`].
+    #[must_use]
+    pub fn keyspace_start() -> Self {
+        Self::Key(Box::default())
+    }
+
     /// The whole keyspace as a half-open range: `Key([])..Max`.
     #[must_use]
     pub fn whole_keyspace() -> Range<Self> {
-        Self::Key(Box::default())..Self::Max
+        Self::keyspace_start()..Self::Max
     }
 }
 
-impl From<Box<[u8]>> for Endpoint {
-    fn from(key: Box<[u8]>) -> Self {
-        Self::Key(key)
-    }
-}
-
-impl From<&[u8]> for Endpoint {
-    fn from(key: &[u8]) -> Self {
+impl<T: Into<Box<[u8]>>> From<T> for Endpoint {
+    fn from(key: T) -> Self {
         Self::Key(key.into())
     }
 }
@@ -88,9 +88,12 @@ impl From<&[u8]> for Endpoint {
 /// `b == k ++ 0x00`), in which case the remainder `[successor(k), b)` is
 /// empty and the region is fully covered — callers must treat the empty
 /// remainder as completion, not hand it out as work.
-#[allow(
-    dead_code,
-    reason = "consumed by the SyncState machinery in a later commit"
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "consumed by the SyncState machinery in a later commit"
+    )
 )]
 pub(crate) fn successor(key: &[u8]) -> Box<[u8]> {
     key.iter().copied().chain(std::iter::once(0)).collect()
@@ -127,9 +130,12 @@ pub(crate) fn successor(key: &[u8]) -> Box<[u8]> {
 /// Note the trim minimizes length along the midpoint's *own* prefixes; an
 /// even shorter key inside `(a, b)` that is not a prefix of the midpoint may
 /// exist. This affects only balance, never correctness.
-#[allow(
-    dead_code,
-    reason = "consumed by the SyncState machinery in a later commit"
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "consumed by the SyncState machinery in a later commit"
+    )
 )]
 pub(crate) fn midpoint(a: &Endpoint, b: &Endpoint) -> Option<Endpoint> {
     if frac_cmp(a, b) != Ordering::Less {
@@ -145,7 +151,7 @@ pub(crate) fn midpoint(a: &Endpoint, b: &Endpoint) -> Option<Endpoint> {
     // sum = frac(a) + frac(b), as (integer bit, fraction bytes). For
     // `b == Max` the sum is exactly `frac(a) + 1.0`.
     let (int_bit, sum) = match b {
-        Endpoint::Max => (1, a_bytes.to_vec()),
+        Endpoint::Max => (1, a_bytes.clone()),
         Endpoint::Key(b_bytes) => add_bytes(a_bytes, b_bytes),
     };
     let mid = shift_right_one(int_bit, &sum);
@@ -181,15 +187,20 @@ pub(crate) fn midpoint(a: &Endpoint, b: &Endpoint) -> Option<Endpoint> {
 /// still owed": `owed = N, N-1, …, 2`) tiles `[a, b)` into `N` slices with
 /// no gap or overlap. For `N = 16` over the whole keyspace the boundaries
 /// land exactly on the nibble seeds `0x10, 0x20, …, 0xf0`.
-#[allow(
-    dead_code,
-    reason = "consumed by the SyncState machinery in a later commit"
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "consumed by the SyncState machinery in a later commit"
+    )
 )]
 pub(crate) fn even_slice_point(a: &Endpoint, b: &Endpoint, owed: usize) -> Option<Endpoint> {
-    if owed < 2 {
+    if owed == 1 {
+        // A 1-way split has no interior boundary: the final slice takes the
+        // whole remainder, so the caller uses `b` directly.
         return None;
     }
-    // Never `None`: `owed >= 2` was checked above.
+    // `owed == 0` makes this `None`; for `owed >= 2` it never fails.
     let divisor = NonZeroU128::new(u128::from(owed as u64))?;
     if frac_cmp(a, b) != Ordering::Less {
         // Zero fraction width: genuinely impossible to split.
@@ -230,10 +241,6 @@ pub(crate) fn even_slice_point(a: &Endpoint, b: &Endpoint, owed: usize) -> Optio
 /// Zero-width spans normalize to `(false, [])` — equal to each other and
 /// less than every nonzero span.
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
-#[allow(
-    dead_code,
-    reason = "consumed by the SyncState machinery in a later commit"
-)]
 pub(crate) struct Span {
     /// `true` only for a span of fraction width exactly `1.0`.
     is_whole: bool,
@@ -245,9 +252,12 @@ pub(crate) struct Span {
 ///
 /// Equal or reversed endpoints, and zero-fraction-width intervals (see the
 /// module docs), all yield the canonical zero span.
-#[allow(
-    dead_code,
-    reason = "consumed by the SyncState machinery in a later commit"
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "consumed by the SyncState machinery in a later commit"
+    )
 )]
 pub(crate) fn span(a: &Endpoint, b: &Endpoint) -> Span {
     if frac_cmp(a, b) != Ordering::Less {
@@ -296,11 +306,11 @@ fn zero_extended(x: &[u8], width: usize) -> impl Iterator<Item = u8> + '_ {
 
 /// `frac(x) + frac(y)` at width `max(x.len(), y.len())`, as
 /// `(carry, bytes)` where `carry` (0 or 1) is the integer part of the sum.
-fn add_bytes(x: &[u8], y: &[u8]) -> (u8, Vec<u8>) {
+fn add_bytes(x: &[u8], y: &[u8]) -> (u8, Box<[u8]>) {
     let width = x.len().max(y.len());
-    let mut out: Vec<u8> = zero_extended(x, width).collect();
+    let mut out: Box<[u8]> = zero_extended(x, width).collect();
     let ys: Vec<u8> = zero_extended(y, width).collect();
-    let mut carry = 0u8;
+    let mut carry = 0;
     // Least-significant (rightmost) byte first.
     for (o, yb) in out.iter_mut().zip(ys).rev() {
         // Each operand is at most 0xFF and carry is at most 1, so the sum is
@@ -315,6 +325,9 @@ fn add_bytes(x: &[u8], y: &[u8]) -> (u8, Vec<u8>) {
 }
 
 /// `frac(b) - frac(a)` at width `max(b.len(), a.len())`.
+///
+/// Byte-at-a-time with `overflowing_sub`: its overflow flag is the borrow
+/// into the next-more-significant byte (standard ripple-borrow subtraction).
 ///
 /// The caller must ensure `frac(a) <= frac(b)`; the final borrow is then
 /// always zero.
@@ -396,7 +409,7 @@ fn divide(int_bit: u8, bytes: &[u8], divisor: NonZeroU128) -> Vec<u8> {
 
 /// `frac(a) + frac(q)` where the caller guarantees the sum stays strictly
 /// below `1.0` (no carry out of the top byte).
-fn add_no_overflow(a: &[u8], q: &[u8]) -> Vec<u8> {
+fn add_no_overflow(a: &[u8], q: &[u8]) -> Box<[u8]> {
     let (carry, out) = add_bytes(a, q);
     debug_assert_eq!(carry, 0, "caller guarantees the sum stays below 1.0");
     out
@@ -436,18 +449,16 @@ mod tests {
     #![expect(
         clippy::unwrap_used,
         clippy::arithmetic_side_effects,
-        reason = "tests may unwrap and use plain arithmetic on small constants"
+        clippy::indexing_slicing,
+        reason = "tests may unwrap, use plain arithmetic on small constants, and index slices"
     )]
 
     use super::*;
     use firewood_storage::SeededRng;
+    use test_case::test_case;
 
-    fn key(bytes: &[u8]) -> Endpoint {
-        Endpoint::Key(bytes.into())
-    }
-
-    fn extend(k: &[u8], tail: &[u8]) -> Box<[u8]> {
-        k.iter().chain(tail).copied().collect()
+    fn endpoint(bytes: &[u8]) -> Endpoint {
+        bytes.into()
     }
 
     /// Asserts no proper prefix of `m` is strictly inside `(a, b)`.
@@ -455,12 +466,11 @@ mod tests {
         let Endpoint::Key(bytes) = m else {
             panic!("split point must be a Key, got {m:?}");
         };
-        for len in 0..bytes.len() {
-            let prefix = Endpoint::Key(bytes.get(..len).unwrap().into());
-            assert!(
-                !(*a < prefix && prefix < *b),
-                "shorter prefix {prefix:?} of {m:?} is strictly inside ({a:?}, {b:?})"
-            );
+        if let Some(prefix) = (0..bytes.len())
+            .map(|len| Endpoint::Key(bytes[..len].into()))
+            .find(|prefix| a < prefix && prefix < b)
+        {
+            panic!("shorter prefix {prefix:?} of {m:?} is strictly inside ({a:?}, {b:?})");
         }
     }
 
@@ -489,19 +499,22 @@ mod tests {
         }
     }
 
-    #[test]
-    fn ord_sanity() {
-        assert!(key(&[]) < key(&[0x00]));
-        assert!(key(&[0x00]) < key(&[0x00, 0x00]));
-        assert!(key(&[0x00, 0x00]) < key(&[0x01]));
-        assert!(key(&[0x01]) < Endpoint::Max);
-        // prefix-extension ordering
-        assert!(key(&[0x10]) < key(&[0x10, 0x00]));
-        assert!(key(&[0x10, 0x00]) < key(&[0x10, 0x01]));
-        assert!(key(&[0x10, 0xff]) < key(&[0x11]));
+    #[test_case(endpoint(&[]), endpoint(&[0x00]); "empty < single zero")]
+    #[test_case(endpoint(&[0x00]), endpoint(&[0x00, 0x00]); "zero < zero-extension")]
+    #[test_case(endpoint(&[0x00, 0x00]), endpoint(&[0x01]); "zeros < one")]
+    #[test_case(endpoint(&[0x01]), Endpoint::Max; "key < Max")]
+    #[test_case(endpoint(&[0x10]), endpoint(&[0x10, 0x00]); "prefix < extension")]
+    #[test_case(endpoint(&[0x10, 0x00]), endpoint(&[0x10, 0x01]); "extension byte ordering")]
+    #[test_case(endpoint(&[0x10, 0xff]), endpoint(&[0x11]); "carry to next byte")]
+    fn ord_lt(lo: Endpoint, hi: Endpoint) {
+        assert!(lo < hi);
+    }
 
+    #[test]
+    fn whole_keyspace_bounds() {
         let whole = Endpoint::whole_keyspace();
-        assert_eq!(whole.start, key(&[]));
+        assert_eq!(whole.start, endpoint(&[]));
+        assert_eq!(whole.start, Endpoint::keyspace_start());
         assert_eq!(whole.end, Endpoint::Max);
         assert!(whole.start < whole.end);
     }
@@ -509,149 +522,118 @@ mod tests {
     #[test]
     fn conversions() {
         let boxed: Box<[u8]> = Box::new([0x10, 0x20]);
-        assert_eq!(Endpoint::from(boxed), key(&[0x10, 0x20]));
-        assert_eq!(Endpoint::from(&[0x10u8, 0x20][..]), key(&[0x10, 0x20]));
+        assert_eq!(Endpoint::from(boxed), endpoint(&[0x10, 0x20]));
+        assert_eq!(Endpoint::from(&[0x10u8, 0x20][..]), endpoint(&[0x10, 0x20]));
     }
 
-    #[test]
-    fn successor_minimality() {
-        for k in [&[][..], &[0x10][..], &[0xff, 0xff][..]] {
-            let s = successor(k);
-            // successor is exactly k ++ 0x00
-            assert_eq!(s, extend(k, &[0x00]));
-            // strictness
-            assert!(key(k) < key(&s));
-            // minimality: every proper extension of k is >= k ++ 0x00
-            for tail in [&[0x00][..], &[0x00, 0x00][..], &[0x01][..], &[0xff][..]] {
-                let x = key(&extend(k, tail));
-                assert!(x >= key(&s), "{x:?} fell below the successor {s:?}");
-            }
+    #[test_case(&[]; "empty key")]
+    #[test_case(&[0x10]; "single byte")]
+    #[test_case(&[0xff, 0xff]; "two 0xff bytes")]
+    fn successor_minimality(k: &[u8]) {
+        fn extend(k: &[u8], tail: &[u8]) -> Box<[u8]> {
+            k.iter().chain(tail).copied().collect()
+        }
+        let s = successor(k);
+        // successor is exactly k ++ 0x00
+        assert_eq!(s, extend(k, &[0x00]));
+        // strictness
+        assert!(endpoint(k) < endpoint(&s));
+        // minimality: every proper extension of k is >= k ++ 0x00
+        for tail in [&[0x00][..], &[0x00, 0x00][..], &[0x01][..], &[0xff][..]] {
+            let x = endpoint(&extend(k, tail));
+            assert!(x >= endpoint(&s), "{x:?} fell below the successor {s:?}");
         }
     }
 
-    #[test]
-    fn midpoint_basic() {
-        // whole keyspace -> 0.5
-        assert_eq!(midpoint(&key(&[]), &Endpoint::Max), Some(key(&[0x80])));
-        // (0x10 + 0x20) / 2 = 0x18
-        assert_eq!(midpoint(&key(&[0x10]), &key(&[0x20])), Some(key(&[0x18])));
-        // b == Max: (0x10/256 + 1.0) / 2 = 0x88/256
-        assert_eq!(midpoint(&key(&[0x10]), &Endpoint::Max), Some(key(&[0x88])));
-        // b == Max near the top: (0xff/256 + 1.0) / 2 = 0.ff80
-        assert_eq!(
-            midpoint(&key(&[0xff]), &Endpoint::Max),
-            Some(key(&[0xff, 0x80]))
-        );
-        // the only key strictly inside ([0x10], [0x10, 0x01])
-        assert_eq!(
-            midpoint(&key(&[0x10]), &key(&[0x10, 0x01])),
-            Some(key(&[0x10, 0x00]))
-        );
+    #[test_case(endpoint(&[]), Endpoint::Max, Some(endpoint(&[0x80])); "whole keyspace -> 0.5")]
+    #[test_case(endpoint(&[0x10]), endpoint(&[0x20]), Some(endpoint(&[0x18])); "(0x10 + 0x20) / 2 = 0x18")]
+    #[test_case(endpoint(&[0x10]), Endpoint::Max, Some(endpoint(&[0x88])); "b == Max: (0x10/256 + 1.0) / 2")]
+    #[test_case(endpoint(&[0xff]), Endpoint::Max, Some(endpoint(&[0xff, 0x80])); "b == Max near the top")]
+    #[test_case(endpoint(&[0x10]), endpoint(&[0x10, 0x01]), Some(endpoint(&[0x10, 0x00])); "only key strictly inside")]
+    #[test_case(endpoint(&[0x10]), endpoint(&[0x10, 0x00]), None; "adjacent: zero width, empty interior")]
+    #[test_case(endpoint(&[0x10]), endpoint(&[0x10, 0x00, 0x00]), None; "zero width, non-empty interior")]
+    #[test_case(endpoint(&[0x10]), endpoint(&[0x10]), None; "equal endpoints")]
+    #[test_case(endpoint(&[]), endpoint(&[]), None; "equal empty endpoints")]
+    #[test_case(Endpoint::Max, Endpoint::Max, None; "equal Max endpoints")]
+    #[test_case(endpoint(&[0x20]), endpoint(&[0x10]), None; "reversed endpoints")]
+    #[test_case(Endpoint::Max, endpoint(&[0x10]), None; "reversed Max / key")]
+    fn midpoint_case(a: Endpoint, b: Endpoint, expected: Option<Endpoint>) {
+        assert_eq!(midpoint(&a, &b), expected);
     }
 
-    #[test]
-    fn midpoint_none_cases() {
-        // adjacent: zero fraction width, lexicographically empty interior
-        assert_eq!(midpoint(&key(&[0x10]), &key(&[0x10, 0x00])), None);
-        // zero fraction width with a lexicographically NON-empty interior
-        // (degenerate; see the module docs)
-        assert_eq!(midpoint(&key(&[0x10]), &key(&[0x10, 0x00, 0x00])), None);
-        // equal endpoints
-        assert_eq!(midpoint(&key(&[0x10]), &key(&[0x10])), None);
-        assert_eq!(midpoint(&key(&[]), &key(&[])), None);
-        assert_eq!(midpoint(&Endpoint::Max, &Endpoint::Max), None);
-        // reversed endpoints
-        assert_eq!(midpoint(&key(&[0x20]), &key(&[0x10])), None);
-        assert_eq!(midpoint(&Endpoint::Max, &key(&[0x10])), None);
-    }
-
-    #[test]
-    fn midpoint_shortest_prefix_examples() {
-        let cases = [
-            (key(&[]), Endpoint::Max),
-            (key(&[0x10]), key(&[0x20])),
-            (key(&[0xff]), Endpoint::Max),
-            (key(&[0x10]), key(&[0x10, 0x01])),
-            (key(&[0x10, 0xff]), key(&[0x12])),
-        ];
-        for (a, b) in &cases {
-            let m = midpoint(a, b).unwrap();
-            assert!(*a < m && m < *b, "midpoint {m:?} outside ({a:?}, {b:?})");
-            assert_shortest_prefix(&m, a, b);
-        }
+    #[test_case(endpoint(&[]), Endpoint::Max; "whole keyspace")]
+    #[test_case(endpoint(&[0x10]), endpoint(&[0x20]); "exact midpoint")]
+    #[test_case(endpoint(&[0xff]), Endpoint::Max; "near the top, b == Max")]
+    #[test_case(endpoint(&[0x10]), endpoint(&[0x10, 0x01]); "narrow sliver")]
+    #[test_case(endpoint(&[0x10, 0xff]), endpoint(&[0x12]); "carry across byte boundary")]
+    fn midpoint_shortest_prefix(a: Endpoint, b: Endpoint) {
+        let m = midpoint(&a, &b).unwrap();
+        assert!(a < m && m < b, "midpoint {m:?} outside ({a:?}, {b:?})");
+        assert_shortest_prefix(&m, &a, &b);
     }
 
     #[test]
     fn even_slice_nibble_seed() {
-        // "divide the remaining span by slices still owed", owed = 16..=2,
-        // lands exactly on the nibble boundaries 0x10, 0x20, ..., 0xf0.
-        let whole = Endpoint::whole_keyspace();
-        let mut prev = whole.start.clone();
+        // Tile the whole keyspace into 16 even slices ("divide the remaining
+        // span by slices still owed", owed = 16..=2); boundaries land exactly
+        // on the nibble seeds 0x10, 0x20, ..., 0xf0.
+        let mut prev = Endpoint::keyspace_start();
         let mut boundaries = Vec::new();
         for owed in (2..=16usize).rev() {
-            let m = even_slice_point(&prev, &whole.end, owed).unwrap();
+            let m = even_slice_point(&prev, &Endpoint::Max, owed).unwrap();
             boundaries.push(m.clone());
             prev = m;
         }
-        let expected: Vec<Endpoint> = (1u8..=15).map(|i| key(&[i * 0x10])).collect();
+        let expected: Vec<Endpoint> = (1u8..=15).map(|i| endpoint(&[i * 0x10])).collect();
         assert_eq!(boundaries, expected);
     }
 
-    #[test]
-    fn even_slice_prime_tiling() {
+    #[test_case(5; "5 slices")]
+    #[test_case(17; "17 slices")]
+    fn even_slice_prime_tiling(n: usize) {
         // Prime slice counts tile with strictly increasing boundaries, all
         // strictly inside (a, b).
-        for n in [5usize, 17] {
-            let mut prev = Endpoint::Key(Box::default());
-            let mut count = 0usize;
-            for owed in (2..=n).rev() {
-                let m = even_slice_point(&prev, &Endpoint::Max, owed).unwrap();
-                assert!(prev < m, "boundaries must strictly increase");
-                assert!(m < Endpoint::Max, "boundary must stay inside the span");
-                prev = m;
-                count += 1;
-            }
-            assert_eq!(count, n - 1);
+        let mut prev = Endpoint::keyspace_start();
+        let mut count = 0usize;
+        for owed in (2..=n).rev() {
+            let m = even_slice_point(&prev, &Endpoint::Max, owed).unwrap();
+            assert!(prev < m, "boundaries must strictly increase");
+            assert!(m < Endpoint::Max, "boundary must stay inside the span");
+            prev = m;
+            count += 1;
         }
+        assert_eq!(count, n - 1);
     }
 
-    #[test]
-    fn even_slice_none_cases() {
-        let a = key(&[0x10]);
-        let b = key(&[0x20]);
-        // owed == 0 or 1: caller uses b directly
-        assert_eq!(even_slice_point(&a, &b, 0), None);
-        assert_eq!(even_slice_point(&a, &b, 1), None);
-        // zero fraction width
-        assert_eq!(
-            even_slice_point(&key(&[0x10]), &key(&[0x10, 0x00]), 4),
-            None
-        );
-        // equal and reversed endpoints
-        assert_eq!(even_slice_point(&a, &a, 4), None);
-        assert_eq!(even_slice_point(&b, &a, 4), None);
+    #[test_case(endpoint(&[0x10]), endpoint(&[0x20]), 0; "owed == 0: caller uses b directly")]
+    #[test_case(endpoint(&[0x10]), endpoint(&[0x20]), 1; "owed == 1: caller uses b directly")]
+    #[test_case(endpoint(&[0x10]), endpoint(&[0x10, 0x00]), 4; "zero fraction width")]
+    #[test_case(endpoint(&[0x10]), endpoint(&[0x10]), 4; "equal endpoints")]
+    #[test_case(endpoint(&[0x20]), endpoint(&[0x10]), 4; "reversed endpoints")]
+    fn even_slice_none(a: Endpoint, b: Endpoint, owed: usize) {
+        assert_eq!(even_slice_point(&a, &b, owed), None);
     }
 
     #[test]
     fn span_ordering() {
-        let whole = span(&key(&[]), &Endpoint::Max); // 1.0
-        let wide = span(&key(&[0x10]), &key(&[0x20])); // 0.10
-        let medium = span(&key(&[0x10]), &key(&[0x18])); // 0.08
-        let narrow = span(&key(&[0xff]), &Endpoint::Max); // 0.01
-        let sliver = span(&key(&[0x10]), &key(&[0x10, 0x01])); // 0.0001
+        let whole = span(&endpoint(&[]), &Endpoint::Max); // 1.0
+        let wide = span(&endpoint(&[0x10]), &endpoint(&[0x20])); // 0.10
+        let medium = span(&endpoint(&[0x10]), &endpoint(&[0x18])); // 0.08
+        let narrow = span(&endpoint(&[0xff]), &Endpoint::Max); // 0.01
+        let sliver = span(&endpoint(&[0x10]), &endpoint(&[0x10, 0x01])); // 0.0001
         assert!(whole > wide);
         assert!(wide > medium);
         assert!(medium > narrow);
         assert!(narrow > sliver);
 
         // equal-width spans at different positions compare equal
-        assert_eq!(wide, span(&key(&[0x80]), &key(&[0x90])));
+        assert_eq!(wide, span(&endpoint(&[0x80]), &endpoint(&[0x90])));
 
         // zero-width spans compare equal to each other and less than
         // everything nonzero
-        let zero1 = span(&key(&[0x10]), &key(&[0x10, 0x00]));
-        let zero2 = span(&key(&[0x20]), &key(&[0x20]));
-        let zero3 = span(&Endpoint::Max, &key(&[])); // reversed
+        let zero1 = span(&endpoint(&[0x10]), &endpoint(&[0x10, 0x00]));
+        let zero2 = span(&endpoint(&[0x20]), &endpoint(&[0x20]));
+        let zero3 = span(&Endpoint::Max, &endpoint(&[])); // reversed
         assert_eq!(zero1, zero2);
         assert_eq!(zero1, zero3);
         assert_eq!(zero1, Span::default());
@@ -659,10 +641,10 @@ mod tests {
 
         // width exactly 1.0 is a property of the fractions, not of Key([]):
         // frac([0x00]) == 0.0 too
-        assert_eq!(whole, span(&key(&[0x00]), &Endpoint::Max));
+        assert_eq!(whole, span(&endpoint(&[0x00]), &Endpoint::Max));
 
         // the whole keyspace dominates even the widest sub-1.0 span
-        assert!(whole > span(&key(&[]), &key(&[0xff, 0xff])));
+        assert!(whole > span(&endpoint(&[]), &endpoint(&[0xff, 0xff])));
     }
 
     fn random_key(rng: &SeededRng) -> Box<[u8]> {
@@ -671,7 +653,7 @@ mod tests {
         (0..len)
             .map(|_| {
                 if rng.random_range(0..2u8) == 0 {
-                    *EDGE.get(rng.random_range(0..EDGE.len())).unwrap()
+                    EDGE[rng.random_range(0..EDGE.len())]
                 } else {
                     rng.random()
                 }
@@ -687,11 +669,10 @@ mod tests {
         }
     }
 
-    fn run_split_properties(iters: usize) {
-        let rng = SeededRng::from_env_or_random();
+    fn run_split_properties(rng: &SeededRng, iters: usize) {
         for _ in 0..iters {
-            let mut a = random_endpoint(&rng);
-            let mut b = random_endpoint(&rng);
+            let mut a = random_endpoint(rng);
+            let mut b = random_endpoint(rng);
             if a > b {
                 std::mem::swap(&mut a, &mut b);
             }
@@ -732,11 +713,10 @@ mod tests {
         }
     }
 
-    fn run_tiling_property(iters: usize) {
-        let rng = SeededRng::from_env_or_random();
+    fn run_tiling_property(rng: &SeededRng, iters: usize) {
         for _ in 0..iters {
-            let bound = random_endpoint(&rng);
-            let mut prev = Endpoint::Key(Box::default());
+            let bound = random_endpoint(rng);
+            let mut prev = Endpoint::keyspace_start();
             let owed_start = rng.random_range(2..=40usize);
             for owed in (2..=owed_start).rev() {
                 if let Some(m) = even_slice_point(&prev, &bound, owed) {
@@ -760,13 +740,15 @@ mod tests {
 
     #[test]
     fn endpoint_split_properties() {
-        run_split_properties(2_000);
-        run_tiling_property(200);
+        let rng = SeededRng::from_env_or_random();
+        run_split_properties(&rng, 2_000);
+        run_tiling_property(&rng, 200);
     }
 
     #[test]
     fn test_slow_endpoint_split_properties() {
-        run_split_properties(200_000);
-        run_tiling_property(20_000);
+        let rng = SeededRng::from_env_or_random();
+        run_split_properties(&rng, 200_000);
+        run_tiling_property(&rng, 20_000);
     }
 }
