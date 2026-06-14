@@ -236,7 +236,7 @@ impl SyncState {
             next_id: 1,
             task_limit,
             seeded: 0,
-            seed_cursor: Endpoint::Key(Box::default()),
+            seed_cursor: Endpoint::keyspace_start(),
         }
     }
 
@@ -1190,7 +1190,7 @@ mod tests {
         // keyspace, so the empty key is below it.
         let (id_b, range_b, _) = take_work(&mut state);
         assert!(
-            range_b.start > Endpoint::Key(Box::default()),
+            range_b.start > Endpoint::keyspace_start(),
             "second slice starts mid-keyspace"
         );
         let before_b = snapshot(&state);
