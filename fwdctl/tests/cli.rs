@@ -4,6 +4,7 @@
 #![allow(clippy::unwrap_used)]
 
 use predicates::prelude::*;
+use std::fmt::Write;
 use std::fs;
 use std::path::Path;
 
@@ -395,5 +396,222 @@ fn test_slow_fwdctl_check_db_with_data() {
             .arg(db_path)
             .assert()
             .success();
+    });
+}
+
+#[test]
+fn test_slow_fwdctl_import_csv() {
+    with_tmpdir(|tmp_dir| {
+        let db_path1 = tmp_dir.join("db1");
+        create_db(&db_path1);
+        insert_key_value(&db_path1, "a", "1");
+        insert_key_value(&db_path1, "b", "2");
+        insert_key_value(&db_path1, "c", "3");
+
+        let dump_file = tmp_dir.join("dump.csv");
+
+        cargo_bin_cmd!()
+            .arg("dump")
+            .arg("--db")
+            .arg(&db_path1)
+            .args(["--output-format", "csv"])
+            .args(["--output-file-name"])
+            .arg(&dump_file)
+            .assert()
+            .success();
+
+        let db_path2 = tmp_dir.join("db2");
+        cargo_bin_cmd!()
+            .arg("import")
+            .arg("--db")
+            .arg(&db_path2)
+            .args(["--input-format", "csv"])
+            .args(["--input-file-name"])
+            .arg(&dump_file)
+            .assert()
+            .success();
+
+        let dump_file2 = tmp_dir.join("dump2.csv");
+        cargo_bin_cmd!()
+            .arg("dump")
+            .arg("--db")
+            .arg(&db_path2)
+            .args(["--output-format", "csv"])
+            .args(["--output-file-name"])
+            .arg(&dump_file2)
+            .assert()
+            .success();
+
+        let contents1 = fs::read_to_string(&dump_file).expect("Should read dump file");
+        let contents2 = fs::read_to_string(&dump_file2).expect("Should read dump file 2");
+        assert_eq!(contents1, contents2);
+    });
+}
+
+#[test]
+fn test_slow_fwdctl_import_json() {
+    with_tmpdir(|tmp_dir| {
+        let db_path1 = tmp_dir.join("db1");
+        create_db(&db_path1);
+        insert_key_value(&db_path1, "a", "1");
+        insert_key_value(&db_path1, "b", "2");
+        insert_key_value(&db_path1, "c", "3");
+
+        let dump_file = tmp_dir.join("dump.json");
+
+        cargo_bin_cmd!()
+            .arg("dump")
+            .arg("--db")
+            .arg(&db_path1)
+            .args(["--output-format", "json"])
+            .args(["--output-file-name"])
+            .arg(&dump_file)
+            .assert()
+            .success();
+
+        let db_path2 = tmp_dir.join("db2");
+        cargo_bin_cmd!()
+            .arg("import")
+            .arg("--db")
+            .arg(&db_path2)
+            .args(["--input-format", "json"])
+            .args(["--input-file-name"])
+            .arg(&dump_file)
+            .assert()
+            .success();
+
+        let dump_file2 = tmp_dir.join("dump2.json");
+        cargo_bin_cmd!()
+            .arg("dump")
+            .arg("--db")
+            .arg(&db_path2)
+            .args(["--output-format", "json"])
+            .args(["--output-file-name"])
+            .arg(&dump_file2)
+            .assert()
+            .success();
+
+        let contents1 = fs::read_to_string(&dump_file).expect("Should read dump file");
+        let contents2 = fs::read_to_string(&dump_file2).expect("Should read dump file 2");
+        assert_eq!(contents1, contents2);
+    });
+}
+
+#[test]
+fn test_slow_fwdctl_import_csv_hex() {
+    with_tmpdir(|tmp_dir| {
+        let db_path1 = tmp_dir.join("db1");
+        create_db(&db_path1);
+        insert_key_value(&db_path1, "a", "1");
+        insert_key_value(&db_path1, "b", "2");
+
+        let dump_file = tmp_dir.join("dump.csv");
+
+        cargo_bin_cmd!()
+            .arg("dump")
+            .arg("--db")
+            .arg(&db_path1)
+            .args(["--output-format", "csv"])
+            .args(["--output-file-name"])
+            .arg(&dump_file)
+            .arg("--hex")
+            .assert()
+            .success();
+
+        let db_path2 = tmp_dir.join("db2");
+        cargo_bin_cmd!()
+            .arg("import")
+            .arg("--db")
+            .arg(&db_path2)
+            .args(["--input-format", "csv"])
+            .args(["--input-file-name"])
+            .arg(&dump_file)
+            .arg("--hex")
+            .assert()
+            .success();
+
+        let dump_file2 = tmp_dir.join("dump2.csv");
+        cargo_bin_cmd!()
+            .arg("dump")
+            .arg("--db")
+            .arg(&db_path2)
+            .args(["--output-format", "csv"])
+            .args(["--output-file-name"])
+            .arg(&dump_file2)
+            .arg("--hex")
+            .assert()
+            .success();
+
+        let contents1 = fs::read_to_string(&dump_file).expect("Should read dump file");
+        let contents2 = fs::read_to_string(&dump_file2).expect("Should read dump file 2");
+        assert_eq!(contents1, contents2);
+    });
+}
+
+#[test]
+fn test_slow_fwdctl_import_invalid_format() {
+    with_tmpdir(|tmp_dir| {
+        let db_path = tmp_dir.join("db");
+        let fake_file = tmp_dir.join("fake.dot");
+        fs::write(&fake_file, "fake").unwrap();
+
+        cargo_bin_cmd!()
+            .arg("import")
+            .arg("--db")
+            .arg(&db_path)
+            .args(["--input-format", "stdout"])
+            .args(["--input-file-name"])
+            .arg(&fake_file)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "Import only supports CSV and JSON formats",
+            ));
+
+        cargo_bin_cmd!()
+            .arg("import")
+            .arg("--db")
+            .arg(&db_path)
+            .args(["--input-format", "dot"])
+            .args(["--input-file-name"])
+            .arg(&fake_file)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "Import only supports CSV and JSON formats",
+            ));
+    });
+}
+
+#[test]
+fn test_slow_fwdctl_import_bulk() {
+    with_tmpdir(|tmp_dir| {
+        let dump_file = tmp_dir.join("bulk.json");
+        let mut json_content = String::from("{\n");
+        for i in 0..1500 {
+            let key = format!("key_{i}");
+            let value = format!("value_{i}");
+            if i < 1499 {
+                let _ = writeln!(json_content, "  \"{key}\": \"{value}\",");
+            } else {
+                let _ = writeln!(json_content, "  \"{key}\": \"{value}\"");
+            }
+        }
+        json_content.push_str("}\n");
+        fs::write(&dump_file, json_content).unwrap();
+
+        let db_path2 = tmp_dir.join("db2");
+        cargo_bin_cmd!()
+            .arg("import")
+            .arg("--db")
+            .arg(&db_path2)
+            .args(["--input-format", "json"])
+            .args(["--input-file-name"])
+            .arg(&dump_file)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(
+                "Successfully imported 1500 records.",
+            ));
     });
 }
