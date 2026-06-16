@@ -10,6 +10,7 @@ guidelines for contributing to firewood.
 * [Testing](#testing)
 * [How to submit changes](#how-to-submit-changes)
 * [Code Review Process](#code-review-process)
+* [Labels](#labels)
 * [Where can I ask for help?](#where-can-i-ask-for-help)
 
 ## Quick Links
@@ -112,6 +113,13 @@ please reach out. We hope you work on an easy task before tackling a harder one.
 ## How to request an enhancement
 
 Just like bugs, please use the [issue tracker](https://github.com/ava-labs/firewood/issues) for requesting enhancements. Please tag the issue with the "enhancement" tag.
+
+## Labels
+
+Issues and pull requests are organized with a namespaced label taxonomy
+(`area/*`, `kind/*`, `priority/*`, `status/*`). See [`LABELS.md`](./LABELS.md).
+Labels are managed as code in `.github/labels.yml` — edit the manifest, never
+the GitHub UI.
 
 ## Style Guide / Coding Conventions
 
