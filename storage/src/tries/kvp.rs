@@ -686,6 +686,10 @@ mod tests {
         merkledb16: b"697e767d6f4af8236090bc95131220c1c94cadba3e66e0a8011c9beef7b255a5",
         ethereum: b"3fa832b90f7f1a053a48a4528d1e446cc679fbcf376d0ef8703748d64030e19d",
     }; "seven keys")]
+    // These assert the root for the compile-selected `DefaultHashMode`; the
+    // `expected_hash!` macro picks the matching vector. Asserting BOTH the
+    // sha256 and ethereum roots in one binary needs the trie machinery
+    // parameterized over `H: HashMode`, which lands in PR 5.
     fn test_hashed_trie(slice: &[(&str, &str)], root_hash: crate::HashType) {
         let root = KeyValueTrieRoot::<str>::from_slice(slice)
             .unwrap()
