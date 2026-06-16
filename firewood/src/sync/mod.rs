@@ -21,4 +21,4 @@ mod syncer;
 
 pub use endpoint::Endpoint;
 pub use state::{SyncError, WorkId};
-pub use syncer::{GetWork, MAX_PROOF_KEYS, Submit, Syncer, WorkItem, start_sync};
+pub use syncer::{GetWork, Submit, Syncer, WorkItem, start_sync};

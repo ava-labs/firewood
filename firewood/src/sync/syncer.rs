@@ -14,7 +14,6 @@
 use std::num::NonZeroUsize;
 use std::ops::Range;
 
-use nonzero_ext::nonzero;
 use parking_lot::Mutex;
 
 use crate::api::{self, Db as _, FrozenRangeProof, HashKey};
@@ -25,18 +24,6 @@ use super::endpoint::Endpoint;
 use super::state::{
     Completed, NextWork, ProofExtent, SyncError, SyncState, WorkId, request_bounds,
 };
-
-/// Maximum number of key/value pairs accepted per submitted proof.
-///
-/// Sized so the transport's byte budget, not the key count, is the binding
-/// limit: network messages are capped at 2 MiB, and the smallest realistic
-/// Ethereum pair (a 64-byte storage key plus its RLP value and framing) is
-/// roughly 100 bytes, so a maximal response carries at most ~21k pairs.
-/// 32768 sits above that, so honest peers always fill the packet and stop
-/// on bytes; a proof exceeding this count could not have come from a
-/// byte-limited response and is rejected as a peer fault. Fixed for the
-/// MVP (a tuning knob per `docs/plans/state-sync.md`, "Deferred for v1").
-pub const MAX_PROOF_KEYS: NonZeroUsize = nonzero!(32768usize);
 
 /// Driver for one sync run toward a fixed target root.
 ///
@@ -73,11 +60,6 @@ pub fn start_sync(db: &Db, target: HashKey, task_limit: NonZeroUsize) -> Syncer<
 /// that side). `None` must be forwarded as the protocol's "no bound", never
 /// as a present empty key — the proof generator emits a different (and
 /// unverifiable) shape for an explicit empty start key.
-///
-/// Requests must additionally be capped at [`MAX_PROOF_KEYS`] keys: that
-/// limit is enforced at [`Syncer::submit`] (an oversized response is
-/// classified as a peer fault), so the transport must ask peers for at most
-/// that many keys per request.
 #[derive(Debug)]
 pub struct WorkItem {
     /// Correlates this region with its eventual [`Syncer::submit`] call.
@@ -164,10 +146,10 @@ impl Syncer<'_> {
     pub fn get_work(&self) -> Result<GetWork, SyncError> {
         let mut state = self.state.lock();
         // Completion + warm fast path. `db.root_hash()` is permitted under
-        // the sync mutex (see the `state` field docs). Both sides of the
-        // comparison use the `or_default_root_hash` convention, so the
-        // empty-db divergence between default and ethhash builds cannot
-        // skew this check.
+        // the sync mutex (see the `state` field docs). It applies the
+        // `or_default_root_hash` convention; `target` is a concrete
+        // committed-root hash, so the empty-db divergence between default
+        // and ethhash builds cannot skew this check.
         let root = self.db.root_hash();
         if root.as_ref() == Some(state.target()) {
             return Ok(GetWork::Done);
@@ -250,13 +232,7 @@ impl Syncer<'_> {
         // 2a. Verify (pure). Failures here are classified per
         //     `is_peer_fault`; every error the pure verifier can emit is a
         //     `ProofError`, i.e. a peer fault.
-        let ctx = match verify_range_proof_structure(
-            proof,
-            hash,
-            first_key,
-            last_key,
-            Some(MAX_PROOF_KEYS),
-        ) {
+        let ctx = match verify_range_proof_structure(proof, hash, first_key, last_key, None) {
             Ok(ctx) => ctx,
             Err(e) if is_peer_fault(&e) => return Ok(Submit::InvalidProof(e)),
             Err(e) => return Err(SyncError::Api(e)),
@@ -265,6 +241,11 @@ impl Syncer<'_> {
         // 2b. Resume point (pure; computed before the commit so phase 3 is
         //     pure map surgery). The returned key is the LAST key the proof
         //     covered, which `SyncState::complete` records inclusively.
+        //     This `?` routes to `SyncError::Api` (internal): the naive
+        //     impl cannot error today and only inspects the
+        //     already-verified proof. TODO(#352): a real find-next impl
+        //     that can surface peer-shaped errors must classify them via
+        //     `is_peer_fault` here, exactly like phase 2a.
         let extent = match find_next_key_after_range_proof(proof, &ctx)? {
             None => ProofExtent::Full,
             Some((last_covered, _)) => ProofExtent::Truncated {
@@ -592,9 +573,6 @@ mod tests {
         // ever candidates — see `is_peer_fault`).
         assert!(is_peer_fault(&api::Error::ProofError(ProofError::Empty)));
         assert!(is_peer_fault(&api::Error::ProofError(
-            ProofError::ProofIsLargerThanMaxLength
-        )));
-        assert!(is_peer_fault(&api::Error::ProofError(
             ProofError::NonMonotonicIncreaseRange
         )));
         // ProofError::IO is storage-shaped: internal, defensively.
@@ -608,37 +586,6 @@ mod tests {
             provided: None
         }));
         assert!(!is_peer_fault(&api::Error::SendErrorToWorker));
-
-        // End-to-end: an oversized (but otherwise honest) proof is a peer
-        // fault — Ok(InvalidProof), id retained, nothing committed.
-        let rng = SeededRng::from_env_or_random();
-        let src = TestDb::new();
-        populate_random(&src, &rng, MAX_PROOF_KEYS.get() + 8);
-        let dest = TestDb::new();
-        let target = src.root_hash().expect("source database is non-empty");
-
-        let syncer = start_sync(&dest, target, limit(1));
-        let GetWork::Work(item) = syncer.get_work().expect("get work") else {
-            panic!("expected work for a fresh sync");
-        };
-        let oversized = source_proof(&src, &item, None);
-        assert!(oversized.key_values().len() > MAX_PROOF_KEYS.get());
-        match syncer.submit(item.id, &oversized) {
-            Ok(Submit::InvalidProof(api::Error::ProofError(
-                ProofError::ProofIsLargerThanMaxLength,
-            ))) => {}
-            other => panic!("expected ProofIsLargerThanMaxLength, got {other:?}"),
-        }
-        assert!(
-            dest.root_hash() != src.root_hash(),
-            "oversized proof must not commit"
-        );
-        // Same id still live: a right-sized proof for the same bounds lands.
-        let good = source_proof(&src, &item, Some(MAX_PROOF_KEYS));
-        assert!(matches!(
-            syncer.submit(item.id, &good),
-            Ok(Submit::Continue(_) | Submit::Exhausted)
-        ));
     }
 
     #[test]
