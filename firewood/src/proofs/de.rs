@@ -20,8 +20,7 @@ use crate::{
     proofs::magic::{BATCH_DELETE, BATCH_DELETE_RANGE, BATCH_PUT},
 };
 use firewood_storage::{
-    Children, DefaultHashMode, HashMode, HashType, PathBuf, TrieHash, TriePathFromUnpackedBytes,
-    ValueDigest,
+    Children, HashType, PathBuf, TrieHash, TriePathFromUnpackedBytes, ValueDigest,
 };
 use integer_encoding::VarInt;
 use std::num::NonZeroUsize;
@@ -40,9 +39,12 @@ impl FrozenRangeProof {
         let mut reader = ProofReader::new(data);
 
         let header = reader.read_item::<Header>()?;
-        header
+        let (_, algorithm) = header
             .validate(Some(ProofType::Range))
             .map_err(ReadError::InvalidHeader)?;
+        // Dispatch all subsequent body reads on the proof's own self-describing
+        // mode so this binary reads either wire format.
+        reader.set_node_hash_algorithm(algorithm);
 
         match header.version {
             0 => {
@@ -101,9 +103,12 @@ impl FrozenChangeProof {
         let mut reader = ProofReader::new(data);
 
         let header = reader.read_item::<Header>()?;
-        header
+        let (_, algorithm) = header
             .validate(Some(ProofType::Change))
             .map_err(ReadError::InvalidHeader)?;
+        // Dispatch all subsequent body reads on the proof's own self-describing
+        // mode so this binary reads either wire format.
+        reader.set_node_hash_algorithm(algorithm);
 
         if header.version != 0 {
             return Err(ReadError::InvalidHeader(
@@ -133,10 +138,11 @@ impl Version0 for FrozenRangeProof {
         let end_proof = reader.read_v0_item()?;
         let key_values = reader.read_v0_item()?;
 
-        Ok(Self::new(
+        Ok(Self::new_with_hash_mode(
             Proof::new(start_proof),
             Proof::new(end_proof),
             key_values,
+            reader.node_hash_algorithm(),
         ))
     }
 }
@@ -147,10 +153,11 @@ impl Version0 for FrozenChangeProof {
         let end_proof = reader.read_v0_item()?;
         let key_values = reader.read_v0_item()?;
 
-        Ok(Self::new(
+        Ok(Self::new_with_hash_mode(
             Proof::new(start_proof),
             Proof::new(end_proof),
             key_values,
+            reader.node_hash_algorithm(),
         ))
     }
 }
@@ -345,9 +352,10 @@ impl<'a> ReadItem<'a> for ChildMask {
 impl<'a> ReadItem<'a> for HashType {
     fn read_item(reader: &mut ProofReader<'a>) -> Result<Self, ReadError> {
         // The two schemes use different proof wire layouts for a child hash;
-        // dispatch on the database's algorithm so each format is read back the
-        // way it was written. (Threading this through `H: HashMode` is PR 5.)
-        if DefaultHashMode::ALGORITHM.is_ethereum() {
+        // dispatch on the proof's own self-describing mode (resolved from the
+        // header byte and threaded onto the reader) so each format is read back
+        // the way it was written, regardless of the compile default.
+        if reader.node_hash_algorithm().is_ethereum() {
             match reader
                 .read_item::<u8>()
                 .map_err(|err| err.set_item("hash type discriminant"))?

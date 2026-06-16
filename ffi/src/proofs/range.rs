@@ -8,6 +8,7 @@ use firewood::{
     api::{self, DbView, FrozenRangeProof, HashKey},
 };
 use firewood_metrics::{MetricsContext, firewood_counter};
+use firewood_storage::{DefaultHashMode, HashMode};
 
 use crate::{
     BorrowedBytes, CodeIteratorHandle, CodeIteratorResult, DatabaseHandle, HashResult, Maybe,
@@ -129,11 +130,16 @@ impl<'db> RangeProofContext<'db> {
 
         debug_assert!(self.verification.is_none());
 
+        // PR 4: the binary is mono-mode, so the expected mode is the compile
+        // default (bridged through `DefaultHashMode`). The verifier rejects a
+        // proof whose header advertises a different mode. A per-DB runtime mode
+        // recovered from the handle is PR 5.
         self.verification = Some(firewood::verify_range_proof_structure(
             &self.proof,
             root,
             start_key,
             end_key,
+            DefaultHashMode::ALGORITHM,
             max_length,
         )?);
         Ok(())

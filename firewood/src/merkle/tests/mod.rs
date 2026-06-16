@@ -16,11 +16,32 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use super::*;
+use crate::proofs::range::RangeProof;
 use crate::{ProofError, ProofNode};
 use firewood_storage::{
     Children, Committed, DeletedNodeTracking, MemStore, Mutable, NodeHashAlgorithm, NodeStore,
     NodeStoreHeader, PathComponent, Propose, RootReader, TrieHash, ValueDigest,
 };
+
+/// Test wrapper around [`crate::merkle::verify_range_proof`] that supplies the
+/// compile-default hash mode as the expected `algorithm` (the mode every proof
+/// built in the test binary carries). Shadows the glob-imported real function
+/// so the many existing call sites need not pass the mode explicitly; tests
+/// that exercise the mode-mismatch guard call the real function directly.
+fn verify_range_proof<H: crate::ProofCollection<Node = ProofNode>>(
+    first_key: Option<impl crate::api::KeyType>,
+    last_key: Option<impl crate::api::KeyType>,
+    root_hash: &TrieHash,
+    proof: &RangeProof<impl crate::api::KeyType, impl crate::api::ValueType, H>,
+) -> Result<(), crate::api::Error> {
+    crate::merkle::verify_range_proof(
+        first_key,
+        last_key,
+        root_hash,
+        NodeHashAlgorithm::compile_option(),
+        proof,
+    )
+}
 
 // Returns n random key-value pairs.
 fn generate_random_kvs(rng: &firewood_storage::SeededRng, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {

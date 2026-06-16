@@ -338,8 +338,17 @@ impl Db {
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
     ) -> Result<Proposal<'_>, api::Error> {
-        let verification =
-            verify_change_proof_structure(proof, end_root.clone(), start_key, end_key, max_length)?;
+        // PR 4: the DB is mono-mode, so the expected mode is the compile
+        // default. The verifier rejects a proof whose header advertises a
+        // different mode. (A per-DB runtime mode is PR 5.)
+        let verification = verify_change_proof_structure(
+            proof,
+            end_root.clone(),
+            start_key,
+            end_key,
+            NodeHashAlgorithm::compile_option(),
+            max_length,
+        )?;
         let parent = self.manager.current_revision();
         let proposal = self.apply_change_proof_to_parent(proof, &*parent)?;
         verify_change_proof_root_hash(proof, &verification, &proposal)?;

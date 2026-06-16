@@ -7,6 +7,8 @@
 //! including the `ProofReader` type for sequential reading and traits for
 //! deserializing individual proof components.
 
+use firewood_storage::{DefaultHashMode, HashMode, NodeHashAlgorithm};
+
 use super::header::{Header, InvalidHeader};
 use std::num::NonZeroUsize;
 pub(super) trait ReadItem<'a>: Sized {
@@ -24,12 +26,40 @@ pub(super) trait Version0: Sized {
 pub(super) struct ProofReader<'a> {
     data: &'a [u8],
     offset: usize,
+    /// The hash algorithm the proof being read was encoded with, resolved from
+    /// the self-describing `hash_mode` header byte. Leaf reads whose wire layout
+    /// differs per mode (e.g. [`HashType`](firewood_storage::HashType)) dispatch
+    /// on this value so a single binary reads either wire format.
+    node_hash_algorithm: NodeHashAlgorithm,
 }
 
 impl<'a> ProofReader<'a> {
+    /// Creates a reader for parsing the fixed-size header, before the proof's
+    /// own hash mode is known.
+    ///
+    /// The algorithm is seeded to the compile default; it is only consulted by
+    /// body reads (after the header is parsed and the reader is re-seeded via
+    /// [`ProofReader::set_node_hash_algorithm`]), so this placeholder never
+    /// influences header parsing.
     #[must_use]
     pub const fn new(data: &'a [u8]) -> Self {
-        Self { data, offset: 0 }
+        Self {
+            data,
+            offset: 0,
+            node_hash_algorithm: DefaultHashMode::ALGORITHM,
+        }
+    }
+
+    /// Re-seeds the reader with the hash algorithm resolved from the validated
+    /// header so subsequent body reads dispatch on the proof's own mode.
+    pub const fn set_node_hash_algorithm(&mut self, algorithm: NodeHashAlgorithm) {
+        self.node_hash_algorithm = algorithm;
+    }
+
+    /// The hash algorithm the proof being read was encoded with.
+    #[must_use]
+    pub const fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        self.node_hash_algorithm
     }
 
     pub fn read_chunk<const N: usize>(&mut self) -> Result<&'a [u8; N], ReadError> {
