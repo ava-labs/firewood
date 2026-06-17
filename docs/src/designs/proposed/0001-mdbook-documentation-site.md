@@ -21,14 +21,16 @@ authored landing page; not-yet-written sub-pages are listed as mdBook draft chap
 (greyed-out sidebar entries) rather than empty stub files.
 
 > [!NOTE]
-> **Bootstrapping note.** This spec does not itself follow the design-doc convention
-> it establishes — it lives under `docs/superpowers/specs/` rather than
-> `docs/src/designs/proposed/NNNN-*.md`. This is the bootstrap problem: the
-> proposed-design workflow, templates, and `new-design` tooling do not exist until
-> this work lands, so the process cannot be applied to the document that defines it.
-> Once the documentation system is implemented, the design of the documentation
-> system itself lives in the book's `meta/` section (see below), and this spec is
-> recorded there as the originating artifact.
+> **Bootstrapping note.** This document is the first proposed design and is named
+> accordingly: `docs/src/designs/proposed/0001-mdbook-documentation-site.md`. It is a
+> chicken-and-egg artifact — the proposed-design workflow, templates, and `new-design`
+> tooling it specifies do not exist until this work lands, so the convention cannot be
+> fully applied to the document that defines it (for example, its frontmatter predates
+> the template this design introduces). Placing it at `proposed/0001-*` anyway makes it
+> a working example of the layout it proposes. Once the documentation system is
+> implemented and this design is built, it is promoted to `active/` and the design of
+> the documentation system itself becomes living documentation in the book's `meta/`
+> section (see below).
 
 ## Goals
 
@@ -70,11 +72,12 @@ multiple sources:
   `firewood_metrics` (`metrics`), `firewood_triehash` (`triehash`), and
   `firewood_replay` (`replay` — it has a `lib.rs`, so its directory is `firewood_replay`,
   **not** `replay`). The two bin-only crates (`fwdctl`, `benchmark`) produce directories
-  named after their `[[bin]]` targets: `fwdctl` and `benchmark`. The exact set is
-  re-confirmed against `cargo doc` output during implementation — in particular
-  `firewood-ffi` is `crate-type = ["staticlib"]`, so verify `cargo doc` actually emits a
-  `firewood_ffi/` directory (it has a `[lib]` with doc comments, but staticlib rustdoc
-  treatment is subtler than a normal `rlib`).
+  named after their `[[bin]]` targets: `fwdctl` and `benchmark`. Running `cargo doc
+  --document-private-items --no-deps` confirms the full set — all nine target
+  directories above plus rustdoc's shared `static.files/` and `src/` (source-view)
+  directories, and no root `index.html`. Notably `firewood_ffi/` **is** emitted with its
+  own `index.html` even though `firewood-ffi` is `crate-type = ["staticlib"]`; rustdoc
+  documents its `[lib]` regardless.
 - A hand-written step writes `target/doc/index.html` as a `<meta refresh>` redirect
   to `/firewood/`.
 - `doc2go` emits Go docs to `/ffi/`.
@@ -87,7 +90,7 @@ Because both rustdoc and mdBook want to own the site root (each emits `index.htm
 and asset directories), making the book the root requires relocating cargo-doc
 output into a subdirectory.
 
-## Decisions (resolved during brainstorming)
+## Design decisions
 
 1. **Site layout:** Book at site root; relocate cargo-doc output to `/rustdoc/`;
    leave `/ffi/` and `/bench/` unchanged.
@@ -143,7 +146,8 @@ docs/
     │   │   ├── README.md       # index of current designs + TODO backfill list
     │   │   └── on-disk-format-and-addressing.md  # the one FULLY WRITTEN seed
     │   └── proposed/
-    │       └── README.md       # index of in-flight proposals (none yet)
+    │       ├── README.md       # index of in-flight proposals
+    │       └── 0001-mdbook-documentation-site.md  # this design (promoted to active/ once built)
     ├── integration/
     │   └── README.md          # authored: Go API (Database/Proposal/Revision) + firewood-go-ethhash publish relationship
     ├── operations/
@@ -205,7 +209,7 @@ work — old external deep links 404, accepted in exchange for the cleaner root 
 `reference/` section and sidebar entries link to the deployed paths
 (`/firewood/rustdoc/`, `/firewood/ffi/`, `/firewood/bench/`). These resolve on the
 deployed site; under local `mdbook serve` they point at the live production site.
-The `reference/README.md` page notes this explicitly. `mdbook-linkcheck` is
+The `reference/README.md` page notes this explicitly. `mdbook-linkcheck2` is
 configured with `follow-web-links = false` so these external link-outs do not break
 local/CI builds.
 
@@ -307,16 +311,22 @@ site/                         ← uploaded as the Pages artifact
 
    For `push`, `workflow_dispatch`, and `workflow_run` events this evaluates to
    `main` (docs always deploy from `main`); for `pull_request` it checks out the PR
-   head so the new `docs/**` filter validates the PR's actual doc changes.
-2. **Install the mdBook toolchain.** `mdbook`, `mdbook-mermaid`, and
-   `mdbook-linkcheck` install via `taiki-e/install-action` (pinned by commit SHA),
-   each pinned to an explicit version. `mdbook-admonish` is **not** in the
-   `taiki-e/install-action` manifest, so install it with `cargo binstall --no-confirm
-   mdbook-admonish@<version>` (`cargo-binstall` itself comes from
-   `taiki-e/install-action`). All four tool versions are pinned and recorded. Because
-   preprocessor assets are installed fresh from these pinned binaries at build time
-   (step 3) rather than vendored, there is no asset/binary version coupling to track
-   by hand.
+   head so the new `docs/**` filter validates the PR's actual doc changes. This is
+   deliberate: a `workflow_dispatch` triggered against a non-`main` branch still builds
+   and deploys `main`'s docs, never the dispatched branch — the published site only ever
+   reflects `main`.
+2. **Install the mdBook toolchain.** `mdbook` and `mdbook-mermaid` install via
+   `taiki-e/install-action` (pinned by commit SHA), each pinned to an explicit version.
+   `mdbook-admonish` and `mdbook-linkcheck2` are **not** in the `taiki-e/install-action`
+   manifest, so install them with `cargo binstall --no-confirm mdbook-admonish@<version>
+   mdbook-linkcheck2@<version>` (`cargo-binstall` itself comes from
+   `taiki-e/install-action`). `cargo binstall` downloads a prebuilt binary when one is
+   published for the runner target and **automatically falls back to `cargo install`**
+   when no prebuilt artifact is available or the download fails (e.g. GitHub rate
+   limiting), so no manual artifact-availability check or fallback step is required. All
+   four tool versions are pinned and recorded. Because preprocessor assets are installed
+   fresh from these pinned binaries at build time (step 3) rather than vendored, there is
+   no asset/binary version coupling to track by hand.
 3. **Install preprocessor assets (not committed).** Run `mdbook-mermaid install docs`
    and `mdbook-admonish install docs` before building. The CSS/JS are generated fresh
    from the pinned binaries on every build and the output paths are git-ignored, so
@@ -333,8 +343,10 @@ site/                         ← uploaded as the Pages artifact
    site/rustdoc/`, then write `site/rustdoc/index.html` redirect → `firewood`.
 6. **Go docs:** repoint to `doc2go -C ffi -home github.com/ava-labs/firewood/ffi -out
    $(pwd)/site/ffi ./...`. Also pin the `doc2go` install (currently
-   `go install go.abhg.dev/doc2go@latest`) to an explicit version for consistency
-   with the newly pinned mdBook tools.
+   `go install go.abhg.dev/doc2go@latest`) to an explicit version for consistency with
+   the newly pinned mdBook tools: `go install go.abhg.dev/doc2go@v0.12.2` (tag `v0.12.2`,
+   commit `cb3c122f7e08194070fd4a8fce4466b2a7d74159`;
+   [`github.com/abhinav/doc2go`](https://github.com/abhinav/doc2go)).
 7. **Benchmark merge (scoped):** `git fetch origin benchmark-data`, then extract each
    of `bench` and `dev` *only if it exists* in `FETCH_HEAD`:
 
@@ -346,13 +358,19 @@ site/                         ← uploaded as the Pages artifact
    done
    ```
 
-   Scoping the archive to the `bench`/`dev` paths (rather than the whole branch root)
-   prevents the extract from clobbering the mdBook `index.html` or other book output.
-   The per-path existence check is required because `git archive FETCH_HEAD bench dev`
-   **errors** (`pathspec 'dev' did not match`) when either path is absent — exactly the
-   first-run or partially-populated state of the `benchmark-data` branch, which the
-   un-scoped command tolerated. Keep the existing outer "branch may not exist on first
-   run" guard wrapping the whole block.
+   `track-performance.yml` populates the `benchmark-data` branch via
+   `github-action-benchmark` (`auto-push: true`, `gh-pages-branch: benchmark-data`),
+   writing official `main` history to `bench/` and experimental feature-branch history
+   to `dev/bench/{branch}/`. Both are directories at the branch root, so `git ls-tree -d`
+   is the correct existence test. Scoping the archive to those two paths — rather than
+   the whole branch root, as the current workflow does with `git archive FETCH_HEAD |
+   tar -x` — prevents the extract from clobbering the mdBook `index.html` or other book
+   output now that the book, not rustdoc, owns the site root. The per-path existence
+   check is required because `git archive FETCH_HEAD bench dev` **errors** (`pathspec
+   'dev' did not match`) whenever `dev/` is absent — the branch's state until the first
+   experimental feature-branch benchmark runs, since `track-performance.yml` currently
+   publishes only `main` history (`bench/`). Keep the existing outer "branch may not
+   exist on first run" guard wrapping the whole block.
 8. **Delete** the hand-written root-redirect step and the "Copy static assets" step —
    mdBook emits the root `index.html` and copies `src/assets/` itself.
 9. **Upload artifact** `path: site` (previously `target/doc`).
@@ -372,11 +390,18 @@ end-to-end coverage; the build is not split into a book-only fast path.
 
 ### Link checking
 
-`mdbook-linkcheck` runs as a backend during `mdbook build`, configured
-`follow-web-links = false`. It validates internal book links (broken `SUMMARY.md`
-entries, bad cross-references) without choking on the external `/rustdoc/` link-outs
-that exist only post-deploy. Broken internal links fail the PR build. Enabling this
-second renderer is what moves HTML output to `docs/book/html/` (see build step 4).
+`mdbook-linkcheck2` runs as a backend during `mdbook build`, configured under
+`[output.linkcheck2]` with `follow-web-links = false`. It validates internal book
+links (broken `SUMMARY.md` entries, bad cross-references) without choking on the
+external `/rustdoc/` link-outs that exist only post-deploy. Broken internal links fail
+the PR build. Enabling this second renderer is what moves HTML output to
+`docs/book/html/` (see build step 4).
+
+`mdbook-linkcheck2` is a maintained fork of the original `mdbook-linkcheck`. The
+original (last released 2022) rejects a `book.toml` whose `[rust]` table sets
+`edition = "2024"` — the workspace default — failing with `unknown variant '2024'`;
+the fork accepts it. The fork preserves the same link-checking behavior and also reads
+the legacy `[output.linkcheck]` table name for backward compatibility.
 
 ### Post-deploy smoke check (automated)
 
@@ -398,17 +423,20 @@ relocation.
 
 ### `book.toml` essentials
 
-- `[build]`: leave `build-dir` at the default (`book`); with the linkcheck renderer
-  enabled, HTML lands in `docs/book/html/`.
+- `[build]`: leave `build-dir` at the default (`book`); with a second renderer
+  enabled, mdBook writes each renderer to its own subdirectory, so HTML lands in
+  `docs/book/html/` and link-check output in `docs/book/linkcheck2/` (only `html/` is
+  copied into `site/`).
 - `[output.html]`: `site-url = "/firewood/"` (used only for the generated 404 page's
-  absolute links — normal pages use relative `path_to_root` links and render
-  correctly both under local `mdbook serve` and at the `/firewood/` Pages base),
+  absolute links — normal pages use relative `path_to_root` links and render correctly
+  both under local `mdbook serve` and at the `/firewood/` Pages base, so omitting or
+  misconfiguring `site-url` breaks only the 404 page, not navigation),
   `git-repository-url`, `edit-url-template` (edit-on-GitHub links), `default-theme`,
   search enabled (default).
 - `[preprocessor.mermaid]` and `[preprocessor.admonish]`. The generated CSS/JS are
   produced by `mdbook-mermaid install docs` / `mdbook-admonish install docs` at build
   time (CI build step 3 and the `justfile` recipes) and are git-ignored, not committed.
-- `[output.linkcheck]` with `follow-web-links = false`.
+- `[output.linkcheck2]` with `follow-web-links = false`.
 
 ## Local tooling
 
@@ -418,17 +446,19 @@ relocation.
   (regenerates the git-ignored preprocessor assets; a prerequisite of the build
   recipes so a fresh checkout builds without a manual step).
 - `book-serve` → `book-assets` then `mdbook serve docs --open` (live reload).
-- `book-build` → `book-assets` then `mdbook build docs` (mirrors CI's internal build).
-- `book-check` → `book-assets` then `mdbook build docs` (what CI runs on PRs).
-  `mdbook-linkcheck` is a renderer backend, not a standalone binary, so it runs
-  automatically as part of `mdbook build` once `[output.linkcheck]` is configured in
-  `book.toml` — there is no separate command to invoke.
+- `book-build` → `book-assets` then `mdbook build docs` (mirrors what CI runs on PRs;
+  this is the single build-and-validate recipe). `mdbook-linkcheck2` is a renderer
+  backend, not a standalone binary, so it runs automatically as part of `mdbook build`
+  once `[output.linkcheck2]` is configured in `book.toml` — there is no separate command
+  to invoke.
 - `new-design slug` → scaffolds `docs/src/designs/proposed/NNNN-slug.md` from the
   proposed template. Sequence-number algorithm: glob
   `docs/src/designs/proposed/[0-9][0-9][0-9][0-9]-*.md`, parse the leading 4-digit
   number from each, take the numeric maximum, add one, and zero-pad to four digits;
   if no matching files exist, start at `0001`. Gaps left by deleted/promoted files
-  are not backfilled (numbers only ever increase).
+  are not backfilled (numbers only ever increase). Two PRs that add a proposal
+  concurrently compute the same next number and collide on merge; resolve it by
+  renumbering the later proposal rather than treating it as a defect.
 
 Recipes call `mdbook` directly; the dev-environment guide names the required tools
 and links to upstream install docs (and may include concrete install commands).
@@ -437,7 +467,7 @@ and links to upstream install docs (and may include concrete install commands).
 
 - **Common prerequisites:** `rustup` + pinned toolchain (MSRV 1.94.0, edition 2024),
   `just`, Go (FFI), Nix (FFI flake), the mdBook toolchain (`mdbook`,
-  `mdbook-mermaid`, `mdbook-admonish`, `mdbook-linkcheck`).
+  `mdbook-mermaid`, `mdbook-admonish`, `mdbook-linkcheck2`).
 - **macOS local:** rustup install; components (`rustfmt`, `clippy`, `rust-analyzer`);
   VS Code + `rust-analyzer` extension settings; `just` workflows; build/test
   (`cargo nextest run --workspace --features ethhash,logger`).
@@ -445,8 +475,8 @@ and links to upstream install docs (and may include concrete install commands).
   Containers; what is preinstalled vs. what to run.
 - **Remote Linux over SSH:** VS Code Remote-SSH; install rustup/Go/Nix on the host;
   rust-analyzer running remotely; port-forwarding `mdbook serve` for live preview.
-- **Verifying your setup:** the canonical build/test/clippy/doc commands from the
-  `CLAUDE.md` PR checklist.
+- **Verifying your setup:** the canonical build/test/clippy/doc commands from
+  `CONTRIBUTING.md`.
 
 ### Scaffolding via draft chapters
 
@@ -490,28 +520,39 @@ the rest are draft chapters):
 This section has substantial, non-trivial material and is authored at MVP, not
 drafted. Two things it must get right:
 
-**1. The Go API surface.** The in-repo `ffi/` crate ships a Go wrapper whose public
-types are `Database` (`ffi/firewood.go`), `Proposal` (`ffi/proposal.go`), and
-`Revision` (`ffi/revision.go`). These map onto the Rust concepts as follows — note the
-Go names deliberately differ from the Rust ones:
+**1. The Go API surface.** The in-repo `ffi/` crate ships a Go wrapper. Its public
+types map onto the Rust concepts as follows — note the Go names deliberately differ
+from the Rust ones:
 
 | Go type (`ffi/*.go`) | Rust concept | Notes |
 | --- | --- | --- |
-| `Database` | `Db` | the database handle; there is **no** Go type named `Db` |
-| `Proposal` | `Proposal` | uncommitted batch atop a base root |
-| `Revision` | `DbView` | `DbView` is a Rust-side concept; its Go mirror is `Revision` |
+| `Database` (`firewood.go`) | `Db` | the database handle; there is **no** Go type named `Db` |
+| `Proposal` (`proposal.go`) | `Proposal` | uncommitted batch atop a base root, awaiting commit |
+| `Revision` (`revision.go`) | `DbView` | read-only view of a historical revision; `DbView` is the Rust-side name |
+| `Reconstructed` (`reconstructed.go`) | reconstructed/archival view | state rebuilt incrementally from range proofs during state sync; released with `Drop` |
+| `Iterator` (`iterator.go`) | view iterator | streams key/value pairs from a view; `Next` copies into Go memory, `NextBorrowed` lends Rust-owned memory |
+| `BatchOp` (`batch_op.go`) | `BatchOp` | a single `Put`/`Delete`/`PrefixDelete`; the unit of a write batch |
+| `RangeProof`, `ChangeProof`, `NextKeyRange` (`proofs.go`) | proof types | range/change proofs and key-range cursors used for state sync |
+
+Construction and tuning options (`New`, the `With*` `Option`s) and the metrics/logging
+entry points (`Gatherer`, `LogConfig`, `StartMetrics`, `StartLogs`) are documented
+alongside the types they configure.
 
 **2. The publish relationship (the part most likely to be missed).** AvalancheGo and
 its grafts do **not** import the in-repo `ffi/` directory. They depend on the
-*separately published* module `github.com/ava-labs/firewood-go-ethhash/ffi` —
-`v0.5.0` is pinned in `avalanchego/go.mod` and in `graft/evm`, `graft/coreth`, and
-`graft/subnet-evm` `go.mod`s. The section documents how the in-repo `ffi/` crate is
-built (the `cargo build` → `go tool cgo` flow from `CLAUDE.md`), packaged, and
-published as `firewood-go-ethhash`, and how a downstream consumer pins and upgrades it.
-It links to `/ffi/` (godoc) for the generated API reference and to `meta/release.md`
-for the publish/version cadence. Without this, the integration story is incomplete: a
-reader following the in-repo `ffi/` path would never find what AvalancheGo actually
-consumes.
+*separately published* Go module `github.com/ava-labs/firewood-go-ethhash/ffi`, pinned
+in `avalanchego/go.mod` and in the `graft/evm`, `graft/coreth`, and `graft/subnet-evm`
+`go.mod`s. That published module tracks the `firewood-ffi` crate version: when
+`firewood-ffi` is released, CI builds the static libraries, copies the in-repo `ffi/`
+directory into the `ava-labs/firewood-go-ethhash` repository, and tags it (see
+[`RELEASE.md`](../../../../RELEASE.md) and
+[`.github/workflows/attach-static-libs.yaml`](../../../../.github/workflows/attach-static-libs.yaml)).
+The section documents how the in-repo `ffi/` crate is built (the `cargo build` →
+`go tool cgo` flow described in [`ffi/README.md`](../../../../ffi/README.md)), packaged,
+and published, and how a downstream consumer pins and upgrades it. It links to `/ffi/`
+(godoc) for the generated API reference and to `meta/release.md` for the publish/version
+cadence. Without this, the integration story is incomplete: a reader following the
+in-repo `ffi/` path would never find what AvalancheGo actually consumes.
 
 ### Meta section (self-documenting)
 
@@ -520,7 +561,7 @@ processes:
 
 - **`meta/documentation.md` (authored).** Seeded with the mdBook setup: the toolchain
   and preprocessors, the `docs/` layout, how to build/serve locally (`just book-serve`
-  / `book-build` / `book-check`), how to add or edit a page and update `SUMMARY.md`,
+  / `book-build`), how to add or edit a page and update `SUMMARY.md`,
   and a pointer to the design-doc workflow. This is the self-documenting core — a new
   contributor learns how the docs work from the docs themselves. It links to
   `getting-started/dev-environment.md` for tool installation rather than repeating it.
@@ -553,7 +594,7 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
 
 - **CI build validation:** a PR touching `docs/**` triggers the `build` job, which
   runs `mdbook build docs` with the linkcheck backend; broken internal links fail.
-- **Local:** `just book-check` reproduces the CI build + linkcheck.
+- **Local:** `just book-build` reproduces the CI build + linkcheck.
 - **Deploy smoke check (automated):** the `smoke` job (CI/CD changes above) runs after
   `deploy` on non-PR events and `curl --fail`s `/`, `/rustdoc/`, `/rustdoc/firewood/`,
   `/ffi/`, and `/bench/`, failing the workflow on any non-success status. The build job
@@ -572,7 +613,7 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
       `site/ffi`, merges benchmark data with a per-path `git archive` (extracting
       `bench`/`dev` only if each exists in `FETCH_HEAD`), removes the old root-redirect
       and copy-static-assets steps, and uploads `site/`. `mdbook`, `mdbook-mermaid`,
-      `mdbook-linkcheck`, `mdbook-admonish`, and `doc2go` are pinned to explicit
+      `mdbook-linkcheck2`, `mdbook-admonish`, and `doc2go` are pinned to explicit
       versions; CI runs `mdbook-mermaid install docs` and `mdbook-admonish install docs`
       before building. The build job asserts `site/index.html` exists before upload.
 - [ ] The hardcoded `ref: main` is replaced with a PR-head-aware checkout, and
@@ -581,11 +622,13 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
       events) and `curl --fail`s `/`, `/rustdoc/`, `/rustdoc/firewood/`, `/ffi/`, and
       `/bench/`.
 - [ ] Introduction and a fully-authored `getting-started/dev-environment.md`
-      (macOS, Docker, remote SSH) are written. "Fully authored" means every section
-      contains the concrete install/build/verify commands from the outline, and the
-      author has run the macOS and devcontainer command sequences end-to-end on a
-      clean environment before merge (the remote-SSH section reuses the same commands
-      and is reviewed for accuracy).
+      (macOS, Docker, remote SSH) are written. *Structural completeness*
+      (reviewer-checkable): every section contains the concrete install/build/verify
+      commands from the outline.
+- [ ] *Author sign-off* (recorded in the PR description, not a CI gate): the author has
+      run the macOS and devcontainer command sequences end-to-end on a clean
+      environment before merge; the remote-SSH section reuses the same commands and is
+      reviewed for accuracy.
 - [ ] `designs/` contains RFC-style `proposed` + `active` templates, a `README.md`
       documenting the model and promotion checklist, the fully-written
       `active/on-disk-format-and-addressing.md` seed, an `active/README.md` index
@@ -602,8 +645,7 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
       work: tooling, layout, build/serve, authoring, design workflow) and thin
       repository-function pages (`release.md` plus link-out pointers to CONTRIBUTING /
       CODE_REVIEW); the process-doc link-outs are in `meta/`, not `reference/`.
-- [ ] `justfile` gains `book-assets`, `book-serve`, `book-build`, `book-check`, and
-      `new-design`.
+- [ ] `justfile` gains `book-assets`, `book-serve`, `book-build`, and `new-design`.
 - [ ] Preprocessor assets are installed at build time (not committed): CI and the
       `book-assets` recipe run `mdbook-mermaid install docs` and `mdbook-admonish
       install docs`, the generated asset paths are git-ignored, and a fresh checkout
@@ -622,7 +664,5 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
 
 ### Verify at implementation time
 
-- `cargo-binstall` has a prebuilt artifact for the pinned `mdbook-admonish` version;
-  otherwise fall back to a versioned GitHub Releases download.
 - The generated 404 page's absolute links resolve on the `/firewood/` Pages base
   (`site-url`); normal pages use relative links and need no special handling.
