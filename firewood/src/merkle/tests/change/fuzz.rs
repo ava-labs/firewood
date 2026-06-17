@@ -168,9 +168,9 @@ macro_rules! clear_first_child_hash {
 }
 
 /// Apply `$action` to a present child hash in `$node`, scanning from a
-/// random starting offset so the choice is uniformly distributed across
-/// the present slots. `continue`s the inner loop if no child hashes are
-/// present. Must be invoked directly inside the inner `for`/`loop`.
+/// random starting offset to vary which present slot is selected.
+/// `continue`s the inner loop if no child hashes are present. Must be invoked directly
+/// inside the inner `for`/`loop`. 
 /// See [`pick_op_index`] for the caveat.
 macro_rules! mutate_random_child_hash {
     ($rng:expr, $node:expr, |$h:ident| $action:expr) => {{
