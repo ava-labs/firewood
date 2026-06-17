@@ -538,12 +538,8 @@ fn pick_proof_for_scenario(
             }
             let si = rng.random_range(1..end_keys.len() - 1);
             let ei = rng.random_range(si..end_keys.len());
-            // Skip when no usable neighbor below `end_keys[si]` exists.
-            // `?` returns None on an all-zero key. The `>=` clause is
-            // defensive. The `==` clause skips collision with the in-trie
-            // predecessor.
             let decreased = decrease_key_vec(&end_keys[si])?;
-            if decreased >= end_keys[si] || (si > 0 && decreased == end_keys[si - 1]) {
+            if decreased >= end_keys[si] || (si > 0 && decreased <= end_keys[si - 1]) {
                 return None;
             }
             let ek = end_keys[ei].clone();
