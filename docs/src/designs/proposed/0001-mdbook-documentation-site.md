@@ -1,6 +1,6 @@
 # Firewood mdBook Documentation Site — Design
 
-- **Status:** pending peer review
+- **Status:** approved
 - **Date:** 2026-06-08
 - **Author:** Brandon LeBlanc
 - **Scope:** Documentation tooling, content scaffolding, and GitHub Pages CI
