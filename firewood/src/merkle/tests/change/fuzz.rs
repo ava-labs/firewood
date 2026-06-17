@@ -570,13 +570,9 @@ fn pick_proof_for_scenario(
             }
             let si = rng.random_range(0..end_keys.len() - 1);
             let ei = rng.random_range(si..end_keys.len() - 1);
-            // Skip when no usable neighbor above `end_keys[ei]` exists.
-            // `?` returns None on an all-0xFF key. The `<=` clause is
-            // defensive. The `==` clause skips collision with the in-trie
-            // successor.
             let increased = increase_key_vec(&end_keys[ei])?;
             if increased <= end_keys[ei]
-                || (ei + 1 < end_keys.len() && increased == end_keys[ei + 1])
+                || (ei + 1 < end_keys.len() && increased >= end_keys[ei + 1])
             {
                 return None;
             }
