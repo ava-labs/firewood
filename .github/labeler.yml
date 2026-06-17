@@ -23,7 +23,7 @@ area/cli:
       - any-glob-to-any-file: ['fwdctl/**']
 area/benchmark:
   - changed-files:
-      - any-glob-to-any-file: ['benchmark/**']
+      - any-glob-to-any-file: ['benchmark/**', '*/benches']
 area/ci:
   - changed-files:
       - any-glob-to-any-file: ['.github/**', '.devcontainer/**']
