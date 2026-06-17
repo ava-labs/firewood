@@ -1256,9 +1256,9 @@ fn test_slow_change_proof_fuzz() {
                         continue;
                     };
                     if decreased >= end_keys[si]
-                        || (si > 0 && decreased == end_keys[si - 1])
+                        || (si > 0 && decreased <= end_keys[si - 1])
                         || increased <= end_keys[ei]
-                        || (ei + 1 < end_keys.len() && increased == end_keys[ei + 1])
+                        || (ei + 1 < end_keys.len() && increased >= end_keys[ei + 1])
                     {
                         continue;
                     }
