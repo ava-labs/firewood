@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781685806346,
+  "lastUpdate": 1781685853063,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -4981,6 +4981,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 82.06160355813843,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "rodrigo",
+            "username": "RodrigoVillar",
+            "email": "77309055+RodrigoVillar@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "4fa41d12e439ea41e4fcc40476e3520f87b56e20",
+          "message": "perf: skip using FDL when running in archival mode (#2078)\n\n## Why this should be merged\n\nWhen archival mode is enabled, the future-delete log is built on every\nproposal, cloned into each committed revision, and retained for\nmax_revisions but is never consumed: `PersistWorker::reap`\nshort-circuits when `RootStore` is present, since old nodes must be\npreserved on disk for historical queries. This is wasted work (an\nallocation/push per replaced node on the hot proposal path) and wasted\nmemory (the deleted lists pinned by every retained revision).\n\n## How this works\n\n`NodeStore<T, S>` gains a `deleted_node_tracking: DeletedNodeTracking`\nfield, a two-variant enum (`Enabled` = build the future-delete log,\n`Disabled` = skip it). It is set at the root constructors and propagated\nby every derived constructor, so the whole nodestore lineage of a\ndatabase shares one value. The manager passes\n`DeletedNodeTracking::Disabled` when opening the database with\n`root_store` enabled, and `Enabled` otherwise.\n\nWhen tracking is `Disabled`, all four FDL population sites become\nno-ops:\n- `read_for_update`\n- `delete_node`\n- `delete_nodes` \n- `NodeStore::new`\n\nEach guard branches on an immutable flag, so it is perfectly predicted\nand effectively free next to the adjacent node-cache lookup.\n\n## How this was tested\n\nAdded two UTs to test if the future-delete log is built in archival and\nnon-archival mode, respectively:\n- `test_no_fdl_when_root_store_enabled()`\n- `test_fdl_tracked_when_root_store_disabled()`\n\n## Breaking Changes\n\n- [ ] firewood\n- [X] firewood-storage\n- [ ] firewood-ffi (C api)\n- [ ] firewood-go (Go api)\n- [ ] fwdctl",
+          "timestamp": "2026-06-11T19:27:22Z",
+          "url": "https://github.com/ava-labs/firewood/commit/4fa41d12e439ea41e4fcc40476e3520f87b56e20"
+        },
+        "date": 1781685852337,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 160.20601579371453,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6241.962856673412,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 83.2438984153389,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6100.104753400523,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 55.70129305818163,
             "unit": "block_accept_ms/ggas"
           }
         ]
