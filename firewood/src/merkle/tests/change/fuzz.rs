@@ -610,9 +610,9 @@ fn pick_proof_for_scenario(
             let decreased = decrease_key_vec(&end_keys[si])?;
             let increased = increase_key_vec(&end_keys[ei])?;
             if decreased >= end_keys[si]
-                || (si > 0 && decreased == end_keys[si - 1])
+                || (si > 0 && decreased <= end_keys[si - 1])
                 || increased <= end_keys[ei]
-                || (ei + 1 < end_keys.len() && increased == end_keys[ei + 1])
+                || (ei + 1 < end_keys.len() && increased >= end_keys[ei + 1])
             {
                 return None;
             }
