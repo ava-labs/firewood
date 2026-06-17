@@ -36,9 +36,9 @@
 //! -  5% — boundary proof structural (truncate, swap, empty)
 //! - 15% — combined: force double-exclusion + exclusion/structural mutation
 //!
-//! Runs 25 iterations in debug builds and 250 in release builds, each with a
-//! freshly seeded RNG. On failure, the printed seed can be passed via
-//! `FIREWOOD_TEST_SEED` to reproduce.
+//! Runs many independent iterations — fewer in debug builds for speed, more
+//! in release — each with a freshly seeded RNG. On failure, the printed seed
+//! can be passed via `FIREWOOD_TEST_SEED` to reproduce.
 //!
 //! # Reproducing failures
 //!
@@ -170,7 +170,7 @@ macro_rules! clear_first_child_hash {
 /// Apply `$action` to a present child hash in `$node`, scanning from a
 /// random starting offset to vary which present slot is selected.
 /// `continue`s the inner loop if no child hashes are present. Must be invoked directly
-/// inside the inner `for`/`loop`. 
+/// inside the inner `for`/`loop`.
 /// See [`pick_op_index`] for the caveat.
 macro_rules! mutate_random_child_hash {
     ($rng:expr, $node:expr, |$h:ident| $action:expr) => {{
@@ -734,7 +734,7 @@ fn test_slow_change_proof_fuzz() {
 
     // Each outer iteration tests one randomly-generated pair of
     // committed tries (start_root, end_root): it builds the fixture
-    // once, then runs 50 inner iterations. Each inner iteration picks
+    // once, then runs many inner iterations. Each inner iteration picks
     // a boundary scenario, generates a change proof, verifies the
     // proof is accepted, and then verifies a mutated copy is rejected.
     for (run, &seed) in seeds.iter().enumerate() {
