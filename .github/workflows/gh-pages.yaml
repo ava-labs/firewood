@@ -79,7 +79,7 @@ jobs:
           echo '<meta http-equiv="refresh" content="0; url=firewood">' > site/rustdoc/index.html
       - name: Build go docs
         # `-C` changes the process cwd so relative paths resolve from inside ffi.
-        run: doc2go -C ffi -home github.com/ava-labs/firewood/ffi -out $(pwd)/site/ffi ./...
+        run: doc2go -C ffi -home github.com/ava-labs/firewood/ffi -out "$(pwd)/site/ffi" ./...
       # Benchmark history lives on the benchmark-data branch (append-only storage).
       # track-performance.yml populates it via github-action-benchmark:
       #   bench/              - official history (main only)
