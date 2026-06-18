@@ -162,15 +162,15 @@ release-step-refresh-changelog tag:
 
 # Regenerate the git-ignored mdBook preprocessor assets (prerequisite of book builds)
 book-assets:
-  mdbook-mermaid install docs
+    mdbook-mermaid install docs
 
 # Serve the book locally with live reload
 book-serve: book-assets
-  mdbook serve docs --open
+    mdbook serve docs --open
 
 # Build the book and run the link checker (mirrors what CI runs on PRs)
 book-build: book-assets
-  mdbook build docs
+    mdbook build docs
 
 # Run a C-Chain reexecution benchmark
 # Triggers Firewood's track-performance.yml which then triggers AvalancheGo.
