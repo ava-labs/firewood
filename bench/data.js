@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781771282595,
+  "lastUpdate": 1781771605606,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -5075,6 +5075,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 40.561967907306126,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Joachim Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "3ac2656e8fabb33c505ddea6d3b766a9b58d0491",
+          "message": "docs: add mdBook documentation site design spec (#2068)\n\n## Why this should be merged\n\nFirewood lacks a navigable documentation site. The published GitHub\nPages site currently lands on raw rustdoc, with no home for\ngetting-started guides, design documents, or links to the Go docs and\nbenchmark dashboards. This PR adds the **design spec** for an mdBook\nsite that becomes the front door of the published docs and establishes a\npeer-reviewable design-doc workflow.\n\n> [!NOTE]\n> This PR contains the design document only — no implementation. It is\nintended for design review before an implementation plan is written.\n\nCloses: #1229\n\n## How this works\n\nThe spec (`docs/src/designs/proposed/0001-mdbook-documentation-site.md`)\nis the first entry in the design-doc workflow it proposes — it lives in\n`proposed/` as a working example of the layout it defines. It captures:\n\n- **Site layout** — mdBook served at the site root; rustdoc relocated to\n`/rustdoc/`; Go docs (`/ffi/`) and benchmarks (`/bench/`, `/dev/bench/`)\nreachable from the book.\n- **Design subsystem** — RFC-style `proposed/` vs. living `active/`\ndocuments, a documented promotion checklist, and one fully-written seed\ndesign (on-disk format & addressing) plus a backfill TODO index.\n- **CI** — extends `gh-pages.yaml`: build mdBook, relocate rustdoc, fix\na pre-existing checkout-ref bug, add `docs/**` PR validation with\ninternal link-checking (via `mdbook-linkcheck2`), and scope the\nbenchmark-data merge to `bench`/`dev`.\n- **Tooling & content** — `justfile` recipes (`book-serve`,\n`book-build`, `new-design`), a fully-authored multi-environment\ndeveloper setup guide, and authored landing pages for Concepts,\nIntegration, Operations, Reference, and Meta, with not-yet-written\nsub-pages listed as mdBook draft chapters.\n\n## How this was tested\n\nDesign only; no code changes. `markdownlint-cli2` passes on the spec.\n\n## Breaking Changes\n\nNone",
+          "timestamp": "2026-06-17T23:53:35Z",
+          "url": "https://github.com/ava-labs/firewood/commit/3ac2656e8fabb33c505ddea6d3b766a9b58d0491"
+        },
+        "date": 1781771604878,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 168.84124460469508,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5922.723457418724,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 110.67318721984913,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5731.384109555076,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 78.00071891074424,
             "unit": "block_accept_ms/ggas"
           }
         ]
