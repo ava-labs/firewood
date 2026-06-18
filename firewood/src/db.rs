@@ -118,7 +118,7 @@ pub struct DbConfig {
     pub manager: RevisionManagerConfig,
     // Whether to perform parallel proposal creation. If set to BatchSize, then firewood
     // performs parallel proposal creation if the batch is >= to the BatchSize value.
-    // TODO: Experimentally determine the right value for BatchSize.
+    // TODO(bernard-avalabs): Experimentally determine the right value for BatchSize.
     #[builder(default = UseParallel::BatchSize(8))]
     pub use_parallel: UseParallel,
     /// Whether to enable `RootStore`.
@@ -1755,6 +1755,57 @@ mod test {
         let view = db.view(root_hash).unwrap();
         let retrieved_value = view.val(key).unwrap().unwrap();
         assert_eq!(value, retrieved_value.as_ref());
+    }
+
+    /// Verifies that proposals skip building the future-delete log when
+    /// archival mode is enabled, since it is never consumed.
+    #[test]
+    fn test_no_fdl_when_root_store_enabled() {
+        let db = TestDb::new_with_config(DbConfig::builder().root_store(true).build());
+
+        let key = b"key";
+        let batch = vec![BatchOp::Put {
+            key,
+            value: b"value",
+        }];
+        db.propose(batch).unwrap().commit().unwrap();
+
+        // Overwriting the key puts the existing node on the future-delete log.
+        let batch = vec![BatchOp::Put {
+            key,
+            value: b"new_value",
+        }];
+        db.propose(batch).unwrap().commit().unwrap();
+
+        assert_eq!(
+            db.manager.current_revision().deleted_len(),
+            0,
+            "future-delete log should not be built in archival mode"
+        );
+    }
+
+    /// Verifies that proposals build the future-delete log if archival mode is disabled.
+    #[test]
+    fn test_fdl_tracked_when_root_store_disabled() {
+        let db = TestDb::new_with_config(DbConfig::builder().root_store(false).build());
+
+        let key = b"key";
+        let batch = vec![BatchOp::Put {
+            key,
+            value: b"value",
+        }];
+        db.propose(batch).unwrap().commit().unwrap();
+
+        let batch = vec![BatchOp::Put {
+            key,
+            value: b"new_value",
+        }];
+        db.propose(batch).unwrap().commit().unwrap();
+
+        assert!(
+            db.manager.current_revision().deleted_len() > 0,
+            "future-delete log should record replaced nodes when archival mode is disabled"
+        );
     }
 
     #[test]

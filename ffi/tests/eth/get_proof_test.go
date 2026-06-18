@@ -4,6 +4,7 @@
 package eth
 
 import (
+	"encoding/binary"
 	"testing"
 
 	"github.com/ava-labs/libevm/common"
@@ -19,7 +20,7 @@ import (
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
 
-	firewood "github.com/ava-labs/firewood-go-ethhash/ffi"
+	"github.com/ava-labs/firewood-go-ethhash/ffi"
 )
 
 // slot is a single storage entry: the raw 32-byte slot key and its value.
@@ -37,8 +38,8 @@ type accountSpec struct {
 // builtState is the result of materializing accountSpecs into a firewood
 // database and an equivalent go-ethereum trie.
 type builtState struct {
-	db   *firewood.Database
-	root firewood.Hash
+	db   *ffi.Database
+	root ffi.Hash
 	// accountRLP maps account hash -> the RLP we stored for that account.
 	accountRLP map[common.Hash][]byte
 }
@@ -57,7 +58,7 @@ func buildState(t *testing.T, specs []accountSpec) builtState {
 	r.NoError(err)
 
 	merged := trienode.NewMergedNodeSet()
-	var batch []firewood.BatchOp
+	var batch []ffi.BatchOp
 	accountRLP := make(map[common.Hash][]byte)
 
 	for _, spec := range specs {
@@ -77,7 +78,7 @@ func buildState(t *testing.T, specs []accountSpec) builtState {
 				fwdKey := append(append([]byte{}, accHash[:]...), slotHash[:]...)
 				encodedVal, err := rlp.EncodeToBytes(s.val[:])
 				r.NoError(err)
-				batch = append(batch, firewood.Put(fwdKey, encodedVal))
+				batch = append(batch, ffi.Put(fwdKey, encodedVal))
 			}
 
 			root, set, err := storageTrie.Commit(false)
@@ -99,7 +100,7 @@ func buildState(t *testing.T, specs []accountSpec) builtState {
 		encodedAcc, err := rlp.EncodeToBytes(acc)
 		r.NoError(err)
 		accountRLP[accHash] = encodedAcc
-		batch = append(batch, firewood.Put(accHash[:], encodedAcc))
+		batch = append(batch, ffi.Put(accHash[:], encodedAcc))
 	}
 
 	ethRoot, set, err := accountTrie.Commit(true)
@@ -107,7 +108,12 @@ func buildState(t *testing.T, specs []accountSpec) builtState {
 	if set != nil {
 		r.NoError(merged.Merge(set))
 	}
-	r.NoError(tdb.TrieDB().Update(ethRoot, types.EmptyRootHash, 0, merged, nil))
+	// TrieDB().Update rejects ethRoot == EmptyRootHash, so skip the no-op
+	// update for an empty-state spec (no callers hit this today, but it keeps
+	// the helper usable for future empty-state cases).
+	if ethRoot != types.EmptyRootHash {
+		r.NoError(tdb.TrieDB().Update(ethRoot, types.EmptyRootHash, 0, merged, nil))
+	}
 
 	fwdRoot, err := db.Update(batch)
 	r.NoError(err)
@@ -226,4 +232,79 @@ func TestEthGetProofStorageInclusionAndExclusion(t *testing.T) {
 	r.Equal(absentSlotHash[:], absentEntry.Key[:])
 	r.Nil(absentEntry.Value)
 	r.Nil(verifyProof(t, storageHash, absentSlotHash[:], absentEntry.Proof))
+}
+
+// findSlotsSharingFirstNibble returns n storage slots whose trie keys
+// (keccak256 of the slot key) all share the same first nibble, with distinct
+// non-zero values. Firewood path-compresses such slots beneath a single
+// account child, so the storage trie root is a real subtree (extension or
+// branch) rather than one synthesized leaf — the multi-slot-under-one-child
+// path that a trie with distinct first nibbles never reaches.
+func findSlotsSharingFirstNibble(t *testing.T, n int) []slot {
+	t.Helper()
+	buckets := make(map[byte][]slot)
+	for i := uint64(1); i < 1_000_000; i++ {
+		var key, val common.Hash
+		binary.BigEndian.PutUint64(key[24:], i)
+		binary.BigEndian.PutUint64(val[24:], i)
+		nibble := crypto.Keccak256(key[:])[0] >> 4
+		buckets[nibble] = append(buckets[nibble], slot{key: key, val: val})
+		if len(buckets[nibble]) == n {
+			return buckets[nibble]
+		}
+	}
+	t.Fatalf("no %d slot keys sharing a first nibble within search bound", n)
+	return nil
+}
+
+// TestEthGetProofStorageSharedFirstNibble covers the storage path where two
+// slots' trie keys collide in their first nibble. Firewood folds them under a
+// single account child, so the storage root is a branch synthesized over a
+// real subtree rather than a lone leaf. This is the path that returns a proof
+// not rooted at StorageHash if the root isn't reconstructed correctly; here
+// the real go-ethereum verifier runs against StorageHash, so a regression
+// fails the test.
+func TestEthGetProofStorageSharedFirstNibble(t *testing.T) {
+	r := require.New(t)
+
+	addr := common.HexToAddress("0x00000000000000000000000000000000000000d4")
+	slots := findSlotsSharingFirstNibble(t, 2)
+
+	// Sanity-check the construction: the two slot trie keys really do collide
+	// in their first nibble.
+	h0 := crypto.Keccak256(slots[0].key[:])
+	h1 := crypto.Keccak256(slots[1].key[:])
+	r.Equal(h0[0]>>4, h1[0]>>4, "slot trie keys must share their first nibble")
+
+	built := buildState(t, []accountSpec{{addr: addr, slots: slots}})
+
+	rev, err := built.db.Revision(built.root)
+	r.NoError(err)
+	defer func() { r.NoError(rev.Drop()) }()
+
+	accHash := crypto.Keccak256Hash(addr[:])
+	slotHashes := make([][]byte, len(slots))
+	for i, s := range slots {
+		h := crypto.Keccak256Hash(s.key[:])
+		slotHashes[i] = h[:]
+	}
+
+	proof, err := rev.EthGetProof(accHash[:], slotHashes)
+	r.NoError(err)
+	r.Len(proof.StorageProof, len(slots))
+
+	storageHash := common.Hash(proof.StorageHash)
+	r.NotEqual(types.EmptyRootHash, storageHash)
+
+	for i, s := range slots {
+		entry := proof.StorageProof[i]
+		slotHash := crypto.Keccak256Hash(s.key[:])
+		r.Equal(slotHash[:], entry.Key[:])
+
+		expectedVal, err := rlp.EncodeToBytes(s.val[:])
+		r.NoError(err)
+		r.Equal(expectedVal, entry.Value, "slot %d value must match", i)
+		r.Equal(expectedVal, verifyProof(t, storageHash, slotHash[:], entry.Proof),
+			"slot %d storage proof must verify against StorageHash", i)
+	}
 }

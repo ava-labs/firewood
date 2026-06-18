@@ -207,13 +207,6 @@ impl ParallelMerkle {
             .root_mut()
             .take()
             .map(|root| {
-                #[cfg(not(feature = "ethhash"))]
-                let (root_node, root_hash) =
-                    NodeStore::<Mutable<Propose>, FileBacked>::hash_helper(
-                        root,
-                        Path::from(&[first_path_component.as_u8()]),
-                    )?;
-                #[cfg(feature = "ethhash")]
                 let (root_node, root_hash) =
                     nodestore.hash_helper(root, Path::from(&[first_path_component.as_u8()]))?;
                 Ok(Child::MaybePersisted(root_node, root_hash))
@@ -467,7 +460,7 @@ impl ParallelMerkle {
             )?;
 
             // Send the current operation to the worker.
-            // TODO: Currently the key from the BatchOp is copied to a Box<[u8]> before it is sent
+            // TODO(bernard-avalabs): Currently the key from the BatchOp is copied to a Box<[u8]> before it is sent
             //       to the worker. It may be possible to send a nibble iterator instead of a
             //       Box<[u8]> to the worker if we use rayon scoped threads. This change would
             //       eliminate a memory copy but may require some code refactoring.

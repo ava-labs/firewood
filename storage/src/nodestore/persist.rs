@@ -79,7 +79,7 @@ impl<'a, N: NodeReader + RootReader> UnPersistedNodeIterator<'a, N> {
 
         // we must have an unpersisted root node to use this iterator
         // It's hard to tell at compile time if this is the case, so we assert it here
-        // TODO: can we use another trait or generic to enforce this?
+        // TODO(rkuris): can we use another trait or generic to enforce this?
         debug_assert!(root.as_ref().is_none_or(|r| r.unpersisted().is_some()));
         let (child_iter_stack, stack) = if let Some(root) = root {
             if let Some(branch) = root
@@ -307,8 +307,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 mod tests {
     use super::*;
     use crate::{
-        Child, Children, HashType, ImmutableProposal, LinearAddress, NodeHashAlgorithm, NodeStore,
-        NodeStoreHeader, Path, PathComponent, SharedNode,
+        Child, Children, DeletedNodeTracking, HashType, ImmutableProposal, LinearAddress,
+        NodeHashAlgorithm, NodeStore, NodeStoreHeader, Path, PathComponent, SharedNode,
         linear::memory::MemStore,
         node::{BranchNode, LeafNode, Node},
         nodestore::{Mutable, Propose},
@@ -327,7 +327,7 @@ mod tests {
     /// Helper to create a test node store with a specific root
     fn create_test_store_with_root(root: Node) -> NodeStore<Mutable<Propose>, MemStore> {
         let mem_store = MemStore::default().into();
-        let mut store = NodeStore::new_empty_proposal(mem_store);
+        let mut store = NodeStore::new_empty_proposal(mem_store, DeletedNodeTracking::Enabled);
         store.root_mut().replace(root);
         store
     }
@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn test_empty_nodestore() {
         let mem_store = MemStore::default().into();
-        let store = NodeStore::new_empty_proposal(mem_store);
+        let store = NodeStore::new_empty_proposal(mem_store, DeletedNodeTracking::Enabled);
         let mut iter = UnPersistedNodeIterator::new(&store);
 
         assert!(iter.next().is_none());
@@ -529,7 +529,8 @@ mod tests {
         // Create a base committed store with MemStore
         let mem_store = MemStore::default();
         let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
-        let base_committed = NodeStore::new_empty_committed(mem_store.into());
+        let base_committed =
+            NodeStore::new_empty_committed(mem_store.into(), DeletedNodeTracking::Enabled);
 
         // Create a mutable proposal from the base
         let mut mutable_store = NodeStore::new(&base_committed).unwrap();
