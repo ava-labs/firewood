@@ -33,7 +33,7 @@ verify it.
 
    ```bash
    cargo build
-   cargo nextest run --workspace --features ethhash,logger
+   cargo nextest run --workspace --features ethhash,logger --all-targets
    ```
 
 ## Docker / dev container
