@@ -30,6 +30,23 @@ once and the credentials survive a rebuild:
 
 ## Troubleshooting
 
+### Upgrading from the old devcontainer
+
+> [!IMPORTANT]
+> If you used the previous Dockerfile-based devcontainer, you must **rebuild**
+> once. VS Code reuses a container by its workspace-folder label regardless of
+> config changes, so it will start the old container against the new config and
+> fail with `unable to find user vscode` (the old container's user was your host
+> `$USER`, not `vscode`).
+
+Run **"Dev Containers: Rebuild Container"** from the Command Palette (not
+"Reopen in Container", which reuses the stale container). To clear it manually
+instead:
+
+```bash
+docker rm -f "$(docker ps -aq --filter label=devcontainer.local_folder="$(pwd)")"
+```
+
 ### `claude login` fails
 
 In some networks `claude login` fails when IPv6 is enabled inside the
