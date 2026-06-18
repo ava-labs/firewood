@@ -85,9 +85,10 @@ impl crate::MetricsContextExt for EthProofOwned {
 /// Coerce a borrowed key into the fixed 32-byte trie-key form firewood expects.
 fn to_trie_key(bytes: &[u8]) -> Result<[u8; 32], api::Error> {
     <[u8; 32]>::try_from(bytes).map_err(|_| {
-        api::Error::InternalError(
-            format!("expected a 32-byte key, got {} bytes", bytes.len()).into(),
-        )
+        api::Error::IO(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("expected a 32-byte key, got {} bytes", bytes.len()),
+        ))
     })
 }
 
