@@ -1,13 +1,6 @@
 {
-  // Ignore generated build output and non-Markdown assets.
+  // Ignore generated build output (mdbook writes HTML/assets under book/).
   "ignores": [
-    "book/**",
-    "assets/**",
-    ".gitignore",
-    "*.js",
-    "*.css",
-    "*.toml",
-    "*.svg",
-    ".markdownlint-cli2.jsonc"
+    "book/**"
   ]
 }
