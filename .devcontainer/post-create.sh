@@ -13,7 +13,7 @@ for dir in \
   /usr/local/cargo/registry \
   /usr/local/cargo/git \
   /go/pkg \
-  "${HOME}/.cache/sccache" \
+  "${HOME}/.cache" \
   "${HOME}/.config/gh" \
   "${HOME}/.claude" \
   "${HOME}/.commandhistory"; do
