@@ -27,12 +27,14 @@
 
 # Operations
 
-- [Operations & Benchmarking]()
+- [Operations & Benchmarking](operations/README.md)
 
 # Reference
 
-- [Reference]()
+- [Reference](reference/README.md)
 
 # Meta
 
-- [About These Docs]()
+- [About These Docs](meta/README.md)
+  - [How these docs work](meta/documentation.md)
+  - [Release process](meta/release.md)

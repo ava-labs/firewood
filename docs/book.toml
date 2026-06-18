@@ -22,3 +22,6 @@ command = "mdbook-mermaid"
 
 [output.linkcheck2]
 follow-web-links = false
+# Exclude deployed-site paths that resolve only on the production GitHub Pages site
+# (/firewood/rustdoc/, /firewood/ffi/, /firewood/bench/).
+exclude = ['^/firewood/(rustdoc|ffi|bench)/']
