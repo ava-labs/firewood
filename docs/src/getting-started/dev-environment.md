@@ -38,14 +38,29 @@ verify it.
 
 ## Docker / dev container
 
-Use the checked-in `.devcontainer/`:
+Use the checked-in `.devcontainer/` (see
+[`.devcontainer/README.md`](https://github.com/ava-labs/firewood/blob/main/.devcontainer/README.md)):
 
-1. Open the repository in VS Code with the **Dev Containers** extension and choose
-   "Reopen in Container". The container builds from `.devcontainer/Dockerfile`.
-2. The container's `postCreateCommand` reports the toolchain state
-   (`rustup show && go version && nix --version && sccache --show-stats`).
-3. Rust, Go, Nix, and `sccache` are preinstalled; run the build/test commands from the
+1. Open the repository in VS Code with the **Dev Containers** extension and run
+   **"Reopen in Container"**.
+2. There is no Dockerfile — the container is assembled from published Dev Container
+   features plus a local `firewood-tools` feature over an Ubuntu 26.04 base. Rust, Go,
+   Nix, `sccache`, and the project's developer tooling are all provided.
+3. `post-create.sh` (the `postCreateCommand`) fixes volume ownership and runs a
+   verification smoke test (`rustup show && go version && nix --version &&
+   sccache --show-stats`).
+4. Developer authentication (`gh`, Claude Code) and shell history persist across
+   rebuilds via named volumes — log in once. Then run the build/test commands from the
    macOS section inside the container.
+
+> [!IMPORTANT]
+> If you previously used the old Dockerfile-based container, upgrading requires a
+> one-time **rebuild**: run "Dev Containers: Rebuild Container" (not "Reopen in
+> Container", which reuses the stale container and fails with
+> `unable to find user vscode`).
+
+For the design behind this setup, see
+[Development Container](../designs/active/devcontainer.md).
 
 ## Remote Linux over SSH
 
