@@ -18,6 +18,7 @@
     - [0001 — mdBook documentation site](designs/proposed/0001-mdbook-documentation-site.md)
   - [Active](designs/active/README.md)
     - [On-disk format and addressing](designs/active/on-disk-format-and-addressing.md)
+    - [Development container](designs/active/devcontainer.md)
   - [Proposed template](designs/templates/proposed.md)
   - [Active template](designs/templates/active.md)
 
