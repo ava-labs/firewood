@@ -24,9 +24,17 @@ jobs:
           runCmd: |
             set -x
             rustup show
+            cargo +nightly --version
             go version
+            golangci-lint --version
             nix --version
             sccache --show-stats
             cargo nextest --version
             just --version
             gh --version
+            shfmt --version
+            dockerfmt --version
+            starship --version
+            claude --version
+            shellcheck --version
+            jq --version
