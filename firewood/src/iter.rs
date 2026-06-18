@@ -262,7 +262,7 @@ fn get_iterator_intial_state<T: TrieReader>(
                     node = match child {
                         None => return Ok(NodeIterState::Iterating { iter_stack }),
                         Some(Child::AddressWithHash(addr, _)) => merkle.read_node(*addr)?,
-                        Some(Child::Node(node)) => (*node).clone().into(), // TODO can we avoid cloning this?
+                        Some(Child::Node(node)) => (*node).clone().into(), // TODO(rkuris) can we avoid cloning this?
                         Some(Child::MaybePersisted(maybe_persisted, _)) => {
                             // For MaybePersisted, we need to get the node
                             maybe_persisted.as_shared_node(merkle)?
@@ -654,7 +654,9 @@ impl<I: Iterator<Item = T>, T: KeyValuePair, K: KeyType> Iterator for FilteredKe
 mod tests {
     use super::*;
     use crate::merkle::Merkle;
-    use firewood_storage::{ImmutableProposal, MemStore, Mutable, NodeStore, Propose};
+    use firewood_storage::{
+        DeletedNodeTracking, ImmutableProposal, MemStore, Mutable, NodeStore, Propose,
+    };
     use std::sync::Arc;
     use test_case::test_case;
 
@@ -671,7 +673,7 @@ mod tests {
     pub(super) fn create_test_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
         let memstore = MemStore::default();
         let memstore = Arc::new(memstore);
-        let nodestore = NodeStore::new_empty_proposal(memstore);
+        let nodestore = NodeStore::new_empty_proposal(memstore, DeletedNodeTracking::Enabled);
         Merkle::from(nodestore)
     }
 

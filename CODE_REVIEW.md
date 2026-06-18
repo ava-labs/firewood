@@ -50,3 +50,10 @@ When any unsafe Rust or Go code is present, or when a change crosses the FFI bou
   32-bit support changes are not needed.
 - Auto-generated C-style comments in `ffi/firewood.h` may retain Rust doc style — do
   not flag these.
+
+## Labeling
+
+- `area/*` is auto-applied from changed paths and `kind/*` from the PR title.
+- **`area/c-chain` is not auto-applied** — add it manually when the change
+  touches C-Chain reexecution or libevm integration.
+- Add `breaking-change` when any PR-template breaking-change box is checked.

@@ -7,7 +7,7 @@ mod change;
 mod collapse;
 #[cfg(feature = "ethhash")]
 mod ethhash;
-// TODO: get the hashes from merkledb and verify compatibility with branch factor 256
+// TODO(rkuris): get the hashes from merkledb and verify compatibility with branch factor 256
 mod proof;
 mod range;
 mod reconcile;
@@ -20,8 +20,8 @@ use std::fmt::Write;
 use super::*;
 use crate::{ProofError, ProofNode};
 use firewood_storage::{
-    Children, Committed, MemStore, Mutable, NodeHashAlgorithm, NodeStore, NodeStoreHeader,
-    PathComponent, Propose, RootReader, TrieHash, ValueDigest,
+    Children, Committed, DeletedNodeTracking, MemStore, Mutable, NodeHashAlgorithm, NodeStore,
+    NodeStoreHeader, PathComponent, Propose, RootReader, TrieHash, ValueDigest,
 };
 
 // Returns n random key-value pairs.
@@ -72,7 +72,10 @@ where
         NodeHashAlgorithm::compile_option(),
     ));
     let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
-    let base = Merkle::from(NodeStore::new_empty_committed(memstore.clone()));
+    let base = Merkle::from(NodeStore::new_empty_committed(
+        memstore.clone(),
+        DeletedNodeTracking::Enabled,
+    ));
     let mut merkle = base.fork().unwrap();
 
     for (k, v) in iter.clone() {
@@ -200,7 +203,7 @@ fn insert_one() {
 fn create_in_memory_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
     let memstore = MemStore::default();
 
-    let nodestore = NodeStore::new_empty_proposal(memstore.into());
+    let nodestore = NodeStore::new_empty_proposal(memstore.into(), DeletedNodeTracking::Enabled);
 
     Merkle { nodestore }
 }
@@ -634,7 +637,7 @@ fn test_insert_leaf_prefix() {
 #[test]
 fn test_insert_sibling_leaf() {
     // The node at key is a branch node with children key_2 and key_3.
-    // TODO assert in this test that key is the parent of key_2 and key_3.
+    // TODO(rkuris) assert in this test that key is the parent of key_2 and key_3.
     // i.e. the node types are branch, leaf, leaf respectively.
     let key = vec![0xff];
     let val = [1];
