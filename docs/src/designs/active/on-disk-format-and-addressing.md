@@ -52,6 +52,17 @@ identifies its size class.
   that became unreachable when a proposal was created but that cannot be freed yet,
   because older in-memory or on-disk revisions may still reference them.
 
+## Invariants and guarantees
+
+- **No forward references before flush.** A node is never referenced by an address
+  that has not yet been flushed to disk, so a crash cannot leave a live node pointing
+  at unwritten data.
+- **Careful free-list management across revisions.** Space is returned to the free
+  lists only once no surviving revision can reference it, so reuse never corrupts a
+  revision that is still readable.
+- Together these make the database recoverable after an unclean shutdown without a
+  separate write-ahead log replay over user data.
+
 ## On-disk and runtime behavior
 
 - **Allocation.** A new node is serialized into a byte buffer; the allocator finds
@@ -77,17 +88,6 @@ identifies its size class.
   (`DeletedNodeTracking::Disabled`) and expired revisions are not freed, preserving
   all historical data on disk for lookup by root hash.
 
-## Invariants and guarantees
-
-- **No forward references before flush.** A node is never referenced by an address
-  that has not yet been flushed to disk, so a crash cannot leave a live node pointing
-  at unwritten data.
-- **Careful free-list management across revisions.** Space is returned to the free
-  lists only once no surviving revision can reference it, so reuse never corrupts a
-  revision that is still readable.
-- Together these make the database recoverable after an unclean shutdown without a
-  separate write-ahead log replay over user data.
-
 ## Trade-offs
 
 - Offset-based addressing keeps reads cheap (a child traversal is a single
@@ -100,7 +100,6 @@ identifies its size class.
 
 ## Related designs
 
-- Originating proposal: [0001 — mdBook documentation site](../proposed/0001-mdbook-documentation-site.md)
-  established this documentation system. (This page itself is the seed example.)
+- This is the first active design written under the process established by [0001 — mdBook documentation site](../proposed/0001-mdbook-documentation-site.md).
 - See the backfill TODO in [Active Designs](README.md) for adjacent subsystems
   (revision management, free lists and the FDL, hashing) still to be written up.
