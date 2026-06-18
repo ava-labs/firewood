@@ -1,0 +1,13 @@
+{
+  // Ignore generated build output and non-Markdown assets.
+  "ignores": [
+    "book/**",
+    "assets/**",
+    ".gitignore",
+    "*.js",
+    "*.css",
+    "*.toml",
+    "*.svg",
+    ".markdownlint-cli2.jsonc"
+  ]
+}

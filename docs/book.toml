@@ -13,15 +13,10 @@ site-url = "/firewood/"
 git-repository-url = "https://github.com/ava-labs/firewood"
 edit-url-template = "https://github.com/ava-labs/firewood/edit/main/docs/{path}"
 default-theme = "rust"
-additional-css = ["mdbook-admonish.css"]
 additional-js = ["mermaid.min.js", "mermaid-init.js"]
 
 [preprocessor.mermaid]
 command = "mdbook-mermaid"
-
-[preprocessor.admonish]
-command = "mdbook-admonish"
-assets_version = "3.1.0" # do not edit: managed by `mdbook-admonish install`
 
 [output.linkcheck2]
 follow-web-links = false

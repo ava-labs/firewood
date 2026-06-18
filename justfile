@@ -160,6 +160,18 @@ release-step-refresh-changelog tag:
     echo "Generating changelog..."
     git cliff -o CHANGELOG.md --tag "{{tag}}"
 
+# Regenerate the git-ignored mdBook preprocessor assets (prerequisite of book builds)
+book-assets:
+  mdbook-mermaid install docs
+
+# Serve the book locally with live reload
+book-serve: book-assets
+  mdbook serve docs --open
+
+# Build the book and run the link checker (mirrors what CI runs on PRs)
+book-build: book-assets
+  mdbook build docs
+
 # Run a C-Chain reexecution benchmark
 # Triggers Firewood's track-performance.yml which then triggers AvalancheGo.
 # This ensures results appear in Firewood's workflow summary and get published
