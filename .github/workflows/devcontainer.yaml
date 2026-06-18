@@ -33,7 +33,7 @@ jobs:
             just --version
             gh --version
             shfmt --version
-            dockerfmt --version
+            dockerfmt version
             starship --version
             claude --version
             shellcheck --version
