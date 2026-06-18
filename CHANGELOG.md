@@ -1064,7 +1064,7 @@ All notable changes to this project will be documented in this file.
 - Remove generics on Db ([#196](https://github.com/ava-labs/firewood/pull/196))
 - Remove generics for Proposal ([#197](https://github.com/ava-labs/firewood/pull/197))
 - Use quotes around all ([#200](https://github.com/ava-labs/firewood/pull/200))
-- `:get<K>:` use Nibbles ([#210](https://github.com/ava-labs/firewood/pull/210))
+- :get<K>: use Nibbles ([#210](https://github.com/ava-labs/firewood/pull/210))
 - Variable renames ([#211](https://github.com/ava-labs/firewood/pull/211))
 - Use thiserror ([#221](https://github.com/ava-labs/firewood/pull/221))
 - *(deps)* Update typed-builder requirement from 0.15.0 to 0.16.0 ([#222](https://github.com/ava-labs/firewood/pull/222))
