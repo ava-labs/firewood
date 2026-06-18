@@ -172,6 +172,21 @@ book-serve: book-assets
 book-build: book-assets
     mdbook build docs
 
+# Scaffold a new proposed design document from the template
+new-design slug:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="docs/src/designs/proposed"
+    tmpl="docs/src/designs/templates/proposed.md"
+    # Highest existing 4-digit prefix (base-10), else 0000; gaps are not backfilled.
+    max=$(ls "$dir"/[0-9][0-9][0-9][0-9]-*.md 2>/dev/null \
+        | sed -E 's#.*/([0-9]{4})-.*#\1#' | sort -n | tail -1)
+    max=${max:-0000}
+    next=$(printf '%04d' $((10#$max + 1)))
+    out="$dir/${next}-{{slug}}.md"
+    cp "$tmpl" "$out"
+    echo "Created $out"
+
 # Run a C-Chain reexecution benchmark
 # Triggers Firewood's track-performance.yml which then triggers AvalancheGo.
 # This ensures results appear in Firewood's workflow summary and get published
