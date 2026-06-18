@@ -549,10 +549,10 @@ in `avalanchego/go.mod` and in the `graft/evm`, `graft/coreth`, and `graft/subne
 `go.mod`s. That published module tracks the `firewood-ffi` crate version: when
 `firewood-ffi` is released, CI builds the static libraries, copies the in-repo `ffi/`
 directory into the `ava-labs/firewood-go-ethhash` repository, and tags it (see
-[`RELEASE.md`](../../../../RELEASE.md) and
-[`.github/workflows/attach-static-libs.yaml`](../../../../.github/workflows/attach-static-libs.yaml)).
+[`RELEASE.md`](https://github.com/ava-labs/firewood/blob/main/RELEASE.md) and
+[`.github/workflows/attach-static-libs.yaml`](https://github.com/ava-labs/firewood/blob/main/.github/workflows/attach-static-libs.yaml)).
 The section documents how the in-repo `ffi/` crate is built (the `cargo build` →
-`go tool cgo` flow described in [`ffi/README.md`](../../../../ffi/README.md)), packaged,
+`go tool cgo` flow described in [`ffi/README.md`](https://github.com/ava-labs/firewood/blob/main/ffi/README.md)), packaged,
 and published, and how a downstream consumer pins and upgrades it. It links to `/ffi/`
 (godoc) for the generated API reference and to `meta/release.md` for the publish/version
 cadence. Without this, the integration story is incomplete: a reader following the

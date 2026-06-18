@@ -13,7 +13,13 @@
 
 # Design Documents
 
-- [Designs]()
+- [Designs](designs/README.md)
+  - [Proposed](designs/proposed/README.md)
+    - [0001 — mdBook documentation site](designs/proposed/0001-mdbook-documentation-site.md)
+  - [Active](designs/active/README.md)
+    - [On-disk format and addressing](designs/active/on-disk-format-and-addressing.md)
+  - [Templates](designs/templates/proposed.md)
+    - [Active template](designs/templates/active.md)
 
 # Integration
 
