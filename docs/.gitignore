@@ -1,0 +1,8 @@
+# mdBook build output
+/book
+
+# Preprocessor assets generated at build time by `just book-assets`
+# (mdbook-mermaid install / mdbook-admonish install). Never commit these.
+/mdbook-admonish.css
+/mermaid.min.js
+/mermaid-init.js
