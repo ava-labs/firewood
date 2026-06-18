@@ -1,5 +1,12 @@
 {
+  // Restrict linting to Markdown files only; markdownlint-cli2 v0.22+ lints
+  // all files when given a directory argument, so globs filters the scan when
+  // invoked as "markdownlint-cli2 ." from within this directory.
   // Ignore generated build output (mdbook writes HTML/assets under book/).
+  "globs": [
+    "**/*.md",
+    "**/*.markdown"
+  ],
   "ignores": [
     "book/**"
   ]

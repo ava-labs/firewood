@@ -1,0 +1,25 @@
+{
+  // Root-level markdownlint-cli2 configuration.
+  // "ignores" here are relative to this file (repo root) and apply when
+  // markdownlint-cli2 is invoked with a directory argument from the root.
+  "ignores": [
+    // mdBook generated output
+    "docs/book/**",
+    // Non-Markdown assets under docs/
+    "docs/assets/**",
+    "docs/.gitignore",
+    "docs/*.js",
+    "docs/*.min.js",
+    "docs/*.css",
+    "docs/*.toml",
+    "docs/*.svg",
+    "docs/**/*.html",
+    "docs/**/*.css",
+    "docs/**/*.js",
+    "docs/**/*.svg",
+    "docs/**/*.png",
+    "docs/**/*.woff2",
+    "docs/**/*.txt",
+    "docs/**/*.jsonc"
+  ]
+}
