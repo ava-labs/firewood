@@ -99,9 +99,7 @@ impl Path {
             Some(0)
         };
 
-        once(flags)
-            .chain(extra_byte)
-            .chain(self.0.iter().copied())
+        once(flags).chain(extra_byte).chain(self.0.iter().copied())
     }
 
     /// Creates a Path from a [Iterator] or other iterator that returns
