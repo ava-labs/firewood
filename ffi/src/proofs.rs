@@ -3,10 +3,12 @@
 
 mod change;
 mod code_hash;
+mod eth;
 mod range;
 
 pub use self::change::*;
 pub use self::code_hash::*;
+pub use self::eth::*;
 pub use self::range::*;
 
 // Re-export firewood-side types that used to be defined in this crate, so

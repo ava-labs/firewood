@@ -17,9 +17,9 @@ updates:
     schedule:
       interval: weekly
     labels:
-      - "dependencies"
-      - "github-actions"
-      - "security"
+      - "kind/dependencies"
+      - "area/ci"
+      - "kind/security"
     commit-message:
       prefix: "ci"
       include: "scope"

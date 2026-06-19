@@ -153,7 +153,11 @@ pub mod registry;
 /// ```
 pub mod proofs;
 
+/// `eth_getProof`-compatible proof export.
+pub mod eth_proof;
+
 // Re-export commonly used proof types at the crate root for ergonomic access
+pub use eth_proof::{EthProof, EthStorageProof, eth_get_proof};
 pub use merkle::{Key, Value, verify_change_proof_root_hash, verify_range_proof};
 pub use proofs::{
     ChangeProof, ChangeProofVerificationContext, EmptyProofCollection, InvalidHeader, KeyRange,
@@ -178,7 +182,9 @@ mod batch_op;
 pub use firewood_storage::logger;
 
 #[cfg(all(test, feature = "logger"))]
-#[ctor::ctor]
+// SAFETY: Called pre-main in test builds only. Does not panic (try_init + ok),
+// uses thread-safe logger initialization, and only reads env vars (safe pre-main).
+#[ctor::ctor(unsafe)]
 /// `ctor` will ensure this function is invoked before any tests are run so we
 /// can initialize the logger consistently across all tests without having to
 /// manually call it in each test.

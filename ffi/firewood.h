@@ -103,7 +103,11 @@ typedef struct OwnedSlice_u8 OwnedBytes;
  * A result type returned from FFI functions return the database root hash. This
  * may or may not be after a mutation.
  */
-enum HashResult_Tag {
+enum HashResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to a database handle.
    */
@@ -130,7 +134,11 @@ enum HashResult_Tag {
    */
   HashResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum HashResult_Tag HashResult_Tag;
+#else
 typedef size_t HashResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct HashResult {
   HashResult_Tag tag;
@@ -194,7 +202,11 @@ typedef struct BorrowedSlice_u8 BorrowedBytes;
  * Callers should use the appropriate variant (`Put`, `Delete`, `DeleteRange`)
  * to express their intent.
  */
-enum BatchOp_Tag {
+enum BatchOp_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * Insert or update a key with a value.
    * The value may be empty (zero-length).
@@ -209,7 +221,11 @@ enum BatchOp_Tag {
    */
   BatchOp_DeleteRange,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum BatchOp_Tag BatchOp_Tag;
+#else
 typedef size_t BatchOp_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct BatchOp_Put_Body {
   BorrowedBytes key;
@@ -275,7 +291,11 @@ typedef struct BorrowedSlice_BatchOp BorrowedBatchOps;
  * The result type returned from an FFI function that returns no value but may
  * return an error.
  */
-enum VoidResult_Tag {
+enum VoidResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to the input handle.
    */
@@ -295,7 +315,11 @@ enum VoidResult_Tag {
    */
   VoidResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum VoidResult_Tag VoidResult_Tag;
+#else
 typedef size_t VoidResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct VoidResult {
   VoidResult_Tag tag;
@@ -309,7 +333,11 @@ typedef struct VoidResult {
 /**
  * A result type returned from FFI functions that create an code hash iterator
  */
-enum CodeIteratorResult_Tag {
+enum CodeIteratorResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to a proof handle.
    */
@@ -328,7 +356,11 @@ enum CodeIteratorResult_Tag {
    */
   CodeIteratorResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum CodeIteratorResult_Tag CodeIteratorResult_Tag;
+#else
 typedef size_t CodeIteratorResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct CodeIteratorResult_Ok_Body {
   /**
@@ -356,7 +388,11 @@ typedef struct CodeIteratorResult {
  * FFI methods and types can use this to represent optional values where `Optional<T>`
  * does not work due to it not having a C-compatible layout.
  */
-enum Maybe_OwnedBytes_Tag {
+enum Maybe_OwnedBytes_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * No value present.
    */
@@ -366,7 +402,11 @@ enum Maybe_OwnedBytes_Tag {
    */
   Maybe_OwnedBytes_Some_OwnedBytes,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum Maybe_OwnedBytes_Tag Maybe_OwnedBytes_Tag;
+#else
 typedef size_t Maybe_OwnedBytes_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct Maybe_OwnedBytes {
   Maybe_OwnedBytes_Tag tag;
@@ -395,7 +435,11 @@ typedef struct NextKeyRange {
   struct Maybe_OwnedBytes end_key;
 } NextKeyRange;
 
-enum NextKeyRangeResult_Tag {
+enum NextKeyRangeResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to the input handle.
    */
@@ -423,7 +467,11 @@ enum NextKeyRangeResult_Tag {
    */
   NextKeyRangeResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum NextKeyRangeResult_Tag NextKeyRangeResult_Tag;
+#else
 typedef size_t NextKeyRangeResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct NextKeyRangeResult {
   NextKeyRangeResult_Tag tag;
@@ -443,7 +491,11 @@ typedef struct NextKeyRangeResult {
  * FFI methods and types can use this to represent optional values where `Optional<T>`
  * does not work due to it not having a C-compatible layout.
  */
-enum Maybe_BorrowedBytes_Tag {
+enum Maybe_BorrowedBytes_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * No value present.
    */
@@ -453,7 +505,11 @@ enum Maybe_BorrowedBytes_Tag {
    */
   Maybe_BorrowedBytes_Some_BorrowedBytes,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum Maybe_BorrowedBytes_Tag Maybe_BorrowedBytes_Tag;
+#else
 typedef size_t Maybe_BorrowedBytes_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct Maybe_BorrowedBytes {
   Maybe_BorrowedBytes_Tag tag;
@@ -473,7 +529,11 @@ typedef struct Maybe_BorrowedBytes {
  *
  * [`fwd_free_change_proof`]: crate::fwd_free_change_proof
  */
-enum ChangeProofResult_Tag {
+enum ChangeProofResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to the input handle.
    */
@@ -505,7 +565,11 @@ enum ChangeProofResult_Tag {
    */
   ChangeProofResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum ChangeProofResult_Tag ChangeProofResult_Tag;
+#else
 typedef size_t ChangeProofResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct ChangeProofResult {
   ChangeProofResult_Tag tag;
@@ -528,7 +592,11 @@ typedef struct ChangeProofResult {
 /**
  * A result type returned from FFI functions that retrieve a single value.
  */
-enum ValueResult_Tag {
+enum ValueResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to a database handle.
    */
@@ -561,7 +629,11 @@ enum ValueResult_Tag {
    */
   ValueResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum ValueResult_Tag ValueResult_Tag;
+#else
 typedef size_t ValueResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct ValueResult {
   ValueResult_Tag tag;
@@ -581,7 +653,11 @@ typedef struct ValueResult {
 /**
  * A result type returned from FFI functions that create a reconstructed view.
  */
-enum ReconstructedResult_Tag {
+enum ReconstructedResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to an input handle.
    */
@@ -595,7 +671,11 @@ enum ReconstructedResult_Tag {
    */
   ReconstructedResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum ReconstructedResult_Tag ReconstructedResult_Tag;
+#else
 typedef size_t ReconstructedResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct ReconstructedResult_Ok_Body {
   /**
@@ -661,7 +741,11 @@ typedef struct CreateChangeProofArgs {
  *
  * [`fwd_free_range_proof`]: crate::fwd_free_range_proof
  */
-enum RangeProofResult_Tag {
+enum RangeProofResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to the input handle.
    */
@@ -693,7 +777,11 @@ enum RangeProofResult_Tag {
    */
   RangeProofResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum RangeProofResult_Tag RangeProofResult_Tag;
+#else
 typedef size_t RangeProofResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct RangeProofResult {
   RangeProofResult_Tag tag;
@@ -785,7 +873,11 @@ typedef struct VerifyRangeProofArgs {
  * A result type returned from FFI functions that create a proposal but do not
  * commit it to the database.
  */
-enum ProposalResult_Tag {
+enum ProposalResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to a database handle.
    */
@@ -806,7 +898,11 @@ enum ProposalResult_Tag {
    */
   ProposalResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum ProposalResult_Tag ProposalResult_Tag;
+#else
 typedef size_t ProposalResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct ProposalResult_Ok_Body {
   /**
@@ -833,6 +929,180 @@ typedef struct ProposalResult {
     };
   };
 } ProposalResult;
+
+/**
+ * A Rust-owned vector of bytes that can be passed to C code.
+ *
+ * C callers must free this memory using the respective FFI function for the
+ * concrete type (but not using the `free` function from the C standard library).
+ */
+typedef struct OwnedSlice_OwnedBytes {
+  OwnedBytes *ptr;
+  size_t len;
+} OwnedSlice_OwnedBytes;
+
+/**
+ * An owned, C-friendly per-slot storage proof inside an [`EthProofOwned`].
+ */
+typedef struct EthStorageProofOwned {
+  /**
+   * The requested 32-byte slot key, echoed back from the caller's input.
+   */
+  uint8_t key[32];
+  /**
+   * The stored slot value, or [`Maybe::None`] for an exclusion proof.
+   */
+  struct Maybe_OwnedBytes value;
+  /**
+   * MPT-RLP-encoded storage-trie nodes, root-to-leaf order. Empty when the
+   * account has no storage at all.
+   */
+  struct OwnedSlice_OwnedBytes proof;
+} EthStorageProofOwned;
+
+/**
+ * A Rust-owned vector of bytes that can be passed to C code.
+ *
+ * C callers must free this memory using the respective FFI function for the
+ * concrete type (but not using the `free` function from the C standard library).
+ */
+typedef struct OwnedSlice_EthStorageProofOwned {
+  struct EthStorageProofOwned *ptr;
+  size_t len;
+} OwnedSlice_EthStorageProofOwned;
+
+/**
+ * An owned, C-friendly `eth_getProof` result.
+ *
+ * Mirrors [`firewood::EthProof`] but with FFI-safe owned buffers. All byte
+ * arrays are heap-owned by Rust and must be freed by passing the enclosing
+ * value to [`fwd_free_eth_proof`].
+ */
+typedef struct EthProofOwned {
+  /**
+   * Account transaction count.
+   */
+  uint64_t nonce;
+  /**
+   * Account balance, zero-padded big-endian.
+   */
+  uint8_t balance[32];
+  /**
+   * Keccak-256 of the account's contract code (empty-code hash if none).
+   */
+  uint8_t code_hash[32];
+  /**
+   * Storage trie root as embedded in the account leaf (empty-trie root for
+   * absent accounts).
+   */
+  uint8_t storage_hash[32];
+  /**
+   * MPT-RLP-encoded account-trie nodes, root-to-leaf order.
+   */
+  struct OwnedSlice_OwnedBytes account_proof;
+  /**
+   * Per-slot storage proofs, one entry per requested key, in input order.
+   */
+  struct OwnedSlice_EthStorageProofOwned storage_proofs;
+} EthProofOwned;
+
+/**
+ * A result type returned from [`fwd_eth_get_proof`].
+ *
+ * The caller must call [`fwd_free_eth_proof`] to free the memory associated
+ * with a returned [`EthProofOwned`] when it is no longer needed.
+ *
+ * [`fwd_eth_get_proof`]: crate::fwd_eth_get_proof
+ * [`fwd_free_eth_proof`]: crate::fwd_free_eth_proof
+ */
+enum EthProofResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  /**
+   * The caller provided a null pointer to the revision handle.
+   */
+  EthProofResult_NullHandlePointer,
+  /**
+   * The database is not running in ethereum hash mode, so an
+   * `eth_getProof`-compatible proof cannot be produced.
+   */
+  EthProofResult_NotSupported,
+  /**
+   * The proof was successfully produced.
+   */
+  EthProofResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. Its
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  EthProofResult_Err,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum EthProofResult_Tag EthProofResult_Tag;
+#else
+typedef size_t EthProofResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
+
+typedef struct EthProofResult {
+  EthProofResult_Tag tag;
+  union {
+    struct {
+      struct EthProofOwned *ok;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} EthProofResult;
+
+/**
+ * A borrowed byte slice. Used to represent data that was passed in from C
+ * callers and will not be freed or retained by Rust code.
+ */
+typedef struct BorrowedSlice_BorrowedBytes {
+  /**
+   * A pointer to the slice of bytes. This can be null if the slice is empty.
+   *
+   * If the pointer is not null, it must point to a valid slice of `len`
+   * elements sized and aligned for `T`.
+   *
+   * As a note, [`NonNull`] is not appropriate here because [`NonNull`] pointer
+   * provenance requires mutable access to the pointer, which is not an invariant
+   * we want to enforce here. We want (and require) the pointer to be immutable.
+   *
+   * [`NonNull`]: std::ptr::NonNull
+   */
+  const BorrowedBytes *ptr;
+  /**
+   * The length of the slice. It is ignored if the pointer is null; however,
+   * if the pointer is not null, it must be equal to the number of elements
+   * pointed to by `ptr`.
+   */
+  size_t len;
+} BorrowedSlice_BorrowedBytes;
+
+/**
+ * A type alias for a borrowed slice of borrowed byte slices (a 2D byte array).
+ *
+ * C callers can use this to pass in an array of byte slices, e.g. a list of
+ * 32-byte storage keys for [`fwd_eth_get_proof`]. Neither the outer array nor
+ * the inner slices are freed by Rust code.
+ *
+ * C callers must ensure that the pointer, if not null, points to a valid slice
+ * of [`BorrowedBytes`] of length `len`, and that each inner slice is itself
+ * valid. Everything must remain valid for the duration of the C function call
+ * that was passed this slice.
+ *
+ * [`fwd_eth_get_proof`]: crate::fwd_eth_get_proof
+ */
+typedef struct BorrowedSlice_BorrowedBytes BorrowedBytes2D;
 
 /**
  * Owned version of `KeyValuePair`, returned to ffi callers.
@@ -984,7 +1254,11 @@ typedef struct OwnedNativeHistogram {
 /**
  * A C-compatible tagged union representing a metric value.
  */
-enum OwnedMetricValue_Tag {
+enum OwnedMetricValue_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   OwnedMetricValue_Counter,
   OwnedMetricValue_Gauge,
   OwnedMetricValue_Summary,
@@ -992,7 +1266,11 @@ enum OwnedMetricValue_Tag {
   OwnedMetricValue_NativeHistogram,
   OwnedMetricValue_Unknown,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum OwnedMetricValue_Tag OwnedMetricValue_Tag;
+#else
 typedef size_t OwnedMetricValue_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct OwnedMetricValue {
   OwnedMetricValue_Tag tag;
@@ -1065,7 +1343,11 @@ typedef struct OwnedSlice_OwnedMetricFamily OwnedRenderedMetrics;
  *
  * [`fwd_gather_rendered`]: crate::fwd_gather_rendered
  */
-enum RenderedMetricsResult_Tag {
+enum RenderedMetricsResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The metrics were successfully gathered.
    *
@@ -1086,7 +1368,11 @@ enum RenderedMetricsResult_Tag {
    */
   RenderedMetricsResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum RenderedMetricsResult_Tag RenderedMetricsResult_Tag;
+#else
 typedef size_t RenderedMetricsResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct RenderedMetricsResult {
   RenderedMetricsResult_Tag tag;
@@ -1103,7 +1389,11 @@ typedef struct RenderedMetricsResult {
 /**
  * A result type returned from FFI functions that get a revision
  */
-enum RevisionResult_Tag {
+enum RevisionResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to a database handle.
    */
@@ -1128,7 +1418,11 @@ enum RevisionResult_Tag {
    */
   RevisionResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum RevisionResult_Tag RevisionResult_Tag;
+#else
 typedef size_t RevisionResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct RevisionResult_Ok_Body {
   /**
@@ -1160,7 +1454,11 @@ typedef struct RevisionResult {
 /**
  * A result type returned from iterator FFI functions
  */
-enum KeyValueResult_Tag {
+enum KeyValueResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to an iterator handle.
    */
@@ -1189,7 +1487,11 @@ enum KeyValueResult_Tag {
    */
   KeyValueResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum KeyValueResult_Tag KeyValueResult_Tag;
+#else
 typedef size_t KeyValueResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct KeyValueResult {
   KeyValueResult_Tag tag;
@@ -1206,7 +1508,11 @@ typedef struct KeyValueResult {
 /**
  * A result type returned from iterator FFI functions
  */
-enum KeyValueBatchResult_Tag {
+enum KeyValueBatchResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to an iterator handle.
    */
@@ -1226,7 +1532,11 @@ enum KeyValueBatchResult_Tag {
    */
   KeyValueBatchResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum KeyValueBatchResult_Tag KeyValueBatchResult_Tag;
+#else
 typedef size_t KeyValueBatchResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct KeyValueBatchResult {
   KeyValueBatchResult_Tag tag;
@@ -1243,7 +1553,11 @@ typedef struct KeyValueBatchResult {
 /**
  * A result type returned from FFI functions that create an iterator
  */
-enum IteratorResult_Tag {
+enum IteratorResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The caller provided a null pointer to a revision/proposal handle.
    */
@@ -1262,7 +1576,11 @@ enum IteratorResult_Tag {
    */
   IteratorResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum IteratorResult_Tag IteratorResult_Tag;
+#else
 typedef size_t IteratorResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct IteratorResult_Ok_Body {
   /**
@@ -1287,7 +1605,11 @@ typedef struct IteratorResult {
 /**
  * The result type returned from the open or create database functions.
  */
-enum HandleResult_Tag {
+enum HandleResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   /**
    * The database was opened or created successfully and the handle is
    * returned as an opaque pointer.
@@ -1309,7 +1631,11 @@ enum HandleResult_Tag {
    */
   HandleResult_Err,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum HandleResult_Tag HandleResult_Tag;
+#else
 typedef size_t HandleResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 
 typedef struct HandleResult {
   HandleResult_Tag tag;
@@ -1869,6 +2195,49 @@ struct VoidResult fwd_db_verify_range_proof(const struct DatabaseHandle *db,
                                             struct VerifyRangeProofArgs args);
 
 /**
+ * Produce an `eth_getProof`-compatible proof for an account and a set of
+ * storage slots against the given revision.
+ *
+ * The returned proof bytes are canonical RLP-encoded Ethereum MPT nodes that a
+ * verifier such as go-ethereum's `trie.VerifyProof` accepts. Absent accounts
+ * come back with zero account scalars plus the empty-code and empty-trie
+ * hashes; the proof bytes distinguish inclusion from exclusion.
+ *
+ * # Arguments
+ *
+ * - `revision` - The revision handle to prove against.
+ * - `account_key` - The account's 32-byte trie key (`keccak256(address)`).
+ * - `storage_keys` - An array of 32-byte slot trie keys
+ *   (`keccak256(slot)`), in the order the proofs should be returned.
+ *
+ * Callers are responsible for keccak-hashing addresses and slots into their
+ * 32-byte trie-key forms before calling this function.
+ *
+ * # Returns
+ *
+ * - [`EthProofResult::NullHandlePointer`] if `revision` is null.
+ * - [`EthProofResult::NotSupported`] if the database is not running in
+ *   ethereum hash mode.
+ * - [`EthProofResult::Ok`] containing the proof on success.
+ * - [`EthProofResult::Err`] containing an error message otherwise (including
+ *   when a key is not exactly 32 bytes long).
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `revision` is a valid pointer to a [`RevisionHandle`].
+ * * ensure that `account_key` is a valid [`BorrowedBytes`] and each entry of
+ *   `storage_keys` is a valid [`BorrowedBytes`].
+ * * call [`fwd_free_eth_proof`] to free a returned [`EthProofOwned`], and
+ *   [`fwd_free_owned_bytes`] to free a returned error message.
+ *
+ * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+ */
+struct EthProofResult fwd_eth_get_proof(const struct RevisionHandle *revision,
+                                        BorrowedBytes account_key,
+                                        BorrowedBytes2D storage_keys);
+
+/**
  * Frees the memory associated with a `ChangeProofContext`.
  *
  * # Arguments
@@ -1881,6 +2250,21 @@ struct VoidResult fwd_db_verify_range_proof(const struct DatabaseHandle *db,
  * - [`VoidResult::Err`] if the process panics while freeing the memory.
  */
 struct VoidResult fwd_free_change_proof(struct ChangeProofContext *proof);
+
+/**
+ * Frees the memory associated with an [`EthProofOwned`].
+ *
+ * # Arguments
+ *
+ * * `proof` - The [`EthProofOwned`] to free, previously returned from
+ *   [`fwd_eth_get_proof`].
+ *
+ * # Returns
+ *
+ * - [`VoidResult::Ok`] if the memory was successfully freed.
+ * - [`VoidResult::Err`] if the process panics while freeing the memory.
+ */
+struct VoidResult fwd_free_eth_proof(struct EthProofOwned *proof);
 
 /**
  * Consumes the [`IteratorHandle`], destroys the iterator, and frees the memory.
