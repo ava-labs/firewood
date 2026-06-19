@@ -306,6 +306,7 @@ fn spawn_prometheus_listener(
 
     // Register the Prometheus recorder directly; prefixing is handled by Grafana/Prometheus relabeling.
     metrics::set_global_recorder(recorder)?;
+    firewood_metrics::mark_global_recorder_installed();
 
     Ok(handle)
 }

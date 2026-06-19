@@ -25,15 +25,59 @@ use std::io::Read;
 use std::num::NonZero;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use firewood_metrics::{GaugeExt, firewood_counter, firewood_gauge, firewood_histogram};
 use lru::LruCache as EntryLruCache;
 use lru_mem::LruCache as MemLruCache;
+use metrics::Counter;
 
 use crate::linear::ReadableNodeMode;
 use crate::{CacheReadStrategy, CachedNode, LinearAddress, MaybePersistedNode, SharedNode};
 
 use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
+
+const CACHE_NODE_MODES: [&str; 4] = ["open", "read", "recon-read", "write"];
+const CACHE_RESULT_TYPES: [&str; 2] = ["miss", "hit"];
+
+type CacheNodeCounters = [[Counter; CACHE_RESULT_TYPES.len()]; CACHE_NODE_MODES.len()];
+
+const fn cache_node_mode_index(mode: &ReadableNodeMode) -> usize {
+    match mode {
+        ReadableNodeMode::Open => 0,
+        ReadableNodeMode::Read => 1,
+        ReadableNodeMode::ReconRead => 2,
+        ReadableNodeMode::Write => 3,
+    }
+}
+
+fn cache_node_counter(mode: &ReadableNodeMode, hit: bool) -> Option<&'static Counter> {
+    static COUNTERS: OnceLock<CacheNodeCounters> = OnceLock::new();
+    firewood_metrics::global_recorder_installed().then(|| {
+        &COUNTERS.get_or_init(|| {
+            std::array::from_fn(|mode_index| {
+                std::array::from_fn(|result_index| {
+                    firewood_counter!(
+                        CACHE_NODE,
+                        "mode" => CACHE_NODE_MODES[mode_index],
+                        "type" => CACHE_RESULT_TYPES[result_index]
+                    )
+                })
+            })
+        })[cache_node_mode_index(mode)][usize::from(hit)]
+    })
+}
+
+fn free_list_cache_counter(hit: bool) -> Option<&'static Counter> {
+    static COUNTERS: OnceLock<[Counter; CACHE_RESULT_TYPES.len()]> = OnceLock::new();
+    firewood_metrics::global_recorder_installed().then(|| {
+        &COUNTERS.get_or_init(|| {
+            std::array::from_fn(|result_index| {
+                firewood_counter!(CACHE_FREELIST, "type" => CACHE_RESULT_TYPES[result_index])
+            })
+        })[usize::from(hit)]
+    })
+}
 
 /// A [`ReadableStorage`] and [`WritableStorage`] backed by a file
 #[derive(Debug)]
@@ -139,7 +183,11 @@ impl ReadableStorage for FileBacked {
         // point — all trie traversals contend here. Impact scales with reader concurrency.
         let mut guard = self.cache.lock();
         let cached = guard.get(&addr).map(|cached_node| cached_node.0.clone());
-        firewood_counter!(CACHE_NODE, "mode" => mode.as_str(), "type" => if cached.is_some() { "hit" } else { "miss" }).increment(1);
+        if let Some(counter) = cache_node_counter(&mode, cached.is_some()) {
+            counter.increment(1);
+        } else {
+            firewood_counter!(CACHE_NODE, "mode" => mode.as_str(), "type" => if cached.is_some() { "hit" } else { "miss" }).increment(1);
+        }
         cached
     }
 
@@ -148,8 +196,12 @@ impl ReadableStorage for FileBacked {
         // every proposal/commit. Contends with writes that also update the free-list cache.
         let mut guard = self.free_list_cache.lock();
         let cached = guard.pop(&addr);
-        firewood_counter!(CACHE_FREELIST, "type" => if cached.is_some() { "hit" } else { "miss" })
-            .increment(1);
+        if let Some(counter) = free_list_cache_counter(cached.is_some()) {
+            counter.increment(1);
+        } else {
+            firewood_counter!(CACHE_FREELIST, "type" => if cached.is_some() { "hit" } else { "miss" })
+                .increment(1);
+        }
         firewood_gauge!(FREELIST_CACHE_SIZE).set_integer(guard.len());
         cached
     }
