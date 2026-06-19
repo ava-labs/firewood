@@ -70,10 +70,20 @@ impl<T: Version0> Version0 for Box<[T]> {
             .read_item::<usize>()
             .map_err(|err| err.set_item("array length"))?;
 
-        // FIXME(demosdemon): we must somehow validate `num_items` matches what is expected
-        // An incorrect, or unexpectedly large value could lead to DoS via OOM
-        // or panicing
-        (0..num_items).map(|_| reader.read_v0_item()).collect()
+        if num_items > reader.remainder().len() {
+            return Err(reader.invalid_item(
+                "array length",
+                "length less than or equal to the remaining bytes",
+                format!("{} > {}", num_items, reader.remainder().len()),
+            ));
+        }
+
+        let mut items = Vec::new();
+        for _ in 0..num_items {
+            items.push(reader.read_v0_item()?);
+        }
+
+        Ok(items.into_boxed_slice())
     }
 }
 

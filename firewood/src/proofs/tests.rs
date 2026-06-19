@@ -916,3 +916,161 @@ fn test_slow_malformed_proof_fuzz() {
         }
     }
 }
+
+#[test]
+fn test_dos_array_length_bounds() {
+    use integer_encoding::VarInt;
+
+    let (proof, mut data) = create_valid_range_proof();
+
+    // The first array length (for start_proof) is at offset 32.
+    let original_len = proof.start_proof().len();
+    let original_len_space = original_len.required_space();
+
+    let malicious_num_items: usize = 10_000_000;
+    let encoded = malicious_num_items.encode_var_vec();
+
+    data.splice(32..32 + original_len_space, encoded);
+
+    // Calculate the remaining bytes after parsing the new varint (offset 32 + encoded varint len)
+    let remainder_len = data.len() - 32 - malicious_num_items.required_space();
+
+    match FrozenRangeProof::from_slice(&data) {
+        Err(ReadError::InvalidItem {
+            item,
+            expected,
+            found,
+            ..
+        }) => {
+            assert_eq!(item, "array length");
+            assert_eq!(expected, "length less than or equal to the remaining bytes");
+            assert_eq!(
+                found,
+                format!("{} > {}", malicious_num_items, remainder_len)
+            );
+        }
+        other => panic!("Expected ReadError::InvalidItem for DoS vector, got: {other:?}"),
+    }
+}
+
+#[cfg(test)]
+mod box_array_deserialization_tests {
+    use super::*;
+    use crate::proofs::header::Header;
+    use crate::proofs::reader::{ProofReader, ReadError, V0Reader, Version0};
+    use integer_encoding::VarInt;
+
+    // Fixed-size 32-byte hash, matching real proof types like HashValue.
+    #[derive(Debug, PartialEq)]
+    struct Hash32([u8; 32]);
+
+    impl Version0 for Hash32 {
+        fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
+            let chunk = reader.read_chunk::<32>()?;
+            Ok(Hash32(*chunk))
+        }
+    }
+
+    // Variable-length type: [len: varint][bytes...]
+    #[derive(Debug, PartialEq)]
+    struct VarLenVec(Vec<u8>);
+
+    impl Version0 for VarLenVec {
+        fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
+            let len = reader.read_item::<usize>()?;
+            let slice = reader.read_slice(len)?;
+            Ok(VarLenVec(slice.to_vec()))
+        }
+    }
+
+    fn v0_reader(data: &[u8]) -> V0Reader<'_> {
+        let inner = ProofReader::new(data);
+        V0Reader::new(inner, Header::from(ProofType::Range))
+    }
+
+    #[test]
+    fn rejects_usize_max_items_without_oom() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&usize::MAX.encode_var_vec());
+        let mut reader = v0_reader(&data);
+        let result: Result<Box<[Hash32]>, _> = reader.read_v0_item();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_when_item_count_exceeds_remaining_bytes() {
+        // Claims 50 items but only provides 50 bytes.
+        // Each Hash32 requires 32 bytes, so 1600 bytes are needed.
+        let mut data = Vec::new();
+        data.extend_from_slice(&50usize.encode_var_vec());
+        data.extend_from_slice(&[0u8; 50]);
+        let mut reader = v0_reader(&data);
+        let result: Result<Box<[Hash32]>, _> = reader.read_v0_item();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_when_items_need_more_bytes_than_available() {
+        // Claims 10 items with 100 bytes remaining.
+        // 10 * 32 = 320 bytes required.
+        let mut data = Vec::new();
+        data.extend_from_slice(&10usize.encode_var_vec());
+        data.extend_from_slice(&[0u8; 100]);
+        let mut reader = v0_reader(&data);
+        let result: Result<Box<[Hash32]>, _> = reader.read_v0_item();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_var_len_item_with_huge_claimed_length() {
+        // 1 item whose internal length field claims usize::MAX.
+        let mut data = Vec::new();
+        data.extend_from_slice(&1usize.encode_var_vec());
+        data.extend_from_slice(&usize::MAX.encode_var_vec());
+        data.extend_from_slice(&[0u8; 10]);
+        let mut reader = v0_reader(&data);
+        let result: Result<Box<[VarLenVec]>, _> = reader.read_v0_item();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_eof_mid_array() {
+        // Claims 5 items but only provides enough data for 2.
+        let mut data = Vec::new();
+        data.extend_from_slice(&5usize.encode_var_vec());
+        data.extend_from_slice(&[0u8; 64]);
+        let mut reader = v0_reader(&data);
+        let result: Result<Box<[Hash32]>, _> = reader.read_v0_item();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn accepts_empty_array() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&0usize.encode_var_vec());
+        let mut reader = v0_reader(&data);
+        let result: Result<Box<[Hash32]>, _> = reader.read_v0_item();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 0);
+    }
+
+    #[test]
+    fn rejects_one_item_with_no_data() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&1usize.encode_var_vec());
+        let mut reader = v0_reader(&data);
+        let result: Result<Box<[Hash32]>, _> = reader.read_v0_item();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn accepts_large_valid_array() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&1000usize.encode_var_vec());
+        data.extend_from_slice(&[0u8; 32000]);
+        let mut reader = v0_reader(&data);
+        let result: Result<Box<[Hash32]>, _> = reader.read_v0_item();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 1000);
+    }
+}
