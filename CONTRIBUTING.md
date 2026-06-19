@@ -9,6 +9,7 @@ guidelines for contributing to firewood.
 * [Quick Links](#quick-links)
 * [Testing](#testing)
 * [How to submit changes](#how-to-submit-changes)
+* [Signing your commits](#signing-your-commits)
 * [Code Review Process](#code-review-process)
 * [Labels](#labels)
 * [Where can I ask for help?](#where-can-i-ask-for-help)
@@ -38,6 +39,56 @@ Also, if you update any versions of packages, notably the MSRV (Minimum Supporte
 
 To create a PR, fork firewood, and use GitHub to create the PR. We typically prioritize reviews in the middle of the next work day,
 so you should expect a response during the week within 24 hours.
+
+## Signing your commits
+
+Every commit in a PR must be cryptographically signed so that GitHub shows it
+as **Verified**. CI rejects PRs that contain unsigned commits, so set this up
+before you open one.
+
+You can sign with either a GPG key or an SSH key. SSH is the quickest path if
+you already push over SSH.
+
+### Option A: Sign with your existing SSH key
+
+    git config --global gpg.format ssh
+    git config --global user.signingkey ~/.ssh/id_ed25519.pub  # your public key
+    git config --global commit.gpgsign true                    # sign every commit
+
+Then add the same key to GitHub as a **Signing Key** (this is separate from an
+authentication key) under *Settings → SSH and GPG keys → New SSH key →
+Key type: Signing Key*.
+
+### Option B: Sign with a GPG key
+
+    gpg --full-generate-key                       # create a key if you don't have one
+    gpg --list-secret-keys --keyid-format=long    # find your key id
+    git config --global user.signingkey <KEYID>
+    git config --global commit.gpgsign true
+
+Export the public key and add it under *Settings → SSH and GPG keys → New GPG
+key*:
+
+    gpg --armor --export <KEYID>
+
+Make sure the email on the key matches the email on your commits.
+
+### Verifying and fixing commits
+
+Check that a commit is signed:
+
+    git log --show-signature -1
+
+If you already have unsigned commits on your branch, re-sign them and
+force-push:
+
+    git rebase --exec 'git commit --amend --no-edit -S' -i <base>
+    git push --force-with-lease
+
+GitHub's [signing your commits][gh-signing] guide has more detail, including
+key setup on Windows and macOS.
+
+[gh-signing]: https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits
 
 ## Code Review Process
 
