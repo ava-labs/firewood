@@ -499,7 +499,6 @@ fn test_slow_fwdctl_import_csv_hex() {
     });
 }
 
-
 #[test]
 fn test_slow_fwdctl_import_csv_malformed() {
     with_tmpdir(|tmp_dir| {

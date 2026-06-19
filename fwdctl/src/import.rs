@@ -45,11 +45,7 @@ pub struct Options {
     pub input_file_name: Option<PathBuf>,
 
     /// Parse the keys and values as hex format.
-    #[arg(
-        short = 'x',
-        long,
-        help = "Parse the keys and values as hex format."
-    )]
+    #[arg(short = 'x', long, help = "Parse the keys and values as hex format.")]
     pub hex: bool,
 
     /// Number of records to batch per database commit.
@@ -89,6 +85,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
 
     let mut batch_ops: Vec<BatchOp<Vec<u8>, Vec<u8>>> = Vec::with_capacity(opts.batch_size);
     let mut total_imported: usize = 0;
+    let mut total_skipped: usize = 0;
 
     let start_time = Instant::now();
     let mut last_status_time = start_time;
@@ -99,7 +96,8 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
             let count = batch_ops.len();
             let proposal = db.propose(batch_ops.drain(..))?;
             proposal.commit()?;
-            total_imported = total_imported.saturating_add(count);
+            // Use wrapping_add because overflow is practically unreachable here
+            total_imported = total_imported.wrapping_add(count);
 
             let now = Instant::now();
             if now.duration_since(last_status_time) >= opts.status_interval {
@@ -124,21 +122,28 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
                 .has_headers(false)
                 .from_reader(reader);
 
-            let mut consecutive_errors = 0;
             const MAX_CONSECUTIVE_ERRORS: usize = 100;
+            let mut consecutive_errors = 0;
+
+            let handle_skip_error = |consecutive_errors: &mut usize, total_skipped: &mut usize| -> Result<(), api::Error> {
+                *consecutive_errors = consecutive_errors.saturating_add(1);
+                *total_skipped = total_skipped.saturating_add(1);
+                if *consecutive_errors > MAX_CONSECUTIVE_ERRORS {
+                    return Err(api::Error::InternalError(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Too many consecutive malformed rows. Aborting import.",
+                    ))));
+                }
+                Ok(())
+            };
 
             for (row_idx, result) in rdr.deserialize().enumerate() {
+                let display_row_idx = row_idx.saturating_add(1);
                 let (key_str, value_str): (String, String) = match result {
                     Ok(r) => r,
                     Err(e) => {
-                        consecutive_errors += 1;
-                        if consecutive_errors > MAX_CONSECUTIVE_ERRORS {
-                            return Err(api::Error::InternalError(Box::new(std::io::Error::new(
-                                std::io::ErrorKind::InvalidInput,
-                                "Too many consecutive malformed rows. Aborting import.",
-                            ))));
-                        }
-                        log::warn!("Skipping malformed CSV row {}: {}", row_idx + 1, e);
+                        handle_skip_error(&mut consecutive_errors, &mut total_skipped)?;
+                        log::warn!("Skipping malformed CSV row {display_row_idx}: {e}");
                         continue;
                     }
                 };
@@ -146,32 +151,20 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
                 let key = match parse_string(&key_str, opts.hex) {
                     Ok(k) => k,
                     Err(e) => {
-                        consecutive_errors += 1;
-                        if consecutive_errors > MAX_CONSECUTIVE_ERRORS {
-                            return Err(api::Error::InternalError(Box::new(std::io::Error::new(
-                                std::io::ErrorKind::InvalidInput,
-                                "Too many consecutive malformed rows. Aborting import.",
-                            ))));
-                        }
-                        log::warn!("Skipping row {}: failed to parse key: {}", row_idx + 1, e);
+                        handle_skip_error(&mut consecutive_errors, &mut total_skipped)?;
+                        log::warn!("Skipping row {display_row_idx}: failed to parse key: {e}");
                         continue;
                     }
                 };
                 let value = match parse_string(&value_str, opts.hex) {
                     Ok(v) => v,
                     Err(e) => {
-                        consecutive_errors += 1;
-                        if consecutive_errors > MAX_CONSECUTIVE_ERRORS {
-                            return Err(api::Error::InternalError(Box::new(std::io::Error::new(
-                                std::io::ErrorKind::InvalidInput,
-                                "Too many consecutive malformed rows. Aborting import.",
-                            ))));
-                        }
-                        log::warn!("Skipping row {}: failed to parse value: {}", row_idx + 1, e);
+                        handle_skip_error(&mut consecutive_errors, &mut total_skipped)?;
+                        log::warn!("Skipping row {display_row_idx}: failed to parse value: {e}");
                         continue;
                     }
                 };
-                
+
                 consecutive_errors = 0;
                 push_op(key, value)?;
             }
@@ -183,7 +176,8 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
         let remaining = batch_ops.len();
         let proposal = db.propose(batch_ops.drain(..))?;
         proposal.commit()?;
-        total_imported = total_imported.saturating_add(remaining);
+        // Use wrapping_add because overflow is practically unreachable here
+        total_imported = total_imported.wrapping_add(remaining);
     }
 
     let total_duration = start_time.elapsed();
@@ -193,13 +187,11 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     } else {
         0
     };
-    let formatted_total_duration =
-        format_duration(Duration::from_secs(total_duration.as_secs()));
+    let formatted_total_duration = format_duration(Duration::from_secs(total_duration.as_secs()));
 
     let final_msg = format!(
-        "Successfully imported {total_imported} keys in {formatted_total_duration} ({final_rate} keys/s)"
+        "Successfully imported {total_imported} keys (skipped {total_skipped} malformed rows) in {formatted_total_duration} ({final_rate} keys/s)"
     );
-    log::info!("{final_msg}");
     println!("{final_msg}");
 
     db.close()
