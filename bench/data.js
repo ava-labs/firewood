@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781771605606,
+  "lastUpdate": 1781858272038,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -5122,6 +5122,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 78.00071891074424,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "c01a70541cf6ec669fc288bbf8b500a2a1582c71",
+          "message": "feat(ffi): 6/7 add fwd_eth_get_proof FFI surface (#2054)\n\n## Why this should be merged\n\nExposes the Rust `eth_get_proof` entry point over the C ABI so the Go\nlayer\n(and other C callers) can request `eth_getProof`-compatible proofs from\na\nfirewood revision.\n\n## How this works\n\n- New `ffi/src/proofs/eth.rs` with `fwd_eth_get_proof(revision,\naccount_key,\nstorage_keys)` and `fwd_free_eth_proof`. The function takes a\n`RevisionHandle`\nplus a 32-byte account key and an array of 32-byte slot keys, and\nreturns\ncanonical RLP-encoded Ethereum MPT nodes a verifier such as\ngo-ethereum's\n  `trie.VerifyProof` accepts.\n- `EthProofOwned` / `EthStorageProofOwned`: `repr(C)` owned mirrors of\n`firewood::EthProof` / `EthStorageProof`, with `OwnedSlice<OwnedBytes>`\nbuffers and `Maybe<OwnedBytes>` for the optional slot value. Fully owned\n(no\n`'db` lifetime), so the result is safe to read or free after the\nrevision and\n  database are closed.\n- `EthProofResult`: `repr(C, usize)` tagged union (`NullHandlePointer`,\n`NotSupported`, `Ok(Box<EthProofOwned>)`, `Err(OwnedBytes)`).\n`NotSupported`\n  maps from `api::Error::FeatureNotSupported` so non-ethereum mode is a\n  distinct, caller-actionable result rather than a stringly-typed error.\n- `BorrowedBytes2D` input alias (`BorrowedSlice<BorrowedBytes>`) for the\n  slot-key array. Keys that are not exactly 32 bytes surface as `Err`.\n- The cbindgen build script regenerates `ffi/firewood.h` with the new\nsymbols.\n\n## How this was tested\n\nFull workspace nextest + clippy + doc with `--features ethhash,logger`.\nThis\nlayer is a thin owned-bytes translation over the already-tested Rust\n`eth_get_proof`; it is exercised end-to-end from Go in the 7/7 step.\n\n## Breaking Changes\n\nNone. Additive to firewood-ffi (new C functions, result/owned types, and\nthe\n`BorrowedBytes2D` alias); no existing C API changes.",
+          "timestamp": "2026-06-18T23:19:08Z",
+          "url": "https://github.com/ava-labs/firewood/commit/c01a70541cf6ec669fc288bbf8b500a2a1582c71"
+        },
+        "date": 1781858271379,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 171.8943028040692,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5817.528467710957,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 73.38236132562866,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5697.735686690421,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 44.68995535130599,
             "unit": "block_accept_ms/ggas"
           }
         ]
