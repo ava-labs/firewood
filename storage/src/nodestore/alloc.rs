@@ -54,13 +54,13 @@ impl FreeLists {
         Self([const { None }; AreaIndex::NUM_AREA_SIZES])
     }
 
-    /// Returns a reference to the free list head for `index`.
+    /// Returns the free list head for `index`.
     ///
     /// This is infallible because [`AreaIndex`] is guaranteed to be in-bounds.
     #[must_use]
-    pub const fn get(&self, index: AreaIndex) -> &Option<LinearAddress> {
+    pub const fn get(&self, index: AreaIndex) -> Option<LinearAddress> {
         #![expect(clippy::indexing_slicing)]
-        &self.0[index.as_usize()]
+        self.0[index.as_usize()]
     }
 
     /// Returns a mutable reference to the free list head for `index`.
@@ -83,7 +83,8 @@ impl Index<AreaIndex> for FreeLists {
     type Output = Option<LinearAddress>;
 
     fn index(&self, index: AreaIndex) -> &Self::Output {
-        self.get(index)
+        #[expect(clippy::indexing_slicing)]
+        &self.0[index.as_usize()]
     }
 }
 
@@ -702,7 +703,7 @@ pub mod test_utils {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::indexing_slicing)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::DeletedNodeTracking;
