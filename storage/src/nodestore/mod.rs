@@ -54,7 +54,6 @@ use crate::linear::{OffsetReader, ReadableNodeMode};
 use crate::logger::{debug, trace};
 use crate::node::branch::ReadSerializable as _;
 use firewood_metrics::{firewood_counter, firewood_histogram};
-use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::io::{Error, ErrorKind};
 use std::num::NonZeroU64;
@@ -160,7 +159,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
                 debug!("No root hash in header; computing from disk");
                 nodestore
                     .read_node_from_disk(root_address, ReadableNodeMode::Open)
-                    .map(|n| hash_node(&n, &Path(SmallVec::default())))?
+                    .map(|n| hash_node(&n, &Path::new()))?
             };
 
             nodestore.kind.root = Some(Child::AddressWithHash(root_address, root_hash));

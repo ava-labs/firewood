@@ -19,14 +19,14 @@ use std::fmt::{self, Debug, LowerHex};
 use std::iter::{FusedIterator, once};
 use std::ops::Add;
 
-use crate::{PathComponent, TriePathFromUnpackedBytes};
-
-static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+use crate::{
+    ComponentIter, PathComponent, PathComponentSliceExt, TriePath, TriePathFromUnpackedBytes,
+};
 
 /// Path is part or all of a node's path in the trie.
-/// Each element is a nibble.
+/// Each element is a nibble stored as a [`PathComponent`].
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Default)]
-pub struct Path(pub SmallVec<[u8; 64]>);
+pub struct Path(pub SmallVec<[PathComponent; 64]>);
 
 impl lru_mem::HeapSize for Path {
     fn heap_size(&self) -> usize {
@@ -41,12 +41,8 @@ impl lru_mem::HeapSize for Path {
 
 impl Debug for Path {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        for nib in &self.0 {
-            if *nib > 0xf {
-                write!(f, "[invalid {:02x}] ", *nib)?;
-            } else {
-                write!(f, "{:x} ", *nib)?;
-            }
+        for component in &self.0 {
+            write!(f, "{component:x} ")?;
         }
         Ok(())
     }
@@ -61,8 +57,8 @@ impl LowerHex for Path {
             if f.alternate() {
                 write!(f, "0x")?;
             }
-            for nib in &self.0 {
-                write!(f, "{:x}", *nib)?;
+            for component in &self.0 {
+                write!(f, "{component:x}")?;
             }
             Ok(())
         }
@@ -70,15 +66,40 @@ impl LowerHex for Path {
 }
 
 impl std::ops::Deref for Path {
-    type Target = [u8];
-    fn deref(&self) -> &[u8] {
+    type Target = [PathComponent];
+
+    fn deref(&self) -> &[PathComponent] {
         &self.0
     }
 }
 
-impl<T: AsRef<[u8]>> From<T> for Path {
-    fn from(value: T) -> Self {
-        Self(SmallVec::from_slice(value.as_ref()))
+impl From<&[u8]> for Path {
+    fn from(value: &[u8]) -> Self {
+        Self(SmallVec::path_from_unpacked_bytes(value).expect("path must contain only nibbles"))
+    }
+}
+
+impl From<Vec<u8>> for Path {
+    fn from(value: Vec<u8>) -> Self {
+        Self::from(value.as_slice())
+    }
+}
+
+impl<const N: usize> From<[u8; N]> for Path {
+    fn from(value: [u8; N]) -> Self {
+        Self::from(value.as_slice())
+    }
+}
+
+impl From<SmallVec<[u8; 64]>> for Path {
+    fn from(value: SmallVec<[u8; 64]>) -> Self {
+        Self::from(value.as_slice())
+    }
+}
+
+impl From<&[PathComponent]> for Path {
+    fn from(value: &[PathComponent]) -> Self {
+        Self(value.into())
     }
 }
 
@@ -99,13 +120,19 @@ impl Path {
             Some(0)
         };
 
-        once(flags).chain(extra_byte).chain(self.0.iter().copied())
+        once(flags)
+            .chain(extra_byte)
+            .chain(self.as_nibbles().iter().copied())
     }
 
     /// Creates a Path from a [Iterator] or other iterator that returns
     /// nibbles
     pub fn from_nibbles_iterator<T: Iterator<Item = u8>>(nibbles_iter: T) -> Self {
-        Path(SmallVec::from_iter(nibbles_iter))
+        let nibbles: SmallVec<[u8; 64]> = SmallVec::from_iter(nibbles_iter);
+        Self(
+            SmallVec::path_from_unpacked_bytes(&nibbles)
+                .expect("nibbles iterator must yield values in 0..=0x0F"),
+        )
     }
 
     /// Creates an empty Path
@@ -126,11 +153,11 @@ impl Path {
             let _ = iter.next();
         }
 
-        Self(iter.collect())
+        Self::from(iter.collect::<SmallVec<[u8; 64]>>())
     }
 
-    /// Add nibbles to the end of a path
-    pub fn extend<T: IntoIterator<Item = u8>>(&mut self, iter: T) {
+    /// Add path components to the end of a path
+    pub fn extend<T: IntoIterator<Item = PathComponent>>(&mut self, iter: T) {
         self.0.extend(iter);
     }
 
@@ -139,15 +166,47 @@ impl Path {
     #[must_use]
     pub fn bytes_iter(&self) -> BytesIterator<'_> {
         BytesIterator {
-            nibbles_iter: self.iter(),
+            nibbles_iter: self.as_nibbles().iter(),
         }
     }
 
-    /// Casts the path to a slice of its components.
+    /// Returns this path as a slice of its components.
     #[must_use]
     pub fn as_components(&self) -> &[PathComponent] {
-        TriePathFromUnpackedBytes::path_from_unpacked_bytes(&self.0)
-            .expect("path should contain only nibbles")
+        &self.0
+    }
+
+    /// Returns this path as a slice of raw nibble bytes.
+    #[must_use]
+    pub fn as_nibbles(&self) -> &[u8] {
+        self.as_components().as_byte_slice()
+    }
+}
+
+impl TriePath for Path {
+    type Components<'a>
+        = ComponentIter<'a>
+    where
+        Self: 'a;
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn components(&self) -> Self::Components<'_> {
+        self.0.iter().copied()
+    }
+
+    fn as_component_slice(&self) -> crate::PartialPath<'_> {
+        crate::PartialPath::Borrowed(&self.0)
+    }
+}
+
+impl TriePathFromUnpackedBytes<'_> for Path {
+    type Error = crate::u4::TryFromIntError;
+
+    fn path_from_unpacked_bytes(bytes: &[u8]) -> Result<Self, Self::Error> {
+        SmallVec::path_from_unpacked_bytes(bytes).map(Self)
     }
 }
 
@@ -186,6 +245,8 @@ impl Iterator for BytesIterator<'_> {
         )
     }
 }
+
+static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
 /// Iterates over the nibbles in `data`.
 /// That is, each byte in `data` is converted to two nibbles.
@@ -340,16 +401,13 @@ mod test {
     #[test_case([1, 2, 3, 4], [2, 3, 4])]
     fn encode_decode<T: AsRef<[u8]> + PartialEq + Debug, U: AsRef<[u8]>>(encode: T, expected: U) {
         let from_encoded = Path::from_encoded_iter(encode.as_ref().iter().copied());
-        assert_eq!(
-            from_encoded.0,
-            SmallVec::<[u8; 32]>::from_slice(expected.as_ref())
-        );
+        assert_eq!(from_encoded.as_nibbles(), expected.as_ref());
         let to_encoded = from_encoded.iter_encoded().collect::<SmallVec<[u8; 32]>>();
         assert_eq!(encode.as_ref(), to_encoded.as_ref());
     }
 
     #[test_case(Path::new(), "[]", "[]")]
-    #[test_case(Path::from([0x12, 0x34, 0x56, 0x78]), "12345678", "0x12345678")]
+    #[test_case(Path::from([0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8]), "12345678", "0x12345678")]
     fn test_fmt_lower_hex(path: Path, expected: &str, expected_with_prefix: &str) {
         assert_eq!(format!("{path:x}"), expected);
         assert_eq!(format!("{path:#x}"), expected_with_prefix);

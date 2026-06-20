@@ -516,7 +516,7 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
         key: K,
         root_hash: &TrieHash,
     ) -> Result<Option<ValueDigest<&[u8]>>, ProofError> {
-        let key = Path(NibblesIterator::new(key.as_ref()).collect());
+        let key = Path::from_nibbles_iterator(NibblesIterator::new(key.as_ref()));
 
         let Some(last_node) = self.0.as_ref().last() else {
             return Err(ProofError::Empty);

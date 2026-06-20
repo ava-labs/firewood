@@ -269,7 +269,7 @@ impl Node {
                 if pp_len == BRANCH_PARTIAL_PATH_LEN_OVERFLOW {
                     encoded.extend_var_int(b.partial_path.len());
                 }
-                encoded.extend_from_slice(&b.partial_path);
+                encoded.extend_from_slice(b.partial_path.as_nibbles());
 
                 // encode the value. For tries that have the same length keys, this is always empty
                 if let Some(v) = &b.value {
@@ -313,7 +313,7 @@ impl Node {
                 if pp_len == LEAF_PARTIAL_PATH_LEN_OVERFLOW {
                     encoded.extend_var_int(l.partial_path.len());
                 }
-                encoded.extend_from_slice(&l.partial_path);
+                encoded.extend_from_slice(l.partial_path.as_nibbles());
 
                 // encode the value
                 encoded.extend_var_int(l.value.len());
@@ -454,8 +454,7 @@ impl Node {
                 children: Children::default(),
             };
             self.update_partial_path(child_path);
-            let child_path_component = PathComponent::try_new(child_index)
-                .ok_or_else(|| Error::other("invalid child index"))?;
+            let child_path_component = child_index;
             *branch.children.get_mut(child_path_component) = Some(Child::Node(self));
             Ok(branch.into())
         } else {
