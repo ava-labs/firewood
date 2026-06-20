@@ -546,7 +546,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
 ///
 /// The second returned element is the unmatched portion of the key after the
 /// partial path has been matched.
-fn compare_partial_path<'a, I1, I2>(
+fn compare_partial_path<I1, I2>(
     partial_path_iter: I1,
     mut unmatched_key_nibbles_iter: I2,
 ) -> (Ordering, I2)
