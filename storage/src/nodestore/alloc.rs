@@ -83,6 +83,8 @@ impl Index<AreaIndex> for FreeLists {
     type Output = Option<LinearAddress>;
 
     fn index(&self, index: AreaIndex) -> &Self::Output {
+        // `AreaIndex` is bounds-checked by construction, so this cannot index
+        // outside the fixed free-list array.
         #[expect(clippy::indexing_slicing)]
         &self.0[index.as_usize()]
     }
