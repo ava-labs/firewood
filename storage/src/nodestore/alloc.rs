@@ -43,6 +43,9 @@ const fn var_int_max_size<VI>() -> usize {
 }
 
 /// Heads of the free lists for each area size.
+///
+/// The derives and transparent representation preserve the original header
+/// layout and satisfy [`NodeStoreHeader`]'s persisted-field trait bounds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Zeroable, Pod)]
 #[repr(transparent)]
 pub struct FreeLists([Option<LinearAddress>; AreaIndex::NUM_AREA_SIZES]);
@@ -70,6 +73,11 @@ impl FreeLists {
     pub const fn get_mut(&mut self, index: AreaIndex) -> &mut Option<LinearAddress> {
         #![expect(clippy::indexing_slicing)]
         &mut self.0[index.as_usize()]
+    }
+
+    /// Returns an iterator over free list heads.
+    pub fn iter(&self) -> std::slice::Iter<'_, Option<LinearAddress>> {
+        self.0.iter()
     }
 }
 
@@ -470,8 +478,9 @@ pub(crate) struct FreeAreaWithMetadata {
 
 pub(crate) struct FreeListsIterator<'a, S: ReadableStorage> {
     storage: &'a S,
-    free_lists: &'a FreeLists,
-    next_free_list_id: Option<AreaIndex>,
+    free_lists_iter: std::iter::Skip<
+        std::iter::Enumerate<std::slice::Iter<'a, std::option::Option<LinearAddress>>>,
+    >,
     current_free_list: Option<(AreaIndex, FreeListIterator<'a, S>)>,
 }
 
@@ -481,36 +490,26 @@ impl<'a, S: ReadableStorage> FreeListsIterator<'a, S> {
         free_lists: &'a FreeLists,
         start_area_index: AreaIndex,
     ) -> Self {
-        let current_free_list = Some(Self::free_list_iterator(
-            storage,
-            free_lists,
-            start_area_index,
-        ));
+        let mut free_lists_iter = free_lists
+            .iter()
+            .enumerate()
+            .skip(start_area_index.as_usize());
+        let current_free_list = free_lists_iter.next().map(|(id, head)| {
+            let free_list_id =
+                AreaIndex::try_from(id).expect("id is less than AreaIndex::NUM_AREA_SIZES");
+            let free_list_iter = FreeListIterator::new(
+                storage,
+                free_list_id,
+                *head,
+                FreeListParent::FreeListHead(free_list_id),
+            );
+            (free_list_id, free_list_iter)
+        });
         Self {
             storage,
-            free_lists,
-            next_free_list_id: Self::next_area_index(start_area_index),
+            free_lists_iter,
             current_free_list,
         }
-    }
-
-    fn free_list_iterator(
-        storage: &'a S,
-        free_lists: &FreeLists,
-        free_list_id: AreaIndex,
-    ) -> (AreaIndex, FreeListIterator<'a, S>) {
-        let free_list_iter = FreeListIterator::new(
-            storage,
-            free_list_id,
-            free_lists[free_list_id],
-            FreeListParent::FreeListHead(free_list_id),
-        );
-        (free_list_id, free_list_iter)
-    }
-
-    fn next_area_index(index: AreaIndex) -> Option<AreaIndex> {
-        let next_index = index.get().checked_add(1)?;
-        AreaIndex::new(next_index)
     }
 
     pub(crate) fn next_with_metadata(
@@ -537,16 +536,19 @@ impl<'a, S: ReadableStorage> FreeListsIterator<'a, S> {
     }
 
     pub(crate) fn move_to_next_free_list(&mut self) {
-        let Some(next_free_list_id) = self.next_free_list_id else {
+        let Some((next_free_list_id, next_free_list_head)) = self.free_lists_iter.next() else {
             self.current_free_list = None;
             return;
         };
-        self.next_free_list_id = Self::next_area_index(next_free_list_id);
-        self.current_free_list = Some(Self::free_list_iterator(
+        let next_free_list_id = AreaIndex::try_from(next_free_list_id)
+            .expect("next_free_list_id is less than AreaIndex::NUM_AREA_SIZES");
+        let next_free_list_iter = FreeListIterator::new(
             self.storage,
-            self.free_lists,
             next_free_list_id,
-        ));
+            *next_free_list_head,
+            FreeListParent::FreeListHead(next_free_list_id),
+        );
+        self.current_free_list = Some((next_free_list_id, next_free_list_iter));
     }
 }
 
