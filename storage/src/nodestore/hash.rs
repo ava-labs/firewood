@@ -144,7 +144,7 @@ where
             // Both lengths are usize counts of nibbles in a trie path, so their
             // sum cannot overflow on any platform firewood targets.
             #[cfg(feature = "ethhash")]
-            let make_fake_root = if path_prefix.0.len().wrapping_add(b.partial_path.0.len()) == 64 {
+            let make_fake_root = if path_prefix.0.len().wrapping_add(b.partial_path.len()) == 64 {
                 // looks like we're at an account branch
                 // tally up how many hashes we need to deal with
                 let ClassifiedChildren {
@@ -157,7 +157,7 @@ where
                     let shared = child_node.as_shared_node(&self)?;
                     let hash = {
                         let mut path_guard = PathGuard::new(&mut path_prefix);
-                        path_guard.0.extend(b.partial_path.0.iter().copied());
+                        path_guard.0.extend(b.partial_path.iter().copied());
                         if unhashed.is_empty() {
                             hash_node_as_storage_trie_root_for_node(
                                 path_guard.as_components(),
@@ -165,7 +165,7 @@ where
                                 &shared,
                             )
                         } else {
-                            path_guard.0.push(child_idx.as_u8());
+                            path_guard.0.push(*child_idx);
                             hash_node(&shared, &path_guard)
                         }
                     };
@@ -205,15 +205,15 @@ where
                 let (child_node, child_hash) = {
                     // we extend and truncate path_prefix to reduce memory allocations]
                     let mut child_path_prefix = PathGuard::new(&mut path_prefix);
-                    child_path_prefix.0.extend(b.partial_path.0.iter().copied());
+                    child_path_prefix.0.extend(b.partial_path.iter().copied());
                     #[cfg(feature = "ethhash")]
                     if make_fake_root.is_none() {
                         // we don't push the nibble there is only one unhashed child and
                         // we're on an account
-                        child_path_prefix.0.push(nibble.as_u8());
+                        child_path_prefix.0.push(nibble);
                     }
                     #[cfg(not(feature = "ethhash"))]
-                    child_path_prefix.0.push(nibble.as_u8());
+                    child_path_prefix.0.push(nibble);
                     #[cfg(feature = "ethhash")]
                     let (child_node, child_hash) =
                         self.hash_helper_inner(child_node, child_path_prefix, make_fake_root)?;
@@ -375,10 +375,7 @@ pub fn hash_node_as_storage_trie_root_parts<Prefix: SplitPath, Partial: SplitPat
 fn update_account_storage_root(node: &mut Node, path_prefix: &Path) {
     // Both lengths are usize counts of nibbles in a trie path, so their
     // sum cannot overflow on any platform firewood targets.
-    let total_depth = path_prefix
-        .0
-        .len()
-        .wrapping_add(node.partial_path().0.len());
+    let total_depth = path_prefix.0.len().wrapping_add(node.partial_path().len());
     if total_depth != 64 {
         return;
     }

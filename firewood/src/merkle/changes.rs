@@ -220,7 +220,7 @@ impl<'a, Left: HashedNodeReader, Right: HashedNodeReader> DiffMerkleNodeStream<'
     /// node from the left trie has a value.
     fn deleted_values(left_value: Option<&[u8]>, left_path: &Path) -> Option<BatchOp<Key, Value>> {
         left_value.map(|_val| BatchOp::Delete {
-            key: key_from_nibble_iter(left_path.iter().copied()),
+            key: key_from_nibble_iter(left_path.iter().map(|c| c.as_u8())),
         })
     }
 
@@ -228,7 +228,7 @@ impl<'a, Left: HashedNodeReader, Right: HashedNodeReader> DiffMerkleNodeStream<'
     /// node from the right trie has a value.
     fn added_values(right_value: Option<&[u8]>, right_path: &Path) -> Option<BatchOp<Key, Value>> {
         right_value.map(|val| BatchOp::Put {
-            key: key_from_nibble_iter(right_path.iter().copied()),
+            key: key_from_nibble_iter(right_path.iter().map(|c| c.as_u8())),
             value: val.into(),
         })
     }
@@ -435,13 +435,8 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
             // children in reverse order.
             for (path_comp, child) in branch.children.iter_present().rev() {
                 // Generate the pre-path for this child, and push it onto the traversal stack.
-                let child_pre_path = Path::from_nibbles_iterator(
-                    prev_node_info
-                        .path
-                        .iter()
-                        .copied()
-                        .chain(once(path_comp.as_u8())),
-                );
+                let mut child_pre_path = prev_node_info.path.clone();
+                child_pre_path.extend(once(path_comp));
                 self.traversal_stack.push(ComparableNodeInfo::new(
                     child_pre_path,
                     child,
@@ -492,16 +487,9 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
                         .iter_present()
                         .rev()
                         .map(|(path_comp, child)| {
-                            (
-                                child,
-                                Path::from_nibbles_iterator(
-                                    prev_node_info
-                                        .path
-                                        .iter()
-                                        .copied()
-                                        .chain(once(path_comp.as_u8())),
-                                ),
-                            )
+                            let mut child_pre_path = prev_node_info.path.clone();
+                            child_pre_path.extend(once(path_comp));
+                            (child, child_pre_path)
                         });
 
                 for (child, child_pre_path) in reversed_children_with_pre_path.by_ref() {
@@ -827,7 +815,7 @@ mod tests {
             let node_info = node_info.unwrap();
             assert!(node_info.hash.is_some());
             if let Some(val) = node_info.node.value() {
-                let key = key_from_nibble_iter(node_info.path.iter().copied());
+                let key = key_from_nibble_iter(node_info.path.iter().map(|c| c.as_u8()));
                 let batch_sorted_item = batch_sorted_it.next().unwrap();
                 assert!(
                     *key == **batch_sorted_item.key()
@@ -845,7 +833,7 @@ mod tests {
         while let Some(node_info) = preorder_it.next() {
             let node_info = node_info.unwrap();
             if let Some(val) = node_info.node.value() {
-                let key = key_from_nibble_iter(node_info.path.iter().copied());
+                let key = key_from_nibble_iter(node_info.path.iter().map(|c| c.as_u8()));
                 let batch_sorted_item = batch_sorted.get(index).unwrap();
                 assert!(
                     *key == **batch_sorted_item.key()
