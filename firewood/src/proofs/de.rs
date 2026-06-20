@@ -78,12 +78,7 @@ impl<T: Version0> Version0 for Box<[T]> {
             ));
         }
 
-        let mut items = Vec::new();
-        for _ in 0..num_items {
-            items.push(reader.read_v0_item()?);
-        }
-
-        Ok(items.into_boxed_slice())
+        (0..num_items).map(|_| reader.read_v0_item()).collect()
     }
 }
 
