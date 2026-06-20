@@ -916,7 +916,7 @@ mod test {
         next_free_block1 = Some(free_list1_area1);
         high_watermark += area_size1;
 
-        free_lists[AREA_INDEX1.as_usize()] = next_free_block1;
+        free_lists[AREA_INDEX1] = next_free_block1;
 
         // second free list
         let area_size2 = AREA_INDEX2.size();
@@ -933,7 +933,7 @@ mod test {
         high_watermark += area_size2;
         let expected_high_watermark = high_watermark;
 
-        free_lists[AREA_INDEX2.as_usize()] = next_free_block2;
+        free_lists[AREA_INDEX2] = next_free_block2;
 
         // third free list
         high_watermark += 1; // + 1 to create gap
@@ -944,12 +944,12 @@ mod test {
         next_free_block3 = Some(free_list3_area1);
         high_watermark += area_size3;
 
-        free_lists[AREA_INDEX3.as_usize()] = next_free_block3;
+        free_lists[AREA_INDEX3] = next_free_block3;
 
         // write header
         let header = test_write_header(nodestore, high_watermark, None, free_lists);
 
-        let expected_start_addr = header.free_lists()[AREA_INDEX1.as_usize()].unwrap();
+        let expected_start_addr = header.free_lists()[AREA_INDEX1].unwrap();
         let expected_end_addr = LinearAddress::new(expected_high_watermark).unwrap();
         let expected_free_areas = vec![expected_start_addr..expected_end_addr];
         let expected_freelist_errors = vec![
@@ -1114,7 +1114,7 @@ mod test {
                 }
                 high_watermark += area_size;
             }
-            freelist[area_index.as_usize()] = next_free_block;
+            freelist[area_index] = next_free_block;
             if num_free_areas > 0 {
                 free_area_counts.insert(area_size, num_free_areas);
             }
