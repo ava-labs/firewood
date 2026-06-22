@@ -2,6 +2,19 @@
 default:
     ./scripts/run-just.sh --list
 
+# Regenerate proof-node wire serialization snapshots for both hash modes.
+#
+# Run this after any intentional change to the ProofNode binary format (ser.rs,
+# de.rs, childmask, or header). The recipe writes snapshots for the MerkleDB
+# (SHA-256) mode first, then for the Ethereum (Keccak-256, ethhash) mode.
+# Existing snapshots are overwritten when their content changes.
+#
+# After running, review the diffs in src/proofs/snapshots/ and commit them
+# alongside the format change.
+snapshot-proof-nodes:
+    INSTA_UPDATE=always cargo nextest run -p firewood --features logger         -E 'test(~snapshot_tests)'
+    INSTA_UPDATE=always cargo nextest run -p firewood --features ethhash,logger -E 'test(~snapshot_tests)'
+
 # Build ffi with nix
 build-ffi-nix: check-nix
     cd ffi && nix build
