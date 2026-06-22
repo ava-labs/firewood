@@ -54,15 +54,6 @@ impl FreeLists {
         Self([const { None }; AreaIndex::NUM_AREA_SIZES])
     }
 
-    /// Returns the free list head for `index`.
-    ///
-    /// This is infallible because [`AreaIndex`] is guaranteed to be in-bounds.
-    #[must_use]
-    pub const fn get(&self, index: AreaIndex) -> Option<LinearAddress> {
-        #![expect(clippy::indexing_slicing)]
-        self.0[index.as_usize()]
-    }
-
     /// Returns a mutable reference to the free list head for `index`.
     ///
     /// This is infallible because [`AreaIndex`] is guaranteed to be in-bounds.
