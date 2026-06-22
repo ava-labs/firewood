@@ -7,9 +7,10 @@
 //! It supports parsing proof headers, proof nodes, and range proofs with full
 //! validation of the format.
 
-#[cfg(feature = "ethhash")]
-use firewood_storage::HashType;
-use firewood_storage::{Children, PathBuf, TrieHash, TriePathFromUnpackedBytes, ValueDigest};
+use firewood_storage::{
+    Children, DefaultHashMode, HashMode, HashType, PathBuf, TrieHash, TriePathFromUnpackedBytes,
+    ValueDigest,
+};
 use integer_encoding::VarInt;
 
 use super::{
@@ -287,7 +288,6 @@ impl<'a> ReadItem<'a> for ValueDigest<&'a [u8]> {
             .map_err(|err| err.set_item("value digest discriminant"))?
         {
             0 => Ok(ValueDigest::Value(reader.read_item()?)),
-            #[cfg(not(feature = "ethhash"))]
             1 => Ok(ValueDigest::Hash(reader.read_item()?)),
             found => Err(reader.invalid_item(
                 "value digest discriminant",
@@ -302,7 +302,6 @@ impl<'a> ReadItem<'a> for ValueDigest<Box<[u8]>> {
     fn read_item(reader: &mut ProofReader<'a>) -> Result<Self, ReadError> {
         reader.read_item::<ValueDigest<&[u8]>>().map(|vd| match vd {
             ValueDigest::Value(v) => ValueDigest::Value(v.into()),
-            #[cfg(not(feature = "ethhash"))]
             ValueDigest::Hash(h) => ValueDigest::Hash(h),
         })
     }
@@ -328,18 +327,25 @@ impl<'a> ReadItem<'a> for ChildMask {
     }
 }
 
-#[cfg(feature = "ethhash")]
 impl<'a> ReadItem<'a> for HashType {
     fn read_item(reader: &mut ProofReader<'a>) -> Result<Self, ReadError> {
-        match reader
-            .read_item::<u8>()
-            .map_err(|err| err.set_item("hash type discriminant"))?
-        {
-            0 => Ok(HashType::Hash(reader.read_item()?)),
-            1 => Ok(HashType::Rlp(reader.read_item::<&[u8]>()?.into())),
-            found => {
-                Err(reader.invalid_item("hash type discriminant", "0 (hash) or 1 (rlp)", found))
+        // The two schemes use different proof wire layouts for a child hash;
+        // dispatch on the database's algorithm so each format is read back the
+        // way it was written. (Threading this through `H: HashMode` is PR 5.)
+        if DefaultHashMode::ALGORITHM.is_ethereum() {
+            match reader
+                .read_item::<u8>()
+                .map_err(|err| err.set_item("hash type discriminant"))?
+            {
+                0 => Ok(HashType::Hash(reader.read_item()?)),
+                1 => Ok(HashType::Rlp(reader.read_item::<&[u8]>()?.into())),
+                found => {
+                    Err(reader.invalid_item("hash type discriminant", "0 (hash) or 1 (rlp)", found))
+                }
             }
+        } else {
+            // MerkleDB child hashes are a bare 32-byte hash, no discriminant.
+            Ok(HashType::from(reader.read_item::<TrieHash>()?))
         }
     }
 }
