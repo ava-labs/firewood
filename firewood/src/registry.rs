@@ -75,3 +75,14 @@ pub fn register_all() -> Vec<firewood_metrics::HistogramMetricConfig> {
     histogram_configs.extend(firewood_storage::registry::register());
     histogram_configs
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn register_all_includes_storage_metrics() {
+        assert_eq!(
+            super::register_all().len(),
+            super::register().len() + firewood_storage::registry::register().len()
+        );
+    }
+}

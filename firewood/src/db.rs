@@ -449,14 +449,6 @@ pub struct HistoricalView {
     nodestore: Arc<NodeStore<Committed, FileBacked>>,
 }
 
-impl HistoricalView {
-    /// Returns the view backing this historical revision.
-    #[must_use]
-    pub fn view(&self) -> ArcDynDbView {
-        self.nodestore.clone()
-    }
-}
-
 #[derive(Clone, Debug)]
 /// A user-visible reconstructed view.
 pub struct ReconstructedView<'db> {
@@ -469,42 +461,6 @@ impl ReconstructedView<'_> {
     #[must_use]
     pub fn view(&self) -> ArcDynDbView {
         self.nodestore.clone()
-    }
-}
-
-impl api::DbView for HistoricalView {
-    type Iter<'view>
-        = MerkleKeyValueIter<'view, NodeStore<Committed, FileBacked>>
-    where
-        Self: 'view;
-
-    fn root_hash(&self) -> Option<api::HashKey> {
-        api::DbView::root_hash(&*self.nodestore)
-    }
-
-    fn val<K: KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
-        api::DbView::val(&*self.nodestore, key)
-    }
-
-    fn single_key_proof<K: KeyType>(&self, key: K) -> Result<FrozenProof, api::Error> {
-        api::DbView::single_key_proof(&*self.nodestore, key)
-    }
-
-    fn range_proof<K: KeyType>(
-        &self,
-        first_key: Option<K>,
-        last_key: Option<K>,
-        limit: Option<NonZeroUsize>,
-    ) -> Result<FrozenRangeProof, api::Error> {
-        api::DbView::range_proof(&*self.nodestore, first_key, last_key, limit)
-    }
-
-    fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
-        api::DbView::iter_option(&*self.nodestore, first_key)
-    }
-
-    fn dump_to_string(&self) -> Result<String, api::Error> {
-        api::DbView::dump_to_string(&*self.nodestore)
     }
 }
 
@@ -931,6 +887,43 @@ mod test {
 
         assert_eq!(&*reconstructed.val(b"base").unwrap().unwrap(), b"v1");
         assert_eq!(&*reconstructed.val(b"next").unwrap().unwrap(), b"v2");
+    }
+
+    #[test]
+    fn test_reconstruct_from_historical_view_uses_requested_revision() {
+        let db = TestDb::new();
+
+        db.propose(vec![BatchOp::Put {
+            key: b"k",
+            value: b"historical",
+        }])
+        .unwrap()
+        .commit()
+        .unwrap();
+        let historical_hash = db.root_hash().unwrap();
+
+        db.propose(vec![BatchOp::Put {
+            key: b"k",
+            value: b"latest",
+        }])
+        .unwrap()
+        .commit()
+        .unwrap();
+
+        let historical = db.historical_view(historical_hash).unwrap();
+        let reconstructed = db
+            .reconstruct_from_view(&historical, Vec::<BatchOp<&[u8], &[u8]>>::new())
+            .unwrap();
+
+        assert_eq!(&*reconstructed.val(b"k").unwrap().unwrap(), b"historical");
+        assert_eq!(
+            &*db.revision(db.root_hash().unwrap())
+                .unwrap()
+                .val(b"k")
+                .unwrap()
+                .unwrap(),
+            b"latest"
+        );
     }
 
     #[test]

@@ -6,6 +6,8 @@
 //! Both proof types can yield the set of contract code hashes referenced by
 //! their account values (Ethereum tries only). The extraction is pure RLP
 //! parsing of bytes already in the proof — no verification is required.
+//! Malformed account values are surfaced as iterator errors; entries with
+//! non-account keys, empty code hashes, or invalid code-hash lengths are skipped.
 //!
 //! Per-proof-type entry points live in `range.rs` and `change.rs`; this
 //! module owns the shared [`CodeIteratorHandle`], the per-element extraction
@@ -49,10 +51,7 @@ fn extract_code_hash(key: &[u8], value: &[u8]) -> Option<Result<HashKey, api::Er
 
     match firewood::account_code_hash(value) {
         Ok(Some(code_hash)) => Some(Ok(code_hash.into())),
-        Ok(None) => None,
-        Err(ProofError::InvalidValueFormat) => {
-            Some(Err(api::Error::ProofError(ProofError::InvalidValueFormat)))
-        }
+        Ok(None) | Err(ProofError::InvalidAccountCodeHashLength { .. }) => None,
         Err(err) => Some(Err(api::Error::ProofError(err))),
     }
 }
@@ -109,9 +108,9 @@ impl<'p> CodeIteratorHandle<'p> {
     }
 
     /// Create a new code hash iterator from the given change-proof batch
-    /// operations. Non-`Put` ops are skipped, and `Put` ops whose key is
-    /// not 32 bytes or whose value does not RLP-decode as an account are
-    /// also skipped.
+    /// operations. Non-`Put` ops, `Put` ops whose key is not 32 bytes, empty
+    /// code hashes, and invalid code-hash lengths are skipped. Malformed
+    /// account values are surfaced as iterator errors.
     ///
     /// The iterator must be freed after use.
     ///
@@ -194,5 +193,34 @@ pub extern "C" fn fwd_code_hash_iter_free(iter: Option<Box<CodeIteratorHandle>>)
 impl crate::MetricsContextExt for CodeIteratorHandle<'_> {
     fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
         None
+    }
+}
+
+#[cfg(all(test, feature = "ethhash"))]
+mod tests {
+    use super::extract_code_hash;
+
+    fn account_rlp_with_short_code_hash() -> Vec<u8> {
+        let mut bytes = vec![0xf8, 0x43, 0x80, 0x80, 0xa0];
+        bytes.extend([0; 32]);
+        bytes.push(0x9f);
+        bytes.extend([0x33; 31]);
+        bytes
+    }
+
+    #[test]
+    fn wrong_length_code_hash_is_skipped() {
+        let key = [0; 32];
+        let value = account_rlp_with_short_code_hash();
+
+        assert!(extract_code_hash(&key, &value).is_none());
+    }
+
+    #[test]
+    fn malformed_account_value_is_returned_as_error() {
+        let key = [0; 32];
+        let result = extract_code_hash(&key, b"not an account").expect("account key is valid");
+
+        assert!(result.is_err());
     }
 }
