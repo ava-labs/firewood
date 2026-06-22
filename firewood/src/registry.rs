@@ -69,6 +69,7 @@ firewood_metrics::define_metrics! {
 /// This is the preferred entry point for embedders that expose metrics for a
 /// full firewood database. It keeps callers from needing to know which metrics
 /// are defined by each internal crate.
+#[must_use]
 pub fn register_all() -> Vec<firewood_metrics::HistogramMetricConfig> {
     let mut histogram_configs = register();
     histogram_configs.extend(firewood_storage::registry::register());

@@ -41,6 +41,11 @@ const KECCAK_EMPTY: [u8; 32] = [
 ///
 /// Returns `Ok(None)` for accounts with the empty-code hash. Malformed account
 /// values return [`ProofError::InvalidValueFormat`].
+///
+/// # Errors
+///
+/// Returns [`ProofError::InvalidValueFormat`] if `value` is not an RLP-encoded
+/// Ethereum account or its `codeHash` field is not 32 bytes.
 #[cfg(feature = "ethhash")]
 pub fn account_code_hash(value: &[u8]) -> Result<Option<HashKey>, ProofError> {
     let code_hash_slice = RlpList::parse(value)
