@@ -93,11 +93,7 @@ impl ParallelMerkle {
                 }
                 .into())
             },
-            |node| {
-                // Returns an error if it cannot convert a child index into a path component.
-                node.force_branch_for_insert()
-                    .map_err(|_| CreateProposalError::InvalidConversionToPathComponent)
-            },
+            |node| Ok(node.force_branch_for_insert()),
         )
     }
 
