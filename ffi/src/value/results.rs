@@ -2,8 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood::api;
-use firewood::{Key, Value};
-use firewood_storage::TrieHash;
+use firewood::{Key, TrieHash, Value};
 use std::fmt;
 
 use crate::revision::{GetRevisionResult, RevisionHandle};

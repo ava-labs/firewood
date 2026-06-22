@@ -17,6 +17,8 @@
 use firewood_storage::{
     NodeHashAlgorithm, PackedPathRef, PathComponent, TriePathFromPackedBytes, ValueDigest,
 };
+#[cfg(feature = "ethhash")]
+use firewood_storage::{RlpList, TrieHash};
 
 use crate::api::{DbView, Error, HashKey, HashKeyExt};
 use crate::proofs::ProofError;
@@ -34,6 +36,24 @@ const KECCAK_EMPTY: [u8; 32] = [
     0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03, 0xc0,
     0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85, 0xa4, 0x70,
 ];
+
+/// Extract a non-empty Ethereum account code hash from an RLP-encoded account value.
+///
+/// Returns `Ok(None)` for accounts with the empty-code hash. Malformed account
+/// values return [`ProofError::InvalidValueFormat`].
+#[cfg(feature = "ethhash")]
+pub fn account_code_hash(value: &[u8]) -> Result<Option<HashKey>, ProofError> {
+    let code_hash_slice = RlpList::parse(value)
+        .and_then(|list| list.nth_bytes(3))
+        .map_err(|_| ProofError::InvalidValueFormat)?;
+    let code_hash =
+        TrieHash::try_from(code_hash_slice).map_err(|_| ProofError::InvalidValueFormat)?;
+    if code_hash == TrieHash::from(KECCAK_EMPTY) {
+        return Ok(None);
+    }
+
+    Ok(Some(code_hash))
+}
 
 /// One `eth_getProof` response, modulo JSON formatting.
 #[derive(Debug, PartialEq, Eq)]

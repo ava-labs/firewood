@@ -13,21 +13,11 @@
 //! `fwd_code_hash_iter_free`).
 
 #[cfg(feature = "ethhash")]
-use firewood_storage::{RlpList, TrieHash};
-
-#[cfg(feature = "ethhash")]
 use firewood::ProofError;
 
 use firewood::api::{self, BatchOp};
 
 use crate::{HashKey, HashResult, VoidResult};
-
-#[cfg(feature = "ethhash")]
-const EMPTY_CODE_HASH: [u8; 32] = [
-    // "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
-    0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03, 0xc0,
-    0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85, 0xa4, 0x70,
-];
 
 #[non_exhaustive]
 pub struct CodeIteratorHandle<'p> {
@@ -57,15 +47,14 @@ fn extract_code_hash(key: &[u8], value: &[u8]) -> Option<Result<HashKey, api::Er
         return None;
     }
 
-    let Ok(code_hash_slice) = RlpList::parse(value).and_then(|l| l.nth_bytes(3)) else {
-        return Some(Err(api::Error::ProofError(ProofError::InvalidValueFormat)));
-    };
-    let code_hash: HashKey = TrieHash::try_from(code_hash_slice).ok()?.into();
-    if code_hash == TrieHash::from(EMPTY_CODE_HASH).into() {
-        return None;
+    match firewood::account_code_hash(value) {
+        Ok(Some(code_hash)) => Some(Ok(code_hash)),
+        Ok(None) => None,
+        Err(ProofError::InvalidValueFormat) => {
+            Some(Err(api::Error::ProofError(ProofError::InvalidValueFormat)))
+        }
+        Err(err) => Some(Err(api::Error::ProofError(err))),
     }
-
-    Some(Ok(code_hash))
 }
 
 impl Iterator for CodeIteratorHandle<'_> {

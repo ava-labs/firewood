@@ -6,14 +6,13 @@ use crate::reconstructed::ReconstructedHandle;
 use crate::{CreateIteratorResult, DatabaseHandle, IteratorHandle};
 use firewood::api;
 use firewood::api::{ArcDynDbView, BoxKeyValueIter, DbView, HashKey};
+use firewood::db::HistoricalView;
 use firewood_metrics::MetricsContext;
-use firewood_storage::{Committed, FileBacked, NodeStore};
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct RevisionHandle<'db> {
     view: ArcDynDbView,
-    historical: Option<Arc<NodeStore<Committed, FileBacked>>>,
+    historical: Option<HistoricalView>,
     metrics_context: MetricsContext,
     handle: &'db DatabaseHandle,
 }
@@ -22,7 +21,7 @@ impl<'db> RevisionHandle<'db> {
     /// Creates a new revision handle for the provided database view.
     pub(crate) fn new(
         view: ArcDynDbView,
-        historical: Option<Arc<NodeStore<Committed, FileBacked>>>,
+        historical: Option<HistoricalView>,
         metrics_context: MetricsContext,
         handle: &'db DatabaseHandle,
     ) -> RevisionHandle<'db> {

@@ -24,7 +24,7 @@ use firewood_metrics::{firewood_counter, firewood_histogram};
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, CommittedParentHash, FileBacked, FileIoError,
     HashedNodeReader, ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage,
-    Reconstructed, ReconstructionSource, TrieReader,
+    Reconstructed, TrieReader,
 };
 use std::io::Write;
 use std::num::NonZeroUsize;
@@ -186,6 +186,13 @@ impl Db {
         self.manager.view(root_hash).map_err(Into::into)
     }
 
+    /// Synchronously get an opaque handle to a committed historical revision.
+    pub fn historical_view(&self, root_hash: HashKey) -> Result<HistoricalView, api::Error> {
+        Ok(HistoricalView {
+            nodestore: self.manager.revision(root_hash)?,
+        })
+    }
+
     /// Dump the Trie of the latest revision.
     pub fn dump(&self, w: &mut dyn Write) -> Result<(), std::io::Error> {
         let latest_rev_nodestore = self.manager.current_revision();
@@ -341,16 +348,12 @@ impl Db {
     /// # Errors
     ///
     /// Returns an error if reconstruction fails.
-    pub fn reconstruct_from_view<P>(
+    pub fn reconstruct_from_view(
         &self,
-        parent: &Arc<NodeStore<P, FileBacked>>,
+        parent: &HistoricalView,
         batch: impl IntoBatchIter,
-    ) -> Result<ReconstructedView<'_>, api::Error>
-    where
-        P: ReconstructionSource<FileBacked>,
-        NodeStore<P, FileBacked>: TrieReader,
-    {
-        let next_nodestore = parent.reconstruction_child()?;
+    ) -> Result<ReconstructedView<'_>, api::Error> {
+        let next_nodestore = parent.nodestore.reconstruction_child()?;
         let mutable_nodestore = RevisionManager::apply_batch_recon(next_nodestore, batch)?;
 
         Ok(ReconstructedView {
@@ -441,6 +444,20 @@ pub struct Proposal<'db> {
 }
 
 #[derive(Clone, Debug)]
+/// A user-visible historical committed view.
+pub struct HistoricalView {
+    nodestore: Arc<NodeStore<Committed, FileBacked>>,
+}
+
+impl HistoricalView {
+    /// Returns the view backing this historical revision.
+    #[must_use]
+    pub fn view(&self) -> ArcDynDbView {
+        self.nodestore.clone()
+    }
+}
+
+#[derive(Clone, Debug)]
 /// A user-visible reconstructed view.
 pub struct ReconstructedView<'db> {
     nodestore: Arc<NodeStore<Reconstructed<FileBacked>, FileBacked>>,
@@ -452,6 +469,42 @@ impl ReconstructedView<'_> {
     #[must_use]
     pub fn view(&self) -> ArcDynDbView {
         self.nodestore.clone()
+    }
+}
+
+impl api::DbView for HistoricalView {
+    type Iter<'view>
+        = MerkleKeyValueIter<'view, NodeStore<Committed, FileBacked>>
+    where
+        Self: 'view;
+
+    fn root_hash(&self) -> Option<api::HashKey> {
+        api::DbView::root_hash(&*self.nodestore)
+    }
+
+    fn val<K: KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
+        api::DbView::val(&*self.nodestore, key)
+    }
+
+    fn single_key_proof<K: KeyType>(&self, key: K) -> Result<FrozenProof, api::Error> {
+        api::DbView::single_key_proof(&*self.nodestore, key)
+    }
+
+    fn range_proof<K: KeyType>(
+        &self,
+        first_key: Option<K>,
+        last_key: Option<K>,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenRangeProof, api::Error> {
+        api::DbView::range_proof(&*self.nodestore, first_key, last_key, limit)
+    }
+
+    fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
+        api::DbView::iter_option(&*self.nodestore, first_key)
+    }
+
+    fn dump_to_string(&self) -> Result<String, api::Error> {
+        api::DbView::dump_to_string(&*self.nodestore)
     }
 }
 
@@ -726,9 +779,11 @@ mod test {
         serial_proposal.commit().unwrap();
 
         let parallel_historical = parallel_db
-            .revision(parallel_db.root_hash().unwrap())
+            .historical_view(parallel_db.root_hash().unwrap())
             .unwrap();
-        let serial_historical = serial_db.revision(serial_db.root_hash().unwrap()).unwrap();
+        let serial_historical = serial_db
+            .historical_view(serial_db.root_hash().unwrap())
+            .unwrap();
 
         let reconstruct_batch = vec![
             BatchOp::Put {
@@ -853,7 +908,7 @@ mod test {
         initial.commit().unwrap();
 
         let historical_hash = db.root_hash().unwrap();
-        let historical = db.revision(historical_hash).unwrap();
+        let historical = db.historical_view(historical_hash).unwrap();
 
         let reconstructed = db
             .reconstruct_from_view(
@@ -891,7 +946,7 @@ mod test {
             .unwrap();
         initial.commit().unwrap();
         let historical_hash = db.root_hash().unwrap();
-        let historical = db.revision(historical_hash).unwrap();
+        let historical = db.historical_view(historical_hash).unwrap();
 
         // Build a reconstructed view on top of the historical revision.
         let original = db
@@ -949,7 +1004,7 @@ mod test {
             .unwrap();
         initial.commit().unwrap();
         let historical_hash = db.root_hash().unwrap();
-        let historical = db.revision(historical_hash).unwrap();
+        let historical = db.historical_view(historical_hash).unwrap();
 
         // Build a reconstructed view on top of the historical revision.
         let original = db
@@ -981,7 +1036,7 @@ mod test {
         initial.commit().unwrap();
 
         let historical_hash = db.root_hash().unwrap();
-        let historical = db.revision(historical_hash).unwrap();
+        let historical = db.historical_view(historical_hash).unwrap();
 
         let original = db
             .reconstruct_from_view(&historical, Vec::<BatchOp<&[u8], &[u8]>>::new())
