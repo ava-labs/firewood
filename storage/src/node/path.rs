@@ -6,10 +6,6 @@
     reason = "Found 8 occurrences after enabling the lint."
 )]
 #![expect(
-    clippy::from_iter_instead_of_collect,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![expect(
     clippy::inline_always,
     reason = "Found 1 occurrences after enabling the lint."
 )]
@@ -128,10 +124,13 @@ impl Path {
     /// Creates a Path from a [Iterator] or other iterator that returns
     /// nibbles
     pub fn from_nibbles_iterator<T: Iterator<Item = u8>>(nibbles_iter: T) -> Self {
-        let nibbles: SmallVec<[u8; 64]> = SmallVec::from_iter(nibbles_iter);
         Self(
-            SmallVec::path_from_unpacked_bytes(&nibbles)
-                .expect("nibbles iterator must yield values in 0..=0x0F"),
+            nibbles_iter
+                .map(|b| {
+                    PathComponent::try_new(b)
+                        .expect("nibbles iterator must yield values in 0..=0x0F")
+                })
+                .collect(),
         )
     }
 
