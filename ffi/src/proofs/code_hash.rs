@@ -48,7 +48,7 @@ fn extract_code_hash(key: &[u8], value: &[u8]) -> Option<Result<HashKey, api::Er
     }
 
     match firewood::account_code_hash(value) {
-        Ok(Some(code_hash)) => Some(Ok(code_hash)),
+        Ok(Some(code_hash)) => Some(Ok(code_hash.into())),
         Ok(None) => None,
         Err(ProofError::InvalidValueFormat) => {
             Some(Err(api::Error::ProofError(ProofError::InvalidValueFormat)))
