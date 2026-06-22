@@ -34,7 +34,6 @@ smallvec.workspace = true
 thiserror.workspace = true
 # Regular dependencies
 bitfield = "0.19.4"
-bitflags = "2.13.0"
 fjall = "=2.11.2" # 3.0.0 has breaking changes
 derive-where = "1.6.1"
 enum-as-inner = "0.7.0"

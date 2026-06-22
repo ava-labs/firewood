@@ -1890,7 +1890,6 @@ dependencies = [
  "aquamarine",
  "arc-swap",
  "bitfield",
- "bitflags 2.13.0",
  "bumpalo",
  "bytemuck",
  "bytemuck_derive",
