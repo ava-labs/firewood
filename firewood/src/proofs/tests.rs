@@ -7,7 +7,8 @@ use integer_encoding::VarInt;
 use test_case::test_case;
 
 use firewood_storage::{
-    Children, IntoHashType, PathComponent, SeededRng, TrieHash, ValueDigest, logger::debug,
+    Children, DenseChildren, IntoHashType, PathComponent, SeededRng, TrieHash, ValueDigest,
+    logger::debug,
 };
 
 use super::{
@@ -482,7 +483,7 @@ fn make_proof_node(
         key,
         partial_len,
         value_digest: value.map(ValueDigest::Value),
-        child_hashes,
+        child_hashes: DenseChildren::from(child_hashes),
     }
 }
 
@@ -783,7 +784,7 @@ fn generate_random_proof_node(rng: &SeededRng) -> ProofNode {
         key,
         partial_len,
         value_digest,
-        child_hashes,
+        child_hashes: DenseChildren::from(child_hashes),
     }
 }
 

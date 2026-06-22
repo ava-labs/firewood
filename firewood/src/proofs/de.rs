@@ -9,7 +9,9 @@
 
 #[cfg(feature = "ethhash")]
 use firewood_storage::HashType;
-use firewood_storage::{Children, PathBuf, TrieHash, TriePathFromUnpackedBytes, ValueDigest};
+use firewood_storage::{
+    Children, DenseChildren, PathBuf, TrieHash, TriePathFromUnpackedBytes, ValueDigest,
+};
 use integer_encoding::VarInt;
 
 use super::{
@@ -190,7 +192,7 @@ impl Version0 for ProofNode {
             key,
             partial_len,
             value_digest,
-            child_hashes,
+            child_hashes: DenseChildren::from(child_hashes),
         })
     }
 }
