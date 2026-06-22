@@ -9,6 +9,7 @@ guidelines for contributing to firewood.
 * [Quick Links](#quick-links)
 * [Testing](#testing)
 * [How to submit changes](#how-to-submit-changes)
+* [Signing your commits](#signing-your-commits)
 * [Code Review Process](#code-review-process)
 * [Labels](#labels)
 * [Where can I ask for help?](#where-can-i-ask-for-help)
@@ -38,6 +39,23 @@ Also, if you update any versions of packages, notably the MSRV (Minimum Supporte
 
 To create a PR, fork firewood, and use GitHub to create the PR. We typically prioritize reviews in the middle of the next work day,
 so you should expect a response during the week within 24 hours.
+
+## Signing your commits
+
+CI rejects PRs that contain unsigned commits, so configure commit signing
+before you open one — GitHub should then show every commit as **Verified**.
+
+The quickest setup is signing with the SSH key you already push with:
+
+    git config --global gpg.format ssh
+    git config --global user.signingkey ~/.ssh/id_ed25519.pub
+    git config --global commit.gpgsign true
+
+Then add that key to GitHub as a **Signing Key** under *Settings → SSH and GPG
+keys*. See GitHub's [signing commits][gh-signing] guide for full details,
+including GPG keys and Windows/macOS setup.
+
+[gh-signing]: https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits
 
 ## Code Review Process
 
