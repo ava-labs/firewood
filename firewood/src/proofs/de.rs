@@ -70,14 +70,30 @@ impl<T: Version0> Version0 for Box<[T]> {
             .read_item::<usize>()
             .map_err(|err| err.set_item("array length"))?;
 
-        if num_items > reader.remainder().len() {
+        let max_items = reader
+            .remainder()
+            .len()
+            .checked_div(T::MIN_BYTES_PER_ITEM)
+            .ok_or_else(|| {
+                reader.invalid_item(
+                    "array length",
+                    "valid minimum bytes per item",
+                    "MIN_BYTES_PER_ITEM is zero",
+                )
+            })?;
+
+        if num_items > max_items {
             return Err(reader.invalid_item(
                 "array length",
-                "length less than or equal to the remaining bytes",
-                format!("{} > {}", num_items, reader.remainder().len()),
+                "length less than or equal to the maximum possible items in remaining bytes",
+                format!(
+                    "{} > ({} / {})",
+                    num_items,
+                    reader.remainder().len(),
+                    T::MIN_BYTES_PER_ITEM
+                ),
             ));
         }
-
         (0..num_items).map(|_| reader.read_v0_item()).collect()
     }
 }
@@ -151,6 +167,8 @@ impl Version0 for FrozenChangeProof {
 }
 
 impl Version0 for BatchOp<Key, Value> {
+    const MIN_BYTES_PER_ITEM: usize = 2;
+
     fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
         match reader
             .read_item::<u8>()
@@ -172,6 +190,8 @@ impl Version0 for BatchOp<Key, Value> {
 }
 
 impl Version0 for ProofNode {
+    const MIN_BYTES_PER_ITEM: usize = 5;
+
     fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
         let key = reader.read_v0_item::<PathBuf>()?;
         let partial_len = reader.read_item()?;
@@ -214,6 +234,8 @@ impl Version0 for PathBuf {
 }
 
 impl Version0 for (Box<[u8]>, Box<[u8]>) {
+    const MIN_BYTES_PER_ITEM: usize = 2;
+
     fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
         Ok((reader.read_item()?, reader.read_item()?))
     }

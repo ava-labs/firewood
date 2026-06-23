@@ -134,21 +134,7 @@ fn test_invalid_header(
     0; // found len
     "no varint after header"
 )]
-#[test_case(
-    |proof, data| {
-        #[expect(clippy::arithmetic_side_effects)]
-        data.truncate(
-            32
-            + proof.start_proof().len().required_space()
-            + proof.start_proof()[0].key.len().required_space()
-            // truncate after the key length varint but before the key bytes
-        );
-    },
-    "byte slice",
-    1, // expected len
-    0; // found len
-    "truncated node key"
-)]
+
 fn test_incomplete_item(
     mutator: impl FnOnce(&FrozenRangeProof, &mut Vec<u8>),
     item: &'static str,
@@ -213,6 +199,20 @@ fn test_incomplete_item(
     "no data after the proof",
     "100 bytes";
     "extra trailing bytes"
+)]
+#[test_case(
+    |proof, data| {
+        #[expect(clippy::arithmetic_side_effects)]
+        data.truncate(
+            32
+            + proof.start_proof().len().required_space()
+            + proof.start_proof()[0].key.len().required_space()
+        );
+    },
+    "array length",
+    "length less than or equal to the maximum possible items in remaining bytes",
+    "2 > (1 / 5)";
+    "truncated node key"
 )]
 fn test_invalid_item(
     mutator: impl FnOnce(&FrozenRangeProof, &mut Vec<u8>),
@@ -740,18 +740,21 @@ fn test_change_proof_incomplete_batch_op_discriminant() {
     let (_, mut data) = create_valid_change_proof();
     data.truncate(35); // cut before the first BatchOp discriminant byte
     match FrozenChangeProof::from_slice(&data) {
-        Err(ReadError::IncompleteItem {
+        Err(ReadError::InvalidItem {
             item,
             expected,
             found,
             ..
         }) => {
-            assert_eq!(item, "option discriminant");
-            assert_eq!(expected, 1);
-            assert_eq!(found, 0);
+            assert_eq!(item, "array length");
+            assert_eq!(
+                expected,
+                "length less than or equal to the maximum possible items in remaining bytes"
+            );
+            assert_eq!(found, "3 > (0 / 2)");
         }
         other => {
-            panic!("Expected IncompleteItem {{ item: \"option discriminant\" }}, got: {other:?}")
+            panic!("Expected InvalidItem {{ item: \"array length\" }}, got: {other:?}")
         }
     }
 }
@@ -943,10 +946,13 @@ fn test_dos_array_length_bounds() {
             ..
         }) => {
             assert_eq!(item, "array length");
-            assert_eq!(expected, "length less than or equal to the remaining bytes");
+            assert_eq!(
+                expected,
+                "length less than or equal to the maximum possible items in remaining bytes"
+            );
             assert_eq!(
                 found,
-                format!("{} > {}", malicious_num_items, remainder_len)
+                format!("{} > ({} / 5)", malicious_num_items, remainder_len)
             );
         }
         other => panic!("Expected ReadError::InvalidItem for DoS vector, got: {other:?}"),
@@ -963,6 +969,8 @@ mod box_array_deserialization_tests {
     struct Hash32([u8; 32]);
 
     impl Version0 for Hash32 {
+        const MIN_BYTES_PER_ITEM: usize = 32;
+
         fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
             let chunk = reader.read_chunk::<32>()?;
             Ok(Hash32(*chunk))
@@ -1047,22 +1055,22 @@ mod box_array_deserialization_tests {
 
     #[test]
     fn boundary_exact_fit_passes() {
-        // 50 items, 50 bytes → 50 > 50 is FALSE → PASS
+        // 10 items, 50 bytes → 10 > 50 / 5 is FALSE → PASS
         // T = u8 so num_items directly equals bytes needed
         let mut data = Vec::new();
-        data.extend_from_slice(&50usize.encode_var_vec());
+        data.extend_from_slice(&10usize.encode_var_vec());
         data.extend_from_slice(&[0u8; 50]);
         let mut reader = v0_reader(&data);
         let result: Result<Box<[u8]>, _> = reader.read_v0_item();
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().len(), 50);
+        assert_eq!(result.unwrap().len(), 10);
     }
 
     #[test]
     fn boundary_one_over_fails() {
-        // 51 items, 50 bytes → 51 > 50 is TRUE → FAIL
-        // T = u8 so num_items directly equals bytes needed
+        // 51 items, 50 bytes → 51 > 50 / 1 is TRUE → FAIL
+        // T = u8 so MIN_BYTES_PER_ITEM = 1
         let mut data = Vec::new();
         data.extend_from_slice(&51usize.encode_var_vec());
         data.extend_from_slice(&[0u8; 50]);
