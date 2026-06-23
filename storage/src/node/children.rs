@@ -580,7 +580,7 @@ impl<T: Clone> Clone for DenseChildren<T> {
             // SAFETY: `src.add(i)` and `dst.add(i)` are both within their respective
             // allocations (0 ≤ i < count); `src` elements are initialised; each `write`
             // to `dst` initialises a previously uninitialised slot.
-            unsafe { dst.add(i).write((*src.add(i)).clone()) }
+            unsafe { dst.add(i).write((*src.add(i)).clone()) };
             // `i < count <= 16`; `wrapping_add` never wraps.
             guard.initialized = i.wrapping_add(1);
         }
@@ -803,7 +803,6 @@ impl<T: Clone> From<&DenseChildren<T>> for Children<Option<T>> {
 #[cfg(test)]
 mod dense_tests {
     use super::*;
-    use std::mem::size_of;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
