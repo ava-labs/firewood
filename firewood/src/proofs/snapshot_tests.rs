@@ -60,9 +60,7 @@
 
 #![expect(clippy::unwrap_used, clippy::indexing_slicing)]
 
-use firewood_storage::{
-    Children, DenseChildren, IntoHashType, PathComponent, TrieHash, ValueDigest,
-};
+use firewood_storage::{Children, IntoHashType, PathComponent, TrieHash, ValueDigest};
 
 use super::types::{Proof, ProofNode};
 use crate::api::{FrozenChangeProof, FrozenRangeProof};
@@ -109,7 +107,7 @@ fn make_node(
         key,
         partial_len,
         value_digest: value.map(ValueDigest::Value),
-        child_hashes: DenseChildren::from(child_hashes),
+        child_hashes,
     }
 }
 
