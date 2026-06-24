@@ -31,6 +31,13 @@ snapshot-nodes:
     INSTA_UPDATE=always cargo nextest run -p firewood-storage --features logger         -E 'test(~snapshot_tests)'
     INSTA_UPDATE=always cargo nextest run -p firewood-storage --features ethhash,logger -E 'test(~snapshot_tests)'
 
+# Regenerate all snapshots across the workspace for both hash modes.
+#
+# Alias for running snapshot-proof-nodes followed by snapshot-nodes. Use this
+# after a change that affects multiple snapshot suites simultaneously (e.g. a
+# shared encoding primitive or a proof format change that ripples into storage).
+snapshot-all: snapshot-proof-nodes snapshot-nodes
+
 # Build ffi with nix
 build-ffi-nix: check-nix
     cd ffi && nix build
