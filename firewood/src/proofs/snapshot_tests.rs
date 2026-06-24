@@ -30,6 +30,12 @@
 //! `ethhash` is compiled only with it. Tests without children (`empty`,
 //! `leaf_with_value`, `partial_path`) produce identical bytes under both
 //! hash modes and share a single snapshot file.
+//!
+//! The `ethhash` module has no `large_value_becomes_hash` variant: child
+//! hashes in `ethhash` mode already carry a 1-byte discriminant prefix, so
+//! `single_child` and `all_children` already cover the complete child
+//! encoding format. The large-value → hash behaviour is format-agnostic and
+//! is fully covered by the `merkledb` variant.
 
 #![expect(clippy::unwrap_used, clippy::indexing_slicing)]
 

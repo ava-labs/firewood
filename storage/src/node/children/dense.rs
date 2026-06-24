@@ -1,7 +1,12 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "DenseChildren<T> requires a custom #[repr(C)] heap layout with raw pointer \
+              arithmetic; the Inner<T> trailing-array pattern cannot be expressed with safe \
+              abstractions"
+)]
 
 use crate::PathComponent;
 use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
@@ -21,6 +26,11 @@ use super::Children;
 #[repr(C)]
 struct Inner<T> {
     bitmap: NonZeroU16,
+    /// Base address of the element array that follows this header in the heap block.
+    ///
+    /// The zero-sized `[T; 0]` field ensures the compiler places this address at the
+    /// correct alignment for `T` (inserted by `Layout::extend`). Use
+    /// `&raw mut (*ptr).data` (RFC 2582) to derive the canonical element-array pointer.
     data: [T; 0],
 }
 
@@ -87,7 +97,7 @@ impl<T> DenseChildren<T> {
     #[must_use]
     pub fn get(&self, index: PathComponent) -> Option<&T> {
         let ptr = self.0?;
-        let bit = 1u16 << index.as_u8();
+        let bit = 1u16.wrapping_shl(u32::from(index.as_u8()));
         // SAFETY: `ptr` is a valid `NonNull<Inner<T>>` per the `DenseChildren` invariant.
         let bm = unsafe { ptr.as_ref().bitmap.get() };
         if bm & bit == 0 {
@@ -167,9 +177,15 @@ impl<'a, T> Iterator for DenseChildrenIter<'a, T> {
         self.data = next;
         Some((pc, item))
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let n = self.remaining.count_ones() as usize;
+        (n, Some(n))
+    }
 }
 
 impl<T> std::iter::FusedIterator for DenseChildrenIter<'_, T> {}
+impl<T> ExactSizeIterator for DenseChildrenIter<'_, T> {}
 
 /// Iterator over all 16 slots yielded as `(PathComponent, Option<&T>)`.
 ///
@@ -203,7 +219,7 @@ impl<'a, T> Iterator for DenseChildrenAllIter<'a, T> {
         // present or absent — before the `data` pointer is conditionally advanced.
         // This keeps `data` aligned with the next present element at all times.
         let has_child = self.remaining & 1 != 0;
-        self.remaining >>= 1;
+        self.remaining = self.remaining.wrapping_shr(1);
         #[expect(clippy::indexing_slicing)]
         let pc = PathComponent::ALL[self.slot as usize];
         // `slot` is < 16 here (checked above), so `wrapping_add` never wraps.
@@ -220,9 +236,15 @@ impl<'a, T> Iterator for DenseChildrenAllIter<'a, T> {
             Some((pc, None))
         }
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let n = usize::from(16u8.saturating_sub(self.slot));
+        (n, Some(n))
+    }
 }
 
 impl<T> std::iter::FusedIterator for DenseChildrenAllIter<'_, T> {}
+impl<T> ExactSizeIterator for DenseChildrenAllIter<'_, T> {}
 
 impl<'a, T> IntoIterator for &'a DenseChildren<T> {
     type Item = (PathComponent, Option<&'a T>);
@@ -411,7 +433,7 @@ impl<T> From<Children<Option<T>>> for DenseChildren<T> {
         let mut scratch: Vec<T> = Vec::with_capacity(16);
         for (pc, opt) in src {
             if let Some(v) = opt {
-                bitmap |= 1u16 << pc.as_u8();
+                bitmap |= 1u16.wrapping_shl(u32::from(pc.as_u8()));
                 scratch.push(v);
             }
         }
@@ -459,6 +481,9 @@ impl<T> From<DenseChildren<T>> for Children<Option<T>> {
             let dp = unsafe { data_ptr(ptr) };
             let mut remaining = bm;
             let mut rank = 0usize;
+            // Elements are stored in ascending slot-index order (established by all
+            // construction paths); trailing_zeros iterates low-to-high, so rank maps
+            // correctly to the dense element at that position.
             while remaining != 0 {
                 let idx = remaining.trailing_zeros() as usize;
                 // `remaining` is non-zero here, so `wrapping_sub` never wraps.
@@ -491,7 +516,7 @@ impl<T: Clone> From<&Children<Option<T>>> for DenseChildren<T> {
         let mut scratch: Vec<T> = Vec::with_capacity(16);
         for (pc, opt) in src {
             if let Some(v) = opt {
-                bitmap |= 1u16 << pc.as_u8();
+                bitmap |= 1u16.wrapping_shl(u32::from(pc.as_u8()));
                 scratch.push(v.clone());
             }
         }

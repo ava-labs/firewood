@@ -181,6 +181,11 @@ pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
 /// node is itself the storage root and is re-encoded directly.
 #[must_use]
 pub fn account_storage_root_rlp(account_node: &ProofNode) -> Option<Box<[u8]>> {
+    // Zero-child and single-child shapes are handled by the caller
+    // (`proof_node_to_mpt_rlp`): no children → empty-trie storage root;
+    // one child → the lone child node is itself the storage root and is
+    // re-encoded directly. Only the multi-child case needs the branch
+    // encoding produced here.
     if account_node.child_hashes.count() < 2 {
         return None;
     }

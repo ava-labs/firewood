@@ -23,7 +23,6 @@
       "clippy.toml",
       "**/tests/compile_*/**",
       "**/go.mod",
-      "**/go.mod",
       "**/cbindgen.toml",
       "**/*.snap",
     ],
