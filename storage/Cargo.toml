@@ -55,7 +55,7 @@ arc-swap = "1.9.1"
 cfg-if = "1.0.4"
 # Workspace dependencies
 criterion = { workspace = true, features = ["html_reports"] }
-insta = "1.48.0"
+insta.workspace = true
 metrics-util.workspace = true
 pprof = { workspace = true, features = ["flamegraph"] }
 rand.workspace = true
