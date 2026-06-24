@@ -89,7 +89,9 @@ overhead is 2 bytes. `size_of::<Option<TrieHash>>() = 33` (no niche), so
 #### With `ethhash` (`HashType = HashOrRlp`)
 
 `HashOrRlp` is an enum of `TrieHash` (`[u8; 32]`) and `SmallVec<[u8; 32]>`.
-`align_of::<HashOrRlp>() = 8` (from the `usize` fields inside `SmallVec`), so
+`align_of::<HashOrRlp>() = 8` (the `Hash` variant is `[u8; 32]` with `align_of 1`, but the
+`Rlp` variant's `SmallVec<[u8; 32]>` stores a `(ptr, len, cap)` triple internally; the
+pointer field drives the alignment to `8` on 64-bit platforms), so
 `size_of::<Inner<HashOrRlp>>() = 8` (2-byte bitmap + 6 bytes of alignment padding);
 per-allocation overhead is 8 bytes. `Option<HashOrRlp>` has the same size as `HashOrRlp`
 itself (48 bytes, niche present), so `size_of::<Children<Option<HashOrRlp>>>() = 768`.

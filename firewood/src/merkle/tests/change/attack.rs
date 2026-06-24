@@ -765,7 +765,7 @@ fn gap_boundaries() -> ([u8; 32], [u8; 32]) {
 
 /// Helper for the common adversarial pattern: generate a valid bounded proof
 /// for the 5-key setup, inject a spurious operation, and assert rejection.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "test helper that mirrors every field of the adversarial injection scenario")]
 fn inject_and_assert_rejected(
     db: &Db,
     root1: api::HashKey,
