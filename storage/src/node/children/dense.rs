@@ -1,6 +1,8 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![expect(unsafe_code)]
+
 use crate::PathComponent;
 use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
 use std::hash::{Hash, Hasher};
@@ -52,7 +54,6 @@ fn alloc_layout<T>(count: usize) -> Layout {
 /// allocation produced by `alloc_layout::<T>(count)` with `Inner.bitmap`
 /// already initialised.
 unsafe fn data_ptr<T>(inner: NonNull<Inner<T>>) -> *mut T {
-    #![expect(unsafe_code)]
     // SAFETY: `inner` is valid per the function precondition; `#[repr(C)]` on
     // `Inner<T>` guarantees that `data` is at the correct offset, so taking
     // `&raw mut` of the field and casting to `*mut T` gives the data base address.
@@ -71,12 +72,9 @@ impl<T> DenseChildren<T> {
     #[must_use]
     pub const fn bitmap(&self) -> u16 {
         let Some(ptr) = self.0 else { return 0 };
-        #[expect(unsafe_code)]
         // SAFETY: `ptr` is a valid `NonNull<Inner<T>>` per the `DenseChildren`
         // invariant (`Some` ↔ a valid allocation with an initialised header).
-        unsafe {
-            ptr.as_ref().bitmap.get()
-        }
+        unsafe { ptr.as_ref().bitmap.get() }
     }
 
     /// Returns the number of present children.
@@ -90,7 +88,6 @@ impl<T> DenseChildren<T> {
     pub fn get(&self, index: PathComponent) -> Option<&T> {
         let ptr = self.0?;
         let bit = 1u16 << index.as_u8();
-        #[expect(unsafe_code)]
         // SAFETY: `ptr` is a valid `NonNull<Inner<T>>` per the `DenseChildren` invariant.
         let bm = unsafe { ptr.as_ref().bitmap.get() };
         if bm & bit == 0 {
@@ -100,7 +97,6 @@ impl<T> DenseChildren<T> {
         // the element at `index`. It is strictly less than `bm.count_ones()`.
         // `bit` is always ≥ 1 (it is a power of two) so `wrapping_sub` never wraps.
         let rank = (bm & bit.wrapping_sub(1)).count_ones() as usize;
-        #[expect(unsafe_code)]
         // SAFETY: `data_ptr(ptr)` is valid per the invariant; `rank` < `count` so
         // `.add(rank)` is within the allocation and the element is initialised.
         Some(unsafe { &*data_ptr(ptr).add(rank) })
@@ -116,7 +112,6 @@ impl<T> DenseChildren<T> {
                 _marker: PhantomData,
             };
         };
-        #[expect(unsafe_code)]
         DenseChildrenIter {
             // SAFETY: `ptr` is valid per the `DenseChildren` invariant.
             remaining: unsafe { ptr.as_ref().bitmap.get() },
@@ -163,7 +158,6 @@ impl<'a, T> Iterator for DenseChildrenIter<'a, T> {
         let pc = PathComponent::ALL[self.remaining.trailing_zeros() as usize];
         // `remaining` is non-zero here (checked above), so `wrapping_sub` never wraps.
         self.remaining &= self.remaining.wrapping_sub(1);
-        #[expect(unsafe_code)]
         // SAFETY: `data` points to the next unread element within the `DenseChildren`
         // allocation. `remaining` was initialised from the bitmap and cleared one bit
         // per call, so `data` is always in bounds and the element is initialised.
@@ -215,7 +209,6 @@ impl<'a, T> Iterator for DenseChildrenAllIter<'a, T> {
         // `slot` is < 16 here (checked above), so `wrapping_add` never wraps.
         self.slot = self.slot.wrapping_add(1);
         if has_child {
-            #[expect(unsafe_code)]
             // SAFETY: `data` points to the next present element in the allocation.
             // `has_child` is true iff the bitmap bit for this slot was set, so the
             // element exists and is initialised. `data.add(1)` is within bounds
@@ -244,7 +237,6 @@ impl<'a, T> IntoIterator for &'a DenseChildren<T> {
                 _marker: PhantomData,
             };
         };
-        #[expect(unsafe_code)]
         DenseChildrenAllIter {
             // SAFETY: `ptr` is a valid `NonNull<Inner<T>>` per the invariant.
             remaining: unsafe { ptr.as_ref().bitmap.get() },
@@ -258,7 +250,6 @@ impl<'a, T> IntoIterator for &'a DenseChildren<T> {
 
 impl<T> Drop for DenseChildren<T> {
     fn drop(&mut self) {
-        #![expect(unsafe_code)]
         let Some(ptr) = self.0 else { return };
         // Read count before any destructor runs; bitmap is not accessed after.
         // SAFETY: `ptr` is a valid `NonNull<Inner<T>>` per the `DenseChildren`
@@ -279,7 +270,6 @@ impl<T> Drop for DenseChildren<T> {
 
 impl<T: Clone> Clone for DenseChildren<T> {
     fn clone(&self) -> Self {
-        #![expect(unsafe_code)]
         let Some(ptr) = self.0 else {
             return Self::new();
         };
@@ -310,7 +300,6 @@ impl<T: Clone> Clone for DenseChildren<T> {
             initialized: usize,
             capacity: usize,
         }
-        #[expect(unsafe_code)]
         impl<T> Drop for CloneGuard<T> {
             fn drop(&mut self) {
                 // SAFETY: `self.ptr` is a valid allocation from `alloc_layout::<T>(self.capacity)`;
@@ -352,14 +341,12 @@ impl<T: PartialEq> PartialEq for DenseChildren<T> {
         if count == 0 {
             return true;
         }
-        #[expect(unsafe_code)]
         // SAFETY: `self.0` is `Some` because `count > 0` (bitmap is non-zero);
         // `data_ptr` returns the base of `count` initialised elements.
         let a = unsafe {
             let ptr = self.0.unwrap_unchecked();
             slice::from_raw_parts(data_ptr(ptr).cast_const(), count)
         };
-        #[expect(unsafe_code)]
         // SAFETY: `other.0` is `Some` (count > 0, bitmaps equal); same reasoning.
         let b = unsafe {
             let ptr = other.0.unwrap_unchecked();
@@ -378,7 +365,6 @@ impl<T: Hash> Hash for DenseChildren<T> {
         if count == 0 {
             return;
         }
-        #[expect(unsafe_code)]
         // SAFETY: `self.0` is `Some` because `count > 0` (bitmap is non-zero);
         // `data_ptr` returns the base of `count` initialised elements.
         let slice = unsafe {
@@ -403,12 +389,10 @@ impl<T> Default for DenseChildren<T> {
     }
 }
 
-#[expect(unsafe_code)]
 // SAFETY: `DenseChildren<T>` has exclusive ownership of its heap allocation.
 // It is safe to send across threads when `T: Send`.
 unsafe impl<T: Send> Send for DenseChildren<T> {}
 
-#[expect(unsafe_code)]
 // SAFETY: `&DenseChildren<T>` only yields `&T` references; no interior mutability.
 // It is safe to share across threads when `T: Sync`.
 unsafe impl<T: Sync> Sync for DenseChildren<T> {}
@@ -423,8 +407,6 @@ impl<T: std::panic::RefUnwindSafe> std::panic::RefUnwindSafe for DenseChildren<T
 /// `Some` value into a densely packed heap allocation. `None` slots are discarded.
 impl<T> From<Children<Option<T>>> for DenseChildren<T> {
     fn from(src: Children<Option<T>>) -> Self {
-        #![expect(unsafe_code)]
-
         let mut bitmap = 0u16;
         let mut scratch: Vec<T> = Vec::with_capacity(16);
         for (pc, opt) in src {
@@ -464,8 +446,6 @@ impl<T> From<Children<Option<T>>> for DenseChildren<T> {
 /// element out of the heap block without requiring `T: Clone`.
 impl<T> From<DenseChildren<T>> for Children<Option<T>> {
     fn from(src: DenseChildren<T>) -> Self {
-        #![expect(unsafe_code)]
-
         let mut out = Children::new();
         // `ManuallyDrop` prevents `DenseChildren::drop` from running so we can
         // move elements out and then manually free the allocation.
@@ -507,8 +487,6 @@ impl<T> From<DenseChildren<T>> for Children<Option<T>> {
 /// present element into a densely packed heap allocation.
 impl<T: Clone> From<&Children<Option<T>>> for DenseChildren<T> {
     fn from(src: &Children<Option<T>>) -> Self {
-        #![expect(unsafe_code)]
-
         let mut bitmap = 0u16;
         let mut scratch: Vec<T> = Vec::with_capacity(16);
         for (pc, opt) in src {
