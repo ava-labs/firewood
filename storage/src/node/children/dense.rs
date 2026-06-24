@@ -429,18 +429,17 @@ impl<T: std::panic::RefUnwindSafe> std::panic::RefUnwindSafe for DenseChildren<T
 /// `Some` value into a densely packed heap allocation. `None` slots are discarded.
 impl<T> From<Children<Option<T>>> for DenseChildren<T> {
     fn from(src: Children<Option<T>>) -> Self {
+        // Pass 1 (by reference): compute the bitmap without consuming `src`.
         let mut bitmap = 0u16;
-        let mut scratch: Vec<T> = Vec::with_capacity(16);
-        for (pc, opt) in src {
-            if let Some(v) = opt {
+        for (pc, opt) in &src {
+            if opt.is_some() {
                 bitmap |= 1u16.wrapping_shl(u32::from(pc.as_u8()));
-                scratch.push(v);
             }
         }
         let Some(bm) = NonZeroU16::new(bitmap) else {
             return Self::new();
         };
-        let count = scratch.len();
+        let count = bm.get().count_ones() as usize;
         let layout = alloc_layout::<T>(count);
         // SAFETY: `alloc` returns a valid pointer or null; null is handled below.
         let Some(raw) = NonNull::new(unsafe { alloc(layout) }) else {
@@ -455,10 +454,15 @@ impl<T> From<Children<Option<T>>> for DenseChildren<T> {
         // SAFETY: `inner` is valid; `data_ptr` returns the base of the element array
         // within the allocation, which holds space for exactly `count` elements.
         let dp = unsafe { data_ptr(inner) };
-        for (i, v) in scratch.into_iter().enumerate() {
-            // SAFETY: `dp.add(i)` is within the allocation (0 ≤ i < count);
-            // each `write` initialises a previously uninitialised slot.
-            unsafe { dp.add(i).write(v) }
+        // Pass 2 (by value): move each `Some` element directly into the allocation.
+        let mut rank = 0usize;
+        for (_pc, opt) in src {
+            if let Some(v) = opt {
+                // SAFETY: `dp.add(rank)` is within the allocation (0 ≤ rank < count);
+                // each `write` initialises a previously uninitialised slot.
+                unsafe { dp.add(rank).write(v) }
+                rank = rank.wrapping_add(1);
+            }
         }
         Self(Some(inner), PhantomData)
     }
