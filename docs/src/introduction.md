@@ -19,5 +19,6 @@ This site is the front door to Firewood's documentation:
 - **Operations & Benchmarking** covers the `fwdctl` CLI and performance dashboards.
 - **Reference** links to the generated Rust and Go API documentation.
 
+> [!WARNING]
 > Firewood is beta-level software. Its API is still evolving and stability is not
 > yet guaranteed.

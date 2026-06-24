@@ -132,7 +132,8 @@ output into a subdirectory.
 ```text
 docs/
 ├── book.toml                  # mdBook config + mermaid preprocessor + linkcheck backend
-├── theme/                     # custom head includes (mermaid assets are installed at build time, git-ignored)
+├── mermaid.min.js             # generated at build time; git-ignored
+├── mermaid-init.js            # generated at build time; git-ignored
 └── src/
     ├── SUMMARY.md             # table of contents / sidebar (includes external link-outs)
     ├── assets/                # architecture.svg, relocated from docs/assets/ (see note below)
@@ -652,7 +653,8 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
       work: tooling, layout, build/serve, authoring, design workflow) and thin
       repository-function pages (`release.md` plus link-out pointers to CONTRIBUTING /
       CODE_REVIEW); the process-doc link-outs are in `meta/`, not `reference/`.
-- [ ] `justfile` gains `book-assets`, `book-serve`, `book-build`, and `new-design`.
+- [x] `justfile` gains `book-assets`, `book-serve`, and `book-build` (PR 1 — foundation).
+- [ ] `justfile` gains a `new-design` recipe (PR 3 — content).
 - [ ] Mermaid assets are installed at build time (not committed): CI and the
       `book-assets` recipe run `mdbook-mermaid install docs`, the generated asset paths
       are git-ignored, and a fresh checkout builds without a manual install step.

@@ -1,3 +1,5 @@
+# Requires mdBook >= 0.5 (native alert syntax) and mdbook-linkcheck2 (any version).
+# Tool versions are pinned in the CI workflow added by the GitHub Pages PR.
 [book]
 title = "Firewood"
 authors = ["Ava Labs"]
