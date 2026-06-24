@@ -536,6 +536,9 @@ impl std::fmt::Display for DisplayTruncatedHex<'_> {
 }
 
 #[cfg(test)]
+mod snapshot_tests;
+
+#[cfg(test)]
 mod test {
     #![expect(clippy::unwrap_used)]
 

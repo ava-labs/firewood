@@ -1904,6 +1904,7 @@ dependencies = [
  "git-version",
  "hex",
  "indicatif",
+ "insta",
  "integer-encoding",
  "io-uring",
  "log",
