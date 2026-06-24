@@ -2,12 +2,14 @@
 default:
     ./scripts/run-just.sh --list
 
-# Regenerate proof-node wire serialization snapshots for both hash modes.
+# Regenerate proof wire serialization snapshots for both hash modes.
 #
-# Run this after any intentional change to the ProofNode binary format (ser.rs,
-# de.rs, childmask, or header). The recipe writes snapshots for the MerkleDB
-# (SHA-256) mode first, then for the Ethereum (Keccak-256, ethhash) mode.
-# Existing snapshots are overwritten when their content changes.
+# Run this after any intentional change to the proof binary format (ser.rs,
+# de.rs, childmask, or header). Covers ProofNode encoding, the 32-byte proof
+# header, key-value pair encoding, and BatchOp encoding. The recipe writes
+# snapshots for the MerkleDB (SHA-256) mode first, then for the Ethereum
+# (Keccak-256, ethhash) mode. Existing snapshots are overwritten when their
+# content changes.
 #
 # After running, review the diffs in src/proofs/snapshots/ and commit them
 # alongside the format change.

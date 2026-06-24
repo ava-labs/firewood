@@ -36,6 +36,27 @@
 //! `single_child` and `all_children` already cover the complete child
 //! encoding format. The large-value → hash behaviour is format-agnostic and
 //! is fully covered by the `merkledb` variant.
+//!
+//! ## Additional coverage
+//!
+//! The following tests lock down wire-format sections beyond individual node encoding.
+//! The payload snapshots (everything after the 32-byte header) are feature-independent
+//! for key-values and batch ops; the header snapshots are cfg-gated because the
+//! `hash_mode` byte differs between SHA-256 and Keccak-256 modes.
+//!
+//! | Test | Subject |
+//! |------|---------|
+//! | `header::merkledb::range` | 32-byte header, SHA-256 mode, range proof type |
+//! | `header::merkledb::change` | 32-byte header, SHA-256 mode, change proof type |
+//! | `header::ethhash::range` | 32-byte header, Keccak-256 mode, range proof type |
+//! | `header::ethhash::change` | 32-byte header, Keccak-256 mode, change proof type |
+//! | `key_values::empty` | Empty KV sequence: `varint(0)` |
+//! | `key_values::single_pair` | One `(key, value)` pair |
+//! | `key_values::multiple_pairs` | Two `(key, value)` pairs |
+//! | `batch_ops::put` | Single `Put` operation (opcode `0x00`) |
+//! | `batch_ops::delete` | Single `Delete` operation (opcode `0x01`) |
+//! | `batch_ops::delete_range` | Single `DeleteRange` operation (opcode `0x02`) |
+//! | `batch_ops::all_ops` | All three operations in sequence |
 
 #![expect(clippy::unwrap_used, clippy::indexing_slicing)]
 
@@ -44,7 +65,9 @@ use firewood_storage::{
 };
 
 use super::types::{Proof, ProofNode};
-use crate::api::FrozenRangeProof;
+use crate::api::{FrozenChangeProof, FrozenRangeProof};
+use crate::db::BatchOp;
+use crate::merkle::{Key, Value};
 
 /// Serializes `node` inside a minimal [`FrozenRangeProof`] and returns the bytes
 /// after the fixed 32-byte proof header.
@@ -173,5 +196,181 @@ mod ethhash {
         let all: Vec<u8> = (0u8..16).collect();
         let node = make_node(&[0], 0, None, &all);
         insta::assert_snapshot!(hex::encode(node_bytes(&node)));
+    }
+}
+
+/// Serializes a [`FrozenRangeProof`] with empty node lists and the given key-value
+/// pairs. Returns all bytes including the 32-byte proof header.
+fn range_proof_bytes(kvs: &[(&[u8], &[u8])]) -> Vec<u8> {
+    let kv_pairs: Box<[(Key, Value)]> = kvs
+        .iter()
+        .map(|(k, v)| (Box::from(*k), Box::from(*v)))
+        .collect();
+    let proof = FrozenRangeProof::new(
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        kv_pairs,
+    );
+    let mut out = Vec::new();
+    proof.write_to_vec(&mut out);
+    out
+}
+
+/// Serializes a [`FrozenChangeProof`] with empty node lists and the given batch
+/// operations. Returns all bytes including the 32-byte proof header.
+fn change_proof_bytes(ops: Box<[BatchOp<Key, Value>]>) -> Vec<u8> {
+    let proof = FrozenChangeProof::new(
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        ops,
+    );
+    let mut out = Vec::new();
+    proof.write_to_vec(&mut out);
+    out
+}
+
+/// Header encoding tests — snapshots the full 32-byte proof header.
+///
+/// The `hash_mode` byte is `0x00` for SHA-256 (merkledb) and `0x01` for
+/// Keccak-256 (ethhash), so the header bytes differ between feature modes.
+/// Tests are nested inside cfg-gated submodules following the same convention
+/// as the node tests above.
+mod header {
+    use super::*;
+
+    fn range_header() -> Vec<u8> {
+        range_proof_bytes(&[])[..32].to_vec()
+    }
+
+    fn change_header() -> Vec<u8> {
+        change_proof_bytes(Box::new([]))[..32].to_vec()
+    }
+
+    #[cfg(not(feature = "ethhash"))]
+    mod merkledb {
+        use super::*;
+
+        /// Range proof header: magic `fwdproof`, version `0x00`, `hash_mode` `0x00`
+        /// (SHA-256), branch_factor `0x10`, proof_type `0x01` (range), 20 zero
+        /// reserved bytes.
+        #[test]
+        fn range() {
+            insta::assert_snapshot!(hex::encode(range_header()));
+        }
+
+        /// Change proof header: same as range but proof_type `0x02` (change).
+        #[test]
+        fn change() {
+            insta::assert_snapshot!(hex::encode(change_header()));
+        }
+    }
+
+    #[cfg(feature = "ethhash")]
+    mod ethhash {
+        use super::*;
+
+        /// Range proof header, Keccak-256 mode: `hash_mode` byte is `0x01`
+        /// instead of `0x00`.
+        #[test]
+        fn range() {
+            insta::assert_snapshot!(hex::encode(range_header()));
+        }
+
+        /// Change proof header, Keccak-256 mode.
+        #[test]
+        fn change() {
+            insta::assert_snapshot!(hex::encode(change_header()));
+        }
+    }
+}
+
+/// Key-value pair encoding tests — snapshots `bytes[32..]` of a [`FrozenRangeProof`]
+/// with empty node lists. Key-value encoding uses raw byte slices and is identical
+/// under both hash modes; no cfg-gating is needed.
+///
+/// The payload begins with `varint(0)` twice (empty start- and end-proof counts),
+/// then `varint(N)` followed by N length-prefixed `(key, value)` pairs.
+mod key_values {
+    use super::*;
+
+    /// No key-value pairs: the KV sequence is encoded as a single `varint(0)`.
+    #[test]
+    fn empty() {
+        insta::assert_snapshot!(hex::encode(&range_proof_bytes(&[])[32..]));
+    }
+
+    /// Single pair `b"key1"` → `b"value1"`.
+    #[test]
+    fn single_pair() {
+        insta::assert_snapshot!(hex::encode(
+            &range_proof_bytes(&[(b"key1", b"value1")])[32..]
+        ));
+    }
+
+    /// Two pairs in sequence: `b"key1"`→`b"val1"`, `b"key2"`→`b"val2"`.
+    #[test]
+    fn multiple_pairs() {
+        insta::assert_snapshot!(hex::encode(
+            &range_proof_bytes(&[(b"key1", b"val1"), (b"key2", b"val2")])[32..]
+        ));
+    }
+}
+
+/// Batch operation encoding tests — snapshots `bytes[32..]` of a
+/// [`FrozenChangeProof`] with empty node lists. Batch ops use fixed opcodes
+/// and raw byte slices; encoding is identical under both hash modes.
+///
+/// The payload begins with `varint(0)` twice (empty start- and end-proof counts),
+/// then `varint(N)` followed by N operations. Each operation starts with a 1-byte
+/// opcode: `0x00` = `Put`, `0x01` = `Delete`, `0x02` = `DeleteRange`.
+mod batch_ops {
+    use super::*;
+
+    /// Single `Put` operation: opcode `0x00`, key length-prefixed, then value
+    /// length-prefixed.
+    #[test]
+    fn put() {
+        let ops = Box::new([BatchOp::Put {
+            key: Box::from(b"key1".as_slice()),
+            value: Box::from(b"val1".as_slice()),
+        }]);
+        insta::assert_snapshot!(hex::encode(&change_proof_bytes(ops)[32..]));
+    }
+
+    /// Single `Delete` operation: opcode `0x01`, then key length-prefixed.
+    #[test]
+    fn delete() {
+        let ops = Box::new([BatchOp::Delete {
+            key: Box::from(b"key2".as_slice()),
+        }]);
+        insta::assert_snapshot!(hex::encode(&change_proof_bytes(ops)[32..]));
+    }
+
+    /// Single `DeleteRange` operation: opcode `0x02`, then prefix length-prefixed.
+    #[test]
+    fn delete_range() {
+        let ops = Box::new([BatchOp::DeleteRange {
+            prefix: Box::from(b"key3".as_slice()),
+        }]);
+        insta::assert_snapshot!(hex::encode(&change_proof_bytes(ops)[32..]));
+    }
+
+    /// All three operations in sequence. Matches the proof constructed by
+    /// `create_valid_change_proof()` in `tests.rs`.
+    #[test]
+    fn all_ops() {
+        let ops = Box::new([
+            BatchOp::Put {
+                key: Box::from(b"key1".as_slice()),
+                value: Box::from(b"val1".as_slice()),
+            },
+            BatchOp::Delete {
+                key: Box::from(b"key2".as_slice()),
+            },
+            BatchOp::DeleteRange {
+                prefix: Box::from(b"key3".as_slice()),
+            },
+        ]);
+        insta::assert_snapshot!(hex::encode(&change_proof_bytes(ops)[32..]));
     }
 }
