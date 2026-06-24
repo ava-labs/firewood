@@ -249,14 +249,14 @@ mod header {
         use super::*;
 
         /// Range proof header: magic `fwdproof`, version `0x00`, `hash_mode` `0x00`
-        /// (SHA-256), branch_factor `0x10`, proof_type `0x01` (range), 20 zero
+        /// (SHA-256), `branch_factor` `0x10`, `proof_type` `0x01` (range), 20 zero
         /// reserved bytes.
         #[test]
         fn range() {
             insta::assert_snapshot!(hex::encode(range_header()));
         }
 
-        /// Change proof header: same as range but proof_type `0x02` (change).
+        /// Change proof header: same as range but `proof_type` `0x02` (change).
         #[test]
         fn change() {
             insta::assert_snapshot!(hex::encode(change_header()));
