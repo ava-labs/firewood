@@ -952,7 +952,7 @@ fn test_dos_array_length_bounds() {
             );
             assert_eq!(
                 found,
-                format!("{} > ({} / 5)", malicious_num_items, remainder_len)
+                format!("{malicious_num_items} > ({remainder_len} / 5)")
             );
         }
         other => panic!("Expected ReadError::InvalidItem for DoS vector, got: {other:?}"),
