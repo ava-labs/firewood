@@ -1,7 +1,6 @@
 # Operations & Benchmarking
 
-This section covers running and measuring Firewood. Deeper sub-pages (per-command
-`fwdctl` reference, benchmark how-tos) will be added as they are written.
+This section covers running and measuring Firewood.
 
 ## `fwdctl`
 

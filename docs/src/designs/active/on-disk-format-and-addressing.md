@@ -49,10 +49,11 @@ identifies its size class.
   size class. The head of each list is stored in the `NodeStoreHeader`; each free
   area stores the address of the next free area of the same size class. Together they
   form 23 independent linked lists of reclaimed space.
-- **Future-delete log (FDL)** — the `deleted` field in `ImmutableProposal` and
-  `Committed` (`storage/src/nodestore/mod.rs`). Records `MaybePersistedNode` values
-  that became unreachable when a proposal was created but that cannot be freed yet,
-  because older in-memory or on-disk revisions may still reference them.
+- **Future-delete log (FDL)** — the `deleted` field in `Mutable<Propose>`,
+  `ImmutableProposal`, and `Committed` (`storage/src/nodestore/mod.rs`). Collects
+  `MaybePersistedNode` values replaced or deleted during proposal construction that
+  cannot be freed yet, because older in-memory or on-disk revisions may still
+  reference them.
 
 ## Invariants and guarantees
 
@@ -82,13 +83,13 @@ identifies its size class.
   address and hash. Nodes replaced by the commit are recorded in the proposal's
   delete list (the FDL) rather than freed immediately.
 - **Revision expiration.** The `RevisionManager` (`firewood/src/manager.rs`) keeps a
-  configurable number of committed revisions in memory (default 128). When the oldest
+  configurable number of committed revisions in memory (`max_revisions`, default 128). When the oldest
   revision is reaped, the FDL entries it carries are freed via `NodeAllocator::delete_node`,
   which writes a free-area record over the node and prepends it to the appropriate
   size-class free list.
 - **Archival mode.** When `RootStore` is enabled, deleted-node tracking is disabled
-  (`DeletedNodeTracking::Disabled`) and expired revisions are not freed, preserving
-  all historical data on disk for lookup by root hash.
+  (`DeletedNodeTracking::Disabled`) and the root address mapping for expired
+  revisions is retained, enabling reconstruction by root hash.
 
 ## Trade-offs
 

@@ -3,8 +3,8 @@
 ![Github Actions](https://github.com/ava-labs/firewood/actions/workflows/ci.yaml/badge.svg?branch=main)
 [![Ecosystem license](https://img.shields.io/badge/License-Ecosystem-blue.svg)](./LICENSE.md)
 
-> :warning: Firewood is beta-level software.
-> The Firewood API may change with little to no warning.
+> [!WARNING]
+> Firewood is beta-level software. Its API may change with little to no warning.
 
 Firewood is an embedded key-value store, optimized to store recent Merkleized blockchain
 state with minimal overhead. Most blockchains, including Avalanche's C-Chain and Ethereum, store their state in Merkle tries to support efficient generation and verification of state proofs.
@@ -17,7 +17,7 @@ to feed into the underlying database that is unaware of the data being stored.
 The convenient byproduct of this approach is that iteration is still fast (for serving state sync queries)
 but compaction is not required to maintain the index.
 Firewood was first conceived to provide a very fast storage layer for the EVM,
-but could be used on any blockchain that requires an authenticated state.
+but can be used on any blockchain that requires an authenticated state.
 
 By default, Firewood only attempts to store recent revisions on-disk and will actively clean up unused data when revisions expire.
 It keeps some configurable number of previous states in memory and on disk to power state sync and APIs
@@ -144,8 +144,11 @@ See [replace\_list\_field](storage/src/hashers/ethhash.rs) for more details.
 ## Run
 
 Example(s) are in the [examples](firewood/examples) directory, that simulate real world
-use-cases. Try running the insert example via the command-line, via `cargo run --release
---example insert`.
+use-cases. Try running the insert example:
+
+```sh
+cargo run --release --example insert
+```
 
 For performance benchmarking — C-Chain re-execution, Rust criterion, and synthetic workloads — see [benchmark/README.md](benchmark/README.md).
 
@@ -157,7 +160,7 @@ which enables maximum link time compiler optimizations.
 
 If you want logging, enable the `logging` feature flag, and then set RUST\_LOG accordingly.
 See the documentation for [env\_logger](https://docs.rs/env_logger/latest/env_logger/) for specifics.
-We currently have very few logging statements, but this is useful for print-style debugging.
+Firewood currently emits very few log statements, but this is useful for print-style debugging.
 
 ## Release
 

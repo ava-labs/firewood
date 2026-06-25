@@ -33,7 +33,7 @@ patch and minor updates flow automatically while majors remain a deliberate bump
 | `node:1` | Node, required by the Claude Code feature |
 | `docker-in-docker:2` (`moby: false`) | Docker CE — Moby's `moby-cli` is not published for Ubuntu 26.04 |
 | `anthropics/devcontainer-features/claude-code:1` | the Claude Code CLI and its editor extension |
-| `./features/firewood-tools` (local) | the Rust/Go tooling with no upstream feature (next section) |
+| `./features/firewood-tools` (local) | build deps, sccache, cargo-nextest and other Cargo/Go tools, shell wiring (starship, sccache config, Claude Code symlink) — see [The local `firewood-tools` feature](#the-local-firewood-tools-feature) |
 
 Go tracks `latest` rather than a pinned version; `latest` always satisfies the Go
 floor in `ffi/go.mod`, which ends the manual version tracking that previously drifted.
@@ -55,8 +55,8 @@ with no maintained upstream equivalent. Its `devcontainer-feature.json` declares
   `cargo-machete`, `cargo-msrv`, `cargo-nextest`, `git-cliff`, `just`, `ripgrep`,
   `rustfilt`, `starship`.
 - Go tools (via `go install`): `dockerfmt`, `shfmt`.
-- Shell wiring: `starship` init, a persistent `HISTFILE`, and a build-time
-  `~/.claude.json` → `~/.claude/user-claude.json` symlink so Claude Code settings
+- Shell wiring: `starship` init, a persistent `HISTFILE`, and a symlink from
+  `~/.claude.json` to `~/.claude/user-claude.json` so Claude Code settings
   land in the persistent volume.
 
 ## Why there is no Dockerfile
@@ -95,7 +95,7 @@ features' PATH entries and tool proxies stay intact.
 - Named volumes are created root-owned and mounted after the image build, so
   `post-create.sh` (the `postCreateCommand`) `chown`s the volume targets to `vscode`
   by username, then runs a verification smoke test (`rustup show`, `go version`,
-  `nix --version`, `sccache --show-stats`). It is idempotent and safe to re-run on
+  `nix --version`, `sccache --show-stats`). The script is idempotent and safe to re-run on
   rebuild.
 - `postStartCommand` runs `sccache --show-stats`.
 

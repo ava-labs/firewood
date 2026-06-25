@@ -117,9 +117,10 @@ output into a subdirectory.
    there is no checked-in JS to drift. Callouts use mdBook's built-in alert syntax
    (`> [!NOTE]`, `> [!WARNING]`, …) rather than a preprocessor.
    > [!NOTE]
-   > `mdbook-admonish` was the original choice for callouts, but it requires mdBook
-   > `< 0.5.0`, which is incompatible with the `mdbook 0.5.x` that `mdbook-linkcheck2`
-   > requires. mdBook 0.5's native alert syntax provides the same callouts with no
+   > `mdbook-admonish` was the original choice for callouts. Its declared `< 0.5.0`
+   > version constraint is intentional: mdBook 0.5 bundles the same native alert syntax,
+   > making the extension permanently redundant (the maintainers have no plans to lift
+   > the constraint). mdBook 0.5's native alerts provide the same callouts with no
    > preprocessor, no checked-in CSS, and no asset-drift surface — so admonish is
    > dropped entirely.
 8. **Install commands in docs:** The authored developer guide may include concrete
@@ -213,8 +214,8 @@ work — old external deep links 404, accepted in exchange for the cleaner root 
 
 `SUMMARY.md` supports raw-URL entries, which render as sidebar items. A
 `reference/` section and sidebar entries link to the deployed paths
-(`/firewood/rustdoc/`, `/firewood/ffi/`, `/firewood/bench/`). These resolve on the
-deployed site; under local `mdbook serve` they point at the live production site.
+(`/rustdoc/`, `/ffi/`, `/bench/`), resolved relative to the GitHub Pages site root.
+These resolve on the deployed site; under local `mdbook serve` they point at the live production site.
 The `reference/README.md` page notes this explicitly. `mdbook-linkcheck2` is
 configured with `follow-web-links = false` so these external link-outs do not break
 local/CI builds.
@@ -324,7 +325,7 @@ site/                         ← uploaded as the Pages artifact
 2. **Install the mdBook toolchain.** `mdbook` and `mdbook-mermaid` install via
    `taiki-e/install-action` (pinned by commit SHA), each pinned to an explicit version.
    `mdbook-linkcheck2` is **not** in the `taiki-e/install-action` manifest, so install it
-   with `cargo binstall --no-confirm mdbook-linkcheck2@<version>` (`cargo-binstall` itself
+   with `cargo binstall --no-confirm mdbook-linkcheck2@0.12.2` (`cargo-binstall` itself
    comes from `taiki-e/install-action`). `cargo binstall` downloads a prebuilt binary when
    one is published for the runner target and **automatically falls back to
    `cargo install`** when no prebuilt artifact is available or the download fails (e.g.

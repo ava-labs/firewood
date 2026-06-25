@@ -1,11 +1,14 @@
 # Release Process
 
 Firewood's release process is documented in
-[`RELEASE.md`](https://github.com/ava-labs/firewood/blob/main/RELEASE.md), including
-how the `firewood-go-ethhash` Go module is built and published from the in-repo `ffi/`
-crate.
+[`RELEASE.md`](https://github.com/ava-labs/firewood/blob/main/RELEASE.md). It covers
+semver tagging, publishing the Rust workspace crates to crates.io, and triggering the
+CI pipeline that builds the static library, copies `ffi/` into the
+`ava-labs/firewood-go-ethhash` repository, and tags the resulting Go module.
 
 ## Related repository processes
 
-- [Contributing](https://github.com/ava-labs/firewood/blob/main/CONTRIBUTING.md)
-- [Code review](https://github.com/ava-labs/firewood/blob/main/CODE_REVIEW.md)
+- [Contributing](https://github.com/ava-labs/firewood/blob/main/CONTRIBUTING.md) —
+  testing requirements, PR workflow, and coding conventions
+- [Code review](https://github.com/ava-labs/firewood/blob/main/CODE_REVIEW.md) —
+  the full set of reviewer and author checklists

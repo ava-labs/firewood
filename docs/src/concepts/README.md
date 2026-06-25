@@ -10,7 +10,7 @@ returns to free lists once no live revision references them.
 
 - **Revision** — a historical, point-in-time state of the trie, including all
   key/value pairs and nodes at that point.
-- **View** — a read-only interface into a `Revision`, `Proposal`, or `Reconstructed`
+- **View** — a read-only interface into a `Revision`, `Proposal`, or reconstructed
   state.
 - **Node** — a portion of the trie; nodes link to other nodes and/or hold key/value
   pairs.

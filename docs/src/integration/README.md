@@ -12,15 +12,16 @@ Rust concepts — the Go names deliberately differ from the Rust ones:
 | --- | --- | --- |
 | `Database` (`firewood.go`) | `Db` | the database handle; there is no Go type named `Db` |
 | `Proposal` (`proposal.go`) | `Proposal` | uncommitted batch atop a base root |
-| `Revision` (`revision.go`) | `DbView` | read-only view of a historical revision |
+| `Revision` (`revision.go`) | `DbView` | read-only view backed by a pinned revision (`DbView` is a Rust trait) |
 | `Reconstructed` (`reconstructed.go`) | reconstructed/archival view | state rebuilt from range proofs during state sync; freed by calling `Drop()` |
 | `Iterator` (`iterator.go`) | view iterator | streams key/value pairs; `Next` copies, `NextBorrowed` lends Rust memory |
 | `BatchOp` (`batch_op.go`) | `BatchOp` | a single `Put`/`Delete`/`PrefixDelete`; the unit of a write batch |
 | `RangeProof`, `ChangeProof`, `NextKeyRange` (`proofs.go`) | proof types | range/change proofs and key-range cursors for state sync |
 
-Construction and tuning (`New`, the `With*` options) and the metrics/logging entry
-points (`Gatherer`, `LogConfig`, `StartMetrics`, `StartLogs`) configure these types.
-The generated Go API reference is published at [`/ffi/`](/firewood/ffi/).
+`New` constructs each type; the `With*` options tune it. The metrics and logging
+entry points (`Gatherer`, `LogConfig`, `StartMetrics`, `StartLogs`) wire up
+observability. The generated Go API reference is published as
+[Go API documentation (godoc)](/firewood/ffi/).
 
 ## How downstream consumers depend on Firewood
 
@@ -37,5 +38,5 @@ the build flow in [`ffi/README.md`](https://github.com/ava-labs/firewood/blob/ma
 > [!NOTE]
 > The Go module path in `firewood-go-ethhash` is rewritten by CI from the in-repo
 > path to `github.com/ava-labs/firewood-go-ethhash/ffi`. The tag format follows Go
-> module conventions: a Firewood workspace release `v0.6.0` is tagged as
-> `ffi/v0.6.0` in the `firewood-go-ethhash` repository.
+> module conventions: a Firewood workspace release `vX.Y.Z` is tagged as
+> `ffi/vX.Y.Z` in the `firewood-go-ethhash` repository.

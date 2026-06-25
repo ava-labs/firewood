@@ -28,11 +28,11 @@ template, fill it in, and open a pull request.
 
 When a proposed design is implemented, promote it to `active/`:
 
-1. `git mv proposed/NNNN-x.md active/x.md`.
+1. `git mv proposed/NNNN-slug.md active/slug.md`.
 2. Flip the frontmatter `status: proposed` to `status: active`; drop the
    proposal-only sections (Drawbacks, Unresolved questions), folding any survivors
    into the active structure.
-3. Rewrite future-tense prose into the present tense — the design now describes
+3. Rewrite any future-tense prose as present tense — the design now describes
    reality.
 4. Add cross-links to the implementing pull request(s) and commits.
 5. Register the document in `active/README.md` and update `SUMMARY.md`.

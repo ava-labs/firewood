@@ -15,7 +15,9 @@ verify it.
 - **[Nix](https://nixos.org/)** — used by the FFI flake (`ffi/flake.nix`).
 - **The mdBook toolchain** for building this site: `mdbook`, `mdbook-mermaid`,
   `mdbook-linkcheck2`. Install with
-  `cargo binstall mdbook@0.5.3 mdbook-mermaid@0.17.0 mdbook-linkcheck2@0.12.2`.
+  `cargo binstall mdbook@0.5.3 mdbook-mermaid@0.17.0`. Install `mdbook-linkcheck2`
+  separately: `cargo binstall mdbook-linkcheck2@0.12.2` (it is not in the
+  `taiki-e/install-action` manifest, so CI installs it via `cargo binstall` directly).
 
 ## macOS (local)
 
@@ -43,12 +45,13 @@ Use the checked-in `.devcontainer/` (see
 
 1. Open the repository in VS Code with the **Dev Containers** extension and run
    **"Reopen in Container"**.
-2. There is no Dockerfile — the container is assembled from published Dev Container
-   features plus a local `firewood-tools` feature over an Ubuntu 26.04 base. Rust, Go,
-   Nix, `sccache`, and the project's developer tooling are all provided.
+2. The container is assembled entirely from published Dev Container features plus a
+   local `firewood-tools` feature over an Ubuntu 26.04 base — no separate Dockerfile.
+   Rust, Go, Nix, `sccache`, and the project's developer tooling are all provided.
 3. `post-create.sh` (the `postCreateCommand`) fixes volume ownership and runs a
    verification smoke test (`rustup show && go version && nix --version &&
-   sccache --show-stats`).
+   sccache --show-stats`). `postStartCommand` also runs `sccache --show-stats` on
+   every container start to confirm the cache daemon is live.
 4. Developer authentication (`gh`, Claude Code) and shell history persist across
    rebuilds via named volumes — log in once. Then run the build/test commands from the
    macOS section inside the container.
