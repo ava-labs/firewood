@@ -28,5 +28,5 @@ returns to free lists once no live revision references them.
   read-only and not committable.
 - **Commit** — applying one or more proposals to the most recent revision.
 
-For the on-disk representation behind these concepts, see
+For the on-disk representation that implements these concepts, see
 [On-disk format and addressing](../designs/active/on-disk-format-and-addressing.md).

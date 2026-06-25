@@ -1,4 +1,4 @@
-# Firewood: Compaction-Less Database Optimized for Efficiently Storing Recent Merkleized Blockchain State
+# Firewood: compaction-less database optimized for efficiently storing recent Merkleized blockchain state
 
 ![Github Actions](https://github.com/ava-labs/firewood/actions/workflows/ci.yaml/badge.svg?branch=main)
 [![Ecosystem license](https://img.shields.io/badge/License-Ecosystem-blue.svg)](./LICENSE.md)
@@ -30,7 +30,7 @@ Firewood also supports archival mode via `RootStore`, which retains all historic
 
 Hashes are not used to determine where a node is stored on disk in the database file.
 Instead space for nodes may be allocated from the end of the file,
-or from space freed from expired revision. Free space management algorithmically resembles that of traditional heap memory management, with free lists used to track different-size spaces that can be reused.
+or from space freed from expired revision. Free space management resembles that of traditional heap memory management, with free lists used to track different-size spaces that can be reused.
 The root address of a node is simply the disk offset within the database file,
 and each branch node points to the disk offset of that other node.
 
@@ -65,7 +65,7 @@ as well as carefully managing the free list during the creation and expiration o
 - `Change Proof` - A proof that consists of a set of all changes between two
   revisions.
 - `Put` - An operation for a `Key`/`Value` pair. A put means "create if it doesn't
-  exist, or update it if it does. A put operation is how you add a `Value` for a
+  exist, or update it if it does". A put operation is how you add a `Value` for a
   specific `Key`.
 - `Delete` - An operation indicating that a `Key` should be removed from the trie.
 - `Batch Operation` - An operation of either `Put` or `Delete`.
@@ -86,13 +86,14 @@ as well as carefully managing the free list during the creation and expiration o
 
 ## Metrics
 
-Firewood provides comprehensive metrics for monitoring database performance, resource utilization, and operational characteristics. For detailed information about all available metrics, how to enable them, and how to interpret them, see [METRICS.md](METRICS.md).
+Firewood exposes metrics for monitoring database performance and resource utilization.
+See [METRICS.md](METRICS.md) for details.
 
 ## Development Environment
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/ava-labs/firewood)
 
-The quickest way to get started is with the included devcontainer, which
+The simplest way to get started is with the included devcontainer, which
 provides a fully configured environment with all required tools pre-installed.
 
 **GitHub Codespaces** — click the badge above or go to
@@ -117,7 +118,7 @@ In order to build firewood, the following dependencies must be installed:
 - `cargo` See [installation instructions](https://doc.rust-lang.org/cargo/getting-started/installation.html).
 - **[just](https://github.com/casey/just)** — task runner (`just --list` shows available recipes). Optional; all commands can also be run with `cargo` directly.
 
-More detailed build instructions, including some scripts,
+More detailed build instructions, including benchmark environment setup scripts,
 can be found in the [benchmark setup scripts](benchmark/setup-scripts).
 
 If you want to build and test the ffi layer for another platform,

@@ -28,7 +28,7 @@ verify it.
    rustup component add rustfmt clippy rust-analyzer
    ```
 
-2. Install `just` and the mdBook toolchain (e.g. via `brew install just` and the
+2. Install `just` and the mdBook toolchain (for example, via `brew install just` and the
    `cargo binstall` line above).
 3. In VS Code, install the `rust-analyzer` extension and point it at the workspace.
 4. Build and test:
@@ -58,9 +58,8 @@ Use the checked-in `.devcontainer/` (see
 
 > [!IMPORTANT]
 > If you previously used the old Dockerfile-based container, upgrading requires a
-> one-time **rebuild**: run "Dev Containers: Rebuild Container" (not "Reopen in
-> Container", which reuses the stale container and fails with
-> `unable to find user vscode`).
+> one-time **rebuild**. "Reopen in Container" reuses the stale container and fails
+> with `unable to find user vscode`. Run **"Dev Containers: Rebuild Container"** instead.
 
 For the design behind this setup, see
 [Development Container](../designs/active/devcontainer.md).
@@ -75,7 +74,7 @@ For the design behind this setup, see
 
 ## Verifying your setup
 
-Run the same checks CI runs (see `CONTRIBUTING.md`):
+Verify your environment by running the same checks CI runs (see `CONTRIBUTING.md`):
 
 ```bash
 cargo fmt

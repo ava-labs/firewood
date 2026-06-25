@@ -8,7 +8,7 @@ and downstream projects) depend on a separately published Go module.
 The in-repo `ffi/` directory ships a Go wrapper. Its public types map onto Firewood's
 Rust concepts — the Go names deliberately differ from the Rust ones:
 
-| Go type (`ffi/*.go`) | Rust concept | Notes |
+| Go type | Rust concept | Notes |
 | --- | --- | --- |
 | `Database` (`firewood.go`) | `Db` | the database handle; there is no Go type named `Db` |
 | `Proposal` (`proposal.go`) | `Proposal` | uncommitted batch atop a base root |

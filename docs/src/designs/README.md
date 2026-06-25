@@ -6,8 +6,7 @@ folders, and the folder it lives in is its status:
 - **`proposed/`** — a design under review, not yet built. Named
   `NNNN-short-slug.md` with a zero-padded sequence number for ordering and stable
   references in review threads. A proposal typically lands before development so
-  reviewers comment on the document through normal pull-request review, but this
-  ordering is a recommendation, not a requirement.
+  reviewers comment on the document through normal pull-request review.
 - **`active/`** — a design that reflects what the code does today. Named
   `short-slug.md` (no number); it is a living document, updated as the code evolves.
 
@@ -19,18 +18,18 @@ folders, and the folder it lives in is its status:
 > to document something already built. Optimize for "more designs discussed and
 > recorded," not "process followed."
 
-## Proposing a design
+## Propose a design
 
 Run `just new-design <slug>` to scaffold `proposed/NNNN-<slug>.md` from the proposed
 template, fill it in, and open a pull request.
 
-## Promotion checklist
+## Promote a design
 
 When a proposed design is implemented, promote it to `active/`:
 
 1. `git mv proposed/NNNN-slug.md active/slug.md`.
 2. Flip the frontmatter `status: proposed` to `status: active`; drop the
-   proposal-only sections (Drawbacks, Unresolved questions), folding any survivors
+   proposal-only sections (Drawbacks, Unresolved questions), incorporating any remaining content
    into the active structure.
 3. Rewrite any future-tense prose as present tense — the design now describes
    reality.

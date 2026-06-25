@@ -10,12 +10,12 @@
 Stand up an [mdBook](https://rust-lang.github.io/mdBook/) documentation site for
 Firewood, deployed to GitHub Pages, and make it the front door of the published
 site. The generated rustdoc, Go docs, and performance benchmark dashboards become
-resources navigable *from* the book rather than the site root.
+resources navigable from the book rather than the site root.
 
 The book ships with an Introduction, a fully-authored Getting Started guide for
-initializing development environments, and a Designs subsystem that establishes a
-peer-reviewable, RFC-style workflow for proposing designs and promoting them to
-living "active" documentation once implemented. Additional sections (Concepts,
+initializing development environments, and a Designs subsystem. The Designs subsystem
+establishes a peer-reviewable, RFC-style workflow for proposing designs and promoting
+them to living "active" documentation once implemented. Additional sections (Concepts,
 AvalancheGo/EVM Integration, Operations & Benchmarking, Reference, Meta) each ship an
 authored landing page; not-yet-written sub-pages are listed as mdBook draft chapters
 (greyed-out sidebar entries) rather than empty stub files.
@@ -98,7 +98,7 @@ output into a subdirectory.
    `docs/src/`). Reuses the existing `docs/src/assets/architecture.svg` already
    referenced by `README.md`.
 3. **CI strategy:** Extend the existing `gh-pages.yaml` rather than add a competing
-   workflow (a separate workflow would race over the single-source Pages artifact).
+   workflow — a separate workflow would race over the single-source Pages artifact.
 4. **Design lifecycle:** File move between `proposed/` and `active/` folders is the
    visible status marker, backed by a documented promotion checklist (a frontmatter
    flip alone does not capture the work of promotion).
@@ -454,11 +454,10 @@ relocation.
   assets; a prerequisite of the build recipes so a fresh checkout builds without a
   manual step).
 - `book-serve` → `book-assets` then `mdbook serve docs --open` (live reload).
-- `book-build` → `book-assets` then `mdbook build docs` (mirrors what CI runs on PRs;
-  this is the single build-and-validate recipe). `mdbook-linkcheck2` is a renderer
-  backend, not a standalone binary, so it runs automatically as part of `mdbook build`
-  once `[output.linkcheck2]` is configured in `book.toml` — there is no separate command
-  to invoke.
+- `book-build` → `book-assets` then `mdbook build docs` — the single
+  build-and-validate recipe that mirrors what CI runs on PRs. `mdbook-linkcheck2` runs
+  automatically as a renderer backend once `[output.linkcheck2]` is in `book.toml`;
+  no separate invocation is needed.
 - `new-design slug` → scaffolds `docs/src/designs/proposed/NNNN-slug.md` from the
   proposed template. Sequence-number algorithm: glob
   `docs/src/designs/proposed/[0-9][0-9][0-9][0-9]-*.md`, parse the leading 4-digit

@@ -6,8 +6,8 @@ This site is an [mdBook](https://rust-lang.github.io/mdBook/) rooted at `docs/`
 ## Toolchain
 
 - `mdbook` builds the book.
-- `mdbook-mermaid` renders Mermaid diagrams. Its JS assets are generated at build time
-  by `just book-assets` and are git-ignored, not committed.
+- `mdbook-mermaid` renders Mermaid diagrams; its JS assets are generated at build time
+  by `just book-assets` and are git-ignored.
 - Callouts use mdBook's native alert syntax (`> [!NOTE]`, `> [!WARNING]`, …) — no
   preprocessor required.
 - `mdbook-linkcheck2` runs as a backend during `mdbook build` and validates internal

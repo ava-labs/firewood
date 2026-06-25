@@ -56,7 +56,7 @@ including GPG keys and Windows/macOS setup.
 
 [gh-signing]: https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits
 
-## Code Review Process
+## Code review process
 
 ### For Reviewers
 
@@ -64,21 +64,21 @@ Reviews should be completed or commented within one business day.
 
 When reviewing code, your goal is to help the author improve the quality of the change and confirm that it meets our architectural and operational standards. GitHub provides three primary review options:
 
-#### ✅ Accept (Approve)
+#### Accept (Approve)
 
 Use this when the code is an improvement over the current state of the codebase.
 
 * It's okay to request minor changes in comments and still approve the pull request.
 * Perfection is not the goal — progress is. If the submitted code is better than what's in production, it's acceptable to approve even if small improvements remain. Consider adding a new issue or request adding a code TODO for larger changes.
 
-#### 💬 Comment (Comment Only)
+#### Comment (Comment Only)
 
 Use this when your review is incomplete, or you're not ready to approve or reject yet. You should use this if the code is too large to review in a limited amount of time (typically 30-60 minutes). You can also suggest how to break up this diff into a smaller diff.
 
 * This can be helpful for asking clarifying questions, suggesting optional improvements, or flagging issues you're unsure about.
 * This state signals that your review is in progress or advisory, not final.
 
-#### ❌ Reject (Request Changes)
+#### Reject (Request Changes)
 
 Use this when there are significant concerns with the code's correctness, architecture, design, or maintainability.
 
@@ -140,7 +140,7 @@ the GitHub UI.
 
 We generally follow the same rules that `cargo fmt` and `cargo clippy` will report as warnings, with a few notable exceptions as documented in the workspace `Cargo.toml` under `[workspace.lints.clippy]`.
 
-By default, we prohibit bare `unwrap` calls and index dereferencing, as there are usually better ways to write this code. In the case where you can't, please use `expect` with a message explaining why it would be a bug, which we currently allow. For more information on our motivation, please read this great article on unwrap: [Using unwrap() in Rust is Okay](https://blog.burntsushi.net/unwrap) by [Andrew Gallant](https://blog.burntsushi.net).
+By default, we prohibit bare `unwrap` calls and index dereferencing, as there are usually better ways to write this code. In the case where you can't, please use `expect` with a message explaining why it would be a bug, which we currently allow. For more information on our motivation, see [Using unwrap() in Rust is Okay](https://burntsushi.net/unwrap/) by [Andrew Gallant](https://burntsushi.net).
 
 ## Where can I ask for help?
 
@@ -148,4 +148,4 @@ If you have questions or need help, please post them as issues in the [issue tra
 
 ## Thank you
 
-We'd like to extend a pre-emptive "thank you" for reading through this and submitting your first contribution!
+We'd like to extend a preemptive "thank you" for reading through this and submitting your first contribution!

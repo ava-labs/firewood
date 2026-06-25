@@ -6,7 +6,7 @@ source:
   - firewood/src/
 ---
 
-# On-disk Format and Addressing
+# On-disk format and addressing
 
 ## Overview
 
@@ -63,8 +63,9 @@ identifies its size class.
 - **Careful free-list management across revisions.** Space is returned to the free
   lists only once no surviving revision can reference it, so reuse never corrupts a
   revision that is still readable.
-- Together these make the database recoverable after an unclean shutdown without a
-  separate write-ahead log replay over user data.
+
+Together these invariants make the database recoverable after an unclean shutdown
+without a separate write-ahead log replay over user data.
 
 ## On-disk and runtime behavior
 
@@ -76,7 +77,7 @@ identifies its size class.
   `AreaIndex`, followed by one byte that is `0xFF` for free areas or a node-type
   discriminant for live nodes, followed by the serialized content.
 - **Free-list size classes.** There are 23 size classes: 16, 32, 64, 96, 128, 256,
-  512, 768, and 1024 bytes, then powers of two from 2 KB through 16 MB. The set is
+  512, 768, and 1024 bytes, then powers of two from 2 KiB through 16 MiB. The set is
   defined in `storage/build.rs` and hashed into the `NodeStoreHeader` so a database
   cannot be opened with a mismatched size table.
 - **Revision creation.** Committing a proposal writes new nodes, producing a new root
@@ -103,6 +104,4 @@ identifies its size class.
 
 ## Related designs
 
-- This is the first active design written under the process established by [0001 — mdBook documentation site](../proposed/0001-mdbook-documentation-site.md).
-- See the backfill TODO in [Active Designs](README.md) for adjacent subsystems
-  (revision management, free lists and the FDL, hashing) still to be written up.
+- See [Active Designs](README.md) for other subsystems still to be documented.
