@@ -258,6 +258,17 @@ jobs:
       - name: Build Firewood FFI
         working-directory: ffi
         run: cargo build --locked
+      # see https://github.com/golang/go/issues/61229#issuecomment-1988965927
+      # the generated archive has a malformed LC_DYSYMTAB which the Apple linker doesn't
+      # like. `ld -r` makes the archive "relocatable" and fixes the malformed LC_DYSYMTAB.
+      - name: Cleanup malformed LC_DYSYMTAB
+        if: matrix.os == 'macos-26'
+        run: |
+          lib_path="target/maxperf/libfirewood_ffi.a"
+          tmp_path="${lib_path}.tmp"
+          cp "$lib_path" "$tmp_path"
+          ld -r -arch arm64 -o "$lib_path" "$tmp_path"
+          rm "$tmp_path"
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
