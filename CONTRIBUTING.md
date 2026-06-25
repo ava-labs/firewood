@@ -17,7 +17,7 @@ guidelines for contributing to firewood.
 ## Quick Links
 
 * [Setting up docker](README.docker.md)
-* [Auto-generated documentation](https://ava-labs.github.io/firewood/firewood/)
+* [Auto-generated documentation](https://ava-labs.github.io/firewood/rustdoc/firewood/)
 * [Issue tracker](https://github.com/ava-labs/firewood/issues)
 
 ## Testing

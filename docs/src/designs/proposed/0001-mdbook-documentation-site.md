@@ -95,7 +95,7 @@ output into a subdirectory.
 1. **Site layout:** Book at site root; relocate cargo-doc output to `/rustdoc/`;
    leave `/ffi/` and `/bench/` unchanged.
 2. **Book source location:** `docs/` is the mdBook root (`docs/book.toml`,
-   `docs/src/`). Reuses the existing `docs/assets/architecture.svg` already
+   `docs/src/`). Reuses the existing `docs/src/assets/architecture.svg` already
    referenced by `README.md`.
 3. **CI strategy:** Extend the existing `gh-pages.yaml` rather than add a competing
    workflow (a separate workflow would race over the single-source Pages artifact).
