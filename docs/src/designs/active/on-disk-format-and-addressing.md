@@ -25,8 +25,10 @@ required. Each revision has a root node, and the root's address is the entry poi
 for reading that revision.
 
 The database file begins with a fixed-size header (`NodeStoreHeader`, occupying the
-first 2048 bytes) that stores the current file size, the root node location and hash,
-and the heads of all free-list chains. After the header, the remainder of the file
+first 2048 bytes) that stores the current file size, the root node location, and the
+heads of all free-list chains. The header also contains a `root_hash` field, but this
+field is only populated in `firewood-v1` format databases; older databases leave it
+uninitialized. After the header, the remainder of the file
 consists of contiguous stored areas, each prefixed by a one-byte area-index that
 identifies its size class.
 

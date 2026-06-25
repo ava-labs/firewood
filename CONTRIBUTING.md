@@ -16,7 +16,7 @@ guidelines for contributing to firewood.
 
 ## Quick Links
 
-* [Setting up docker](README.docker.md)
+* [Development container](.devcontainer/README.md)
 * [Auto-generated documentation](https://ava-labs.github.io/firewood/rustdoc/firewood/)
 * [Issue tracker](https://github.com/ava-labs/firewood/issues)
 
@@ -25,8 +25,8 @@ guidelines for contributing to firewood.
 After submitting a PR, we'll run all the tests and verify your code meets our submission guidelines. To ensure it's more likely to pass these checks, you should run the following commands locally:
 
     cargo fmt
-    cargo nextest run
-    cargo clippy
+    cargo nextest run --workspace --features ethhash,logger --all-targets
+    cargo clippy --workspace --features ethhash,logger --all-targets
     cargo doc --no-deps
 
 Resolve any warnings or errors before making your PR.

@@ -115,7 +115,7 @@ See [`.devcontainer/`](.devcontainer/) for the full configuration.
 In order to build firewood, the following dependencies must be installed:
 
 - `cargo` See [installation instructions](https://doc.rust-lang.org/cargo/getting-started/installation.html).
-- `make` See [download instructions](https://www.gnu.org/software/make/#download) or run `sudo apt install build-essential` on Linux.
+- **[just](https://github.com/casey/just)** — task runner (`just --list` shows available recipes). Optional; all commands can also be run with `cargo` directly.
 
 More detailed build instructions, including some scripts,
 can be found in the [benchmark setup scripts](benchmark/setup-scripts).
@@ -139,7 +139,7 @@ It is worth noting that the hash stored as a value inside the account root RLP i
 During hash calculations, we know the hash of the children,
 and use that directly to modify the value in-place
 when hashing the node.
-See [replace\_hash](firewood/storage/src/hashers/ethhash.rs) for more details.
+See [replace\_list\_field](storage/src/hashers/ethhash.rs) for more details.
 
 ## Run
 
@@ -150,7 +150,7 @@ use-cases. Try running the insert example via the command-line, via `cargo run -
 For performance benchmarking — C-Chain re-execution, Rust criterion, and synthetic workloads — see [benchmark/README.md](benchmark/README.md).
 
 For maximum runtime performance at the cost of compile time,
-use `cargo run --maxperf` instead,
+use `cargo run --profile maxperf` instead,
 which enables maximum link time compiler optimizations.
 
 ## Logging
@@ -175,7 +175,7 @@ Firewood comes with a CLI tool called `fwdctl` that enables one to create and in
 ## Test
 
 ```sh
-cargo nextest --release
+cargo nextest run --release
 ```
 
 ## License

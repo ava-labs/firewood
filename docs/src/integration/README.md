@@ -1,7 +1,7 @@
 # AvalancheGo & EVM Integration
 
 Firewood exposes a Go API through its FFI layer, and downstream consumers (AvalancheGo
-and its grafts) depend on a separately published Go module.
+and downstream projects) depend on a separately published Go module.
 
 ## The Go API surface
 
@@ -24,7 +24,7 @@ The generated Go API reference is published at [`/ffi/`](/firewood/ffi/).
 
 ## How downstream consumers depend on Firewood
 
-AvalancheGo and its grafts do **not** import the in-repo `ffi/` directory. They depend
+AvalancheGo and downstream projects do **not** import the in-repo `ffi/` directory. They depend
 on the separately published Go module `github.com/ava-labs/firewood-go-ethhash/ffi`,
 pinned in their `go.mod` files. That module tracks Firewood's workspace releases: when a
 Firewood version is released (a semver tag on the repository, which sets the

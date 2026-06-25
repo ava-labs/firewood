@@ -414,12 +414,15 @@ Because linkcheck runs with `follow-web-links = false`, the `/rustdoc/`, `/ffi/`
 rustdoc relocation — are never validated by the build. A third job, `smoke`, is added
 to `gh-pages.yaml`:
 
-- `needs: [deploy]` so it runs only after a successful deploy.
+- `needs: [build, deploy]` so it runs only after a successful deploy and can read
+  the `has_bench` output from the build job.
 - `if:` gated to the same condition as `deploy` (canonical repo, non-`pull_request`
   events) so PR runs and forks are unaffected.
 - A single step that `curl --fail`s each deployed path — `/`, `/rustdoc/` (the
-  redirect), `/rustdoc/firewood/`, `/ffi/`, and `/bench/` — against the Pages base URL,
-  failing the workflow if any returns a non-success status.
+  redirect), `/rustdoc/firewood/`, and `/ffi/` — against the Pages base URL,
+  failing the workflow if any returns a non-success status. `/bench/` is checked
+  only when `needs.build.outputs.has_bench == 'true'` (the benchmark-data branch
+  was present during the build).
 
 This is the automated backstop for the consciously-skipped external link validation and
 surfaces a stale crate-directory name (e.g. `firewood_replay`) introduced by a future

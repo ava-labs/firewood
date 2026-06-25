@@ -91,8 +91,7 @@ features' PATH entries and tool proxies stay intact.
 
 ## Build and runtime behavior
 
-- The container starts as the base image's `vscode` user; `updateRemoteUserUID`
-  remaps it to the host UID so bind-mounted files keep correct ownership on Linux.
+- The container starts as the base image's `vscode` user.
 - Named volumes are created root-owned and mounted after the image build, so
   `post-create.sh` (the `postCreateCommand`) `chown`s the volume targets to `vscode`
   by username, then runs a verification smoke test (`rustup show`, `go version`,

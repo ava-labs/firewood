@@ -10,7 +10,7 @@ verify it.
   `rustfmt`, `clippy`, and `rust-analyzer` components.
 - **[just](https://github.com/casey/just)** — the command runner used throughout this
   repository (`just --list` shows available recipes).
-- **Go** (see `.devcontainer/Dockerfile` and `ffi/go.mod` for the version) — required
+- **Go** (see `ffi/go.mod` for the version) — required
   for the FFI layer.
 - **[Nix](https://nixos.org/)** — used by the FFI flake (`ffi/flake.nix`).
 - **The mdBook toolchain** for building this site: `mdbook`, `mdbook-mermaid`,
