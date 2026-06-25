@@ -10,6 +10,10 @@ on:
       # full Pages assembly. Docs PRs run build-only (deploy is gated below).
       - .github/workflows/gh-pages.yaml
       - docs/**
+      - '**/*.rs'
+      - Cargo.toml
+      - Cargo.lock
+      - ffi/**/*.go
   # allow manual trigger because we cannot "retry" a deploy step
   workflow_dispatch:
   # Rebuild pages after benchmark workflow completes.
@@ -32,6 +36,8 @@ jobs:
       github.repository == 'ava-labs/firewood' &&
       (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
+    outputs:
+      has_bench: ${{ steps.bench.outputs.has_bench }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -87,10 +93,12 @@ jobs:
       # Scope the extract to those paths so it cannot clobber the book's index.html
       # now that the book owns the site root.
       - name: Include benchmark data
+        id: bench
         run: |
           # Fetch benchmark-data branch (may not exist on first run)
           if ! git fetch origin benchmark-data 2>/dev/null; then
             echo "No benchmark-data branch yet, skipping"
+            echo "has_bench=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           for path in bench dev; do
@@ -100,6 +108,13 @@ jobs:
               git archive FETCH_HEAD "$path" | tar -x -C site/
             fi
           done
+          # Signal whether /bench/ was populated so the smoke job can skip it
+          # on a fresh deploy where no benchmark history exists yet.
+          if [ -d site/bench ]; then
+            echo "has_bench=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_bench=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/upload-artifact@v7
         with:
           name: pages
@@ -140,14 +155,22 @@ jobs:
     # successful deploy, validating the link-outs that linkcheck (web links off)
     # cannot — e.g. a stale crate directory after a rustdoc relocation.
     if: github.repository == 'ava-labs/firewood' && github.event_name != 'pull_request'
-    needs: deploy
+    needs: [build, deploy]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Smoke-check deployed paths
         run: |
           base="https://ava-labs.github.io/firewood"
-          for path in / /rustdoc/ /rustdoc/firewood/ /ffi/ /bench/; do
+          for path in / /rustdoc/ /rustdoc/firewood/ /ffi/; do
             url="${base}${path}"
             echo "checking ${url}"
-            curl --fail --silent --show-error --location "${url}" > /dev/null
+            curl --fail --silent --show-error --location --max-time 30 --connect-timeout 10 "${url}" > /dev/null
           done
+          if [ "${{ needs.build.outputs.has_bench }}" = "true" ]; then
+            url="${base}/bench/"
+            echo "checking ${url}"
+            curl --fail --silent --show-error --location --max-time 30 --connect-timeout 10 "${url}" > /dev/null
+          else
+            echo "skipping /bench/ — no benchmark history on this deploy"
+          fi
