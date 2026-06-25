@@ -264,7 +264,7 @@ jobs:
       - name: Cleanup malformed LC_DYSYMTAB
         if: matrix.os == 'macos-26'
         run: |
-          lib_path="target/maxperf/libfirewood_ffi.a"
+          lib_path="target/debug/libfirewood_ffi.a"
           tmp_path="${lib_path}.tmp"
           cp "$lib_path" "$tmp_path"
           ld -r -arch arm64 -o "$lib_path" "$tmp_path"
