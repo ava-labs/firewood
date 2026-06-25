@@ -7,58 +7,74 @@
 //! hex-encoded bytes that follow the fixed 32-byte proof header when it is
 //! serialized inside a minimal [`FrozenRangeProof`]. The header itself is
 //! excluded because it encodes only proof-level metadata (magic, version,
-//! hash mode, proof type); the snapshots target only the node encoding.
+//! hash mode, proof type); those node snapshots target only the node encoding.
 //!
 //! Snapshot files live in `src/proofs/snapshots/`. Run `just snapshot-proof-nodes`
 //! to write them on the first run or to regenerate them after an intentional
 //! wire-format change.
 //!
+//! # Structure
+//!
+//! Each group of structurally-identical tests is a single
+//! [`test_case`](test_case::test_case)-parametrized function. The first
+//! argument of every case is the explicit `insta` snapshot name (an explicit
+//! name is required: `test_case` would otherwise make all cases of one function
+//! resolve to the same auto-derived name).
+//!
+//! Tests whose bytes differ between hash modes (branch child encoding and the
+//! header's `hash_mode` byte) build in both modes from a single function;
+//! [`hash_mode_name`] prefixes their snapshot name with `merkledb__` or
+//! `ethhash__` so each mode gets its own snapshot file. Tests whose bytes are
+//! mode-independent share a single file.
+//!
 //! # Test coverage
 //!
-//! | Test | Key nibbles | `partial_len` | Value | Children |
-//! |------|-------------|---------------|-------|----------|
-//! | [`empty`] | `[]` | 0 | none | none |
-//! | [`leaf_with_value`] | `[1, 2, 3]` | 0 | `b"hello"` | none |
-//! | [`partial_path`] | `[1, 2, 3, 4, 5]` | 3 | none | none |
-//! | [`merkledb::single_child`] | `[1]` | 0 | none | nibble 7 |
-//! | [`merkledb::all_children`] | `[0]` | 0 | none | all 16 |
-//! | [`merkledb::large_value_becomes_hash`] | `[1, 2]` | 0 | 32 × `0xAB` | none |
-//! | [`ethhash::single_child`] | `[1]` | 0 | none | nibble 7 |
-//! | [`ethhash::all_children`] | `[0]` | 0 | none | all 16 |
+//! ## `ProofNode` encoding
 //!
-//! The `merkledb` sub-module is compiled only without the `ethhash` feature;
-//! `ethhash` is compiled only with it. Tests without children (`empty`,
-//! `leaf_with_value`, `partial_path`) produce identical bytes under both
-//! hash modes and share a single snapshot file.
+//! [`proof_node`] cases have no children, so their bytes are identical under
+//! both hash modes and share one snapshot file. [`branch_node`] cases carry
+//! child hashes (or a hashed large value), whose encoding differs per mode, so
+//! they are prefixed via [`hash_mode_name`].
 //!
-//! The `ethhash` module has no `large_value_becomes_hash` variant: child
-//! hashes in `ethhash` mode already carry a 1-byte discriminant prefix, so
-//! `single_child` and `all_children` already cover the complete child
-//! encoding format. The large-value → hash behaviour is format-agnostic and
-//! is fully covered by the `merkledb` variant.
+//! | Function | Case | Key nibbles | `partial_len` | Value | Children |
+//! |----------|------|-------------|---------------|-------|----------|
+//! | [`proof_node`] | `empty` | `[]` | 0 | none | none |
+//! | [`proof_node`] | `leaf_with_value` | `[1, 2, 3]` | 0 | `b"hello"` | none |
+//! | [`proof_node`] | `partial_path` | `[1, 2, 3, 4, 5]` | 3 | none | none |
+//! | [`branch_node`] | `single_child` | `[1]` | 0 | none | nibble 7 |
+//! | [`branch_node`] | `all_children` | `[0]` | 0 | none | all 16 |
+//! | [`branch_node`] | `large_value_becomes_hash` | `[1, 2]` | 0 | 32 × `0xAB` | none |
 //!
-//! ## Additional coverage
+//! `large_value_becomes_hash` is `merkledb`-only (via `cfg_attr`): the
+//! large-value → hash behaviour is format-agnostic and is fully covered by the
+//! MerkleDB variant, while `single_child` / `all_children` already exercise the
+//! complete child-hash encoding under both modes.
 //!
-//! The following tests lock down wire-format sections beyond individual node encoding.
-//! The payload snapshots (everything after the 32-byte header) are feature-independent
-//! for key-values and batch ops; the header snapshots are cfg-gated because the
-//! `hash_mode` byte differs between SHA-256 and Keccak-256 modes.
+//! ## Header, key-values, and batch ops
 //!
-//! | Test | Subject |
-//! |------|---------|
-//! | `header::merkledb::range` | 32-byte header, SHA-256 mode, range proof type |
-//! | `header::merkledb::change` | 32-byte header, SHA-256 mode, change proof type |
-//! | `header::ethhash::range` | 32-byte header, Keccak-256 mode, range proof type |
-//! | `header::ethhash::change` | 32-byte header, Keccak-256 mode, change proof type |
-//! | `key_values::empty` | Empty KV sequence: `varint(0)` |
-//! | `key_values::single_pair` | One `(key, value)` pair |
-//! | `key_values::multiple_pairs` | Two `(key, value)` pairs |
-//! | `batch_ops::put` | Single `Put` operation (opcode `0x00`) |
-//! | `batch_ops::delete` | Single `Delete` operation (opcode `0x01`) |
-//! | `batch_ops::delete_range` | Single `DeleteRange` operation (opcode `0x02`) |
-//! | `batch_ops::all_ops` | All three operations in sequence |
+//! [`proof_header`] snapshots the full 32-byte header (whose `hash_mode` byte
+//! differs between SHA-256 and Keccak-256), so it is prefixed via
+//! [`hash_mode_name`]. [`key_value`] and [`batch_op`] snapshot `bytes[32..]`
+//! and are feature-independent (raw byte slices / fixed opcodes); their explicit
+//! snapshot names carry a `key_values__` / `batch_ops__` group prefix so they
+//! stay unique within the flattened module (snapshot names are keyed by module
+//! path + name, not by function).
+//!
+//! | Function | Case | Subject |
+//! |----------|------|---------|
+//! | [`proof_header`] | `range` | 32-byte header, range proof type |
+//! | [`proof_header`] | `change` | 32-byte header, change proof type |
+//! | [`key_value`] | `empty` | Empty KV sequence: `varint(0)` |
+//! | [`key_value`] | `single_pair` | One `(key, value)` pair |
+//! | [`key_value`] | `multiple_pairs` | Two `(key, value)` pairs |
+//! | [`batch_op`] | `put` | Single `Put` operation (opcode `0x00`) |
+//! | [`batch_op`] | `delete` | Single `Delete` operation (opcode `0x01`) |
+//! | [`batch_op`] | `delete_range` | Single `DeleteRange` operation (opcode `0x02`) |
+//! | [`batch_op`] | `all_ops` | All three operations in sequence |
 
 #![expect(clippy::unwrap_used, clippy::indexing_slicing)]
+
+use test_case::test_case;
 
 use firewood_storage::{Children, IntoHashType, PathComponent, TrieHash, ValueDigest};
 
@@ -66,6 +82,18 @@ use super::types::{Proof, ProofNode};
 use crate::api::{FrozenChangeProof, FrozenRangeProof};
 use crate::db::BatchOp;
 use crate::merkle::{Key, Value};
+
+/// Prefixes a snapshot name with the active hash mode so feature-split tests
+/// write distinct snapshot files. Bytes differ between modes, so `merkledb` and
+/// `ethhash` snapshots must not share a filename.
+fn hash_mode_name(name: &str) -> String {
+    let mode = if cfg!(feature = "ethhash") {
+        "ethhash"
+    } else {
+        "merkledb"
+    };
+    format!("{mode}__{name}")
+}
 
 /// Serializes `node` inside a minimal [`FrozenRangeProof`] and returns the bytes
 /// after the fixed 32-byte proof header.
@@ -111,92 +139,6 @@ fn make_node(
     }
 }
 
-/// Empty leaf: zero-length key, no value, no children.
-///
-/// Encoded as: `[count=1] [key_len=0] [partial_len=0] [option=0] [mask=0x0000]
-/// [end_proof_count=0] [kv_count=0]` — 8 bytes after the header.
-#[test]
-fn empty() {
-    let node = make_node(&[], 0, None, &[]);
-    insta::assert_snapshot!(hex::encode(node_bytes(&node)));
-}
-
-/// Leaf with a short value (`b"hello"`, 5 bytes). Values shorter than 32 bytes
-/// are encoded as `ValueDigest::Value` (discriminant `0x00`) under both hash modes.
-#[test]
-fn leaf_with_value() {
-    let node = make_node(&[1, 2, 3], 0, Some(Box::from(b"hello".as_slice())), &[]);
-    insta::assert_snapshot!(hex::encode(node_bytes(&node)));
-}
-
-/// Node with `partial_len = 3` on a 5-nibble key. The first 3 nibbles belong to
-/// the parent; the remaining 2 are this node's own partial path.
-#[test]
-fn partial_path() {
-    let node = make_node(&[1, 2, 3, 4, 5], 3, None, &[]);
-    insta::assert_snapshot!(hex::encode(node_bytes(&node)));
-}
-
-/// Tests for MerkleDB hashing (SHA-256, non-`ethhash`). Child hashes are encoded
-/// as flat 32-byte `TrieHash` values with no prefix byte.
-#[cfg(not(feature = "ethhash"))]
-mod merkledb {
-    use super::*;
-
-    /// Branch with a single child at nibble 7. `ChildMask` has bit 7 set
-    /// (`0x0080`); one 32-byte child hash follows.
-    #[test]
-    fn single_child() {
-        let node = make_node(&[1], 0, None, &[7]);
-        insta::assert_snapshot!(hex::encode(node_bytes(&node)));
-    }
-
-    /// Branch with all 16 children present. `ChildMask = 0xFFFF`; 16 × 32
-    /// bytes of child hashes follow.
-    #[test]
-    fn all_children() {
-        let all: Vec<u8> = (0u8..16).collect();
-        let node = make_node(&[0], 0, None, &all);
-        insta::assert_snapshot!(hex::encode(node_bytes(&node)));
-    }
-
-    /// A 32-byte value is hashed by `make_hash()` during serialization and
-    /// encoded as `ValueDigest::Hash` (option `0x01`, digest `0x01`, then 32
-    /// SHA-256 bytes).
-    #[test]
-    fn large_value_becomes_hash() {
-        let value: Box<[u8]> = vec![0xABu8; 32].into_boxed_slice();
-        let node = make_node(&[1, 2], 0, Some(value), &[]);
-        insta::assert_snapshot!(hex::encode(node_bytes(&node)));
-    }
-}
-
-/// Tests for Ethereum hashing (Keccak-256, `ethhash` feature). Each child hash
-/// carries a 1-byte discriminant: `0x00` for `HashType::Hash` (32-byte Keccak
-/// hash), `0x01` for `HashType::Rlp` (inline RLP, < 32 bytes).
-#[cfg(feature = "ethhash")]
-mod ethhash {
-    use super::*;
-
-    /// Branch with a single child at nibble 7. The child is encoded as
-    /// discriminant `0x00` + 32-byte zero hash → 33 bytes per child.
-    #[test]
-    fn single_child() {
-        let node = make_node(&[1], 0, None, &[7]);
-        insta::assert_snapshot!(hex::encode(node_bytes(&node)));
-    }
-
-    /// Branch with all 16 children. Each child takes 33 bytes (discriminant +
-    /// hash); total child data is 16 × 33 = 528 bytes after the 2-byte
-    /// `ChildMask`.
-    #[test]
-    fn all_children() {
-        let all: Vec<u8> = (0u8..16).collect();
-        let node = make_node(&[0], 0, None, &all);
-        insta::assert_snapshot!(hex::encode(node_bytes(&node)));
-    }
-}
-
 /// Serializes a [`FrozenRangeProof`] with empty node lists and the given key-value
 /// pairs. Returns all bytes including the 32-byte proof header.
 fn range_proof_bytes(kvs: &[(&[u8], &[u8])]) -> Vec<u8> {
@@ -227,148 +169,115 @@ fn change_proof_bytes(ops: Box<[BatchOp<Key, Value>]>) -> Vec<u8> {
     out
 }
 
-/// Header encoding tests — snapshots the full 32-byte proof header.
+/// [`ProofNode`] encodings with no children — identical bytes under both hash
+/// modes, so a single (unprefixed) snapshot file is shared.
 ///
-/// The `hash_mode` byte is `0x00` for SHA-256 (merkledb) and `0x01` for
-/// Keccak-256 (ethhash), so the header bytes differ between feature modes.
-/// Tests are nested inside cfg-gated submodules following the same convention
-/// as the node tests above.
-mod header {
-    use super::*;
+/// - `empty`: zero-length key, no value, no children — 8 bytes after the header.
+/// - `leaf_with_value`: short value (`b"hello"`, < 32 bytes) encoded as
+///   `ValueDigest::Value` (discriminant `0x00`).
+/// - `partial_path`: `partial_len = 3` on a 5-nibble key; the first 3 nibbles
+///   belong to the parent, the remaining 2 are this node's own partial path.
+#[test_case("empty", &[], 0, None, &[] ; "empty")]
+#[test_case("leaf_with_value", &[1, 2, 3], 0, Some(Box::from(b"hello".as_slice())), &[] ; "leaf_with_value")]
+#[test_case("partial_path", &[1, 2, 3, 4, 5], 3, None, &[] ; "partial_path")]
+fn proof_node(
+    name: &str,
+    key: &[u8],
+    partial_len: usize,
+    value: Option<Box<[u8]>>,
+    children: &[u8],
+) {
+    let node = make_node(key, partial_len, value, children);
+    insta::assert_snapshot!(name, hex::encode(node_bytes(&node)));
+}
 
-    fn range_header() -> Vec<u8> {
-        range_proof_bytes(&[])[..32].to_vec()
-    }
+/// [`ProofNode`] encodings whose bytes depend on the hash mode, so
+/// [`hash_mode_name`] keeps the two modes in separate files.
+///
+/// MerkleDB encodes each child hash as a flat 32-byte `TrieHash`; ethhash
+/// prefixes each with a 1-byte discriminant (`0x00` = 32-byte Keccak hash,
+/// `0x01` = inline RLP).
+///
+/// - `single_child`: one child at nibble 7 (`ChildMask` bit 7, `0x0080`).
+/// - `all_children`: all 16 children (`ChildMask = 0xFFFF`).
+/// - `large_value_becomes_hash` (merkledb-only): a 32-byte value is hashed by
+///   `make_hash()` and encoded as `ValueDigest::Hash`.
+#[test_case("single_child", &[1], 0, None, &[7] ; "single_child")]
+#[test_case("all_children", &[0], 0, None, &[0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] ; "all_children")]
+#[cfg_attr(
+    not(feature = "ethhash"),
+    test_case("large_value_becomes_hash", &[1, 2], 0, Some(vec![0xABu8; 32].into_boxed_slice()), &[] ; "large_value_becomes_hash")
+)]
+fn branch_node(
+    name: &str,
+    key: &[u8],
+    partial_len: usize,
+    value: Option<Box<[u8]>>,
+    children: &[u8],
+) {
+    let node = make_node(key, partial_len, value, children);
+    insta::assert_snapshot!(hash_mode_name(name), hex::encode(node_bytes(&node)));
+}
 
-    fn change_header() -> Vec<u8> {
+/// Proof header encoding — the full 32-byte header. The `hash_mode` byte is
+/// `0x00` for SHA-256 (merkledb) and `0x01` for Keccak-256 (ethhash), so the
+/// bytes differ between modes and [`hash_mode_name`] keeps them in separate
+/// files.
+///
+/// `range` (`proof_type` `0x01`) and `change` (`proof_type` `0x02`) otherwise
+/// share the same magic `fwdproof`, version `0x00`, `branch_factor` `0x10`, and
+/// 20 zero reserved bytes.
+#[test_case("range", false ; "range")]
+#[test_case("change", true ; "change")]
+fn proof_header(name: &str, change: bool) {
+    let bytes = if change {
         change_proof_bytes(Box::new([]))[..32].to_vec()
-    }
-
-    #[cfg(not(feature = "ethhash"))]
-    mod merkledb {
-        use super::*;
-
-        /// Range proof header: magic `fwdproof`, version `0x00`, `hash_mode` `0x00`
-        /// (SHA-256), `branch_factor` `0x10`, `proof_type` `0x01` (range), 20 zero
-        /// reserved bytes.
-        #[test]
-        fn range() {
-            insta::assert_snapshot!(hex::encode(range_header()));
-        }
-
-        /// Change proof header: same as range but `proof_type` `0x02` (change).
-        #[test]
-        fn change() {
-            insta::assert_snapshot!(hex::encode(change_header()));
-        }
-    }
-
-    #[cfg(feature = "ethhash")]
-    mod ethhash {
-        use super::*;
-
-        /// Range proof header, Keccak-256 mode: `hash_mode` byte is `0x01`
-        /// instead of `0x00`.
-        #[test]
-        fn range() {
-            insta::assert_snapshot!(hex::encode(range_header()));
-        }
-
-        /// Change proof header, Keccak-256 mode.
-        #[test]
-        fn change() {
-            insta::assert_snapshot!(hex::encode(change_header()));
-        }
-    }
+    } else {
+        range_proof_bytes(&[])[..32].to_vec()
+    };
+    insta::assert_snapshot!(hash_mode_name(name), hex::encode(bytes));
 }
 
-/// Key-value pair encoding tests — snapshots `bytes[32..]` of a [`FrozenRangeProof`]
-/// with empty node lists. Key-value encoding uses raw byte slices and is identical
-/// under both hash modes; no cfg-gating is needed.
+/// Key-value pair encoding — snapshots `bytes[32..]` of a [`FrozenRangeProof`]
+/// with empty node lists. Key-value encoding uses raw byte slices and is
+/// identical under both hash modes, so no prefix is needed.
 ///
-/// The payload begins with `varint(0)` twice (empty start- and end-proof counts),
-/// then `varint(N)` followed by N length-prefixed `(key, value)` pairs.
-mod key_values {
-    use super::*;
-
-    /// No key-value pairs: the KV sequence is encoded as a single `varint(0)`.
-    #[test]
-    fn empty() {
-        insta::assert_snapshot!(hex::encode(&range_proof_bytes(&[])[32..]));
-    }
-
-    /// Single pair `b"key1"` → `b"value1"`.
-    #[test]
-    fn single_pair() {
-        insta::assert_snapshot!(hex::encode(
-            &range_proof_bytes(&[(b"key1", b"value1")])[32..]
-        ));
-    }
-
-    /// Two pairs in sequence: `b"key1"`→`b"val1"`, `b"key2"`→`b"val2"`.
-    #[test]
-    fn multiple_pairs() {
-        insta::assert_snapshot!(hex::encode(
-            &range_proof_bytes(&[(b"key1", b"val1"), (b"key2", b"val2")])[32..]
-        ));
-    }
+/// The payload begins with `varint(0)` twice (empty start- and end-proof
+/// counts), then `varint(N)` followed by N length-prefixed `(key, value)` pairs.
+#[test_case("empty", &[] ; "empty")]
+#[test_case("single_pair", &[(b"key1".as_slice(), b"value1".as_slice())] ; "single_pair")]
+#[test_case("multiple_pairs", &[(b"key1".as_slice(), b"val1".as_slice()), (b"key2".as_slice(), b"val2".as_slice())] ; "multiple_pairs")]
+fn key_value(name: &str, pairs: &[(&[u8], &[u8])]) {
+    insta::assert_snapshot!(
+        format!("key_values__{name}"),
+        hex::encode(&range_proof_bytes(pairs)[32..])
+    );
 }
 
-/// Batch operation encoding tests — snapshots `bytes[32..]` of a
-/// [`FrozenChangeProof`] with empty node lists. Batch ops use fixed opcodes
-/// and raw byte slices; encoding is identical under both hash modes.
+/// Batch operation encoding — snapshots `bytes[32..]` of a [`FrozenChangeProof`]
+/// with empty node lists. Batch ops use fixed opcodes and raw byte slices;
+/// encoding is identical under both hash modes.
 ///
-/// The payload begins with `varint(0)` twice (empty start- and end-proof counts),
-/// then `varint(N)` followed by N operations. Each operation starts with a 1-byte
-/// opcode: `0x00` = `Put`, `0x01` = `Delete`, `0x02` = `DeleteRange`.
-mod batch_ops {
-    use super::*;
-
-    /// Single `Put` operation: opcode `0x00`, key length-prefixed, then value
-    /// length-prefixed.
-    #[test]
-    fn put() {
-        let ops = Box::new([BatchOp::Put {
-            key: Box::from(b"key1".as_slice()),
-            value: Box::from(b"val1".as_slice()),
-        }]);
-        insta::assert_snapshot!(hex::encode(&change_proof_bytes(ops)[32..]));
-    }
-
-    /// Single `Delete` operation: opcode `0x01`, then key length-prefixed.
-    #[test]
-    fn delete() {
-        let ops = Box::new([BatchOp::Delete {
-            key: Box::from(b"key2".as_slice()),
-        }]);
-        insta::assert_snapshot!(hex::encode(&change_proof_bytes(ops)[32..]));
-    }
-
-    /// Single `DeleteRange` operation: opcode `0x02`, then prefix length-prefixed.
-    #[test]
-    fn delete_range() {
-        let ops = Box::new([BatchOp::DeleteRange {
-            prefix: Box::from(b"key3".as_slice()),
-        }]);
-        insta::assert_snapshot!(hex::encode(&change_proof_bytes(ops)[32..]));
-    }
-
-    /// All three operations in sequence. Matches the proof constructed by
-    /// `create_valid_change_proof()` in `tests.rs`.
-    #[test]
-    fn all_ops() {
-        let ops = Box::new([
-            BatchOp::Put {
-                key: Box::from(b"key1".as_slice()),
-                value: Box::from(b"val1".as_slice()),
-            },
-            BatchOp::Delete {
-                key: Box::from(b"key2".as_slice()),
-            },
-            BatchOp::DeleteRange {
-                prefix: Box::from(b"key3".as_slice()),
-            },
-        ]);
-        insta::assert_snapshot!(hex::encode(&change_proof_bytes(ops)[32..]));
-    }
+/// The payload begins with `varint(0)` twice (empty start- and end-proof
+/// counts), then `varint(N)` followed by N operations. Each operation starts
+/// with a 1-byte opcode: `0x00` = `Put`, `0x01` = `Delete`,
+/// `0x02` = `DeleteRange`. `all_ops` matches the proof constructed by
+/// `create_valid_change_proof()` in `tests.rs`.
+#[test_case("put", Box::new([BatchOp::Put { key: Box::from(b"key1".as_slice()), value: Box::from(b"val1".as_slice()) }]) ; "put")]
+#[test_case("delete", Box::new([BatchOp::Delete { key: Box::from(b"key2".as_slice()) }]) ; "delete")]
+#[test_case("delete_range", Box::new([BatchOp::DeleteRange { prefix: Box::from(b"key3".as_slice()) }]) ; "delete_range")]
+#[test_case(
+    "all_ops",
+    Box::new([
+        BatchOp::Put { key: Box::from(b"key1".as_slice()), value: Box::from(b"val1".as_slice()) },
+        BatchOp::Delete { key: Box::from(b"key2".as_slice()) },
+        BatchOp::DeleteRange { prefix: Box::from(b"key3".as_slice()) },
+    ])
+    ; "all_ops"
+)]
+fn batch_op(name: &str, ops: Box<[BatchOp<Key, Value>]>) {
+    insta::assert_snapshot!(
+        format!("batch_ops__{name}"),
+        hex::encode(&change_proof_bytes(ops)[32..])
+    );
 }
