@@ -10,12 +10,12 @@
 Stand up an [mdBook](https://rust-lang.github.io/mdBook/) documentation site for
 Firewood, deployed to GitHub Pages, and make it the front door of the published
 site. The generated rustdoc, Go docs, and performance benchmark dashboards become
-resources navigable *from* the book rather than the site root.
+resources navigable from the book rather than the site root.
 
 The book ships with an Introduction, a fully-authored Getting Started guide for
-initializing development environments, and a Designs subsystem that establishes a
-peer-reviewable, RFC-style workflow for proposing designs and promoting them to
-living "active" documentation once implemented. Additional sections (Concepts,
+initializing development environments, and a Designs subsystem. The Designs subsystem
+establishes a peer-reviewable, RFC-style workflow for proposing designs and promoting
+them to living "active" documentation once implemented. Additional sections (Concepts,
 AvalancheGo/EVM Integration, Operations & Benchmarking, Reference, Meta) each ship an
 authored landing page; not-yet-written sub-pages are listed as mdBook draft chapters
 (greyed-out sidebar entries) rather than empty stub files.
@@ -98,7 +98,7 @@ output into a subdirectory.
    `docs/src/`). Reuses the existing `docs/src/assets/architecture.svg` already
    referenced by `README.md`.
 3. **CI strategy:** Extend the existing `gh-pages.yaml` rather than add a competing
-   workflow (a separate workflow would race over the single-source Pages artifact).
+   workflow — a separate workflow would race over the single-source Pages artifact.
 4. **Design lifecycle:** File move between `proposed/` and `active/` folders is the
    visible status marker, backed by a documented promotion checklist (a frontmatter
    flip alone does not capture the work of promotion).
@@ -117,9 +117,10 @@ output into a subdirectory.
    there is no checked-in JS to drift. Callouts use mdBook's built-in alert syntax
    (`> [!NOTE]`, `> [!WARNING]`, …) rather than a preprocessor.
    > [!NOTE]
-   > `mdbook-admonish` was the original choice for callouts, but it requires mdBook
-   > `< 0.5.0`, which is incompatible with the `mdbook 0.5.x` that `mdbook-linkcheck2`
-   > requires. mdBook 0.5's native alert syntax provides the same callouts with no
+   > `mdbook-admonish` was the original choice for callouts. Its declared `< 0.5.0`
+   > version constraint is intentional: mdBook 0.5 bundles the same native alert syntax,
+   > making the extension permanently redundant (the maintainers have no plans to lift
+   > the constraint). mdBook 0.5's native alerts provide the same callouts with no
    > preprocessor, no checked-in CSS, and no asset-drift surface — so admonish is
    > dropped entirely.
 8. **Install commands in docs:** The authored developer guide may include concrete
@@ -213,8 +214,8 @@ work — old external deep links 404, accepted in exchange for the cleaner root 
 
 `SUMMARY.md` supports raw-URL entries, which render as sidebar items. A
 `reference/` section and sidebar entries link to the deployed paths
-(`/firewood/rustdoc/`, `/firewood/ffi/`, `/firewood/bench/`). These resolve on the
-deployed site; under local `mdbook serve` they point at the live production site.
+(`/rustdoc/`, `/ffi/`, `/bench/`), resolved relative to the GitHub Pages site root.
+These resolve on the deployed site; under local `mdbook serve` they point at the live production site.
 The `reference/README.md` page notes this explicitly. `mdbook-linkcheck2` is
 configured with `follow-web-links = false` so these external link-outs do not break
 local/CI builds.
@@ -324,7 +325,7 @@ site/                         ← uploaded as the Pages artifact
 2. **Install the mdBook toolchain.** `mdbook` and `mdbook-mermaid` install via
    `taiki-e/install-action` (pinned by commit SHA), each pinned to an explicit version.
    `mdbook-linkcheck2` is **not** in the `taiki-e/install-action` manifest, so install it
-   with `cargo binstall --no-confirm mdbook-linkcheck2@<version>` (`cargo-binstall` itself
+   with `cargo binstall --no-confirm mdbook-linkcheck2@0.12.2` (`cargo-binstall` itself
    comes from `taiki-e/install-action`). `cargo binstall` downloads a prebuilt binary when
    one is published for the runner target and **automatically falls back to
    `cargo install`** when no prebuilt artifact is available or the download fails (e.g.
@@ -414,12 +415,15 @@ Because linkcheck runs with `follow-web-links = false`, the `/rustdoc/`, `/ffi/`
 rustdoc relocation — are never validated by the build. A third job, `smoke`, is added
 to `gh-pages.yaml`:
 
-- `needs: [deploy]` so it runs only after a successful deploy.
+- `needs: [build, deploy]` so it runs only after a successful deploy and can read
+  the `has_bench` output from the build job.
 - `if:` gated to the same condition as `deploy` (canonical repo, non-`pull_request`
   events) so PR runs and forks are unaffected.
 - A single step that `curl --fail`s each deployed path — `/`, `/rustdoc/` (the
-  redirect), `/rustdoc/firewood/`, `/ffi/`, and `/bench/` — against the Pages base URL,
-  failing the workflow if any returns a non-success status.
+  redirect), `/rustdoc/firewood/`, and `/ffi/` — against the Pages base URL,
+  failing the workflow if any returns a non-success status. `/bench/` is checked
+  only when `needs.build.outputs.has_bench == 'true'` (the benchmark-data branch
+  was present during the build).
 
 This is the automated backstop for the consciously-skipped external link validation and
 surfaces a stale crate-directory name (e.g. `firewood_replay`) introduced by a future
@@ -450,11 +454,10 @@ relocation.
   assets; a prerequisite of the build recipes so a fresh checkout builds without a
   manual step).
 - `book-serve` → `book-assets` then `mdbook serve docs --open` (live reload).
-- `book-build` → `book-assets` then `mdbook build docs` (mirrors what CI runs on PRs;
-  this is the single build-and-validate recipe). `mdbook-linkcheck2` is a renderer
-  backend, not a standalone binary, so it runs automatically as part of `mdbook build`
-  once `[output.linkcheck2]` is configured in `book.toml` — there is no separate command
-  to invoke.
+- `book-build` → `book-assets` then `mdbook build docs` — the single
+  build-and-validate recipe that mirrors what CI runs on PRs. `mdbook-linkcheck2` runs
+  automatically as a renderer backend once `[output.linkcheck2]` is in `book.toml`;
+  no separate invocation is needed.
 - `new-design slug` → scaffolds `docs/src/designs/proposed/NNNN-slug.md` from the
   proposed template. Sequence-number algorithm: glob
   `docs/src/designs/proposed/[0-9][0-9][0-9][0-9]-*.md`, parse the leading 4-digit
@@ -549,10 +552,10 @@ in `avalanchego/go.mod` and in the `graft/evm`, `graft/coreth`, and `graft/subne
 `go.mod`s. That published module tracks the `firewood-ffi` crate version: when
 `firewood-ffi` is released, CI builds the static libraries, copies the in-repo `ffi/`
 directory into the `ava-labs/firewood-go-ethhash` repository, and tags it (see
-[`RELEASE.md`](../../../../RELEASE.md) and
-[`.github/workflows/attach-static-libs.yaml`](../../../../.github/workflows/attach-static-libs.yaml)).
+[`RELEASE.md`](https://github.com/ava-labs/firewood/blob/main/RELEASE.md) and
+[`.github/workflows/attach-static-libs.yaml`](https://github.com/ava-labs/firewood/blob/main/.github/workflows/attach-static-libs.yaml)).
 The section documents how the in-repo `ffi/` crate is built (the `cargo build` →
-`go tool cgo` flow described in [`ffi/README.md`](../../../../ffi/README.md)), packaged,
+`go tool cgo` flow described in [`ffi/README.md`](https://github.com/ava-labs/firewood/blob/main/ffi/README.md)), packaged,
 and published, and how a downstream consumer pins and upgrades it. It links to `/ffi/`
 (godoc) for the generated API reference and to `meta/release.md` for the publish/version
 cadence. Without this, the integration story is incomplete: a reader following the

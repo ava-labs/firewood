@@ -4,29 +4,38 @@
 
 # Guides
 
-- [Getting Started]()
-  - [Development Environment]()
+- [Getting Started](getting-started/README.md)
+  - [Development Environment](getting-started/dev-environment.md)
 
 # Concepts
 
-- [Concepts & Architecture]()
+- [Concepts & Architecture](concepts/README.md)
 
 # Design Documents
 
-- [Designs]()
+- [Designs](designs/README.md)
+  - [Proposed](designs/proposed/README.md)
+    - [0001 — mdBook documentation site](designs/proposed/0001-mdbook-documentation-site.md)
+  - [Active](designs/active/README.md)
+    - [On-disk format and addressing](designs/active/on-disk-format-and-addressing.md)
+    - [Development container](designs/active/devcontainer.md)
+  - [Proposed template](designs/templates/proposed.md)
+  - [Active template](designs/templates/active.md)
 
 # Integration
 
-- [AvalancheGo & EVM Integration]()
+- [AvalancheGo & EVM Integration](integration/README.md)
 
 # Operations
 
-- [Operations & Benchmarking]()
+- [Operations & Benchmarking](operations/README.md)
 
 # Reference
 
-- [Reference]()
+- [Reference](reference/README.md)
 
 # Meta
 
-- [About These Docs]()
+- [About These Docs](meta/README.md)
+  - [How these docs work](meta/documentation.md)
+  - [Release process](meta/release.md)

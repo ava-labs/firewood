@@ -1,10 +1,10 @@
-# Firewood: Compaction-Less Database Optimized for Efficiently Storing Recent Merkleized Blockchain State
+# Firewood: compaction-less database optimized for efficiently storing recent Merkleized blockchain state
 
 ![Github Actions](https://github.com/ava-labs/firewood/actions/workflows/ci.yaml/badge.svg?branch=main)
 [![Ecosystem license](https://img.shields.io/badge/License-Ecosystem-blue.svg)](./LICENSE.md)
 
-> :warning: Firewood is beta-level software.
-> The Firewood API may change with little to no warning.
+> [!WARNING]
+> Firewood is beta-level software. Its API may change with little to no warning.
 
 Firewood is an embedded key-value store, optimized to store recent Merkleized blockchain
 state with minimal overhead. Most blockchains, including Avalanche's C-Chain and Ethereum, store their state in Merkle tries to support efficient generation and verification of state proofs.
@@ -17,7 +17,7 @@ to feed into the underlying database that is unaware of the data being stored.
 The convenient byproduct of this approach is that iteration is still fast (for serving state sync queries)
 but compaction is not required to maintain the index.
 Firewood was first conceived to provide a very fast storage layer for the EVM,
-but could be used on any blockchain that requires an authenticated state.
+but can be used on any blockchain that requires an authenticated state.
 
 By default, Firewood only attempts to store recent revisions on-disk and will actively clean up unused data when revisions expire.
 It keeps some configurable number of previous states in memory and on disk to power state sync and APIs
@@ -30,7 +30,7 @@ Firewood also supports archival mode via `RootStore`, which retains all historic
 
 Hashes are not used to determine where a node is stored on disk in the database file.
 Instead space for nodes may be allocated from the end of the file,
-or from space freed from expired revision. Free space management algorithmically resembles that of traditional heap memory management, with free lists used to track different-size spaces that can be reused.
+or from space freed from expired revision. Free space management resembles that of traditional heap memory management, with free lists used to track different-size spaces that can be reused.
 The root address of a node is simply the disk offset within the database file,
 and each branch node points to the disk offset of that other node.
 
@@ -65,7 +65,7 @@ as well as carefully managing the free list during the creation and expiration o
 - `Change Proof` - A proof that consists of a set of all changes between two
   revisions.
 - `Put` - An operation for a `Key`/`Value` pair. A put means "create if it doesn't
-  exist, or update it if it does. A put operation is how you add a `Value` for a
+  exist, or update it if it does". A put operation is how you add a `Value` for a
   specific `Key`.
 - `Delete` - An operation indicating that a `Key` should be removed from the trie.
 - `Batch Operation` - An operation of either `Put` or `Delete`.
@@ -86,13 +86,14 @@ as well as carefully managing the free list during the creation and expiration o
 
 ## Metrics
 
-Firewood provides comprehensive metrics for monitoring database performance, resource utilization, and operational characteristics. For detailed information about all available metrics, how to enable them, and how to interpret them, see [METRICS.md](METRICS.md).
+Firewood exposes metrics for monitoring database performance and resource utilization.
+See [METRICS.md](METRICS.md) for details.
 
 ## Development Environment
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/ava-labs/firewood)
 
-The quickest way to get started is with the included devcontainer, which
+The simplest way to get started is with the included devcontainer, which
 provides a fully configured environment with all required tools pre-installed.
 
 **GitHub Codespaces** — click the badge above or go to
@@ -115,9 +116,9 @@ See [`.devcontainer/`](.devcontainer/) for the full configuration.
 In order to build firewood, the following dependencies must be installed:
 
 - `cargo` See [installation instructions](https://doc.rust-lang.org/cargo/getting-started/installation.html).
-- `make` See [download instructions](https://www.gnu.org/software/make/#download) or run `sudo apt install build-essential` on Linux.
+- **[just](https://github.com/casey/just)** — task runner (`just --list` shows available recipes). Optional; all commands can also be run with `cargo` directly.
 
-More detailed build instructions, including some scripts,
+More detailed build instructions, including benchmark environment setup scripts,
 can be found in the [benchmark setup scripts](benchmark/setup-scripts).
 
 If you want to build and test the ffi layer for another platform,
@@ -139,25 +140,28 @@ It is worth noting that the hash stored as a value inside the account root RLP i
 During hash calculations, we know the hash of the children,
 and use that directly to modify the value in-place
 when hashing the node.
-See [replace\_hash](firewood/storage/src/hashers/ethhash.rs) for more details.
+See [replace\_list\_field](storage/src/hashers/ethhash.rs) for more details.
 
 ## Run
 
 Example(s) are in the [examples](firewood/examples) directory, that simulate real world
-use-cases. Try running the insert example via the command-line, via `cargo run --release
---example insert`.
+use-cases. Try running the insert example:
+
+```sh
+cargo run --release --example insert
+```
 
 For performance benchmarking — C-Chain re-execution, Rust criterion, and synthetic workloads — see [benchmark/README.md](benchmark/README.md).
 
 For maximum runtime performance at the cost of compile time,
-use `cargo run --maxperf` instead,
+use `cargo run --profile maxperf` instead,
 which enables maximum link time compiler optimizations.
 
 ## Logging
 
 If you want logging, enable the `logging` feature flag, and then set RUST\_LOG accordingly.
 See the documentation for [env\_logger](https://docs.rs/env_logger/latest/env_logger/) for specifics.
-We currently have very few logging statements, but this is useful for print-style debugging.
+Firewood currently emits very few log statements, but this is useful for print-style debugging.
 
 ## Release
 
@@ -175,7 +179,7 @@ Firewood comes with a CLI tool called `fwdctl` that enables one to create and in
 ## Test
 
 ```sh
-cargo nextest --release
+cargo nextest run --release
 ```
 
 ## License

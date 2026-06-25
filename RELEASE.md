@@ -1,12 +1,11 @@
-# Releasing firewood
+# Releasing Firewood
 
-Releasing firewood is straightforward and can mostly be done in CI. Updating the
-Cargo.toml file is currently manual.
+Most of the release process runs in CI. Updating `Cargo.toml` is a manual step.
 
 Firewood is made up of several sub-projects in a workspace. Each project is in
 its own crate and has an independent version.
 
-## Workspace Dependencies
+## Prerequisites
 
 Ensure the following tools are installed before beginning:
 
@@ -25,11 +24,9 @@ branch 'release/v0.1.1' set up to track 'origin/main'.
 Switched to a new branch 'release/v0.1.1'
 ```
 
-If already on a new branch, ensure `HEAD` is the same as the remote's `main`.
-As the upstream repo changes, rebase the branch onto `main` so that the changes
-from `git cliff` follow the repository history in the correct linear order.
-
-On rebase, quickly redo the generative steps with `just`:
+If the release branch falls behind `origin/main` while in review, rebase it
+(not merge — `git cliff` requires a linear commit history for correct changelog
+ordering) and regenerate the release artifacts:
 
 ```shell
 just release-step-update-rust-dependencies && just release-step-refresh-changelog v0.1.1
@@ -50,13 +47,13 @@ Updating the Rust MSRV requires edits in two places:
 - [clippy.toml]
   - Update the root `msrv` setting to indicate the set MSRV. This configures
     clippy to include newer lints that would otherwise be incorrect with a lower
-    MSRV; such as recommending newly stablized features that were unstable in
+    MSRV; such as recommending newly stabilized features that were unstable in
     the older release.
 - [Cargo.toml]
   - Update `workspace.package.rust-version` which will propagate through the
     other cargo packages that have `package.rust-version.workspace = true` set.
 
-[^1]: e.g., with 1.91 stable, 1.89 is the best effort MSRV
+[^1]: e.g., with 1.96 stable, 1.94 is the best effort MSRV
 
 ### Cargo Dependencies
 
@@ -100,7 +97,7 @@ bump signals non-breaking changes.
 
 ### Crates with public API guarantees
 
-| Crate | Public interface |
+| Component | Public interface |
 | ----- | ---------------- |
 | `firewood` | Rust API |
 | `firewood-storage` | Rust API |
@@ -108,9 +105,9 @@ bump signals non-breaking changes.
 | `firewood-go` (via `firewood-go-ethhash`) | Go module API |
 | `fwdctl` | CLI flags and config file format |
 
-Tag pull requests with the appropriate `breaking-change/<crate>` label when the
-change breaks the public interface. `git cliff` reads these labels via the GitHub
-API and marks affected entries in the CHANGELOG automatically.
+Tag pull requests with the `breaking-change` label when the change breaks the
+public interface. `git cliff` reads this label via the GitHub API and marks
+affected entries in the CHANGELOG automatically.
 
 ### Crates without public API guarantees
 
@@ -144,7 +141,7 @@ For semver breaking changes, all downstream packages require upgrading to the ne
 therefore, the next step is to bump the dependency declarations to the new version.
 Packages within the workspace that are used as libraries are also defined within
 the [`[workspace.dependencies]`](https://doc.rust-lang.org/cargo/reference/workspaces.html#the-dependencies-table)
-table. E.g.,:
+table. For example:
 
 ```toml
 [workspace.dependencies]
@@ -154,8 +151,7 @@ firewood = { path = "firewood", version = "0.1.1" }
 
 This allows packages within the workspace to inherit the dependency,
 including path, version, and workspace-level features by adding `workspace = true`
-to the dependency table (note: using `cargo add -p firewood-fwdctl firewood-metrics`
-would automatically add the dependency with `workspace = true`).
+to the dependency table.
 
 ```toml
 [dependencies]
@@ -169,8 +165,9 @@ firewood-storage = { workspace = true, features = ["io-uring"] }
 firewood-storage.workspace = true
 ```
 
-Thefefore, after updating the `workspace.package.version` value, we must update
-the dependency versions to match.
+Therefore, after updating each package's version in `[workspace.dependencies]`
+(and in the crate's own `Cargo.toml` if it sets `package.version` directly),
+update the matching dependency declarations to the new version.
 
 Run `cargo update` after editing the `Cargo.toml` files to ensure the lockfile
 is correct and reflects the new package versions.
@@ -191,7 +188,7 @@ just release-step-refresh-changelog v0.1.1
 ```
 
 Breaking changes are detected automatically from both conventional commit
-syntax (`feat!:`, `BREAKING CHANGE:` footer) and PR labels (`breaking-change/*`).
+syntax (`feat!:`, `BREAKING CHANGE:` footer) and PR labels (`breaking-change`).
 No manual edits to `CHANGELOG.md` are needed or expected.
 
 ## Commit
@@ -202,16 +199,16 @@ Commit the version bump and change log updates. Using the summary prefix:
 
 will cause `git-cliff` to omit the commit from the changelog. This is why
 substantive changes when upgrading dependencies should be in their own commit.
-If you do not use the prefix, there will be an egg-and-chicken problem as the
-commit message generated by GitHub includes the pull request as a suffix.
-Manually resolve this in the CHANGELOG if needed; otherwise, the CHANGELOG will
-have irrelevant changes on future releases.
+Without this prefix, `git cliff` includes the version-bump commit in the next
+release's changelog, producing a stale pull-request reference (the PR number
+did not exist when the commit was written). Manually correct the CHANGELOG if
+the prefix was omitted.
 
-## Review
+## Open and merge the release PR
 
-> ❗ Be sure to update the versions of all sub-projects before creating a new
-> release. Open a PR with the updated versions and merge it before continuing to
-> the next step.
+> [!IMPORTANT]
+> Update the versions of all relevant packages before opening this PR. After
+> the PR merges, continue to the tagging and publishing steps.
 
 ## Publish
 
@@ -241,7 +238,8 @@ Pushing the tag triggers three automated jobs:
 
 ### Publish the draft release (manual step)
 
-The crates.io workflow does **not** run until the GitHub release is published.
+> [!IMPORTANT]
+> The crates.io workflow does **not** run until the GitHub release is published.
 
 1. Go to <https://github.com/ava-labs/firewood/releases>.
 2. Find the draft (labelled **Draft**).
@@ -261,8 +259,6 @@ dependency order, automatically skipping:
   (crates.io rejects non-registry dependencies).
 
 ## Milestone
-
-> NOTE: this should be automated as well.
 
 Close the GitHub milestone for the version that was released. Be sure to create
 a new milestone for the next version if one does not already exist. Carry over
