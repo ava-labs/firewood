@@ -107,7 +107,7 @@ pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
     let mut items: [RlpItem<'_>; BranchNode::MAX_CHILDREN + 1] =
         [RlpItem::Empty; BranchNode::MAX_CHILDREN + 1];
     for ((_, child), slot) in (&node.child_hashes).into_iter().zip(items.iter_mut()) {
-        *slot = proof_child_rlp_item(child.as_ref());
+        *slot = proof_child_rlp_item(child);
     }
     // The 17th element is the value. Account nodes carry their value in
     // account RLP that gets spliced in below, not in the branch slot.
@@ -125,7 +125,7 @@ pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
     // hasher hashed.
     let inner_bytes: Box<[u8]> = if is_account {
         match value_bytes {
-            Some(v) => fix_account_storage_root_value(v, &node.child_hashes)
+            Some(v) => fix_account_storage_root_value(v, &Children::from(&node.child_hashes))
                 .unwrap_or_else(|| Box::from(v)),
             None => branch_bytes,
         }
@@ -181,6 +181,11 @@ pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
 /// node is itself the storage root and is re-encoded directly.
 #[must_use]
 pub fn account_storage_root_rlp(account_node: &ProofNode) -> Option<Box<[u8]>> {
+    // Zero-child and single-child shapes are handled by the caller
+    // (`proof_node_to_mpt_rlp`): no children → empty-trie storage root;
+    // one child → the lone child node is itself the storage root and is
+    // re-encoded directly. Only the multi-child case needs the branch
+    // encoding produced here.
     if account_node.child_hashes.count() < 2 {
         return None;
     }
@@ -190,7 +195,7 @@ pub fn account_storage_root_rlp(account_node: &ProofNode) -> Option<Box<[u8]>> {
         .into_iter()
         .zip(items.iter_mut())
     {
-        *slot = proof_child_rlp_item(child.as_ref());
+        *slot = proof_child_rlp_item(child);
     }
     // The 17th slot stays empty: at the storage trie root there is no value.
     Some(encode_list(&items))
@@ -298,7 +303,9 @@ fn proof_child_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
 #[expect(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use firewood_storage::{IntoHashType, PathBuf, RlpList, TrieHash, TriePathFromUnpackedBytes};
+    use firewood_storage::{
+        DenseChildren, IntoHashType, PathBuf, RlpList, TrieHash, TriePathFromUnpackedBytes,
+    };
 
     fn pathbuf_from_nibbles(nibbles: &[u8]) -> PathBuf {
         let components =
@@ -311,7 +318,7 @@ mod tests {
             key: pathbuf_from_nibbles(nibbles),
             partial_len: 0,
             value_digest: Some(ValueDigest::Value(value.into())),
-            child_hashes: Children::new(),
+            child_hashes: DenseChildren::new(),
         }
     }
 
@@ -332,7 +339,7 @@ mod tests {
             key: pathbuf_from_nibbles(&[1, 2]),
             partial_len: 0,
             value_digest: None,
-            child_hashes: Children::new(),
+            child_hashes: DenseChildren::new(),
         };
         let bytes = proof_node_to_mpt_rlp(&node);
         assert_eq!(bytes.len(), 1);
@@ -359,7 +366,7 @@ mod tests {
             key: pathbuf_from_nibbles(&[]),
             partial_len: 0,
             value_digest: None,
-            child_hashes: children,
+            child_hashes: DenseChildren::from(children),
         };
         let bytes = proof_node_to_mpt_rlp(&node);
         assert_eq!(bytes.len(), 1, "empty partial path emits one buffer");
@@ -388,7 +395,7 @@ mod tests {
             key: pathbuf_from_nibbles(&[5, 6, 7]),
             partial_len: 0,
             value_digest: None,
-            child_hashes: children,
+            child_hashes: DenseChildren::from(children),
         };
         let bytes = proof_node_to_mpt_rlp(&node);
         assert_eq!(bytes.len(), 2, "long-inner branch emits two buffers");

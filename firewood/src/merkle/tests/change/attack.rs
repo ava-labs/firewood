@@ -386,15 +386,19 @@ fn test_crafted_conflicting_proof_nodes_rejected() {
     assert!(!end_nodes.is_empty(), "end proof should have nodes");
 
     let root_node = &mut end_nodes[0];
-    let child_hash = root_node
+    // Find the first present child nibble and flip its hash.
+    let (first_nibble, first_hash) = root_node
         .child_hashes
-        .iter_mut()
-        .find_map(|(_, h)| h.as_mut())
+        .iter_present()
+        .next()
         .expect("root node should have at least one child hash");
-    let bytes: [u8; 32] = child_hash.clone().into_triehash().into();
+    let bytes: [u8; 32] = first_hash.clone().into_triehash().into();
     let mut new_bytes = bytes;
     new_bytes[0] ^= 1;
-    *child_hash = firewood_storage::TrieHash::from(new_bytes).into_hash_type();
+    let new_hash = firewood_storage::TrieHash::from(new_bytes).into_hash_type();
+    let mut children = Children::from(&root_node.child_hashes);
+    children[first_nibble] = Some(new_hash);
+    root_node.child_hashes = DenseChildren::from(children);
 
     let crafted = FrozenChangeProof::new(
         crate::Proof::new(valid.start_proof().as_ref().into()),
@@ -617,7 +621,9 @@ fn test_crafted_stripped_divergent_child_rejected() {
         .expect("should have a proof node at [1, 0, 5]");
 
     let nibble_8 = firewood_storage::PathComponent::try_new(8).unwrap();
-    start_nodes[branch_idx].child_hashes[nibble_8] = None;
+    let mut children = Children::from(&start_nodes[branch_idx].child_hashes);
+    children[nibble_8] = None;
+    start_nodes[branch_idx].child_hashes = DenseChildren::from(children);
 
     let crafted = FrozenChangeProof::new(
         crate::Proof::new(start_nodes.into_boxed_slice()),
@@ -759,7 +765,10 @@ fn gap_boundaries() -> ([u8; 32], [u8; 32]) {
 
 /// Helper for the common adversarial pattern: generate a valid bounded proof
 /// for the 5-key setup, inject a spurious operation, and assert rejection.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test helper that mirrors every field of the adversarial injection scenario"
+)]
 fn inject_and_assert_rejected(
     db: &Db,
     root1: api::HashKey,

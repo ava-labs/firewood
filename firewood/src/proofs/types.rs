@@ -50,8 +50,9 @@
 use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
 use firewood_storage::hash_node_as_storage_trie_root_parts;
 use firewood_storage::{
-    Children, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator, Path,
-    PathBuf, PathComponent, PathIterItem, Preimage, SplitPath, TrieHash, TriePath, ValueDigest,
+    Children, DenseChildren, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath,
+    NibblesIterator, Path, PathBuf, PathComponent, PathIterItem, Preimage, SplitPath, TrieHash,
+    TriePath, ValueDigest,
 };
 use thiserror::Error;
 
@@ -298,7 +299,7 @@ pub struct ProofNode {
     /// Otherwise, the node's value or the hash of its value.
     pub value_digest: Option<ValueDigest<Value>>,
     /// The hash of each child, or None if the child does not exist.
-    pub child_hashes: Children<Option<HashType>>,
+    pub child_hashes: DenseChildren<HashType>,
 }
 
 impl std::fmt::Debug for ProofNode {
@@ -361,7 +362,7 @@ impl Hashable for ProofNode {
     }
 
     fn children(&self) -> Children<Option<HashType>> {
-        self.child_hashes.clone()
+        Children::from(&self.child_hashes)
     }
 }
 
@@ -417,7 +418,7 @@ impl From<PathIterItem> for ProofNode {
             key: item.key_nibbles,
             partial_len,
             value_digest,
-            child_hashes,
+            child_hashes: DenseChildren::from(child_hashes),
         }
     }
 }
@@ -851,7 +852,7 @@ mod tests {
             key,
             partial_len: parent_prefix_len,
             value_digest: value.map(|v| ValueDigest::Value(v.to_vec().into_boxed_slice())),
-            child_hashes,
+            child_hashes: DenseChildren::from(child_hashes),
         }
     }
 

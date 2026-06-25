@@ -1,6 +1,9 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+pub mod dense;
+pub use dense::{DenseChildren, DenseChildrenAllIter, DenseChildrenIter};
+
 use crate::PathComponent;
 
 const MAX_CHILDREN: usize = PathComponent::LEN;
