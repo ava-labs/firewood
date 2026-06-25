@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782375529736,
+  "lastUpdate": 1782375879045,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -5545,6 +5545,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 44.987627732737636,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Joachim Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "2b091f906f31c55ed04627be812d6155187339cf",
+          "message": "feat(devcontainer): rewrite as a Dockerfile-less feature-based config (#2087)\n\n## Why this should be merged\n\nThe dev container hand-implemented toolchain and user setup in a\n~158-line\n`Dockerfile` plus a ~78-line `devcontainer.json`. Much of that work has\nwell-maintained upstream equivalents in the devcontainer **features**\necosystem,\nand the hand-rolled config had drifted:\n\n- **Version drift.** `ffi/go.mod` requires `go 1.25.10`, but the\ncontainer\n  pinned `GO_VERSION=1.25.8`. Manually tracked versions go stale.\n- **Reinvented setup.** Non-root user creation, sudo, the `gh` apt-repo\ndance,\n  the Go tarball install, rustup, and Nix were all done by hand despite\n  maintained features existing for each.\n- **No auth persistence.** Rebuilding discarded `gh` and Claude Code\nlogins and\n  shell history, forcing re-authentication every time.\n\nMoving these subsystems onto features shifts their maintenance upstream\nand\nshrinks the surface this project keeps current.\n\n## How this works\n\n`devcontainer.json` now uses `image:` (not `build:`) and composes\npublished\nfeatures, dropping the `Dockerfile` entirely:\n\n- **base** `mcr.microsoft.com/devcontainers/base:ubuntu26.04` with the\nbaked-in\n  `vscode` user (replaces the `userdel`/`useradd`/sudoers block).\n- **github-cli**, **go** (`latest`, fixes the version drift), **rust**\n(`profile: default`), **nix** (upstream daemon-mode installer, `/nix` on\na\n  volume), **node**, **docker-in-docker** (`moby: false` → Docker CE),\n**claude-code** (official Anthropic feature; auto-adds the VS Code\nextension).\n- A local **`firewood-tools`** feature with\n`installsAfter: [rust, go]` carries everything with no upstream\nequivalent:\nbuild deps (`clang`, `cmake`, `libssl-dev`, `pkg-config`, `jq`,\n`shellcheck`,\n…), the nightly toolchain, `cargo-binstall` + `sccache` wiring, the\ncargo tool\nset (`cargo-nextest`, `just`, `ripgrep`, `git-cliff`, `ast-grep`,\n`starship`,\n…), and Go tools (`shfmt`, `dockerfmt`). `installsAfter` is what makes\nthe\n  Dockerfile-less, correctly-ordered build possible.\n- **Persistent volumes** for `gh` auth, Claude Code auth/state, and\nshell\nhistory (new), alongside the existing sccache/cargo/go caches\n(retargeted onto\nthe toolchain features' default homes). Volume names are unchanged, so\ncached\n  contents survive the remount.\n- **`post-create.sh`** idempotently fixes ownership of the\nruntime-mounted\n  volumes and runs a verification smoke check.\n\n## How this was tested\n\n- Full local `devcontainer build` + `up` on arm64 reached\n`{\"outcome\":\"success\"}` with `remoteUser: vscode`. Observed: rust stable\n`1.96.0` / nightly `1.98.0-nightly`, go `1.26.4` (satisfies the\n`1.25.10`\n  floor), golangci-lint `2.12.2`, sccache `0.15.0`, Docker CE `29.5.3`,\n  claude `2.1.181`.\n- Two Ubuntu 26.04 (`resolute`) issues surfaced and fixed:\n`docker-in-docker`'s\ndefault Moby has no `moby-cli` for `resolute` (→ `moby: false`, Docker\nCE), and\na `.cache/sccache` volume left the parent `.cache` root-owned (→ chown\nthe\n  parent in `post-create.sh`).\n- `.github/workflows/devcontainer.yaml` is extended to smoke-test the\n  feature-provided tools (`cargo +nightly`, `golangci-lint`, `shfmt`,\n`dockerfmt`, `starship`, `claude`, `shellcheck`, `jq`) on top of the\nexisting\n  `rustup`/`go`/`nix`/`sccache`/`cargo nextest`/`just`/`gh` checks.\n\n## Behavior changes to note\n\n- Container user changes from the host `$USER` to `vscode`\n  (`updateRemoteUserUID` remaps to the host UID on Linux).\n- Nix switches from the Determinate installer to the upstream\ndaemon-mode\ninstaller with `/nix` on a Docker volume; `nix build` in `ffi/` is\nexpected to\n  keep working (the flake is unchanged).\n- The Go version floats at `latest` instead of a pinned value.\n- Cargo/Go cache paths move from the user home to `/usr/local/cargo` and\n`/go`.\n- The `claude login` IPv6 workaround ships as a commented `runArgs`\nentry documented\nin the devcontainer README. This was mentioned in an upstream issue as\nnecessary\n  to resolve claude login issues; but, I did not encounter this.\n\n## Breaking Changes\n\nNo code changes — `.devcontainer/` and CI only.",
+          "timestamp": "2026-06-22T20:14:28Z",
+          "url": "https://github.com/ava-labs/firewood/commit/2b091f906f31c55ed04627be812d6155187339cf"
+        },
+        "date": 1782375878016,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 165.0425607510433,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6059.043167104268,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 113.32820081974873,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5862.8782724851135,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 79.92654779236891,
             "unit": "block_accept_ms/ggas"
           }
         ]
