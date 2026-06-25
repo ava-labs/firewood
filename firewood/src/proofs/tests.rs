@@ -960,6 +960,8 @@ fn test_dos_array_length_bounds() {
 }
 
 mod box_array_deserialization_tests {
+    use std::num::NonZeroUsize;
+
     use super::*;
     use crate::proofs::header::Header;
     use crate::proofs::reader::{ProofReader, ReadError, V0Reader, Version0};
@@ -969,7 +971,7 @@ mod box_array_deserialization_tests {
     struct Hash32([u8; 32]);
 
     impl Version0 for Hash32 {
-        const MIN_BYTES_PER_ITEM: usize = 32;
+        const MIN_BYTES_PER_ITEM: NonZeroUsize = NonZeroUsize::new(32).unwrap();
 
         fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
             let chunk = reader.read_chunk::<32>()?;

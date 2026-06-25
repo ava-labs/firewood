@@ -8,7 +8,7 @@
 //! deserializing individual proof components.
 
 use super::header::{Header, InvalidHeader};
-
+use std::num::NonZeroUsize;
 pub(super) trait ReadItem<'a>: Sized {
     /// Reads an item from the given reader, or terrminates with an error.
     fn read_item(data: &mut ProofReader<'a>) -> Result<Self, ReadError>;
@@ -16,7 +16,7 @@ pub(super) trait ReadItem<'a>: Sized {
 
 pub(super) trait Version0: Sized {
     /// The minimum number of bytes required to deserialize a single instance of this type.
-    const MIN_BYTES_PER_ITEM: usize = 1;
+    const MIN_BYTES_PER_ITEM: NonZeroUsize = NonZeroUsize::new(1).unwrap();
 
     fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError>;
 }
