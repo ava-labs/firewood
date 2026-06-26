@@ -142,7 +142,7 @@ yields 3 structurally-zero low address bits reserved as tag bits.
 AREA (8-aligned):
   AreaHeader (8 bytes, repr(C), little-endian):
     off 0  size_class : u8     index into the file's size-class table
-    off 1  kind       : u8     0 = node, 1 = free, 2 = value-overflow, 3.. reserved
+    off 1  kind       : u8     0 = node, 1 = free, 2 = value-overflow; 3.. registry
     off 2  flags      : u8     reserved per-area bits
     off 3  reserved   : u8
     off 4  reserved   : u32    future (write 0)
@@ -157,9 +157,32 @@ guarantees the 8-byte alignment the zero-copy casts need. The `reserved` bytes
 exist only to fill the 8 bytes alignment already demands, so they cost no extra
 space; a v2.x writer that assigns them meaning announces it with a feature bit, and
 a v2.0 reader treats nonzero values there as an unknown feature, not corruption.
-On the traversal path, an area whose `kind` is not 0, 1, or 2 MUST be treated as a
-corruption error — `kind` is not part of the skippable extension surface, so a new
-`kind` value would be a v3 event.
+The `kind` byte is an **extensible registry, not a closed set.** Values 0 (node),
+1 (free), and 2 (value-overflow) and their meanings are frozen; the remaining values
+are allocated to features (a core range and a feature range, as for the cold-TLV
+tags). A new kind — for example DRH's `fdl` log areas — is admitted within major
+version 2 under one contract that keeps the rebuild scan total without forcing a v3
+migration:
+
+- **Size is kind-independent.** An area's byte extent comes from `size_class` and
+  the `area_sizes` table alone, so a linear scan steps over an area of any kind —
+  known or not — without interpreting its payload. (This is a frozen invariant, not
+  an incidental property.)
+- **New kinds are write-gated.** Introducing a kind MUST set a
+  `required_writer_features` bit (and `min_reader_version` only if old readers must
+  traverse the kind to read the *latest committed revision*). A writer that does not
+  support the bit opens read-only and never runs the destructive rebuild reclaim, so
+  it cannot misclassify an area whose kind it does not understand.
+- **An out-of-range kind is never trusted as a future feature.** A writer that opens
+  read-write has passed `required_writer_features`, so it understands every kind the
+  file can legally contain; a value outside that set is not a feature it is missing.
+  Keyed on reachability (see the rebuild scan), such an area is torn mid-fill debris
+  when off the live root and is reclaimed like any debris, and is genuine corruption
+  only when a live node references it. A new kind never reaches an ungated writer's
+  scan, because the gate already forced it read-only.
+
+Readers reach areas by following addresses from the root or the free-list heads,
+never by scanning, so an old reader simply never touches an area of an unknown kind.
 
 **Addressing.** An address is a global `u64` byte offset, 8-byte aligned, with `0`
 reserved as null (the niche for `Option<Address>`):
@@ -507,11 +530,15 @@ holds — its child addresses *and*, when `flags.value_overflow` is set, its
 | `value-overflow` | no | — | **reclaim-to-free** — orphaned overflow whose referrer never published |
 | `free` | — | yes | **free** — already correct |
 | `free` | — | no | **reclaim-to-free** — popped-but-unfilled reserved-pool area |
-| other | — | — | **leak** — sub-minimum slop or unrecognized; counted toward the waste bound |
+| unrecognized | no | — | **reclaim-to-free** — torn mid-fill debris bearing a garbage `kind` byte |
+| unrecognized | yes | — | **corruption** — a live-referenced area with an unintelligible header |
 
-Keying on `R_root` rather than on `kind` alone is what closes the "bounded per
-crash but unbounded across crashes" hazard: a `kind = node` area off the live root
-is positively classified as reclaimable, never mistaken for a live node.
+Keying on `R_root` rather than on `kind` alone is what closes the "bounded per crash
+but unbounded across crashes" hazard: an area off the live root is positively
+classified as reclaimable — whether it is `kind = node` mid-fill debris or debris
+bearing a torn `kind` byte — never mistaken for live data. Sub-minimum segment-tail
+residual (`< area_sizes[0]`) carries no `AreaHeader`; it is identified positionally
+rather than walked as an area, and is counted toward the waste bound.
 
 ### Allocation and free lists
 
@@ -577,7 +604,9 @@ Frozen for all of major version 2 (changing any is a v3 event), grouped by area:
 - *Integrity:* the XXH3-64 checksum with no spare bits.
 - *Compatibility:* the three compatibility mechanisms, the cold-TLV extension model,
   and the cold-region seek invariant.
-- *Operational protocols:* the kind-byte/fill invariant and the total rebuild
+- *Operational protocols:* the frozen `kind` values (0/1/2) and the
+  kind-extensibility contract (kind-independent area size, write-gated new kinds,
+  corruption checked only after the gate); the fill invariant and the total rebuild
   predicate; runtime hash-mode selection; the `required_writer_features`
   open-for-write precondition; and the `clean_shutdown` protocol.
 
@@ -673,12 +702,13 @@ implementation:
 - **Durable revision history (DRH).** Make the last N revisions traversable after a
   restart (in v2.0 they are in-memory only). DRH adds a revision index of retained
   roots (anchored by `revision_index_anchor`) and an on-disk future-delete log
-  (chained `kind = fdl` areas anchored by `fdl_head`/`fdl_tail`), plus commit and
-  reclamation steps — all in reserved, feature-gated space, with node bytes
-  unchanged. It is additive precisely because the `required_writer_features` write
-  gate ships in v2.0: an older writer ignorant of DRH would corrupt retained
-  history, and the gate forces it read-only instead. DRH is therefore a clean v2.x
-  addition rather than a v3 migration.
+  (chained `kind = fdl` areas anchored by `fdl_head`/`fdl_tail` — a new kind admitted
+  under the kind-extensibility contract above), plus commit and reclamation steps —
+  all in reserved, feature-gated space, with node bytes unchanged. It is additive
+  precisely because the `required_writer_features` write gate ships in v2.0: an older
+  writer ignorant of DRH would misclassify and reclaim its `fdl` areas during a
+  rebuild scan, and the gate forces it read-only instead. DRH is therefore a clean
+  v2.x addition rather than a v3 migration.
 - **`mmap`-based writer.** Mutate mapped pages directly with `msync` range ordering,
   landing with a test asserting zero format-byte change versus the `pread`/`pwrite`
   writer's output.
