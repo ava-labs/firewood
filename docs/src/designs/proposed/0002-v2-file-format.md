@@ -9,22 +9,26 @@ tracking-issue: https://github.com/ava-labs/firewood/issues/804
 
 ## Summary
 
-A version 2 (v2) on-disk file format for Firewood, a clean break from v1 (no v1
-backward compatibility) designed for zero-deserialization reads on the traversal
-hot path — `pread` into an aligned buffer in v2.0 and true zero-copy through `mmap`
-in v2.1 — while preserving Firewood's defining property: a compaction-less
-store in which a node's address is its direct byte offset on disk. The format is
+A version 2 (v2) on-disk file format for Firewood is a clean break from v1, with no
+backward compatibility. It is designed for zero-deserialization reads on the
+traversal hot path — `pread` into an aligned buffer in v2.0 and true zero-copy
+through `mmap` in v2.1 — while preserving Firewood's defining property: a
+compaction-less store in which a node's address is its direct byte offset in the data
+address space. A database is a small **control file** (the double-buffered header
+plus a **manifest**) and one or more **data files** of areas; the manifest maps the
+single global data address space to physical data files, and the read path always
+resolves an address through it (trivially, with one data file in v2.0). The format is
 frozen for all of major version 2 and is built so that within major version 2 any
-reader reads any file, in both directions, with no format change — a change that
-would break this is by definition a v3 event — so the next migration on a
-multi-terabyte state file is deferred as far as possible.
+reader reads any file, in both directions, with no byte-format change — changing the
+byte layout is by definition a v3 event — so the next migration on a multi-terabyte
+state file is deferred as far as possible.
 
 ## Motivation
 
 The v1 format serializes each trie
 node with a variable-length encoding that must be parsed field-by-field on every
 read, and it bakes the area-size table into the binary (a mismatch is rejected at
-open). Two pressures motivate a new format:
+open). Two factors motivate a new format:
 
 - **Read cost.** Path traversal is Firewood's dominant operation. A format whose
   nodes can be reinterpreted directly from mapped bytes — with the data traversal
@@ -32,27 +36,30 @@ open). Two pressures motivate a new format:
   removes per-node deserialization from the hot path.
 - **Migration cost.** A production state file is already in the 2 TiB range, and a
   format migration on a file that size is extremely expensive. v2 must therefore
-  be future-proof enough to evolve *within* major version 2 without forcing
+  be able to evolve *within* major version 2 without forcing
   another migration, which v1's compiled-in assumptions and ad-hoc encoding cannot
   support.
 
 The four tenets, in priority order:
 
-1. **Compaction-less, direct addressing.** A node's address is its byte offset
-   within the file. No compaction step; no hash-indexed indirection.
+1. **Compaction-less, direct addressing.** A node's address is its byte offset in
+   the data address space, resolved to a physical data file through the manifest. No
+   compaction step; no hash-indexed indirection.
 2. **Zero-copy-ready layout.** Nodes are reinterpreted from their on-disk bytes
    with no field-by-field deserialization.
 3. **Within-major compatibility, future-proofed.** Any v2.x reader reads any v2.y
-   file, in both directions, unless an explicit read/write gate is raised (which
-   within major version 2 is a v3 signal).
+   file, in both directions, unless an explicit read/write gate is raised; such a
+   gate is a reader/writer-capability event, not a byte-format (v3) one (see
+   [Two version axes](#two-version-axes)).
 4. **Traversal-first structure.** The layout favors path/trie traversal above all
    else.
 
 ### Scope
 
-In scope: the header, the area/allocation model and alignment, node encodings,
-partial-path encoding, the free-list on-disk layout, the read path (direct in
-v2.0, `mmap` in v2.1), and the commit/recovery protocol.
+In scope: the control file (header and manifest), the data address space and
+manifest resolution, the data-file area/allocation model and alignment, node
+encodings, partial-path encoding, the free-list on-disk layout, the read path
+(`pread` in v2.0, `mmap` in v2.1), and the commit/recovery protocol.
 
 Out of scope (semantics retained from v1, only their serialization changes): the
 revision-retention policy, revision-history semantics, and the public Rust/FFI
@@ -67,7 +74,11 @@ These are stated requirements of v2, not open questions:
   recoverability protocol assumes it. Reads may run concurrently with the writer,
   but only through handles registered with the revision manager: a registered
   reader pins its revision so the writer will not reap and reuse an area the reader
-  is still traversing. v2.0 defines no cross-process or unregistered-`mmap` reader
+  is still traversing. In v2.0 the pin is a reference count held by the revision
+  manager — an area is never reaped while any registered reader's snapshot holds a
+  revision that references it — which is sufficient for in-process readers, including
+  the v2.1 `mmap` reader that dereferences mapped bytes without a syscall. v2.0
+  defines no cross-process or unregistered-`mmap` reader
   pin protocol — an independent reader that outlives its pinned revision's retention
   window may observe a reaped-and-reused area as garbage. Extending safe reads to
   such readers (a reader epoch/pin protocol) is deferred (see
@@ -78,29 +89,38 @@ These are stated requirements of v2, not open questions:
 
 ## Guide-level explanation
 
-A v2 file is a small double-buffered header followed by a sequence of 8-byte
-aligned **areas**. Each area holds one node, one overflow value, or a free-list
-entry. A node's address is simply its byte offset in the file.
+A v2 database is a small double-buffered **control file** — the header plus a
+**manifest** — and one or more **data files**, each a sequence of 8-byte aligned
+**areas**. Each area holds one node, one overflow value, or a free-list entry. A
+node's address is its byte offset in the single global **data address space**; the
+manifest maps that space to physical data files, so the address never names a file.
 
 ```text
-FILE = [ Header slot A ][ Header slot B ][ Area ][ Area ][ Area ] ...
-        \__ double-buffered, checksummed, seq-numbered __/   \__ 8-aligned, size-classed __/
+CONTROL FILE = [ Header slot A ][ Header slot B ]   (each carries the manifest in its headroom)
+               \__ double-buffered, checksummed, seq-numbered; manifest published with the header __/
+
+DATA FILE(s) = [ Area ][ Area ][ Area ] ...   (8-aligned, size-classed; v2.0 has exactly one)
+
+MANIFEST = ordered map of the data address space -> data files
+           v2.0: a single entry { start 0, length, data file 0 }
+           read path: (file, intra_offset) = manifest.resolve(addr)   (identity when N = 1)
 
 AREA = [ AreaHeader 8B: size_class, kind, flags ]   (kind: node | value-overflow | free)
        [ payload ... ]
 
 NODE payload (kind = node):
   HOT  (zero-copy; traversal touches only this):
-    NodeHeader 8B  : flags, child_bitmap:u16, path_len_nibbles:u32
+    NodeHeader 8B  : flags, child_bitmap : u16, path_len_nibbles : u32
     child_addrs    : [u64; popcount(child_bitmap)]   (8-aligned)
     partial_path   : packed nibbles (ceil(n/2) bytes)
   COLD (faulted only for value reads / hashing / proofs):
-    [ethhash] child_hash_lens : [u8; popcount]
-    child_hashes              : [[u8;32]; popcount]
+    child_hash_lens : [u8; popcount]    // ethhash only
+    child_hashes    : [[u8;32]; popcount]
     value                     : inline (len + bytes) OR overflow (u64 addr + u64 len)
     [optional feature-gated cold TLV regions, skippable]
 
-ADDRESS = global u64 file offset, 8-byte aligned (low 3 bits reserved as tag bits).
+ADDRESS = global u64 offset in the data address space, 8-byte aligned
+          (low 3 bits reserved as tag bits; value 0 = null).
 ```
 
 The defining idea is the **hot/cold split**: traversal reads addresses, not
@@ -111,10 +131,12 @@ destination. Following one child reads the 8-byte node header and a single index
 this plus the packed partial path sit within the first cache line or two, though a
 densely populated branch (up to 16 child addresses = 128 B) spans several.
 
-The **read mechanism is versioned but the bytes are not.** A v2.0 reader resolves
-an area in two positioned reads: an 8-byte `AreaHeader` prefix yields `size_class`,
-the header's `area_sizes` table gives the byte extent, and a second `pread` pulls
-the bounded area into the reader's buffer. That buffer is an over-aligned POD type
+The **read mechanism is versioned but the bytes are not.** A reader first resolves
+an address to a physical `(data file, intra-file offset)` through the manifest — the
+identity map when there is one data file — then reads that file. A v2.0 reader
+resolves an area in two positioned reads against it: an 8-byte `AreaHeader` prefix
+yields `size_class`, the header's `area_sizes` table gives the byte extent, and a
+second `pread` pulls the bounded area into the reader's buffer. That buffer is an over-aligned `Pod` type
 (`#[repr(C, align(16))] struct AlignedBuffer<const N: usize>([u8; N])`,
 stack-allocated when small and boxed when large), so the bytes land 16-aligned —
 hence 8-aligned — and the typed `bytemuck::from_bytes` casts of the `AreaHeader`,
@@ -160,7 +182,7 @@ a v2.0 reader treats nonzero values there as an unknown feature, not corruption.
 The `kind` byte is an **extensible registry, not a closed set.** Values 0 (node),
 1 (free), and 2 (value-overflow) and their meanings are frozen; the remaining values
 are allocated to features (a core range and a feature range, as for the cold-TLV
-tags). A new kind — for example DRH's `fdl` log areas — is admitted within major
+tags). A new kind — for example durable-revision-history (DRH) `fdl` log areas — is admitted within major
 version 2 under one contract that keeps the rebuild scan total without forcing a v3
 migration:
 
@@ -184,21 +206,28 @@ migration:
 Readers reach areas by following addresses from the root or the free-list heads,
 never by scanning, so an old reader simply never touches an area of an unknown kind.
 
-**Addressing.** An address is a global `u64` byte offset, 8-byte aligned, with `0`
-reserved as null (the niche for `Option<Address>`):
+**Addressing.** An address is a global `u64` offset into the data address space,
+8-byte aligned, with `0` reserved as null (the niche for `Option<Address>`):
 
 ```text
 Address = u64
-  bits 63..3 : the offset
+  bits 63..3 : the data-address-space offset
   bits  2..0 : RESERVED TAG BITS. v2.0 writers MUST write 0; readers MUST mask
                (addr & !0b111) before dereferencing. Future per-edge metadata is
                assigned to these bits only under a header feature flag.
   value 0    : null
 ```
 
-The address *is* the disk offset; segmentation (below) never leaks into it. The
-masking rule applies to every stored `Address` — child addresses, the value
-`overflow_addr`, `root_address`, and `free_list_heads` entries.
+The address *is* a position in the data address space; neither the manifest's file
+resolution nor segmentation (both below) ever leaks into it — the address names a
+position, and the manifest and segment tables resolve that position to a physical
+file and mapping. Keeping the file out of the address is what lets the address space
+span multiple data files without a byte-format change (see
+[Future possibilities](#future-possibilities)). Data-address 0 is the null sentinel
+and is never allocated, so the `Option<Address>` niche holds across all data files;
+the first area begins at the first nonzero 8-aligned offset. The masking rule applies
+to every stored `Address` — child addresses, the value `overflow_addr`,
+`root_address`, and `free_list_heads` entries.
 
 **Size classes (self-describing).** The size-class table is data in the header,
 not a compiled-in constant. A frozen maximum of 64 classes keeps the header
@@ -213,18 +242,27 @@ class can still hold a free record (`AreaHeader(8) + next_free(8)`). The minimum
 bounded by the free record, not by any node shape — a node that needs more room
 simply allocates a larger class.
 
-**Read path and segmented mapping.** v2.0 reads via `pread` + `bytemuck` cast.
-v2.1 maps the file in fixed-size **segments** (`segment_size`, frozen at 1 GiB but
-recorded in the header; it MUST be a multiple of `page_size`). The v2.1 reader
-decomposes an address as `seg = addr / segment_size`,
-`ptr = segment_base[seg] + addr % segment_size`, maps segments lazily, and never
+**Read path and segmented mapping.** Every read first resolves an address through
+the manifest to `(data file, intra-file offset)` (the identity map when N = 1), then
+reads that file. v2.0 reads via `pread` + `bytemuck` cast. v2.1 maps each data file
+in fixed-size **segments** (`segment_size`, default 1 GiB and recorded in the header;
+it MUST be a multiple of `page_size`). `segment_size` is writer-policy data, honored
+as recorded — a reader maps with the file's value, never an exact match against a
+compiled-in constant — so a file written with a different segment size opens
+unchanged, like the `area_sizes` table. The v2.1 reader decomposes the
+intra-file offset as `seg = off / segment_size`,
+`ptr = segment_base[seg] + off % segment_size`, maps segments lazily, and never
 relocates a live mapping (new segments map additively), so growth is safe for
-concurrent readers and works identically on Linux and macOS.
+concurrent readers and works identically on Linux and macOS. The address→file step
+is a table lookup the v2.0 reader already performs, so adding data files later
+changes manifest data, not reader code.
 
-*No-straddle invariant:* an area never crosses a segment boundary, so any node
-lies within one contiguous mapping. A bump allocation that would straddle the next
-boundary pads the tail gap and registers it as free area(s). The gap is decomposed
-deterministically and independently of the (per-file) size-class table:
+*No-straddle invariant:* an area never crosses a segment or data-file boundary, so
+any node lies within one contiguous mapping. (Data files span an integer number of
+segments, so every file boundary is also a segment boundary, and the one rule covers
+both.) A bump allocation that would straddle the next boundary pads the tail gap and
+registers it as free area(s). The gap is decomposed deterministically and
+independently of the (per-file) size-class table:
 
 ```text
 remaining = gap_bytes
@@ -235,9 +273,13 @@ while remaining >= area_sizes[0]:          # area_sizes[0] is the minimum class
 # remaining (< area_sizes[0]) is unreclaimable slop
 ```
 
-The gap at a boundary is at most one max-area (16 MiB per 1 GiB segment, ≈ 1.56%),
-but almost all of it re-enters the free lists; permanently unreclaimed waste per
-boundary is only the sub-minimum residual (< `area_sizes[0]` bytes).
+The loop terminates because every iteration removes at least `area_sizes[0]` bytes
+(validated `>= 16` at open) and exits once `remaining < area_sizes[0]`, so the
+residual is exactly `gap_bytes mod area_sizes[0]` and is strictly bounded by
+`area_sizes[0]`. The gap at a boundary is at most one max-area (16 MiB per 1 GiB
+segment, ≈ 1.56%), but almost all of it re-enters the free lists; permanently
+unreclaimed waste per boundary is only that sub-minimum residual (< `area_sizes[0]`
+bytes).
 
 **Endianness.** All integers are little-endian by definition. On the little-endian
 targets Firewood supports this is native, giving true zero-copy. A big-endian host
@@ -260,7 +302,7 @@ NodeHeader (8 bytes, repr(C), little-endian):
 ```
 
 The trie is 16-ary (one nibble per level), so `child_bitmap` is exactly 16 bits.
-`path_len_nibbles` is `u32` — a deliberate, frozen hard cap of ~4.29e9 nibbles
+`path_len_nibbles` is `u32` — a deliberate, frozen hard cap of ~4.3 billion nibbles
 (~2 GiB key), about seven orders of magnitude above any realistic key, chosen to
 eliminate an overflow branch on the hot path. The `child_addrs` array follows at
 `+16` (8-aligned); the `partial_path` follows it as packed nibbles (two per byte,
@@ -323,7 +365,7 @@ later known one" actually hold.
 
 **Inline-value threshold is writer policy, not format.** A reader never consults a
 threshold — `flags.value_overflow` is self-describing per node, so nodes written
-under different thresholds coexist. The default is 256 B (so account RLP and
+under different thresholds coexist. The default is 256 bytes (so account RLP and
 storage slots stay inline) and is persisted as an advisory
 `default_inline_value_threshold` that readers ignore. The inline `value_len` is a
 `u32` by format; if it exceeds the area's remaining payload, the reader MUST return
@@ -333,13 +375,16 @@ obligation: a referenced overflow area must satisfy
 and a reader MUST reject the reference as corruption rather than read past the
 overflow area's payload.
 
-### Header, versioning, and compatibility
+### Control file: header, manifest, versioning, and compatibility
 
-The file opens with two header slots. The fixed slot content is the first 8192
-bytes; the on-disk slot stride is `max(8192, page_size)` (zero padding fills the
-remainder under large pages). Each commit writes the **older** slot (lower
-`sequence`), checksums it, and `fsync`s it, so a torn header write never damages
-the last-good slot.
+The **control file** opens with two header slots and carries the **manifest** in
+each slot's reserved headroom, so the manifest is double-buffered, checksummed, and
+published atomically with the header. The header slots live only in the control file;
+data files contain areas exclusively and begin at data-address 0. The fixed slot
+content is the first 8192 bytes; the on-disk slot stride is `max(8192, page_size)`
+(zero padding fills the remainder under large pages). Each commit writes the
+**older** slot (lower `sequence`), checksums it, and `fsync`s it, so a torn header
+write never damages the last-good slot.
 
 ```text
 DbHeaderSlot (repr(C), little-endian; fixed content = 8192 B):
@@ -358,16 +403,16 @@ DbHeaderSlot (repr(C), little-endian; fixed content = 8192 B):
   off  104  hash_algorithm                 : u8       0 = SHA-256, 1 = Keccak-256; selects runtime hash mode
   off  105  size_class_count               : u8       N <= 64
   off  106  clean_shutdown                 : u8       1 if last close was clean
-  off  107  page_size_log2                 : u8       log2 of the page alignment the file guarantees (>= 12)
+  off  107  page_size_log2                 : u8       log2 of the page alignment the file guarantees (12..=30)
   off  108  default_inline_value_threshold : u32      advisory
-  // root and allocation state (rewritten every commit)
-  off  112  root_address                   : u64      0 = empty tree
-  off  120  high_water_mark                : u64      next bump-allocation offset
+  // root and allocation state (rewritten every commit; offsets are data-address-space)
+  off  112  root_address                   : u64      data-address offset; 0 = empty tree
+  off  120  high_water_mark                : u64      next bump offset in the data address space
   off  128  root_hash                      : [u8;32]
   off  160  fdl_head                       : u64      RESERVED, feature-gated, 0 in v2.0
   off  168  fdl_tail                       : u64      RESERVED, feature-gated, 0 in v2.0
   off  176  revision_index_anchor          : u64      RESERVED, feature-gated, 0 in v2.0
-  off  184  reserved_b                     : u64      RESERVED, feature-gated, 0 in v2.0
+  off  184  manifest_anchor                : u64      offset of the manifest within this slot's headroom
   // tables
   off  192  area_sizes                     : [u64;64] entries >= size_class_count are 0
   off  704  free_list_heads                : [u64;64] per-class free-list head Address
@@ -383,10 +428,46 @@ entire `u64` with no spare bits, so a future writer cannot smuggle meaning into 
 New fixed fields are carved from `reserved` (off 1280) low-end upward, each
 recorded next to the `feature_bits` bit that announces it.
 
-**Page alignment (frozen rule).** The file records `page_size_log2`
+**Manifest (frozen envelope, N=1 in v2.0).** The manifest lives inside the slot's
+`reserved` block (`reserved[1280..8184]`, the frozen-core headroom), so it is part of
+the 8192-byte fixed content, covered by the slot `checksum`, and published in the
+same `fsync` — independent of `page_size`, since it does not rely on any inter-slot
+padding. `manifest_anchor` records its byte offset within the slot; the manifest sits
+at the high end of the `reserved` block and grows downward, while new fixed fields are
+carved from the low end (off 1280) upward, so the two never collide. The manifest maps
+the data address space to physical data files; the read path resolves every address
+through it, which is what lets the address space later span multiple files with no
+reader-version bump:
+
+```text
+Manifest (at manifest_anchor, inside reserved[1280..8184]; little-endian):
+  manifest_version : u16
+  file_count       : u16     = 1 in v2.0
+  reserved         : u32     (write 0)
+  entries[file_count]:
+    start_offset   : u64     start in the data address space (entry 0 = 0)
+    length         : u64     bytes of data address space this file backs
+    file_id        : u64     stable id; also the data file's on-disk name suffix
+    flags          : u32     bit 0 frozen (0 in v2.0); reserved otherwise
+    live_areas     : u64     RESERVED occupancy counter for reclamation (0 in v2.0)
+    reserved       : u32     (write 0)
+```
+
+Each entry is 40 bytes, so the 6904-byte `reserved` block holds ~170 entries — far
+beyond any plausible v2.0 need. In v2.0 the manifest is written once at creation with
+one entry (`{ 0, length, file_id }`) and is immutable thereafter; `resolve(addr)` is
+the identity. The `flags.frozen` bit and `live_areas` counter are the seam for the
+multi-file extension — reserved and zero in v2.0. A writer whose manifest would
+overflow the `reserved` block relocates it, via `manifest_anchor`, to a dedicated
+control-file region beyond the two slots; that relocation is a feature-gated
+extension, not a v2.0 concern.
+
+**Page alignment (frozen rule).** The control file records `page_size_log2`
 (`page_size = 1 << page_size_log2`, a power of two, ≥ 4096). The slot stride is
-`max(8192, page_size)`, so the first area begins at `2 * max(8192, page_size)` —
-always a multiple of `page_size`, hence page-aligned, and always at least 16384.
+`max(8192, page_size)`, so slot B begins at a `page_size` multiple (and at least
+8192) and each slot spans at least one full page. Data files contain only areas and
+begin at data-address 0, which is page-aligned by construction; the first 8-aligned
+offset is reserved as the null sentinel and the first area follows it.
 On open a reader refuses the file if `page_size < the system page size`: a file
 aligned to a smaller page cannot be mapped on a host with larger pages, while a
 file aligned to a larger page maps fine anywhere with pages ≤ it. `page_size_log2`
@@ -408,12 +489,13 @@ extension channel, over a frozen hot core:
 | Meaning | file uses optional capability X | reader must understand minor >= V | writer must support X to write |
 | On unknown | reader ignores the bit, skips the cold region | reader refuses the file | writer opens read-only |
 | Compatibility | bidirectional (additions optional, skippable) | one-way read gate | one-way write gate |
-| Intended use | the default channel for all evolution | a non-skippable read change; raising it is by definition a v3 signal | gate for any write-affecting feature |
+| Intended use | the default channel for all evolution | a non-skippable read change (old readers refuse); see the two version axes below | gate for any write-affecting feature |
 
 `feature_bits` is the routine channel: every ordinary addition ships as a feature
 bit plus self-delimiting cold data (a cold TLV record, an address tag-bit meaning,
-or an advisory `reserved` field). `min_reader_version` is reserved for a
-non-skippable read change — moving it is by definition a v3 signal.
+or an advisory `reserved` field). `min_reader_version` is reserved for non-skippable
+read changes — bumping it makes old readers refuse the file but rewrites no bytes and
+migrates nothing (see [Two version axes](#two-version-axes)).
 `required_writer_features` is the write gate: a writer that does not support a set
 bit opens read-only, which is the insurance that lets any write-affecting feature
 be added later without older writers silently corrupting it. To classify a change,
@@ -423,6 +505,33 @@ ask in order: does a reader need new bytes to read the latest revision (raise
 `feature_bits`, unknown cold TLV tags (assigned from a central registry —
 `0x0000`–`0x00FF` core, `0x0100`–`0x01FF` ethhash), and set address tag bits are
 all skipped, never fatal.
+
+#### Two version axes
+
+It helps to keep two independent notions of "version" apart, because they do not move
+together:
+
+- The **byte-format version** is the frozen on-disk layout. Bumping it re-freezes
+  the layout and forces a migration of existing files — this is what "v3" means.
+- The **reader-capability version** (`min_reader_version`) gates whether an older
+  reader may open a file at all. Bumping it makes old readers refuse, but rewrites no
+  existing bytes and migrates nothing; a file that does not use the gated capability
+  keeps a low `min_reader_version`, and old readers still read it.
+
+A true v3 bumps the byte-format axis. A non-skippable read change bumps only the
+reader-capability axis. Most evolution touches neither and ships as a `feature_bits`
+capability plus skippable cold data. Multi-file support is the sharpest example:
+because the manifest indirection is live from v2.0, splitting the data across files
+needs *no* reader-capability bump — the read path already resolves every address
+through the manifest — so it ships as `feature_bits` + `required_writer_features`
+(older writers go read-only; older readers keep reading).
+
+There is deliberately no `required_reader_features` bitmask symmetric to
+`required_writer_features`. A reader capability is either skippable — then it is a
+`feature_bits` bit the reader ignores — or non-skippable, in which case the coarse
+`min_reader_version` gate is exactly right (refuse the file). A per-capability reader
+*refusal* finer than the version integer has shown no use case; if one arises, a
+reserved field can host it without a layout break.
 
 ### Commit and recovery
 
@@ -445,21 +554,32 @@ never a torn mix.
 Phase 1 - write node bytes (only to NON-live-referenced areas):
    - new nodes -> bump space (beyond live high_water_mark), and/or
    - areas from the reserved pool (popped and published by a PRIOR commit)
-   fsync                                   // node bytes durable
+   fsync the DATA file(s)                  // node bytes durable
 Phase 2 - publish (atomic):
-   - write the scratch (older) header slot: root_address, root_hash,
-     high_water_mark, free_list_heads[], sequence + 1, checksum
-   fsync                                   // the commit point
+   - write the scratch (older) header slot in the CONTROL FILE (manifest rides in
+     its headroom): root_address, root_hash, high_water_mark, free_list_heads[],
+     sequence + 1, checksum
+   fsync the CONTROL file                  // the commit point
 ```
+
+The two `fsync`s now span two files: Phase 1 flushes the data file(s) that received
+node bytes; Phase 2 flushes the control file that publishes the header. The ordering
+constraint is across files — the control-file header must not become durable before
+the data bytes it references — so the data `fsync` must complete before the control
+`fsync` begins. When a commit writes more than one data file, every touched data
+file is flushed in Phase 1 before Phase 2.
 
 The Phase-1 write of each new area includes its full `AreaHeader` (with
 `kind = node`), so a `kind = node` byte may be durable before Phase 2 publishes —
 this is safe because the area is off all live-header references. The two-`fsync`
-ordering is a hard requirement of any write backend; a writer using io-uring must
-chain a barrier `fsync` or fall back to a blocking one between phases. This requires
-the writable-storage trait to gain a durability-barrier method
-(`fsync`/`fdatasync`) that every backend implements — the current trait exposes only
-writes, so this is a required API addition the implementation introduces.
+ordering is a hard requirement of any write backend, and meeting it forces a change
+to the `WritableStorage` trait — which today exposes only `write`/`write_batch` and
+no durability barrier — a **breaking change** to the public `firewood-storage` API
+affecting every backend. The added barrier is per file; `fdatasync` suffices (it
+flushes the size change needed to read appended data), and the in-memory backend
+implements it as a no-op. An io-uring writer chains an `IORING_OP_FSYNC` SQE with the
+`IOSQE_IO_DRAIN` flag between phases, or falls back to a blocking `fsync(2)`; a plain
+submission does not provide the barrier.
 
 **Reuse and reaping are safe** because each touches only non-live-referenced areas:
 an area is *popped one commit ahead* of being filled (commit N−1 publishes a header
@@ -472,7 +592,7 @@ the intrusive `next_free` links — is always written to non-live-referenced are
 **Recovery on open:**
 
 ```text
-1. Bootstrap and read both slots:
+1. Open the CONTROL FILE and read both slots:
      a. Read the fixed 8192-byte content at offset 0 (always present: stride >= 8192).
         This is slot A; verify magic, major == 2, endian_test, and checksum.
      b. Locate slot B without trusting any unvalidated byte. The on-disk stride is
@@ -493,8 +613,11 @@ the intrusive `next_free` links — is always written to non-live-referenced are
      refuse        if min_reader_version > mine;
      read-only     if any required_writer_features bit is unsupported.
 3. Adopt the valid slot with the highest sequence; this IS the committed state.
-4. Trust its root tree and free_list_heads / chains (the invariant guarantees it).
-5. Treat anything beyond its high_water_mark as uncommitted debris and ignore it.
+4. Read the manifest at its manifest_anchor and open each data file it lists; the
+   manifest defines the data address space that root_address and free_list_heads
+   index. (v2.0: one entry, one data file.)
+5. Trust its root tree and free_list_heads / chains (the invariant guarantees it).
+6. Treat anything beyond its high_water_mark as uncommitted debris and ignore it.
 ```
 
 No redo/undo log is needed. A crash can strand reserved-pool areas (popped but
@@ -520,16 +643,22 @@ The rebuild scan is a **total** classification over every area, keyed on
 `AreaHeader.kind`, reachability from the live root (`R_root`), and membership on a
 published free chain (`R_free`). Reachability follows every live reference a node
 holds — its child addresses *and*, when `flags.value_overflow` is set, its
-`overflow_addr` — so a live overflow value counts as `R_root = yes`:
+`overflow_addr` — so a live overflow value counts as `R_root = yes`. One rule takes
+precedence over the per-kind rows below: an area that is **both** reachable from the
+live root and on a published free chain (`R_root ∧ R_free`), or a live-referenced
+`free`-kind area, is double-use **corruption** — the per-kind rows, which list `—`
+for the don't-care column, assume this case has already been excluded.
 
 | `kind` | `R_root` | `R_free` | Classification |
 | --- | --- | --- | --- |
-| `node` | yes | — | **live node** — retain |
+| any | yes | yes | **corruption** — double-use: live tree and a free chain both claim the area |
+| `free` | yes | — | **corruption** — a live node references a `free`-kind area |
+| `node` | yes | no | **live node** — retain |
 | `node` | no | — | **reclaim-to-free** — mid-fill debris whose header never published |
-| `value-overflow` | yes | — | **live value** — retain (reached via a node's `overflow_addr`) |
+| `value-overflow` | yes | no | **live value** — retain (reached via a node's `overflow_addr`) |
 | `value-overflow` | no | — | **reclaim-to-free** — orphaned overflow whose referrer never published |
-| `free` | — | yes | **free** — already correct |
-| `free` | — | no | **reclaim-to-free** — popped-but-unfilled reserved-pool area |
+| `free` | no | yes | **free** — already correct |
+| `free` | no | no | **reclaim-to-free** — popped-but-unfilled reserved-pool area |
 | unrecognized | no | — | **reclaim-to-free** — torn mid-fill debris bearing a garbage `kind` byte |
 | unrecognized | yes | — | **corruption** — a live-referenced area with an unintelligible header |
 
@@ -543,8 +672,19 @@ rather than walked as an area, and is counted toward the waste bound.
 ### Allocation and free lists
 
 To allocate, pick the smallest size class that fits `AreaHeader(8) + hot + cold`,
-then reuse (`pop free_list_heads[c]`, O(1)) or bump (`carve at high_water_mark`,
-honoring the no-straddle rule). A freed area's payload becomes its intrusive link:
+then either bump (`carve at high_water_mark`, an O(1) step honoring the no-straddle
+rule) or reuse a free-list entry. Reuse is **not** pop-then-fill within one commit —
+that would overwrite an area the live header still references through its free chain,
+violating the recovery invariant. It is the two-commit pop-ahead lifecycle:
+
+```text
+commit N-1:  pop area X from free_list_heads[c]  ->  publish a header that excludes X
+commit N  :  fill X (write its node bytes)       ->  publish a header that references X
+```
+
+After commit N−1, X is on no live free chain and in no live tree, so commit N may
+overwrite it safely (see Commit and recovery). A freed area's payload becomes its
+intrusive link:
 
 ```text
 FREE AREA (8-aligned):
@@ -579,9 +719,11 @@ feature — so any binary opens any file in the mode its header declares, and an
 unrecognized value is refused. There is no cross-algorithm path to
 guard. A node's own hash lives in its parent's cold `child_hashes` slot; the root's
 hash lives in `root_hash`. Under ethhash, `child_hash_lens[i] == 32` is a full
-Keccak hash and `1..=31` is an embedded RLP node in the slot's first `len` bytes (a
-present child is never length 0; the writer zeroes bytes `len..32` and a reader uses
-only `0..len`, keeping stored bytes reproducible). merkledb files omit
+Keccak hash and `1..=31` is an embedded RLP node in the slot's first `len` bytes (the
+writer zeroes bytes `len..32` and a reader uses only `0..len`, keeping stored bytes
+reproducible). The value `child_hash_lens[i] == 0` is assigned no meaning and is
+reserved: a present child is never length 0, and a reader MUST treat a stored 0 as a
+corruption error rather than read an empty slice. merkledb files omit
 `child_hash_lens` entirely.
 
 **Correctness constraint.** v2 changes storage, not Merkle semantics: for any
@@ -592,15 +734,20 @@ v1's — blockchain consensus depends on exact state roots.
 
 Frozen for all of major version 2 (changing any is a v3 event), grouped by area:
 
-- *Alignment and addressing:* 8-byte alignment, the 3 reserved address tag bits, and
-  the address-masking rule.
+- *Alignment and addressing:* 8-byte alignment, the 3 reserved address tag bits, the
+  address-masking rule, and the data address space — an address is a position in it,
+  resolved to a physical data file through the manifest; data-address 0 is null; and
+  data files span an integer number of segments so a file boundary is always a
+  segment boundary.
 - *Area and node layout:* the `AreaHeader` and `NodeHeader` layouts, the `+16`
   child-address-array position, and packed-nibble paths.
-- *Header layout and commit:* the 8192-byte header content layout (field offsets and
-  the `area_sizes`/`free_list_heads` tables, with `checksum` at 8184) and
-  double-buffering, with on-disk slot stride `max(8192, page_size)` and first area at
-  `2 * slot_stride`; little-endian integers; the page-alignment rule; the
-  recoverability invariant and the header-swap commit point.
+- *Control file and commit:* the control file holding two header slots with the
+  manifest in slot headroom (the 8192-byte header content layout — field offsets, the
+  `area_sizes`/`free_list_heads` tables, `checksum` at 8184 — and the frozen manifest
+  envelope), double-buffering with on-disk slot stride `max(8192, page_size)`, data
+  files beginning at data-address 0; little-endian integers; the page-alignment rule;
+  the read path resolving every address through the manifest; the recoverability
+  invariant and the header-swap commit point.
 - *Integrity:* the XXH3-64 checksum with no spare bits.
 - *Compatibility:* the three compatibility mechanisms, the cold-TLV extension model,
   and the cold-region seek invariant.
@@ -626,11 +773,20 @@ breaking compatibility: the `area_sizes` table, `segment_size`, `page_size_log2`
   traversal hot path.
 - **Two `fsync`s per commit** is a real write-path cost (its magnitude versus v1 is
   unmeasured; see Unresolved questions).
+- **Durability semantics change, visibly.** v1 documents only OS-level crash
+  recovery — safe across a process crash, not a power loss. The commit `fsync`s make
+  v2 durable-on-commit (machine-crash safe at the commit point). This is a stronger
+  guarantee but a user-visible contract change: callers that relied on OS-level
+  recovery, and tuned retry/replay logic around it, get different semantics.
 - **Crash recovery trades a bounded space leak** (reserved-pool and bump debris)
   for never corrupting committed state, requiring an occasional rebuild scan after
   an unclean shutdown.
 - **The `mmap` reader and an `mmap` writer are net-new** surfaces deferred to later
   versions; v2.0 ships only the simpler `pread` reader.
+- **A database is now at least two files** (a control file plus one data file) and
+  every read carries a manifest lookup. Both costs are paid up front — the lookup is
+  the identity map at N=1 — to make multi-file a reader-transparent, write-gated
+  addition later rather than a v3 read break.
 
 ## Rationale and alternatives
 
@@ -657,6 +813,15 @@ breaking compatibility: the `area_sizes` table, `segment_size`, `page_size_log2`
 - **Runtime hash mode vs a compile-time feature.** A header-selected mode removes
   the cross-algorithm guard surface entirely and lets a single binary serve both
   merkledb and ethhash files.
+- **Control file + live manifest vs an inline header.** Keeping the header inline at
+  offset 0 of a single data file would be simpler to package, but it pins the header
+  inside the very file a future multi-file scheme most wants to reclaim (the oldest),
+  and it would force readers to learn a file map only at multi-file time — a
+  reader-capability break. A separate control file gives the header and manifest a
+  stable home off the reclaimable data files, and running the manifest indirection
+  from v2.0 (always N=1) turns multi-file into a write-gated, reader-transparent
+  addition instead of a v3-level read break. The cost — every database is a control
+  file plus at least one data file — is paid once and buys that future for free.
 
 ## Prior art
 
@@ -679,11 +844,15 @@ implementation:
    implementation; if it materially regresses the C-Chain commit path, advance the
    `mmap`-writer follow-up (which can batch differently). The format does not change
    either way.
-2. **Writer-exclusivity mechanism.** Single-writer access is a stated requirement;
-   the open question is only enforcement. v2 most likely keeps v1's advisory
-   `flock`, but the guarantee boundary on shared/network storage or container
-   runtimes (where advisory locks are unreliable) must be stated at implementation
-   time.
+2. **Writer-exclusivity mechanism.** Single-writer access is a stated correctness
+   requirement, not a performance optimization — a second writer on a 2 TiB database
+   corrupts it unrecoverably. v2.0 ships v1's advisory `flock` plus an `O_EXCL`
+   sentinel taken at open, and explicitly does **not** guarantee exclusivity on
+   shared/network storage or container runtimes where advisory locks are silently
+   unreliable: there, exclusivity is the operator's responsibility and that
+   configuration is unsupported for the single-writer guarantee. The open question is
+   whether to add a stronger positive mechanism (e.g. a lease) for those
+   environments; it does not gate the format.
 3. **v2.1 `mmap` reader isolation model.** The default is snapshot-pinned-at-open: a
    reader reads the header once, pins `root_address`, and traverses that revision;
    because committed nodes are immutable, no re-validation and no extra header field
@@ -709,6 +878,30 @@ implementation:
   writer ignorant of DRH would misclassify and reclaim its `fdl` areas during a
   rebuild scan, and the gate forces it read-only instead. DRH is therefore a clean
   v2.x addition rather than a v3 migration.
+- **Multi-file data (split + freeze + reclaim).** Spread the data address space
+  across several data files, motivated by friendlier object-store backups (today's
+  workaround is an offline `split` of the single data file). When a new data file
+  opens, older ones are **frozen** (no new allocations land in them); a frozen file
+  whose every area is free is reclaimed whole (its data-address range is retired, or
+  recycled via the manifest). Reclamation is accelerated by **copy-on-read-from-frozen**:
+  once a frozen file's free count crosses a threshold, proposals that touch its
+  surviving nodes relocate them into the active file — which is just the existing
+  copy-on-write path-copy giving the node a fresh address, draining the frozen file.
+  Note this drain is economically a *selective compaction* triggered by a free-space
+  threshold: the format stays compaction-less in steady state, but the frozen-file
+  drain does pay copy cost, and a future design must account for it rather than assume
+  it is free.
+  This is a v2.x addition, not a v3 migration: addresses stay file-agnostic offsets;
+  the read path already resolves through the manifest, so old readers keep reading
+  (no `min_reader_version` bump); the freeze/reclaim policy and the manifest's
+  `flags.frozen`/`live_areas` fields are write-gated by a `required_writer_features`
+  bit, so an older writer that would re-fill or reuse a frozen file opens read-only.
+  Whole-file deletion is crash-safe by the same publish-before-mutate discipline as
+  the header: publish a manifest that no longer references the file, then `unlink`;
+  and a file cannot be deleted while a reader pins a revision spanning it (the same
+  reader-pin protocol that gates node reaping). The one design-time prerequisite —
+  already honored — is that data files align to segment boundaries, so the existing
+  no-straddle invariant subsumes file-straddle.
 - **`mmap`-based writer.** Mutate mapped pages directly with `msync` range ordering,
   landing with a test asserting zero format-byte change versus the `pread`/`pwrite`
   writer's output.
@@ -748,7 +941,8 @@ implementation.
       every account-depth case).
 - [ ] **Hash-mode selection at open:** the open path dispatches to the trait for the
       file's `hash_algorithm`; a merkledb file opens in merkledb mode and an ethhash
-      file in ethhash mode; an unrecognized value is refused.
+      file in ethhash mode; an unrecognized value is refused. This gate depends on the
+      compile-time `ethhash` feature removal (see Implementation notes).
 - [ ] **Zero-copy mechanism under `unsafe`-deny:** `AreaHeader`, `NodeHeader`, and
       the address-array element derive `bytemuck` `Pod`/`Zeroable`; the v2.0 read
       buffer is the over-aligned `AlignedBuffer<N>` so the `bytemuck::from_bytes`
@@ -756,11 +950,17 @@ implementation.
       (`cargo build -p firewood-storage`; the only permitted `unsafe impl`s are the
       established `PodInOption`/`ZeroableInOption`).
 - [ ] **Header checksum pinned + test vector:** the slot checksum is XXH3-64 over
-      `[0, 8184)`; lock one concrete crate (candidates: `xxhash-rust` with `xxh3`,
-      or `twox-hash`; pure-Rust preferred) before any byte-layout snapshot lands,
-      record a byte-for-byte test vector, and assert a reader rejects a mismatch.
+      `[0, 8184)`; lock one concrete crate (candidates: `xxhash-rust` with the `xxh3`
+      feature, or `twox-hash`; both are pure Rust) before any byte-layout snapshot
+      lands, record a byte-for-byte test vector, and assert a reader rejects a
+      mismatch.
 - [ ] **Inline `value_len` overflow rejects:** a value length exceeding the area's
       remaining payload is corruption, never truncated.
+- [ ] **Manifest resolution:** every address resolves to `(data file, intra-file
+      offset)` through the manifest; with N=1 the map is the identity. A hand-crafted
+      N=2 manifest (areas split across two files at a segment boundary) returns
+      byte-identical reads, proving the indirection is live and multi-file-ready
+      without a reader-version bump.
 
 ### Implementation gates (after the format is frozen)
 
