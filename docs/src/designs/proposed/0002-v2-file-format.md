@@ -11,8 +11,8 @@ tracking-issue: https://github.com/ava-labs/firewood/issues/804
 
 A version 2 (v2) on-disk file format for Firewood, a clean break from v1 (no v1
 backward compatibility) designed for zero-deserialization reads on the traversal
-hot path — a single positioned read (`pread`) in v2.0 and true zero-copy through
-`mmap` in v2.1 — while preserving Firewood's defining property: a compaction-less
+hot path — `pread` into an aligned buffer in v2.0 and true zero-copy through `mmap`
+in v2.1 — while preserving Firewood's defining property: a compaction-less
 store in which a node's address is its direct byte offset on disk. The format is
 frozen for all of major version 2 and is built so that within major version 2 any
 reader reads any file, in both directions, with no format change — a change that
@@ -114,12 +114,16 @@ densely populated branch (up to 16 child addresses = 128 B) spans several.
 The **read mechanism is versioned but the bytes are not.** A v2.0 reader resolves
 an area in two positioned reads: an 8-byte `AreaHeader` prefix yields `size_class`,
 the header's `area_sizes` table gives the byte extent, and a second `pread` pulls
-the bounded area into a buffer. Because a heap buffer carries no alignment guarantee
-beyond one byte, the v2.0 reader reinterprets it with unaligned POD reads
-(`bytemuck::pod_read_unaligned`) — no field-by-field deserialization, but one copy.
-A v2.1 reader maps the file and reinterprets node bytes in place: mappings are
-page-aligned (hence 8-aligned), so the typed `bytemuck::from_bytes` cast is valid
-and the read is true zero-copy. Both read identical files, so `mmap` is a reader
+the bounded area into the reader's buffer. That buffer is an over-aligned POD type
+(`#[repr(C, align(16))] struct AlignedBuffer<const N: usize>([u8; N])`,
+stack-allocated when small and boxed when large), so the bytes land 16-aligned —
+hence 8-aligned — and the typed `bytemuck::from_bytes` casts of the `AreaHeader`,
+`NodeHeader`, and address array are valid with no field-by-field deserialization and
+no copy beyond the read. This mirrors how v1 already reads its header directly into
+an aligned `Pod` struct (`storage/src/nodestore/header.rs`). A v2.1 reader maps the
+file and reinterprets node bytes in place: mappings are page-aligned (hence
+8-aligned), so the same `bytemuck::from_bytes` casts apply with zero copies — the
+read copy is what v2.1 elides. Both read identical files, so `mmap` is a reader
 capability, not a format change.
 
 ## Detailed design
@@ -716,8 +720,9 @@ implementation.
       file's `hash_algorithm`; a merkledb file opens in merkledb mode and an ethhash
       file in ethhash mode; an unrecognized value is refused.
 - [ ] **Zero-copy mechanism under `unsafe`-deny:** `AreaHeader`, `NodeHeader`, and
-      the address-array element derive `bytemuck` `Pod`/`Zeroable` and cast via
-      `bytemuck::from_bytes` with no new `unsafe` outside `ffi`
+      the address-array element derive `bytemuck` `Pod`/`Zeroable`; the v2.0 read
+      buffer is the over-aligned `AlignedBuffer<N>` so the `bytemuck::from_bytes`
+      casts meet their alignment precondition with no new `unsafe` outside `ffi`
       (`cargo build -p firewood-storage`; the only permitted `unsafe impl`s are the
       established `PodInOption`/`ZeroableInOption`).
 - [ ] **Header checksum pinned + test vector:** the slot checksum is XXH3-64 over
