@@ -107,21 +107,9 @@ func ethGetProofCall(
 	return getEthProofFromResult(call(cAccountKey, cStorageKeys))
 }
 
-// EthGetProof produces an eth_getProof-compatible proof for the account at
-// accountKey and each storage slot in slotKeys, evaluated against this
-// reconstructed view.
-//
-// Both accountKey and every entry of slotKeys must be 32-byte trie keys: the
-// caller is responsible for keccak-hashing addresses and storage slots into
-// their trie-key forms (firewood stores accounts at keccak256(address) and
-// slots at keccak256(address) ++ keccak256(slot)).
-//
-// Absent accounts come back with zero account scalars plus the empty-code and
-// empty-trie hashes; the proof bytes themselves distinguish inclusion from
-// exclusion to a verifier.
-//
-// It returns [ErrEthProofNotSupported] if the database is not in Ethereum hash
-// mode, and [ErrDroppedReconstructed] if this view has already been released.
+// EthGetProof is [Revision.EthGetProof] evaluated against this reconstructed
+// view. It returns [ErrEthProofNotSupported] if the database is not in Ethereum
+// hash mode, and [ErrDroppedReconstructed] if the view has been released.
 func (r *Reconstructed) EthGetProof(accountKey []byte, slotKeys [][]byte) (*EthAccountProof, error) {
 	r.keepAliveHandle.mu.RLock()
 	defer r.keepAliveHandle.mu.RUnlock()
