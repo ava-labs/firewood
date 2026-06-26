@@ -11,12 +11,13 @@ tracking-issue: https://github.com/ava-labs/firewood/issues/804
 
 A version 2 (v2) on-disk file format for Firewood, a clean break from v1 (no v1
 backward compatibility) designed for zero-deserialization reads on the traversal
-hot path — read directly with `pread` in v2.0 and zero-copy through `mmap` in
-v2.1 — while preserving Firewood's defining property: a compaction-less store in
-which a node's address is its direct byte offset on disk. The format is frozen for
-all of major version 2 and is built so that any v2.x reader reads any v2.y file in
-both directions, so the next migration on a multi-terabyte state file is deferred
-as far as possible.
+hot path — a single positioned read (`pread`) in v2.0 and true zero-copy through
+`mmap` in v2.1 — while preserving Firewood's defining property: a compaction-less
+store in which a node's address is its direct byte offset on disk. The format is
+frozen for all of major version 2 and is built so that within major version 2 any
+reader reads any file, in both directions, with no format change — a change that
+would break this is by definition a v3 event — so the next migration on a
+multi-terabyte state file is deferred as far as possible.
 
 ## Motivation
 
@@ -42,7 +43,8 @@ The four tenets, in priority order:
 2. **Zero-copy-ready layout.** Nodes are reinterpreted from their on-disk bytes
    with no field-by-field deserialization.
 3. **Within-major compatibility, future-proofed.** Any v2.x reader reads any v2.y
-   file, in both directions.
+   file, in both directions, unless an explicit read/write gate is raised (which
+   within major version 2 is a v3 signal).
 4. **Traversal-first structure.** The layout favors path/trie traversal above all
    else.
 
@@ -62,7 +64,14 @@ though the format reserves the hooks to add it without a break.
 These are stated requirements of v2, not open questions:
 
 - **Single writer.** At most one process writes a database at a time; the
-  recoverability protocol assumes it. Reads may run concurrently with the writer.
+  recoverability protocol assumes it. Reads may run concurrently with the writer,
+  but only through handles registered with the revision manager: a registered
+  reader pins its revision so the writer will not reap and reuse an area the reader
+  is still traversing. v2.0 defines no cross-process or unregistered-`mmap` reader
+  pin protocol — an independent reader that outlives its pinned revision's retention
+  window may observe a reaped-and-reused area as garbage. Extending safe reads to
+  such readers (a reader epoch/pin protocol) is deferred (see
+  [Unresolved questions](#unresolved-questions)).
 - **High-throughput storage.** The database targets an NVMe-class block device or
   better; the commit protocol and layout are tuned for low-latency random writes
   and `fsync`. Performance on spinning or network-backed storage is out of scope.
@@ -97,18 +106,21 @@ ADDRESS = global u64 file offset, 8-byte aligned (low 3 bits reserved as tag bit
 The defining idea is the **hot/cold split**: traversal reads addresses, not
 hashes. Child addresses are hot and contiguous; child hashes and values are cold
 and faulted only when hashing, generating a proof, or reading a value at a
-destination. A single hop reads the 8-byte node header, one `u64` child address,
-and the packed partial path — all within the first cache line or two.
+destination. Following one child reads the 8-byte node header and a single indexed
+`u64` child address — a bounded, contiguous hot region; for the common sparse node
+this plus the packed partial path sit within the first cache line or two, though a
+densely populated branch (up to 16 child addresses = 128 B) spans several.
 
-The **read mechanism is versioned but the bytes are not.** A v2.0 reader fetches
-an area with one positioned read (`pread`) and reinterprets the buffer with
-`bytemuck` — no deserialization, one copy. A v2.1 reader maps the file and
-reinterprets node bytes in place (true zero-copy). Both read identical files, so
-`mmap` is a reader capability, not a format change.
-
-Like every Firewood design, a proposed document precedes the build; this proposal
-tracks [issue #804](https://github.com/ava-labs/firewood/issues/804) and is
-promoted to `active/` once implemented.
+The **read mechanism is versioned but the bytes are not.** A v2.0 reader resolves
+an area in two positioned reads: an 8-byte `AreaHeader` prefix yields `size_class`,
+the header's `area_sizes` table gives the byte extent, and a second `pread` pulls
+the bounded area into a buffer. Because a heap buffer carries no alignment guarantee
+beyond one byte, the v2.0 reader reinterprets it with unaligned POD reads
+(`bytemuck::pod_read_unaligned`) — no field-by-field deserialization, but one copy.
+A v2.1 reader maps the file and reinterprets node bytes in place: mappings are
+page-aligned (hence 8-aligned), so the typed `bytemuck::from_bytes` cast is valid
+and the read is true zero-copy. Both read identical files, so `mmap` is a reader
+capability, not a format change.
 
 ## Detailed design
 
@@ -165,10 +177,14 @@ masking rule applies to every stored `Address` — child addresses, the value
 not a compiled-in constant. A frozen maximum of 64 classes keeps the header
 fixed-size; the per-area `size_class` byte indexes the file's own table, so every
 reader and writer agrees on what a class means for that file. This eliminates the
-v1 trap where a compiled-in table mismatch rejects the file. v2.0 ships a sensible
-default table (geometric, ~16 B to 16 MiB); a future writer may choose different
-values for new files, and old readers honor whatever the file declares. All class
-sizes are multiples of 8.
+v1 trap where a compiled-in table mismatch rejects the file. v2.0 ships a
+default table (geometric progression, 16 B to 16 MiB); a future writer may choose different
+values for new files, and old readers honor whatever the file declares. Two
+size-class invariants are validated at open and a file violating either is refused:
+every class size is a multiple of 8, and `area_sizes[0] >= 16` so the smallest
+class can still hold a free record (`AreaHeader(8) + next_free(8)`). The minimum is
+bounded by the free record, not by any node shape — a node that needs more room
+simply allocates a larger class.
 
 **Read path and segmented mapping.** v2.0 reads via `pread` + `bytemuck` cast.
 v2.1 maps the file in fixed-size **segments** (`segment_size`, frozen at 1 GiB but
@@ -209,7 +225,8 @@ NodeHeader (8 bytes, repr(C), little-endian):
            bit 0  kind            0 = branch, 1 = leaf
            bit 1  has_value       node carries a value
            bit 2  value_overflow  0 = inline value, 1 = overflow reference
-           bits 3..7  reserved    (write 0)
+           bit 3  has_cold_tlv    0 = no TLV region, 1 = TLV region follows value
+           bits 4..7  reserved    (write 0)
   off 1  reserved0        : u8     reserved per-node growth surface (write 0)
   off 2  child_bitmap     : u16    bit i set if a child exists at nibble i
   off 4  path_len_nibbles : u32
@@ -220,7 +237,10 @@ The trie is 16-ary (one nibble per level), so `child_bitmap` is exactly 16 bits.
 (~2 GiB key), about seven orders of magnitude above any realistic key, chosen to
 eliminate an overflow branch on the hot path. The `child_addrs` array follows at
 `+16` (8-aligned); the `partial_path` follows it as packed nibbles (two per byte,
-high nibble first), `ceil(path_len_nibbles / 2)` bytes.
+high nibble first), `ceil(path_len_nibbles / 2)` bytes. When `path_len_nibbles` is
+odd, the final byte's low nibble is padding: a writer MUST write it as zero and a
+reader MUST ignore it. Freezing the pad to zero keeps the encoded bytes
+reproducible, which the byte-identical-hash requirement below depends on.
 
 **Branch node.**
 
@@ -238,7 +258,10 @@ AREA (8-aligned)
     value section (present iff flags.has_value):
       inline   : value_len : u32, bytes[value_len]
       overflow : overflow_addr : Address, value_len : u64
-  [optional feature-gated cold TLV regions: [tag:u16][len:u32][bytes], skippable]
+    cold TLV region (present iff flags.has_cold_tlv):
+      tlv_total_len : u32                            bytes in the records that follow
+      records       : [tag:u16][len:u32][bytes] ...  (exactly tlv_total_len bytes)
+  (any area payload beyond the last cold element is zero-filled slop, ignored)
 ```
 
 Child lookup at nibble `n` (the hot path) is branch-free aside from one `POPCNT`:
@@ -256,13 +279,20 @@ parent's `child_hashes` slot, and the root's hash lives in the header).
 
 **Cold-region seek invariant (frozen).** Every cold sub-region's byte extent MUST
 be computable from the hot header (`pc`, `has_value`, `value_overflow`,
-`path_len_nibbles`) plus the file's `hash_algorithm` alone — never from the cold
-bytes. The `child_hashes` block is always `32 * pc` bytes: the physical stride is
-32 bytes per child regardless of `child_hash_lens`, which is interpretation-only.
-The value-section offset is therefore a closed form, computable without faulting
-the hash block. The only variable-length cold element is a trailing TLV region,
-which carries its own `[tag:u16][len:u32]` length. This invariant is what makes
-"skip an unknown cold region" actually hold.
+`path_len_nibbles`, `has_cold_tlv`) plus the file's `hash_algorithm` alone — never
+from the cold bytes. The `child_hashes` block is always `32 * pc` bytes: the
+physical stride is 32 bytes per child regardless of `child_hash_lens`, which is
+interpretation-only. The value-section offset is therefore a closed form, computable
+without faulting the hash block. The trailing TLV region is the only variable-length
+cold element, and it is framed so a reader can both skip unknown records and find
+later known ones: it is present iff `has_cold_tlv` is set, it opens with a
+`tlv_total_len : u32` byte count, and the reader walks `[tag:u16][len:u32][bytes]`
+records consuming exactly `tlv_total_len` bytes — no terminator and no inter-record
+padding, so a zero byte is never mistaken for an empty `tag = 0x0000` record. Any
+area payload beyond the final cold element (or beyond the value section when
+`has_cold_tlv` is clear) is zero-filled slop and is ignored; the TLV walk never
+runs into it. This framing is what makes "skip an unknown cold region, then read a
+later known one" actually hold.
 
 **Inline-value threshold is writer policy, not format.** A reader never consults a
 threshold — `flags.value_overflow` is self-describing per node, so nodes written
@@ -270,7 +300,11 @@ under different thresholds coexist. The default is 256 B (so account RLP and
 storage slots stay inline) and is persisted as an advisory
 `default_inline_value_threshold` that readers ignore. The inline `value_len` is a
 `u32` by format; if it exceeds the area's remaining payload, the reader MUST return
-a corruption error, never truncate.
+a corruption error, never truncate. The overflow case carries the symmetric
+obligation: a referenced overflow area must satisfy
+`value_len <= area_size(overflow_area.size_class) - 8` (its 8-byte `AreaHeader`),
+and a reader MUST reject the reference as corruption rather than read past the
+overflow area's payload.
 
 ### Header, versioning, and compatibility
 
@@ -330,9 +364,13 @@ On open a reader refuses the file if `page_size < the system page size`: a file
 aligned to a smaller page cannot be mapped on a host with larger pages, while a
 file aligned to a larger page maps fine anywhere with pages ≤ it. `page_size_log2`
 is set once at creation and immutable thereafter (every commit rewrites it with the
-same value), so it locates slot B reliably even when slot A's checksum fails;
-because each slot spans at least one full page, a single torn page write damages at
-most one slot, preserving the double buffer's independent-failure property.
+same value). Because each slot spans at least one full page, a single torn page
+write damages at most one slot, preserving the double buffer's independent-failure
+property. The reader never trusts the `page_size_log2` byte from an *unvalidated*
+slot to locate the other slot: a torn-but-plausible value would point the search at
+the wrong offset and miss a recoverable slot. Instead it probes the small, fixed set
+of candidate strides (`max(8192, 1 << k)` for `k` in `12..=30`) for a checksum-valid
+slot — see recovery below.
 
 **Three compatibility mechanisms (the heart of tenet 3).** Within-major
 bidirectional compatibility rests on two one-way gates plus a bidirectional
@@ -343,7 +381,7 @@ extension channel, over a frozen hot core:
 | Meaning | file uses optional capability X | reader must understand minor >= V | writer must support X to write |
 | On unknown | reader ignores the bit, skips the cold region | reader refuses the file | writer opens read-only |
 | Compatibility | bidirectional (additions optional, skippable) | one-way read gate | one-way write gate |
-| Intended use | the default channel for all evolution | break-glass only | gate for any write-affecting feature |
+| Intended use | the default channel for all evolution | a non-skippable read change; raising it is by definition a v3 signal | gate for any write-affecting feature |
 
 `feature_bits` is the routine channel: every ordinary addition ships as a feature
 bit plus self-delimiting cold data (a cold TLV record, an address tag-bit meaning,
@@ -369,8 +407,10 @@ The whole recovery argument rests on a single invariant:
 The live header is the valid slot with the highest `sequence`; it transitively
 references the committed root tree and the free-list chains. Everything else (bump
 space beyond `high_water_mark`, areas in neither the tree nor a free chain) is safe
-to write. Because the header swap is atomic, a crash lands on the old or the new
-header, never a mix.
+to write. The header swap is not a hardware-atomic store; its all-or-nothing effect
+comes from double-buffering, per-slot checksums, and sequence selection: a crash
+leaves either the previous valid slot or a checksum-valid newer slot selectable,
+never a torn mix.
 
 **Commit** is two `fsync`s:
 
@@ -389,7 +429,10 @@ The Phase-1 write of each new area includes its full `AreaHeader` (with
 `kind = node`), so a `kind = node` byte may be durable before Phase 2 publishes —
 this is safe because the area is off all live-header references. The two-`fsync`
 ordering is a hard requirement of any write backend; a writer using io-uring must
-chain a barrier `fsync` or fall back to a blocking one between phases.
+chain a barrier `fsync` or fall back to a blocking one between phases. This requires
+the writable-storage trait to gain a durability-barrier method
+(`fsync`/`fdatasync`) that every backend implements — the current trait exposes only
+writes, so this is a required API addition the implementation introduces.
 
 **Reuse and reaping are safe** because each touches only non-live-referenced areas:
 an area is *popped one commit ahead* of being filled (commit N−1 publishes a header
@@ -404,12 +447,20 @@ the intrusive `next_free` links — is always written to non-live-referenced are
 ```text
 1. Bootstrap and read both slots:
      a. Read the fixed 8192-byte content at offset 0 (always present: stride >= 8192).
-     b. Read page_size_log2 (off 107); verify it is plausible (12..=30) else refuse.
-        It is immutable since creation, so it authoritatively locates slot B.
-     c. slot_stride = max(8192, 1 << page_size_log2); read slot B at slot_stride.
-     d. For each slot verify magic, major == 2, endian_test, checksum; a valid slot
-        whose own page_size_log2 disagrees with (b) is treated as invalid.
-     e. Refuse if neither slot is valid, or if page_size < the system page size.
+        This is slot A; verify magic, major == 2, endian_test, and checksum.
+     b. Locate slot B without trusting any unvalidated byte. The on-disk stride is
+        max(8192, 1 << page_size_log2) and page_size_log2 is immutable since
+        creation, but its byte may be torn in a damaged slot — so the reader probes
+        each candidate stride max(8192, 1 << k) for k in 12..=30, reads a slot-B
+        candidate at each, and keeps any that verifies magic, major == 2,
+        endian_test, and checksum. (If slot A verified, its page_size_log2 selects
+        the stride directly and the probe is a one-shot confirmation; the probe only
+        does real work when slot A is damaged.)
+     c. A valid slot's page_size MUST agree with the stride it was found at; a slot
+        whose page_size_log2 disagrees with its discovery stride is treated as
+        invalid.
+     d. Refuse if neither slot is valid, or if the adopted slot's page_size is
+        smaller than the system page size.
    Select the runtime hash mode from the adopted slot's hash_algorithm.
 2. Enforce gates (a precondition of handle acquisition, atomic with it):
      refuse        if min_reader_version > mine;
@@ -420,19 +471,36 @@ the intrusive `next_free` links — is always written to non-live-referenced are
 ```
 
 No redo/undo log is needed. A crash can strand reserved-pool areas (popped but
-never filled) and bump debris beyond `high_water_mark`; both are harmless,
-bounded, unreclaimed space, recovered by an optional free-space rebuild scan gated
-behind the `clean_shutdown` flag (set to 0 by every Phase-2 write, to 1 only by a
-cooperative close), so the scan runs only after an unclean open.
+never filled) and bump debris beyond `high_water_mark`; both are harmless, bounded
+space, recovered by an optional free-space rebuild scan that runs only after an
+unclean open (see the `clean_shutdown` protocol below). Because that scan is the
+*only* path that reclaims stranded reserved-pool areas, a clean close MUST NOT leave
+them stranded — otherwise they would leak unrecoverably and accumulate across clean
+restarts. A cooperative close therefore returns every popped-but-unfilled reserved
+area to its `free_list_heads[c]` chain as part of its final commit.
+
+**Clean-shutdown protocol.** `clean_shutdown` is not poked in place in the live
+slot — an in-place byte write would break that slot's checksum and violate the
+"never mutate live-referenced state" rule. A cooperative close performs one final,
+ordinary header publish to the scratch (older) slot: it returns reserved areas to
+the free lists, sets `clean_shutdown = 1`, bumps `sequence`, checksums, and
+`fsync`s. Every Phase-2 commit, by contrast, publishes with `clean_shutdown = 0`. On
+open the rebuild scan runs unless the adopted slot reads `clean_shutdown = 1`, so a
+clean close both records the flag durably and leaves no reserved-pool debris for the
+skipped scan to miss.
 
 The rebuild scan is a **total** classification over every area, keyed on
 `AreaHeader.kind`, reachability from the live root (`R_root`), and membership on a
-published free chain (`R_free`):
+published free chain (`R_free`). Reachability follows every live reference a node
+holds — its child addresses *and*, when `flags.value_overflow` is set, its
+`overflow_addr` — so a live overflow value counts as `R_root = yes`:
 
 | `kind` | `R_root` | `R_free` | Classification |
 | --- | --- | --- | --- |
 | `node` | yes | — | **live node** — retain |
 | `node` | no | — | **reclaim-to-free** — mid-fill debris whose header never published |
+| `value-overflow` | yes | — | **live value** — retain (reached via a node's `overflow_addr`) |
+| `value-overflow` | no | — | **reclaim-to-free** — orphaned overflow whose referrer never published |
 | `free` | — | yes | **free** — already correct |
 | `free` | — | no | **reclaim-to-free** — popped-but-unfilled reserved-pool area |
 | other | — | — | **leak** — sub-minimum slop or unrecognized; counted toward the waste bound |
@@ -466,12 +534,18 @@ variant.
 
 ### Hashing integration
 
-The format stores hashes but is agnostic to hashing semantics, which stay in the
-hashing layer. `hash_algorithm` is a file-global, immutable header field (`0` =
-SHA-256/merkledb, `1` = Keccak-256/ethhash) that **selects the runtime hash mode at
-open**: both modes are built into one binary as two traits — there is no
-compile-time hash feature — so any binary opens any file in the mode its header
-declares, and an unrecognized value is refused. There is no cross-algorithm path to
+The format stores hashes and stays agnostic to hashing *semantics* (which stay in
+the hashing layer), but it is not agnostic to hash *geometry*: the layout freezes a
+32-byte child-hash stride (see the cold-region seek invariant) and the ethhash
+`child_hash_lens` convention. v2 therefore supports the declared 32-byte-output
+algorithms; an algorithm needing a different hash width or extra per-child metadata
+is a gated layout change or a v3 event, not a drop-in `hash_algorithm` value.
+
+The `hash_algorithm` field (`0` = SHA-256/merkledb, `1` = Keccak-256/ethhash) is a
+file-global, immutable header field. It **selects the runtime hash mode at open**:
+both modes are built into one binary as two traits — there is no compile-time hash
+feature — so any binary opens any file in the mode its header declares, and an
+unrecognized value is refused. There is no cross-algorithm path to
 guard. A node's own hash lives in its parent's cold `child_hashes` slot; the root's
 hash lives in `root_hash`. Under ethhash, `child_hash_lens[i] == 32` is a full
 Keccak hash and `1..=31` is an embedded RLP node in the slot's first `len` bytes (a
@@ -485,18 +559,23 @@ v1's — blockchain consensus depends on exact state roots.
 
 ### Frozen invariants
 
-Frozen for all of major version 2 (changing any is a v3 event): 8-byte alignment
-and 3 reserved address tag bits; the `AreaHeader` and `NodeHeader` layouts, the
-`+16` child-address-array position, and packed-nibble paths; the 8192-byte header
-content layout (field offsets and the `area_sizes`/`free_list_heads` tables, with
-`checksum` at 8184) and double-buffering, with on-disk slot stride
-`max(8192, page_size)` and first area at `2 * slot_stride`; little-endian integers;
-the XXH3-64 checksum with no spare bits; the page-alignment rule; the three
-compatibility mechanisms and the cold-TLV extension model; the recoverability
-invariant and atomic header-swap commit point; the kind-byte/fill invariant and the
-total rebuild predicate; the cold-region seek invariant; runtime hash-mode
-selection; the `required_writer_features` open-for-write precondition; the
-`clean_shutdown` protocol; and the address-masking rule.
+Frozen for all of major version 2 (changing any is a v3 event), grouped by area:
+
+- *Alignment and addressing:* 8-byte alignment, the 3 reserved address tag bits, and
+  the address-masking rule.
+- *Area and node layout:* the `AreaHeader` and `NodeHeader` layouts, the `+16`
+  child-address-array position, and packed-nibble paths.
+- *Header layout and commit:* the 8192-byte header content layout (field offsets and
+  the `area_sizes`/`free_list_heads` tables, with `checksum` at 8184) and
+  double-buffering, with on-disk slot stride `max(8192, page_size)` and first area at
+  `2 * slot_stride`; little-endian integers; the page-alignment rule; the
+  recoverability invariant and the header-swap commit point.
+- *Integrity:* the XXH3-64 checksum with no spare bits.
+- *Compatibility:* the three compatibility mechanisms, the cold-TLV extension model,
+  and the cold-region seek invariant.
+- *Operational protocols:* the kind-byte/fill invariant and the total rebuild
+  predicate; runtime hash-mode selection; the `required_writer_features`
+  open-for-write precondition; and the `clean_shutdown` protocol.
 
 Accepted, owned limits (each a v3 event to raise): `path_len_nibbles` at the `u32`
 ceiling, the 64-class size-class cap, the 256-bit gate arrays, and the `u32` inline
@@ -577,7 +656,13 @@ implementation:
    because committed nodes are immutable, no re-validation and no extra header field
    are needed. A "follow-latest" reader (re-read the header each traversal) is the
    alternative; the double-buffered header supports both, so this is a reader-policy
-   choice, not a format change.
+   choice, not a format change. One caveat bounds this: "committed nodes are
+   immutable" holds only within a revision's retention window — once the pinned
+   revision expires, the writer may reap and reuse its areas. A reader registered
+   with the revision manager pins the revision and is safe; an independent or
+   cross-process reader that traverses past the retention window needs an epoch/pin
+   handshake with the reaper, which v2.0 does not define and which (like the `mmap`
+   writer) is a later addition in reserved, feature-gated space.
 
 ## Future possibilities
 
@@ -667,7 +752,9 @@ implementation.
 
 - Removing the compile-time `ethhash` Cargo feature (so hash mode is runtime) is a
   separate, in-flight, cross-cutting refactor and an accepted breaking change to the
-  `firewood-storage` API; the format freeze does not depend on it landing, and the
-  `--features ethhash` recipes in repository tooling must drop the feature once it is
-  gone.
-- `markdownlint-cli2 .` passes on the added Markdown.
+  `firewood-storage` API. The frozen *byte layout* does not depend on it — the
+  `hash_algorithm` field and the 32-byte cold-hash geometry are fixed regardless —
+  but the "Hash-mode selection at open" freeze gate below does: it exercises runtime
+  dispatch and so cannot pass until this refactor lands. Treat the refactor as a
+  prerequisite of that one gate, not of the layout decisions. Once it is gone, the
+  `--features ethhash` recipes in repository tooling must drop the feature.
