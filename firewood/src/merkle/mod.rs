@@ -353,18 +353,16 @@ fn compute_outside_children(
         } else if let Some(on_path_byte) = boundary_nibbles.get(terminal.key.len()) {
             // Terminal is an ancestor of the boundary key. The next
             // nibble tells us which child leads toward the boundary.
-            // Mark children on the far side of that nibble as outside,
-            // and also mark the on-path child itself: its subtree may
-            // contain keys beyond the proven range, so we must use the
-            // proof's hash rather than recomputing it.
+            // Mark children on the far side of that nibble as outside.
+            // The on-path child itself is left inside the range so its
+            // subtree is correctly computed from the applied batch.
             let on_path_nibble = U4::new_masked(*on_path_byte);
             let entry = result.entry(terminal.key.clone()).or_default();
             *entry = if boundary.is_left() {
                 entry.set_below(on_path_nibble)
             } else {
                 entry.set_above(on_path_nibble)
-            }
-            .set(on_path_nibble);
+            };
         } else if !boundary.is_left() {
             // Boundary is a prefix of or exactly matches the terminal key.
             // For the right edge, all children extend beyond end_key (they
