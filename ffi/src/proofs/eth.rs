@@ -4,6 +4,7 @@
 use firewood::api;
 use firewood_metrics::MetricsContext;
 
+use crate::reconstructed::ReconstructedHandle;
 use crate::revision::RevisionHandle;
 use crate::{
     BorrowedBytes, BorrowedBytes2D, EthProofResult, Maybe, OwnedBytes, OwnedSlice, VoidResult,
@@ -92,6 +93,30 @@ fn to_trie_key(bytes: &[u8]) -> Result<[u8; 32], api::Error> {
     })
 }
 
+/// Shared body for the `fwd_eth_get_proof*` entry points: parse the keys and
+/// call the core proof function against `handle`. Returns
+/// [`EthProofResult::NullHandlePointer`] when `handle` is `None`.
+fn eth_get_proof_on<H>(
+    handle: Option<&H>,
+    account_key: BorrowedBytes<'_>,
+    storage_keys: BorrowedBytes2D<'_>,
+) -> EthProofResult
+where
+    H: api::DbView + crate::MetricsContextExt,
+{
+    crate::invoke_with_handle(
+        handle,
+        move |view| -> Result<firewood::EthProof, api::Error> {
+            let account_key = to_trie_key(account_key.as_slice())?;
+            let storage_keys = storage_keys
+                .iter()
+                .map(|key| to_trie_key(key.as_slice()))
+                .collect::<Result<Vec<[u8; 32]>, _>>()?;
+            firewood::eth_get_proof(view, &account_key, &storage_keys)
+        },
+    )
+}
+
 /// Produce an `eth_getProof`-compatible proof for an account and a set of
 /// storage slots against the given revision.
 ///
@@ -135,17 +160,26 @@ pub extern "C" fn fwd_eth_get_proof(
     account_key: BorrowedBytes,
     storage_keys: BorrowedBytes2D,
 ) -> EthProofResult {
-    crate::invoke_with_handle(
-        revision,
-        move |rev| -> Result<firewood::EthProof, api::Error> {
-            let account_key = to_trie_key(account_key.as_slice())?;
-            let storage_keys = storage_keys
-                .iter()
-                .map(|key| to_trie_key(key.as_slice()))
-                .collect::<Result<Vec<[u8; 32]>, _>>()?;
-            firewood::eth_get_proof(rev, &account_key, &storage_keys)
-        },
-    )
+    eth_get_proof_on(revision, account_key, storage_keys)
+}
+
+/// Produce an `eth_getProof`-compatible proof against a reconstructed view
+/// rather than a committed revision.
+///
+/// See [`fwd_eth_get_proof`] for the proof format, arguments, return values,
+/// and key-encoding requirements.
+///
+/// # Safety
+///
+/// As [`fwd_eth_get_proof`], except `reconstructed` must be a valid pointer to
+/// a [`ReconstructedHandle`].
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_eth_get_proof_on_reconstructed(
+    reconstructed: Option<&ReconstructedHandle<'_>>,
+    account_key: BorrowedBytes,
+    storage_keys: BorrowedBytes2D,
+) -> EthProofResult {
+    eth_get_proof_on(reconstructed, account_key, storage_keys)
 }
 
 /// Frees the memory associated with an [`EthProofOwned`].
