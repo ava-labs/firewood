@@ -5,6 +5,7 @@ package eth
 
 import (
 	"encoding/binary"
+	"fmt"
 	"testing"
 
 	"github.com/ava-labs/libevm/common"
@@ -136,9 +137,35 @@ func verifyProof(t *testing.T, root common.Hash, key []byte, nodes [][]byte) []b
 	return value
 }
 
-func TestEthGetProofAccountInclusionAndExclusion(t *testing.T) {
+// ethProver is satisfied by *ffi.Revision and *ffi.Reconstructed,
+// which expose the same EthGetProof signature.
+type ethProver interface {
+	EthGetProof(accountKey []byte, slotKeys [][]byte) (*ffi.EthAccountProof, error)
+}
+
+// proversAtRoot returns the committed revision and an equivalent reconstructed
+// view, both rooted at built.root. Each view is released via t.Cleanup.
+func proversAtRoot(t *testing.T, built builtState) []ethProver {
+	t.Helper()
 	r := require.New(t)
 
+	// 1. Committed revision on the database built.db already committed to.
+	rev, err := built.db.Revision(built.root)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(rev.Drop()) })
+
+	// 2. Reconstructed view whose state matches the committed revision:
+	// reconstructing with an empty batch on top of rev applies no changes, so
+	// the resulting view sits at the same root.
+	recon, err := rev.Reconstruct(nil)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(recon.Drop()) })
+	r.Equal(built.root, recon.Root(), "reconstructed root must match committed root")
+
+	return []ethProver{rev, recon}
+}
+
+func TestEthGetProofAccountInclusionAndExclusion(t *testing.T) {
 	present := common.HexToAddress("0x00000000000000000000000000000000000000a1")
 	other := common.HexToAddress("0x00000000000000000000000000000000000000b2")
 	absent := common.HexToAddress("0x00000000000000000000000000000000000000ff")
@@ -146,37 +173,38 @@ func TestEthGetProofAccountInclusionAndExclusion(t *testing.T) {
 	built := buildState(t, []accountSpec{{addr: present}, {addr: other}})
 	root := common.Hash(built.root)
 
-	rev, err := built.db.Revision(built.root)
-	r.NoError(err)
-	defer func() { r.NoError(rev.Drop()) }()
-
-	// Inclusion: the account proof verifies to the stored account RLP, and the
-	// returned scalars match.
 	accHash := crypto.Keccak256Hash(present[:])
-	proof, err := rev.EthGetProof(accHash[:], nil)
-	r.NoError(err)
-	r.Empty(proof.StorageProof)
-
-	value := verifyProof(t, root, accHash[:], proof.AccountProof)
-	r.Equal(built.accountRLP[accHash], value)
-
-	r.Equal(uint64(1), proof.Nonce)
-	r.Equal(types.EmptyRootHash, common.Hash(proof.StorageHash))
-	r.Equal(types.EmptyCodeHash, common.Hash(proof.CodeHash))
-
-	// Exclusion: an absent account verifies to a nil value (valid proof of
-	// absence) and reports the default account shape.
 	absentHash := crypto.Keccak256Hash(absent[:])
-	absentProof, err := rev.EthGetProof(absentHash[:], nil)
-	r.NoError(err)
-	r.Nil(verifyProof(t, root, absentHash[:], absentProof.AccountProof))
-	r.Equal(uint64(0), absentProof.Nonce)
-	r.Equal(types.EmptyRootHash, common.Hash(absentProof.StorageHash))
+
+	for _, prover := range proversAtRoot(t, built) {
+		t.Run(fmt.Sprintf("%T", prover), func(t *testing.T) {
+			r := require.New(t)
+
+			// Inclusion: the account proof verifies to the stored account RLP, and the
+			// returned scalars match.
+			proof, err := prover.EthGetProof(accHash[:], nil)
+			r.NoError(err)
+			r.Empty(proof.StorageProof)
+
+			value := verifyProof(t, root, accHash[:], proof.AccountProof)
+			r.Equal(built.accountRLP[accHash], value)
+
+			r.Equal(uint64(1), proof.Nonce)
+			r.Equal(types.EmptyRootHash, common.Hash(proof.StorageHash))
+			r.Equal(types.EmptyCodeHash, common.Hash(proof.CodeHash))
+
+			// Exclusion: an absent account verifies to a nil value (valid proof of
+			// absence) and reports the default account shape.
+			absentProof, err := prover.EthGetProof(absentHash[:], nil)
+			r.NoError(err)
+			r.Nil(verifyProof(t, root, absentHash[:], absentProof.AccountProof))
+			r.Equal(uint64(0), absentProof.Nonce)
+			r.Equal(types.EmptyRootHash, common.Hash(absentProof.StorageHash))
+		})
+	}
 }
 
 func TestEthGetProofStorageInclusionAndExclusion(t *testing.T) {
-	r := require.New(t)
-
 	addr := common.HexToAddress("0x00000000000000000000000000000000000000c3")
 	slots := []slot{
 		{key: common.HexToHash("0x01"), val: common.HexToHash("0x1111")},
@@ -187,10 +215,6 @@ func TestEthGetProofStorageInclusionAndExclusion(t *testing.T) {
 
 	built := buildState(t, []accountSpec{{addr: addr, slots: slots}})
 	root := common.Hash(built.root)
-
-	rev, err := built.db.Revision(built.root)
-	r.NoError(err)
-	defer func() { r.NoError(rev.Drop()) }()
 
 	accHash := crypto.Keccak256Hash(addr[:])
 
@@ -204,34 +228,40 @@ func TestEthGetProofStorageInclusionAndExclusion(t *testing.T) {
 	absentSlotHash := crypto.Keccak256Hash(absentSlotKey[:])
 	slotHashes = append(slotHashes, absentSlotHash[:])
 
-	proof, err := rev.EthGetProof(accHash[:], slotHashes)
-	r.NoError(err)
-	r.Len(proof.StorageProof, len(slots)+1)
+	for _, prover := range proversAtRoot(t, built) {
+		t.Run(fmt.Sprintf("%T", prover), func(t *testing.T) {
+			r := require.New(t)
 
-	// StorageHash must equal the canonical storage trie root.
-	storageHash := common.Hash(proof.StorageHash)
-	r.NotEqual(types.EmptyRootHash, storageHash)
+			proof, err := prover.EthGetProof(accHash[:], slotHashes)
+			r.NoError(err)
+			r.Len(proof.StorageProof, len(slots)+1)
 
-	// The account proof still verifies against the revision root.
-	r.Equal(built.accountRLP[accHash], verifyProof(t, root, accHash[:], proof.AccountProof))
+			// StorageHash must equal the canonical storage trie root.
+			storageHash := common.Hash(proof.StorageHash)
+			r.NotEqual(types.EmptyRootHash, storageHash)
 
-	// Present slots: storage proof verifies to the RLP-encoded value.
-	for i, s := range slots {
-		entry := proof.StorageProof[i]
-		slotHash := crypto.Keccak256Hash(s.key[:])
-		r.Equal(slotHash[:], entry.Key[:])
+			// The account proof still verifies against the revision root.
+			r.Equal(built.accountRLP[accHash], verifyProof(t, root, accHash[:], proof.AccountProof))
 
-		expectedVal, err := rlp.EncodeToBytes(s.val[:])
-		r.NoError(err)
-		r.Equal(expectedVal, entry.Value)
-		r.Equal(expectedVal, verifyProof(t, storageHash, slotHash[:], entry.Proof))
+			// Present slots: storage proof verifies to the RLP-encoded value.
+			for i, s := range slots {
+				entry := proof.StorageProof[i]
+				slotHash := crypto.Keccak256Hash(s.key[:])
+				r.Equal(slotHash[:], entry.Key[:])
+
+				expectedVal, err := rlp.EncodeToBytes(s.val[:])
+				r.NoError(err)
+				r.Equal(expectedVal, entry.Value)
+				r.Equal(expectedVal, verifyProof(t, storageHash, slotHash[:], entry.Proof))
+			}
+
+			// Absent slot: nil value and a valid exclusion proof.
+			absentEntry := proof.StorageProof[len(slots)]
+			r.Equal(absentSlotHash[:], absentEntry.Key[:])
+			r.Nil(absentEntry.Value)
+			r.Nil(verifyProof(t, storageHash, absentSlotHash[:], absentEntry.Proof))
+		})
 	}
-
-	// Absent slot: nil value and a valid exclusion proof.
-	absentEntry := proof.StorageProof[len(slots)]
-	r.Equal(absentSlotHash[:], absentEntry.Key[:])
-	r.Nil(absentEntry.Value)
-	r.Nil(verifyProof(t, storageHash, absentSlotHash[:], absentEntry.Proof))
 }
 
 // findSlotsSharingFirstNibble returns n storage slots whose trie keys
