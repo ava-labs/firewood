@@ -1838,7 +1838,6 @@ dependencies = [
  "firewood",
  "firewood-metrics",
  "firewood-replay",
- "firewood-storage",
  "metrics",
  "metrics-exporter-prometheus",
  "parking_lot",

@@ -23,7 +23,6 @@ crate-type = ["staticlib"]
 # Workspace dependencies
 firewood.workspace = true
 firewood-metrics.workspace = true
-firewood-storage.workspace = true
 metrics.workspace = true
 parking_lot.workspace = true
 # Regular dependencies
@@ -41,7 +40,7 @@ test-case.workspace = true
 [features]
 logger = ["dep:env_logger", "firewood/logger"]
 ethhash = ["firewood/ethhash"]
-io-uring = ["firewood/io-uring", "firewood-storage/io-uring"]
+io-uring = ["firewood/io-uring"]
 block-replay = ["dep:firewood-replay"]
 
 [build-dependencies]

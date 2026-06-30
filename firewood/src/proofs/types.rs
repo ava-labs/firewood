@@ -163,6 +163,20 @@ pub enum ProofError {
     #[error("invalid value format")]
     InvalidValueFormat,
 
+    /// Invalid Ethereum account value format
+    #[error("invalid Ethereum account value format: {reason}")]
+    InvalidAccountValueFormat {
+        /// Description of why account decoding failed.
+        reason: String,
+    },
+
+    /// Invalid Ethereum account code hash length
+    #[error("invalid Ethereum account code hash length: expected 32 bytes, got {len}")]
+    InvalidAccountCodeHashLength {
+        /// Actual length of the code hash field.
+        len: usize,
+    },
+
     #[error("larger than max length")]
     ProofIsLargerThanMaxLength,
 

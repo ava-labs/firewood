@@ -17,6 +17,8 @@
 use firewood_storage::{
     NodeHashAlgorithm, PackedPathRef, PathComponent, TriePathFromPackedBytes, ValueDigest,
 };
+#[cfg(feature = "ethhash")]
+use firewood_storage::{RlpList, TrieHash};
 
 use crate::api::{DbView, Error, HashKey, HashKeyExt};
 use crate::proofs::ProofError;
@@ -34,6 +36,33 @@ const KECCAK_EMPTY: [u8; 32] = [
     0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03, 0xc0,
     0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85, 0xa4, 0x70,
 ];
+
+/// Extract a non-empty Ethereum account code hash from an RLP-encoded account value.
+///
+/// Returns `Ok(None)` for accounts with the empty-code hash.
+///
+/// # Errors
+///
+/// Returns [`ProofError::InvalidAccountValueFormat`] if `value` is not an
+/// RLP-encoded Ethereum account, if the account has fewer than four fields, or
+/// if the `codeHash` field is not encoded as bytes. Returns
+/// [`ProofError::InvalidAccountCodeHashLength`] if the `codeHash` field is not
+/// 32 bytes.
+#[cfg(feature = "ethhash")]
+pub fn account_code_hash(value: &[u8]) -> Result<Option<HashKey>, ProofError> {
+    let code_hash_slice = RlpList::parse(value)
+        .and_then(|list| list.nth_bytes(3))
+        .map_err(|err| ProofError::InvalidAccountValueFormat {
+            reason: err.to_string(),
+        })?;
+    let code_hash = TrieHash::try_from(code_hash_slice)
+        .map_err(|err| ProofError::InvalidAccountCodeHashLength { len: err.0 })?;
+    if code_hash == TrieHash::from(KECCAK_EMPTY) {
+        return Ok(None);
+    }
+
+    Ok(Some(code_hash))
+}
 
 /// One `eth_getProof` response, modulo JSON formatting.
 #[derive(Debug, PartialEq, Eq)]
@@ -427,6 +456,10 @@ mod tests {
     }
 
     fn account_rlp(nonce: u64, balance_be: &[u8]) -> Box<[u8]> {
+        account_rlp_with_code_hash(nonce, balance_be, &KECCAK_EMPTY)
+    }
+
+    fn account_rlp_with_code_hash(nonce: u64, balance_be: &[u8], code_hash: &[u8]) -> Box<[u8]> {
         // storageRoot and codeHash get fixed up by firewood during hashing
         // if the input is stale; we supply real values here so the on-disk
         // codeHash matches what we'd expect after decoding.
@@ -439,7 +472,7 @@ mod tests {
             RlpItem::Bytes(nonce_min),
             RlpItem::Bytes(balance_be),
             RlpItem::Bytes(&[0u8; 32]), // storageRoot — fixed up by firewood
-            RlpItem::Bytes(&KECCAK_EMPTY),
+            RlpItem::Bytes(code_hash),
         ])
     }
 
@@ -456,6 +489,35 @@ mod tests {
     #[test]
     fn keccak_empty_matches_keccak_of_empty_input() {
         assert_eq!(keccak(b""), KECCAK_EMPTY);
+    }
+
+    #[test]
+    fn account_code_hash_decodes_all_outcomes() {
+        let non_empty_code_hash = [0x22; 32];
+        let non_empty = account_rlp_with_code_hash(1, &[0x01], &non_empty_code_hash);
+        assert_eq!(
+            account_code_hash(&non_empty).unwrap(),
+            Some(non_empty_code_hash.into())
+        );
+
+        let empty = account_rlp(1, &[0x01]);
+        assert_eq!(account_code_hash(&empty).unwrap(), None);
+
+        let bad_rlp = account_code_hash(b"not an account").unwrap_err();
+        assert!(
+            matches!(bad_rlp, ProofError::InvalidAccountValueFormat { .. }),
+            "expected account value format error, got {bad_rlp:?}"
+        );
+
+        let wrong_length = account_rlp_with_code_hash(1, &[0x01], &[0x33; 31]);
+        let wrong_length_err = account_code_hash(&wrong_length).unwrap_err();
+        assert!(
+            matches!(
+                wrong_length_err,
+                ProofError::InvalidAccountCodeHashLength { len: 31 }
+            ),
+            "expected account code hash length error, got {wrong_length_err:?}"
+        );
     }
 
     #[test]

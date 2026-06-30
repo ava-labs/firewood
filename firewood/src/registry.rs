@@ -63,3 +63,26 @@ firewood_metrics::define_metrics! {
         PROOF_KEYS = "firewood_proof_keys" buckets([0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0, 2048.0, 4096.0, 8192.0, 16_384.0, 32_768.0, 65_536.0, 131_072.0]),
     },
 }
+
+/// Registers firewood and lower-layer storage metric descriptions.
+///
+/// This is the preferred entry point for embedders that expose metrics for a
+/// full firewood database. It keeps callers from needing to know which metrics
+/// are defined by each internal crate.
+#[must_use]
+pub fn register_all() -> Vec<firewood_metrics::HistogramMetricConfig> {
+    let mut histogram_configs = register();
+    histogram_configs.extend(firewood_storage::registry::register());
+    histogram_configs
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn register_all_includes_storage_metrics() {
+        assert_eq!(
+            super::register_all().len(),
+            super::register().len() + firewood_storage::registry::register().len()
+        );
+    }
+}
