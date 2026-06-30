@@ -14,6 +14,7 @@ pub mod delete;
 pub mod dump;
 pub mod get;
 pub mod graph;
+pub mod import;
 pub mod insert;
 #[cfg(feature = "launch")]
 pub mod launch;
@@ -101,6 +102,8 @@ enum Commands {
     Get(get::Options),
     /// Delete values associated with a key
     Delete(delete::Options),
+    /// Restore database from a dump file
+    Import(import::Options),
     /// Display key/value trie root hash
     Root(root::Options),
     /// Dump contents of key/value store
@@ -128,6 +131,7 @@ fn main() -> Result<(), api::Error> {
         Commands::Insert(opts) => insert::run(opts),
         Commands::Get(opts) => get::run(opts),
         Commands::Delete(opts) => delete::run(opts),
+        Commands::Import(opts) => import::run(opts),
         Commands::Root(opts) => root::run(opts),
         Commands::Dump(opts) => dump::run(opts),
         Commands::Graph(opts) => graph::run(opts),

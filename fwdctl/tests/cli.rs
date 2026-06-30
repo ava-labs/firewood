@@ -4,6 +4,7 @@
 #![allow(clippy::unwrap_used)]
 
 use predicates::prelude::*;
+use std::fmt::Write;
 use std::fs;
 use std::path::Path;
 
@@ -395,5 +396,203 @@ fn test_slow_fwdctl_check_db_with_data() {
             .arg(db_path)
             .assert()
             .success();
+    });
+}
+
+#[test]
+fn test_slow_fwdctl_import_csv() {
+    with_tmpdir(|tmp_dir| {
+        let db_path1 = tmp_dir.join("db1");
+        create_db(&db_path1);
+        insert_key_value(&db_path1, "a", "1");
+        insert_key_value(&db_path1, "b", "2");
+        insert_key_value(&db_path1, "c", "3");
+
+        let dump_file = tmp_dir.join("dump.csv");
+
+        cargo_bin_cmd!()
+            .arg("dump")
+            .arg("--db")
+            .arg(&db_path1)
+            .args(["--output-format", "csv"])
+            .args(["--output-file-name"])
+            .arg(&dump_file)
+            .assert()
+            .success();
+
+        let db_path2 = tmp_dir.join("db2");
+        cargo_bin_cmd!()
+            .arg("import")
+            .arg("--db")
+            .arg(&db_path2)
+            .args(["--input-format", "csv"])
+            .args(["--input-file-name"])
+            .arg(&dump_file)
+            .assert()
+            .success();
+
+        let dump_file2 = tmp_dir.join("dump2.csv");
+        cargo_bin_cmd!()
+            .arg("dump")
+            .arg("--db")
+            .arg(&db_path2)
+            .args(["--output-format", "csv"])
+            .args(["--output-file-name"])
+            .arg(&dump_file2)
+            .assert()
+            .success();
+
+        let contents1 = fs::read_to_string(&dump_file).expect("Should read dump file");
+        let contents2 = fs::read_to_string(&dump_file2).expect("Should read dump file 2");
+        assert_eq!(contents1, contents2);
+    });
+}
+
+#[test]
+fn test_slow_fwdctl_import_csv_hex() {
+    with_tmpdir(|tmp_dir| {
+        let db_path1 = tmp_dir.join("db1");
+        create_db(&db_path1);
+        insert_key_value(&db_path1, "a", "1");
+        insert_key_value(&db_path1, "b", "2");
+
+        let dump_file = tmp_dir.join("dump.csv");
+
+        cargo_bin_cmd!()
+            .arg("dump")
+            .arg("--db")
+            .arg(&db_path1)
+            .args(["--output-format", "csv"])
+            .args(["--output-file-name"])
+            .arg(&dump_file)
+            .arg("--hex")
+            .assert()
+            .success();
+
+        let db_path2 = tmp_dir.join("db2");
+        cargo_bin_cmd!()
+            .arg("import")
+            .arg("--db")
+            .arg(&db_path2)
+            .args(["--input-format", "csv"])
+            .args(["--input-file-name"])
+            .arg(&dump_file)
+            .arg("--hex")
+            .assert()
+            .success();
+
+        let dump_file2 = tmp_dir.join("dump2.csv");
+        cargo_bin_cmd!()
+            .arg("dump")
+            .arg("--db")
+            .arg(&db_path2)
+            .args(["--output-format", "csv"])
+            .args(["--output-file-name"])
+            .arg(&dump_file2)
+            .arg("--hex")
+            .assert()
+            .success();
+
+        let contents1 = fs::read_to_string(&dump_file).expect("Should read dump file");
+        let contents2 = fs::read_to_string(&dump_file2).expect("Should read dump file 2");
+        assert_eq!(contents1, contents2);
+    });
+}
+
+#[test]
+fn test_slow_fwdctl_import_csv_malformed() {
+    with_tmpdir(|tmp_dir| {
+        let db_path = tmp_dir.join("db");
+        create_db(&db_path);
+
+        let dump_file = tmp_dir.join("malformed.csv");
+        // Row 1: good
+        // Row 2: 1 column (skip)
+        // Row 3: good
+        // Row 4: 3 columns (skip because strict deserialize enforces exactly 2)
+        // Row 5: invalid hex in key (skip)
+        fs::write(&dump_file, "61,31\n62\n63,33\n64,34,35\nzz,36\n").unwrap();
+
+        cargo_bin_cmd!()
+            .arg("import")
+            .arg("--db")
+            .arg(&db_path)
+            .args(["--input-file-name"])
+            .arg(&dump_file)
+            .arg("--hex")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Successfully imported 2 keys"));
+    });
+}
+
+#[test]
+fn test_slow_fwdctl_import_large_random_database() {
+    with_tmpdir(|tmp_dir| {
+        //Generate a large random database dump
+        let dump_file1 = tmp_dir.join("bulk1.csv");
+        let mut csv_content = String::with_capacity(100_000 * 25);
+        for i in 0..100_000 {
+            // Using standard key/value pairs
+            let _ = writeln!(csv_content, "key_{i:06},value_{i:06}");
+        }
+        fs::write(&dump_file1, csv_content).unwrap();
+
+        // Import it into db1
+        let db_path1 = tmp_dir.join("db1");
+        cargo_bin_cmd!()
+            .arg("import")
+            .arg("--db")
+            .arg(&db_path1)
+            .args(["--input-file-name"])
+            .arg(&dump_file1)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(
+                "Successfully imported 100000 keys",
+            ));
+
+        // Export db1 to dump_file2
+        let dump_file2 = tmp_dir.join("bulk2.csv");
+        cargo_bin_cmd!()
+            .arg("dump")
+            .arg("--db")
+            .arg(&db_path1)
+            .args(["--output-format", "csv"])
+            .args(["--output-file-name"])
+            .arg(&dump_file2)
+            .assert()
+            .success();
+
+        // Import dump_file2 into db2
+        let db_path2 = tmp_dir.join("db2");
+        cargo_bin_cmd!()
+            .arg("import")
+            .arg("--db")
+            .arg(&db_path2)
+            .args(["--input-file-name"])
+            .arg(&dump_file2)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(
+                "Successfully imported 100000 keys",
+            ));
+
+        // Export db2 to dump_file3
+        let dump_file3 = tmp_dir.join("bulk3.csv");
+        cargo_bin_cmd!()
+            .arg("dump")
+            .arg("--db")
+            .arg(&db_path2)
+            .args(["--output-format", "csv"])
+            .args(["--output-file-name"])
+            .arg(&dump_file3)
+            .assert()
+            .success();
+
+        //Compare the two exported databases to ensure exact match!
+        let contents1 = fs::read_to_string(&dump_file2).expect("Should read dump file 2");
+        let contents2 = fs::read_to_string(&dump_file3).expect("Should read dump file 3");
+        assert_eq!(contents1, contents2, "The exported databases do not match!");
     });
 }
