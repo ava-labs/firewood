@@ -529,16 +529,16 @@ fn test_slow_fwdctl_import_csv_malformed() {
 #[test]
 fn test_slow_fwdctl_import_large_random_database() {
     with_tmpdir(|tmp_dir| {
-        // 1. Generate a large random database dump
+        //Generate a large random database dump
         let dump_file1 = tmp_dir.join("bulk1.csv");
         let mut csv_content = String::with_capacity(100_000 * 25);
         for i in 0..100_000 {
             // Using standard key/value pairs
-            let _ = writeln!(csv_content, "key_{:06},value_{:06}", i, i);
+            let _ = writeln!(csv_content, "key_{i:06},value_{i:06}");
         }
         fs::write(&dump_file1, csv_content).unwrap();
 
-        // 2. Import it into db1
+        // Import it into db1
         let db_path1 = tmp_dir.join("db1");
         cargo_bin_cmd!()
             .arg("import")
@@ -552,7 +552,7 @@ fn test_slow_fwdctl_import_large_random_database() {
                 "Successfully imported 100000 keys",
             ));
 
-        // 3. Export db1 to dump_file2
+        // Export db1 to dump_file2
         let dump_file2 = tmp_dir.join("bulk2.csv");
         cargo_bin_cmd!()
             .arg("dump")
@@ -564,7 +564,7 @@ fn test_slow_fwdctl_import_large_random_database() {
             .assert()
             .success();
 
-        // 4. Import dump_file2 into db2
+        // Import dump_file2 into db2
         let db_path2 = tmp_dir.join("db2");
         cargo_bin_cmd!()
             .arg("import")
@@ -578,7 +578,7 @@ fn test_slow_fwdctl_import_large_random_database() {
                 "Successfully imported 100000 keys",
             ));
 
-        // 5. Export db2 to dump_file3
+        // Export db2 to dump_file3
         let dump_file3 = tmp_dir.join("bulk3.csv");
         cargo_bin_cmd!()
             .arg("dump")
@@ -590,7 +590,7 @@ fn test_slow_fwdctl_import_large_random_database() {
             .assert()
             .success();
 
-        // 6. Compare the two exported databases to ensure exact match!
+        //Compare the two exported databases to ensure exact match!
         let contents1 = fs::read_to_string(&dump_file2).expect("Should read dump file 2");
         let contents2 = fs::read_to_string(&dump_file3).expect("Should read dump file 3");
         assert_eq!(contents1, contents2, "The exported databases do not match!");
