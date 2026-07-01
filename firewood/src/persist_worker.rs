@@ -331,7 +331,7 @@ impl PersistChannel {
         state.emit_permits();
 
         // BLOCKING: condvar wait. The commit thread parks here when all permits are consumed
-        // (i.e. `deferred_persistence_commit_count` commits have accumulated without a persist).
+        // (i.e. `max_revision_recovery_lag` commits have accumulated without a persist).
         // It wakes when the background persist loop calls `commit_not_full.notify_all()` after
         // releasing permits. Duration is bounded by how fast the background thread can write a
         // revision to disk. Under slow I/O this can stall commits for hundreds of milliseconds.
