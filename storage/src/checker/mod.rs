@@ -741,11 +741,11 @@ fn update_progress_bar(progress_bar: Option<&ProgressBar>, range_set: &LinearAdd
 #[cfg(test)]
 mod test {
     #![expect(clippy::unwrap_used)]
-    #![expect(clippy::indexing_slicing)]
 
     use nonzero_ext::nonzero;
 
     use super::*;
+    use crate::DeletedNodeTracking;
     use crate::linear::memory::MemStore;
     use crate::nodestore::NodeStoreHeader;
     use crate::nodestore::alloc::FreeLists;
@@ -915,7 +915,7 @@ mod test {
         next_free_block1 = Some(free_list1_area1);
         high_watermark += area_size1;
 
-        free_lists[AREA_INDEX1.as_usize()] = next_free_block1;
+        free_lists[AREA_INDEX1] = next_free_block1;
 
         // second free list
         let area_size2 = AREA_INDEX2.size();
@@ -932,7 +932,7 @@ mod test {
         high_watermark += area_size2;
         let expected_high_watermark = high_watermark;
 
-        free_lists[AREA_INDEX2.as_usize()] = next_free_block2;
+        free_lists[AREA_INDEX2] = next_free_block2;
 
         // third free list
         high_watermark += 1; // + 1 to create gap
@@ -943,12 +943,12 @@ mod test {
         next_free_block3 = Some(free_list3_area1);
         high_watermark += area_size3;
 
-        free_lists[AREA_INDEX3.as_usize()] = next_free_block3;
+        free_lists[AREA_INDEX3] = next_free_block3;
 
         // write header
         let header = test_write_header(nodestore, high_watermark, None, free_lists);
 
-        let expected_start_addr = header.free_lists()[AREA_INDEX1.as_usize()].unwrap();
+        let expected_start_addr = header.free_lists()[AREA_INDEX1].unwrap();
         let expected_end_addr = LinearAddress::new(expected_high_watermark).unwrap();
         let expected_free_areas = vec![expected_start_addr..expected_end_addr];
         let expected_freelist_errors = vec![
@@ -992,7 +992,8 @@ mod test {
     // We use primitive calls here to do a low-level check.
     fn checker_traverse_correct_trie() {
         let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+        let nodestore =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let test_trie = gen_test_trie(&nodestore);
         // let (_, high_watermark, (root_addr, root_hash)) = gen_test_trie(&mut nodestore);
@@ -1016,7 +1017,8 @@ mod test {
     // This test permutes the simple trie with a wrong hash and checks that the checker detects it.
     fn checker_traverse_trie_with_wrong_hash() {
         let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+        let nodestore =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let mut test_trie = gen_test_trie(&nodestore);
         let root_addr = test_trie.root_address;
@@ -1090,7 +1092,8 @@ mod test {
         let rng = crate::SeededRng::from_env_or_random();
 
         let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+        let nodestore =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         // write free areas
         let mut high_watermark = NodeStoreHeader::SIZE;
@@ -1110,7 +1113,7 @@ mod test {
                 }
                 high_watermark += area_size;
             }
-            freelist[area_index.as_usize()] = next_free_block;
+            freelist[area_index] = next_free_block;
             if num_free_areas > 0 {
                 free_area_counts.insert(area_size, num_free_areas);
             }
@@ -1136,7 +1139,8 @@ mod test {
     #[test]
     fn traverse_freelist_should_skip_offspring_of_incorrect_areas() {
         let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+        let nodestore =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
         let TestFreelist {
             high_watermark,
             free_ranges,
@@ -1157,7 +1161,8 @@ mod test {
     #[test]
     fn fix_freelist_with_overlap() {
         let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+        let nodestore =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
         let TestFreelist {
             high_watermark,
             free_ranges: _,
@@ -1200,7 +1205,8 @@ mod test {
         let mut rng = crate::SeededRng::from_env_or_random();
 
         let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+        let nodestore =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let num_areas = 10;
 
@@ -1257,7 +1263,8 @@ mod test {
     #[expect(clippy::arithmetic_side_effects)]
     fn split_range_of_zeros_into_leaked_areas() {
         let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+        let nodestore =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let expected_leaked_area_indices = vec![
             area_index!(8),
@@ -1308,7 +1315,8 @@ mod test {
     #[expect(clippy::arithmetic_side_effects)]
     fn split_range_into_leaked_areas_test() {
         let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+        let nodestore =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         // write two free areas
         let mut high_watermark = NodeStoreHeader::SIZE;

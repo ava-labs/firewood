@@ -9,10 +9,10 @@ use std::fmt;
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
-    ChangeProofContext, CodeIteratorHandle, CreateIteratorResult, CreateProposalResult, HashKey,
-    IteratorHandle, KeyRange, NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair,
-    OwnedRenderedMetrics, ProposalHandle, RangeProofContext, ReconstructedHandle, SyncHandle,
-    SyncWorkItem,
+    ChangeProofContext, CodeIteratorHandle, CreateIteratorResult, CreateProposalResult,
+    EthProofOwned, HashKey, IteratorHandle, KeyRange, NextKeyRange, OwnedBytes, OwnedKeyValueBatch,
+    OwnedKeyValuePair, OwnedRenderedMetrics, ProposalHandle, RangeProofContext, ReconstructedHandle,
+    SyncHandle, SyncWorkItem,
 };
 
 /// The result type returned from an FFI function that returns no value but may
@@ -279,6 +279,43 @@ pub enum ChangeProofResult {
     ///
     /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
     Err(OwnedBytes),
+}
+
+/// A result type returned from [`fwd_eth_get_proof`].
+///
+/// The caller must call [`fwd_free_eth_proof`] to free the memory associated
+/// with a returned [`EthProofOwned`] when it is no longer needed.
+///
+/// [`fwd_eth_get_proof`]: crate::fwd_eth_get_proof
+/// [`fwd_free_eth_proof`]: crate::fwd_free_eth_proof
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum EthProofResult {
+    /// The caller provided a null pointer to the revision handle.
+    NullHandlePointer,
+    /// The database is not running in ethereum hash mode, so an
+    /// `eth_getProof`-compatible proof cannot be produced.
+    NotSupported,
+    /// The proof was successfully produced.
+    Ok(Box<EthProofOwned>),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. Its
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl From<Result<firewood::EthProof, api::Error>> for EthProofResult {
+    fn from(value: Result<firewood::EthProof, api::Error>) -> Self {
+        match value {
+            Ok(proof) => EthProofResult::Ok(Box::new(proof.into())),
+            Err(api::Error::FeatureNotSupported(_)) => EthProofResult::NotSupported,
+            Err(err) => EthProofResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -836,6 +873,7 @@ impl_null_handle_result!(
     HashResult,
     RangeProofResult<'_>,
     ChangeProofResult,
+    EthProofResult,
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
@@ -856,6 +894,7 @@ impl_cresult!(
     HandleResult,
     RangeProofResult<'_>,
     ChangeProofResult,
+    EthProofResult,
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,

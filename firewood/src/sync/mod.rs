@@ -24,3 +24,9 @@ mod tests;
 pub use endpoint::Endpoint;
 pub use state::{SyncError, WorkId};
 pub use syncer::{GetWork, Submit, Syncer, WorkItem, start_sync};
+
+/// Maximum key/value pairs per submitted proof. Proofs exceeding this limit
+/// are rejected as invalid by [`Syncer::submit`]. Sized so the transport's
+/// byte budget — not the key count — is the binding constraint.
+pub const MAX_PROOF_KEYS: std::num::NonZeroUsize =
+    std::num::NonZeroUsize::new(32768).expect("nonzero");

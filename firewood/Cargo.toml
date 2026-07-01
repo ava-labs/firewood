@@ -1,6 +1,6 @@
 [package]
 name = "firewood"
-version = "0.6.0"
+version = "0.7.0"
 edition.workspace = true
 authors = [
      "Angel Leon <gubatron@gmail.com>",
@@ -62,6 +62,7 @@ env_logger.workspace = true
 ethereum-types.workspace = true
 firewood-storage = { workspace = true, features = ["test_utils"] }
 firewood-triehash.workspace = true
+insta.workspace = true
 pprof = { workspace = true, features = ["flamegraph"] }
 rand.workspace = true
 tempfile.workspace = true

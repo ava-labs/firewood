@@ -29,9 +29,11 @@ use crate::nodestore::NodeStoreHeader;
 use firewood_metrics::{firewood_counter, firewood_gauge};
 use integer_encoding::VarIntReader;
 
+use bytemuck_derive::{Pod, Zeroable};
 use std::io::{Error, ErrorKind, Read};
 use std::iter::FusedIterator;
 use std::mem::size_of;
+use std::ops::{Index, IndexMut};
 
 use crate::{FreeListParent, MaybePersistedNode, ReadableStorage, WritableStorage};
 
@@ -40,8 +42,50 @@ const fn var_int_max_size<VI>() -> usize {
     const { (size_of::<VI>() * 8 + 7) / 7 }
 }
 
-/// `FreeLists` is an array of `Option<LinearAddress>` for each area size.
-pub type FreeLists = [Option<LinearAddress>; AreaIndex::NUM_AREA_SIZES];
+/// Heads of the free lists for each area size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Zeroable, Pod)]
+#[repr(transparent)]
+pub struct FreeLists([Option<LinearAddress>; AreaIndex::NUM_AREA_SIZES]);
+
+impl FreeLists {
+    /// Creates a new [`FreeLists`] with all heads set to `None`.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self([const { None }; AreaIndex::NUM_AREA_SIZES])
+    }
+
+    /// Returns a mutable reference to the free list head for `index`.
+    ///
+    /// This is infallible because [`AreaIndex`] is guaranteed to be in-bounds.
+    #[must_use]
+    pub const fn get_mut(&mut self, index: AreaIndex) -> &mut Option<LinearAddress> {
+        #![expect(clippy::indexing_slicing)]
+        &mut self.0[index.as_usize()]
+    }
+}
+
+impl Default for FreeLists {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Index<AreaIndex> for FreeLists {
+    type Output = Option<LinearAddress>;
+
+    fn index(&self, index: AreaIndex) -> &Self::Output {
+        // `AreaIndex` is bounds-checked by construction, so this cannot index
+        // outside the fixed free-list array.
+        #[expect(clippy::indexing_slicing)]
+        &self.0[index.as_usize()]
+    }
+}
+
+impl IndexMut<AreaIndex> for FreeLists {
+    fn index_mut(&mut self, index: AreaIndex) -> &mut Self::Output {
+        self.get_mut(index)
+    }
+}
 
 /// A [`FreeArea`] is stored at the start of the area that contained a node that
 /// has been freed.
@@ -231,11 +275,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
         &mut self,
         index: AreaIndex,
     ) -> Result<Option<LinearAddress>, FileIoError> {
-        let free_stored_area_addr = self
-            .header
-            .free_lists_mut()
-            .get_mut(index.as_usize())
-            .expect("index is less than AreaIndex::NUM_AREA_SIZES");
+        let free_stored_area_addr = self.header.free_lists_mut().get_mut(index);
         if let Some(address) = free_stored_area_addr {
             let address = *address;
             if let Some(free_head) = self.storage.free_list_cache(address) {
@@ -312,7 +352,6 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the area cannot be read or written.
-    #[expect(clippy::indexing_slicing)]
     pub(crate) fn delete_node(&mut self, node: MaybePersistedNode) -> Result<(), FileIoError> {
         let Some(addr) = node.as_linear_address() else {
             return Ok(());
@@ -328,16 +367,16 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
 
         // The area that contained the node is now free.
         let mut stored_area_bytes = Vec::new();
-        FreeArea::new(self.header.free_lists()[area_size_index.as_usize()])
+        FreeArea::new(self.header.free_lists()[area_size_index])
             .as_bytes(area_size_index, &mut stored_area_bytes);
 
         self.storage.write(addr.into(), &stored_area_bytes)?;
 
         self.storage
-            .add_to_free_list_cache(addr, self.header.free_lists()[area_size_index.as_usize()]);
+            .add_to_free_list_cache(addr, self.header.free_lists()[area_size_index]);
 
         // The newly freed block is now the head of the free list.
-        self.header.free_lists_mut()[area_size_index.as_usize()] = Some(addr);
+        self.header.free_lists_mut()[area_size_index] = Some(addr);
 
         Ok(())
     }
@@ -424,9 +463,8 @@ pub(crate) struct FreeAreaWithMetadata {
 
 pub(crate) struct FreeListsIterator<'a, S: ReadableStorage> {
     storage: &'a S,
-    free_lists_iter: std::iter::Skip<
-        std::iter::Enumerate<std::slice::Iter<'a, std::option::Option<LinearAddress>>>,
-    >,
+    free_lists: &'a FreeLists,
+    next_free_list_id: Option<AreaIndex>,
     current_free_list: Option<(AreaIndex, FreeListIterator<'a, S>)>,
 }
 
@@ -436,26 +474,36 @@ impl<'a, S: ReadableStorage> FreeListsIterator<'a, S> {
         free_lists: &'a FreeLists,
         start_area_index: AreaIndex,
     ) -> Self {
-        let mut free_lists_iter = free_lists
-            .iter()
-            .enumerate()
-            .skip(start_area_index.as_usize());
-        let current_free_list = free_lists_iter.next().map(|(id, head)| {
-            let free_list_id =
-                AreaIndex::try_from(id).expect("id is less than AreaIndex::NUM_AREA_SIZES");
-            let free_list_iter = FreeListIterator::new(
-                storage,
-                free_list_id,
-                *head,
-                FreeListParent::FreeListHead(free_list_id),
-            );
-            (free_list_id, free_list_iter)
-        });
+        let current_free_list = Some(Self::free_list_iterator(
+            storage,
+            free_lists,
+            start_area_index,
+        ));
         Self {
             storage,
-            free_lists_iter,
+            free_lists,
+            next_free_list_id: Self::next_area_index(start_area_index),
             current_free_list,
         }
+    }
+
+    fn free_list_iterator(
+        storage: &'a S,
+        free_lists: &FreeLists,
+        free_list_id: AreaIndex,
+    ) -> (AreaIndex, FreeListIterator<'a, S>) {
+        let free_list_iter = FreeListIterator::new(
+            storage,
+            free_list_id,
+            free_lists[free_list_id],
+            FreeListParent::FreeListHead(free_list_id),
+        );
+        (free_list_id, free_list_iter)
+    }
+
+    fn next_area_index(index: AreaIndex) -> Option<AreaIndex> {
+        let next_index = index.get().checked_add(1)?;
+        AreaIndex::new(next_index)
     }
 
     pub(crate) fn next_with_metadata(
@@ -482,19 +530,16 @@ impl<'a, S: ReadableStorage> FreeListsIterator<'a, S> {
     }
 
     pub(crate) fn move_to_next_free_list(&mut self) {
-        let Some((next_free_list_id, next_free_list_head)) = self.free_lists_iter.next() else {
+        let Some(next_free_list_id) = self.next_free_list_id else {
             self.current_free_list = None;
             return;
         };
-        let next_free_list_id = AreaIndex::try_from(next_free_list_id)
-            .expect("next_free_list_id is less than AreaIndex::NUM_AREA_SIZES");
-        let next_free_list_iter = FreeListIterator::new(
+        self.next_free_list_id = Self::next_area_index(next_free_list_id);
+        self.current_free_list = Some(Self::free_list_iterator(
             self.storage,
+            self.free_lists,
             next_free_list_id,
-            *next_free_list_head,
-            FreeListParent::FreeListHead(next_free_list_id),
-        );
-        self.current_free_list = Some((next_free_list_id, next_free_list_iter));
+        ));
     }
 }
 
@@ -534,9 +579,7 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
     ) -> Result<(), FileIoError> {
         match free_list_parent {
             FreeListParent::FreeListHead(area_size_index) => {
-                *free_lists
-                    .get_mut(area_size_index.as_usize())
-                    .expect("area_size_index is less than AreaIndex::NUM_AREA_SIZES") = None;
+                free_lists[area_size_index] = None;
                 Ok(())
             }
             FreeListParent::PrevFreeArea {
@@ -653,9 +696,10 @@ pub mod test_utils {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::indexing_slicing)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::DeletedNodeTracking;
     use crate::area_index;
     use crate::linear::memory::MemStore;
     use rand::seq::IteratorRandom;
@@ -684,7 +728,8 @@ mod tests {
     fn free_list_iterator() {
         let mut rng = crate::SeededRng::from_env_or_random();
         let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+        let nodestore =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let area_index = rng.random_range(0..AreaIndex::NUM_AREA_SIZES as u8);
         let area_index_type = AreaIndex::try_from(area_index).unwrap();
@@ -737,7 +782,8 @@ mod tests {
     fn free_list_iter_with_metadata() {
         let rng = crate::SeededRng::from_env_or_random();
         let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+        let nodestore =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let mut free_lists = FreeLists::default();
         let mut offset = NodeStoreHeader::SIZE;
@@ -758,7 +804,7 @@ mod tests {
         next_free_block1 = Some(free_list1_area1);
         offset += area_size1;
 
-        free_lists[area_index1.as_usize()] = next_free_block1;
+        free_lists[area_index1] = next_free_block1;
 
         // second free list
         let area_index2 = AreaIndex::new(
@@ -780,7 +826,7 @@ mod tests {
         next_free_block2 = Some(free_list2_area1);
         offset += area_size2;
 
-        free_lists[area_index2.as_usize()] = next_free_block2;
+        free_lists[area_index2] = next_free_block2;
 
         // write header
         test_write_header(&nodestore, offset, None, free_lists);
@@ -863,7 +909,8 @@ mod tests {
         const AREA_INDEX2_PLUS_1: AreaIndex = area_index!(6);
 
         let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_committed(memstore.into());
+        let nodestore =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let mut free_lists = FreeLists::default();
         let mut offset = NodeStoreHeader::SIZE;
@@ -882,7 +929,7 @@ mod tests {
         next_free_block1 = Some(free_list1_area1);
         offset += area_size1;
 
-        free_lists[AREA_INDEX1.as_usize()] = next_free_block1;
+        free_lists[AREA_INDEX1] = next_free_block1;
 
         // second free list
         assert_ne!(AREA_INDEX1, AREA_INDEX2);
@@ -899,7 +946,7 @@ mod tests {
         next_free_block2 = Some(free_list2_area1);
         offset += area_size2;
 
-        free_lists[AREA_INDEX2.as_usize()] = next_free_block2;
+        free_lists[AREA_INDEX2] = next_free_block2;
 
         // write header
         test_write_header(&nodestore, offset, None, free_lists);
