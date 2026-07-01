@@ -2,10 +2,9 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::cmp::Ordering;
+use std::iter::once;
 
-use firewood_storage::{
-    Child, Mutable, Node, NodeStore, Path, PathComponent, Propose, ReadableStorage,
-};
+use firewood_storage::{Child, Mutable, Node, NodeStore, PathComponent, Propose, ReadableStorage};
 
 use crate::{ProofError, api, merkle::Merkle};
 
@@ -75,7 +74,7 @@ fn nibble_in_range(
 /// Builds the accumulated nibble prefix for a child node by extending
 /// `prefix` with the descent nibble and the child's `partial_path`.
 fn build_child_prefix(prefix: &[u8], nibble: u8, node: &Node) -> Box<[u8]> {
-    let pp = &node.partial_path().0;
+    let pp = node.partial_path().as_nibbles();
     // slice lengths are bounded by isize::MAX. Sum cannot overflow.
     #[allow(clippy::arithmetic_side_effects)]
     let capacity = prefix.len() + 1 + pp.len();
@@ -97,7 +96,7 @@ fn consume_partial_path<'a>(
     let (consumed, rest) = remaining
         .split_at_checked(pp.len())
         .ok_or(api::Error::ProofError(ProofError::ProofNodeUnreachable))?;
-    if !consumed.iter().zip(pp.iter()).all(|(a, b)| a.as_u8() == *b) {
+    if !consumed.iter().zip(pp.iter()).all(|(a, b)| a == b) {
         return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
     }
     Ok(rest)
@@ -141,12 +140,12 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
             && !remaining.is_empty()
             && prefix
                 .iter()
-                .zip(root_node.partial_path().0.iter())
-                .all(|(t, p)| t.as_u8() == *p)
+                .zip(root_node.partial_path().iter())
+                .all(|(t, p)| t == p)
         {
             // On error the root is left empty, but the caller discards
             // the proving trie on any verification failure.
-            let root_prefix: Box<[u8]> = root_node.partial_path().0.iter().copied().collect();
+            let root_prefix: Box<[u8]> = root_node.partial_path().as_nibbles().into();
             root_node = self.collapse_strip(root_node, remaining, &root_prefix, range)?;
         }
 
@@ -205,14 +204,14 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         range: Option<(&[u8], &[u8])>,
     ) -> Result<Node, api::Error> {
         // get a reference to the partial path for ease of reading
-        let pp = &node.partial_path().0;
+        let pp = node.partial_path();
 
         // find the point where the key differs from the partial path
         // unwrap_or handles the case where they are subsets of each other
         let diverge = key
             .iter()
             .zip(pp.iter())
-            .position(|(pc, nibble)| pc.as_u8() != *nibble)
+            .position(|(pc, nibble)| pc != nibble)
             .unwrap_or(key.len().min(pp.len()));
 
         if diverge != pp.len() {
@@ -392,14 +391,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
             return Ok(node);
         };
         let mut merged = self.read_for_update(only_child)?;
-        let merged_path = Path::from_nibbles_iterator(
-            branch
-                .partial_path
-                .iter()
-                .chain(std::iter::once(&child_idx.as_u8()))
-                .chain(merged.partial_path().iter())
-                .copied(),
-        );
+        let mut merged_path = branch.partial_path.clone();
+        merged_path.extend(once(child_idx));
+        merged_path.extend(merged.partial_path().iter().copied());
         merged.update_partial_path(merged_path);
         Ok(merged)
     }

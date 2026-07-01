@@ -16,7 +16,9 @@
 
 use crate::node::branch::ReadSerializable;
 use crate::nodestore::AreaIndex;
-use crate::{HashType, LinearAddress, Path, PathBuf, PathComponent, SharedNode};
+use crate::{
+    HashType, LinearAddress, Path, PathBuf, PathComponent, SharedNode, TriePathFromUnpackedBytes,
+};
 use bitfield::bitfield;
 use branch::Serializable as _;
 pub use branch::{BranchNode, Child};
@@ -269,7 +271,7 @@ impl Node {
                 if pp_len == BRANCH_PARTIAL_PATH_LEN_OVERFLOW {
                     encoded.extend_var_int(b.partial_path.len());
                 }
-                encoded.extend_from_slice(&b.partial_path);
+                encoded.extend_from_slice(b.partial_path.as_nibbles());
 
                 // encode the value. For tries that have the same length keys, this is always empty
                 if let Some(v) = &b.value {
@@ -313,7 +315,7 @@ impl Node {
                 if pp_len == LEAF_PARTIAL_PATH_LEN_OVERFLOW {
                     encoded.extend_var_int(l.partial_path.len());
                 }
-                encoded.extend_from_slice(&l.partial_path);
+                encoded.extend_from_slice(l.partial_path.as_nibbles());
 
                 // encode the value
                 encoded.extend_var_int(l.value.len());
@@ -436,11 +438,8 @@ impl Node {
     ///     branch.
     /// 2.  If the existing node does not have a partial path, then there is nothing we need
     ///     to do if it is a branch. If it is a leaf, then convert it into a branch.
-    ///
-    /// # Errors
-    ///
-    /// Returns an `Error` if it cannot create a `PathComponent` from a u8 index.
-    pub fn force_branch_for_insert(mut self) -> Result<Box<BranchNode>, Error> {
+    #[must_use]
+    pub fn force_branch_for_insert(mut self) -> Box<BranchNode> {
         // If the `partial_path` is non-empty, then create a branch that will be the new
         // root with the previous root as the child at the index returned from split_first.
         if let Some((child_index, child_path)) = self
@@ -454,12 +453,10 @@ impl Node {
                 children: Children::default(),
             };
             self.update_partial_path(child_path);
-            let child_path_component = PathComponent::try_new(child_index)
-                .ok_or_else(|| Error::other("invalid child index"))?;
-            *branch.children.get_mut(child_path_component) = Some(Child::Node(self));
-            Ok(branch.into())
+            *branch.children.get_mut(child_index) = Some(Child::Node(self));
+            branch.into()
         } else {
-            Ok(match self {
+            match self {
                 Node::Leaf(leaf) => {
                     // Root is a leaf with an empty partial path. Replace it with a branch.
                     BranchNode {
@@ -470,7 +467,7 @@ impl Node {
                     .into()
                 }
                 Node::Branch(branch) => branch,
-            })
+            }
         }
     }
 }
@@ -518,7 +515,9 @@ fn read_path_with_prefix_length(reader: &mut impl Read) -> std::io::Result<Path>
 
 #[inline]
 fn read_path_with_provided_length(reader: &mut impl Read, len: usize) -> std::io::Result<Path> {
-    reader.read_fixed_len(len).map(Path::from)
+    let bytes = reader.read_fixed_len(len)?;
+    Path::path_from_unpacked_bytes(&bytes)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 struct DisplayTruncatedHex<'a>(&'a [u8]);

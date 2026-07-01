@@ -562,7 +562,7 @@ mod tests {
         let root_node = root_maybe_persisted
             .as_shared_node(&committed_store)
             .unwrap();
-        assert_eq!(*root_node.partial_path(), Path::from(&[0]));
+        assert_eq!(*root_node.partial_path(), Path::from([0]));
         assert_eq!(root_node.value(), Some(&b"branch_value"[..]));
         assert!(root_node.is_branch());
         let root_branch = root_node.as_branch().unwrap();
@@ -575,7 +575,7 @@ mod tests {
         let child1_node = child1_maybe_persisted
             .as_shared_node(&committed_store)
             .unwrap();
-        assert_eq!(*child1_node.partial_path(), Path::from(&[1, 2, 3]));
+        assert_eq!(*child1_node.partial_path(), Path::from([1, 2, 3]));
         assert_eq!(child1_node.value(), Some(&b"value1"[..]));
 
         let child2 = root_branch.children[PathComponent::ALL[2]]
@@ -585,7 +585,7 @@ mod tests {
         let child2_node = child2_maybe_persisted
             .as_shared_node(&committed_store)
             .unwrap();
-        assert_eq!(*child2_node.partial_path(), Path::from(&[4, 5, 6]));
+        assert_eq!(*child2_node.partial_path(), Path::from([4, 5, 6]));
         assert_eq!(child2_node.value(), Some(&b"value2"[..]));
     }
 }

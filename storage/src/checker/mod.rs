@@ -41,12 +41,12 @@ fn extra_read_pages(addr: LinearAddress, bytes: u64) -> Option<u64> {
 #[cfg(feature = "ethhash")]
 fn is_valid_key(key: &Path) -> bool {
     const VALID_ETH_KEY_SIZES: [usize; 2] = [64, 128]; // in number of nibbles - two nibbles make a byte
-    VALID_ETH_KEY_SIZES.contains(&key.0.len())
+    VALID_ETH_KEY_SIZES.contains(&key.len())
 }
 
 #[cfg(not(feature = "ethhash"))]
 fn is_valid_key(key: &Path) -> bool {
-    key.0.len().is_multiple_of(2)
+    key.len().is_multiple_of(2)
 }
 
 #[expect(clippy::result_large_err)]
@@ -324,7 +324,9 @@ where
 
         // if the node has a value, check that the key is valid
         let mut current_path_prefix = path_prefix.clone();
-        current_path_prefix.0.extend_from_slice(node.partial_path());
+        current_path_prefix
+            .0
+            .extend(node.partial_path().iter().copied());
         if node.value().is_some() && !is_valid_key(&current_path_prefix) {
             return Err(vec![CheckerError::InvalidKey {
                 key: current_path_prefix,
@@ -366,7 +368,7 @@ where
                 // collect kv count
                 trie_stats.kv_count = trie_stats.kv_count.saturating_add(1);
                 // collect kv pair bytes - this is the minimum number of bytes needed to store the data
-                let key_bytes = current_path_prefix.0.len().div_ceil(2);
+                let key_bytes = current_path_prefix.len().div_ceil(2);
                 let value_bytes = value.len();
                 trie_stats.kv_bytes = trie_stats
                     .kv_bytes
@@ -428,7 +430,7 @@ where
                 {
                     let parent = TrieNodeParent::Parent(subtrie_root_address, nibble);
                     let mut child_path_prefix = current_path_prefix.clone();
-                    child_path_prefix.0.push(nibble.as_u8());
+                    child_path_prefix.0.push(nibble);
                     let child_subtrie = SubTrieMetadata {
                         root_address: address,
                         root_hash: hash.clone(),
@@ -1027,7 +1029,7 @@ mod test {
         let (branch_node, branch_addr) = test_trie
             .nodes
             .iter_mut()
-            .find(|(node, _)| matches!(node, Node::Branch(b) if *b.partial_path.0 == [3]))
+            .find(|(node, _)| matches!(node, Node::Branch(b) if b.partial_path.as_components() == [PathComponent::ALL[3]]))
             .unwrap();
 
         let branch = branch_node.as_branch_mut().unwrap();
@@ -1057,7 +1059,7 @@ mod test {
         let (root_node, _) = test_trie
             .nodes
             .iter()
-            .find(|(node, _)| matches!(node, Node::Branch(b) if *b.partial_path.0 == [2]))
+            .find(|(node, _)| matches!(node, Node::Branch(b) if b.partial_path.as_components() == [PathComponent::ALL[2]]))
             .unwrap();
         let root_branch = root_node.as_branch().unwrap();
         let (_, parent_stored_hash) = root_branch.children[PathComponent::ALL[0]]

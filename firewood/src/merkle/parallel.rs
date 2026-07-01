@@ -93,11 +93,7 @@ impl ParallelMerkle {
                 }
                 .into())
             },
-            |node| {
-                // Returns an error if it cannot convert a child index into a path component.
-                node.force_branch_for_insert()
-                    .map_err(|_| CreateProposalError::InvalidConversionToPathComponent)
-            },
+            |node| Ok(node.force_branch_for_insert()),
         )
     }
 
@@ -153,9 +149,12 @@ impl ParallelMerkle {
                 // should always be empty because of our prepare step, its (former) child index, and
                 // its partial path. Because the parent's partial path should always be empty, we
                 // can omit it and start with the `child_index`.
-                let partial_path = Path::from_nibbles_iterator(
-                    once(child_index.as_u8()).chain(child.partial_path().iter().copied()),
-                );
+                let partial_path = {
+                    let mut path = Path::new();
+                    path.extend(once(child_index));
+                    path.extend(child.partial_path().iter().copied());
+                    path
+                };
                 child.update_partial_path(partial_path);
                 Ok(Some(child))
             }
@@ -208,7 +207,7 @@ impl ParallelMerkle {
             .take()
             .map(|root| {
                 let (root_node, root_hash) =
-                    nodestore.hash_helper(root, Path::from(&[first_path_component.as_u8()]))?;
+                    nodestore.hash_helper(root, Path::from([first_path_component.as_u8()]))?;
                 Ok(Child::MaybePersisted(root_node, root_hash))
             })
             .transpose()

@@ -143,7 +143,8 @@ impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
                                     }
                                 };
 
-                                let child_partial_path = child.partial_path().iter().copied();
+                                let child_partial_path =
+                                    child.partial_path().iter().map(|c| c.as_u8());
 
                                 // The child's key is its parent's key, followed by the child's index,
                                 // followed by the child's partial path (if any).
@@ -201,10 +202,10 @@ fn get_iterator_intial_state<T: TrieReader>(
         let partial_path = node.partial_path();
 
         let (comparison, new_unmatched_key_nibbles) =
-            compare_partial_path(partial_path.iter(), unmatched_key_nibbles);
+            compare_partial_path(partial_path.iter().copied(), unmatched_key_nibbles);
         unmatched_key_nibbles = new_unmatched_key_nibbles;
 
-        matched_key_nibbles.extend(partial_path.iter());
+        matched_key_nibbles.extend(partial_path.iter().map(|c| c.as_u8()));
 
         match comparison {
             Ordering::Less => {
@@ -435,9 +436,9 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                 };
 
                 let (comparison, unmatched_key) =
-                    compare_partial_path(partial_path.iter(), unmatched_key);
+                    compare_partial_path(partial_path.iter().copied(), unmatched_key);
 
-                matched_key.extend(partial_path.iter());
+                matched_key.extend(partial_path.iter().map(|c| c.as_u8()));
                 let node_key =
                     PathBuf::path_from_unpacked_bytes(matched_key).expect("valid components");
 
@@ -545,12 +546,12 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
 ///
 /// The second returned element is the unmatched portion of the key after the
 /// partial path has been matched.
-fn compare_partial_path<'a, I1, I2>(
+fn compare_partial_path<I1, I2>(
     partial_path_iter: I1,
     mut unmatched_key_nibbles_iter: I2,
 ) -> (Ordering, I2)
 where
-    I1: Iterator<Item = &'a u8>,
+    I1: Iterator<Item = PathComponent>,
     I2: Iterator<Item = u8>,
 {
     for next_partial_path_nibble in partial_path_iter {
@@ -558,7 +559,7 @@ where
             return (Ordering::Greater, unmatched_key_nibbles_iter);
         };
 
-        match next_partial_path_nibble.cmp(&next_key_nibble) {
+        match next_partial_path_nibble.as_u8().cmp(&next_key_nibble) {
             Ordering::Less => return (Ordering::Less, unmatched_key_nibbles_iter),
             Ordering::Greater => return (Ordering::Greater, unmatched_key_nibbles_iter),
             Ordering::Equal => {}
