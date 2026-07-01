@@ -111,12 +111,17 @@ output into a subdirectory.
    content yet are listed as mdBook **draft chapters** (link-less `SUMMARY.md` entries,
    which render as greyed-out/disabled sidebar items) rather than empty stub pages —
    see "Scaffolding via draft chapters" below.
-7. **Preprocessors:** `mdbook-mermaid` (diagrams) and `mdbook-admonish` (callouts).
-   Their generated CSS/JS assets are **not** vendored; instead `mdbook-mermaid install
-   docs` and `mdbook-admonish install docs` run as part of every build (CI and the
-   local `justfile` recipes). This removes the committed-asset drift surface entirely —
-   there is no checked-in CSS to fall out of sync, and `mdbook-admonish` itself fails
-   the build on an asset/binary version mismatch.
+7. **Preprocessors and callouts:** `mdbook-mermaid` (diagrams) is the only
+   preprocessor. Its generated JS assets are **not** vendored; instead `mdbook-mermaid
+   install docs` runs as part of every build (CI and the local `justfile` recipes), so
+   there is no checked-in JS to drift. Callouts use mdBook's built-in alert syntax
+   (`> [!NOTE]`, `> [!WARNING]`, …) rather than a preprocessor.
+   > [!NOTE]
+   > `mdbook-admonish` was the original choice for callouts, but it requires mdBook
+   > `< 0.5.0`, which is incompatible with the `mdbook 0.5.x` that `mdbook-linkcheck2`
+   > requires. mdBook 0.5's native alert syntax provides the same callouts with no
+   > preprocessor, no checked-in CSS, and no asset-drift surface — so admonish is
+   > dropped entirely.
 8. **Install commands in docs:** The authored developer guide may include concrete
    install commands (`rustup`, `cargo install`, `brew install`, VS Code extensions).
 
@@ -126,8 +131,9 @@ output into a subdirectory.
 
 ```text
 docs/
-├── book.toml                  # mdBook config + preprocessors + linkcheck backend
-├── theme/                     # custom head includes (mermaid/admonish assets are installed at build time, git-ignored)
+├── book.toml                  # mdBook config + mermaid preprocessor + linkcheck backend
+├── mermaid.min.js             # generated at build time; git-ignored
+├── mermaid-init.js            # generated at build time; git-ignored
 └── src/
     ├── SUMMARY.md             # table of contents / sidebar (includes external link-outs)
     ├── assets/                # architecture.svg, relocated from docs/assets/ (see note below)
@@ -317,21 +323,19 @@ site/                         ← uploaded as the Pages artifact
    reflects `main`.
 2. **Install the mdBook toolchain.** `mdbook` and `mdbook-mermaid` install via
    `taiki-e/install-action` (pinned by commit SHA), each pinned to an explicit version.
-   `mdbook-admonish` and `mdbook-linkcheck2` are **not** in the `taiki-e/install-action`
-   manifest, so install them with `cargo binstall --no-confirm mdbook-admonish@<version>
-   mdbook-linkcheck2@<version>` (`cargo-binstall` itself comes from
-   `taiki-e/install-action`). `cargo binstall` downloads a prebuilt binary when one is
-   published for the runner target and **automatically falls back to `cargo install`**
-   when no prebuilt artifact is available or the download fails (e.g. GitHub rate
-   limiting), so no manual artifact-availability check or fallback step is required. All
-   four tool versions are pinned and recorded. Because preprocessor assets are installed
-   fresh from these pinned binaries at build time (step 3) rather than vendored, there is
-   no asset/binary version coupling to track by hand.
+   `mdbook-linkcheck2` is **not** in the `taiki-e/install-action` manifest, so install it
+   with `cargo binstall --no-confirm mdbook-linkcheck2@<version>` (`cargo-binstall` itself
+   comes from `taiki-e/install-action`). `cargo binstall` downloads a prebuilt binary when
+   one is published for the runner target and **automatically falls back to
+   `cargo install`** when no prebuilt artifact is available or the download fails (e.g.
+   GitHub rate limiting), so no manual artifact-availability check or fallback step is
+   required. All three tool versions are pinned and recorded. Because the mermaid assets
+   are installed fresh from the pinned binary at build time (step 3) rather than vendored,
+   there is no asset/binary version coupling to track by hand.
 3. **Install preprocessor assets (not committed).** Run `mdbook-mermaid install docs`
-   and `mdbook-admonish install docs` before building. The CSS/JS are generated fresh
-   from the pinned binaries on every build and the output paths are git-ignored, so
-   there is nothing to drift; CI fails if either install errors, and `mdbook build`
-   itself fails on an asset/binary version mismatch.
+   before building. The JS is generated fresh from the pinned binary on every build and
+   the output paths are git-ignored, so there is nothing to drift; CI fails if the install
+   errors.
 4. **Build the book and stage HTML.** Run `mdbook build docs`. Because `book.toml`
    enables two renderers (`html` + `linkcheck`), mdBook writes HTML to
    `docs/book/html/` (not `docs/book/`). Create the staging dir and copy:
@@ -433,18 +437,18 @@ relocation.
   misconfiguring `site-url` breaks only the 404 page, not navigation),
   `git-repository-url`, `edit-url-template` (edit-on-GitHub links), `default-theme`,
   search enabled (default).
-- `[preprocessor.mermaid]` and `[preprocessor.admonish]`. The generated CSS/JS are
-  produced by `mdbook-mermaid install docs` / `mdbook-admonish install docs` at build
-  time (CI build step 3 and the `justfile` recipes) and are git-ignored, not committed.
+- `[preprocessor.mermaid]`. Its JS is produced by `mdbook-mermaid install docs` at build
+  time (CI build step 3 and the `justfile` recipes) and is git-ignored, not committed.
+  Callouts need no preprocessor — they use mdBook's native alert syntax (`> [!NOTE]`).
 - `[output.linkcheck2]` with `follow-web-links = false`.
 
 ## Local tooling
 
 ### `justfile` recipes
 
-- `book-assets` → `mdbook-mermaid install docs && mdbook-admonish install docs`
-  (regenerates the git-ignored preprocessor assets; a prerequisite of the build
-  recipes so a fresh checkout builds without a manual step).
+- `book-assets` → `mdbook-mermaid install docs` (regenerates the git-ignored mermaid
+  assets; a prerequisite of the build recipes so a fresh checkout builds without a
+  manual step).
 - `book-serve` → `book-assets` then `mdbook serve docs --open` (live reload).
 - `book-build` → `book-assets` then `mdbook build docs` (mirrors what CI runs on PRs;
   this is the single build-and-validate recipe). `mdbook-linkcheck2` is a renderer
@@ -467,7 +471,7 @@ and links to upstream install docs (and may include concrete install commands).
 
 - **Common prerequisites:** `rustup` + pinned toolchain (MSRV 1.94.0, edition 2024),
   `just`, Go (FFI), Nix (FFI flake), the mdBook toolchain (`mdbook`,
-  `mdbook-mermaid`, `mdbook-admonish`, `mdbook-linkcheck2`).
+  `mdbook-mermaid`, `mdbook-linkcheck2`).
 - **macOS local:** rustup install; components (`rustfmt`, `clippy`, `rust-analyzer`);
   VS Code + `rust-analyzer` extension settings; `just` workflows; build/test
   (`cargo nextest run --workspace --features ethhash,logger`).
@@ -602,20 +606,24 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
 - **`new-design` recipe:** running it produces a correctly numbered proposed doc from
   the template.
 - **Existing checks unaffected:** `cargo doc --no-deps`, `cargo fmt`, `cargo clippy`,
-  and `cargo nextest` are unchanged; `markdownlint-cli2 .` passes on the new Markdown.
+  and `cargo nextest` are unchanged; the repository's markdownlint check passes on the
+  new Markdown. A book-scoped `docs/.markdownlint.json` disables `MD025` (multiple H1)
+  and `MD042` (empty links) for mdBook's `SUMMARY.md` format; it lives outside `src/` so
+  mdBook does not copy it into the rendered output.
 
 ## Acceptance criteria
 
 - [ ] `docs/book.toml` + `docs/src/SUMMARY.md` exist; `mdbook build docs` succeeds
-      locally with mermaid, admonish, and linkcheck (internal links only).
+      locally with mermaid and linkcheck (internal links only); callouts use mdBook's
+      native alert syntax (no admonish preprocessor).
 - [ ] `gh-pages.yaml` copies the book HTML (`docs/book/html/`) into `site/`,
       relocates rustdoc to `site/rustdoc/` with a redirect index, repoints go docs to
       `site/ffi`, merges benchmark data with a per-path `git archive` (extracting
       `bench`/`dev` only if each exists in `FETCH_HEAD`), removes the old root-redirect
       and copy-static-assets steps, and uploads `site/`. `mdbook`, `mdbook-mermaid`,
-      `mdbook-linkcheck2`, `mdbook-admonish`, and `doc2go` are pinned to explicit
-      versions; CI runs `mdbook-mermaid install docs` and `mdbook-admonish install docs`
-      before building. The build job asserts `site/index.html` exists before upload.
+      `mdbook-linkcheck2`, and `doc2go` are pinned to explicit versions; CI runs
+      `mdbook-mermaid install docs` before building. The build job asserts
+      `site/index.html` exists before upload.
 - [ ] The hardcoded `ref: main` is replaced with a PR-head-aware checkout, and
       `docs/**` is added to the `pull_request.paths` filter; deploy stays gated to
       non-PR events on the canonical repo. A `smoke` job runs after `deploy` (non-PR
@@ -645,11 +653,11 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
       work: tooling, layout, build/serve, authoring, design workflow) and thin
       repository-function pages (`release.md` plus link-out pointers to CONTRIBUTING /
       CODE_REVIEW); the process-doc link-outs are in `meta/`, not `reference/`.
-- [ ] `justfile` gains `book-assets`, `book-serve`, `book-build`, and `new-design`.
-- [ ] Preprocessor assets are installed at build time (not committed): CI and the
-      `book-assets` recipe run `mdbook-mermaid install docs` and `mdbook-admonish
-      install docs`, the generated asset paths are git-ignored, and a fresh checkout
-      builds without a manual install step.
+- [x] `justfile` gains `book-assets`, `book-serve`, and `book-build` (PR 1 — foundation).
+- [ ] `justfile` gains a `new-design` recipe (PR 3 — content).
+- [ ] Mermaid assets are installed at build time (not committed): CI and the
+      `book-assets` recipe run `mdbook-mermaid install docs`, the generated asset paths
+      are git-ignored, and a fresh checkout builds without a manual install step.
 - [ ] `architecture.svg` is moved to `docs/src/assets/` and the root `README.md`
       reference is updated accordingly; the book renders the diagram.
 - [ ] `markdownlint-cli2 .` passes.
