@@ -997,6 +997,147 @@ mod test {
     }
 
     #[test]
+    fn test_reconstruct_clone_is_independent_branching_trie() {
+        // Exercises the fork-then-advance path on a wide, deep trie where the
+        // shared-Arc fallback in `From<Arc<NodeStore<Reconstructed, _>>>`
+        // would deep-clone via `Node::clone` if the optimization regressed.
+        // The trivial-trie variant `test_reconstruct_clone_is_independent`
+        // wouldn't notice a regression in that walk; this one would.
+        let db = TestDb::new();
+
+        // Build a base committed revision with two entries per top-level
+        // nibble so the root is a 16-way branch with depth in every subtree.
+        let mut base_batch = Vec::new();
+        for hi in 0..16u8 {
+            for lo in 0..2u8 {
+                let key = vec![hi << 4, lo];
+                let value = vec![hi, lo, 0xaa];
+                base_batch.push(BatchOp::Put { key, value });
+            }
+        }
+        let initial = db.propose(base_batch).unwrap();
+        initial.commit().unwrap();
+        let historical_hash = db.root_hash().unwrap();
+        let historical = db.revision(historical_hash).unwrap();
+
+        let original = db
+            .reconstruct_from_view(
+                &historical,
+                vec![BatchOp::Put {
+                    key: b"shared".to_vec(),
+                    value: b"v_shared".to_vec(),
+                }],
+            )
+            .unwrap();
+        let original_root = original.root_hash();
+
+        let cloned = original.clone();
+        assert_eq!(cloned.root_hash(), original_root);
+
+        // Each side mutates a distinct suffix in every top-level subtree, so
+        // both reconstructs touch the full breadth of branches.
+        let mut clone_batch = Vec::new();
+        let mut orig_batch = Vec::new();
+        for hi in 0..16u8 {
+            clone_batch.push(BatchOp::Put {
+                key: vec![hi << 4, 0x99],
+                value: vec![hi, 0xcc],
+            });
+            orig_batch.push(BatchOp::Put {
+                key: vec![hi << 4, 0x88],
+                value: vec![hi, 0xdd],
+            });
+        }
+        let new_cloned = cloned.reconstruct(clone_batch).unwrap();
+        let original_next = original.reconstruct(orig_batch).unwrap();
+
+        // Each side sees only its own mutations, across every subtree.
+        for hi in 0..16u8 {
+            let clone_only = [hi << 4, 0x99];
+            let orig_only = [hi << 4, 0x88];
+            assert_eq!(
+                &*new_cloned.val(&clone_only[..]).unwrap().unwrap(),
+                &[hi, 0xcc][..]
+            );
+            assert_eq!(new_cloned.val(&orig_only[..]).unwrap(), None);
+            assert_eq!(
+                &*original_next.val(&orig_only[..]).unwrap().unwrap(),
+                &[hi, 0xdd][..]
+            );
+            assert_eq!(original_next.val(&clone_only[..]).unwrap(), None);
+        }
+
+        // Both sides retain every base entry.
+        for hi in 0..16u8 {
+            for lo in 0..2u8 {
+                let key = [hi << 4, lo];
+                let expected = [hi, lo, 0xaa];
+                assert_eq!(&*new_cloned.val(&key[..]).unwrap().unwrap(), &expected[..]);
+                assert_eq!(
+                    &*original_next.val(&key[..]).unwrap().unwrap(),
+                    &expected[..]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_reconstruct_with_held_view_arc() {
+        // The shared-Arc advance path is reachable two ways: explicit
+        // `clone()` (covered by the other tests) and an FFI iterator that
+        // pinned the inner nodestore via `view()`. This test exercises the
+        // second case: hold an `ArcDynDbView` over the original, then
+        // advance the original. The advance must succeed and produce
+        // correct reads; the pinned share must continue to see the
+        // pre-advance snapshot.
+        let db = TestDb::new();
+
+        let initial = db
+            .propose(vec![BatchOp::Put {
+                key: b"base",
+                value: b"v0",
+            }])
+            .unwrap();
+        initial.commit().unwrap();
+        let historical_hash = db.root_hash().unwrap();
+        let historical = db.revision(historical_hash).unwrap();
+
+        let original = db
+            .reconstruct_from_view(
+                &historical,
+                vec![BatchOp::Put {
+                    key: b"shared",
+                    value: b"v1",
+                }],
+            )
+            .unwrap();
+        let original_root = original.root_hash();
+
+        // Pin the inner nodestore via `view()`. While `pinned` is alive the
+        // underlying Arc has strong_count > 1, so the advance below takes
+        // the shared-Arc path.
+        let pinned = original.view();
+
+        let advanced = original
+            .reconstruct(vec![BatchOp::Put {
+                key: b"after",
+                value: b"v2",
+            }])
+            .unwrap();
+
+        // Advance is correct: sees base, shared, and the new entry.
+        assert_eq!(&*advanced.val(b"base").unwrap().unwrap(), b"v0");
+        assert_eq!(&*advanced.val(b"shared").unwrap().unwrap(), b"v1");
+        assert_eq!(&*advanced.val(b"after").unwrap().unwrap(), b"v2");
+
+        // The pinned share still reads the pre-advance snapshot.
+        assert_eq!(pinned.root_hash(), Some(original_root.unwrap()));
+        assert_eq!(&*pinned.val(b"base").unwrap().unwrap(), b"v0");
+        assert_eq!(&*pinned.val(b"shared").unwrap().unwrap(), b"v1");
+        assert_eq!(pinned.val(b"after").unwrap(), None);
+    }
+
+    #[test]
     fn reopen_test() {
         let db = TestDb::new();
         let initial_root = db.root_hash();
