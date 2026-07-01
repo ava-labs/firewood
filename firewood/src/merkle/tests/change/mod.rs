@@ -104,5 +104,6 @@ mod edge_cases;
 // root hash, so change proofs from an empty database can't be generated.
 #[cfg(feature = "ethhash")]
 mod empty;
+mod fuzz;
 mod partial;
 mod structural;
