@@ -136,8 +136,6 @@ pub fn find_next_key_after_range_proof(
     proof: &FrozenRangeProof,
     verification: &RangeProofVerificationContext,
 ) -> Result<Option<KeyRange>, api::Error> {
-    // TODO(#352): proper implementation, this naively returns the last key
-    // in the range, which is correct, but not ideal.
     let Some((last_key, _)) = proof.key_values().last() else {
         // no key-values in the proof, so we are done
         return Ok(None);
@@ -155,7 +153,70 @@ pub fn find_next_key_after_range_proof(
         return Ok(None);
     }
 
-    Ok(Some((last_key.clone(), verification.end_key.clone())))
+    let end_nodes: &[crate::ProofNode] = proof.end_proof().as_ref();
+    let mut next_key_prefix = None;
+
+    let last_key_nibbles: Vec<u8> =
+        firewood_storage::NibblesIterator::new(last_key.as_ref()).collect();
+
+    for node in end_nodes.iter().rev() {
+        let node_nibbles: Vec<u8> = node.key.iter().map(|c| c.as_u8()).collect();
+
+        // Find the deepest node that is an ancestor of last_key
+        if last_key_nibbles.starts_with(&node_nibbles) {
+            let next_nibble = last_key_nibbles.get(node_nibbles.len());
+            let start_child_idx = match next_nibble {
+                Some(&n) => n.wrapping_add(1),
+                None => 0, // If last_key matches perfectly, next keys are in its children
+            };
+
+            for idx in start_child_idx..16 {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "idx is strictly bounded by the loop condition 0..16"
+                )]
+                let component = firewood_storage::PathComponent::ALL[idx as usize];
+
+                if node.child_hashes[component].is_some() {
+                    let mut next_nibbles = node_nibbles.clone();
+                    next_nibbles.push(idx);
+
+                    // Pad odd nibble length with 0 (a 0x0 nibble) to align to a full byte
+                    if !next_nibbles.len().is_multiple_of(2) {
+                        next_nibbles.push(0);
+                    }
+
+                    // Convert pairs of nibbles to full bytes
+                    let mut data = Vec::with_capacity(next_nibbles.len() / 2);
+                    let mut iter = next_nibbles.iter();
+                    while let (Some(&hi), Some(&lo)) = (iter.next(), iter.next()) {
+                        data.push((hi << 4) | lo);
+                    }
+                    next_key_prefix = Some(data);
+                    break;
+                }
+            }
+            if next_key_prefix.is_some() {
+                break;
+            }
+        }
+    }
+
+    if let Some(next_key) = next_key_prefix {
+        if let Some(ref end_key) = verification.end_key {
+            // If the next populated branch is beyond end_key, the range is fully accounted for.
+            if next_key.as_slice() > end_key.as_ref() {
+                return Ok(None);
+            }
+        }
+        return Ok(Some((
+            next_key.into_boxed_slice(),
+            verification.end_key.clone(),
+        )));
+    }
+
+    // If no rightward branch is found in the end_proof path, the trie is exhausted.
+    Ok(None)
 }
 
 /// A range proof is a cryptographic proof that demonstrates a contiguous set of key-value pairs
@@ -422,5 +483,135 @@ mod tests {
 
         let items: Vec<_> = range_proof.into_iter().collect();
         assert!(items.is_empty());
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Unit test explicitly defines many permutations"
+    )]
+    #[expect(clippy::type_complexity, reason = "Test mock data type")]
+    fn test_find_next_key_after_range_proof() {
+        use crate::api::HashKey;
+        use crate::proofs::types::ProofNode;
+
+        // Helper to construct a minimal ProofNode with populated child branches
+        fn make_mock_node(nibbles: &[u8], children_idxs: &[u8]) -> ProofNode {
+            let key: firewood_storage::PathBuf = nibbles
+                .iter()
+                .map(|&b| firewood_storage::PathComponent::ALL[b as usize])
+                .collect();
+            let mut child_hashes: firewood_storage::Children<Option<firewood_storage::HashType>> =
+                firewood_storage::Children::new();
+            for &idx in children_idxs {
+                child_hashes[firewood_storage::PathComponent::ALL[idx as usize]] =
+                    Some(firewood_storage::HashType::from([0xAA; 32]));
+            }
+            ProofNode {
+                key,
+                partial_len: nibbles.len(),
+                value_digest: None,
+                child_hashes,
+            }
+        }
+
+        let mut verification = RangeProofVerificationContext {
+            root: HashKey::from([0; 32]),
+            start_key: None,
+            end_key: None,
+            max_length: None,
+        };
+
+        // (a) Next key is a deeper child of last_key's node.
+        let key_values: Box<[(Box<[u8]>, Box<[u8]>)]> =
+            Box::new([(Box::from([0x12]), Box::from([]))]);
+        let start_proof: Proof<Box<[ProofNode]>> = Proof::new(Box::new([]));
+        let end_nodes = vec![make_mock_node(&[1, 2], &[3])];
+        let proof = RangeProof::new(
+            start_proof,
+            Proof::new(end_nodes.into_boxed_slice()),
+            key_values,
+        );
+        let result = find_next_key_after_range_proof(&proof, &verification).unwrap();
+        assert_eq!(result.unwrap().0.as_ref(), &[0x12, 0x30]);
+
+        // (b) Next key is a right-sibling requiring one walk-up.
+        let key_values: Box<[(Box<[u8]>, Box<[u8]>)]> =
+            Box::new([(Box::from([0x12]), Box::from([]))]);
+        let start_proof: Proof<Box<[ProofNode]>> = Proof::new(Box::new([]));
+        let end_nodes = vec![make_mock_node(&[1], &[2, 4]), make_mock_node(&[1, 2], &[])];
+        let proof = RangeProof::new(
+            start_proof,
+            Proof::new(end_nodes.into_boxed_slice()),
+            key_values,
+        );
+        let result = find_next_key_after_range_proof(&proof, &verification).unwrap();
+        assert_eq!(result.unwrap().0.as_ref(), &[0x14]);
+
+        // (c) last_key at nibble 15 forcing multi-level walk-up.
+        let key_values: Box<[(Box<[u8]>, Box<[u8]>)]> =
+            Box::new([(Box::from([0x1F]), Box::from([]))]);
+        let start_proof: Proof<Box<[ProofNode]>> = Proof::new(Box::new([]));
+        let end_nodes = vec![
+            make_mock_node(&[], &[1, 2]),
+            make_mock_node(&[1], &[15]),
+            make_mock_node(&[1, 15], &[]),
+        ];
+        let proof = RangeProof::new(
+            start_proof,
+            Proof::new(end_nodes.into_boxed_slice()),
+            key_values,
+        );
+        let result = find_next_key_after_range_proof(&proof, &verification).unwrap();
+        assert_eq!(result.unwrap().0.as_ref(), &[0x20]);
+
+        // (d) Computed next key > end_key → None.
+        verification.end_key = Some(Box::from([0x13]));
+        let key_values: Box<[(Box<[u8]>, Box<[u8]>)]> =
+            Box::new([(Box::from([0x12]), Box::from([]))]);
+        let start_proof: Proof<Box<[ProofNode]>> = Proof::new(Box::new([]));
+        let end_nodes = vec![make_mock_node(&[1], &[2, 4]), make_mock_node(&[1, 2], &[])];
+        let proof = RangeProof::new(
+            start_proof,
+            Proof::new(end_nodes.into_boxed_slice()),
+            key_values,
+        );
+        let result = find_next_key_after_range_proof(&proof, &verification).unwrap();
+        assert!(result.is_none());
+
+        // (e) Trie exhausted → None.
+        verification.end_key = None;
+        let key_values: Box<[(Box<[u8]>, Box<[u8]>)]> =
+            Box::new([(Box::from([0x1F]), Box::from([]))]);
+        let start_proof: Proof<Box<[ProofNode]>> = Proof::new(Box::new([]));
+        let end_nodes = vec![
+            make_mock_node(&[], &[1]),
+            make_mock_node(&[1], &[15]),
+            make_mock_node(&[1, 15], &[]),
+        ];
+        let proof = RangeProof::new(
+            start_proof,
+            Proof::new(end_nodes.into_boxed_slice()),
+            key_values,
+        );
+        let result = find_next_key_after_range_proof(&proof, &verification).unwrap();
+        assert!(result.is_none());
+
+        // (f) Odd-nibble branch prefix padding (verifying the 0 padding logic).
+        let key_values: Box<[(Box<[u8]>, Box<[u8]>)]> =
+            Box::new([(Box::from([0x12, 0x34]), Box::from([]))]);
+        let start_proof: Proof<Box<[ProofNode]>> = Proof::new(Box::new([]));
+        let end_nodes = vec![
+            make_mock_node(&[1, 2], &[3, 4]),
+            make_mock_node(&[1, 2, 3], &[4]), // last key goes down to 4
+            make_mock_node(&[1, 2, 3, 4], &[]),
+        ];
+        let proof = RangeProof::new(
+            start_proof,
+            Proof::new(end_nodes.into_boxed_slice()),
+            key_values,
+        );
+        let result = find_next_key_after_range_proof(&proof, &verification).unwrap();
+        assert_eq!(result.unwrap().0.as_ref(), &[0x12, 0x40]);
     }
 }
