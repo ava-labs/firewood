@@ -10,7 +10,10 @@
 )]
 
 use crate::hashednode::{HasUpdate, Hashable, Preimage};
-use crate::{TrieHash, TriePath, TriePathAsPackedBytes, ValueDigest};
+use crate::{
+    HashMode, MerkleDbHash, NodeHashAlgorithm, Path, TrieHash, TriePath, TriePathAsPackedBytes,
+    ValueDigest,
+};
 /// Merkledb compatible hashing algorithm.
 use integer_encoding::VarInt;
 use sha2::{Digest, Sha256};
@@ -21,6 +24,18 @@ const BITS_PER_NIBBLE: u64 = 4;
 impl HasUpdate for Sha256 {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {
         sha2::Digest::update(self, data);
+    }
+}
+
+impl HashMode for MerkleDbHash {
+    const ALGORITHM: NodeHashAlgorithm = NodeHashAlgorithm::MerkleDB;
+
+    fn default_root_hash() -> Option<TrieHash> {
+        None
+    }
+
+    fn is_valid_key(key: &Path) -> bool {
+        key.0.len().is_multiple_of(2)
     }
 }
 
