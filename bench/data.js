@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783066148848,
+  "lastUpdate": 1783066346646,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -6109,6 +6109,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 44.41590312735664,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "dvansari65",
+            "username": "dvansari65",
+            "email": "dvansari360@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "d8d8780651dddd63a8148f776dab2b6a1d0c8cfd",
+          "message": "feat(fwdctl): add import command (#2082)\n\n## Why this should be merged\n\nThere is no way to rebuild or restore a database from exported CSV\ndumps. This adds the `fwdctl import` subcommand to reconstruct databases\nfrom dumps produced by `fwdctl dump`.\n\n## How this works\n\nAdds `fwdctl import` which streams CSV data, batches it into\nconfigurable chunks (default 10,000 records), and commits them.\nFeatures:\n\n- Configurable `--batch-size` and `--status-interval` (default 1m)\n- Optional `--hex` flag for hex-encoded keys/values\n- Reads from a file (`--input-file-name`) or stdin\n- Skips malformed rows with warnings; aborts after 100 consecutive\nerrors\n- Reports final summary: `imported N keys (skipped M malformed rows) in\nT (R keys/s)`\n\nJSON support is deferred to a follow-up PR.\n\n## How this was tested\n\nIntegration tests in `fwdctl/tests/cli.rs`:\n- `test_slow_fwdctl_import_csv` — round-trip export/import\n- `test_slow_fwdctl_import_csv_hex` — hex-encoded round-trip\n- `test_slow_fwdctl_import_csv_malformed` — strict 2-column constraint\nand hex-parse error recovery\n- `test_slow_fwdctl_import_large_random_database` — export, import, and\ncompare a 100k-key random database\n\n## Breaking Changes\n\n- [ ] firewood\n- [ ] firewood-storage\n- [ ] firewood-ffi (C api)\n- [ ] firewood-go (Go api)\n- [x] fwdctl (adds `import` subcommand)\n\n---------\n\nCo-authored-by: Ron Kuris <ron.kuris@avalabs.org>",
+          "timestamp": "2026-06-30T21:42:52Z",
+          "url": "https://github.com/ava-labs/firewood/commit/d8d8780651dddd63a8148f776dab2b6a1d0c8cfd"
+        },
+        "date": 1783066346154,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 171.17600951636638,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5841.940134165756,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 108.80066360968866,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5655.959189602882,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 74.6683844845111,
             "unit": "block_accept_ms/ggas"
           }
         ]
