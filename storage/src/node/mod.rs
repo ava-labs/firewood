@@ -1,19 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![expect(
-    clippy::items_after_statements,
-    reason = "Found 2 occurrences after enabling the lint."
-)]
-#![expect(
-    clippy::missing_errors_doc,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![expect(
-    clippy::missing_panics_doc,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-
 use crate::node::branch::ReadSerializable;
 use crate::nodestore::AreaIndex;
 use crate::{HashType, LinearAddress, Path, PathBuf, PathComponent, SharedNode};
@@ -234,6 +221,12 @@ impl Node {
     /// # Errors
     ///
     /// Returns an error if the encoded size exceeds the maximum area size.
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "panics via `expect` only if a child lacks persisted address/hash info, which \
+                  cannot happen because children are always hashed and persisted before a node \
+                  is serialized"
+    )]
     pub fn as_bytes<T>(&self, encoded: &mut T) -> Result<AreaIndex, Error>
     where
         T: ExtendableBytes + AsRef<[u8]> + std::ops::IndexMut<usize, Output = u8>,
@@ -261,6 +254,11 @@ impl Node {
                 );
 
                 // create an output stack item, which can overflow to memory for very large branch nodes
+                #[expect(
+                    clippy::items_after_statements,
+                    reason = "kept next to the `reserve` call it sizes; hoisting it to module \
+                              scope would divorce the constant from its one use"
+                )]
                 const OPTIMIZE_BRANCHES_FOR_SIZE: usize = 1024;
                 encoded.reserve(OPTIMIZE_BRANCHES_FOR_SIZE);
                 encoded.push(first_byte.0);
@@ -305,6 +303,11 @@ impl Node {
                 };
                 let first_byte: LeafFirstByte = LeafFirstByte::new(1, pp_len);
 
+                #[expect(
+                    clippy::items_after_statements,
+                    reason = "kept next to the `reserve` call it sizes; hoisting it to module \
+                              scope would divorce the constant from its one use"
+                )]
                 const OPTIMIZE_LEAVES_FOR_SIZE: usize = 128;
                 encoded.reserve(OPTIMIZE_LEAVES_FOR_SIZE);
                 encoded.push(first_byte.0);
@@ -336,6 +339,11 @@ impl Node {
     }
 
     /// Given a reader, return a [Node] from those bytes
+    #[expect(
+        clippy::missing_errors_doc,
+        reason = "error variants are self-describing `Error::other` messages (freed-area marker, \
+                  invalid child position/index, zero address) or propagated reader I/O errors"
+    )]
     pub fn from_reader(mut serialized: &mut impl Read) -> Result<Self, Error> {
         match serialized.read_byte()? {
             255 => {

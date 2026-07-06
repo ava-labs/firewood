@@ -4,11 +4,6 @@
 //! This module provides the [`ReadableStorage`] and [`WritableStorage`] traits,
 //! which define the interface for reading and writing to a linear store.
 
-#![expect(
-    clippy::missing_errors_doc,
-    reason = "Found 4 occurrences after enabling the lint."
-)]
-
 use std::fmt::Debug;
 use std::io::{Cursor, Read};
 use std::ops::Deref;
@@ -148,9 +143,19 @@ pub trait ReadableStorage: Debug + Sync + Send {
     /// # Returns
     ///
     /// A `Result` containing a boxed `Read` trait object, or an `Error` if the operation fails.
+    #[expect(
+        clippy::missing_errors_doc,
+        reason = "returns a FileIoError, whose own docs describe the wrapped I/O failure \
+                  (filename/offset/context); implementations surface the underlying read error"
+    )]
     fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError>;
 
     /// Return the size of the underlying storage, in bytes
+    #[expect(
+        clippy::missing_errors_doc,
+        reason = "returns a FileIoError, whose own docs describe the wrapped I/O failure \
+                  (filename/offset/context); implementations surface the underlying I/O error"
+    )]
     fn size(&self) -> Result<u64, FileIoError>;
 
     /// Read a node from the cache (if any)
@@ -197,6 +202,12 @@ pub trait ReadableStorage: Debug + Sync + Send {
 }
 
 /// Trait for writable storage.
+#[expect(
+    clippy::missing_errors_doc,
+    reason = "the 3 fallible methods below all return FileIoError, whose own docs describe the \
+              wrapped I/O failure (filename/offset/context); write_batch's only additional \
+              error case (overflow summing bytes written) is documented inline at its call site"
+)]
 pub trait WritableStorage: ReadableStorage {
     /// Writes the given object at the specified offset.
     ///
