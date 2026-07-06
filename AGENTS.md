@@ -144,7 +144,8 @@ Before submitting/updating a PR, run the following
 ```bash
 cargo fmt                                                               # Format code
 cargo nextest run --workspace --features ethhash,logger --all-targets   # Run tests
-cargo clippy --workspace --features ethhash,logger --all-targets        # Linter
+cargo clippy --workspace --features ethhash,logger --all-targets                    # Linter
+cargo clippy --profile maxperf --features ethhash,logger --workspace --all-targets  # Linter (maxperf: debug-assertions off)
 cargo doc --no-deps                                                     # Ensure docs build
 ```
 
