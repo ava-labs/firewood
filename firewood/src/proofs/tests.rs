@@ -1,8 +1,6 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![expect(clippy::unwrap_used, clippy::indexing_slicing)]
-
 use integer_encoding::VarInt;
 use test_case::test_case;
 

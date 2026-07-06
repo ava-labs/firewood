@@ -64,8 +64,6 @@ fn write_all_with_sep(
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used)]
-
     use super::*;
     use test_case::test_case;
 

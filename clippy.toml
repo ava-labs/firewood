@@ -3,6 +3,9 @@
 
 msrv = "1.94"
 
+allow-unwrap-in-tests = true
+allow-indexing-slicing-in-tests = true
+
 doc-valid-idents = [
   "MerkleDB",
   # this list must end with ".." so that it does not truncate the default list

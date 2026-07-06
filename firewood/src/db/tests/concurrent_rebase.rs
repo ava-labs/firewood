@@ -71,7 +71,10 @@ const MAX_REVISIONS: usize = 16;
 // Keys must be 32 bytes (64 nibbles) so the checker accepts them under
 // the `ethhash` feature, where valid keys are sized like Ethereum account
 // or storage trie entries.
-#[expect(clippy::indexing_slicing, clippy::disallowed_methods)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "copy_from_slice panics on a length mismatch, but here it always writes an 8-byte range into a fixed 32-byte key"
+)]
 fn key(thread_idx: usize, commit_idx: usize, key_idx: usize) -> Vec<u8> {
     let mut k = vec![0u8; 32];
     k[..8].copy_from_slice(&(thread_idx as u64).to_be_bytes());
@@ -254,7 +257,6 @@ fn test_concurrent_rebase_overlapping_paths() {
     let mut seed: Vec<BatchOp<Vec<u8>, Vec<u8>>> = Vec::with_capacity(64);
     for i in 0u8..64 {
         let mut k = vec![0u8; 32];
-        #[expect(clippy::indexing_slicing, reason = "k is a 32-byte vec")]
         {
             k[0] = i.wrapping_mul(4); // spread across the first nibble
             k[31] = i;
@@ -472,7 +474,6 @@ fn test_empty_parent_rebase_after_reap() {
     let mut filler_keys = Vec::with_capacity(filler_count);
     for i in 0..filler_count {
         let mut k = vec![0u8; 32];
-        #[expect(clippy::indexing_slicing, reason = "k is a 32-byte vec")]
         {
             k[0] = 0x80; // distinct first nibble from p_key (0xaa)
             k[31] = i as u8;
