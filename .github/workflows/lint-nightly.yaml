@@ -1,0 +1,39 @@
+name: lint-nightly
+on:
+  schedule:
+    # Mondays 06:00 UTC — surfaces new/changed nightly clippy lints out of band,
+    # decoupled from PR gating (which runs pinned nightly-2026-07-05).
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+jobs:
+  rust-lint:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile-key: debug-no-default-features
+            profile-args: "--no-default-features"
+          - profile-key: debug-no-features
+            profile-args: ""
+          - profile-key: debug-no-features
+            profile-args: ""
+            os: macos-26
+          - profile-key: debug-ethhash-logger
+            profile-args: "--features ethhash,logger"
+          - profile-key: debug-all-features
+            profile-args: "--all-features"
+          - profile-key: maxperf-ethhash-logger
+            profile-args: "--profile maxperf --features ethhash,logger"
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable (channel via input)
+        with:
+          toolchain: nightly
+          components: clippy
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2 -> v2.9.1
+        with:
+          save-if: "false"
+          shared-key: ${{ matrix.profile-key }}
+      - name: Clippy
+        run: cargo clippy --locked ${{ matrix.profile-args }} --workspace --all-targets -- -D warnings
