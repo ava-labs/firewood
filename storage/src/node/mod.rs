@@ -221,12 +221,14 @@ impl Node {
     /// # Errors
     ///
     /// Returns an error if the encoded size exceeds the maximum area size.
-    #[expect(
-        clippy::missing_panics_doc,
-        reason = "panics via `expect` only if a child lacks persisted address/hash info, which \
-                  cannot happen because children are always hashed and persisted before a node \
-                  is serialized"
-    )]
+    ///
+    /// # Panics
+    ///
+    /// Panics if a branch child lacks persisted address/hash info; children are always hashed
+    /// and persisted before a node is serialized, so this should never happen. Also panics if
+    /// the area size index position exceeds the encoded length; the buffer only grows during
+    /// encoding, so the position captured at the start of this method is always less than or
+    /// equal to the final length.
     pub fn as_bytes<T>(&self, encoded: &mut T) -> Result<AreaIndex, Error>
     where
         T: ExtendableBytes + AsRef<[u8]> + std::ops::IndexMut<usize, Output = u8>,
