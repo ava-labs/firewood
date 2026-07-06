@@ -81,11 +81,9 @@ impl MaybePersistedNode {
     ///
     /// * `storage` - A reference to a `NodeReader` implementation that can read nodes from storage
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// Returns a `Result<SharedNode, FileIoError>` where:
-    /// - `Ok(SharedNode)` contains the node if successfully retrieved
-    /// - `Err(FileIoError)` if there was an error reading from storage
+    /// Returns a [`FileIoError`] if the node is on disk and `storage` fails to read it.
     pub fn as_shared_node<S: NodeReader>(&self, storage: &S) -> Result<SharedNode, FileIoError> {
         match &*self.0.lock() {
             MaybePersisted::Allocated(_, node) | MaybePersisted::Unpersisted(node) => {
@@ -107,6 +105,10 @@ impl MaybePersistedNode {
     /// an already reconstructed root. We avoid the clone unless the reconstructed
     /// revision is referenced elsewhere at the time of this call, which is
     /// unlikely in our typical use cases.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the node is persisted and `storage` fails to read it.
     pub fn try_into_node<S: NodeReader>(self, storage: &S) -> Result<Node, FileIoError> {
         match Arc::try_unwrap(self.0) {
             Ok(mutex) => match mutex.into_inner() {

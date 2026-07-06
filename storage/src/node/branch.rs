@@ -160,11 +160,9 @@ impl Child {
     ///
     /// * `storage` - A reference to a `NodeReader` implementation that can read nodes from storage.
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// Returns a `Result<SharedNode, FileIoError>` where:
-    /// - `Ok(SharedNode)` contains the node if successfully read
-    /// - `Err(FileIoError)` if there was an error reading from storage
+    /// Returns a [`FileIoError`] if `storage` fails to read the node from disk.
     pub fn as_shared_node<S: NodeReader>(&self, storage: &S) -> Result<SharedNode, FileIoError> {
         match self {
             Child::Node(node) => Ok(node.clone().into()),

@@ -140,6 +140,10 @@ impl Path {
     }
 
     /// Casts the path to a slice of its components.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any byte in the path is not a valid nibble (greater than `0x0F`).
     #[must_use]
     pub fn as_components(&self) -> &[PathComponent] {
         TriePathFromUnpackedBytes::path_from_unpacked_bytes(&self.0)

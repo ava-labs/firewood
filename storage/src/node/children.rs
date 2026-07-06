@@ -111,9 +111,13 @@ impl<T> Children<T> {
     /// Merges this collection of children with another collection of children
     /// using the given function.
     ///
-    /// If the function returns an error, the merge is aborted and the error is
-    /// returned. Because this method takes `self` and `other` by value, they
-    /// will be dropped if the merge fails.
+    /// Because this method takes `self` and `other` by value, they will be
+    /// dropped if the merge fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error produced by `merge` if any invocation returns `Err`;
+    /// the merge is aborted at that point.
     pub fn merge<U, V, E>(
         self,
         other: Children<U>,
