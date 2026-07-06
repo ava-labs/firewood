@@ -123,10 +123,6 @@ impl AreaIndex {
     }
 
     /// Get the size of an area index (used by the checker)
-    ///
-    /// # Panics
-    ///
-    /// Panics if `index` is out of bounds for the `AREA_SIZES` array.
     #[must_use]
     pub const fn size(self) -> u64 {
         #[expect(clippy::indexing_slicing)]
@@ -157,8 +153,13 @@ impl TryFrom<usize> for AreaIndex {
     type Error = Error;
 
     fn try_from(index: usize) -> Result<Self, Self::Error> {
-        let index_u8: Result<u8, _> = index.try_into();
-        index_u8.map(AreaIndex).map_err(|_| {
+        let index_u8: u8 = index.try_into().map_err(|_| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("Area index out of bounds: {index}"),
+            )
+        })?;
+        AreaIndex::new(index_u8).ok_or_else(|| {
             Error::new(
                 ErrorKind::InvalidData,
                 format!("Area index out of bounds: {index}"),
@@ -322,5 +323,11 @@ mod tests {
         let hash: TrieHash = hasher.finalize().into();
 
         assert_eq!(AREA_SIZES_HASH, *hash);
+    }
+
+    #[test]
+    fn test_area_index_try_from_usize_out_of_bounds() {
+        assert!(AreaIndex::try_from(AreaIndex::NUM_AREA_SIZES).is_err());
+        assert!(AreaIndex::try_from(usize::MAX).is_err());
     }
 }
