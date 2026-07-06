@@ -59,6 +59,12 @@ The FFI layer sets the context on each inbound call based on caller configuratio
 
 ### Database layer (`firewood` crate)
 
+#### Build information
+
+| Metric                | Type  | Labels               | Description                                                                                                                                                |
+| --------------------- | ----- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `firewood_build_info` | gauge | `git_sha`, `git_tag` | Constant `1`, set when a database is opened. `git_sha` is the commit built from (`unknown` outside a git checkout); `git_tag` is empty if HEAD is untagged |
+
 #### Proposals
 
 | Metric                                      | Type      | Labels    | Description                                           |
