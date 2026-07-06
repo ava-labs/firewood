@@ -475,7 +475,7 @@ fn test_empty_parent_rebase_after_reap() {
         k[0] = 0x80; // distinct first nibble from p_key (0xaa)
         k[31] = i as u8;
         let v = [i as u8; 8];
-        filler_keys.push((k.clone(), v.clone()));
+        filler_keys.push((k, v));
         db.propose(vec![BatchOp::Put { key: k, value: v }])
             .expect("propose filler")
             .commit()
