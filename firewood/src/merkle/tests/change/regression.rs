@@ -3,8 +3,10 @@
 
 //! Regression: a no-bounds change proof anchors its end proof on the highest
 //! changed key (`merkle/mod.rs` `change_proof`: `end_key.or(batch_ops.last())`).
-//! Tampering the right-edge op must still be rejected. Found by
-//! `test_slow_change_proof_fuzz` (`FIREWOOD_TEST_SEED=6348968561142317239`).
+//! Tampering the right-edge op must still be rejected. Reported in
+//! ava-labs/firewood#2091; the change-proof verification fuzzer that originally
+//! surfaced it (seed 6348968561142317239) is not on `main`, so this
+//! deterministic case guards the fix in its place.
 
 use super::*;
 use crate::{ChangeProof, Proof};
@@ -23,12 +25,13 @@ fn is_rejected(
 
 #[test]
 fn test_tampered_right_edge_delete_to_put_is_rejected() {
-    // `0xf0` and `0xfa` keep `0x0f` a real branch in the END trie. `0xf51c`
-    // (victim) and `0xf5cd` (the max changed key) both live under that branch's
-    // child `5`, and BOTH are deleted — so in the end trie child `5` of `0x0f`
-    // is absent, and `prove(0xf5cd)` is an exclusion proof terminating at the
-    // `0x0f` branch that marks child `5` out-of-range. The victim `0xf51c`
-    // sorts below the anchor `0xf5cd` but in that same on-path child.
+    // `0xf0` and `0xfa` keep the `f` branch (nibble path `[f]`) real in the END
+    // trie. `0xf51c` (victim) and `0xf5cd` (the max changed key) both live under
+    // that branch's child `5`, and both are deleted — so in the end trie child
+    // `5` of the `f` branch is absent, and `prove(0xf5cd)` is an exclusion proof
+    // terminating at the `f` branch that marks child `5` out-of-range. The
+    // victim `0xf51c` sorts below the anchor `0xf5cd` but in that same on-path
+    // child.
     let (db, _dir) = setup_db![
         (b"\x10".as_slice(), b"low".as_slice()),
         (b"\xf0".as_slice(), b"fz".as_slice()),
