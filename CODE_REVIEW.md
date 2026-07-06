@@ -12,8 +12,10 @@ providing inline feedback — in addition to general best practices.
   **production** code — `debug_assert!(<invariant>)` paired with `wrapping_*` (zero release
   cost, and the assertion restores the dev/test overflow canary). Do not use
   `checked_*`/`saturating_*` for provably-safe operations; they add runtime cost for no
-  benefit. Test-only arithmetic already runs under the dev-profile overflow canary, so a
-  reasoned `#[expect]` there is acceptable. See **Lint Suppression Policy** below.
+  benefit. Reserve a reasoned `#[expect(clippy::arithmetic_side_effects, reason = "...")]`
+  for the rare expression where every rewrite hurts clarity. Test-only arithmetic already
+  runs under the dev-profile overflow canary, so a reasoned `#[expect]` there is
+  acceptable. See **Lint Suppression Policy** below.
 - **`unwrap()`**: Hard reject outside `#[cfg(test)]` modules. Also reject
   `#[allow(clippy::unwrap_used)]` and `#[expect(clippy::unwrap_used)]` outside test
   modules.
