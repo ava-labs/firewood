@@ -14,8 +14,6 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-// TODO(rkuris): remove bitflags, we only use one bit
-use bitflags::bitflags;
 use smallvec::SmallVec;
 use std::fmt::{self, Debug, LowerHex};
 use std::iter::{FusedIterator, once};
@@ -84,31 +82,24 @@ impl<T: AsRef<[u8]>> From<T> for Path {
     }
 }
 
-bitflags! {
-    // should only ever be the size of a nibble
-    struct Flags: u8 {
-        const ODD_LEN  = 0b0001;
-    }
-}
+const FLAG_ODD_LEN: u8 = 0b0001;
 
 impl Path {
     /// Return an iterator over the encoded bytes
     pub fn iter_encoded(&self) -> impl Iterator<Item = u8> {
-        let mut flags = Flags::empty();
+        let mut flags = 0u8;
 
         let has_odd_len = self.0.len() & 1 == 1;
 
         let extra_byte = if has_odd_len {
-            flags.insert(Flags::ODD_LEN);
+            flags |= FLAG_ODD_LEN;
 
             None
         } else {
             Some(0)
         };
 
-        once(flags.bits())
-            .chain(extra_byte)
-            .chain(self.0.iter().copied())
+        once(flags).chain(extra_byte).chain(self.0.iter().copied())
     }
 
     /// Creates a Path from a [Iterator] or other iterator that returns
@@ -129,9 +120,9 @@ impl Path {
     /// then there is another discarded byte after that.
     #[cfg(test)]
     pub fn from_encoded_iter<Iter: Iterator<Item = u8>>(mut iter: Iter) -> Self {
-        let flags = Flags::from_bits_retain(iter.next().unwrap_or_default());
+        let flags = iter.next().unwrap_or_default();
 
-        if !flags.contains(Flags::ODD_LEN) {
+        if (flags & FLAG_ODD_LEN) == 0 {
             let _ = iter.next();
         }
 
