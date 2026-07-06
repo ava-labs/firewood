@@ -125,7 +125,10 @@ impl AreaIndex {
     /// Get the size of an area index (used by the checker)
     #[must_use]
     pub const fn size(self) -> u64 {
-        #[expect(clippy::indexing_slicing)]
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "const fn cannot use `get()`; AreaIndex is only constructed via a bounds-checked path (`new`, `TryFrom`) or the test-only `from_u8_unchecked`, so the index is always within `AREA_SIZES`"
+        )]
         AREA_SIZES[self.as_usize()]
     }
 }
