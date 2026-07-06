@@ -254,16 +254,14 @@ fn test_concurrent_rebase_overlapping_paths() {
 
     // Seed with a meaningful initial trie so subsequent proposals' COWs hit
     // shared branches at upper levels.
-    let mut seed: Vec<BatchOp<Vec<u8>, Vec<u8>>> = Vec::with_capacity(64);
+    let mut seed = Vec::with_capacity(64);
     for i in 0u8..64 {
-        let mut k = vec![0u8; 32];
-        {
-            k[0] = i.wrapping_mul(4); // spread across the first nibble
-            k[31] = i;
-        }
+        let mut k = [0u8; 32];
+        k[0] = i.wrapping_mul(4); // spread across the first nibble
+        k[31] = i;
         seed.push(BatchOp::Put {
             key: k,
-            value: vec![i; 8],
+            value: [i; 8],
         });
     }
     db.propose(seed).unwrap().commit().unwrap();
@@ -473,12 +471,10 @@ fn test_empty_parent_rebase_after_reap() {
     let filler_count = TIGHT_MAX_REVISIONS.wrapping_add(2);
     let mut filler_keys = Vec::with_capacity(filler_count);
     for i in 0..filler_count {
-        let mut k = vec![0u8; 32];
-        {
-            k[0] = 0x80; // distinct first nibble from p_key (0xaa)
-            k[31] = i as u8;
-        }
-        let v = vec![i as u8; 8];
+        let mut k = [0u8; 32];
+        k[0] = 0x80; // distinct first nibble from p_key (0xaa)
+        k[31] = i as u8;
+        let v = [i as u8; 8];
         filler_keys.push((k.clone(), v.clone()));
         db.propose(vec![BatchOp::Put { key: k, value: v }])
             .expect("propose filler")
