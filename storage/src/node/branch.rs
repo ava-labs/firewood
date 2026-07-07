@@ -3,7 +3,14 @@
 
 #![expect(
     clippy::match_same_arms,
-    reason = "Found 1 occurrences after enabling the lint."
+    reason = "3 matches on Child enumerate each variant explicitly rather than merging arms \
+              with `|` even though the bodies coincide: Child::heap_size documents (via the \
+              adjacent comment) why AddressWithHash and MaybePersisted both contribute 0 \
+              bytes for different reasons; Child::hash mirrors the per-variant shape of its \
+              sibling methods (persisted_address, persist_info) in this file; and \
+              BranchNode's Debug impl leaves Child::Node as its own arm (marked \
+              TODO(rkuris)) as a placeholder for output that isn't implemented yet, not a \
+              deliberate alias of the None arm"
 )]
 
 use crate::node::ExtendableBytes;

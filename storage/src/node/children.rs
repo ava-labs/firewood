@@ -62,7 +62,10 @@ impl<T> Children<T> {
     /// This is infallible because `index` is guaranteed to be in-bounds.
     #[must_use]
     pub const fn get(&self, index: PathComponent) -> &T {
-        #![expect(clippy::indexing_slicing)]
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "index.as_usize() is a 4-bit value (0..=15), always < MAX_CHILDREN (16)"
+        )]
         &self.0[index.as_usize()]
     }
 
@@ -71,7 +74,10 @@ impl<T> Children<T> {
     /// This is infallible because `index` is guaranteed to be in-bounds.
     #[must_use]
     pub const fn get_mut(&mut self, index: PathComponent) -> &mut T {
-        #![expect(clippy::indexing_slicing)]
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "index.as_usize() is a 4-bit value (0..=15), always < MAX_CHILDREN (16)"
+        )]
         &mut self.0[index.as_usize()]
     }
 
@@ -80,7 +86,10 @@ impl<T> Children<T> {
     ///
     /// This is infallible because `index` is guaranteed to be in-bounds.
     pub const fn replace(&mut self, index: PathComponent, value: T) -> T {
-        #![expect(clippy::indexing_slicing)]
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "index.as_usize() is a 4-bit value (0..=15), always < MAX_CHILDREN (16)"
+        )]
         std::mem::replace(&mut self.0[index.as_usize()], value)
     }
 

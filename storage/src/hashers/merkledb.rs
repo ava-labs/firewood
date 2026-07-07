@@ -5,7 +5,11 @@
     not(feature = "ethhash"),
     expect(
         clippy::arithmetic_side_effects,
-        reason = "Found 1 occurrences after enabling the lint."
+        reason = "key_bit_len = BITS_PER_NIBBLE * key.len() as u64 cannot overflow: key.len() \
+                  is the nibble count of a single trie key, which would have to exceed \
+                  u64::MAX / 4 nibbles (many exabytes) to overflow a u64, far beyond any \
+                  representable key; the lint only fires for this generic Preimage::write \
+                  instantiation in non-ethhash builds, hence the cfg-scoped suppression"
     )
 )]
 
