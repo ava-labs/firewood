@@ -153,18 +153,16 @@ impl TryFrom<usize> for AreaIndex {
     type Error = Error;
 
     fn try_from(index: usize) -> Result<Self, Self::Error> {
-        let index_u8: u8 = index.try_into().map_err(|_| {
-            Error::new(
-                ErrorKind::InvalidData,
-                format!("Area index out of bounds: {index}"),
-            )
-        })?;
-        AreaIndex::new(index_u8).ok_or_else(|| {
-            Error::new(
-                ErrorKind::InvalidData,
-                format!("Area index out of bounds: {index}"),
-            )
-        })
+        index
+            .try_into()
+            .ok()
+            .and_then(AreaIndex::new)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    format!("Area index out of bounds: {index}"),
+                )
+            })
     }
 }
 
