@@ -234,7 +234,10 @@ pub struct LinearAddressRangeSet {
     bytes_in_set: u64,
 }
 
-#[expect(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "new()/insert_area() return CheckerError, which aggregates rich per-variant diagnostic context (addresses, byte ranges, an intersection Vec, etc.) and is large regardless of which variant is built here; both methods only ever error on the checker's cold path, and CheckerError is a public type consumed across the workspace via `?`-propagation into Vec<CheckerError>, so boxing it would ripple far beyond this impl for no benefit on the (never-erroring) success path"
+)]
 impl LinearAddressRangeSet {
     const NODE_STORE_START_ADDR: LinearAddress = LinearAddress::new(NodeStoreHeader::SIZE).unwrap();
 
@@ -392,9 +395,15 @@ mod test_range_set {
         let mut range_set = RangeSet::new();
         range_set.insert_range(0..0);
         range_set.insert_range(10..10);
-        #[expect(clippy::reversed_empty_ranges)]
+        #[expect(
+            clippy::reversed_empty_ranges,
+            reason = "intentionally reversed (start > end) to verify insert_range treats it as an empty range and is a no-op, matching Range::is_empty semantics"
+        )]
         range_set.insert_range(20..10);
-        #[expect(clippy::reversed_empty_ranges)]
+        #[expect(
+            clippy::reversed_empty_ranges,
+            reason = "intentionally reversed (start > end) to verify insert_range treats it as an empty range and is a no-op, matching Range::is_empty semantics"
+        )]
         range_set.insert_range(30..0);
         assert_eq!(range_set.into_iter().collect::<Vec<_>>(), vec![]);
     }

@@ -100,7 +100,10 @@ impl<A: SplitPath, B: SplitPath> PathCommonPrefix<A, B> {
 impl<A: SplitPath, B: SplitPath, C> PathCommonPrefix<A, B, C> {
     /// Converts this into its constituent parts, where the suffixes are
     /// optionally empty.
-    #[expect(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "the return type mirrors split_first's own signature applied to each suffix (an optional leading component plus the remainder) alongside the common prefix; a dedicated named type would just wrap these same three parts under a new name without reducing the complexity"
+    )]
     pub fn split_first_parts(self) -> (Option<(PathComponent, A)>, Option<(PathComponent, B)>, C) {
         (
             self.a_suffix.split_first(),
