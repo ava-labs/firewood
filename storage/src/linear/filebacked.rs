@@ -8,15 +8,26 @@
 
 #![expect(
     clippy::arithmetic_side_effects,
-    reason = "Found 5 occurrences after enabling the lint."
+    reason = "PredictiveReader maintains pos <= len <= buffer.len() (1024) by construction: \
+              len/pos only ever advance by max_to_return = min(buf.len(), len - pos), so \
+              `len - pos`, `pos + max_to_return`, and `pos += max_to_return` stay within the \
+              fixed buffer capacity. `offset` is only ever incremented by the exact `read` \
+              count used to set `len` in the same step, so offset >= len always holds and \
+              `offset - len + pos` cannot underflow; offset/bytes_read are u64 byte counters \
+              for a single open file/read, far below u64::MAX for any real file size"
 )]
 #![expect(
     clippy::indexing_slicing,
-    reason = "Found 3 occurrences after enabling the lint."
+    reason = "buf[..max_to_return] and self.buffer[pos..pos + max_to_return] are both bounded \
+              by max_to_return = min(buf.len(), len - pos), so neither slice end can exceed \
+              its respective buffer"
 )]
 #![expect(
     clippy::missing_errors_doc,
-    reason = "Found 1 occurrences after enabling the lint."
+    reason = "lock/new/set_len each wrap a single OS call (flock/open/ftruncate) whose only \
+              failure path is returned unchanged as FileIoError, whose `context` field already \
+              names the failing operation at each call site; an `# Errors` section would only \
+              restate the return type"
 )]
 
 use parking_lot::Mutex;

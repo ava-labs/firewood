@@ -3,11 +3,16 @@
 
 #![expect(
     clippy::arithmetic_side_effects,
-    reason = "Found 3 occurrences after enabling the lint."
+    reason = "write() computes offset + object.len() to grow/index the backing Vec; offset \
+              always comes from an address already within (or one past) this in-memory \
+              store's current length, so reaching usize::MAX would require the Vec to already \
+              hold more bytes than real memory allows, and that allocation would already \
+              have failed"
 )]
 #![expect(
     clippy::indexing_slicing,
-    reason = "Found 1 occurrences after enabling the lint."
+    reason = "guard[offset..offset + object.len()] is preceded by a resize that grows guard \
+              to at least offset + object.len(), so the slice is always in bounds"
 )]
 
 use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
