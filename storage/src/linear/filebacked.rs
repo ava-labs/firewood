@@ -24,7 +24,7 @@
 )]
 #![expect(
     clippy::missing_errors_doc,
-    reason = "lock/new/set_len each wrap a single OS call (flock/open/ftruncate) whose only \
+    reason = "lock/new/set_len each wrap OS-level setup calls (flock/open/ftruncate, plus io_uring setup under the `io-uring` feature) whose only \
               failure path is returned unchanged as FileIoError, whose `context` field already \
               names the failing operation at each call site; an `# Errors` section would only \
               restate the return type"
