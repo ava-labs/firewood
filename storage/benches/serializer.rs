@@ -3,11 +3,16 @@
 
 #![expect(
     clippy::assigning_clones,
-    reason = "Found 1 occurrences after enabling the lint."
+    reason = "the one occurrence (`branch`'s `children[..] = child.clone()`) is one-time \
+              benchmark-fixture setup outside the timed `b.iter` closures; rewriting it as \
+              `clone_from` through the `Children` index operator would not change what is \
+              measured and reads worse than a plain assignment"
 )]
 #![expect(
     clippy::unwrap_used,
-    reason = "Found 7 occurrences after enabling the lint."
+    reason = "benches are not #[cfg(test)] so the workspace unwrap_used lint fires on this \
+              fixture-building and profiler-hook code; a panic here simply aborts the bench run, \
+              which is an acceptable failure mode for code that never ships to users"
 )]
 
 use std::fs::File;
@@ -34,7 +39,6 @@ fn file_error_panic<T, U>(path: &FsPath) -> impl FnOnce(T) -> U {
 }
 
 impl Profiler for FlamegraphProfiler {
-    #[expect(clippy::unwrap_used)]
     fn start_profiling(&mut self, _benchmark_id: &str, _benchmark_dir: &FsPath) {
         if let Self::Init(frequency) = self {
             let guard = ProfilerGuard::new(*frequency).unwrap();
@@ -42,7 +46,6 @@ impl Profiler for FlamegraphProfiler {
         }
     }
 
-    #[expect(clippy::unwrap_used)]
     fn stop_profiling(&mut self, _benchmark_id: &str, benchmark_dir: &FsPath) {
         std::fs::create_dir_all(benchmark_dir).unwrap();
         let filename = "firewood-flamegraph.svg";
