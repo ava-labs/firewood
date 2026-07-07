@@ -166,7 +166,7 @@ impl Iterator for BytesIterator<'_> {
         {
             debug_assert!(
                 hi <= 0xf && lo <= 0xf,
-                "Path elements are nibbles (0..=0xf), so packing two of them into a byte can't overflow"
+                "Path elements are nibbles by crate convention (not type-enforced); packing two nibbles into a byte can't overflow"
             );
             return Some(hi.wrapping_mul(16).wrapping_add(lo));
         }
@@ -203,7 +203,7 @@ impl Iterator for NibblesIterator<'_> {
         let result = if self.head.is_multiple_of(2) {
             #[expect(
                 clippy::indexing_slicing,
-                reason = "not-empty guarantees head < tail == 2 * data.len(), so head / 2 < \
+                reason = "not-empty guarantees head < tail <= 2 * data.len(), so head / 2 < \
                           data.len(); `>> 4` on a u8 yields 0..=0xf, in bounds for the \
                           16-element NIBBLES table"
             )]
@@ -211,7 +211,7 @@ impl Iterator for NibblesIterator<'_> {
         } else {
             #[expect(
                 clippy::indexing_slicing,
-                reason = "not-empty guarantees head < tail == 2 * data.len(), so head / 2 < \
+                reason = "not-empty guarantees head < tail <= 2 * data.len(), so head / 2 < \
                           data.len(); `& 0xf` yields 0..=0xf, in bounds for the 16-element \
                           NIBBLES table"
             )]
