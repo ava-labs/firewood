@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783412530538,
+  "lastUpdate": 1783412957039,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -6297,6 +6297,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 48.31508633534056,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "dvansari65",
+            "username": "dvansari65",
+            "email": "dvansari360@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "778d1f096ee6680e4e191d045f4448dcb986d985",
+          "message": "fix(proofs): change-proof verification accepts forged batch ops (#2109)\n\n## Why this should be merged:\nChange-proof verification incorrectly accepted forged batch operations\n(e.g. changing Delete to Put) for keys under an empty boundary branch\nbecause the verifier marked the on-path child as outside the proven\nrange, blindly copying the empty/null hash from the proof instead of\nvalidating against the applied batch.\n\nCloses #2091\n\n## How this works:\nIn compute_outside_children, we no longer mark the on-path child of the\nterminal ancestor node as outside the range. This forces the verifier to\ncompute the hash of the subtree from the applied batch operations in the\nproving trie, correctly detecting mismatch/forgeries.\n\n## How this was tested:\n- Added a regression test in regression.rs verifying that a tampered\nright-edge Delete-to-Put operation is successfully rejected.\n- Updated outside_children_ancestor_left_edge and\noutside_children_ancestor_right_edge unit tests in range.rs to assert\nthe correct range boundary masks.\n- Ran all 440 tests in the workspace with features ethhash,logger\nenabled.\n\n## Breaking Changes:\nNone.",
+          "timestamp": "2026-07-06T20:40:49Z",
+          "url": "https://github.com/ava-labs/firewood/commit/778d1f096ee6680e4e191d045f4448dcb986d985"
+        },
+        "date": 1783412956389,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 158.3740012076936,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6314.167681402379,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 123.09721874409807,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6093.161905428237,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 93.64513086802998,
             "unit": "block_accept_ms/ggas"
           }
         ]
