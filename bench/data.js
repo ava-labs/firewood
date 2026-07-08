@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783497548766,
+  "lastUpdate": 1783497722484,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -6391,6 +6391,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 47.08675597397593,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Joachim Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "6fd227bd0c7f2d99469f55753a6b596e9205bf57",
+          "message": "fix(storage): validate AreaIndex::TryFrom<usize> against NUM_AREA_SIZES (#2119)\n\n## Why this should be merged\n\nA valid `AreaIndex` must index within `AREA_SIZES` (`< NUM_AREA_SIZES`),\nand `AreaIndex::new` / `TryFrom<u8>` enforce that — but `TryFrom<usize>`\nonly checked that the value fit in a `u8`, skipping the bounds check. So\n`AreaIndex::try_from(100usize)` returned `Ok` of an out-of-range index\nthat then panicked in `size()`. \n\nCloses #2118\n\n## How this works\n\n`TryFrom<usize>` now routes through `AreaIndex::new`, returning `Err`\nfor indices `>= NUM_AREA_SIZES`. `AreaIndex` is therefore always in\nbounds, so `size()` can no longer panic in non-test code (its `# Panics`\ndoc is dropped) and its `indexing_slicing` suppression is now\nwell-founded.\n\n## How this was tested\n\nAdded a regression test asserting `AreaIndex::try_from(NUM_AREA_SIZES)`\nand `try_from(usize::MAX)` both return `Err`. `cargo nextest run` and\n`cargo clippy -- -D warnings` pass.\n\n## Breaking Changes\n\n`AreaIndex::try_from(usize)` now returns `Err` for indices `>=\nNUM_AREA_SIZES` instead of an `Ok` that panics on use. Technically this\nis a breaking change even though it was invalid to begin with.",
+          "timestamp": "2026-07-07T17:13:29Z",
+          "url": "https://github.com/ava-labs/firewood/commit/6fd227bd0c7f2d99469f55753a6b596e9205bf57"
+        },
+        "date": 1783497722019,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 169.39146030382398,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5903.485324504433,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 108.93657029581405,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5716.9415852225775,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 75.12513718262953,
             "unit": "block_accept_ms/ggas"
           }
         ]
