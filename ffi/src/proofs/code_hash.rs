@@ -209,6 +209,10 @@ mod tests {
     #[test]
     fn wrong_length_code_hash_is_skipped() {
         let key = [0; 32];
+
+        // RLP account list: [nonce="", balance="", storageRoot=[0; 32],
+        // codeHash=[0x33; 31]]. The final field is intentionally one byte
+        // short so this exercises the wrong-length skip path.
         let mut value = vec![0xf8, 0x43, 0x80, 0x80, 0xa0];
         value.extend([0; 32]);
         value.push(0x9f);
