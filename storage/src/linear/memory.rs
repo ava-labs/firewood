@@ -3,11 +3,12 @@
 
 #![expect(
     clippy::arithmetic_side_effects,
-    reason = "Found 3 occurrences after enabling the lint."
+    reason = "offset + object.len() overflowing usize would mean the Vec already holds more \
+              bytes than real memory allows, which would have already failed to allocate"
 )]
 #![expect(
     clippy::indexing_slicing,
-    reason = "Found 1 occurrences after enabling the lint."
+    reason = "preceded by a resize to at least offset + object.len(), so always in bounds"
 )]
 
 use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};

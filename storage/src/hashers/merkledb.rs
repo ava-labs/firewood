@@ -5,7 +5,8 @@
     not(feature = "ethhash"),
     expect(
         clippy::arithmetic_side_effects,
-        reason = "Found 1 occurrences after enabling the lint."
+        reason = "key.len() would need to exceed u64::MAX/4 nibbles (many exabytes) to \
+                  overflow key_bit_len"
     )
 )]
 

@@ -48,8 +48,24 @@ pub fn hash_node(node: &Node, path_prefix: &Path) -> HashType {
 #[must_use]
 pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
     // Key, 3 options, value digest
-    #[expect(clippy::arithmetic_side_effects)]
-    let est_len = node.partial_path().len() + path_prefix.len() + 3 + HashType::empty().len();
+    //
+    // This is a capacity hint only: `node.partial_path()` and `path_prefix` are
+    // nibble counts bounded by the keys a caller actually stores (never
+    // realistically anywhere near usize::MAX), so this cannot overflow in
+    // practice. Use wrapping arithmetic rather than saturating: if the
+    // invariant were ever violated, wrapping still yields a valid (if
+    // undersized) capacity that `buf`'s later writes grow past, whereas
+    // saturating would request a usize::MAX-sized allocation and abort.
+    debug_assert!(
+        node.partial_path().len() <= usize::MAX / 4 && path_prefix.len() <= usize::MAX / 4,
+        "trie path lengths should never approach usize::MAX"
+    );
+    let est_len = node
+        .partial_path()
+        .len()
+        .wrapping_add(path_prefix.len())
+        .wrapping_add(3)
+        .wrapping_add(HashType::empty().len());
     let mut buf = Vec::with_capacity(est_len);
     HashableShunt::from_node(path_prefix.as_components(), node).write(&mut buf);
     buf.into_boxed_slice()

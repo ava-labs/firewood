@@ -200,7 +200,12 @@ impl<'a, T: AsRef<[u8]> + ?Sized> KeyValueTrieRoot<'a, T> {
     fn deep_merge(
         mut leading_path: PathGuard<'_>,
         mut lhs: Box<Self>,
-        #[expect(clippy::boxed_local)] mut rhs: Box<Self>,
+        #[expect(
+            clippy::boxed_local,
+            reason = "caller already holds this boxed; unboxing would just move it before it's \
+                      dropped here, no allocation saved"
+        )]
+        mut rhs: Box<Self>,
     ) -> Result<Box<Self>, DuplicateKeyError> {
         leading_path.extend(lhs.partial_path.components());
 
@@ -255,7 +260,12 @@ impl<'a, T: AsRef<[u8]> + ?Sized> HashedKeyValueTrieRoot<'a, T> {
     #[must_use]
     pub fn new(
         mut leading_path: PathGuard<'_>,
-        #[expect(clippy::boxed_local)] node: Box<KeyValueTrieRoot<'a, T>>,
+        #[expect(
+            clippy::boxed_local,
+            reason = "caller already holds this boxed; unboxing would just move it before it's \
+                      dropped here, no allocation saved"
+        )]
+        node: Box<KeyValueTrieRoot<'a, T>>,
     ) -> Box<Self> {
         let children = node
             .children
@@ -395,7 +405,11 @@ impl<'a, T: AsRef<[u8]> + ?Sized> DebugValue<'a, T> {
 
 impl<T: AsRef<[u8]> + ?Sized> std::fmt::Debug for DebugValue<'_, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        #![expect(clippy::indexing_slicing)]
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "both slice ends are bounded by their source's len (truncated.len() <= \
+                      MAX_BYTES)"
+        )]
 
         const MAX_BYTES: usize = 32;
 
@@ -472,7 +486,8 @@ mod tests {
     const fn from_ascii<const FROM: usize, const TO: usize>(hex: &[u8; FROM]) -> [u8; TO] {
         #![expect(
             clippy::arithmetic_side_effects,
-            reason = "the loop counter is incremented with a plain `+= 1` rather than a wrapping/checked call"
+            reason = "loop bounded by i < TO; subtractions only run where c is already >= that \
+                      digit's base; the shift only fills a u8's top nibble"
         )]
 
         const fn from_hex_char(c: u8) -> u8 {

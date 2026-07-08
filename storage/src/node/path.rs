@@ -1,15 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![expect(
-    clippy::arithmetic_side_effects,
-    reason = "Found 8 occurrences after enabling the lint."
-)]
-#![expect(
-    clippy::inline_always,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-
 use smallvec::SmallVec;
 use std::fmt::{self, Debug, LowerHex};
 use std::iter::{FusedIterator, once};
@@ -140,6 +131,10 @@ impl Path {
     }
 
     /// Casts the path to a slice of its components.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any byte in the path is not a valid nibble (greater than `0x0F`).
     #[must_use]
     pub fn as_components(&self) -> &[PathComponent] {
         TriePathFromUnpackedBytes::path_from_unpacked_bytes(&self.0)
@@ -169,7 +164,11 @@ impl Iterator for BytesIterator<'_> {
         if let Some(&hi) = self.nibbles_iter.next()
             && let Some(&lo) = self.nibbles_iter.next()
         {
-            return Some(hi * 16 + lo);
+            debug_assert!(
+                hi <= 0xf && lo <= 0xf,
+                "Path elements are nibbles by crate convention (not type-enforced); packing two nibbles into a byte can't overflow"
+            );
+            return Some(hi.wrapping_mul(16).wrapping_add(lo));
         }
         None
     }
@@ -202,23 +201,36 @@ impl Iterator for NibblesIterator<'_> {
             return None;
         }
         let result = if self.head.is_multiple_of(2) {
-            #[expect(clippy::indexing_slicing)]
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "head/2 < data.len() (head < tail <= 2*data.len()); nibble is 0..=0xf"
+            )]
             NIBBLES[(self.data[self.head / 2] >> 4) as usize]
         } else {
-            #[expect(clippy::indexing_slicing)]
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "head/2 < data.len() (head < tail <= 2*data.len()); nibble is 0..=0xf"
+            )]
             NIBBLES[(self.data[self.head / 2] & 0xf) as usize]
         };
-        self.head += 1;
+        debug_assert!(
+            self.head < self.tail,
+            "the is_empty check above guarantees head has not yet reached tail"
+        );
+        self.head = self.head.wrapping_add(1);
         Some(result)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.tail - self.head;
+        debug_assert!(self.tail >= self.head, "tail never precedes head");
+        let remaining = self.tail.wrapping_sub(self.head);
         (remaining, Some(remaining))
     }
 
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        self.head += std::cmp::min(n, self.tail - self.head);
+        debug_assert!(self.tail >= self.head, "tail never precedes head");
+        let step = std::cmp::min(n, self.tail.wrapping_sub(self.head));
+        self.head = self.head.wrapping_add(step);
         self.next()
     }
 }
@@ -226,6 +238,10 @@ impl Iterator for NibblesIterator<'_> {
 impl<'a> NibblesIterator<'a> {
     const BYTES_PER_NIBBLE: usize = 2;
 
+    #[expect(
+        clippy::inline_always,
+        reason = "trivial equality check inlined to avoid a call in the iterator's hot loop"
+    )]
     #[inline(always)]
     const fn is_empty(&self) -> bool {
         self.head == self.tail
@@ -235,10 +251,14 @@ impl<'a> NibblesIterator<'a> {
     /// Each byte in `data` is converted to two nibbles.
     #[must_use]
     pub const fn new(data: &'a [u8]) -> Self {
+        debug_assert!(
+            data.len() <= usize::MAX / Self::BYTES_PER_NIBBLE,
+            "Rust slices can never exceed isize::MAX bytes, so doubling the length can't overflow"
+        );
         NibblesIterator {
             data,
             head: 0,
-            tail: Self::BYTES_PER_NIBBLE * data.len(),
+            tail: Self::BYTES_PER_NIBBLE.wrapping_mul(data.len()),
         }
     }
 }
@@ -250,19 +270,35 @@ impl DoubleEndedIterator for NibblesIterator<'_> {
         }
 
         let result = if self.tail.is_multiple_of(2) {
-            #[expect(clippy::indexing_slicing)]
-            NIBBLES[(self.data[self.tail / 2 - 1] & 0xf) as usize]
+            debug_assert!(
+                self.tail >= 2,
+                "the is_empty check above guarantees tail > head >= 0, and an even tail > 0 is at least 2"
+            );
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "debug_assert above bounds tail/2-1 to [0, data.len()); nibble is 0..=0xf"
+            )]
+            NIBBLES[(self.data[(self.tail / 2).wrapping_sub(1)] & 0xf) as usize]
         } else {
-            #[expect(clippy::indexing_slicing)]
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "odd tail <= 2*data.len()-1, so tail/2 < data.len(); nibble is 0..=0xf"
+            )]
             NIBBLES[(self.data[self.tail / 2] >> 4) as usize]
         };
-        self.tail -= 1;
+        debug_assert!(
+            self.tail > self.head,
+            "the is_empty check above guarantees tail has not yet reached head"
+        );
+        self.tail = self.tail.wrapping_sub(1);
 
         Some(result)
     }
 
     fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
-        self.tail -= std::cmp::min(n, self.tail - self.head);
+        debug_assert!(self.tail >= self.head, "tail never precedes head");
+        let step = std::cmp::min(n, self.tail.wrapping_sub(self.head));
+        self.tail = self.tail.wrapping_sub(step);
         self.next_back()
     }
 }

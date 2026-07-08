@@ -22,7 +22,8 @@
 #![expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
-    reason = "benchmarks panic on bad fixtures, that's fine"
+    reason = "fixtures built in this file are fixed-size and well-formed; a panic here just \
+              aborts the bench run rather than corrupting a measurement"
 )]
 
 use std::hint::black_box;

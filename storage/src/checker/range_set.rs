@@ -234,7 +234,10 @@ pub struct LinearAddressRangeSet {
     bytes_in_set: u64,
 }
 
-#[expect(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "large CheckerError on the cold error path; see its type docs"
+)]
 impl LinearAddressRangeSet {
     const NODE_STORE_START_ADDR: LinearAddress = LinearAddress::new(NodeStoreHeader::SIZE).unwrap();
 
@@ -392,9 +395,15 @@ mod test_range_set {
         let mut range_set = RangeSet::new();
         range_set.insert_range(0..0);
         range_set.insert_range(10..10);
-        #[expect(clippy::reversed_empty_ranges)]
+        #[expect(
+            clippy::reversed_empty_ranges,
+            reason = "intentionally reversed; exercises the empty-range no-op"
+        )]
         range_set.insert_range(20..10);
-        #[expect(clippy::reversed_empty_ranges)]
+        #[expect(
+            clippy::reversed_empty_ranges,
+            reason = "intentionally reversed; exercises the empty-range no-op"
+        )]
         range_set.insert_range(30..0);
         assert_eq!(range_set.into_iter().collect::<Vec<_>>(), vec![]);
     }
@@ -798,7 +807,10 @@ mod test_linear_address_range_set {
     fn test_display(items: usize, expected: &str) {
         let mut range_set = LinearAddressRangeSet::new(0x2000).unwrap();
         for i in 0..items {
-            #[allow(clippy::arithmetic_side_effects)]
+            #[expect(
+                clippy::arithmetic_side_effects,
+                reason = "test offsets are small literals; far from overflow"
+            )]
             let offset = i as u64 * 0x20 + 0x1000;
             range_set
                 .insert_area(LinearAddress::new(offset).unwrap(), 0x10, TEST_PARENT)

@@ -3,7 +3,9 @@
 
 #![expect(
     clippy::match_same_arms,
-    reason = "Found 1 occurrences after enabling the lint."
+    reason = "arms are enumerated explicitly per Child variant even where bodies coincide, to \
+              keep each match one edit away from diverging (see Child::heap_size's adjacent \
+              comment for why two arms currently agree)"
 )]
 
 use crate::node::ExtendableBytes;
@@ -160,11 +162,9 @@ impl Child {
     ///
     /// * `storage` - A reference to a `NodeReader` implementation that can read nodes from storage.
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// Returns a `Result<SharedNode, FileIoError>` where:
-    /// - `Ok(SharedNode)` contains the node if successfully read
-    /// - `Err(FileIoError)` if there was an error reading from storage
+    /// Returns a [`FileIoError`] if `storage` fails to read the node from disk.
     pub fn as_shared_node<S: NodeReader>(&self, storage: &S) -> Result<SharedNode, FileIoError> {
         match self {
             Child::Node(node) => Ok(node.clone().into()),

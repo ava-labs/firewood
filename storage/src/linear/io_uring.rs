@@ -309,8 +309,15 @@ impl<'a> QueueEntry<'a> {
     fn handle_result(&mut self, res: i32) -> Result<usize, BatchError> {
         match res.cmp(&0) {
             Ordering::Less => {
-                #[expect(clippy::arithmetic_side_effects)]
-                let err = io::Error::from_raw_os_error(-res);
+                // `res` is a raw errno reported by the kernel through the io-uring
+                // completion queue; valid errno values are small positive numbers
+                // (well under 4096 on Linux), so `res` can never legitimately be
+                // `i32::MIN`, the only value for which negation would overflow.
+                debug_assert!(
+                    res != i32::MIN,
+                    "io-uring reported an impossible errno of i32::MIN"
+                );
+                let err = io::Error::from_raw_os_error(res.wrapping_neg());
                 // rust stdlib maps EAGAIN to WouldBlock; re-submit in that case
                 if matches!(err.kind(), ErrorKind::WouldBlock) {
                     debug!(
@@ -338,7 +345,10 @@ impl<'a> QueueEntry<'a> {
                 incurable: false,
             }),
             Ordering::Greater => {
-                #[expect(clippy::cast_sign_loss)]
+                #[expect(
+                    clippy::cast_sign_loss,
+                    reason = "res > 0 here, so the sign bit is unset and the cast is lossless"
+                )]
                 let written = res as usize;
                 let Some(remaining) = self.buffer.get(written..) else {
                     // concious choice: if the kernel writes more than we asked for,
@@ -386,7 +396,10 @@ impl<'batch> Outstanding<'batch> {
             Ok(index) => {
                 // binary_search guarantees `index` is valid and the compiler
                 // knows this too but clippy does not
-                #[expect(clippy::indexing_slicing)]
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "binary_search_by just returned Ok(index), so it's valid in self.btree"
+                )]
                 let existing = &self.btree[index];
                 // This is a critical logic error and should never happen. It
                 // indicates that either we allocated a node at the same offset

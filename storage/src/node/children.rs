@@ -62,7 +62,10 @@ impl<T> Children<T> {
     /// This is infallible because `index` is guaranteed to be in-bounds.
     #[must_use]
     pub const fn get(&self, index: PathComponent) -> &T {
-        #![expect(clippy::indexing_slicing)]
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "4-bit PathComponent index, always < MAX_CHILDREN"
+        )]
         &self.0[index.as_usize()]
     }
 
@@ -71,7 +74,10 @@ impl<T> Children<T> {
     /// This is infallible because `index` is guaranteed to be in-bounds.
     #[must_use]
     pub const fn get_mut(&mut self, index: PathComponent) -> &mut T {
-        #![expect(clippy::indexing_slicing)]
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "4-bit PathComponent index, always < MAX_CHILDREN"
+        )]
         &mut self.0[index.as_usize()]
     }
 
@@ -80,7 +86,10 @@ impl<T> Children<T> {
     ///
     /// This is infallible because `index` is guaranteed to be in-bounds.
     pub const fn replace(&mut self, index: PathComponent, value: T) -> T {
-        #![expect(clippy::indexing_slicing)]
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "4-bit PathComponent index, always < MAX_CHILDREN"
+        )]
         std::mem::replace(&mut self.0[index.as_usize()], value)
     }
 
@@ -111,9 +120,13 @@ impl<T> Children<T> {
     /// Merges this collection of children with another collection of children
     /// using the given function.
     ///
-    /// If the function returns an error, the merge is aborted and the error is
-    /// returned. Because this method takes `self` and `other` by value, they
-    /// will be dropped if the merge fails.
+    /// Because this method takes `self` and `other` by value, they will be
+    /// dropped if the merge fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error produced by `merge` if any invocation returns `Err`;
+    /// the merge is aborted at that point.
     pub fn merge<U, V, E>(
         self,
         other: Children<U>,

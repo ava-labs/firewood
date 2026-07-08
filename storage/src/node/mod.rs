@@ -1,19 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![expect(
-    clippy::items_after_statements,
-    reason = "Found 2 occurrences after enabling the lint."
-)]
-#![expect(
-    clippy::missing_errors_doc,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![expect(
-    clippy::missing_panics_doc,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-
 use crate::node::branch::ReadSerializable;
 use crate::nodestore::AreaIndex;
 use crate::{HashType, LinearAddress, Path, PathBuf, PathComponent, SharedNode};
@@ -123,7 +110,11 @@ pub trait ExtendableBytes: Write {
     ///
     /// This uses a stack buffer for holding the encoded integer and copies it
     /// into the buffer.
-    #[expect(clippy::indexing_slicing)]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "encode_var never returns a length above the 10-byte MAX_VARINT_SIZE buffer, \
+                  so `..len` is always in bounds"
+    )]
     fn extend_var_int<VI: VarInt>(&mut self, int: VI) {
         let mut buf = [0u8; 10];
         let len = VarInt::encode_var(int, &mut buf);
@@ -234,6 +225,14 @@ impl Node {
     /// # Errors
     ///
     /// Returns an error if the encoded size exceeds the maximum area size.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a branch child lacks persisted address/hash info; children are always hashed
+    /// and persisted before a node is serialized, so this should never happen. Also panics if
+    /// the area size index position exceeds the encoded length; the buffer only grows during
+    /// encoding, so the position captured at the start of this method is always less than or
+    /// equal to the final length.
     pub fn as_bytes<T>(&self, encoded: &mut T) -> Result<AreaIndex, Error>
     where
         T: ExtendableBytes + AsRef<[u8]> + std::ops::IndexMut<usize, Output = u8>,
@@ -261,6 +260,11 @@ impl Node {
                 );
 
                 // create an output stack item, which can overflow to memory for very large branch nodes
+                #[expect(
+                    clippy::items_after_statements,
+                    reason = "kept next to the `reserve` call it sizes; hoisting it to module \
+                              scope would divorce the constant from its one use"
+                )]
                 const OPTIMIZE_BRANCHES_FOR_SIZE: usize = 1024;
                 encoded.reserve(OPTIMIZE_BRANCHES_FOR_SIZE);
                 encoded.push(first_byte.0);
@@ -305,6 +309,11 @@ impl Node {
                 };
                 let first_byte: LeafFirstByte = LeafFirstByte::new(1, pp_len);
 
+                #[expect(
+                    clippy::items_after_statements,
+                    reason = "kept next to the `reserve` call it sizes; hoisting it to module \
+                              scope would divorce the constant from its one use"
+                )]
                 const OPTIMIZE_LEAVES_FOR_SIZE: usize = 128;
                 encoded.reserve(OPTIMIZE_LEAVES_FOR_SIZE);
                 encoded.push(first_byte.0);
@@ -336,6 +345,11 @@ impl Node {
     }
 
     /// Given a reader, return a [Node] from those bytes
+    #[expect(
+        clippy::missing_errors_doc,
+        reason = "errors are self-describing `Error::other` messages or propagated reader I/O \
+                  errors"
+    )]
     pub fn from_reader(mut serialized: &mut impl Read) -> Result<Self, Error> {
         match serialized.read_byte()? {
             255 => {
@@ -594,7 +608,15 @@ than 126 bytes as the length would be encoded in multiple bytes.
     // When ethhash is enabled, we don't actually check the `expected_length`
     fn test_serialize_deserialize(
         node: Node,
-        #[cfg_attr(feature = "ethhash", expect(unused_variables))] expected_length: usize,
+        #[cfg_attr(
+            feature = "ethhash",
+            expect(
+                unused_variables,
+                reason = "expected_length is only used by the assert_eq! compiled out under \
+                          ethhash"
+            )
+        )]
+        expected_length: usize,
     ) {
         use crate::node::Node;
         use std::io::Cursor;

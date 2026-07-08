@@ -49,7 +49,10 @@ fn is_valid_key(key: &Path) -> bool {
     key.0.len().is_multiple_of(2)
 }
 
-#[expect(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "large CheckerError on the cold error path; see its type docs"
+)]
 const fn check_area_aligned(
     address: LinearAddress,
     parent: StoredAreaParent,
@@ -272,7 +275,11 @@ where
     }
 
     /// Recursively traverse the trie from the given root node.
-    #[expect(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one traversal step inlines validation plus branch/leaf stats bookkeeping; \
+                  splitting it would scatter the single error-handling control-flow path"
+    )]
     fn visit_trie_helper(
         &self,
         subtrie: SubTrieMetadata,
@@ -778,7 +785,10 @@ mod test {
     ///     Root -->|"nibble 0"| Branch
     ///     Branch -->|"nibble 1"| Leaf
     /// ```
-    #[expect(clippy::arithmetic_side_effects)]
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "test offsets are small literals; far from overflow"
+    )]
     fn gen_test_trie(nodestore: &NodeStore<Committed, MemStore>) -> TestTrie {
         let mut high_watermark = NodeStoreHeader::SIZE;
         let mut total_branch_bytes_written = 0;
@@ -882,7 +892,10 @@ mod test {
     // ----------------------------------------------------------------------------------------------------------------------------------------------------
     //                                                             ^ free_list1_area1 and free_list1_area2 overlap by 16 bytes      ^ 1 byte
     //              ^ 16 empty bytes to ensure that free_list1_area1, free_list1_area2, and free_list2_area1 are page-aligned                ^ missaligned
-    #[expect(clippy::arithmetic_side_effects)]
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "test offsets are small literals; far from overflow"
+    )]
     fn gen_test_freelist_with_errors(nodestore: &NodeStore<Committed, MemStore>) -> TestFreelist {
         const AREA_INDEX1: AreaIndex = area_index!(9); // 2048
         const AREA_INDEX2: AreaIndex = area_index!(12); // 16384
@@ -1258,7 +1271,10 @@ mod test {
     #[test]
     // This test creates a linear set of free areas and free them.
     // When traversing it should break consecutive areas.
-    #[expect(clippy::arithmetic_side_effects)]
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "test offsets are small literals; far from overflow"
+    )]
     fn split_range_of_zeros_into_leaked_areas() {
         let memstore = MemStore::default();
         let nodestore =
@@ -1310,7 +1326,10 @@ mod test {
 
     #[test]
     // With both valid and invalid areas in the range, return the valid areas until reaching one invalid area, then use heuristics to split the rest of the range.
-    #[expect(clippy::arithmetic_side_effects)]
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "test offsets are small literals; far from overflow"
+    )]
     fn split_range_into_leaked_areas_test() {
         let memstore = MemStore::default();
         let nodestore =

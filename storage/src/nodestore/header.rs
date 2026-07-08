@@ -549,7 +549,8 @@ const fn const_copy(src: &[u8], dst: &mut [u8]) {
     #![expect(
         clippy::indexing_slicing,
         clippy::arithmetic_side_effects,
-        reason = "const and sufficient bounds checks"
+        reason = "const fn cannot use iterators/copy_from_slice; i is bounded by \
+                  min(src.len(), dst.len()) before each access, so it can't overflow"
     )]
 
     let mut i = 0;

@@ -1499,7 +1499,6 @@ where
 }
 
 #[cfg(test)]
-#[expect(clippy::cast_possible_truncation)]
 mod tests {
 
     use crate::BranchNode;

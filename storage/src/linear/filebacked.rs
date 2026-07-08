@@ -8,15 +8,17 @@
 
 #![expect(
     clippy::arithmetic_side_effects,
-    reason = "Found 5 occurrences after enabling the lint."
+    reason = "pos <= len <= buffer.len() by construction; advances are bounded by \
+              max_to_return = min(buf.len(), len - pos), and offset >= len always holds, \
+              so these can't over/underflow"
 )]
 #![expect(
     clippy::indexing_slicing,
-    reason = "Found 3 occurrences after enabling the lint."
+    reason = "both slices are bounded by max_to_return = min(buf.len(), len - pos)"
 )]
 #![expect(
     clippy::missing_errors_doc,
-    reason = "Found 1 occurrences after enabling the lint."
+    reason = "returns FileIoError; conditions documented on the error type"
 )]
 
 use parking_lot::Mutex;
