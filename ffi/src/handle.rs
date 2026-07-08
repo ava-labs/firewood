@@ -8,7 +8,7 @@ use firewood::{
         self, ArcDynDbView, Db as _, DbView, FrozenChangeProof, HashKey, HashKeyExt, IntoBatchIter,
         KeyType,
     },
-    db::{Db, DbConfig, HistoricalView},
+    db::{CommittedView, Db, DbConfig},
     manager::RevisionManagerConfig,
 };
 
@@ -248,7 +248,7 @@ impl DatabaseHandle {
     /// Returns an error if reconstruction fails.
     pub fn reconstruct_from_view<'db>(
         &'db self,
-        parent: &HistoricalView,
+        parent: &CommittedView,
         batch: impl IntoBatchIter,
     ) -> Result<firewood::db::ReconstructedView<'db>, api::Error> {
         self.db.reconstruct_from_view(parent, batch)

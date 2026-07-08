@@ -192,8 +192,8 @@ impl Db {
     ///
     /// Returns [`api::Error::RevisionNotFound`] if `root_hash` does not identify
     /// an available committed revision.
-    pub fn committed_view(&self, root_hash: HashKey) -> Result<HistoricalView, api::Error> {
-        Ok(HistoricalView {
+    pub fn committed_view(&self, root_hash: HashKey) -> Result<CommittedView, api::Error> {
+        Ok(CommittedView {
             nodestore: self.manager.revision(root_hash)?,
         })
     }
@@ -355,7 +355,7 @@ impl Db {
     /// Returns an error if reconstruction fails.
     pub fn reconstruct_from_view(
         &self,
-        parent: &HistoricalView,
+        parent: &CommittedView,
         batch: impl IntoBatchIter,
     ) -> Result<ReconstructedView<'_>, api::Error> {
         let next_nodestore = parent.nodestore.reconstruction_child()?;
@@ -452,7 +452,7 @@ pub struct Proposal<'db> {
 /// Opaque handle to a historical committed revision.
 ///
 /// Use this as the parent argument to [`Db::reconstruct_from_view`].
-pub struct HistoricalView {
+pub struct CommittedView {
     nodestore: Arc<NodeStore<Committed, FileBacked>>,
 }
 
