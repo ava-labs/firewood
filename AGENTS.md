@@ -231,3 +231,35 @@ See [`CODE_REVIEW.md`](./CODE_REVIEW.md) for the complete set of code review che
 
 - [Auto-generated docs](https://ava-labs.github.io/firewood/firewood/)
 - [Issue tracker](https://github.com/ava-labs/firewood/issues)
+
+## Cursor Cloud specific instructions
+
+The Cloud VM snapshot ships with the toolchains this repo needs already installed:
+the stable Rust toolchain (>= MSRV 1.94.0, edition 2024) as the rustup default,
+Go 1.25.x on `PATH` (matching `ffi/go.mod`), and `cargo-nextest`. The startup
+update script only runs `cargo fetch --locked` to refresh Rust dependencies; Go
+modules are fetched on demand by `go test`. If a future toolchain bump makes the
+default `rustc`/`go` too old, upgrade with `rustup default stable` /
+`/usr/local/go` (the `cargo`/`go`/`nextest` installs are baked into the snapshot,
+not the update script).
+
+Standard build/lint/test/doc commands live in the "PR Strategy" section above and
+in `.github/workflows/ci.yaml`; use those verbatim. The primary feature set for
+local work is `--features ethhash,logger`.
+
+Non-obvious gotchas:
+
+- `fwdctl` takes the database path via a per-subcommand `-d/--db` flag, not a
+  global option (e.g. `fwdctl insert -d my.db key value`). The default node hash
+  algorithm is `ethereum`.
+- Go FFI (`ffi/`) tests link the Rust **staticlib**, so you must build it first
+  (`cargo build` inside `ffi/`, or `cargo build -p firewood-ffi`) before
+  `go test ./...`. Go looks in `target/{maxperf,release,debug}`.
+- `TEST_FIREWOOD_HASH_MODE` must match how the staticlib was built: use
+  `firewood` (SHA-256, default features) or `ethhash` (Keccak-256, requires
+  building with `--features ethhash`). A mismatch causes hash assertion failures.
+  CI runs Go tests with `GOEXPERIMENT=cgocheck2`.
+- The default `cargo nextest` profile skips tests prefixed `test_slow_`; run with
+  `--profile ci` to include them.
+- Running `cargo run --example insert` from the repo root creates a scratch
+  `firewood/firewood.db` directory — delete it before committing.
