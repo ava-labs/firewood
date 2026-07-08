@@ -31,9 +31,7 @@ pub trait ValueType: AsRef<[u8]> + Debug {}
 
 impl<T> ValueType for T where T: AsRef<[u8]> + Debug {}
 
-/// The type and size of a single hash key.
-///
-/// This is an API-oriented alias for [`crate::TrieHash`].
+/// The type and size of a single hash key
 /// These are 256-bit hashes that are used for a variety of reasons:
 ///  - They identify a version of the datastore at a specific point
 ///    in time
