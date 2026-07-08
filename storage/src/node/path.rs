@@ -203,17 +203,13 @@ impl Iterator for NibblesIterator<'_> {
         let result = if self.head.is_multiple_of(2) {
             #[expect(
                 clippy::indexing_slicing,
-                reason = "not-empty guarantees head < tail <= 2 * data.len(), so head / 2 < \
-                          data.len(); `>> 4` on a u8 yields 0..=0xf, in bounds for the \
-                          16-element NIBBLES table"
+                reason = "head/2 < data.len() (head < tail <= 2*data.len()); nibble is 0..=0xf"
             )]
             NIBBLES[(self.data[self.head / 2] >> 4) as usize]
         } else {
             #[expect(
                 clippy::indexing_slicing,
-                reason = "not-empty guarantees head < tail <= 2 * data.len(), so head / 2 < \
-                          data.len(); `& 0xf` yields 0..=0xf, in bounds for the 16-element \
-                          NIBBLES table"
+                reason = "head/2 < data.len() (head < tail <= 2*data.len()); nibble is 0..=0xf"
             )]
             NIBBLES[(self.data[self.head / 2] & 0xf) as usize]
         };
@@ -244,8 +240,7 @@ impl<'a> NibblesIterator<'a> {
 
     #[expect(
         clippy::inline_always,
-        reason = "called on every next()/next_back() to decide whether to stop; forcing inlining \
-                  of this trivial equality check avoids a call in the iterator's hot loop"
+        reason = "trivial equality check inlined to avoid a call in the iterator's hot loop"
     )]
     #[inline(always)]
     const fn is_empty(&self) -> bool {
@@ -281,17 +276,13 @@ impl DoubleEndedIterator for NibblesIterator<'_> {
             );
             #[expect(
                 clippy::indexing_slicing,
-                reason = "the debug_assert above guarantees an even tail is at least 2 and \
-                          tail <= 2 * data.len(), so tail / 2 - 1 is in [0, data.len()); \
-                          `& 0xf` yields 0..=0xf, in bounds for the 16-element NIBBLES table"
+                reason = "debug_assert above bounds tail/2-1 to [0, data.len()); nibble is 0..=0xf"
             )]
             NIBBLES[(self.data[(self.tail / 2).wrapping_sub(1)] & 0xf) as usize]
         } else {
             #[expect(
                 clippy::indexing_slicing,
-                reason = "not-empty guarantees tail <= 2 * data.len(); an odd tail is at most \
-                          2 * data.len() - 1, so tail / 2 < data.len(); `>> 4` on a u8 yields \
-                          0..=0xf, in bounds for the 16-element NIBBLES table"
+                reason = "odd tail <= 2*data.len()-1, so tail/2 < data.len(); nibble is 0..=0xf"
             )]
             NIBBLES[(self.data[self.tail / 2] >> 4) as usize]
         };

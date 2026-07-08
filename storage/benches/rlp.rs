@@ -22,10 +22,8 @@
 #![expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
-    reason = "fixtures are fixed-size, well-formed RLP built in this file (branch_children/ \
-              account_value); the `.unwrap()`s on decode results and the `list[2]` index into \
-              the 4-element account_value list can only fail if a fixture were malformed, and a \
-              panic simply aborts this benchmark run rather than corrupting a measurement"
+    reason = "fixtures built in this file are fixed-size and well-formed; a panic here just \
+              aborts the bench run rather than corrupting a measurement"
 )]
 
 use std::hint::black_box;

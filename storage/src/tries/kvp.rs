@@ -202,7 +202,8 @@ impl<'a, T: AsRef<[u8]> + ?Sized> KeyValueTrieRoot<'a, T> {
         mut lhs: Box<Self>,
         #[expect(
             clippy::boxed_local,
-            reason = "rhs is destructured (value taken, children moved) rather than stored or returned as a Box, but every caller already holds it boxed (it's a trie node whose Children array embeds Box<Self> per slot); unboxing to Self by value would just move that same data onto the stack before this function tears it down again, without avoiding any allocation"
+            reason = "caller already holds this boxed; unboxing would just move it before it's \
+                      dropped here, no allocation saved"
         )]
         mut rhs: Box<Self>,
     ) -> Result<Box<Self>, DuplicateKeyError> {
@@ -261,7 +262,8 @@ impl<'a, T: AsRef<[u8]> + ?Sized> HashedKeyValueTrieRoot<'a, T> {
         mut leading_path: PathGuard<'_>,
         #[expect(
             clippy::boxed_local,
-            reason = "node is destructured (partial_path/value/children moved out) rather than stored or returned as a Box, but every caller already holds it boxed (KeyValueTrieRoot::into_hashed_trie takes `self: Box<Self>`); unboxing to KeyValueTrieRoot by value would just move that same data onto the stack before this function tears it down again, without avoiding any allocation"
+            reason = "caller already holds this boxed; unboxing would just move it before it's \
+                      dropped here, no allocation saved"
         )]
         node: Box<KeyValueTrieRoot<'a, T>>,
     ) -> Box<Self> {
@@ -405,7 +407,8 @@ impl<T: AsRef<[u8]> + ?Sized> std::fmt::Debug for DebugValue<'_, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         #![expect(
             clippy::indexing_slicing,
-            reason = "`value[..value.len().min(MAX_BYTES)]` slices at an end bound that is always <= value.len() by construction, and `hex_buf[..truncated.len().wrapping_mul(2)]` slices a MAX_BYTES*2-byte local array at an end bound that is always <= its length since truncated.len() <= MAX_BYTES"
+            reason = "both slice ends are bounded by their source's len (truncated.len() <= \
+                      MAX_BYTES)"
         )]
 
         const MAX_BYTES: usize = 32;
@@ -483,7 +486,8 @@ mod tests {
     const fn from_ascii<const FROM: usize, const TO: usize>(hex: &[u8; FROM]) -> [u8; TO] {
         #![expect(
             clippy::arithmetic_side_effects,
-            reason = "test-only hex-decoding helper: `i += 1` is bounded by the `i < TO` loop condition; `c - b'0'`, `c - b'a' + 10`, and `c - b'A' + 10` in from_hex_char only run in the match arm where `c` is already known to be at or above that literal, so the subtraction (and the `+ 10`) cannot underflow; and `from_hex_char(hi) << 4` only ever shifts a 4-bit nibble into the top nibble of a u8, which cannot overflow"
+            reason = "loop bounded by i < TO; subtractions only run where c is already >= that \
+                      digit's base; the shift only fills a u8's top nibble"
         )]
 
         const fn from_hex_char(c: u8) -> u8 {

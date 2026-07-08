@@ -51,7 +51,7 @@ fn is_valid_key(key: &Path) -> bool {
 
 #[expect(
     clippy::result_large_err,
-    reason = "CheckerError aggregates rich per-variant diagnostic context (addresses, byte ranges, an intersection Vec, etc.), so it is large regardless of which variant is built here; it is only ever returned on the checker's cold error path, and `CheckerError` is a public type consumed by callers across the workspace via `?`-propagation into `Vec<CheckerError>`, so boxing it would ripple far beyond this function for no benefit on the (never-erroring) success path"
+    reason = "large CheckerError on the cold error path; see its type docs"
 )]
 const fn check_area_aligned(
     address: LinearAddress,
@@ -277,7 +277,8 @@ where
     /// Recursively traverse the trie from the given root node.
     #[expect(
         clippy::too_many_lines,
-        reason = "one recursive traversal step performs alignment/read/size/key/hash validation, then inlines branch-vs-leaf statistics bookkeeping (area counts, occupancy, branching-factor and depth distributions) before recursing into children; splitting the bookkeeping into helpers would scatter the single control-flow path errors take without reducing the actual work done per node"
+        reason = "one traversal step inlines validation plus branch/leaf stats bookkeeping; \
+                  splitting it would scatter the single error-handling control-flow path"
     )]
     fn visit_trie_helper(
         &self,
@@ -786,7 +787,7 @@ mod test {
     /// ```
     #[expect(
         clippy::arithmetic_side_effects,
-        reason = "test fixture builds a tiny 3-node trie; `high_watermark` and the byte-count accumulators start at `NodeStoreHeader::SIZE` and only ever grow by a handful of node-area sizes (at most a few hundred bytes total), nowhere near u64::MAX"
+        reason = "test offsets are small literals; far from overflow"
     )]
     fn gen_test_trie(nodestore: &NodeStore<Committed, MemStore>) -> TestTrie {
         let mut high_watermark = NodeStoreHeader::SIZE;
@@ -893,7 +894,7 @@ mod test {
     //              ^ 16 empty bytes to ensure that free_list1_area1, free_list1_area2, and free_list2_area1 are page-aligned                ^ missaligned
     #[expect(
         clippy::arithmetic_side_effects,
-        reason = "test fixture lays out three free lists (area sizes 2048/16384/96 bytes) plus small literal gaps/overlaps (16 or 1 bytes) to construct known misalignment/intersection scenarios; `high_watermark` only ever grows by these small literal amounts (at most tens of KB total), nowhere near u64::MAX"
+        reason = "test offsets are small literals; far from overflow"
     )]
     fn gen_test_freelist_with_errors(nodestore: &NodeStore<Committed, MemStore>) -> TestFreelist {
         const AREA_INDEX1: AreaIndex = area_index!(9); // 2048
@@ -1272,7 +1273,7 @@ mod test {
     // When traversing it should break consecutive areas.
     #[expect(
         clippy::arithmetic_side_effects,
-        reason = "test sums 5 literal leaked-area sizes (1024 + 768 + 128 + 64 + 16 = 2000 bytes) and adds that total to NodeStoreHeader::SIZE to compute expected offsets; nowhere near u64::MAX"
+        reason = "test offsets are small literals; far from overflow"
     )]
     fn split_range_of_zeros_into_leaked_areas() {
         let memstore = MemStore::default();
@@ -1327,7 +1328,7 @@ mod test {
     // With both valid and invalid areas in the range, return the valid areas until reaching one invalid area, then use heuristics to split the rest of the range.
     #[expect(
         clippy::arithmetic_side_effects,
-        reason = "test writes 4 areas of literal sizes (1024/768/768/1024 bytes) back to back, advancing `high_watermark` by each size in turn to compute expected offsets; nowhere near u64::MAX"
+        reason = "test offsets are small literals; far from overflow"
     )]
     fn split_range_into_leaked_areas_test() {
         let memstore = MemStore::default();

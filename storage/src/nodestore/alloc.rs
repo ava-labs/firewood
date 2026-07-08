@@ -61,7 +61,7 @@ impl FreeLists {
     pub const fn get_mut(&mut self, index: AreaIndex) -> &mut Option<LinearAddress> {
         #![expect(
             clippy::indexing_slicing,
-            reason = "AreaIndex::as_usize() is bounds-checked at construction (new/TryFrom) against NUM_AREA_SIZES, which matches this array's length, so the index is always in bounds"
+            reason = "AreaIndex is bounds-checked at construction, always in range"
         )]
         &mut self.0[index.as_usize()]
     }
@@ -81,7 +81,7 @@ impl Index<AreaIndex> for FreeLists {
         // outside the fixed free-list array.
         #[expect(
             clippy::indexing_slicing,
-            reason = "AreaIndex is bounds-checked by construction, so this cannot index outside the fixed free-list array"
+            reason = "AreaIndex is bounds-checked at construction, always in range"
         )]
         &self.0[index.as_usize()]
     }
@@ -905,7 +905,7 @@ mod tests {
     #[test]
     #[expect(
         clippy::arithmetic_side_effects,
-        reason = "test accumulates a handful of small area-size offsets (at most 16MB each) starting from NodeStoreHeader::SIZE; nowhere near u64::MAX so this cannot overflow"
+        reason = "test offsets are small literals; far from overflow"
     )]
     fn free_lists_iter_skip_to_next_free_list() {
         use test_utils::{test_write_free_area, test_write_header};

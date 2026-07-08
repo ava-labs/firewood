@@ -258,6 +258,10 @@ impl LowerHex for FreeListParent {
 use derive_where::derive_where;
 
 /// Errors returned by the checker
+///
+/// Intentionally large: each variant carries rich diagnostic context
+/// (addresses, byte ranges, intersection lists, etc.) and is only ever
+/// returned on the checker's cold error path.
 #[derive(thiserror::Error, Debug)]
 #[derive_where(PartialEq, Eq)]
 #[non_exhaustive]

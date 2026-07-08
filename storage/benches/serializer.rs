@@ -3,16 +3,13 @@
 
 #![expect(
     clippy::assigning_clones,
-    reason = "the one occurrence (`branch`'s `children[..] = child.clone()`) is one-time \
-              benchmark-fixture setup outside the timed `b.iter` closures; rewriting it as \
-              `clone_from` through the `Children` index operator would not change what is \
-              measured and reads worse than a plain assignment"
+    reason = "one-time fixture setup outside the timed b.iter closure; clone_from wouldn't \
+              change what's measured"
 )]
 #![expect(
     clippy::unwrap_used,
-    reason = "benches are not #[cfg(test)] so the workspace unwrap_used lint fires on this \
-              fixture-building and profiler-hook code; a panic here simply aborts the bench run, \
-              which is an acceptable failure mode for code that never ships to users"
+    reason = "benches aren't #[cfg(test)] so unwrap_used fires on fixture setup; a panic here \
+              just aborts the bench run"
 )]
 
 use std::fs::File;

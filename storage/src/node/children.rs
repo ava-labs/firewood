@@ -64,7 +64,7 @@ impl<T> Children<T> {
     pub const fn get(&self, index: PathComponent) -> &T {
         #![expect(
             clippy::indexing_slicing,
-            reason = "index.as_usize() is a 4-bit value (0..=15), always < MAX_CHILDREN (16)"
+            reason = "4-bit PathComponent index, always < MAX_CHILDREN"
         )]
         &self.0[index.as_usize()]
     }
@@ -76,7 +76,7 @@ impl<T> Children<T> {
     pub const fn get_mut(&mut self, index: PathComponent) -> &mut T {
         #![expect(
             clippy::indexing_slicing,
-            reason = "index.as_usize() is a 4-bit value (0..=15), always < MAX_CHILDREN (16)"
+            reason = "4-bit PathComponent index, always < MAX_CHILDREN"
         )]
         &mut self.0[index.as_usize()]
     }
@@ -88,7 +88,7 @@ impl<T> Children<T> {
     pub const fn replace(&mut self, index: PathComponent, value: T) -> T {
         #![expect(
             clippy::indexing_slicing,
-            reason = "index.as_usize() is a 4-bit value (0..=15), always < MAX_CHILDREN (16)"
+            reason = "4-bit PathComponent index, always < MAX_CHILDREN"
         )]
         std::mem::replace(&mut self.0[index.as_usize()], value)
     }

@@ -347,8 +347,7 @@ impl<'a> QueueEntry<'a> {
             Ordering::Greater => {
                 #[expect(
                     clippy::cast_sign_loss,
-                    reason = "this arm only runs when res > 0 (Ordering::Greater), so the sign \
-                              bit is unset and the cast to usize is lossless"
+                    reason = "res > 0 here, so the sign bit is unset and the cast is lossless"
                 )]
                 let written = res as usize;
                 let Some(remaining) = self.buffer.get(written..) else {
@@ -399,8 +398,7 @@ impl<'batch> Outstanding<'batch> {
                 // knows this too but clippy does not
                 #[expect(
                     clippy::indexing_slicing,
-                    reason = "binary_search_by just returned Ok(index), which guarantees index \
-                              is a valid position in self.btree"
+                    reason = "binary_search_by just returned Ok(index), so it's valid in self.btree"
                 )]
                 let existing = &self.btree[index];
                 // This is a critical logic error and should never happen. It

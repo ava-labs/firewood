@@ -236,7 +236,7 @@ pub struct LinearAddressRangeSet {
 
 #[expect(
     clippy::result_large_err,
-    reason = "new()/insert_area() return CheckerError, which aggregates rich per-variant diagnostic context (addresses, byte ranges, an intersection Vec, etc.) and is large regardless of which variant is built here; both methods only ever error on the checker's cold path, and CheckerError is a public type consumed across the workspace via `?`-propagation into Vec<CheckerError>, so boxing it would ripple far beyond this impl for no benefit on the (never-erroring) success path"
+    reason = "large CheckerError on the cold error path; see its type docs"
 )]
 impl LinearAddressRangeSet {
     const NODE_STORE_START_ADDR: LinearAddress = LinearAddress::new(NodeStoreHeader::SIZE).unwrap();
@@ -397,12 +397,12 @@ mod test_range_set {
         range_set.insert_range(10..10);
         #[expect(
             clippy::reversed_empty_ranges,
-            reason = "intentionally reversed (start > end) to verify insert_range treats it as an empty range and is a no-op, matching Range::is_empty semantics"
+            reason = "intentionally reversed; exercises the empty-range no-op"
         )]
         range_set.insert_range(20..10);
         #[expect(
             clippy::reversed_empty_ranges,
-            reason = "intentionally reversed (start > end) to verify insert_range treats it as an empty range and is a no-op, matching Range::is_empty semantics"
+            reason = "intentionally reversed; exercises the empty-range no-op"
         )]
         range_set.insert_range(30..0);
         assert_eq!(range_set.into_iter().collect::<Vec<_>>(), vec![]);
@@ -809,7 +809,7 @@ mod test_linear_address_range_set {
         for i in 0..items {
             #[expect(
                 clippy::arithmetic_side_effects,
-                reason = "test builds small literal offsets; values are far from overflow"
+                reason = "test offsets are small literals; far from overflow"
             )]
             let offset = i as u64 * 0x20 + 0x1000;
             range_set

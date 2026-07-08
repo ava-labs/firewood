@@ -112,9 +112,8 @@ pub trait ExtendableBytes: Write {
     /// into the buffer.
     #[expect(
         clippy::indexing_slicing,
-        reason = "VarInt::encode_var never returns a length greater than the size of the \
-                  buffer it was given (10 bytes, MAX_VARINT_SIZE for a u64), so `..len` is \
-                  always in bounds"
+        reason = "encode_var never returns a length above the 10-byte MAX_VARINT_SIZE buffer, \
+                  so `..len` is always in bounds"
     )]
     fn extend_var_int<VI: VarInt>(&mut self, int: VI) {
         let mut buf = [0u8; 10];
@@ -348,8 +347,8 @@ impl Node {
     /// Given a reader, return a [Node] from those bytes
     #[expect(
         clippy::missing_errors_doc,
-        reason = "error variants are self-describing `Error::other` messages (freed-area marker, \
-                  invalid child position/index, zero address) or propagated reader I/O errors"
+        reason = "errors are self-describing `Error::other` messages or propagated reader I/O \
+                  errors"
     )]
     pub fn from_reader(mut serialized: &mut impl Read) -> Result<Self, Error> {
         match serialized.read_byte()? {
@@ -613,9 +612,8 @@ than 126 bytes as the length would be encoded in multiple bytes.
             feature = "ethhash",
             expect(
                 unused_variables,
-                reason = "expected_length is only read by the assert_eq! below, which is \
-                          itself compiled out under ethhash (see the #[cfg(not(feature = \
-                          \"ethhash\"))] on that line), leaving the parameter unused"
+                reason = "expected_length is only used by the assert_eq! compiled out under \
+                          ethhash"
             )
         )]
         expected_length: usize,
