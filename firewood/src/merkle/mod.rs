@@ -714,8 +714,7 @@ fn right_edge<'a>(
     // odd-length but carries a value before reaching here — see
     // [`reject_odd_nibble_value_digests`] — so we don't re-check parity.)
     if terminal.value_digest.is_some() {
-        let nibs: Vec<u8> = terminal.key.iter().map(|c| c.as_u8()).collect();
-        let terminal_full_key: Vec<u8> = Path::from(nibs.as_slice()).bytes_iter().collect();
+        let terminal_full_key: Vec<u8> = Path::from(terminal.key.as_slice()).bytes_iter().collect();
         match terminal_full_key.as_slice().cmp(last_kv_k) {
             std::cmp::Ordering::Greater => {
                 return RightBoundary::OutOfRange(Cow::Owned(terminal_full_key));
@@ -945,12 +944,7 @@ fn verify_proof_node_values(
             continue;
         };
         let proof_value = proof_value_bytes.as_ref();
-        let key_nibbles: Vec<u8> = proof_node
-            .key
-            .iter()
-            .map(|component| component.as_u8())
-            .collect();
-        let node_key_bytes: Vec<u8> = Path::from(key_nibbles.as_slice()).bytes_iter().collect();
+        let node_key_bytes: Vec<u8> = Path::from(proof_node.key.as_slice()).bytes_iter().collect();
         let within_right = match right_boundary {
             RightBoundary::InRange(None) => true,
             RightBoundary::InRange(Some(end)) => node_key_bytes.as_slice() <= *end,
@@ -1990,7 +1984,6 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
     /// Removes the value associated with the given `key`.
     /// Returns the value that was removed, if any.
     /// Otherwise returns `None`.
-    /// Each element of `key` is 2 nibbles.
     pub(crate) fn remove(&mut self, key: &[u8]) -> Result<Option<Value>, FileIoError> {
         self.remove_from_iter(NibblesIterator::new(key))
     }
@@ -1998,7 +1991,7 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
     /// Removes the value associated with the given `key` where `key` is a `NibblesIterator`
     /// Returns the value that was removed, if any.
     /// Otherwise returns `None`.
-    /// Each element of `key` is 2 nibbles.
+    /// Each yielded item is a single nibble.
     pub(crate) fn remove_from_iter(
         &mut self,
         key: NibblesIterator<'_>,
@@ -2268,31 +2261,29 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
 }
 
 impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
-    /// Returns the node mapped to by `key_nibbles` where each key element is a
-    /// single nibble.
+    /// Returns the node mapped to by `key` where each element is a single nibble.
     #[cfg(test)]
     pub(crate) fn get_node_from_nibbles(
         &self,
-        key_nibbles: &[u8],
+        key: &[PathComponent],
     ) -> Result<Option<SharedNode>, FileIoError> {
         let Some(root) = self.root() else {
             return Ok(None);
         };
 
-        let key = Path::from(key_nibbles);
+        let key = Path::from(key);
         get_helper(&self.nodestore, &root, &key)
     }
 
-    /// Ensures a branch exists at `key_nibbles` where each key element is a
-    /// single nibble.
+    /// Ensures a branch exists at `key` where each element is a single nibble.
     ///
     /// This creates missing branch structure without inserting a value at the
     /// target key. Existing values and descendants are preserved.
     pub(crate) fn insert_branch_from_nibbles(
         &mut self,
-        key_nibbles: &[u8],
+        key: &[PathComponent],
     ) -> Result<(), FileIoError> {
-        let key_path = Path::from(key_nibbles);
+        let key_path = Path::from(key);
         let root = self.nodestore.root_mut();
         let Some(root_node) = std::mem::take(root) else {
             let branch = BranchNode {

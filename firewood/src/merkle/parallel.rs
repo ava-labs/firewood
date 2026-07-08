@@ -206,8 +206,10 @@ impl ParallelMerkle {
             .root_mut()
             .take()
             .map(|root| {
-                let (root_node, root_hash) =
-                    nodestore.hash_helper(root, Path::from([first_path_component.as_u8()]))?;
+                let (root_node, root_hash) = nodestore.hash_helper(
+                    root,
+                    Path::from(core::slice::from_ref(&first_path_component)),
+                )?;
                 Ok(Child::MaybePersisted(root_node, root_hash))
             })
             .transpose()

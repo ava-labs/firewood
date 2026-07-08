@@ -516,8 +516,12 @@ fn read_path_with_prefix_length(reader: &mut impl Read) -> std::io::Result<Path>
 #[inline]
 fn read_path_with_provided_length(reader: &mut impl Read, len: usize) -> std::io::Result<Path> {
     let bytes = reader.read_fixed_len(len)?;
-    Path::path_from_unpacked_bytes(&bytes)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    Path::path_from_unpacked_bytes(&bytes).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("invalid path nibbles 0x{}: {e}", hex::encode(bytes)),
+        )
+    })
 }
 
 struct DisplayTruncatedHex<'a>(&'a [u8]);
@@ -657,5 +661,25 @@ than 126 bytes as the length would be encoded in multiple bytes.
             area_index,
             "Area index should be calculated from node size only"
         );
+    }
+
+    #[test]
+    fn from_reader_rejects_invalid_path_nibble() {
+        use std::io::Cursor;
+
+        let node = Node::Leaf(LeafNode {
+            partial_path: Path::from([0, 1, 2, 3]),
+            value: vec![4, 5, 6, 7].into(),
+        });
+        let mut serialized = Vec::new();
+        node.as_bytes(&mut serialized).unwrap();
+        // Area index at 0; leaf first byte at 1; path nibbles at 2..6.
+        *serialized.get_mut(2).expect("path nibble byte") = 0x10;
+
+        let mut cursor = Cursor::new(&serialized);
+        cursor.set_position(1);
+        let err = Node::from_reader(&mut cursor).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("invalid path nibbles"));
     }
 }

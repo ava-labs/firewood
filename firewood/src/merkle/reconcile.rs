@@ -38,11 +38,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         proof_node: &ProofNode,
         on_conflict: impl FnOnce(&ProofNode, Option<&[u8]>) -> Result<Option<Value>, ProofError>,
     ) -> Result<(), ProofError> {
-        let key_nibbles: Box<[u8]> = proof_node
-            .key
-            .iter()
-            .map(|component| component.as_u8())
-            .collect();
+        let key_nibbles = &proof_node.key;
 
         if !key_nibbles.len().is_multiple_of(2)
             && matches!(proof_node.value_digest, Some(ValueDigest::Value(_)))
@@ -50,7 +46,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
             return Err(ProofError::ValueAtOddNibbleLength);
         }
 
-        self.insert_branch_from_nibbles(&key_nibbles)?;
+        self.insert_branch_from_nibbles(key_nibbles)?;
 
         // insert_branch_from_nibbles guarantees a branch exists at this path
         // and that all nodes along it are in-memory, so this cannot fail.

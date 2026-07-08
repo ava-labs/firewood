@@ -87,6 +87,7 @@ impl<const N: usize> From<[u8; N]> for Path {
     }
 }
 
+#[cfg(test)]
 impl From<SmallVec<[u8; 64]>> for Path {
     fn from(value: SmallVec<[u8; 64]>) -> Self {
         Self::from(value.as_slice())
@@ -101,6 +102,12 @@ impl From<&[PathComponent]> for Path {
 
 const FLAG_ODD_LEN: u8 = 0b0001;
 
+/// # Panics
+///
+/// The [`From`] implementations for byte slices (`&[u8]`, `[u8; N]`, [`Vec<u8>`])
+/// panic if any byte is outside `0x00..=0x0F`. Prefer
+/// [`TriePathFromUnpackedBytes::path_from_unpacked_bytes`] at untrusted
+/// boundaries.
 impl Path {
     /// Return an iterator over the encoded bytes
     pub fn iter_encoded(&self) -> impl Iterator<Item = u8> {
@@ -121,8 +128,13 @@ impl Path {
             .chain(self.as_nibbles().iter().copied())
     }
 
-    /// Creates a Path from a [Iterator] or other iterator that returns
-    /// nibbles
+    /// Creates a Path from an iterator that yields nibbles.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the iterator yields any value outside `0x00..=0x0F`. Callers
+    /// with validated [`PathComponent`] iterators should build a [`Path`] via
+    /// [`From<&[PathComponent]>`] or [`Self::extend`] instead.
     pub fn from_nibbles_iterator<T: Iterator<Item = u8>>(nibbles_iter: T) -> Self {
         Self(
             nibbles_iter
@@ -140,10 +152,12 @@ impl Path {
         Path(SmallVec::new())
     }
 
-    /// Read from an iterator that returns nibbles with a prefix
-    /// The prefix is one optional byte -- if not present, the Path is empty
-    /// If there is one byte, and the byte contains a [`Flags::ODD_LEN`] (0x1)
-    /// then there is another discarded byte after that.
+    /// Read from an iterator that returns encoded path bytes with a prefix.
+    ///
+    /// The prefix is one optional byte — if not present, the path is empty.
+    /// If [`FLAG_ODD_LEN`] is set in the prefix byte, the path has an odd
+    /// number of nibbles and no padding byte follows. Otherwise a padding
+    /// byte is read and discarded before the nibble bytes.
     #[cfg(test)]
     pub fn from_encoded_iter<Iter: Iterator<Item = u8>>(mut iter: Iter) -> Self {
         let flags = iter.next().unwrap_or_default();
@@ -410,5 +424,31 @@ mod test {
     fn test_fmt_lower_hex(path: Path, expected: &str, expected_with_prefix: &str) {
         assert_eq!(format!("{path:x}"), expected);
         assert_eq!(format!("{path:#x}"), expected_with_prefix);
+    }
+
+    #[test]
+    fn path_trait_round_trip() {
+        use crate::{PartialPath, TriePath};
+
+        let path = Path::from([0x1, 0x2, 0xa, 0xf]);
+        let components: Vec<_> = path.components().collect();
+        assert_eq!(components, path.as_components());
+        assert_eq!(path.as_nibbles(), &[0x1, 0x2, 0xa, 0xf]);
+        match path.as_component_slice() {
+            PartialPath::Borrowed(slice) => assert_eq!(slice, components.as_slice()),
+            PartialPath::Owned(_) => panic!("expected borrowed partial path"),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "path must contain only nibbles")]
+    fn from_bytes_panics_on_invalid_nibble() {
+        let _ = Path::from([0x10u8].as_slice());
+    }
+
+    #[test]
+    #[should_panic(expected = "nibbles iterator must yield values in 0..=0x0F")]
+    fn from_nibbles_iterator_panics_on_invalid_nibble() {
+        let _ = Path::from_nibbles_iterator([0x10u8].into_iter());
     }
 }

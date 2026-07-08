@@ -19,6 +19,7 @@ pub struct TryFromIntError;
 /// memory efficiency when used in data structures like [`Option`] as well as
 /// allowing for faster indexing into [`Children`](crate::node::Children) arrays
 /// by enabling the compiler to optimize away bounds checks.
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct U4(Repr);
 
@@ -144,24 +145,25 @@ impl TryFrom<u8> for U4 {
 /// like the [`Children`](crate::Children) array in the hexary trie, the compiler can
 /// optimize away bounds checks and remove possible panic points. This is because the
 /// compiler knows that the value of [`U4`] can only be one of the 16 valid indices.
+#[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Repr {
-    Ox0,
-    Ox1,
-    Ox2,
-    Ox3,
-    Ox4,
-    Ox5,
-    Ox6,
-    Ox7,
-    Ox8,
-    Ox9,
-    OxA,
-    OxB,
-    OxC,
-    OxD,
-    OxE,
-    OxF,
+    Ox0 = 0x0,
+    Ox1 = 0x1,
+    Ox2 = 0x2,
+    Ox3 = 0x3,
+    Ox4 = 0x4,
+    Ox5 = 0x5,
+    Ox6 = 0x6,
+    Ox7 = 0x7,
+    Ox8 = 0x8,
+    Ox9 = 0x9,
+    OxA = 0xA,
+    OxB = 0xB,
+    OxC = 0xC,
+    OxD = 0xD,
+    OxE = 0xE,
+    OxF = 0xF,
 }
 
 impl Repr {

@@ -6,6 +6,7 @@ use smallvec::SmallVec;
 use super::{PartialPath, TriePath, TriePathFromUnpackedBytes};
 
 /// A path component in a hexary trie; which is only 4 bits (aka a nibble).
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PathComponent(pub crate::u4::U4);
 
@@ -371,14 +372,9 @@ impl<T: std::ops::Deref<Target = [PathComponent]>> PathComponentSliceExt for T {
 const unsafe fn byte_slice_as_path_components_unchecked(bytes: &[u8]) -> &[PathComponent] {
     #![expect(unsafe_code)]
 
-    // SAFETY: The caller must ensure that all bytes are valid for `PathComponent`,
-    // which is trivially true for 256-ary tries. For hexary tries, the caller must
-    // ensure that each byte is in the range 0x00 to 0x0F inclusive.
-    //
-    // We also rely on the fact that `PathComponent` is a single element type
-    // over `u8` (or `u4` which looks like a `u8` for this purpose).
-    //
-    // borrow rules ensure that the pointer for `bytes` is not null and
+    // SAFETY: `PathComponent` is `#[repr(transparent)]` over `U4`, which is
+    // `#[repr(transparent)]` over `Repr` (`#[repr(u8)]` with discriminants
+    // 0x0..=0xF). Each path-component byte therefore matches its nibble value.
     // `bytes.len()` is always valid. The returned reference will have the same
     // lifetime as `bytes` so it cannot outlive the original slice.
     unsafe {
@@ -390,8 +386,7 @@ const unsafe fn byte_slice_as_path_components_unchecked(bytes: &[u8]) -> &[PathC
 const fn path_components_as_byte_slice(components: &[PathComponent]) -> &[u8] {
     #![expect(unsafe_code)]
 
-    // SAFETY: We rely on the fact that `PathComponent` is a single element type
-    // over `u8` (or `u4` which looks like a `u8` for this purpose).
+    // SAFETY: `PathComponent` and `U4` have the same layout as `u8` (see above).
     //
     // borrow rules ensure that the pointer for `components` is not null and
     // `components.len()` is always valid. The returned reference will have the same

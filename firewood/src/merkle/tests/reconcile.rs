@@ -16,7 +16,7 @@ fn test_reconcile_branch_proof_node_creates_missing_branch_without_value() {
         .unwrap();
 
     let node = merkle
-        .get_node_from_nibbles(&[0xa, 0xb, 0xc])
+        .get_node_from_nibbles(nibbles(&[0xa, 0xb, 0xc]).as_slice())
         .unwrap()
         .unwrap();
     let branch = node.as_branch().expect("expected branch node");
@@ -26,7 +26,9 @@ fn test_reconcile_branch_proof_node_creates_missing_branch_without_value() {
 #[test]
 fn test_reconcile_branch_proof_node_sets_missing_value_via_callback() {
     let mut merkle = create_in_memory_merkle();
-    merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
+    merkle
+        .insert_branch_from_nibbles(nibbles(&[0xa, 0xb]).as_slice())
+        .unwrap();
 
     let proof_node =
         test_branch_proof_node(&[0xa, 0xb], Some(ValueDigest::Value(Box::from([7u8]))));
@@ -39,7 +41,10 @@ fn test_reconcile_branch_proof_node_sets_missing_value_via_callback() {
         })
         .unwrap();
 
-    let node = merkle.get_node_from_nibbles(&[0xa, 0xb]).unwrap().unwrap();
+    let node = merkle
+        .get_node_from_nibbles(nibbles(&[0xa, 0xb]).as_slice())
+        .unwrap()
+        .unwrap();
     let branch = node.as_branch().expect("expected branch node");
     assert_eq!(branch.value.as_deref(), Some([7u8].as_slice()));
 }
@@ -48,7 +53,9 @@ fn test_reconcile_branch_proof_node_sets_missing_value_via_callback() {
 fn test_reconcile_branch_proof_node_clears_value_via_callback() {
     let mut merkle = create_in_memory_merkle();
     merkle.insert(&[0xab], Box::from([3u8])).unwrap();
-    merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
+    merkle
+        .insert_branch_from_nibbles(nibbles(&[0xa, 0xb]).as_slice())
+        .unwrap();
 
     let proof_node = test_branch_proof_node(&[0xa, 0xb], None);
 
@@ -57,7 +64,10 @@ fn test_reconcile_branch_proof_node_clears_value_via_callback() {
         .reconcile_branch_proof_node(&proof_node, |_, _| Ok(None))
         .unwrap();
 
-    let node = merkle.get_node_from_nibbles(&[0xa, 0xb]).unwrap().unwrap();
+    let node = merkle
+        .get_node_from_nibbles(nibbles(&[0xa, 0xb]).as_slice())
+        .unwrap()
+        .unwrap();
     let branch = node.as_branch().expect("expected branch node");
     assert!(branch.value.is_none());
 }
@@ -66,7 +76,9 @@ fn test_reconcile_branch_proof_node_clears_value_via_callback() {
 fn test_reconcile_branch_proof_node_rejects_conflict_via_callback() {
     let mut merkle = create_in_memory_merkle();
     merkle.insert(&[0xab], Box::from([1u8])).unwrap();
-    merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
+    merkle
+        .insert_branch_from_nibbles(nibbles(&[0xa, 0xb]).as_slice())
+        .unwrap();
 
     let proof_node =
         test_branch_proof_node(&[0xa, 0xb], Some(ValueDigest::Value(Box::from([2u8]))));
@@ -78,7 +90,10 @@ fn test_reconcile_branch_proof_node_rejects_conflict_via_callback() {
     assert!(matches!(err, ProofError::UnexpectedValue));
 
     // Value is unchanged.
-    let node = merkle.get_node_from_nibbles(&[0xa, 0xb]).unwrap().unwrap();
+    let node = merkle
+        .get_node_from_nibbles(nibbles(&[0xa, 0xb]).as_slice())
+        .unwrap()
+        .unwrap();
     let branch = node.as_branch().expect("expected branch node");
     assert_eq!(branch.value.as_deref(), Some([1u8].as_slice()));
 }
@@ -101,7 +116,7 @@ fn test_reconcile_branch_proof_node_account_storage_root_relaxation(
 
     // 32-byte account key == 64 nibbles == ACCOUNT_DEPTH_NIBBLES.
     let account_key = [0x11u8; 32];
-    let account_nibbles = [0x1u8; 64];
+    let account_nibbles = nibbles(&[0x1u8; 64]);
 
     // The branch holds the full on-disk value. The proof value always carries a
     // different storageRoot; in the conflicting case it also differs in balance.
@@ -110,10 +125,11 @@ fn test_reconcile_branch_proof_node_account_storage_root_relaxation(
 
     let mut merkle = create_in_memory_merkle();
     merkle.insert(&account_key, branch_value.clone()).unwrap();
-    merkle.insert_branch_from_nibbles(&account_nibbles).unwrap();
+    merkle
+        .insert_branch_from_nibbles(account_nibbles.as_slice())
+        .unwrap();
 
-    let proof_node =
-        test_branch_proof_node(&account_nibbles, Some(ValueDigest::Value(proof_value)));
+    let proof_node = test_branch_proof_node(&[0x1u8; 64], Some(ValueDigest::Value(proof_value)));
 
     // on_conflict always rejects, so the outcome reveals whether the relaxation
     // fired: a storageRoot-only diff returns early with Ok and never consults
@@ -131,7 +147,7 @@ fn test_reconcile_branch_proof_node_account_storage_root_relaxation(
     // relaxation returns before assignment, and on_conflict's Err propagates
     // before it.
     let node = merkle
-        .get_node_from_nibbles(&account_nibbles)
+        .get_node_from_nibbles(account_nibbles.as_slice())
         .unwrap()
         .unwrap();
     let branch = node.as_branch().expect("expected branch node");

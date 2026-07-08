@@ -208,6 +208,13 @@ fn create_in_memory_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
     Merkle { nodestore }
 }
 
+fn nibbles(n: &[u8]) -> Vec<PathComponent> {
+    n.iter()
+        .copied()
+        .map(|nibble| PathComponent::try_new(nibble).expect("test nibble"))
+        .collect()
+}
+
 fn test_branch_proof_node(
     key_nibbles: &[u8],
     value_digest: Option<ValueDigest<Value>>,
@@ -232,7 +239,9 @@ fn test_get_node_from_nibbles_matches_byte_lookup() {
     merkle.insert(&[0xab, 0xcd], Box::from([1u8])).unwrap();
 
     let from_bytes = merkle.get_node(&[0xab, 0xcd]).unwrap();
-    let from_nibbles = merkle.get_node_from_nibbles(&[0xa, 0xb, 0xc, 0xd]).unwrap();
+    let from_nibbles = merkle
+        .get_node_from_nibbles(nibbles(&[0xa, 0xb, 0xc, 0xd]).as_slice())
+        .unwrap();
 
     assert_eq!(from_bytes, from_nibbles);
 }
@@ -241,10 +250,12 @@ fn test_get_node_from_nibbles_matches_byte_lookup() {
 fn test_insert_branch_from_nibbles_into_empty_trie() {
     let mut merkle = create_in_memory_merkle();
 
-    merkle.insert_branch_from_nibbles(&[0xa, 0xb, 0xc]).unwrap();
+    merkle
+        .insert_branch_from_nibbles(nibbles(&[0xa, 0xb, 0xc]).as_slice())
+        .unwrap();
 
     let node = merkle
-        .get_node_from_nibbles(&[0xa, 0xb, 0xc])
+        .get_node_from_nibbles(nibbles(&[0xa, 0xb, 0xc]).as_slice())
         .unwrap()
         .unwrap();
     let branch = node.as_branch().expect("expected branch node");
@@ -256,9 +267,14 @@ fn test_insert_branch_from_nibbles_converts_leaf_to_branch() {
     let mut merkle = create_in_memory_merkle();
     merkle.insert(&[0xab], Box::from([9u8])).unwrap();
 
-    merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
+    merkle
+        .insert_branch_from_nibbles(nibbles(&[0xa, 0xb]).as_slice())
+        .unwrap();
 
-    let node = merkle.get_node_from_nibbles(&[0xa, 0xb]).unwrap().unwrap();
+    let node = merkle
+        .get_node_from_nibbles(nibbles(&[0xa, 0xb]).as_slice())
+        .unwrap()
+        .unwrap();
     let branch = node.as_branch().expect("expected branch node");
     assert_eq!(branch.value.as_deref(), Some([9u8].as_slice()));
     assert_eq!(
@@ -272,9 +288,14 @@ fn test_insert_branch_from_nibbles_inserts_missing_ancestor() {
     let mut merkle = create_in_memory_merkle();
     merkle.insert(&[0xab, 0xcd], Box::from([7u8])).unwrap();
 
-    merkle.insert_branch_from_nibbles(&[0xa]).unwrap();
+    merkle
+        .insert_branch_from_nibbles(nibbles(&[0xa]).as_slice())
+        .unwrap();
 
-    let ancestor = merkle.get_node_from_nibbles(&[0xa]).unwrap().unwrap();
+    let ancestor = merkle
+        .get_node_from_nibbles(nibbles(&[0xa]).as_slice())
+        .unwrap()
+        .unwrap();
     let ancestor_branch = ancestor.as_branch().expect("expected ancestor branch");
     assert!(ancestor_branch.value.is_none());
     assert_eq!(
@@ -288,10 +309,12 @@ fn test_insert_branch_from_nibbles_inserts_missing_descendant() {
     let mut merkle = create_in_memory_merkle();
     merkle.insert(&[0xab], Box::from([5u8])).unwrap();
 
-    merkle.insert_branch_from_nibbles(&[0xa, 0xb, 0xc]).unwrap();
+    merkle
+        .insert_branch_from_nibbles(nibbles(&[0xa, 0xb, 0xc]).as_slice())
+        .unwrap();
 
     let descendant = merkle
-        .get_node_from_nibbles(&[0xa, 0xb, 0xc])
+        .get_node_from_nibbles(nibbles(&[0xa, 0xb, 0xc]).as_slice())
         .unwrap()
         .unwrap();
     let descendant_branch = descendant.as_branch().expect("expected descendant branch");
@@ -310,9 +333,14 @@ fn test_insert_branch_from_nibbles_splits_divergent_paths() {
 
     // Branch at [0xa, 0xc] shares prefix [a] then diverges: key goes 'c', node goes 'b'
     // This exercises the (Some, Some) arm of insert_branch_helper
-    merkle.insert_branch_from_nibbles(&[0xa, 0xc]).unwrap();
+    merkle
+        .insert_branch_from_nibbles(nibbles(&[0xa, 0xc]).as_slice())
+        .unwrap();
 
-    let branch = merkle.get_node_from_nibbles(&[0xa, 0xc]).unwrap().unwrap();
+    let branch = merkle
+        .get_node_from_nibbles(nibbles(&[0xa, 0xc]).as_slice())
+        .unwrap()
+        .unwrap();
     let branch_node = branch.as_branch().expect("expected branch node");
     assert!(branch_node.value.is_none());
     assert_eq!(
