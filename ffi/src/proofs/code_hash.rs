@@ -209,18 +209,13 @@ impl crate::MetricsContextExt for CodeIteratorHandle<'_> {
 mod tests {
     use super::extract_code_hash;
 
-    fn account_rlp_with_short_code_hash() -> Vec<u8> {
-        let mut bytes = vec![0xf8, 0x43, 0x80, 0x80, 0xa0];
-        bytes.extend([0; 32]);
-        bytes.push(0x9f);
-        bytes.extend([0x33; 31]);
-        bytes
-    }
-
     #[test]
     fn wrong_length_code_hash_is_skipped() {
         let key = [0; 32];
-        let value = account_rlp_with_short_code_hash();
+        let mut value = vec![0xf8, 0x43, 0x80, 0x80, 0xa0];
+        value.extend([0; 32]);
+        value.push(0x9f);
+        value.extend([0x33; 31]);
 
         assert!(extract_code_hash(&key, &value).is_none());
     }

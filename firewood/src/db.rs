@@ -899,10 +899,13 @@ mod test {
     #[test]
     fn test_reconstruct_from_historical_view_uses_requested_revision() {
         let db = TestDb::new();
+        let key = b"k";
+        let historical_value = b"historical";
+        let latest_value = b"latest";
 
         db.propose(vec![BatchOp::Put {
-            key: b"k",
-            value: b"historical",
+            key,
+            value: historical_value,
         }])
         .unwrap()
         .commit()
@@ -910,8 +913,8 @@ mod test {
         let historical_hash = db.root_hash().unwrap();
 
         db.propose(vec![BatchOp::Put {
-            key: b"k",
-            value: b"latest",
+            key,
+            value: latest_value,
         }])
         .unwrap()
         .commit()
@@ -922,14 +925,14 @@ mod test {
             .reconstruct_from_view(&historical, Vec::<BatchOp<&[u8], &[u8]>>::new())
             .unwrap();
 
-        assert_eq!(&*reconstructed.val(b"k").unwrap().unwrap(), b"historical");
+        assert_eq!(&*reconstructed.val(key).unwrap().unwrap(), historical_value);
         assert_eq!(
             &*db.revision(db.root_hash().unwrap())
                 .unwrap()
-                .val(b"k")
+                .val(key)
                 .unwrap()
                 .unwrap(),
-            b"latest"
+            latest_value
         );
     }
 
