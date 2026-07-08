@@ -187,6 +187,11 @@ impl Db {
     }
 
     /// Synchronously get an opaque handle to a committed historical revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`api::Error::RevisionNotFound`] if `root_hash` does not identify
+    /// an available committed revision.
     pub fn historical_view(&self, root_hash: HashKey) -> Result<HistoricalView, api::Error> {
         Ok(HistoricalView {
             nodestore: self.manager.revision(root_hash)?,
@@ -444,7 +449,9 @@ pub struct Proposal<'db> {
 }
 
 #[derive(Clone, Debug)]
-/// A user-visible historical committed view.
+/// Opaque handle to a historical committed revision.
+///
+/// Use this as the parent argument to [`Db::reconstruct_from_view`].
 pub struct HistoricalView {
     nodestore: Arc<NodeStore<Committed, FileBacked>>,
 }

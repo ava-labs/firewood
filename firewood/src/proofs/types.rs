@@ -51,7 +51,8 @@ use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
 use firewood_storage::hash_node_as_storage_trie_root_parts;
 use firewood_storage::{
     Children, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator, Path,
-    PathBuf, PathComponent, PathIterItem, Preimage, SplitPath, TrieHash, TriePath, ValueDigest,
+    PathBuf, PathComponent, PathIterItem, Preimage, RlpError, SplitPath, TrieHash, TriePath,
+    ValueDigest,
 };
 use thiserror::Error;
 
@@ -159,15 +160,12 @@ pub enum ProofError {
     #[error("the proof has not yet been verified")]
     Unverified,
 
-    /// Invalid value format
-    #[error("invalid value format")]
-    InvalidValueFormat,
-
     /// Invalid Ethereum account value format
-    #[error("invalid Ethereum account value format: {reason}")]
+    #[error("invalid Ethereum account value format: {source}")]
     InvalidAccountValueFormat {
-        /// Description of why account decoding failed.
-        reason: String,
+        /// Underlying RLP decoding failure.
+        #[source]
+        source: RlpError,
     },
 
     /// Invalid Ethereum account code hash length

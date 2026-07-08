@@ -2,6 +2,11 @@
 // See the file LICENSE.md for licensing terms.
 
 //! Firewood layer metric definitions.
+//!
+//! Call exactly one registration entry point at startup:
+//! - [`crate::registry::register_all`] for a full firewood database, including storage metrics.
+//! - [`crate::registry::register`] only when intentionally registering this crate's metrics
+//!   without lower-layer storage metrics.
 
 firewood_metrics::define_metrics! {
     counters: {
@@ -68,7 +73,8 @@ firewood_metrics::define_metrics! {
 ///
 /// This is the preferred entry point for embedders that expose metrics for a
 /// full firewood database. It keeps callers from needing to know which metrics
-/// are defined by each internal crate.
+/// are defined by each internal crate. Do not also call [`register`], because
+/// this function already includes those metric descriptions.
 #[must_use]
 pub fn register_all() -> Vec<firewood_metrics::HistogramMetricConfig> {
     let mut histogram_configs = register();

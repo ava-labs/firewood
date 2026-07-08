@@ -241,7 +241,7 @@ impl DatabaseHandle {
         })
     }
 
-    /// Reconstructs a view on top of an existing historical node store.
+    /// Reconstructs a view on top of an existing historical revision.
     ///
     /// # Errors
     ///

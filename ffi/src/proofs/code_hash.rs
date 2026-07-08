@@ -7,7 +7,8 @@
 //! their account values (Ethereum tries only). The extraction is pure RLP
 //! parsing of bytes already in the proof — no verification is required.
 //! Malformed account values are surfaced as iterator errors; entries with
-//! non-account keys, empty code hashes, or invalid code-hash lengths are skipped.
+//! non-account keys, empty code hashes, or invalid code-hash lengths are skipped
+//! to preserve the C API's historical iteration behavior.
 //!
 //! Per-proof-type entry points live in `range.rs` and `change.rs`; this
 //! module owns the shared [`CodeIteratorHandle`], the per-element extraction
@@ -15,7 +16,7 @@
 //! `fwd_code_hash_iter_free`).
 
 #[cfg(feature = "ethhash")]
-use firewood::ProofError;
+use firewood::{ProofError, logger};
 
 use firewood::api::{self, BatchOp};
 
@@ -51,7 +52,15 @@ fn extract_code_hash(key: &[u8], value: &[u8]) -> Option<Result<HashKey, api::Er
 
     match firewood::account_code_hash(value) {
         Ok(Some(code_hash)) => Some(Ok(code_hash.into())),
-        Ok(None) | Err(ProofError::InvalidAccountCodeHashLength { .. }) => None,
+        Ok(None) => None,
+        Err(ProofError::InvalidAccountCodeHashLength { len }) => {
+            // Historically the C iterator skipped this entry. Keep that contract
+            // so later valid hashes remain reachable, but log the corruption signal.
+            logger::warn!(
+                "skipping account code hash with invalid length for key {key:?}: expected 32 bytes, got {len}"
+            );
+            None
+        }
         Err(err) => Some(Err(api::Error::ProofError(err))),
     }
 }
@@ -221,6 +230,11 @@ mod tests {
         let key = [0; 32];
         let result = extract_code_hash(&key, b"not an account").expect("account key is valid");
 
-        assert!(result.is_err());
+        assert_eq!(
+            result
+                .expect_err("malformed account value should return an iterator error")
+                .to_string(),
+            "proof error: invalid Ethereum account value format: expected a list, found a byte string"
+        );
     }
 }

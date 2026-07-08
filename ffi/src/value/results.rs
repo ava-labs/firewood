@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood::api;
-use firewood::{Key, TrieHash, Value};
+use firewood::{Key, Value};
 use std::fmt;
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
@@ -181,8 +181,8 @@ impl<E: fmt::Display> From<Result<Option<api::HashKey>, E>> for HashResult {
     }
 }
 
-impl From<Option<TrieHash>> for HashResult {
-    fn from(value: Option<TrieHash>) -> Self {
+impl From<Option<api::HashKey>> for HashResult {
+    fn from(value: Option<api::HashKey>) -> Self {
         match value {
             Some(hash) => HashResult::Some(hash.into()),
             None => HashResult::None,

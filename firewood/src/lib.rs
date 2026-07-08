@@ -187,6 +187,8 @@ pub use firewood_storage::logger;
 pub use firewood_storage::NodeHashAlgorithm;
 
 /// Root or node hash used by Firewood tries.
+///
+/// This is the same type exposed as [`api::HashKey`] in the database API.
 pub use firewood_storage::TrieHash;
 
 #[cfg(all(test, feature = "logger"))]

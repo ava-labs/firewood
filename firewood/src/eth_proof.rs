@@ -45,16 +45,14 @@ const KECCAK_EMPTY: [u8; 32] = [
 ///
 /// Returns [`ProofError::InvalidAccountValueFormat`] if `value` is not an
 /// RLP-encoded Ethereum account, if the account has fewer than four fields, or
-/// if the `codeHash` field is not encoded as bytes. Returns
+/// if any of the first four account fields is not encoded as bytes. Returns
 /// [`ProofError::InvalidAccountCodeHashLength`] if the `codeHash` field is not
 /// 32 bytes.
 #[cfg(feature = "ethhash")]
 pub fn account_code_hash(value: &[u8]) -> Result<Option<HashKey>, ProofError> {
     let code_hash_slice = RlpList::parse(value)
         .and_then(|list| list.nth_bytes(3))
-        .map_err(|err| ProofError::InvalidAccountValueFormat {
-            reason: err.to_string(),
-        })?;
+        .map_err(|source| ProofError::InvalidAccountValueFormat { source })?;
     let code_hash = TrieHash::try_from(code_hash_slice)
         .map_err(|err| ProofError::InvalidAccountCodeHashLength { len: err.0 })?;
     if code_hash == TrieHash::from(KECCAK_EMPTY) {
