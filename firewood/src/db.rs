@@ -658,8 +658,6 @@ impl<'a> api::Reconstructible for ReconstructedView<'a> {
 
 #[cfg(test)]
 mod test {
-    #![expect(clippy::unwrap_used)]
-
     use core::iter::Take;
     use std::collections::HashMap;
     use std::iter::Peekable;

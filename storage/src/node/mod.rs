@@ -540,8 +540,6 @@ mod snapshot_tests;
 
 #[cfg(test)]
 mod test {
-    #![expect(clippy::unwrap_used)]
-
     use crate::node::{BranchNode, LeafNode, Node};
     use crate::{Child, Children, LinearAddress, NibblesIterator, Path};
     use test_case::test_case;

@@ -303,7 +303,6 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use crate::{
