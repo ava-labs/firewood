@@ -632,7 +632,6 @@ fn read_bincode_varint_u64_le(reader: &mut impl Read) -> std::io::Result<u64> {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 pub mod test_utils {
     use super::*;
 
@@ -696,7 +695,6 @@ pub mod test_utils {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::DeletedNodeTracking;

@@ -56,8 +56,6 @@
 //! | `hash_or_rlp` | `keccak_hash` | Full 32-byte hash: `[0x00] + 32 bytes` |
 //! | `hash_or_rlp` | `rlp_bytes` | Short RLP: length byte + payload bytes |
 
-#![expect(clippy::unwrap_used)]
-
 use test_case::test_case;
 
 use crate::IntoHashType;

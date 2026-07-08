@@ -1,7 +1,10 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![allow(clippy::unwrap_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration test binary; unwrap failures surface as test failures"
+)]
 
 use predicates::prelude::*;
 use std::fmt::Write;

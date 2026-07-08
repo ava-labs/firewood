@@ -72,8 +72,6 @@
 //! | [`batch_op`] | `delete_range` | Single `DeleteRange` operation (opcode `0x02`) |
 //! | [`batch_op`] | `all_ops` | All three operations in sequence |
 
-#![expect(clippy::unwrap_used, clippy::indexing_slicing)]
-
 use test_case::test_case;
 
 use firewood_storage::{Children, IntoHashType, PathComponent, TrieHash, ValueDigest};

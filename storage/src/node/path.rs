@@ -105,7 +105,7 @@ impl Path {
     /// Creates a Path from a [Iterator] or other iterator that returns
     /// nibbles
     pub fn from_nibbles_iterator<T: Iterator<Item = u8>>(nibbles_iter: T) -> Self {
-        Path(SmallVec::from_iter(nibbles_iter))
+        Path(nibbles_iter.into_iter().collect())
     }
 
     /// Creates an empty Path

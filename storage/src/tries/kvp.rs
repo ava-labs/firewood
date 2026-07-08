@@ -450,8 +450,6 @@ impl<T: std::fmt::Debug> std::fmt::Debug for DebugChildren<'_, T> {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used)]
-
     use test_case::test_case;
 
     use super::*;
@@ -472,7 +470,10 @@ mod tests {
     ///
     /// [upstream]: https://github.com/rust-lang/rust/issues/76560
     const fn from_ascii<const FROM: usize, const TO: usize>(hex: &[u8; FROM]) -> [u8; TO] {
-        #![expect(clippy::arithmetic_side_effects, clippy::indexing_slicing)]
+        #![expect(
+            clippy::arithmetic_side_effects,
+            reason = "the loop counter is incremented with a plain `+= 1` rather than a wrapping/checked call"
+        )]
 
         const fn from_hex_char(c: u8) -> u8 {
             match c {
