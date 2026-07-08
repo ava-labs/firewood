@@ -16,7 +16,7 @@
 //! `fwd_code_hash_iter_free`).
 
 #[cfg(feature = "ethhash")]
-use firewood::{ProofError, logger};
+use firewood::ProofError;
 
 use firewood::api::{self, BatchOp};
 
@@ -53,12 +53,9 @@ fn extract_code_hash(key: &[u8], value: &[u8]) -> Option<Result<HashKey, api::Er
     match firewood::account_code_hash(value) {
         Ok(Some(code_hash)) => Some(Ok(code_hash.into())),
         Ok(None) => None,
-        Err(ProofError::InvalidAccountCodeHashLength { len }) => {
-            // Historically the C iterator skipped this entry. Keep that contract
-            // so later valid hashes remain reachable, but log the corruption signal.
-            logger::warn!(
-                "skipping account code hash with invalid length for key {key:?}: expected 32 bytes, got {len}"
-            );
+        Err(ProofError::InvalidAccountCodeHashLength { .. }) => {
+            // Keep the C iterator's historical contract: a wrong-length codeHash
+            // skips this account and allows later valid code hashes to be yielded.
             None
         }
         Err(err) => Some(Err(api::Error::ProofError(err))),
