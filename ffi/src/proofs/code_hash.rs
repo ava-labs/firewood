@@ -213,10 +213,16 @@ mod tests {
         // RLP account list: [nonce="", balance="", storageRoot=[0; 32],
         // codeHash=[0x33; 31]]. The final field is intentionally one byte
         // short so this exercises the wrong-length skip path.
-        let mut account_rlp_with_short_code_hash = vec![0xf8, 0x43, 0x80, 0x80, 0xa0];
-        account_rlp_with_short_code_hash.extend([0; 32]);
-        account_rlp_with_short_code_hash.push(0x9f);
-        account_rlp_with_short_code_hash.extend([0x33; 31]);
+        let mut account_rlp_with_short_code_hash = vec![
+            0xf8, // Long-form RLP list with a one-byte payload length.
+            0x43, // List payload length: 67 bytes.
+            0x80, // Empty nonce.
+            0x80, // Empty balance.
+            0xa0, // storageRoot is a 32-byte string.
+        ];
+        account_rlp_with_short_code_hash.extend([0; 32]); // Zero storageRoot bytes.
+        account_rlp_with_short_code_hash.push(0x9f); // codeHash is a 31-byte string.
+        account_rlp_with_short_code_hash.extend([0x33; 31]); // Short codeHash bytes.
 
         assert!(extract_code_hash(&key, &account_rlp_with_short_code_hash).is_none());
     }
