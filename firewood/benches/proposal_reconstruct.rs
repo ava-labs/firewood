@@ -147,7 +147,7 @@ fn bench_reconstructed_chain(criterion: &mut Criterion) {
                     let first_batch = batches_iter.next().unwrap();
                     db.propose(first_batch).unwrap().commit().unwrap();
                     let root_hash = db.root_hash().unwrap();
-                    let historical = db.historical_view(root_hash).unwrap();
+                    let historical = db.committed_view(root_hash).unwrap();
 
                     let second_batch = batches_iter.next().unwrap();
                     let mut reconstructed =

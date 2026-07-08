@@ -230,7 +230,7 @@ impl DatabaseHandle {
     /// accessing the database.
     pub fn get_revision(&self, root: HashKey) -> Result<GetRevisionResult<'_>, api::Error> {
         let view = self.db.view(root.clone())?;
-        let historical = match self.db.historical_view(root.clone()) {
+        let historical = match self.db.committed_view(root.clone()) {
             Ok(rev) => Some(rev),
             Err(api::Error::RevisionNotFound { .. }) => None,
             Err(err) => return Err(err),

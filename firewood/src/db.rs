@@ -192,7 +192,7 @@ impl Db {
     ///
     /// Returns [`api::Error::RevisionNotFound`] if `root_hash` does not identify
     /// an available committed revision.
-    pub fn historical_view(&self, root_hash: HashKey) -> Result<HistoricalView, api::Error> {
+    pub fn committed_view(&self, root_hash: HashKey) -> Result<HistoricalView, api::Error> {
         Ok(HistoricalView {
             nodestore: self.manager.revision(root_hash)?,
         })
@@ -742,10 +742,10 @@ mod test {
         serial_proposal.commit().unwrap();
 
         let parallel_historical = parallel_db
-            .historical_view(parallel_db.root_hash().unwrap())
+            .committed_view(parallel_db.root_hash().unwrap())
             .unwrap();
         let serial_historical = serial_db
-            .historical_view(serial_db.root_hash().unwrap())
+            .committed_view(serial_db.root_hash().unwrap())
             .unwrap();
 
         let reconstruct_batch = vec![
@@ -871,7 +871,7 @@ mod test {
         initial.commit().unwrap();
 
         let historical_hash = db.root_hash().unwrap();
-        let historical = db.historical_view(historical_hash).unwrap();
+        let historical = db.committed_view(historical_hash).unwrap();
 
         let reconstructed = db
             .reconstruct_from_view(
@@ -897,7 +897,7 @@ mod test {
     }
 
     #[test]
-    fn test_reconstruct_from_historical_view_uses_requested_revision() {
+    fn test_reconstruct_from_committed_view_uses_requested_revision() {
         let db = TestDb::new();
         let key = b"k";
         let historical_value = b"historical";
@@ -920,7 +920,7 @@ mod test {
         .commit()
         .unwrap();
 
-        let historical = db.historical_view(historical_hash).unwrap();
+        let historical = db.committed_view(historical_hash).unwrap();
         let reconstructed = db
             .reconstruct_from_view(&historical, Vec::<BatchOp<&[u8], &[u8]>>::new())
             .unwrap();
@@ -949,7 +949,7 @@ mod test {
             .unwrap();
         initial.commit().unwrap();
         let historical_hash = db.root_hash().unwrap();
-        let historical = db.historical_view(historical_hash).unwrap();
+        let historical = db.committed_view(historical_hash).unwrap();
 
         // Build a reconstructed view on top of the historical revision.
         let original = db
@@ -1007,7 +1007,7 @@ mod test {
             .unwrap();
         initial.commit().unwrap();
         let historical_hash = db.root_hash().unwrap();
-        let historical = db.historical_view(historical_hash).unwrap();
+        let historical = db.committed_view(historical_hash).unwrap();
 
         // Build a reconstructed view on top of the historical revision.
         let original = db
@@ -1039,7 +1039,7 @@ mod test {
         initial.commit().unwrap();
 
         let historical_hash = db.root_hash().unwrap();
-        let historical = db.historical_view(historical_hash).unwrap();
+        let historical = db.committed_view(historical_hash).unwrap();
 
         let original = db
             .reconstruct_from_view(&historical, Vec::<BatchOp<&[u8], &[u8]>>::new())
