@@ -382,8 +382,6 @@ impl std::ops::DerefMut for UnlockOnDrop {
 
 #[cfg(test)]
 mod test {
-    #![expect(clippy::unwrap_used)]
-
     use crate::NodeHashAlgorithm;
 
     use super::*;

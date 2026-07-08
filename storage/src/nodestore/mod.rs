@@ -1499,7 +1499,6 @@ where
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 #[expect(clippy::cast_possible_truncation)]
 mod tests {
 

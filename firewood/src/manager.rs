@@ -702,7 +702,6 @@ impl RevisionManager {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use firewood_storage::RootReader;
 
