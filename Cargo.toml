@@ -61,10 +61,10 @@ metrics-exporter-prometheus = { git = "https://github.com/demosdemon/metrics.git
 
 [workspace.dependencies]
 # workspace local packages
-firewood = { path = "firewood", version = "0.7.0" }
+firewood = { path = "firewood", version = "0.8.0" }
 firewood-macros = { path = "firewood-macros", version = "0.6.0" }
-firewood-storage = { path = "storage", version = "0.7.0" }
-firewood-ffi = { path = "ffi", version = "0.7.0" }
+firewood-storage = { path = "storage", version = "0.8.0" }
+firewood-ffi = { path = "ffi", version = "0.8.0" }
 firewood-metrics = { path = "metrics", version = "0.7.0" }
 firewood-replay = { path = "replay", version = "0.7.0" }
 
@@ -103,5 +103,5 @@ ethereum-types = "0.16.0"
 hex-literal = "1.1.0"
 pprof = "0.15.0"
 insta = "1.48.0"
-rand = "0.10.1"
+rand = "0.10.2"
 tempfile = "3.27.0"
