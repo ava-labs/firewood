@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783585416043,
+  "lastUpdate": 1783586044420,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -6485,6 +6485,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 52.09385557219569,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Joachim Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "66c2c3cd19f7126a4f7bf798c49ecea6d7fa1a57",
+          "message": "chore(clippy): allow unwrap and indexing in tests (#2117)\n\n## Why this should be merged\n\n`unwrap()` and slice indexing are acceptable in tests, but each use was\nsuppressed inline throughout the test suite. Turning on clippy's\n`allow-unwrap-in-tests` / `allow-indexing-slicing-in-tests` stops those\ntwo lints firing in `#[cfg(test)]`, so the per-site suppressions can be\ndeleted — shrinking the surface the broader `#[allow]` → `#[expect]`\ncleanup has to touch.\n\n## How this works\n\nBehavior-neutral. With the flags on, the in-test\n`#[expect(clippy::unwrap_used)]` / `#[expect(clippy::indexing_slicing)]`\nbecome unfulfilled and are removed (multi-lint attributes keep their\nstill-firing lints, with a reason); the three redundant test-module\n`#[allow(clippy::unwrap_used)]` go too. `fwdctl/tests/cli.rs` is an\nintegration binary whose unwraps sit in non-`#[test]` helpers the flags\ndon't cover, so it keeps a file-scoped, reasoned `#[expect]`. A final\nstyle commit collapses the scoping blocks left vestigial by the narrowed\nattributes. Stacked on #2116.\n\n## How this was tested\n\n`cargo clippy --workspace --all-targets -- -D warnings` on the pinned\nnightly across the feature matrix — an over-removal (a lint left firing)\nor an under-removal (an unfulfilled `#[expect]`) would fail the gate.\n`cargo nextest run --workspace --features ethhash,logger --all-targets`\npasses.\n\n## Breaking Changes\n\nnone.",
+          "timestamp": "2026-07-08T19:23:14Z",
+          "url": "https://github.com/ava-labs/firewood/commit/66c2c3cd19f7126a4f7bf798c49ecea6d7fa1a57"
+        },
+        "date": 1783586043302,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 158.43142319480293,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6311.879170399344,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 124.59924374035312,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6089.621433423383,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 93.59618853160543,
             "unit": "block_accept_ms/ggas"
           }
         ]
