@@ -302,10 +302,9 @@ func (l *lease) attach(registry *keepAliveRegistry, dropFn func() error) error {
 		// registry.mu lock order (dropFn → handle.Drop → lease.release
 		// takes lease.mu, which would then take registry.mu via
 		// removeAndDecr). No count++ ran, so no decrement is needed.
-		if err := dropFn(); err != nil {
-			return errors.Join(errDBClosed, err)
-		}
-		return errDBClosed
+		// errors.Join discards nil, so a successful dropFn yields just
+		// errDBClosed.
+		return errors.Join(errDBClosed, dropFn())
 	}
 	if l.registry != nil {
 		registry.mu.Unlock()

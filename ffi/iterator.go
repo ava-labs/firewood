@@ -238,7 +238,10 @@ func (it *Iterator) NextBorrowed() bool {
 //
 // If the iterator was advanced with [Iterator.NextBorrowed], the returned slice
 // borrows Rust memory and is only valid until the next call to [Iterator.Next],
-// [Iterator.NextBorrowed], or [Iterator.Drop].
+// [Iterator.NextBorrowed], or [Iterator.Drop] — including a Drop initiated by
+// another goroutine, such as [Database.Close] with [WithForceCloseHandles].
+// Key deliberately takes no lock: the caller consumes the slice after Key
+// returns, so a lock here could not extend the slice's validity.
 func (it *Iterator) Key() []byte {
 	if it.currentPair == nil || it.err != nil {
 		return nil
@@ -251,7 +254,10 @@ func (it *Iterator) Key() []byte {
 //
 // If the iterator was advanced with [Iterator.NextBorrowed], the returned slice
 // borrows Rust memory and is only valid until the next call to [Iterator.Next],
-// [Iterator.NextBorrowed], or [Iterator.Drop].
+// [Iterator.NextBorrowed], or [Iterator.Drop] — including a Drop initiated by
+// another goroutine, such as [Database.Close] with [WithForceCloseHandles].
+// Value deliberately takes no lock: the caller consumes the slice after Value
+// returns, so a lock here could not extend the slice's validity.
 func (it *Iterator) Value() []byte {
 	if it.currentPair == nil || it.err != nil {
 		return nil

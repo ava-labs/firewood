@@ -50,3 +50,9 @@ When any unsafe Rust or Go code is present, or when a change crosses the FFI bou
   32-bit support changes are not needed.
 - Auto-generated C-style comments in `ffi/firewood.h` may retain Rust doc style — do
   not flag these.
+- Go handle types that hold a borrow on the `Database` must register a lease in the
+  `keepAliveRegistry` via `lease.attach`. The registered drop function must be a method
+  on the inner handle (or any type that does not back-reference the outer wrapper) so
+  that `runtime.AddCleanup` can reclaim the wrapper when the user drops their last
+  reference. See `ffi/keepalive.go` for the lock-ordering invariants and the
+  closed-registry contract.
