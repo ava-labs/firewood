@@ -6,10 +6,6 @@
     reason = "Found 8 occurrences after enabling the lint."
 )]
 #![expect(
-    clippy::from_iter_instead_of_collect,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![expect(
     clippy::inline_always,
     reason = "Found 1 occurrences after enabling the lint."
 )]
