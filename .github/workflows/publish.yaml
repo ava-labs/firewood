@@ -13,7 +13,9 @@ jobs:
     if: github.repository == 'ava-labs/firewood' && startsWith(github.event.release.tag_name, 'v')
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
+        with:
+          toolchain: stable
       ## NOTE: keep these packages sorted in reverse topological order!
       ## cargo tree --workspace -e all | grep firewood
       - name: publish firewood-macros crate

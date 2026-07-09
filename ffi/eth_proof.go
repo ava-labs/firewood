@@ -79,8 +79,8 @@ type EthStorageProof struct {
 // It returns [ErrEthProofNotSupported] if the database is not in Ethereum hash
 // mode, and [ErrDroppedRevision] if this revision has already been released.
 func (r *Revision) EthGetProof(accountKey []byte, slotKeys [][]byte) (*EthAccountProof, error) {
-	r.keepAliveHandle.mu.RLock()
-	defer r.keepAliveHandle.mu.RUnlock()
+	r.lease.mu.RLock()
+	defer r.lease.mu.RUnlock()
 	if r.dropped {
 		return nil, ErrDroppedRevision
 	}
@@ -111,8 +111,8 @@ func ethGetProofCall(
 // view. It returns [ErrEthProofNotSupported] if the database is not in Ethereum
 // hash mode, and [ErrDroppedReconstructed] if the view has been released.
 func (r *Reconstructed) EthGetProof(accountKey []byte, slotKeys [][]byte) (*EthAccountProof, error) {
-	r.keepAliveHandle.mu.RLock()
-	defer r.keepAliveHandle.mu.RUnlock()
+	r.lease.mu.RLock()
+	defer r.lease.mu.RUnlock()
 	if r.dropped {
 		return nil, ErrDroppedReconstructed
 	}
