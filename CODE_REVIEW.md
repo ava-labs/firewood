@@ -56,3 +56,10 @@ When any unsafe Rust or Go code is present, or when a change crosses the FFI bou
   that `runtime.AddCleanup` can reclaim the wrapper when the user drops their last
   reference. See `ffi/keepalive.go` for the lock-ordering invariants and the
   closed-registry contract.
+
+## Labeling
+
+- `area/*` is auto-applied from changed paths and `kind/*` from the PR title.
+- **`area/c-chain` is not auto-applied** — add it manually when the change
+  touches C-Chain reexecution or libevm integration.
+- Add `breaking-change` when any PR-template breaking-change box is checked.

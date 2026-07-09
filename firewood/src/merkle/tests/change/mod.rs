@@ -105,4 +105,5 @@ mod edge_cases;
 #[cfg(feature = "ethhash")]
 mod empty;
 mod partial;
+mod regression;
 mod structural;

@@ -562,7 +562,10 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::arithmetic_side_effects)]
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "test helpers use plain `+= 1` counters rather than checked/wrapping arithmetic"
+)]
 mod tests {
     use crate::{
         Proof,
@@ -577,8 +580,9 @@ mod tests {
     };
 
     use firewood_storage::{
-        Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, MemStore, Mutable,
-        NodeStore, Propose, SeededRng, TestRecorder, TrieReader,
+        Committed, DeletedNodeTracking, FileBacked, FileIoError, HashedNodeReader,
+        ImmutableProposal, MemStore, Mutable, NodeStore, Propose, SeededRng, TestRecorder,
+        TrieReader,
     };
     use lender::Lender;
     use std::{collections::HashSet, ops::Deref, path::PathBuf, sync::Arc};
@@ -624,7 +628,8 @@ mod tests {
 
     fn create_test_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
         let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_proposal(Arc::new(memstore));
+        let nodestore =
+            NodeStore::new_empty_proposal(Arc::new(memstore), DeletedNodeTracking::Enabled);
         Merkle::from(nodestore)
     }
 
@@ -997,7 +1002,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::indexing_slicing)]
     fn test_diff_interleaved_keys() {
         // m1: a, c, e
         // m2: b, c, d, f
@@ -1852,7 +1856,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::indexing_slicing)]
     fn test_change_proof_into_iterator() {
         let key_values: Box<[BatchOp<Key, Value>]> = Box::new([
             BatchOp::Put {

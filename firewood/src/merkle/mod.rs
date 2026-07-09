@@ -27,10 +27,10 @@ use crate::{
 use firewood_metrics::{HistogramExt, firewood_counter, firewood_histogram};
 use firewood_storage::MemStore;
 use firewood_storage::{
-    BranchNode, Child, Children, FileIoError, HashType, HashableShunt, HashedNodeReader,
-    ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, Mutable, MutableKind,
-    NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, Propose, ReadableStorage,
-    SharedNode, TrieHash, TrieReader, U4, ValueDigest,
+    BranchNode, Child, Children, DeletedNodeTracking, FileIoError, HashType, HashableShunt,
+    HashedNodeReader, ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, Mutable,
+    MutableKind, NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, Propose,
+    ReadableStorage, SharedNode, TrieHash, TrieReader, U4, ValueDigest,
 };
 use firewood_storage::{
     hash_node_as_storage_trie_root_for_node, hash_node_as_storage_trie_root_parts,
@@ -353,18 +353,16 @@ fn compute_outside_children(
         } else if let Some(on_path_byte) = boundary_nibbles.get(terminal.key.len()) {
             // Terminal is an ancestor of the boundary key. The next
             // nibble tells us which child leads toward the boundary.
-            // Mark children on the far side of that nibble as outside,
-            // and also mark the on-path child itself: its subtree may
-            // contain keys beyond the proven range, so we must use the
-            // proof's hash rather than recomputing it.
+            // Mark children on the far side of that nibble as outside.
+            // The on-path child itself is left inside the range so its
+            // subtree is correctly computed from the applied batch.
             let on_path_nibble = U4::new_masked(*on_path_byte);
             let entry = result.entry(terminal.key.clone()).or_default();
             *entry = if boundary.is_left() {
                 entry.set_below(on_path_nibble)
             } else {
                 entry.set_above(on_path_nibble)
-            }
-            .set(on_path_nibble);
+            };
         } else if !boundary.is_left() {
             // Boundary is a prefix of or exactly matches the terminal key.
             // For the right edge, all children extend beyond end_key (they
@@ -675,15 +673,23 @@ fn reject_odd_nibble_value_digests(proof_nodes: &[ProofNode]) -> Result<(), Proo
 /// the proof and `key_values`, with `first_key` / `last_key` used solely for
 /// structural range checks on the caller-provided bounds. We are not there
 /// yet on the right edge: when the end-proof's terminal is a strict prefix
-/// of `last_kv` with the on-path child set, [`compute_outside_children`]
-/// marks `last_kv`'s on-path child as outside, so the hash reconstruction
-/// substitutes the proof's stored child hash and would *not* notice a
-/// tampered `last_kv` value. The cryptographic `verify_edge` call against
-/// the caller's `last_key` is what catches that case
-/// (`test_tampered_in_range_value_rejected`). We have no known attack
-/// against the current design; the dependency on the caller's bound is
-/// documented here so a future refactor can audit and remove it
-/// deliberately if a fully self-contained verifier is wanted.
+/// of `last_kv` (an ancestor node, `terminal_full_key < last_kv`), the
+/// terminal has no successor proof node to derive its on-path nibble from, so
+/// [`compute_outside_children`] derives it from the caller's `last_key`. That
+/// nibble splits the terminal's children into "above the boundary" (index
+/// greater than the nibble — hashes taken from the proof) and in-range (at or
+/// below it — recomputed from `key_values`), so the hash reconstruction, not
+/// just the structural checks, depends on `last_key` here.
+///
+/// The in-range children — where `last_kv` and every other in-range key live —
+/// are recomputed from `key_values`, so a tampered in-range value produces a
+/// root-hash mismatch on its own (`test_tampered_in_range_value_rejected`).
+/// `verify_edge` still runs for the `InRange` boundary (unlike the
+/// `OutOfRange` case, which skips it) and cryptographically anchors the proof
+/// against `last_key`. We have no known
+/// attack against the current design; the hash reconstruction's dependency on
+/// the caller's bound is documented here so a future refactor can audit and
+/// remove it deliberately if a fully self-contained verifier is wanted.
 ///
 /// # Asymmetry with the left edge
 ///
@@ -848,12 +854,13 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
 
     // Right edge:
     //   * InRange (terminal == last_kv, or fallback to the caller's
-    //     requested bound): run full `verify_edge`. This is what
-    //     cryptographically anchors the proof at `last_kv`'s value when
-    //     the proof's terminal sits at or above `last_kv`, since the
-    //     hash-reconstruction path treats `last_kv`'s on-path child as
-    //     outside-the-range and would otherwise miss a tampered `last_kv`
-    //     value.
+    //     requested bound): run full `verify_edge` to cryptographically
+    //     anchor the proof against the boundary. In-range children are
+    //     recomputed from `key_values` during hash reconstruction, so a
+    //     tampered in-range value already surfaces as a root-hash mismatch
+    //     (see `compute_outside_children`'s terminal-ancestor case and
+    //     `test_tampered_in_range_value_rejected`); `verify_edge` anchors
+    //     the boundary itself.
     //   * OutOfRange (terminal_full_key > last_kv): skip
     //     `proof.verify(...)` — the proof was structurally generated for
     //     a deeper bound, and the cryptographic check is folded into the
@@ -989,7 +996,7 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
 ) -> Result<(), api::Error> {
     // Build in-memory merkle from key-value pairs
     let memstore = MemStore::default();
-    let nodestore = NodeStore::new_empty_proposal(memstore.into());
+    let nodestore = NodeStore::new_empty_proposal(memstore.into(), DeletedNodeTracking::Enabled);
     let mut proving_merkle: Merkle<NodeStore<Mutable<Propose>, MemStore>> = Merkle::from(nodestore);
 
     for (key, value) in key_values {

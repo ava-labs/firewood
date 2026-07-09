@@ -1,8 +1,6 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![expect(clippy::indexing_slicing, clippy::unwrap_used)]
-
 mod change;
 mod collapse;
 #[cfg(feature = "ethhash")]
@@ -20,8 +18,8 @@ use std::fmt::Write;
 use super::*;
 use crate::{ProofError, ProofNode};
 use firewood_storage::{
-    Children, Committed, MemStore, Mutable, NodeHashAlgorithm, NodeStore, NodeStoreHeader,
-    PathComponent, Propose, RootReader, TrieHash, ValueDigest,
+    Children, Committed, DeletedNodeTracking, MemStore, Mutable, NodeHashAlgorithm, NodeStore,
+    NodeStoreHeader, PathComponent, Propose, RootReader, TrieHash, ValueDigest,
 };
 
 // Returns n random key-value pairs.
@@ -72,7 +70,10 @@ where
         NodeHashAlgorithm::compile_option(),
     ));
     let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
-    let base = Merkle::from(NodeStore::new_empty_committed(memstore.clone()));
+    let base = Merkle::from(NodeStore::new_empty_committed(
+        memstore.clone(),
+        DeletedNodeTracking::Enabled,
+    ));
     let mut merkle = base.fork().unwrap();
 
     for (k, v) in iter.clone() {
@@ -200,7 +201,7 @@ fn insert_one() {
 fn create_in_memory_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
     let memstore = MemStore::default();
 
-    let nodestore = NodeStore::new_empty_proposal(memstore.into());
+    let nodestore = NodeStore::new_empty_proposal(memstore.into(), DeletedNodeTracking::Enabled);
 
     Merkle { nodestore }
 }

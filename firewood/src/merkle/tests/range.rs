@@ -98,15 +98,15 @@ fn outside_children_single_node_exact_match_right_edge() {
 fn outside_children_ancestor_left_edge() {
     // Terminal key [1], boundary key 0x15 → nibbles [1, 5].
     // Terminal is ancestor of boundary. On-path nibble = 5.
-    // Left edge: children < 5 are outside, plus child 5 itself.
+    // Left edge: children < 5 are outside.
     let nodes = [proof_node(&[1])];
     let result = compute_outside_children(&nodes, EdgeBoundary::Left(Some(&[0x15]))).unwrap();
     let mask = result[&nibble_path(&[1])];
-    // Children 0..=5 should be outside (left of 5, plus 5 itself)
+    // Children 0..5 should be outside (strictly left of 5)
     for i in 0..16u8 {
         assert_eq!(
             mask.is_set(U4::new_masked(i)),
-            i <= 5,
+            i < 5,
             "left edge ancestor: child {i}"
         );
     }
@@ -115,7 +115,7 @@ fn outside_children_ancestor_left_edge() {
 #[test]
 fn outside_children_ancestor_right_edge() {
     // Terminal key [1], boundary key 0x15 → nibbles [1, 5].
-    // Right edge: children > 5 are outside, plus child 5 itself.
+    // Right edge: children > 5 are outside.
     let nodes = [proof_node(&[1])];
     let result = compute_outside_children(
         &nodes,
@@ -126,7 +126,7 @@ fn outside_children_ancestor_right_edge() {
     for i in 0..16u8 {
         assert_eq!(
             mask.is_set(U4::new_masked(i)),
-            i >= 5,
+            i > 5,
             "right edge ancestor: child {i}"
         );
     }
