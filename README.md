@@ -41,6 +41,8 @@ as well as carefully managing the free list during the creation and expiration o
 
 ![architecture diagram](./docs/assets/architecture.svg)
 
+[View the interactive Merkle trie animation](https://ava-labs.github.io/firewood/assets/firewood_trie.html) to see how Firewood allocates, reuses, and manages trie nodes across revisions.
+
 ## Terminology
 
 - `Revision` - A historical point-in-time state/version of the trie. This
