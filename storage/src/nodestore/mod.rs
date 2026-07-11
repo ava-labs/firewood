@@ -1041,21 +1041,31 @@ impl<S: ReadableStorage> From<NodeStore<Mutable<Recon<S>>, S>> for NodeStore<Rec
 
 impl<S: ReadableStorage> From<Arc<NodeStore<Reconstructed<S>, S>>>
     for NodeStore<Mutable<Recon<S>>, S>
+where
+    NodeStore<Reconstructed<S>, S>: TrieReader,
 {
     fn from(val: Arc<NodeStore<Reconstructed<S>, S>>) -> Self {
-        // Fast path: if this Arc is uniquely owned, `try_unwrap` is O(1) and lets us move the
-        // reconstructed root out without cloning.
-        // The fallback (shared-Arc) path is reachable in two ways:
+        // Fast path: `try_unwrap` moves the reconstructed root out without cloning
+        // when the Arc is uniquely owned.
+        //
+        // The shared-Arc path is reachable in two ways:
         //   1. A caller produced sibling views via `ReconstructedView::clone` and is keeping
         //      another sibling alive across this call.
         //   2. A caller is iterating over the reconstructed view (the iterator holds an Arc
         //      clone via `ReconstructedView::view`) while also deriving the next reconstructed
         //      state.
-        // Fallback cost: producing an owned root from the shared Arc requires recursively
-        // cloning the in-memory subtree attached to it. We accept this fallback so callers
-        // don't have to guarantee uniqueness, while still exploiting the cheaper move path
-        // whenever possible.
-        Self::from(Arc::unwrap_or_clone(val))
+        // In the shared case, `unwrap_or_clone` on the root `SharedNode` deep-clones every
+        // `Child::Node` subtree via `Node::clone`. Forcing `root_hash` first rewrites those
+        // children to `Child::MaybePersisted` (Arc-shared), turning the deep walk into a
+        // per-level Arc bump.
+        let inner = match Arc::try_unwrap(val) {
+            Ok(owned) => owned,
+            Err(arc) => {
+                let _ = arc.root_hash();
+                Arc::unwrap_or_clone(arc)
+            }
+        };
+        Self::from(inner)
     }
 }
 
@@ -1063,6 +1073,9 @@ impl<S: ReadableStorage> From<Arc<NodeStore<Reconstructed<S>, S>>>
 ///
 /// This clones the [`SharedNode`] arc (cheap ref-count bump) and the
 /// [`OnceLock`] hash (cloned if already computed, empty otherwise).
+///
+/// Not derived because only `Reconstructed` T may be cloned; others are
+/// not safe.
 impl<S> Clone for NodeStore<Reconstructed<S>, S> {
     fn clone(&self) -> Self {
         NodeStore {
@@ -1928,6 +1941,56 @@ mod tests {
             assert!(
                 !matches!(child, Child::Node(_)),
                 "root child still Child::Node after root_hash: {child:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn shared_arc_advance_forces_hash_for_sibling() {
+        // When `From<Arc<NodeStore<Reconstructed, _>>>` is called on a shared
+        // Arc (strong_count > 1), the impl forces `root_hash()` before
+        // `unwrap_or_clone` so the deep `Node::clone` fallback becomes a
+        // per-level Arc bump. Verify the *sibling* Arc holder observes the
+        // hashed state (children rewritten to `Child::MaybePersisted`,
+        // OnceLock populated).
+        let storage = Arc::new(MemStore::default());
+        let mut recon = NodeStore::new_empty_recon(Arc::clone(&storage));
+
+        let mut children = Children::new();
+        children[PathComponent::ALL[0x0]] = Some(Child::Node(Node::Leaf(LeafNode {
+            partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"abc")),
+            value: b"v0".to_vec().into_boxed_slice(),
+        })));
+        children[PathComponent::ALL[0xF]] = Some(Child::Node(Node::Leaf(LeafNode {
+            partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"xyz")),
+            value: b"vf".to_vec().into_boxed_slice(),
+        })));
+        recon.root_mut().replace(Node::Branch(Box::new(BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children,
+        })));
+
+        let reconstructed: Arc<NodeStore<Reconstructed<_>, _>> = Arc::new(recon.into());
+        let sibling = Arc::clone(&reconstructed);
+        assert!(reconstructed.kind.hash.get().is_none());
+
+        // Advance one Arc; the other (sibling) stays alive, so strong_count == 2.
+        let _mutable: NodeStore<Mutable<Recon<_>>, _> = reconstructed.into();
+
+        // Sibling now sees the forced hash and the rewritten children.
+        assert!(
+            sibling.kind.hash.get().is_some(),
+            "sibling OnceLock must be populated after shared-Arc advance"
+        );
+        let root = sibling.root_node().expect("sibling root present");
+        let Node::Branch(b) = &*root else {
+            panic!("sibling root must be a branch");
+        };
+        for (_, child) in b.children.iter_present() {
+            assert!(
+                !matches!(child, Child::Node(_)),
+                "sibling child still Child::Node after shared-Arc advance: {child:?}"
             );
         }
     }
