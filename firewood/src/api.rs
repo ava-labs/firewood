@@ -6,7 +6,7 @@ use crate::merkle::parallel::CreateProposalError;
 use crate::merkle::{Key, Value};
 use crate::persist_worker::PersistError;
 use crate::{Proof, ProofError, ProofNode, RangeProof};
-use firewood_storage::{DefaultHashMode, FileIoError, HashMode, TrieHash};
+use firewood_storage::{DefaultHashMode, FileIoError, HashMode, NodeHashAlgorithm, TrieHash};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -583,6 +583,9 @@ pub trait DynDb: Debug + Send + Sync + 'static {
     /// Propose a change to the database via an already-collected batch.
     #[expect(clippy::missing_errors_doc)]
     fn propose(&self, ops: OwnedBatch) -> Result<Box<dyn DynProposal<'_> + '_>, Error>;
+
+    /// The node-hashing scheme this database uses.
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm;
 
     /// Dump the latest revision's trie to a string.
     #[expect(clippy::missing_errors_doc)]

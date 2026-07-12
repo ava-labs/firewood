@@ -94,17 +94,26 @@ pub struct DatabaseHandleArgs<'a> {
 
     /// The hashing mode to use for the database.
     ///
-    /// This must match the compile-time feature:
-    /// - [`NodeHashAlgorithm::Ethereum`] if the `ethhash` feature is enabled
-    /// - [`NodeHashAlgorithm::MerkleDB`] if the `ethhash` feature is disabled
-    ///
-    /// Opening returns an error if this does not match the compile-time feature.
+    /// This is the per-database node-hashing scheme, selected at runtime. For
+    /// an existing database it must match the scheme persisted in the file
+    /// header (a mismatch is an error); for a fresh database it is the scheme
+    /// to create with. A single binary can open both
+    /// [`NodeHashAlgorithm::Ethereum`] and [`NodeHashAlgorithm::MerkleDB`]
+    /// databases regardless of the build's `ethhash` feature.
     pub node_hash_algorithm: NodeHashAlgorithm,
 
     /// The maximum number of unpersisted revisions that can exist at a given time.
     ///
     /// Note: `revisions` must be > `deferred_persistence_commit_count`.
     pub deferred_persistence_commit_count: u64,
+}
+
+/// A view handle that can report the node-hashing scheme of its backing
+/// database. Implemented by the concrete revision/reconstructed handles so the
+/// generic `eth_get_proof` entry points can supply the algorithm to
+/// [`firewood::eth_get_proof`], which no longer infers it from the view.
+pub(crate) trait NodeHashAlgorithmExt {
+    fn node_hash_algorithm(&self) -> firewood_storage::NodeHashAlgorithm;
 }
 
 impl DatabaseHandleArgs<'_> {
@@ -146,7 +155,7 @@ impl DatabaseHandleArgs<'_> {
 ///
 #[derive(Debug)]
 pub struct DatabaseHandle {
-    /// The database, erased behind the object-safe write boundary.
+    /// The database, erased to the runtime-selected hash mode.
     db: Box<dyn DynDb>,
     metrics_context: MetricsContext,
 }
@@ -160,8 +169,9 @@ impl DatabaseHandle {
     pub fn new(args: DatabaseHandleArgs<'_>) -> Result<Self, api::Error> {
         let metrics_context = MetricsContext::new(args.expensive_metrics);
 
+        let algorithm: firewood_storage::NodeHashAlgorithm = args.node_hash_algorithm.into();
         let cfg = DbConfig::builder()
-            .node_hash_algorithm(args.node_hash_algorithm.into())
+            .node_hash_algorithm(algorithm)
             .truncate(args.truncate)
             .manager(args.as_rev_manager_config()?)
             .root_store(args.root_store)
@@ -176,7 +186,9 @@ impl DatabaseHandle {
             return Err(invalid_data("database path cannot be empty"));
         }
 
-        let db: Box<dyn DynDb> = Box::new(Db::new(path, cfg)?);
+        // Select the concrete `Db<H>` at runtime from the requested algorithm,
+        // validated against the on-disk header, and hold it erased.
+        let db = Db::open(path, algorithm, cfg)?;
         Ok(Self {
             db,
             metrics_context,
@@ -191,6 +203,12 @@ impl DatabaseHandle {
     #[must_use]
     pub fn current_root_hash(&self) -> Option<HashKey> {
         self.db.root_hash()
+    }
+
+    /// Returns the node-hashing scheme this database was opened with.
+    #[must_use]
+    pub fn node_hash_algorithm(&self) -> firewood_storage::NodeHashAlgorithm {
+        self.db.node_hash_algorithm()
     }
 
     /// Returns a value from the database for the given key from the latest root hash.

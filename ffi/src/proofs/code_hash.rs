@@ -15,22 +15,16 @@
 //! logic, and the type-agnostic FFI exports (`fwd_code_hash_iter_next`,
 //! `fwd_code_hash_iter_free`).
 
-#[cfg(feature = "ethhash")]
-use firewood::ProofError;
-
-use firewood::api::{self, BatchOp};
+use firewood::{
+    ProofError,
+    api::{self, BatchOp},
+};
+use firewood_storage::NodeHashAlgorithm;
 
 use crate::{HashKey, HashResult, VoidResult};
-
 #[non_exhaustive]
 pub struct CodeIteratorHandle<'p> {
-    #[cfg(feature = "ethhash")]
     inner: BoxCodeHashIter<'p>,
-    // uninhabitable fields make the struct impossible to construct when the feature is disabled
-    #[cfg(not(feature = "ethhash"))]
-    void: std::convert::Infallible,
-    #[cfg(not(feature = "ethhash"))]
-    marker: std::marker::PhantomData<&'p ()>,
 }
 
 impl std::fmt::Debug for CodeIteratorHandle<'_> {
@@ -41,10 +35,21 @@ impl std::fmt::Debug for CodeIteratorHandle<'_> {
 
 type KeyValuePair = (Box<[u8]>, Box<[u8]>);
 
-#[cfg(feature = "ethhash")]
 type BoxCodeHashIter<'p> = Box<dyn Iterator<Item = Result<HashKey, api::Error>> + 'p>;
 
-#[cfg(feature = "ethhash")]
+/// Reject code-hash iteration on a non-Ethereum proof. Code hashes only exist
+/// in Ethereum account values; this is the runtime replacement for the former
+/// compile-time `ethhash`-feature gate.
+fn require_ethereum(algorithm: NodeHashAlgorithm) -> Result<(), api::Error> {
+    if algorithm.is_ethereum() {
+        Ok(())
+    } else {
+        Err(api::Error::FeatureNotSupported(
+            "code hash iteration requires an ethereum-mode proof".to_owned(),
+        ))
+    }
+}
+
 fn extract_code_hash(key: &[u8], value: &[u8]) -> Option<Result<HashKey, api::Error>> {
     if key.len() != 32 {
         return None;
@@ -66,10 +71,6 @@ impl Iterator for CodeIteratorHandle<'_> {
     type Item = Result<HashKey, api::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        #[cfg(not(feature = "ethhash"))]
-        match self.void {}
-
-        #[cfg(feature = "ethhash")]
         self.inner.next()
     }
 }
@@ -90,27 +91,20 @@ impl<'p> CodeIteratorHandle<'p> {
     ///
     /// # Errors
     ///
-    /// - Returns `api::Error::FeatureNotSupported` if the `ethhash` feature
-    ///   is not enabled.
-    #[cfg_attr(not(feature = "ethhash"), allow(unused_variables))]
-    pub fn from_key_values(key_values: &'p [KeyValuePair]) -> Result<Self, api::Error> {
-        #[cfg(not(feature = "ethhash"))]
-        {
-            Err(api::Error::FeatureNotSupported(
-                "ethhash code hash iterator".to_owned(),
-            ))
-        }
-
-        #[cfg(feature = "ethhash")]
-        {
-            Ok(CodeIteratorHandle {
-                inner: Box::new(
-                    key_values
-                        .iter()
-                        .filter_map(|(key, value)| extract_code_hash(key, value)),
-                ),
-            })
-        }
+    /// - Returns `api::Error::FeatureNotSupported` if `algorithm` is not an
+    ///   ethereum-mode proof.
+    pub fn from_key_values(
+        algorithm: NodeHashAlgorithm,
+        key_values: &'p [KeyValuePair],
+    ) -> Result<Self, api::Error> {
+        require_ethereum(algorithm)?;
+        Ok(CodeIteratorHandle {
+            inner: Box::new(
+                key_values
+                    .iter()
+                    .filter_map(|(key, value)| extract_code_hash(key, value)),
+            ),
+        })
     }
 
     /// Create a new code hash iterator from the given change-proof batch
@@ -129,28 +123,19 @@ impl<'p> CodeIteratorHandle<'p> {
     ///
     /// # Errors
     ///
-    /// - Returns `api::Error::FeatureNotSupported` if the `ethhash` feature
-    ///   is not enabled.
-    #[cfg_attr(not(feature = "ethhash"), allow(unused_variables))]
+    /// - Returns `api::Error::FeatureNotSupported` if `algorithm` is not an
+    ///   ethereum-mode proof.
     pub fn from_batch_ops(
+        algorithm: NodeHashAlgorithm,
         batch_ops: &'p [BatchOp<firewood::Key, firewood::Value>],
     ) -> Result<Self, api::Error> {
-        #[cfg(not(feature = "ethhash"))]
-        {
-            Err(api::Error::FeatureNotSupported(
-                "ethhash code hash iterator".to_owned(),
-            ))
-        }
-
-        #[cfg(feature = "ethhash")]
-        {
-            Ok(CodeIteratorHandle {
-                inner: Box::new(batch_ops.iter().filter_map(|op| match op {
-                    BatchOp::Put { key, value } => extract_code_hash(key, value),
-                    _ => None,
-                })),
-            })
-        }
+        require_ethereum(algorithm)?;
+        Ok(CodeIteratorHandle {
+            inner: Box::new(batch_ops.iter().filter_map(|op| match op {
+                BatchOp::Put { key, value } => extract_code_hash(key, value),
+                _ => None,
+            })),
+        })
     }
 }
 
@@ -202,7 +187,7 @@ impl crate::MetricsContextExt for CodeIteratorHandle<'_> {
     }
 }
 
-#[cfg(all(test, feature = "ethhash"))]
+#[cfg(test)]
 mod tests {
     use super::extract_code_hash;
 

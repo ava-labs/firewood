@@ -267,7 +267,7 @@ impl<'db> RangeProofContext<'db> {
     }
 
     fn code_hash_iter(&self) -> Result<CodeIteratorHandle<'_>, api::Error> {
-        CodeIteratorHandle::from_key_values(self.proof.key_values())
+        CodeIteratorHandle::from_key_values(self.proof.hash_mode(), self.proof.key_values())
     }
 }
 

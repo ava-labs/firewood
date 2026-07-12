@@ -22,9 +22,9 @@ use crate::verify_change_proof_structure;
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_metrics::{firewood_counter, firewood_histogram};
 use firewood_storage::{
-    CheckOpt, CheckerReport, Committed, CommittedParentHash, DefaultHashMode, FileBacked,
-    FileIoError, HashMode, HashedNodeReader, ImmutableProposal, Mutable, NodeHashAlgorithm,
-    NodeStore, Parentable, Propose, ReadableStorage, Reconstructed, TrieReader,
+    CheckOpt, CheckerReport, Committed, CommittedParentHash, DefaultHashMode, EthHash, FileBacked,
+    FileIoError, HashMode, HashedNodeReader, ImmutableProposal, MerkleDbHash, Mutable,
+    NodeHashAlgorithm, NodeStore, Parentable, Propose, ReadableStorage, Reconstructed, TrieReader,
 };
 use std::io::Write;
 use std::num::NonZeroUsize;
@@ -208,6 +208,10 @@ impl<H: HashMode> api::DynDb for Db<H> {
         Ok(Box::new(proposal))
     }
 
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        H::ALGORITHM
+    }
+
     fn dump_to_string(&self) -> Result<String, api::Error> {
         Db::dump_to_string(self).map_err(api::Error::from)
     }
@@ -302,21 +306,43 @@ impl<H: HashMode> api::DynDb for Db<H> {
 
 impl Db {
     /// Create a new database instance.
+    ///
+    /// Returns a `Db<DefaultHashMode>`; the hash mode is carried as a runtime
+    /// value through [`DbConfig::node_hash_algorithm`]. The requested algorithm
+    /// must match the on-disk header for an existing database (enforced at
+    /// open). To open a database whose hash mode is only known at runtime, use
+    /// [`Db::open`], which returns an erased [`api::DynDb`].
     pub fn new<P: AsRef<Path>>(db_dir: P, cfg: DbConfig) -> Result<Self, api::Error> {
-        let config_manager = ConfigManager::builder()
-            .root_dir(db_dir.as_ref().to_path_buf())
-            .node_hash_algorithm(cfg.node_hash_algorithm)
-            .create(cfg.create_if_missing)
-            .truncate(cfg.truncate)
-            .root_store(cfg.root_store)
-            .manager(cfg.manager)
-            .build();
-        let manager = RevisionManager::new(config_manager)?;
-        let db = Self {
-            manager,
-            use_parallel: cfg.use_parallel,
-        };
-        Ok(db)
+        Self::new_with_hash_mode(db_dir, cfg)
+    }
+
+    /// Open a database, selecting the concrete hash mode `H` at runtime from
+    /// `algorithm`, and return it as an erased [`api::DynDb`].
+    ///
+    /// `algorithm` is the database's node-hashing scheme: for an existing
+    /// database it is the header's persisted algorithm, and for a fresh
+    /// database it is the requested algorithm to create with. The selected `H`
+    /// is validated against the on-disk header (a mismatch is an error), so a
+    /// single binary can open both an Ethereum and a MerkleDB database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database cannot be opened, or if `algorithm`
+    /// does not match an existing database's header.
+    pub fn open<P: AsRef<Path>>(
+        db_dir: P,
+        algorithm: NodeHashAlgorithm,
+        mut cfg: DbConfig,
+    ) -> Result<Box<dyn api::DynDb>, api::Error> {
+        cfg.node_hash_algorithm = algorithm;
+        Ok(match algorithm {
+            NodeHashAlgorithm::Ethereum => {
+                Box::new(Db::<EthHash>::new_with_hash_mode(db_dir, cfg)?)
+            }
+            NodeHashAlgorithm::MerkleDB => {
+                Box::new(Db::<MerkleDbHash>::new_with_hash_mode(db_dir, cfg)?)
+            }
+        })
     }
 
     /// Synchronously get an opaque handle to a committed historical revision.
@@ -329,6 +355,46 @@ impl Db {
         Ok(CommittedView {
             nodestore: self.manager.revision(root_hash)?,
         })
+    }
+}
+
+impl<H: HashMode> Db<H> {
+    /// Create or open a database with the hash mode fixed by the type
+    /// parameter `H`. The configured [`DbConfig::node_hash_algorithm`] must
+    /// equal `H::ALGORITHM`; the open path validates it against the header.
+    fn new_with_hash_mode<P: AsRef<Path>>(db_dir: P, cfg: DbConfig) -> Result<Self, api::Error> {
+        // The hashing scheme is `H`, but the fresh-database header is stamped
+        // from `cfg.node_hash_algorithm`. Reject a config that disagrees with
+        // `H` so we never create a header that claims one mode while hashing
+        // under another (e.g. `Db::new(cfg{Ethereum})` in a MerkleDB build).
+        if cfg.node_hash_algorithm != H::ALGORITHM {
+            return Err(api::Error::FeatureNotSupported(format!(
+                "requested node hash algorithm {:?} does not match the database \
+                 type parameter's algorithm {:?}",
+                cfg.node_hash_algorithm,
+                H::ALGORITHM,
+            )));
+        }
+        let config_manager = ConfigManager::builder()
+            .root_dir(db_dir.as_ref().to_path_buf())
+            .node_hash_algorithm(cfg.node_hash_algorithm)
+            .create(cfg.create_if_missing)
+            .truncate(cfg.truncate)
+            .root_store(cfg.root_store)
+            .manager(cfg.manager)
+            .build();
+        let manager = RevisionManager::<H>::new(config_manager)?;
+        let db = Self {
+            manager,
+            use_parallel: cfg.use_parallel,
+        };
+        Ok(db)
+    }
+
+    /// The node-hashing scheme this database uses.
+    #[must_use]
+    pub const fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        H::ALGORITHM
     }
 }
 

@@ -17,7 +17,6 @@
 use firewood_storage::{
     NodeHashAlgorithm, PackedPathRef, PathComponent, TriePathFromPackedBytes, ValueDigest,
 };
-#[cfg(feature = "ethhash")]
 use firewood_storage::{RlpList, TrieHash};
 
 use crate::api::{DbView, Error, HashKey, HashKeyExt};
@@ -49,7 +48,6 @@ const KECCAK_EMPTY: [u8; 32] = [
 /// if any of the first four account fields is not encoded as bytes. Returns
 /// [`ProofError::InvalidAccountCodeHashLength`] if the `codeHash` field is not
 /// 32 bytes.
-#[cfg(feature = "ethhash")]
 pub fn account_code_hash(value: &[u8]) -> Result<Option<HashKey>, ProofError> {
     let code_hash_slice = RlpList::parse(value)
         .and_then(|list| list.nth_bytes(3))
@@ -144,13 +142,14 @@ pub struct EthStorageProof {
 ///   error if the on-disk account value cannot be parsed.
 pub fn eth_get_proof<V>(
     view: &V,
+    algorithm: NodeHashAlgorithm,
     account_key: &[u8; 32],
     storage_keys: &[[u8; 32]],
 ) -> Result<EthProof, Error>
 where
     V: DbView + ?Sized,
 {
-    if !NodeHashAlgorithm::compile_option().is_ethereum() {
+    if !algorithm.is_ethereum() {
         return Err(Error::FeatureNotSupported(
             "eth_get_proof requires ethereum hash mode".into(),
         ));
@@ -422,19 +421,25 @@ fn nibbles_match_packed(nibbles: &[PathComponent], packed: &[u8]) -> bool {
     nibbles.iter().copied().eq(packed_ref)
 }
 
-/// The negative half of [`eth_get_proof`]'s runtime mode gate: a merkledb-mode
-/// (non-ethhash) build must refuse to emit eth proofs. The positive half lives
-/// in the `ethhash`-gated `tests` module below.
-#[cfg(all(test, not(feature = "ethhash")))]
+/// The negative half of [`eth_get_proof`]'s runtime mode gate: passing the
+/// MerkleDB algorithm must refuse to emit eth proofs. Now that the algorithm is
+/// a runtime argument this runs in both feature configs. The positive half
+/// lives in the `ethhash`-gated `tests` module below.
+#[cfg(test)]
 mod merkledb_gate_tests {
     use super::*;
     use crate::merkle::tests::init_merkle;
 
     #[test]
-    fn eth_get_proof_rejected_without_ethhash() {
+    fn eth_get_proof_rejected_in_merkledb_mode() {
         let merkle = init_merkle(std::iter::empty::<(&[u8], &[u8])>());
-        let err = eth_get_proof(merkle.nodestore(), &[0u8; 32], &[])
-            .expect_err("merkledb-mode database must not emit eth proofs");
+        let err = eth_get_proof(
+            merkle.nodestore(),
+            NodeHashAlgorithm::MerkleDB,
+            &[0u8; 32],
+            &[],
+        )
+        .expect_err("merkledb-mode database must not emit eth proofs");
         assert!(
             matches!(err, Error::FeatureNotSupported(_)),
             "expected FeatureNotSupported, got {err:?}"
@@ -475,12 +480,11 @@ mod tests {
         ])
     }
 
-    /// Confirm an ethhash build passes the runtime mode gate. The gate's
-    /// *negative* path is covered by `merkledb_gate_tests` below, which only
-    /// compiles without the `ethhash` feature.
+    /// Confirm the runtime mode gate accepts the Ethereum algorithm (the
+    /// positive path). The negative path is covered by `merkledb_gate_tests`.
     #[test]
     fn mode_gate_passes_under_ethhash() {
-        assert!(NodeHashAlgorithm::compile_option().is_ethereum());
+        assert!(NodeHashAlgorithm::Ethereum.is_ethereum());
     }
 
     /// `KECCAK_EMPTY` is a hardcoded literal; confirm it really is
@@ -524,7 +528,8 @@ mod tests {
         // Empty trie; ask for any account.
         let merkle = init_merkle(std::iter::empty::<(&[u8], &[u8])>());
         let key = [0x11u8; 32];
-        let proof = eth_get_proof(merkle.nodestore(), &key, &[]).unwrap();
+        let proof =
+            eth_get_proof(merkle.nodestore(), NodeHashAlgorithm::Ethereum, &key, &[]).unwrap();
         assert_eq!(proof.nonce, 0);
         assert_eq!(proof.balance, [0u8; 32]);
         assert_eq!(proof.code_hash, KECCAK_EMPTY);
@@ -540,7 +545,8 @@ mod tests {
         let balance = [0x12, 0x34];
         let value = account_rlp(7, &balance);
         let merkle = init_merkle([(key.as_slice(), value.as_ref())]);
-        let proof = eth_get_proof(merkle.nodestore(), &key, &[]).unwrap();
+        let proof =
+            eth_get_proof(merkle.nodestore(), NodeHashAlgorithm::Ethereum, &key, &[]).unwrap();
         assert_eq!(proof.nonce, 7);
         // balance is right-aligned in 32 bytes.
         assert_eq!(proof.balance[30..], balance);
@@ -568,7 +574,13 @@ mod tests {
         ]);
 
         // Inclusion: requested slot equals stored slot.
-        let proof = eth_get_proof(merkle.nodestore(), &account_key, &[slot_key]).unwrap();
+        let proof = eth_get_proof(
+            merkle.nodestore(),
+            NodeHashAlgorithm::Ethereum,
+            &account_key,
+            &[slot_key],
+        )
+        .unwrap();
         assert_eq!(proof.storage_proofs.len(), 1);
         let entry = &proof.storage_proofs[0];
         assert_eq!(entry.key, slot_key);
@@ -582,7 +594,13 @@ mod tests {
 
         // Exclusion: ask for a different slot under the same account.
         let other = [0xbbu8; 32];
-        let proof = eth_get_proof(merkle.nodestore(), &account_key, &[other]).unwrap();
+        let proof = eth_get_proof(
+            merkle.nodestore(),
+            NodeHashAlgorithm::Ethereum,
+            &account_key,
+            &[other],
+        )
+        .unwrap();
         let entry = &proof.storage_proofs[0];
         assert_eq!(entry.value, None);
         assert_eq!(entry.proof.len(), 1, "still emits the lone leaf node");
@@ -704,7 +722,13 @@ mod tests {
             (acc2.as_slice(), v2.as_ref()),
         ]);
 
-        let proof = eth_get_proof(merkle.nodestore(), &missing, &[]).unwrap();
+        let proof = eth_get_proof(
+            merkle.nodestore(),
+            NodeHashAlgorithm::Ethereum,
+            &missing,
+            &[],
+        )
+        .unwrap();
         assert_eq!(proof.nonce, 0);
         assert_eq!(proof.balance, [0u8; 32]);
         assert_eq!(proof.code_hash, KECCAK_EMPTY);
@@ -744,7 +768,8 @@ mod tests {
         ]);
         let root_hash = merkle.nodestore().root_hash().unwrap();
         let root: [u8; 32] = root_hash.as_ref().try_into().unwrap();
-        let proof = eth_get_proof(merkle.nodestore(), &acc1, &[]).unwrap();
+        let proof =
+            eth_get_proof(merkle.nodestore(), NodeHashAlgorithm::Ethereum, &acc1, &[]).unwrap();
         let recovered =
             mpt_proof_value(&proof.account_proof, &root, &acc1).expect("acc1 should be present");
         // The recovered bytes should match what firewood persisted for the
@@ -772,7 +797,13 @@ mod tests {
             (full_b.as_slice(), b"val-b".as_slice()),
         ]);
 
-        let proof = eth_get_proof(merkle.nodestore(), &account_key, &[slot_a, slot_b]).unwrap();
+        let proof = eth_get_proof(
+            merkle.nodestore(),
+            NodeHashAlgorithm::Ethereum,
+            &account_key,
+            &[slot_a, slot_b],
+        )
+        .unwrap();
         assert_eq!(proof.storage_proofs.len(), 2);
         assert_eq!(
             proof.storage_proofs[0].value.as_deref(),
@@ -822,7 +853,13 @@ mod tests {
         ]);
 
         // Inclusion: both slots are present and must verify end-to-end.
-        let proof = eth_get_proof(merkle.nodestore(), &account_key, &[slot_a, slot_b]).unwrap();
+        let proof = eth_get_proof(
+            merkle.nodestore(),
+            NodeHashAlgorithm::Ethereum,
+            &account_key,
+            &[slot_a, slot_b],
+        )
+        .unwrap();
         assert_eq!(proof.storage_proofs.len(), 2);
         assert_eq!(
             proof.storage_proofs[0].value.as_deref(),
@@ -851,8 +888,13 @@ mod tests {
         let mut miss_shared = [0x00u8; 32];
         miss_shared[0] = 0x02;
         let miss_other = [0xffu8; 32];
-        let proof =
-            eth_get_proof(merkle.nodestore(), &account_key, &[miss_shared, miss_other]).unwrap();
+        let proof = eth_get_proof(
+            merkle.nodestore(),
+            NodeHashAlgorithm::Ethereum,
+            &account_key,
+            &[miss_shared, miss_other],
+        )
+        .unwrap();
         for entry in &proof.storage_proofs {
             assert_eq!(
                 entry.value, None,

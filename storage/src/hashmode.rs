@@ -87,10 +87,14 @@ mod tests {
 
     #[test]
     fn default_hash_mode_matches_compile_option() {
-        assert_eq!(
-            DefaultHashMode::ALGORITHM,
-            NodeHashAlgorithm::compile_option()
-        );
+        // `DefaultHashMode` must stay coupled to the `ethhash` feature: it is
+        // the cfg-selected default `H` until the flag is removed (PR 6).
+        let expected = if cfg!(feature = "ethhash") {
+            NodeHashAlgorithm::Ethereum
+        } else {
+            NodeHashAlgorithm::MerkleDB
+        };
+        assert_eq!(DefaultHashMode::ALGORITHM, expected);
     }
 
     #[test]

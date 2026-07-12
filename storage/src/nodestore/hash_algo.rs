@@ -8,10 +8,10 @@ pub struct NodeHashAlgorithmTryFromIntError(u64);
 
 /// The hash algorithm used by the node store.
 ///
-/// This must currently match the compile-time option. However, it will eventually
-/// be made a runtime option when initializing the node store. Therefore, the
-/// option is required when initializing and opening the node store to ensure
-/// compatibility and to detect any mismatches.
+/// This is a per-database runtime choice persisted in the file header. A
+/// database created under one scheme is opened under that same scheme
+/// regardless of the build's `ethhash` feature; the requested algorithm is
+/// validated against the header at open time (`validate_open`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NodeHashAlgorithm {
     /// Use the MerkleDB node hashing algorithm, with sha256 as the hash function.
@@ -22,36 +22,8 @@ pub enum NodeHashAlgorithm {
 }
 
 impl NodeHashAlgorithm {
-    /// Returns the hash algorithm selected by the current build.
-    ///
-    /// Today this is decided at compile time by the `ethhash` feature; when
-    /// the algorithm becomes runtime-selectable (issue #1088), this is the
-    /// single function that switches over and every caller picks up the new
-    /// behavior automatically.
-    #[must_use]
-    #[inline]
-    pub const fn compile_option() -> Self {
-        if cfg!(feature = "ethhash") {
-            NodeHashAlgorithm::Ethereum
-        } else {
-            NodeHashAlgorithm::MerkleDB
-        }
-    }
-
-    /// Returns whether this hash algorithm matches the one selected by the
-    /// current build (see [`Self::compile_option`]).
-    #[must_use]
-    pub const fn matches_compile_option(self) -> bool {
-        self.is_ethereum() == Self::compile_option().is_ethereum()
-    }
-
     /// Returns whether this is the Ethereum hash algorithm (Keccak-256,
     /// account-aware nodes).
-    ///
-    /// Callers that need to gate ethereum-mode proofs or encoding should
-    /// read `NodeHashAlgorithm::compile_option().is_ethereum()` instead of
-    /// checking the `ethhash` feature directly. When this enum becomes
-    /// runtime-selectable, every caller picks up the new behavior for free.
     #[must_use]
     pub const fn is_ethereum(self) -> bool {
         matches!(self, NodeHashAlgorithm::Ethereum)
@@ -61,23 +33,6 @@ impl NodeHashAlgorithm {
         match self {
             NodeHashAlgorithm::MerkleDB => "MerkleDB",
             NodeHashAlgorithm::Ethereum => "Ethereum",
-        }
-    }
-
-    // TODO(#1088): remove this after implementing runtime selection of hash algorithms
-    pub(crate) fn validate_init(self) -> std::io::Result<()> {
-        if self.matches_compile_option() {
-            Ok(())
-        } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                format!(
-                    "node store hash algorithm mismatch: want to initialize with {}, \
-                     but build option is for {}",
-                    self.name(),
-                    Self::compile_option().name()
-                ),
-            ))
         }
     }
 

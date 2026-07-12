@@ -102,7 +102,7 @@ fn eth_get_proof_on<H>(
     storage_keys: BorrowedBytes2D<'_>,
 ) -> EthProofResult
 where
-    H: api::DbView + crate::MetricsContextExt,
+    H: api::DbView + crate::MetricsContextExt + crate::NodeHashAlgorithmExt,
 {
     crate::invoke_with_handle(
         handle,
@@ -112,7 +112,8 @@ where
                 .iter()
                 .map(|key| to_trie_key(key.as_slice()))
                 .collect::<Result<Vec<[u8; 32]>, _>>()?;
-            firewood::eth_get_proof(view, &account_key, &storage_keys)
+            let algorithm = view.node_hash_algorithm();
+            firewood::eth_get_proof(view, algorithm, &account_key, &storage_keys)
         },
     )
 }

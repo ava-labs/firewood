@@ -263,13 +263,13 @@ const (
 // algorithm and database options. The database directory will be created at the
 // provided path if it does not already exist.
 //
-// The [nodeHashAlgorithm] is required and must match the compile-time feature:
-//   - NodeHashAlgorithmEthereum if the ethhash feature is enabled
-//   - NodeHashAlgorithmMerkleDB if the ethhash feature is disabled
+// The [nodeHashAlgorithm] is required and selects the hashing mode for the
+// database at runtime, independent of the ethhash build feature:
+//   - EthereumNodeHashing for Ethereum-compatible Keccak-256 hashing
+//   - MerkleDBNodeHashing for MerkleDB-compatible SHA-256 hashing
 //
-// In the future, the node hash algorithm will be configurable at runtime and
-// no longer need to match compile-time features but will instead select the
-// desired hashing mode.
+// When opening an existing database, the requested algorithm must match the one
+// stamped in the file header, otherwise opening fails with a mismatch error.
 //
 // If no [Option] is provided, sensible defaults will be used.
 // See the With* functions for details about each configuration parameter and its default value.
