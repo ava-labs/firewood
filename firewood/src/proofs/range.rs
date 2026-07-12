@@ -58,7 +58,7 @@
 
 use std::num::NonZeroUsize;
 
-use firewood_storage::{DefaultHashMode, HashMode, NodeHashAlgorithm};
+use firewood_storage::{EthHash, HashMode, NodeHashAlgorithm};
 
 use crate::api::{self, FrozenRangeProof, HashKey};
 use crate::merkle::verify_range_proof;
@@ -248,13 +248,12 @@ where
         end_proof: Proof<H>,
         key_values: Box<[(K, V)]>,
     ) -> Self {
-        // Proofs built in this binary carry the compile-default mode.
-        Self::with_hash_mode(
-            start_proof,
-            end_proof,
-            key_values,
-            DefaultHashMode::ALGORITHM,
-        )
+        // Convenience constructor with no runtime algorithm available; the
+        // parse path stamps the resolved header mode via `with_hash_mode`,
+        // and the production builder passes the database's runtime algorithm.
+        // EthHash: default concrete mode for the mode-less convenience
+        // constructor (#1088).
+        Self::with_hash_mode(start_proof, end_proof, key_values, EthHash::ALGORITHM)
     }
 
     /// Like [`RangeProof::new`], but records the [`NodeHashAlgorithm`] the proof

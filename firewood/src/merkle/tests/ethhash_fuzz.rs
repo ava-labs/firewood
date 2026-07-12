@@ -35,7 +35,7 @@ use crate::api::{
 use crate::db::{Db, DbConfig};
 use crate::merkle::{Key, Value, verify_change_proof_root_hash, verify_range_proof};
 use crate::verify_change_proof_structure;
-use firewood_storage::{NodeHashAlgorithm, SeededRng, replace_list_field};
+use firewood_storage::{EthHash, NodeHashAlgorithm, SeededRng, replace_list_field};
 use rand::seq::SliceRandom;
 
 /// An account's key paired with its sorted, distinct storage-slot bytes (byte
@@ -47,7 +47,7 @@ type AccountSlots = ([u8; 32], Box<[u8]>);
 /// committed end state, and the sorted key set of the end state (for boundary
 /// selection).
 struct ShapedFixture {
-    db: Db,
+    db: Db<EthHash>,
     /// Keeps the temp dir alive while `db` is in use.
     _dir: tempfile::TempDir,
     start_root: HashKey,
@@ -461,7 +461,7 @@ fn check_all_scenarios(
 /// Generate and verify a valid range proof over `root` for the given bounds
 /// (sometimes through a serialization round-trip), returning it for tampering.
 fn check_valid_range_proof(
-    db: &Db,
+    db: &Db<EthHash>,
     root: &HashKey,
     first: Option<&[u8]>,
     last: Option<&[u8]>,
@@ -483,7 +483,7 @@ fn check_valid_range_proof(
 /// the given bounds (sometimes through a serialization round-trip), returning
 /// it for tampering.
 fn check_valid_change_proof(
-    db: &Db,
+    db: &Db<EthHash>,
     start_root: &HashKey,
     end_root: &HashKey,
     first: Option<&[u8]>,

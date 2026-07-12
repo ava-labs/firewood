@@ -21,7 +21,7 @@ requires Linux):
 | --------------------------- | ----- | ----- |
 | (none)                      | ✓     | ✓     |
 | `--no-default-features`     | ✓     | ✓     |
-| `--features ethhash,logger` | ✓     | ✓     |
+| `--features logger`         | ✓     | ✓     |
 | `--all-features`            | ✗     | ✓     |
 
 ## Commit and PR Conventions

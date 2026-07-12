@@ -38,7 +38,7 @@
 //!   `nodestore::hash`.
 //! - Post-hash fixups for account `storageRoot`:
 //!   `fix_account_storage_root_value` in `nodestore::hash` (proof-generation
-//!   path; only compiled with `ethhash`).
+//!   path; only relevant when Ethereum hashing is selected at runtime).
 
 pub(crate) mod ethhash;
 pub(crate) mod merkledb;

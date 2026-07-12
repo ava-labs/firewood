@@ -2,8 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::{
-    Children, DefaultHashMode, HashMode, HashType, HashableShunt, IntoSplitPath, Node, Path,
-    PathComponent, SplitPath, TrieHash,
+    Children, HashMode, HashType, HashableShunt, IntoSplitPath, Node, Path, PathComponent,
+    SplitPath, TrieHash,
 };
 use smallvec::SmallVec;
 
@@ -194,32 +194,4 @@ pub trait Hashable: std::fmt::Debug {
     /// Each element is a child's index and hash.
     /// Yields 0 elements if the node is a leaf.
     fn children(&self) -> Children<Option<HashType>>;
-}
-
-/// A preimage of a hash.
-pub trait Preimage: std::fmt::Debug {
-    /// Returns the hash of this preimage.
-    fn to_hash(&self) -> HashType;
-
-    /// Write this hash preimage to `buf`.
-    fn write(&self, buf: &mut impl HasUpdate);
-}
-
-/// Hashes via [`Preimage`] resolve to the compile-selected
-/// [`DefaultHashMode`].
-///
-/// Storage hashing is genericized over `H: HashMode` and calls `H::to_hash` /
-/// `H::write_preimage` directly (see [`hash_node`], [`hash_preimage`], and
-/// [`HashableShunt::to_hash`](crate::HashableShunt::to_hash)). The
-/// [`Preimage`] trait survives for the remaining `&self`-shaped consumers
-/// above storage (e.g. `ProofNode`) and for `Debug` rendering; those still
-/// resolve to the default scheme until they are threaded over `H`.
-impl<T: Hashable> Preimage for T {
-    fn to_hash(&self) -> HashType {
-        DefaultHashMode::to_hash(self)
-    }
-
-    fn write(&self, buf: &mut impl HasUpdate) {
-        DefaultHashMode::write_preimage(self, buf);
-    }
 }

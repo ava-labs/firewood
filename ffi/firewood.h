@@ -1720,7 +1720,7 @@ typedef struct DatabaseHandleArgs {
    * header (a mismatch is an error); for a fresh database it is the scheme
    * to create with. A single binary can open both
    * [`NodeHashAlgorithm::Ethereum`] and [`NodeHashAlgorithm::MerkleDB`]
-   * databases regardless of the build's `ethhash` feature.
+   * databases regardless of the database's runtime hash mode.
    */
   enum NodeHashAlgorithm node_hash_algorithm;
   /**
@@ -1982,8 +1982,8 @@ struct HashResult fwd_code_hash_iter_next(struct CodeIteratorHandle *iter);
  * # Returns
  *
  * - [`HashResult::NullHandlePointer`] if the provided database handle is null.
- * - [`HashResult::None`] if the trie has no root hash (merkledb mode only;
- *   ethhash always returns a root hash, even for an empty trie).
+ * - [`HashResult::None`] if the trie has no root hash (MerkleDB mode only;
+ *   Ethereum mode always returns a root hash, even for an empty trie).
  * - [`HashResult::Some`] if the commit was successful, containing the new root hash.
  * - [`HashResult::Err`] if an error occurred while committing the batch.
  *
@@ -2005,8 +2005,8 @@ struct HashResult fwd_commit_proposal(struct ProposalHandle *proposal);
  * # Returns
  *
  * - [`HashResult::NullHandlePointer`] if the provided proposal handle is null.
- * - [`HashResult::None`] if the trie has no root hash (merkledb mode only;
- *   ethhash always returns a root hash, even for an empty trie).
+ * - [`HashResult::None`] if the trie has no root hash (MerkleDB mode only;
+ *   Ethereum mode always returns a root hash, even for an empty trie).
  * - [`HashResult::Some`] if the commit was successful, containing the new root hash.
  * - [`HashResult::Err`] if an error occurred while committing or rebasing.
  *
@@ -2103,8 +2103,8 @@ struct RangeProofResult fwd_db_range_proof(const struct DatabaseHandle *db,
  *
  * - [`HashResult::NullHandlePointer`] if the caller provided a null pointer
  *   to either the database or the proof.
- * - [`HashResult::None`] if the trie has no root hash (merkledb mode only;
- *   ethhash always returns a root hash, even for an empty trie).
+ * - [`HashResult::None`] if the trie has no root hash (MerkleDB mode only;
+ *   Ethereum mode always returns a root hash, even for an empty trie).
  * - [`HashResult::Some`] containing the new root hash.
  * - [`HashResult::Err`] if verification or commit failed.
  */

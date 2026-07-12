@@ -58,8 +58,8 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
 
     // Use the runtime-selecting `open` so the concrete hash mode matches the
     // requested algorithm (a fresh DB has no header to honor). `Db::new` would
-    // force `Db<DefaultHashMode>` and reject a requested mode that differs from
-    // the compile default.
+    // force `Db<EthHash>` and reject a requested mode that differs from
+    // the Ethereum default.
     let db = Db::open(
         opts.database.dbpath.clone(),
         opts.database.node_hash_algorithm.into(),

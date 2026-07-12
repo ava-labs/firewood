@@ -13,6 +13,7 @@ import (
 )
 
 func TestRevisionReconstructReadsAndChains(t *testing.T) {
+	skipIfNotEthereumMode(t)
 	r := require.New(t)
 	db := newTestDatabase(t)
 
@@ -62,6 +63,7 @@ func TestRevisionReconstructReadsAndChains(t *testing.T) {
 }
 
 func BenchmarkReconstructFromRevision(b *testing.B) {
+	skipIfNotEthereumMode(b)
 	r := require.New(b)
 	db := newTestDatabase(b)
 
@@ -91,6 +93,7 @@ func BenchmarkReconstructFromRevision(b *testing.B) {
 }
 
 func BenchmarkReconstructChain(b *testing.B) {
+	skipIfNotEthereumMode(b)
 	r := require.New(b)
 	const (
 		totalBatches = 2_049 // first batch is committed, rest are reconstructed
@@ -132,6 +135,7 @@ func BenchmarkReconstructChain(b *testing.B) {
 }
 
 func TestReconstructedDump(t *testing.T) {
+	skipIfNotEthereumMode(t)
 	r := require.New(t)
 	db := newTestDatabase(t)
 
@@ -153,6 +157,7 @@ func TestReconstructedDump(t *testing.T) {
 }
 
 func TestReconstructedDropThenUse(t *testing.T) {
+	skipIfNotEthereumMode(t)
 	r := require.New(t)
 	db := newTestDatabase(t)
 
@@ -193,6 +198,7 @@ func TestReconstructedDropThenUse(t *testing.T) {
 // TestReconstructedClone verifies that a Reconstruct call on a clone does
 // not affect the original handle's view of the same key.
 func TestReconstructedClone(t *testing.T) {
+	skipIfNotEthereumMode(t)
 	r := require.New(t)
 	db := newTestDatabase(t)
 
@@ -227,6 +233,7 @@ func TestReconstructedClone(t *testing.T) {
 // TestReconstructedCloneOutlivesOriginal verifies that dropping the original
 // reconstructed handle does not invalidate the clone.
 func TestReconstructedCloneOutlivesOriginal(t *testing.T) {
+	skipIfNotEthereumMode(t)
 	r := require.New(t)
 	db := newTestDatabase(t)
 
@@ -265,6 +272,7 @@ func TestReconstructedCloneOutlivesOriginal(t *testing.T) {
 // TestReconstructedCloneAfterDrop verifies that Clone cannot be called on a
 // dropped reconstructed handle.
 func TestReconstructedCloneAfterDrop(t *testing.T) {
+	skipIfNotEthereumMode(t)
 	r := require.New(t)
 	db := newTestDatabase(t)
 
@@ -288,6 +296,7 @@ func TestReconstructedCloneAfterDrop(t *testing.T) {
 // calls do not panic or return unexpected errors. Every goroutine must see
 // either a successful result or ErrDroppedReconstructed.
 func TestReconstructedConcurrentGetAndDrop(t *testing.T) {
+	skipIfNotEthereumMode(t)
 	r := require.New(t)
 	db := newTestDatabase(t)
 

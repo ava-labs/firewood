@@ -70,7 +70,7 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
             b.iter_batched(
                 || {
                     let store = Arc::new(MemStore::default());
-                    let nodestore: NodeStore<_, _, firewood_storage::DefaultHashMode> =
+                    let nodestore: NodeStore<_, _, firewood_storage::EthHash> =
                         NodeStore::new_empty_proposal(store, DeletedNodeTracking::Enabled);
                     let merkle = Merkle::from(nodestore);
 
@@ -118,7 +118,9 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
                     let db_path = TempDir::new().unwrap();
                     let db_path = db_path.path().join("benchmark_db");
                     let cfg = DbConfig::builder()
-                        .node_hash_algorithm(<firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM)
+                        .node_hash_algorithm(
+                            <firewood_storage::EthHash as firewood_storage::HashMode>::ALGORITHM,
+                        )
                         .truncate(true)
                         .build();
                     let db = firewood::db::Db::new(db_path, cfg).unwrap();

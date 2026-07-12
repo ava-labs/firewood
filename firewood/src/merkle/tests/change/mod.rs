@@ -108,8 +108,7 @@ mod edge_cases;
 // empty trie has no root hash, so change proofs from an empty database can't
 // be generated.
 mod empty;
-// Helpers shared by fuzz tests. Gated to the only current consumer.
-#[cfg(feature = "ethhash")]
+// Helpers shared by fuzz tests.
 pub(super) mod fuzz_common;
 mod partial;
 mod regression;
