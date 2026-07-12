@@ -24,12 +24,13 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("inserting key value pair {opts:?}");
     let key = opts.key.database_key()?;
     let hex_key = hex::encode(&key);
+    let algorithm = opts.database.resolve_node_hash_algorithm();
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(opts.database.node_hash_algorithm.into())
+        .node_hash_algorithm(algorithm)
         .create_if_missing(false)
         .truncate(false);
 
-    let db: Box<dyn api::DynDb> = Box::new(Db::new(opts.database.dbpath.clone(), cfg.build())?);
+    let db = Db::open(opts.database.dbpath.clone(), algorithm, cfg.build())?;
 
     let batch: api::OwnedBatch = Box::new([BatchOp::Put {
         key: key.into_boxed_slice(),

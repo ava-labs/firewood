@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -169,28 +168,19 @@ func newTestDatabase(tb testing.TB, opts ...Option) *Database {
 	return db
 }
 
-var (
-	// detectedNodeHashAlgorithm is cached after first detection to avoid repeated attempts
-	detectedNodeHashAlgorithm     NodeHashAlgorithm
-	detectedNodeHashAlgorithmOnce sync.Once
-)
+// testNodeHashAlgorithm reports the node hashing algorithm the tests should
+// create databases with. Node hashing is a per-database runtime choice (#1088),
+// so the mode is taken from TEST_FIREWOOD_HASH_MODE to stay consistent with the
+// expected roots selected in TestMain; it defaults to Ethereum when unset.
+func testNodeHashAlgorithm() NodeHashAlgorithm {
+	if os.Getenv("TEST_FIREWOOD_HASH_MODE") == firewoodKey {
+		return MerkleDBNodeHashing
+	}
+	return EthereumNodeHashing
+}
 
 func newDatabase(dbDir string, opts ...Option) (*Database, error) {
-	// Detect the correct algo once and cache it
-	detectedNodeHashAlgorithmOnce.Do(func() {
-		// Try ethhash first, if it fails try merkledb
-		tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("firewood-hash-detection-%d", time.Now().UnixNano()))
-		defer os.RemoveAll(tempDir)
-
-		_, err := New(tempDir, EthereumNodeHashing, WithTruncate(true))
-		if err == nil {
-			detectedNodeHashAlgorithm = EthereumNodeHashing
-		} else {
-			detectedNodeHashAlgorithm = MerkleDBNodeHashing
-		}
-	})
-
-	f, err := New(dbDir, detectedNodeHashAlgorithm, opts...)
+	f, err := New(dbDir, testNodeHashAlgorithm(), opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new database in directory %q: %w", dbDir, err)
 	}
@@ -212,43 +202,33 @@ func TestUpdateSingleKV(t *testing.T) {
 func TestNodeHashAlgorithmValidation(t *testing.T) {
 	r := require.New(t)
 
-	// Try to create a database with ethhash
+	// Node hashing is a per-database runtime choice (issue #1088): a single
+	// binary can create and operate on both an Ethereum-mode database and a
+	// MerkleDB-mode database side by side, regardless of the ethhash feature.
 	dbDirEth := t.TempDir()
-	dbEth, errEth := New(dbDirEth, EthereumNodeHashing, WithTruncate(true))
+	dbEth, err := New(dbDirEth, EthereumNodeHashing, WithTruncate(true))
+	r.NoError(err)
+	_, _, ethBatch := kvForTest(1)
+	_, err = dbEth.Update(ethBatch)
+	r.NoError(err)
+	r.NoError(dbEth.Close(oneSecCtx(t)))
 
-	// Try to create a database with merkledb
 	dbDirMerkledb := t.TempDir()
-	dbMerkledb, errMerkledb := New(dbDirMerkledb, MerkleDBNodeHashing, WithTruncate(true))
+	dbMerkledb, err := New(dbDirMerkledb, MerkleDBNodeHashing, WithTruncate(true))
+	r.NoError(err)
+	_, _, merkledbBatch := kvForTest(1)
+	_, err = dbMerkledb.Update(merkledbBatch)
+	r.NoError(err)
+	r.NoError(dbMerkledb.Close(oneSecCtx(t)))
 
-	// Exactly one should succeed based on compile-time feature
-	type resultType int
-	const (
-		ethereumOnly resultType = iota
-		merkledbOnly
-		bothOrNeither
-	)
-
-	result := bothOrNeither
-	switch {
-	case errEth == nil && errMerkledb != nil:
-		result = ethereumOnly
-	case errMerkledb == nil && errEth != nil:
-		result = merkledbOnly
+	// Re-opening an existing database with a different algorithm than the one
+	// stamped in its header is rejected by the header-vs-requested gate.
+	reopened, err := New(dbDirEth, MerkleDBNodeHashing)
+	if err == nil {
+		r.NoError(reopened.Close(oneSecCtx(t)))
 	}
-
-	switch result {
-	case ethereumOnly:
-		r.NoError(dbEth.Close(oneSecCtx(t)))
-		r.Error(errMerkledb)
-		r.ErrorContains(errMerkledb, "node store hash algorithm mismatch: want to initialize with MerkleDB, but build option is for Ethereum")
-	case merkledbOnly:
-		r.NoError(dbMerkledb.Close(oneSecCtx(t)))
-		r.Error(errEth)
-		r.ErrorContains(errEth, "node store hash algorithm mismatch: want to initialize with Ethereum, but build option is for MerkleDB")
-	case bothOrNeither:
-		// Both succeeded or both failed - this should not happen
-		r.Failf("Expected exactly one hash type to succeed", "got errEth=%v, errNative=%v", errEth, errMerkledb)
-	}
+	r.Error(err)
+	r.ErrorContains(err, "node store hash algorithm mismatch: want to open with MerkleDB, but file header indicates Ethereum")
 }
 
 func TestUpdateMultiKV(t *testing.T) {
