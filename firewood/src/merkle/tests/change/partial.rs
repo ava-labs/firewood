@@ -16,6 +16,7 @@ use test_case::test_case;
 /// Verify that partial proofs return the expected number of batch ops
 /// and pass both structural and root hash verification, across
 /// combinations of `start_key`, `end_key`, and `limit`.
+#[firewood_macros::hash_mode]
 #[test_case(None,          None,          Some(1),  1 ; "limit 1 of 3 truncates")]
 #[test_case(None,          None,          Some(2),  2 ; "limit 2 of 3 truncates")]
 #[test_case(None,          None,          Some(3),  3 ; "limit equals change count not truncated")]
@@ -24,14 +25,16 @@ use test_case::test_case;
 #[test_case(None,          Some(b"\x05"), Some(1),  0 ; "end before first change gives empty proof")]
 #[test_case(Some(b"\x20"), Some(b"\x40"), Some(1),  1 ; "bounded and limited")]
 #[test_case(Some(b"\x20"), Some(b"\x40"), None,     1 ; "bounded all fit")]
-fn test_partial_proof_verified(
+fn test_partial_proof_verified<H: HashMode>(
     start_key: Option<&[u8]>,
     end_key: Option<&[u8]>,
     limit: Option<usize>,
     expected_ops: usize,
 ) {
-    let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\x30", b"v1"), (b"\x50", b"v2")];
-    let (target, _dir_target) = setup_db![(b"\x10", b"v0"), (b"\x30", b"v1"), (b"\x50", b"v2")];
+    let (source, _dir_source) =
+        setup_db![mode = H; (b"\x10", b"v0"), (b"\x30", b"v1"), (b"\x50", b"v2")];
+    let (target, _dir_target) =
+        setup_db![mode = H; (b"\x10", b"v0"), (b"\x30", b"v1"), (b"\x50", b"v2")];
     let root1_target = target.root_hash().unwrap();
     let (root1_source, root2) = setup_2nd_commit!(
         source,
@@ -44,16 +47,20 @@ fn test_partial_proof_verified(
         .unwrap();
     assert_eq!(proof.batch_ops().len(), expected_ops);
 
-    let ctx = verify_change_proof_structure(&proof, root2, start_key, end_key, limit_nz).unwrap();
+    let ctx =
+        verify_change_proof_structure(&proof, root2, start_key, end_key, H::ALGORITHM, limit_nz)
+            .unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
 /// Sync source→target using a partial proof of 1 key (limit=1), commit,
 /// then a proof of the remaining keys (2 passes).
-#[test]
-fn test_partial_proof_round_trip() {
-    let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
-    let (target, _dir_target) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+#[firewood_macros::hash_mode]
+fn test_partial_proof_round_trip<H: HashMode>() {
+    let (source, _dir_source) =
+        setup_db![mode = H; (b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+    let (target, _dir_target) =
+        setup_db![mode = H; (b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
     let root1_target = target.root_hash().unwrap();
 
     let (root1_source, root2) = setup_2nd_commit!(
@@ -72,9 +79,15 @@ fn test_partial_proof_round_trip() {
             NonZeroUsize::new(1),
         )
         .unwrap();
-    let ctx1 =
-        verify_change_proof_structure(&proof1, root2.clone(), None, None, NonZeroUsize::new(1))
-            .unwrap();
+    let ctx1 = verify_change_proof_structure(
+        &proof1,
+        root2.clone(),
+        None,
+        None,
+        H::ALGORITHM,
+        NonZeroUsize::new(1),
+    )
+    .unwrap();
     verify_and_check(&target, &proof1, &ctx1, root1_target.clone()).unwrap();
 
     // Commit round 1
@@ -91,7 +104,8 @@ fn test_partial_proof_round_trip() {
         .change_proof(root1_source, root2.clone(), Some(&next_start), None, None)
         .unwrap();
     let ctx2 =
-        verify_change_proof_structure(&proof2, root2, Some(&next_start), None, None).unwrap();
+        verify_change_proof_structure(&proof2, root2, Some(&next_start), None, H::ALGORITHM, None)
+            .unwrap();
     verify_and_check(&target, &proof2, &ctx2, root_target_after_1).unwrap();
 }
 
@@ -100,10 +114,12 @@ fn test_partial_proof_round_trip() {
 /// proof validates against the last returned key — a Put produces an
 /// inclusion proof, but a Delete produces an exclusion proof, exercising
 /// a different verification path.
-#[test]
-fn test_partial_proof_with_delete_last_op() {
-    let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
-    let (target, _dir_target) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+#[firewood_macros::hash_mode]
+fn test_partial_proof_with_delete_last_op<H: HashMode>() {
+    let (source, _dir_source) =
+        setup_db![mode = H; (b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+    let (target, _dir_target) =
+        setup_db![mode = H; (b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
     let root1_target = target.root_hash().unwrap();
 
     let changes: Vec<BatchOp<&[u8], &[u8]>> = vec![
@@ -129,7 +145,14 @@ fn test_partial_proof_with_delete_last_op() {
             NonZeroUsize::new(2),
         )
         .unwrap();
-    let ctx =
-        verify_change_proof_structure(&proof, root2, None, None, NonZeroUsize::new(2)).unwrap();
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2,
+        None,
+        None,
+        H::ALGORITHM,
+        NonZeroUsize::new(2),
+    )
+    .unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }

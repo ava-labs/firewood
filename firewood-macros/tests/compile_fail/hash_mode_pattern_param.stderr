@@ -1,0 +1,5 @@
+error: #[hash_mode] helpers may only use plain identifier parameters
+  --> tests/compile_fail/hash_mode_pattern_param.rs:10:19
+   |
+10 | fn t<H: HashMode>((a, b): (u32, u32)) {
+   |                   ^^^^^^

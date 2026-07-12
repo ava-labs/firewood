@@ -407,20 +407,21 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
 
 #[cfg(test)]
 mod tests {
-    use firewood_storage::{DeletedNodeTracking, MemStore};
+    use std::sync::Arc;
+
+    use firewood_storage::{DeletedNodeTracking, EthHash, MemStore, MerkleDbHash};
 
     use super::*;
 
-    fn create_test_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
-        let memstore = MemStore::default();
-        let nodestore =
-            NodeStore::new_empty_proposal(memstore.into(), DeletedNodeTracking::Enabled);
+    fn create_test_merkle<H: HashMode>() -> Merkle<NodeStore<Mutable<Propose>, MemStore, H>> {
+        let memstore = Arc::new(MemStore::new(Vec::new(), H::ALGORITHM));
+        let nodestore = NodeStore::new_empty_proposal(memstore, DeletedNodeTracking::Enabled);
         Merkle { nodestore }
     }
 
-    type TestMerkle = Merkle<NodeStore<Mutable<Propose>, MemStore>>;
+    type TestMerkle<H> = Merkle<NodeStore<Mutable<Propose>, MemStore, H>>;
 
-    fn branch_child(m: &mut TestMerkle, keys: &[&[u8]], nibble: u8) -> Child {
+    fn branch_child<H: HashMode>(m: &mut TestMerkle<H>, keys: &[&[u8]], nibble: u8) -> Child {
         for key in keys {
             m.insert(key, Box::from(b"v".as_slice())).unwrap();
         }
@@ -432,15 +433,15 @@ mod tests {
             .unwrap()
     }
 
-    fn check_child_in_range(
-        setup: impl FnOnce(&mut TestMerkle) -> Child,
+    fn check_child_in_range<H: HashMode>(
+        setup: impl FnOnce(&mut TestMerkle<H>) -> Child,
         acc_prefix: &[u8],
         nibble: u8,
         start_nib: &[u8],
         end_nib: &[u8],
         expected: bool,
     ) {
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<H>();
         let child = setup(&mut merkle);
         let pc = PathComponent::try_new(nibble).unwrap();
         let result = merkle
@@ -452,10 +453,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_child_in_range() {
+    #[firewood_macros::hash_mode]
+    fn test_child_in_range<H: HashMode>() {
         // nibble clearly out of range — returns false without reading
-        check_child_in_range(
+        check_child_in_range::<H>(
             |m| branch_child(m, &[b"\x50", b"\x60"], 0x5),
             &[],
             0x5,
@@ -465,7 +466,7 @@ mod tests {
         );
 
         // leaf: nibble straddles start, full key [0,0] < start [0,1]
-        check_child_in_range(
+        check_child_in_range::<H>(
             |m| branch_child(m, &[b"\x00", b"\x10"], 0x0),
             &[],
             0x0,
@@ -475,7 +476,7 @@ mod tests {
         );
 
         // leaf: nibble straddles start, full key [0,5] >= start [0,1]
-        check_child_in_range(
+        check_child_in_range::<H>(
             |m| branch_child(m, &[b"\x05", b"\x10"], 0x0),
             &[],
             0x0,
@@ -485,7 +486,7 @@ mod tests {
         );
 
         // leaf: nibble straddles end, full key [3,f] > end [3,0]
-        check_child_in_range(
+        check_child_in_range::<H>(
             |m| branch_child(m, &[b"\x3f", b"\x10"], 0x3),
             &[],
             0x3,
@@ -495,7 +496,7 @@ mod tests {
         );
 
         // branch: all children out of range ([0,0,0,0] and [0,0,5,0] both < [0,1])
-        check_child_in_range(
+        check_child_in_range::<H>(
             |m| branch_child(m, &[b"\x00\x00", b"\x00\x50", b"\x10"], 0x0),
             &[],
             0x0,
@@ -505,7 +506,7 @@ mod tests {
         );
 
         // branch: one child in range ([0,1,0,0] >= [0,1])
-        check_child_in_range(
+        check_child_in_range::<H>(
             |m| branch_child(m, &[b"\x00\x00", b"\x01\x00", b"\x10"], 0x0),
             &[],
             0x0,
@@ -515,7 +516,7 @@ mod tests {
         );
 
         // branch with value: key [0,0] in range [0,0]..[0,f], has value
-        check_child_in_range(
+        check_child_in_range::<H>(
             |m| branch_child(m, &[b"\x00", b"\x00\x50", b"\x10"], 0x0),
             &[],
             0x0,
@@ -562,10 +563,10 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_collapse_navigate_exact_match() {
+    #[firewood_macros::hash_mode]
+    fn test_collapse_navigate_exact_match<H: HashMode>() {
         let pc = |n: u8| PathComponent::try_new(n).unwrap();
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<H>();
 
         // Under \x10, branch with children at 2 and 3.
         // Under \x10\x2, branch with children at 1 and 2.
@@ -607,10 +608,10 @@ mod tests {
         assert!(merkle.get_value(b"\x10\x30").unwrap().is_some());
     }
 
-    #[test]
-    fn test_collapse_navigate_recurse() {
+    #[firewood_macros::hash_mode]
+    fn test_collapse_navigate_recurse<H: HashMode>() {
         let pc = |n: u8| PathComponent::try_new(n).unwrap();
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<H>();
 
         // Under \x1, branch with children at nibbles 0 and 1.
         // Under \x10\x2, branch with children at nibbles 1 and 3.
@@ -645,10 +646,10 @@ mod tests {
         assert!(merkle.get_value(b"\x10\x23").unwrap().is_none());
     }
 
-    #[test]
-    fn test_collapse_navigate_errors() {
+    #[firewood_macros::hash_mode]
+    fn test_collapse_navigate_errors<H: HashMode>() {
         let pc = |n: u8| PathComponent::try_new(n).unwrap();
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<H>();
 
         // Single key \x10 → root has partial_path [1, 0]
         merkle.insert(b"\x10", Box::from(b"a".as_slice())).unwrap();
@@ -685,7 +686,7 @@ mod tests {
 
         // Range covers \x10\x22 in this test. An in-range off-path child
         // should result in an `EndRootMismatch`.
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<H>();
         merkle
             .insert(b"\x10\x21", Box::from(b"a".as_slice()))
             .unwrap();
@@ -715,10 +716,10 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_collapse_navigate_mismatched_partial_path() {
+    #[firewood_macros::hash_mode]
+    fn test_collapse_navigate_mismatched_partial_path<H: HashMode>() {
         let pc = |n: u8| PathComponent::try_new(n).unwrap();
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<H>();
 
         // Under [1, 0, 2]: leaf with partial_path [1] for \x10\x21
         merkle
