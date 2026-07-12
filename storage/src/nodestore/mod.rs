@@ -105,8 +105,8 @@ use crate::hashednode::hash_node;
 use crate::node::Node;
 use crate::node::persist::MaybePersistedNode;
 use crate::{
-    CacheReadStrategy, Child, DefaultHashMode, FileIoError, HashMode, HashType, Path,
-    ReadableStorage, SharedNode, TrieHash,
+    CacheReadStrategy, Child, EthHash, FileIoError, HashMode, HashType, Path, ReadableStorage,
+    SharedNode, TrieHash,
 };
 
 use super::linear::WritableStorage;
@@ -440,7 +440,9 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> NodeStore<Mutable<K>, S, H
     }
 }
 
-impl<S: ReadableStorage> NodeStore<Mutable<Recon<S>>, S> {
+// EthHash: reconstruction is permanently Ethereum-only (issue #1088 locked
+// decision); the reconstruction path is not threaded over `H`.
+impl<S: ReadableStorage> NodeStore<Mutable<Recon<S>>, S, EthHash> {
     /// Create a new mutable nodestore for reconstruction from a read-capable parent.
     ///
     /// Unlike [`NodeStore::new`], this constructor does not require `Parentable`.
@@ -455,11 +457,11 @@ impl<S: ReadableStorage> NodeStore<Mutable<Recon<S>>, S> {
     ///
     /// Returns a [`FileIoError`] if the parent root cannot be read.
     pub(crate) fn new_for_reconstruction<T>(
-        parent: &NodeStore<T, S>,
-        parent_anchor: Arc<NodeStore<Committed, S>>,
+        parent: &NodeStore<T, S, EthHash>,
+        parent_anchor: Arc<NodeStore<Committed, S, EthHash>>,
     ) -> Result<Self, FileIoError>
     where
-        NodeStore<T, S>: TrieReader,
+        NodeStore<T, S, EthHash>: TrieReader,
     {
         let root = if let Some(root) = parent.root_as_maybe_persisted_node() {
             let root = triomphe::Arc::unwrap_or_clone(root.as_shared_node(parent)?);
@@ -481,9 +483,11 @@ impl<S: ReadableStorage> NodeStore<Mutable<Recon<S>>, S> {
     }
 }
 
-impl<T: ReconstructionSource<S>, S: ReadableStorage> NodeStore<T, S>
+// EthHash: reconstruction is permanently Ethereum-only (issue #1088 locked
+// decision).
+impl<T: ReconstructionSource<S>, S: ReadableStorage> NodeStore<T, S, EthHash>
 where
-    NodeStore<T, S>: TrieReader,
+    NodeStore<T, S, EthHash>: TrieReader,
     Self: Sized,
 {
     /// Create a mutable reconstruction child from a committed or reconstructed parent.
@@ -498,7 +502,7 @@ where
     /// Returns a [`FileIoError`] if the parent root cannot be read.
     pub fn reconstruction_child(
         self: &Arc<Self>,
-    ) -> Result<NodeStore<Mutable<Recon<S>>, S>, FileIoError> {
+    ) -> Result<NodeStore<Mutable<Recon<S>>, S, EthHash>, FileIoError> {
         let anchor = T::committed_anchor(self);
         NodeStore::new_for_reconstruction(self, anchor)
     }
@@ -543,7 +547,9 @@ impl<S: WritableStorage, H: HashMode> NodeStore<Mutable<Propose>, S, H> {
     }
 }
 
-impl<S: ReadableStorage> NodeStore<Mutable<Recon<S>>, S> {
+// EthHash: reconstruction is permanently Ethereum-only (issue #1088 locked
+// decision).
+impl<S: ReadableStorage> NodeStore<Mutable<Recon<S>>, S, EthHash> {
     /// Creates a new, empty, reconstruction [`NodeStore`] backed by a fresh
     /// empty committed parent. Used by tests of reconstruction workflows;
     /// production reconstructions always go through
@@ -597,19 +603,26 @@ pub trait ReconstructionSource<S> {
     /// parent. For [`Committed`] parents this clones the caller's `Arc`; for
     /// [`Reconstructed`] parents this clones the parent's existing anchor so
     /// every derived `Reconstructed` pins the same original committed root.
-    fn committed_anchor(arc: &Arc<NodeStore<Self, S>>) -> Arc<NodeStore<Committed, S>>
+    // EthHash: reconstruction is permanently Ethereum-only (issue #1088).
+    fn committed_anchor(
+        arc: &Arc<NodeStore<Self, S, EthHash>>,
+    ) -> Arc<NodeStore<Committed, S, EthHash>>
     where
         Self: Sized;
 }
 
 impl<S: ReadableStorage> ReconstructionSource<S> for Committed {
-    fn committed_anchor(arc: &Arc<NodeStore<Self, S>>) -> Arc<NodeStore<Committed, S>> {
+    fn committed_anchor(
+        arc: &Arc<NodeStore<Self, S, EthHash>>,
+    ) -> Arc<NodeStore<Committed, S, EthHash>> {
         Arc::clone(arc)
     }
 }
 
 impl<S: ReadableStorage> ReconstructionSource<S> for Reconstructed<S> {
-    fn committed_anchor(arc: &Arc<NodeStore<Self, S>>) -> Arc<NodeStore<Committed, S>> {
+    fn committed_anchor(
+        arc: &Arc<NodeStore<Self, S, EthHash>>,
+    ) -> Arc<NodeStore<Committed, S, EthHash>> {
         Arc::clone(&arc.kind.parent_anchor)
     }
 }
@@ -636,12 +649,14 @@ pub trait NodeReader {
     /// database was created with.
     ///
     /// Proof emission (child-hash wire layout, value-digest rule, and the
-    /// account storage-root fix) is governed by the source DB's runtime mode,
-    /// not the build's compile-time default. The default returns
-    /// [`DefaultHashMode::ALGORITHM`]; [`NodeStore`] overrides it with the value
-    /// from the storage header.
+    /// account storage-root fix) is governed by the source DB's runtime mode.
+    /// [`NodeStore`] overrides this with the value read from the storage header;
+    /// the default is only reached by readers that carry no header.
     fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
-        DefaultHashMode::ALGORITHM
+        // EthHash: fallback for header-less readers; every real `NodeStore`
+        // reader overrides this from its persisted header. Ethereum is the
+        // shipping/C-Chain mode.
+        <EthHash as HashMode>::ALGORITHM
     }
 }
 
@@ -887,7 +902,7 @@ impl ImmutableProposal {
 /// 4. Chain further reconstructions: convert back to [`Mutable<Recon>`] via [`From`] and repeat.
 ///
 #[derive(Debug)]
-pub struct NodeStore<T, S, H = DefaultHashMode> {
+pub struct NodeStore<T, S, H> {
     /// This is one of [Committed], [`ImmutableProposal`], [`Mutable<Propose>`], [`Mutable<Recon>`], or [`Reconstructed`].
     kind: T,
     /// Persisted storage to read nodes from.
@@ -901,9 +916,8 @@ pub struct NodeStore<T, S, H = DefaultHashMode> {
     /// never be consumed (e.g. archival mode, where old nodes are preserved on
     /// disk for historical queries), so proposals skip building it entirely.
     deleted_node_tracking: DeletedNodeTracking,
-    /// The node-hashing scheme ([`HashMode`]). Zero-sized; defaulted to the
-    /// compile-selected mode ([`DefaultHashMode`]) while `H` is threaded
-    /// through the stack, and selected per database at runtime after #1088.
+    /// The node-hashing scheme ([`HashMode`]). Zero-sized; `H` is threaded
+    /// through the stack and selected per database at runtime (#1088).
     _hash_mode: PhantomData<H>,
 }
 
@@ -950,7 +964,8 @@ pub struct Reconstructed<S> {
     /// view (transitively) references. Holding it prevents the
     /// `RevisionManager` from reaping that revision while this `Reconstructed`
     /// is alive.
-    pub(crate) parent_anchor: Arc<NodeStore<Committed, S>>,
+    // EthHash: reconstruction is permanently Ethereum-only (issue #1088).
+    pub(crate) parent_anchor: Arc<NodeStore<Committed, S, EthHash>>,
 }
 
 impl<S> Clone for Reconstructed<S> {
@@ -984,7 +999,8 @@ pub struct Propose {
 #[derive(Debug)]
 pub struct Recon<S> {
     /// See [`Reconstructed::parent_anchor`].
-    pub(crate) parent_anchor: Arc<NodeStore<Committed, S>>,
+    // EthHash: reconstruction is permanently Ethereum-only (issue #1088).
+    pub(crate) parent_anchor: Arc<NodeStore<Committed, S, EthHash>>,
 }
 
 /// Behaviour that differs between proposal and reconstruction mutable nodestores.
@@ -1033,8 +1049,11 @@ pub struct Mutable<Kind> {
 /// create a mutable root node for a new Reconstructed
 /// with this root.
 /// For reconstruct on reconstruct, this avoids cloning
-impl<S: ReadableStorage> From<NodeStore<Reconstructed<S>, S>> for NodeStore<Mutable<Recon<S>>, S> {
-    fn from(val: NodeStore<Reconstructed<S>, S>) -> Self {
+// EthHash: reconstruction is permanently Ethereum-only (issue #1088).
+impl<S: ReadableStorage> From<NodeStore<Reconstructed<S>, S, EthHash>>
+    for NodeStore<Mutable<Recon<S>>, S, EthHash>
+{
+    fn from(val: NodeStore<Reconstructed<S>, S, EthHash>) -> Self {
         // Consume the ArcSwap to get back the SharedNode, then unwrap_or_clone to extract
         // an owned Node. In the linear M->R->M->R chain the SharedNode is uniquely held,
         // so this is a free move.
@@ -1057,8 +1076,11 @@ impl<S: ReadableStorage> From<NodeStore<Reconstructed<S>, S>> for NodeStore<Muta
     }
 }
 
-impl<S: ReadableStorage> From<NodeStore<Mutable<Recon<S>>, S>> for NodeStore<Reconstructed<S>, S> {
-    fn from(val: NodeStore<Mutable<Recon<S>>, S>) -> Self {
+// EthHash: reconstruction is permanently Ethereum-only (issue #1088).
+impl<S: ReadableStorage> From<NodeStore<Mutable<Recon<S>>, S, EthHash>>
+    for NodeStore<Reconstructed<S>, S, EthHash>
+{
+    fn from(val: NodeStore<Mutable<Recon<S>>, S, EthHash>) -> Self {
         NodeStore {
             kind: Reconstructed {
                 root: val
@@ -1076,10 +1098,11 @@ impl<S: ReadableStorage> From<NodeStore<Mutable<Recon<S>>, S>> for NodeStore<Rec
     }
 }
 
-impl<S: ReadableStorage> From<Arc<NodeStore<Reconstructed<S>, S>>>
-    for NodeStore<Mutable<Recon<S>>, S>
+// EthHash: reconstruction is permanently Ethereum-only (issue #1088).
+impl<S: ReadableStorage> From<Arc<NodeStore<Reconstructed<S>, S, EthHash>>>
+    for NodeStore<Mutable<Recon<S>>, S, EthHash>
 {
-    fn from(val: Arc<NodeStore<Reconstructed<S>, S>>) -> Self {
+    fn from(val: Arc<NodeStore<Reconstructed<S>, S, EthHash>>) -> Self {
         // Fast path: if this Arc is uniquely owned, `try_unwrap` is O(1) and lets us move the
         // reconstructed root out without cloning.
         // The fallback (shared-Arc) path is reachable in two ways:
@@ -1100,7 +1123,8 @@ impl<S: ReadableStorage> From<Arc<NodeStore<Reconstructed<S>, S>>>
 ///
 /// This clones the [`SharedNode`] arc (cheap ref-count bump) and the
 /// [`OnceLock`] hash (cloned if already computed, empty otherwise).
-impl<S> Clone for NodeStore<Reconstructed<S>, S> {
+// EthHash: reconstruction is permanently Ethereum-only (issue #1088).
+impl<S> Clone for NodeStore<Reconstructed<S>, S, EthHash> {
     fn clone(&self) -> Self {
         NodeStore {
             kind: self.kind.clone(),
@@ -1533,9 +1557,9 @@ impl<S: WritableStorage, H: HashMode> NodeStore<Committed, S, H> {
 }
 
 // Helper functions for the checker
-impl<T, S: ReadableStorage> NodeStore<T, S>
+impl<T, S: ReadableStorage, H: HashMode> NodeStore<T, S, H>
 where
-    NodeStore<T, S>: NodeReader,
+    NodeStore<T, S, H>: NodeReader,
 {
     // Find the area index and size of the stored area at the given address if the area is valid.
     // TODO(#2050): there should be a way to read stored area directly instead of try reading as a free area then as a node
@@ -1875,7 +1899,7 @@ mod tests {
         Ok(())
     }
 
-    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
+    // Reconstruction is Ethereum-only (#1088 follow-up).
     #[test]
     fn reconstructed_root_address_is_none() {
         let storage = Arc::new(MemStore::default());
@@ -1886,12 +1910,12 @@ mod tests {
             value: b"value".to_vec().into_boxed_slice(),
         }));
 
-        let reconstructed: NodeStore<Reconstructed<_>, _> = recon.into();
+        let reconstructed: NodeStore<Reconstructed<_>, _, EthHash> = recon.into();
 
         assert_eq!(reconstructed.root_address(), None);
     }
 
-    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
+    // Reconstruction is Ethereum-only (#1088 follow-up).
     #[test]
     fn reconstructed_conversion_defers_hashing() {
         let storage = Arc::new(MemStore::default());
@@ -1902,13 +1926,13 @@ mod tests {
             value: b"value".to_vec().into_boxed_slice(),
         }));
 
-        let reconstructed: NodeStore<Reconstructed<_>, _> = recon.into();
+        let reconstructed: NodeStore<Reconstructed<_>, _, EthHash> = recon.into();
 
         // Conversion should not eagerly hash reconstructed roots.
         assert!(reconstructed.kind.hash.get().is_none());
     }
 
-    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
+    // Reconstruction is Ethereum-only (#1088 follow-up).
     #[test]
     fn reconstructed_root_hash_is_memoized() {
         let storage = Arc::new(MemStore::default());
@@ -1919,7 +1943,7 @@ mod tests {
             value: b"value".to_vec().into_boxed_slice(),
         }));
 
-        let reconstructed: NodeStore<Reconstructed<_>, _> = recon.into();
+        let reconstructed: NodeStore<Reconstructed<_>, _, EthHash> = recon.into();
 
         // Before hashing, the OnceLock is empty
         assert!(reconstructed.kind.hash.get().is_none());
@@ -1932,18 +1956,18 @@ mod tests {
         assert_eq!(first_hash, second_hash);
     }
 
-    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
+    // Reconstruction is Ethereum-only (#1088 follow-up).
     #[test]
     fn reconstructed_empty_root_hash_is_none() {
         let storage = Arc::new(MemStore::default());
         let recon = NodeStore::new_empty_recon(Arc::clone(&storage));
 
-        let reconstructed: NodeStore<Reconstructed<_>, _> = recon.into();
+        let reconstructed: NodeStore<Reconstructed<_>, _, EthHash> = recon.into();
 
         assert_eq!(reconstructed.root_hash(), None);
     }
 
-    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
+    // Reconstruction is Ethereum-only (#1088 follow-up).
     #[test]
     fn reconstructed_root_hash_rewrites_root_children() {
         // After root_hash() runs, the swapped-in root must have no Child::Node
@@ -1967,7 +1991,7 @@ mod tests {
             children,
         })));
 
-        let reconstructed: NodeStore<Reconstructed<_>, _> = recon.into();
+        let reconstructed: NodeStore<Reconstructed<_>, _, EthHash> = recon.into();
 
         // Sanity: pre-hash, the root branch has at least one Child::Node.
         let before = reconstructed.root_node().expect("root present");
@@ -1998,7 +2022,7 @@ mod tests {
     }
 
     #[test]
-    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
+    // Reconstruction is Ethereum-only (#1088 follow-up).
     fn reconstructed_pins_committed_parent() {
         // A Reconstructed must hold a strong Arc to its committed parent so
         // the RevisionManager cannot reap the revision (and free its on-disk
@@ -2010,7 +2034,7 @@ mod tests {
         ));
         assert_eq!(Arc::strong_count(&committed), 1);
 
-        let recon = NodeStore::<Mutable<Recon<_>>, _>::new_for_reconstruction(
+        let recon = NodeStore::<Mutable<Recon<_>>, _, EthHash>::new_for_reconstruction(
             &*committed,
             Arc::clone(&committed),
         )
@@ -2021,7 +2045,7 @@ mod tests {
             "Mutable<Recon> should pin the committed parent"
         );
 
-        let reconstructed: NodeStore<Reconstructed<_>, _> = recon.into();
+        let reconstructed: NodeStore<Reconstructed<_>, _, EthHash> = recon.into();
         assert_eq!(
             Arc::strong_count(&committed),
             2,

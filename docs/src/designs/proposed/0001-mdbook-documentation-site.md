@@ -470,7 +470,7 @@ and links to upstream install docs (and may include concrete install commands).
   `mdbook-mermaid`, `mdbook-admonish`, `mdbook-linkcheck2`).
 - **macOS local:** rustup install; components (`rustfmt`, `clippy`, `rust-analyzer`);
   VS Code + `rust-analyzer` extension settings; `just` workflows; build/test
-  (`cargo nextest run --workspace --features ethhash,logger`).
+  (`cargo nextest run --workspace --features logger`).
 - **Docker / devcontainer:** use the existing `.devcontainer/`; open in VS Code Dev
   Containers; what is preinstalled vs. what to run.
 - **Remote Linux over SSH:** VS Code Remote-SSH; install rustup/Go/Nix on the host;

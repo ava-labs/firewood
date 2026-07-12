@@ -22,8 +22,8 @@ pub mod replay;
 pub mod root;
 
 // The node-hashing scheme is now a per-database runtime choice. For a fresh
-// database the default is the binary's compile-time scheme (`DefaultHashMode`);
-// for an existing database the header's scheme is auto-detected and honored.
+// database the default is the locked Ethereum scheme; for an existing database
+// the header's scheme is auto-detected and honored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, ValueEnum)]
 pub enum NodeHashAlgorithm {
     #[default]
@@ -42,15 +42,11 @@ impl From<NodeHashAlgorithm> for firewood_storage::NodeHashAlgorithm {
     }
 }
 
-/// The `--hash-mode` default for a fresh database: the binary's compile-time
-/// scheme (`DefaultHashMode`). An existing database's persisted header is
-/// honored instead (see [`DatabasePath::resolve_node_hash_algorithm`]).
+/// The `--hash-mode` default for a fresh database: the locked Ethereum scheme.
+/// An existing database's persisted header is honored instead (see
+/// [`DatabasePath::resolve_node_hash_algorithm`]).
 const fn default_node_hash_algorithm() -> NodeHashAlgorithm {
-    use firewood_storage::HashMode;
-    match <firewood_storage::DefaultHashMode as HashMode>::ALGORITHM {
-        firewood_storage::NodeHashAlgorithm::Ethereum => NodeHashAlgorithm::Ethereum,
-        firewood_storage::NodeHashAlgorithm::MerkleDB => NodeHashAlgorithm::MerkleDB,
-    }
+    NodeHashAlgorithm::Ethereum
 }
 
 #[derive(Clone, Debug, Parser)]
@@ -120,7 +116,7 @@ impl DatabasePath {
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
-#[command(version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_COMMIT_SHA"), ", ", env!("ETHHASH_FEATURE"), ")"))]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_COMMIT_SHA"), ")"))]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

@@ -70,7 +70,6 @@ sha2.workspace = true
 [features]
 logger = ["log"]
 io-uring = ["dep:io-uring"]
-ethhash = []
 test_utils = ["dep:metrics-util", "dep:rand"]
 
 [[bench]]

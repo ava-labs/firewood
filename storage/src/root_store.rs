@@ -18,7 +18,7 @@ use weak_table::WeakValueHashMap;
 
 use derive_where::derive_where;
 
-use crate::hashmode::{DefaultHashMode, HashMode};
+use crate::hashmode::HashMode;
 use crate::linear::filebacked::FileBacked;
 use crate::nodestore::{Committed, DeletedNodeTracking, LinearAddress, NodeStore};
 use crate::{IntoHashType, TrieHash};
@@ -28,7 +28,7 @@ use crate::{IntoHashType, TrieHash};
 /// `H` is the database's node-hashing scheme; the persisted root addresses are
 /// scheme-independent, so a [`RootStore`] reconstructs committed revisions under
 /// whichever `H` its owning database uses.
-pub type CommittedRevision<H = DefaultHashMode> = Arc<NodeStore<Committed, FileBacked, H>>;
+pub type CommittedRevision<H> = Arc<NodeStore<Committed, FileBacked, H>>;
 
 /// In-memory cache of reconstructed committed revisions, keyed by root hash and
 /// holding weak references so reaped revisions drop out automatically.
@@ -42,7 +42,7 @@ const FJALL_PARTITION_NAME: &str = "firewood";
 /// This structure holds everything related to an open root store
 #[derive_where(Debug)]
 #[derive_where(skip_inner)]
-pub struct RootStore<H = DefaultHashMode> {
+pub struct RootStore<H> {
     keyspace: Keyspace,
     items: PartitionHandle,
     storage: Arc<FileBacked>,

@@ -7,7 +7,7 @@
 //! including the `ProofReader` type for sequential reading and traits for
 //! deserializing individual proof components.
 
-use firewood_storage::{DefaultHashMode, HashMode, NodeHashAlgorithm};
+use firewood_storage::{EthHash, HashMode, NodeHashAlgorithm};
 
 use super::header::{Header, InvalidHeader};
 use std::num::NonZeroUsize;
@@ -37,8 +37,8 @@ impl<'a> ProofReader<'a> {
     /// Creates a reader for parsing the fixed-size header, before the proof's
     /// own hash mode is known.
     ///
-    /// The algorithm is seeded to the compile default; it is only consulted by
-    /// body reads (after the header is parsed and the reader is re-seeded via
+    /// The algorithm is seeded to a placeholder; it is only consulted by body
+    /// reads (after the header is parsed and the reader is re-seeded via
     /// [`ProofReader::set_node_hash_algorithm`]), so this placeholder never
     /// influences header parsing.
     #[must_use]
@@ -46,7 +46,9 @@ impl<'a> ProofReader<'a> {
         Self {
             data,
             offset: 0,
-            node_hash_algorithm: DefaultHashMode::ALGORITHM,
+            // EthHash: pre-header placeholder; overwritten by
+            // `set_node_hash_algorithm` once the header is parsed (#1088).
+            node_hash_algorithm: EthHash::ALGORITHM,
         }
     }
 

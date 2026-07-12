@@ -38,14 +38,14 @@ type KeyValuePair = (Box<[u8]>, Box<[u8]>);
 type BoxCodeHashIter<'p> = Box<dyn Iterator<Item = Result<HashKey, api::Error>> + 'p>;
 
 /// Reject code-hash iteration on a non-Ethereum proof. Code hashes only exist
-/// in Ethereum account values; this is the runtime replacement for the former
-/// compile-time `ethhash`-feature gate.
+/// in Ethereum account values, so this gates on the database's runtime hash
+/// mode.
 fn require_ethereum(algorithm: NodeHashAlgorithm) -> Result<(), api::Error> {
     if algorithm.is_ethereum() {
         Ok(())
     } else {
         Err(api::Error::FeatureNotSupported(
-            "code hash iteration requires an ethereum-mode proof".to_owned(),
+            "code hash iteration requires an Ethereum-mode database".to_owned(),
         ))
     }
 }
@@ -92,7 +92,7 @@ impl<'p> CodeIteratorHandle<'p> {
     /// # Errors
     ///
     /// - Returns `api::Error::FeatureNotSupported` if `algorithm` is not an
-    ///   ethereum-mode proof.
+    ///   Ethereum-mode database.
     pub fn from_key_values(
         algorithm: NodeHashAlgorithm,
         key_values: &'p [KeyValuePair],
@@ -124,7 +124,7 @@ impl<'p> CodeIteratorHandle<'p> {
     /// # Errors
     ///
     /// - Returns `api::Error::FeatureNotSupported` if `algorithm` is not an
-    ///   ethereum-mode proof.
+    ///   Ethereum-mode database.
     pub fn from_batch_ops(
         algorithm: NodeHashAlgorithm,
         batch_ops: &'p [BatchOp<firewood::Key, firewood::Value>],

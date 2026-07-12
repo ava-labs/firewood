@@ -158,7 +158,7 @@ enum TestName {
 }
 
 trait TestRunner {
-    fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>>;
+    fn run(&self, db: &Db<firewood_storage::EthHash>, args: &Args) -> Result<(), Box<dyn Error>>;
 
     fn generate_inserts(
         start: u64,
@@ -235,11 +235,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .cache_read_strategy(args.global_opts.cache_read_strategy.clone().into())
         .max_revisions(args.global_opts.revisions)
         .build();
-    let node_hash_algorithm = if cfg!(feature = "ethhash") {
-        NodeHashAlgorithm::Ethereum
-    } else {
-        NodeHashAlgorithm::MerkleDB
-    };
+    // The benchmark suite exercises Ethereum-mode (C-Chain) databases.
+    let node_hash_algorithm = NodeHashAlgorithm::Ethereum;
     let cfg = DbConfig::builder()
         .node_hash_algorithm(node_hash_algorithm)
         .truncate(matches!(args.test_name, TestName::Create))

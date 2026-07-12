@@ -3,10 +3,15 @@
 
 //! Runtime-selectable node-hashing scheme.
 //!
-//! [`HashMode`] is the trait that will eventually carry every behavior that
-//! differs between the MerkleDB (SHA-256) and Ethereum (Keccak-256) hashing
-//! schemes, implemented by the two zero-sized types [`MerkleDbHash`] and
-//! [`EthHash`].
+//! [`HashMode`] is the trait that carries every behavior that differs between
+//! the MerkleDB (SHA-256) and Ethereum (Keccak-256) hashing schemes, implemented
+//! by the two zero-sized types [`MerkleDbHash`] and [`EthHash`]. Threading it as
+//! a type parameter is how issue #1088 makes the scheme a per-database runtime
+//! choice instead of a compile-time feature.
+//!
+//! Both `impl HashMode` blocks are compiled in every build, so a single binary
+//! can hash under either scheme; the scheme a given database uses is recorded in
+//! its file header and selected at open time.
 
 use crate::hashednode::{HasUpdate, Hashable};
 use crate::node::ExtendableBytes;
@@ -62,16 +67,6 @@ pub struct MerkleDbHash;
 #[derive(Debug, Default)]
 pub struct EthHash;
 
-/// The hash mode selected by the `ethhash` feature's compile-time state:
-/// `EthHash` when enabled, `MerkleDbHash` otherwise.
-#[cfg(feature = "ethhash")]
-pub type DefaultHashMode = EthHash;
-
-/// The hash mode selected by the `ethhash` feature's compile-time state:
-/// `EthHash` when enabled, `MerkleDbHash` otherwise.
-#[cfg(not(feature = "ethhash"))]
-pub type DefaultHashMode = MerkleDbHash;
-
 // The `impl HashMode for EthHash` and `impl HashMode for MerkleDbHash` blocks
 // live in `crate::hashers::{ethhash,merkledb}` alongside the scheme-specific
 // preimage hashing and child-hash codecs they carry. Both are compiled in every
@@ -86,44 +81,28 @@ mod tests {
     }
 
     #[test]
-    fn default_hash_mode_matches_compile_option() {
-        // `DefaultHashMode` must stay coupled to the `ethhash` feature: it is
-        // the cfg-selected default `H` until the flag is removed (PR 6).
-        let expected = if cfg!(feature = "ethhash") {
-            NodeHashAlgorithm::Ethereum
-        } else {
-            NodeHashAlgorithm::MerkleDB
-        };
-        assert_eq!(DefaultHashMode::ALGORITHM, expected);
+    fn default_root_hash_per_mode() {
+        // Ethereum exposes the empty-trie root; MerkleDB has none.
+        assert_eq!(EthHash::ALGORITHM, NodeHashAlgorithm::Ethereum);
+        assert!(EthHash::default_root_hash().is_some());
+
+        assert_eq!(MerkleDbHash::ALGORITHM, NodeHashAlgorithm::MerkleDB);
+        assert!(MerkleDbHash::default_root_hash().is_none());
     }
 
     #[test]
-    #[cfg(feature = "ethhash")]
-    fn default_root_hash() {
-        assert!(DefaultHashMode::default_root_hash().is_some());
-    }
+    fn is_valid_key_per_mode() {
+        // Ethereum accepts only account (64 nibbles) and storage-slot
+        // (128 nibbles) keys.
+        assert!(EthHash::is_valid_key(&path_of_len(64)));
+        assert!(EthHash::is_valid_key(&path_of_len(128)));
+        assert!(!EthHash::is_valid_key(&path_of_len(66)));
+        assert!(!EthHash::is_valid_key(&path_of_len(63)));
 
-    #[test]
-    #[cfg(not(feature = "ethhash"))]
-    fn default_root_hash() {
-        assert!(DefaultHashMode::default_root_hash().is_none());
-    }
-
-    #[test]
-    #[cfg(feature = "ethhash")]
-    fn is_valid_key() {
-        assert!(DefaultHashMode::is_valid_key(&path_of_len(64)));
-        assert!(DefaultHashMode::is_valid_key(&path_of_len(128)));
-        assert!(!DefaultHashMode::is_valid_key(&path_of_len(66)));
-        assert!(!DefaultHashMode::is_valid_key(&path_of_len(63)));
-    }
-
-    #[test]
-    #[cfg(not(feature = "ethhash"))]
-    fn is_valid_key() {
-        assert!(DefaultHashMode::is_valid_key(&path_of_len(64)));
-        assert!(DefaultHashMode::is_valid_key(&path_of_len(2)));
-        assert!(!DefaultHashMode::is_valid_key(&path_of_len(3)));
+        // MerkleDB accepts any even nibble length.
+        assert!(MerkleDbHash::is_valid_key(&path_of_len(64)));
+        assert!(MerkleDbHash::is_valid_key(&path_of_len(2)));
+        assert!(!MerkleDbHash::is_valid_key(&path_of_len(3)));
     }
 
     // The codec and cross-mode tests below call the `EthHash` / `MerkleDbHash`

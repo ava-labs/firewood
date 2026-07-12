@@ -77,6 +77,7 @@ func runIteratorTestForAllModes(parentT *testing.T, fn func(*testing.T, iterator
 
 // Tests that basic iterator functionality works
 func TestIter(t *testing.T) {
+	skipIfNotEthereumMode(t) // iterates over a revision
 	r := require.New(t)
 	db := newTestDatabase(t)
 	keys, vals, batch := kvForTest(100)
@@ -99,6 +100,7 @@ func TestIter(t *testing.T) {
 }
 
 func TestIterOnRoot(t *testing.T) {
+	skipIfNotEthereumMode(t) // iterates over revisions
 	r := require.New(t)
 	db := newTestDatabase(t)
 	keys, vals, batch := kvForTest(240)
@@ -202,6 +204,7 @@ func TestIterAfterProposalCommit(t *testing.T) {
 
 // Tests that the iterator on latest revision works properly after a proposal commit
 func TestIterUpdate(t *testing.T) {
+	skipIfNotEthereumMode(t) // iterates over the latest revision
 	r := require.New(t)
 	db := newTestDatabase(t)
 
@@ -231,6 +234,7 @@ func TestIterUpdate(t *testing.T) {
 
 // Tests the iterator's behavior after exhaustion, should safely return empty item/batch, indicating done
 func TestIterDone(t *testing.T) {
+	skipIfNotEthereumMode(t) // iterates over the latest revision
 	r := require.New(t)
 	db := newTestDatabase(t)
 
@@ -272,6 +276,7 @@ func TestIterDone(t *testing.T) {
 // Tests the iterator's behavior after revision is dropped, should safely
 // outlive the revision as it owns a reference to the revision in Rust.
 func TestIterOutlivesRevision(t *testing.T) {
+	skipIfNotEthereumMode(t) // iterates over the latest revision
 	r := require.New(t)
 	db := newTestDatabase(t, func(config *config) {
 		config.revisions = 2

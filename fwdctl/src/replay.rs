@@ -60,6 +60,8 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
         .node_hash_algorithm(opts.database.node_hash_algorithm.into())
         .truncate(opts.truncate)
         .build();
+    // `replay_from_file` operates on a concrete `Db<EthHash>` (not the erased
+    // `DynDb`), so this dev tool replays into Ethereum-mode databases only.
     let db = Db::new(opts.database.dbpath.clone(), cfg)?;
 
     let start = Instant::now();

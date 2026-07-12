@@ -9,9 +9,9 @@ pub struct NodeHashAlgorithmTryFromIntError(u64);
 /// The hash algorithm used by the node store.
 ///
 /// This is a per-database runtime choice persisted in the file header. A
-/// database created under one scheme is opened under that same scheme
-/// regardless of the build's `ethhash` feature; the requested algorithm is
-/// validated against the header at open time (`validate_open`).
+/// database created under one scheme is opened under that same scheme; the
+/// requested algorithm is validated against the header at open time
+/// (`validate_open`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NodeHashAlgorithm {
     /// Use the MerkleDB node hashing algorithm, with sha256 as the hash function.

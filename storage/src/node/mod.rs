@@ -620,7 +620,7 @@ than 126 bytes as the length would be encoded in multiple bytes.
     /// `EthHash::write_child_hash`, which delegates to the existing `HashOrRlp`
     /// codec, so these bytes must stay byte-for-byte identical.
     ///
-    /// Eth-only golden (not `#[cfg(feature = "ethhash")]`-gated): both hashers
+    /// Eth-only golden (not cfg-gated): both hashers
     /// compile into one binary since PR 3, so the mode is pinned via
     /// `#[hash_mode(eth)]` instead of a compile-time feature gate.
     #[firewood_macros::hash_mode(eth)]

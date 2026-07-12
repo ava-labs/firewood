@@ -50,9 +50,9 @@
 use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
 use firewood_storage::hash_node_as_storage_trie_root_parts;
 use firewood_storage::{
-    Children, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator,
-    NodeHashAlgorithm, Path, PathBuf, PathComponent, PathIterItem, Preimage, RlpError, SplitPath,
-    TrieHash, TriePath, ValueDigest,
+    Children, EthHash, FileIoError, HashMode, HashType, Hashable, IntoHashType, IntoSplitPath,
+    NibblesIterator, NodeHashAlgorithm, Path, PathBuf, PathComponent, PathIterItem, RlpError,
+    SplitPath, TrieHash, TriePath, ValueDigest,
 };
 use thiserror::Error;
 
@@ -330,8 +330,10 @@ impl std::fmt::Debug for ProofNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Filter the missing children and only show the present ones with their indices
         let child_hashes = self.child_hashes.iter_present().collect::<Vec<_>>();
-        // Compute the hash and render it as well
-        let hash = self.to_hash();
+        // Compute a hash for display only. The concrete mode here is cosmetic
+        // (Debug output), not load-bearing, so it is pinned to a single scheme.
+        // EthHash: cosmetic Debug-display hash only (#1088).
+        let hash = <EthHash as HashMode>::to_hash(self);
 
         f.debug_struct("ProofNode")
             .field("key", &self.key)
@@ -915,7 +917,6 @@ mod tests {
     /// `partial_len == 0` (empty parent prefix) is rejected with `UnexpectedHash`.
     /// `partial_len` is an independent wire field, so a proof can carry a
     /// correctly sized key and set only `partial_len` to 0.
-    #[cfg(feature = "ethhash")]
     #[test]
     fn fold_rejects_zero_partial_len_storage_child() {
         use firewood_storage::U4;
@@ -932,7 +933,7 @@ mod tests {
         let mut account_children: Children<Option<HashType>> = Children::new();
         account_children[PathComponent(U4::new_masked(1))] = Some(HashType::from([0xABu8; 32]));
         let account = make_node(&account_nibbles, 0, None, account_children);
-        let root_hash: TrieHash = account.to_hash().into_triehash();
+        let root_hash: TrieHash = <EthHash as HashMode>::to_hash(&account).into_triehash();
 
         let proof = Proof::new(vec![account, storage_child]);
 
@@ -943,11 +944,7 @@ mod tests {
         proven_key.extend([0x00u8; 31]);
 
         assert!(matches!(
-            proof.value_digest(
-                proven_key.as_slice(),
-                &root_hash,
-                <firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM
-            ),
+            proof.value_digest(proven_key.as_slice(), &root_hash, EthHash::ALGORITHM),
             Err(ProofError::UnexpectedHash { .. })
         ));
     }
@@ -958,7 +955,7 @@ mod tests {
     fn proof_for_wrong_branch_is_rejected() {
         // Leaf at nibble path [3, 0] with a value.
         let leaf = make_node(&[3, 0], 1, Some(b"val_b"), Children::new());
-        let leaf_hash = leaf.to_hash();
+        let leaf_hash = <EthHash as HashMode>::to_hash(&leaf);
 
         // Root branch with children at nibbles 3 and 5.
         let mut root_children: Children<Option<HashType>> = Children::new();
@@ -966,7 +963,7 @@ mod tests {
         root_children[PathComponent(firewood_storage::U4::new_masked(5))] =
             Some(HashType::from([0xCC; 32]));
         let root = make_node(&[], 0, None, root_children);
-        let root_hash: TrieHash = root.to_hash().into_triehash();
+        let root_hash: TrieHash = <EthHash as HashMode>::to_hash(&root).into_triehash();
 
         let proof = Proof::new(vec![root, leaf]);
 
@@ -974,22 +971,14 @@ mod tests {
         // — this is the key the proof was built for.
         assert!(
             proof
-                .value_digest(
-                    [0x30u8],
-                    &root_hash,
-                    <firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM
-                )
+                .value_digest([0x30u8], &root_hash, EthHash::ALGORITHM)
                 .is_ok()
         );
 
         // Verifying against key [0x50] (nibble path [5, 0]) must fail
         // — the proof goes to nibble 3, not nibble 5.
         assert!(matches!(
-            proof.value_digest(
-                [0x50u8],
-                &root_hash,
-                <firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM
-            ),
+            proof.value_digest([0x50u8], &root_hash, EthHash::ALGORITHM),
             Err(ProofError::ShouldBePrefixOfNextKey),
         ));
     }

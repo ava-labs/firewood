@@ -4,6 +4,7 @@
 use clap::Args;
 use firewood::api::{self, Db as _, Proposal as _};
 use firewood::db::{BatchOp, Db, DbConfig};
+use firewood_storage::EthHash;
 use humantime::{format_duration, parse_duration};
 use std::fs::File;
 use std::path::PathBuf;
@@ -138,7 +139,7 @@ fn parse_string(s: &str, hex: bool) -> Result<Vec<u8>, api::Error> {
 fn process_csv(
     opts: &Options,
     reader: Box<dyn std::io::Read>,
-    db: &Db,
+    db: &Db<EthHash>,
     state: &mut ImportState,
     start_time: Instant,
 ) -> Result<(), api::Error> {
@@ -232,7 +233,7 @@ fn maybe_log_status(
 
 fn commit_batch(
     batch_ops: &mut Vec<BatchOp<Vec<u8>, Vec<u8>>>,
-    db: &Db,
+    db: &Db<EthHash>,
     total_imported: &mut usize,
 ) -> Result<(), api::Error> {
     let remaining = batch_ops.len();

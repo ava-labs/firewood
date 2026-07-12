@@ -33,17 +33,19 @@ const (
 	errWrongParent    = "The proposal cannot be committed since it is not a direct child of the most recent commit. "
 )
 
-// expectedRoots contains the expected root hashes for different use cases across both default
-// firewood hashing and ethhash.
-// By default, TestMain infers which mode Firewood is operating in and selects the expected roots
-// accordingly (this does turn test empty database into an effective no-op).
+// The node hashing algorithm is now a per-database runtime choice rather than a
+// compile-time build option: a single binary can open both Ethereum-mode and
+// MerkleDB-mode databases. Each test run therefore selects one algorithm to
+// create its databases with.
 //
-// To test a specific hashing mode explicitly, set the environment variable:
-// TEST_FIREWOOD_HASH_MODE=ethhash or TEST_FIREWOOD_HASH_MODE=firewood
-// This will skip the inference step and enforce we use the expected roots for the specified mode.
+// The hash mode is chosen from the TEST_FIREWOOD_HASH_MODE environment variable
+// ("ethhash" or "firewood"), defaulting to "ethhash" when unset (the binary's
+// natural default). TestMain records the selection in selectedNodeHashAlgorithm
+// and selectedHashMode, and sets expectedRoots to the matching entry in
+// expectedRootModes so the root-hash assertions use the right vectors.
 var (
-	// expectedRoots contains a mapping of expected root hashes for different test
-	// vectors.
+	// expectedRootModes contains the expected root hashes for different test
+	// vectors, keyed by hash mode.
 	expectedRootModes = map[string]map[string]string{
 		ethhashKey: {
 			emptyKey:     emptyEthhashRoot,
@@ -54,11 +56,13 @@ var (
 			insert100Key: "f858b51ada79c4abeb6566ef1204a453030dba1cca3526d174e2cb3ce2aadc57",
 		},
 	}
-	expectedEmptyRootToMode = map[string]string{
-		emptyEthhashRoot:  ethhashKey,
-		emptyFirewoodRoot: firewoodKey,
-	}
 	expectedRoots map[string]string
+
+	// selectedHashMode is the hash mode label ("ethhash" or "firewood") chosen
+	// for this test run, and selectedNodeHashAlgorithm is the corresponding
+	// algorithm passed to New when creating databases.
+	selectedHashMode          string
+	selectedNodeHashAlgorithm NodeHashAlgorithm
 )
 
 func stringToHash(t *testing.T, s string) Hash {
@@ -67,30 +71,6 @@ func stringToHash(t *testing.T, s string) Hash {
 	require.NoError(t, err)
 	require.Len(t, b, RootLength)
 	return Hash(b)
-}
-
-func inferHashingMode(ctx context.Context) (string, error) {
-	dbDir := os.TempDir()
-	db, err := newDatabase(dbDir)
-	if err != nil {
-		return "", err
-	}
-	defer func() {
-		ctx, cancel := context.WithTimeout(ctx, time.Second)
-		defer cancel()
-		_ = db.Close(ctx)
-		_ = os.Remove(dbDir)
-	}()
-
-	actualEmptyRoot := db.Root()
-	actualEmptyRootHex := hex.EncodeToString(actualEmptyRoot[:])
-
-	actualFwMode, ok := expectedEmptyRootToMode[actualEmptyRootHex]
-	if !ok {
-		return "", fmt.Errorf("unknown empty root %q, cannot infer mode", actualEmptyRootHex)
-	}
-
-	return actualFwMode, nil
 }
 
 func TestMain(m *testing.M) {
@@ -116,16 +96,13 @@ func TestMain(m *testing.M) {
 		}
 	}
 
-	// If TEST_FIREWOOD_HASH_MODE is set, use it to select the expected roots.
-	// Otherwise, infer the hash mode from an empty database.
+	// The node hashing algorithm is a per-database runtime choice, so each test
+	// run picks one algorithm to create its databases with. TEST_FIREWOOD_HASH_MODE
+	// selects it ("ethhash" or "firewood"), defaulting to "ethhash" when unset
+	// (the binary's natural default is Ethereum hashing).
 	hashMode := os.Getenv("TEST_FIREWOOD_HASH_MODE")
 	if hashMode == "" {
-		inferredHashMode, err := inferHashingMode(context.Background())
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to infer hash mode %v\n", err)
-			os.Exit(1)
-		}
-		hashMode = inferredHashMode
+		hashMode = ethhashKey
 	}
 	selectedExpectedRoots, ok := expectedRootModes[hashMode]
 	if !ok {
@@ -133,6 +110,13 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	expectedRoots = selectedExpectedRoots
+	selectedHashMode = hashMode
+	switch hashMode {
+	case ethhashKey:
+		selectedNodeHashAlgorithm = EthereumNodeHashing
+	case firewoodKey:
+		selectedNodeHashAlgorithm = MerkleDBNodeHashing
+	}
 
 	os.Exit(m.Run())
 }
@@ -179,6 +163,25 @@ func testNodeHashAlgorithm() NodeHashAlgorithm {
 	return EthereumNodeHashing
 }
 
+// skipIfNotEthereumMode skips the test unless this run selected the Ethereum
+// hash mode. Several capabilities are currently Ethereum-only on the FFI side
+// and fail on a MerkleDB-mode database:
+//   - historical revisions / reconstruction (Database.Revision,
+//     Database.LatestRevision, *.Reconstruct), which are permanently
+//     Ethereum-only per #1088; and
+//   - the standalone range-proof verifier (RangeProof.Verify and anything built
+//     on it), whose expected mode is currently the locked Ethereum default.
+//
+// Tests exercising those features therefore only run in Ethereum mode.
+func skipIfNotEthereumMode(tb testing.TB) {
+	tb.Helper()
+	if testNodeHashAlgorithm() != EthereumNodeHashing {
+		tb.Skip("skipping: test requires Ethereum hash mode")
+	}
+}
+
+// newDatabase opens or creates a database in dbDir using the hash algorithm
+// selected for this test run (see TestMain).
 func newDatabase(dbDir string, opts ...Option) (*Database, error) {
 	f, err := New(dbDir, testNodeHashAlgorithm(), opts...)
 	if err != nil {
@@ -199,36 +202,53 @@ func TestUpdateSingleKV(t *testing.T) {
 	r.Equal(vals[0], got)
 }
 
+// TestNodeHashAlgorithmValidation verifies that the node hashing algorithm is a
+// per-database runtime choice: a single binary can create both Ethereum-mode and
+// MerkleDB-mode databases on fresh directories, but reopening an existing
+// database with a different algorithm than it was created with fails.
 func TestNodeHashAlgorithmValidation(t *testing.T) {
-	r := require.New(t)
+	const mismatchPrefix = "node store hash algorithm mismatch: want to open with"
 
-	// Node hashing is a per-database runtime choice (issue #1088): a single
-	// binary can create and operate on both an Ethereum-mode database and a
-	// MerkleDB-mode database side by side, regardless of the ethhash feature.
-	dbDirEth := t.TempDir()
-	dbEth, err := New(dbDirEth, EthereumNodeHashing, WithTruncate(true))
-	r.NoError(err)
-	_, _, ethBatch := kvForTest(1)
-	_, err = dbEth.Update(ethBatch)
-	r.NoError(err)
-	r.NoError(dbEth.Close(oneSecCtx(t)))
+	// (a) Both fresh creates succeed regardless of algorithm.
+	t.Run("FreshCreatesBothSucceed", func(t *testing.T) {
+		r := require.New(t)
 
-	dbDirMerkledb := t.TempDir()
-	dbMerkledb, err := New(dbDirMerkledb, MerkleDBNodeHashing, WithTruncate(true))
-	r.NoError(err)
-	_, _, merkledbBatch := kvForTest(1)
-	_, err = dbMerkledb.Update(merkledbBatch)
-	r.NoError(err)
-	r.NoError(dbMerkledb.Close(oneSecCtx(t)))
+		dbEth, errEth := New(t.TempDir(), EthereumNodeHashing, WithTruncate(true))
+		r.NoError(errEth, "fresh create with EthereumNodeHashing")
+		r.NoError(dbEth.Close(oneSecCtx(t)))
 
-	// Re-opening an existing database with a different algorithm than the one
-	// stamped in its header is rejected by the header-vs-requested gate.
-	reopened, err := New(dbDirEth, MerkleDBNodeHashing)
-	if err == nil {
-		r.NoError(reopened.Close(oneSecCtx(t)))
-	}
-	r.Error(err)
-	r.ErrorContains(err, "node store hash algorithm mismatch: want to open with MerkleDB, but file header indicates Ethereum")
+		dbMerkledb, errMerkledb := New(t.TempDir(), MerkleDBNodeHashing, WithTruncate(true))
+		r.NoError(errMerkledb, "fresh create with MerkleDBNodeHashing")
+		r.NoError(dbMerkledb.Close(oneSecCtx(t)))
+	})
+
+	// (b) Create with Ethereum, then reopening with MerkleDB (no truncate) fails.
+	t.Run("ReopenEthereumAsMerkleDBFails", func(t *testing.T) {
+		r := require.New(t)
+
+		dbDir := t.TempDir()
+		dbEth, err := New(dbDir, EthereumNodeHashing, WithTruncate(true))
+		r.NoError(err)
+		r.NoError(dbEth.Close(oneSecCtx(t)))
+
+		_, err = New(dbDir, MerkleDBNodeHashing)
+		r.Error(err)
+		r.ErrorContains(err, mismatchPrefix)
+	})
+
+	// (c) The reverse: create with MerkleDB, reopening with Ethereum fails.
+	t.Run("ReopenMerkleDBAsEthereumFails", func(t *testing.T) {
+		r := require.New(t)
+
+		dbDir := t.TempDir()
+		dbMerkledb, err := New(dbDir, MerkleDBNodeHashing, WithTruncate(true))
+		r.NoError(err)
+		r.NoError(dbMerkledb.Close(oneSecCtx(t)))
+
+		_, err = New(dbDir, EthereumNodeHashing)
+		r.Error(err)
+		r.ErrorContains(err, mismatchPrefix)
+	})
 }
 
 func TestUpdateMultiKV(t *testing.T) {
@@ -986,6 +1006,7 @@ func TestProposeSameRoot(t *testing.T) {
 
 // Tests that an empty revision can be retrieved.
 func TestRevision(t *testing.T) {
+	skipIfNotEthereumMode(t)
 	r := require.New(t)
 	db := newTestDatabase(t)
 
@@ -1045,6 +1066,7 @@ func TestRevision(t *testing.T) {
 // Tests that even if a proposal is committed, the corresponding revision will not go away
 // as we're holding on to it
 func TestRevisionOutlivesProposal(t *testing.T) {
+	skipIfNotEthereumMode(t)
 	r := require.New(t)
 	db := newTestDatabase(t)
 
@@ -1076,6 +1098,7 @@ func TestRevisionOutlivesProposal(t *testing.T) {
 
 // Tests that after committing a proposal, the corresponding revision is still accessible.
 func TestCommitWithRevisionHeld(t *testing.T) {
+	skipIfNotEthereumMode(t)
 	r := require.New(t)
 	db := newTestDatabase(t)
 
@@ -1113,6 +1136,7 @@ func TestCommitWithRevisionHeld(t *testing.T) {
 
 // Tests that holding a reference to revision will prevent from it being reaped
 func TestRevisionOutlivesReaping(t *testing.T) {
+	skipIfNotEthereumMode(t)
 	r := require.New(t)
 	db := newTestDatabase(t, WithRevisions(2))
 
@@ -1161,6 +1185,7 @@ func TestInvalidRevision(t *testing.T) {
 
 // Tests that edge case `Get` calls are handled correctly.
 func TestGetNilCases(t *testing.T) {
+	skipIfNotEthereumMode(t) // creates a revision
 	r := require.New(t)
 	db := newTestDatabase(t)
 
@@ -1251,6 +1276,7 @@ func TestEmptyProposals(t *testing.T) {
 }
 
 func TestHandlesFreeImplicitly(t *testing.T) {
+	skipIfNotEthereumMode(t) // exercises revisions via LatestRevision
 	t.Parallel()
 
 	db, err := newDatabase(t.TempDir())
@@ -1343,6 +1369,7 @@ func TestHandlesFreeImplicitly(t *testing.T) {
 }
 
 func TestFjallStore(t *testing.T) {
+	skipIfNotEthereumMode(t) // reads back revisions
 	r := require.New(t)
 
 	// Create a new database with RootStore enabled
@@ -1533,6 +1560,7 @@ func TestCloseWithCancelledContext(t *testing.T) {
 // TestCloseWithMultipleActiveHandles verifies that Database.Close returns
 // ErrActiveKeepAliveHandles when multiple handles are active and context is cancelled.
 func TestCloseWithMultipleActiveHandles(t *testing.T) {
+	skipIfNotEthereumMode(t) // holds active revision handles
 	r := require.New(t)
 	db, err := newDatabase(t.TempDir())
 	r.NoError(err)
@@ -1610,6 +1638,7 @@ func TestCloseSucceedsWhenHandlesDroppedInTime(t *testing.T) {
 // WithForceCloseHandles releases live proposals, revisions, reconstructed
 // views, and iterators without requiring the caller to drop them first.
 func TestCloseForceDropsOutstandingHandles(t *testing.T) {
+	skipIfNotEthereumMode(t) // reconstructs from a historical revision
 	r := require.New(t)
 	db, err := newDatabase(t.TempDir())
 	r.NoError(err)
@@ -1903,6 +1932,7 @@ func TestIteratorFreesImplicitly(t *testing.T) {
 // TestReconstructedFreesImplicitly checks that an undropped reconstructed view
 // is released by its finalizer, unblocking Close.
 func TestReconstructedFreesImplicitly(t *testing.T) {
+	skipIfNotEthereumMode(t) // reconstructs from a historical revision
 	db, err := newDatabase(t.TempDir())
 	require.NoError(t, err)
 
@@ -1941,6 +1971,7 @@ func TestReconstructedFreesImplicitly(t *testing.T) {
 // force-close does not auto-drop a verified RangeProof. The proof is counted
 // but not in the drop map, so Close blocks until the proof is freed.
 func TestCloseForceDoesNotDropRangeProof(t *testing.T) {
+	skipIfNotEthereumMode(t) // standalone range-proof verification is Ethereum-only
 	db := newTestDatabase(t)
 	_, _, batch := kvForTest(50)
 	root, err := db.Update(batch)
@@ -1997,6 +2028,7 @@ func TestCloseAndForceDropPartialThenRetry(t *testing.T) {
 }
 
 func TestDump(t *testing.T) {
+	skipIfNotEthereumMode(t) // dumps a revision
 	r := require.New(t)
 	db := newTestDatabase(t)
 

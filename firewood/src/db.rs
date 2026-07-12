@@ -22,9 +22,9 @@ use crate::verify_change_proof_structure;
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_metrics::{firewood_counter, firewood_histogram};
 use firewood_storage::{
-    CheckOpt, CheckerReport, Committed, CommittedParentHash, DefaultHashMode, EthHash, FileBacked,
-    FileIoError, HashMode, HashedNodeReader, ImmutableProposal, MerkleDbHash, Mutable,
-    NodeHashAlgorithm, NodeStore, Parentable, Propose, ReadableStorage, Reconstructed, TrieReader,
+    CheckOpt, CheckerReport, Committed, CommittedParentHash, EthHash, FileBacked, FileIoError,
+    HashMode, HashedNodeReader, ImmutableProposal, MerkleDbHash, Mutable, NodeHashAlgorithm,
+    NodeStore, Parentable, Propose, ReadableStorage, Reconstructed, TrieReader,
 };
 use std::io::Write;
 use std::num::NonZeroUsize;
@@ -113,9 +113,10 @@ pub enum UseParallel {
 pub struct DbConfig {
     /// The algorithm used for hashing nodes (required).
     ///
-    /// In tests this defaults to the [`DefaultHashMode`]'s algorithm so that
-    /// the builder pairs with the compile-selected `Db<DefaultHashMode>`.
-    #[cfg_attr(test, builder(default = DefaultHashMode::ALGORITHM))]
+    /// In tests this defaults to the Ethereum algorithm so the builder has a
+    /// concrete mode to pair with.
+    // EthHash: default concrete mode where one is genuinely required (#1088).
+    #[cfg_attr(test, builder(default = EthHash::ALGORITHM))]
     pub node_hash_algorithm: NodeHashAlgorithm,
     /// Whether to create the DB if it doesn't exist.
     #[builder(default = true)]
@@ -145,12 +146,11 @@ pub struct DbConfig {
 /// A database instance generic over its node-hashing scheme `H`.
 ///
 /// `H` carries the hash mode as a type parameter so the proof verify/write
-/// paths can name it (e.g. `Proposal<'_, H>`). The default `DefaultHashMode`
-/// keeps existing concrete callers (`Db::new`, FFI, `fwdctl`) compiling as
-/// `Db<DefaultHashMode>`. The internal nodestores remain pinned to the
-/// storage-supported default mode; `H` is presently always `DefaultHashMode`.
+/// paths can name it (e.g. `Proposal<'_, H>`). Callers select a concrete
+/// scheme (e.g. `Db<EthHash>`); the hash mode a database actually uses is
+/// recorded in its file header and validated at open time.
 #[derive(Debug)]
-pub struct Db<H = DefaultHashMode> {
+pub struct Db<H> {
     manager: RevisionManager<H>,
     use_parallel: UseParallel,
 }
@@ -266,6 +266,7 @@ impl<H: HashMode> api::DynDb for Db<H> {
         Ok(Box::new(proposal))
     }
 
+    // EthHash: reconstruction is permanently Ethereum-only (#1088).
     fn reconstruct_from_view(
         &self,
         parent: &CommittedView,
@@ -283,16 +284,15 @@ impl<H: HashMode> api::DynDb for Db<H> {
     }
 
     fn committed_view(&self, hash: HashKey) -> Result<Option<CommittedView>, api::Error> {
-        // Reconstruction is `DefaultHashMode`-only, so only a default-mode
+        // Reconstruction is Ethereum-only, so only an Ethereum-mode
         // database can hand back an opaque committed view. Recover the concrete
-        // `Db<DefaultHashMode>` via downcast; non-default modes return `Ok(None)`
+        // `Db<EthHash>` via downcast; non-Ethereum modes return `Ok(None)`
         // so callers can surface `FeatureNotSupported` when reconstruction is
         // requested.
-        let Some(default_db) = (self as &dyn std::any::Any).downcast_ref::<Db<DefaultHashMode>>()
-        else {
+        let Some(eth_db) = (self as &dyn std::any::Any).downcast_ref::<Db<EthHash>>() else {
             return Ok(None);
         };
-        match default_db.committed_view(hash) {
+        match eth_db.committed_view(hash) {
             Ok(view) => Ok(Some(view)),
             Err(api::Error::RevisionNotFound { .. }) => Ok(None),
             Err(err) => Err(err),
@@ -304,10 +304,11 @@ impl<H: HashMode> api::DynDb for Db<H> {
     }
 }
 
-impl Db {
-    /// Create a new database instance.
+// EthHash: default concrete mode for the `Db::new` convenience constructor (#1088).
+impl Db<EthHash> {
+    /// Create a new database instance with the Ethereum hash mode.
     ///
-    /// Returns a `Db<DefaultHashMode>`; the hash mode is carried as a runtime
+    /// The hash mode is carried as a runtime
     /// value through [`DbConfig::node_hash_algorithm`]. The requested algorithm
     /// must match the on-disk header for an existing database (enforced at
     /// open). To open a database whose hash mode is only known at runtime, use
@@ -362,6 +363,9 @@ impl<H: HashMode> Db<H> {
     /// Create or open a database with the hash mode fixed by the type
     /// parameter `H`. The configured [`DbConfig::node_hash_algorithm`] must
     /// equal `H::ALGORITHM`; the open path validates it against the header.
+    ///
+    /// `pub(crate)` so in-crate tests can construct a `Db<MerkleDbHash>` (the
+    /// public constructors only yield `Db<EthHash>`).
     pub(crate) fn new_with_hash_mode<P: AsRef<Path>>(
         db_dir: P,
         cfg: DbConfig,
@@ -579,20 +583,21 @@ impl<H: HashMode> Db<H> {
         parent: &CommittedView,
         batch: impl IntoBatchIter,
     ) -> Result<ReconstructedView<'_>, api::Error> {
-        // Reconstruction is hardcoded to `RevisionManager::<DefaultHashMode>`
-        // below, so it is only valid for a default-mode database. Guard the
+        // EthHash: reconstruction is permanently Ethereum-only (#1088).
+        // Reconstruction is hardcoded to `RevisionManager::<EthHash>` below,
+        // so it is only valid for an Ethereum-mode database. Guard the
         // hardcode where it lives rather than relying solely on upstream gating.
-        if H::ALGORITHM != DefaultHashMode::ALGORITHM {
+        if H::ALGORITHM != EthHash::ALGORITHM {
             return Err(api::Error::FeatureNotSupported(format!(
-                "reconstruct is only supported for the build's default hash mode \
+                "reconstruct is only supported for the Ethereum hash mode \
                  ({:?}); this database uses {:?}",
-                DefaultHashMode::ALGORITHM,
+                EthHash::ALGORITHM,
                 H::ALGORITHM,
             )));
         }
         let next_nodestore = parent.nodestore.reconstruction_child()?;
         let mutable_nodestore =
-            RevisionManager::<DefaultHashMode>::apply_batch_recon(next_nodestore, batch)?;
+            RevisionManager::<EthHash>::apply_batch_recon(next_nodestore, batch)?;
 
         Ok(ReconstructedView {
             db: self,
@@ -610,22 +615,23 @@ impl<H: HashMode> Db<H> {
     /// Returns an error if reconstruction fails.
     fn reconstruct_from_reconstructed(
         &self,
-        parent: Arc<NodeStore<Reconstructed<FileBacked>, FileBacked>>,
+        parent: Arc<NodeStore<Reconstructed<FileBacked>, FileBacked, EthHash>>,
         batch: impl IntoBatchIter,
     ) -> Result<ReconstructedView<'_>, api::Error> {
-        // See `reconstruct_from_view`: the `RevisionManager::<DefaultHashMode>`
-        // hardcode below is only valid for a default-mode database.
-        if H::ALGORITHM != DefaultHashMode::ALGORITHM {
+        // EthHash: reconstruction is permanently Ethereum-only (#1088).
+        // See `reconstruct_from_view`: the `RevisionManager::<EthHash>`
+        // hardcode below is only valid for an Ethereum-mode database.
+        if H::ALGORITHM != EthHash::ALGORITHM {
             return Err(api::Error::FeatureNotSupported(format!(
-                "reconstruct is only supported for the build's default hash mode \
+                "reconstruct is only supported for the Ethereum hash mode \
                  ({:?}); this database uses {:?}",
-                DefaultHashMode::ALGORITHM,
+                EthHash::ALGORITHM,
                 H::ALGORITHM,
             )));
         }
         let next_nodestore = parent.into();
         let mutable_nodestore =
-            RevisionManager::<DefaultHashMode>::apply_batch_recon(next_nodestore, batch)?;
+            RevisionManager::<EthHash>::apply_batch_recon(next_nodestore, batch)?;
 
         Ok(ReconstructedView {
             db: self,
@@ -689,9 +695,8 @@ impl<H: HashMode> Db<H> {
 /// A user-visible database proposal.
 ///
 /// `H` mirrors the parent [`Db`]'s hash mode so the proof verify/write paths
-/// can name it. The backing nodestore stays pinned to the storage-supported
-/// default mode; `H` is presently always `DefaultHashMode`.
-pub struct Proposal<'db, H = DefaultHashMode> {
+/// can name it. The backing nodestore is parameterized by the same `H`.
+pub struct Proposal<'db, H> {
     nodestore: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked, H>>,
     db: &'db Db<H>,
 }
@@ -701,19 +706,20 @@ pub struct Proposal<'db, H = DefaultHashMode> {
 ///
 /// Use this as the parent argument to [`Db::reconstruct_from_view`].
 pub struct CommittedView {
-    nodestore: Arc<NodeStore<Committed, FileBacked>>,
+    nodestore: Arc<NodeStore<Committed, FileBacked, EthHash>>,
 }
 
 #[derive(Debug)]
 /// A user-visible reconstructed view.
 ///
-/// The storage reconstruction path is `DefaultHashMode`-only (see the
+/// The storage reconstruction path is Ethereum-only (see the
 /// [`api::Reconstructible`] impl and the backing nodestore type), so this
 /// view is not generic over the hash mode. The owning database is held behind
 /// the erased [`api::DynDb`] so a reconstructed view can be produced from a
 /// runtime-selected `Db<H>` without naming `H`.
 pub struct ReconstructedView<'db> {
-    nodestore: Arc<NodeStore<Reconstructed<FileBacked>, FileBacked>>,
+    // EthHash: reconstruction is permanently Ethereum-only (#1088).
+    nodestore: Arc<NodeStore<Reconstructed<FileBacked>, FileBacked, EthHash>>,
     db: &'db dyn api::DynDb,
 }
 
@@ -935,8 +941,9 @@ impl<H: HashMode> Proposal<'_, H> {
 }
 
 impl api::DbView for ReconstructedView<'_> {
+    // EthHash: reconstruction is permanently Ethereum-only (#1088).
     type Iter<'view>
-        = MerkleKeyValueIter<'view, NodeStore<Reconstructed<FileBacked>, FileBacked>>
+        = MerkleKeyValueIter<'view, NodeStore<Reconstructed<FileBacked>, FileBacked, EthHash>>
     where
         Self: 'view;
 
@@ -970,9 +977,9 @@ impl api::DbView for ReconstructedView<'_> {
     }
 }
 
-// The storage reconstruction path is `DefaultHashMode`-only; the owning
-// database is reached through the erased [`api::DynDb`] so reconstruction works
-// off a runtime-selected `Db<H>` (in practice the binary's default mode).
+// EthHash: the storage reconstruction path is permanently Ethereum-only
+// (#1088); the owning database is reached through the erased [`api::DynDb`] so
+// reconstruction works off a runtime-selected `Db<H>` (which must be Ethereum).
 impl<'a> api::Reconstructible for ReconstructedView<'a> {
     type Reconstructed = ReconstructedView<'a>;
 
@@ -1016,8 +1023,8 @@ mod test {
     use std::path::Path;
 
     use firewood_storage::{
-        CheckOpt, CheckerError, DefaultHashMode, EthHash, HashMode, LinearAddress,
-        MaybePersistedNode, MerkleDbHash, TrieHash,
+        CheckOpt, CheckerError, EthHash, HashMode, LinearAddress, MaybePersistedNode, MerkleDbHash,
+        TrieHash,
     };
     use nonzero_ext::nonzero;
 
@@ -1073,15 +1080,15 @@ mod test {
     /// Reconstruction always uses the serial path (`apply_batch_recon`), but the base
     /// revision may have been built with parallel or serial proposals. This test confirms
     /// both produce identical reconstruction results.
-    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
+    // Reconstruction is Ethereum-only (#1088 follow-up).
     #[test]
     fn test_reconstruct_deterministic() {
-        let parallel_db = TestDb::<DefaultHashMode>::new_with_config(
+        let parallel_db = TestDb::<EthHash>::new_with_config(
             DbConfig::builder()
                 .use_parallel(UseParallel::Always)
                 .build(),
         );
-        let serial_db = TestDb::<DefaultHashMode>::new_with_config(
+        let serial_db = TestDb::<EthHash>::new_with_config(
             DbConfig::builder().use_parallel(UseParallel::Never).build(),
         );
 
@@ -1211,10 +1218,10 @@ mod test {
         assert_eq!(&*historical.val(b"k").unwrap().unwrap(), b"v");
     }
 
-    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
+    // Reconstruction is Ethereum-only (#1088 follow-up).
     #[test]
     fn test_reconstruct_reads_and_chains() {
-        let db = TestDb::<DefaultHashMode>::new();
+        let db = TestDb::<EthHash>::new();
 
         let initial = db
             .propose(vec![BatchOp::Put {
@@ -1250,7 +1257,7 @@ mod test {
         assert_eq!(&*reconstructed.val(b"next").unwrap().unwrap(), b"v2");
     }
 
-    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
+    // Reconstruction is Ethereum-only (#1088 follow-up).
     #[test]
     fn test_reconstruct_from_committed_view_uses_requested_revision() {
         let db = TestDb::new();
@@ -1293,7 +1300,7 @@ mod test {
 
     #[test]
     fn test_reconstruct_clone_is_independent() {
-        let db = TestDb::<DefaultHashMode>::new();
+        let db = TestDb::<EthHash>::new();
 
         // Build a base committed revision.
         let initial = db
@@ -1349,10 +1356,10 @@ mod test {
         assert_eq!(new_cloned.val(b"original_only").unwrap(), None);
     }
 
-    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
+    // Reconstruction is Ethereum-only (#1088 follow-up).
     #[test]
     fn test_reconstruct_clone_of_clone() {
-        let db = TestDb::<DefaultHashMode>::new();
+        let db = TestDb::<EthHash>::new();
 
         // Build a base committed revision.
         let initial = db
@@ -1385,10 +1392,10 @@ mod test {
         assert_eq!(original_root, second_clone.root_hash());
     }
 
-    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
+    // Reconstruction is Ethereum-only (#1088 follow-up).
     #[test]
     fn test_reconstruct_clone_outlives_original() {
-        let db = TestDb::<DefaultHashMode>::new();
+        let db = TestDb::<EthHash>::new();
 
         let key = b"k";
         let value = b"v";
@@ -1865,8 +1872,8 @@ mod test {
         }
 
         // All keys should be deleted in both implementations.
-        // When the trie is completely empty, root_hash() may return None (e.g. without
-        // the ethhash feature). In that case, the trie is empty and all keys are deleted.
+        // When the trie is completely empty, root_hash() may return None (e.g. in
+        // MerkleDB mode). In that case, the trie is empty and all keys are deleted.
         assert_eq!(
             parallel_db.root_hash(),
             single_db.root_hash(),

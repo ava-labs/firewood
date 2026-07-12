@@ -124,8 +124,8 @@ fn make_key(hex_str: &str) -> Key {
 /// Ethereum's empty-trie root (`keccak256(0x80)`) is a property of the
 /// `EthHash` scheme, not of the binary's compile-time `ethhash` feature — so
 /// this reaches for `EthHash::default_root_hash()` directly rather than the
-/// `OptionalHashKeyExt` convenience (which resolves via the compile-selected
-/// `DefaultHashMode` and would silently go stale in a non-`ethhash` build).
+/// `OptionalHashKeyExt` convenience (an Ethereum-pinned legacy shim; naming
+/// the scheme keeps this test's intent explicit).
 #[test]
 fn test_root_hash_random_deletions() {
     use rand::seq::SliceRandom;
@@ -672,9 +672,8 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
         })
         .collect();
 
-    // `RangeProof::new` stamps the compile-time `DefaultHashMode`, which would
-    // silently mismatch this test's pinned `EthHash` in a non-`ethhash` build.
-    // `new_with_hash_mode` records the actual mode explicitly instead, exactly
+    // `RangeProof::new` is a mode-less convenience that does not stamp the
+    // trie's actual mode. `new_with_hash_mode` records it explicitly, exactly
     // as `Merkle::range_proof` does for a proof built from a live trie.
     let range_proof =
         RangeProof::new_with_hash_mode(start_proof, end_proof, key_values, EthHash::ALGORITHM);

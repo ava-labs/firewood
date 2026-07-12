@@ -33,12 +33,8 @@ jobs:
           - profile-key: debug-no-features
             profile-args: ""
             os: macos-26
-          - profile-key: debug-ethhash-logger
-            profile-args: "--features ethhash,logger"
           - profile-key: debug-all-features
             profile-args: "--all-features"
-          - profile-key: maxperf-ethhash-logger
-            profile-args: "--profile maxperf --features ethhash,logger"
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v6
@@ -94,8 +90,6 @@ jobs:
           - profile-key: debug-no-features
             profile-args: ""
             os: macos-26
-          - profile-key: debug-ethhash-logger
-            profile-args: "--features ethhash,logger"
           - profile-key: debug-all-features
             profile-args: "--all-features"
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
@@ -128,12 +122,8 @@ jobs:
           - profile-key: debug-no-features
             profile-args: ""
             os: macos-26
-          - profile-key: debug-ethhash-logger
-            profile-args: "--features ethhash,logger"
           - profile-key: debug-all-features
             profile-args: "--all-features"
-          - profile-key: maxperf-ethhash-logger
-            profile-args: "--profile maxperf --features ethhash,logger"
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v6
@@ -162,12 +152,8 @@ jobs:
           - profile-key: debug-no-features
             profile-args: ""
             os: macos-26
-          - profile-key: debug-ethhash-logger
-            profile-args: "--features ethhash,logger"
           - profile-key: debug-all-features
             profile-args: "--all-features"
-          - profile-key: maxperf-ethhash-logger
-            profile-args: "--cargo-profile maxperf --features ethhash,logger"
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v6
@@ -194,12 +180,8 @@ jobs:
           - profile-key: debug-no-features
             profile-args: ""
             os: macos-26
-          - profile-key: debug-ethhash-logger
-            profile-args: "--features ethhash,logger"
           - profile-key: debug-all-features
             profile-args: "--all-features"
-          - profile-key: maxperf-ethhash-logger
-            profile-args: "--profile maxperf --features ethhash,logger"
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v6
@@ -297,9 +279,9 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2 -> v2.9.1
         with:
           save-if: "false"
-          shared-key: "debug-ethhash-logger"
-      - name: Build Firewood FFI (with ethhash)
-        run: cargo build --features ethhash,logger
+          shared-key: "debug-no-features"
+      - name: Build Firewood FFI
+        run: cargo build --features logger
       - name: Set up Go
         uses: actions/setup-go@v6
         with:

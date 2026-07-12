@@ -22,9 +22,6 @@ thiserror.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 
-[features]
-ethhash = ["firewood/ethhash"]
-
 [lints]
 workspace = true
 

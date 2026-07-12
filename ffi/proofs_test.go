@@ -170,6 +170,7 @@ func TestRangeProofNonExistentRoot(t *testing.T) {
 }
 
 func TestRangeProofPartialRange(t *testing.T) {
+	skipIfNotEthereumMode(t) // range-proof verification is Ethereum-only
 	r := require.New(t)
 	db := newTestDatabase(t)
 
@@ -189,6 +190,7 @@ func TestRangeProofPartialRange(t *testing.T) {
 }
 
 func TestRangeProofDiffersAfterUpdate(t *testing.T) {
+	skipIfNotEthereumMode(t) // range-proof verification is Ethereum-only
 	r := require.New(t)
 	db := newTestDatabase(t)
 
@@ -213,6 +215,7 @@ func TestRangeProofDiffersAfterUpdate(t *testing.T) {
 }
 
 func TestRoundTripSerialization(t *testing.T) {
+	skipIfNotEthereumMode(t) // range-proof verification is Ethereum-only
 	r := require.New(t)
 	db := newTestDatabase(t)
 
@@ -258,6 +261,7 @@ func TestRangeProofVerify(t *testing.T) {
 }
 
 func TestVerifyAndCommitRangeProof(t *testing.T) {
+	skipIfNotEthereumMode(t) // range-proof verification is Ethereum-only
 	r := require.New(t)
 
 	// Create source and target databases
@@ -285,6 +289,7 @@ func TestVerifyAndCommitRangeProof(t *testing.T) {
 }
 
 func TestRangeProofFindNextKey(t *testing.T) {
+	skipIfNotEthereumMode(t) // range-proof verification is Ethereum-only
 	r := require.New(t)
 	db := newTestDatabase(t)
 
@@ -322,6 +327,10 @@ func TestRangeProofFindNextKey(t *testing.T) {
 }
 
 func TestRangeProofCodeHashes(t *testing.T) {
+	// Range-proof verification (via newVerifiedRangeProof) is Ethereum-only, so
+	// this test only runs in Ethereum mode and always expects code hashes to be
+	// yielded successfully.
+	skipIfNotEthereumMode(t)
 	r := require.New(t)
 	db := newTestDatabase(t)
 
@@ -337,16 +346,10 @@ func TestRangeProofCodeHashes(t *testing.T) {
 	proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenUnbounded)
 
 	i := 0
-	mode, err := inferHashingMode(t.Context())
-	r.NoError(err)
 	for h, err := range proof.CodeHashes() {
 		i++
-		if mode == ethhashKey {
-			r.NoError(err, "%T.CodeHashes()", proof)
-			r.Equal(codeHash, h)
-		} else {
-			require.ErrorContains(t, err, "feature not supported in this build: code hash iteration requires an ethereum-mode proof")
-		}
+		r.NoError(err, "%T.CodeHashes()", proof)
+		r.Equal(codeHash, h)
 	}
 
 	require.Equalf(t, 1, i, "expected one yield from %T.CodeHashes()", proof)
@@ -377,15 +380,13 @@ func TestChangeProofCodeHashes(t *testing.T) {
 	t.Cleanup(func() { r.NoError(proof.Free()) })
 
 	i := 0
-	mode, err := inferHashingMode(t.Context())
-	r.NoError(err)
 	for h, err := range proof.CodeHashes() {
 		i++
-		if mode == ethhashKey {
+		if selectedHashMode == ethhashKey {
 			r.NoError(err, "%T.CodeHashes()", proof)
 			r.Equal(codeHash, h)
 		} else {
-			require.ErrorContains(t, err, "feature not supported in this build: code hash iteration requires an ethereum-mode proof")
+			require.ErrorContains(t, err, "code hash iteration requires an Ethereum-mode database")
 		}
 	}
 
@@ -393,6 +394,7 @@ func TestChangeProofCodeHashes(t *testing.T) {
 }
 
 func TestRangeProofFreeReleasesKeepAlive(t *testing.T) {
+	skipIfNotEthereumMode(t) // range-proof verification is Ethereum-only
 	r := require.New(t)
 	db := newTestDatabase(t)
 	_, _, batch := kvForTest(50)
@@ -416,6 +418,7 @@ func TestRangeProofFreeReleasesKeepAlive(t *testing.T) {
 }
 
 func TestRangeProofCommitReleasesKeepAlive(t *testing.T) {
+	skipIfNotEthereumMode(t) // range-proof verification is Ethereum-only
 	r := require.New(t)
 	db := newTestDatabase(t)
 	_, _, batch := kvForTest(50)
@@ -449,6 +452,7 @@ func TestRangeProofCommitReleasesKeepAlive(t *testing.T) {
 // TestRangeProofFinalizerCleanup verifies that the finalizer properly releases
 // the keep-alive handle when the proof goes out of scope.
 func TestRangeProofFinalizerCleanup(t *testing.T) {
+	skipIfNotEthereumMode(t) // range-proof verification is Ethereum-only
 	r := require.New(t)
 	db := newTestDatabase(t)
 	_, _, batch := kvForTest(50)

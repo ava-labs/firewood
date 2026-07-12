@@ -195,31 +195,3 @@ pub trait Hashable: std::fmt::Debug {
     /// Yields 0 elements if the node is a leaf.
     fn children(&self) -> Children<Option<HashType>>;
 }
-
-/// A preimage of a hash.
-pub trait Preimage: std::fmt::Debug {
-    /// Returns the hash of this preimage.
-    fn to_hash(&self) -> HashType;
-
-    /// Write this hash preimage to `buf`.
-    fn write(&self, buf: &mut impl HasUpdate);
-}
-
-/// Hashes via [`Preimage`] resolve to the compile-selected
-/// [`DefaultHashMode`](crate::DefaultHashMode).
-///
-/// Storage hashing is genericized over `H: HashMode` and calls `H::to_hash` /
-/// `H::write_preimage` directly (see [`hash_node`], [`hash_preimage`], and
-/// [`HashableShunt::to_hash`](crate::HashableShunt::to_hash)). The
-/// [`Preimage`] trait survives for the remaining `&self`-shaped consumers
-/// above storage (e.g. `ProofNode`) and for `Debug` rendering; those still
-/// resolve to the default scheme until they are threaded over `H`.
-impl<T: Hashable> Preimage for T {
-    fn to_hash(&self) -> HashType {
-        <crate::DefaultHashMode as crate::HashMode>::to_hash(self)
-    }
-
-    fn write(&self, buf: &mut impl HasUpdate) {
-        <crate::DefaultHashMode as crate::HashMode>::write_preimage(self, buf);
-    }
-}
