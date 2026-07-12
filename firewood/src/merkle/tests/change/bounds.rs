@@ -90,5 +90,12 @@ fn test_generator_uses_end_key_for_complete_proof() {
         .unwrap();
 
     // End proof validates against end_key for complete proofs
-    proof.end_proof().value_digest(b"\xff", &root2).unwrap();
+    proof
+        .end_proof()
+        .value_digest(
+            b"\xff",
+            &root2,
+            firewood_storage::DefaultHashMode::ALGORITHM,
+        )
+        .unwrap();
 }

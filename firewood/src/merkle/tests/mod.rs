@@ -19,8 +19,8 @@ use super::*;
 use crate::proofs::range::RangeProof;
 use crate::{ProofError, ProofNode};
 use firewood_storage::{
-    Children, Committed, DeletedNodeTracking, MemStore, Mutable, NodeHashAlgorithm, NodeStore,
-    NodeStoreHeader, PathComponent, Propose, RootReader, TrieHash, ValueDigest,
+    Children, Committed, DeletedNodeTracking, MemStore, Mutable, NodeStore, NodeStoreHeader,
+    PathComponent, Propose, RootReader, TrieHash, ValueDigest,
 };
 
 /// Test wrapper around [`crate::merkle::verify_range_proof`] that supplies the
@@ -38,7 +38,7 @@ fn verify_range_proof<H: crate::ProofCollection<Node = ProofNode>>(
         first_key,
         last_key,
         root_hash,
-        NodeHashAlgorithm::compile_option(),
+        <firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM,
         proof,
     )
 }
@@ -78,6 +78,47 @@ where
     merkle
 }
 
+/// Builds a committed in-memory merkle pinned to the hash mode `H`, regardless
+/// of the binary's `ethhash` feature. Used by the `ValueDigest::Hash` tests,
+/// which depend on MerkleDB's ≥32-byte value capping and must run under
+/// `MerkleDbHash` in either binary.
+#[cfg(not(feature = "ethhash"))]
+pub(crate) fn init_merkle_in_mode<H, I, K, V>(iter: I) -> Merkle<NodeStore<Committed, MemStore, H>>
+where
+    H: firewood_storage::HashMode,
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<[u8]>,
+    V: AsRef<[u8]>,
+{
+    let memstore = Arc::new(MemStore::new(Vec::with_capacity(64 * 1024), H::ALGORITHM));
+    let mut header = NodeStoreHeader::new(H::ALGORITHM);
+    let base: Merkle<NodeStore<Committed, MemStore, H>> = Merkle::from(
+        NodeStore::new_empty_committed(memstore, DeletedNodeTracking::Enabled),
+    );
+    let mut merkle = base.fork().unwrap();
+    for (k, v) in iter {
+        merkle.insert(k.as_ref(), v.as_ref().into()).unwrap();
+    }
+    let merkle = merkle.hash();
+    let ns = merkle.into_inner().as_committed();
+    ns.persist(&mut header).unwrap();
+    ns.into()
+}
+
+/// `verify_range_proof` variant that supplies an explicit `algorithm` rather
+/// than the compile default, so mode-specific tests can verify under the mode
+/// their proof was built in regardless of the binary.
+#[cfg(not(feature = "ethhash"))]
+fn verify_range_proof_in_mode<H: crate::ProofCollection<Node = ProofNode>>(
+    first_key: Option<impl crate::api::KeyType>,
+    last_key: Option<impl crate::api::KeyType>,
+    root_hash: &TrieHash,
+    algorithm: firewood_storage::NodeHashAlgorithm,
+    proof: &RangeProof<impl crate::api::KeyType, impl crate::api::ValueType, H>,
+) -> Result<(), crate::api::Error> {
+    crate::merkle::verify_range_proof(first_key, last_key, root_hash, algorithm, proof)
+}
+
 pub(crate) fn init_merkle_with_header<I, K, V>(
     iter: I,
 ) -> (Merkle<NodeStore<Committed, MemStore>>, NodeStoreHeader)
@@ -88,9 +129,11 @@ where
 {
     let memstore = Arc::new(MemStore::new(
         Vec::with_capacity(64 * 1024),
-        NodeHashAlgorithm::compile_option(),
+        <firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM,
     ));
-    let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+    let mut header = NodeStoreHeader::new(
+        <firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM,
+    );
     let base = Merkle::from(NodeStore::new_empty_committed(
         memstore.clone(),
         DeletedNodeTracking::Enabled,
@@ -585,19 +628,42 @@ fn single_key_proof() {
         let proof = merkle.prove(&key).unwrap();
 
         proof
-            .verify(key.clone(), Some(value.clone()), &root_hash)
+            .verify(
+                key.clone(),
+                Some(value.clone()),
+                &root_hash,
+                <firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM,
+            )
             .unwrap();
 
         {
             // Test that the proof is invalid when the value is different
             let mut value = value.clone();
             value[0] = value[0].wrapping_add(1);
-            assert!(proof.verify(key.clone(), Some(value), &root_hash).is_err());
+            assert!(
+                proof
+                    .verify(
+                        key.clone(),
+                        Some(value),
+                        &root_hash,
+                        <firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM
+                    )
+                    .is_err()
+            );
         }
 
         {
             // Test that the proof is invalid when the hash is different
-            assert!(proof.verify(key, Some(value), &TrieHash::empty()).is_err());
+            assert!(
+                proof
+                    .verify(
+                        key,
+                        Some(value),
+                        &TrieHash::empty(),
+                        <firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM
+                    )
+                    .is_err()
+            );
         }
     }
 }

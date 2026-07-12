@@ -5,7 +5,7 @@ use crate::api::{KeyType, KeyValuePair};
 use crate::merkle::{Key, Value};
 
 use firewood_storage::{
-    BranchNode, Child, DefaultHashMode, FileIoError, HashMode, NibblesIterator, Node, PathBuf,
+    BranchNode, Child, FileIoError, NibblesIterator, Node, NodeHashAlgorithm, PathBuf,
     PathComponent, PathIterItem, SharedNode, TriePathFromUnpackedBytes, TrieReader,
 };
 use std::cmp::Ordering;
@@ -314,6 +314,11 @@ impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
             result
                 .map(|(key, node)| {
                     let must_recompute = self.iter.merkle.must_recompute_storage_hash();
+                    // Source the account storage-root fix policy from the source
+                    // DB's runtime algorithm, not the build's compile default, so
+                    // a cross-mode DB emits range-proof key_values that match its
+                    // proof nodes.
+                    let algorithm = self.iter.merkle.node_hash_algorithm();
                     match &*node {
                         Node::Branch(branch) => {
                             let Some(value) = branch.value.as_ref() else {
@@ -325,13 +330,14 @@ impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
                             } else {
                                 firewood_storage::Children::new()
                             };
-                            fix_account_value(key, value, &child_hashes, must_recompute)
+                            fix_account_value(key, value, &child_hashes, must_recompute, algorithm)
                         }
                         Node::Leaf(leaf) => fix_account_value(
                             key,
                             &leaf.value,
                             &firewood_storage::Children::new(),
                             must_recompute,
+                            algorithm,
                         ),
                     }
                 })
@@ -342,17 +348,22 @@ impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
 
 impl<T: TrieReader> FusedIterator for MerkleKeyValueIter<'_, T> {}
 
-/// For ethhash account nodes (32-byte key) on databases that require storageRoot
+/// For Ethereum account nodes (32-byte key) on databases that require storageRoot
 /// recomputation, replace the storageRoot with the correct hash computed from the
 /// node's children. This ensures range proof `key_values` match the proof nodes.
-/// Without ethhash this is a no-op.
+///
+/// The eth-ness check is the source DB's runtime `algorithm`, not the build's
+/// compile default, so a `Db<EthHash>` opened in a non-ethhash binary still
+/// applies the fix (and a `Db<MerkleDbHash>` in an ethhash binary does not).
+/// `must_recompute` is an independent version flag, not an eth-ness proxy.
 fn fix_account_value(
     key: Key,
     value: &[u8],
     child_hashes: &firewood_storage::Children<Option<firewood_storage::HashType>>,
     must_recompute: bool,
+    algorithm: NodeHashAlgorithm,
 ) -> Option<(Key, Value)> {
-    if DefaultHashMode::ALGORITHM.is_ethereum()
+    if algorithm.is_ethereum()
         && must_recompute
         && key.len() == 32
         && let Some(fixed) = firewood_storage::fix_account_storage_root_value(value, child_hashes)

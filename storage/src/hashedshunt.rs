@@ -29,9 +29,9 @@ impl<'a, P1: SplitPath, P2: SplitPath> HashableShunt<'a, P1, P2> {
         }
     }
 
-    /// Calculates the hash of this shunt.
-    pub fn to_hash(&self) -> HashType {
-        crate::Preimage::to_hash(self)
+    /// Calculates the hash of this shunt under the scheme `H`.
+    pub fn to_hash<H: crate::HashMode>(&self) -> HashType {
+        H::to_hash(self)
     }
 }
 
@@ -45,7 +45,7 @@ impl<P1: SplitPath, P2: SplitPath> std::fmt::Debug for HashableShunt<'_, P1, P2>
                 &self.value.as_ref().map(|v| v.as_ref().map(hex::encode)),
             )
             .field("child_hashes", &self.child_hashes)
-            .field("hash", &self.to_hash())
+            .field("hash", &self.to_hash::<crate::DefaultHashMode>())
             .finish()
     }
 }

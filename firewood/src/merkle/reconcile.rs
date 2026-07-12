@@ -2,14 +2,14 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood_storage::{
-    DefaultHashMode, HashMode, Mutable, NodeStore, Propose, ReadableStorage, ValueDigest,
-    logger::warn, replace_list_field,
+    HashMode, Mutable, NodeStore, Propose, ReadableStorage, ValueDigest, logger::warn,
+    replace_list_field,
 };
 
 use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
 use crate::{ProofError, ProofNode, Value, merkle::Merkle};
 
-impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
+impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> {
     /// Reconciles a branch proof node against the in-memory proving merkle.
     ///
     /// This helper creates any missing branch structure for the proof node's
@@ -99,7 +99,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         // caller (`verify_change_proof_root_hash`) still gates acceptance on the
         // final root-hash check, so relaxing here only avoids a spurious per-node
         // `UnexpectedValue`. It never widens what proofs are accepted.
-        if DefaultHashMode::ALGORITHM.is_ethereum()
+        if H::ALGORITHM.is_ethereum()
             && proof_node.key.len() == ACCOUNT_DEPTH_NIBBLES
             && let (Some(pv), Some(bv)) = (proof_value, branch.value.as_deref())
             && account_values_equal_except_storage_root(pv, bv)

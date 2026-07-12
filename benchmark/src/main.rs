@@ -235,8 +235,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         .cache_read_strategy(args.global_opts.cache_read_strategy.clone().into())
         .max_revisions(args.global_opts.revisions)
         .build();
+    let node_hash_algorithm = if cfg!(feature = "ethhash") {
+        NodeHashAlgorithm::Ethereum
+    } else {
+        NodeHashAlgorithm::MerkleDB
+    };
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+        .node_hash_algorithm(node_hash_algorithm)
         .truncate(matches!(args.test_name, TestName::Create))
         .manager(mgrcfg)
         .build();

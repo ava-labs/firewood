@@ -38,12 +38,21 @@ const _: () = {
     assert!(size_of::<Header>() == 32);
 };
 
-impl From<ProofType> for Header {
-    fn from(proof_type: ProofType) -> Self {
+impl From<(ProofType, NodeHashAlgorithm)> for Header {
+    /// Builds a header stamping the runtime [`NodeHashAlgorithm`] of the source
+    /// DB into the `hash_mode` byte, so the header always agrees with the proof
+    /// body's `hash_mode()`. The byte mapping matches
+    /// [`NodeHashAlgorithm::try_from`]'s `u64` discriminant (`0` = MerkleDB/sha256,
+    /// `1` = Ethereum/keccak256).
+    fn from((proof_type, algorithm): (ProofType, NodeHashAlgorithm)) -> Self {
+        let hash_mode = match algorithm {
+            NodeHashAlgorithm::MerkleDB => 0,
+            NodeHashAlgorithm::Ethereum => 1,
+        };
         Self {
             magic: *magic::PROOF_HEADER,
             version: magic::PROOF_VERSION,
-            hash_mode: magic::HASH_MODE,
+            hash_mode,
             branch_factor: magic::BRANCH_FACTOR,
             proof_type: proof_type as u8,
             _reserved: [0; 20],

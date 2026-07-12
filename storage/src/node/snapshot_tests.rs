@@ -62,7 +62,9 @@ use crate::IntoHashType;
 use crate::node::branch::Serializable;
 use crate::node::{BranchNode, LeafNode, Node};
 use crate::nodestore::alloc::FreeArea;
-use crate::{Child, Children, LinearAddress, NibblesIterator, Path, PathComponent, TrieHash};
+use crate::{
+    Child, Children, DefaultHashMode, LinearAddress, NibblesIterator, Path, PathComponent, TrieHash,
+};
 
 /// Serializes a [`Serializable`] value into a fresh `Vec<u8>`.
 fn write_to_vec<T: Serializable>(t: &T) -> Vec<u8> {
@@ -75,7 +77,7 @@ fn write_to_vec<T: Serializable>(t: &T) -> Vec<u8> {
 /// leading `AreaIndex` byte at position 0).
 fn node_as_bytes(node: &Node) -> Vec<u8> {
     let mut buf = Vec::new();
-    node.as_bytes(&mut buf).unwrap();
+    node.as_bytes::<DefaultHashMode, _>(&mut buf).unwrap();
     buf
 }
 

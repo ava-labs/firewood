@@ -266,8 +266,9 @@ fn verify_boundary_proof<C: ProofCollection>(
     boundary_op: Option<&FrozenBatchOp>,
     mismatch_error: ProofError,
     edge: ProofEdge,
+    algorithm: NodeHashAlgorithm,
 ) -> Result<(), api::Error> {
-    let result = match proof.value_digest(key, end_root) {
+    let result = match proof.value_digest(key, end_root, algorithm) {
         Ok(result) => result,
         Err(ProofError::Empty) => None,
         // Any `UnexpectedHash` from this boundary `value_digest` walk is by
@@ -308,13 +309,14 @@ fn compute_right_edge_key<'a>(
     last_op_key: Option<&'a [u8]>,
     end_key: Option<&'a [u8]>,
     max_length: Option<NonZeroUsize>,
+    algorithm: NodeHashAlgorithm,
 ) -> Option<&'a [u8]> {
     let possibly_truncated = max_length.is_some_and(|n| proof.batch_ops().len() == n.get());
     let truncated = possibly_truncated
         && last_op_key.is_some_and(|k| {
             proof
                 .end_proof()
-                .value_digest(k, end_root)
+                .value_digest(k, end_root, algorithm)
                 .ok()
                 .flatten()
                 .is_some()
@@ -353,6 +355,7 @@ fn compute_right_edge_key<'a>(
 ///
 /// On success, returns a [`ChangeProofVerificationContext`] capturing the
 /// verification parameters for use by downstream root hash verification.
+#[allow(clippy::too_many_lines)]
 pub fn verify_change_proof_structure(
     proof: &FrozenChangeProof,
     end_root: HashKey,
@@ -467,6 +470,7 @@ pub fn verify_change_proof_structure(
             boundary_op,
             ProofError::StartProofOperationMismatch,
             ProofEdge::Left,
+            algorithm,
         )?;
     }
 
@@ -492,7 +496,14 @@ pub fn verify_change_proof_structure(
     }
 
     let last_op_key = last_op.map(|op| op.key().as_ref());
-    let right_edge_key = compute_right_edge_key(proof, &end_root, last_op_key, end_key, max_length);
+    let right_edge_key = compute_right_edge_key(
+        proof,
+        &end_root,
+        last_op_key,
+        end_key,
+        max_length,
+        algorithm,
+    );
 
     // Verify end boundary proof against end_root. The end proof was
     // generated for right_edge_key. The boundary_op check applies when
@@ -509,6 +520,7 @@ pub fn verify_change_proof_structure(
             end_boundary_op,
             ProofError::EndProofOperationMismatch,
             ProofEdge::Right,
+            algorithm,
         )?;
     }
 

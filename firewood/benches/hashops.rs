@@ -8,7 +8,7 @@ use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use firewood::Merkle;
 use firewood::api::{Db as _, Proposal as _};
 use firewood::db::{BatchOp, DbConfig};
-use firewood_storage::{DeletedNodeTracking, MemStore, NodeHashAlgorithm, NodeStore};
+use firewood_storage::{DeletedNodeTracking, MemStore, NodeStore};
 use pprof::ProfilerGuard;
 use rand::{RngExt, distr::Alphanumeric};
 use std::fs::File;
@@ -70,7 +70,7 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
             b.iter_batched(
                 || {
                     let store = Arc::new(MemStore::default());
-                    let nodestore =
+                    let nodestore: NodeStore<_, _, firewood_storage::DefaultHashMode> =
                         NodeStore::new_empty_proposal(store, DeletedNodeTracking::Enabled);
                     let merkle = Merkle::from(nodestore);
 
@@ -118,7 +118,7 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
                     let db_path = TempDir::new().unwrap();
                     let db_path = db_path.path().join("benchmark_db");
                     let cfg = DbConfig::builder()
-                        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+                        .node_hash_algorithm(<firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM)
                         .truncate(true)
                         .build();
                     let db = firewood::db::Db::new(db_path, cfg).unwrap();

@@ -9,6 +9,7 @@
 use firewood_metrics::firewood_counter;
 use fjall::{Config, Keyspace, PartitionCreateOptions, PartitionHandle, PersistMode};
 use parking_lot::Mutex;
+use std::marker::PhantomData;
 use std::{
     path::Path,
     sync::{Arc, Weak},
@@ -17,12 +18,22 @@ use weak_table::WeakValueHashMap;
 
 use derive_where::derive_where;
 
+use crate::hashmode::{DefaultHashMode, HashMode};
 use crate::linear::filebacked::FileBacked;
 use crate::nodestore::{Committed, DeletedNodeTracking, LinearAddress, NodeStore};
 use crate::{IntoHashType, TrieHash};
 
 /// Type alias for a committed revision stored in the root store.
-pub type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
+///
+/// `H` is the database's node-hashing scheme; the persisted root addresses are
+/// scheme-independent, so a [`RootStore`] reconstructs committed revisions under
+/// whichever `H` its owning database uses.
+pub type CommittedRevision<H = DefaultHashMode> = Arc<NodeStore<Committed, FileBacked, H>>;
+
+/// In-memory cache of reconstructed committed revisions, keyed by root hash and
+/// holding weak references so reaped revisions drop out automatically.
+type RevisionCache<H> =
+    Mutex<WeakValueHashMap<TrieHash, Weak<NodeStore<Committed, FileBacked, H>>>>;
 
 /// fjall uses partitions. We store all firewood-specific data in a
 /// partition named 'firewood'
@@ -31,15 +42,18 @@ const FJALL_PARTITION_NAME: &str = "firewood";
 /// This structure holds everything related to an open root store
 #[derive_where(Debug)]
 #[derive_where(skip_inner)]
-pub struct RootStore {
+pub struct RootStore<H = DefaultHashMode> {
     keyspace: Keyspace,
     items: PartitionHandle,
     storage: Arc<FileBacked>,
     /// Cache of reconstructed revisions by hash.
-    revision_cache: Mutex<WeakValueHashMap<TrieHash, Weak<NodeStore<Committed, FileBacked>>>>,
+    revision_cache: RevisionCache<H>,
+    /// Marker for the database's node-hashing scheme. The persisted data is
+    /// scheme-independent; `H` only types the reconstructed revisions.
+    _hash_mode: PhantomData<H>,
 }
 
-impl RootStore {
+impl<H: HashMode> RootStore<H> {
     /// Creates or opens an instance of `RootStore`
     ///
     /// # Arguments
@@ -55,7 +69,7 @@ impl RootStore {
         path: P,
         storage: Arc<FileBacked>,
         truncate: bool,
-    ) -> Result<RootStore, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let keyspace = Config::new(path).open()?;
 
         if truncate {
@@ -73,6 +87,7 @@ impl RootStore {
             items,
             storage,
             revision_cache,
+            _hash_mode: PhantomData,
         })
     }
 
@@ -128,7 +143,7 @@ impl RootStore {
     pub fn get(
         &self,
         hash: &TrieHash,
-    ) -> Result<Option<CommittedRevision>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Option<CommittedRevision<H>>, Box<dyn std::error::Error + Send + Sync>> {
         // 1. Obtain the lock to prevent multiple threads from caching the same result
         // BLOCKING: mutex lock held for the entire `get` operation, including the fjall read
         // (step 3) and NodeStore construction (step 4) on a cache miss. A cache miss against a
@@ -180,7 +195,7 @@ mod tests {
     use super::*;
     use crate::CacheReadStrategy;
     use crate::linear::filebacked::FileBacked;
-    use crate::nodestore::{NodeHashAlgorithm, NodeStore};
+    use crate::nodestore::NodeStore;
     use std::num::NonZero;
     use std::sync::Arc;
 
@@ -197,17 +212,18 @@ mod tests {
                 false,
                 true,
                 CacheReadStrategy::WritesOnly,
-                NodeHashAlgorithm::compile_option(),
+                <crate::DefaultHashMode as crate::HashMode>::ALGORITHM,
             )
             .unwrap(),
         );
 
         let root_store_dir = tmpdir.as_ref().join("root_store");
-        let root_store = RootStore::new(root_store_dir, file_backed.clone(), false).unwrap();
+        let root_store: RootStore =
+            RootStore::new(root_store_dir, file_backed.clone(), false).unwrap();
 
         // Create a revision to cache. `RootStore` implies archival mode,
         // where deleted nodes are never tracked.
-        let revision = Arc::new(NodeStore::new_empty_committed(
+        let revision: CommittedRevision = Arc::new(NodeStore::new_empty_committed(
             file_backed.clone(),
             DeletedNodeTracking::Disabled,
         ));
@@ -238,13 +254,14 @@ mod tests {
                 false,
                 true,
                 CacheReadStrategy::WritesOnly,
-                NodeHashAlgorithm::compile_option(),
+                <crate::DefaultHashMode as crate::HashMode>::ALGORITHM,
             )
             .unwrap(),
         );
 
         let root_store_dir = tmpdir.as_ref().join("root_store");
-        let root_store = RootStore::new(root_store_dir, file_backed.clone(), false).unwrap();
+        let root_store: RootStore =
+            RootStore::new(root_store_dir, file_backed.clone(), false).unwrap();
 
         // Try to get a hash that doesn't exist in the cache nor in the underlying datastore.
         let nonexistent_hash = TrieHash::from_bytes([1; 32]);

@@ -35,7 +35,7 @@ use std::iter::FusedIterator;
 use std::mem::size_of;
 use std::ops::{Index, IndexMut};
 
-use crate::{FreeListParent, MaybePersistedNode, ReadableStorage, WritableStorage};
+use crate::{FreeListParent, HashMode, MaybePersistedNode, ReadableStorage, WritableStorage};
 
 /// Returns the maximum size needed to encode a `VarInt`.
 const fn var_int_max_size<VI>() -> usize {
@@ -552,7 +552,7 @@ impl<S: ReadableStorage> Iterator for FreeListsIterator<'_, S> {
 }
 
 /// Extension methods for `NodeStore` to provide free list iteration capabilities
-impl<T, S: ReadableStorage> NodeStore<T, S> {
+impl<T, S: ReadableStorage, H: HashMode> NodeStore<T, S, H> {
     /// Returns an iterator over the free lists of size no smaller than the size corresponding to `start_area_index`.
     /// The iterator returns a tuple of the address and the area index of the free area.
     /// Since this is a low-level iterator, we avoid safe conversion to `AreaIndex` for performance.
@@ -635,10 +635,10 @@ fn read_bincode_varint_u64_le(reader: &mut impl Read) -> std::io::Result<u64> {
 pub mod test_utils {
     use super::*;
 
-    use crate::NodeHashAlgorithm;
     use crate::node::Node;
     use crate::nodestore::header::RootNodeInfo;
     use crate::nodestore::{Committed, NodeStore, NodeStoreHeader};
+    use crate::{DefaultHashMode, HashMode};
 
     // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the size of the area on success.
     pub fn test_write_new_node<S: WritableStorage>(
@@ -647,7 +647,9 @@ pub mod test_utils {
         offset: u64,
     ) -> (u64, u64) {
         let mut stored_area_bytes = Vec::new();
-        let area_size_index = node.as_bytes(&mut stored_area_bytes).unwrap();
+        let area_size_index = node
+            .as_bytes::<DefaultHashMode, _>(&mut stored_area_bytes)
+            .unwrap();
         let bytes_written = stored_area_bytes.len() as u64;
         nodestore
             .storage
@@ -675,7 +677,7 @@ pub mod test_utils {
         root_node_info: Option<RootNodeInfo>,
         free_lists: FreeLists,
     ) -> NodeStoreHeader {
-        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let mut header = NodeStoreHeader::new(DefaultHashMode::ALGORITHM);
         header.set_size(size);
         header.set_root_location(root_node_info);
         *header.free_lists_mut() = free_lists;
