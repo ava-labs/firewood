@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use clap::Args;
-use firewood::api::{self, Db as _, Proposal as _};
+use firewood::api;
 use firewood::db::{BatchOp, Db, DbConfig};
 
 use crate::DatabasePath;
@@ -28,12 +28,12 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
         .create_if_missing(false)
         .truncate(false);
 
-    let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
+    let db: Box<dyn api::DynDb> = Box::new(Db::new(opts.database.dbpath.clone(), cfg.build())?);
 
-    let batch: Vec<BatchOp<Vec<u8>, Vec<u8>>> = vec![BatchOp::Put {
-        key: opts.key.clone().into(),
-        value: opts.value.bytes().collect(),
-    }];
+    let batch: api::OwnedBatch = Box::new([BatchOp::Put {
+        key: opts.key.clone().into_bytes().into_boxed_slice(),
+        value: opts.value.clone().into_bytes().into_boxed_slice(),
+    }]);
     let proposal = db.propose(batch)?;
     proposal.commit()?;
 

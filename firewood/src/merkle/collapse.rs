@@ -4,7 +4,7 @@
 use std::cmp::Ordering;
 
 use firewood_storage::{
-    Child, Mutable, Node, NodeStore, Path, PathComponent, Propose, ReadableStorage,
+    Child, HashMode, Mutable, Node, NodeStore, Path, PathComponent, Propose, ReadableStorage,
 };
 
 use crate::{ProofError, api, merkle::Merkle};
@@ -103,7 +103,7 @@ fn consume_partial_path<'a>(
     Ok(rest)
 }
 
-impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
+impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> {
     /// Collapse intermediate branches between two consecutive proof-path
     /// positions.
     ///

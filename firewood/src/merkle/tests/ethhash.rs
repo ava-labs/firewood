@@ -695,8 +695,9 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
     let header = NodeStoreHeader::read_from_storage(&*storage).unwrap();
 
     // Re-open from the clobbered MemStore so all reads come from disk.
-    let merkle =
-        Merkle::from(NodeStore::open(&header, storage, DeletedNodeTracking::Enabled).unwrap());
+    let reopened: NodeStore<Committed, _> =
+        NodeStore::open(&header, storage, DeletedNodeTracking::Enabled).unwrap();
+    let merkle = Merkle::from(reopened);
 
     // Sanity check: the stored values now contain dummy zeros.
     for (k, _) in &*accounts {
