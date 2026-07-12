@@ -11,6 +11,11 @@
 //! `account_values_equal_except_storage_root` relaxation in
 //! `reconcile_branch_proof_node`, that mismatch is rejected as
 //! `UnexpectedValue`.
+//!
+//! Pinned to `EthHash`: account-depth semantics (RLP-encoded values,
+//! `storageRoot` splicing) and most fixtures below start from an empty trie
+//! (whose root hash only exists under ethhash) only apply under Ethereum
+//! hashing.
 
 use super::*;
 use test_case::test_case;
@@ -35,7 +40,8 @@ fn key_under_account(account_key: &[u8; 32], byte_32: u8) -> [u8; 64] {
 /// (`ACCOUNT_KEY`) with four storage children at suffixes 0x10/0x30/0x60/0xC0.
 /// Returns the DB and its tempdir guard (which the caller must keep alive),
 /// plus the empty and populated roots.
-fn source_with_four_storage_children() -> (Db, tempfile::TempDir, api::HashKey, api::HashKey) {
+fn source_with_four_storage_children()
+-> (Db<EthHash>, tempfile::TempDir, api::HashKey, api::HashKey) {
     let storage_keys: Vec<[u8; 64]> = [0x10u8, 0x30, 0x60, 0xC0]
         .iter()
         .map(|&p| key_under_account(&ACCOUNT_KEY, p))
@@ -45,7 +51,7 @@ fn source_with_four_storage_children() -> (Db, tempfile::TempDir, api::HashKey, 
         .collect();
     let account_value = rlp_encode_account(1, 100, &[0u8; 32], &empty_code_hash());
 
-    let (source, dir) = setup_db![];
+    let (source, dir) = setup_db![mode = EthHash];
     let (empty_root, root2) = setup_2nd_commit!(
         source,
         [
@@ -110,10 +116,17 @@ fn test_change_proof_partial_storage_children_against_empty(start_bound: Bound, 
     let proof = source
         .change_proof(empty_root.clone(), root2.clone(), start_key, end_key, None)
         .unwrap();
-    let ctx =
-        verify_change_proof_structure(&proof, root2.clone(), start_key, end_key, None).unwrap();
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2.clone(),
+        start_key,
+        end_key,
+        EthHash::ALGORITHM,
+        None,
+    )
+    .unwrap();
 
-    let (target, _dir_target) = setup_db![];
+    let (target, _dir_target) = setup_db![mode = EthHash];
     let empty_root_target = target.root_hash().unwrap();
     verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
 }
@@ -155,6 +168,7 @@ fn test_change_proof_arbitrary_order_right_then_left_converges() {
         full_root.clone(),
         None,
         Some(mid_key.as_ref()),
+        EthHash::ALGORITHM,
         None,
     )
     .unwrap();
@@ -173,12 +187,13 @@ fn test_change_proof_arbitrary_order_right_then_left_converges() {
         full_root.clone(),
         Some(mid_key.as_ref()),
         None,
+        EthHash::ALGORITHM,
         None,
     )
     .unwrap();
 
     // Apply RIGHT first, then LEFT, to an empty target.
-    let (target, _dir_target) = setup_db![];
+    let (target, _dir_target) = setup_db![mode = EthHash];
     let target_empty_root = target.root_hash().unwrap();
 
     // Step 1: apply RIGHT half. Verifies, then commits.
@@ -254,11 +269,12 @@ fn test_change_proof_both_bounds_inside_account_storage() {
         root2.clone(),
         Some(start.as_ref()),
         Some(end.as_ref()),
+        EthHash::ALGORITHM,
         None,
     )
     .unwrap();
 
-    let (target, _dir_target) = setup_db![];
+    let (target, _dir_target) = setup_db![mode = EthHash];
     let empty_root_target = target.root_hash().unwrap();
     verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
 }
@@ -288,10 +304,17 @@ fn test_change_proof_account_in_range_no_storage_in_range() {
             None,
         )
         .unwrap();
-    let ctx = verify_change_proof_structure(&proof, root2.clone(), None, Some(end.as_ref()), None)
-        .unwrap();
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2.clone(),
+        None,
+        Some(end.as_ref()),
+        EthHash::ALGORITHM,
+        None,
+    )
+    .unwrap();
 
-    let (target, _dir_target) = setup_db![];
+    let (target, _dir_target) = setup_db![mode = EthHash];
     let empty_root_target = target.root_hash().unwrap();
     verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
 }
@@ -309,7 +332,7 @@ fn test_change_proof_single_storage_child_truncated() {
     let storage_value = rlp_encode_storage(&[1u8; 32]);
     let account_value = rlp_encode_account(1, 100, &[0u8; 32], &empty_code_hash());
 
-    let (source, _dir_source) = setup_db![];
+    let (source, _dir_source) = setup_db![mode = EthHash];
     let (empty_root, root2) = setup_2nd_commit!(
         source,
         [
@@ -331,10 +354,17 @@ fn test_change_proof_single_storage_child_truncated() {
             None,
         )
         .unwrap();
-    let ctx = verify_change_proof_structure(&proof, root2.clone(), None, Some(end.as_ref()), None)
-        .unwrap();
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2.clone(),
+        None,
+        Some(end.as_ref()),
+        EthHash::ALGORITHM,
+        None,
+    )
+    .unwrap();
 
-    let (target, _dir_target) = setup_db![];
+    let (target, _dir_target) = setup_db![mode = EthHash];
     let empty_root_target = target.root_hash().unwrap();
     verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
 }
