@@ -519,8 +519,8 @@ pub trait Reconstructible: DbView {
     where
         Self: Sized;
 
-    /// The underlying database
-    fn db(&self) -> &crate::db::Db;
+    /// The underlying database, erased to [`DynDb`].
+    fn db(&self) -> &dyn DynDb;
 }
 
 /// A proposal for a new revision of the database.
@@ -553,6 +553,163 @@ pub trait Proposal: DbView {
     /// A new proposal
     #[expect(clippy::missing_errors_doc)]
     fn propose(&self, data: impl IntoBatchIter) -> Result<Self::Proposal, Error>;
+}
+
+/// A batch already collected into owned key/value pairs.
+///
+/// The [`DynDb`]/[`DynProposal`] boundary cannot accept an `impl IntoBatchIter`
+/// (a generic method is not dispatchable through a vtable), so the generic
+/// batch is pre-collected into this concrete, owned shape at the boundary.
+pub type OwnedBatch = Box<[BatchOp<Box<[u8]>, Box<[u8]>>]>;
+
+/// A dyn-safe version of [`Db`].
+///
+/// [`Db`] itself is not object-safe (it has GAT associated types and generic
+/// `impl IntoBatchIter` methods), so a single binary that opens databases of
+/// more than one hash mode erases each `Db<H>` to `Box<dyn DynDb>` via this
+/// trait. The blanket impl lives next to the concrete `Db<H>` in `db.rs`.
+pub trait DynDb: Debug + Send + Sync + 'static {
+    /// Get a shareable view for a specific committed revision.
+    #[expect(clippy::missing_errors_doc)]
+    fn revision(&self, hash: TrieHash) -> Result<ArcDynDbView, Error>;
+
+    /// Get the hash of the most recently committed revision.
+    fn root_hash(&self) -> Option<TrieHash>;
+
+    /// Get a shareable view, either committed or proposed, by hash.
+    #[expect(clippy::missing_errors_doc)]
+    fn view(&self, hash: HashKey) -> Result<ArcDynDbView, Error>;
+
+    /// Propose a change to the database via an already-collected batch.
+    #[expect(clippy::missing_errors_doc)]
+    fn propose(&self, ops: OwnedBatch) -> Result<Box<dyn DynProposal<'_> + '_>, Error>;
+
+    /// Dump the latest revision's trie to a string.
+    #[expect(clippy::missing_errors_doc)]
+    fn dump_to_string(&self) -> Result<String, Error>;
+
+    /// Generate a change proof between two revisions.
+    #[expect(clippy::missing_errors_doc)]
+    fn change_proof(
+        &self,
+        start_hash: HashKey,
+        end_hash: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenChangeProof, Error>;
+
+    /// Verify a change proof and create a proposal from it.
+    #[expect(clippy::missing_errors_doc)]
+    fn verify_change_proof(
+        &self,
+        proof: &FrozenChangeProof,
+        end_root: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<Box<dyn DynProposal<'_> + '_>, Error>;
+
+    /// Merge a key/value range into a new proposal on the latest revision.
+    #[expect(clippy::missing_errors_doc)]
+    fn merge_key_value_range(
+        &self,
+        first_key: Option<&[u8]>,
+        last_key: Option<&[u8]>,
+        key_values: OwnedBatch,
+    ) -> Result<Box<dyn DynProposal<'_> + '_>, Error>;
+
+    /// Reconstruct a view from a committed parent by applying batch operations.
+    ///
+    /// Reconstruction is supported only when this database's hash mode is the
+    /// build's default mode; other modes return [`Error::FeatureNotSupported`].
+    #[expect(clippy::missing_errors_doc)]
+    fn reconstruct_from_view(
+        &self,
+        parent: &crate::db::CommittedView,
+        batch: OwnedBatch,
+    ) -> Result<crate::db::ReconstructedView<'_>, Error>;
+
+    /// Reconstruct a view from a reconstructed parent by applying batch
+    /// operations (used internally by [`Reconstructible::reconstruct`]).
+    #[expect(clippy::missing_errors_doc)]
+    fn reconstruct_from_reconstructed<'db>(
+        &'db self,
+        parent: crate::db::ReconstructedView<'db>,
+        batch: OwnedBatch,
+    ) -> Result<crate::db::ReconstructedView<'db>, Error>;
+
+    /// Get an opaque committed revision for `hash`, if this database runs in
+    /// the build's default hash mode and the revision is available.
+    ///
+    /// Reconstruction is `DefaultHashMode`-only at the storage layer, so this
+    /// A database opened in a non-default mode returns `Ok(None)`; the
+    /// reconstruct caller then surfaces [`Error::FeatureNotSupported`].
+    #[expect(clippy::missing_errors_doc)]
+    fn committed_view(&self, hash: TrieHash) -> Result<Option<crate::db::CommittedView>, Error>;
+
+    /// Close the database, persisting the latest committed revision.
+    #[expect(clippy::missing_errors_doc)]
+    fn close(self: Box<Self>) -> Result<(), Error>;
+}
+
+/// A dyn-safe version of [`Proposal`].
+///
+/// Unlike [`DynDbView`], this trait is **not** `'static`: a [`Proposal`]
+/// borrows its parent database, so it cannot outlive it. That borrow is why
+/// `DynProposal` cannot simply extend `DynDbView` (whose `'static` bound a
+/// borrowing proposal cannot satisfy); instead it carries the same read
+/// surface directly, plus the proposal-only `propose`/`commit` operations in
+/// their object-safe form (`commit` consumes the box rather than `self` by
+/// value). Its shareable, `'static` view is reachable via [`DynProposal::view`].
+pub trait DynProposal<'db>: Debug + Send + Sync {
+    /// Get the root hash of this proposal.
+    fn root_hash(&self) -> Option<HashKey>;
+
+    /// Get the value of a specific key in this proposal.
+    #[expect(clippy::missing_errors_doc)]
+    fn val(&self, key: &[u8]) -> Result<Option<Value>, Error>;
+
+    /// Obtain a proof for a single key.
+    #[expect(clippy::missing_errors_doc)]
+    fn single_key_proof(&self, key: &[u8]) -> Result<FrozenProof, Error>;
+
+    /// Obtain a range proof over a set of keys.
+    #[expect(clippy::missing_errors_doc)]
+    fn range_proof(
+        &self,
+        first_key: Option<&[u8]>,
+        last_key: Option<&[u8]>,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenRangeProof, Error>;
+
+    /// Obtain a stream over the keys/values of this proposal.
+    #[expect(clippy::missing_errors_doc)]
+    fn iter_option(&self, first_key: Option<&[u8]>) -> Result<BoxKeyValueIter<'_>, Error>;
+
+    /// Dump the proposal's trie structure to a string.
+    #[expect(clippy::missing_errors_doc)]
+    fn dump_to_string(&self) -> Result<String, Error>;
+
+    /// Returns the shareable, `'static` view backing this proposal.
+    fn view(&self) -> ArcDynDbView;
+
+    /// Propose a new revision on top of this proposal.
+    ///
+    /// The returned proposal shares the parent database's `'db` lifetime, so it
+    /// may outlive the borrow of `self` (proposal chaining keeps the original
+    /// database handle alive, not the parent proposal).
+    #[expect(clippy::missing_errors_doc)]
+    fn propose(&self, ops: OwnedBatch) -> Result<Box<dyn DynProposal<'db> + 'db>, Error>;
+
+    /// Commit this proposal.
+    #[expect(clippy::missing_errors_doc)]
+    fn commit(self: Box<Self>) -> Result<(), Error>;
+
+    /// Commit this proposal, rebasing onto the latest revision if its parent
+    /// is stale. Returns the committed root hash.
+    #[expect(clippy::missing_errors_doc)]
+    fn commit_with_rebase(self: Box<Self>) -> Result<Option<HashKey>, Error>;
 }
 
 #[cfg(test)]

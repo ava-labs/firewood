@@ -219,7 +219,14 @@ fn test_missing_key_proof() {
         assert!(!proof.is_empty());
         assert_eq!(proof.len(), 1);
 
-        proof.verify(key, None::<&[u8]>, &root_hash).unwrap();
+        proof
+            .verify(
+                key,
+                None::<&[u8]>,
+                &root_hash,
+                firewood_storage::DefaultHashMode::ALGORITHM,
+            )
+            .unwrap();
     }
 }
 
@@ -2123,12 +2130,17 @@ fn test_right_edge_boundary_prefix_of_terminal() {
 /// Setup: \x10 is a prefix of \x10\x20, making \x10 a branch with a value
 /// AND children. The 32-byte value at \x10 triggers `ValueDigest::Hash` after
 /// serialization round-trip.
+// `ValueDigest::Hash` only arises from MerkleDB's ≥32-byte value capping, so
+// `ValueDigest::Hash` only arises from MerkleDB's ≥32-byte value capping,
+// which never happens in an ethhash build, so this stays MerkleDB-only.
 #[cfg(not(feature = "ethhash"))]
 #[test]
 fn test_range_proof_with_hashed_value() {
+    use firewood_storage::{MerkleDbHash, NodeHashAlgorithm};
+
     // Value >= 32 bytes triggers ValueDigest::Hash in merkledb mode
     let big_value = vec![0xab_u8; 32];
-    let merkle = init_merkle([
+    let merkle = init_merkle_in_mode::<MerkleDbHash, _, _, _>([
         (b"\x10" as &[u8], big_value.as_slice()),
         (b"\x10\x20", b"child"),
         (b"\x30", b"other"),
@@ -2156,7 +2168,14 @@ fn test_range_proof_with_hashed_value() {
     );
 
     // This must pass — the Hash digest matches the branch value.
-    verify_range_proof(Some(b"\x10"), Some(b"\x30"), &root_hash, &deserialized).unwrap();
+    verify_range_proof_in_mode(
+        Some(b"\x10"),
+        Some(b"\x30"),
+        &root_hash,
+        NodeHashAlgorithm::MerkleDB,
+        &deserialized,
+    )
+    .unwrap();
 }
 
 /// Regression test: empty range proof with a Hash digest at an out-of-range
@@ -2167,10 +2186,12 @@ fn test_range_proof_with_hashed_value() {
 #[cfg(not(feature = "ethhash"))]
 #[test]
 fn test_empty_range_proof_with_hashed_value() {
+    use firewood_storage::{MerkleDbHash, NodeHashAlgorithm};
+
     // \x10 has a large value (>= 32 bytes), \x10\x20 makes \x10 a branch.
     // Range is past all keys — empty key-value list.
     let big_value = vec![0xab_u8; 32];
-    let merkle = init_merkle([
+    let merkle = init_merkle_in_mode::<MerkleDbHash, _, _, _>([
         (b"\x10" as &[u8], big_value.as_slice()),
         (b"\x10\x20", b"child"),
     ]);
@@ -2188,7 +2209,14 @@ fn test_empty_range_proof_with_hashed_value() {
     let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
 
     // This must pass — the Hash proof node is out of range.
-    verify_range_proof(Some(b"\x30"), Some(b"\x40"), &root_hash, &deserialized).unwrap();
+    verify_range_proof_in_mode(
+        Some(b"\x30"),
+        Some(b"\x40"),
+        &root_hash,
+        NodeHashAlgorithm::MerkleDB,
+        &deserialized,
+    )
+    .unwrap();
 }
 
 /// Multi-level trie with hashed values at multiple branch depths.
@@ -2209,7 +2237,9 @@ fn test_empty_range_proof_with_hashed_value() {
 #[cfg(not(feature = "ethhash"))]
 #[test]
 fn test_multi_level_range_proof_with_hashed_values() {
-    let merkle = init_merkle([
+    use firewood_storage::{MerkleDbHash, NodeHashAlgorithm};
+
+    let merkle = init_merkle_in_mode::<MerkleDbHash, _, _, _>([
         (b"abc" as &[u8], [0; 64].as_slice()),
         (b"abc123", [1; 64].as_slice()),
         (b"abcdef", [2; 64].as_slice()),
@@ -2247,5 +2277,12 @@ fn test_multi_level_range_proof_with_hashed_values() {
     // This exercises:
     // - "abc" out-of-range: Hash fallback in compute_root_hash_with_proofs
     // - "abcdef" in-range: Hash fast path in reconcile_branch_proof_node
-    verify_range_proof(Some(b"abc123"), Some(b"\xff"), &root_hash, &deserialized).unwrap();
+    verify_range_proof_in_mode(
+        Some(b"abc123"),
+        Some(b"\xff"),
+        &root_hash,
+        NodeHashAlgorithm::MerkleDB,
+        &deserialized,
+    )
+    .unwrap();
 }

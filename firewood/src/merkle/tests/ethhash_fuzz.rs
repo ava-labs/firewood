@@ -508,7 +508,7 @@ fn check_valid_change_proof(
     let proposal = db
         .apply_change_proof_to_parent(&change_proof, &*parent)
         .unwrap_or_else(|e| panic!("apply_change_proof_to_parent should succeed ({locator}): {e}"));
-    verify_change_proof_root_hash(&change_proof, &ctx, &proposal)
+    verify_change_proof_root_hash(&change_proof, &ctx, &proposal, NodeHashAlgorithm::Ethereum)
         .unwrap_or_else(|e| panic!("valid change proof root hash should verify ({locator}): {e}"));
     change_proof
 }
