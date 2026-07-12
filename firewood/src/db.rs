@@ -362,7 +362,10 @@ impl<H: HashMode> Db<H> {
     /// Create or open a database with the hash mode fixed by the type
     /// parameter `H`. The configured [`DbConfig::node_hash_algorithm`] must
     /// equal `H::ALGORITHM`; the open path validates it against the header.
-    fn new_with_hash_mode<P: AsRef<Path>>(db_dir: P, cfg: DbConfig) -> Result<Self, api::Error> {
+    pub(crate) fn new_with_hash_mode<P: AsRef<Path>>(
+        db_dir: P,
+        cfg: DbConfig,
+    ) -> Result<Self, api::Error> {
         // The hashing scheme is `H`, but the fresh-database header is stamped
         // from `cfg.node_hash_algorithm`. Reject a config that disagrees with
         // `H` so we never create a header that claims one mode while hashing
@@ -1012,10 +1015,13 @@ mod test {
     use std::ops::{Deref, DerefMut};
     use std::path::Path;
 
-    use firewood_storage::{CheckOpt, CheckerError, LinearAddress, MaybePersistedNode, TrieHash};
+    use firewood_storage::{
+        CheckOpt, CheckerError, DefaultHashMode, EthHash, HashMode, LinearAddress,
+        MaybePersistedNode, MerkleDbHash, TrieHash,
+    };
     use nonzero_ext::nonzero;
 
-    use crate::api::{Db as _, DbView, HashKeyExt, Proposal as _, Reconstructible};
+    use crate::api::{Db as _, DbView, Proposal as _, Reconstructible};
     use crate::db::{Db, Proposal, UseParallel};
     use crate::manager::RevisionManagerConfig;
 
@@ -1057,7 +1063,7 @@ mod test {
 
     impl<T: Iterator> IterExt for T {}
 
-    impl Db {
+    impl<H: HashMode> Db<H> {
         /// Wait until all pending commits have been persisted.
         fn wait_persisted(&self) {
             self.manager.wait_persisted();
@@ -1067,15 +1073,17 @@ mod test {
     /// Reconstruction always uses the serial path (`apply_batch_recon`), but the base
     /// revision may have been built with parallel or serial proposals. This test confirms
     /// both produce identical reconstruction results.
+    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
     #[test]
     fn test_reconstruct_deterministic() {
-        let parallel_db = TestDb::new_with_config(
+        let parallel_db = TestDb::<DefaultHashMode>::new_with_config(
             DbConfig::builder()
                 .use_parallel(UseParallel::Always)
                 .build(),
         );
-        let serial_db =
-            TestDb::new_with_config(DbConfig::builder().use_parallel(UseParallel::Never).build());
+        let serial_db = TestDb::<DefaultHashMode>::new_with_config(
+            DbConfig::builder().use_parallel(UseParallel::Never).build(),
+        );
 
         let initial_batch = vec![BatchOp::Put {
             key: b"base",
@@ -1125,9 +1133,9 @@ mod test {
         );
     }
 
-    #[test]
-    fn test_update_commits_batch_and_returns_root() {
-        let db = TestDb::new();
+    #[firewood_macros::hash_mode]
+    fn test_update_commits_batch_and_returns_root<H: HashMode>() {
+        let db = TestDb::<H>::new();
 
         let root = db
             .update(vec![BatchOp::Put {
@@ -1158,9 +1166,9 @@ mod test {
         );
     }
 
-    #[test]
-    fn test_update_returns_empty_root_after_delete_all() {
-        let db = TestDb::new();
+    #[firewood_macros::hash_mode]
+    fn test_update_returns_empty_root_after_delete_all<H: HashMode>() {
+        let db = TestDb::<H>::new();
 
         db.update(vec![BatchOp::Put {
             key: b"k",
@@ -1174,13 +1182,13 @@ mod test {
             }])
             .unwrap();
 
-        assert_eq!(root, TrieHash::default_root_hash());
-        assert_eq!(db.root_hash(), TrieHash::default_root_hash());
+        assert_eq!(root, H::default_root_hash());
+        assert_eq!(db.root_hash(), H::default_root_hash());
     }
 
-    #[test]
-    fn test_proposal_reads() {
-        let db = TestDb::new();
+    #[firewood_macros::hash_mode]
+    fn test_proposal_reads<H: HashMode>() {
+        let db = TestDb::<H>::new();
         let batch = vec![BatchOp::Put {
             key: b"k",
             value: b"v",
@@ -1203,9 +1211,10 @@ mod test {
         assert_eq!(&*historical.val(b"k").unwrap().unwrap(), b"v");
     }
 
+    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
     #[test]
     fn test_reconstruct_reads_and_chains() {
-        let db = TestDb::new();
+        let db = TestDb::<DefaultHashMode>::new();
 
         let initial = db
             .propose(vec![BatchOp::Put {
@@ -1241,6 +1250,7 @@ mod test {
         assert_eq!(&*reconstructed.val(b"next").unwrap().unwrap(), b"v2");
     }
 
+    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
     #[test]
     fn test_reconstruct_from_committed_view_uses_requested_revision() {
         let db = TestDb::new();
@@ -1283,7 +1293,7 @@ mod test {
 
     #[test]
     fn test_reconstruct_clone_is_independent() {
-        let db = TestDb::new();
+        let db = TestDb::<DefaultHashMode>::new();
 
         // Build a base committed revision.
         let initial = db
@@ -1339,9 +1349,10 @@ mod test {
         assert_eq!(new_cloned.val(b"original_only").unwrap(), None);
     }
 
+    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
     #[test]
     fn test_reconstruct_clone_of_clone() {
-        let db = TestDb::new();
+        let db = TestDb::<DefaultHashMode>::new();
 
         // Build a base committed revision.
         let initial = db
@@ -1374,9 +1385,10 @@ mod test {
         assert_eq!(original_root, second_clone.root_hash());
     }
 
+    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
     #[test]
     fn test_reconstruct_clone_outlives_original() {
-        let db = TestDb::new();
+        let db = TestDb::<DefaultHashMode>::new();
 
         let key = b"k";
         let value = b"v";
@@ -1399,9 +1411,9 @@ mod test {
         assert_eq!(&*cloned.val(b"k").unwrap().unwrap(), b"v");
     }
 
-    #[test]
-    fn reopen_test() {
-        let db = TestDb::new();
+    #[firewood_macros::hash_mode]
+    fn reopen_test<H: HashMode>() {
+        let db = TestDb::<H>::new();
         let initial_root = db.root_hash();
         let batch = vec![
             BatchOp::Put {
@@ -1430,13 +1442,13 @@ mod test {
         assert_eq!(final_root, initial_root);
     }
 
-    #[test]
+    #[firewood_macros::hash_mode]
     // test that dropping a proposal removes it from the list of known proposals
     //    /-> P1 - will get committed
     // R1 --> P2 - will get dropped
     //    \-> P3 - will get orphaned, but it's still known
-    fn test_proposal_scope_historic() {
-        let db = TestDb::new();
+    fn test_proposal_scope_historic<H: HashMode>() {
+        let db = TestDb::<H>::new();
         let batch1 = vec![BatchOp::Put {
             key: b"k1",
             value: b"v1",
@@ -1481,14 +1493,14 @@ mod test {
         assert!(db.manager.proposal_hashes().contains(&hash3));
     }
 
-    #[test]
+    #[firewood_macros::hash_mode]
     // test that dropping a proposal removes it from the list of known proposals
     // R1 - base revision
     //  \-> P1 - will get committed
     //   \-> P2 - will get dropped
     //    \-> P3 - will get orphaned, but it's still known
-    fn test_proposal_scope_orphan() {
-        let db = TestDb::new();
+    fn test_proposal_scope_orphan<H: HashMode>() {
+        let db = TestDb::<H>::new();
         let batch1 = vec![BatchOp::Put {
             key: b"k1",
             value: b"v1",
@@ -1537,9 +1549,9 @@ mod test {
         assert_eq!(&*proposal3.val(b"k3").unwrap().unwrap(), b"v3");
     }
 
-    #[test]
-    fn test_view_sync() {
-        let db = TestDb::new();
+    #[firewood_macros::hash_mode]
+    fn test_view_sync<H: HashMode>() {
+        let db = TestDb::<H>::new();
 
         // Create and commit some data to get a historical revision
         let batch = vec![BatchOp::Put {
@@ -1569,9 +1581,9 @@ mod test {
         assert_eq!(&*value, b"proposal_value");
     }
 
-    #[test]
-    fn test_propose_parallel_reopen() {
-        fn insert_commit(db: &TestDb, kv: u8) {
+    #[firewood_macros::hash_mode]
+    fn test_propose_parallel_reopen<H: HashMode>() {
+        fn insert_commit<H: HashMode>(db: &TestDb<H>, kv: u8) {
             let keys: Vec<[u8; 1]> = vec![[kv; 1]];
             let vals: Vec<Box<[u8]>> = vec![Box::new([kv; 1])];
             let kviter = keys.iter().zip(vals.iter());
@@ -1580,7 +1592,7 @@ mod test {
         }
 
         // Create, insert, close, open, insert
-        let db = TestDb::new_with_config(
+        let db = TestDb::<H>::new_with_config(
             DbConfig::builder()
                 .use_parallel(UseParallel::Always)
                 .build(),
@@ -1599,13 +1611,13 @@ mod test {
         drop(db);
 
         // Open-db1, insert, open-db2, insert
-        let db1 = TestDb::new_with_config(
+        let db1 = TestDb::<H>::new_with_config(
             DbConfig::builder()
                 .use_parallel(UseParallel::Always)
                 .build(),
         );
         insert_commit(&db1, 1);
-        let db2 = TestDb::new_with_config(
+        let db2 = TestDb::<H>::new_with_config(
             DbConfig::builder()
                 .use_parallel(UseParallel::Always)
                 .build(),
@@ -1622,10 +1634,10 @@ mod test {
         assert_eq!(&committed2.val(k).unwrap().unwrap(), v);
     }
 
-    #[test]
-    fn test_propose_parallel() {
+    #[firewood_macros::hash_mode]
+    fn test_propose_parallel<H: HashMode>() {
         const N: usize = 100;
-        let db = TestDb::new_with_config(
+        let db = TestDb::<H>::new_with_config(
             DbConfig::builder()
                 .use_parallel(UseParallel::Always)
                 .build(),
@@ -1743,8 +1755,8 @@ mod test {
         }
     }
 
-    #[test]
-    fn test_propose_parallel_vs_normal_propose() {
+    #[firewood_macros::hash_mode]
+    fn test_propose_parallel_vs_normal_propose<H: HashMode>() {
         fn persisted_deleted(nodes: &[MaybePersistedNode]) -> Vec<LinearAddress> {
             let mut addresses: Vec<_> = nodes
                 .iter()
@@ -1754,13 +1766,14 @@ mod test {
             addresses
         }
 
-        let parallel_db = TestDb::new_with_config(
+        let parallel_db = TestDb::<H>::new_with_config(
             DbConfig::builder()
                 .use_parallel(UseParallel::Always)
                 .build(),
         );
-        let single_threaded_db =
-            TestDb::new_with_config(DbConfig::builder().use_parallel(UseParallel::Never).build());
+        let single_threaded_db = TestDb::<H>::new_with_config(
+            DbConfig::builder().use_parallel(UseParallel::Never).build(),
+        );
 
         // First batch: insert two keys with different first nibbles so they are
         // handled by different workers in the parallel merkle implementation.
@@ -1814,15 +1827,16 @@ mod test {
     /// `DeleteRange { prefix: &[] }`) only sends the delete to existing workers,
     /// so children in subtries that were never touched by prior operations in the
     /// batch may survive incorrectly.
-    #[test]
-    fn test_parallel_delete_range_empty_prefix_with_existing_workers() {
-        let parallel_db = TestDb::new_with_config(
+    #[firewood_macros::hash_mode]
+    fn test_parallel_delete_range_empty_prefix_with_existing_workers<H: HashMode>() {
+        let parallel_db = TestDb::<H>::new_with_config(
             DbConfig::builder()
                 .use_parallel(UseParallel::Always)
                 .build(),
         );
-        let single_db =
-            TestDb::new_with_config(DbConfig::builder().use_parallel(UseParallel::Never).build());
+        let single_db = TestDb::<H>::new_with_config(
+            DbConfig::builder().use_parallel(UseParallel::Never).build(),
+        );
 
         // Insert keys in different subtries (different first nibbles)
         let setup_keys: Vec<[u8; 1]> = vec![[0x00], [0x10], [0x20]];
@@ -1878,12 +1892,12 @@ mod test {
     ///
     /// Test creates two batches and proposes them, and verifies that the values are in the correct proposal.
     /// It then commits them one by one, and verifies the latest committed version is correct.
-    #[test]
-    fn test_propose_on_proposal() {
+    #[firewood_macros::hash_mode]
+    fn test_propose_on_proposal<H: HashMode>() {
         // number of keys and values to create for this test
         const N: usize = 20;
 
-        let db = TestDb::new();
+        let db = TestDb::<H>::new();
 
         // create N keys and values like (key0, value0)..(keyN, valueN)
         let (keys, vals): (Vec<_>, Vec<_>) = (0..N)
@@ -1938,11 +1952,11 @@ mod test {
         }
     }
 
-    #[test]
-    fn test_slow_fuzz_checker() {
+    #[firewood_macros::hash_mode]
+    fn test_slow_fuzz_checker<H: HashMode>() {
         let rng = firewood_storage::SeededRng::from_env_or_random();
 
-        let db = TestDb::new();
+        let db = TestDb::<H>::new();
 
         // takes about 0.3s on a mac to run 50 times
         for _ in 0..50 {
@@ -1987,12 +2001,16 @@ mod test {
         }
     }
 
-    #[test]
-    fn test_deep_propose() {
+    #[firewood_macros::hash_mode]
+    // The `#[hash_mode]` macro moves this body into a plain (non-`#[test]`)
+    // generic helper, so it no longer gets clippy's blanket `#[test]`
+    // exemption for `arithmetic_side_effects`.
+    #[expect(clippy::arithmetic_side_effects)]
+    fn test_deep_propose<H: HashMode>() {
         const NUM_KEYS: NonZeroUsize = const { NonZeroUsize::new(2).unwrap() };
         const NUM_PROPOSALS: usize = 100;
 
-        let db = TestDb::new();
+        let db = TestDb::<H>::new();
 
         let ops = (0..(NUM_KEYS.get() * NUM_PROPOSALS))
             .map(|i| (format!("key{i}"), format!("value{i}")))
@@ -2000,7 +2018,7 @@ mod test {
 
         let proposals = ops.iter().chunk_fold(
             NUM_KEYS,
-            Vec::<Proposal<'_>>::with_capacity(NUM_PROPOSALS),
+            Vec::<Proposal<'_, H>>::with_capacity(NUM_PROPOSALS),
             |mut proposals, ops| {
                 let proposal = if let Some(parent) = proposals.last() {
                     parent.propose(ops).unwrap()
@@ -2039,16 +2057,16 @@ mod test {
     }
 
     /// Test that reading from a proposal during commit works as expected
-    #[test]
-    fn test_slow_read_during_commit() {
+    #[firewood_macros::hash_mode]
+    fn test_slow_read_during_commit<H: HashMode>() {
         use crate::db::Proposal;
 
         const CHANNEL_CAPACITY: usize = 8;
 
-        let testdb = TestDb::new();
+        let testdb = TestDb::<H>::new();
         let db = &*testdb;
 
-        let (tx, rx) = std::sync::mpsc::sync_channel::<Proposal<'_>>(CHANNEL_CAPACITY);
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Proposal<'_, H>>(CHANNEL_CAPACITY);
         let (result_tx, result_rx) = std::sync::mpsc::sync_channel(CHANNEL_CAPACITY);
 
         // scope will block until all scope-spawned threads finish
@@ -2090,9 +2108,9 @@ mod test {
 
     /// Verifies that after reopening the database, an older revision can still
     /// be retrieved via the root store.
-    #[test]
-    fn test_resurrect_unpersisted_root() {
-        let db = TestDb::new_with_config(DbConfig::builder().root_store(true).build());
+    #[firewood_macros::hash_mode]
+    fn test_resurrect_unpersisted_root<H: HashMode>() {
+        let db = TestDb::<H>::new_with_config(DbConfig::builder().root_store(true).build());
 
         // First, create a revision to retrieve
         let key = b"key";
@@ -2129,9 +2147,9 @@ mod test {
     }
 
     /// Verifies that persisted revisions are still accessible when reopening the database.
-    #[test]
-    fn test_root_store() {
-        let db = TestDb::new_with_config(DbConfig::builder().root_store(true).build());
+    #[firewood_macros::hash_mode]
+    fn test_root_store<H: HashMode>() {
+        let db = TestDb::<H>::new_with_config(DbConfig::builder().root_store(true).build());
 
         // First, create a revision to retrieve
         let key = b"key";
@@ -2162,9 +2180,9 @@ mod test {
 
     /// Verifies that proposals skip building the future-delete log when
     /// archival mode is enabled, since it is never consumed.
-    #[test]
-    fn test_no_fdl_when_root_store_enabled() {
-        let db = TestDb::new_with_config(DbConfig::builder().root_store(true).build());
+    #[firewood_macros::hash_mode]
+    fn test_no_fdl_when_root_store_enabled<H: HashMode>() {
+        let db = TestDb::<H>::new_with_config(DbConfig::builder().root_store(true).build());
 
         let key = b"key";
         let batch = vec![BatchOp::Put {
@@ -2188,9 +2206,9 @@ mod test {
     }
 
     /// Verifies that proposals build the future-delete log if archival mode is disabled.
-    #[test]
-    fn test_fdl_tracked_when_root_store_disabled() {
-        let db = TestDb::new_with_config(DbConfig::builder().root_store(false).build());
+    #[firewood_macros::hash_mode]
+    fn test_fdl_tracked_when_root_store_disabled<H: HashMode>() {
+        let db = TestDb::<H>::new_with_config(DbConfig::builder().root_store(false).build());
 
         let key = b"key";
         let batch = vec![BatchOp::Put {
@@ -2211,23 +2229,23 @@ mod test {
         );
     }
 
-    #[test]
-    fn test_rootstore_empty_db_reopen() {
-        let db = TestDb::new_with_config(DbConfig::builder().root_store(true).build());
+    #[firewood_macros::hash_mode]
+    fn test_rootstore_empty_db_reopen<H: HashMode>() {
+        let db = TestDb::<H>::new_with_config(DbConfig::builder().root_store(true).build());
 
         db.reopen();
     }
 
     /// Verifies that revisions exceeding the in-memory limit can still be retrieved.
-    #[test]
-    fn test_root_store_with_capped_max_revisions() {
+    #[firewood_macros::hash_mode]
+    fn test_root_store_with_capped_max_revisions<H: HashMode>() {
         const NUM_REVISIONS: usize = 10;
 
         let dbconfig = DbConfig::builder()
             .manager(RevisionManagerConfig::builder().max_revisions(5).build())
             .root_store(true)
             .build();
-        let db = TestDb::new_with_config(dbconfig);
+        let db = TestDb::<H>::new_with_config(dbconfig);
 
         // Create and commit 10 proposals
         let key = b"root_store";
@@ -2262,10 +2280,11 @@ mod test {
     }
 
     /// Verifies that `RootStore` is truncated as well if we truncate the database.
-    #[test]
-    fn test_root_store_truncation() {
-        let db =
-            TestDb::new_with_config(DbConfig::builder().root_store(true).truncate(true).build());
+    #[firewood_macros::hash_mode]
+    fn test_root_store_truncation<H: HashMode>() {
+        let db = TestDb::<H>::new_with_config(
+            DbConfig::builder().root_store(true).truncate(true).build(),
+        );
 
         // Create a revision to store
         let batch = vec![BatchOp::Put {
@@ -2281,18 +2300,20 @@ mod test {
     }
 
     /// Verifies that opening a database fails if the directory doesn't exist.
-    #[test]
-    fn test_nonexistent_directory() {
+    #[firewood_macros::hash_mode]
+    fn test_nonexistent_directory<H: HashMode>() {
         let tmpdir = tempfile::tempdir().unwrap();
 
-        assert!(Db::new(tmpdir, DbConfig::builder().create_if_missing(false).build()).is_err());
+        let mut cfg = DbConfig::builder().create_if_missing(false).build();
+        cfg.node_hash_algorithm = H::ALGORITHM;
+        assert!(Db::<H>::new_with_hash_mode(tmpdir, cfg).is_err());
     }
 
-    #[test]
-    fn test_backwards_compatible_magic_string() {
+    #[firewood_macros::hash_mode]
+    fn test_backwards_compatible_magic_string<H: HashMode>() {
         use std::os::unix::fs::FileExt;
 
-        let testdb = TestDb::new();
+        let testdb = TestDb::<H>::new();
 
         testdb
             .propose([(b"key", b"value")])
@@ -2326,8 +2347,8 @@ mod test {
         assert_eq!(rh, testdb.root_hash().unwrap());
     }
 
-    #[test]
-    fn test_deferred_persist_multiple_commits_with_commit_count_one() {
+    #[firewood_macros::hash_mode]
+    fn test_deferred_persist_multiple_commits_with_commit_count_one<H: HashMode>() {
         const NUM_REVISIONS: usize = 20;
 
         let dbcfg = DbConfig::builder()
@@ -2338,7 +2359,7 @@ mod test {
             )
             .build();
 
-        let db = TestDb::new_with_config(dbcfg);
+        let db = TestDb::<H>::new_with_config(dbcfg);
 
         // Create and commit NUM_REVISIONS proposals, storing their root hashes
         let root_hashes: Vec<TrieHash> = (0..NUM_REVISIONS)
@@ -2371,11 +2392,11 @@ mod test {
         }
     }
 
-    #[test]
-    fn test_deferred_persist_close_with_commit_count_one() {
+    #[firewood_macros::hash_mode]
+    fn test_deferred_persist_close_with_commit_count_one<H: HashMode>() {
         let dbcfg = DbConfig::builder().build();
 
-        let db = TestDb::new_with_config(dbcfg);
+        let db = TestDb::<H>::new_with_config(dbcfg);
 
         // Then, commit once and see what the latest revision is
         let key = b"foo";
@@ -2393,8 +2414,8 @@ mod test {
         assert_eq!(value, new_value.as_ref());
     }
 
-    #[test]
-    fn test_deferred_persist_close_with_high_commit_count() {
+    #[firewood_macros::hash_mode]
+    fn test_deferred_persist_close_with_high_commit_count<H: HashMode>() {
         const HIGH_COMMIT_COUNT: NonZeroU64 = nonzero!(1_000_000u64);
         const MAX_REVISIONS: usize = HIGH_COMMIT_COUNT.get() as usize + 1;
 
@@ -2409,7 +2430,7 @@ mod test {
             )
             .build();
 
-        let db = TestDb::new_with_config(dbcfg);
+        let db = TestDb::<H>::new_with_config(dbcfg);
 
         // Then, commit once and see what the latest revision is
         let key = b"foo";
@@ -2427,8 +2448,8 @@ mod test {
         assert_eq!(value, new_value.as_ref());
     }
 
-    #[test]
-    fn test_deferred_persist_with_multiple_commit_count() {
+    #[firewood_macros::hash_mode]
+    fn test_deferred_persist_with_multiple_commit_count<H: HashMode>() {
         const COMMIT_COUNT: NonZeroU64 = nonzero!(5u64);
         const NUM_REVISIONS: u64 = COMMIT_COUNT.get() + 1;
 
@@ -2440,7 +2461,7 @@ mod test {
             )
             .build();
 
-        let db = TestDb::new_with_config(dbcfg);
+        let db = TestDb::<H>::new_with_config(dbcfg);
 
         let mut root_hashes = Vec::new();
 
@@ -2470,8 +2491,8 @@ mod test {
 
     /// Verifies that an unpersisted revision which wipes the database is
     /// persisted when the database closes.
-    #[test]
-    fn test_deferred_persistence_closing_on_empty_trie() {
+    #[firewood_macros::hash_mode]
+    fn test_deferred_persistence_closing_on_empty_trie<H: HashMode>() {
         const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
 
         let dbcfg = DbConfig::builder()
@@ -2482,7 +2503,7 @@ mod test {
             )
             .build();
 
-        let db = TestDb::new_with_config(dbcfg);
+        let db = TestDb::<H>::new_with_config(dbcfg);
 
         // Commit COMMIT_COUNT proposals to trigger the first persist
         for i in 0..COMMIT_COUNT.get() {
@@ -2503,11 +2524,11 @@ mod test {
 
         // Verify that the latest committed revision is empty.
         let last_committed_hash = db.root_hash();
-        assert_eq!(last_committed_hash, TrieHash::default_root_hash());
+        assert_eq!(last_committed_hash, H::default_root_hash());
     }
 
-    #[test]
-    fn test_deferred_persistence_root_store() {
+    #[firewood_macros::hash_mode]
+    fn test_deferred_persistence_root_store<H: HashMode>() {
         const NUM_COMMITS: usize = 20;
         const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
         const MAX_REVISIONS: usize = COMMIT_COUNT.get() as usize + 1;
@@ -2522,7 +2543,7 @@ mod test {
             .root_store(true)
             .build();
 
-        let db = TestDb::new_with_config(dbcfg);
+        let db = TestDb::<H>::new_with_config(dbcfg);
 
         let mut root_hashes = Vec::new();
 
@@ -2570,8 +2591,8 @@ mod test {
     }
 
     /// Verifies that non-persisted revisions are lost after reopening the database.
-    #[test]
-    fn test_deferred_persistence_unpersisted_revisions() {
+    #[firewood_macros::hash_mode]
+    fn test_deferred_persistence_unpersisted_revisions<H: HashMode>() {
         const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
 
         let dbcfg = DbConfig::builder()
@@ -2583,7 +2604,7 @@ mod test {
             .root_store(true)
             .build();
 
-        let db = TestDb::new_with_config(dbcfg);
+        let db = TestDb::<H>::new_with_config(dbcfg);
 
         let mut root_hashes = Vec::new();
 
@@ -2616,38 +2637,41 @@ mod test {
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
-    pub(super) struct TestDb {
-        db: Option<Db>,
+    pub(super) struct TestDb<H: HashMode> {
+        db: Option<Db<H>>,
         tmpdir: tempfile::TempDir,
         dbconfig: DbConfig,
     }
-    impl Drop for TestDb {
+    impl<H: HashMode> Drop for TestDb<H> {
         fn drop(&mut self) {
             if let Some(db) = self.db.take() {
                 db.close().unwrap();
             }
         }
     }
-    impl Deref for TestDb {
-        type Target = Db;
+    impl<H: HashMode> Deref for TestDb<H> {
+        type Target = Db<H>;
         fn deref(&self) -> &Self::Target {
             self.db.as_ref().unwrap()
         }
     }
-    impl DerefMut for TestDb {
+    impl<H: HashMode> DerefMut for TestDb<H> {
         fn deref_mut(&mut self) -> &mut Self::Target {
             self.db.as_mut().unwrap()
         }
     }
 
-    impl TestDb {
+    impl<H: HashMode> TestDb<H> {
         pub fn new() -> Self {
             TestDb::new_with_config(DbConfig::builder().build())
         }
 
-        pub fn new_with_config(dbconfig: DbConfig) -> Self {
+        pub fn new_with_config(mut dbconfig: DbConfig) -> Self {
+            // The test's mode is `H`; make the config agree regardless of what
+            // the builder defaulted to (new_with_hash_mode rejects a mismatch).
+            dbconfig.node_hash_algorithm = H::ALGORITHM;
             let tmpdir = tempfile::tempdir().unwrap();
-            let db = Db::new(tmpdir.as_ref(), dbconfig.clone()).unwrap();
+            let db = Db::new_with_hash_mode(tmpdir.as_ref(), dbconfig.clone()).unwrap();
             TestDb {
                 db: Some(db),
                 tmpdir,
@@ -2662,7 +2686,7 @@ mod test {
         pub fn reopen(mut self) -> Self {
             self.db.take().unwrap().close().unwrap();
 
-            let db = Db::new(self.tmpdir.path(), self.dbconfig.clone()).unwrap();
+            let db = Db::new_with_hash_mode(self.tmpdir.path(), self.dbconfig.clone()).unwrap();
             self.db = Some(db);
             self
         }
@@ -2680,7 +2704,8 @@ mod test {
             self.db.take().unwrap().close().unwrap();
 
             self.dbconfig = DbConfig::builder().truncate(true).build();
-            let db = Db::new(self.tmpdir.path(), self.dbconfig.clone()).unwrap();
+            self.dbconfig.node_hash_algorithm = H::ALGORITHM;
+            let db = Db::new_with_hash_mode(self.tmpdir.path(), self.dbconfig.clone()).unwrap();
             self.db = Some(db);
             self
         }

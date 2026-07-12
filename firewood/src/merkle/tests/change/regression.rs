@@ -11,20 +11,20 @@
 use super::*;
 use crate::{ChangeProof, Proof};
 
-fn is_rejected(
-    db: &Db,
+fn is_rejected<H: HashMode>(
+    db: &Db<H>,
     proof: &FrozenChangeProof,
     start_root: api::HashKey,
     end_root: api::HashKey,
 ) -> bool {
-    match verify_change_proof_structure(proof, end_root, None, None, None) {
+    match verify_change_proof_structure(proof, end_root, None, None, H::ALGORITHM, None) {
         Err(_) => true,
         Ok(ctx) => verify_and_check(db, proof, &ctx, start_root).is_err(),
     }
 }
 
-#[test]
-fn test_tampered_right_edge_delete_to_put_is_rejected() {
+#[firewood_macros::hash_mode]
+fn test_tampered_right_edge_delete_to_put_is_rejected<H: HashMode>() {
     // `0xf0` and `0xfa` keep the `f` branch (nibble path `[f]`) real in the END
     // trie. `0xf51c` (victim) and `0xf5cd` (the max changed key) both live under
     // that branch's child `5`, and both are deleted — so in the end trie child
@@ -33,6 +33,7 @@ fn test_tampered_right_edge_delete_to_put_is_rejected() {
     // victim `0xf51c` sorts below the anchor `0xf5cd` but in that same on-path
     // child.
     let (db, _dir) = setup_db![
+        mode = H;
         (b"\x10".as_slice(), b"low".as_slice()),
         (b"\xf0".as_slice(), b"fz".as_slice()),
         (b"\xfa".as_slice(), b"fa".as_slice()),
@@ -68,10 +69,11 @@ fn test_tampered_right_edge_delete_to_put_is_rejected() {
             other => other.clone(),
         })
         .collect::<Vec<_>>();
-    let mutated = ChangeProof::new(
+    let mutated = ChangeProof::new_with_hash_mode(
         Proof::new(proof.start_proof().as_ref().into()),
         Proof::new(proof.end_proof().as_ref().into()),
         mutated_ops.into_boxed_slice(),
+        H::ALGORITHM,
     );
 
     assert!(

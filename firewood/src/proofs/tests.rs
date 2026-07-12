@@ -5,8 +5,8 @@ use integer_encoding::VarInt;
 use test_case::test_case;
 
 use firewood_storage::{
-    Children, HashType, IntoHashType, NodeHashAlgorithm, PathComponent, SeededRng, TrieHash,
-    ValueDigest, logger::debug,
+    Children, EthHash, HashMode, HashType, IntoHashType, MerkleDbHash, NodeHashAlgorithm,
+    PathComponent, SeededRng, TrieHash, ValueDigest, logger::debug,
 };
 
 use super::{
@@ -18,8 +18,12 @@ use super::{
 use crate::api::{FrozenChangeProof, FrozenRangeProof};
 use crate::db::BatchOp;
 
-fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
-    let merkle = crate::merkle::tests::init_merkle((0u8..=10).map(|k| ([k], [k])));
+/// Builds a valid range proof over a small real trie. Genuinely builds a trie
+/// (unlike the other helpers in this file, which hand-construct proof nodes),
+/// so it is generic over `H` per the `#[hash_mode]` composition rule rather
+/// than value-parametrized by [`NodeHashAlgorithm`] — tests that build a real trie are dualized with `#[hash_mode]`, while those that hand-construct nodes parametrize by algorithm value.
+fn create_valid_range_proof<H: HashMode>() -> (FrozenRangeProof, Vec<u8>) {
+    let merkle = crate::merkle::tests::init_merkle::<H, _, _, _>((0u8..=10).map(|k| ([k], [k])));
     let proof = merkle
         .range_proof(Some(&[2u8]), Some(&[8u8]), std::num::NonZeroUsize::new(5))
         .unwrap();
@@ -28,8 +32,12 @@ fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
     (proof, serialized)
 }
 
-fn create_valid_change_proof() -> (FrozenChangeProof, Vec<u8>) {
-    let proof = FrozenChangeProof::new(
+/// Builds a valid change proof stamped with `algorithm`. Unlike
+/// [`create_valid_range_proof`], this never touches a real trie (both
+/// boundary proofs are empty), so it is value-parametrized by
+/// [`NodeHashAlgorithm`] rather than generic over `H`.
+fn create_valid_change_proof(algorithm: NodeHashAlgorithm) -> (FrozenChangeProof, Vec<u8>) {
+    let proof = FrozenChangeProof::new_with_hash_mode(
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([
@@ -44,24 +52,27 @@ fn create_valid_change_proof() -> (FrozenChangeProof, Vec<u8>) {
                 prefix: Box::from(b"key3".as_slice()),
             },
         ]),
+        algorithm,
     );
     let mut serialized = Vec::new();
     proof.write_to_vec(&mut serialized);
     (proof, serialized)
 }
 
-#[test]
-fn test_range_proof_roundtrip() {
-    let (_, serialized) = create_valid_range_proof();
+// Genuinely builds a trie (via `create_valid_range_proof`), so it's dualized with `#[hash_mode]` rather than value-parametrized — this exercises both hash modes in the real trie-construction path.
+#[firewood_macros::hash_mode]
+fn test_range_proof_roundtrip<H: HashMode>() {
+    let (_, serialized) = create_valid_range_proof::<H>();
     let parsed = FrozenRangeProof::from_slice(&serialized).expect("roundtrip should succeed");
     let mut re_serialized = Vec::new();
     parsed.write_to_vec(&mut re_serialized);
     assert_eq!(serialized, re_serialized);
 }
 
-#[test]
-fn test_change_proof_roundtrip() {
-    let (_, serialized) = create_valid_change_proof();
+#[test_case(NodeHashAlgorithm::MerkleDB; "merkledb")]
+#[test_case(NodeHashAlgorithm::Ethereum; "eth")]
+fn test_change_proof_roundtrip(algorithm: NodeHashAlgorithm) {
+    let (_, serialized) = create_valid_change_proof(algorithm);
     let parsed = FrozenChangeProof::from_slice(&serialized).expect("roundtrip should succeed");
     let mut re_serialized = Vec::new();
     parsed.write_to_vec(&mut re_serialized);
@@ -98,11 +109,14 @@ fn test_change_proof_roundtrip() {
     |err| matches!(err, InvalidHeader::InvalidProofType { found: 2, expected: Some(ProofType::Range) });
     "wrong proof type"
 )]
+// Mode-free: every case corrupts a fixed header byte (or the proof-type byte)
+// to a value with no valid interpretation, independent of which mode built
+// the underlying scaffold proof. `MerkleDbHash` is an arbitrary fixed choice.
 fn test_invalid_header(
     mutator: impl FnOnce(&mut Vec<u8>),
     expected: impl FnOnce(&InvalidHeader) -> bool,
 ) {
-    let (_, mut data) = create_valid_range_proof();
+    let (_, mut data) = create_valid_range_proof::<MerkleDbHash>();
 
     mutator(&mut data);
 
@@ -134,13 +148,16 @@ fn test_invalid_header(
     "no varint after header"
 )]
 
+// Mode-free: every case truncates within the fixed 32-byte header or the
+// array-length varint right after it, before any mode-dependent bytes.
+// `MerkleDbHash` is an arbitrary fixed choice.
 fn test_incomplete_item(
     mutator: impl FnOnce(&FrozenRangeProof, &mut Vec<u8>),
     item: &'static str,
     expected_len: usize,
     found_len: usize,
 ) {
-    let (proof, mut data) = create_valid_range_proof();
+    let (proof, mut data) = create_valid_range_proof::<MerkleDbHash>();
 
     debug!("data len: {}", data.len());
     debug!("proof: {proof:#?}");
@@ -213,13 +230,17 @@ fn test_incomplete_item(
     "2 > (1 / 5)";
     "truncated node key"
 )]
+// Mode-free: every case corrupts bytes strictly before the children region
+// (value-digest discriminant, header-adjacent varint, trailing bytes, or a
+// truncation that cuts off before any child hash). `MerkleDbHash` is an
+// arbitrary fixed choice.
 fn test_invalid_item(
     mutator: impl FnOnce(&FrozenRangeProof, &mut Vec<u8>),
     item: &'static str,
     expected: &'static str,
     found: &'static str,
 ) {
-    let (proof, mut data) = create_valid_range_proof();
+    let (proof, mut data) = create_valid_range_proof::<MerkleDbHash>();
 
     mutator(&proof, &mut data);
 
@@ -247,9 +268,12 @@ fn test_invalid_item(
     }
 }
 
+// Mode-free: corrupts the `partial_len` varint immediately after the first
+// node's key bytes, before any mode-dependent bytes. `MerkleDbHash` is an
+// arbitrary fixed choice.
 #[test]
 fn test_partial_key_len_exceeds_key_len() {
-    let (proof, mut data) = create_valid_range_proof();
+    let (proof, mut data) = create_valid_range_proof::<MerkleDbHash>();
 
     let node = &proof.start_proof()[0];
     let key_len = node.key.len();
@@ -334,11 +358,14 @@ fn test_empty_proof() {
     |err| matches!(err, InvalidHeader::InvalidProofType { found: 1, expected: Some(ProofType::Change) });
     "wrong proof type"
 )]
+// Mode-free: every case corrupts a fixed header byte, independent of the
+// scaffold proof's algorithm. `NodeHashAlgorithm::MerkleDB` is an arbitrary
+// fixed choice.
 fn test_change_proof_invalid_header(
     mutator: impl FnOnce(&mut Vec<u8>),
     expected: impl FnOnce(&InvalidHeader) -> bool,
 ) {
-    let (_, mut data) = create_valid_change_proof();
+    let (_, mut data) = create_valid_change_proof(NodeHashAlgorithm::MerkleDB);
 
     mutator(&mut data);
 
@@ -369,13 +396,16 @@ fn test_change_proof_invalid_header(
     0; // found len
     "no varint after header"
 )]
+// Mode-free: every case truncates within the fixed 32-byte header or the
+// array-length varint right after it. `NodeHashAlgorithm::MerkleDB` is an
+// arbitrary fixed choice.
 fn test_change_proof_incomplete_item(
     mutator: impl FnOnce(&mut Vec<u8>),
     item: &'static str,
     expected_len: usize,
     found_len: usize,
 ) {
-    let (_, mut data) = create_valid_change_proof();
+    let (_, mut data) = create_valid_change_proof(NodeHashAlgorithm::MerkleDB);
 
     mutator(&mut data);
 
@@ -426,13 +456,16 @@ fn test_change_proof_incomplete_item(
     "99";
     "invalid batch op discriminant"
 )]
+// Mode-free: every case corrupts a fixed-offset byte outside any
+// mode-dependent encoding (change proofs here never carry child hashes).
+// `NodeHashAlgorithm::MerkleDB` is an arbitrary fixed choice.
 fn test_change_proof_invalid_item(
     mutator: impl FnOnce(&FrozenChangeProof, &mut Vec<u8>),
     item: &'static str,
     expected: &'static str,
     found: &'static str,
 ) {
-    let (proof, mut data) = create_valid_change_proof();
+    let (proof, mut data) = create_valid_change_proof(NodeHashAlgorithm::MerkleDB);
 
     mutator(&proof, &mut data);
 
@@ -485,12 +518,17 @@ fn make_proof_node(
     }
 }
 
-/// Wraps a single `ProofNode` in a minimal `FrozenRangeProof` and serializes it.
-fn make_range_proof_from_single_node(node: ProofNode) -> (FrozenRangeProof, Vec<u8>) {
-    let proof = FrozenRangeProof::new(
+/// Wraps a single `ProofNode` in a minimal `FrozenRangeProof` stamped with
+/// `algorithm` and serializes it.
+fn make_range_proof_from_single_node(
+    node: ProofNode,
+    algorithm: NodeHashAlgorithm,
+) -> (FrozenRangeProof, Vec<u8>) {
+    let proof = FrozenRangeProof::new_with_hash_mode(
         Proof::new(Box::new([node])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([]),
+        algorithm,
     );
     let mut serialized = Vec::new();
     proof.write_to_vec(&mut serialized);
@@ -505,60 +543,62 @@ fn assert_range_proof_round_trip(serialized: Vec<u8>) {
     assert_eq!(serialized, re_serialized, "round-trip bytes must match");
 }
 
-#[test]
-fn test_proof_node_leaf_round_trip() {
+#[test_case(NodeHashAlgorithm::MerkleDB; "merkledb")]
+#[test_case(NodeHashAlgorithm::Ethereum; "eth")]
+fn test_proof_node_leaf_round_trip(algorithm: NodeHashAlgorithm) {
     // Leaf: no children, no value, empty key
     let node = make_proof_node(&[], 0, None, &[]);
-    let (_, serialized) = make_range_proof_from_single_node(node);
+    let (_, serialized) = make_range_proof_from_single_node(node, algorithm);
     assert_range_proof_round_trip(serialized);
 }
 
-#[test]
-fn test_proof_node_single_child_round_trip() {
+#[test_case(NodeHashAlgorithm::MerkleDB; "merkledb")]
+#[test_case(NodeHashAlgorithm::Ethereum; "eth")]
+fn test_proof_node_single_child_round_trip(algorithm: NodeHashAlgorithm) {
     // Branch with one child at nibble index 7
     let node = make_proof_node(&[1, 2, 3], 0, None, &[7]);
-    let (_, serialized) = make_range_proof_from_single_node(node);
+    let (_, serialized) = make_range_proof_from_single_node(node, algorithm);
     assert_range_proof_round_trip(serialized);
 }
 
-#[test]
-fn test_proof_node_all_children_round_trip() {
+#[test_case(NodeHashAlgorithm::MerkleDB; "merkledb")]
+#[test_case(NodeHashAlgorithm::Ethereum; "eth")]
+fn test_proof_node_all_children_round_trip(algorithm: NodeHashAlgorithm) {
     // Branch with all 16 children present (ChildMask = 0xFFFF)
     let all_nibbles: Vec<u8> = (0u8..16).collect();
     let node = make_proof_node(&[0], 0, None, &all_nibbles);
-    let (_, serialized) = make_range_proof_from_single_node(node);
+    let (_, serialized) = make_range_proof_from_single_node(node, algorithm);
     assert_range_proof_round_trip(serialized);
 }
 
-#[cfg(not(feature = "ethhash"))]
+// MerkleDB-only: values >= 32 bytes are converted to a hash by make_hash()
+// during serialization ONLY under the MerkleDB scheme (the Ethereum scheme
+// never emits a `Hash` digest; see `ValueDigest::make_hash`). The round-trip
+// bytes should still match because re-serializing a Hash-variant node also
+// produces a hash discriminant (1) rather than a value discriminant (0).
 #[test]
 fn test_value_digest_hash_round_trip() {
-    // Values >= 32 bytes are converted to a hash by make_hash() during serialization.
-    // The round-trip bytes should still match because re-serializing a Hash-variant
-    // node also produces a hash discriminant (1) rather than a value discriminant (0).
     let value: Box<[u8]> = vec![0xABu8; 32].into_boxed_slice();
     let node = make_proof_node(&[1, 2], 0, Some(value), &[]);
-    let (_, serialized) = make_range_proof_from_single_node(node);
+    let (_, serialized) = make_range_proof_from_single_node(node, NodeHashAlgorithm::MerkleDB);
     assert_range_proof_round_trip(serialized);
 }
 
-#[test_case(
-    BatchOp::Put { key: Box::from(b"k".as_slice()), value: Box::from(b"v".as_slice()) };
-    "put"
-)]
-#[test_case(
-    BatchOp::Delete { key: Box::from(b"k".as_slice()) };
-    "delete"
-)]
-#[test_case(
-    BatchOp::DeleteRange { prefix: Box::from(b"k".as_slice()) };
-    "delete range"
-)]
-fn test_change_proof_batch_op_variant(op: BatchOp<Box<[u8]>, Box<[u8]>>) {
-    let proof = FrozenChangeProof::new(
+#[test_case(NodeHashAlgorithm::MerkleDB, BatchOp::Put { key: Box::from(b"k".as_slice()), value: Box::from(b"v".as_slice()) }; "put_merkledb")]
+#[test_case(NodeHashAlgorithm::Ethereum, BatchOp::Put { key: Box::from(b"k".as_slice()), value: Box::from(b"v".as_slice()) }; "put_eth")]
+#[test_case(NodeHashAlgorithm::MerkleDB, BatchOp::Delete { key: Box::from(b"k".as_slice()) }; "delete_merkledb")]
+#[test_case(NodeHashAlgorithm::Ethereum, BatchOp::Delete { key: Box::from(b"k".as_slice()) }; "delete_eth")]
+#[test_case(NodeHashAlgorithm::MerkleDB, BatchOp::DeleteRange { prefix: Box::from(b"k".as_slice()) }; "delete_range_merkledb")]
+#[test_case(NodeHashAlgorithm::Ethereum, BatchOp::DeleteRange { prefix: Box::from(b"k".as_slice()) }; "delete_range_eth")]
+fn test_change_proof_batch_op_variant(
+    algorithm: NodeHashAlgorithm,
+    op: BatchOp<Box<[u8]>, Box<[u8]>>,
+) {
+    let proof = FrozenChangeProof::new_with_hash_mode(
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([op]),
+        algorithm,
     );
     let mut serialized = Vec::new();
     proof.write_to_vec(&mut serialized);
@@ -569,16 +609,17 @@ fn test_change_proof_batch_op_variant(op: BatchOp<Box<[u8]>, Box<[u8]>>) {
     assert_eq!(serialized, re_serialized, "round-trip bytes must match");
 }
 
-#[test]
-fn test_proof_node_partial_len_boundaries() {
+#[test_case(NodeHashAlgorithm::MerkleDB; "merkledb")]
+#[test_case(NodeHashAlgorithm::Ethereum; "eth")]
+fn test_proof_node_partial_len_boundaries(algorithm: NodeHashAlgorithm) {
     // partial_len = 0: no shared prefix with the parent node
     let node = make_proof_node(&[1, 2, 3, 4], 0, None, &[]);
-    let (_, serialized) = make_range_proof_from_single_node(node);
+    let (_, serialized) = make_range_proof_from_single_node(node, algorithm);
     assert_range_proof_round_trip(serialized);
 
     // partial_len = key.len(): entire key is shared with the parent
     let node = make_proof_node(&[1, 2, 3, 4], 4, None, &[]);
-    let (_, serialized) = make_range_proof_from_single_node(node);
+    let (_, serialized) = make_range_proof_from_single_node(node, algorithm);
     assert_range_proof_round_trip(serialized);
 }
 
@@ -604,10 +645,13 @@ fn test_proof_node_partial_len_boundaries() {
 //   Non-ethhash: [39..71] = TrieHash (32 bytes)
 //   Ethhash:     [39] = HashType discriminant, [40..72] = TrieHash
 
+// Mode-free: this node has no children, so bytes up to (and including) [34]
+// are identical under both modes. `NodeHashAlgorithm::MerkleDB` is an
+// arbitrary fixed choice.
 #[test]
 fn test_invalid_path_nibble() {
     let node = make_proof_node(&[1, 2, 3], 0, None, &[]);
-    let (_, mut data) = make_range_proof_from_single_node(node);
+    let (_, mut data) = make_range_proof_from_single_node(node, NodeHashAlgorithm::MerkleDB);
     data[34] = 0x10; // first key byte set to an invalid nibble (16 > 15)
     match FrozenRangeProof::from_slice(&data) {
         Err(ReadError::InvalidItem { item, .. }) => assert_eq!(item, "path"),
@@ -615,10 +659,13 @@ fn test_invalid_path_nibble() {
     }
 }
 
+// Mode-free: this node has no children and a short (< 32 byte) value, so the
+// value-digest discriminant at [39] is identical under both modes.
+// `NodeHashAlgorithm::MerkleDB` is an arbitrary fixed choice.
 #[test]
 fn test_invalid_value_digest_discriminant() {
     let node = make_proof_node(&[1, 2, 3], 0, Some(Box::from(b"v".as_slice())), &[]);
-    let (_, mut data) = make_range_proof_from_single_node(node);
+    let (_, mut data) = make_range_proof_from_single_node(node, NodeHashAlgorithm::MerkleDB);
     data[39] = 2; // invalid ValueDigest discriminant (must be 0 or 1)
     match FrozenRangeProof::from_slice(&data) {
         Err(ReadError::InvalidItem {
@@ -637,6 +684,10 @@ fn test_invalid_value_digest_discriminant() {
     }
 }
 
+// Mode-free: this node has no children, so the ChildMask region truncated
+// here ([39], [40]) is identical under both modes (mode-dependent child hash
+// bytes only follow when the mask is non-zero).
+// `NodeHashAlgorithm::MerkleDB` is an arbitrary fixed choice.
 #[test_case(38, "option discriminant", 1, 0; "option discriminant")]
 #[test_case(39, "children map", 2, 0; "children map zero bytes")]
 #[test_case(40, "children map", 2, 1; "children map one byte")]
@@ -647,7 +698,7 @@ fn test_incomplete_item_known_layout(
     found_len: usize,
 ) {
     let node = make_proof_node(&[1, 2, 3], 0, None, &[]);
-    let (_, mut data) = make_range_proof_from_single_node(node);
+    let (_, mut data) = make_range_proof_from_single_node(node, NodeHashAlgorithm::MerkleDB);
     data.truncate(truncate_at);
     match FrozenRangeProof::from_slice(&data) {
         Err(ReadError::IncompleteItem {
@@ -664,11 +715,14 @@ fn test_incomplete_item_known_layout(
     }
 }
 
-#[cfg(not(feature = "ethhash"))]
+// MerkleDB-only: under MerkleDB, a child hash is a bare 32-byte `TrieHash`
+// with no discriminant, so truncating right after the ChildMask lands inside
+// the hash itself (the Ethereum layout instead expects a 1-byte hash-type
+// discriminant first; see `test_incomplete_hash_type_discriminant`).
 #[test]
 fn test_incomplete_trie_hash() {
     let node = make_proof_node(&[1], 0, None, &[7]);
-    let (_, mut data) = make_range_proof_from_single_node(node);
+    let (_, mut data) = make_range_proof_from_single_node(node, NodeHashAlgorithm::MerkleDB);
     data.truncate(39); // ChildMask ends at [38]; TrieHash starts at [39]
     match FrozenRangeProof::from_slice(&data) {
         Err(ReadError::IncompleteItem {
@@ -685,11 +739,13 @@ fn test_incomplete_trie_hash() {
     }
 }
 
-#[cfg(feature = "ethhash")]
+// Ethereum-only: under Ethereum, a child hash is prefixed with a 1-byte
+// hash-type discriminant (0 = keccak256 hash, 1 = inline RLP), which
+// MerkleDB's bare 32-byte layout doesn't have (see `test_incomplete_trie_hash`).
 #[test]
 fn test_incomplete_hash_type_discriminant() {
     let node = make_proof_node(&[1], 0, None, &[7]);
-    let (_, mut data) = make_range_proof_from_single_node(node);
+    let (_, mut data) = make_range_proof_from_single_node(node, NodeHashAlgorithm::Ethereum);
     data.truncate(39); // ChildMask ends at [38]; HashType discriminant is at [39]
     match FrozenRangeProof::from_slice(&data) {
         Err(ReadError::IncompleteItem {
@@ -708,11 +764,12 @@ fn test_incomplete_hash_type_discriminant() {
     }
 }
 
-#[cfg(feature = "ethhash")]
+// Ethereum-only: the hash-type discriminant grammar (0 = hash, 1 = rlp) only
+// exists on the Ethereum wire format; MerkleDB has no such discriminant byte.
 #[test]
 fn test_invalid_hash_type_discriminant() {
     let node = make_proof_node(&[1], 0, None, &[7]);
-    let (_, mut data) = make_range_proof_from_single_node(node);
+    let (_, mut data) = make_range_proof_from_single_node(node, NodeHashAlgorithm::Ethereum);
     data[39] = 2; // invalid HashType discriminant (must be 0 or 1)
     match FrozenRangeProof::from_slice(&data) {
         Err(ReadError::InvalidItem {
@@ -731,12 +788,15 @@ fn test_invalid_hash_type_discriminant() {
     }
 }
 
+// Mode-free: change proofs here never carry child hashes, so the only
+// mode-dependent byte is the header's hash_mode field, untouched here.
+// `NodeHashAlgorithm::MerkleDB` is an arbitrary fixed choice.
 #[test]
 fn test_change_proof_incomplete_batch_op_discriminant() {
     // Layout of create_valid_change_proof() after the 32-byte header:
     //   [32]=0x00 (start_proof count=0)  [33]=0x00 (end_proof count=0)
     //   [34]=0x03 (batch_ops count=3)    [35]=0x00 (first BatchOp discriminant)
-    let (_, mut data) = create_valid_change_proof();
+    let (_, mut data) = create_valid_change_proof(NodeHashAlgorithm::MerkleDB);
     data.truncate(35); // cut before the first BatchOp discriminant byte
     match FrozenChangeProof::from_slice(&data) {
         Err(ReadError::InvalidItem {
@@ -919,11 +979,14 @@ fn test_slow_malformed_proof_fuzz() {
     }
 }
 
+// Mode-free: corrupts the start_proof array-length varint right after the
+// fixed 32-byte header, before any mode-dependent bytes. `MerkleDbHash` is an
+// arbitrary fixed choice.
 #[test]
 fn test_dos_array_length_bounds() {
     use integer_encoding::VarInt;
 
-    let (proof, mut data) = create_valid_range_proof();
+    let (proof, mut data) = create_valid_range_proof::<MerkleDbHash>();
 
     // The first array length (for start_proof) is at offset 32.
     let original_len = proof.start_proof().len();
@@ -1101,9 +1164,13 @@ fn parse_header(data: &[u8]) -> Header {
 // PR 4 Test 1 (plan Task 6.1): `Header::validate` accepts BOTH known hash modes
 // (so one binary can parse either wire format) and rejects only a truly-unknown
 // byte. Complements the `data[9] = 99` case in `test_invalid_header`.
+//
+// Mode-free: the loop below already exercises both hash_mode bytes directly by
+// overwriting byte [9], independent of which mode built the scaffold proof.
+// `MerkleDbHash` is an arbitrary fixed choice.
 #[test]
 fn test_header_validate_accepts_both_hash_modes() {
-    let (_, base) = create_valid_range_proof();
+    let (_, base) = create_valid_range_proof::<MerkleDbHash>();
 
     for (byte, expected) in [
         (0u8, NodeHashAlgorithm::MerkleDB),
@@ -1166,11 +1233,13 @@ fn test_hash_type_read_dispatches_on_threaded_mode() {
 
 // PR 4 Test 3 (plan Task 6.3): the explicit-mode verifier rejects a proof whose
 // self-describing header mode disagrees with the caller's expected mode, with
-// `ProofError::HashModeMismatch` — before any hashing. The proof itself is a
-// valid compile-default-mode proof; only the expected mode is flipped.
-#[test]
-fn test_verify_range_proof_rejects_hash_mode_mismatch() {
-    let (proof, _) = create_valid_range_proof();
+// `ProofError::HashModeMismatch` — before any hashing. The proof is built with
+// mode `H`; only the expected mode is flipped. Dualized with `#[hash_mode]`
+// since `create_valid_range_proof` genuinely builds a trie,
+// exercising the mismatch guard in both directions — this is why it's generic over H rather than value-parametrized.
+#[firewood_macros::hash_mode]
+fn test_verify_range_proof_rejects_hash_mode_mismatch<H: HashMode>() {
+    let (proof, _) = create_valid_range_proof::<H>();
     let other_mode = if proof.hash_mode().is_ethereum() {
         NodeHashAlgorithm::MerkleDB
     } else {
@@ -1200,10 +1269,12 @@ fn test_verify_range_proof_rejects_hash_mode_mismatch() {
 // change-proof guard in `verify_change_proof_structure`. Without it, a
 // copy-paste regression (e.g. an inverted comparison) in the change path would
 // go undetected. Calls the real crate-level verifier, not the merkle-tests
-// shadow wrapper, so the guard is genuinely exercised.
-#[test]
-fn test_verify_change_proof_structure_rejects_hash_mode_mismatch() {
-    let (proof, _) = create_valid_change_proof();
+// shadow wrapper, so the guard is genuinely exercised. `create_valid_change_proof`
+// never builds a trie, so this is dualized by value (using `#[test_case]`) rather than by `H` — proof-structural tests parametrize by algorithm.
+#[test_case(NodeHashAlgorithm::MerkleDB; "merkledb")]
+#[test_case(NodeHashAlgorithm::Ethereum; "eth")]
+fn test_verify_change_proof_structure_rejects_hash_mode_mismatch(algorithm: NodeHashAlgorithm) {
+    let (proof, _) = create_valid_change_proof(algorithm);
     let other_mode = if proof.hash_mode().is_ethereum() {
         NodeHashAlgorithm::MerkleDB
     } else {

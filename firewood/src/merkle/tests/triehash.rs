@@ -1,6 +1,8 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+//! MerkleDB-only: sha256 golden vectors.
+
 use super::*;
 use test_case::test_case;
 
@@ -13,7 +15,7 @@ use test_case::test_case;
 #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,1,2],&[0,1,2])], Some("229011c50ad4d5c2f4efe02b8db54f361ad295c4eee2bf76ea4ad1bb92676f97"); "root with branch child")]
 #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,8],&[0,8]),(&[0,1,2],&[0,1,2])], Some("a683b4881cb540b969f885f538ba5904699d480152f350659475a962d6240ef9"); "root with branch child and leaf child")]
 fn test_root_hash_merkledb_compatible(kvs: Vec<(&[u8], &[u8])>, expected_hash: Option<&str>) {
-    let merkle = init_merkle(kvs);
+    let merkle = init_merkle::<MerkleDbHash, _, _, _>(kvs);
     let Some(got_hash) = merkle.nodestore.root_hash() else {
         assert!(expected_hash.is_none());
         return;

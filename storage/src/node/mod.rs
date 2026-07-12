@@ -542,9 +542,16 @@ mod snapshot_tests;
 #[cfg(test)]
 mod test {
     use crate::node::{BranchNode, LeafNode, Node};
-    use crate::{Child, Children, DefaultHashMode, LinearAddress, NibblesIterator, Path};
+    use crate::{
+        Child, Children, EthHash, HashMode, LinearAddress, MerkleDbHash, NibblesIterator, Path,
+    };
     use test_case::test_case;
 
+    // These are MerkleDB-only byte-length goldens: the eth encoding's
+    // `HashOrRlp` child-hash region has a different on-disk length, so this
+    // test locks the merkledb wire format only (see
+    // `test_eth_child_hash_region_exact_bytes` for the eth-mode equivalent).
+    #[firewood_macros::hash_mode(merkledb)]
     #[test_case(
         Node::Leaf(LeafNode {
             partial_path: Path::from(vec![0, 1, 2, 3]),
@@ -592,23 +599,16 @@ than 126 bytes as the length would be encoded in multiple bytes.
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
         )})), 1165; "full branch node with obnoxiously long partial path and long value"
     )]
-    // When ethhash is enabled, we don't actually check the `expected_length`
-    fn test_serialize_deserialize(
-        node: Node,
-        #[cfg_attr(feature = "ethhash", expect(unused_variables))] expected_length: usize,
-    ) {
+    fn test_serialize_deserialize<H: HashMode>(node: Node, expected_length: usize) {
         use crate::node::Node;
         use std::io::Cursor;
 
         let mut serialized = Vec::new();
-        let _area_index = node
-            .as_bytes::<DefaultHashMode, _>(&mut serialized)
-            .unwrap();
-        #[cfg(not(feature = "ethhash"))]
+        let _area_index = node.as_bytes::<H, _>(&mut serialized).unwrap();
         assert_eq!(serialized.len(), expected_length);
         let mut cursor = Cursor::new(&serialized);
         cursor.set_position(1);
-        let deserialized = Node::from_reader::<DefaultHashMode>(&mut cursor).unwrap();
+        let deserialized = Node::from_reader::<H>(&mut cursor).unwrap();
 
         assert_eq!(node, deserialized);
     }
@@ -619,9 +619,12 @@ than 126 bytes as the length would be encoded in multiple bytes.
     /// hash bytes for a full hash). PR 3 routes this through
     /// `EthHash::write_child_hash`, which delegates to the existing `HashOrRlp`
     /// codec, so these bytes must stay byte-for-byte identical.
-    #[cfg(feature = "ethhash")]
-    #[test]
-    fn test_eth_child_hash_region_exact_bytes() {
+    ///
+    /// Eth-only golden (not `#[cfg(feature = "ethhash")]`-gated): both hashers
+    /// compile into one binary since PR 3, so the mode is pinned via
+    /// `#[hash_mode(eth)]` instead of a compile-time feature gate.
+    #[firewood_macros::hash_mode(eth)]
+    fn test_eth_child_hash_region_exact_bytes<H: HashMode>() {
         // A partial branch with a single child at slot 15, no value.
         let child_hash: crate::HashType = std::array::from_fn::<u8, 32, _>(|i| i as u8).into();
         let node = Node::Branch(Box::new(BranchNode {
@@ -640,8 +643,7 @@ than 126 bytes as the length would be encoded in multiple bytes.
         }));
 
         let mut serialized = Vec::new();
-        node.as_bytes::<DefaultHashMode, _>(&mut serialized)
-            .unwrap();
+        node.as_bytes::<H, _>(&mut serialized).unwrap();
 
         // The child record is the tail of the encoding: the child-slot nibble
         // (15) as a varint, then the 8-byte address, then the frozen
@@ -661,14 +663,12 @@ than 126 bytes as the length would be encoded in multiple bytes.
         // And the whole thing must round-trip.
         let mut cursor = std::io::Cursor::new(&serialized);
         cursor.set_position(1);
-        assert_eq!(
-            node,
-            Node::from_reader::<DefaultHashMode>(&mut cursor).unwrap()
-        );
+        assert_eq!(node, Node::from_reader::<H>(&mut cursor).unwrap());
     }
 
-    #[test]
-    fn test_area_index_with_non_empty_buffer() {
+    #[firewood_macros::hash_mode]
+    #[expect(clippy::arithmetic_side_effects)]
+    fn test_area_index_with_non_empty_buffer<H: HashMode>() {
         use crate::node::Node;
         use crate::nodestore::AreaIndex;
 
@@ -680,16 +680,12 @@ than 126 bytes as the length would be encoded in multiple bytes.
 
         // First, encode into an empty buffer to get the expected area index
         let mut empty_buffer = Vec::new();
-        let expected_area_index = node
-            .as_bytes::<DefaultHashMode, _>(&mut empty_buffer)
-            .unwrap();
+        let expected_area_index = node.as_bytes::<H, _>(&mut empty_buffer).unwrap();
         let expected_size = empty_buffer.len();
 
         // Now encode into a non-empty buffer with a 100-byte prefix
         let mut non_empty_buffer = vec![0xFF; 100];
-        let area_index = node
-            .as_bytes::<DefaultHashMode, _>(&mut non_empty_buffer)
-            .unwrap();
+        let area_index = node.as_bytes::<H, _>(&mut non_empty_buffer).unwrap();
 
         // The area index should be the same regardless of buffer prefix
         assert_eq!(

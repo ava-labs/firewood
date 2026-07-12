@@ -1497,7 +1497,7 @@ where
     }
 }
 
-impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
+impl<S: WritableStorage, H: HashMode> NodeStore<Arc<ImmutableProposal>, S, H> {
     /// Returns the slice of deleted nodes in this proposal (test only).
     #[cfg(any(test, feature = "test_utils"))]
     #[must_use]
@@ -1558,8 +1558,10 @@ mod tests {
 
     use crate::BranchNode;
     use crate::Children;
+    use crate::EthHash;
     use crate::FileBacked;
     use crate::LeafNode;
+    use crate::MerkleDbHash;
     use crate::NibblesIterator;
     use crate::PathComponent;
     use crate::linear::memory::MemStore;
@@ -1604,16 +1606,16 @@ mod tests {
         assert!(AreaIndex::from_size(AreaIndex::MAX_AREA_SIZE + 1).is_err());
     }
 
-    #[test]
-    fn test_reparent() {
+    #[firewood_macros::hash_mode]
+    fn test_reparent<H: HashMode>() {
         // create an empty base revision
-        let memstore = MemStore::default();
-        let base: NodeStore<Committed, _> =
+        let memstore = MemStore::new(Vec::new(), H::ALGORITHM);
+        let base: NodeStore<Committed, _, H> =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         // create an empty r1, check that it's parent is the empty committed version
         let r1 = NodeStore::new(&base).unwrap();
-        let r1: NodeStore<Arc<ImmutableProposal>, _> = r1.try_into().unwrap();
+        let r1: NodeStore<Arc<ImmutableProposal>, _, H> = r1.try_into().unwrap();
         {
             let parent = r1.kind.parent.lock();
             assert!(matches!(
@@ -1623,8 +1625,8 @@ mod tests {
         }
 
         // create an empty r2, check that it's parent is the proposed version r1
-        let r2: NodeStore<Mutable<Propose>, _> = NodeStore::new(&r1).unwrap();
-        let r2: NodeStore<Arc<ImmutableProposal>, _> = r2.try_into().unwrap();
+        let r2: NodeStore<Mutable<Propose>, _, H> = NodeStore::new(&r1).unwrap();
+        let r2: NodeStore<Arc<ImmutableProposal>, _, H> = r2.try_into().unwrap();
         {
             let parent = r2.kind.parent.lock();
             assert!(matches!(*parent, NodeStoreParent::Proposed(_)));
@@ -1643,12 +1645,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_slow_giant_node() {
-        let memstore = Arc::new(MemStore::default());
-        let mut header =
-            NodeStoreHeader::new(<crate::DefaultHashMode as crate::HashMode>::ALGORITHM);
-        let empty_root: NodeStore<Committed, _> =
+    #[firewood_macros::hash_mode]
+    fn test_slow_giant_node<H: HashMode>() {
+        let memstore = Arc::new(MemStore::new(Vec::new(), H::ALGORITHM));
+        let mut header = NodeStoreHeader::new(H::ALGORITHM);
+        let empty_root: NodeStore<Committed, _, H> =
             NodeStore::new_empty_committed(Arc::clone(&memstore), DeletedNodeTracking::Enabled);
 
         let mut node_store = NodeStore::new(&empty_root).unwrap();
@@ -1662,7 +1663,7 @@ mod tests {
 
         node_store.root_mut().replace(giant_leaf);
 
-        let node_store = NodeStore::<Arc<ImmutableProposal>, _>::try_from(node_store).unwrap();
+        let node_store = NodeStore::<Arc<ImmutableProposal>, _, H>::try_from(node_store).unwrap();
 
         let node_store = node_store.as_committed();
 
@@ -1699,8 +1700,8 @@ mod tests {
     /// The fix calls `allocate_at` immediately after allocating storage for a node
     /// but before adding it to the batch, ensuring children have addresses when
     /// their parents are serialized.
-    #[test]
-    fn persist_branch_with_children() -> Result<(), Box<dyn Error>> {
+    #[firewood_macros::hash_mode]
+    fn persist_branch_with_children<H: HashMode>() -> Result<(), Box<dyn Error>> {
         let tmpdir = tempfile::tempdir()?;
         let dbfile = tmpdir.path().join("nodestore_branch_persist_test.db");
 
@@ -1711,11 +1712,10 @@ mod tests {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            <crate::DefaultHashMode as crate::HashMode>::ALGORITHM,
+            H::ALGORITHM,
         )?);
-        let mut header =
-            NodeStoreHeader::new(<crate::DefaultHashMode as crate::HashMode>::ALGORITHM);
-        let nodestore: NodeStore<Committed, _> =
+        let mut header = NodeStoreHeader::new(H::ALGORITHM);
+        let nodestore: NodeStore<Committed, _, H> =
             NodeStore::open(&header, storage, DeletedNodeTracking::Enabled)?;
 
         let mut proposal = NodeStore::new(&nodestore)?;
@@ -1765,7 +1765,7 @@ mod tests {
             })));
         }
 
-        let proposal = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal)?;
+        let proposal = NodeStore::<Arc<ImmutableProposal>, _, H>::try_from(proposal)?;
 
         let nodestore = proposal.as_committed();
         nodestore.persist(&mut header)?;
@@ -1780,8 +1780,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn with_root_success() -> Result<(), Box<dyn Error>> {
+    #[firewood_macros::hash_mode]
+    fn with_root_success<H: HashMode>() -> Result<(), Box<dyn Error>> {
         let tmpdir = tempfile::tempdir()?;
         let dbfile = tmpdir.path().join("with_root_test.db");
 
@@ -1792,11 +1792,10 @@ mod tests {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            <crate::DefaultHashMode as crate::HashMode>::ALGORITHM,
+            H::ALGORITHM,
         )?);
-        let mut header =
-            NodeStoreHeader::new(<crate::DefaultHashMode as crate::HashMode>::ALGORITHM);
-        let base: NodeStore<Committed, _> =
+        let mut header = NodeStoreHeader::new(H::ALGORITHM);
+        let base: NodeStore<Committed, _, H> =
             NodeStore::open(&header, Arc::clone(&storage), DeletedNodeTracking::Enabled)?;
 
         // Create a proposal with a leaf node and persist it
@@ -1805,7 +1804,7 @@ mod tests {
             partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"key")),
             value: b"value".to_vec().into_boxed_slice(),
         }));
-        let proposal = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal)?;
+        let proposal = NodeStore::<Arc<ImmutableProposal>, _, H>::try_from(proposal)?;
         let committed = proposal.as_committed();
         committed.persist(&mut header)?;
 
@@ -1814,7 +1813,7 @@ mod tests {
         let root_hash = header.root_hash().unwrap().into_hash_type();
 
         // Reconstruct using with_root
-        let restored: NodeStore<Committed, _> = NodeStore::with_root(
+        let restored: NodeStore<Committed, _, H> = NodeStore::with_root(
             root_hash.clone(),
             root_address,
             storage,
@@ -1826,8 +1825,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn with_root_wrong_hash() -> Result<(), Box<dyn Error>> {
+    #[firewood_macros::hash_mode]
+    fn with_root_wrong_hash<H: HashMode>() -> Result<(), Box<dyn Error>> {
         let tmpdir = tempfile::tempdir()?;
         let dbfile = tmpdir.path().join("with_root_bad_hash_test.db");
 
@@ -1838,11 +1837,10 @@ mod tests {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            <crate::DefaultHashMode as crate::HashMode>::ALGORITHM,
+            H::ALGORITHM,
         )?);
-        let mut header =
-            NodeStoreHeader::new(<crate::DefaultHashMode as crate::HashMode>::ALGORITHM);
-        let base: NodeStore<Committed, _> =
+        let mut header = NodeStoreHeader::new(H::ALGORITHM);
+        let base: NodeStore<Committed, _, H> =
             NodeStore::open(&header, Arc::clone(&storage), DeletedNodeTracking::Enabled)?;
 
         // Create a proposal with a leaf node and persist it
@@ -1851,7 +1849,7 @@ mod tests {
             partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"key")),
             value: b"value".to_vec().into_boxed_slice(),
         }));
-        let proposal = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal)?;
+        let proposal = NodeStore::<Arc<ImmutableProposal>, _, H>::try_from(proposal)?;
         let committed = proposal.as_committed();
         committed.persist(&mut header)?;
 
@@ -1859,7 +1857,7 @@ mod tests {
 
         // Use a bogus hash
         let bad_hash = HashType::from([0xAB; 32]);
-        let result = NodeStore::<Committed, _, DefaultHashMode>::with_root(
+        let result = NodeStore::<Committed, _, H>::with_root(
             bad_hash,
             root_address,
             storage,
@@ -1877,6 +1875,7 @@ mod tests {
         Ok(())
     }
 
+    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
     #[test]
     fn reconstructed_root_address_is_none() {
         let storage = Arc::new(MemStore::default());
@@ -1892,6 +1891,7 @@ mod tests {
         assert_eq!(reconstructed.root_address(), None);
     }
 
+    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
     #[test]
     fn reconstructed_conversion_defers_hashing() {
         let storage = Arc::new(MemStore::default());
@@ -1908,6 +1908,7 @@ mod tests {
         assert!(reconstructed.kind.hash.get().is_none());
     }
 
+    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
     #[test]
     fn reconstructed_root_hash_is_memoized() {
         let storage = Arc::new(MemStore::default());
@@ -1931,6 +1932,7 @@ mod tests {
         assert_eq!(first_hash, second_hash);
     }
 
+    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
     #[test]
     fn reconstructed_empty_root_hash_is_none() {
         let storage = Arc::new(MemStore::default());
@@ -1941,6 +1943,7 @@ mod tests {
         assert_eq!(reconstructed.root_hash(), None);
     }
 
+    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
     #[test]
     fn reconstructed_root_hash_rewrites_root_children() {
         // After root_hash() runs, the swapped-in root must have no Child::Node
@@ -1995,6 +1998,7 @@ mod tests {
     }
 
     #[test]
+    // Reconstruction is DefaultHashMode-only until the flag-removal PR pins it to EthHash (#1088 follow-up).
     fn reconstructed_pins_committed_parent() {
         // A Reconstructed must hold a strong Arc to its committed parent so
         // the RevisionManager cannot reap the revision (and free its on-disk
