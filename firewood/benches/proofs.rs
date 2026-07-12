@@ -25,8 +25,9 @@ use rand::{RngExt, distr::Alphanumeric};
 fn bench_proofs(criterion: &mut Criterion) {
     // Fixture: 1000 random 32-byte keys, 1-byte values, hashed and frozen.
     let rng = &SeededRng::from_option(Some(1234));
-    let store = Arc::new(MemStore::default());
-    let nodestore = NodeStore::new_empty_proposal(store, DeletedNodeTracking::Enabled);
+    let store = Arc::new(MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM));
+    let nodestore: NodeStore<_, _, DefaultHashMode> =
+        NodeStore::new_empty_proposal(store, DeletedNodeTracking::Enabled);
     let mut merkle = Merkle::from(nodestore);
 
     let mut keys: Vec<Vec<u8>> =
@@ -58,7 +59,12 @@ fn bench_proofs(criterion: &mut Criterion) {
         let proof = view.single_key_proof(mid).unwrap();
         b.iter(|| {
             proof
-                .verify(mid, Some(b"v".as_slice()), &root_hash)
+                .verify(
+                    mid,
+                    Some(b"v".as_slice()),
+                    &root_hash,
+                    DefaultHashMode::ALGORITHM,
+                )
                 .unwrap();
         });
     });

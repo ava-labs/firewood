@@ -3,7 +3,7 @@
 
 use crate::api::OptionalHashKeyExt;
 use crate::merkle::Merkle;
-use firewood_storage::{Committed, DeletedNodeTracking, MemStore, NodeStore};
+use firewood_storage::{Committed, DefaultHashMode, DeletedNodeTracking, MemStore, NodeStore};
 
 use super::*;
 use ethereum_types::H256;
@@ -249,7 +249,7 @@ fn assert_range_proof_roundtrips(
 
 /// The pieces a fold test needs from [`build_account_trie`].
 struct AccountTrie {
-    merkle: Merkle<NodeStore<Committed, MemStore>>,
+    merkle: Merkle<NodeStore<Committed, MemStore, DefaultHashMode>>,
     root_hash: TrieHash,
     account_key: Box<[u8]>,
     storage_keys: Box<[Box<[u8]>]>,
@@ -695,8 +695,9 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
     let header = NodeStoreHeader::read_from_storage(&*storage).unwrap();
 
     // Re-open from the clobbered MemStore so all reads come from disk.
-    let merkle =
-        Merkle::from(NodeStore::open(&header, storage, DeletedNodeTracking::Enabled).unwrap());
+    let reopened: NodeStore<Committed, _, DefaultHashMode> =
+        NodeStore::open(&header, storage, DeletedNodeTracking::Enabled).unwrap();
+    let merkle = Merkle::from(reopened);
 
     // Sanity check: the stored values now contain dummy zeros.
     for (k, _) in &*accounts {

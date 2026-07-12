@@ -47,7 +47,7 @@ type OwnedOps = Box<[BatchOp<Box<[u8]>, Box<[u8]>>]>;
 /// Verifies `proof` against the given inclusive bounds, returning the rejection
 /// reason on failure.
 fn verify(
-    db: &Db,
+    db: &Db<DefaultHashMode>,
     proof: &FrozenChangeProof,
     start_root: &api::HashKey,
     end_root: &api::HashKey,
@@ -60,7 +60,10 @@ fn verify(
 
 /// Commit `end_batch` onto `db`, returning the roots before and after. Unlike
 /// `setup_2nd_commit!` this takes arbitrary ops, so it can apply deletes.
-fn commit_batch(db: &Db, end_batch: Vec<BatchOp<&[u8], &[u8]>>) -> (api::HashKey, api::HashKey) {
+fn commit_batch(
+    db: &Db<DefaultHashMode>,
+    end_batch: Vec<BatchOp<&[u8], &[u8]>>,
+) -> (api::HashKey, api::HashKey) {
     let start_root = db.root_hash().unwrap();
     db.propose(end_batch).unwrap().commit().unwrap();
     (start_root, db.root_hash().unwrap())

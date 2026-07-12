@@ -1,7 +1,10 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood::api::{self, BoxKeyValueIter, DbView, HashKey, IntoBatchIter, Proposal as _};
+use firewood::{
+    DefaultHashMode,
+    api::{self, BoxKeyValueIter, DbView, HashKey, IntoBatchIter, Proposal as _},
+};
 
 use crate::{IteratorHandle, iterator::CreateIteratorResult, metrics::MetricsContextExt};
 
@@ -10,15 +13,19 @@ use crate::{IteratorHandle, iterator::CreateIteratorResult, metrics::MetricsCont
 #[derive(Debug)]
 pub struct ProposalHandle<'db> {
     hash_key: Option<HashKey>,
-    proposal: firewood::db::Proposal<'db>,
+    proposal: firewood::db::Proposal<'db, DefaultHashMode>,
     handle: &'db crate::DatabaseHandle,
 }
 
 impl<'db> DbView for ProposalHandle<'db> {
     type Iter<'view>
-        = <firewood::db::Proposal<'db> as DbView>::Iter<'view>
+        = <firewood::db::Proposal<'db, DefaultHashMode> as DbView>::Iter<'view>
     where
         Self: 'view;
+
+    fn node_hash_algorithm(&self) -> firewood::NodeHashAlgorithm {
+        self.proposal.node_hash_algorithm()
+    }
 
     fn root_hash(&self) -> Option<HashKey> {
         self.proposal.root_hash()
@@ -111,7 +118,7 @@ pub struct CreateProposalResult<'db> {
 impl<'db> CreateProposalResult<'db> {
     pub(crate) fn new(
         handle: &'db crate::DatabaseHandle,
-        f: impl FnOnce() -> Result<firewood::db::Proposal<'db>, api::Error>,
+        f: impl FnOnce() -> Result<firewood::db::Proposal<'db, DefaultHashMode>, api::Error>,
     ) -> Result<Self, api::Error> {
         let proposal = f()?;
 
@@ -154,7 +161,7 @@ pub trait CView<'db> {
     fn create_proposal(
         self,
         values: impl IntoBatchIter,
-    ) -> Result<firewood::db::Proposal<'db>, api::Error>;
+    ) -> Result<firewood::db::Proposal<'db, DefaultHashMode>, api::Error>;
 
     /// Create a [`ProposalHandle`] from the values.
     ///
@@ -182,7 +189,7 @@ impl<'db> CView<'db> for &ProposalHandle<'db> {
     fn create_proposal(
         self,
         values: impl IntoBatchIter,
-    ) -> Result<firewood::db::Proposal<'db>, api::Error> {
+    ) -> Result<firewood::db::Proposal<'db, DefaultHashMode>, api::Error> {
         self.proposal.propose(values)
     }
 }

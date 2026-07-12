@@ -5,6 +5,7 @@
 //! no edges, left only, right only, and both edges.
 
 use super::*;
+use firewood_storage::{DefaultHashMode, HashMode};
 use test_case::test_case;
 
 /// Left edge proof is present iff `requested_start_key` is set. Right edge
@@ -90,5 +91,8 @@ fn test_generator_uses_end_key_for_complete_proof() {
         .unwrap();
 
     // End proof validates against end_key for complete proofs
-    proof.end_proof().value_digest(b"\xff", &root2).unwrap();
+    proof
+        .end_proof()
+        .value_digest(b"\xff", &root2, DefaultHashMode::ALGORITHM)
+        .unwrap();
 }
