@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783671722236,
+  "lastUpdate": 1783929586236,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -6626,6 +6626,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 53.06850851463029,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "rodrigo",
+            "username": "RodrigoVillar",
+            "email": "77309055+RodrigoVillar@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "94c8d4b4b31a3824d95c8fb6242c873324088c0c",
+          "message": "refactor(ffi)!: remove direct storage dependency (#2111)\n\n## Why this should be merged\n\nCloses #1972.\n\n`firewood-ffi` currently reaches directly into `firewood-storage` for\nmetrics registration, logging, hash types, code-hash extraction details,\nand reconstruction parent types. That makes storage internals part of\nthe FFI crate's contract and means storage-layer refactors can become\nFFI-breaking. This PR routes those dependencies through the `firewood`\ncrate API instead.\n\n## How this works\n\n`firewood` now re-exports the public hash algorithm/hash types that FFI\nneeds and exposes `registry::register_all()` as the single metrics\nregistration entry point for embedders that want full Firewood database\nmetrics, including storage metrics. FFI metrics setup now calls that\nfirewood-level entry point, and jemalloc metrics logging uses\n`firewood::logger`.\n\nReconstruction now uses a firewood-owned boundary type.\n`Db::committed_view()` returns an opaque `CommittedView` for committed\nrevisions, and `Db::reconstruct_from_view()` accepts `&CommittedView`\ninstead of exposing `NodeStore<Committed, FileBacked>` and storage\nreconstruction traits in the public signature. The FFI `RevisionHandle`\nstores this opaque committed parent only when the requested root is\ncommitted; proposal roots remain readable via `Db::view()` but are not\nreconstructable.\n\nEthereum code-hash extraction moved behind\n`firewood::account_code_hash()`. The FFI iterator preserves its previous\nbehavior for wrong-length `codeHash` fields by skipping that account and\ncontinuing to later entries, while malformed account RLP still surfaces\nas an iterator error. The account-format error now carries the\nunderlying RLP decoding source.\n\n## How this was tested\n\nCI + added targeted tests added in this PR:\n- `account_code_hash_decodes_all_outcomes`\n- `register_all_includes_storage_metrics`\n- `test_reconstruct_from_committed_view_uses_requested_revision`\n- `malformed_account_value_is_returned_as_error`\n- `wrong_length_code_hash_is_skipped`\n\n\n## Breaking Changes\n\n- [x] firewood\n- `Db::reconstruct_from_view` now accepts `&CommittedView` instead of a\ngeneric storage `NodeStore` source.\n- Malformed Ethereum account values now surface as\n`ProofError::InvalidAccountValueFormat` with the underlying RLP source\ninstead of the removed `InvalidValueFormat` variant.\n- [ ] firewood-storage\n- [x] firewood-ffi (C api)\n- No C ABI change is intended, but malformed Ethereum account values\nreturned through the code-hash iterator now include the more specific\n`invalid Ethereum account value format: ...` error text.\n- [ ] firewood-go (Go api)\n- [ ] fwdctl\n\n---------\n\nCo-authored-by: Cursor Agent <cursoragent@cursor.com>\nCo-authored-by: rodrigo <RodrigoVillar@users.noreply.github.com>",
+          "timestamp": "2026-07-10T14:34:13Z",
+          "url": "https://github.com/ava-labs/firewood/commit/94c8d4b4b31a3824d95c8fb6242c873324088c0c"
+        },
+        "date": 1783929585435,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 176.78674578349222,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5656.5326521971465,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 70.4038951296959,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5544.32085309553,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 40.47775350242068,
             "unit": "block_accept_ms/ggas"
           }
         ]
