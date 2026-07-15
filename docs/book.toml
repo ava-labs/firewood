@@ -1,8 +1,7 @@
 # Requires mdBook >= 0.5 (native alert syntax) and mdbook-linkcheck2 (any version).
-# The frontmatter stripper mdbook-yml-header is source-only (no prebuilt binary),
-# so it is installed with a pinned `cargo install --locked mdbook-yml-header@0.1.5`
-# rather than the SHA-pinned prebuilt path used for the other tools.
-# Tool versions are pinned in `.github/workflows/gh-pages.yaml`.
+# Frontmatter stripping is done by an in-repo jq preprocessor
+# (scripts/mdbook-frontmatter-strip.sh), so it needs jq on PATH but no third-party
+# preprocessor binary. Tool versions are pinned in `.github/workflows/gh-pages.yaml`.
 [book]
 title = "Firewood"
 authors = ["Ava Labs"]
@@ -23,10 +22,13 @@ additional-js = ["mermaid.min.js", "mermaid-init.js"]
 [preprocessor.mermaid]
 command = "mdbook-mermaid"
 
-# Strips the YAML frontmatter block (--- ... ---) from each chapter so the
-# schema metadata does not render as a stray horizontal rule and heading.
-# Binary: mdbook-yml-header (mdbook-<name> convention, so no explicit command).
-[preprocessor.yml-header]
+# Strips the YAML frontmatter block (--- ... ---) from each chapter so the design-doc
+# schema metadata does not render as a stray horizontal rule and heading. This is an
+# in-repo jq preprocessor rather than a published crate, so there is no third-party
+# binary to install in CI or keep alive. mdBook runs preprocessor commands from the
+# book root, so the command path is relative to docs/, not the repo root.
+[preprocessor.frontmatter-strip]
+command = "../scripts/mdbook-frontmatter-strip.sh"
 
 [output.linkcheck2]
 follow-web-links = false
