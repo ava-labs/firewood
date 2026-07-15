@@ -116,7 +116,7 @@ where
     ///
     /// Can return a `FileIoError` if it is unable to read a node that it is hashing.
     pub fn hash_helper(
-        #[cfg(feature = "ethhash")] &self,
+        &self,
         node: Node,
         mut root_path: Path,
     ) -> Result<(MaybePersistedNode, HashType), FileIoError> {

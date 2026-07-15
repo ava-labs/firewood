@@ -106,4 +106,5 @@ mod edge_cases;
 mod empty;
 mod fuzz;
 mod partial;
+mod regression;
 mod structural;

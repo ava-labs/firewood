@@ -1162,10 +1162,7 @@ impl<S: ReadableStorage> TryFrom<NodeStore<Mutable<Propose>, S>>
         };
 
         // Hashes the trie with an empty path and returns the address of the new root.
-        #[cfg(feature = "ethhash")]
         let (root, root_hash) = nodestore.hash_helper(root, Path::new())?;
-        #[cfg(not(feature = "ethhash"))]
-        let (root, root_hash) = NodeStore::<Mutable<Propose>, S>::hash_helper(root, Path::new())?;
 
         let immutable_proposal =
             Arc::into_inner(nodestore.kind).expect("no other references to the proposal");
@@ -1300,11 +1297,7 @@ where
         let swap = self.kind.root.as_ref()?;
         let current = swap.load_full();
         let node_val: Node = Node::clone(&current);
-        #[cfg(feature = "ethhash")]
         let (hashed_mp, hash) = self.hash_helper(node_val, Path::new()).ok()?;
-        #[cfg(not(feature = "ethhash"))]
-        let (hashed_mp, hash) =
-            NodeStore::<Mutable<Propose>, S>::hash_helper(node_val, Path::new()).ok()?;
         // Extract the in-memory SharedNode from the freshly-built MaybePersistedNode
         // (always the `Unpersisted` variant here, so this is a Mutex lock + Arc clone,
         // no I/O). Replace the unhashed root with the fully-hashed one. If another
@@ -1506,7 +1499,6 @@ where
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 #[expect(clippy::cast_possible_truncation)]
 mod tests {
 
