@@ -117,13 +117,14 @@ output into a subdirectory.
    which render as greyed-out/disabled sidebar items) rather than empty stub pages —
    see "Scaffolding via draft chapters" below.
 7. **Preprocessors and callouts:** Two preprocessors: `mdbook-mermaid` (diagrams) and
-   `mdbook-yml-header` (strips each chapter's YAML frontmatter so the schema metadata
-   does not render as a stray horizontal rule and heading). mermaid's generated JS
-   assets are **not** vendored; instead `mdbook-mermaid install docs` runs as part of
-   every build (CI and the local `justfile` recipes), so there is no checked-in JS to
-   drift. `mdbook-yml-header` is a plain preprocessor binary with no generated assets.
-   Callouts use mdBook's built-in alert syntax (`> [!NOTE]`, `> [!WARNING]`, …) rather
-   than a preprocessor.
+   an in-repo frontmatter stripper (`scripts/mdbook-frontmatter-strip.sh`, a small jq
+   script that removes each chapter's YAML frontmatter so the schema metadata does not
+   render as a stray horizontal rule and heading). mermaid's generated JS assets are
+   **not** vendored; instead `mdbook-mermaid install docs` runs as part of every build
+   (CI and the local `justfile` recipes), so there is no checked-in JS to drift. The
+   frontmatter stripper is owned in-repo rather than pulled from a published crate (see
+   decision 10) and needs only `jq` on `PATH`. Callouts use mdBook's built-in alert
+   syntax (`> [!NOTE]`, `> [!WARNING]`, …) rather than a preprocessor.
    > [!NOTE]
    > `mdbook-admonish` was the original choice for callouts, but it requires mdBook
    > `< 0.5.0`, which is incompatible with the `mdbook 0.5.x` that `mdbook-linkcheck2`
@@ -134,10 +135,18 @@ output into a subdirectory.
    install commands (`rustup`, `cargo install`, `brew install`, VS Code extensions).
 9. **Frontmatter with no dates:** Design docs carry a small YAML frontmatter schema
    (`title`, `status`, `category`, `authors`, optional `tracking-issue`), stripped from
-   the rendered output by `mdbook-yml-header`. It deliberately has **no date field**;
-   git commit history is the single source of truth for a design's age, surfaced by the
-   `design-age` tooling. This refuses hand-maintained dates that silently drift from
-   reality.
+   the rendered output by the in-repo frontmatter preprocessor. It deliberately has
+   **no date field**; git commit history is the single source of truth for a design's
+   age, surfaced by the `design-age` tooling. This refuses hand-maintained dates that
+   silently drift from reality.
+10. **In-repo frontmatter stripper (not a published crate):** The stripper is a small
+    in-repo jq script (`scripts/mdbook-frontmatter-strip.sh`). The published mdBook
+    frontmatter preprocessors are single-maintainer crates with no prebuilt binary, so
+    they would compile from source on every docs/Go CI run and — worse — a yank or an
+    unmaintained crate would block every docs and Go PR with no fallback. The transform
+    is trivial (strip a leading `--- … ---` block), so owning it in-repo removes that
+    supply-chain dependency and the per-run source compile, at the cost of only a `jq`
+    dependency (already on CI runners and standard developer machines).
 
 ## Architecture
 
@@ -258,7 +267,7 @@ entirely in the `status` frontmatter field:
 ### Frontmatter schema
 
 Every design begins with a YAML frontmatter block, stripped from the rendered HTML by
-the `mdbook-yml-header` preprocessor:
+the in-repo frontmatter preprocessor (`scripts/mdbook-frontmatter-strip.sh`):
 
 ```yaml
 ---
@@ -369,13 +378,12 @@ site/                         ← uploaded as the Pages artifact
    one is published for the runner target and **automatically falls back to
    `cargo install`** when no prebuilt artifact is available or the download fails (e.g.
    GitHub rate limiting), so no manual artifact-availability check or fallback step is
-   required. The frontmatter stripper `mdbook-yml-header` is likewise absent from the
-   `taiki-e/install-action` manifest **and publishes no prebuilt binaries**, so it is
-   built from source with a pinned, locked `cargo install --locked
-   mdbook-yml-header@0.1.5` — the one tool that is always a source compile rather than a
-   prebuilt download. All four tool versions are pinned and recorded. Because the mermaid
-   assets are installed fresh from the pinned binary at build time (step 3) rather than
-   vendored, there is no asset/binary version coupling to track by hand.
+   required. Frontmatter stripping needs no tool install at all: it is an in-repo jq
+   preprocessor (`scripts/mdbook-frontmatter-strip.sh`), and `jq` is preinstalled on the
+   runners. All three installed mdBook-toolchain versions (`mdbook`, `mdbook-mermaid`,
+   `mdbook-linkcheck2`) are pinned and recorded. Because the mermaid assets are installed
+   fresh from the pinned binary at build time (step 3) rather than vendored, there is no
+   asset/binary version coupling to track by hand.
 3. **Install preprocessor assets (not committed).** Run `mdbook-mermaid install docs`
    before building. The JS is generated fresh from the pinned binary on every build and
    the output paths are git-ignored, so there is nothing to drift; CI fails if the install
@@ -490,7 +498,8 @@ relocation.
   both under local `mdbook serve` and at the `/firewood/` Pages base, so omitting or
   misconfiguring `site-url` breaks only the 404 page, not navigation),
   `git-repository-url`, `edit-url-template` (edit-on-GitHub links), `default-theme`,
-  search enabled (default).
+  `additional-js = ["mermaid.min.js", "mermaid-init.js"]` (wires the mermaid
+  preprocessor's generated JS into every page), search enabled (default).
 - `[preprocessor.mermaid]`. Its JS is produced by `mdbook-mermaid install docs` at build
   time (CI build step 3 and the `justfile` recipes) and is git-ignored, not committed.
   Callouts need no preprocessor — they use mdBook's native alert syntax (`> [!NOTE]`).
@@ -498,11 +507,11 @@ relocation.
   benign version-mismatch warning under the pinned `mdbook@0.5.3` (`built against
   version 0.5.0 ... called from version 0.5.3`). It is expected, not a regression;
   revisit the pin if an `mdbook-mermaid` release declares 0.5.3 compatibility.
-- `[preprocessor.yml-header]` (bare table). Strips each chapter's YAML frontmatter
-  before rendering so the schema metadata does not surface as a stray `<hr>` + heading.
-  The binary is `mdbook-yml-header` (the `mdbook-<name>` convention supplies the
-  command, so no explicit `command` key); it has no generated assets to install or
-  vendor.
+- `[preprocessor.frontmatter-strip]` with `command = "../scripts/mdbook-frontmatter-strip.sh"`.
+  Strips each chapter's YAML frontmatter before rendering so the schema metadata does
+  not surface as a stray `<hr>` + heading. It is an in-repo jq script (needs `jq` on
+  `PATH`; no binary to install). mdBook runs preprocessor commands from the book root,
+  so the `command` path is relative to `docs/`, not the repo root.
 - `[output.linkcheck2]` with `follow-web-links = false`.
 
 ## Local tooling
@@ -519,9 +528,10 @@ relocation.
   also performs). `mdbook-linkcheck2` is a renderer
   backend, not a standalone binary, so it runs automatically as part of `mdbook build`
   once `[output.linkcheck2]` is configured in `book.toml` — there is no separate command
-  to invoke. The `mdbook-mermaid` and `mdbook-yml-header` preprocessor binaries must be
-  on `PATH`; mdBook runs them automatically per their `book.toml` tables. Neither needs
-  an install step in `book-assets` — mermaid's *assets* do, its binary does not.
+  to invoke. The `mdbook-mermaid` binary must be on `PATH`, and the in-repo frontmatter
+  stripper needs `jq` on `PATH`; mdBook runs both automatically per their `book.toml`
+  tables. Neither needs an install step in `book-assets` — mermaid's *assets* do, its
+  binary does not, and the stripper is already in the repo.
 - `new-design slug` → scaffolds `docs/src/designs/NNNN-slug.md` from `template.md` (with
   `status: proposed`). Sequence-number algorithm: glob
   `docs/src/designs/[0-9][0-9][0-9][0-9]-*.md`, parse the leading 4-digit number from
@@ -543,9 +553,8 @@ and links to upstream install docs (and may include concrete install commands).
 ### Getting Started — `dev-environment.md` (fully authored)
 
 - **Common prerequisites:** `rustup` + pinned toolchain (MSRV 1.94.0, edition 2024),
-  `just`, Go (FFI), Nix (FFI flake), the mdBook toolchain (`mdbook`,
-  `mdbook-mermaid`, `mdbook-linkcheck2`, and `mdbook-yml-header` — the last installed
-  from source via `cargo install --locked mdbook-yml-header@0.1.5`).
+  `just`, `jq` (used by the in-repo frontmatter preprocessor), Go (FFI), Nix (FFI
+  flake), and the mdBook toolchain (`mdbook`, `mdbook-mermaid`, `mdbook-linkcheck2`).
 - **macOS local:** rustup install; components (`rustfmt`, `clippy`, `rust-analyzer`);
   VS Code + `rust-analyzer` extension settings; `just` workflows; build/test
   (`cargo nextest run --workspace --features ethhash,logger`).
@@ -682,9 +691,9 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
   additionally asserts `site/index.html` exists before upload.
 - **`new-design` recipe:** running it produces a correctly numbered
   `docs/src/designs/NNNN-slug.md` from `template.md` with `status: proposed`.
-- **Frontmatter stripping:** the `yml-header` preprocessor removes each chapter's YAML
-  block; spot-check that `0001`'s frontmatter does not appear in the rendered
-  `docs/book/html/` output (no stray `<hr>` or metadata heading).
+- **Frontmatter stripping:** the in-repo `frontmatter-strip` preprocessor removes each
+  chapter's YAML block; spot-check that `0001`'s frontmatter does not appear in the
+  rendered `docs/book/html/` output (no stray `<hr>` or metadata heading).
 - **`design-age` recipe:** `just design-age` lists every `docs/src/designs/NNNN-*.md`
   by last git-commit date, oldest-first, with uncommitted docs last — and reads git
   history only, never a doc's contents.
@@ -697,16 +706,17 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
 ## Acceptance criteria
 
 - [ ] `docs/book.toml` + `docs/src/SUMMARY.md` exist; `mdbook build docs` succeeds
-      locally with mermaid, `yml-header` frontmatter stripping, and linkcheck (internal
-      links only); callouts use mdBook's native alert syntax (no admonish preprocessor).
+      locally with mermaid, in-repo `frontmatter-strip` stripping, and linkcheck
+      (internal links only); callouts use mdBook's native alert syntax (no admonish
+      preprocessor).
 - [x] `gh-pages.yaml` copies the book HTML (`docs/book/html/`) into `site/`,
       relocates rustdoc to `site/rustdoc/` with a redirect index, repoints go docs to
       `site/ffi`, merges benchmark data with a per-path `git archive` (extracting
       `bench`/`dev` only if each exists in `FETCH_HEAD`), removes the old root-redirect
       and copy-static-assets steps, and uploads `site/`. `mdbook`, `mdbook-mermaid`,
-      `mdbook-linkcheck2`, `mdbook-yml-header`, and `doc2go` are pinned to explicit
-      versions (`mdbook-yml-header` via a source `cargo install --locked`, the others
-      as prebuilt binaries); CI runs `mdbook-mermaid install docs` before building. The
+      `mdbook-linkcheck2`, and `doc2go` are pinned to explicit versions; frontmatter
+      stripping is an in-repo jq preprocessor (no install); CI runs
+      `mdbook-mermaid install docs` before building. The
       build job asserts `site/index.html` exists before upload.
 - [x] The hardcoded `ref: main` is replaced with a PR-head-aware checkout, and
       `docs/**` and `ffi/**/*.go` are added to the `pull_request.paths` filter (Rust
@@ -728,8 +738,9 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
       status-flip promotion checklist + backfill TODO, and the fully-written
       `NNNN-on-disk-format-and-addressing.md` seed (number assigned at authoring time).
 - [ ] Design docs carry the YAML frontmatter schema (`title`, `status`, `category`,
-      `authors`, optional `tracking-issue`) with **no date fields**;
-      `[preprocessor.yml-header]` strips it so it does not render. `0001` itself uses
+      `authors`, optional `tracking-issue`) with **no date fields**; the in-repo
+      `[preprocessor.frontmatter-strip]` jq script strips it so it does not render.
+      `0001` itself uses
       the schema (its old `Status:`/`Date:`/`Author:` bullets are gone). *(The
       foundation PR wires `book.toml` and converts `0001`; `template.md` and the
       remaining docs land with the content PR.)*
