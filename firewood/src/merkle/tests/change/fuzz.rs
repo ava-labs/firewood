@@ -869,12 +869,37 @@ fn test_slow_change_proof_fuzz() {
                         // M1: Omit a Put
                         0 => {
                             let idx = pick_op_index!(rng, ops, BatchOp::Put { .. });
+                            // Only omit an op when a Put still follows it. A
+                            // change proof's provable range is anchored by the
+                            // last Put; a trailing run of deletes is
+                            // unprovable — the proof cannot attest that deletes
+                            // preceding the last provided op were present (two
+                            // deletes sharing a prefix are indistinguishable
+                            // from a smaller valid range). So if nothing but
+                            // deletes follow, dropping this op yields a still-
+                            // valid proof over a smaller range, not a tamper.
+                            // (NB: this same gap affects `find_next_key`, which
+                            // is a separate problem to document.)
+                            if !ops[idx + 1..]
+                                .iter()
+                                .any(|op| matches!(op, BatchOp::Put { .. }))
+                            {
+                                continue;
+                            }
                             ops.remove(idx);
                             mutation_name = "M1_omit_put";
                         }
                         // M2: Omit a Delete
                         1 => {
                             let idx = pick_op_index!(rng, ops, BatchOp::Delete { .. });
+                            // See M1: a trailing run of deletes is unprovable,
+                            // so only omit when a Put still follows.
+                            if !ops[idx + 1..]
+                                .iter()
+                                .any(|op| matches!(op, BatchOp::Put { .. }))
+                            {
+                                continue;
+                            }
                             ops.remove(idx);
                             mutation_name = "M2_omit_delete";
                         }
