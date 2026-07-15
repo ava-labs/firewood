@@ -47,8 +47,7 @@ impl<T: MetricsContextExt + ?Sized> MetricsContextExt for &mut T {
 /// be initialized if it has already been set up in the same process.
 pub fn setup_metrics() -> Result<(), Box<dyn Error>> {
     let mut histogram_configs = crate::registry::register();
-    histogram_configs.extend(firewood::registry::register());
-    histogram_configs.extend(firewood_storage::registry::register());
+    histogram_configs.extend(firewood::registry::register_all());
     #[cfg(feature = "block-replay")]
     histogram_configs.extend(firewood_replay::registry::register());
     jemalloc_metrics::register(); // does not export histogram configs

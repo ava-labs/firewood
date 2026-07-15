@@ -2,6 +2,69 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0] - 2026-07-09
+
+### 🚀 Features
+
+- *(fwdctl)* Add import command ([#2082](https://github.com/ava-labs/firewood/pull/2082))
+- *(ffi)* Close option to force-close outstanding FFI handles for avalanchego async execution engine ([#1976](https://github.com/ava-labs/firewood/pull/1976))
+
+### 🐛 Bug Fixes
+
+- *(proofs)* Change-proof verification accepts forged batch ops ([#2109](https://github.com/ava-labs/firewood/pull/2109))
+- *(storage)* Validate AreaIndex::TryFrom<usize> against NUM_AREA_SIZES ([#2119](https://github.com/ava-labs/firewood/pull/2119))
+
+### 📚 Documentation
+
+- *(storage)* Document FileBacked struct and its fields ([#2112](https://github.com/ava-labs/firewood/pull/2112))
+- Document the lint-suppression policy ([#2116](https://github.com/ava-labs/firewood/pull/2116))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(deps)* Bump golang.org/x/net from 0.52.0 to 0.55.0 in /ffi/tests/firewood ([#2113](https://github.com/ava-labs/firewood/pull/2113))
+- *(clippy)* Allow unwrap and indexing in tests ([#2117](https://github.com/ava-labs/firewood/pull/2117))
+- Run clippy on a pinned nightly, gate maxperf, and add a weekly nightly lint ([#2115](https://github.com/ava-labs/firewood/pull/2115))
+- *(deps)* Bump golang.org/x/crypto from 0.51.0 to 0.52.0 in /ffi/tests/firewood ([#2127](https://github.com/ava-labs/firewood/pull/2127))
+- *(deps)* Bump golang.org/x/crypto from 0.45.0 to 0.52.0 in /ffi/tests/eth ([#2129](https://github.com/ava-labs/firewood/pull/2129))
+
+## [0.7.0] - 2026-06-29
+
+### 🚀 Features
+
+- *(proofs)* 5/7 add eth_get_proof entry point producing eth_getProof-compatible proofs ([#2053](https://github.com/ava-labs/firewood/pull/2053))
+- *(labels)* Introduce versioned label taxonomy ([#2084](https://github.com/ava-labs/firewood/pull/2084))
+- *(labels)* Add issue intake forms and label lifecycle automation ([#2085](https://github.com/ava-labs/firewood/pull/2085))
+- *(ffi)* 6/7 add fwd_eth_get_proof FFI surface ([#2054](https://github.com/ava-labs/firewood/pull/2054))
+- *(devcontainer)* Rewrite as a Dockerfile-less feature-based config ([#2087](https://github.com/ava-labs/firewood/pull/2087))
+- *(ffi)* 7/7 add Go EthGetProof wrapper and go-ethereum verification test ([#2055](https://github.com/ava-labs/firewood/pull/2055))
+- Support eth_getProof for reconstructed revisions ([#2059](https://github.com/ava-labs/firewood/pull/2059))
+
+### 🐛 Bug Fixes
+
+- *(proofs)* Reconcile partial-storage account values ([#2060](https://github.com/ava-labs/firewood/pull/2060))
+- *(launch)* Correct restored C-chain config for the validator scenario ([#2072](https://github.com/ava-labs/firewood/pull/2072))
+- *(proofs)* Reject change proof that drops an in-range Put behind a left-edge exclusion boundary ([#2064](https://github.com/ava-labs/firewood/pull/2064))
+- Prevent OOM DoS in Box<[T]>::read_v0_item via untrusted num_items ([#2095](https://github.com/ava-labs/firewood/pull/2095))
+
+### 🚜 Refactor
+
+- *(storage)* Unify hash_helper receiver ([#2093](https://github.com/ava-labs/firewood/pull/2093))
+- *(storage)* Add FreeLists newtype ([#2097](https://github.com/ava-labs/firewood/pull/2097))
+- *(storage)* Remove bitflags dependency from path.rs ([#2092](https://github.com/ava-labs/firewood/pull/2092))
+
+### 📚 Documentation
+
+- Explain how to sign commits in CONTRIBUTING ([#2096](https://github.com/ava-labs/firewood/pull/2096))
+- Update CONTRIBUTING.md for duplicate docs ([#2106](https://github.com/ava-labs/firewood/pull/2106))
+
+### ⚡ Performance
+
+- Skip using FDL when running in archival mode ([#2078](https://github.com/ava-labs/firewood/pull/2078))
+
+### 🧪 Testing
+
+- Add insta snapshot tests for proof and node wire serialization ([#2104](https://github.com/ava-labs/firewood/pull/2104))
+
 ## [0.6.0] - 2026-06-09
 
 ### 🚀 Features
@@ -68,8 +131,8 @@ All notable changes to this project will be documented in this file.
 - *(manager)* Resolve empty-trie revision under ethhash without RootStore (TOB-FIREWOOD-7) ([#1982](https://github.com/ava-labs/firewood/pull/1982))
 - *(range-proof)* Use last_kv_key as right-edge anchor for inclusion-style end_proofs ([#1970](https://github.com/ava-labs/firewood/pull/1970))
 - *(manager)* Hold proposals lock across cleanup and reparent (TOB-FIREWOOD-6) ([#1981](https://github.com/ava-labs/firewood/pull/1981))
-- *(manager)* [**breaking** firewood-storage] Use CommittedId for parent identity, skip trivial commits ([#1987](https://github.com/ava-labs/firewood/pull/1987))
-- *(storage)* [**breaking** firewood, firewood-ffi, firewood-storage] Pin committed parent in Reconstructed to prevent reaping ([#2000](https://github.com/ava-labs/firewood/pull/2000))
+- *(manager)* Use CommittedId for parent identity, skip trivial commits ([#1987](https://github.com/ava-labs/firewood/pull/1987))
+- *(storage)* Pin committed parent in Reconstructed to prevent reaping ([#2000](https://github.com/ava-labs/firewood/pull/2000))
 
 ### 🚜 Refactor
 
@@ -138,10 +201,10 @@ All notable changes to this project will be documented in this file.
 
 ### 🚜 Refactor
 
-- *(metrics)* [**breaking** firewood-go] Remove histograms ([#1847](https://github.com/ava-labs/firewood/pull/1847))
+- *(metrics)* [**breaking**] Remove histograms ([#1847](https://github.com/ava-labs/firewood/pull/1847))
 - *(proofs)* Replace ChildMask [bool; 16] with u16 newtype ([#1849](https://github.com/ava-labs/firewood/pull/1849))
 - *(range-proofs)* Consolidate ChildrenMap into ChildMask ([#1852](https://github.com/ava-labs/firewood/pull/1852))
-- *(merkle)* [**breaking** firewood] Reduce visibility of firewood::merkle module ([#1858](https://github.com/ava-labs/firewood/pull/1858))
+- *(merkle)* [**breaking**] Reduce visibility of firewood::merkle module ([#1858](https://github.com/ava-labs/firewood/pull/1858))
 - Rename verify_root_hash to verify_range_proof_root_hash ([#1887](https://github.com/ava-labs/firewood/pull/1887))
 - *(ffi)* Remove ArcCache from DatabaseHandle ([#1891](https://github.com/ava-labs/firewood/pull/1891))
 - *(metrics)* Consolidate metric registry definitions with macro ([#1867](https://github.com/ava-labs/firewood/pull/1867))
