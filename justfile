@@ -208,6 +208,11 @@ book-serve: book-assets
 book-build: book-assets
     mdbook build docs
 
+# List design docs by last git-commit date (oldest/stalest first).
+# Freshness comes from git history — design docs carry no in-doc dates.
+design-age:
+    ./scripts/design-doc-age.sh
+
 # Run a C-Chain reexecution benchmark
 # Triggers Firewood's track-performance.yml which then triggers AvalancheGo.
 # This ensures results appear in Firewood's workflow summary and get published
