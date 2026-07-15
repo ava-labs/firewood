@@ -503,10 +503,6 @@ relocation.
 - `[preprocessor.mermaid]`. Its JS is produced by `mdbook-mermaid install docs` at build
   time (CI build step 3 and the `justfile` recipes) and is git-ignored, not committed.
   Callouts need no preprocessor — they use mdBook's native alert syntax (`> [!NOTE]`).
-  Note: the pinned `mdbook-mermaid@0.17.0` is built against mdBook 0.5.0 and prints a
-  benign version-mismatch warning under the pinned `mdbook@0.5.3` (`built against
-  version 0.5.0 ... called from version 0.5.3`). It is expected, not a regression;
-  revisit the pin if an `mdbook-mermaid` release declares 0.5.3 compatibility.
 - `[preprocessor.frontmatter-strip]` with `command = "../scripts/mdbook-frontmatter-strip.sh"`.
   Strips each chapter's YAML frontmatter before rendering so the schema metadata does
   not surface as a stray `<hr>` + heading. It is an in-repo jq script (needs `jq` on
@@ -705,7 +701,7 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
 
 ## Acceptance criteria
 
-- [ ] `docs/book.toml` + `docs/src/SUMMARY.md` exist; `mdbook build docs` succeeds
+- [x] `docs/book.toml` + `docs/src/SUMMARY.md` exist; `mdbook build docs` succeeds
       locally with mermaid, in-repo `frontmatter-strip` stripping, and linkcheck
       (internal links only); callouts use mdBook's native alert syntax (no admonish
       preprocessor).
