@@ -6,13 +6,15 @@ on:
       - main
   pull_request:
     paths:
-      # Validate the workflow itself, and any documentation change, against the
-      # full Pages assembly. Docs PRs run build-only (deploy is gated below).
+      # Rebuild the Pages artifact for the inputs it actually depends on: the
+      # workflow itself, any docs change, and the Go sources. This is the only
+      # workflow that runs doc2go, so a Go change must rebuild to catch broken
+      # godoc. Rust source is intentionally absent — ci.yaml already runs
+      # `cargo doc -D warnings` on every PR, so gating here on **/*.rs would only
+      # duplicate that stricter check. Deploy is gated below, so PR runs are
+      # build-only.
       - .github/workflows/gh-pages.yaml
       - docs/**
-      - '**/*.rs'
-      - Cargo.toml
-      - Cargo.lock
       - ffi/**/*.go
   # allow manual trigger because we cannot "retry" a deploy step
   workflow_dispatch:
