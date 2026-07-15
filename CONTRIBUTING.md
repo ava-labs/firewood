@@ -145,6 +145,59 @@ We generally follow the same rules that `cargo fmt` and `cargo clippy` will repo
 
 By default, we prohibit bare `unwrap` calls and index dereferencing, as there are usually better ways to write this code. In the case where you can't, please use `expect` with a message explaining why it would be a bug, which we currently allow. For more information on our motivation, please read this great article on unwrap: [Using unwrap() in Rust is Okay](https://blog.burntsushi.net/unwrap) by [Andrew Gallant](https://blog.burntsushi.net).
 
+### Documenting wrappers, shims, and FFI adapters
+
+When a function exists only to delegate to another — an FFI adapter, a thin
+wrapper, or a shim that adds no behavior of its own — **do not duplicate the
+callee's documentation**. Duplicated docs drift: when the underlying function
+changes, every copy must be found and updated, and a stale copy misleads readers
+more than a one-line reference ever could.
+
+Instead:
+
+* Say what the wrapper *is* and link to the function it delegates to for the
+  details (parameters, return values, formats, and safety requirements). In
+  Rust, use intra-doc links (`` [`fwd_eth_get_proof`] ``) so readers can click
+  through to the canonical documentation.
+* Document only what is **unique to the wrapper**: why it exists (if
+  non-obvious), and any behavior it adds or changes — extra error conditions,
+  additional safety requirements, or different argument handling.
+* **Reference a target at least as visible as the item being documented.**
+  Public docs that link to a private item break — Rust fails CI, and Go renders
+  the link as dead plain text. A wrapper may delegate to a private helper for its
+  *implementation*, but its docs should reference the **public** canonical
+  function (or inline the details) — never the private helper.
+
+In Rust, `rustdoc` renders `[Type::method]` as a clickable link, so referencing
+the canonical documentation is both DRY and convenient — prefer it:
+
+    /// Produce an `eth_getProof`-compatible proof against a reconstructed view
+    /// rather than a committed revision.
+    ///
+    /// See [`fwd_eth_get_proof`] for the proof format, arguments, return values,
+    /// and key-encoding requirements.
+    ///
+    /// # Safety
+    ///
+    /// As [`fwd_eth_get_proof`], except `reconstructed` must be a valid pointer to
+    /// a [`ReconstructedHandle`].
+
+In Go, doc links such as `[Revision.EthGetProof]` (available since Go 1.19) are
+clickable on pkg.go.dev and navigable via `gopls`, just as in Rust, so the same
+balance applies: cross-reference the shared contract, but keep wrapper-specific
+details (such as error conditions) local rather than referring the reader away
+entirely. Go's style guides reinforce this preference for clarity over strict
+DRY — the [Google Go Style Guide][google-go-style] lists clarity as its foremost
+principle and does not treat DRY as overriding, and the
+[Uber Go Style Guide][uber-go-style] is likewise a catalog of conventions that
+favor clarity and consistency:
+
+    // EthGetProof is [Revision.EthGetProof] evaluated against this reconstructed
+    // view. It returns [ErrDroppedReconstructed] if the view has been released.
+
+[google-go-style]: https://google.github.io/styleguide/go/guide
+[uber-go-style]: https://github.com/uber-go/guide/blob/master/style.md
+
 ## Where can I ask for help?
 
 If you have questions or need help, please post them as issues in the [issue tracker](https://github.com/ava-labs/firewood/issues). This allows the community to benefit from the discussion and helps us maintain a searchable knowledge base.

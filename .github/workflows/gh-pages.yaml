@@ -47,7 +47,7 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'main' }}
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
       # caution: this is the same restore as in ci.yaml
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2 -> v2.9.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2
         with:
           save-if: "false"
       - name: Install mdBook toolchain
@@ -58,6 +58,11 @@ jobs:
         # cargo binstall downloads a prebuilt binary when available and
         # automatically falls back to `cargo install` otherwise.
         run: cargo binstall --no-confirm mdbook-linkcheck2@0.12.2
+      - name: Install the frontmatter stripper (source-only, no prebuilt binary)
+        # mdbook-yml-header strips the design-doc YAML frontmatter (book.toml's
+        # [preprocessor.yml-header]); it publishes no prebuilt binary, so build it
+        # from source with a pinned, locked version.
+        run: cargo install --locked mdbook-yml-header@0.1.5
       - uses: actions/setup-go@v6
         with:
           go-version: 1.25

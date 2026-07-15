@@ -1,4 +1,7 @@
 # Requires mdBook >= 0.5 (native alert syntax) and mdbook-linkcheck2 (any version).
+# The frontmatter stripper mdbook-yml-header is source-only (no prebuilt binary),
+# so it is installed with a pinned `cargo install --locked mdbook-yml-header@0.1.5`
+# rather than the SHA-pinned prebuilt path used for the other tools.
 # Tool versions are pinned in `.github/workflows/gh-pages.yaml`.
 [book]
 title = "Firewood"
@@ -19,6 +22,11 @@ additional-js = ["mermaid.min.js", "mermaid-init.js"]
 
 [preprocessor.mermaid]
 command = "mdbook-mermaid"
+
+# Strips the YAML frontmatter block (--- ... ---) from each chapter so the
+# schema metadata does not render as a stray horizontal rule and heading.
+# Binary: mdbook-yml-header (mdbook-<name> convention, so no explicit command).
+[preprocessor.yml-header]
 
 [output.linkcheck2]
 follow-web-links = false

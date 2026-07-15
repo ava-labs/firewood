@@ -588,7 +588,6 @@ mod test_range_set {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod test_linear_address_range_set {
 
     use crate::{FreeListParent, PathComponent, TrieNodeParent, area_index};

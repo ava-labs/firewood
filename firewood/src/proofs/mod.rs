@@ -293,6 +293,8 @@ pub(crate) mod range;
 pub(crate) mod reader;
 pub(super) mod ser;
 #[cfg(test)]
+mod snapshot_tests;
+#[cfg(test)]
 mod tests;
 pub(crate) mod types;
 
