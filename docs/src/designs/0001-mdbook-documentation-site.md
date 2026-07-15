@@ -3,7 +3,7 @@ title: Firewood mdBook Documentation Site
 status: active
 category: docs
 authors: [demosdemon]
-tracking-issue: ava-labs/firewood#2068
+tracking-issue: ava-labs/firewood#1229
 ---
 
 # Firewood mdBook Documentation Site — Design
@@ -266,7 +266,7 @@ title: On-Disk Format & Addressing
 status: active
 category: storage
 authors: [demosdemon]
-tracking-issue: ava-labs/firewood#2068   # optional
+tracking-issue: ava-labs/firewood#1229   # optional
 ---
 ```
 
@@ -425,11 +425,18 @@ site/                         ← uploaded as the Pages artifact
 
 ### Trigger change
 
-Add `docs/**` to the `pull_request.paths` filter (the workflow-file path entry
-stays). The `deploy` job's existing `github.event_name != 'pull_request'` guard keeps
-PR runs build-only.
+Add `docs/**` and `ffi/**/*.go` to the `pull_request.paths` filter (the workflow-file
+path entry stays). The `deploy` job's existing `github.event_name != 'pull_request'`
+guard keeps PR runs build-only.
 
-A docs-only PR therefore runs the *entire* site assembly (cargo doc, doc2go, benchmark
+`docs/**` validates the book against documentation changes. `ffi/**/*.go` is included
+because `gh-pages.yaml` is the *only* workflow that runs `doc2go`, so a change to the Go
+sources must rebuild the Pages artifact to catch broken godoc output. Rust source
+changes are **deliberately excluded**: `ci.yaml` already runs `cargo doc` with
+`-D warnings` on every PR, so gating this workflow on `**/*.rs` would only duplicate an
+existing, stricter check.
+
+A matching PR therefore runs the *entire* site assembly (cargo doc, doc2go, benchmark
 merge, mdBook build), not just `mdbook build`. This is **intentional**: validating the
 full Pages artifact against the PR's changes is the point — it catches cross-component
 breakage (e.g. a relocated rustdoc path, a broken `reference/` link-out, or an asset
@@ -458,12 +465,15 @@ Because linkcheck runs with `follow-web-links = false`, the `/rustdoc/`, `/ffi/`
 rustdoc relocation — are never validated by the build. A third job, `smoke`, is added
 to `gh-pages.yaml`:
 
-- `needs: [deploy]` so it runs only after a successful deploy.
+- `needs: [build, deploy]` so it runs only after a successful deploy and can read the
+  `build` job's `has_bench` output (below).
 - `if:` gated to the same condition as `deploy` (canonical repo, non-`pull_request`
   events) so PR runs and forks are unaffected.
-- A single step that `curl --fail`s each deployed path — `/`, `/rustdoc/` (the
-  redirect), `/rustdoc/firewood/`, `/ffi/`, and `/bench/` — against the Pages base URL,
-  failing the workflow if any returns a non-success status.
+- A step that `curl --fail`s each deployed path — `/`, `/rustdoc/` (the redirect),
+  `/rustdoc/firewood/`, and `/ffi/` — against the Pages base URL, failing the workflow
+  if any returns a non-success status. `/bench/` is checked only when the `build` job
+  reports `has_bench == true`; a fresh deploy with no `benchmark-data` history yet has
+  no `/bench/` to curl, so that path is skipped rather than failing the job.
 
 This is the automated backstop for the consciously-skipped external link validation and
 surfaces a stale crate-directory name (e.g. `firewood_replay`) introduced by a future
@@ -484,6 +494,10 @@ relocation.
 - `[preprocessor.mermaid]`. Its JS is produced by `mdbook-mermaid install docs` at build
   time (CI build step 3 and the `justfile` recipes) and is git-ignored, not committed.
   Callouts need no preprocessor — they use mdBook's native alert syntax (`> [!NOTE]`).
+  Note: the pinned `mdbook-mermaid@0.17.0` is built against mdBook 0.5.0 and prints a
+  benign version-mismatch warning under the pinned `mdbook@0.5.3` (`built against
+  version 0.5.0 ... called from version 0.5.3`). It is expected, not a regression;
+  revisit the pin if an `mdbook-mermaid` release declares 0.5.3 compatibility.
 - `[preprocessor.yml-header]` (bare table). Strips each chapter's YAML frontmatter
   before rendering so the schema metadata does not surface as a stray `<hr>` + heading.
   The binary is `mdbook-yml-header` (the `mdbook-<name>` convention supplies the
@@ -499,8 +513,10 @@ relocation.
   assets; a prerequisite of the build recipes so a fresh checkout builds without a
   manual step).
 - `book-serve` → `book-assets` then `mdbook serve docs --open` (live reload).
-- `book-build` → `book-assets` then `mdbook build docs` (mirrors what CI runs on PRs;
-  this is the single build-and-validate recipe). `mdbook-linkcheck2` is a renderer
+- `book-build` → `book-assets` then `mdbook build docs` (mirrors the book-build and
+  link-check portion of CI — it validates book content and internal links, but not the
+  rustdoc relocation, doc2go output, or benchmark merge that the full CI site assembly
+  also performs). `mdbook-linkcheck2` is a renderer
   backend, not a standalone binary, so it runs automatically as part of `mdbook build`
   once `[output.linkcheck2]` is configured in `book.toml` — there is no separate command
   to invoke. The `mdbook-mermaid` and `mdbook-yml-header` preprocessor binaries must be
@@ -654,12 +670,15 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
 
 ## Testing & verification
 
-- **CI build validation:** a PR touching `docs/**` triggers the `build` job, which
-  runs `mdbook build docs` with the linkcheck backend; broken internal links fail.
-- **Local:** `just book-build` reproduces the CI build + linkcheck.
+- **CI build validation:** a PR touching `docs/**` or `ffi/**/*.go` triggers the
+  `build` job, which runs `mdbook build docs` with the linkcheck backend; broken
+  internal links fail.
+- **Local:** `just book-build` reproduces the book-build + link-check portion of CI
+  (not the full site assembly).
 - **Deploy smoke check (automated):** the `smoke` job (CI/CD changes above) runs after
   `deploy` on non-PR events and `curl --fail`s `/`, `/rustdoc/`, `/rustdoc/firewood/`,
-  `/ffi/`, and `/bench/`, failing the workflow on any non-success status. The build job
+  and `/ffi/` — plus `/bench/` only when the `build` job reports benchmark history
+  (`has_bench`) — failing the workflow on any non-success status. The build job
   additionally asserts `site/index.html` exists before upload.
 - **`new-design` recipe:** running it produces a correctly numbered
   `docs/src/designs/NNNN-slug.md` from `template.md` with `status: proposed`.
@@ -680,7 +699,7 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
 - [ ] `docs/book.toml` + `docs/src/SUMMARY.md` exist; `mdbook build docs` succeeds
       locally with mermaid, `yml-header` frontmatter stripping, and linkcheck (internal
       links only); callouts use mdBook's native alert syntax (no admonish preprocessor).
-- [ ] `gh-pages.yaml` copies the book HTML (`docs/book/html/`) into `site/`,
+- [x] `gh-pages.yaml` copies the book HTML (`docs/book/html/`) into `site/`,
       relocates rustdoc to `site/rustdoc/` with a redirect index, repoints go docs to
       `site/ffi`, merges benchmark data with a per-path `git archive` (extracting
       `bench`/`dev` only if each exists in `FETCH_HEAD`), removes the old root-redirect
@@ -689,11 +708,12 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
       versions (`mdbook-yml-header` via a source `cargo install --locked`, the others
       as prebuilt binaries); CI runs `mdbook-mermaid install docs` before building. The
       build job asserts `site/index.html` exists before upload.
-- [ ] The hardcoded `ref: main` is replaced with a PR-head-aware checkout, and
-      `docs/**` is added to the `pull_request.paths` filter; deploy stays gated to
-      non-PR events on the canonical repo. A `smoke` job runs after `deploy` (non-PR
-      events) and `curl --fail`s `/`, `/rustdoc/`, `/rustdoc/firewood/`, `/ffi/`, and
-      `/bench/`.
+- [x] The hardcoded `ref: main` is replaced with a PR-head-aware checkout, and
+      `docs/**` and `ffi/**/*.go` are added to the `pull_request.paths` filter (Rust
+      doc coverage stays in `ci.yaml`); deploy stays gated to non-PR events on the
+      canonical repo. A `smoke` job (`needs: [build, deploy]`) runs after `deploy`
+      (non-PR events) and `curl --fail`s `/`, `/rustdoc/`, `/rustdoc/firewood/`, and
+      `/ffi/`, plus `/bench/` only when the build reports benchmark history.
 - [ ] Introduction and a fully-authored `getting-started/dev-environment.md`
       (macOS, Docker, remote SSH) are written. *Structural completeness*
       (reviewer-checkable): every section contains the concrete install/build/verify
@@ -730,10 +750,10 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
 - [x] `justfile` gains `book-assets`, `book-serve`, and `book-build` (PR 1 — foundation).
 - [ ] `justfile` gains a `new-design` recipe scaffolding
       `docs/src/designs/NNNN-slug.md` from `template.md` (PR 3 — content).
-- [ ] Mermaid assets are installed at build time (not committed): CI and the
+- [x] Mermaid assets are installed at build time (not committed): CI and the
       `book-assets` recipe run `mdbook-mermaid install docs`, the generated asset paths
       are git-ignored, and a fresh checkout builds without a manual install step.
-- [ ] `architecture.svg` is moved to `docs/src/assets/` and the root `README.md`
+- [x] `architecture.svg` is moved to `docs/src/assets/` and the root `README.md`
       reference is updated accordingly; the book renders the diagram.
 - [ ] `markdownlint-cli2 .` passes.
 

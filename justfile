@@ -204,7 +204,8 @@ book-assets:
 book-serve: book-assets
     mdbook serve docs --open
 
-# Build the book and run the link checker (mirrors what CI runs on PRs)
+# Build the book and run the link checker (the book-build + linkcheck part of CI,
+# not the full site assembly)
 book-build: book-assets
     mdbook build docs
 
