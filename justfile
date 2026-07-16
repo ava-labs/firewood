@@ -209,6 +209,21 @@ book-serve: book-assets
 book-build: book-assets
     mdbook build docs
 
+# Scaffold a new proposed design document from the template
+new-design slug:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="docs/src/designs"
+    tmpl="docs/src/designs/template.md"
+    # Highest existing 4-digit prefix (base-10), else 0000; gaps are not backfilled.
+    max=$(ls "$dir"/[0-9][0-9][0-9][0-9]-*.md 2>/dev/null \
+        | sed -E 's#.*/([0-9]{4})-.*#\1#' | sort -n | tail -1)
+    max=${max:-0000}
+    next=$(printf '%04d' $((10#$max + 1)))
+    out="$dir/${next}-{{slug}}.md"
+    cp "$tmpl" "$out"
+    echo "Created $out"
+
 # List design docs by last git-commit date (oldest/stalest first).
 # Freshness comes from git history — design docs carry no in-doc dates.
 design-age:

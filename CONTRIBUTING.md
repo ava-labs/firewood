@@ -10,35 +10,49 @@ guidelines for contributing to firewood.
 * [Testing](#testing)
 * [How to submit changes](#how-to-submit-changes)
 * [Signing your commits](#signing-your-commits)
-* [Code Review Process](#code-review-process)
+* [Code review process](#code-review-process)
+* [How to report a bug](#how-to-report-a-bug)
+* [First time fixes for contributors](#first-time-fixes-for-contributors)
+* [How to request an enhancement](#how-to-request-an-enhancement)
 * [Labels](#labels)
+* [Style Guide / Coding Conventions](#style-guide--coding-conventions)
 * [Where can I ask for help?](#where-can-i-ask-for-help)
+* [Thank you](#thank-you)
 
 ## Quick Links
 
-* [Setting up docker](README.docker.md)
+* [Development container](.devcontainer/README.md)
 * [Auto-generated documentation](https://ava-labs.github.io/firewood/rustdoc/firewood/)
 * [Issue tracker](https://github.com/ava-labs/firewood/issues)
 
 ## Testing
 
-After submitting a PR, we'll run all the tests and verify your code meets our submission guidelines. To ensure it's more likely to pass these checks, you should run the following commands locally:
+CI runs all tests and verifies your code meets the submission guidelines. Run the following commands locally before opening a PR:
 
-    cargo fmt
-    cargo nextest run
-    cargo clippy
-    cargo doc --no-deps
+```sh
+cargo fmt
+cargo nextest run --workspace --features ethhash,logger --all-targets
+cargo +nightly-2026-07-05 clippy --workspace --features ethhash,logger --all-targets
+cargo +nightly-2026-07-05 clippy --profile maxperf --workspace --features ethhash,logger --all-targets
+cargo doc --no-deps
+```
 
 Resolve any warnings or errors before making your PR.
 
-Also, if you update any versions of packages, notably the MSRV (Minimum Supported Rust Version), you ought to update the nix ffi flake lock file to pin compatible versions of nix packages as well:
+Clippy runs on the pinned nightly toolchain (`nightly-2026-07-05`) that CI's
+required lint job uses, and the second invocation checks the `maxperf` profile
+(debug assertions off). Running clippy on stable can pass locally yet still fail
+the required CI check, which enforces lints stable does not.
 
-    ./scripts/run-just.sh update-ffi-flake
+Also, if you update any versions of packages, notably the MSRV (Minimum Supported Rust Version), update the nix ffi flake lock file to pin compatible versions of nix packages as well:
+
+```sh
+./scripts/run-just.sh update-ffi-flake
+```
 
 ## How to submit changes
 
-To create a PR, fork firewood, and use GitHub to create the PR. We typically prioritize reviews in the middle of the next work day,
-so you should expect a response during the week within 24 hours.
+To create a PR, fork firewood, and use GitHub to create the PR. Expect a response within one business day.
 
 ## Signing your commits
 
@@ -47,9 +61,11 @@ before you open one — GitHub should then show every commit as **Verified**.
 
 The quickest setup is signing with the SSH key you already push with:
 
-    git config --global gpg.format ssh
-    git config --global user.signingkey ~/.ssh/id_ed25519.pub
-    git config --global commit.gpgsign true
+```sh
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/id_ed25519.pub
+git config --global commit.gpgsign true
+```
 
 Then add that key to GitHub as a **Signing Key** under *Settings → SSH and GPG
 keys*. See GitHub's [signing commits][gh-signing] guide for full details,
@@ -57,38 +73,36 @@ including GPG keys and Windows/macOS setup.
 
 [gh-signing]: https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits
 
-## Code Review Process
-
-Code review is a critical part of our development process. It ensures that our codebase remains maintainable, performant, and secure. This document outlines how we approach code reviews at Ava Labs, with responsibilities and expectations for both reviewers and authors.
+## Code review process
 
 ### For Reviewers
 
-Reviews should be completed or commented within one business day. We have a daily reminder for reviews that have not been reviewed that is posted in slack's #firewood channel.
+Reviews should be completed or commented within one business day.
 
 When reviewing code, your goal is to help the author improve the quality of the change and confirm that it meets our architectural and operational standards. GitHub provides three primary review options:
 
-#### ✅ Accept (Approve)
+#### Accept (Approve)
 
 Use this when the code is an improvement over the current state of the codebase.
 
 * It's okay to request minor changes in comments and still approve the pull request.
 * Perfection is not the goal — progress is. If the submitted code is better than what's in production, it's acceptable to approve even if small improvements remain. Consider adding a new issue or request adding a code TODO for larger changes.
 
-#### 💬 Comment (Comment Only)
+#### Comment (Comment Only)
 
 Use this when your review is incomplete, or you're not ready to approve or reject yet. You should use this if the code is too large to review in a limited amount of time (typically 30-60 minutes). You can also suggest how to break up this diff into a smaller diff.
 
 * This can be helpful for asking clarifying questions, suggesting optional improvements, or flagging issues you're unsure about.
 * This state signals that your review is in progress or advisory, not final.
 
-#### ❌ Reject (Request Changes)
+#### Reject (Request Changes)
 
 Use this when there are significant concerns with the code's correctness, architecture, design, or maintainability.
 
 * A "Reject" signals that the pull request must not be merged until the raised issues are addressed.
 * The author is expected to make substantial revisions and return the code for a second round of review by the same reviewer.
 
-#### Best Practices
+#### Best practices
 
 * Be respectful and constructive. Your comments should guide and empower the author, not discourage them.
 * Justify your feedback with principles, not preferences.
@@ -141,9 +155,9 @@ the GitHub UI.
 
 ## Style Guide / Coding Conventions
 
-We generally follow the same rules that `cargo fmt` and `cargo clippy` will report as warnings, with a few notable exceptions as documented in the associated Cargo.toml file.
+We generally follow the same rules that `cargo fmt` and `cargo clippy` will report as warnings, with a few notable exceptions as documented in the workspace `Cargo.toml` under `[workspace.lints.clippy]`.
 
-By default, we prohibit bare `unwrap` calls and index dereferencing, as there are usually better ways to write this code. In the case where you can't, please use `expect` with a message explaining why it would be a bug, which we currently allow. For more information on our motivation, please read this great article on unwrap: [Using unwrap() in Rust is Okay](https://blog.burntsushi.net/unwrap) by [Andrew Gallant](https://blog.burntsushi.net).
+By default, we prohibit bare `unwrap` calls and index dereferencing, as there are usually better ways to write this code. In the case where you can't, please use `expect` with a message explaining why it would be a bug, which we currently allow. For more information on our motivation, see [Using unwrap() in Rust is Okay](https://burntsushi.net/unwrap/) by [Andrew Gallant](https://burntsushi.net).
 
 ### Documenting wrappers, shims, and FFI adapters
 
@@ -171,16 +185,18 @@ Instead:
 In Rust, `rustdoc` renders `[Type::method]` as a clickable link, so referencing
 the canonical documentation is both DRY and convenient — prefer it:
 
-    /// Produce an `eth_getProof`-compatible proof against a reconstructed view
-    /// rather than a committed revision.
-    ///
-    /// See [`fwd_eth_get_proof`] for the proof format, arguments, return values,
-    /// and key-encoding requirements.
-    ///
-    /// # Safety
-    ///
-    /// As [`fwd_eth_get_proof`], except `reconstructed` must be a valid pointer to
-    /// a [`ReconstructedHandle`].
+```rust
+/// Produce an `eth_getProof`-compatible proof against a reconstructed view
+/// rather than a committed revision.
+///
+/// See [`fwd_eth_get_proof`] for the proof format, arguments, return values,
+/// and key-encoding requirements.
+///
+/// # Safety
+///
+/// As [`fwd_eth_get_proof`], except `reconstructed` must be a valid pointer to
+/// a [`ReconstructedHandle`].
+```
 
 In Go, doc links such as `[Revision.EthGetProof]` (available since Go 1.19) are
 clickable on pkg.go.dev and navigable via `gopls`, just as in Rust, so the same
@@ -192,8 +208,10 @@ principle and does not treat DRY as overriding, and the
 [Uber Go Style Guide][uber-go-style] is likewise a catalog of conventions that
 favor clarity and consistency:
 
-    // EthGetProof is [Revision.EthGetProof] evaluated against this reconstructed
-    // view. It returns [ErrDroppedReconstructed] if the view has been released.
+```go
+// EthGetProof is [Revision.EthGetProof] evaluated against this reconstructed
+// view. It returns [ErrDroppedReconstructed] if the view has been released.
+```
 
 [google-go-style]: https://google.github.io/styleguide/go/guide
 [uber-go-style]: https://github.com/uber-go/guide/blob/master/style.md
@@ -204,4 +222,4 @@ If you have questions or need help, please post them as issues in the [issue tra
 
 ## Thank you
 
-We'd like to extend a pre-emptive "thank you" for reading through this and submitting your first contribution!
+We'd like to extend a preemptive "thank you" for reading through this and submitting your first contribution!
