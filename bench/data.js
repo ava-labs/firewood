@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784101817166,
+  "lastUpdate": 1784188472587,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -6908,6 +6908,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 82.41933115710258,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Joachim Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "e355f7ec92e812a6316e02d8307997e80a6525dc",
+          "message": "docs: scaffold the mdBook documentation site (#2088)\n\n### Why this should be merged\n\nFirewood's published site currently lands on raw rustdoc, with no home\nfor\ngetting-started guides, design documents, or links to the Go docs and\nbenchmark\ndashboards. This PR adds the local foundation for an\n[mdBook](https://rust-lang.github.io/mdBook/)\ndocumentation site: configuration, the table-of-contents skeleton, an\nauthored\nIntroduction, and `just` recipes to build and serve it. It is the first\nof three\nstacked PRs (foundation → GitHub Pages CI → authored content); on its\nown it produces\na book that builds and serves locally. It also corrects the design\nproposal to record\na tooling decision made during implementation (below).\n\n### How this works\n\n- `docs/book.toml` configures mdBook with the `mdbook-mermaid`\npreprocessor (diagrams)\n  and the `mdbook-linkcheck2` renderer backend (internal-link checking,\n`follow-web-links = false`). Callouts use mdBook 0.5's native alert\nsyntax\n  (`> [!NOTE]`) — no callout preprocessor.\n- `docs/src/SUMMARY.md` is the sidebar: the Introduction is authored and\nlinked; every\nother section is an mdBook **draft chapter** (greyed-out) to be filled\nin by the\n  content PR.\n- Preprocessor assets (mermaid JS) are generated at build time by `just\nbook-assets`\n  and git-ignored — nothing is vendored, so there is no asset drift.\n- `just book-serve` / `just book-build` build/serve the book;\n`book-build` mirrors what\n  CI runs.\n- `docs/.markdownlint.json` lives outside `src/` (so mdBook does not\ncopy it into\nrendered output) and disables `MD025`/`MD042` for mdBook's `SUMMARY.md`\nformat.\n- **Design proposal update**\n(`docs/src/designs/proposed/0001-mdbook-documentation-site.md`):\n`mdbook-admonish` requires mdBook `< 0.5.0`, which conflicts with the\n`mdbook 0.5.x`\nthat `mdbook-linkcheck2` requires. mdBook 0.5's native alerts provide\nthe same\ncallouts with no preprocessor and no checked-in CSS, so admonish is\ndropped.\n\n### How this was tested\n\n- `just book-build` builds cleanly: mermaid and linkcheck2 run; HTML\nlands in\n  `docs/book/html/`.\n- A fresh checkout (generated assets deleted) builds with no manual step\n—\n  `book-assets` regenerates them as a prerequisite.\n- `markdownlint-cli2 \"docs/**/*.md\"` reports 0 errors.\n\n### Breaking Changes\n\nNone. No Rust, Go, or `fwdctl` code changes; no public API impact. The\nbook is not yet\ndeployed (that is the next PR).",
+          "timestamp": "2026-07-15T20:08:38Z",
+          "url": "https://github.com/ava-labs/firewood/commit/e355f7ec92e812a6316e02d8307997e80a6525dc"
+        },
+        "date": 1784188472037,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 159.44252791082175,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6271.852391598512,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 81.04767308739675,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6134.064907982219,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 53.97266812110497,
             "unit": "block_accept_ms/ggas"
           }
         ]
