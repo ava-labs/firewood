@@ -38,8 +38,10 @@ rustup toolchain install nightly --profile minimal
 rustup component add clippy rustfmt rust-src rust-docs llvm-tools --toolchain nightly
 
 # 3. cargo-binstall (prebuilt) so the remaining tools install without compiling.
+#    Pin the installer to a release commit (v1.21.0) instead of the floating `main`
+#    branch, matching the repo convention of pinning third-party sources by commit SHA.
 curl -L --proto '=https' --tlsv1.2 -sSf \
-  https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+  https://raw.githubusercontent.com/cargo-bins/cargo-binstall/ead08b90bd7b2e6d81963fb9cf0b7239f66d5db4/install-from-binstall-release.sh | bash
 
 # 4. sccache, then wire it in as the global rustc wrapper.
 cargo binstall --no-confirm --locked sccache
