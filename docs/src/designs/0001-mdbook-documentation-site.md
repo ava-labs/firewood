@@ -21,8 +21,8 @@ peer-reviewable, RFC-style workflow for proposing designs and promoting them to
 living documentation — a `status` frontmatter flip, not a file move — once
 implemented. Additional sections (Concepts,
 AvalancheGo/EVM Integration, Operations & Benchmarking, Reference, Meta) each ship an
-authored landing page; not-yet-written sub-pages are listed as mdBook draft chapters
-(greyed-out sidebar entries) rather than empty stub files.
+authored landing page; not-yet-written sub-pages are omitted from the sidebar until
+their content lands, rather than shipped as empty stub files.
 
 > [!NOTE]
 > **Bootstrapping note.** This is the first design and is numbered accordingly:
@@ -54,7 +54,7 @@ authored landing page; not-yet-written sub-pages are listed as mdBook draft chap
 - Backfilling every existing design. This MVP writes exactly one fully-realized
   active design (on-disk format & addressing) and lists the rest as TODO.
 - Authoring full content for the scaffolded sections beyond an authored landing page;
-  their deeper sub-pages remain draft chapters until written.
+  their deeper sub-pages are omitted from `SUMMARY.md` until written.
 - Changing how benchmark data is collected or stored (`track-performance.yml` and
   the `benchmark-data` branch are unchanged).
 - Custom mdBook theming beyond the preprocessor-provided assets and standard
@@ -113,10 +113,12 @@ output into a subdirectory.
 6. **Extra sections:** Concepts/Architecture, AvalancheGo/EVM Integration, Operations
    & Benchmarking, Reference (generated artifacts), and Meta (self-documenting docs +
    repository-process docs: release, contributing, code review). Sections with real
-   seed content are authored at landing-page depth; sections (and sub-pages) without
-   content yet are listed as mdBook **draft chapters** (link-less `SUMMARY.md` entries,
-   which render as greyed-out/disabled sidebar items) rather than empty stub pages —
-   see "Scaffolding via draft chapters" below.
+   seed content are authored at landing-page depth. Every section ships an authored
+   landing page; not-yet-written *sub-pages* are omitted from `SUMMARY.md` until their
+   content lands, rather than shipped as empty stub pages. mdBook **draft chapters**
+   (link-less `SUMMARY.md` entries that render greyed-out) remain available if the
+   outline should later advertise a "coming soon" page — see "Scaffolding via draft
+   chapters" below.
 7. **Preprocessors and callouts:** Two preprocessors: `mdbook-mermaid` (diagrams) and
    an in-repo frontmatter stripper (`scripts/mdbook-frontmatter-strip.sh`, a small jq
    script that removes each chapter's YAML frontmatter so the schema metadata does not
@@ -175,7 +177,7 @@ docs/
     ├── integration/
     │   └── README.md          # authored: Go API (Database/Proposal/Revision) + firewood-go-ethhash publish relationship
     ├── operations/
-    │   └── README.md          # authored landing: fwdctl, benchmarks, dashboards; links benchmark/docs/* + /bench/ (sub-pages are draft chapters until written)
+    │   └── README.md          # authored landing: fwdctl, benchmarks, dashboards; links benchmark/docs/* + /bench/ (sub-pages omitted until written)
     ├── reference/
     │   └── README.md          # authored landing: link-out hub for GENERATED artifacts: rustdoc ↗, godoc ↗, benchmarks ↗
     └── meta/
@@ -189,8 +191,9 @@ docs/
 > seed content, linked in `SUMMARY.md`; **thin** = a short real page that mostly links
 > out; **draft chapter** = a `SUMMARY.md` entry written with empty link parentheses
 > (`- [Title]()`), which has **no file** and renders greyed-out (see "Scaffolding via
-> draft chapters"). Every section above ships an authored landing page at MVP; only
-> not-yet-written *sub-pages* are draft chapters.
+> draft chapters"). Every section above ships an authored landing page at MVP;
+> not-yet-written *sub-pages* are omitted from `SUMMARY.md` until written (the MVP
+> ships no draft chapters).
 
 ### Architecture diagram asset (relocation)
 
@@ -579,9 +582,9 @@ and links to upstream install docs (and may include concrete install commands).
 mdBook supports **draft chapters** — `SUMMARY.md` entries written with empty link
 parentheses (`- [Title]()`), which render as greyed-out/disabled items in the sidebar.
 Per the mdBook guide their purpose is "to signal future chapters still to be written."
-This is the idiomatic mdBook mechanism this design uses **instead of** creating empty
-stub `.md` files (hollow pages would be search-indexed and present as real-but-empty
-content). The rule:
+This is the idiomatic mdBook mechanism for signalling future chapters **instead of**
+creating empty stub `.md` files (hollow pages would be search-indexed and present as
+real-but-empty content). The rule:
 
 - A section or sub-page with real seed content gets an authored landing page and a
   *linked* `SUMMARY.md` entry.
@@ -589,8 +592,9 @@ content). The rule:
   it shows in the outline as "coming soon" without creating a hollow page, and is
   promoted to a linked entry when its first real content lands.
 
-Applying that rule to the extra sections (those with seed content are authored now;
-the rest are draft chapters):
+Applying that rule to the extra sections — all four ship an authored landing page, and
+no sub-page draft chapters ship in the MVP (unwritten sub-pages are omitted from
+`SUMMARY.md` until their content lands):
 
 - `concepts/` — authored: seeded by promoting the README terminology + architecture-
   diagram prose.
@@ -605,7 +609,7 @@ the rest are draft chapters):
   the new layout. Migrating their content into the book is a follow-up. The landing
   page links to `/bench/` for the live dashboards. **MVP scope:** exactly one file,
   `operations/README.md`; deeper sub-pages (e.g. `fwdctl.md`, `benchmarks.md`) are
-  draft-chapter entries in `SUMMARY.md` (no files) until their content is written.
+  omitted from `SUMMARY.md` until their content is written.
 - `reference/` — authored landing page (`reference/README.md`): a link-out hub for
   *generated* artifacts only (rustdoc ↗, godoc ↗, benchmarks ↗). It is authored (the
   three link-outs are its content), not a draft chapter. Repository-process docs
@@ -737,7 +741,7 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
       (macOS, Docker, remote SSH) are written. *Structural completeness*
       (reviewer-checkable): every section contains the concrete install/build/verify
       commands from the outline.
-- [ ] *Author sign-off* (recorded in the PR description, not a CI gate): the author has
+- [x] *Author sign-off* (recorded in the PR description, not a CI gate): the author has
       run the macOS and devcontainer command sequences end-to-end on a clean
       environment before merge; the remote-SSH section reuses the same commands and is
       reviewed for accuracy.
@@ -755,14 +759,15 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
       remaining docs land with the content PR.)*
 - [x] `scripts/design-doc-age.sh` (run via `just design-age`) lists each design by last
       git-commit date, oldest-first, from git history alone — never in-doc dates.
-- [ ] Sections with seed content (`concepts/`, `integration/`, `operations/`,
-      `reference/`) have authored landing pages and linked `SUMMARY.md` entries;
-      sections/sub-pages without content yet are mdBook draft chapters (link-less
-      `SUMMARY.md` entries that render greyed-out), not empty `.md` files. `reference/`
-      links only to generated artifacts (rustdoc/godoc/benchmarks). `integration/`
-      documents the Go wrapper types (`Database`/`Proposal`/`Revision`, mapping to the
-      Rust `Db`/`Proposal`/`DbView`) and the `firewood-go-ethhash` publish relationship
-      that AvalancheGo actually consumes.
+- [x] Sections with seed content (`concepts/`, `integration/`, `operations/`,
+      `reference/`) have authored landing pages and linked `SUMMARY.md` entries.
+      Not-yet-written sub-pages are omitted from `SUMMARY.md` (added when their content
+      lands) rather than shipped as empty `.md` files; no sub-page draft chapters ship
+      in the MVP. `reference/` links only to generated artifacts
+      (rustdoc/godoc/benchmarks). `integration/` documents the Go wrapper types
+      (`Database`/`Proposal`/`Revision`, mapping to the Rust `Db`/`Proposal`/`DbView`)
+      and the `firewood-go-ethhash` publish relationship that AvalancheGo actually
+      consumes.
 - [x] A `meta/` section exists with an **authored** `documentation.md` (how the docs
       work: tooling, layout, build/serve, authoring, design workflow) and thin
       repository-function pages (`release.md` plus link-out pointers to CONTRIBUTING /
