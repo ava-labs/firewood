@@ -230,5 +230,5 @@ See [`CODE_REVIEW.md`](./CODE_REVIEW.md) for the complete set of code review che
 
 ## Additional Resources
 
-- [Auto-generated docs](https://ava-labs.github.io/firewood/firewood/)
+- [Auto-generated docs](https://ava-labs.github.io/firewood/rustdoc/firewood/)
 - [Issue tracker](https://github.com/ava-labs/firewood/issues)
