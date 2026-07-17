@@ -98,29 +98,12 @@ type commit struct {
 //   - REPLAY_MAX_COMMITS: max commits to replay (default: 10000, 0 for unlimited)
 func TestReplayLogExecution(t *testing.T) {
 	r := require.New(t)
+	logs, maxCommits := loadReplayLogsFromEnv(t)
 
-	logPath := os.Getenv(replayLogEnv)
-	if logPath == "" {
-		t.Skipf("%s not set; skipping replay execution test", replayLogEnv)
-	}
-
-	maxCommits := 10000
-	if v := os.Getenv(replayMaxCommitsEnv); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			maxCommits = n
-		}
-	}
-
-	logs, err := loadReplayLogs(filepath.Clean(logPath), maxCommits)
-	if err != nil {
-		t.Skipf("unable to read replay log %q: %v", logPath, err)
-	}
-	r.NotEmpty(logs, "expected at least one replay segment")
-
-	db := newTestDatabase(t, WithTruncate(true))
+	db := newTestDatabase(t, WithTruncate(true), WithDeferredPersistenceCommitCount(1))
 
 	start := time.Now()
-	commits, err := applyReplayLogs(db, logs, replayConfig{MaxCommits: maxCommits, VerifyHashes: true})
+	commits, err := applyReplayLogs(db, logs, replayConfig{MaxCommits: maxCommits, VerifyHashes: true}, nil)
 	r.NoError(err, "replay logs against database")
 	elapsed := time.Since(start)
 
@@ -139,35 +122,28 @@ func TestReplayLogExecution(t *testing.T) {
 // Run with: REPLAY_LOG=/path/to/log go test -bench=BenchmarkReplayLog -benchtime=1x
 func BenchmarkReplayLog(b *testing.B) {
 	r := require.New(b)
-	logPath := os.Getenv(replayLogEnv)
-	if logPath == "" {
-		b.Skipf("%s not set; skipping replay benchmark", replayLogEnv)
-	}
+	logs, maxCommits := loadReplayLogsFromEnv(b)
 
-	maxCommits := 10000
-	if v := os.Getenv(replayMaxCommitsEnv); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			maxCommits = n
-		}
-	}
-
-	logs, err := loadReplayLogs(filepath.Clean(logPath), maxCommits)
-	if err != nil {
-		b.Skipf("unable to read replay log: %v", err)
-	}
-	r.NotEmpty(logs, "expected at least one replay segment")
-
+	times := replayTimings{}
 	commits := 0
+	var err error
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	runs := 0
+	for b.Loop() {
+		runs++
 		b.StopTimer()
-		db := newTestDatabase(b, WithTruncate(true))
+		db := newTestDatabase(b, WithTruncate(true), WithDeferredPersistenceCommitCount(25))
 		b.StartTimer()
 
-		commits, err = applyReplayLogs(db, logs, replayConfig{MaxCommits: maxCommits})
+		commits, err = applyReplayLogs(db, logs, replayConfig{MaxCommits: maxCommits}, times)
 		r.NoError(err, "replay failed")
 	}
 
+	for name, total := range times {
+		if runs > 0 {
+			b.ReportMetric(float64(total.Nanoseconds())/float64(runs), "ns/"+name)
+		}
+	}
 	b.ReportMetric(float64(commits), "commits")
 }
 
@@ -213,7 +189,7 @@ func TestBlockReplayRoundTrip(t *testing.T) {
 
 	db2 := newTestDatabase(t)
 
-	_, err = applyReplayLogs(db2, logs, replayConfig{VerifyHashes: true})
+	_, err = applyReplayLogs(db2, logs, replayConfig{VerifyHashes: true}, nil)
 	r.NoError(err)
 
 	replayedRoot := db2.Root()
@@ -278,21 +254,32 @@ type replayConfig struct {
 	VerifyHashes bool
 }
 
+type replayTimings map[string]time.Duration
+
+func (t replayTimings) add(name string, elapsed time.Duration) {
+	if t != nil && name != "" {
+		t[name] += elapsed
+	}
+}
+
 // applyReplayLogs applies replay logs to a database.
 // Returns the number of commits applied and any error encountered.
-func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, error) {
+func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig, times replayTimings) (int, error) {
 	proposals := make(map[uint64]*Proposal)
 	totalCommits := 0
-
 	for _, segment := range logs {
 		for _, op := range segment.Operations {
+			start := time.Now()
+			var opName string
 			switch {
 			case op.GetLatest != nil:
+				opName = "get-latest"
 				if _, err := db.Get(op.GetLatest.Key); err != nil {
 					return totalCommits, fmt.Errorf("GetLatest: %w", err)
 				}
 
 			case op.GetFromProposal != nil:
+				opName = "get-from-proposal"
 				prop, ok := proposals[op.GetFromProposal.ProposalID]
 				if !ok {
 					return totalCommits, fmt.Errorf("GetFromProposal: unknown proposal id %d", op.GetFromProposal.ProposalID)
@@ -302,12 +289,14 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 				}
 
 			case op.Batch != nil:
+				opName = "batch"
 				batch := batchFromReplayPairs(op.Batch.Pairs)
 				if _, err := db.Update(batch); err != nil {
 					return totalCommits, fmt.Errorf("Batch: %w", err)
 				}
 
 			case op.ProposeOnDB != nil:
+				opName = "propose-on-db"
 				batch := batchFromReplayPairs(op.ProposeOnDB.Pairs)
 				prop, err := db.Propose(batch)
 				if err != nil {
@@ -316,6 +305,7 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 				proposals[op.ProposeOnDB.ReturnedProposalID] = prop
 
 			case op.ProposeOnProposal != nil:
+				opName = "propose-on-proposal"
 				parent, ok := proposals[op.ProposeOnProposal.ProposalID]
 				if !ok {
 					return totalCommits, fmt.Errorf("ProposeOnProposal: unknown parent proposal id %d", op.ProposeOnProposal.ProposalID)
@@ -328,6 +318,7 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 				proposals[op.ProposeOnProposal.ReturnedProposalID] = prop
 
 			case op.Commit != nil:
+				opName = "commit"
 				prop, ok := proposals[op.Commit.ProposalID]
 				if !ok {
 					return totalCommits, fmt.Errorf("Commit: unknown proposal id %d", op.Commit.ProposalID)
@@ -351,6 +342,8 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 			default:
 				return totalCommits, fmt.Errorf("unknown or empty DbOperation: %+v", op)
 			}
+
+			times.add(opName, time.Since(start))
 		}
 	}
 
@@ -365,6 +358,34 @@ func loadReplayLogs(logPath string, maxCommits int) ([]replayLog, error) {
 		return nil, err
 	}
 	return decodeReplayLogs(data, maxCommits)
+}
+
+func loadReplayLogsFromEnv(tb testing.TB) ([]replayLog, int) {
+	tb.Helper()
+
+	logPath := os.Getenv(replayLogEnv)
+	if logPath == "" {
+		tb.Skipf("%s not set; skipping replay test", replayLogEnv)
+	}
+
+	maxCommits := replayMaxCommits()
+	logs, err := loadReplayLogs(filepath.Clean(logPath), maxCommits)
+	if err != nil {
+		tb.Skipf("unable to read replay log %q: %v", logPath, err)
+	}
+
+	require.New(tb).NotEmpty(logs, "expected at least one replay segment")
+	return logs, maxCommits
+}
+
+func replayMaxCommits() int {
+	maxCommits := 10000
+	if v := os.Getenv(replayMaxCommitsEnv); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			maxCommits = n
+		}
+	}
+	return maxCommits
 }
 
 func batchFromReplayPairs(pairs []keyValueOp) []BatchOp {
