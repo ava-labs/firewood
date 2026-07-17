@@ -5,6 +5,7 @@ package ffi
 
 import (
 	"encoding/hex"
+	"iter"
 	"runtime"
 	"sync"
 	"testing"
@@ -497,6 +498,59 @@ func TestRangeProofVerifyTwiceIdempotent(t *testing.T) {
 	// (db.Close is idempotent, so newTestDatabase's cleanup close is a no-op.)
 	r.NoError(proof.Free())
 	r.NoError(db.Close(oneSecCtx(t)))
+}
+
+// TestRangeProofCodeHashesKeepsProofAlive is a regression test for the
+// code-hash iterator's borrow of the proof. The Rust CodeIteratorHandle holds
+// Box<dyn Iterator + 'p> over the proof's key-values, so the RangeProof must
+// stay alive for the whole iteration, not just the create call. CodeHashes uses
+// p only to create the iterator and then iterates the borrowing handle, so
+// without an explicit keepalive the proof can be garbage-collected mid-iteration
+// and its finalizer frees the key-values the iterator is still reading.
+//
+// A runtime.AddCleanup canary detects the root condition directly: if the proof
+// is reclaimed while the iterator is live, the cleanup fires. It is dropped from
+// the caller's scope so only the CodeHashes closure references it.
+func TestRangeProofCodeHashesKeepsProofAlive(t *testing.T) {
+	r := require.New(t)
+	mode, err := inferHashingMode(t.Context())
+	r.NoError(err)
+	if mode != ethhashKey {
+		t.Skip("code hashes are only produced in ethhash mode")
+	}
+
+	db := newTestDatabase(t)
+	key := [32]byte{0x12, 0x34, 0x56} // account key must be length 32
+	val, err := hex.DecodeString("f8440164a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
+	r.NoError(err)
+	root, err := db.Update([]BatchOp{Put(key[:], val)})
+	r.NoError(err)
+	proofBytes := newSerializedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenUnbounded)
+
+	collected := make(chan struct{})
+	// Build the iterator in a nested scope so the only remaining reference to the
+	// proof is the one captured by the CodeHashes closure.
+	seq := func() iter.Seq2[Hash, error] {
+		p := new(RangeProof)
+		r.NoError(p.UnmarshalBinary(proofBytes)) // arms the Free finalizer
+		runtime.AddCleanup(p, func(struct{}) { close(collected) }, struct{}{})
+		return p.CodeHashes()
+	}()
+
+	for _, err := range seq {
+		r.NoError(err)
+		// Mid-iteration: try hard to reclaim the proof. If CodeHashes stopped
+		// referencing it after creating the iterator, it is collectible here.
+		for range 50 {
+			runtime.GC()
+			select {
+			case <-collected:
+				r.FailNow("RangeProof was garbage-collected mid-iteration; CodeHashes must keep the proof alive while its borrowed iterator is live")
+			default:
+			}
+			runtime.Gosched()
+		}
+	}
 }
 
 func TestRangeProofCodeHashes(t *testing.T) {
