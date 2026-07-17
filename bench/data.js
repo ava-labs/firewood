@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784188536939,
+  "lastUpdate": 1784274799089,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -7002,6 +7002,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 83.74538662711004,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Joachim Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "405c26e8d4e7c54069eec58c76f6db02e1d6aa69",
+          "message": "ci: serve the mdBook at the GitHub Pages site root (#2089)\n\n### Why this should be merged\n\nThe GitHub Pages deployment currently lands on raw rustdoc. This PR —\nthe second of\nthree stacked changes, on top of the documentation-site foundation —\nmakes the mdBook\nthe front door of the published site: generated rustdoc moves under\n`/rustdoc/`, the Go\ndocs and benchmark dashboards remain reachable from the book, and a\npost-deploy smoke\ncheck guards the result. It also relocates the architecture diagram into\nthe book\nsource, atomically with removing the workflow step that used to copy it.\n\n### How this works\n\nOutput assembly in `.github/workflows/gh-pages.yaml` moves from the\ncargo-owned\n`target/doc/` into a `site/` staging directory, so mdBook owns the root:\n\n- `mdbook build docs` renders the book; because a second renderer\n(`linkcheck2`) is\nenabled, HTML lands in `docs/book/html/`, which is copied into `site/`.\nThe build\n  asserts `site/index.html` exists before upload.\n- Rustdoc relocates to `site/rustdoc/` (`mv target/doc/* site/rustdoc/`)\nwith a\n  redirect index pointing at the `firewood` crate.\n- Go docs build into `site/ffi` (`doc2go`, pinned to `v0.12.2`).\n- Benchmark history merges from the `benchmark-data` branch, scoped\nper-path to\n  `bench`/`dev` so the extract cannot clobber the book root.\n- The mdBook toolchain installs from pinned sources: `mdbook` and\n`mdbook-mermaid` via\n`taiki-e/install-action` (pinned by commit SHA), `mdbook-linkcheck2` via\n  `cargo binstall`.\n- The hardcoded `ref: main` becomes a PR-head-aware checkout, and\n`docs/**` is added to\nthe `pull_request.paths` filter so documentation PRs validate the full\nassembly.\nDeploy stays gated to non-`pull_request` events on the canonical\nrepository; a `smoke`\njob runs after deploy and `curl --fail`s `/`, `/rustdoc/`,\n`/rustdoc/firewood/`,\n  `/ffi/`, and `/bench/`.\n- The architecture diagram moves to `docs/src/assets/`; the workflow's\n\"Copy static\nassets\" and hand-written root-redirect steps are removed (mdBook now\nprovides the root\n  `index.html` and copies `src/` assets itself).\n\n### How this was tested\n\n- `actionlint` reports no issues on the rewritten workflow.\n- The book build and `site/` staging were verified locally on the\nfoundation branch; the\ncomplete Pages assembly (cargo doc, doc2go, benchmark merge, mdBook\nbuild) runs in CI\n  on this PR.\n- Note: `/bench/` resolves only once the `benchmark-data` branch is\npopulated, which it\n  is in the canonical repository.\n\n### Breaking Changes\n\n- **External deep links to `/firewood/<crate>/` rustdoc paths now 404.**\nRustdoc moves\nunder `/rustdoc/`, with a redirect index at `/rustdoc/`. This is an\naccepted trade-off\nfor the cleaner root URL; per-crate redirect stubs at the old paths\nremain a documented\n  future option.\n- No Rust, Go, or `fwdctl` code changes.\n\n> Known limitation (pre-existing, not introduced here): the `build`\njob's canonical-repo\n> guard skips pull requests opened from forks, so documentation PRs from\nforks do not run\n> this workflow. Relaxing this requires a `pull_request_target` redesign\nwith its own\n> security review; tracked as a follow-up.",
+          "timestamp": "2026-07-16T16:36:34Z",
+          "url": "https://github.com/ava-labs/firewood/commit/405c26e8d4e7c54069eec58c76f6db02e1d6aa69"
+        },
+        "date": 1784274798542,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 164.07353159930028,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6094.828277617598,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 75.36319790639978,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5970.270391673584,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 47.11587526635746,
             "unit": "block_accept_ms/ggas"
           }
         ]
