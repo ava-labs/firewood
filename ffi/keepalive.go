@@ -328,6 +328,16 @@ func (l *lease) attach(registry *keepAliveRegistry, dropFn func() error) error {
 // [WithForceCloseHandles] will not auto-drop a still-referenced
 // RangeProof; graceful [Database.Close] still waits on the count.
 //
+// Re-attaching the same lease to the same registry is a no-op. Unlike a
+// registered handle (see [lease.attach]), which gets a fresh lease per
+// construction, a RangeProof can legitimately reach this path more than once:
+// [Database.VerifyRangeProof] prepares a proposal and may be called repeatedly
+// on the same proof (the Rust side and the finalizer are already idempotent).
+// Making it idempotent keeps the count balanced — one attach, one release —
+// rather than crashing on a redundant prepare. Re-attaching to a *different*
+// registry is still a bug the count/registry bookkeeping cannot represent, so
+// it panics.
+//
 // Callers must serialize against [Database.Close] (e.g. via
 // db.handleLock.RLock) before invoking this — there is no closed-registry
 // guard here. The change-proof family is being redesigned, so a
@@ -336,8 +346,12 @@ func (l *lease) attachUnregistered(registry *keepAliveRegistry) {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 
+	if l.registry == registry {
+		// Already attached to this registry — idempotent; do not double-count.
+		return
+	}
 	if l.registry != nil {
-		panic("lease already attached")
+		panic("lease already attached to a different registry")
 	}
 	registry.count++
 	l.registry = registry
