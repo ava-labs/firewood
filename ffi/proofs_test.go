@@ -100,11 +100,10 @@ func newSerializedChangeProof(
 	db *Database,
 	startRoot, endRoot Hash,
 	startKey, endKey maybe,
-	proofLen uint32,
 ) []byte {
 	r := require.New(t)
 
-	proof, err := db.ChangeProof(startRoot, endRoot, startKey, endKey, proofLen)
+	proof, err := db.ChangeProof(startRoot, endRoot, startKey, endKey, changeProofLenUnbounded)
 	r.NoError(err)
 
 	proofBytes, err := proof.MarshalBinary()
@@ -707,6 +706,107 @@ func TestRangeProofFinalizerCleanup(t *testing.T) {
 	r.NoError(db.Close(t.Context()), "Database should be closeable after proof is garbage collected")
 }
 
+// TestChangeProofSetFinalizerReset guards against a double-SetFinalizer panic on
+// ChangeProof, mirroring TestRangeProofSetFinalizerReset. Both
+// Database.ChangeProof and UnmarshalBinary register the Free finalizer, and Free
+// does not clear it, so a proof that reaches a finalizer-setting path twice (a
+// from-create proof re-loaded via UnmarshalBinary, or a repeated UnmarshalBinary)
+// fatally panicked with "finalizer already set". Each sequence must leave the
+// proof with exactly one finalizer.
+//
+// (VerifyChangeProof does not set a finalizer, so there is no verify variant, and
+// ChangeProof has no lease, so there is no lease-attach variant.)
+func TestChangeProofSetFinalizerReset(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	_, _, batch := kvForTest(100)
+	startRoot, err := db.Update(batch[:50])
+	r.NoError(err)
+	endRoot, err := db.Update(batch)
+	r.NoError(err)
+	proofBytes := newSerializedChangeProof(t, db, startRoot, endRoot, nothing(), nothing())
+
+	tests := []struct {
+		name string
+		// run performs a sequence that reaches a finalizer-setting path twice
+		// and returns the resulting proof for cleanup. It must not panic.
+		run func(*require.Assertions) *ChangeProof
+	}{
+		{"create_then_unmarshal", func(r *require.Assertions) *ChangeProof {
+			p, err := db.ChangeProof(startRoot, endRoot, nothing(), nothing(), changeProofLenUnbounded)
+			r.NoError(err)
+			r.NoError(p.UnmarshalBinary(proofBytes))
+			return p
+		}},
+		{"unmarshal_then_unmarshal", func(r *require.Assertions) *ChangeProof {
+			p := new(ChangeProof)
+			r.NoError(p.UnmarshalBinary(proofBytes))
+			r.NoError(p.UnmarshalBinary(proofBytes))
+			return p
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			p := tt.run(r) // must not fatally panic with "finalizer already set"
+			t.Cleanup(func() { _ = p.Free() })
+		})
+	}
+}
+
+// TestChangeProofCodeHashesKeepsProofAlive is the ChangeProof analogue of
+// TestRangeProofCodeHashesKeepsProofAlive. The Rust code iterator borrows the
+// proof's data for its whole lifetime (CodeIteratorHandle<'p>), so
+// ChangeProof.CodeHashes must keep the proof alive across iteration; otherwise
+// the proof can be garbage-collected mid-iteration and its finalizer frees the
+// key-values the iterator is still reading. A runtime.AddCleanup canary detects
+// that condition directly.
+func TestChangeProofCodeHashesKeepsProofAlive(t *testing.T) {
+	r := require.New(t)
+	mode, err := inferHashingMode(t.Context())
+	r.NoError(err)
+	if mode != ethhashKey {
+		t.Skip("code hashes are only produced in ethhash mode")
+	}
+
+	db := newTestDatabase(t)
+	startRoot, err := db.Update([]BatchOp{Put([]byte("baseline"), []byte("v"))})
+	r.NoError(err)
+	key := [32]byte{0x12, 0x34, 0x56} // account key must be length 32
+	val, err := hex.DecodeString("f8440164a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
+	r.NoError(err)
+	endRoot, err := db.Update([]BatchOp{Put(key[:], val)})
+	r.NoError(err)
+	proofBytes := newSerializedChangeProof(t, db, startRoot, endRoot, nothing(), nothing())
+
+	collected := make(chan struct{})
+	// Build the iterator in a nested scope so the only remaining reference to the
+	// proof is the one captured by the CodeHashes closure.
+	seq := func() iter.Seq2[Hash, error] {
+		p := new(ChangeProof)
+		r.NoError(p.UnmarshalBinary(proofBytes)) // arms the Free finalizer
+		runtime.AddCleanup(p, func(struct{}) { close(collected) }, struct{}{})
+		return p.CodeHashes()
+	}()
+
+	for _, err := range seq {
+		r.NoError(err)
+		// Mid-iteration: try hard to reclaim the proof. If CodeHashes stopped
+		// referencing it after creating the iterator, it is collectible here.
+		for range 50 {
+			runtime.GC()
+			select {
+			case <-collected:
+				r.FailNow("ChangeProof was garbage-collected mid-iteration; CodeHashes must keep the proof alive while its borrowed iterator is live")
+			default:
+			}
+			runtime.Gosched()
+		}
+	}
+}
+
 func TestChangeProofEmptyDB(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
@@ -748,7 +848,7 @@ func TestChangeProofDiffersAfterUpdate(t *testing.T) {
 	r.NotEqual(root1, root2)
 
 	// Get a proof
-	proof1 := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing(), changeProofLenUnbounded)
+	proof1 := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing())
 	r.NoError(err)
 
 	// Insert more data
@@ -757,7 +857,7 @@ func TestChangeProofDiffersAfterUpdate(t *testing.T) {
 	r.NotEqual(root2, root3)
 
 	// Get a proof again
-	proof2 := newSerializedChangeProof(t, db, root2, root3, nothing(), nothing(), changeProofLenUnbounded)
+	proof2 := newSerializedChangeProof(t, db, root2, root3, nothing(), nothing())
 	// Ensure the proofs are different
 	r.NotEqual(proof1, proof2)
 }
@@ -775,7 +875,7 @@ func TestRoundTripChangeProofSerialization(t *testing.T) {
 	r.NoError(err)
 
 	// get a proof
-	proofBytes := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing(), changeProofLenUnbounded)
+	proofBytes := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing())
 
 	// Deserialize the proof.
 	proof := new(ChangeProof)
