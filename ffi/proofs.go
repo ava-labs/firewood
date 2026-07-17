@@ -90,6 +90,14 @@ type RangeProof struct {
 	// embedded proposal, the database must be kept alive. The proposal and
 	// reference to the database are released after calling
 	// `C.fwd_db_verify_and_commit_range_proof` or `C.fwd_free_range_proof`.
+	//
+	// Every method that passes handle to a C call must hold lease.mu.RLock for
+	// the duration of that call. Free — including the GC finalizer registered
+	// below — invalidates handle under lease.mu.Lock, so the read-lock both
+	// serializes the call against the free and keeps the proof reachable across
+	// the cgo call, preventing the finalizer from running mid-call. Omitting it
+	// is a use-after-free of the Rust RangeProofContext (see
+	// https://github.com/ava-labs/firewood/issues/2137).
 	handle *C.RangeProofContext
 
 	// lease keeps the database alive while this range proof owns an
@@ -155,6 +163,9 @@ func (p *RangeProof) Verify(
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
 ) error {
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
+
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
@@ -271,6 +282,8 @@ func (db *Database) VerifyAndCommitRangeProof(
 //
 // TODO(#352): the start key will be inclusive in the future; update documentation then.
 func (p *RangeProof) FindNextKey() (*NextKeyRange, error) {
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
 	return getNextKeyRangeFromNextKeyRangeResult(C.fwd_range_proof_find_next_key(p.handle))
 }
 
@@ -318,6 +331,9 @@ func (it *codeIterator) Free() error {
 //
 // The format is unspecified and opaque to firewood.
 func (p *RangeProof) MarshalBinary() ([]byte, error) {
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
+
 	start := time.Now()
 	result, err := getValueFromValueResult(C.fwd_range_proof_to_bytes(p.handle))
 	proofMarshalDuration.WithLabelValues("range").Observe(time.Since(start).Seconds())
