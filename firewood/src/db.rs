@@ -2048,16 +2048,16 @@ mod test {
 
     #[test]
     fn test_deferred_persist_close_with_high_commit_count() {
-        const HIGH_COMMIT_COUNT: NonZeroU64 = nonzero!(1_000_000u64);
-        const MAX_REVISIONS: usize = HIGH_COMMIT_COUNT.get() as usize + 1;
+        const HIGH_RECOVERY_LAG: NonZeroU64 = nonzero!(1_000_000u64);
+        const MAX_REVISIONS: usize = HIGH_RECOVERY_LAG.get() as usize + 1;
 
-        // Set commit count to an arbitrarily high number so persist happens
-        // only on shutdown
+        // Set the recovery lag to an arbitrarily high number so persist happens
+        // only on shutdown.
         let dbcfg = DbConfig::builder()
             .manager(
                 RevisionManagerConfig::builder()
                     .max_revisions(MAX_REVISIONS)
-                    .deferred_persistence_commit_count(HIGH_COMMIT_COUNT)
+                    .max_revision_recovery_lag(HIGH_RECOVERY_LAG)
                     .build(),
             )
             .build();
@@ -2082,13 +2082,13 @@ mod test {
 
     #[test]
     fn test_deferred_persist_with_multiple_commit_count() {
-        const COMMIT_COUNT: NonZeroU64 = nonzero!(5u64);
-        const NUM_REVISIONS: u64 = COMMIT_COUNT.get() + 1;
+        const MAX_REVISION_RECOVERY_LAG: NonZeroU64 = nonzero!(5u64);
+        const NUM_REVISIONS: u64 = MAX_REVISION_RECOVERY_LAG.get() + 1;
 
         let dbcfg = DbConfig::builder()
             .manager(
                 RevisionManagerConfig::builder()
-                    .deferred_persistence_commit_count(COMMIT_COUNT)
+                    .max_revision_recovery_lag(MAX_REVISION_RECOVERY_LAG)
                     .build(),
             )
             .build();
@@ -2107,17 +2107,17 @@ mod test {
             proposal.commit().unwrap();
         }
 
-        // Verify that at least one of the last COMMIT_COUNT revisions is persisted.
-        let commit_count = COMMIT_COUNT.get() as usize;
+        // Verify that at least one of the last MAX_REVISION_RECOVERY_LAG revisions is persisted.
+        let max_revision_recovery_lag = MAX_REVISION_RECOVERY_LAG.get() as usize;
         let any_persisted = root_hashes
             .iter()
             .rev()
-            .take(commit_count)
+            .take(max_revision_recovery_lag)
             .any(|hash| db.manager.revision_persist_status(hash.clone()).unwrap());
 
         assert!(
             any_persisted,
-            "At least one of the last {COMMIT_COUNT} revisions should be persisted"
+            "At least one of the last {MAX_REVISION_RECOVERY_LAG} revisions should be persisted"
         );
     }
 
@@ -2125,20 +2125,20 @@ mod test {
     /// persisted when the database closes.
     #[test]
     fn test_deferred_persistence_closing_on_empty_trie() {
-        const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
+        const MAX_REVISION_RECOVERY_LAG: NonZeroU64 = nonzero!(10u64);
 
         let dbcfg = DbConfig::builder()
             .manager(
                 RevisionManagerConfig::builder()
-                    .deferred_persistence_commit_count(COMMIT_COUNT)
+                    .max_revision_recovery_lag(MAX_REVISION_RECOVERY_LAG)
                     .build(),
             )
             .build();
 
         let db = TestDb::new_with_config(dbcfg);
 
-        // Commit COMMIT_COUNT proposals to trigger the first persist
-        for i in 0..COMMIT_COUNT.get() {
+        // Commit MAX_REVISION_RECOVERY_LAG proposals to trigger the first persist.
+        for i in 0..MAX_REVISION_RECOVERY_LAG.get() {
             let batch = vec![BatchOp::Put {
                 key: format!("key{i}").as_bytes().to_vec(),
                 value: format!("value{i}").as_bytes().to_vec(),
@@ -2162,14 +2162,14 @@ mod test {
     #[test]
     fn test_deferred_persistence_root_store() {
         const NUM_COMMITS: usize = 20;
-        const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
-        const MAX_REVISIONS: usize = COMMIT_COUNT.get() as usize + 1;
+        const MAX_REVISION_RECOVERY_LAG: NonZeroU64 = nonzero!(10u64);
+        const MAX_REVISIONS: usize = MAX_REVISION_RECOVERY_LAG.get() as usize + 1;
 
         let dbcfg = DbConfig::builder()
             .manager(
                 RevisionManagerConfig::builder()
                     .max_revisions(MAX_REVISIONS)
-                    .deferred_persistence_commit_count(COMMIT_COUNT)
+                    .max_revision_recovery_lag(MAX_REVISION_RECOVERY_LAG)
                     .build(),
             )
             .root_store(true)
@@ -2192,9 +2192,9 @@ mod test {
 
         let db = db.reopen();
 
-        // Verify that we never went more than COMMIT_COUNT revisions without
+        // Verify that we never went more than MAX_REVISION_RECOVERY_LAG revisions without
         // persisting.
-        let commit_count = COMMIT_COUNT.get() as usize;
+        let max_revision_recovery_lag = MAX_REVISION_RECOVERY_LAG.get() as usize;
         let mut last_persisted: Option<usize> = None;
 
         for (i, hash) in root_hashes.iter().enumerate() {
@@ -2209,8 +2209,8 @@ mod test {
                     None => i.wrapping_add(1),
                 };
                 assert!(
-                    gap <= commit_count,
-                    "Gap of {gap} between persisted revisions exceeds COMMIT_COUNT of {commit_count}"
+                    gap <= max_revision_recovery_lag,
+                    "Gap of {gap} between persisted revisions exceeds MAX_REVISION_RECOVERY_LAG of {max_revision_recovery_lag}"
                 );
                 last_persisted = Some(i);
             }
@@ -2225,12 +2225,12 @@ mod test {
     /// Verifies that non-persisted revisions are lost after reopening the database.
     #[test]
     fn test_deferred_persistence_unpersisted_revisions() {
-        const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
+        const MAX_REVISION_RECOVERY_LAG: NonZeroU64 = nonzero!(10u64);
 
         let dbcfg = DbConfig::builder()
             .manager(
                 RevisionManagerConfig::builder()
-                    .deferred_persistence_commit_count(COMMIT_COUNT)
+                    .max_revision_recovery_lag(MAX_REVISION_RECOVERY_LAG)
                     .build(),
             )
             .root_store(true)
@@ -2241,7 +2241,7 @@ mod test {
         let mut root_hashes = Vec::new();
 
         let key = b"key";
-        for i in 0..COMMIT_COUNT.get() {
+        for i in 0..MAX_REVISION_RECOVERY_LAG.get() {
             let batch = vec![BatchOp::Put {
                 key,
                 value: format!("{i}").as_bytes().to_vec(),
