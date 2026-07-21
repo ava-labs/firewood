@@ -370,7 +370,17 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
 
             *slot = None;
         }
-        branch.value = None;
+
+        // Clear the value only when this node's key is out of the proven range.
+        // The hash step prefers a present value over the proof's digest, so a
+        // retained out-of-range value would be hashed instead of the one the
+        // proof supplies for the end trie. Clearing lets the proof supply it.
+        // An in-range value belongs to an in-range key and must be kept so it
+        // is validated against the batch. Dropping it lets a forged or omitted
+        // in-range op whose key is a prefix of the boundary slip through.
+        if range.is_none_or(|(start_nib, end_nib)| acc_prefix < start_nib || acc_prefix > end_nib) {
+            branch.value = None;
+        }
 
         // Recurse into the on-path child.
         let Some(child) = branch.children.take(on_path) else {
@@ -387,6 +397,14 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
 
         branch.children[on_path] = Some(Child::Node(child_node));
 
+        // A valued node is never flattened. When it has a single child,
+        // merging into that child would drop the value and hide a forged or
+        // omitted in-range op whose key sits here, so the value must survive to
+        // be validated against the batch. Checked before take_only_child, which
+        // removes the child.
+        if branch.value.is_some() {
+            return Ok(node);
+        }
         // If exactly one child remains, flatten by merging partial paths.
         let Some((child_idx, only_child)) = branch.children.take_only_child() else {
             return Ok(node);

@@ -256,6 +256,27 @@ impl EdgeBoundary<'_> {
     }
 }
 
+/// Range and change proofs build their proving tries differently, so they
+/// disagree on whether a boundary terminal's on-path child — the child the
+/// boundary key descends into — is in range: for a range proof it always is,
+/// for a change proof only if an in-range batch op lives under it. This enum
+/// lets [`compute_outside_children`] tell which kind of proof it is verifying
+/// and apply the matching rule.
+pub(crate) enum OnPathChild<'a> {
+    /// Range-proof verification: the proving trie holds only in-range
+    /// key-values, so the on-path child is always in range.
+    AlwaysInRange,
+    /// Change-proof verification: the proving trie is start-trie + in-range
+    /// batch ops and retains out-of-range keys the end trie dropped. The
+    /// on-path child is in range only if an in-range batch op lives under it
+    /// (its key nibble-prefixed by the child). Otherwise the subtree is
+    /// entirely out of range and must come from the proof.
+    InRangeIfSubtreeChanged {
+        /// The in-range batch-op keys, as nibble paths.
+        changed_keys: &'a [Vec<u8>],
+    },
+}
+
 /// For a proof edge path, computes which child indices at each proof node are
 /// "outside" the proven range and should use the proof's child hashes.
 ///
@@ -273,9 +294,13 @@ impl EdgeBoundary<'_> {
 /// child" marking — the hash check then substitutes the proof's stored
 /// child hash there instead of recursing into the proving trie's
 /// (irrelevant) subtree.
+///
+/// The `on_path_child` policy resolves the one decision that differs between
+/// range and change proofs.
 fn compute_outside_children(
     proof_nodes: &[ProofNode],
     boundary: EdgeBoundary<'_>,
+    on_path_child: OnPathChild<'_>,
 ) -> Result<HashMap<PathBuf, ChildMask>, ProofError> {
     // Invariant from `right_edge`: `RightBoundary::OutOfRange(K)` is only
     // constructed when `K` is the end-proof's terminal full key (and
@@ -354,8 +379,6 @@ fn compute_outside_children(
             // Terminal is an ancestor of the boundary key. The next
             // nibble tells us which child leads toward the boundary.
             // Mark children on the far side of that nibble as outside.
-            // The on-path child itself is left inside the range so its
-            // subtree is correctly computed from the applied batch.
             let on_path_nibble = U4::new_masked(*on_path_byte);
             let entry = result.entry(terminal.key.clone()).or_default();
             *entry = if boundary.is_left() {
@@ -363,6 +386,17 @@ fn compute_outside_children(
             } else {
                 entry.set_above(on_path_nibble)
             };
+            // Change proofs only: mark the on-path child outside unless an
+            // in-range batch op lives under it, so its subtree comes from the
+            // proof, not the proposal.
+            if let OnPathChild::InRangeIfSubtreeChanged { changed_keys } = on_path_child {
+                let mut child_prefix: Vec<u8> = terminal.key.iter().map(|c| c.as_u8()).collect();
+                child_prefix.push(*on_path_byte);
+                let has_in_range_change = changed_keys.iter().any(|k| k.starts_with(&child_prefix));
+                if !has_in_range_change {
+                    *entry = entry.set(on_path_nibble);
+                }
+            }
         } else if !boundary.is_left() {
             // Boundary is a prefix of or exactly matches the terminal key.
             // For the right edge, all children extend beyond end_key (they
@@ -375,6 +409,43 @@ fn compute_outside_children(
     }
 
     Ok(result)
+}
+
+/// Merge the outside-child masks for a change proof's two boundaries.
+///
+/// The in-range batch-op keys (as nibble paths) let the ancestor-on-path arm
+/// mark a boundary's on-path child outside when no in-range change lives under
+/// it, while keeping it in range when an in-range op does, so a forged in-range
+/// op is still caught. Returns the union of the left and right boundary masks
+/// keyed by node path.
+fn change_outside_children(
+    proof: &FrozenChangeProof,
+    verification: &ChangeProofVerificationContext,
+) -> Result<HashMap<PathBuf, ChildMask>, ProofError> {
+    let changed_keys: Vec<Vec<u8>> = proof
+        .batch_ops()
+        .iter()
+        .map(|op| NibblesIterator::new(op.key().as_ref()).collect())
+        .collect();
+    let mut outside_children = compute_outside_children(
+        proof.start_proof().as_ref(),
+        EdgeBoundary::Left(verification.start_key.as_deref()),
+        OnPathChild::InRangeIfSubtreeChanged {
+            changed_keys: &changed_keys,
+        },
+    )?;
+    for (key, flags) in compute_outside_children(
+        proof.end_proof().as_ref(),
+        EdgeBoundary::Right(RightBoundary::InRange(
+            verification.right_edge_key.as_deref(),
+        )),
+        OnPathChild::InRangeIfSubtreeChanged {
+            changed_keys: &changed_keys,
+        },
+    )? {
+        *outside_children.entry(key).or_default() |= flags;
+    }
+    Ok(outside_children)
 }
 
 /// Compute the hash of a node in the proving trie, merging child hashes
@@ -1039,14 +1110,18 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
         }
     }
 
-    // Compute which children at each edge node are outside the proven range
+    // Compute which children at each edge node are outside the proven range.
+    // Range proofs pass `AlwaysInRange`: the proving trie holds only in-range
+    // key-values, so the on-path child is always in range.
     let mut outside_children = compute_outside_children(
         proof.start_proof().as_ref(),
         EdgeBoundary::Left(first_key_bytes),
+        OnPathChild::AlwaysInRange,
     )?;
     for (key, flags) in compute_outside_children(
         proof.end_proof().as_ref(),
         EdgeBoundary::Right(right_boundary),
+        OnPathChild::AlwaysInRange,
     )? {
         let entry = outside_children.entry(key).or_default();
         *entry |= flags;
@@ -1231,20 +1306,8 @@ pub fn verify_change_proof_root_hash(
     }
 
     // Compute which children at each boundary node are outside the proven
-    // range via `compute_outside_children`.
-    let mut outside_children = compute_outside_children(
-        start_nodes,
-        EdgeBoundary::Left(verification.start_key.as_deref()),
-    )?;
-    for (key, flags) in compute_outside_children(
-        end_nodes,
-        EdgeBoundary::Right(RightBoundary::InRange(
-            verification.right_edge_key.as_deref(),
-        )),
-    )? {
-        let entry = outside_children.entry(key).or_default();
-        *entry |= flags;
-    }
+    // range, merging both boundaries.
+    let outside_children = change_outside_children(proof, verification)?;
 
     // Compute the hybrid root hash via `compute_root_hash_with_proofs`.
     // In-range children are hashed from the proving trie. Out-of-range
