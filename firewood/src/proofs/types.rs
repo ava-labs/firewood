@@ -50,9 +50,9 @@
 use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
 use firewood_storage::hash_node_as_storage_trie_root_parts;
 use firewood_storage::{
-    Children, DefaultHashMode, FileIoError, HashMode, HashType, Hashable, IntoHashType,
-    IntoSplitPath, NibblesIterator, Path, PathBuf, PathComponent, PathIterItem, Preimage, RlpError,
-    SplitPath, TrieHash, TriePath, ValueDigest,
+    Children, DefaultHashMode, FileIoError, HashMode, HashType, Hashable, IntoSplitPath,
+    NibblesIterator, Path, PathBuf, PathComponent, PathIterItem, Preimage, RlpError, SplitPath,
+    TrieHash, TriePath, ValueDigest,
 };
 use thiserror::Error;
 
@@ -534,7 +534,7 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
             return Err(ProofError::Empty);
         };
 
-        let mut expected_hash = root_hash.clone().into_hash_type();
+        let mut expected_hash = HashType::from(root_hash.clone());
 
         // Indicates whether the current node is hashed as a standalone storage-trie
         // root: set to true one iteration prior to reaching the lone storage child
