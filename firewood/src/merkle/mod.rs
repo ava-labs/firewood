@@ -196,8 +196,9 @@ fn verify_edge<H: ProofCollection + ?Sized>(
 /// inside [`RightBoundary`]. Splitting these two concerns lets sites that
 /// only operate on the right edge (e.g. `verify_proof_node_values`) take
 /// `RightBoundary` directly without an `unreachable!()` arm for `Left`,
-/// while keeping a single unified type for the one place that genuinely
-/// dispatches on left-vs-right at runtime: `compute_outside_children`.
+/// while keeping a single unified type for the places that genuinely
+/// dispatch on left-vs-right at runtime: `classify_terminal` and
+/// `compute_outside_children`.
 #[derive(Debug)]
 pub(crate) enum EdgeBoundary<'a> {
     /// Left edge, inclusive at `start_key`. `None` proves from the very
@@ -256,25 +257,73 @@ impl EdgeBoundary<'_> {
     }
 }
 
-/// Range and change proofs build their proving tries differently, so they
-/// disagree on whether a boundary terminal's on-path child — the child the
-/// boundary key descends into — is in range: for a range proof it always is,
-/// for a change proof only if an in-range batch op lives under it. This enum
-/// lets [`compute_outside_children`] tell which kind of proof it is verifying
-/// and apply the matching rule.
-pub(crate) enum OnPathChild<'a> {
-    /// Range-proof verification: the proving trie holds only in-range
-    /// key-values, so the on-path child is always in range.
-    AlwaysInRange,
-    /// Change-proof verification: the proving trie is start-trie + in-range
-    /// batch ops and retains out-of-range keys the end trie dropped. The
-    /// on-path child is in range only if an in-range batch op lives under it
-    /// (its key nibble-prefixed by the child). Otherwise the subtree is
-    /// entirely out of range and must come from the proof.
-    InRangeIfSubtreeChanged {
-        /// The in-range batch-op keys, as nibble paths.
-        changed_keys: &'a [Vec<u8>],
-    },
+/// How a boundary terminal marks its own children in the outside-children mask.
+enum TerminalMarking {
+    /// All of the terminal's children are outside the proven range.
+    AllOutside,
+    /// The terminal is a strict ancestor of the boundary key. The boundary
+    /// descends into this child nibble. Children on the far side of it are
+    /// outside, and the child itself straddles the boundary.
+    OnPath(PathComponent),
+}
+
+/// Classifies the boundary terminal's effect on its own children: the terminal
+/// key paired with how its children are marked, or `None` when the proof is
+/// empty, the edge is unbounded, or none of the terminal's children are outside
+/// the range.
+///
+/// The boundary key (in bytes, not nibbles) determines the on-path nibble at
+/// the terminal, since there is no subsequent proof node to derive it from.
+///
+/// Computed once per edge by the caller and passed to
+/// [`compute_outside_children`] along with the same `boundary`, which applies
+/// it to the mask. The change-proof caller additionally uses the
+/// [`TerminalMarking::OnPath`] case to decide the straddling child against the
+/// proving trie.
+fn classify_terminal(
+    proof_nodes: &[ProofNode],
+    boundary: &EdgeBoundary<'_>,
+) -> Option<(PathBuf, TerminalMarking)> {
+    let terminal = proof_nodes.last()?;
+    let boundary_key = boundary.boundary_key()?;
+    let boundary_nibbles: Vec<u8> = NibblesIterator::new(boundary_key).collect();
+
+    // First position where the boundary and terminal key diverge, capturing
+    // the diverging values to avoid re-indexing.
+    let divergence = terminal
+        .key
+        .iter()
+        .zip(boundary_nibbles.iter())
+        .find(|(tk, bn)| tk.as_u8() != **bn);
+
+    let marking = if let Some((tk, bn)) = divergence {
+        // Boundary diverges within the terminal's key. All children are outside
+        // only when the boundary is "past" the terminal (left edge: B >
+        // terminal, right edge: B < terminal). Otherwise none are.
+        let all_outside = if boundary.is_left() {
+            *bn > tk.as_u8()
+        } else {
+            *bn < tk.as_u8()
+        };
+        if all_outside {
+            TerminalMarking::AllOutside
+        } else {
+            return None;
+        }
+    } else if let Some(on_path_byte) = boundary_nibbles.get(terminal.key.len()) {
+        // Terminal is an ancestor of the boundary. This nibble leads toward it.
+        // `NibblesIterator` yields nibbles, so masking is lossless.
+        TerminalMarking::OnPath(PathComponent(U4::new_masked(*on_path_byte)))
+    } else if !boundary.is_left() {
+        // Boundary is a prefix of or equals the terminal key. On the right
+        // edge, all children extend beyond end_key, so they are outside.
+        TerminalMarking::AllOutside
+    } else {
+        // Left edge, boundary matches/prefixes terminal: children extend
+        // beyond start_key and are in range.
+        return None;
+    };
+    Some((terminal.key.clone(), marking))
 }
 
 /// For a proof edge path, computes which child indices at each proof node are
@@ -282,10 +331,6 @@ pub(crate) enum OnPathChild<'a> {
 ///
 /// For the left edge: children with index < the on-path child are outside.
 /// For the right edge: children with index > the on-path child are outside.
-///
-/// The boundary key (in bytes, not nibbles) is used to determine the
-/// on-path nibble at the terminal proof node, since there is no subsequent
-/// proof node to derive it from.
 ///
 /// For [`RightBoundary::OutOfRange`], the boundary itself sits at the
 /// proof's terminal node and is *not* part of the proven range. The on-path
@@ -295,18 +340,20 @@ pub(crate) enum OnPathChild<'a> {
 /// child hash there instead of recursing into the proving trie's
 /// (irrelevant) subtree.
 ///
-/// The `on_path_child` policy resolves the one decision that differs between
-/// range and change proofs.
+/// The terminal's classification (`terminal`) is computed once by the caller
+/// via [`classify_terminal`] and applied here. When it is
+/// [`TerminalMarking::OnPath`], the straddling child's far side is marked, and
+/// the caller decides that child itself against the proving trie.
 fn compute_outside_children(
     proof_nodes: &[ProofNode],
-    boundary: EdgeBoundary<'_>,
-    on_path_child: OnPathChild<'_>,
+    boundary: &EdgeBoundary<'_>,
+    terminal: Option<&(PathBuf, TerminalMarking)>,
 ) -> Result<HashMap<PathBuf, ChildMask>, ProofError> {
     // Invariant from `right_edge`: `RightBoundary::OutOfRange(K)` is only
     // constructed when `K` is the end-proof's terminal full key (and
     // `K > last_kv`). Pin that here so a future change to `right_edge`
     // that breaks it surfaces immediately in tests.
-    if let EdgeBoundary::Right(RightBoundary::OutOfRange(boundary_key)) = &boundary {
+    if let EdgeBoundary::Right(RightBoundary::OutOfRange(boundary_key)) = boundary {
         debug_assert!(
             proof_nodes.last().is_some_and(|terminal| {
                 terminal
@@ -348,64 +395,23 @@ fn compute_outside_children(
         }
     }
 
-    // Terminal node: derive the on-path nibble from the boundary key.
-    // If the boundary key diverges within the terminal node's partial path,
-    // either all or none of the children are outside the range.
-    if let (Some(terminal), Some(boundary_key)) = (proof_nodes.last(), boundary.boundary_key()) {
-        let boundary_nibbles: Vec<u8> = NibblesIterator::new(boundary_key).collect();
-
-        // Find the first position where boundary and terminal key diverge,
-        // capturing the diverging values to avoid re-indexing.
-        let divergence = terminal
-            .key
-            .iter()
-            .zip(boundary_nibbles.iter())
-            .find(|(tk, bn)| tk.as_u8() != **bn);
-
-        if let Some((tk, bn)) = divergence {
-            // Boundary diverges within the terminal's key at this position.
-            // If boundary is "past" the terminal (left edge: B > terminal,
-            // right edge: B < terminal), all children are outside.
-            let all_outside = if boundary.is_left() {
-                *bn > tk.as_u8()
-            } else {
-                *bn < tk.as_u8()
-            };
-            if all_outside {
-                result.insert(terminal.key.clone(), ChildMask::ALL);
+    // Terminal node: apply the pre-classified marking (see `classify_terminal`).
+    if let Some((terminal_key, marking)) = terminal {
+        match marking {
+            TerminalMarking::AllOutside => {
+                result.insert(terminal_key.clone(), ChildMask::ALL);
             }
-            // Otherwise (boundary is "before" terminal), no children are outside.
-        } else if let Some(on_path_byte) = boundary_nibbles.get(terminal.key.len()) {
-            // Terminal is an ancestor of the boundary key. The next
-            // nibble tells us which child leads toward the boundary.
-            // Mark children on the far side of that nibble as outside.
-            let on_path_nibble = U4::new_masked(*on_path_byte);
-            let entry = result.entry(terminal.key.clone()).or_default();
-            *entry = if boundary.is_left() {
-                entry.set_below(on_path_nibble)
-            } else {
-                entry.set_above(on_path_nibble)
-            };
-            // Change proofs only: mark the on-path child outside unless an
-            // in-range batch op lives under it, so its subtree comes from the
-            // proof, not the proposal.
-            if let OnPathChild::InRangeIfSubtreeChanged { changed_keys } = on_path_child {
-                let mut child_prefix: Vec<u8> = terminal.key.iter().map(|c| c.as_u8()).collect();
-                child_prefix.push(*on_path_byte);
-                let has_in_range_change = changed_keys.iter().any(|k| k.starts_with(&child_prefix));
-                if !has_in_range_change {
-                    *entry = entry.set(on_path_nibble);
-                }
+            TerminalMarking::OnPath(on_path) => {
+                // Mark children on the far side of the on-path nibble outside.
+                // The on-path child itself is decided by the caller.
+                let entry = result.entry(terminal_key.clone()).or_default();
+                *entry = if boundary.is_left() {
+                    entry.set_below(on_path.0)
+                } else {
+                    entry.set_above(on_path.0)
+                };
             }
-        } else if !boundary.is_left() {
-            // Boundary is a prefix of or exactly matches the terminal key.
-            // For the right edge, all children extend beyond end_key (they
-            // represent keys longer than end_key sharing its prefix), so
-            // they are outside the proven range.
-            result.insert(terminal.key.clone(), ChildMask::ALL);
         }
-        // For the left edge when boundary matches/is-prefix-of terminal,
-        // children extend beyond start_key and are in-range — no marking.
     }
 
     Ok(result)
@@ -413,37 +419,58 @@ fn compute_outside_children(
 
 /// Merge the outside-child masks for a change proof's two boundaries.
 ///
-/// The in-range batch-op keys (as nibble paths) let the ancestor-on-path arm
-/// mark a boundary's on-path child outside when no in-range change lives under
-/// it, while keeping it in range when an in-range op does, so a forged in-range
-/// op is still caught. Returns the union of the left and right boundary masks
-/// keyed by node path.
-fn change_outside_children(
+/// Each boundary terminal's on-path child is decided from the proposal: it is
+/// taken from the proof only when the proving trie holds no in-range key under
+/// it (via [`Merkle::on_path_child_in_range`]). An omitted in-range op then
+/// leaves its key in the proposal, forces that child to be recomputed, and
+/// fails the root-hash check. Returns the union of the left and right boundary
+/// masks keyed by node path.
+///
+/// `start_nib` and `end_nib` must be the nibble expansions of `verification`'s
+/// `start_key` and `right_edge_key`, where a `None` end is unbounded (+∞).
+fn change_outside_children<S: ReadableStorage>(
     proof: &FrozenChangeProof,
     verification: &ChangeProofVerificationContext,
-) -> Result<HashMap<PathBuf, ChildMask>, ProofError> {
-    let changed_keys: Vec<Vec<u8>> = proof
-        .batch_ops()
-        .iter()
-        .map(|op| NibblesIterator::new(op.key().as_ref()).collect())
-        .collect();
+    proving_merkle: &Merkle<NodeStore<Mutable<Propose>, S>>,
+    start_nib: &[u8],
+    end_nib: Option<&[u8]>,
+) -> Result<HashMap<PathBuf, ChildMask>, api::Error> {
+    let start_boundary = EdgeBoundary::Left(verification.start_key.as_deref());
+    let end_boundary = EdgeBoundary::Right(RightBoundary::InRange(
+        verification.right_edge_key.as_deref(),
+    ));
+    let start_proof = proof.start_proof();
+    let end_proof = proof.end_proof();
+
+    // Classify each edge's terminal once, then reuse it for both the mask and
+    // the on-path decision below.
+    let start_terminal = classify_terminal(start_proof.as_ref(), &start_boundary);
+    let end_terminal = classify_terminal(end_proof.as_ref(), &end_boundary);
+
     let mut outside_children = compute_outside_children(
-        proof.start_proof().as_ref(),
-        EdgeBoundary::Left(verification.start_key.as_deref()),
-        OnPathChild::InRangeIfSubtreeChanged {
-            changed_keys: &changed_keys,
-        },
+        start_proof.as_ref(),
+        &start_boundary,
+        start_terminal.as_ref(),
     )?;
-    for (key, flags) in compute_outside_children(
-        proof.end_proof().as_ref(),
-        EdgeBoundary::Right(RightBoundary::InRange(
-            verification.right_edge_key.as_deref(),
-        )),
-        OnPathChild::InRangeIfSubtreeChanged {
-            changed_keys: &changed_keys,
-        },
-    )? {
+    let end_children =
+        compute_outside_children(end_proof.as_ref(), &end_boundary, end_terminal.as_ref())?;
+    for (key, flags) in end_children {
         *outside_children.entry(key).or_default() |= flags;
+    }
+
+    // On-path children: mark one outside only when the proving trie holds no
+    // in-range key under it. An omitted or forged in-range op leaves its key in
+    // the proposal, so that child stays in range, is recomputed, and fails the
+    // root-hash check. This reads the proposal, never the attacker-controlled
+    // batch ops. A storage error while reading it propagates.
+    for (terminal_key, marking) in [start_terminal, end_terminal].into_iter().flatten() {
+        let TerminalMarking::OnPath(on_path) = marking else {
+            continue;
+        };
+        if !proving_merkle.on_path_child_in_range(&terminal_key, on_path, start_nib, end_nib)? {
+            let entry = outside_children.entry(terminal_key).or_default();
+            *entry = entry.set(on_path.0);
+        }
     }
     Ok(outside_children)
 }
@@ -1111,18 +1138,25 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
     }
 
     // Compute which children at each edge node are outside the proven range.
-    // Range proofs pass `AlwaysInRange`: the proving trie holds only in-range
-    // key-values, so the on-path child is always in range.
+    // The terminal classification feeds the mask (including any far-side
+    // marking). A range proof's proving trie holds only in-range key-values, so
+    // the straddling on-path child is always in range and needs no decision
+    // here — unlike change proofs, which resolve it against the proposal.
+    let start_boundary = EdgeBoundary::Left(first_key_bytes);
+    let end_boundary = EdgeBoundary::Right(right_boundary);
+    let start_terminal = classify_terminal(proof.start_proof().as_ref(), &start_boundary);
+    let end_terminal = classify_terminal(proof.end_proof().as_ref(), &end_boundary);
     let mut outside_children = compute_outside_children(
         proof.start_proof().as_ref(),
-        EdgeBoundary::Left(first_key_bytes),
-        OnPathChild::AlwaysInRange,
+        &start_boundary,
+        start_terminal.as_ref(),
     )?;
-    for (key, flags) in compute_outside_children(
+    let end_children = compute_outside_children(
         proof.end_proof().as_ref(),
-        EdgeBoundary::Right(right_boundary),
-        OnPathChild::AlwaysInRange,
-    )? {
+        &end_boundary,
+        end_terminal.as_ref(),
+    )?;
+    for (key, flags) in end_children {
         let entry = outside_children.entry(key).or_default();
         *entry |= flags;
     }
@@ -1168,6 +1202,17 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
 /// Panics if reconciling non-empty boundary proof nodes into the proving
 /// trie fails to create a root node (this is structurally guaranteed by
 /// `insert_branch_from_nibbles`).
+///
+/// # Ordering
+///
+/// `verification` must come from `verify_change_proof_structure`, which
+/// validates the boundary proofs (notably the `ExclusionProofMissingChild`
+/// check). This function may mark a boundary terminal's on-path child outside
+/// — taking its hash from the proof — when the proposal holds no in-range key
+/// under it. That is sound only because the structural check has already
+/// established that child is absent in `end_root`. Passing a hand-built
+/// `ChangeProofVerificationContext` that skipped structural verification is
+/// unsound.
 pub fn verify_change_proof_root_hash(
     proof: &FrozenChangeProof,
     verification: &ChangeProofVerificationContext,
@@ -1244,19 +1289,25 @@ pub fn verify_change_proof_root_hash(
     // Same treatment for end proof nodes: ancestors and divergent nodes
     // of the right boundary may have out-of-range values that differ
     // from the proposal.
-    let end_key_nibbles: Vec<u8> = verification
+    // `None` is an unbounded right edge (+∞). Keeping it distinct from an empty
+    // slice matters: an empty slice sorts as the minimum key, which would mark
+    // every key out of range at the upper bound.
+    let end_key_nibbles: Option<Vec<u8>> = verification
         .right_edge_key
         .as_deref()
-        .map(|k| NibblesIterator::new(k).collect())
-        .unwrap_or_default();
+        .map(|k| NibblesIterator::new(k).collect());
 
     for proof_node in end_nodes {
         proving_merkle.reconcile_branch_proof_node(proof_node, |pn, _branch_value| {
             let node_nibbles: Vec<u8> = pn.key.iter().map(|c| c.as_u8()).collect();
             // Symmetric to the start proof: an end proof node is in-range
             // if its key <= end_key (covers exclusion proofs where the
-            // terminal undershoots to the nearest existing key).
-            if node_nibbles <= end_key_nibbles {
+            // terminal undershoots to the nearest existing key). An unbounded
+            // right edge (+∞) puts every node in range.
+            if end_key_nibbles
+                .as_ref()
+                .is_none_or(|end| node_nibbles <= *end)
+            {
                 Err(ProofError::UnexpectedValue)
             } else {
                 match &pn.value_digest {
@@ -1285,7 +1336,7 @@ pub fn verify_change_proof_root_hash(
     // Out-of-range children are stripped. In-range children that are also
     // proposal-local (created by this proposal's batch_ops, not inherited
     // from the parent) indicate tampered operations and trigger rejection.
-    let range = Some((start_key_nibbles.as_slice(), end_key_nibbles.as_slice()));
+    let range = Some((start_key_nibbles.as_slice(), end_key_nibbles.as_deref()));
     for [parent, child] in start_nodes.array_windows() {
         proving_merkle.collapse_branch_to_path(&parent.key, &child.key, range)?;
     }
@@ -1307,7 +1358,13 @@ pub fn verify_change_proof_root_hash(
 
     // Compute which children at each boundary node are outside the proven
     // range, merging both boundaries.
-    let outside_children = change_outside_children(proof, verification)?;
+    let outside_children = change_outside_children(
+        proof,
+        verification,
+        &proving_merkle,
+        start_key_nibbles.as_slice(),
+        end_key_nibbles.as_deref(),
+    )?;
 
     // Compute the hybrid root hash via `compute_root_hash_with_proofs`.
     // In-range children are hashed from the proving trie. Out-of-range

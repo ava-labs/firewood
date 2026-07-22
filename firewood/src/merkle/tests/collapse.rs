@@ -53,7 +53,7 @@ fn test_collapse_root_to_path_rejects() {
     // Collapse toward [1, 0] but nibble 0 is in range [0x0, 0xf].
     // Should reject because collapsing would strip a child that is within the
     // range, indicating tampered batch_ops.
-    let result = merkle.collapse_root_to_path(&[pc(1), pc(0)], Some((&[0x0], &[0xf])));
+    let result = merkle.collapse_root_to_path(&[pc(1), pc(0)], Some((&[0x0], Some(&[0xf]))));
 
     assert!(matches!(
         result,
@@ -112,7 +112,7 @@ fn test_collapse_branch_to_path_rejects() {
     let result = merkle.collapse_branch_to_path(
         &[pc(1), pc(0)],
         &[pc(1), pc(0), pc(2), pc(1)],
-        Some((&[0x1, 0x0, 0x2, 0x0], &[0x1, 0x0, 0x2, 0xf])),
+        Some((&[0x1, 0x0, 0x2, 0x0], Some(&[0x1, 0x0, 0x2, 0xf]))),
     );
     assert!(matches!(
         result,
