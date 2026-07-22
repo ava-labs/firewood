@@ -109,7 +109,7 @@ fn add_value_digest_to_buf<H: HasUpdate, T: AsRef<[u8]>>(
     let value_exists: u8 = 1;
     buf.update([value_exists]);
 
-    add_len_and_value_to_buf(buf, value_digest.make_hash());
+    add_len_and_value_to_buf(buf, value_digest.make_hash::<MerkleDbHash>());
 }
 
 #[inline]

@@ -25,9 +25,12 @@ pub struct MemStore {
 
 impl Default for MemStore {
     fn default() -> Self {
+        // A bare `MemStore::default()` carries no header to honor, so it
+        // defaults to MerkleDB. Tests that need Ethereum hashing construct one
+        // explicitly via [`MemStore::new`].
         Self {
             bytes: Mutex::new(Vec::new()),
-            node_hash_algorithm: NodeHashAlgorithm::compile_option(),
+            node_hash_algorithm: NodeHashAlgorithm::MerkleDB,
         }
     }
 }

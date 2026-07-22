@@ -38,21 +38,26 @@ impl<'a, P: SplitPath> HashableShunt<'a, P, &'a [PathComponent]> {
     }
 }
 
-/// Returns the hash of `node`, which is at the given `path_prefix`.
+/// Returns the hash of `node`, which is at the given `path_prefix`, under the
+/// hashing scheme `H`.
 #[must_use]
-pub fn hash_node(node: &Node, path_prefix: &Path) -> HashType {
-    HashableShunt::from_node(path_prefix.as_components(), node).to_hash()
+pub fn hash_node<H: HashMode>(node: &Node, path_prefix: &Path) -> HashType {
+    HashableShunt::from_node(path_prefix.as_components(), node).to_hash::<H>()
 }
 
 /// Returns the serialized representation of `node` used as the pre-image
-/// when hashing the node. The node is at the given `path_prefix`.
+/// when hashing the node under the scheme `H`. The node is at the given
+/// `path_prefix`.
 #[must_use]
-pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
+pub fn hash_preimage<H: HashMode>(node: &Node, path_prefix: &Path) -> Box<[u8]> {
     // Key, 3 options, value digest
     #[expect(clippy::arithmetic_side_effects)]
     let est_len = node.partial_path().len() + path_prefix.len() + 3 + HashType::empty().len();
     let mut buf = Vec::with_capacity(est_len);
-    HashableShunt::from_node(path_prefix.as_components(), node).write(&mut buf);
+    H::write_preimage(
+        &HashableShunt::from_node(path_prefix.as_components(), node),
+        &mut buf,
+    );
     buf.into_boxed_slice()
 }
 
@@ -120,20 +125,19 @@ impl<T: AsRef<[u8]>> ValueDigest<T> {
         }
     }
 
-    /// Convert the value to a hash if it is not already a hash.
+    /// Convert the value to a hash if it is not already a hash, under the
+    /// scheme `H`.
     ///
     /// Under the MerkleDB scheme, a value of 32 bytes or more is replaced by
     /// its SHA-256 hash; shorter values pass through unchanged. The Ethereum
     /// scheme never hashes values, so this is the identity there.
     ///
-    /// The capping is the MerkleDB scheme's behavior, so it is gated on the
-    /// database's algorithm at runtime rather than threaded through `H`
-    /// (deferred to PR 5).
-    pub fn make_hash(&self) -> ValueDigest<&[u8]> {
+    /// The capping is the MerkleDB scheme's behavior, selected by the scheme
+    /// `H` rather than the compile-time default. `H::ALGORITHM` is a `const`,
+    /// so each monomorphization keeps only the matching arm.
+    pub fn make_hash<H: crate::HashMode>(&self) -> ValueDigest<&[u8]> {
         match self.as_ref() {
-            ValueDigest::Value(v)
-                if v.len() >= 32 && !crate::DefaultHashMode::ALGORITHM.is_ethereum() =>
-            {
+            ValueDigest::Value(v) if v.len() >= 32 && !H::ALGORITHM.is_ethereum() => {
                 use sha2::{Digest, Sha256};
                 ValueDigest::Hash(HashType::from(TrieHash::from(Sha256::digest(v))))
             }
@@ -201,15 +205,15 @@ pub trait Preimage: std::fmt::Debug {
     fn write(&self, buf: &mut impl HasUpdate);
 }
 
-/// A single blanket implementation that delegates to the compile-selected
-/// [`DefaultHashMode`](crate::DefaultHashMode). The scheme-specific bodies live
-/// on the [`EthHash`](crate::EthHash) / [`MerkleDbHash`](crate::MerkleDbHash)
-/// [`HashMode`] impls (both compiled), so this `&self` shim limits call-site
-/// churn while still routing through the unified [`HashMode`] surface.
+/// Hashes via [`Preimage`] resolve to the compile-selected
+/// [`DefaultHashMode`](crate::DefaultHashMode).
 ///
-/// Threading a generic `H: HashMode` through these call sites (so a caller can
-/// pick the scheme at runtime) is deferred; until then every `.to_hash()` /
-/// `.write()` call resolves to the default scheme via this shim.
+/// Storage hashing is genericized over `H: HashMode` and calls `H::to_hash` /
+/// `H::write_preimage` directly (see [`hash_node`], [`hash_preimage`], and
+/// [`HashableShunt::to_hash`](crate::HashableShunt::to_hash)). The
+/// [`Preimage`] trait survives for the remaining `&self`-shaped consumers
+/// above storage (e.g. `ProofNode`) and for `Debug` rendering; those still
+/// resolve to the default scheme until they are threaded over `H`.
 impl<T: Hashable> Preimage for T {
     fn to_hash(&self) -> HashType {
         <crate::DefaultHashMode as crate::HashMode>::to_hash(self)

@@ -186,8 +186,13 @@ fn test_change_proof_arbitrary_order_right_then_left_converges() {
     let proposal_right = target
         .apply_change_proof_to_parent(&proof_right, &*parent)
         .unwrap();
-    crate::merkle::verify_change_proof_root_hash(&proof_right, &ctx_right, &proposal_right)
-        .unwrap();
+    crate::merkle::verify_change_proof_root_hash(
+        &proof_right,
+        &ctx_right,
+        &proposal_right,
+        proof_right.hash_mode(),
+    )
+    .unwrap();
     proposal_right.commit().unwrap();
     let after_right_root = target.root_hash().unwrap();
     assert_ne!(
@@ -203,7 +208,13 @@ fn test_change_proof_arbitrary_order_right_then_left_converges() {
     let proposal_left = target
         .apply_change_proof_to_parent(&proof_left, &*parent)
         .unwrap();
-    crate::merkle::verify_change_proof_root_hash(&proof_left, &ctx_left, &proposal_left).unwrap();
+    crate::merkle::verify_change_proof_root_hash(
+        &proof_left,
+        &ctx_left,
+        &proposal_left,
+        proof_left.hash_mode(),
+    )
+    .unwrap();
     proposal_left.commit().unwrap();
     let final_root = target.root_hash().unwrap();
 

@@ -12,8 +12,8 @@ use crate::logger::trace;
 use crate::node::{BranchNode, Node};
 use crate::rlp::{NULL_RLP, RlpItem, encode_list, replace_list_field};
 use crate::{
-    Child, Children, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage, SharedNode,
-    TrieHash,
+    Child, Children, HashMode, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage,
+    SharedNode, TrieHash,
 };
 use crate::{HashableShunt, JoinedPath, PathComponent, SplitPath, ValueDigest};
 use sha3::{Digest, Keccak256};
@@ -66,20 +66,18 @@ impl DerefMut for PathGuard<'_> {
 }
 
 /// Classified children for ethereum hash processing
-#[cfg(feature = "ethhash")]
 pub(super) struct ClassifiedChildren<'a> {
     pub(super) unhashed: Vec<(PathComponent, Node)>,
     pub(super) hashed: Vec<(PathComponent, (MaybePersistedNode, &'a mut HashType))>,
 }
 
-impl<T, S: ReadableStorage> NodeStore<T, S>
+impl<T, S: ReadableStorage, H: HashMode> NodeStore<T, S, H>
 where
-    NodeStore<T, S>: NodeReader,
+    NodeStore<T, S, H>: NodeReader,
 {
     /// Helper function to classify children for ethereum hash processing
     /// We have some special cases based on the number of children
     /// and whether they are hashed or unhashed, so we need to classify them.
-    #[cfg(feature = "ethhash")]
     pub(super) fn ethhash_classify_children<'a>(
         &self,
         children: &'a mut Children<Option<Child>>,
@@ -120,22 +118,22 @@ where
         node: Node,
         mut root_path: Path,
     ) -> Result<(MaybePersistedNode, HashType), FileIoError> {
-        #[cfg(not(feature = "ethhash"))]
-        let res = Self::hash_helper_inner(node, PathGuard::from_path(&mut root_path))?;
-        #[cfg(feature = "ethhash")]
-        let res = self.hash_helper_inner(node, PathGuard::from_path(&mut root_path), None)?;
-        Ok(res)
+        self.hash_helper_inner(node, PathGuard::from_path(&mut root_path), None)
     }
 
     /// Recursive helper that hashes the given `node` and the subtree rooted at it.
     /// This function takes a mut `node` to update the hash in place.
     /// The `path_prefix` is also mut because we will extend it to the path of the child we are hashing in recursive calls - it will be restored after the recursive call returns.
-    /// The `num_siblings` is the number of children of the parent node, which includes this node.
+    ///
+    /// `fake_root_extra_nibble` is only meaningful under the Ethereum scheme (it
+    /// carries the account branch's child-slot nibble for the single-storage-child
+    /// fold); under MerkleDB the eth branches are dead code eliminated because
+    /// `H::ALGORITHM.is_ethereum()` is a compile-time constant for each `H`.
     fn hash_helper_inner(
-        #[cfg(feature = "ethhash")] &self,
+        &self,
         mut node: Node,
         mut path_prefix: PathGuard<'_>,
-        #[cfg(feature = "ethhash")] fake_root_extra_nibble: Option<PathComponent>,
+        fake_root_extra_nibble: Option<PathComponent>,
     ) -> Result<(MaybePersistedNode, HashType), FileIoError> {
         // If this is a branch, find all unhashed children and recursively hash them.
         trace!("hashing {node:?} at {path_prefix:?}");
@@ -143,8 +141,9 @@ where
             // special case code for ethereum hashes at the account level
             // Both lengths are usize counts of nibbles in a trie path, so their
             // sum cannot overflow on any platform firewood targets.
-            #[cfg(feature = "ethhash")]
-            let make_fake_root = if path_prefix.0.len().wrapping_add(b.partial_path.0.len()) == 64 {
+            let make_fake_root = if H::ALGORITHM.is_ethereum()
+                && path_prefix.0.len().wrapping_add(b.partial_path.0.len()) == 64
+            {
                 // looks like we're at an account branch
                 // tally up how many hashes we need to deal with
                 let ClassifiedChildren {
@@ -159,14 +158,14 @@ where
                         let mut path_guard = PathGuard::new(&mut path_prefix);
                         path_guard.0.extend(b.partial_path.0.iter().copied());
                         if unhashed.is_empty() {
-                            hash_node_as_storage_trie_root_for_node(
+                            hash_node_as_storage_trie_root_for_node::<H>(
                                 path_guard.as_components(),
                                 *child_idx,
                                 &shared,
                             )
                         } else {
                             path_guard.0.push(child_idx.as_u8());
-                            hash_node(&shared, &path_guard)
+                            hash_node::<H>(&shared, &path_guard)
                         }
                     };
                     **child_hash = hash;
@@ -206,22 +205,13 @@ where
                     // we extend and truncate path_prefix to reduce memory allocations]
                     let mut child_path_prefix = PathGuard::new(&mut path_prefix);
                     child_path_prefix.0.extend(b.partial_path.0.iter().copied());
-                    #[cfg(feature = "ethhash")]
-                    if make_fake_root.is_none() {
-                        // we don't push the nibble there is only one unhashed child and
-                        // we're on an account
+                    // Under the Ethereum scheme, when an account branch has a
+                    // single unhashed child we don't push the nibble (it is
+                    // folded into the storage-trie-root hash instead).
+                    if !(H::ALGORITHM.is_ethereum() && make_fake_root.is_some()) {
                         child_path_prefix.0.push(nibble.as_u8());
                     }
-                    #[cfg(not(feature = "ethhash"))]
-                    child_path_prefix.0.push(nibble.as_u8());
-                    #[cfg(feature = "ethhash")]
-                    let (child_node, child_hash) =
-                        self.hash_helper_inner(child_node, child_path_prefix, make_fake_root)?;
-                    #[cfg(not(feature = "ethhash"))]
-                    let (child_node, child_hash) =
-                        Self::hash_helper_inner(child_node, child_path_prefix)?;
-
-                    (child_node, child_hash)
+                    self.hash_helper_inner(child_node, child_path_prefix, make_fake_root)?
                 };
 
                 *child = Some(Child::MaybePersisted(child_node, child_hash));
@@ -230,27 +220,31 @@ where
         }
 
         // For account-depth nodes (branch or leaf), persist the computed
-        // storageRoot into the node's RLP-encoded value.
-        #[cfg(feature = "ethhash")]
-        update_account_storage_root(&mut node, &path_prefix);
+        // storageRoot into the node's RLP-encoded value. Ethereum scheme only.
+        if H::ALGORITHM.is_ethereum() {
+            update_account_storage_root(&mut node, &path_prefix);
+        }
 
         // At this point, we either have a leaf or a branch with all children hashed.
         // if the encoded child hash <32 bytes then we use that RLP
-
-        #[cfg(feature = "ethhash")]
-        let hash = if let Some(nibble) = fake_root_extra_nibble {
-            hash_node_as_storage_trie_root_for_node(path_prefix.as_components(), nibble, &node)
-        } else {
-            hash_node(&node, &path_prefix)
+        let hash = match fake_root_extra_nibble {
+            Some(nibble) if H::ALGORITHM.is_ethereum() => {
+                hash_node_as_storage_trie_root_for_node::<H>(
+                    path_prefix.as_components(),
+                    nibble,
+                    &node,
+                )
+            }
+            _ => hash_node::<H>(&node, &path_prefix),
         };
-
-        #[cfg(not(feature = "ethhash"))]
-        let hash = hash_node(&node, &path_prefix);
 
         Ok((SharedNode::new(node).into(), hash))
     }
 
-    #[cfg(feature = "ethhash")]
+    /// Hash `node` at `path_prefix`, applying the Ethereum storage-trie-root
+    /// fold for an account branch's single storage child when the scheme is
+    /// Ethereum. Under the MerkleDB scheme `H::ALGORITHM.is_ethereum()` is a
+    /// compile-time `false`, so this reduces to a plain [`hash_node`].
     pub(crate) fn compute_node_ethhash(
         node: &Node,
         path_prefix: &Path,
@@ -259,13 +253,13 @@ where
         let components = path_prefix.as_components();
         // 64 nibbles for the account prefix + 1 for this node's slot in the
         // account branch = 65. !have_peers means this is the only storage child.
-        if components.len() == 65 && !have_peers {
+        if H::ALGORITHM.is_ethereum() && components.len() == 65 && !have_peers {
             let (branch_nibble, account_prefix) = components
                 .split_last()
                 .expect("len == 65 implies non-empty");
-            hash_node_as_storage_trie_root_for_node(account_prefix, *branch_nibble, node)
+            hash_node_as_storage_trie_root_for_node::<H>(account_prefix, *branch_nibble, node)
         } else {
-            hash_node(node, path_prefix)
+            hash_node::<H>(node, path_prefix)
         }
     }
 }
@@ -274,7 +268,7 @@ where
 /// extracts that function's parts — the partial path, value digest, and child
 /// hashes — from a [`Node`] directly: a branch contributes its value and its
 /// children's hashes, a leaf contributes its value and no children.
-pub fn hash_node_as_storage_trie_root_for_node(
+pub fn hash_node_as_storage_trie_root_for_node<H: HashMode>(
     account_full_prefix: &[PathComponent],
     branch_nibble: PathComponent,
     node: &Node,
@@ -286,7 +280,7 @@ pub fn hash_node_as_storage_trie_root_for_node(
         ),
         Node::Leaf(l) => (Some(ValueDigest::Value(l.value.as_ref())), Children::new()),
     };
-    hash_node_as_storage_trie_root_parts(
+    hash_node_as_storage_trie_root_parts::<H, _, _>(
         account_full_prefix,
         branch_nibble,
         node.partial_path().as_components(),
@@ -354,7 +348,7 @@ pub fn fix_account_storage_root_value(
 ///
 /// Single source of truth for the storage-trie-root fold; prefer this over
 /// inline folding so live hashing and proof verification cannot drift.
-pub fn hash_node_as_storage_trie_root_parts<Prefix: SplitPath, Partial: SplitPath>(
+pub fn hash_node_as_storage_trie_root_parts<H: HashMode, Prefix: SplitPath, Partial: SplitPath>(
     account_full_prefix: Prefix,
     branch_nibble: PathComponent,
     partial_path: Partial,
@@ -362,7 +356,7 @@ pub fn hash_node_as_storage_trie_root_parts<Prefix: SplitPath, Partial: SplitPat
     children: Children<Option<HashType>>,
 ) -> HashType {
     let folded = JoinedPath::new(std::slice::from_ref(&branch_nibble), partial_path);
-    HashableShunt::new(account_full_prefix, folded, value_digest, children).to_hash()
+    HashableShunt::new(account_full_prefix, folded, value_digest, children).to_hash::<H>()
 }
 
 /// Persist the computed storageRoot into an account node's RLP-encoded value,
@@ -371,7 +365,6 @@ pub fn hash_node_as_storage_trie_root_parts<Prefix: SplitPath, Partial: SplitPat
 ///
 /// For branch accounts, the storage root is computed from the children's hashes.
 /// For leaf accounts (no storage sub-trie), the storage root is the empty trie hash.
-#[cfg(feature = "ethhash")]
 fn update_account_storage_root(node: &mut Node, path_prefix: &Path) {
     // Both lengths are usize counts of nibbles in a trie path, so their
     // sum cannot overflow on any platform firewood targets.

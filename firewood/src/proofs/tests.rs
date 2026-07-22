@@ -998,7 +998,10 @@ mod box_array_deserialization_tests {
 
     fn v0_reader(data: &[u8]) -> V0Reader<'_> {
         let inner = ProofReader::new(data);
-        V0Reader::new(inner, Header::from(ProofType::Range))
+        V0Reader::new(
+            inner,
+            Header::from((ProofType::Range, NodeHashAlgorithm::MerkleDB)),
+        )
     }
 
     #[test]

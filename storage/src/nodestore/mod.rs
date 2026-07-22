@@ -96,6 +96,7 @@ pub use header::NodeStoreHeader;
 /// I --> |commit|N("New commit NodeStore&lt;Committed, S&gt;")
 /// style E color:#FFFFFF, fill:#AA00FF, stroke:#AA00FF
 /// ```
+use std::marker::PhantomData;
 use std::mem::take;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -104,7 +105,8 @@ use crate::hashednode::hash_node;
 use crate::node::Node;
 use crate::node::persist::MaybePersistedNode;
 use crate::{
-    CacheReadStrategy, Child, FileIoError, HashType, Path, ReadableStorage, SharedNode, TrieHash,
+    CacheReadStrategy, Child, DefaultHashMode, FileIoError, HashMode, HashType, Path,
+    ReadableStorage, SharedNode, TrieHash,
 };
 
 use super::linear::WritableStorage;
@@ -113,7 +115,7 @@ use super::linear::WritableStorage;
 /// Set to the maximum area size to minimize allocations for large nodes.
 const INITIAL_BUMP_SIZE: usize = AreaIndex::MAX_AREA_SIZE as usize;
 
-impl<S> NodeStore<Committed, S> {
+impl<S, H> NodeStore<Committed, S, H> {
     /// Returns the [`CommittedId`] that uniquely identifies this committed
     /// revision. This is the identity used to validate a proposal's parent
     /// at commit time; root hash alone would not distinguish hash-equal
@@ -124,7 +126,7 @@ impl<S> NodeStore<Committed, S> {
     }
 }
 
-impl<S: ReadableStorage> NodeStore<Committed, S> {
+impl<S: ReadableStorage, H: HashMode> NodeStore<Committed, S, H> {
     /// Creates a new `NodeStore` using the provided header and storage.
     ///
     /// The header should be read using [`NodeStoreHeader::read_from_storage`] before calling this.
@@ -151,6 +153,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
             storage,
             must_recompute_storage_hash: header.must_recompute_storage_hash(),
             deleted_node_tracking,
+            _hash_mode: PhantomData,
         };
 
         if let Some(root_address) = header.root_address() {
@@ -160,7 +163,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
                 debug!("No root hash in header; computing from disk");
                 nodestore
                     .read_node_from_disk(root_address, ReadableNodeMode::Open)
-                    .map(|n| hash_node(&n, &Path(SmallVec::default())))?
+                    .map(|n| hash_node::<H>(&n, &Path(SmallVec::default())))?
             };
 
             nodestore.kind.root = Some(Child::AddressWithHash(root_address, root_hash));
@@ -190,6 +193,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
             // need to recompute them.
             must_recompute_storage_hash: header::Version::new().must_recompute_storage_hash(),
             deleted_node_tracking,
+            _hash_mode: PhantomData,
         }
     }
 
@@ -223,11 +227,12 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
             storage,
             must_recompute_storage_hash: header.must_recompute_storage_hash(),
             deleted_node_tracking,
+            _hash_mode: PhantomData,
         };
 
         let node = nodestore.read_node(root_address)?;
 
-        if hash_node(node.as_ref(), &Path::new()) == root_hash {
+        if hash_node::<H>(node.as_ref(), &Path::new()) == root_hash {
             nodestore.kind.root = Some(Child::AddressWithHash(root_address, root_hash));
             Ok(nodestore)
         } else {
@@ -247,7 +252,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     }
 }
 
-impl<S: ReadableStorage> NodeStore<Committed, S> {
+impl<S: ReadableStorage, H> NodeStore<Committed, S, H> {
     /// Get the underlying storage for a `NodeStore`.
     #[must_use]
     pub const fn storage(&self) -> &Arc<S> {
@@ -289,7 +294,7 @@ impl Parentable for Arc<ImmutableProposal> {
     }
 }
 
-impl<S> NodeStore<Arc<ImmutableProposal>, S> {
+impl<S, H> NodeStore<Arc<ImmutableProposal>, S, H> {
     /// When an immutable proposal commits, we need to reparent any proposal that
     /// has the committed proposal as its parent.
     ///
@@ -297,7 +302,7 @@ impl<S> NodeStore<Arc<ImmutableProposal>, S> {
     /// from `self` (the just-committed proposal).
     pub fn commit_reparent(
         &self,
-        other: &NodeStore<Arc<ImmutableProposal>, S>,
+        other: &NodeStore<Arc<ImmutableProposal>, S, H>,
         new_id: CommittedId,
     ) {
         other.kind.commit_reparent(&self.kind, new_id);
@@ -327,13 +332,18 @@ impl Parentable for Committed {
     }
 }
 
-impl<S: ReadableStorage> NodeStore<Mutable<Propose>, S> {
+impl<S: ReadableStorage, H: HashMode> NodeStore<Mutable<Propose>, S, H> {
     /// Create a new proposal [`NodeStore`] from a parent [`NodeStore`].
+    ///
+    /// The proposal inherits the parent's hash mode `H`, so it hashes under `H`
+    /// when finalized into an [`ImmutableProposal`]. A `Db<H>` builds proposals
+    /// on top of its `H`-typed committed revisions, so the database's hash mode
+    /// flows through into hashing.
     ///
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the parent root cannot be read.
-    pub fn new<F: Parentable>(parent: &NodeStore<F, S>) -> Result<Self, FileIoError> {
+    pub fn new<F: Parentable>(parent: &NodeStore<F, S, H>) -> Result<Self, FileIoError> {
         let mut deleted = Vec::default();
         let root = if let Some(ref root) = parent.kind.root() {
             // Record the replaced root in the future-delete log, unless delete
@@ -358,6 +368,7 @@ impl<S: ReadableStorage> NodeStore<Mutable<Propose>, S> {
             storage: parent.storage.clone(),
             must_recompute_storage_hash: parent.must_recompute_storage_hash,
             deleted_node_tracking: parent.deleted_node_tracking,
+            _hash_mode: PhantomData,
         })
     }
 
@@ -389,7 +400,7 @@ impl<S: ReadableStorage> NodeStore<Mutable<Propose>, S> {
 
     /// Creates a new [`NodeStore`] from a root node, inheriting the parent from another proposal.
     #[must_use]
-    pub fn from_root(parent: &NodeStore<Mutable<Propose>, S>, root: Option<Node>) -> Self {
+    pub fn from_root(parent: &NodeStore<Mutable<Propose>, S, H>, root: Option<Node>) -> Self {
         NodeStore {
             kind: Mutable {
                 root,
@@ -401,11 +412,12 @@ impl<S: ReadableStorage> NodeStore<Mutable<Propose>, S> {
             storage: parent.storage.clone(),
             must_recompute_storage_hash: parent.must_recompute_storage_hash,
             deleted_node_tracking: parent.deleted_node_tracking,
+            _hash_mode: PhantomData,
         }
     }
 }
 
-impl<K: MutableKind, S: ReadableStorage> NodeStore<Mutable<K>, S> {
+impl<K: MutableKind, S: ReadableStorage, H: HashMode> NodeStore<Mutable<K>, S, H> {
     /// Reads a node for update, marking it as replaced (logically deleted).
     ///
     /// Reads the node from cache or disk, then calls [`MutableKind::track_deleted`] on the
@@ -464,6 +476,7 @@ impl<S: ReadableStorage> NodeStore<Mutable<Recon<S>>, S> {
             storage: parent.storage.clone(),
             must_recompute_storage_hash: parent.must_recompute_storage_hash,
             deleted_node_tracking: parent.deleted_node_tracking,
+            _hash_mode: PhantomData,
         })
     }
 }
@@ -491,14 +504,14 @@ where
     }
 }
 
-impl<T, S> NodeStore<Mutable<T>, S> {
+impl<T, S, H> NodeStore<Mutable<T>, S, H> {
     /// Returns the root of this mutable nodestore.
     pub const fn root_mut(&mut self) -> &mut Option<Node> {
         &mut self.kind.root
     }
 }
 
-impl<S: WritableStorage> NodeStore<Mutable<Propose>, S> {
+impl<S: WritableStorage, H: HashMode> NodeStore<Mutable<Propose>, S, H> {
     /// Creates a new, empty, [`NodeStore`].
     /// This is used during testing and during the creation of an in-memory merkle for proofs.
     ///
@@ -525,6 +538,7 @@ impl<S: WritableStorage> NodeStore<Mutable<Propose>, S> {
             // correct storageRoots at hash time.
             must_recompute_storage_hash: header::Version::new().must_recompute_storage_hash(),
             deleted_node_tracking,
+            _hash_mode: PhantomData,
         }
     }
 }
@@ -551,6 +565,7 @@ impl<S: ReadableStorage> NodeStore<Mutable<Recon<S>>, S> {
             // Reconstruction views never participate in the future-delete
             // log, so this value is irrelevant here.
             deleted_node_tracking: DeletedNodeTracking::Enabled,
+            _hash_mode: PhantomData,
         }
     }
 }
@@ -616,6 +631,18 @@ pub trait NodeReader {
     fn must_recompute_storage_hash(&self) -> bool {
         true
     }
+
+    /// Returns the runtime [`NodeHashAlgorithm`] this reader's underlying
+    /// database was created with.
+    ///
+    /// Proof emission (child-hash wire layout, value-digest rule, and the
+    /// account storage-root fix) is governed by the source DB's runtime mode,
+    /// not the build's compile-time default. The default returns
+    /// [`DefaultHashMode::ALGORITHM`]; [`NodeStore`] overrides it with the value
+    /// from the storage header.
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        DefaultHashMode::ALGORITHM
+    }
 }
 
 impl<T> NodeReader for T
@@ -629,6 +656,10 @@ where
 
     fn must_recompute_storage_hash(&self) -> bool {
         self.deref().must_recompute_storage_hash()
+    }
+
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        self.deref().node_hash_algorithm()
     }
 }
 
@@ -856,7 +887,7 @@ impl ImmutableProposal {
 /// 4. Chain further reconstructions: convert back to [`Mutable<Recon>`] via [`From`] and repeat.
 ///
 #[derive(Debug)]
-pub struct NodeStore<T, S> {
+pub struct NodeStore<T, S, H = DefaultHashMode> {
     /// This is one of [Committed], [`ImmutableProposal`], [`Mutable<Propose>`], [`Mutable<Recon>`], or [`Reconstructed`].
     kind: T,
     /// Persisted storage to read nodes from.
@@ -870,6 +901,10 @@ pub struct NodeStore<T, S> {
     /// never be consumed (e.g. archival mode, where old nodes are preserved on
     /// disk for historical queries), so proposals skip building it entirely.
     deleted_node_tracking: DeletedNodeTracking,
+    /// The node-hashing scheme ([`HashMode`]). Zero-sized; defaulted to the
+    /// compile-selected mode ([`DefaultHashMode`]) while `H` is threaded
+    /// through the stack, and selected per database at runtime after #1088.
+    _hash_mode: PhantomData<H>,
 }
 
 /// Whether removed and replaced nodes are recorded in the future-delete log
@@ -1017,6 +1052,7 @@ impl<S: ReadableStorage> From<NodeStore<Reconstructed<S>, S>> for NodeStore<Muta
             storage: val.storage,
             must_recompute_storage_hash: val.must_recompute_storage_hash,
             deleted_node_tracking: val.deleted_node_tracking,
+            _hash_mode: PhantomData,
         }
     }
 }
@@ -1035,6 +1071,7 @@ impl<S: ReadableStorage> From<NodeStore<Mutable<Recon<S>>, S>> for NodeStore<Rec
             storage: val.storage,
             must_recompute_storage_hash: val.must_recompute_storage_hash,
             deleted_node_tracking: val.deleted_node_tracking,
+            _hash_mode: PhantomData,
         }
     }
 }
@@ -1070,11 +1107,12 @@ impl<S> Clone for NodeStore<Reconstructed<S>, S> {
             storage: self.storage.clone(),
             must_recompute_storage_hash: self.must_recompute_storage_hash,
             deleted_node_tracking: self.deleted_node_tracking,
+            _hash_mode: PhantomData,
         }
     }
 }
 
-impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
+impl<S: ReadableStorage, H: HashMode> NodeStore<Arc<ImmutableProposal>, S, H> {
     /// Returns true if the parent of this proposal is the committed revision
     /// identified by `id`.
     ///
@@ -1105,16 +1143,16 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     /// queue, whose front entry is not guaranteed to be the initial empty
     /// revision once `max_revisions` is exceeded.
     #[must_use]
-    pub fn empty_committed_sibling(&self) -> NodeStore<Committed, S> {
+    pub fn empty_committed_sibling(&self) -> NodeStore<Committed, S, H> {
         NodeStore::new_empty_committed(self.storage.clone(), self.deleted_node_tracking)
     }
 }
 
-impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
+impl<S: WritableStorage, H: HashMode> NodeStore<Arc<ImmutableProposal>, S, H> {
     /// Return a Committed version of this proposal, which doesn't have any modified nodes.
     /// This function is used during commit.
     #[must_use]
-    pub fn as_committed(&self) -> NodeStore<Committed, S> {
+    pub fn as_committed(&self) -> NodeStore<Committed, S, H> {
         NodeStore {
             kind: Committed {
                 deleted: self.kind.deleted.clone(),
@@ -1124,21 +1162,23 @@ impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
             storage: self.storage.clone(),
             must_recompute_storage_hash: self.must_recompute_storage_hash,
             deleted_node_tracking: self.deleted_node_tracking,
+            _hash_mode: PhantomData,
         }
     }
 }
 
-impl<S: ReadableStorage> TryFrom<NodeStore<Mutable<Propose>, S>>
-    for NodeStore<Arc<ImmutableProposal>, S>
+impl<S: ReadableStorage, H: HashMode> TryFrom<NodeStore<Mutable<Propose>, S, H>>
+    for NodeStore<Arc<ImmutableProposal>, S, H>
 {
     type Error = FileIoError;
 
-    fn try_from(val: NodeStore<Mutable<Propose>, S>) -> Result<Self, Self::Error> {
+    fn try_from(val: NodeStore<Mutable<Propose>, S, H>) -> Result<Self, Self::Error> {
         let NodeStore {
             kind,
             storage,
             must_recompute_storage_hash,
             deleted_node_tracking,
+            _hash_mode: _,
         } = val;
         let Mutable {
             root,
@@ -1154,6 +1194,7 @@ impl<S: ReadableStorage> TryFrom<NodeStore<Mutable<Propose>, S>>
             storage,
             must_recompute_storage_hash,
             deleted_node_tracking,
+            _hash_mode: PhantomData,
         };
 
         let Some(root) = root else {
@@ -1176,7 +1217,7 @@ impl<S: ReadableStorage> TryFrom<NodeStore<Mutable<Propose>, S>>
     }
 }
 
-impl<T, S: ReadableStorage> NodeReader for NodeStore<Mutable<T>, S> {
+impl<T, S: ReadableStorage, H: HashMode> NodeReader for NodeStore<Mutable<T>, S, H> {
     fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError> {
         self.read_node_from_disk(addr, ReadableNodeMode::Write)
     }
@@ -1184,9 +1225,13 @@ impl<T, S: ReadableStorage> NodeReader for NodeStore<Mutable<T>, S> {
     fn must_recompute_storage_hash(&self) -> bool {
         self.must_recompute_storage_hash
     }
+
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        self.storage.node_hash_algorithm()
+    }
 }
 
-impl<S: ReadableStorage> NodeReader for NodeStore<Reconstructed<S>, S> {
+impl<S: ReadableStorage, H: HashMode> NodeReader for NodeStore<Reconstructed<S>, S, H> {
     fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError> {
         self.read_node_from_disk(addr, ReadableNodeMode::ReconRead)
     }
@@ -1194,9 +1239,13 @@ impl<S: ReadableStorage> NodeReader for NodeStore<Reconstructed<S>, S> {
     fn must_recompute_storage_hash(&self) -> bool {
         self.must_recompute_storage_hash
     }
+
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        self.storage.node_hash_algorithm()
+    }
 }
 
-impl<T: Parentable, S: ReadableStorage> NodeReader for NodeStore<T, S> {
+impl<T: Parentable, S: ReadableStorage, H: HashMode> NodeReader for NodeStore<T, S, H> {
     fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError> {
         self.read_node_from_disk(addr, ReadableNodeMode::Read)
     }
@@ -1204,9 +1253,13 @@ impl<T: Parentable, S: ReadableStorage> NodeReader for NodeStore<T, S> {
     fn must_recompute_storage_hash(&self) -> bool {
         self.must_recompute_storage_hash
     }
+
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        self.storage.node_hash_algorithm()
+    }
 }
 
-impl<T, S: ReadableStorage> RootReader for NodeStore<Mutable<T>, S> {
+impl<T, S: ReadableStorage, H: HashMode> RootReader for NodeStore<Mutable<T>, S, H> {
     fn root_node(&self) -> Option<SharedNode> {
         self.kind.root.as_ref().map(|node| node.clone().into())
     }
@@ -1218,7 +1271,7 @@ impl<T, S: ReadableStorage> RootReader for NodeStore<Mutable<T>, S> {
     }
 }
 
-impl<S: ReadableStorage> RootReader for NodeStore<Committed, S> {
+impl<S: ReadableStorage, H: HashMode> RootReader for NodeStore<Committed, S, H> {
     fn root_node(&self) -> Option<SharedNode> {
         // TODO(rkuris): If the read_node fails, we just say there is no root; this is incorrect
         self.kind
@@ -1232,7 +1285,7 @@ impl<S: ReadableStorage> RootReader for NodeStore<Committed, S> {
     }
 }
 
-impl<S: ReadableStorage> RootReader for NodeStore<Arc<ImmutableProposal>, S> {
+impl<S: ReadableStorage, H: HashMode> RootReader for NodeStore<Arc<ImmutableProposal>, S, H> {
     fn root_node(&self) -> Option<SharedNode> {
         // Use the MaybePersistedNode's as_shared_node method to get the root
         self.kind
@@ -1246,7 +1299,7 @@ impl<S: ReadableStorage> RootReader for NodeStore<Arc<ImmutableProposal>, S> {
     }
 }
 
-impl<S: ReadableStorage> RootReader for NodeStore<Reconstructed<S>, S> {
+impl<S: ReadableStorage, H: HashMode> RootReader for NodeStore<Reconstructed<S>, S, H> {
     fn root_node(&self) -> Option<SharedNode> {
         self.kind
             .root
@@ -1259,11 +1312,12 @@ impl<S: ReadableStorage> RootReader for NodeStore<Reconstructed<S>, S> {
     }
 }
 
-impl<T, S> HashedNodeReader for NodeStore<T, S>
+impl<T, S, H> HashedNodeReader for NodeStore<T, S, H>
 where
-    NodeStore<T, S>: TrieReader,
+    NodeStore<T, S, H>: TrieReader,
     T: Parentable,
     S: ReadableStorage,
+    H: HashMode,
 {
     fn root_address(&self) -> Option<LinearAddress> {
         self.kind.root_address()
@@ -1276,9 +1330,9 @@ where
 
 // This implements HashedNodeReader, can never be persisted,
 // and the root_hash is computed lazily via OnceLock.
-impl<S: ReadableStorage> HashedNodeReader for NodeStore<Reconstructed<S>, S>
+impl<S: ReadableStorage, H: HashMode> HashedNodeReader for NodeStore<Reconstructed<S>, S, H>
 where
-    NodeStore<Reconstructed<S>, S>: TrieReader,
+    NodeStore<Reconstructed<S>, S, H>: TrieReader,
 {
     fn root_address(&self) -> Option<LinearAddress> {
         // Reconstructed views are read-only overlays and are never persisted.
@@ -1350,7 +1404,7 @@ fn area_index_and_size<S: ReadableStorage>(
     Ok((index, size))
 }
 
-impl<T, S: ReadableStorage> NodeStore<T, S> {
+impl<T, S: ReadableStorage, H: HashMode> NodeStore<T, S, H> {
     /// Read a [Node] from the provided [`LinearAddress`].
     /// `addr` is the address of a `StoredArea` in the `ReadableStorage`.
     ///
@@ -1397,7 +1451,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
 
         let mut area_stream = self.storage.stream_from(actual_addr)?;
         let offset_before = area_stream.offset();
-        let node: SharedNode = Node::from_reader(&mut area_stream)
+        let node: SharedNode = Node::from_reader::<H>(&mut area_stream)
             .map_err(|e| {
                 self.storage
                     .file_io_error(e, actual_addr, Some("read_node_from_disk".to_owned()))
@@ -1451,7 +1505,7 @@ impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         self.kind.deleted.as_ref()
     }
 }
-impl<S: WritableStorage> NodeStore<Committed, S> {
+impl<S: WritableStorage, H: HashMode> NodeStore<Committed, S, H> {
     /// Adjust the freelist to reflect the freed nodes in the oldest revision.
     ///
     /// This method takes ownership of `self` and adds its deleted nodes to the free list
@@ -1554,7 +1608,8 @@ mod tests {
     fn test_reparent() {
         // create an empty base revision
         let memstore = MemStore::default();
-        let base = NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
+        let base: NodeStore<Committed, _> =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         // create an empty r1, check that it's parent is the empty committed version
         let r1 = NodeStore::new(&base).unwrap();
@@ -1591,8 +1646,9 @@ mod tests {
     #[test]
     fn test_slow_giant_node() {
         let memstore = Arc::new(MemStore::default());
-        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
-        let empty_root =
+        let mut header =
+            NodeStoreHeader::new(<crate::DefaultHashMode as crate::HashMode>::ALGORITHM);
+        let empty_root: NodeStore<Committed, _> =
             NodeStore::new_empty_committed(Arc::clone(&memstore), DeletedNodeTracking::Enabled);
 
         let mut node_store = NodeStore::new(&empty_root).unwrap();
@@ -1655,10 +1711,12 @@ mod tests {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            NodeHashAlgorithm::compile_option(),
+            <crate::DefaultHashMode as crate::HashMode>::ALGORITHM,
         )?);
-        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
-        let nodestore = NodeStore::open(&header, storage, DeletedNodeTracking::Enabled)?;
+        let mut header =
+            NodeStoreHeader::new(<crate::DefaultHashMode as crate::HashMode>::ALGORITHM);
+        let nodestore: NodeStore<Committed, _> =
+            NodeStore::open(&header, storage, DeletedNodeTracking::Enabled)?;
 
         let mut proposal = NodeStore::new(&nodestore)?;
 
@@ -1734,10 +1792,12 @@ mod tests {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            NodeHashAlgorithm::compile_option(),
+            <crate::DefaultHashMode as crate::HashMode>::ALGORITHM,
         )?);
-        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
-        let base = NodeStore::open(&header, Arc::clone(&storage), DeletedNodeTracking::Enabled)?;
+        let mut header =
+            NodeStoreHeader::new(<crate::DefaultHashMode as crate::HashMode>::ALGORITHM);
+        let base: NodeStore<Committed, _> =
+            NodeStore::open(&header, Arc::clone(&storage), DeletedNodeTracking::Enabled)?;
 
         // Create a proposal with a leaf node and persist it
         let mut proposal = NodeStore::new(&base)?;
@@ -1754,7 +1814,7 @@ mod tests {
         let root_hash = header.root_hash().unwrap().into_hash_type();
 
         // Reconstruct using with_root
-        let restored = NodeStore::with_root(
+        let restored: NodeStore<Committed, _> = NodeStore::with_root(
             root_hash.clone(),
             root_address,
             storage,
@@ -1778,10 +1838,12 @@ mod tests {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            NodeHashAlgorithm::compile_option(),
+            <crate::DefaultHashMode as crate::HashMode>::ALGORITHM,
         )?);
-        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
-        let base = NodeStore::open(&header, Arc::clone(&storage), DeletedNodeTracking::Enabled)?;
+        let mut header =
+            NodeStoreHeader::new(<crate::DefaultHashMode as crate::HashMode>::ALGORITHM);
+        let base: NodeStore<Committed, _> =
+            NodeStore::open(&header, Arc::clone(&storage), DeletedNodeTracking::Enabled)?;
 
         // Create a proposal with a leaf node and persist it
         let mut proposal = NodeStore::new(&base)?;
@@ -1797,7 +1859,7 @@ mod tests {
 
         // Use a bogus hash
         let bad_hash = HashType::from([0xAB; 32]);
-        let result = NodeStore::with_root(
+        let result = NodeStore::<Committed, _, DefaultHashMode>::with_root(
             bad_hash,
             root_address,
             storage,

@@ -57,6 +57,7 @@ features = ["mio", "net", "parking_lot", "rt", "time"]
 
 [features]
 default = ["prometheus"]
+ethhash = ["firewood/ethhash"]
 logger = ["firewood/logger"]
 prometheus = [
      "dep:metrics-exporter-prometheus",

@@ -326,12 +326,23 @@ pub(super) mod magic {
     /// Current proof format version: `0`
     pub const PROOF_VERSION: u8 = 0;
 
-    /// Hash mode identifier for SHA-256 hashing
+    /// Hash mode identifier for the build's compile-default hashing scheme.
+    ///
+    /// The serialized proof header no longer derives its `hash_mode` byte from
+    /// this constant — it is stamped from the source DB's runtime
+    /// [`NodeHashAlgorithm`](firewood_storage::NodeHashAlgorithm) via
+    /// `Header::from((ProofType, algorithm))`. This constant remains as the
+    /// documented wire byte for the compile-default mode and is referenced by
+    /// tests; hence `allow(dead_code)` for non-test builds.
     #[cfg(not(feature = "ethhash"))]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub const HASH_MODE: u8 = 0;
 
-    /// Hash mode identifier for Keccak-256 hashing (Ethereum-compatible)
+    /// Hash mode identifier for the build's compile-default hashing scheme
+    /// (Keccak-256, Ethereum-compatible). See the non-ethhash variant for why
+    /// this is `allow(dead_code)` outside tests.
     #[cfg(feature = "ethhash")]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub const HASH_MODE: u8 = 1;
 
     /// Returns the human-readable name for a hash mode identifier.

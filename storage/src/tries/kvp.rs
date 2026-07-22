@@ -242,24 +242,26 @@ impl<'a, T: AsRef<[u8]> + ?Sized> KeyValueTrieRoot<'a, T> {
         Ok(self)
     }
 
-    /// Hashes this trie, returning a hashed trie.
+    /// Hashes this trie under the hash mode `H`, returning a hashed trie.
     #[must_use]
-    pub fn into_hashed_trie(self: Box<Self>) -> Box<HashedKeyValueTrieRoot<'a, T>> {
-        HashedKeyValueTrieRoot::new(PathGuard::new(&mut PathBuf::new_const()), self)
+    pub fn into_hashed_trie<H: crate::HashMode>(
+        self: Box<Self>,
+    ) -> Box<HashedKeyValueTrieRoot<'a, T>> {
+        HashedKeyValueTrieRoot::new::<H>(PathGuard::new(&mut PathBuf::new_const()), self)
     }
 }
 
 impl<'a, T: AsRef<[u8]> + ?Sized> HashedKeyValueTrieRoot<'a, T> {
     /// Constructs a new hashed key-value trie node from the given un-hashed
-    /// node.
+    /// node, hashing under the scheme `H`.
     #[must_use]
-    pub fn new(
+    pub fn new<H: crate::HashMode>(
         mut leading_path: PathGuard<'_>,
         #[expect(clippy::boxed_local)] node: Box<KeyValueTrieRoot<'a, T>>,
     ) -> Box<Self> {
-        let children = node
-            .children
-            .map(|pc, child| child.map(|child| Self::new(leading_path.fork_append(pc), child)));
+        let children = node.children.map(|pc, child| {
+            child.map(|child| Self::new::<H>(leading_path.fork_append(pc), child))
+        });
 
         Box::new(Self {
             computed: HashableShunt::new(
@@ -270,7 +272,7 @@ impl<'a, T: AsRef<[u8]> + ?Sized> HashedKeyValueTrieRoot<'a, T> {
                     .each_ref()
                     .map(|_, c| c.as_deref().map(|c| c.computed.clone())),
             )
-            .to_hash(),
+            .to_hash::<H>(),
             leading_path: leading_path.as_slice().into(),
             partial_path: node.partial_path,
             value: node.value,
@@ -512,7 +514,7 @@ mod tests {
     /// # Example
     ///
     /// ```rust
-    /// expected_hash!{
+    /// both_hashes!{
     ///     merkledb16: b"749390713e51d3e4e50ba492a669c1644a6d9cb7e48b2a14d556e7f953da92fc",
     ///     ethereum: b"2e636399fae96dc07abaf21167a34b8a5514d6594e777635987e319c76f28a75",
     /// }
@@ -521,49 +523,36 @@ mod tests {
     /// or with RLP:
     ///
     /// ```rust
-    /// expected_hash!{
+    /// both_hashes!{
     ///     merkledb16: b"1ffe11ce995a9c07021d6f8a8c5b1817e6375dd0ea27296b91a8d48db2858bc9",
     ///     ethereum: rlp(b"c482206131"),
     /// }
     /// ```
-    macro_rules! expected_hash {
+    /// Build the `(merkledb, ethereum)` expected-root pair so a single binary
+    /// can assert both schemes. The ethereum root may be either a 32-byte hex
+    /// hash or, when short enough to be inlined, an RLP byte string wrapped in
+    /// `rlp(...)`. (Replaces the former `expected_hash!`, which selected one
+    /// vector at compile time; cross-mode assertion lands in PR 5.)
+    macro_rules! both_hashes {
         (
             merkledb16: $hex16:expr,
             ethereum: rlp($hexeth:expr),
         ) => {{
-            cfg_if::cfg_if! {
-                if #[cfg(feature = "ethhash")] {
-                    fn __expected_hash() -> $crate::HashType {
-                        $crate::HashType::Rlp(smallvec::SmallVec::from(
-                            &from_ascii::<{ $hexeth.len() }, { $hexeth.len() / 2 }>($hexeth)[..],
-                        ))
-                    }
-                } else {
-                    fn __expected_hash() -> $crate::HashType {
-                        $crate::HashType::from(from_ascii($hex16))
-                    }
-                }
-            }
-
-            __expected_hash()
+            (
+                $crate::HashType::from(from_ascii($hex16)),
+                $crate::HashType::Rlp(smallvec::SmallVec::from(
+                    &from_ascii::<{ $hexeth.len() }, { $hexeth.len() / 2 }>($hexeth)[..],
+                )),
+            )
         }};
         (
             merkledb16: $hex16:expr,
             ethereum: $hexeth:expr,
         ) => {{
-            cfg_if::cfg_if! {
-                if #[cfg(feature = "ethhash")] {
-                    fn __expected_hash() -> $crate::HashType {
-                        $crate::HashType::from(from_ascii($hexeth))
-                    }
-                } else {
-                    fn __expected_hash() -> $crate::HashType {
-                        $crate::HashType::from(from_ascii($hex16))
-                    }
-                }
-            }
-
-            __expected_hash()
+            (
+                $crate::HashType::from(from_ascii($hex16)),
+                $crate::HashType::from(from_ascii($hexeth)),
+            )
         }};
     }
 
@@ -642,61 +631,68 @@ mod tests {
         }
     }
 
-    #[test_case(&[("a", "1")], expected_hash!{
+    #[test_case(&[("a", "1")], both_hashes!{
         merkledb16: b"1ffe11ce995a9c07021d6f8a8c5b1817e6375dd0ea27296b91a8d48db2858bc9",
         ethereum: rlp(b"c482206131"),
     }; "single key")]
-    #[test_case(&[("a", "1"), ("b", "2")], expected_hash!{
+    #[test_case(&[("a", "1"), ("b", "2")], both_hashes!{
         merkledb16: b"ff783ce73f7a5fa641991d76d626eefd7840a839590db4269e1e92359ae60593",
         ethereum: rlp(b"d81696d580c22031c220328080808080808080808080808080"),
     }; "two disjoint keys")]
-    #[test_case(&[("a", "1"), ("ab", "2")], expected_hash!{
+    #[test_case(&[("a", "1"), ("ab", "2")], both_hashes!{
         merkledb16: b"c5def8c64a2f3b8647283251732b68a2fb185f8bf92c0103f31d5ec69bb9a90c",
         ethereum: rlp(b"d882006194d3808080808080c2323280808080808080808031"),
     }; "two nested keys")]
-    #[test_case(&[("a", "1"), ("b", "2"), ("c", "3")], expected_hash!{
+    #[test_case(&[("a", "1"), ("b", "2"), ("c", "3")], both_hashes!{
         merkledb16: b"95618fd79a0ca2d7612bf9fd60663b81f632c9a65e76bb5bc3ed5f3045cf1404",
         ethereum: rlp(b"da1698d780c22031c22032c2203380808080808080808080808080"),
     }; "three disjoint keys")]
-    #[test_case(&[("a", "1"), ("ab", "2"), ("ac", "3")], expected_hash!{
+    #[test_case(&[("a", "1"), ("ab", "2"), ("ac", "3")], both_hashes!{
         merkledb16: b"ee8a7a1409935f58ab6ce40a1e05ee2a587bdc06c201dbec7006ee1192e71f70",
         ethereum: b"6ffab67bf7096a9608b312b9b2459c17ec9429286b283a3b3cdaa64860182699",
     }; "two children of same parent")]
-    #[test_case(&[("a", "1"), ("b", "2"), ("ba", "3")], expected_hash!{
+    #[test_case(&[("a", "1"), ("b", "2"), ("ba", "3")], both_hashes!{
         merkledb16: b"d3efab83a1a4dd193c8ae51dfe638bba3494d8b1917e7a9185d20301ff1c528b",
         ethereum: b"21a118e1765c556e505a8752a0fd5bbb4ea78fb21077f8488d42862ebabf0130",
     }; "nested sibling")]
-    #[test_case(&[("a", "1"), ("ab", "2"), ("abc", "3")], expected_hash!{
+    #[test_case(&[("a", "1"), ("ab", "2"), ("abc", "3")], both_hashes!{
         merkledb16: b"af11454e2f920fb49041c9890c318455952d651b7d835f5731218dbc4bde4805",
         ethereum: b"eabecb5e4efb9b5824cd926fac6350bdcb4a599508b16538afde303d72571169",
     }; "linear nested keys")]
-    #[test_case(&[("a", "1"), ("ab", "2"), ("ac", "3"), ("b", "4")], expected_hash!{
+    #[test_case(&[("a", "1"), ("ab", "2"), ("ac", "3"), ("b", "4")], both_hashes!{
         merkledb16: b"749390713e51d3e4e50ba492a669c1644a6d9cb7e48b2a14d556e7f953da92fc",
         ethereum: b"2e636399fae96dc07abaf21167a34b8a5514d6594e777635987e319c76f28a75",
     }; "four keys")]
-    #[test_case(&[("a", "1"), ("ab", "2"), ("ac", "3"), ("b", "4"), ("ba", "5")], expected_hash!{
+    #[test_case(&[("a", "1"), ("ab", "2"), ("ac", "3"), ("b", "4"), ("ba", "5")], both_hashes!{
         merkledb16: b"1c043978de0cd65fe2e75a74eaa98878b753f4ec20f6fbbb7232a39f02e88c6f",
         ethereum: b"df930bafb34edb6d758eb5f4dd9461fc259c8c13abf38da8a0f63f289e107ecd",
     }; "five keys")]
-    #[test_case(&[("a", "1"), ("ab", "2"), ("ac", "3"), ("b", "4"), ("ba", "5"), ("bb", "6")], expected_hash!{
+    #[test_case(&[("a", "1"), ("ab", "2"), ("ac", "3"), ("b", "4"), ("ba", "5"), ("bb", "6")], both_hashes!{
         merkledb16: b"c2c13c095f7f07ce9ef92401f73951b4846a19e2b092b8a527fe96fa82f55cfd",
         ethereum: b"8ca7c3b09aa0a8877122d67fd795051bd1e6ff169932e3b7a1158ed3d66fbedf",
     }; "six keys")]
-    #[test_case(&[("a", "1"), ("ab", "2"), ("ac", "3"), ("b", "4"), ("ba", "5"), ("bb", "6"), ("c", "7")], expected_hash!{
+    #[test_case(&[("a", "1"), ("ab", "2"), ("ac", "3"), ("b", "4"), ("ba", "5"), ("bb", "6"), ("c", "7")], both_hashes!{
         merkledb16: b"697e767d6f4af8236090bc95131220c1c94cadba3e66e0a8011c9beef7b255a5",
         ethereum: b"3fa832b90f7f1a053a48a4528d1e446cc679fbcf376d0ef8703748d64030e19d",
     }; "seven keys")]
-    // These assert the root for the compile-selected `DefaultHashMode`; the
-    // `expected_hash!` macro picks the matching vector. Asserting BOTH the
-    // sha256 and ethereum roots in one binary needs the trie machinery
-    // parameterized over `H: HashMode`, which lands in PR 5.
-    fn test_hashed_trie(slice: &[(&str, &str)], root_hash: crate::HashType) {
-        let root = KeyValueTrieRoot::<str>::from_slice(slice)
+    // Asserts BOTH the sha256 (MerkleDB) and keccak (Ethereum) roots in a
+    // single binary, regardless of the `ethhash` feature, by hashing the trie
+    // under each `HashMode` directly. The trie machinery is now parameterized
+    // over `H: HashMode` (PR 5).
+    fn test_hashed_trie(
+        slice: &[(&str, &str)],
+        (merkledb_root, ethereum_root): (crate::HashType, crate::HashType),
+    ) {
+        let merkledb = KeyValueTrieRoot::<str>::from_slice(slice)
             .unwrap()
             .unwrap()
-            .into_hashed_trie();
+            .into_hashed_trie::<crate::MerkleDbHash>();
+        assert_eq!(*merkledb.computed(), merkledb_root);
 
-        assert_eq!(*root.computed(), root_hash);
-        assert_eq!(*root.computed(), crate::Preimage::to_hash(&*root));
+        let ethereum = KeyValueTrieRoot::<str>::from_slice(slice)
+            .unwrap()
+            .unwrap()
+            .into_hashed_trie::<crate::EthHash>();
+        assert_eq!(*ethereum.computed(), ethereum_root);
     }
 }

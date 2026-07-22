@@ -50,9 +50,9 @@
 use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
 use firewood_storage::hash_node_as_storage_trie_root_parts;
 use firewood_storage::{
-    Children, DefaultHashMode, FileIoError, HashMode, HashType, Hashable, IntoHashType,
-    IntoSplitPath, NibblesIterator, NodeHashAlgorithm, Path, PathBuf, PathComponent, PathIterItem,
-    Preimage, RlpError, SplitPath, TrieHash, TriePath, ValueDigest,
+    Children, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator,
+    NodeHashAlgorithm, Path, PathBuf, PathComponent, PathIterItem, Preimage, RlpError, SplitPath,
+    TrieHash, TriePath, ValueDigest,
 };
 use thiserror::Error;
 
@@ -331,7 +331,7 @@ impl std::fmt::Debug for ProofNode {
         // Filter the missing children and only show the present ones with their indices
         let child_hashes = self.child_hashes.iter_present().collect::<Vec<_>>();
         // Compute the hash and render it as well
-        let hash = firewood_storage::Preimage::to_hash(self);
+        let hash = self.to_hash();
 
         f.debug_struct("ProofNode")
             .field("key", &self.key)
@@ -397,20 +397,48 @@ impl Hashable for ProofNode {
 ///
 /// `None` only when the node's parent prefix is empty (`partial_len == 0`),
 /// which a real storage child never has, so it signals a malformed proof.
-fn compute_node_hash_as_storage_trie_root<N: Hashable>(node: &N) -> Option<HashType> {
+fn compute_node_hash_as_storage_trie_root<N: Hashable>(
+    node: &N,
+    algorithm: NodeHashAlgorithm,
+) -> Option<HashType> {
     let (branch_nibble, account_prefix) =
         node.parent_prefix_path().into_split_path().split_last()?;
-    Some(hash_node_as_storage_trie_root_parts(
-        account_prefix,
-        branch_nibble,
-        node.partial_path().into_split_path(),
-        node.value_digest(),
-        node.children(),
-    ))
+    let partial_path = node.partial_path().into_split_path();
+    let value_digest = node.value_digest();
+    let children = node.children();
+    Some(match algorithm {
+        NodeHashAlgorithm::Ethereum => {
+            hash_node_as_storage_trie_root_parts::<firewood_storage::EthHash, _, _>(
+                account_prefix,
+                branch_nibble,
+                partial_path,
+                value_digest,
+                children,
+            )
+        }
+        NodeHashAlgorithm::MerkleDB => {
+            hash_node_as_storage_trie_root_parts::<firewood_storage::MerkleDbHash, _, _>(
+                account_prefix,
+                branch_nibble,
+                partial_path,
+                value_digest,
+                children,
+            )
+        }
+    })
 }
 
-impl From<PathIterItem> for ProofNode {
-    fn from(item: PathIterItem) -> Self {
+impl ProofNode {
+    /// Build a [`ProofNode`] from a [`PathIterItem`], applying the account
+    /// storage-root fix according to the source DB's runtime `algorithm`.
+    ///
+    /// The eth-ness check is the runtime `algorithm` (so a `Db<EthHash>` opened
+    /// in a non-ethhash binary still applies the fix) AND the per-version
+    /// `must_recompute_storage_hash` flag (newer `firewood-v1-hfix` databases
+    /// persist the correct storageRoot during hashing, so the RLP
+    /// decode/re-encode is skipped on those). This mirrors the verify side
+    /// ([`compute_node_hash_as_storage_trie_root`]).
+    pub(crate) fn from_path_item(item: PathIterItem, algorithm: NodeHashAlgorithm) -> Self {
         let child_hashes = if let Some(branch) = item.node.as_branch() {
             branch.children_hashes()
         } else {
@@ -431,8 +459,7 @@ impl From<PathIterItem> for ProofNode {
         // recomputation, fix the value from the node's children. Newer
         // databases (firewood-v1-hfix) persist the correct storageRoot during
         // hashing, so we skip the RLP decode/re-encode on those.
-        #[cfg(feature = "ethhash")]
-        let value_digest = if item.must_recompute_storage_hash {
+        let value_digest = if algorithm.is_ethereum() && item.must_recompute_storage_hash {
             fix_account_storage_root(value_digest, &item.key_nibbles, &child_hashes)
         } else {
             value_digest
@@ -450,7 +477,6 @@ impl From<PathIterItem> for ProofNode {
 /// For account-depth nodes (64 nibbles), replace the storageRoot field in the
 /// value with the hash computed from the node's children. This ensures proofs
 /// from older databases (before firewood-v1-hfix) contain a valid storageRoot.
-#[cfg(feature = "ethhash")]
 fn fix_account_storage_root(
     value_digest: Option<ValueDigest<Box<[u8]>>>,
     key_nibbles: &PathBuf,
@@ -501,8 +527,12 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
         key: K,
         expected_value: Option<V>,
         root_hash: &TrieHash,
+        algorithm: NodeHashAlgorithm,
     ) -> Result<(), ProofError> {
-        verify_opt_value_digest(expected_value, self.value_digest(key, root_hash)?)
+        verify_opt_value_digest(
+            expected_value,
+            self.value_digest(key, root_hash, algorithm)?,
+        )
     }
 
     /// Verify this proof against `root_hash` for the given `key` and return the
@@ -540,6 +570,7 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
         &self,
         key: K,
         root_hash: &TrieHash,
+        algorithm: NodeHashAlgorithm,
     ) -> Result<Option<ValueDigest<&[u8]>>, ProofError> {
         let key = Path(NibblesIterator::new(key.as_ref()).collect());
 
@@ -556,16 +587,16 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
 
         let mut iter = self.0.as_ref().iter().peekable();
         while let Some(node) = iter.next() {
-            let computed = if DefaultHashMode::ALGORITHM.is_ethereum() && hash_as_storage_root {
-                compute_node_hash_as_storage_trie_root(node)
+            let computed = if algorithm.is_ethereum() && hash_as_storage_root {
+                compute_node_hash_as_storage_trie_root(node, algorithm)
             } else {
-                Some(node.to_hash())
+                Some(crate::merkle::hash_in_mode(algorithm, node))
             };
             // A malformed node yields `None`; reject it as an unexpected hash.
             let Some(actual_hash) = computed else {
                 return Err(ProofError::UnexpectedHash {
                     expected: expected_hash,
-                    actual: node.to_hash(),
+                    actual: crate::merkle::hash_in_mode(algorithm, node),
                 });
             };
             if actual_hash != expected_hash {
@@ -912,7 +943,11 @@ mod tests {
         proven_key.extend([0x00u8; 31]);
 
         assert!(matches!(
-            proof.value_digest(proven_key.as_slice(), &root_hash),
+            proof.value_digest(
+                proven_key.as_slice(),
+                &root_hash,
+                <firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM
+            ),
             Err(ProofError::UnexpectedHash { .. })
         ));
     }
@@ -937,12 +972,24 @@ mod tests {
 
         // Verifying against key [0x30] (nibble path [3, 0]) should succeed
         // — this is the key the proof was built for.
-        assert!(proof.value_digest([0x30u8], &root_hash).is_ok());
+        assert!(
+            proof
+                .value_digest(
+                    [0x30u8],
+                    &root_hash,
+                    <firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM
+                )
+                .is_ok()
+        );
 
         // Verifying against key [0x50] (nibble path [5, 0]) must fail
         // — the proof goes to nibble 3, not nibble 5.
         assert!(matches!(
-            proof.value_digest([0x50u8], &root_hash),
+            proof.value_digest(
+                [0x50u8],
+                &root_hash,
+                <firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM
+            ),
             Err(ProofError::ShouldBePrefixOfNextKey),
         ));
     }
