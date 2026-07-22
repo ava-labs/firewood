@@ -251,6 +251,22 @@
 //! boundary proof node fall outside the proven range (left of
 //! `requested_start_key` or right of `right_edge_key`).
 //!
+//! A boundary terminal's on-path child — the child the boundary key descends
+//! into — is resolved against the **proving trie**: it is marked outside only
+//! when the proposal holds no in-range key under it. An omitted in-range
+//! delete or a forged op leaves its key in the proposal, so that child stays
+//! in range and is recomputed rather than taken from the proof, and the
+//! mismatch is caught. An omitted in-range put leaves the proposal with no
+//! child there at all, which is likewise kept in range and recomputed. An
+//! unbounded right edge is treated as +∞ here, not as an empty (minimum) key.
+//!
+//! Marking that child outside is sound only because structural verification
+//! (phase 1) has already required it to be absent from `end_root` for the
+//! exclusion proof to be valid (`ExclusionProofMissingChild`), so the proof
+//! cannot supply a child hash that hides in-range state there. This is why
+//! [`verify_change_proof_root_hash`] must only be called with a context
+//! produced by [`verify_change_proof_structure`].
+//!
 //! `compute_root_hash_with_proofs` recursively walks the **proving trie**:
 //!
 //! - **In-range children** (not in the outside mask): hashed from the
