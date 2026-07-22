@@ -344,7 +344,7 @@ fn classify_terminal(
 /// The terminal's classification (`terminal`) is computed once by the caller
 /// via [`classify_terminal`] and applied here. When it is
 /// [`TerminalMarking::OnPath`], the straddling child's far side is marked, and
-/// the caller decides that child itself against the proving trie.
+/// the change-proof caller decides that child itself against the proving trie.
 fn compute_outside_children(
     proof_nodes: &[ProofNode],
     boundary: &EdgeBoundary<'_>,
@@ -422,10 +422,10 @@ fn compute_outside_children(
 ///
 /// Each boundary terminal's on-path child is decided from the proposal: it is
 /// taken from the proof only when the proving trie holds no in-range key under
-/// it (via [`Merkle::on_path_child_in_range`]). An omitted in-range op then
-/// leaves its key in the proposal, forces that child to be recomputed, and
-/// fails the root-hash check. Returns the union of the left and right boundary
-/// masks keyed by node path.
+/// it (via [`Merkle::on_path_child_in_range`]). An omitted in-range delete or
+/// a forged op then leaves its key in the proposal, forces that child to be
+/// recomputed, and fails the root-hash check. Returns the union of the left
+/// and right boundary masks keyed by node path.
 ///
 /// `start_nib` and `end_nib` must be the nibble expansions of `verification`'s
 /// `start_key` and `right_edge_key`, where a `None` end is unbounded (+∞).
@@ -460,10 +460,11 @@ fn change_outside_children<S: ReadableStorage>(
     }
 
     // On-path children: mark one outside only when the proving trie holds no
-    // in-range key under it. An omitted or forged in-range op leaves its key in
-    // the proposal, so that child stays in range, is recomputed, and fails the
-    // root-hash check. This reads the proposal, never the attacker-controlled
-    // batch ops. A storage error while reading it propagates.
+    // in-range key under it. An omitted in-range delete or a forged op leaves
+    // its key in the proposal, so that child stays in range, is recomputed, and
+    // fails the root-hash check. This reads the proposal, never the
+    // attacker-controlled batch ops. A storage error while reading it
+    // propagates.
     for (terminal_key, marking) in [start_terminal, end_terminal].into_iter().flatten() {
         let TerminalMarking::OnPath(on_path) = marking else {
             continue;
@@ -1206,14 +1207,14 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
 ///
 /// # Ordering
 ///
-/// `verification` must come from `verify_change_proof_structure`, which
-/// validates the boundary proofs (notably the `ExclusionProofMissingChild`
-/// check). This function may mark a boundary terminal's on-path child outside
-/// — taking its hash from the proof — when the proposal holds no in-range key
-/// under it. That is sound only because the structural check has already
-/// established that child is absent in `end_root`. Passing a hand-built
-/// `ChangeProofVerificationContext` that skipped structural verification is
-/// unsound.
+/// `verification` must come from `verify_change_proof_structure` for this same
+/// `proof`, which validates the boundary proofs (notably the
+/// `ExclusionProofMissingChild` check). This function may mark a boundary
+/// terminal's on-path child outside — taking its hash from the proof — when
+/// the proposal holds no in-range key under it. That is sound only because the
+/// structural check has already established that child is absent in
+/// `end_root`. Passing a hand-built `ChangeProofVerificationContext`, or one
+/// produced for a different proof, is unsound.
 pub fn verify_change_proof_root_hash(
     proof: &FrozenChangeProof,
     verification: &ChangeProofVerificationContext,

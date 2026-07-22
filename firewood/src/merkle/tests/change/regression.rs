@@ -5,7 +5,7 @@
 //! boundaries, where a boundary key shares a trie-descent path with a
 //! neighbouring key.
 //!
-//! Soundness — a tampered or forged op must be rejected:
+//! Soundness — a tampered, forged, or omitted op must be rejected:
 //! - `test_tampered_right_edge_delete_to_put_is_rejected` (#2091): in a
 //!   no-bounds proof, whose end proof anchors on the highest changed key
 //!   (`merkle/mod.rs` `change_proof`: `end_key.or(batch_ops.last())`), a deleted
@@ -20,10 +20,10 @@
 //!   in-range delete under the boundary's on-path child (ships empty batch ops)
 //!   is rejected — the key stays in the proposal, so that child is recomputed
 //!   rather than taken from the proof, and the root-hash check fails.
-//! - `test_unbounded_end_omitted_in_range_delete_is_rejected`: the same omission
-//!   with an unbounded right edge (`end_key == None`). The +∞ end bound keeps
-//!   the key in range, so the child is recomputed rather than taken from the
-//!   (empty) proof.
+//! - `test_unbounded_end_omitted_in_range_delete_is_rejected`: the analogous
+//!   omission at the start boundary's on-path child, with an unbounded right
+//!   edge (`end_key == None`). The +∞ end bound keeps the key in range, so the
+//!   child is recomputed rather than taken from the start proof.
 //!
 //! Completeness — an honest out-of-range deletion just past a boundary must
 //! still verify:
@@ -354,7 +354,7 @@ fn test_out_of_range_delete_below_start_bound_verifies() {
 
 /// A change proof that OMITS an in-range delete must be rejected. `0xf51c` is
 /// in range and sits under child `5` of the `f` branch, which the end bound
-/// `0xf5cd` descends into; the honest proof deletes it. An attacker reuses the
+/// `0xf5cd` descends into. The honest proof deletes it. An attacker reuses the
 /// honest boundary proofs but ships empty batch ops (claiming nothing changed).
 /// The proposal (start trie + no ops) still holds `0xf51c`, so that child must
 /// be recomputed from the proposal — deciding it from the batch ops instead
@@ -457,6 +457,6 @@ fn test_unbounded_end_omitted_in_range_delete_is_rejected() {
         !verifies(&db, &forged, start_root, end_root, Some(sk), None),
         "SOUNDNESS BUG: an unbounded-end change proof omitting the in-range \
          Delete{{0x53}} was accepted. The key remains in the proposal and its \
-         subtree must be recomputed, not taken from the (empty) proof"
+         subtree must be recomputed, not taken from the start proof"
     );
 }

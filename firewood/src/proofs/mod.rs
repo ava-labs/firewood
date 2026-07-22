@@ -253,11 +253,12 @@
 //!
 //! A boundary terminal's on-path child — the child the boundary key descends
 //! into — is resolved against the **proving trie**: it is marked outside only
-//! when the proposal holds no in-range key under it. An omitted or forged
-//! in-range op leaves its key in the proposal, so that child stays in range
-//! and is recomputed rather than taken from the proof, and the mismatch is
-//! caught. An unbounded right edge is treated as +∞ here, not as an empty
-//! (minimum) key.
+//! when the proposal holds no in-range key under it. An omitted in-range
+//! delete or a forged op leaves its key in the proposal, so that child stays
+//! in range and is recomputed rather than taken from the proof, and the
+//! mismatch is caught. An omitted in-range put leaves the proposal with no
+//! child there at all, which is likewise kept in range and recomputed. An
+//! unbounded right edge is treated as +∞ here, not as an empty (minimum) key.
 //!
 //! Marking that child outside is sound only because structural verification
 //! (phase 1) has already required it to be absent from `end_root` for the

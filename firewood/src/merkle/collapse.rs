@@ -162,7 +162,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         Ok(())
     }
 
-    /// In-range children that are also proposal-local trigger rejection.
+    /// Stripping an off-path child that holds an in-range key triggers
+    /// rejection.
     pub(crate) fn collapse_branch_to_path(
         &mut self,
         from: &[PathComponent],
@@ -371,13 +372,16 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
             // Consume this node's partial path. If node_key is too short to hold
             // it, or diverges, node_key does not land on a node boundary here —
             // sound default: treat the child as in range (it gets recomputed).
-            let Some(segment) = pos.checked_add(pp.len()).and_then(|n| node_key.get(pos..n)) else {
+            let Some(after_pp) = pos.checked_add(pp.len()) else {
+                return Ok(true);
+            };
+            let Some(segment) = node_key.get(pos..after_pp) else {
                 return Ok(true);
             };
             if segment.iter().zip(pp).any(|(a, b)| a.as_u8() != b.as_u8()) {
                 return Ok(true);
             }
-            pos = pos.saturating_add(pp.len());
+            pos = after_pp;
             if pos == node_key.len() {
                 break;
             }
@@ -391,7 +395,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
                 return Ok(true);
             };
             current = child.as_shared_node(&self.nodestore)?;
-            pos = pos.saturating_add(1);
+            // `descend` came from `node_key.get(pos)`, so `pos < node_key.len()`
+            // and this cannot overflow.
+            debug_assert!(pos < node_key.len());
+            pos = pos.wrapping_add(1);
         }
 
         let Some(branch) = current.as_branch() else {
