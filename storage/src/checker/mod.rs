@@ -974,7 +974,7 @@ mod test {
     // We use primitive calls here to do a low-level check.
     fn checker_traverse_correct_trie() {
         let memstore = MemStore::default();
-        let nodestore =
+        let nodestore: NodeStore<Committed, _> =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let test_trie = gen_test_trie(&nodestore);
@@ -999,7 +999,7 @@ mod test {
     // This test permutes the simple trie with a wrong hash and checks that the checker detects it.
     fn checker_traverse_trie_with_wrong_hash() {
         let memstore = MemStore::default();
-        let nodestore =
+        let nodestore: NodeStore<Committed, _> =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let mut test_trie = gen_test_trie(&nodestore);
@@ -1074,7 +1074,7 @@ mod test {
         let rng = crate::SeededRng::from_env_or_random();
 
         let memstore = MemStore::default();
-        let nodestore =
+        let nodestore: NodeStore<Committed, _> =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         // write free areas
@@ -1121,7 +1121,7 @@ mod test {
     #[test]
     fn traverse_freelist_should_skip_offspring_of_incorrect_areas() {
         let memstore = MemStore::default();
-        let nodestore =
+        let nodestore: NodeStore<Committed, _> =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
         let TestFreelist {
             high_watermark,
@@ -1143,7 +1143,7 @@ mod test {
     #[test]
     fn fix_freelist_with_overlap() {
         let memstore = MemStore::default();
-        let nodestore =
+        let nodestore: NodeStore<Committed, _> =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
         let TestFreelist {
             high_watermark,
@@ -1187,7 +1187,7 @@ mod test {
         let mut rng = crate::SeededRng::from_env_or_random();
 
         let memstore = MemStore::default();
-        let nodestore =
+        let nodestore: NodeStore<Committed, _> =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let num_areas = 10;
@@ -1245,7 +1245,7 @@ mod test {
     #[expect(clippy::arithmetic_side_effects)]
     fn split_range_of_zeros_into_leaked_areas() {
         let memstore = MemStore::default();
-        let nodestore =
+        let nodestore: NodeStore<Committed, _> =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let expected_leaked_area_indices = vec![
@@ -1297,7 +1297,7 @@ mod test {
     #[expect(clippy::arithmetic_side_effects)]
     fn split_range_into_leaked_areas_test() {
         let memstore = MemStore::default();
-        let nodestore =
+        let nodestore: NodeStore<Committed, _> =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         // write two free areas

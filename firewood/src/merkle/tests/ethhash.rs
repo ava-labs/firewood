@@ -1,7 +1,8 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::api::OptionalHashKeyExt;
+//! Ethereum-only: keccak/RLP golden vectors.
+
 use crate::merkle::Merkle;
 use firewood_storage::{Committed, DeletedNodeTracking, MemStore, NodeStore};
 
@@ -50,7 +51,7 @@ where
     K: AsRef<[u8]> + Ord,
     V: AsRef<[u8]>,
 {
-    let merkle = init_merkle(kvs.clone());
+    let merkle = init_merkle::<EthHash, I, K, V>(kvs.clone());
     let firewood_hash = merkle.nodestore.root_hash().unwrap_or_else(TrieHash::empty);
     let eth_hash: TrieHash = KeccakHasher::trie_root(kvs).to_fixed_bytes().into();
     assert_eq!(firewood_hash, eth_hash);
@@ -106,7 +107,7 @@ fn test_eth_compatible_accounts(
     }))
     .collect::<Vec<(Box<_>, Box<_>)>>();
 
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<EthHash, _, _, _>(items);
     let firewood_hash = merkle.nodestore.root_hash();
 
     assert_eq!(
@@ -120,6 +121,11 @@ fn make_key(hex_str: &str) -> Key {
     hex::decode(hex_str).unwrap().into_boxed_slice()
 }
 
+/// Ethereum's empty-trie root (`keccak256(0x80)`) is a property of the
+/// `EthHash` scheme, not of the binary's compile-time `ethhash` feature — so
+/// this reaches for `EthHash::default_root_hash()` directly rather than the
+/// `OptionalHashKeyExt` convenience (which resolves via the compile-selected
+/// `DefaultHashMode` and would silently go stale in a non-`ethhash` build).
 #[test]
 fn test_root_hash_random_deletions() {
     use rand::seq::SliceRandom;
@@ -151,7 +157,8 @@ fn test_root_hash_random_deletions() {
         items_ordered.sort_unstable();
         items_ordered.shuffle(&mut &rng);
 
-        let (mut committed_merkle, mut header) = init_merkle_with_header(&items);
+        let (mut committed_merkle, mut header) =
+            init_merkle_with_header::<EthHash, _, _, _>(&items);
 
         for (k, v) in items_ordered {
             let mut merkle = committed_merkle.fork().unwrap();
@@ -175,7 +182,7 @@ fn test_root_hash_random_deletions() {
             let h0 = committed_merkle
                 .nodestore()
                 .root_hash()
-                .or_default_root_hash()
+                .or_else(EthHash::default_root_hash)
                 .unwrap();
 
             assert_eq!(h, h0);
@@ -239,17 +246,22 @@ fn assert_range_proof_roundtrips(
     root_hash: &TrieHash,
     range_proof: &crate::api::FrozenRangeProof,
 ) {
-    verify_range_proof(first, last, root_hash, range_proof).unwrap();
+    verify_range_proof(first, last, root_hash, EthHash::ALGORITHM, range_proof).unwrap();
 
     let mut serialized = Vec::new();
     range_proof.write_to_vec(&mut serialized);
     let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
-    verify_range_proof(first, last, root_hash, &deserialized).unwrap();
+    verify_range_proof(first, last, root_hash, EthHash::ALGORITHM, &deserialized).unwrap();
 }
 
 /// The pieces a fold test needs from [`build_account_trie`].
 struct AccountTrie {
-    merkle: Merkle<NodeStore<Committed, MemStore>>,
+    // Explicit `EthHash`: `NodeStore`'s default `H` tracks the compile-time
+    // `ethhash` feature, but this module now compiles under both configs, so
+    // relying on the default would silently swap in `MerkleDbHash` in a
+    // non-`ethhash` build even though `build_account_trie` always hashes
+    // with `EthHash`.
+    merkle: Merkle<NodeStore<Committed, MemStore, EthHash>>,
     root_hash: TrieHash,
     account_key: Box<[u8]>,
     storage_keys: Box<[Box<[u8]>]>,
@@ -286,7 +298,7 @@ fn build_account_trie(storage_child_nibbles: &[u8]) -> AccountTrie {
     }
     items.push((following_key.as_ref(), following_value.as_ref()));
 
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<EthHash, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
     AccountTrie {
         merkle,
@@ -318,7 +330,7 @@ fn commit_and_read_storage_root(
         items.push((key, Box::from(*value)));
     }
 
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<EthHash, _, _, _>(items);
 
     let stored = merkle
         .get_value(account_key_hash.as_slice())
@@ -389,10 +401,11 @@ fn test_persisted_storage_root_one_storage_entry() {
     // just (storage_key, storage_value). Building it the same way the
     // ethhash hasher would lets us assert against a concrete hash rather
     // than just "not empty".
-    let expected = init_merkle([(storage_key.as_slice(), storage_value.as_slice())])
-        .nodestore()
-        .root_hash()
-        .expect("standalone storage trie should have a root");
+    let expected =
+        init_merkle::<EthHash, _, _, _>([(storage_key.as_slice(), storage_value.as_slice())])
+            .nodestore()
+            .root_hash()
+            .expect("standalone storage trie should have a root");
 
     assert_eq!(
         storage_root.as_slice(),
@@ -424,7 +437,7 @@ fn test_persisted_storage_root_two_storage_entries() {
         ],
     );
 
-    let expected = init_merkle([
+    let expected = init_merkle::<EthHash, _, _, _>([
         (storage_key_a.as_slice(), storage_value_a.as_slice()),
         (storage_key_b.as_slice(), storage_value_b.as_slice()),
     ])
@@ -485,7 +498,7 @@ fn test_range_proof_accounts_have_computed_storage_root() {
         .map(|(k, v)| (k.clone(), v.clone()))
         .chain(once((storage_key, storage_value)))
         .collect();
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<EthHash, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     // Build a range proof over [left_key, right_key]. The storage entry
@@ -499,6 +512,7 @@ fn test_range_proof_accounts_have_computed_storage_root() {
         Some(left_key.as_ref()),
         Some(right_key.as_ref()),
         &root_hash,
+        EthHash::ALGORITHM,
         &range_proof,
     )
     .unwrap();
@@ -641,7 +655,7 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
         .map(|(k, v)| (k.clone(), v.clone()))
         .chain(once((storage_key, storage_value)))
         .collect();
-    let (merkle, _header) = init_merkle_with_header(items);
+    let (merkle, _header) = init_merkle_with_header::<EthHash, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     // ── Phase 1: generate a correct range proof to learn the real storageRoot values ──
@@ -658,11 +672,17 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values);
+    // `RangeProof::new` stamps the compile-time `DefaultHashMode`, which would
+    // silently mismatch this test's pinned `EthHash` in a non-`ethhash` build.
+    // `new_with_hash_mode` records the actual mode explicitly instead, exactly
+    // as `Merkle::range_proof` does for a proof built from a live trie.
+    let range_proof =
+        RangeProof::new_with_hash_mode(start_proof, end_proof, key_values, EthHash::ALGORITHM);
     verify_range_proof(
         Some(left_key.as_ref()),
         Some(right_key.as_ref()),
         &root_hash,
+        EthHash::ALGORITHM,
         &range_proof,
     )
     .unwrap();
@@ -694,8 +714,12 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
     // Re-read the header from the clobbered storage so the version matches.
     let header = NodeStoreHeader::read_from_storage(&*storage).unwrap();
 
-    // Re-open from the clobbered MemStore so all reads come from disk.
-    let reopened: NodeStore<Committed, _> =
+    // Re-open from the clobbered MemStore so all reads come from disk. Explicit
+    // `EthHash`: the data on disk was written under `EthHash` (see `merkle`
+    // above), and `NodeStore`'s default `H` would otherwise silently follow
+    // the compile-time `ethhash` feature instead of the mode this test is
+    // pinned to.
+    let reopened: NodeStore<Committed, _, EthHash> =
         NodeStore::open(&header, storage, DeletedNodeTracking::Enabled).unwrap();
     let merkle = Merkle::from(reopened);
 
@@ -723,6 +747,7 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
         Some(left_key.as_ref()),
         Some(right_key.as_ref()),
         &root_hash,
+        EthHash::ALGORITHM,
         &range_proof,
     )
     .unwrap();

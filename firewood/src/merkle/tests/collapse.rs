@@ -8,9 +8,9 @@ use super::*;
 /// with a target of \x10. Since \x01 is not on the path from the root
 /// to the target, nibble 0 is stripped from the root. Path compression
 /// changes the root's partial path from a length of 0 to a length of 2.
-#[test]
-fn test_collapse_root_to_path() {
-    let mut merkle = create_in_memory_merkle();
+#[firewood_macros::hash_mode]
+fn test_collapse_root_to_path<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
     let pc = |n: u8| PathComponent::try_new(n).unwrap();
 
     // \x01 → nibbles [0, 1], \x10 → nibbles [1, 0]
@@ -37,9 +37,9 @@ fn test_collapse_root_to_path() {
 /// of the remaining nodes. In this example, the target is \x10, the range is
 /// [0x0], [0xf], and the root (which is on-path) has a child in the range.
 /// Therefore we expect to receive an `EndRootMismatch` error.
-#[test]
-fn test_collapse_root_to_path_rejects() {
-    let mut merkle = create_in_memory_merkle();
+#[firewood_macros::hash_mode]
+fn test_collapse_root_to_path_rejects<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
     let pc = |n: u8| PathComponent::try_new(n).unwrap();
 
     // \x01 → nibbles [0, 1], \x10 → nibbles [1, 0]
@@ -61,10 +61,10 @@ fn test_collapse_root_to_path_rejects() {
     ));
 }
 
-#[test]
-fn test_collapse_branch_to_path() {
+#[firewood_macros::hash_mode]
+fn test_collapse_branch_to_path<H: HashMode>() {
     let pc = |n: u8| PathComponent::try_new(n).unwrap();
-    let mut merkle = create_in_memory_merkle();
+    let mut merkle = create_in_memory_merkle::<H>();
 
     merkle
         .insert(b"\x10\x21", Box::from(b"a".as_slice()))
@@ -90,10 +90,10 @@ fn test_collapse_branch_to_path() {
     assert!(merkle.get_value(b"\x10\x30").unwrap().is_some());
 }
 
-#[test]
-fn test_collapse_branch_to_path_rejects() {
+#[firewood_macros::hash_mode]
+fn test_collapse_branch_to_path_rejects<H: HashMode>() {
     let pc = |n: u8| PathComponent::try_new(n).unwrap();
-    let mut merkle = create_in_memory_merkle();
+    let mut merkle = create_in_memory_merkle::<H>();
 
     merkle
         .insert(b"\x10\x21", Box::from(b"a".as_slice()))

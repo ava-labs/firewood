@@ -6,21 +6,28 @@
 //! When the start revision is empty, every key in the end revision is a new
 //! insertion. These tests exercise the interaction between empty start tries
 //! and the divergent child / value skip logic.
+//!
+//! Pinned to `EthHash`: an empty trie has no root hash under `MerkleDbHash`
+//! (there is nothing to hash), so a change proof from an empty database
+//! can't be generated in that mode. Only `ethhash` gives an empty trie a
+//! well-defined root hash.
 
 use super::*;
 
 /// Empty start trie, single key inserted. Complete proof (no bounds).
 #[test]
 fn test_empty_start_trie_single_key_no_bounds() {
-    let (db, _dir) = setup_db![];
+    let (db, _dir) = setup_db![mode = EthHash];
     let (empty_root, root2) = setup_2nd_commit!(db, [(b"\x50", b"hello")]);
 
     let proof = db
         .change_proof(empty_root, root2.clone(), None, None, None)
         .unwrap();
-    let ctx = verify_change_proof_structure(&proof, root2.clone(), None, None, None).unwrap();
+    let ctx =
+        verify_change_proof_structure(&proof, root2.clone(), None, None, EthHash::ALGORITHM, None)
+            .unwrap();
 
-    let (target, _dir_target) = setup_db![];
+    let (target, _dir_target) = setup_db![mode = EthHash];
     let empty_root_target = target.root_hash().unwrap();
 
     verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
@@ -30,7 +37,7 @@ fn test_empty_start_trie_single_key_no_bounds() {
 /// start proof (`start_key` exists in end trie).
 #[test]
 fn test_empty_start_trie_bounded_inclusion() {
-    let (db, _dir) = setup_db![];
+    let (db, _dir) = setup_db![mode = EthHash];
     let (empty_root, root2) = setup_2nd_commit!(
         db,
         [
@@ -50,11 +57,17 @@ fn test_empty_start_trie_bounded_inclusion() {
             None,
         )
         .unwrap();
-    let ctx =
-        verify_change_proof_structure(&proof, root2.clone(), Some(b"\x10"), Some(b"\x30"), None)
-            .unwrap();
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2.clone(),
+        Some(b"\x10"),
+        Some(b"\x30"),
+        EthHash::ALGORITHM,
+        None,
+    )
+    .unwrap();
 
-    let (target, _dir_target) = setup_db![];
+    let (target, _dir_target) = setup_db![mode = EthHash];
     let empty_root_target = target.root_hash().unwrap();
 
     verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
@@ -64,7 +77,7 @@ fn test_empty_start_trie_bounded_inclusion() {
 /// (`start_key` does NOT exist in end trie).
 #[test]
 fn test_empty_start_trie_bounded_exclusion() {
-    let (db, _dir) = setup_db![];
+    let (db, _dir) = setup_db![mode = EthHash];
     let (empty_root, root2) =
         setup_2nd_commit!(db, [(b"\x10", b"a"), (b"\x20", b"b"), (b"\x30", b"c")]);
 
@@ -77,11 +90,17 @@ fn test_empty_start_trie_bounded_exclusion() {
             None,
         )
         .unwrap();
-    let ctx =
-        verify_change_proof_structure(&proof, root2.clone(), Some(b"\x05"), Some(b"\x30"), None)
-            .unwrap();
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2.clone(),
+        Some(b"\x05"),
+        Some(b"\x30"),
+        EthHash::ALGORITHM,
+        None,
+    )
+    .unwrap();
 
-    let (target, _dir_target) = setup_db![];
+    let (target, _dir_target) = setup_db![mode = EthHash];
     let empty_root_target = target.root_hash().unwrap();
 
     verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
@@ -93,7 +112,7 @@ fn test_empty_start_trie_bounded_exclusion() {
 /// which places a value on the root node itself.
 #[test]
 fn test_empty_start_trie_prefix_keys() {
-    let (db, _dir) = setup_db![];
+    let (db, _dir) = setup_db![mode = EthHash];
     let (empty_root, root2) = setup_2nd_commit!(
         db,
         [
@@ -105,7 +124,7 @@ fn test_empty_start_trie_prefix_keys() {
         ]
     );
 
-    let (target, _dir_target) = setup_db![];
+    let (target, _dir_target) = setup_db![mode = EthHash];
     let empty_root_target = target.root_hash().unwrap();
 
     // Range [\x10\x50, \x20]: start_key \x10\x50 exists (inclusion).
@@ -125,6 +144,7 @@ fn test_empty_start_trie_prefix_keys() {
         root2.clone(),
         Some(b"\x10\x50"),
         Some(b"\x20"),
+        EthHash::ALGORITHM,
         None,
     )
     .unwrap();
@@ -146,6 +166,7 @@ fn test_empty_start_trie_prefix_keys() {
         root2.clone(),
         Some(b"\x10\x50\x00"),
         Some(b"\x20"),
+        EthHash::ALGORITHM,
         None,
     )
     .unwrap();

@@ -123,6 +123,36 @@ fn fwdctl_root_hash() {
 }
 
 #[test]
+fn fwdctl_merkledb_database_round_trip() {
+    with_tmpdir(|db_path| {
+        // Create in MerkleDB mode via the explicit flag…
+        cargo_bin_cmd!()
+            .arg("create")
+            .arg("--db")
+            .arg(db_path)
+            .args(["--hash-mode", "merkle-db"])
+            .assert()
+            .success();
+        // …then insert/get/root auto-detect the mode from the header.
+        insert_key_value(db_path, "year", "2026");
+        cargo_bin_cmd!()
+            .arg("get")
+            .arg("--db")
+            .arg(db_path)
+            .args(["year"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("2026"));
+        cargo_bin_cmd!()
+            .arg("root")
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success();
+    });
+}
+
+#[test]
 fn fwdctl_dump() {
     with_tmpdir(|db_path| {
         create_db(db_path);

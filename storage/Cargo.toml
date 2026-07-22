@@ -54,6 +54,7 @@ arc-swap = "1.9.2"
 [dev-dependencies]
 # Workspace dependencies
 criterion = { workspace = true, features = ["html_reports"] }
+firewood-macros.workspace = true
 insta.workspace = true
 metrics-util.workspace = true
 pprof = { workspace = true, features = ["flamegraph"] }

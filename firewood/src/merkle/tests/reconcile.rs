@@ -1,13 +1,21 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+//! Ethereum-only: pinned to `EthHash` throughout because
+//! `test_reconcile_branch_proof_node_account_storage_root_relaxation` below
+//! exercises the account-depth storageRoot relaxation in
+//! `reconcile_branch_proof_node`, which only exists under Ethereum hashing.
+//! The other tests in this module reconcile generic branch proof nodes and
+//! don't depend on the hash mode, but are pinned to the same concrete type
+//! for consistency (and because they share this module's `use super::*;`
+//! helpers with the account-relaxation test).
+
 use super::*;
-#[cfg(feature = "ethhash")]
 use test_case::test_case;
 
 #[test]
 fn test_reconcile_branch_proof_node_creates_missing_branch_without_value() {
-    let mut merkle = create_in_memory_merkle();
+    let mut merkle = create_in_memory_merkle::<firewood_storage::EthHash>();
 
     let proof_node = test_branch_proof_node(&[0xa, 0xb, 0xc], None);
 
@@ -25,7 +33,7 @@ fn test_reconcile_branch_proof_node_creates_missing_branch_without_value() {
 
 #[test]
 fn test_reconcile_branch_proof_node_sets_missing_value_via_callback() {
-    let mut merkle = create_in_memory_merkle();
+    let mut merkle = create_in_memory_merkle::<firewood_storage::EthHash>();
     merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
 
     let proof_node =
@@ -46,7 +54,7 @@ fn test_reconcile_branch_proof_node_sets_missing_value_via_callback() {
 
 #[test]
 fn test_reconcile_branch_proof_node_clears_value_via_callback() {
-    let mut merkle = create_in_memory_merkle();
+    let mut merkle = create_in_memory_merkle::<firewood_storage::EthHash>();
     merkle.insert(&[0xab], Box::from([3u8])).unwrap();
     merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
 
@@ -64,7 +72,7 @@ fn test_reconcile_branch_proof_node_clears_value_via_callback() {
 
 #[test]
 fn test_reconcile_branch_proof_node_rejects_conflict_via_callback() {
-    let mut merkle = create_in_memory_merkle();
+    let mut merkle = create_in_memory_merkle::<firewood_storage::EthHash>();
     merkle.insert(&[0xab], Box::from([1u8])).unwrap();
     merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
 
@@ -90,7 +98,6 @@ fn test_reconcile_branch_proof_node_rejects_conflict_via_callback() {
 /// still conflicts.
 ///
 /// This exercises the helper directly, without constructing any proofs.
-#[cfg(feature = "ethhash")]
 #[test_case(100, true  ; "storage_root_only_diff_is_forgiven")]
 #[test_case(999, false ; "extra_balance_diff_still_conflicts")]
 fn test_reconcile_branch_proof_node_account_storage_root_relaxation(
@@ -108,7 +115,7 @@ fn test_reconcile_branch_proof_node_account_storage_root_relaxation(
     let branch_value = rlp_encode_account(1, 100, &[0xAA; 32], &empty_code_hash());
     let proof_value = rlp_encode_account(1, proof_balance, &[0xBB; 32], &empty_code_hash());
 
-    let mut merkle = create_in_memory_merkle();
+    let mut merkle = create_in_memory_merkle::<firewood_storage::EthHash>();
     merkle.insert(&account_key, branch_value.clone()).unwrap();
     merkle.insert_branch_from_nibbles(&account_nibbles).unwrap();
 

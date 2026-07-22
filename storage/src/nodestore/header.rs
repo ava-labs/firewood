@@ -604,6 +604,7 @@ const fn const_copy(src: &[u8], dst: &mut [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{EthHash, HashMode, MerkleDbHash};
     use test_case::test_case;
 
     #[test]
@@ -620,9 +621,9 @@ mod tests {
         assert!(Version { bytes }.validate().is_err());
     }
 
-    #[test]
-    fn test_header_new() {
-        let header = NodeStoreHeader::new(<crate::DefaultHashMode as crate::HashMode>::ALGORITHM);
+    #[firewood_macros::hash_mode]
+    fn test_header_new<H: HashMode>() {
+        let header = NodeStoreHeader::new(H::ALGORITHM);
 
         // Check the header is correctly initialized.
         assert_eq!(header.version, Version::new());

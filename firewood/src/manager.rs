@@ -723,15 +723,14 @@ mod tests {
     use firewood_storage::RootReader;
 
     use super::*;
-    use crate::api::OptionalHashKeyExt;
 
-    impl RevisionManager {
+    impl<H: HashMode> RevisionManager<H> {
         /// Get all proposal hashes available.
         pub fn proposal_hashes(&self) -> Vec<TrieHash> {
             self.proposals
                 .lock()
                 .iter()
-                .filter_map(|p| p.root_hash().or_default_root_hash())
+                .filter_map(|p| p.root_hash().or_else(H::default_root_hash))
                 .collect()
         }
 

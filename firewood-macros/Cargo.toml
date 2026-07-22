@@ -23,8 +23,14 @@ syn = { version = "2.0", features = ["full", "extra-traits"] }
 [dev-dependencies]
 # Workspace dependencies
 firewood-metrics.workspace = true
+test-case.workspace = true
 # Regular dependencies
 trybuild = "1.0"
 
 [lints]
 workspace = true
+
+# test-case is only referenced from the trybuild fixtures under
+# tests/compile_pass/, which cargo-machete does not scan.
+[package.metadata.cargo-machete]
+ignored = ["test-case"]

@@ -663,7 +663,8 @@ mod tests {
     use super::*;
     use crate::merkle::Merkle;
     use firewood_storage::{
-        DeletedNodeTracking, ImmutableProposal, MemStore, Mutable, NodeStore, Propose,
+        DeletedNodeTracking, EthHash, HashMode, ImmutableProposal, MemStore, MerkleDbHash, Mutable,
+        NodeStore, Propose,
     };
     use std::sync::Arc;
     use test_case::test_case;
@@ -678,28 +679,30 @@ mod tests {
         };
     }
 
-    pub(super) fn create_test_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
-        let memstore = MemStore::default();
-        let memstore = Arc::new(memstore);
+    pub(super) fn create_test_merkle<H: HashMode>()
+    -> Merkle<NodeStore<Mutable<Propose>, MemStore, H>> {
+        let memstore = Arc::new(MemStore::new(Vec::new(), H::ALGORITHM));
         let nodestore = NodeStore::new_empty_proposal(memstore, DeletedNodeTracking::Enabled);
         Merkle::from(nodestore)
     }
 
+    #[firewood_macros::hash_mode]
     #[test_case(&[]; "empty key")]
     #[test_case(&[1]; "non-empty key")]
-    fn path_iterate_empty_merkle_empty_key(key: &[u8]) {
-        let merkle = create_test_merkle();
+    fn path_iterate_empty_merkle_empty_key<H: HashMode>(key: &[u8]) {
+        let merkle = create_test_merkle::<H>();
         let mut iter = merkle.path_iter(key).unwrap();
         assert!(iter.next().is_none());
     }
 
+    #[firewood_macros::hash_mode]
     #[test_case(&[]; "empty key")]
     #[test_case(&[0xBE,0xE0]; "prefix of singleton key")]
     #[test_case(&[0xBE, 0xEF]; "match singleton key")]
     #[test_case(&[0xBE, 0xEF,0x10]; "suffix of singleton key")]
     #[test_case(&[0xF0]; "no key nibbles match singleton key")]
-    fn path_iterate_singleton_merkle(key: &[u8]) {
-        let mut merkle = create_test_merkle();
+    fn path_iterate_singleton_merkle<H: HashMode>(key: &[u8]) {
+        let mut merkle = create_test_merkle::<H>();
 
         merkle.insert(&[0xBE, 0xEF], Box::new([0x42])).unwrap();
 
@@ -713,10 +716,11 @@ mod tests {
         assert!(iter.next().is_none());
     }
 
+    #[firewood_macros::hash_mode]
     #[test_case(&[0x00, 0x00, 0x00, 0xFF]; "leaf key")]
     #[test_case(&[0x00, 0x00, 0x00, 0xFF, 0x01]; "leaf key suffix")]
-    fn path_iterate_non_singleton_merkle_seek_leaf(key: &[u8]) {
-        let merkle = created_populated_merkle();
+    fn path_iterate_non_singleton_merkle_seek_leaf<H: HashMode>(key: &[u8]) {
+        let merkle = created_populated_merkle::<H>();
 
         let mut iter = merkle.path_iter(key).unwrap();
 
@@ -761,10 +765,11 @@ mod tests {
         assert!(iter.next().is_none());
     }
 
+    #[firewood_macros::hash_mode]
     #[test_case(&[0x00, 0x00, 0x00]; "branch key")]
     #[test_case(&[0x00, 0x00, 0x00, 0x10]; "branch key suffix (but not a leaf key)")]
-    fn path_iterate_non_singleton_merkle_seek_branch(key: &[u8]) {
-        let merkle = created_populated_merkle();
+    fn path_iterate_non_singleton_merkle_seek_branch<H: HashMode>(key: &[u8]) {
+        let merkle = created_populated_merkle::<H>();
 
         let mut iter = merkle.path_iter(key).unwrap();
 
@@ -793,9 +798,9 @@ mod tests {
         assert!(iter.next().is_none());
     }
 
-    #[test]
-    fn path_iterate_yields_non_root_divergent_node() {
-        let merkle = created_populated_merkle();
+    #[firewood_macros::hash_mode]
+    fn path_iterate_yields_non_root_divergent_node<H: HashMode>() {
+        let merkle = created_populated_merkle::<H>();
 
         // Key 0x00,0x01 (nibbles [0,0,0,1]) matches the root (partial_path [0,0])
         // and descends via nibble 0 into a child whose partial_path is [0,0,0].
@@ -817,23 +822,23 @@ mod tests {
         assert!(iter.next().is_none());
     }
 
-    #[test]
-    fn key_value_iterate_empty() {
-        let merkle = create_test_merkle();
+    #[firewood_macros::hash_mode]
+    fn key_value_iterate_empty<H: HashMode>() {
+        let merkle = create_test_merkle::<H>();
         let iter = merkle.key_value_iter_from_key(b"x");
         assert_iterator_is_exhausted(iter);
     }
 
-    #[test]
-    fn node_iterate_empty() {
-        let merkle = create_test_merkle();
+    #[firewood_macros::hash_mode]
+    fn node_iterate_empty<H: HashMode>() {
+        let merkle = create_test_merkle::<H>();
         let iter = MerkleNodeIter::new(merkle.nodestore(), Box::new([]));
         assert_iterator_is_exhausted(iter);
     }
 
-    #[test]
-    fn node_iterate_root_only() {
-        let mut merkle = create_test_merkle();
+    #[firewood_macros::hash_mode]
+    fn node_iterate_root_only<H: HashMode>() {
+        let mut merkle = create_test_merkle::<H>();
 
         merkle.insert(&[0x00], Box::new([0x00])).unwrap();
 
@@ -863,8 +868,8 @@ mod tests {
     ///  1   F
     ///
     /// The number next to each branch is the position of the child in the branch's children array.
-    fn created_populated_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
-        let mut merkle = create_test_merkle();
+    fn created_populated_merkle<H: HashMode>() -> Merkle<NodeStore<Mutable<Propose>, MemStore, H>> {
+        let mut merkle = create_test_merkle::<H>();
 
         merkle
             .insert(&[0x00, 0x00, 0x00], Box::new([0x00, 0x00, 0x00]))
@@ -890,9 +895,9 @@ mod tests {
         merkle
     }
 
-    #[test]
-    fn node_iterator_no_start_key() {
-        let merkle = created_populated_merkle();
+    #[firewood_macros::hash_mode]
+    fn node_iterator_no_start_key<H: HashMode>() {
+        let merkle = created_populated_merkle::<H>();
 
         let mut iter = MerkleNodeIter::new(merkle.nodestore(), Box::new([]));
 
@@ -933,9 +938,9 @@ mod tests {
         assert_iterator_is_exhausted(iter);
     }
 
-    #[test]
-    fn node_iterator_start_key_between_nodes() {
-        let merkle = created_populated_merkle();
+    #[firewood_macros::hash_mode]
+    fn node_iterator_start_key_between_nodes<H: HashMode>() {
+        let merkle = created_populated_merkle::<H>();
 
         let mut iter = MerkleNodeIter::new(
             merkle.nodestore(),
@@ -960,9 +965,9 @@ mod tests {
         assert_iterator_is_exhausted(iter);
     }
 
-    #[test]
-    fn node_iterator_start_key_on_node() {
-        let merkle = created_populated_merkle();
+    #[firewood_macros::hash_mode]
+    fn node_iterator_start_key_on_node<H: HashMode>() {
+        let merkle = created_populated_merkle::<H>();
 
         let mut iter = MerkleNodeIter::new(
             merkle.nodestore(),
@@ -987,21 +992,22 @@ mod tests {
         assert_iterator_is_exhausted(iter);
     }
 
-    #[test]
-    fn node_iterator_start_key_after_last_key() {
-        let merkle = created_populated_merkle();
+    #[firewood_macros::hash_mode]
+    fn node_iterator_start_key_after_last_key<H: HashMode>() {
+        let merkle = created_populated_merkle::<H>();
 
         let iter = MerkleNodeIter::new(merkle.nodestore(), vec![0xFF].into_boxed_slice());
 
         assert_iterator_is_exhausted(iter);
     }
 
+    #[firewood_macros::hash_mode]
     #[test_case(Some(&[u8::MIN]); "Starting at first key")]
     #[test_case(None; "No start specified")]
     #[test_case(Some(&[128u8]); "Starting in middle")]
     #[test_case(Some(&[u8::MAX]); "Starting at last key")]
-    fn key_value_iterate_many(start: Option<&[u8]>) {
-        let mut merkle = create_test_merkle();
+    fn key_value_iterate_many<H: HashMode>(start: Option<&[u8]>) {
+        let mut merkle = create_test_merkle::<H>();
 
         // insert all values from u8::MIN to u8::MAX, with the key and value the same
         for k in u8::MIN..=u8::MAX {
@@ -1024,15 +1030,16 @@ mod tests {
         assert_iterator_is_exhausted(iter);
     }
 
-    #[test]
-    fn key_value_fused_empty() {
-        let merkle = create_test_merkle();
+    #[firewood_macros::hash_mode]
+    fn key_value_fused_empty<H: HashMode>() {
+        let merkle = create_test_merkle::<H>();
         assert_iterator_is_exhausted(merkle.key_value_iter_from_key(b""));
     }
 
-    #[test]
-    fn key_value_table_test() {
-        let mut merkle = create_test_merkle();
+    #[firewood_macros::hash_mode]
+    #[expect(clippy::arithmetic_side_effects)]
+    fn key_value_table_test<H: HashMode>() {
+        let mut merkle = create_test_merkle::<H>();
 
         let max: u8 = 100;
         // Insert key-values in reverse order to ensure iterator
@@ -1095,9 +1102,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn key_value_fused_full() {
-        let mut merkle = create_test_merkle();
+    #[firewood_macros::hash_mode]
+    fn key_value_fused_full<H: HashMode>() {
+        let mut merkle = create_test_merkle::<H>();
 
         let last = vec![0x00, 0x00, 0x00];
 
@@ -1125,9 +1132,9 @@ mod tests {
         assert_iterator_is_exhausted(iter);
     }
 
-    #[test]
-    fn key_value_root_with_empty_value() {
-        let mut merkle = create_test_merkle();
+    #[firewood_macros::hash_mode]
+    fn key_value_root_with_empty_value<H: HashMode>() {
+        let mut merkle = create_test_merkle::<H>();
 
         let key = vec![].into_boxed_slice();
         let value = [0x00];
@@ -1139,9 +1146,9 @@ mod tests {
         assert_eq!(iter.next().unwrap().unwrap(), (key, value.into()));
     }
 
-    #[test]
-    fn key_value_get_branch_and_leaf() {
-        let mut merkle = create_test_merkle();
+    #[firewood_macros::hash_mode]
+    fn key_value_get_branch_and_leaf<H: HashMode>() {
+        let mut merkle = create_test_merkle::<H>();
 
         let first_leaf = [0x00, 0x00];
         let second_leaf = [0x00, 0x0f];
@@ -1152,7 +1159,7 @@ mod tests {
 
         merkle.insert(&branch, branch.into()).unwrap();
 
-        let immutable_merkle: Merkle<NodeStore<Arc<ImmutableProposal>, _>> =
+        let immutable_merkle: Merkle<NodeStore<Arc<ImmutableProposal>, _, H>> =
             merkle.try_into().unwrap();
         println!("{}", immutable_merkle.dump_to_string().unwrap());
         merkle = immutable_merkle.fork().unwrap();
@@ -1175,9 +1182,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn key_value_start_at_key_not_in_trie() {
-        let mut merkle = create_test_merkle();
+    #[firewood_macros::hash_mode]
+    fn key_value_start_at_key_not_in_trie<H: HashMode>() {
+        let mut merkle = create_test_merkle::<H>();
 
         let first_key = 0x00;
         let intermediate = 0x80;
@@ -1213,13 +1220,13 @@ mod tests {
         assert_iterator_is_exhausted(iter);
     }
 
-    #[test]
-    fn key_value_start_at_key_on_branch_with_no_value() {
+    #[firewood_macros::hash_mode]
+    fn key_value_start_at_key_on_branch_with_no_value<H: HashMode>() {
         let sibling_path = 0x00;
         let branch_path = 0x0f;
         let children = 0..=0x0f;
 
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<H>();
 
         children.clone().for_each(|child_path| {
             let key = vec![sibling_path, child_path];
@@ -1254,15 +1261,16 @@ mod tests {
         assert_iterator_is_exhausted(iter);
     }
 
-    #[test]
-    fn key_value_start_at_key_on_branch_with_value() {
+    #[firewood_macros::hash_mode]
+    #[expect(clippy::arithmetic_side_effects)]
+    fn key_value_start_at_key_on_branch_with_value<H: HashMode>() {
         let sibling_path = 0x00;
         let branch_path = 0x0f;
         let branch_key = vec![branch_path];
 
         let children = (0..=0xf).map(|val| (val << 4) + val); // 0x00, 0x11, ... 0xff
 
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<H>();
 
         merkle
             .insert(&branch_key, branch_key.clone().into())
@@ -1302,11 +1310,11 @@ mod tests {
         assert_iterator_is_exhausted(iter);
     }
 
-    #[test]
-    fn key_value_start_at_key_on_extension() {
+    #[firewood_macros::hash_mode]
+    fn key_value_start_at_key_on_extension<H: HashMode>() {
         let missing = 0x0a;
         let children = (0..=0x0f).filter(|x| *x != missing);
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<H>();
 
         let keys: Vec<_> = children
             .map(|child_path| {
@@ -1332,15 +1340,15 @@ mod tests {
         assert_iterator_is_exhausted(iter);
     }
 
-    #[test]
-    fn key_value_start_at_key_overlapping_with_extension_but_greater() {
+    #[firewood_macros::hash_mode]
+    fn key_value_start_at_key_overlapping_with_extension_but_greater<H: HashMode>() {
         let start_key = 0x0a;
         let shared_path = 0x09;
         // 0x0900, 0x0901, ... 0x0a0f
         // path extension is 0x090
         let children = (0..=0x0f).map(|val| vec![shared_path, val]);
 
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<H>();
 
         children.for_each(|key| {
             merkle.insert(&key, key.clone().into()).unwrap();
@@ -1351,15 +1359,15 @@ mod tests {
         assert_iterator_is_exhausted(iter);
     }
 
-    #[test]
-    fn key_value_start_at_key_overlapping_with_extension_but_smaller() {
+    #[firewood_macros::hash_mode]
+    fn key_value_start_at_key_overlapping_with_extension_but_smaller<H: HashMode>() {
         let start_key = 0x00;
         let shared_path = 0x09;
         // 0x0900, 0x0901, ... 0x0a0f
         // path extension is 0x090
         let children = (0..=0x0f).map(|val| vec![shared_path, val]);
 
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<H>();
 
         let keys: Vec<_> = children
             .inspect(|key| {
@@ -1379,13 +1387,14 @@ mod tests {
         assert_iterator_is_exhausted(iter);
     }
 
-    #[test]
-    fn key_value_start_at_key_between_siblings() {
+    #[firewood_macros::hash_mode]
+    #[expect(clippy::arithmetic_side_effects)]
+    fn key_value_start_at_key_between_siblings<H: HashMode>() {
         let missing = 0xaa;
         let children = (0..=0xf)
             .map(|val| (val << 4) + val) // 0x00, 0x11, ... 0xff
             .filter(|x| *x != missing);
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<H>();
 
         let keys: Vec<_> = children
             .map(|child_path| {
@@ -1411,11 +1420,11 @@ mod tests {
         assert_iterator_is_exhausted(iter);
     }
 
-    #[test]
-    fn key_value_start_at_key_greater_than_all_others_leaf() {
+    #[firewood_macros::hash_mode]
+    fn key_value_start_at_key_greater_than_all_others_leaf<H: HashMode>() {
         let key = [0x00];
         let greater_key = [0xff];
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<H>();
         merkle.insert(&key, key.into()).unwrap();
 
         let iter = merkle.key_value_iter_from_key(&greater_key);
@@ -1423,13 +1432,14 @@ mod tests {
         assert_iterator_is_exhausted(iter);
     }
 
-    #[test]
-    fn key_value_start_at_key_greater_than_all_others_branch() {
+    #[firewood_macros::hash_mode]
+    #[expect(clippy::arithmetic_side_effects)]
+    fn key_value_start_at_key_greater_than_all_others_branch<H: HashMode>() {
         let greatest = 0xff;
         let children = (0..=0xf)
             .map(|val| (val << 4) + val) // 0x00, 0x11, ... 0xff
             .filter(|x| *x != greatest);
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<H>();
 
         let keys: Vec<_> = children
             .map(|child_path| {
@@ -1459,9 +1469,9 @@ mod tests {
         assert!(iter.next().is_none());
     }
 
-    #[test]
-    fn iterator_skips_leaf_when_start_key_prefixed_by_leaf() {
-        let merkle = created_populated_merkle();
+    #[firewood_macros::hash_mode]
+    fn iterator_skips_leaf_when_start_key_prefixed_by_leaf<H: HashMode>() {
+        let merkle = created_populated_merkle::<H>();
 
         let mut iter =
             MerkleNodeIter::new(merkle.nodestore(), [0x00, 0x00, 0x00, 0xFF, 0x01].into());
