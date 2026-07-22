@@ -330,11 +330,11 @@ jobs:
       - name: Run C-Chain replay test
         working-directory: ffi
         env:
-          CCHAIN_REPLAY_LOG_PATH: ${{ runner.temp }}/${{ matrix.name }}.replay
-          CCHAIN_REPLAY_EXPECTED_ROOT: ${{ matrix.expected-root }}
-          CCHAIN_REPLAY_REQUIRED: "1"
+          REPLAY_LOG: ${{ runner.temp }}/${{ matrix.name }}.replay
+          REPLAY_MAX_COMMITS: "0"
+          REPLAY_EXPECTED_ROOT: ${{ matrix.expected-root }}
           TEST_FIREWOOD_HASH_MODE: ethhash
-        run: go test -run 'TestCChainReplay$' -v -timeout 20m .
+        run: go test -run 'TestReplayLogExecution$' -v -timeout 20m .
 
   firewood-ethhash-differential-fuzz:
     needs: build
