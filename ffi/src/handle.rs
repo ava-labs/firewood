@@ -4,12 +4,11 @@
 use std::num::{NonZeroU64, NonZeroUsize};
 
 use firewood::{
-    api::{
-        self, ArcDynDbView, DynDb, FrozenChangeProof, HashKey, HashKeyExt, IntoBatchIter, KeyType,
-    },
+    api::{self, ArcDynDbView, DynDb, FrozenChangeProof, HashKey, IntoBatchIter, KeyType},
     db::{CommittedView, Db, DbConfig},
     manager::RevisionManagerConfig,
 };
+use firewood_storage::{EthHash, HashMode, MerkleDbHash};
 
 use crate::{BatchOp, BorrowedBytes, CView, CreateProposalResult};
 
@@ -99,7 +98,7 @@ pub struct DatabaseHandleArgs<'a> {
     /// header (a mismatch is an error); for a fresh database it is the scheme
     /// to create with. A single binary can open both
     /// [`NodeHashAlgorithm::Ethereum`] and [`NodeHashAlgorithm::MerkleDB`]
-    /// databases regardless of the build's `ethhash` feature.
+    /// databases regardless of the database's runtime hash mode.
     pub node_hash_algorithm: NodeHashAlgorithm,
 
     /// The maximum number of unpersisted revisions that can exist at a given time.
@@ -211,6 +210,18 @@ impl DatabaseHandle {
         self.db.node_hash_algorithm()
     }
 
+    /// The empty-database root hash for this database's runtime hash mode.
+    ///
+    /// Derived from the database's runtime [`NodeHashAlgorithm`] so a MerkleDB
+    /// database reports `None` (no empty-trie root) while an Ethereum database
+    /// reports `Some(keccak256(0x80))`.
+    fn empty_root_hash(&self) -> Option<HashKey> {
+        match self.db.node_hash_algorithm() {
+            firewood_storage::NodeHashAlgorithm::Ethereum => EthHash::default_root_hash(),
+            firewood_storage::NodeHashAlgorithm::MerkleDB => MerkleDbHash::default_root_hash(),
+        }
+    }
+
     /// Returns a value from the database for the given key from the latest root hash.
     ///
     /// # Errors
@@ -219,7 +230,7 @@ impl DatabaseHandle {
     pub fn get_latest(&self, key: impl KeyType) -> Result<Option<Box<[u8]>>, api::Error> {
         let Some(root) = self.current_root_hash() else {
             return Err(api::Error::RevisionNotFound {
-                provided: HashKey::default_root_hash(),
+                provided: self.empty_root_hash(),
             });
         };
 
@@ -248,8 +259,8 @@ impl DatabaseHandle {
     /// accessing the database.
     pub fn get_revision(&self, root: HashKey) -> Result<GetRevisionResult<'_>, api::Error> {
         let view = self.db.view(root.clone())?;
-        // The opaque committed parent is available only in the build's default
-        // hash mode (see [`DynDb::committed_view`]).
+        // The opaque committed parent is available only in Ethereum hash mode
+        // (see [`DynDb::committed_view`]).
         let historical = self.db.committed_view(root.clone())?;
         Ok(GetRevisionResult {
             handle: RevisionHandle::new(view, historical, self.metrics_context, self),

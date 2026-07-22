@@ -19,16 +19,8 @@ fn main() {
         }
     };
 
-    // Check if ethhash feature is enabled
-    let ethhash_feature = if cfg!(feature = "ethhash") {
-        "ethhash"
-    } else {
-        "-ethhash"
-    };
-
-    // Make the git SHA and ethhash status available to the main.rs file
+    // Make the git SHA available to the main.rs file
     println!("cargo:rustc-env=GIT_COMMIT_SHA={git_sha}");
-    println!("cargo:rustc-env=ETHHASH_FEATURE={ethhash_feature}");
 
     // Re-run this build script if the git HEAD changes
     println!("cargo:rerun-if-changed=../.git/HEAD");

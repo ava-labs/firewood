@@ -238,12 +238,8 @@ fn exclusion_with_proof_value_present<H: HashMode>() {
     let proof = merkle.prove(&missing).unwrap();
 
     debug!("{proof:#?}");
-    // `Preimage::to_hash` (the inherent `.to_hash()` method) always hashes
-    // under the compile-time `DefaultHashMode`, not the mode this trie was
-    // actually built with — it hasn't been threaded over `H` yet (see the
-    // `Preimage` doc comment in `firewood-storage::hashednode`). Call the
-    // mode-aware `HashMode::to_hash` directly so this assertion holds under
-    // both wrappers regardless of which mode the binary defaults to.
+    // Hash via the mode-aware `HashMode::to_hash` so this assertion holds
+    // under both wrappers regardless of the mode the trie was built with.
     assert_eq!(
         H::to_hash(proof.as_ref().first().unwrap()),
         root_hash.clone().into_hash_type()

@@ -676,9 +676,8 @@ mod tests {
         ethereum: b"3fa832b90f7f1a053a48a4528d1e446cc679fbcf376d0ef8703748d64030e19d",
     }; "seven keys")]
     // Asserts BOTH the sha256 (MerkleDB) and keccak (Ethereum) roots in a
-    // single binary, regardless of the `ethhash` feature, by hashing the trie
-    // under each `HashMode` directly. The trie machinery is now parameterized
-    // over `H: HashMode` (PR 5).
+    // single binary by hashing the trie under each `HashMode` directly. The
+    // trie machinery is now parameterized over `H: HashMode` (PR 5).
     fn test_hashed_trie(
         slice: &[(&str, &str)],
         (merkledb_root, ethereum_root): (crate::HashType, crate::HashType),

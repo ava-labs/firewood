@@ -18,14 +18,16 @@
 //! name is required: `test_case` would otherwise make all cases of one function
 //! resolve to the same auto-derived name).
 //!
-//! Tests whose bytes differ between hash modes (branch child encoding) build in
-//! both modes from a single function; [`hash_mode_name`] prefixes their
-//! snapshot name with `merkledb__` or `ethhash__` so each mode gets its own
-//! snapshot file. Tests whose bytes are mode-independent share a single file.
+//! The node-hashing scheme is a runtime, per-database choice (issue #1088), so
+//! tests whose bytes differ between hash modes (branch child encoding) take the
+//! [`NodeHashAlgorithm`] as an explicit case argument and run once per mode;
+//! [`hash_mode_name`] prefixes their snapshot name with `merkledb__` or
+//! `ethhash__` so each mode gets its own snapshot file. Tests whose bytes are
+//! mode-independent pick a single mode and share one snapshot file.
 //!
 //! # Test coverage
 //!
-//! ## `Serializable` implementations (feature-agnostic)
+//! ## `Serializable` implementations (mode-independent)
 //!
 //! | Function | Case | Subject |
 //! |----------|------|---------|
@@ -39,8 +41,8 @@
 //!
 //! Leaf nodes produce identical bytes under both hash modes (no child hashes),
 //! so the [`leaf`] cases share a single snapshot file. Branch nodes encode
-//! child hashes differently per mode, so [`branch`] cases are prefixed via
-//! [`hash_mode_name`].
+//! child hashes differently per mode, so [`branch`] cases run under both modes
+//! and are prefixed via [`hash_mode_name`].
 //!
 //! | Function | Case | Subject |
 //! |----------|------|---------|
@@ -49,7 +51,7 @@
 //! | [`branch`] | `one_child` | Branch: one child (`merkledb__`/`ethhash__`) |
 //! | [`branch`] | `with_value` | Branch: value + one child (`merkledb__`/`ethhash__`) |
 //!
-//! ## `HashOrRlp` serialization (ethhash feature only)
+//! ## `HashOrRlp` serialization
 //!
 //! | Function | Case | Subject |
 //! |----------|------|---------|
@@ -63,7 +65,8 @@ use crate::node::branch::Serializable;
 use crate::node::{BranchNode, LeafNode, Node};
 use crate::nodestore::alloc::FreeArea;
 use crate::{
-    Child, Children, DefaultHashMode, LinearAddress, NibblesIterator, Path, PathComponent, TrieHash,
+    Child, Children, EthHash, LinearAddress, MerkleDbHash, NibblesIterator, NodeHashAlgorithm,
+    Path, PathComponent, TrieHash,
 };
 
 /// Serializes a [`Serializable`] value into a fresh `Vec<u8>`.
@@ -73,19 +76,26 @@ fn write_to_vec<T: Serializable>(t: &T) -> Vec<u8> {
     buf
 }
 
-/// Calls [`Node::as_bytes`] and returns the full encoded bytes (including the
-/// leading `AreaIndex` byte at position 0).
-fn node_as_bytes(node: &Node) -> Vec<u8> {
+/// Calls [`Node::as_bytes`] under the given runtime hash mode and returns the
+/// full encoded bytes (including the leading `AreaIndex` byte at position 0).
+fn node_as_bytes(node: &Node, algorithm: NodeHashAlgorithm) -> Vec<u8> {
     let mut buf = Vec::new();
-    node.as_bytes::<DefaultHashMode, _>(&mut buf).unwrap();
+    match algorithm {
+        NodeHashAlgorithm::Ethereum => {
+            node.as_bytes::<EthHash, _>(&mut buf).unwrap();
+        }
+        NodeHashAlgorithm::MerkleDB => {
+            node.as_bytes::<MerkleDbHash, _>(&mut buf).unwrap();
+        }
+    }
     buf
 }
 
-/// Prefixes a snapshot name with the active hash mode so feature-split tests
-/// write distinct snapshot files. Bytes differ between modes, so `merkledb` and
+/// Prefixes a snapshot name with the given hash mode so mode-split tests write
+/// distinct snapshot files. Bytes differ between modes, so `merkledb` and
 /// `ethhash` snapshots must not share a filename.
-fn hash_mode_name(name: &str) -> String {
-    let mode = if cfg!(feature = "ethhash") {
+fn hash_mode_name(algorithm: NodeHashAlgorithm, name: &str) -> String {
+    let mode = if algorithm.is_ethereum() {
         "ethhash"
     } else {
         "merkledb"
@@ -130,7 +140,8 @@ fn free_area(name: &str, addr: Option<u64>) {
 }
 
 /// Leaf node serialization. Leaf encoding is identical under both hash modes
-/// (no child hashes), so these cases are not prefixed.
+/// (no child hashes), so these cases are not prefixed and a single fixed mode
+/// (MerkleDB) is used to produce the shared snapshot.
 ///
 /// Encoded first byte: `is_leaf=1 | path_len_low_bits`. Followed by path
 /// nibbles, then varint value length, then value bytes. `long_partial_path` has
@@ -150,36 +161,49 @@ fn leaf(name: &str, partial_path: Path) {
         partial_path,
         value: vec![4, 5, 6, 7].into(),
     });
-    insta::assert_snapshot!(name, hex::encode(node_as_bytes(&node)));
+    insta::assert_snapshot!(
+        name,
+        hex::encode(node_as_bytes(&node, NodeHashAlgorithm::MerkleDB))
+    );
 }
 
 /// Branch node serialization. Child hashes encode differently per hash mode
 /// (flat 32-byte `TrieHash` for MerkleDB; a 1-byte discriminant prefix for
-/// ethhash), so [`hash_mode_name`] keeps the two modes in separate files.
+/// ethhash), so each case runs under both modes and [`hash_mode_name`] keeps the
+/// two modes in separate files.
 ///
 /// `one_child` places a single child at nibble 15 (`0xF`) with no value.
 /// `with_value` exercises the has-value bit and value-length varint with a
 /// child at nibble 0 and a longer partial path.
-#[test_case("one_child", vec![0, 1], None, 15 ; "one_child")]
-#[test_case("with_value", vec![0, 1, 2, 3], Some(vec![4, 5, 6, 7]), 0 ; "with_value")]
-fn branch(name: &str, path: Vec<u8>, value: Option<Vec<u8>>, child: u8) {
+#[test_case("one_child", NodeHashAlgorithm::MerkleDB, vec![0, 1], None, 15 ; "one_child_merkledb")]
+#[test_case("one_child", NodeHashAlgorithm::Ethereum, vec![0, 1], None, 15 ; "one_child_ethhash")]
+#[test_case("with_value", NodeHashAlgorithm::MerkleDB, vec![0, 1, 2, 3], Some(vec![4, 5, 6, 7]), 0 ; "with_value_merkledb")]
+#[test_case("with_value", NodeHashAlgorithm::Ethereum, vec![0, 1, 2, 3], Some(vec![4, 5, 6, 7]), 0 ; "with_value_ethhash")]
+fn branch(
+    name: &str,
+    algorithm: NodeHashAlgorithm,
+    path: Vec<u8>,
+    value: Option<Vec<u8>>,
+    child: u8,
+) {
     let node = Node::Branch(Box::new(BranchNode {
         partial_path: Path::from(path),
         value: value.map(Into::into),
         children: Children::from_fn(child_at(child)),
     }));
-    insta::assert_snapshot!(hash_mode_name(name), hex::encode(node_as_bytes(&node)));
+    insta::assert_snapshot!(
+        hash_mode_name(algorithm, name),
+        hex::encode(node_as_bytes(&node, algorithm))
+    );
 }
 
-/// [`crate::HashType`] (`HashOrRlp`) serialization — available only when the
-/// `ethhash` feature is enabled. Each value is prefixed with a 1-byte
-/// discriminant: `0x00` for a full 32-byte Keccak hash, non-zero (the RLP
-/// length) for an inline RLP value.
+/// [`crate::HashType`] (`HashOrRlp`) serialization. Each value is prefixed with
+/// a 1-byte discriminant: `0x00` for a full 32-byte Keccak hash, non-zero (the
+/// RLP length) for an inline RLP value.
 ///
 /// `keccak_hash` is discriminant `0x00` followed by 32 zero bytes. `rlp_bytes`
 /// is a single-byte RLP payload `0xC0` (empty RLP list): length byte `0x01`
 /// followed by `0xC0`.
-#[cfg(feature = "ethhash")]
 #[test_case("keccak_hash", crate::HashType::Hash(TrieHash::from([0u8; 32])) ; "keccak_hash")]
 #[test_case("rlp_bytes", crate::HashType::Rlp(smallvec::SmallVec::from_slice(&[0xC0u8])) ; "rlp_bytes")]
 fn hash_or_rlp(name: &str, h: crate::HashType) {

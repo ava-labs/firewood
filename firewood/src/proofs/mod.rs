@@ -326,24 +326,22 @@ pub(super) mod magic {
     /// Current proof format version: `0`
     pub const PROOF_VERSION: u8 = 0;
 
-    /// Hash mode identifier for the build's compile-default hashing scheme.
+    /// Proof-header `hash_mode` wire byte for the MerkleDB (SHA-256) scheme.
     ///
-    /// The serialized proof header no longer derives its `hash_mode` byte from
-    /// this constant — it is stamped from the source DB's runtime
-    /// [`NodeHashAlgorithm`](firewood_storage::NodeHashAlgorithm) via
-    /// `Header::from((ProofType, algorithm))`. This constant remains as the
-    /// documented wire byte for the compile-default mode and is referenced by
-    /// tests; hence `allow(dead_code)` for non-test builds.
-    #[cfg(not(feature = "ethhash"))]
+    /// Matches the [`NodeHashAlgorithm::MerkleDB`](firewood_storage::NodeHashAlgorithm)
+    /// discriminant. The serialized proof header derives its `hash_mode` byte
+    /// from the source DB's runtime algorithm via
+    /// `Header::from((ProofType, algorithm))`; these constants document the wire
+    /// bytes and are referenced by tests, hence `allow(dead_code)` outside tests.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub const HASH_MODE: u8 = 0;
+    pub const HASH_MODE_SHA256: u8 = 0;
 
-    /// Hash mode identifier for the build's compile-default hashing scheme
-    /// (Keccak-256, Ethereum-compatible). See the non-ethhash variant for why
-    /// this is `allow(dead_code)` outside tests.
-    #[cfg(feature = "ethhash")]
+    /// Proof-header `hash_mode` wire byte for the Ethereum (Keccak-256) scheme.
+    ///
+    /// Matches the [`NodeHashAlgorithm::Ethereum`](firewood_storage::NodeHashAlgorithm)
+    /// discriminant. See [`HASH_MODE_SHA256`] for details.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub const HASH_MODE: u8 = 1;
+    pub const HASH_MODE_KECCAK: u8 = 1;
 
     /// Returns the human-readable name for a hash mode identifier.
     pub const fn hash_mode_name(v: u8) -> &'static str {

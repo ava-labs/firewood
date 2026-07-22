@@ -296,13 +296,14 @@ pub fn hash_node_as_storage_trie_root_for_node<H: HashMode>(
 /// - 1 child → that child's hash directly. The caller is responsible for having
 ///   produced that hash via `hash_node_as_storage_trie_root_parts` (which folds
 ///   the account's branch nibble into the child's partial path so the child hashes
-///   as a standalone storage-trie root). Only relevant under the `ethhash` feature.
+///   as a standalone storage-trie root). Only relevant when the database uses
+///   Ethereum hashing.
 /// - ≥2 children → the 17-element branch RLP, hashed.
 ///
 /// At account depth (64 nibbles) storage keys are 32 bytes, so every child
 /// encoding exceeds 32 bytes and the inline-RLP variant of [`HashType`] cannot
-/// occur. Without `ethhash`, `HashType` is `TrieHash` and the single-child case
-/// returns the child hash unchanged.
+/// occur. Under MerkleDB hashing the single-child case returns the child hash
+/// unchanged.
 #[must_use]
 fn compute_storage_trie_root(child_hashes: &Children<Option<HashType>>) -> TrieHash {
     if child_hashes.count() == 0 {
@@ -410,7 +411,7 @@ fn single_child_storage_root(child: HashType) -> crate::TrieHash {
 }
 
 /// Encode one child slot of an account's storage branch as an [`RlpItem`].
-/// Mirrors the dispatch the ethhash hasher does inline (see
+/// Mirrors the dispatch the Ethereum-mode hasher does inline (see
 /// `storage/src/hashers/ethhash.rs::EthHash::write_preimage`).
 fn child_to_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
     match child {

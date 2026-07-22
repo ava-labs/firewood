@@ -8,23 +8,20 @@
 //! is its own self-describing layout; Ethereum tooling cannot consume it
 //! directly. This module emits the buffers verifiers actually want.
 //!
-//! Always compiled. The encoding logic is the same regardless of which hash
-//! algorithm built the underlying trie; when the trie was hashed with
-//! SHA-256 the emitted bytes are still structurally well-formed MPT RLP but
-//! won't verify under a Keccak verifier. Callers are expected to know what
-//! database they opened.
+//! The encoding logic is the same regardless of which hash algorithm built the
+//! underlying trie; when the trie was hashed with SHA-256 the emitted bytes are
+//! still structurally well-formed MPT RLP but won't verify under a Keccak
+//! verifier. Callers are expected to know what database they opened.
 //!
 //! The Ethereum-account convention (treat depth-64 nodes as accounts and
-//! splice the storage trie's root into the value at field index 2) only
-//! fires when the `ethhash` feature is enabled. `is_account` evaluates to
-//! `false` without that feature, so the storage-root splice and the
-//! inline-extension override both fall through naturally and the emitter
-//! produces vanilla MPT-RLP for every node.
+//! splice the storage trie's root into the value at field index 2) fires
+//! purely on nibble depth: `is_account` is `true` only at depth 64, so at any
+//! other depth the storage-root splice and the inline-extension override both
+//! fall through naturally and the emitter produces vanilla MPT-RLP.
 //!
-//! The bulk of the encoding mirrors [`firewood_storage::Preimage`] for the
-//! ethhash hasher (see `storage/src/hashers/ethhash.rs`). Where the hasher
-//! collapses encoded bytes into a hash, this module keeps the bytes so a
-//! verifier can walk them.
+//! The bulk of the encoding mirrors the Ethereum (Keccak-256) hasher (see
+//! `storage/src/hashers/ethhash.rs`). Where the hasher collapses encoded bytes
+//! into a hash, this module keeps the bytes so a verifier can walk them.
 
 use std::io::{Error, ErrorKind};
 
@@ -45,15 +42,14 @@ pub(crate) const ACCOUNT_DEPTH_NIBBLES: usize = 64;
 
 /// Emit one or two canonical MPT-RLP nodes for `node`.
 ///
-/// The emitter accepts a `ProofNode` at any depth. When the `ethhash`
-/// feature is enabled, nibble depth 64 (i.e. 32 bytes, the Keccak-256 of
-/// an account address) gets the Ethereum account-node convention: the
-/// node's value is treated as account RLP, and the `storageRoot` field
-/// (index 2) is recomputed from the node's children before encoding.
-/// Without `ethhash` (or at any other depth) the value is emitted
-/// verbatim. Callers walking a state-trie proof from root to leaf can
-/// call this on every `ProofNode` in the path; the depth-64 special case
-/// only fires on the account node itself.
+/// The emitter accepts a `ProofNode` at any depth. At nibble depth 64 (i.e.
+/// 32 bytes, the Keccak-256 of an account address) a node gets the Ethereum
+/// account-node convention: the node's value is treated as account RLP, and
+/// the `storageRoot` field (index 2) is recomputed from the node's children
+/// before encoding. At any other depth the value is emitted verbatim.
+/// Callers walking a state-trie proof from root to leaf can call this on
+/// every `ProofNode` in the path; the depth-64 special case only fires on the
+/// account node itself.
 ///
 /// Returns a single buffer for leaves and for branches with empty partial
 /// paths. Returns two buffers when a firewood node combines a non-empty
@@ -119,7 +115,7 @@ pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
     // Compute the storage trie's root from this node's children and splice
     // it into the account RLP value at field index 2. If the splice fails
     // (malformed account RLP), fall back to the raw account RLP rather than
-    // to the value-less branch encoding; this mirrors the ethhash hasher's
+    // to the value-less branch encoding; this mirrors the Ethereum hasher's
     // fallback at ethhash.rs:234-236 so a verifier sees the same bytes the
     // hasher hashed.
     let inner_bytes: Box<[u8]> = if is_account {
@@ -154,7 +150,7 @@ pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
         out
     } else {
         // Inline form: the inner bytes fit (or this is an account, which
-        // the ethhash hasher always inlines). Mirroring the hasher here:
+        // the Ethereum hasher always inlines). Mirroring the hasher here:
         // see ethhash.rs:309-320.
         smallvec![encode_list(&[
             RlpItem::Bytes(&compact_path),

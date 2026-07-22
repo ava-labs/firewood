@@ -43,7 +43,7 @@ mod u4;
 /// Logger module for handling logging functionality
 pub mod logger;
 
-/// Ethereum MPT path encoding primitives shared by the ethhash hasher and the
+/// Ethereum MPT path encoding primitives shared by the Ethereum hasher and the
 /// `eth_getProof`-compatible proof emitter.
 pub mod eth_encoding;
 
@@ -58,9 +58,9 @@ pub mod macros;
 pub mod registry;
 // re-export these so callers don't need to know where they are
 pub use checker::{CheckOpt, CheckerReport, DBStats, FreeListsStats, TrieStats};
-pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
+pub use hashednode::{Hashable, ValueDigest, hash_node, hash_preimage};
 pub use hashedshunt::HashableShunt;
-pub use hashmode::{DefaultHashMode, EthHash, HashMode, MerkleDbHash};
+pub use hashmode::{EthHash, HashMode, MerkleDbHash};
 pub use hashtype::{HashType, IntoHashType, InvalidTrieHashLength, TrieHash};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
@@ -377,8 +377,8 @@ pub enum CheckerError {
         "The node {key:#x} at {address:#x} (parent: {parent:#x}) has a value but its path is not 32 or 64 bytes long"
     )]
     /// A value is found corresponding to an invalid key.
-    /// With ethhash, keys must be 32 or 64 bytes long.
-    /// Without ethhash, keys cannot contain half-bytes (i.e., odd number of nibbles).
+    /// Under Ethereum hashing, keys must be 32 or 64 bytes long.
+    /// Under MerkleDB hashing, keys cannot contain half-bytes (i.e., odd number of nibbles).
     InvalidKey {
         /// The key found, or equivalently the path of the node that stores the value
         key: Path,
@@ -431,22 +431,23 @@ impl From<CheckerError> for Vec<CheckerError> {
 /// least one byte is present and will produce a spurious ` val=` prefix
 /// for empty input.
 ///
-/// With ethhash enabled, values that look like non-empty RLP lists (first
-/// byte >= 0xc0) are decoded and displayed as ` rlp=[field0,field1,...]`
-/// with hex-encoded fields truncated to 12 characters. If the value cannot
-/// be decoded as an RLP list, the raw bytes are dumped instead. Other values
-/// are displayed as plaintext (` val=...`) if they are alphanumeric UTF-8,
-/// or as truncated hex otherwise.
+/// When the database uses Ethereum hashing, values that look like non-empty
+/// RLP lists (first byte >= 0xc0) are decoded and displayed as
+/// ` rlp=[field0,field1,...]` with hex-encoded fields truncated to 12
+/// characters. If the value cannot be decoded as an RLP list, the raw bytes
+/// are dumped instead. Other values are displayed as plaintext (` val=...`) if
+/// they are alphanumeric UTF-8, or as truncated hex otherwise.
 ///
 /// # Errors
 ///
 /// Returns an error if writing to `writer` fails.
 pub fn format_node_value<W: std::io::Write + ?Sized>(
     value: &[u8],
+    algorithm: crate::NodeHashAlgorithm,
     writer: &mut W,
 ) -> std::io::Result<()> {
-    #[cfg(feature = "ethhash")]
-    if value.first().is_some_and(|&b| b >= 0xc0)
+    if algorithm.is_ethereum()
+        && value.first().is_some_and(|&b| b >= 0xc0)
         && let Ok(rlp_list) = crate::rlp::RlpList::parse(value)
         && let Ok(items) = rlp_list.fields()
         && !items.is_empty()
@@ -486,58 +487,58 @@ pub fn format_node_value<W: std::io::Write + ?Sized>(
 #[cfg(test)]
 mod format_node_value_tests {
     use super::*;
+    // ZSTs the `#[hash_mode]` wrappers instantiate the generic helpers with.
+    use crate::EthHash;
 
-    fn fmt(value: &[u8]) -> String {
+    fn fmt<H: crate::HashMode>(value: &[u8]) -> String {
         let mut buf = Vec::new();
-        format_node_value(value, &mut buf).unwrap();
+        format_node_value(value, H::ALGORITHM, &mut buf).unwrap();
         String::from_utf8(buf).unwrap()
     }
 
     #[test]
     fn alphanumeric_plaintext() {
-        assert_eq!(fmt(b"hello"), " val=hello");
-        assert_eq!(fmt(b"value1"), " val=value1");
+        assert_eq!(fmt::<EthHash>(b"hello"), " val=hello");
+        assert_eq!(fmt::<EthHash>(b"value1"), " val=value1");
     }
 
     #[test]
     fn long_alphanumeric_truncated() {
-        assert_eq!(fmt(b"longvalue"), " val=longva...");
+        assert_eq!(fmt::<EthHash>(b"longvalue"), " val=longva...");
     }
 
     #[test]
     fn non_utf8_as_hex() {
-        assert_eq!(fmt(&[0xff, 0xfe]), " val=fffe");
+        assert_eq!(fmt::<EthHash>(&[0xff, 0xfe]), " val=fffe");
     }
 
     #[test]
     fn long_hex_truncated() {
-        assert_eq!(fmt(&[0xde, 0xad, 0xbe, 0xef]), " val=deadbe...");
+        assert_eq!(fmt::<EthHash>(&[0xde, 0xad, 0xbe, 0xef]), " val=deadbe...");
     }
 
     #[test]
     fn non_alphanumeric_utf8_as_hex() {
         // Space is not alphanumeric, so falls through to hex.
-        assert_eq!(fmt(b"hi there"), " val=686920...");
+        assert_eq!(fmt::<EthHash>(b"hi there"), " val=686920...");
     }
 
-    #[cfg(feature = "ethhash")]
-    #[test]
-    fn rlp_list_decoded() {
+    #[firewood_macros::hash_mode(eth)]
+    fn rlp_list_decoded<H: crate::HashMode>() {
         use ::rlp::RlpStream;
         // RLP encode [0x01, 0x02] as a 2-item list.
         let mut rlp = RlpStream::new_list(2);
         rlp.append(&vec![0x01u8]);
         rlp.append(&vec![0x02u8]);
         let encoded = rlp.out();
-        assert_eq!(fmt(&encoded), " rlp=[01,02]");
+        assert_eq!(fmt::<H>(&encoded), " rlp=[01,02]");
     }
 
-    #[cfg(feature = "ethhash")]
-    #[test]
-    fn empty_rlp_list_falls_through() {
+    #[firewood_macros::hash_mode(eth)]
+    fn empty_rlp_list_falls_through<H: crate::HashMode>() {
         // 0xc0 is an empty RLP list — as_list returns Ok([]) which we
         // treat as non-RLP since there are no fields to display.
-        let result = fmt(&[0xc0]);
+        let result = fmt::<H>(&[0xc0]);
         assert!(
             result.starts_with(" val="),
             "expected hex fallback, got: {result}"

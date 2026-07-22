@@ -95,7 +95,9 @@ fn bench_proposal_chain(criterion: &mut Criterion) {
                     let db_dir = TempDir::new().unwrap();
                     let db_path = db_dir.path().join("benchmark_db");
                     let cfg = DbConfig::builder()
-                        .node_hash_algorithm(<firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM)
+                        .node_hash_algorithm(
+                            <firewood_storage::EthHash as firewood_storage::HashMode>::ALGORITHM,
+                        )
                         .truncate(true)
                         .build();
                     let db = Db::new(db_path, cfg).unwrap();
@@ -134,7 +136,9 @@ fn bench_reconstructed_chain(criterion: &mut Criterion) {
                     // extra threads muddying up any flamegraphs when creating the
                     // initial proposal
                     let cfg = DbConfig::builder()
-                        .node_hash_algorithm(<firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM)
+                        .node_hash_algorithm(
+                            <firewood_storage::EthHash as firewood_storage::HashMode>::ALGORITHM,
+                        )
                         .truncate(true)
                         .use_parallel(UseParallel::Never)
                         .build();

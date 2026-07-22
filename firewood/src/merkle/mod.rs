@@ -127,13 +127,13 @@ fn storage_trie_root_parts_in_mode<Prefix: SplitPath, Partial: SplitPath>(
 }
 
 macro_rules! write_attributes {
-    ($writer:ident, $node:expr, $value:expr) => {
+    ($writer:ident, $node:expr, $value:expr, $algorithm:expr) => {
         if !$node.partial_path.0.is_empty() {
             write!($writer, " pp={:x}", $node.partial_path)
                 .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
         }
         if !$value.is_empty() {
-            firewood_storage::format_node_value($value, $writer)
+            firewood_storage::format_node_value($value, $algorithm, $writer)
                 .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
         }
     };
@@ -461,8 +461,8 @@ fn compute_outside_children(
 /// `MaybePersisted`) already carry their hash and are used directly.
 /// Out-of-range children get their hash from the corresponding proof node.
 ///
-/// Hashes the node as a normal trie node. Under `ethhash`, when this node
-/// is the single storage child of an account at depth 64, the parent
+/// Hashes the node as a normal trie node. Under the Ethereum hash mode, when
+/// this node is the single storage child of an account at depth 64, the parent
 /// instead invokes `compute_root_hash_as_storage_trie_root` to apply the
 /// storage-trie-root fold.
 fn compute_root_hash_with_proofs(
@@ -542,7 +542,7 @@ fn compute_root_hash_as_storage_trie_root(
 /// Hashable parts of a branch node assembled by `build_branch_parts`. The
 /// caller applies the final hash via either `HashableShunt::new` (normal)
 /// or `hash_node_as_storage_trie_root_parts` (the single-storage-child
-/// fold used at depth-64 account boundaries under `ethhash`).
+/// fold used at depth-64 account boundaries under the Ethereum hash mode).
 struct BranchParts<'b> {
     partial_path: &'b [PathComponent],
     value_digest: Option<ValueDigest<&'b [u8]>>,
@@ -656,8 +656,8 @@ fn build_branch_parts<'b>(
 /// An "effective" child is either an in-range branch child or an
 /// out-of-range child carried by the proof node — together they reflect
 /// the true on-disk shape. Proof verification only; live hashing has its
-/// own detection in `hash_helper_inner`. Without `ethhash` there is no
-/// account-branch fold, so this always returns `None`.
+/// own detection in `hash_helper_inner`. When `algorithm` is not the Ethereum
+/// hash mode there is no account-branch fold, so this always returns `None`.
 fn single_effective_account_child(
     full_key: &[PathComponent],
     branch: &BranchNode,
@@ -1128,10 +1128,16 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
     root_hash: &TrieHash,
     algorithm: NodeHashAlgorithm,
 ) -> Result<(), api::Error> {
-    // Build in-memory merkle from key-value pairs
+    // Build in-memory merkle from key-value pairs. This proving trie only
+    // structures the nodes; the final root hash is computed below by
+    // `compute_root_hash_with_proofs` under the runtime `algorithm`, so the
+    // proving nodestore's hash-mode type parameter is not load-bearing.
+    // EthHash: structural in-memory proving trie; correctness comes from the
+    // runtime `algorithm` (#1088).
     let memstore = MemStore::default();
     let nodestore = NodeStore::new_empty_proposal(memstore.into(), DeletedNodeTracking::Enabled);
-    let mut proving_merkle: Merkle<NodeStore<Mutable<Propose>, MemStore>> = Merkle::from(nodestore);
+    let mut proving_merkle: Merkle<NodeStore<Mutable<Propose>, MemStore, EthHash>> =
+        Merkle::from(nodestore);
 
     for (key, value) in key_values {
         proving_merkle.insert(key.as_ref(), value.as_ref().into())?;
@@ -1635,9 +1641,15 @@ impl<T: TrieReader> Merkle<T> {
                 .map_err(|e| FileIoError::new(e, None, 0, None))?;
         }
 
+        let algorithm = self.nodestore.node_hash_algorithm();
         match &*node.as_shared_node(&self.nodestore)? {
             Node::Branch(b) => {
-                write_attributes!(writer, b, &b.value.clone().unwrap_or(Box::from([])));
+                write_attributes!(
+                    writer,
+                    b,
+                    &b.value.clone().unwrap_or(Box::from([])),
+                    algorithm
+                );
                 writeln!(writer, "\"]")
                     .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
                 for (childidx, child) in &b.children {
@@ -1664,7 +1676,7 @@ impl<T: TrieReader> Merkle<T> {
                 }
             }
             Node::Leaf(l) => {
-                write_attributes!(writer, l, &l.value);
+                write_attributes!(writer, l, &l.value, algorithm);
                 writeln!(writer, "\" shape=rect]")
                     .map_err(|e| FileIoError::from_generic_no_file(e, "write leaf"))?;
             }

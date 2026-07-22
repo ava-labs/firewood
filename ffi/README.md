@@ -89,15 +89,11 @@ To trigger this build, [attach-static-libs](../.github/workflows/attach-static-l
 
 ### Hash Mode
 
-Firewood implemented its own optimized merkle trie structure. To support Ethereum Merkle Trie hash compatibility, it also provides a feature flag `ethhash`.
+Firewood implemented its own optimized merkle trie structure, and it also supports Ethereum Merkle Trie hash compatibility.
 
-This is an optional feature (disabled by default). To enable it for a local build, compile with:
+The hash mode is selected at runtime, per database, via the node hash algorithm rather than a cargo feature. Choose it when you open the database: pass the algorithm to `New(dir, NodeHashAlgorithm, ...)` in Go or to `Db::open(path, algorithm, cfg)` in Rust. A single static library serves both modes, so no separate build is required.
 
-```sh
-cargo build -p firewood-ffi --features ethhash
-```
-
-To support development in [Coreth](https://github.com/ava-labs/coreth), Firewood pushes static libraries for Ethereum-compatible hashing to [firewood-go-ethhash](https://github.com/ava-labs/firewood-go-ethhash) with `ethhash` enabled by default. To use Firewood's native hashing structure, you must still build the static library separately.
+To support development in [Coreth](https://github.com/ava-labs/coreth), Firewood pushes static libraries to [firewood-go-ethhash](https://github.com/ava-labs/firewood-go-ethhash). Because one library serves both modes, Go consumers select Ethereum-compatible or Firewood-native hashing at runtime when opening a database.
 
 ## Development
 
@@ -113,7 +109,7 @@ It is possible that your editor does not properly recognize the C bindings, due 
 
 ### Testing
 
-Although the VS Code testing feature does work, there are some quirks in ensuring proper building. The Rust code must be compiled separated, and sometimes the `go test` command continues to use a cached result. Whenever testing after making changes to the Rust/C builds, the cache should be cleared if results don't seem correct. The Go testing suite can determine dynamically whether ethhash is enabled or not, so it can be run with either configuration. For each individual testing module, ensure the hashing method you compiled with matches the test.
+Although the VS Code testing feature does work, there are some quirks in ensuring proper building. The Rust code must be compiled separated, and sometimes the `go test` command continues to use a cached result. Whenever testing after making changes to the Rust/C builds, the cache should be cleared if results don't seem correct. Because one build supports both hash modes, the Go testing suite selects the hashing mode at runtime per test, so there is no compiled-in mode to match.
 
 To ensure there are no memory leaks, the easiest way is to use your preferred CLI tool (e.g. `valgrind` for Linux, `leaks` for macOS) and compile the tests into a binary. You must not compile a release binary to ensure all memory can be managed. An example flow is given below.
 

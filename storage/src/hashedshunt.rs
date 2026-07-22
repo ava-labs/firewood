@@ -45,7 +45,8 @@ impl<P1: SplitPath, P2: SplitPath> std::fmt::Debug for HashableShunt<'_, P1, P2>
                 &self.value.as_ref().map(|v| v.as_ref().map(hex::encode)),
             )
             .field("child_hashes", &self.child_hashes)
-            .field("hash", &self.to_hash::<crate::DefaultHashMode>())
+            // EthHash: Debug rendering only (cosmetic hash); correctness paths are generic over H
+            .field("hash", &self.to_hash::<crate::EthHash>())
             .finish()
     }
 }

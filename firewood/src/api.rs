@@ -6,7 +6,7 @@ use crate::merkle::parallel::CreateProposalError;
 use crate::merkle::{Key, Value};
 use crate::persist_worker::PersistError;
 use crate::{Proof, ProofError, ProofNode, RangeProof};
-use firewood_storage::{DefaultHashMode, FileIoError, HashMode, NodeHashAlgorithm, TrieHash};
+use firewood_storage::{EthHash, FileIoError, HashMode, NodeHashAlgorithm, TrieHash};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -52,11 +52,13 @@ pub trait OptionalHashKeyExt: Sized {
 }
 
 impl HashKeyExt for HashKey {
-    /// Returns the empty-database root hash for the compile-selected mode:
-    /// `None` for merkledb, `Some(keccak256(0x80))` for ethhash.
+    /// Returns the empty-database root hash for the Ethereum hash mode
+    /// (`Some(keccak256(0x80))`).
+    // EthHash: legacy mode-less convenience; mode-aware callers use
+    // `H::default_root_hash()`.
     #[inline]
     fn default_root_hash() -> Option<HashKey> {
-        DefaultHashMode::default_root_hash()
+        EthHash::default_root_hash()
     }
 }
 
@@ -277,8 +279,8 @@ pub trait Db {
     ///
     /// # Note
     ///
-    /// If the database is empty, this will return None, unless the ethhash feature is enabled.
-    /// In that case, we return the special ethhash compatible empty trie hash.
+    /// If the database is empty, this will return None, unless the database uses
+    /// Ethereum hashing, whose empty-trie root is the non-empty `keccak256(0x80)`.
     fn root_hash(&self) -> Option<TrieHash>;
 
     /// Propose a change to the database via a batch
@@ -327,8 +329,8 @@ pub trait DbView {
     ///
     /// # Note
     ///
-    /// If the database is empty, this will return None, unless the ethhash feature is enabled.
-    /// In that case, we return the special ethhash compatible empty trie hash.
+    /// If the database is empty, this will return None, unless the database uses
+    /// Ethereum hashing, whose empty-trie root is the non-empty `keccak256(0x80)`.
     fn root_hash(&self) -> Option<HashKey>;
 
     /// Get the value of a specific key
@@ -401,8 +403,8 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
     ///
     /// # Note
     ///
-    /// If the database is empty, this will return None, unless the ethhash feature is enabled.
-    /// In that case, we return the special ethhash compatible empty trie hash.
+    /// If the database is empty, this will return None, unless the database uses
+    /// Ethereum hashing, whose empty-trie root is the non-empty `keccak256(0x80)`.
     fn root_hash(&self) -> Option<HashKey>;
 
     /// Get the value of a specific key
@@ -624,8 +626,9 @@ pub trait DynDb: Debug + Send + Sync + 'static {
 
     /// Reconstruct a view from a committed parent by applying batch operations.
     ///
-    /// Reconstruction is supported only when this database's hash mode is the
-    /// build's default mode; other modes return [`Error::FeatureNotSupported`].
+    /// Reconstruction is supported only when this database's hash mode is
+    /// Ethereum; other modes return [`Error::FeatureNotSupported`].
+    // EthHash: reconstruction is permanently Ethereum-only (#1088).
     #[expect(clippy::missing_errors_doc)]
     fn reconstruct_from_view(
         &self,
@@ -635,6 +638,7 @@ pub trait DynDb: Debug + Send + Sync + 'static {
 
     /// Reconstruct a view from a reconstructed parent by applying batch
     /// operations (used internally by [`Reconstructible::reconstruct`]).
+    // EthHash: reconstruction is permanently Ethereum-only (#1088).
     #[expect(clippy::missing_errors_doc)]
     fn reconstruct_from_reconstructed<'db>(
         &'db self,
@@ -643,10 +647,10 @@ pub trait DynDb: Debug + Send + Sync + 'static {
     ) -> Result<crate::db::ReconstructedView<'db>, Error>;
 
     /// Get an opaque committed revision for `hash`, if this database runs in
-    /// the build's default hash mode and the revision is available.
+    /// Ethereum hash mode and the revision is available.
     ///
-    /// Reconstruction is `DefaultHashMode`-only at the storage layer, so this
-    /// A database opened in a non-default mode returns `Ok(None)`; the
+    /// Reconstruction is Ethereum-only at the storage layer, so a database
+    /// opened in a non-Ethereum mode returns `Ok(None)`; the
     /// reconstruct caller then surfaces [`Error::FeatureNotSupported`].
     #[expect(clippy::missing_errors_doc)]
     fn committed_view(&self, hash: TrieHash) -> Result<Option<crate::db::CommittedView>, Error>;
@@ -718,21 +722,25 @@ pub trait DynProposal<'db>: Debug + Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // ZSTs the `#[hash_mode]` wrappers instantiate the generic helpers with.
+    use firewood_storage::{EthHash, MerkleDbHash};
 
-    #[test]
-    #[cfg(feature = "ethhash")]
-    fn test_ethhash_compat_default_root_hash_equals_empty_rlp_hash() {
+    #[firewood_macros::hash_mode(eth)]
+    fn test_ethhash_compat_default_root_hash_equals_empty_rlp_hash<H: HashMode>() {
         use sha3::Digest as _;
 
+        // `H::default_root_hash()` (the `HashMode` method) returns
+        // `Option<TrieHash>`; `HashKey == TrieHash` so this exercises the mode
+        // the wrapper binds rather than the production-default routing through
+        // `HashKeyExt::default_root_hash`.
         assert_eq!(
-            TrieHash::default_root_hash(),
+            H::default_root_hash(),
             Some(sha3::Keccak256::digest(rlp::NULL_RLP).into()),
         );
     }
 
-    #[test]
-    #[cfg(not(feature = "ethhash"))]
-    fn test_firewood_default_root_hash_equals_none() {
-        assert_eq!(TrieHash::default_root_hash(), None);
+    #[firewood_macros::hash_mode(merkledb)]
+    fn test_firewood_default_root_hash_equals_none<H: HashMode>() {
+        assert_eq!(H::default_root_hash(), None);
     }
 }

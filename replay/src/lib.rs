@@ -26,7 +26,7 @@ use std::time::Instant;
 use firewood::api::{self, Db as DbApi, DbView as DbViewApi, Proposal as ProposalApi};
 use firewood::db::{BatchOp, Db, Proposal};
 use firewood_metrics::firewood_histogram;
-use firewood_storage::InvalidTrieHashLength;
+use firewood_storage::{EthHash, InvalidTrieHashLength};
 
 pub mod registry;
 use serde::{Deserialize, Serialize};
@@ -196,17 +196,17 @@ fn into_batch_ops(pairs: Vec<KeyValueOp>) -> Vec<BoxedBatchOp> {
 
 /// Retrieves a proposal reference from the map, returning an error if not found.
 fn get_proposal<'a, 'db>(
-    proposals: &'a HashMap<ProposalId, Proposal<'db>>,
+    proposals: &'a HashMap<ProposalId, Proposal<'db, EthHash>>,
     id: ProposalId,
-) -> Result<&'a Proposal<'db>, ReplayError> {
+) -> Result<&'a Proposal<'db, EthHash>, ReplayError> {
     proposals.get(&id).ok_or(ReplayError::UnknownProposal(id))
 }
 
 /// Removes and returns a proposal from the map, returning an error if not found.
 fn take_proposal<'db>(
-    proposals: &mut HashMap<ProposalId, Proposal<'db>>,
+    proposals: &mut HashMap<ProposalId, Proposal<'db, EthHash>>,
     id: ProposalId,
-) -> Result<Proposal<'db>, ReplayError> {
+) -> Result<Proposal<'db, EthHash>, ReplayError> {
     proposals
         .remove(&id)
         .ok_or(ReplayError::UnknownProposal(id))
@@ -216,8 +216,8 @@ fn take_proposal<'db>(
 ///
 /// Returns the root hash if the operation was a commit that produced one.
 fn apply_operation<'db>(
-    db: &'db Db,
-    proposals: &mut HashMap<ProposalId, Proposal<'db>>,
+    db: &'db Db<EthHash>,
+    proposals: &mut HashMap<ProposalId, Proposal<'db, EthHash>>,
     operation: DbOperation,
 ) -> Result<Option<Box<[u8]>>, ReplayError> {
     match operation {
@@ -308,10 +308,10 @@ fn apply_operation<'db>(
 /// - The log references an unknown proposal ID
 pub fn replay_from_reader<R: Read>(
     mut reader: R,
-    db: &Db,
+    db: &Db<EthHash>,
     max_commits: Option<u64>,
 ) -> Result<Option<Box<[u8]>>, ReplayError> {
-    let mut proposals: HashMap<ProposalId, Proposal<'_>> = HashMap::new();
+    let mut proposals: HashMap<ProposalId, Proposal<'_, EthHash>> = HashMap::new();
     let mut last_commit_hash = None;
     let mut commit_count = 0u64;
     let max = max_commits.unwrap_or(u64::MAX);
@@ -363,7 +363,7 @@ pub fn replay_from_reader<R: Read>(
 /// See [`replay_from_reader`] for detailed error conditions.
 pub fn replay_from_file(
     path: impl AsRef<std::path::Path>,
-    db: &Db,
+    db: &Db<EthHash>,
     max_commits: Option<u64>,
 ) -> Result<Option<Box<[u8]>>, ReplayError> {
     let file = std::fs::File::open(path)?;
@@ -379,14 +379,11 @@ mod tests {
     use std::io::Cursor;
     use tempfile::tempdir;
 
-    fn create_test_db() -> (tempfile::TempDir, Db) {
+    fn create_test_db() -> (tempfile::TempDir, Db<EthHash>) {
         let tmpdir = tempdir().expect("create tempdir");
         let db_path = tmpdir.path().join("test.db");
-        let algorithm = if cfg!(feature = "ethhash") {
-            NodeHashAlgorithm::Ethereum
-        } else {
-            NodeHashAlgorithm::MerkleDB
-        };
+        // Replay operates on Ethereum-mode (C-Chain) databases.
+        let algorithm = NodeHashAlgorithm::Ethereum;
         let cfg = DbConfig::builder()
             .node_hash_algorithm(algorithm)
             .truncate(true)

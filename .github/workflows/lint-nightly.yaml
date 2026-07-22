@@ -18,12 +18,8 @@ jobs:
           - profile-key: debug-no-features
             profile-args: ""
             os: macos-26
-          - profile-key: debug-ethhash-logger
-            profile-args: "--features ethhash,logger"
           - profile-key: debug-all-features
             profile-args: "--all-features"
-          - profile-key: maxperf-ethhash-logger
-            profile-args: "--profile maxperf --features ethhash,logger"
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v6

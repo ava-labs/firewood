@@ -15,11 +15,12 @@
 //! error type on the public API.
 
 use firewood_storage::{
-    NodeHashAlgorithm, PackedPathRef, PathComponent, TriePathFromPackedBytes, ValueDigest,
+    EthHash, HashMode, NodeHashAlgorithm, PackedPathRef, PathComponent, TriePathFromPackedBytes,
+    ValueDigest,
 };
 use firewood_storage::{RlpList, TrieHash};
 
-use crate::api::{DbView, Error, HashKey, HashKeyExt};
+use crate::api::{DbView, Error, HashKey};
 use crate::proofs::ProofError;
 use crate::proofs::eth::{
     ACCOUNT_DEPTH_NIBBLES, AccountFields, account_storage_root_rlp, proof_node_to_mpt_rlp,
@@ -82,21 +83,19 @@ pub struct EthProof {
 
 impl Default for EthProof {
     /// "Absent account" shape: zero `nonce` and `balance`, `code_hash` =
-    /// `keccak("")` (the empty-code hash), `storage_hash` =
-    /// [`HashKey::default_root_hash`] (the empty-trie root in eth mode).
-    /// Matches what an ethereum verifier expects to see for a missing
-    /// account.
+    /// `keccak("")` (the empty-code hash), `storage_hash` = the Ethereum
+    /// empty-trie root ([`EthHash::default_root_hash`]). Matches what an
+    /// ethereum verifier expects to see for a missing account.
     ///
-    /// Under merkledb mode `default_root_hash` returns `None`, so
-    /// `storage_hash` falls back to all zeros. Callers should not reach
-    /// this case — [`eth_get_proof`] gates on `is_ethereum()` before any
-    /// `EthProof` is constructed.
+    /// This shape is Ethereum-only — [`eth_get_proof`] gates on
+    /// `is_ethereum()` before any `EthProof` is constructed.
+    // EthHash: eth_getProof is Ethereum-only (#1088).
     fn default() -> Self {
         Self {
             nonce: 0,
             balance: [0u8; 32],
             code_hash: KECCAK_EMPTY,
-            storage_hash: HashKey::default_root_hash()
+            storage_hash: EthHash::default_root_hash()
                 .as_deref()
                 .copied()
                 .unwrap_or_default(),
@@ -422,9 +421,8 @@ fn nibbles_match_packed(nibbles: &[PathComponent], packed: &[u8]) -> bool {
 }
 
 /// The negative half of [`eth_get_proof`]'s runtime mode gate: passing the
-/// MerkleDB algorithm must refuse to emit eth proofs. Now that the algorithm is
-/// a runtime argument this runs in both feature configs. The positive half
-/// lives in the `ethhash`-gated `tests` module below.
+/// MerkleDB algorithm must refuse to emit eth proofs. The positive half lives in
+/// the `tests` module below, whose fixtures are pinned to Ethereum hashing.
 #[cfg(test)]
 mod merkledb_gate_tests {
     use super::*;
@@ -432,10 +430,12 @@ mod merkledb_gate_tests {
 
     #[test]
     fn eth_get_proof_rejected_in_merkledb_mode() {
-        // Exercises the eth-only gate; runs under the compile-default mode until the flag-removal PR — the merkledb rejection path is covered by the runtime gate test above.
-        let merkle = init_merkle::<firewood_storage::DefaultHashMode, _, _, _>(
-            std::iter::empty::<(&[u8], &[u8])>(),
-        );
+        // Both hashers compile into one binary now, so the fixture trie is
+        // genuinely MerkleDB-mode; the gate must refuse to emit eth proofs for it.
+        let merkle = init_merkle::<firewood_storage::MerkleDbHash, _, _, _>(std::iter::empty::<(
+            &[u8],
+            &[u8],
+        )>());
         let err = eth_get_proof(
             merkle.nodestore(),
             NodeHashAlgorithm::MerkleDB,
@@ -451,8 +451,7 @@ mod merkledb_gate_tests {
 }
 
 // eth_getProof is an Ethereum-only surface (runtime-gated); these tests stay single-mode.
-#[cfg(all(test, feature = "ethhash"))]
-#[expect(clippy::unwrap_used, clippy::indexing_slicing)]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::merkle::tests::init_merkle;

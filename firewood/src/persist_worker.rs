@@ -113,7 +113,7 @@ pub enum PersistError {
 ///     Note right of Disk: Latest committed revision is persisted
 /// ```
 #[derive(Debug)]
-pub(crate) struct PersistWorker<H = firewood_storage::DefaultHashMode> {
+pub(crate) struct PersistWorker<H> {
     /// The background thread responsible for persisting commits async.
     handle: Mutex<Option<JoinHandle<Result<(), PersistError>>>>,
 

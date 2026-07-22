@@ -3,7 +3,7 @@
 
 use std::{fmt::Debug, num::NonZeroUsize};
 
-use firewood_storage::{DefaultHashMode, HashMode, NodeHashAlgorithm};
+use firewood_storage::{EthHash, HashMode, NodeHashAlgorithm};
 
 use crate::{
     Proof, ProofCollection, ProofError,
@@ -62,14 +62,12 @@ where
         end_proof: Proof<H>,
         key_values: Box<[BatchOp<K, V>]>,
     ) -> Self {
-        // Proofs built in this binary carry the compile-default mode; the parse
-        // path stamps the resolved header mode via `new_with_hash_mode`.
-        Self::new_with_hash_mode(
-            start_proof,
-            end_proof,
-            key_values,
-            DefaultHashMode::ALGORITHM,
-        )
+        // Convenience constructor with no runtime algorithm available; the
+        // parse path stamps the resolved header mode via `new_with_hash_mode`,
+        // and the production builder passes the database's runtime algorithm.
+        // EthHash: default concrete mode for the mode-less convenience
+        // constructor (#1088).
+        Self::new_with_hash_mode(start_proof, end_proof, key_values, EthHash::ALGORITHM)
     }
 
     /// Like [`ChangeProof::new`], but records the [`NodeHashAlgorithm`] the proof
