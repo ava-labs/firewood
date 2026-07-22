@@ -1715,11 +1715,12 @@ typedef struct DatabaseHandleArgs {
   /**
    * The hashing mode to use for the database.
    *
-   * This must match the compile-time feature:
-   * - [`NodeHashAlgorithm::Ethereum`] if the `ethhash` feature is enabled
-   * - [`NodeHashAlgorithm::MerkleDB`] if the `ethhash` feature is disabled
-   *
-   * Opening returns an error if this does not match the compile-time feature.
+   * This is the per-database node-hashing scheme, selected at runtime. For
+   * an existing database it must match the scheme persisted in the file
+   * header (a mismatch is an error); for a fresh database it is the scheme
+   * to create with. A single binary can open both
+   * [`NodeHashAlgorithm::Ethereum`] and [`NodeHashAlgorithm::MerkleDB`]
+   * databases regardless of the build's `ethhash` feature.
    */
   enum NodeHashAlgorithm node_hash_algorithm;
   /**

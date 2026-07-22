@@ -102,3 +102,9 @@ impl crate::MetricsContextExt for ReconstructedHandle<'_> {
         self.handle.metrics_context()
     }
 }
+
+impl crate::NodeHashAlgorithmExt for ReconstructedHandle<'_> {
+    fn node_hash_algorithm(&self) -> firewood_storage::NodeHashAlgorithm {
+        self.handle.node_hash_algorithm()
+    }
+}

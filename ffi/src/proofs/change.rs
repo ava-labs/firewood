@@ -79,7 +79,7 @@ impl ChangeProofContext {
             .proof
             .as_ref()
             .ok_or(api::Error::ProofError(ProofError::ProofIsNone))?;
-        CodeIteratorHandle::from_batch_ops(proof.batch_ops())
+        CodeIteratorHandle::from_batch_ops(proof.hash_mode(), proof.batch_ops())
     }
 }
 

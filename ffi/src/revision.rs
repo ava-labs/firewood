@@ -121,3 +121,9 @@ impl crate::MetricsContextExt for RevisionHandle<'_> {
         Some(self.metrics_context)
     }
 }
+
+impl crate::NodeHashAlgorithmExt for RevisionHandle<'_> {
+    fn node_hash_algorithm(&self) -> firewood_storage::NodeHashAlgorithm {
+        self.handle.node_hash_algorithm()
+    }
+}

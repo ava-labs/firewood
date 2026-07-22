@@ -275,7 +275,9 @@ pub struct NodeStoreHeader {
     /// The hash of the area sizes used in this database to prevent someone from changing the
     /// area sizes and trying to read old databases with the wrong area sizes.
     area_size_hash: [u8; 32],
-    /// Whether ethhash was enabled when this database was created.
+    /// The node-hashing scheme this database was created with, as a
+    /// [`NodeHashAlgorithm`] discriminant (`0` = MerkleDB, `1` = Ethereum).
+    /// This is the per-database runtime selector honored at open time.
     node_hash_algorithm: u64,
     /// The merkle root hash of the entire database when it was last committed.
     ///
@@ -329,11 +331,6 @@ impl NodeStoreHeader {
     pub fn read_from_storage<S: crate::linear::ReadableStorage>(
         storage: &S,
     ) -> Result<Self, crate::FileIoError> {
-        // TODO(#1088): remove this after implementing runtime selection of hash algorithms
-        storage.node_hash_algorithm().validate_init().map_err(|e| {
-            storage.file_io_error(e, 0, Some("NodeHashAlgorithm::validate_init".to_owned()))
-        })?;
-
         let mut this = bytemuck::zeroed::<Self>();
         let header_bytes = bytemuck::bytes_of_mut(&mut this);
         storage
@@ -347,6 +344,36 @@ impl NodeStoreHeader {
         })?;
 
         Ok(this)
+    }
+
+    /// Reads only the node-hashing scheme persisted in the header, without
+    /// validating it against any requested algorithm.
+    ///
+    /// This is the auto-detection primitive: it lets a caller learn an existing
+    /// database's scheme so it can open with the matching one, instead of
+    /// having to guess and hit a `validate_open` mismatch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the header cannot be read or the persisted
+    /// discriminant is not a known [`NodeHashAlgorithm`].
+    pub fn peek_node_hash_algorithm<S: crate::linear::ReadableStorage>(
+        storage: &S,
+    ) -> Result<NodeHashAlgorithm, crate::FileIoError> {
+        let mut this = bytemuck::zeroed::<Self>();
+        let header_bytes = bytemuck::bytes_of_mut(&mut this);
+        storage
+            .stream_from(0)?
+            .read_exact(header_bytes)
+            .map_err(|e| {
+                storage.file_io_error(
+                    e,
+                    0,
+                    Some("NodeStoreHeader::peek_node_hash_algorithm".to_owned()),
+                )
+            })?;
+        this.node_hash_algorithm()
+            .map_err(|e| storage.file_io_error(e, 0, Some("node_hash_algorithm".to_owned())))
     }
 
     /// Creates a new header with default values and no root address.
@@ -435,6 +462,22 @@ impl NodeStoreHeader {
     #[must_use]
     pub const fn root_address(&self) -> Option<LinearAddress> {
         self.root_address
+    }
+
+    /// The node-hashing scheme this database was created with, decoded from the
+    /// persisted header discriminant.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the persisted discriminant is not a known
+    /// [`NodeHashAlgorithm`] value.
+    pub fn node_hash_algorithm(&self) -> Result<NodeHashAlgorithm, Error> {
+        NodeHashAlgorithm::try_from(self.node_hash_algorithm).map_err(|err| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("hash mode flag in database header is invalid: {err}"),
+            )
+        })
     }
 
     /// Get the root hash.
@@ -531,7 +574,6 @@ impl NodeStoreHeader {
     }
 
     fn validate_node_hash_algorithm(&self, expected: NodeHashAlgorithm) -> Result<(), Error> {
-        expected.validate_init()?;
         NodeHashAlgorithm::try_from(self.node_hash_algorithm)
             .map_err(|err| {
                 std::io::Error::new(
@@ -580,7 +622,7 @@ mod tests {
 
     #[test]
     fn test_header_new() {
-        let header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let header = NodeStoreHeader::new(<crate::DefaultHashMode as crate::HashMode>::ALGORITHM);
 
         // Check the header is correctly initialized.
         assert_eq!(header.version, Version::new());
