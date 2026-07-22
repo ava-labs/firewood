@@ -9,6 +9,19 @@ use firewood_storage::{
 
 use crate::{ProofError, api, merkle::Merkle};
 
+/// The proven range for a collapse operation, in nibbles. Callers pass it
+/// wrapped in an `Option`: `None` skips range checking — off-path children are
+/// stripped freely and branch values cleared unconditionally — while `Some`
+/// enforces the range, where stripping an off-path child that holds an in-range
+/// key is a tamper and in-range values are kept.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CollapseRange<'a> {
+    /// The lower bound of the proven range.
+    pub(crate) start: &'a [u8],
+    /// The upper bound, or `None` for unbounded (+∞).
+    pub(crate) end: Option<&'a [u8]>,
+}
+
 /// Returns `true` when a nibble at position `child_nib` under the accumulated
 /// prefix `acc_prefix` could contain keys within `[start_nib, end_nib]`, where
 /// a `None` `end_nib` is unbounded (+∞).
@@ -121,7 +134,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     pub(crate) fn collapse_root_to_path(
         &mut self,
         target: &[PathComponent],
-        range: Option<(&[u8], Option<&[u8]>)>,
+        range: Option<CollapseRange<'_>>,
     ) -> Result<(), api::Error> {
         // The root's partial_path consumes some prefix of target.
         // Only collapse if target extends beyond the root's partial_path.
@@ -149,14 +162,12 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         Ok(())
     }
 
-    /// `range`: `(start_nibbles, end_nibbles)` for the proven range, where a
-    /// `None` end is unbounded (+∞). In-range children that are also
-    /// proposal-local trigger rejection.
+    /// In-range children that are also proposal-local trigger rejection.
     pub(crate) fn collapse_branch_to_path(
         &mut self,
         from: &[PathComponent],
         to: &[PathComponent],
-        range: Option<(&[u8], Option<&[u8]>)>,
+        range: Option<CollapseRange<'_>>,
     ) -> Result<(), api::Error> {
         // `to` must start with `from` since consecutive proof nodes form a
         // parent-child path — the child's key is always a prefix extension
@@ -198,7 +209,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         key: &[PathComponent],
         suffix: &[PathComponent],
         parent_prefix: &[u8],
-        range: Option<(&[u8], Option<&[u8]>)>,
+        range: Option<CollapseRange<'_>>,
     ) -> Result<Node, api::Error> {
         // get a reference to the partial path for ease of reading
         let pp = &node.partial_path().0;
@@ -253,7 +264,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         mut node: Node,
         path: &[PathComponent],
         acc_prefix: &[u8],
-        range: Option<(&[u8], Option<&[u8]>)>,
+        range: Option<CollapseRange<'_>>,
     ) -> Result<Node, api::Error> {
         let Some((&first, remaining)) = path.split_first() else {
             return Ok(node);
@@ -412,7 +423,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         mut node: Node,
         path: &[PathComponent],
         acc_prefix: &[u8],
-        range: Option<(&[u8], Option<&[u8]>)>,
+        range: Option<CollapseRange<'_>>,
     ) -> Result<Node, api::Error> {
         let Some((&on_path, remaining)) = path.split_first() else {
             return Ok(node);
@@ -428,9 +439,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
                 continue;
             }
 
-            if let Some((start_nib, end_nib)) = range
+            if let Some(CollapseRange { start, end }) = range
                 && let Some(child) = slot.as_ref()
-                && self.child_in_range(child, acc_prefix, nibble, start_nib, end_nib)?
+                && self.child_in_range(child, acc_prefix, nibble, start, end)?
             {
                 return Err(api::Error::ProofError(ProofError::EndRootMismatch));
             }
@@ -445,9 +456,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         // An in-range value belongs to an in-range key and must be kept so it
         // is validated against the batch. Dropping it lets a forged or omitted
         // in-range op whose key is a prefix of the boundary slip through.
-        if range.is_none_or(|(start_nib, end_nib)| {
-            acc_prefix < start_nib || end_nib.is_some_and(|end| acc_prefix > end)
-        }) {
+        let out_of_range = range.is_none_or(|CollapseRange { start, end }| {
+            acc_prefix < start || end.is_some_and(|end| acc_prefix > end)
+        });
+        if out_of_range {
             branch.value = None;
         }
 
@@ -804,7 +816,10 @@ mod tests {
             &[pc(1), pc(0)],
             &[pc(2), pc(1)],
             &[0x1, 0x0],
-            Some((&[0x1, 0x0, 0x2, 0x0], Some(&[0x1, 0x0, 0x2, 0xf]))),
+            Some(CollapseRange {
+                start: &[0x1, 0x0, 0x2, 0x0],
+                end: Some(&[0x1, 0x0, 0x2, 0xf]),
+            }),
         );
         assert!(matches!(
             result,

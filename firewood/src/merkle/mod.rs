@@ -50,6 +50,7 @@ pub type Key = Box<[u8]>;
 pub type Value = Box<[u8]>;
 
 use childmask::ChildMask;
+use collapse::CollapseRange;
 
 macro_rules! write_attributes {
     ($writer:ident, $node:expr, $value:expr) => {
@@ -1336,7 +1337,10 @@ pub fn verify_change_proof_root_hash(
     // Out-of-range children are stripped. In-range children that are also
     // proposal-local (created by this proposal's batch_ops, not inherited
     // from the parent) indicate tampered operations and trigger rejection.
-    let range = Some((start_key_nibbles.as_slice(), end_key_nibbles.as_deref()));
+    let range = Some(CollapseRange {
+        start: start_key_nibbles.as_slice(),
+        end: end_key_nibbles.as_deref(),
+    });
     for [parent, child] in start_nodes.array_windows() {
         proving_merkle.collapse_branch_to_path(&parent.key, &child.key, range)?;
     }
