@@ -6,6 +6,7 @@ package ffi
 import (
 	"encoding/hex"
 	"runtime"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -319,6 +320,90 @@ func TestRangeProofFindNextKey(t *testing.T) {
 	r.NotNil(nextRange)
 	r.Equal(nextRange.StartKey(), startKey)
 	r.NoError(nextRange.Free())
+}
+
+// TestRangeProofMethodFreeRace is a regression test for ava-labs/firewood#2137.
+//
+// Several (*RangeProof) methods read p.handle and pass it into a cgo call
+// without holding p.lease.mu, so they are not serialized against
+// (*RangeProof).Free, which frees the underlying Rust RangeProofContext under
+// p.lease.mu. In production the racing Free is the GC finalizer that
+// (*RangeProof) registers: once the proof becomes unreachable — which it is for
+// the duration of the cgo call, since these methods never touch p again after
+// loading the handle — the finalizer may run concurrently and free the context
+// out from under the in-flight call. The result is a use-after-free: the issue
+// reported "SIGSEGV ... signal arrived during cgo execution" inside
+// fwd_range_proof_find_next_key (FindNextKey); Verify and MarshalBinary share
+// the identical defect.
+//
+// The finalizer's exact timing cannot be forced from Go — the proof must be
+// reachable to call a method on it, yet unreachable for the finalizer to run —
+// so this test drives the identical concurrent code paths directly: the method
+// and Free (the very method the finalizer calls) race on the same proof. Under
+// -race — which CI runs the ffi suite under — the unsynchronized p.handle
+// access is reported deterministically. Without -race the same race can surface
+// as the reported SIGSEGV, but the timing window is narrow and does not
+// reliably crash in a bounded run, so -race is the signal this test relies on.
+// Guarding each method with p.lease.mu fixes all of them.
+func TestRangeProofMethodFreeRace(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	_, _, batch := kvForTest(100)
+	root, err := db.Update(batch)
+	r.NoError(err)
+
+	// Cheaply mint fresh, independent RangeProofContexts by unmarshalling the
+	// same serialized proof each iteration. UnmarshalBinary arms the Free
+	// finalizer but attaches no database lease, so nothing keeps the handle
+	// alive across the cgo call — exactly the production shape.
+	proofBytes := newSerializedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
+
+	// Each op reads p.handle and passes it into a single cgo call. None may race
+	// (*RangeProof).Free on p.handle. (CodeHashes is intentionally excluded: its
+	// Rust iterator borrows from the proof and is consumed across multiple calls,
+	// so it needs an iteration-spanning guard rather than this single-call one.)
+	ops := []struct {
+		name string
+		call func(*RangeProof)
+	}{
+		{"FindNextKey", func(p *RangeProof) { _, _ = p.FindNextKey() }},
+		{"Verify", func(p *RangeProof) {
+			_ = p.Verify(root, nothing(), nothing(), rangeProofLenTruncated)
+		}},
+		{"MarshalBinary", func(p *RangeProof) { _, _ = p.MarshalBinary() }},
+	}
+
+	for _, op := range ops {
+		t.Run(op.name, func(t *testing.T) {
+			r := require.New(t)
+			// -race flags the conflicting p.handle access as soon as one
+			// iteration's method and Free overlap, which the start barrier makes
+			// near-certain per iteration; a few thousand iterations is ample
+			// margin while keeping the -race CI run fast.
+			const iterations = 10_000
+			for range iterations {
+				p := new(RangeProof)
+				r.NoError(p.UnmarshalBinary(proofBytes))
+
+				start := make(chan struct{})
+				var wg sync.WaitGroup
+				wg.Add(2)
+				go func() {
+					defer wg.Done()
+					<-start
+					op.call(p) // reads p.handle across cgo, unsynchronized
+				}()
+				go func() {
+					defer wg.Done()
+					<-start
+					_ = p.Free() // frees the Rust context (the finalizer's code path)
+				}()
+				close(start)
+				wg.Wait()
+			}
+		})
+	}
 }
 
 func TestRangeProofCodeHashes(t *testing.T) {
