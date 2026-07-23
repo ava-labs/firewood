@@ -465,6 +465,40 @@ func TestRangeProofSetFinalizerReset(t *testing.T) {
 	}
 }
 
+// TestRangeProofVerifyTwiceIdempotent verifies that preparing the same proof
+// against the same database more than once is a safe no-op rather than a panic
+// ("lease already attached"), and that the redundant call does not leak a
+// second keep-alive lease (which would leave Database.Close waiting on a
+// phantom outstanding handle).
+func TestRangeProofVerifyTwiceIdempotent(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	_, _, batch := kvForTest(100)
+	root, err := db.Update(batch)
+	r.NoError(err)
+
+	proof, err := db.RangeProof(root, nothing(), nothing(), rangeProofLenTruncated)
+	r.NoError(err)
+
+	r.NoError(db.VerifyRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated))
+	r.NoError(db.VerifyRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated))
+
+	// The proof is still usable after the redundant verify.
+	nkr, err := proof.FindNextKey()
+	r.NoError(err)
+	if nkr != nil {
+		r.NoError(nkr.Free())
+	}
+
+	// Exactly one lease was taken: a single Free drops the outstanding-handle
+	// count to zero, so a graceful Close finds nothing to wait on. A leaked
+	// second lease would make this Close return ErrActiveKeepAliveHandles.
+	// (db.Close is idempotent, so newTestDatabase's cleanup close is a no-op.)
+	r.NoError(proof.Free())
+	r.NoError(db.Close(oneSecCtx(t)))
+}
+
 func TestRangeProofCodeHashes(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
