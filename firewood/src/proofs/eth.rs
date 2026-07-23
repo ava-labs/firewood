@@ -286,7 +286,7 @@ fn proof_child_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use firewood_storage::{IntoHashType, PathBuf, RlpList, TrieHash, TriePathFromUnpackedBytes};
+    use firewood_storage::{PathBuf, RlpList, TrieHash, TriePathFromUnpackedBytes};
 
     fn pathbuf_from_nibbles(nibbles: &[u8]) -> PathBuf {
         let components =
@@ -334,7 +334,7 @@ mod tests {
     }
 
     fn hash_child(byte: u8) -> HashType {
-        TrieHash::from([byte; 32]).into_hash_type()
+        TrieHash::from([byte; 32]).into()
     }
 
     #[test]
