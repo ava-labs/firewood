@@ -7,6 +7,8 @@
 //! The header contains metadata about the proof format including version, hash mode,
 //! branching factor, and proof type, enabling quick validation before deserialization.
 
+use firewood_storage::NodeHashAlgorithm;
+
 use super::{magic, types::ProofType};
 
 /// A fixed-size header at the beginning of every serialized proof.
@@ -50,10 +52,17 @@ impl From<ProofType> for Header {
 }
 
 impl Header {
-    /// Validates the header, returning the discovered proof type if valid.
+    /// Validates the header, returning the discovered proof type and the
+    /// resolved [`NodeHashAlgorithm`] the proof was encoded with.
     ///
-    /// If `expected_type` is `Some`, the proof type must match (in which case the return
-    /// value can be ignored).
+    /// If `expected_type` is `Some`, the proof type must match (in which case the
+    /// returned proof type can be ignored). The resolved algorithm is taken from
+    /// the self-describing `hash_mode` header byte: any known mode (`0` =
+    /// MerkleDB, `1` = Ethereum) is accepted so a single binary can parse either
+    /// wire format; only a truly-unknown byte is rejected with
+    /// [`InvalidHeader::UnsupportedHashMode`]. Whether that resolved mode is the
+    /// one the caller wants is a verify-side policy decision (see
+    /// `ProofError::HashModeMismatch`), not a parse-time error.
     ///
     /// # Errors
     ///
@@ -62,7 +71,7 @@ impl Header {
     pub(super) fn validate(
         &self,
         expected_type: Option<ProofType>,
-    ) -> Result<ProofType, InvalidHeader> {
+    ) -> Result<(ProofType, NodeHashAlgorithm), InvalidHeader> {
         if self.magic != *magic::PROOF_HEADER {
             return Err(InvalidHeader::InvalidMagic { found: self.magic });
         }
@@ -73,11 +82,14 @@ impl Header {
             });
         }
 
-        if self.hash_mode != magic::HASH_MODE {
-            return Err(InvalidHeader::UnsupportedHashMode {
+        // Resolve the self-describing hash-mode byte into an algorithm. Both
+        // known modes are accepted here so one binary can read either format;
+        // only an unknown byte is rejected.
+        let algorithm = NodeHashAlgorithm::try_from(u64::from(self.hash_mode)).map_err(|_| {
+            InvalidHeader::UnsupportedHashMode {
                 found: self.hash_mode,
-            });
-        }
+            }
+        })?;
 
         if self.branch_factor != magic::BRANCH_FACTOR {
             return Err(InvalidHeader::UnsupportedBranchFactor {
@@ -96,7 +108,7 @@ impl Header {
                     expected: Some(expected),
                 })
             }
-            (Some(found), _) => Ok(found),
+            (Some(found), _) => Ok((found, algorithm)),
         }
     }
 }
@@ -119,12 +131,15 @@ pub enum InvalidHeader {
         /// The version byte found instead of a supported version.
         found: u8,
     },
-    /// The proof was encoded for an unsupported hash mode.
+    /// The proof was encoded for an unknown hash mode (a byte that maps to no
+    /// known [`NodeHashAlgorithm`]). Both known modes (`0` = sha256, `1` =
+    /// keccak256) are accepted by validation; only an unrecognized byte lands
+    /// here.
     #[error(
-        "unsupported hash mode: found {found:02x} ({}); expected {:02x} ({})",
+        "unsupported hash mode: found {found:02x} ({}); expected {:02x} (sha256) or {:02x} (keccak256)",
         magic::hash_mode_name(*found),
-        magic::HASH_MODE,
-        magic::hash_mode_name(magic::HASH_MODE)
+        0u8,
+        1u8,
     )]
     UnsupportedHashMode {
         /// The flag indicating which hash mode created this proof.
