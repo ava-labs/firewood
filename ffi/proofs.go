@@ -226,7 +226,7 @@ func (db *Database) VerifyRangeProof(
 	// https://github.com/ava-labs/firewood/issues/1539 is deferred for
 	// both proof types.
 	proof.lease.attachUnregistered(db.keepAlives)
-	runtime.SetFinalizer(proof, (*RangeProof).Free)
+	proof.setFreeFinalizer()
 	return nil
 }
 
@@ -358,7 +358,7 @@ func (p *RangeProof) UnmarshalBinary(data []byte) error {
 	if err == nil {
 		p.handle = handle.handle
 		handle.handle = nil
-		runtime.SetFinalizer(p, (*RangeProof).Free)
+		p.setFreeFinalizer()
 	}
 
 	return err
@@ -381,6 +381,18 @@ func (p *RangeProof) Free() error {
 		p.handle = nil
 		return nil
 	})
+}
+
+// setFreeFinalizer registers (*RangeProof).Free as p's finalizer, replacing any
+// finalizer a previous life of p may already carry. runtime.SetFinalizer
+// fatally panics if a finalizer is already set, and a RangeProof can
+// legitimately reach a finalizer-setting path more than once (a repeated
+// UnmarshalBinary, or UnmarshalBinary followed by Database.VerifyRangeProof), so
+// clear any existing finalizer first. SetFinalizer(p, nil) is a no-op when none
+// is set.
+func (p *RangeProof) setFreeFinalizer() {
+	runtime.SetFinalizer(p, nil)
+	runtime.SetFinalizer(p, (*RangeProof).Free)
 }
 
 // ChangeProof returns a proof that the changes between [startRoot] and

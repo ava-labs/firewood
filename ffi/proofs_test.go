@@ -406,6 +406,65 @@ func TestRangeProofMethodFreeRace(t *testing.T) {
 	}
 }
 
+// TestRangeProofSetFinalizerReset guards against a double-SetFinalizer panic.
+//
+// runtime.SetFinalizer fatally panics ("finalizer already set") if it is called
+// with a non-nil finalizer on an object that already has one. A RangeProof can
+// legitimately reach a finalizer-setting path more than once: UnmarshalBinary
+// documents that it overwrites existing contents (so it may be called again),
+// and a from-bytes proof can then be prepared with Database.VerifyRangeProof —
+// which also sets the finalizer. Because Free does not clear the finalizer,
+// each of these sequences re-set the finalizer on the unfixed code and crashed
+// the process. They must instead leave the proof with exactly one finalizer.
+//
+// (Calling VerifyRangeProof twice is a separate matter: it panics earlier on
+// lease.attachUnregistered, so it is not exercised here.)
+func TestRangeProofSetFinalizerReset(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	_, _, batch := kvForTest(100)
+	root, err := db.Update(batch)
+	r.NoError(err)
+
+	proofBytes := newSerializedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
+
+	tests := []struct {
+		name string
+		// run performs a sequence that reaches a finalizer-setting path twice
+		// and returns the resulting proof for cleanup. It must not panic.
+		run func(*require.Assertions) *RangeProof
+	}{
+		{"unmarshal_then_unmarshal", func(r *require.Assertions) *RangeProof {
+			p := new(RangeProof)
+			r.NoError(p.UnmarshalBinary(proofBytes))
+			r.NoError(p.UnmarshalBinary(proofBytes))
+			return p
+		}},
+		{"unmarshal_then_verify", func(r *require.Assertions) *RangeProof {
+			p := new(RangeProof)
+			r.NoError(p.UnmarshalBinary(proofBytes))
+			r.NoError(db.VerifyRangeProof(p, nothing(), nothing(), root, rangeProofLenTruncated))
+			return p
+		}},
+		{"verify_then_unmarshal", func(r *require.Assertions) *RangeProof {
+			p, err := db.RangeProof(root, nothing(), nothing(), rangeProofLenTruncated)
+			r.NoError(err)
+			r.NoError(db.VerifyRangeProof(p, nothing(), nothing(), root, rangeProofLenTruncated))
+			r.NoError(p.UnmarshalBinary(proofBytes))
+			return p
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			p := tt.run(r) // must not fatally panic with "finalizer already set"
+			t.Cleanup(func() { _ = p.Free() })
+		})
+	}
+}
+
 func TestRangeProofCodeHashes(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
