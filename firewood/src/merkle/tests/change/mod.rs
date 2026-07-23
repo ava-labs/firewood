@@ -108,4 +108,5 @@ mod empty;
 #[cfg(feature = "ethhash")]
 pub(super) mod fuzz_common;
 mod partial;
+mod regression;
 mod structural;

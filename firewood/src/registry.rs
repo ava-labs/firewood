@@ -2,6 +2,11 @@
 // See the file LICENSE.md for licensing terms.
 
 //! Firewood layer metric definitions.
+//!
+//! Call exactly one registration entry point at startup:
+//! - [`crate::registry::register_all`] for a full firewood database, including storage metrics.
+//! - [`crate::registry::register`] only when intentionally registering this crate's metrics
+//!   without lower-layer storage metrics.
 
 firewood_metrics::define_metrics! {
     counters: {
@@ -62,4 +67,28 @@ firewood_metrics::define_metrics! {
         /// Number of key/value pairs contained in a generated proof, by proof kind
         PROOF_KEYS = "firewood_proof_keys" buckets([0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0, 2048.0, 4096.0, 8192.0, 16_384.0, 32_768.0, 65_536.0, 131_072.0]),
     },
+}
+
+/// Registers firewood and lower-layer storage metric descriptions.
+///
+/// This is the preferred entry point for embedders that expose metrics for a
+/// full firewood database. It keeps callers from needing to know which metrics
+/// are defined by each internal crate. Do not also call [`register`], because
+/// this function already includes those metric descriptions.
+#[must_use]
+pub fn register_all() -> Vec<firewood_metrics::HistogramMetricConfig> {
+    let mut histogram_configs = register();
+    histogram_configs.extend(firewood_storage::registry::register());
+    histogram_configs
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn register_all_includes_storage_metrics() {
+        assert_eq!(
+            super::register_all().len(),
+            super::register().len() + firewood_storage::registry::register().len()
+        );
+    }
 }

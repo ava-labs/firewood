@@ -1,8 +1,6 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![expect(clippy::unwrap_used, clippy::indexing_slicing)]
-
 use integer_encoding::VarInt;
 use test_case::test_case;
 
@@ -134,21 +132,7 @@ fn test_invalid_header(
     0; // found len
     "no varint after header"
 )]
-#[test_case(
-    |proof, data| {
-        #[expect(clippy::arithmetic_side_effects)]
-        data.truncate(
-            32
-            + proof.start_proof().len().required_space()
-            + proof.start_proof()[0].key.len().required_space()
-            // truncate after the key length varint but before the key bytes
-        );
-    },
-    "byte slice",
-    1, // expected len
-    0; // found len
-    "truncated node key"
-)]
+
 fn test_incomplete_item(
     mutator: impl FnOnce(&FrozenRangeProof, &mut Vec<u8>),
     item: &'static str,
@@ -213,6 +197,20 @@ fn test_incomplete_item(
     "no data after the proof",
     "100 bytes";
     "extra trailing bytes"
+)]
+#[test_case(
+    |proof, data| {
+        #[expect(clippy::arithmetic_side_effects)]
+        data.truncate(
+            32
+            + proof.start_proof().len().required_space()
+            + proof.start_proof()[0].key.len().required_space()
+        );
+    },
+    "array length",
+    "length less than or equal to the maximum possible items in remaining bytes",
+    "2 > (1 / 5)";
+    "truncated node key"
 )]
 fn test_invalid_item(
     mutator: impl FnOnce(&FrozenRangeProof, &mut Vec<u8>),
@@ -740,18 +738,21 @@ fn test_change_proof_incomplete_batch_op_discriminant() {
     let (_, mut data) = create_valid_change_proof();
     data.truncate(35); // cut before the first BatchOp discriminant byte
     match FrozenChangeProof::from_slice(&data) {
-        Err(ReadError::IncompleteItem {
+        Err(ReadError::InvalidItem {
             item,
             expected,
             found,
             ..
         }) => {
-            assert_eq!(item, "option discriminant");
-            assert_eq!(expected, 1);
-            assert_eq!(found, 0);
+            assert_eq!(item, "array length");
+            assert_eq!(
+                expected,
+                "length less than or equal to the maximum possible items in remaining bytes"
+            );
+            assert_eq!(found, "3 > (0 / 2)");
         }
         other => {
-            panic!("Expected IncompleteItem {{ item: \"option discriminant\" }}, got: {other:?}")
+            panic!("Expected InvalidItem {{ item: \"array length\" }}, got: {other:?}")
         }
     }
 }
@@ -914,5 +915,174 @@ fn test_slow_malformed_proof_fuzz() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn test_dos_array_length_bounds() {
+    use integer_encoding::VarInt;
+
+    let (proof, mut data) = create_valid_range_proof();
+
+    // The first array length (for start_proof) is at offset 32.
+    let original_len = proof.start_proof().len();
+    let original_len_space = original_len.required_space();
+
+    let malicious_num_items: usize = 10_000_000;
+    let encoded = malicious_num_items.encode_var_vec();
+
+    data.splice(32..32 + original_len_space, encoded);
+
+    // Calculate the remaining bytes after parsing the new varint (offset 32 + encoded varint len)
+    let remainder_len = data.len() - 32 - malicious_num_items.required_space();
+
+    match FrozenRangeProof::from_slice(&data) {
+        Err(ReadError::InvalidItem {
+            item,
+            expected,
+            found,
+            ..
+        }) => {
+            assert_eq!(item, "array length");
+            assert_eq!(
+                expected,
+                "length less than or equal to the maximum possible items in remaining bytes"
+            );
+            assert_eq!(
+                found,
+                format!("{malicious_num_items} > ({remainder_len} / 5)")
+            );
+        }
+        other => panic!("Expected ReadError::InvalidItem for DoS vector, got: {other:?}"),
+    }
+}
+
+mod box_array_deserialization_tests {
+    use std::num::NonZeroUsize;
+
+    use super::*;
+    use crate::proofs::header::Header;
+    use crate::proofs::reader::{ProofReader, ReadError, V0Reader, Version0};
+    use integer_encoding::VarInt;
+
+    #[derive(Debug, PartialEq)]
+    struct Hash32([u8; 32]);
+
+    impl Version0 for Hash32 {
+        const MIN_BYTES_PER_ITEM: NonZeroUsize = NonZeroUsize::new(32).unwrap();
+
+        fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
+            let chunk = reader.read_chunk::<32>()?;
+            Ok(Hash32(*chunk))
+        }
+    }
+
+    impl Version0 for u8 {
+        fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
+            let chunk = reader.read_chunk::<1>()?;
+            Ok(chunk[0])
+        }
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct VarLenVec(Vec<u8>);
+
+    impl Version0 for VarLenVec {
+        fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
+            let len = reader.read_item::<usize>()?;
+            let slice = reader.read_slice(len)?;
+            Ok(VarLenVec(slice.to_vec()))
+        }
+    }
+
+    fn v0_reader(data: &[u8]) -> V0Reader<'_> {
+        let inner = ProofReader::new(data);
+        V0Reader::new(inner, Header::from(ProofType::Range))
+    }
+
+    #[test]
+    fn rejects_usize_max_items_via_length_guard() {
+        // Guard catches extreme case before any iteration
+        let mut data = Vec::new();
+        data.extend_from_slice(&usize::MAX.encode_var_vec());
+        let mut reader = v0_reader(&data);
+        let result: Result<Box<[Hash32]>, _> = reader.read_v0_item();
+
+        assert!(matches!(
+            result,
+            Err(ReadError::InvalidItem {
+                item: "array length",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_eof_mid_array() {
+        // Guard doesn't trigger (5 > 64 is FALSE), but loop fails safely on EOF
+        let mut data = Vec::new();
+        data.extend_from_slice(&5usize.encode_var_vec());
+        data.extend_from_slice(&[0u8; 64]); // only 2 complete Hash32 items
+        let mut reader = v0_reader(&data);
+        let result: Result<Box<[Hash32]>, _> = reader.read_v0_item();
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_var_len_item_with_huge_claimed_length() {
+        // Nested length field amplification
+        let mut data = Vec::new();
+        data.extend_from_slice(&1usize.encode_var_vec());
+        data.extend_from_slice(&usize::MAX.encode_var_vec());
+        data.extend_from_slice(&[0u8; 10]);
+        let mut reader = v0_reader(&data);
+        let result: Result<Box<[VarLenVec]>, _> = reader.read_v0_item();
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn accepts_empty_array() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&0usize.encode_var_vec());
+        let mut reader = v0_reader(&data);
+        let result: Result<Box<[Hash32]>, _> = reader.read_v0_item();
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 0);
+    }
+
+    #[test]
+    fn boundary_exact_fit_passes() {
+        // 10 items, 50 bytes → 10 > 50 / 5 is FALSE → PASS
+        // T = u8 so num_items directly equals bytes needed
+        let mut data = Vec::new();
+        data.extend_from_slice(&10usize.encode_var_vec());
+        data.extend_from_slice(&[0u8; 50]);
+        let mut reader = v0_reader(&data);
+        let result: Result<Box<[u8]>, _> = reader.read_v0_item();
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 10);
+    }
+
+    #[test]
+    fn boundary_one_over_fails() {
+        // 51 items, 50 bytes → 51 > 50 / 1 is TRUE → FAIL
+        // T = u8 so MIN_BYTES_PER_ITEM = 1
+        let mut data = Vec::new();
+        data.extend_from_slice(&51usize.encode_var_vec());
+        data.extend_from_slice(&[0u8; 50]);
+        let mut reader = v0_reader(&data);
+        let result: Result<Box<[u8]>, _> = reader.read_v0_item();
+
+        assert!(matches!(
+            result,
+            Err(ReadError::InvalidItem {
+                item: "array length",
+                ..
+            })
+        ));
     }
 }

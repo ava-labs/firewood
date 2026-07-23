@@ -2,6 +2,42 @@
 default:
     ./scripts/run-just.sh --list
 
+# Regenerate proof wire serialization snapshots for both hash modes.
+#
+# Run this after any intentional change to the proof binary format (ser.rs,
+# de.rs, childmask, or header). Covers ProofNode encoding, the 32-byte proof
+# header, key-value pair encoding, and BatchOp encoding. The recipe writes
+# snapshots for the MerkleDB (SHA-256) mode first, then for the Ethereum
+# (Keccak-256, ethhash) mode. Existing snapshots are overwritten when their
+# content changes.
+#
+# After running, review the diffs in src/proofs/snapshots/ and commit them
+# alongside the format change.
+snapshot-proof-nodes:
+    INSTA_UPDATE=always cargo nextest run -p firewood --features logger         -E 'test(~snapshot_tests)'
+    INSTA_UPDATE=always cargo nextest run -p firewood --features ethhash,logger -E 'test(~snapshot_tests)'
+
+# Regenerate firewood-storage node serialization snapshots for both hash modes.
+#
+# Run this after any intentional change to Serializable impls (TrieHash,
+# FreeArea, HashOrRlp) or to Node::as_bytes / Node::from_reader. The recipe
+# writes snapshots for the MerkleDB (SHA-256) mode first, then for the
+# Ethereum (Keccak-256, ethhash) mode. Existing snapshots are overwritten
+# when their content changes.
+#
+# After running, review the diffs in storage/src/node/snapshots/ and commit
+# them alongside the format change.
+snapshot-nodes:
+    INSTA_UPDATE=always cargo nextest run -p firewood-storage --features logger         -E 'test(~snapshot_tests)'
+    INSTA_UPDATE=always cargo nextest run -p firewood-storage --features ethhash,logger -E 'test(~snapshot_tests)'
+
+# Regenerate all snapshots across the workspace for both hash modes.
+#
+# Alias for running snapshot-proof-nodes followed by snapshot-nodes. Use this
+# after a change that affects multiple snapshot suites simultaneously (e.g. a
+# shared encoding primitive or a proof format change that ripples into storage).
+snapshot-all: snapshot-proof-nodes snapshot-nodes
+
 # Build ffi with nix
 build-ffi-nix: check-nix
     cd ffi && nix build
@@ -159,6 +195,24 @@ release-step-refresh-changelog tag:
 
     echo "Generating changelog..."
     git cliff -o CHANGELOG.md --tag "{{tag}}"
+
+# Regenerate the git-ignored mdBook preprocessor assets (prerequisite of book builds)
+book-assets:
+    mdbook-mermaid install docs
+
+# Serve the book locally with live reload
+book-serve: book-assets
+    mdbook serve docs --open
+
+# Build the book and run the link checker (the book-build + linkcheck part of CI,
+# not the full site assembly)
+book-build: book-assets
+    mdbook build docs
+
+# List design docs by last git-commit date (oldest/stalest first).
+# Freshness comes from git history — design docs carry no in-doc dates.
+design-age:
+    ./scripts/design-doc-age.sh
 
 # Run a C-Chain reexecution benchmark
 # Triggers Firewood's track-performance.yml which then triggers AvalancheGo.

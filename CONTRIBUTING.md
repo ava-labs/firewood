@@ -9,13 +9,15 @@ guidelines for contributing to firewood.
 * [Quick Links](#quick-links)
 * [Testing](#testing)
 * [How to submit changes](#how-to-submit-changes)
+* [Signing your commits](#signing-your-commits)
 * [Code Review Process](#code-review-process)
+* [Labels](#labels)
 * [Where can I ask for help?](#where-can-i-ask-for-help)
 
 ## Quick Links
 
 * [Setting up docker](README.docker.md)
-* [Auto-generated documentation](https://ava-labs.github.io/firewood/firewood/)
+* [Auto-generated documentation](https://ava-labs.github.io/firewood/rustdoc/firewood/)
 * [Issue tracker](https://github.com/ava-labs/firewood/issues)
 
 ## Testing
@@ -37,6 +39,23 @@ Also, if you update any versions of packages, notably the MSRV (Minimum Supporte
 
 To create a PR, fork firewood, and use GitHub to create the PR. We typically prioritize reviews in the middle of the next work day,
 so you should expect a response during the week within 24 hours.
+
+## Signing your commits
+
+CI rejects PRs that contain unsigned commits, so configure commit signing
+before you open one — GitHub should then show every commit as **Verified**.
+
+The quickest setup is signing with the SSH key you already push with:
+
+    git config --global gpg.format ssh
+    git config --global user.signingkey ~/.ssh/id_ed25519.pub
+    git config --global commit.gpgsign true
+
+Then add that key to GitHub as a **Signing Key** under *Settings → SSH and GPG
+keys*. See GitHub's [signing commits][gh-signing] guide for full details,
+including GPG keys and Windows/macOS setup.
+
+[gh-signing]: https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits
 
 ## Code Review Process
 
@@ -113,11 +132,71 @@ please reach out. We hope you work on an easy task before tackling a harder one.
 
 Just like bugs, please use the [issue tracker](https://github.com/ava-labs/firewood/issues) for requesting enhancements. Please tag the issue with the "enhancement" tag.
 
+## Labels
+
+Issues and pull requests are organized with a namespaced label taxonomy
+(`area/*`, `kind/*`, `priority/*`, `status/*`). See [`LABELS.md`](./LABELS.md).
+Labels are managed as code in `.github/labels.yml` — edit the manifest, never
+the GitHub UI.
+
 ## Style Guide / Coding Conventions
 
 We generally follow the same rules that `cargo fmt` and `cargo clippy` will report as warnings, with a few notable exceptions as documented in the associated Cargo.toml file.
 
 By default, we prohibit bare `unwrap` calls and index dereferencing, as there are usually better ways to write this code. In the case where you can't, please use `expect` with a message explaining why it would be a bug, which we currently allow. For more information on our motivation, please read this great article on unwrap: [Using unwrap() in Rust is Okay](https://blog.burntsushi.net/unwrap) by [Andrew Gallant](https://blog.burntsushi.net).
+
+### Documenting wrappers, shims, and FFI adapters
+
+When a function exists only to delegate to another — an FFI adapter, a thin
+wrapper, or a shim that adds no behavior of its own — **do not duplicate the
+callee's documentation**. Duplicated docs drift: when the underlying function
+changes, every copy must be found and updated, and a stale copy misleads readers
+more than a one-line reference ever could.
+
+Instead:
+
+* Say what the wrapper *is* and link to the function it delegates to for the
+  details (parameters, return values, formats, and safety requirements). In
+  Rust, use intra-doc links (`` [`fwd_eth_get_proof`] ``) so readers can click
+  through to the canonical documentation.
+* Document only what is **unique to the wrapper**: why it exists (if
+  non-obvious), and any behavior it adds or changes — extra error conditions,
+  additional safety requirements, or different argument handling.
+* **Reference a target at least as visible as the item being documented.**
+  Public docs that link to a private item break — Rust fails CI, and Go renders
+  the link as dead plain text. A wrapper may delegate to a private helper for its
+  *implementation*, but its docs should reference the **public** canonical
+  function (or inline the details) — never the private helper.
+
+In Rust, `rustdoc` renders `[Type::method]` as a clickable link, so referencing
+the canonical documentation is both DRY and convenient — prefer it:
+
+    /// Produce an `eth_getProof`-compatible proof against a reconstructed view
+    /// rather than a committed revision.
+    ///
+    /// See [`fwd_eth_get_proof`] for the proof format, arguments, return values,
+    /// and key-encoding requirements.
+    ///
+    /// # Safety
+    ///
+    /// As [`fwd_eth_get_proof`], except `reconstructed` must be a valid pointer to
+    /// a [`ReconstructedHandle`].
+
+In Go, doc links such as `[Revision.EthGetProof]` (available since Go 1.19) are
+clickable on pkg.go.dev and navigable via `gopls`, just as in Rust, so the same
+balance applies: cross-reference the shared contract, but keep wrapper-specific
+details (such as error conditions) local rather than referring the reader away
+entirely. Go's style guides reinforce this preference for clarity over strict
+DRY — the [Google Go Style Guide][google-go-style] lists clarity as its foremost
+principle and does not treat DRY as overriding, and the
+[Uber Go Style Guide][uber-go-style] is likewise a catalog of conventions that
+favor clarity and consistency:
+
+    // EthGetProof is [Revision.EthGetProof] evaluated against this reconstructed
+    // view. It returns [ErrDroppedReconstructed] if the view has been released.
+
+[google-go-style]: https://google.github.io/styleguide/go/guide
+[uber-go-style]: https://github.com/uber-go/guide/blob/master/style.md
 
 ## Where can I ask for help?
 

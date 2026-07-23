@@ -21,12 +21,12 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
-	"sync"
 	"unsafe"
 )
 
 var (
-	ErrDroppedRevision       = errors.New("revision already dropped")
+	// ErrDroppedRevision wraps [ErrDropped].
+	ErrDroppedRevision       = fmt.Errorf("revision %w", ErrDropped)
 	ErrRevisionNotFound      = errors.New("revision not found")
 	ErrEndRevisionNotFound   = errors.New("end revision not found")
 	ErrStartRevisionNotFound = errors.New("start revision not found")
@@ -67,8 +67,8 @@ type Revision struct {
 //
 // It returns ErrDroppedRevision if this revision has already been released.
 func (r *Revision) Get(key []byte) ([]byte, error) {
-	r.keepAliveHandle.mu.RLock()
-	defer r.keepAliveHandle.mu.RUnlock()
+	r.lease.mu.RLock()
+	defer r.lease.mu.RUnlock()
 	if r.dropped {
 		return nil, ErrDroppedRevision
 	}
@@ -90,8 +90,8 @@ func (r *Revision) Get(key []byte) ([]byte, error) {
 //
 // It returns [ErrDroppedRevision] if this revision has already been released.
 func (r *Revision) Iter(key []byte) (*Iterator, error) {
-	r.keepAliveHandle.mu.RLock()
-	defer r.keepAliveHandle.mu.RUnlock()
+	r.lease.mu.RLock()
+	defer r.lease.mu.RUnlock()
 	if r.dropped {
 		return nil, ErrDroppedRevision
 	}
@@ -101,7 +101,7 @@ func (r *Revision) Iter(key []byte) (*Iterator, error) {
 
 	itResult := C.fwd_iter_on_revision(r.ptr, newBorrowedBytes(key, &pinner))
 
-	return getIteratorFromIteratorResult(itResult)
+	return getIteratorFromIteratorResult(itResult, r.lease.registry)
 }
 
 // Reconstruct applies a batch of operations on top of this historical revision,
@@ -110,8 +110,8 @@ func (r *Revision) Iter(key []byte) (*Iterator, error) {
 // The returned view is not committed to the database and is not visible via
 // [Database.Revision] or [Database.Root].
 func (r *Revision) Reconstruct(batch []BatchOp) (*Reconstructed, error) {
-	r.keepAliveHandle.mu.RLock()
-	defer r.keepAliveHandle.mu.RUnlock()
+	r.lease.mu.RLock()
+	defer r.lease.mu.RUnlock()
 	if r.dropped {
 		return nil, ErrDroppedRevision
 	}
@@ -122,7 +122,7 @@ func (r *Revision) Reconstruct(batch []BatchOp) (*Reconstructed, error) {
 	kvp := newKeyValuePairsFromBatch(batch, &pinner)
 	return getReconstructedFromResult(
 		C.fwd_reconstruct_on_revision(r.ptr, kvp),
-		r.keepAliveHandle.outstandingHandles,
+		r.lease.registry,
 	)
 }
 
@@ -136,8 +136,8 @@ func (r *Revision) Root() Hash {
 //
 // Returns ErrDroppedRevision if this revision has already been released.
 func (r *Revision) Dump() (string, error) {
-	r.keepAliveHandle.mu.RLock()
-	defer r.keepAliveHandle.mu.RUnlock()
+	r.lease.mu.RLock()
+	defer r.lease.mu.RUnlock()
 	if r.dropped {
 		return "", ErrDroppedRevision
 	}
@@ -151,7 +151,7 @@ func (r *Revision) Dump() (string, error) {
 }
 
 // getRevisionFromResult converts a C.RevisionResult to a Revision or error.
-func getRevisionFromResult(result C.RevisionResult, wg *sync.WaitGroup) (*Revision, error) {
+func getRevisionFromResult(result C.RevisionResult, registry *keepAliveRegistry) (*Revision, error) {
 	switch result.tag {
 	case C.RevisionResult_NullHandlePointer:
 		return nil, errDBClosed
@@ -161,10 +161,14 @@ func getRevisionFromResult(result C.RevisionResult, wg *sync.WaitGroup) (*Revisi
 		body := (*C.RevisionResult_Ok_Body)(unsafe.Pointer(&result.anon0))
 		hashKey := *(*Hash)(unsafe.Pointer(&body.root_hash._0))
 		rev := &Revision{
-			handle: createHandle(body.handle, wg, func(r *C.RevisionHandle) C.VoidResult { return C.fwd_free_revision(r) }),
+			handle: newHandle(body.handle, func(r *C.RevisionHandle) C.VoidResult { return C.fwd_free_revision(r) }),
 			root:   hashKey,
 		}
-		runtime.AddCleanup(rev, drop, rev.handle)
+		// attach calls rev.Drop on the closed-registry path; nothing else to clean up.
+		if err := rev.lease.attach(registry, rev.Drop); err != nil {
+			return nil, err
+		}
+		runtime.AddCleanup(rev, drop[*C.RevisionHandle], rev.handle)
 		return rev, nil
 	case C.RevisionResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()

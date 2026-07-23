@@ -90,14 +90,22 @@ type RangeProof struct {
 	// embedded proposal, the database must be kept alive. The proposal and
 	// reference to the database are released after calling
 	// `C.fwd_db_verify_and_commit_range_proof` or `C.fwd_free_range_proof`.
+	//
+	// Every method that passes handle to a C call must hold lease.mu.RLock for
+	// the duration of that call. Free — including the GC finalizer registered
+	// below — invalidates handle under lease.mu.Lock, so the read-lock both
+	// serializes the call against the free and keeps the proof reachable across
+	// the cgo call, preventing the finalizer from running mid-call. Omitting it
+	// is a use-after-free of the Rust RangeProofContext (see
+	// https://github.com/ava-labs/firewood/issues/2137).
 	handle *C.RangeProofContext
 
-	// keepAliveHandle keeps the database alive while this range proof
-	// owns an embedded proposal. It is initialized when the range proof is
-	// verified with a database handle ([Database.VerifyRangeProof]) and not by
-	// unmarshalling or when [RangeProof.Verify] is used. It is disowned after
-	// [Database.VerifyAndCommitRangeProof] or [RangeProof.Free].
-	keepAliveHandle databaseKeepAliveHandle
+	// lease keeps the database alive while this range proof owns an
+	// embedded proposal. It is initialized when the range proof is
+	// verified with a database handle ([Database.VerifyRangeProof]) and not
+	// by unmarshalling or when [RangeProof.Verify] is used. It is released
+	// after [Database.VerifyAndCommitRangeProof] or [RangeProof.Free].
+	lease lease
 }
 
 // ChangeProof represents a proof of changes between two roots for a range of keys.
@@ -155,6 +163,9 @@ func (p *RangeProof) Verify(
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
 ) error {
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
+
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
@@ -204,11 +215,18 @@ func (db *Database) VerifyRangeProof(
 		return err
 	}
 
-	// keep the database alive while the proof owns the embedded proposal
-	// TODO(bernard-avalabs): use runtime.AddCleanup and shared handle[T] infrastructure
-	// instead of SetFinalizer, for consistency with Proposal and Revision.
-	proof.keepAliveHandle.init(&db.outstandingHandles)
-	runtime.SetFinalizer(proof, (*RangeProof).Free)
+	// keep the database alive while the proof owns the embedded proposal.
+	// Proofs are intentionally NOT entered into Database.keepAlives: a
+	// bound `proof.Free` would keep `proof` reachable via the registry and
+	// prevent the GC finalizer from ever running. They still increment the
+	// outstanding-handle count, so graceful Close waits on them;
+	// WithForceCloseHandles will not auto-drop a still-referenced
+	// RangeProof. The change-proof family is being redesigned, so the
+	// runtime.AddCleanup migration tracked in
+	// https://github.com/ava-labs/firewood/issues/1539 is deferred for
+	// both proof types.
+	proof.lease.attachUnregistered(db.keepAlives)
+	proof.setFreeFinalizer()
 	return nil
 }
 
@@ -241,7 +259,7 @@ func (db *Database) VerifyAndCommitRangeProof(
 	}
 
 	var hash Hash
-	err := proof.keepAliveHandle.disown(true /* evenOnError */, func() error {
+	err := proof.lease.release(func() error {
 		var err error
 		db.commitLock.Lock()
 		defer db.commitLock.Unlock()
@@ -264,6 +282,8 @@ func (db *Database) VerifyAndCommitRangeProof(
 //
 // TODO(#352): the start key will be inclusive in the future; update documentation then.
 func (p *RangeProof) FindNextKey() (*NextKeyRange, error) {
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
 	return getNextKeyRangeFromNextKeyRangeResult(C.fwd_range_proof_find_next_key(p.handle))
 }
 
@@ -311,6 +331,9 @@ func (it *codeIterator) Free() error {
 //
 // The format is unspecified and opaque to firewood.
 func (p *RangeProof) MarshalBinary() ([]byte, error) {
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
+
 	start := time.Now()
 	result, err := getValueFromValueResult(C.fwd_range_proof_to_bytes(p.handle))
 	proofMarshalDuration.WithLabelValues("range").Observe(time.Since(start).Seconds())
@@ -335,7 +358,7 @@ func (p *RangeProof) UnmarshalBinary(data []byte) error {
 	if err == nil {
 		p.handle = handle.handle
 		handle.handle = nil
-		runtime.SetFinalizer(p, (*RangeProof).Free)
+		p.setFreeFinalizer()
 	}
 
 	return err
@@ -346,7 +369,7 @@ func (p *RangeProof) UnmarshalBinary(data []byte) error {
 // It is safe to call Free more than once; subsequent calls after the first
 // will be no-ops.
 func (p *RangeProof) Free() error {
-	return p.keepAliveHandle.disown(false /* evenOnError */, func() error {
+	return p.lease.release(func() error {
 		if p.handle == nil {
 			return nil
 		}
@@ -358,6 +381,18 @@ func (p *RangeProof) Free() error {
 		p.handle = nil
 		return nil
 	})
+}
+
+// setFreeFinalizer registers (*RangeProof).Free as p's finalizer, replacing any
+// finalizer a previous life of p may already carry. runtime.SetFinalizer
+// fatally panics if a finalizer is already set, and a RangeProof can
+// legitimately reach a finalizer-setting path more than once (a repeated
+// UnmarshalBinary, or UnmarshalBinary followed by Database.VerifyRangeProof), so
+// clear any existing finalizer first. SetFinalizer(p, nil) is a no-op when none
+// is set.
+func (p *RangeProof) setFreeFinalizer() {
+	runtime.SetFinalizer(p, nil)
+	runtime.SetFinalizer(p, (*RangeProof).Free)
 }
 
 // ChangeProof returns a proof that the changes between [startRoot] and
@@ -421,7 +456,7 @@ func (db *Database) VerifyChangeProof(
 
 	return getProposalFromProposalResult(
 		C.fwd_db_verify_change_proof(db.handle, proof.handle, args),
-		&db.outstandingHandles,
+		db.keepAlives,
 		&db.commitLock,
 	)
 }
@@ -538,6 +573,13 @@ func (p *ChangeProof) UnmarshalBinary(data []byte) error {
 }
 
 // Free releases the resources associated with this ChangeProof.
+//
+// Unlike [RangeProof], a ChangeProof holds no database reference on the
+// Rust side (it is pure proof data), so it does not participate in the
+// keep-alive count and an outstanding ChangeProof does not block
+// [Database.Close]. This is the intended model for both proof types:
+// the plan is for RangeProof to also stop holding a database reference,
+// not for ChangeProof to grow one.
 //
 // It is safe to call Free more than once; subsequent calls after the first
 // will be no-ops.

@@ -9,7 +9,7 @@ mod owned;
 pub mod rendered_metrics;
 pub(crate) mod results;
 
-pub use self::borrowed::{BorrowedBatchOps, BorrowedBytes, BorrowedSlice};
+pub use self::borrowed::{BorrowedBatchOps, BorrowedBytes, BorrowedBytes2D, BorrowedSlice};
 use self::display_hex::DisplayHex;
 pub use self::hash_key::HashKey;
 pub use self::kvp::{BatchOp, OwnedKeyValueBatch, OwnedKeyValuePair};
@@ -21,9 +21,10 @@ pub use self::rendered_metrics::{
 };
 pub(crate) use self::results::{CResult, NullHandleResult};
 pub use self::results::{
-    ChangeProofResult, CodeIteratorResult, HandleResult, HashResult, IteratorResult,
-    KeyValueBatchResult, KeyValueResult, NextKeyRangeResult, ProposalResult, RangeProofResult,
-    ReconstructedResult, RenderedMetricsResult, RevisionResult, ValueResult, VoidResult,
+    ChangeProofResult, CodeIteratorResult, EthProofResult, HandleResult, HashResult,
+    IteratorResult, KeyValueBatchResult, KeyValueResult, NextKeyRangeResult, ProposalResult,
+    RangeProofResult, ReconstructedResult, RenderedMetricsResult, RevisionResult, ValueResult,
+    VoidResult,
 };
 
 /// Maybe is a C-compatible optional type using a tagged union pattern.

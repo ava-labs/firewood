@@ -102,3 +102,7 @@ tags
 .ionide
 
 # End of https://www.toptal.com/developers/gitignore/api/rust,visualstudiocode,vim,macos
+
+# Dev Container CLI feature lockfile (regenerated per build; pinning
+# feature digests would defeat the major-version auto-update strategy)
+.devcontainer/devcontainer-lock.json
