@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784794702655,
+  "lastUpdate": 1784879783605,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -7472,6 +7472,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 84.21694611120445,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "bernard-avalabs",
+            "username": "bernard-avalabs",
+            "email": "53795885+bernard-avalabs@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "514baa51bc98bc04aa56f0fd95b7b91ce4d53bee",
+          "message": "test(merkle): add ethhash-shaped proof fuzzer (#2080)\n\n## Why this should be merged\n  \nExisting fuzzers generate arbitrary tries, so the ethhash-specific\nverification paths (the storage-trie-root fold and the partial-storage\nreconcile) are almost never exercised. This fuzzer builds\nEthereum-shaped state on purpose so both paths fire on every iteration,\nfor both range and change proofs.\n\n## How this works\n  \nEach iteration builds a random database of depth-64 accounts with\nweighted storage-child counts, guaranteeing one single-child and one\nmulti-child account. It verifies range and change proofs across boundary\nscenarios that cut inside account storage, then asserts forged-value,\nforged-codeHash, and dropped-storage-leaf tampers are rejected, while a\nforged storageRoot is still accepted (the verifier recomputes that\nfield). Shared fuzz helpers live in `change/fuzz_common.rs`.\n`FIREWOOD_TEST_SEED` reruns one iteration; `FIREWOOD_TEST_SOAK_SECONDS`\nsoaks until a deadline.\n\n## How this was tested\n\nFull workspace suite under the ci profile. Red/green: disabling the fold\nor the reconcile relaxation each fails the fuzzer on the first\niteration. Soaked thousands of iterations with no failures.\n\n## Breaking Changes\n  \nNone. Test-only.",
+          "timestamp": "2026-07-24T00:44:28Z",
+          "url": "https://github.com/ava-labs/firewood/commit/514baa51bc98bc04aa56f0fd95b7b91ce4d53bee"
+        },
+        "date": 1784879782838,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 171.0920735942608,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5844.806126854638,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 74.69669738809911,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5721.722483834164,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 46.557911145737364,
             "unit": "block_accept_ms/ggas"
           }
         ]
