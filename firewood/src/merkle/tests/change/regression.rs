@@ -60,43 +60,6 @@ fn commit_batch(db: &Db, end_batch: Vec<BatchOp<&[u8], &[u8]>>) -> (api::HashKey
     (start_root, db.root_hash().unwrap())
 }
 
-/// Generate a change proof over the given bounds. The completeness tests use
-/// this directly so they can assert with their own diagnostic message.
-fn proof_over(
-    db: &Db,
-    start_root: &api::HashKey,
-    end_root: &api::HashKey,
-    start_key: Option<&[u8]>,
-    end_key: Option<&[u8]>,
-) -> FrozenChangeProof {
-    db.change_proof(
-        start_root.clone(),
-        end_root.clone(),
-        start_key,
-        end_key,
-        None,
-    )
-    .unwrap()
-}
-
-/// Generate a change proof and assert it verifies, returning it so a caller can
-/// tamper with it. For the soundness tests the honest case is a precondition
-/// rather than the assertion under test, so one message serves all of them.
-fn honest_proof(
-    db: &Db,
-    start_root: &api::HashKey,
-    end_root: &api::HashKey,
-    start_key: Option<&[u8]>,
-    end_key: Option<&[u8]>,
-) -> FrozenChangeProof {
-    let proof = proof_over(db, start_root, end_root, start_key, end_key);
-    assert!(
-        verifies(db, &proof, start_root, end_root, start_key, end_key),
-        "honest proof must verify"
-    );
-    proof
-}
-
 /// Rebuild `proof` with different `batch_ops`, keeping both boundary proofs.
 fn replace_ops(proof: &FrozenChangeProof, batch_ops: OwnedOps) -> FrozenChangeProof {
     ChangeProof::new(
@@ -152,7 +115,13 @@ fn test_tampered_right_edge_delete_to_put_is_rejected() {
     );
 
     // No-bounds change proof; its end proof anchors on the max op key 0xf5cd.
-    let proof = honest_proof(&db, &start_root, &end_root, None, None);
+    let proof = db
+        .change_proof(start_root.clone(), end_root.clone(), None, None, None)
+        .unwrap();
+    assert!(
+        verifies(&db, &proof, &start_root, &end_root, None, None),
+        "honest proof must verify"
+    );
 
     // Tamper: Delete{0xf51c} -> Put{0xf51c, "forged"}.
     let mutated = forge_delete_to_put(&proof, b"\xf5\x1c");
@@ -191,7 +160,15 @@ fn test_out_of_range_delete_past_end_bound_verifies() {
     );
 
     let (sk, ek) = (b"\x00".as_slice(), b"\xfb".as_slice());
-    let proof = proof_over(&db, &start_root, &end_root, Some(sk), Some(ek));
+    let proof = db
+        .change_proof(
+            start_root.clone(),
+            end_root.clone(),
+            Some(sk),
+            Some(ek),
+            None,
+        )
+        .unwrap();
     assert!(
         verifies(&db, &proof, &start_root, &end_root, Some(sk), Some(ek)),
         "honest change proof over [0x00, 0xfb] must verify. The deletion of \
@@ -214,7 +191,19 @@ fn test_forged_in_range_delete_to_put_is_rejected() {
     let (start_root, end_root) = commit_batch(&db, vec![BatchOp::Delete { key: b"\x56" }]);
 
     let (sk, ek) = (b"\x00".as_slice(), b"\x56\x00".as_slice());
-    let proof = honest_proof(&db, &start_root, &end_root, Some(sk), Some(ek));
+    let proof = db
+        .change_proof(
+            start_root.clone(),
+            end_root.clone(),
+            Some(sk),
+            Some(ek),
+            None,
+        )
+        .unwrap();
+    assert!(
+        verifies(&db, &proof, &start_root, &end_root, Some(sk), Some(ek)),
+        "honest proof must verify"
+    );
 
     let forged = forge_delete_to_put(&proof, b"\x56");
     assert!(
@@ -260,7 +249,15 @@ fn test_out_of_range_delete_below_start_bound_verifies() {
     );
 
     let (sk, ek) = (b"\xd4\x4f".as_slice(), b"\xf9".as_slice());
-    let proof = proof_over(&db, &start_root, &end_root, Some(sk), Some(ek));
+    let proof = db
+        .change_proof(
+            start_root.clone(),
+            end_root.clone(),
+            Some(sk),
+            Some(ek),
+            None,
+        )
+        .unwrap();
     assert!(
         verifies(&db, &proof, &start_root, &end_root, Some(sk), Some(ek)),
         "honest change proof over [0xd44f, 0xf9] must verify. The deletion of \
@@ -289,7 +286,13 @@ fn test_unbounded_end_omitted_in_range_delete_is_rejected() {
     let (start_root, end_root) = commit_batch(&db, vec![BatchOp::Delete { key: b"\x53" }]);
 
     let sk = b"\x52".as_slice();
-    let proof = honest_proof(&db, &start_root, &end_root, Some(sk), None);
+    let proof = db
+        .change_proof(start_root.clone(), end_root.clone(), Some(sk), None, None)
+        .unwrap();
+    assert!(
+        verifies(&db, &proof, &start_root, &end_root, Some(sk), None),
+        "honest proof must verify"
+    );
 
     // Forge: drop the in-range Delete and the end proof, so `right_edge_key`
     // resolves to None (unbounded end). Dropping the end proof is essential —
@@ -339,7 +342,19 @@ fn test_split_boundary_child_omitted_in_range_delete_is_rejected() {
     );
 
     let (sk, ek) = (b"\x00".as_slice(), b"\xfb\x50".as_slice());
-    let proof = honest_proof(&db, &start_root, &end_root, Some(sk), Some(ek));
+    let proof = db
+        .change_proof(
+            start_root.clone(),
+            end_root.clone(),
+            Some(sk),
+            Some(ek),
+            None,
+        )
+        .unwrap();
+    assert!(
+        verifies(&db, &proof, &start_root, &end_root, Some(sk), Some(ek)),
+        "honest proof must verify"
+    );
 
     // Forge: drop the in-range Delete{0xfb10}, keeping the honest boundary
     // proofs. The proposal keeps 0xfb10, so boundary child b is split.
@@ -385,7 +400,19 @@ fn test_split_start_boundary_child_omitted_in_range_delete_is_rejected() {
     );
 
     let (sk, ek) = (b"\xd4\x50".as_slice(), b"\xf0".as_slice());
-    let proof = honest_proof(&db, &start_root, &end_root, Some(sk), Some(ek));
+    let proof = db
+        .change_proof(
+            start_root.clone(),
+            end_root.clone(),
+            Some(sk),
+            Some(ek),
+            None,
+        )
+        .unwrap();
+    assert!(
+        verifies(&db, &proof, &start_root, &end_root, Some(sk), Some(ek)),
+        "honest proof must verify"
+    );
 
     // Forge: drop the in-range Delete{0xd490}, keeping the honest boundary
     // proofs. The proposal keeps 0xd490, so boundary child 4 is split.
