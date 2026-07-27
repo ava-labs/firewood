@@ -483,12 +483,14 @@ fn change_outside_children<S: ReadableStorage>(
             continue;
         };
 
-        // An `OnPath` terminal is a strict ancestor of the boundary key, so a
-        // valid exclusion proof carries no child at that nibble. Marking the
-        // child outside substitutes the proof's hash for it, so a hash present
-        // here could hide in-range state that is never checked against the
-        // batch ops. Check it here rather than inheriting it from the structural
-        // pass, so this step is sound on its own.
+        // Confirms that structural validation ran and accepted this proof. An
+        // `OnPath` terminal is a strict ancestor of the boundary key, so
+        // `Proof::value_digest`'s exclusion check has already required the
+        // terminal to carry no child at this nibble. A child present here
+        // therefore means the proof never passed that check. Marking the child
+        // outside substitutes the proof's hash for it, which on an unvalidated
+        // proof would hide in-range state that is never checked against the
+        // batch ops.
         if terminal.node.child_hashes[on_path].is_some() {
             return Err(api::Error::ProofError(
                 ProofError::ExclusionProofMissingChild,
