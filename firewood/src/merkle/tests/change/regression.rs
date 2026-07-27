@@ -34,31 +34,97 @@
 use super::*;
 use crate::{ChangeProof, Proof};
 
-fn is_rejected(
-    db: &Db,
-    proof: &FrozenChangeProof,
-    start_root: api::HashKey,
-    end_root: api::HashKey,
-) -> bool {
-    match verify_change_proof_structure(proof, end_root, None, None, None) {
-        Err(_) => true,
-        Ok(ctx) => verify_and_check(db, proof, &ctx, start_root).is_err(),
-    }
-}
+/// `batch_ops` as they come off a generated proof.
+type OwnedOps = Box<[BatchOp<Box<[u8]>, Box<[u8]>>]>;
 
-/// Whether a proof verifies (is accepted) against the given inclusive bounds.
+/// Whether a proof is accepted against the given inclusive bounds.
 fn verifies(
     db: &Db,
     proof: &FrozenChangeProof,
-    start_root: api::HashKey,
-    end_root: api::HashKey,
+    start_root: &api::HashKey,
+    end_root: &api::HashKey,
     start_key: Option<&[u8]>,
     end_key: Option<&[u8]>,
 ) -> bool {
-    match verify_change_proof_structure(proof, end_root, start_key, end_key, None) {
+    match verify_change_proof_structure(proof, end_root.clone(), start_key, end_key, None) {
         Err(_) => false,
-        Ok(ctx) => verify_and_check(db, proof, &ctx, start_root).is_ok(),
+        Ok(ctx) => verify_and_check(db, proof, &ctx, start_root.clone()).is_ok(),
     }
+}
+
+/// Commit `end_batch` onto `db`, returning the roots before and after. Unlike
+/// `setup_2nd_commit!` this takes arbitrary ops, so it can apply deletes.
+fn commit_batch(db: &Db, end_batch: Vec<BatchOp<&[u8], &[u8]>>) -> (api::HashKey, api::HashKey) {
+    let start_root = db.root_hash().unwrap();
+    db.propose(end_batch).unwrap().commit().unwrap();
+    (start_root, db.root_hash().unwrap())
+}
+
+/// Generate a change proof over the given bounds. The completeness tests use
+/// this directly so they can assert with their own diagnostic message.
+fn proof_over(
+    db: &Db,
+    start_root: &api::HashKey,
+    end_root: &api::HashKey,
+    start_key: Option<&[u8]>,
+    end_key: Option<&[u8]>,
+) -> FrozenChangeProof {
+    db.change_proof(
+        start_root.clone(),
+        end_root.clone(),
+        start_key,
+        end_key,
+        None,
+    )
+    .unwrap()
+}
+
+/// Generate a change proof and assert it verifies, returning it so a caller can
+/// tamper with it. For the soundness tests the honest case is a precondition
+/// rather than the assertion under test, so one message serves all of them.
+fn honest_proof(
+    db: &Db,
+    start_root: &api::HashKey,
+    end_root: &api::HashKey,
+    start_key: Option<&[u8]>,
+    end_key: Option<&[u8]>,
+) -> FrozenChangeProof {
+    let proof = proof_over(db, start_root, end_root, start_key, end_key);
+    assert!(
+        verifies(db, &proof, start_root, end_root, start_key, end_key),
+        "honest proof must verify"
+    );
+    proof
+}
+
+/// Rebuild `proof` with different `batch_ops`, keeping both boundary proofs.
+fn replace_ops(proof: &FrozenChangeProof, batch_ops: OwnedOps) -> FrozenChangeProof {
+    ChangeProof::new(
+        Proof::new(proof.start_proof().as_ref().into()),
+        Proof::new(proof.end_proof().as_ref().into()),
+        batch_ops,
+    )
+}
+
+/// Rebuild `proof` with the `Delete` at `victim` flipped to a `Put`.
+fn forge_delete_to_put(proof: &FrozenChangeProof, victim: &[u8]) -> FrozenChangeProof {
+    let ops: Vec<_> = proof
+        .batch_ops()
+        .iter()
+        .map(|op| match op {
+            BatchOp::Delete { key } if key.as_ref() == victim => BatchOp::Put {
+                key: key.clone(),
+                value: Box::from(&b"forged"[..]),
+            },
+            other => other.clone(),
+        })
+        .collect();
+    replace_ops(proof, ops.into_boxed_slice())
+}
+
+/// Rebuild `proof` claiming nothing changed, keeping both boundary proofs.
+fn omit_all_ops(proof: &FrozenChangeProof) -> FrozenChangeProof {
+    replace_ops(proof, Vec::new().into_boxed_slice())
 }
 
 #[test]
@@ -77,43 +143,21 @@ fn test_tampered_right_edge_delete_to_put_is_rejected() {
         (b"\xf5\x1c".as_slice(), b"victim".as_slice()), // <- 0xf51c (victim)
         (b"\xf5\xcd".as_slice(), b"anchor".as_slice())  // <- 0xf5cd (anchor)
     ];
-    let start_root = db.root_hash().unwrap();
-    let end_batch: Vec<BatchOp<&[u8], &[u8]>> = vec![
-        BatchOp::Delete { key: b"\xf5\x1c" },
-        BatchOp::Delete { key: b"\xf5\xcd" },
-    ];
-    db.propose(end_batch).unwrap().commit().unwrap();
-    let end_root = db.root_hash().unwrap();
+    let (start_root, end_root) = commit_batch(
+        &db,
+        vec![
+            BatchOp::Delete { key: b"\xf5\x1c" },
+            BatchOp::Delete { key: b"\xf5\xcd" },
+        ],
+    );
 
     // No-bounds change proof; its end proof anchors on the max op key 0xf5cd.
-    let proof = db
-        .change_proof(start_root.clone(), end_root.clone(), None, None, None)
-        .unwrap();
-    assert!(
-        !is_rejected(&db, &proof, start_root.clone(), end_root.clone()),
-        "honest proof should verify"
-    );
+    let proof = honest_proof(&db, &start_root, &end_root, None, None);
 
     // Tamper: Delete{0xf51c} -> Put{0xf51c, "forged"}.
-    let mutated_ops = proof
-        .batch_ops()
-        .iter()
-        .map(|op| match op {
-            BatchOp::Delete { key } if key.as_ref() == b"\xf5\x1c" => BatchOp::Put {
-                key: key.clone(),
-                value: Box::from(&b"forged"[..]),
-            },
-            other => other.clone(),
-        })
-        .collect::<Vec<_>>();
-    let mutated = ChangeProof::new(
-        Proof::new(proof.start_proof().as_ref().into()),
-        Proof::new(proof.end_proof().as_ref().into()),
-        mutated_ops.into_boxed_slice(),
-    );
-
+    let mutated = forge_delete_to_put(&proof, b"\xf5\x1c");
     assert!(
-        is_rejected(&db, &mutated, start_root, end_root),
+        !verifies(&db, &mutated, &start_root, &end_root, None, None),
         "SOUNDNESS BUG: change-proof verification accepted a proof whose batch op for \
          0xf51c was forged from Delete to Put (the key shares the right-edge's 0xf5 \
          branch and sorts below the deleted anchor 0xf5cd, so it is wrongly treated \
@@ -131,33 +175,25 @@ fn test_tampered_right_edge_delete_to_put_is_rejected() {
 #[test]
 fn test_out_of_range_delete_past_end_bound_verifies() {
     let (db, _dir) = setup_db![(b"\xfb\x00".as_slice(), b"\x00".as_slice())];
-    let start_root = db.root_hash().unwrap();
-    let end_batch: Vec<BatchOp<&[u8], &[u8]>> = vec![
-        BatchOp::Delete { key: b"\xfb\x00" },
-        BatchOp::Put {
-            key: b"\xf7",
-            value: b"\x00",
-        },
-        BatchOp::Put {
-            key: b"\xf1",
-            value: b"\x00",
-        },
-    ];
-    db.propose(end_batch).unwrap().commit().unwrap();
-    let end_root = db.root_hash().unwrap();
+    let (start_root, end_root) = commit_batch(
+        &db,
+        vec![
+            BatchOp::Delete { key: b"\xfb\x00" },
+            BatchOp::Put {
+                key: b"\xf7",
+                value: b"\x00",
+            },
+            BatchOp::Put {
+                key: b"\xf1",
+                value: b"\x00",
+            },
+        ],
+    );
 
     let (sk, ek) = (b"\x00".as_slice(), b"\xfb".as_slice());
-    let proof = db
-        .change_proof(
-            start_root.clone(),
-            end_root.clone(),
-            Some(sk),
-            Some(ek),
-            None,
-        )
-        .unwrap();
+    let proof = proof_over(&db, &start_root, &end_root, Some(sk), Some(ek));
     assert!(
-        verifies(&db, &proof, start_root, end_root, Some(sk), Some(ek)),
+        verifies(&db, &proof, &start_root, &end_root, Some(sk), Some(ek)),
         "honest change proof over [0x00, 0xfb] must verify. The deletion of \
          the out-of-range 0xfb00 (past the end bound 0xfb, which is its \
          prefix) must not cause an EndRootMismatch"
@@ -175,50 +211,14 @@ fn test_forged_in_range_delete_to_put_is_rejected() {
         (b"\x56".as_slice(), b"\x01".as_slice()),
         (b"\x56\x01".as_slice(), b"\x01".as_slice())
     ];
-    let start_root = db.root_hash().unwrap();
-    let end_batch: Vec<BatchOp<&[u8], &[u8]>> = vec![BatchOp::Delete { key: b"\x56" }];
-    db.propose(end_batch).unwrap().commit().unwrap();
-    let end_root = db.root_hash().unwrap();
+    let (start_root, end_root) = commit_batch(&db, vec![BatchOp::Delete { key: b"\x56" }]);
 
     let (sk, ek) = (b"\x00".as_slice(), b"\x56\x00".as_slice());
-    let proof = db
-        .change_proof(
-            start_root.clone(),
-            end_root.clone(),
-            Some(sk),
-            Some(ek),
-            None,
-        )
-        .unwrap();
+    let proof = honest_proof(&db, &start_root, &end_root, Some(sk), Some(ek));
+
+    let forged = forge_delete_to_put(&proof, b"\x56");
     assert!(
-        verifies(
-            &db,
-            &proof,
-            start_root.clone(),
-            end_root.clone(),
-            Some(sk),
-            Some(ek)
-        ),
-        "honest proof must verify"
-    );
-    let forged_ops = proof
-        .batch_ops()
-        .iter()
-        .map(|op| match op {
-            BatchOp::Delete { key } if key.as_ref() == b"\x56" => BatchOp::Put {
-                key: key.clone(),
-                value: Box::from(&b"forged"[..]),
-            },
-            other => other.clone(),
-        })
-        .collect::<Vec<_>>();
-    let forged = ChangeProof::new(
-        Proof::new(proof.start_proof().as_ref().into()),
-        Proof::new(proof.end_proof().as_ref().into()),
-        forged_ops.into_boxed_slice(),
-    );
-    assert!(
-        !verifies(&db, &forged, start_root, end_root, Some(sk), Some(ek)),
+        !verifies(&db, &forged, &start_root, &end_root, Some(sk), Some(ek)),
         "SOUNDNESS BUG: a forged in-range Delete{{0x56}}->Put was accepted. \
          The in-range 0x56 must be validated against the batch, not taken \
          from the proof"
@@ -248,29 +248,21 @@ fn test_out_of_range_delete_below_start_bound_verifies() {
         (b"\xd4".as_slice(), b"\x00".as_slice()),
         (b"\xdb".as_slice(), b"\x00".as_slice())
     ];
-    let start_root = db.root_hash().unwrap();
-    let end_batch: Vec<BatchOp<&[u8], &[u8]>> = vec![
-        BatchOp::Delete { key: b"\xd4" },
-        BatchOp::Put {
-            key: b"\xd5",
-            value: b"\x00",
-        },
-    ];
-    db.propose(end_batch).unwrap().commit().unwrap();
-    let end_root = db.root_hash().unwrap();
+    let (start_root, end_root) = commit_batch(
+        &db,
+        vec![
+            BatchOp::Delete { key: b"\xd4" },
+            BatchOp::Put {
+                key: b"\xd5",
+                value: b"\x00",
+            },
+        ],
+    );
 
     let (sk, ek) = (b"\xd4\x4f".as_slice(), b"\xf9".as_slice());
-    let proof = db
-        .change_proof(
-            start_root.clone(),
-            end_root.clone(),
-            Some(sk),
-            Some(ek),
-            None,
-        )
-        .unwrap();
+    let proof = proof_over(&db, &start_root, &end_root, Some(sk), Some(ek));
     assert!(
-        verifies(&db, &proof, start_root, end_root, Some(sk), Some(ek)),
+        verifies(&db, &proof, &start_root, &end_root, Some(sk), Some(ek)),
         "honest change proof over [0xd44f, 0xf9] must verify. The deletion of \
          the out-of-range 0xd4 (below sk, and a prefix of it) must not cause \
          an EndRootMismatch"
@@ -294,36 +286,21 @@ fn test_unbounded_end_omitted_in_range_delete_is_rejected() {
         (b"\x53".as_slice(), b"victim".as_slice()),
         (b"\x60".as_slice(), b"hi".as_slice())
     ];
-    let start_root = db.root_hash().unwrap();
-    let end_batch: Vec<BatchOp<&[u8], &[u8]>> = vec![BatchOp::Delete { key: b"\x53" }];
-    db.propose(end_batch).unwrap().commit().unwrap();
-    let end_root = db.root_hash().unwrap();
+    let (start_root, end_root) = commit_batch(&db, vec![BatchOp::Delete { key: b"\x53" }]);
 
     let sk = b"\x52".as_slice();
-    let proof = db
-        .change_proof(start_root.clone(), end_root.clone(), Some(sk), None, None)
-        .unwrap();
-    assert!(
-        verifies(
-            &db,
-            &proof,
-            start_root.clone(),
-            end_root.clone(),
-            Some(sk),
-            None
-        ),
-        "honest unbounded-end proof must verify"
-    );
+    let proof = honest_proof(&db, &start_root, &end_root, Some(sk), None);
 
     // Forge: drop the in-range Delete and the end proof, so `right_edge_key`
-    // resolves to None (unbounded end).
+    // resolves to None (unbounded end). Dropping the end proof is essential —
+    // reusing the honest one leaves `right_edge_key` non-empty.
     let forged = ChangeProof::new(
         Proof::new(proof.start_proof().as_ref().into()),
         Proof::new(Vec::new().into_boxed_slice()),
         Vec::new().into_boxed_slice(),
     );
     assert!(
-        !verifies(&db, &forged, start_root, end_root, Some(sk), None),
+        !verifies(&db, &forged, &start_root, &end_root, Some(sk), None),
         "SOUNDNESS BUG: an unbounded-end change proof omitting the in-range \
          Delete{{0x53}} was accepted. The key remains in the proposal and its \
          subtree must be recomputed, not taken from the start proof"
@@ -353,45 +330,22 @@ fn test_split_boundary_child_omitted_in_range_delete_is_rejected() {
         (b"\xfb\x10".as_slice(), b"in".as_slice()),
         (b"\xfb\x90".as_slice(), b"out".as_slice())
     ];
-    let start_root = db.root_hash().unwrap();
-    let end_batch: Vec<BatchOp<&[u8], &[u8]>> = vec![
-        BatchOp::Delete { key: b"\xfb\x10" },
-        BatchOp::Delete { key: b"\xfb\x90" },
-    ];
-    db.propose(end_batch).unwrap().commit().unwrap();
-    let end_root = db.root_hash().unwrap();
+    let (start_root, end_root) = commit_batch(
+        &db,
+        vec![
+            BatchOp::Delete { key: b"\xfb\x10" },
+            BatchOp::Delete { key: b"\xfb\x90" },
+        ],
+    );
 
     let (sk, ek) = (b"\x00".as_slice(), b"\xfb\x50".as_slice());
-    let proof = db
-        .change_proof(
-            start_root.clone(),
-            end_root.clone(),
-            Some(sk),
-            Some(ek),
-            None,
-        )
-        .unwrap();
-    assert!(
-        verifies(
-            &db,
-            &proof,
-            start_root.clone(),
-            end_root.clone(),
-            Some(sk),
-            Some(ek)
-        ),
-        "honest proof must verify"
-    );
+    let proof = honest_proof(&db, &start_root, &end_root, Some(sk), Some(ek));
 
     // Forge: drop the in-range Delete{0xfb10}, keeping the honest boundary
     // proofs. The proposal keeps 0xfb10, so boundary child b is split.
-    let forged = ChangeProof::new(
-        Proof::new(proof.start_proof().as_ref().into()),
-        Proof::new(proof.end_proof().as_ref().into()),
-        Vec::new().into_boxed_slice(),
-    );
+    let forged = omit_all_ops(&proof);
     assert!(
-        !verifies(&db, &forged, start_root, end_root, Some(sk), Some(ek)),
+        !verifies(&db, &forged, &start_root, &end_root, Some(sk), Some(ek)),
         "SOUNDNESS BUG: an omitted in-range Delete{{0xfb10}} was accepted even \
          though the boundary child also holds the out-of-range 0xfb90. The \
          in-range key remains in the proposal and its subtree must be \
@@ -422,45 +376,22 @@ fn test_split_start_boundary_child_omitted_in_range_delete_is_rejected() {
         (b"\xd4\x90".as_slice(), b"in".as_slice()),
         (b"\xdb".as_slice(), b"a".as_slice())
     ];
-    let start_root = db.root_hash().unwrap();
-    let end_batch: Vec<BatchOp<&[u8], &[u8]>> = vec![
-        BatchOp::Delete { key: b"\xd4\x10" },
-        BatchOp::Delete { key: b"\xd4\x90" },
-    ];
-    db.propose(end_batch).unwrap().commit().unwrap();
-    let end_root = db.root_hash().unwrap();
+    let (start_root, end_root) = commit_batch(
+        &db,
+        vec![
+            BatchOp::Delete { key: b"\xd4\x10" },
+            BatchOp::Delete { key: b"\xd4\x90" },
+        ],
+    );
 
     let (sk, ek) = (b"\xd4\x50".as_slice(), b"\xf0".as_slice());
-    let proof = db
-        .change_proof(
-            start_root.clone(),
-            end_root.clone(),
-            Some(sk),
-            Some(ek),
-            None,
-        )
-        .unwrap();
-    assert!(
-        verifies(
-            &db,
-            &proof,
-            start_root.clone(),
-            end_root.clone(),
-            Some(sk),
-            Some(ek)
-        ),
-        "honest proof must verify"
-    );
+    let proof = honest_proof(&db, &start_root, &end_root, Some(sk), Some(ek));
 
     // Forge: drop the in-range Delete{0xd490}, keeping the honest boundary
     // proofs. The proposal keeps 0xd490, so boundary child 4 is split.
-    let forged = ChangeProof::new(
-        Proof::new(proof.start_proof().as_ref().into()),
-        Proof::new(proof.end_proof().as_ref().into()),
-        Vec::new().into_boxed_slice(),
-    );
+    let forged = omit_all_ops(&proof);
     assert!(
-        !verifies(&db, &forged, start_root, end_root, Some(sk), Some(ek)),
+        !verifies(&db, &forged, &start_root, &end_root, Some(sk), Some(ek)),
         "SOUNDNESS BUG: an omitted in-range Delete{{0xd490}} was accepted even \
          though the start boundary child also holds the out-of-range 0xd410. The \
          in-range key remains in the proposal and its subtree must be recomputed, \
