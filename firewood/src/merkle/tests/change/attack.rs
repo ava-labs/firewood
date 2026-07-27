@@ -426,6 +426,12 @@ fn test_crafted_conflicting_proof_nodes_rejected() {
 /// nibble must be rejected by the root-hash check alone, without the structural
 /// check having run.
 ///
+/// This does not reproduce an exploit. A remote peer supplies proof bytes, not
+/// the call sequence, and every real caller runs the structural check first,
+/// which rejects this truncation outright. What is tested is the robustness of
+/// the API: the root-hash check owns its own precondition rather than inheriting
+/// it from call ordering.
+///
 /// The end bound `0xfb50` descends into child `b` of the `[f]` branch, and the
 /// end trie keeps `0xfb10` and `0xfb90` under that child, so an honest
 /// exclusion proof has to descend into it. Truncating the end proof to the `[f]`
@@ -434,7 +440,7 @@ fn test_crafted_conflicting_proof_nodes_rejected() {
 /// hash for a subtree that is never rebuilt from the proposal, so in-range state
 /// under it would go unchecked against `batch_ops`.
 ///
-/// `0x10` is below the start bound so the collapse can strip it; `0xf7` keeps
+/// `0x10` is below the start bound so the collapse can strip it. `0xf7` keeps
 /// the `[f]` branch non-trivial.
 #[test]
 fn test_crafted_truncated_end_proof_on_path_child_rejected() {
