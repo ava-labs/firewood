@@ -7,7 +7,10 @@ use firewood_storage::{
     Child, Mutable, Node, NodeStore, Path, PathComponent, Propose, ReadableStorage,
 };
 
-use crate::{ProofError, api, merkle::Merkle};
+use crate::{
+    ProofError, api,
+    merkle::{Merkle, get_helper},
+};
 
 /// The proven range for a collapse operation, in nibbles. Callers pass it
 /// wrapped in an `Option`: `None` skips range checking — off-path children are
@@ -359,48 +362,19 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         start_nib: &[u8],
         end_nib: Option<&[u8]>,
     ) -> Result<bool, api::Error> {
-        let Some(mut current) = self.root() else {
+        let Some(root) = self.root() else {
             return Ok(true);
         };
+        let acc: Vec<u8> = node_key.iter().map(|c| c.as_u8()).collect();
 
-        // Walk from the root to the node whose accumulated path == node_key,
-        // consuming each node's partial path then descending by the next nibble.
-        let mut pos = 0usize;
-        loop {
-            let pp = current.partial_path().as_components();
-            // Consume this node's partial path. If node_key is too short to hold
-            // it, or diverges, node_key does not land on a node boundary here —
-            // sound default: treat the child as in range (it gets recomputed).
-            let Some(after_pp) = pos.checked_add(pp.len()) else {
-                return Ok(true);
-            };
-            let Some(segment) = node_key.get(pos..after_pp) else {
-                return Ok(true);
-            };
-            if segment.iter().zip(pp).any(|(a, b)| a.as_u8() != b.as_u8()) {
-                return Ok(true);
-            }
-            pos = after_pp;
-            if pos == node_key.len() {
-                break;
-            }
-            let Some(branch) = current.as_branch() else {
-                return Ok(true);
-            };
-            let Some(&descend) = node_key.get(pos) else {
-                return Ok(true);
-            };
-            let Some(child) = branch.children[descend].as_ref() else {
-                return Ok(true);
-            };
-            current = child.as_shared_node(&self.nodestore)?;
-            // `descend` came from `node_key.get(pos)`, so `pos < node_key.len()`
-            // and this cannot overflow.
-            debug_assert!(pos < node_key.len());
-            pos = pos.wrapping_add(1);
-        }
-
-        let Some(branch) = current.as_branch() else {
+        // `get_helper` yields a node only when one sits exactly at `acc`. Every
+        // other outcome — the path ends inside a partial path, diverges, or runs
+        // past a leaf — means `node_key` is not a node boundary in the proposal,
+        // which takes the same sound default as the arms below.
+        let Some(node) = get_helper(&self.nodestore, &root, &acc)? else {
+            return Ok(true);
+        };
+        let Some(branch) = node.as_branch() else {
             return Ok(true);
         };
         match branch.children[on_path].as_ref() {
@@ -408,10 +382,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
             // trie does have a child here — e.g. from an omitted in-range put —
             // the recomputed hash fails the root-hash check.
             None => Ok(true),
-            Some(child) => {
-                let acc: Vec<u8> = node_key.iter().map(|c| c.as_u8()).collect();
-                self.child_in_range(child, &acc, on_path, start_nib, end_nib)
-            }
+            Some(child) => self.child_in_range(child, &acc, on_path, start_nib, end_nib),
         }
     }
 
