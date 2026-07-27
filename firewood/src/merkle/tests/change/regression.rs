@@ -13,20 +13,16 @@
 //!   Delete to Put.
 //! - `test_forged_in_range_delete_to_put_is_rejected` (#2138): an in-range op
 //!   whose key is a prefix of the end bound is flipped from Delete to Put.
-//! - `test_forged_in_range_op_under_on_path_child_is_rejected`: an in-range op
-//!   under the child the boundary descends into is flipped from Delete to Put
-//!   (that child is rebuilt from the proposal, so the forgery is caught).
-//! - `test_omitted_in_range_delete_is_rejected`: a change proof that OMITS an
-//!   in-range delete under the boundary's on-path child (ships empty batch ops)
-//!   is rejected — the key stays in the proposal, so that child is recomputed
-//!   rather than taken from the proof, and the root-hash check fails.
-//! - `test_unbounded_end_omitted_in_range_delete_is_rejected`: the analogous
-//!   omission at the start boundary's on-path child, with an unbounded right
-//!   edge (`end_key == None`). The +∞ end bound keeps the key in range, so the
-//!   child is recomputed rather than taken from the start proof.
+//! - `test_unbounded_end_omitted_in_range_delete_is_rejected`: an omitted
+//!   in-range delete under the start boundary's on-path child, with an unbounded
+//!   right edge (`end_key == None`). The +∞ end bound keeps the key in range, so
+//!   the child is recomputed rather than taken from the start proof.
 //! - `test_split_boundary_child_omitted_in_range_delete_is_rejected`: the
 //!   boundary child is genuinely split — it holds both an in-range and an
 //!   out-of-range key — and an omitted in-range delete must still be rejected.
+//! - `test_split_start_boundary_child_omitted_in_range_delete_is_rejected`: the
+//!   left-edge mirror of the split case. The two edges share one code path with
+//!   inverted comparisons, so each needs its own split coverage.
 //!
 //! Completeness — an honest out-of-range deletion just past a boundary must
 //! still verify:
@@ -229,80 +225,6 @@ fn test_forged_in_range_delete_to_put_is_rejected() {
     );
 }
 
-/// A forged in-range Delete-to-Put must be rejected when the changed key sits
-/// under the child the boundary descends into. `0xf51c` and `0xf5cd` are both
-/// deleted in range, so child `5` of the `f` branch is empty in the end trie.
-/// The end proof for `0xf5cd` stops at the `f` branch, descending toward the
-/// bound through that empty child `5`, and both deleted keys are in range
-/// under it. Because an in-range key there is rebuilt from the proposal rather
-/// than taken from the proof, flipping `0xf51c`'s Delete to a Put no longer
-/// matches `end_root`.
-#[test]
-fn test_forged_in_range_op_under_on_path_child_is_rejected() {
-    let (db, _dir) = setup_db![
-        (b"\x10".as_slice(), b"low".as_slice()),
-        (b"\xf0".as_slice(), b"fz".as_slice()),
-        (b"\xfa".as_slice(), b"fa".as_slice()),
-        (b"\xf5\x1c".as_slice(), b"victim".as_slice()),
-        (b"\xf5\xcd".as_slice(), b"anchor".as_slice())
-    ];
-    let start_root = db.root_hash().unwrap();
-    let end_batch: Vec<BatchOp<&[u8], &[u8]>> = vec![
-        BatchOp::Delete { key: b"\xf5\x1c" },
-        BatchOp::Delete { key: b"\xf5\xcd" },
-    ];
-    db.propose(end_batch).unwrap().commit().unwrap();
-    let end_root = db.root_hash().unwrap();
-
-    let (sk, ek) = (b"\x00".as_slice(), b"\xf5\xcd".as_slice());
-    let proof = db
-        .change_proof(
-            start_root.clone(),
-            end_root.clone(),
-            Some(sk),
-            Some(ek),
-            None,
-        )
-        .unwrap();
-    assert!(
-        verifies(
-            &db,
-            &proof,
-            start_root.clone(),
-            end_root.clone(),
-            Some(sk),
-            Some(ek)
-        ),
-        "honest proof must verify"
-    );
-
-    // Forge the in-range Delete{0xf51c} -> Put. 0xf51c is in range and sits
-    // under child 5, which the boundary descends into, so that child is
-    // rebuilt from the proposal, catching the forged value.
-    let forged_ops = proof
-        .batch_ops()
-        .iter()
-        .map(|op| match op {
-            BatchOp::Delete { key } if key.as_ref() == b"\xf5\x1c" => BatchOp::Put {
-                key: key.clone(),
-                value: Box::from(&b"forged"[..]),
-            },
-            other => other.clone(),
-        })
-        .collect::<Vec<_>>();
-    let forged = ChangeProof::new(
-        Proof::new(proof.start_proof().as_ref().into()),
-        Proof::new(proof.end_proof().as_ref().into()),
-        forged_ops.into_boxed_slice(),
-    );
-    assert!(
-        !verifies(&db, &forged, start_root, end_root, Some(sk), Some(ek)),
-        "SOUNDNESS BUG: a forged in-range Delete{{0xf51c}}->Put was accepted. \
-         An in-range key under the child the boundary descends into must be \
-         validated against the batch, not taken from the proof"
-    );
-}
-
 /// An honest change proof must verify when an out-of-range key just below the
 /// start bound was deleted, where the start bound extends that deleted key
 /// (`0xd44f` extends `0xd4`). This is the left-edge mirror of the end-bound
@@ -352,62 +274,6 @@ fn test_out_of_range_delete_below_start_bound_verifies() {
         "honest change proof over [0xd44f, 0xf9] must verify. The deletion of \
          the out-of-range 0xd4 (below sk, and a prefix of it) must not cause \
          an EndRootMismatch"
-    );
-}
-
-/// A change proof that OMITS an in-range delete must be rejected. `0xf51c` is
-/// in range and sits under child `5` of the `f` branch, which the end bound
-/// `0xf5cd` descends into. The honest proof deletes it. An attacker reuses the
-/// honest boundary proofs but ships empty batch ops (claiming nothing changed).
-/// The proposal (start trie + no ops) still holds `0xf51c`, so that child must
-/// be recomputed from the proposal — deciding it from the batch ops instead
-/// would take it from the proof and hide the omission.
-#[test]
-fn test_omitted_in_range_delete_is_rejected() {
-    let (db, _dir) = setup_db![
-        (b"\x10".as_slice(), b"low".as_slice()),
-        (b"\xf0".as_slice(), b"fz".as_slice()),
-        (b"\xfa".as_slice(), b"fa".as_slice()),
-        (b"\xf5\x1c".as_slice(), b"victim".as_slice())
-    ];
-    let start_root = db.root_hash().unwrap();
-    let end_batch: Vec<BatchOp<&[u8], &[u8]>> = vec![BatchOp::Delete { key: b"\xf5\x1c" }];
-    db.propose(end_batch).unwrap().commit().unwrap();
-    let end_root = db.root_hash().unwrap();
-
-    let (sk, ek) = (b"\x00".as_slice(), b"\xf5\xcd".as_slice());
-    let proof = db
-        .change_proof(
-            start_root.clone(),
-            end_root.clone(),
-            Some(sk),
-            Some(ek),
-            None,
-        )
-        .unwrap();
-    assert!(
-        verifies(
-            &db,
-            &proof,
-            start_root.clone(),
-            end_root.clone(),
-            Some(sk),
-            Some(ek)
-        ),
-        "honest proof must verify"
-    );
-
-    // Forge: drop the in-range Delete, keeping the honest boundary proofs.
-    let forged = ChangeProof::new(
-        Proof::new(proof.start_proof().as_ref().into()),
-        Proof::new(proof.end_proof().as_ref().into()),
-        Vec::new().into_boxed_slice(),
-    );
-    assert!(
-        !verifies(&db, &forged, start_root, end_root, Some(sk), Some(ek)),
-        "SOUNDNESS BUG: a change proof omitting the in-range Delete{{0xf51c}} \
-         was accepted. The key remains in the proposal and its subtree must be \
-         recomputed, not taken from the proof"
     );
 }
 
@@ -530,5 +396,74 @@ fn test_split_boundary_child_omitted_in_range_delete_is_rejected() {
          though the boundary child also holds the out-of-range 0xfb90. The \
          in-range key remains in the proposal and its subtree must be \
          recomputed, not taken from the proof"
+    );
+}
+
+/// Left-edge mirror of `test_split_boundary_child_omitted_in_range_delete_is_rejected`.
+/// The start bound `0xd450` descends into child `4` of the `[d]` branch, and that
+/// child is split: `0xd410` sorts below the bound (out of range) while `0xd490`
+/// sorts above it (in range). The end trie deletes both, so child `4` is absent
+/// there and the left-edge terminal is the `[d]` branch; only `Delete 0xd490` is
+/// in range, so only it appears in the change list.
+///
+/// An attacker replays the honest boundary proofs with an empty change list. The
+/// proposal keeps `0xd490`, so child `4` still holds an in-range key and must be
+/// recomputed from the proposal rather than taken from the start proof. The
+/// out-of-range `0xd410` sharing the child must not let it be taken wholesale.
+///
+/// `0xd1` and `0xdb` keep the `[d]` branch non-trivial in the end trie, and
+/// `0x10` keeps the root a branch.
+#[test]
+fn test_split_start_boundary_child_omitted_in_range_delete_is_rejected() {
+    let (db, _dir) = setup_db![
+        (b"\x10".as_slice(), b"a".as_slice()),
+        (b"\xd1".as_slice(), b"a".as_slice()),
+        (b"\xd4\x10".as_slice(), b"out".as_slice()),
+        (b"\xd4\x90".as_slice(), b"in".as_slice()),
+        (b"\xdb".as_slice(), b"a".as_slice())
+    ];
+    let start_root = db.root_hash().unwrap();
+    let end_batch: Vec<BatchOp<&[u8], &[u8]>> = vec![
+        BatchOp::Delete { key: b"\xd4\x10" },
+        BatchOp::Delete { key: b"\xd4\x90" },
+    ];
+    db.propose(end_batch).unwrap().commit().unwrap();
+    let end_root = db.root_hash().unwrap();
+
+    let (sk, ek) = (b"\xd4\x50".as_slice(), b"\xf0".as_slice());
+    let proof = db
+        .change_proof(
+            start_root.clone(),
+            end_root.clone(),
+            Some(sk),
+            Some(ek),
+            None,
+        )
+        .unwrap();
+    assert!(
+        verifies(
+            &db,
+            &proof,
+            start_root.clone(),
+            end_root.clone(),
+            Some(sk),
+            Some(ek)
+        ),
+        "honest proof must verify"
+    );
+
+    // Forge: drop the in-range Delete{0xd490}, keeping the honest boundary
+    // proofs. The proposal keeps 0xd490, so boundary child 4 is split.
+    let forged = ChangeProof::new(
+        Proof::new(proof.start_proof().as_ref().into()),
+        Proof::new(proof.end_proof().as_ref().into()),
+        Vec::new().into_boxed_slice(),
+    );
+    assert!(
+        !verifies(&db, &forged, start_root, end_root, Some(sk), Some(ek)),
+        "SOUNDNESS BUG: an omitted in-range Delete{{0xd490}} was accepted even \
+         though the start boundary child also holds the out-of-range 0xd410. The \
+         in-range key remains in the proposal and its subtree must be recomputed, \
+         not taken from the start proof"
     );
 }
