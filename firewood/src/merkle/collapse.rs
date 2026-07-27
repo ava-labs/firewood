@@ -19,9 +19,13 @@ use crate::{
 /// key is a tamper and in-range values are kept.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CollapseRange<'a> {
-    /// The lower bound of the proven range.
+    /// The lower bound of the proven range. Unbounded below is the empty slice
+    /// rather than an `Option`, because the empty slice already sorts as the
+    /// minimum key and so compares correctly against every key.
     pub(crate) start: &'a [u8],
-    /// The upper bound, or `None` for unbounded (+∞).
+    /// The upper bound, or `None` for unbounded (+∞). This side needs the
+    /// `Option`: the empty slice is the *minimum* key, so reusing it here would
+    /// judge every key out of range at the upper bound.
     pub(crate) end: Option<&'a [u8]>,
 }
 

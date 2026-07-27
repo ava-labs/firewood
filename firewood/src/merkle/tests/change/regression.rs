@@ -125,9 +125,9 @@ fn test_tampered_right_edge_delete_to_put_is_rejected() {
 /// end bound was deleted. `0xfb00` sorts after the bound `0xfb` (a longer key
 /// extending a shorter one comes later), so its deletion is out of range and
 /// correctly not in `batch_ops`. The verifier's rebuilt trie retains `0xfb00`
-/// under the `f` branch's `b` child. Without the on-path-child correction,
-/// that child would be recomputed from the rebuilt trie and mismatch
-/// `end_root`, rejecting the proof with `EndRootMismatch`.
+/// under the `f` branch's `b` child, so that child must be taken from the proof
+/// rather than recomputed — recomputing it would surface the retained key and
+/// mismatch `end_root`, rejecting the proof with `EndRootMismatch`.
 #[test]
 fn test_out_of_range_delete_past_end_bound_verifies() {
     let (db, _dir) = setup_db![(b"\xfb\x00".as_slice(), b"\x00".as_slice())];
@@ -229,7 +229,7 @@ fn test_forged_in_range_delete_to_put_is_rejected() {
 /// start bound was deleted, where the start bound extends that deleted key
 /// (`0xd44f` extends `0xd4`). This is the left-edge mirror of the end-bound
 /// case: there the deleted key extends the bound, here the bound extends the
-/// deleted key. Both edges use the same on-path-child correction.
+/// deleted key. Both edges resolve the on-path child the same way.
 ///
 /// start trie:  `{ 0xd4: 0x00, 0xdb: 0x00 }`
 /// end trie:    `{ 0xd5: 0x00, 0xdb: 0x00 }`  (`0xd4` deleted, `0xd5` added)
@@ -237,11 +237,11 @@ fn test_forged_in_range_delete_to_put_is_rejected() {
 ///
 /// `0xd4 < sk = 0xd44f`, so deleting it is out of range and correctly not in
 /// `batch_ops`. The verifier's rebuilt trie retains `0xd4` under the `d`
-/// branch. Without the on-path-child correction, the computed root would
-/// mismatch `end_root`, rejecting the proof with `EndRootMismatch`. `0xd5` and
-/// `0xdb` are in range (`0xdb` keeps the `d` branch non-trivial). Minimized
-/// from change-proof fuzz seed 8534711138888643184 (`start_nonexistent`
-/// scenario).
+/// branch, so that child must be taken from the start proof rather than
+/// recomputed — recomputing it would surface the retained key and mismatch
+/// `end_root`, rejecting the proof with `EndRootMismatch`. `0xd5` and `0xdb` are
+/// in range (`0xdb` keeps the `d` branch non-trivial). Minimized from
+/// change-proof fuzz seed 8534711138888643184 (`start_nonexistent` scenario).
 #[test]
 fn test_out_of_range_delete_below_start_bound_verifies() {
     let (db, _dir) = setup_db![
