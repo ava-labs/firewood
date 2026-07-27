@@ -382,9 +382,11 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
             return Ok(true);
         };
         match branch.children[on_path].as_ref() {
-            // No on-path child in the proposal: keep it in range. If the end
-            // trie does have a child here — e.g. from an omitted in-range put —
-            // the recomputed hash fails the root-hash check.
+            // No on-path child in the proposal, so there is no in-range key
+            // under it to report. Either answer computes the same root here —
+            // the hash step skips an absent child before consulting the mask,
+            // and the caller has already rejected a proof carrying a child hash
+            // at this nibble — so return the same sound default as above.
             None => Ok(true),
             Some(child) => self.child_in_range(child, &acc, on_path, start_nib, end_nib),
         }
