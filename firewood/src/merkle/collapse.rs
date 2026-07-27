@@ -112,25 +112,14 @@ fn consume_partial_path<'a>(
 }
 
 impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
-    /// Collapse intermediate branches between two consecutive proof-path
-    /// positions.
-    ///
-    /// The proof implies a direct path from the parent to the child with
-    /// no intermediate branch nodes. If the fork's trie has extra branches
-    /// along this path (from out-of-range keys), this method removes their
-    /// off-path children on the outside of the range and flattens
-    /// single-child branches.
-    ///
-    /// Between consecutive proof nodes in `end_root`, the path is direct:
-    /// intermediate nodes have only the on-path child. Removes all
-    /// non-on-path children and values from intermediate branches so the
-    /// proving trie matches `end_root`'s path-compressed structure.
     /// Collapse the proving trie's root so its structure matches the end
-    /// trie's root path. When out-of-range deletions cause the end trie's
-    /// root to compress (e.g., root `partial_path` changes from `[]` to `[1]`),
-    /// the proposal root still has the old shape. This strips non-on-path
-    /// children from the root and flattens single-child branches so the
-    /// root's `partial_path` matches the first proof node's key.
+    /// trie's root path.
+    ///
+    /// When out-of-range deletions cause the end trie's root to compress
+    /// (e.g., root `partial_path` changes from `[]` to `[1]`), the proposal
+    /// root still has the old shape. This strips non-on-path children from the
+    /// root and flattens single-child branches so the root's `partial_path`
+    /// matches the first proof node's key.
     pub(crate) fn collapse_root_to_path(
         &mut self,
         target: &[PathComponent],
@@ -162,8 +151,18 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         Ok(())
     }
 
+    /// Collapse intermediate branches between two consecutive proof-path
+    /// positions.
+    ///
+    /// The proof implies a direct path from the parent to the child with no
+    /// intermediate branch nodes. If the fork's trie has extra branches along
+    /// this path (from out-of-range keys), this strips their off-path children
+    /// and flattens single-child branches so the trie matches `end_root`'s
+    /// path-compressed structure.
+    ///
     /// Stripping an off-path child that holds an in-range key triggers
-    /// rejection.
+    /// rejection. A branch value is cleared only when the node's own key is out
+    /// of range, and a node that keeps its value is never flattened.
     pub(crate) fn collapse_branch_to_path(
         &mut self,
         from: &[PathComponent],

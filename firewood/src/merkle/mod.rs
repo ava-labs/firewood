@@ -1363,9 +1363,9 @@ pub fn verify_change_proof_root_hash(
     // end_root's trie. Between consecutive proof nodes, the proof implies a
     // direct path with no intermediate branches.
     //
-    // Out-of-range children are stripped. In-range children that are also
-    // proposal-local (created by this proposal's batch_ops, not inherited
-    // from the parent) indicate tampered operations and trigger rejection.
+    // Out-of-range children are stripped. Stripping an off-path child that
+    // holds an in-range key indicates tampered operations and triggers
+    // rejection.
     let range = Some(CollapseRange {
         start: start_key_nibbles.as_slice(),
         end: end_key_nibbles.as_deref(),

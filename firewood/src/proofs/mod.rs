@@ -240,6 +240,14 @@
 //! `start_root` structure that doesn't exist in `end_root` and will be
 //! accounted for by the proof's boundary hashes.
 //!
+//! **Values at intermediate nodes** follow the same range rule. A node whose
+//! own key is out of range has its value cleared, so Step 4 can supply the
+//! digest the proof carries for `end_root`. A node whose key is in range keeps
+//! its value, so it is validated against `batch_ops` — dropping it would let a
+//! forged or omitted in-range op whose key is a prefix of the boundary slip
+//! through. Because a node that keeps its value must survive, it is never
+//! flattened into its only child.
+//!
 //! `collapse_root_to_path` applies the same logic to the root itself,
 //! handling cases where out-of-range deletions caused `end_root`'s root
 //! to path-compress (e.g., root partial_path changes from `[]` to
