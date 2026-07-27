@@ -260,12 +260,12 @@
 //! child there at all, which is likewise kept in range and recomputed. An
 //! unbounded right edge is treated as +∞ here, not as an empty (minimum) key.
 //!
-//! Marking that child outside is sound only because structural verification
-//! (phase 1) has already required it to be absent from `end_root` for the
-//! exclusion proof to be valid (`ExclusionProofMissingChild`), so the proof
-//! cannot supply a child hash that hides in-range state there. This is why
-//! [`verify_change_proof_root_hash`] must only be called with a context
-//! produced by [`verify_change_proof_structure`].
+//! Marking that child outside substitutes the proof's child hash for it, which
+//! is safe only when the proof has no hash at that nibble — otherwise it could
+//! supply one that hides in-range state. Structural verification (phase 1)
+//! already guarantees this for any valid exclusion proof
+//! (`ExclusionProofMissingChild`), and [`verify_change_proof_root_hash`] checks
+//! it locally so the guarantee does not depend on phase 1 having run.
 //!
 //! `compute_root_hash_with_proofs` recursively walks the **proving trie**:
 //!
