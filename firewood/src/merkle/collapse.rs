@@ -29,6 +29,19 @@ pub(crate) struct CollapseRange<'a> {
     pub(crate) end: Option<&'a [u8]>,
 }
 
+/// Where the hash step should get a boundary terminal's on-path child.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BoundaryChildSource {
+    /// Recompute the child from the proving trie. Required whenever the trie
+    /// may hold an in-range key under it, so a forged or omitted in-range op
+    /// surfaces as a root-hash mismatch.
+    Recompute,
+    /// Take the child hash from the proof. Sound only for a child definitely
+    /// present with no in-range key under it, since a proof-supplied hash is
+    /// never checked against the batch ops.
+    Proof,
+}
+
 /// Returns `true` when a nibble at position `child_nib` under the accumulated
 /// prefix `acc_prefix` could contain keys within `[start_nib, end_nib]`, where
 /// a `None` `end_nib` is unbounded (+∞).
@@ -162,7 +175,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     /// positions.
     ///
     /// The proof implies a direct path from the parent to the child with no
-    /// intermediate branch nodes. If the fork's trie has extra branches along
+    /// intermediate branch nodes. If the proving trie has extra branches along
     /// this path (from out-of-range keys), this strips their off-path children
     /// and flattens single-child branches so the trie matches `end_root`'s
     /// path-compressed structure.
@@ -344,30 +357,28 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         Ok(false)
     }
 
-    /// Returns whether the on-path child of the boundary terminal is in the
-    /// proven range — i.e. whether the proving trie holds an in-range key under
-    /// it.
+    /// Decides where a boundary terminal's on-path child comes from.
     ///
     /// `node_key` is the terminal's full nibble path and `on_path` the child
     /// nibble the boundary key descends into. `start_nib` and `end_nib` are the
     /// proven range's nibble bounds, where a `None` end is unbounded (+∞).
     ///
     /// Navigates the proving trie to the node at `node_key`, then asks
-    /// [`Merkle::child_in_range`] about that child. Returns `true` (keep the
-    /// child in range, so it is recomputed from the proposal) whenever the trie
-    /// can't confirm otherwise — the sound default: a recompute that mismatches
-    /// `end_root` is a rejection, so nothing can be silently taken from the
-    /// proof. Only a child that is definitely present with no in-range key
-    /// under it returns `false`.
-    pub(crate) fn on_path_child_in_range(
+    /// [`Merkle::child_in_range`] about that child. Answers
+    /// [`BoundaryChildSource::Recompute`] whenever the trie cannot confirm
+    /// otherwise — the sound default, since a recompute that mismatches
+    /// `end_root` is a rejection, so nothing is silently taken from the proof.
+    /// Only a child definitely present with no in-range key under it answers
+    /// [`BoundaryChildSource::Proof`].
+    pub(crate) fn boundary_child_source(
         &self,
         node_key: &[PathComponent],
         on_path: PathComponent,
         start_nib: &[u8],
         end_nib: Option<&[u8]>,
-    ) -> Result<bool, api::Error> {
+    ) -> Result<BoundaryChildSource, api::Error> {
         let Some(root) = self.root() else {
-            return Ok(true);
+            return Ok(BoundaryChildSource::Recompute);
         };
         let acc: Vec<u8> = node_key.iter().map(|c| c.as_u8()).collect();
 
@@ -376,10 +387,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         // past a leaf — means `node_key` is not a node boundary in the proposal,
         // which takes the same sound default as the arms below.
         let Some(node) = get_helper(&self.nodestore, &root, &acc)? else {
-            return Ok(true);
+            return Ok(BoundaryChildSource::Recompute);
         };
         let Some(branch) = node.as_branch() else {
-            return Ok(true);
+            return Ok(BoundaryChildSource::Recompute);
         };
         match branch.children[on_path].as_ref() {
             // No on-path child in the proposal, so there is no in-range key
@@ -387,8 +398,14 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
             // the hash step skips an absent child before consulting the mask,
             // and the caller has already rejected a proof carrying a child hash
             // at this nibble — so return the same sound default as above.
-            None => Ok(true),
-            Some(child) => self.child_in_range(child, &acc, on_path, start_nib, end_nib),
+            None => Ok(BoundaryChildSource::Recompute),
+            Some(child) => Ok(
+                if self.child_in_range(child, &acc, on_path, start_nib, end_nib)? {
+                    BoundaryChildSource::Recompute
+                } else {
+                    BoundaryChildSource::Proof
+                },
+            ),
         }
     }
 

@@ -50,7 +50,7 @@ pub type Key = Box<[u8]>;
 pub type Value = Box<[u8]>;
 
 use childmask::ChildMask;
-use collapse::CollapseRange;
+use collapse::{BoundaryChildSource, CollapseRange};
 
 macro_rules! write_attributes {
     ($writer:ident, $node:expr, $value:expr) => {
@@ -197,9 +197,8 @@ fn verify_edge<H: ProofCollection + ?Sized>(
 /// inside [`RightBoundary`]. Splitting these two concerns lets sites that
 /// only operate on the right edge (e.g. `verify_proof_node_values`) take
 /// `RightBoundary` directly without an `unreachable!()` arm for `Left`,
-/// while keeping a single unified type for the places that genuinely
-/// dispatch on left-vs-right at runtime: `classify_terminal` and
-/// `compute_outside_children`.
+/// while keeping a single type for the places that genuinely dispatch on
+/// left-vs-right at runtime: `classify_terminal` and `compute_outside_children`.
 #[derive(Debug)]
 pub(crate) enum EdgeBoundary<'a> {
     /// Left edge, inclusive at `start_key`. `None` proves from the very
@@ -439,7 +438,7 @@ fn compute_outside_children(
 ///
 /// Each boundary terminal's on-path child is decided from the proposal: it is
 /// taken from the proof only when the proving trie holds no in-range key under
-/// it (via [`Merkle::on_path_child_in_range`]). An omitted in-range delete or
+/// it (via [`Merkle::boundary_child_source`]). An omitted in-range delete or
 /// a forged op then leaves its key in the proposal, forces that child to be
 /// recomputed, and fails the root-hash check. Returns the union of the left
 /// and right boundary masks keyed by node path.
@@ -476,12 +475,8 @@ fn change_outside_children<S: ReadableStorage>(
         *outside_children.entry(key).or_default() |= flags;
     }
 
-    // On-path children: mark one outside only when the proving trie holds no
-    // in-range key under it. An omitted in-range delete or a forged op leaves
-    // its key in the proposal, so that child stays in range, is recomputed, and
-    // fails the root-hash check. This reads the proposal, never the
-    // attacker-controlled batch ops. A storage error while reading it
-    // propagates.
+    // Decide each on-path child against the proposal, never against the
+    // attacker-controlled batch ops. A storage error while reading it propagates.
     for terminal in [start_terminal, end_terminal].into_iter().flatten() {
         let TerminalMarking::OnPath(on_path) = terminal.marking else {
             continue;
@@ -502,7 +497,9 @@ fn change_outside_children<S: ReadableStorage>(
         }
 
         let terminal_key = &terminal.node.key;
-        if !proving_merkle.on_path_child_in_range(terminal_key, on_path, start_nib, end_nib)? {
+        if proving_merkle.boundary_child_source(terminal_key, on_path, start_nib, end_nib)?
+            == BoundaryChildSource::Proof
+        {
             let entry = outside_children.entry(terminal_key.clone()).or_default();
             *entry = entry.set(on_path.0);
         }

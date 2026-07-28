@@ -314,8 +314,8 @@ fn test_unbounded_end_omitted_in_range_delete_is_rejected() {
 /// end bound `0xfb50` descends into child `b` of the terminal `[f]` branch. The
 /// old trie holds two keys under that child: `0xfb10` (in range, `< 0xfb50`)
 /// and `0xfb90` (out of range, `> 0xfb50`). The end trie deletes both, so child
-/// `b` is absent there and the right-edge terminal is the `[f]` branch; only
-/// `Delete 0xfb10` is in range, so only it appears in the change list.
+/// `b` is absent there and the right-edge terminal is the `[f]` branch. Only
+/// `Delete 0xfb10` is in range, so it is the only op in the change list.
 ///
 /// An attacker replays the honest boundary proofs with an empty change list.
 /// The proposal (old trie + no ops) still holds `0xfb10`, so its child `b` is
@@ -373,8 +373,8 @@ fn test_split_boundary_child_omitted_in_range_delete_is_rejected() {
 /// The start bound `0xd450` descends into child `4` of the `[d]` branch, and that
 /// child is split: `0xd410` sorts below the bound (out of range) while `0xd490`
 /// sorts above it (in range). The end trie deletes both, so child `4` is absent
-/// there and the left-edge terminal is the `[d]` branch; only `Delete 0xd490` is
-/// in range, so only it appears in the change list.
+/// there and the left-edge terminal is the `[d]` branch. Only `Delete 0xd490` is
+/// in range, so it is the only op in the change list.
 ///
 /// An attacker replays the honest boundary proofs with an empty change list. The
 /// proposal keeps `0xd490`, so child `4` still holds an in-range key and must be
