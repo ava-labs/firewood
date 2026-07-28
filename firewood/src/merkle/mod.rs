@@ -269,9 +269,11 @@ enum TerminalMarking {
     OnPath(PathComponent),
 }
 
-/// A classified boundary terminal: the proof node and how its own children are
-/// marked. Carrying the node lets a caller acting on `marking` check the same
-/// node the classification came from, rather than re-deriving it from the proof.
+/// Keeps a boundary terminal's [`TerminalMarking`] together with the node it
+/// describes, because its two consumers both need the node when applying the
+/// marking. [`compute_outside_children`] keys the terminal's mask entry by the
+/// node path, and [`change_outside_children`] checks its child at the on-path
+/// nibble before deciding that child.
 #[derive(Debug)]
 struct TerminalClass<'a> {
     node: &'a ProofNode,
