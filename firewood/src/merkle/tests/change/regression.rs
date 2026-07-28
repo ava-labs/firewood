@@ -37,19 +37,18 @@ use crate::{ChangeProof, Proof};
 /// `batch_ops` as they come off a generated proof.
 type OwnedOps = Box<[BatchOp<Box<[u8]>, Box<[u8]>>]>;
 
-/// Whether a proof is accepted against the given inclusive bounds.
-fn verifies(
+/// Verifies `proof` against the given inclusive bounds, returning the rejection
+/// reason on failure.
+fn verify(
     db: &Db,
     proof: &FrozenChangeProof,
     start_root: &api::HashKey,
     end_root: &api::HashKey,
     start_key: Option<&[u8]>,
     end_key: Option<&[u8]>,
-) -> bool {
-    match verify_change_proof_structure(proof, end_root.clone(), start_key, end_key, None) {
-        Err(_) => false,
-        Ok(ctx) => verify_and_check(db, proof, &ctx, start_root.clone()).is_ok(),
-    }
+) -> Result<(), api::Error> {
+    let ctx = verify_change_proof_structure(proof, end_root.clone(), start_key, end_key, None)?;
+    verify_and_check(db, proof, &ctx, start_root.clone())
 }
 
 /// Commit `end_batch` onto `db`, returning the roots before and after. Unlike
@@ -118,15 +117,15 @@ fn test_tampered_right_edge_delete_to_put_is_rejected() {
     let proof = db
         .change_proof(start_root.clone(), end_root.clone(), None, None, None)
         .unwrap();
-    assert!(
-        verifies(&db, &proof, &start_root, &end_root, None, None),
-        "honest proof must verify"
-    );
+    verify(&db, &proof, &start_root, &end_root, None, None).expect("honest proof must verify");
 
     // Tamper: Delete{0xf51c} -> Put{0xf51c, "forged"}.
     let mutated = forge_delete_to_put(&proof, b"\xf5\x1c");
     assert!(
-        !verifies(&db, &mutated, &start_root, &end_root, None, None),
+        matches!(
+            verify(&db, &mutated, &start_root, &end_root, None, None),
+            Err(api::Error::ProofError(crate::ProofError::EndRootMismatch))
+        ),
         "SOUNDNESS BUG: change-proof verification accepted a proof whose batch op for \
          0xf51c was forged from Delete to Put (the key shares the right-edge's 0xf5 \
          branch and sorts below the deleted anchor 0xf5cd, so it is wrongly treated \
@@ -169,11 +168,11 @@ fn test_out_of_range_delete_past_end_bound_verifies() {
             None,
         )
         .unwrap();
-    assert!(
-        verifies(&db, &proof, &start_root, &end_root, Some(sk), Some(ek)),
+    assert_eq!(proof.batch_ops().len(), 2);
+    verify(&db, &proof, &start_root, &end_root, Some(sk), Some(ek)).expect(
         "honest change proof over [0x00, 0xfb] must verify. The deletion of \
          the out-of-range 0xfb00 (past the end bound 0xfb, which is its \
-         prefix) must not cause an EndRootMismatch"
+         prefix) must not cause an EndRootMismatch",
     );
 }
 
@@ -200,14 +199,15 @@ fn test_forged_in_range_delete_to_put_is_rejected() {
             None,
         )
         .unwrap();
-    assert!(
-        verifies(&db, &proof, &start_root, &end_root, Some(sk), Some(ek)),
-        "honest proof must verify"
-    );
+    verify(&db, &proof, &start_root, &end_root, Some(sk), Some(ek))
+        .expect("honest proof must verify");
 
     let forged = forge_delete_to_put(&proof, b"\x56");
     assert!(
-        !verifies(&db, &forged, &start_root, &end_root, Some(sk), Some(ek)),
+        matches!(
+            verify(&db, &forged, &start_root, &end_root, Some(sk), Some(ek)),
+            Err(api::Error::ProofError(crate::ProofError::EndRootMismatch))
+        ),
         "SOUNDNESS BUG: a forged in-range Delete{{0x56}}->Put was accepted. \
          The in-range 0x56 must be validated against the batch, not taken \
          from the proof"
@@ -258,11 +258,10 @@ fn test_out_of_range_delete_below_start_bound_verifies() {
             None,
         )
         .unwrap();
-    assert!(
-        verifies(&db, &proof, &start_root, &end_root, Some(sk), Some(ek)),
+    verify(&db, &proof, &start_root, &end_root, Some(sk), Some(ek)).expect(
         "honest change proof over [0xd44f, 0xf9] must verify. The deletion of \
          the out-of-range 0xd4 (below sk, and a prefix of it) must not cause \
-         an EndRootMismatch"
+         an EndRootMismatch",
     );
 }
 
@@ -289,10 +288,7 @@ fn test_unbounded_end_omitted_in_range_delete_is_rejected() {
     let proof = db
         .change_proof(start_root.clone(), end_root.clone(), Some(sk), None, None)
         .unwrap();
-    assert!(
-        verifies(&db, &proof, &start_root, &end_root, Some(sk), None),
-        "honest proof must verify"
-    );
+    verify(&db, &proof, &start_root, &end_root, Some(sk), None).expect("honest proof must verify");
 
     // Forge: drop the in-range Delete and the end proof, so `right_edge_key`
     // resolves to None (unbounded end). Dropping the end proof is essential —
@@ -303,7 +299,10 @@ fn test_unbounded_end_omitted_in_range_delete_is_rejected() {
         Vec::new().into_boxed_slice(),
     );
     assert!(
-        !verifies(&db, &forged, &start_root, &end_root, Some(sk), None),
+        matches!(
+            verify(&db, &forged, &start_root, &end_root, Some(sk), None),
+            Err(api::Error::ProofError(crate::ProofError::EndRootMismatch))
+        ),
         "SOUNDNESS BUG: an unbounded-end change proof omitting the in-range \
          Delete{{0x53}} was accepted. The key remains in the proposal and its \
          subtree must be recomputed, not taken from the start proof"
@@ -351,16 +350,18 @@ fn test_split_boundary_child_omitted_in_range_delete_is_rejected() {
             None,
         )
         .unwrap();
-    assert!(
-        verifies(&db, &proof, &start_root, &end_root, Some(sk), Some(ek)),
-        "honest proof must verify"
-    );
+    assert_eq!(proof.batch_ops().len(), 1);
+    verify(&db, &proof, &start_root, &end_root, Some(sk), Some(ek))
+        .expect("honest proof must verify");
 
     // Forge: drop the in-range Delete{0xfb10}, keeping the honest boundary
     // proofs. The proposal keeps 0xfb10, so boundary child b is split.
     let forged = omit_all_ops(&proof);
     assert!(
-        !verifies(&db, &forged, &start_root, &end_root, Some(sk), Some(ek)),
+        matches!(
+            verify(&db, &forged, &start_root, &end_root, Some(sk), Some(ek)),
+            Err(api::Error::ProofError(crate::ProofError::EndRootMismatch))
+        ),
         "SOUNDNESS BUG: an omitted in-range Delete{{0xfb10}} was accepted even \
          though the boundary child also holds the out-of-range 0xfb90. The \
          in-range key remains in the proposal and its subtree must be \
@@ -409,16 +410,18 @@ fn test_split_start_boundary_child_omitted_in_range_delete_is_rejected() {
             None,
         )
         .unwrap();
-    assert!(
-        verifies(&db, &proof, &start_root, &end_root, Some(sk), Some(ek)),
-        "honest proof must verify"
-    );
+    assert_eq!(proof.batch_ops().len(), 1);
+    verify(&db, &proof, &start_root, &end_root, Some(sk), Some(ek))
+        .expect("honest proof must verify");
 
     // Forge: drop the in-range Delete{0xd490}, keeping the honest boundary
     // proofs. The proposal keeps 0xd490, so boundary child 4 is split.
     let forged = omit_all_ops(&proof);
     assert!(
-        !verifies(&db, &forged, &start_root, &end_root, Some(sk), Some(ek)),
+        matches!(
+            verify(&db, &forged, &start_root, &end_root, Some(sk), Some(ek)),
+            Err(api::Error::ProofError(crate::ProofError::EndRootMismatch))
+        ),
         "SOUNDNESS BUG: an omitted in-range Delete{{0xd490}} was accepted even \
          though the start boundary child also holds the out-of-range 0xd410. The \
          in-range key remains in the proposal and its subtree must be recomputed, \

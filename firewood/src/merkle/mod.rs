@@ -278,9 +278,11 @@ struct TerminalClass<'a> {
     marking: TerminalMarking,
 }
 
-/// Classifies the boundary terminal's effect on its own children, or `None`
-/// when the proof is empty, the edge is unbounded, or none of the terminal's
-/// children are outside the range.
+/// Classifies the boundary terminal's effect on its own children. Returns
+/// `None` when the proof is empty, the edge is unbounded, or the terminal's
+/// children are all in range. A returned marking can still mark no children
+/// outside — [`TerminalMarking::OnPath`] at nibble 0 on the left edge, or 15 on
+/// the right, leaves the mask empty.
 ///
 /// The boundary key (in bytes, not nibbles) determines the on-path nibble at
 /// the terminal, since there is no subsequent proof node to derive it from.
