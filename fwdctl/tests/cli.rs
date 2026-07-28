@@ -46,6 +46,188 @@ fn insert_key_value(db_path: &Path, key: &str, value: &str) {
         .stdout(predicate::str::contains(key));
 }
 
+#[cfg(feature = "ethhash")]
+const ACCOUNT: &str = "00112233445566778899aabbccddeeff00112233";
+#[cfg(feature = "ethhash")]
+const SLOT: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+#[cfg(feature = "ethhash")]
+const ACCOUNT_HASH: &str = "b7ff4d50bd18751616802a406c94b190f1a3fd4fc82b06db40943e0119c5e8bc";
+#[cfg(feature = "ethhash")]
+const STORAGE_KEY: &str = "b7ff4d50bd18751616802a406c94b190f1a3fd4fc82b06db40943e0119c5e8bcb10e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf6";
+
+#[test]
+fn fwdctl_hex_key_round_trip() {
+    with_tmpdir(|db_path| {
+        create_db(db_path);
+
+        cargo_bin_cmd!()
+            .args(["insert", "--hex", "79656172", "2023"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success();
+
+        cargo_bin_cmd!()
+            .args(["get", "year"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("2023"));
+
+        cargo_bin_cmd!()
+            .args(["delete", "--hex", "79656172"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success();
+
+        #[cfg(not(feature = "ethhash"))]
+        cargo_bin_cmd!()
+            .args(["get", "year"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Database is empty"));
+
+        #[cfg(feature = "ethhash")]
+        cargo_bin_cmd!()
+            .args(["get", "year"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("Key 'year' not found"));
+    });
+}
+
+#[test]
+fn fwdctl_hex_key_rejects_malformed_input() {
+    cargo_bin_cmd!()
+        .args(["get", "--hex", "not-hex"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("key must be hexadecimal"));
+}
+
+#[cfg(feature = "ethhash")]
+#[test]
+fn fwdctl_key_modes_conflict() {
+    cargo_bin_cmd!()
+        .args(["get", "--hex", "--account", ACCOUNT])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "the argument '--hex' cannot be used with '--account'",
+        ));
+}
+
+#[cfg(feature = "ethhash")]
+#[test]
+fn fwdctl_key_hashing_is_documented_in_help() {
+    cargo_bin_cmd!()
+        .args(["get", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "--account\n          Hash KEY as a 20-byte hex Ethereum account address",
+        ))
+        .stdout(predicate::str::contains(
+            "--storage <SLOT>\n          Hash KEY as a 20-byte hex Ethereum account address and SLOT as a 32-byte hex storage key",
+        ));
+}
+
+#[cfg(feature = "ethhash")]
+#[test]
+fn fwdctl_account_key_round_trip() {
+    with_tmpdir(|db_path| {
+        create_db(db_path);
+
+        cargo_bin_cmd!()
+            .args(["insert", "--account", ACCOUNT, "account value"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success();
+
+        cargo_bin_cmd!()
+            .args(["get", "--account", ACCOUNT])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("account value"));
+
+        cargo_bin_cmd!()
+            .args(["dump", "--hex"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(ACCOUNT_HASH));
+    });
+}
+
+#[cfg(feature = "ethhash")]
+#[test]
+fn fwdctl_storage_key_round_trip() {
+    with_tmpdir(|db_path| {
+        create_db(db_path);
+
+        cargo_bin_cmd!()
+            .args(["insert", "--storage", SLOT, ACCOUNT, "storage value"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success();
+
+        cargo_bin_cmd!()
+            .args(["get", "--storage", SLOT, ACCOUNT])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("storage value"));
+
+        cargo_bin_cmd!()
+            .args(["dump", "--hex"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(STORAGE_KEY));
+    });
+}
+
+#[cfg(feature = "ethhash")]
+#[test]
+fn fwdctl_account_rejects_malformed_hex() {
+    cargo_bin_cmd!()
+        .args([
+            "get",
+            "--account",
+            "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "account must be exactly 20 bytes of hexadecimal",
+        ));
+}
+
+#[cfg(feature = "ethhash")]
+#[test]
+fn fwdctl_storage_rejects_wrong_length() {
+    cargo_bin_cmd!()
+        .args(["get", "--storage", "abcd", ACCOUNT])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "storage key must be exactly 32 bytes (64 hex digits); got 2 bytes",
+        ));
+}
+
 #[test]
 fn fwdctl_prints_version() {
     let expected_version_output: String = format!("{PRG} {VERSION}");
