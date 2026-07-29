@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785312117384,
+  "lastUpdate": 1785312194864,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -7801,6 +7801,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 53.11202221151805,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "rodrigo",
+            "username": "RodrigoVillar",
+            "email": "77309055+RodrigoVillar@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "9059e762863b38fcd82f77579514fe55cc42ffe3",
+          "message": "test(ffi): add C-Chain replay test and CI job (#2134)\n\n## Why this should be merged\n\nCloses #2131.\n\nChanges to Firewood that would break the C-Chain are currently only\ncaught after a version bump into AvalancheGo, when its reexecution\nbenchmarks run. This PR adds a replay test that runs on every Firewood\nPR (and on `main`), catching C-Chain-breaking regressions before they\nship — without importing Coreth/SAEVM.\n\n## How this works\n\n`TestCChainReplay` (in `ffi`) replays a recorded log of the FFI\noperations issued while executing C-Chain mainnet blocks 0–250,000\nagainst a fresh Firewood database built with `ethhash`, and verifies\nstate roots along the way:\n\n- Configuration is env-driven: `CCHAIN_REPLAY_REQUIRED` gates the test\n(unset → skip, so the regular `go test ./...` runs are unaffected; set →\nthe test must run and any missing/malformed configuration is a hard\nfailure, so CI can never silently skip). `CCHAIN_REPLAY_LOG_PATH` and\n`CCHAIN_REPLAY_EXPECTED_ROOT` supply the artifact and its expected final\nroot.\n\nReplay artifacts are matrix entries (`name` / `replay-log` /\n`expected-root`), so additional ranges — e.g. a mid-chain window\nreplayed on top of a database snapshot — are one-row additions.\n\nPrerequisites for the job to go green (in progress):\n- [x] Upload `cchain-mainnet-250k.replay` to\n`s3://firewood-cchain-replay-logs`\n- [x] `AWS_S3_READ_ONLY_ROLE` secret on this repo (SecOps request\npending)\n\n## How this was tested\n\n- Full local run against the 0–250,000 artifact: 250,001 commits\n- New unit tests for the env contract\n(`TestCChainReplayParamsFromEnvNotRequired` / `Valid` / `RootErrors`).\n\n## Breaking Changes\n\n- [ ] firewood\n- [ ] firewood-storage\n- [ ] firewood-ffi (C api)\n- [ ] firewood-go (Go api)\n- [ ] fwdctl",
+          "timestamp": "2026-07-28T14:54:54Z",
+          "url": "https://github.com/ava-labs/firewood/commit/9059e762863b38fcd82f77579514fe55cc42ffe3"
+        },
+        "date": 1785312193997,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 167.50992542522167,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5969.795505917118,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 110.30430354435853,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5779.639740734028,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 77.31285221472102,
             "unit": "block_accept_ms/ggas"
           }
         ]
