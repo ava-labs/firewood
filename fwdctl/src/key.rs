@@ -9,8 +9,12 @@ use sha3::{Digest, Keccak256};
 
 #[derive(Debug, Args)]
 pub struct KeyArgument {
-    /// The key. Used as a UTF-8 string unless an Ethereum hashing option is set
-    #[arg(required = true, value_name = "KEY", help = "Key to operate on")]
+    /// The key. Used as UTF-8 unless `--hex` or an Ethereum hashing option is set
+    #[arg(
+        required = true,
+        value_name = "KEY",
+        help = "Key to operate on (UTF-8 by default; decoded or hashed when a key mode is set)"
+    )]
     pub key: String,
 
     /// Decode KEY as hexadecimal bytes

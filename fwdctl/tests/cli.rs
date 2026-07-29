@@ -130,11 +130,13 @@ fn fwdctl_key_hashing_is_documented_in_help() {
         .args(["get", "--help"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("--account"))
         .stdout(predicate::str::contains(
-            "--account\n          Hash KEY as a 20-byte hex Ethereum account address",
+            "Hash KEY as a 20-byte hex Ethereum account address",
         ))
+        .stdout(predicate::str::contains("--storage <SLOT>"))
         .stdout(predicate::str::contains(
-            "--storage <SLOT>\n          Hash KEY as a 20-byte hex Ethereum account address and SLOT as a 32-byte hex storage key",
+            "Hash KEY as a 20-byte hex Ethereum account address and SLOT as a 32-byte hex storage key",
         ));
 }
 
