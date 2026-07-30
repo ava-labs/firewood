@@ -149,4 +149,5 @@ create lifecycle, `post-create.sh` is exercised in CI.
 
 ## Related designs
 
-See [Design Documents](README.md) for the design workflow.
+See [Design Documents](README.md) for the design workflow. For the broader local setup, see
+[Development Environment](../getting-started/dev-environment.md).
