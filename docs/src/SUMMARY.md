@@ -13,7 +13,9 @@
 
 # Design Documents
 
-- [Designs]()
+- [Designs](designs/README.md)
+  - [mdBook documentation site](designs/2026-06-17-mdbook-documentation-site.md)
+  - [Template](designs/template.md)
 
 # Integration
 
@@ -25,7 +27,7 @@
 
 # Reference
 
-- [Reference]()
+- [Reference](reference/README.md)
 
 # Meta
 
