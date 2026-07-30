@@ -109,6 +109,32 @@ The `fwdctl` tool provides command-line operations on databases. See `fwdctl/REA
 
 For more information on coding conventions and constraints, please refer to [CONTRIBUTING.md](./CONTRIBUTING.md)
 
+## Design Documents
+
+Firewood records designs as living documentation in a single flat directory,
+`docs/src/designs/` (rendered in the mdBook site). Every design is
+`YYYY-MM-DD-<slug>.md`, where the date is the day the design was written; it is
+assigned once and never changes. A design's lifecycle state lives in the `status`
+frontmatter field, not in its location or filename. Follow this workflow when writing
+a design document:
+
+- **Propose:** run `just new-design <slug>` to scaffold
+  `docs/src/designs/YYYY-MM-DD-<slug>.md` (with `status: proposed`) from the RFC-style
+  template, fill it in, and open a pull request for review.
+- **Promote:** once the design is implemented, promote it in place — a status flip,
+  not a file move, so its `YYYY-MM-DD-<slug>.md` path stays stable and its date prefix
+  goes on recording when the design was proposed. Following the checklist in
+  `docs/src/designs/README.md`: flip the frontmatter `status` to `active`, drop the
+  proposal-only sections, rewrite future-tense prose into the present tense, add
+  cross-links to the implementing PR(s), and update the index in
+  `docs/src/designs/README.md` and `docs/src/SUMMARY.md`.
+- `active` designs describe what the code does today; keep them up to date as the
+  design changes.
+
+Never write a date into a design's frontmatter or body. The filename records when the
+design was proposed; `just design-age` reports how fresh each design is from git
+history. A hand-maintained date inside a document only drifts out of sync.
+
 ## Commit and PR Title Convention
 
 Commit messages and PR titles **must** follow the
