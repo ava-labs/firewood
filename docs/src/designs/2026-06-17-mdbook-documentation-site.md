@@ -767,7 +767,7 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
       git-commit date, oldest first.
 - [x] `reference/` has an authored landing page linking only to generated artifacts
       (rustdoc/godoc/benchmarks).
-- [ ] Sections with seed content (`concepts/`, `integration/`, `operations/`) have
+- [x] Sections with seed content (`concepts/`, `integration/`, `operations/`) have
       authored landing pages and linked `SUMMARY.md` entries. Not-yet-written sub-pages
       are omitted from `SUMMARY.md` (added when their content lands) rather than shipped
       as empty `.md` files; no sub-page draft chapters ship. `integration/` documents the
