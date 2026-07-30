@@ -456,7 +456,7 @@ impl Node {
             self.update_partial_path(child_path);
             let child_path_component = PathComponent::try_new(child_index)
                 .ok_or_else(|| Error::other("invalid child index"))?;
-            *branch.children.get_mut(child_path_component) = Some(Child::Node(self));
+            *branch.children.get_mut(child_path_component) = Some(Child::Node(Box::new(self)));
             Ok(branch.into())
         } else {
             Ok(match self {

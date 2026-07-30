@@ -246,7 +246,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         let child_node = self.read_for_update(child)?;
         let child_node =
             self.collapse_navigate(child_node, deeper, suffix, parent_prefix, range)?;
-        branch.children[child_component] = Some(Child::Node(child_node));
+        branch.children[child_component] = Some(Child::Node(Box::new(child_node)));
         Ok(node)
     }
 
@@ -285,7 +285,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
 
         child_node = self.collapse_strip(child_node, after_child, &child_prefix, range)?;
 
-        branch.children[first] = Some(Child::Node(child_node));
+        branch.children[first] = Some(Child::Node(Box::new(child_node)));
         Ok(node)
     }
 
@@ -385,7 +385,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
             child_node = self.collapse_strip(child_node, deeper, &child_prefix, range)?;
         }
 
-        branch.children[on_path] = Some(Child::Node(child_node));
+        branch.children[on_path] = Some(Child::Node(Box::new(child_node)));
 
         // If exactly one child remains, flatten by merging partial paths.
         let Some((child_idx, only_child)) = branch.children.take_only_child() else {
