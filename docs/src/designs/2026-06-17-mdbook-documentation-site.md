@@ -794,7 +794,7 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
       (`Database`/`Proposal`/`Revision`, mapping to the Rust `Db`/`Proposal`/`DbView`)
       and the `firewood-go-ethhash` publish relationship that AvalancheGo actually
       consumes.
-- [ ] A `meta/` section exists with an **authored** `documentation.md` (how the docs
+- [x] A `meta/` section exists with an **authored** `documentation.md` (how the docs
       work: tooling, layout, build/serve, authoring, design workflow) and thin
       repository-function pages (`release.md` plus link-out pointers to CONTRIBUTING /
       CODE_REVIEW); the process-doc link-outs are in `meta/`, not `reference/`.
