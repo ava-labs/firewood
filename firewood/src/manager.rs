@@ -169,7 +169,7 @@ impl<H: HashMode> RevisionManager<H> {
     /// [`ConfigManager::node_hash_algorithm`]; for an existing database that
     /// is the header's persisted algorithm (validated at open via
     /// `validate_open`), and for a fresh database it is the requested
-    /// algorithm.
+    /// algorithm. [`crate::db::Db::open`] selects the right `H` at runtime.
     pub fn new(config: ConfigManager) -> Result<Self, RevisionManagerError> {
         let commit_count = config.manager.deferred_persistence_commit_count.get();
         if (config.manager.max_revisions as u64) <= commit_count {

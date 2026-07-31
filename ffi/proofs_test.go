@@ -523,7 +523,7 @@ func TestRangeProofCodeHashes(t *testing.T) {
 			r.NoError(err, "%T.CodeHashes()", proof)
 			r.Equal(codeHash, h)
 		} else {
-			require.ErrorContains(t, err, "feature not supported in this build: ethhash code hash iterator")
+			require.ErrorContains(t, err, "feature not supported in this build: code hash iteration requires an ethereum-mode proof")
 		}
 	}
 
@@ -563,7 +563,7 @@ func TestChangeProofCodeHashes(t *testing.T) {
 			r.NoError(err, "%T.CodeHashes()", proof)
 			r.Equal(codeHash, h)
 		} else {
-			require.ErrorContains(t, err, "feature not supported in this build: ethhash code hash iterator")
+			require.ErrorContains(t, err, "feature not supported in this build: code hash iteration requires an ethereum-mode proof")
 		}
 	}
 

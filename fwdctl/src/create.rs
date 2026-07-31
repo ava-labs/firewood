@@ -56,7 +56,15 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     let db_config = new(opts);
     log::debug!("database configuration parameters: \n{db_config:?}\n");
 
-    let db: Box<dyn api::DynDb> = Box::new(Db::new(opts.database.dbpath.clone(), db_config)?);
+    // Use the runtime-selecting `open` so the concrete hash mode matches the
+    // requested algorithm (a fresh DB has no header to honor). `Db::new` would
+    // force `Db<DefaultHashMode>` and reject a requested mode that differs from
+    // the compile default.
+    let db = Db::open(
+        opts.database.dbpath.clone(),
+        opts.database.node_hash_algorithm.into(),
+        db_config,
+    )?;
     println!(
         "created firewood database in {}",
         opts.database.dbpath.display()
