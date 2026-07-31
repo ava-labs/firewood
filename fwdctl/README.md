@@ -58,6 +58,9 @@ $ fwdctl create firewood
 ```sh
 # Get the value associated with a key in the database, if it exists.
 fwdctl get KEY
+
+# Use raw bytes instead of UTF-8 text.
+fwdctl get --key-hex 0xdeadbeef
 ```
 
 * fwdctl insert KEY VALUE
@@ -65,6 +68,12 @@ fwdctl get KEY
 ```sh
 # Insert a key/value pair into the database.
 fwdctl insert KEY VALUE
+
+# In an ethhash build, hash an account and storage slot into one trie key.
+cargo run -p firewood-fwdctl --features ethhash -- insert --node-hash-algorithm ethereum \
+  --account 0x1111111111111111111111111111111111111111 \
+  --storage-key 0x2222222222222222222222222222222222222222222222222222222222222222 \
+  VALUE
 ```
 
 * fwdctl delete KEY
@@ -73,3 +82,9 @@ fwdctl insert KEY VALUE
 # Delete a key from the database, along with the associated value.
 fwdctl delete KEY
 ```
+
+The `get`, `insert`, and `delete` commands accept a text `KEY`, `--key-hex`,
+or `--account` with an optional `--storage-key`. Account inputs must be 20
+bytes and storage keys must be 32 bytes. In an `ethhash` build, an account is
+stored under `keccak256(account)`, and a storage entry is stored under
+`keccak256(account) || keccak256(storage_key)`.

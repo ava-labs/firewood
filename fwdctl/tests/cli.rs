@@ -89,6 +89,40 @@ fn fwdctl_get_successful() {
 }
 
 #[test]
+fn fwdctl_hex_key_round_trip() {
+    with_tmpdir(|db_path| {
+        create_db(db_path);
+
+        cargo_bin_cmd!()
+            .arg("insert")
+            .args(["--key-hex", "0x00ff", "binary-value"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("0x00ff"));
+
+        cargo_bin_cmd!()
+            .arg("get")
+            .args(["--key-hex", "0x00ff"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("binary-value"));
+
+        cargo_bin_cmd!()
+            .arg("delete")
+            .args(["--key-hex", "0x00ff"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("0x00ff"));
+    });
+}
+
+#[test]
 fn fwdctl_delete_successful() {
     with_tmpdir(|db_path| {
         create_db(db_path);
