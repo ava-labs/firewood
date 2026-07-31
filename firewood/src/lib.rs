@@ -185,6 +185,11 @@ pub use firewood_storage::logger;
 /// Hashing mode used for trie nodes.
 pub use firewood_storage::NodeHashAlgorithm;
 
+/// The two node-hashing schemes and the trait they implement, for callers
+/// (e.g. the FFI crate) that dispatch on a database's runtime mode without
+/// depending on `firewood-storage` directly.
+pub use firewood_storage::{EthHash, HashMode, MerkleDbHash};
+
 /// Root or node hash used by Firewood tries.
 ///
 /// This is the same type exposed as [`api::HashKey`] in the database API.

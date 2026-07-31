@@ -618,7 +618,7 @@ than 126 bytes as the length would be encoded in multiple bytes.
     /// by the hash codec output (`0x00` + 32 raw bytes for a full hash). These
     /// bytes must stay byte-for-byte stable so existing databases keep working.
     ///
-    /// Eth-only golden (not `#[cfg(feature = "ethhash")]`-gated): both hashers
+    /// Eth-only golden (not cfg-gated): both hashers
     /// compile into one binary since PR 3, so the mode is pinned via
     /// `#[hash_mode(eth)]` instead of a compile-time feature gate.
     #[firewood_macros::hash_mode(eth)]

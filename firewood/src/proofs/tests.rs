@@ -303,13 +303,14 @@ fn test_partial_key_len_exceeds_key_len() {
     }
 }
 
-#[test]
-fn test_empty_proof() {
+#[test_case(magic::HASH_MODE_SHA256; "sha256 hash mode")]
+#[test_case(magic::HASH_MODE_KECCAK; "keccak hash mode")]
+fn test_empty_proof(hash_mode: u8) {
     #[rustfmt::skip]
     let bytes = [
         b'f', b'w', b'd', b'p', b'r', b'o', b'o', b'f', // magic
         0, // version
-        magic::HASH_MODE,
+        hash_mode,
         magic::BRANCH_FACTOR,
         ProofType::Range as u8,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // reserved

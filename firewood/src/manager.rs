@@ -18,7 +18,7 @@ use firewood_storage::logger::{trace, warn};
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
 
-use crate::api::{self, ArcDynDbView, HashKey, HashKeyExt, IntoBatchIter};
+use crate::api::{self, ArcDynDbView, HashKey, IntoBatchIter};
 use crate::db::{BatchOp, UseParallel};
 use crate::merkle::Merkle;
 use crate::merkle::parallel::ParallelMerkle;
@@ -27,9 +27,9 @@ use firewood_metrics::{GaugeExt, firewood_counter, firewood_gauge, firewood_hist
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::RootStore;
 use firewood_storage::{
-    BranchNode, Committed, CommittedId, DefaultHashMode, DeletedNodeTracking, FileBacked,
-    FileIoError, HashMode, HashedNodeReader, ImmutableProposal, Mutable, MutableKind,
-    NodeHashAlgorithm, NodeStore, NodeStoreHeader, Propose, Recon, TrieHash,
+    BranchNode, Committed, CommittedId, DeletedNodeTracking, FileBacked, FileIoError, HashMode,
+    HashedNodeReader, ImmutableProposal, Mutable, MutableKind, NodeHashAlgorithm, NodeStore,
+    NodeStoreHeader, Propose, Recon, TrieHash,
 };
 
 pub(crate) const DB_FILE_NAME: &str = "firewood.db";
@@ -86,16 +86,15 @@ pub struct ConfigManager {
     pub manager: RevisionManagerConfig,
 }
 
-pub type CommittedRevision<H = DefaultHashMode> = Arc<NodeStore<Committed, FileBacked, H>>;
-type ProposedRevision<H = DefaultHashMode> = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked, H>>;
+pub type CommittedRevision<H> = Arc<NodeStore<Committed, FileBacked, H>>;
+type ProposedRevision<H> = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked, H>>;
 
 /// Manages historical revisions and proposals for a [`crate::db::Db`].
 ///
-/// `H` mirrors the owning database's hash-mode type parameter. The managed
-/// nodestores stay pinned to the storage-supported default mode; `H` is
-/// presently always [`DefaultHashMode`].
+/// `H` mirrors the owning database's hash-mode type parameter; the managed
+/// nodestores are parameterized by the same `H`.
 #[derive(Debug)]
-pub(crate) struct RevisionManager<H = DefaultHashMode> {
+pub(crate) struct RevisionManager<H> {
     /// Maximum number of revisions to keep in memory.
     ///
     /// When this limit is exceeded, the oldest revision is removed from memory.
@@ -561,10 +560,11 @@ impl<H: HashMode> RevisionManager<H> {
         }
         drop(by_hash);
 
-        // 2. Default empty-trie short-circuit. An empty trie has no on-disk
-        //    root node, so `RootStore` can never produce it; synthesize one
-        //    against the file backing carried by the latest committed revision.
-        if HashKey::default_root_hash().as_ref() == Some(&root_hash) {
+        // 2. Empty-trie short-circuit for this hash mode. An empty trie has no
+        //    on-disk root node, so `RootStore` can never produce it; synthesize
+        //    one against the file backing carried by the latest committed
+        //    revision.
+        if H::default_root_hash().as_ref() == Some(&root_hash) {
             let storage = self.current_revision().storage().clone();
             let deleted_node_tracking = if self.root_store.is_some() {
                 DeletedNodeTracking::Disabled
@@ -721,6 +721,8 @@ impl<H: HashMode> RevisionManager<H> {
 #[cfg(test)]
 mod tests {
     use firewood_storage::RootReader;
+    // ZST the `#[hash_mode]` wrapper instantiates the generic helper with.
+    use firewood_storage::EthHash;
 
     use super::*;
 
@@ -763,20 +765,20 @@ mod tests {
 
         let config = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
-            .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+            .node_hash_algorithm(EthHash::ALGORITHM)
             .create(true)
             .truncate(false)
             .build();
 
         // First database instance should open successfully
-        let first_manager = RevisionManager::<DefaultHashMode>::new(config.clone());
+        let first_manager = RevisionManager::<EthHash>::new(config.clone());
         assert!(
             first_manager.is_ok(),
             "First database should open successfully"
         );
 
         // Second database instance should fail to open due to file locking
-        let second_manager = RevisionManager::<DefaultHashMode>::new(config.clone());
+        let second_manager = RevisionManager::<EthHash>::new(config.clone());
         assert!(
             second_manager.is_err(),
             "Second database should fail to open"
@@ -796,7 +798,7 @@ mod tests {
         drop(first_manager.unwrap());
 
         // Now the second database should open successfully
-        let third_manager = RevisionManager::<DefaultHashMode>::new(config);
+        let third_manager = RevisionManager::<EthHash>::new(config);
         assert!(
             third_manager.is_ok(),
             "Database should open after first instance is dropped"
@@ -822,7 +824,7 @@ mod tests {
 
         let config = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
-            .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+            .node_hash_algorithm(EthHash::ALGORITHM)
             .create(true)
             .manager(
                 RevisionManagerConfig::builder()
@@ -831,7 +833,7 @@ mod tests {
             )
             .build();
 
-        let manager = Arc::new(RevisionManager::<DefaultHashMode>::new(config).unwrap());
+        let manager = Arc::new(RevisionManager::<EthHash>::new(config).unwrap());
 
         // Create an initial proposal and commit it to have a non-empty base
         let base_revision = manager.current_revision();
@@ -843,7 +845,7 @@ mod tests {
                 value: b"value".to_vec().into_boxed_slice(),
             }));
         }
-        let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _>> =
+        let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _, EthHash>> =
             Arc::new(proposal.try_into().unwrap());
         manager.add_proposal(proposal.clone());
         manager.commit(proposal).unwrap();
@@ -931,7 +933,7 @@ mod tests {
                         }));
                     }
 
-                    let immutable: Arc<NodeStore<Arc<ImmutableProposal>, _>> =
+                    let immutable: Arc<NodeStore<Arc<ImmutableProposal>, _, EthHash>> =
                         Arc::new(match new_proposal.try_into() {
                             Ok(p) => p,
                             Err(e) => {
@@ -996,12 +998,12 @@ mod tests {
         // Create a database with root_store disabled (default)
         let config = ConfigManager::builder()
             .root_dir(db_path.clone())
-            .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+            .node_hash_algorithm(EthHash::ALGORITHM)
             .create(true)
             .root_store(false)
             .build();
 
-        let _manager = RevisionManager::<DefaultHashMode>::new(config).unwrap();
+        let _manager = RevisionManager::<EthHash>::new(config).unwrap();
 
         // Verify that the root_store directory does NOT exist
         let root_store_dir = db_path.join("root_store");
@@ -1020,12 +1022,12 @@ mod tests {
         // Create a database with root_store enabled
         let config = ConfigManager::builder()
             .root_dir(db_path.clone())
-            .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+            .node_hash_algorithm(EthHash::ALGORITHM)
             .create(true)
             .root_store(true)
             .build();
 
-        let _manager = RevisionManager::<DefaultHashMode>::new(config).unwrap();
+        let _manager = RevisionManager::<EthHash>::new(config).unwrap();
 
         // Verify that the root_store directory DOES exist
         let root_store_dir = db_path.join("root_store");
@@ -1043,7 +1045,7 @@ mod tests {
         // `max_revisions` < `commit_count`
         let config = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
-            .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+            .node_hash_algorithm(EthHash::ALGORITHM)
             .create(true)
             .manager(
                 RevisionManagerConfig::builder()
@@ -1053,13 +1055,13 @@ mod tests {
             )
             .build();
 
-        let result = RevisionManager::<DefaultHashMode>::new(config);
+        let result = RevisionManager::<EthHash>::new(config);
         assert!(result.is_err());
 
         // `max_revisions` == `commit_count`
         let config = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
-            .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+            .node_hash_algorithm(EthHash::ALGORITHM)
             .manager(
                 RevisionManagerConfig::builder()
                     .max_revisions(commit_count.get() as usize)
@@ -1068,14 +1070,14 @@ mod tests {
             )
             .build();
 
-        let result = RevisionManager::<DefaultHashMode>::new(config);
+        let result = RevisionManager::<EthHash>::new(config);
         assert!(result.is_err());
 
         // `max_revisions` > `commit_count`
         let max_revisions = commit_count.get().wrapping_add(1) as usize;
         let config = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
-            .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+            .node_hash_algorithm(EthHash::ALGORITHM)
             .manager(
                 RevisionManagerConfig::builder()
                     .max_revisions(max_revisions)
@@ -1084,7 +1086,7 @@ mod tests {
             )
             .build();
 
-        let result = RevisionManager::<DefaultHashMode>::new(config);
+        let result = RevisionManager::<EthHash>::new(config);
         assert!(result.is_ok());
     }
 
@@ -1095,18 +1097,19 @@ mod tests {
     /// `revision()` previously fell through to `RootStore::get` and returned
     /// `RevisionNotFound`. The fix synthesizes an empty committed nodestore
     /// when the caller asks for the default empty-trie hash.
-    #[cfg(feature = "ethhash")]
-    #[test]
-    fn test_revision_empty_root_after_eviction() {
+    #[firewood_macros::hash_mode(eth)]
+    fn test_revision_empty_root_after_eviction<H: HashMode>() {
         use firewood_storage::{LeafNode, NibblesIterator, Node, Path};
 
-        let empty_hash =
-            HashKey::default_root_hash().expect("ethhash exposes a default empty-trie hash");
+        // Drive the empty-trie hash from `H` (the mode the wrapper binds), not
+        // the production default routed through `HashKeyExt::default_root_hash`,
+        // so the test truly exercises the selected mode end-to-end.
+        let empty_hash = H::default_root_hash().expect("ethhash exposes a default empty-trie hash");
 
         let db_dir = tempfile::tempdir().unwrap();
         let config = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
-            .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+            .node_hash_algorithm(H::ALGORITHM)
             .create(true)
             .manager(
                 // Smallest legal queue: max_revisions must exceed
@@ -1117,7 +1120,7 @@ mod tests {
             )
             .build();
 
-        let manager = RevisionManager::<DefaultHashMode>::new(config).unwrap();
+        let manager = RevisionManager::<H>::new(config).unwrap();
 
         // Sanity: the fresh manager indexes the empty revision under the
         // default hash.
@@ -1132,7 +1135,7 @@ mod tests {
                 partial_path: Path::from_nibbles_iterator(NibblesIterator::new(&[i])),
                 value: Box::new([i]),
             }));
-            let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _>> =
+            let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _, H>> =
                 Arc::new(proposal.try_into().unwrap());
             manager.add_proposal(proposal.clone());
             manager.commit(proposal).unwrap();

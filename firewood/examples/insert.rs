@@ -58,9 +58,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .max_revisions(args.revisions)
         .build();
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(
-            <firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM,
-        )
+        .node_hash_algorithm(<firewood_storage::EthHash as firewood_storage::HashMode>::ALGORITHM)
         .truncate(args.truncate)
         .manager(mgrcfg)
         .build();

@@ -4,7 +4,6 @@
 use clap::Args;
 use firewood::api;
 use firewood::db::{Db, DbConfig};
-use std::io::stdout;
 
 use crate::DatabasePath;
 
@@ -21,7 +20,13 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
         .create_if_missing(false)
         .truncate(false);
 
-    let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
-    db.dump(&mut stdout())?;
+    // Open via the runtime-selecting `open` so an existing database's persisted
+    // hash mode is honored regardless of the requested `--hash-mode`.
+    let db = Db::open(
+        opts.database.dbpath.clone(),
+        opts.database.resolve_node_hash_algorithm(),
+        cfg.build(),
+    )?;
+    print!("{}", db.dump_to_string()?);
     db.close()
 }

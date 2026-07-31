@@ -63,16 +63,20 @@ benchmark/            # Performance benchmarking suite
 - **Commit**: Operation of applying Proposals to the most recent Revision
 - **Batch**: Ordered set of Put/Delete operations
 
+## Hashing modes (runtime)
+
+The node hash scheme is a per-database runtime choice, not a cargo feature. It is
+selected when the database is opened via `Db::open(path, algorithm, cfg)` (Rust) or
+the FFI `New(dir, algorithm, ...)`. One binary supports both modes:
+
+- **Ethereum / EthHash (Keccak-256)** — understands "account" nodes at specific
+  depths with RLP-encoded values and computes the account trie hash as the actual
+  root. This is the C-Chain / EVM-compatible mode.
+- **MerkleDB / MerkleDbHash (SHA-256)** — the merkledb-compatible scheme.
+
+See `storage/src/hashers/ethhash.rs` for the Ethereum hashing implementation details.
+
 ## Feature Flags
-
-### `ethhash`
-
-By default, Firewood uses SHA-256 hashing compatible with merkledb. Enable this feature for Ethereum compatibility:
-
-- Changes hashing from SHA-256 to Keccak-256
-- Understands "account" nodes at specific depths with RLP-encoded values
-- Computes account trie hash as actual root
-- See `firewood/storage/src/hashers/ethhash.rs` for implementation details
 
 ### `logging`
 
@@ -86,9 +90,9 @@ Building and using the FFI library is a multi-step process. To generate the
 Firewood Rust FFI bindings:
 
 ```bash
-cd ffi/src                                              # Go to Rust binding directory
-cargo clean                                             # Remove any existing bindings
-cargo build --profile maxperf --features ethhash,logger # Generate bindings
+cd ffi/src                                      # Go to Rust binding directory
+cargo clean                                     # Remove any existing bindings
+cargo build --profile maxperf --features logger # Generate bindings
 ```
 
 To then have Golang utilize these new bindings:
@@ -143,9 +147,9 @@ Before submitting/updating a PR, run the following
 
 ```bash
 cargo fmt                                                               # Format code
-cargo nextest run --workspace --features ethhash,logger --all-targets   # Run tests
-cargo +nightly-2026-07-05 clippy --workspace --features ethhash,logger --all-targets                    # Linter
-cargo +nightly-2026-07-05 clippy --profile maxperf --features ethhash,logger --workspace --all-targets  # Linter (maxperf: debug-assertions off)
+cargo nextest run --workspace --features logger --all-targets           # Run tests
+cargo +nightly-2026-07-05 clippy --workspace --features logger --all-targets                    # Linter
+cargo +nightly-2026-07-05 clippy --profile maxperf --features logger --workspace --all-targets  # Linter (maxperf: debug-assertions off)
 cargo doc --no-deps                                                     # Ensure docs build
 ```
 
@@ -156,7 +160,7 @@ All tests must pass, and there should be no clippy warnings.
 If your PR modifies code that is tested by any test prefixed with `test_slow_`, you should also run the full test suite with the `ci` profile to ensure those tests pass:
 
 ```bash
-cargo nextest run --workspace --features ethhash,logger --all-targets --profile ci
+cargo nextest run --workspace --features logger --all-targets --profile ci
 ```
 
 The `ci` profile includes slow tests that are skipped in the default profile for faster local development.
@@ -218,7 +222,7 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
 
 4. **Beta Status**: The API may change. Don't assume stability guarantees.
 
-5. **Feature Flags**: Be aware of `ethhash` feature flag when discussing Ethereum compatibility vs. default merkledb compatibility.
+5. **Hashing Mode**: The hashing mode (Ethereum/Keccak-256 vs. MerkleDB/SHA-256) is selected at runtime per database when the database is opened. There is no `ethhash` cargo feature flag.
 
 6. **Documentation**: Public APIs should be well-documented. Run `cargo doc --no-deps` to check.
 

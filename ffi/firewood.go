@@ -58,14 +58,12 @@ const RootLength = C.sizeof_HashKey
 // Hash is the type used for all firewood hashes.
 type Hash [RootLength]byte
 
-// NodeHashAlgorithm represents the node hashing algorithm used by the database;
-// this must match the algorithm previously used to crate the database.
+// NodeHashAlgorithm represents the node hashing algorithm used by the database.
+// It is a per-database runtime choice: a single binary can open databases of
+// either algorithm. When opening an existing database, the algorithm must match
+// the one the database was created with.
 //
 // Currently, there are only two variants but more may be added in the future.
-// At this time, the node hash algorithm used when opening the database must
-// match the compile-time feature used when building the FFI library. This
-// restriction will be lifted after #1088, which enables runtime selection of
-// the node hashing algorithm.
 type NodeHashAlgorithm C.enum_NodeHashAlgorithm
 
 const (
@@ -263,13 +261,14 @@ const (
 // algorithm and database options. The database directory will be created at the
 // provided path if it does not already exist.
 //
-// The [nodeHashAlgorithm] is required and selects the hashing mode for the
-// database at runtime, independent of the ethhash build feature:
-//   - EthereumNodeHashing for Ethereum-compatible Keccak-256 hashing
-//   - MerkleDBNodeHashing for MerkleDB-compatible SHA-256 hashing
+// The [nodeHashAlgorithm] is required and selects the database's hashing mode at
+// runtime, on a per-database basis:
+//   - EthereumNodeHashing for Ethereum-compatible (Keccak-256) hashing
+//   - MerkleDBNodeHashing for MerkleDB-compatible (SHA-256) hashing
 //
-// When opening an existing database, the requested algorithm must match the one
-// stamped in the file header, otherwise opening fails with a mismatch error.
+// A single binary supports both modes; the algorithm is a runtime choice rather
+// than a compile-time feature. When opening an existing database, the algorithm
+// must match the one the database was created with.
 //
 // If no [Option] is provided, sensible defaults will be used.
 // See the With* functions for details about each configuration parameter and its default value.

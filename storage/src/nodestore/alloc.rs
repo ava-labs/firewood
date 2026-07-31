@@ -568,7 +568,7 @@ impl<T, S: ReadableStorage, H: HashMode> NodeStore<T, S, H> {
 }
 
 // Functionalities use by the checker
-impl<T, S: WritableStorage> NodeStore<T, S> {
+impl<T, S: WritableStorage, H: crate::HashMode> NodeStore<T, S, H> {
     /// Truncates a free list at the given parent location.
     ///
     /// The `free_lists` parameter should be obtained from the `NodeStoreHeader`.

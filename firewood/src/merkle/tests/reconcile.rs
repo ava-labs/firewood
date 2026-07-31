@@ -91,11 +91,11 @@ fn test_reconcile_branch_proof_node_rejects_conflict_via_callback() {
     assert_eq!(branch.value.as_deref(), Some([1u8].as_slice()));
 }
 
-/// Checks that the `ethhash` account relaxation in
+/// Checks that the Ethereum account relaxation in
 /// `reconcile_branch_proof_node` is exactly as narrow as intended: at account
 /// depth (64 nibbles), two account values that differ *only* in `storageRoot`
 /// (field 2) reconcile without conflict, while a difference in any other field
-/// still conflicts.
+/// still conflicts. Pinned to Ethereum hashing.
 ///
 /// This exercises the helper directly, without constructing any proofs.
 #[test_case(100, true  ; "storage_root_only_diff_is_forgiven")]

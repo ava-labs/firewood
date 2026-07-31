@@ -9,8 +9,8 @@ use askama::Template;
 use clap::Args;
 use firewood::api;
 use firewood_storage::{
-    CacheReadStrategy, CheckOpt, DBStats, DeletedNodeTracking, FileBacked, NodeStore,
-    NodeStoreHeader,
+    CacheReadStrategy, CheckOpt, DBStats, DeletedNodeTracking, EthHash, FileBacked,
+    NodeHashAlgorithm, NodeStore, NodeStoreHeader,
 };
 use indicatif::{ProgressBar, ProgressFinish, ProgressStyle};
 use nonzero_ext::nonzero;
@@ -80,7 +80,20 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     } else {
         DeletedNodeTracking::Enabled
     };
-    let nodestore = NodeStore::open(&header, storage, deleted_node_tracking)?;
+    // `fwdctl check` runs the checker with Ethereum hashing rules. Refuse a
+    // non-Ethereum database loudly rather than silently mis-reporting a valid
+    // MerkleDB database as corrupt (false InvalidKey / HashMismatch).
+    // Generalizing the checker to MerkleDB is a follow-up, tracked alongside
+    // reconstruct. The default (Ethereum) request on a MerkleDB database is
+    // already rejected by header validation in `read_from_storage` above.
+    let requested: NodeHashAlgorithm = opts.database.node_hash_algorithm.into();
+    if requested != NodeHashAlgorithm::Ethereum {
+        return Err(api::Error::FeatureNotSupported(
+            "fwdctl check currently supports only Ethereum-mode databases".to_owned(),
+        ));
+    }
+    let nodestore: NodeStore<_, _, EthHash> =
+        NodeStore::open(&header, storage, deleted_node_tracking)?;
     let check_report = nodestore.check(&header, check_ops);
 
     println!("Errors ({}): ", check_report.errors.len());
