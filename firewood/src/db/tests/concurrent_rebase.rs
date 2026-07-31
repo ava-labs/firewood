@@ -38,7 +38,7 @@
 
 use std::thread;
 
-use firewood_storage::{CheckOpt, CheckerError};
+use firewood_storage::{CheckOpt, CheckerError, EthHash, HashMode, MerkleDbHash};
 
 use crate::api::{self, Db as _, DbView as _, Proposal as _};
 use crate::db::{BatchOp, DbConfig};
@@ -88,7 +88,7 @@ fn value(thread_idx: usize, commit_idx: usize, key_idx: usize) -> Vec<u8> {
 }
 
 /// `TestDb` with a tight `max_revisions` so reaping fires during the test.
-fn test_db_with_tight_revisions() -> TestDb {
+fn test_db_with_tight_revisions<H: HashMode>() -> TestDb<H> {
     TestDb::new_with_config(
         DbConfig::builder()
             .manager(
@@ -106,7 +106,7 @@ fn test_db_with_tight_revisions() -> TestDb {
 /// behind the latest committed root — to ignore [`CheckerError::UnpersistedRoot`].
 /// After [`TestDb::reopen`], pass `false`: a reopened db must have a
 /// persisted root.
-fn assert_check_clean(db: &TestDb, label: &str, tolerate_unpersisted: bool) {
+fn assert_check_clean<H: HashMode>(db: &TestDb<H>, label: &str, tolerate_unpersisted: bool) {
     let report = db.check(CheckOpt {
         hash_check: true,
         progress_bar: None,
@@ -122,9 +122,9 @@ fn assert_check_clean(db: &TestDb, label: &str, tolerate_unpersisted: bool) {
 
 /// Verify every disjoint `(t, c, k)` key produced by [`key`]/[`value`] is
 /// present in `db`'s latest revision with the expected value.
-fn assert_disjoint_keys_present(db: &TestDb, label: &str) {
-    let latest_root = <crate::db::Db as crate::api::Db>::root_hash(db).unwrap();
-    let view = <crate::db::Db as crate::api::Db>::revision(db, latest_root).unwrap();
+fn assert_disjoint_keys_present<H: HashMode>(db: &TestDb<H>, label: &str) {
+    let latest_root = <crate::db::Db<H> as crate::api::Db>::root_hash(db).unwrap();
+    let view = <crate::db::Db<H> as crate::api::Db>::revision(db, latest_root).unwrap();
     for t in 0..THREADS {
         for c in 0..COMMITS_PER_THREAD {
             for k in 0..KEYS_PER_BATCH {
@@ -143,9 +143,13 @@ fn assert_disjoint_keys_present(db: &TestDb, label: &str) {
     }
 }
 
-#[test]
-fn test_concurrent_commit_with_rebase_no_freelist_corruption() {
-    let db = test_db_with_tight_revisions();
+#[firewood_macros::hash_mode]
+// The `#[hash_mode]` macro moves this body into a plain (non-`#[test]`)
+// generic helper, so it no longer gets clippy's blanket `#[test]` exemption
+// for `arithmetic_side_effects`.
+#[expect(clippy::arithmetic_side_effects)]
+fn test_concurrent_commit_with_rebase_no_freelist_corruption<H: HashMode>() {
+    let db = test_db_with_tight_revisions::<H>();
 
     // Seed with a small initial commit so the freelist has some starting state.
     let seed_key = vec![0xffu8; 32];
@@ -164,7 +168,7 @@ fn test_concurrent_commit_with_rebase_no_freelist_corruption() {
     thread::scope(|s| {
         let mut handles = Vec::with_capacity(THREADS);
         for t in 0..THREADS {
-            let db_ref: &crate::db::Db = &db;
+            let db_ref: &crate::db::Db<H> = &db;
             handles.push(s.spawn(move || {
                 for c in 0..COMMITS_PER_THREAD {
                     // Build the batch once and retry around it. On a slow
@@ -228,8 +232,8 @@ fn test_concurrent_commit_with_rebase_no_freelist_corruption() {
 /// random keys distributed across the entire keyspace so threads' writes
 /// share intermediate branch nodes. `max_revisions` is set low enough that
 /// reaping fires during the concurrent phase.
-#[test]
-fn test_concurrent_rebase_overlapping_paths() {
+#[firewood_macros::hash_mode]
+fn test_concurrent_rebase_overlapping_paths<H: HashMode>() {
     use std::sync::Barrier;
 
     const SHARED_THREADS: usize = 8;
@@ -250,7 +254,7 @@ fn test_concurrent_rebase_overlapping_paths() {
         k
     }
 
-    let db = test_db_with_tight_revisions();
+    let db = test_db_with_tight_revisions::<H>();
 
     // Seed with a meaningful initial trie so subsequent proposals' COWs hit
     // shared branches at upper levels.
@@ -274,7 +278,7 @@ fn test_concurrent_rebase_overlapping_paths() {
     thread::scope(|s| {
         let mut handles = Vec::with_capacity(SHARED_THREADS);
         for t in 0..SHARED_THREADS {
-            let db_ref: &crate::db::Db = &db;
+            let db_ref: &crate::db::Db<H> = &db;
             let barrier = &barrier;
             handles.push(s.spawn(move || {
                 let mut rng = 0xdead_beefu64.wrapping_add((t as u64).wrapping_mul(0x9e37_79b9));
@@ -314,9 +318,9 @@ fn test_concurrent_rebase_overlapping_paths() {
 /// trivial result (rebased batch is a no-op against current). The trivial
 /// path must succeed and not push a duplicate revision; the post-state must
 /// match the first commit and the freelist must be intact.
-#[test]
-fn test_trivial_rebase_succeeds_without_corruption() {
-    let db = TestDb::new();
+#[firewood_macros::hash_mode]
+fn test_trivial_rebase_succeeds_without_corruption<H: HashMode>() {
+    let db = TestDb::<H>::new();
 
     let key = vec![0x42u8; 32];
     let val = vec![0xaa, 0xbb, 0xcc];
@@ -335,7 +339,7 @@ fn test_trivial_rebase_succeeds_without_corruption() {
         .unwrap();
 
     p_a.commit().unwrap();
-    let after_a = <crate::db::Db as crate::api::Db>::root_hash(&db).unwrap();
+    let after_a = <crate::db::Db<H> as crate::api::Db>::root_hash(&db).unwrap();
 
     // p_b's recorded parent is stale; rebase diff applied to current is a
     // no-op. commit_with_rebase must succeed and return the same hash as
@@ -346,7 +350,7 @@ fn test_trivial_rebase_succeeds_without_corruption() {
         .expect("commit produces a hash");
     assert_eq!(returned, after_a);
 
-    let view = <crate::db::Db as crate::api::Db>::revision(&db, after_a).unwrap();
+    let view = <crate::db::Db<H> as crate::api::Db>::revision(&db, after_a).unwrap();
     assert_eq!(view.val(&key).unwrap().as_deref(), Some(val.as_slice()));
     drop(view);
 
@@ -362,9 +366,9 @@ fn test_trivial_rebase_succeeds_without_corruption() {
 /// against the third — `parent_id_is` must reject hash-equal-but-different
 /// parents and force a rebase. After rebase the proposal commits cleanly
 /// with no freelist corruption.
-#[test]
-fn test_round_trip_rejects_stale_parent() {
-    let db = TestDb::new();
+#[firewood_macros::hash_mode]
+fn test_round_trip_rejects_stale_parent<H: HashMode>() {
+    let db = TestDb::<H>::new();
 
     let key = vec![0x42u8; 32];
     let val = vec![0xaa, 0xbb, 0xcc];
@@ -377,7 +381,7 @@ fn test_round_trip_rejects_stale_parent() {
     .unwrap()
     .commit()
     .unwrap();
-    let c1_hash = <crate::db::Db as crate::api::Db>::root_hash(&db).unwrap();
+    let c1_hash = <crate::db::Db<H> as crate::api::Db>::root_hash(&db).unwrap();
 
     // P off C1 adds a separate key.
     let key2 = vec![0x43u8; 32];
@@ -403,7 +407,7 @@ fn test_round_trip_rejects_stale_parent() {
     .unwrap()
     .commit()
     .unwrap();
-    let c3_hash = <crate::db::Db as crate::api::Db>::root_hash(&db).unwrap();
+    let c3_hash = <crate::db::Db<H> as crate::api::Db>::root_hash(&db).unwrap();
     assert_eq!(
         c1_hash, c3_hash,
         "A→B→A should reach the same root hash twice"
@@ -416,8 +420,8 @@ fn test_round_trip_rejects_stale_parent() {
         .commit_with_rebase()
         .expect("commit_with_rebase must succeed via rebase");
 
-    let final_hash = <crate::db::Db as crate::api::Db>::root_hash(&db).unwrap();
-    let view = <crate::db::Db as crate::api::Db>::revision(&db, final_hash).unwrap();
+    let final_hash = <crate::db::Db<H> as crate::api::Db>::root_hash(&db).unwrap();
+    let view = <crate::db::Db<H> as crate::api::Db>::revision(&db, final_hash).unwrap();
     assert_eq!(view.val(&key).unwrap().as_deref(), Some(val.as_slice()));
     assert_eq!(view.val(&key2).unwrap().as_deref(), Some(val2.as_slice()));
     drop(view);
@@ -438,15 +442,15 @@ fn test_round_trip_rejects_stale_parent() {
 /// deletions). With the fix, an empty `Committed` view is constructed
 /// on the fly, so the diff yields exactly the proposal's puts and the
 /// rebased commit preserves all prior state.
-#[test]
-fn test_empty_parent_rebase_after_reap() {
+#[firewood_macros::hash_mode]
+fn test_empty_parent_rebase_after_reap<H: HashMode>() {
     // A tighter `max_revisions` than the concurrent tests use: those need
     // a higher cap so the persist worker can keep up, but here we just
     // need a small N so a handful of fillers reaps the initial empty
     // revision out of the queue.
     const TIGHT_MAX_REVISIONS: usize = 4;
 
-    let db = TestDb::new_with_config(
+    let db = TestDb::<H>::new_with_config(
         DbConfig::builder()
             .manager(
                 RevisionManagerConfig::builder()
@@ -490,8 +494,8 @@ fn test_empty_parent_rebase_after_reap() {
         .expect("empty-parent rebase must succeed after reap");
 
     // Final revision must contain P's key AND every filler key.
-    let final_hash = <crate::db::Db as crate::api::Db>::root_hash(&db).unwrap();
-    let view = <crate::db::Db as crate::api::Db>::revision(&db, final_hash).unwrap();
+    let final_hash = <crate::db::Db<H> as crate::api::Db>::root_hash(&db).unwrap();
+    let view = <crate::db::Db<H> as crate::api::Db>::revision(&db, final_hash).unwrap();
     assert_eq!(
         view.val(&p_key).unwrap().as_deref(),
         Some(p_val.as_slice()),
