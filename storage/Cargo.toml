@@ -53,7 +53,6 @@ arc-swap = "1.9.2"
 arity-arrays = { version = "0.2.0", default-features = false, features = ["16"] }
 
 [dev-dependencies]
-cfg-if = "1.0.4"
 # Workspace dependencies
 criterion = { workspace = true, features = ["html_reports"] }
 insta.workspace = true

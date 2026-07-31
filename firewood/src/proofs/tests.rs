@@ -1000,7 +1000,7 @@ mod box_array_deserialization_tests {
         // Resolve the algorithm from the header itself, mirroring the
         // production validate-then-into_body flow. (These tests exercise
         // mode-independent reads, so any consistent mode works.)
-        let header = Header::from(ProofType::Range);
+        let header = Header::from((ProofType::Range, NodeHashAlgorithm::MerkleDB));
         let (_, algorithm) = header
             .validate(Some(ProofType::Range))
             .expect("default header should be valid");

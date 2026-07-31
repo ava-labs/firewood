@@ -382,7 +382,7 @@ impl std::ops::DerefMut for UnlockOnDrop {
 
 #[cfg(test)]
 mod test {
-    use crate::NodeHashAlgorithm;
+    #![allow(clippy::unwrap_used)]
 
     use super::*;
     use nonzero_ext::nonzero;
@@ -405,7 +405,7 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            NodeHashAlgorithm::compile_option(),
+            <crate::DefaultHashMode as crate::HashMode>::ALGORITHM,
         )
         .unwrap();
 
@@ -448,7 +448,7 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            NodeHashAlgorithm::compile_option(),
+            <crate::DefaultHashMode as crate::HashMode>::ALGORITHM,
         )
         .unwrap();
 

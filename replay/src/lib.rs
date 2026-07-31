@@ -382,8 +382,13 @@ mod tests {
     fn create_test_db() -> (tempfile::TempDir, Db) {
         let tmpdir = tempdir().expect("create tempdir");
         let db_path = tmpdir.path().join("test.db");
+        let algorithm = if cfg!(feature = "ethhash") {
+            NodeHashAlgorithm::Ethereum
+        } else {
+            NodeHashAlgorithm::MerkleDB
+        };
         let cfg = DbConfig::builder()
-            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+            .node_hash_algorithm(algorithm)
             .truncate(true)
             .manager(RevisionManagerConfig::builder().build())
             .build();

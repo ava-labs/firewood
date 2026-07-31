@@ -412,7 +412,8 @@ fn test_crafted_conflicting_proof_nodes_rejected() {
 
     let parent = db.revision(root1).unwrap();
     let proposal = db.apply_change_proof_to_parent(&crafted, &*parent).unwrap();
-    let err = verify_change_proof_root_hash(&crafted, &ctx, &proposal).unwrap_err();
+    let err =
+        verify_change_proof_root_hash(&crafted, &ctx, &proposal, crafted.hash_mode()).unwrap_err();
     assert!(
         matches!(
             err,
@@ -464,7 +465,8 @@ fn test_crafted_value_at_odd_nibble_length_rejected() {
 
     let parent = db.revision(root1).unwrap();
     let proposal = db.apply_change_proof_to_parent(&crafted, &*parent).unwrap();
-    let err = verify_change_proof_root_hash(&crafted, &ctx, &proposal).unwrap_err();
+    let err =
+        verify_change_proof_root_hash(&crafted, &ctx, &proposal, crafted.hash_mode()).unwrap_err();
     assert!(
         matches!(
             err,
@@ -545,7 +547,9 @@ fn test_crafted_divergence_at_depth_zero() {
         right_edge_key: Some(b"\xa1".to_vec().into()),
     };
 
-    let err = verify_change_proof_root_hash(&crafted, &verification, &proposal).unwrap_err();
+    let err =
+        verify_change_proof_root_hash(&crafted, &verification, &proposal, crafted.hash_mode())
+            .unwrap_err();
     assert!(
         matches!(
             err,
