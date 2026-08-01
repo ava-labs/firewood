@@ -49,11 +49,19 @@ fn is_valid_key(key: &Path) -> bool {
     key.0.len().is_multiple_of(2)
 }
 
+/// Returns Ok(()) if the area alignment is correct for the given format.
+///
+/// Unpadded nodes are not required to be aligned to area size boundaries.
+/// Padded nodes must be aligned to `MIN_AREA_SIZE`.
 #[expect(clippy::result_large_err)]
 const fn check_area_aligned(
     address: LinearAddress,
     parent: StoredAreaParent,
+    is_unpadded: bool,
 ) -> Result<(), CheckerError> {
+    if is_unpadded {
+        return Ok(());
+    }
     if !address.is_aligned() {
         return Err(CheckerError::AreaMisaligned { address, parent });
     }
@@ -112,10 +120,14 @@ pub struct TrieStats {
     pub low_occupancy_branch_area_count: u64,
     /// Leaves that can fit into a smaller area
     pub low_occupancy_leaf_area_count: u64,
-    /// The number of areas that span an extra page due to not being aligned
+    /// The number of padded areas that span an extra page due to not being aligned
     pub area_extra_unaligned_page: u64,
-    /// The number of nodes that span an extra page due to not being aligned
+    /// The number of padded nodes that span an extra page due to not being aligned
     pub node_extra_unaligned_page: u64,
+    /// Number of unpadded nodes
+    pub unpadded_node_count: u64,
+    /// Total bytes of unpadded nodes on disk (including prefix)
+    pub unpadded_node_bytes: u64,
 }
 
 impl Default for TrieStats {
@@ -133,6 +145,8 @@ impl Default for TrieStats {
             low_occupancy_leaf_area_count: 0,
             area_extra_unaligned_page: 0,
             node_extra_unaligned_page: 0,
+            unpadded_node_count: 0,
+            unpadded_node_bytes: 0,
         }
     }
 }
@@ -291,10 +305,6 @@ where
             has_peers,
         } = subtrie;
 
-        // check that address is aligned
-        check_area_aligned(subtrie_root_address, StoredAreaParent::TrieNode(parent))?;
-
-        // read the node from the disk - we avoid cache since we will never visit the same node twice
         let area_meta = self
             .area_index_and_size(subtrie_root_address)
             .map_err(|e| {
@@ -304,11 +314,12 @@ where
                 }]
             })?;
 
-        // TODO(galadd): will send a PR after  this to add proper unpadded handling here
-        // not included in this so that code changes won't be too large
-        // For now, all existing databases are padded
-        let area_index = area_meta.area_index.expect("padded node expected");
-        let area_size = area_meta.total_size;
+        // check alignment (skip for unpadded nodes)
+        check_area_aligned(
+            subtrie_root_address,
+            StoredAreaParent::TrieNode(parent),
+            area_meta.is_unpadded,
+        )?;
 
         let (node, node_bytes) = self
             .read_node_with_num_bytes_from_disk(subtrie_root_address)
@@ -319,11 +330,12 @@ where
                 }]
             })?;
 
-        // check if the node fits in the area, equal is not allowed due to 1-byte area size index
-        if node_bytes > area_size {
+        // For padded nodes, verify node fits within area
+        // For unpadded nodes, node_bytes should equal total_size (no padding)
+        if !area_meta.is_unpadded && node_bytes > area_meta.total_size {
             return Err(vec![CheckerError::NodeLargerThanArea {
                 area_start: subtrie_root_address,
-                area_size,
+                area_size: area_meta.total_size,
                 node_bytes,
                 parent,
             }]);
@@ -360,7 +372,7 @@ where
         // check that the area is within bounds and does not intersect with other areas and mark it as visiteds
         visited.insert_area(
             subtrie_root_address,
-            area_size,
+            area_meta.total_size,
             StoredAreaParent::TrieNode(parent),
         )?;
 
@@ -380,21 +392,29 @@ where
                     .saturating_add(key_bytes as u64)
                     .saturating_add(value_bytes as u64);
             }
-            // collect the number of areas that requires reading an extra page due to not being aligned
-            if extra_read_pages(subtrie_root_address, area_size)
-                .expect("impossible since we checked in visited.insert_area()")
-                > 0
-            {
-                trie_stats.area_extra_unaligned_page =
-                    trie_stats.area_extra_unaligned_page.saturating_add(1);
-            }
-            // collect the number of nodes that requires reading an extra page due to not being aligned
-            if extra_read_pages(subtrie_root_address, node_bytes)
-                .expect("impossible since we checked in visited.insert_area()")
-                > 0
-            {
-                trie_stats.node_extra_unaligned_page =
-                    trie_stats.node_extra_unaligned_page.saturating_add(1);
+
+            if area_meta.is_unpadded {
+                // Unpadded node stats
+                trie_stats.unpadded_node_count = trie_stats.unpadded_node_count.saturating_add(1);
+                trie_stats.unpadded_node_bytes =
+                    trie_stats.unpadded_node_bytes.saturating_add(node_bytes);
+            } else {
+                // collect the number of areas that requires reading an extra page due to not being aligned
+                if extra_read_pages(subtrie_root_address, area_meta.total_size)
+                    .expect("impossible since we checked in visited.insert_area()")
+                    > 0
+                {
+                    trie_stats.area_extra_unaligned_page =
+                        trie_stats.area_extra_unaligned_page.saturating_add(1);
+                }
+                // collect the number of nodes that requires reading an extra page due to not being aligned
+                if extra_read_pages(subtrie_root_address, node_bytes)
+                    .expect("impossible since we checked in visited.insert_area()")
+                    > 0
+                {
+                    trie_stats.node_extra_unaligned_page =
+                        trie_stats.node_extra_unaligned_page.saturating_add(1);
+                }
             }
         }
 
@@ -404,7 +424,16 @@ where
             Node::Branch(branch) => {
                 let persist_info = branch.persist_info();
                 let num_children = persist_info.count();
-                {
+
+                if area_meta.is_unpadded {
+                    // Unpadded branch: just track bytes
+                    trie_stats.branch_bytes = trie_stats.branch_bytes.saturating_add(node_bytes);
+                } else {
+                    let area_index = area_meta
+                        .area_index
+                        .expect("padded node must have area_index");
+                    let area_size = area_meta.total_size;
+
                     // update the branch area count
                     let branch_area_count = trie_stats
                         .branch_area_counts
@@ -420,13 +449,14 @@ where
                         trie_stats.low_occupancy_branch_area_count =
                             trie_stats.low_occupancy_branch_area_count.saturating_add(1);
                     }
-                    // collect the branching factor distribution
-                    let branching_factor_count = trie_stats
-                        .branching_factors
-                        .entry(num_children)
-                        .or_insert(0);
-                    *branching_factor_count = branching_factor_count.saturating_add(1);
                 }
+
+                // collect the branching factor distribution
+                let branching_factor_count = trie_stats
+                    .branching_factors
+                    .entry(num_children)
+                    .or_insert(0);
+                *branching_factor_count = branching_factor_count.saturating_add(1);
 
                 // this is an internal node, traverse the children
                 for (nibble, (address, hash)) in persist_info
@@ -457,21 +487,32 @@ where
                 }
             }
             Node::Leaf(_) => {
-                // update the leaf area count
-                let leaf_area_count = trie_stats
+                if area_meta.is_unpadded {
+                    // Unpadded leaf: just track bytes
+                    trie_stats.leaf_bytes = trie_stats.leaf_bytes.saturating_add(node_bytes);
+                } else {
+                    let area_index = area_meta
+                        .area_index
+                        .expect("padded node must have area_index");
+                    let area_size = area_meta.total_size;
+
+                    // update the leaf area count
+                    let leaf_area_count = trie_stats
                  .leaf_area_counts
                  .get_mut(&area_size)
                  .expect("area size is initialized when trie_stats is created and we checked that node_bytes <= area_size");
-                *leaf_area_count = leaf_area_count.saturating_add(1);
-                // collect the leaf bytes
-                trie_stats.leaf_bytes = trie_stats.leaf_bytes.saturating_add(node_bytes);
-                // collect low occupancy area count, add 1 for the area size index byte
-                let smallest_area_index = AreaIndex::from_size(node_bytes)
-                    .expect("impossible since we checked that node_bytes <= area_size");
-                if smallest_area_index < area_index {
-                    trie_stats.low_occupancy_leaf_area_count =
-                        trie_stats.low_occupancy_leaf_area_count.saturating_add(1);
+                    *leaf_area_count = leaf_area_count.saturating_add(1);
+                    // collect the leaf bytes
+                    trie_stats.leaf_bytes = trie_stats.leaf_bytes.saturating_add(node_bytes);
+                    // collect low occupancy area count, add 1 for the area size index byte
+                    let smallest_area_index = AreaIndex::from_size(node_bytes)
+                        .expect("impossible since we checked that node_bytes <= area_size");
+                    if smallest_area_index < area_index {
+                        trie_stats.low_occupancy_leaf_area_count =
+                            trie_stats.low_occupancy_leaf_area_count.saturating_add(1);
+                    }
                 }
+
                 // collect the depth distribution
                 let depth_count = trie_stats.depths.entry(depth).or_insert(0);
                 *depth_count = depth_count.saturating_add(1);
@@ -516,7 +557,7 @@ where
             };
 
             // check that the area is aligned
-            if let Err(e) = check_area_aligned(addr, StoredAreaParent::FreeList(parent)) {
+            if let Err(e) = check_area_aligned(addr, StoredAreaParent::FreeList(parent), false) {
                 errors.push(e);
                 free_list_iter.move_to_next_free_list();
                 continue;
@@ -679,14 +720,13 @@ where
                 }
             };
 
-            // TODO(galadd): will send a PR after  this to add proper unpadded handling here
-            // not included in this so that code changes won't be too large
-            // For now, all existing databases are padded
-            let Some(area_index) = area_meta.area_index else {
-                warn!("Unpadded node in leaked range at {current_addr}, cannot add to free list");
+            // Unpadded nodes can't be added to free lists (wrong size class)
+            let (area_index, area_size) = if let Some(idx) = area_meta.area_index {
+                (idx, area_meta.total_size)
+            } else {
+                warn!("Unpadded node at {current_addr} in leaked range, cannot add to free list");
                 break;
             };
-            let area_size = area_meta.total_size;
 
             let next_addr = current_addr
                 .advance(area_size)
@@ -870,6 +910,8 @@ mod test {
             low_occupancy_leaf_area_count: 0,
             area_extra_unaligned_page: 0,
             node_extra_unaligned_page: 0,
+            unpadded_node_count: 0,
+            unpadded_node_bytes: 0,
         };
 
         TestTrie {

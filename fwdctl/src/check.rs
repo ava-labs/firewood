@@ -152,6 +152,10 @@ Leaf Area Stats:
     Leaf Area Distribution: {{leaf_area_counts}}
     Leaves that Can Fit Into Smaller Area (low_occupancy_leaf_area): {{low_occupancy_leaf_area_count}} ({{low_occupancy_leaf_area_percent}})
 
+Unpadded Stats:
+    Unpadded Node Count: {{unpadded_node_count}}
+    Unpadded Node Bytes: {{unpadded_node_bytes}}
+
 Free List Area Stats:
     Total Free List Area Count (free_list_area_count): {{total_free_list_area_count}}
     Total Free List Area Bytes (free_list_area_bytes): {{total_free_list_area_bytes}}
@@ -191,6 +195,9 @@ struct DBStatsReport {
     leaf_area_counts: String,
     low_occupancy_leaf_area_count: String,
     low_occupancy_leaf_area_percent: String,
+    // Unpadded stats
+    unpadded_node_count: String,
+    unpadded_node_bytes: String,
     // Free list area stats
     total_free_list_area_count: String,
     total_free_list_area_bytes: String,
@@ -285,6 +292,8 @@ fn print_stats_report(db_stats: DBStats) {
             db_stats.trie_stats.low_occupancy_leaf_area_count,
             total_leaf_area_count,
         ),
+        unpadded_node_count: format_u64(db_stats.trie_stats.unpadded_node_count),
+        unpadded_node_bytes: format_u64(db_stats.trie_stats.unpadded_node_bytes),
         total_free_list_area_count: format_u64(total_free_list_area_count),
         total_free_list_area_bytes: format_u64(total_free_list_area_bytes),
         free_list_area_counts: format_map(&db_stats.free_list_stats.area_counts),
