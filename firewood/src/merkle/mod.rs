@@ -1283,31 +1283,50 @@ pub fn verify_change_proof_root_hash(
     // values outside the range). Overwrite with the proof's value so the
     // hash computation uses end_root's value.
     //
-    // Out-of-range nodes include:
-    //  - proper prefixes of start_key (ancestors on the path)
-    //  - divergent nodes whose key is NOT a prefix of start_key (these
-    //    appear in exclusion proofs when start_key doesn't exist)
+    // A start proof can carry these out-of-range nodes:
+    //  - proper prefixes of start_key (ancestors on the path), which sort
+    //    before it
+    //  - divergent nodes that sort before start_key, which appear when no node
+    //    sits at start_key itself
+    //  - nodes that sort after the right edge, reachable when the end trie
+    //    holds no key in the range
     //
-    // Only nodes whose key exactly equals start_key are in-range; value
-    // mismatches there are real errors.
+    // A divergent terminal that overshoots to the nearest existing key after
+    // start_key is in range, and a value mismatch there is a real error.
     let start_key_nibbles: Vec<u8> = verification
         .start_key
         .as_deref()
         .map(|k| NibblesIterator::new(k).collect())
         .unwrap_or_default();
 
+    // `None` is an unbounded right edge (+∞). Keeping it distinct from an empty
+    // slice matters: an empty slice sorts as the minimum key, which would mark
+    // every key out of range at the upper bound.
+    let end_key_nibbles: Option<Vec<u8>> = verification
+        .right_edge_key
+        .as_deref()
+        .map(|k| NibblesIterator::new(k).collect());
+
+    // Whether a boundary proof node sits inside the proven range. Both loops
+    // below ask the same question — a node's position is in range or it is not,
+    // regardless of which proof carried it. Testing only the near bound would
+    // judge a divergent terminal beyond the far bound as in-range and report
+    // its legitimately differing value as `UnexpectedValue`.
+    let in_proven_range = |node_nibbles: &[u8]| {
+        node_nibbles >= start_key_nibbles.as_slice()
+            && end_key_nibbles
+                .as_deref()
+                .is_none_or(|end| node_nibbles <= end)
+    };
+
     for proof_node in start_nodes {
         proving_merkle.reconcile_branch_proof_node(proof_node, |pn, _branch_value| {
             let node_nibbles: Vec<u8> = pn.key.iter().map(|c| c.as_u8()).collect();
-            // A start proof node is in-range if its key >= start_key. This
-            // covers both inclusion proofs (key == start_key) and exclusion
-            // proofs where the terminal node overshoots start_key to the
-            // nearest existing key. Reaching this guard at an in-range
-            // position is always a real error: the proposal already holds the
-            // correct value, so the only way the proof node and branch
-            // disagree is tampering — e.g. a dropped in-range `Put` whose
-            // boundary proof still carries the omitted key's hash.
-            if node_nibbles >= start_key_nibbles {
+            // Reaching this guard in range is always a real error: the proposal
+            // already holds the correct value, so the only way the proof node
+            // and branch disagree is tampering — e.g. a dropped in-range `Put`
+            // whose boundary proof still carries the omitted key's hash.
+            if in_proven_range(&node_nibbles) {
                 Err(ProofError::UnexpectedValue)
             } else {
                 match &pn.value_digest {
@@ -1322,25 +1341,14 @@ pub fn verify_change_proof_root_hash(
     // Same treatment for end proof nodes: ancestors and divergent nodes
     // of the right boundary may have out-of-range values that differ
     // from the proposal.
-    // `None` is an unbounded right edge (+∞). Keeping it distinct from an empty
-    // slice matters: an empty slice sorts as the minimum key, which would mark
-    // every key out of range at the upper bound.
-    let end_key_nibbles: Option<Vec<u8>> = verification
-        .right_edge_key
-        .as_deref()
-        .map(|k| NibblesIterator::new(k).collect());
-
     for proof_node in end_nodes {
         proving_merkle.reconcile_branch_proof_node(proof_node, |pn, _branch_value| {
             let node_nibbles: Vec<u8> = pn.key.iter().map(|c| c.as_u8()).collect();
-            // Symmetric to the start proof: an end proof node is in-range
-            // if its key <= end_key (covers exclusion proofs where the
-            // terminal undershoots to the nearest existing key). An unbounded
-            // right edge (+∞) puts every node in range.
-            if end_key_nibbles
-                .as_ref()
-                .is_none_or(|end| node_nibbles <= *end)
-            {
+            // Symmetric to the start proof. An exclusion proof's terminal can
+            // undershoot to the nearest existing key, so at an out-of-range
+            // position the proposal's branch value legitimately differs from the
+            // proof's, and the proof's is adopted.
+            if in_proven_range(&node_nibbles) {
                 Err(ProofError::UnexpectedValue)
             } else {
                 match &pn.value_digest {
@@ -1718,6 +1726,12 @@ impl<T: HashedNodeReader> Merkle<T> {
     ///
     /// * `api::Error::InvalidRange` - If `start_key` > `end_key` when both are provided.
     ///   This ensures the range bounds are logically consistent.
+    ///
+    /// * `api::Error::ProofError(ProofError::Empty)` - If the end revision has no
+    ///   root, i.e. every key in the database was deleted. `prove` yields no nodes
+    ///   for a rootless trie, so no boundary proof can be produced and a change
+    ///   proof onto an empty trie is not expressible. Deleting every key in a
+    ///   bounded *range* is fine as long as some key survives elsewhere.
     ///
     /// * `api::Error` - Various other errors can occur during proof generation, such as:
     ///   - I/O errors when reading nodes from storage
