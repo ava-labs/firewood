@@ -30,6 +30,10 @@
 //!   where the deleted key extends the bound.
 //! - `test_out_of_range_delete_below_start_bound_verifies`: start bound, where
 //!   the bound extends the deleted key.
+//!
+//! Completeness — a reconcile guard must test both bounds, not one (#2154):
+//! - `test_all_deleted_range_with_survivor_above_end_bound_verifies`: every
+//!   in-range key is deleted and the sole survivor sorts above the end bound.
 
 use super::*;
 use crate::{ChangeProof, Proof};
@@ -426,5 +430,62 @@ fn test_split_start_boundary_child_omitted_in_range_delete_is_rejected() {
         "a split boundary child must be recomputed from the proposal. The start \
          boundary's child holds the in-range 0xd490 as well as the out-of-range \
          0xd410, so it cannot be taken from the proof"
+    );
+}
+
+/// A bounded change proof must verify when every in-range key was deleted and
+/// the sole surviving key sorts above the end bound.
+///
+/// start trie: `{ 0x10, 0x56, 0x5601, 0xf1 }`
+/// end trie:   `{ 0x5601 }`  (all others deleted, `0x5601` rewritten)
+/// range:      `[0x1000, 0x56]`
+///
+/// `0x10` sorts below `0x1000` (a shorter key comes first), so only `Delete
+/// 0x56` is in range. `0x5601` sorts above the bound `0x56` and is therefore out
+/// of range, but it is the end trie's only key, so it appears as a valued node
+/// in the start proof. A reconcile guard testing only `>= start_key` judges it
+/// in-range and reports its value as `UnexpectedValue`, rejecting an honest
+/// proof. Nothing here needs a limit or truncation.
+///
+/// The `Put` rewriting `0x5601` is load-bearing: `reconcile_branch_proof_node`
+/// short-circuits when the proof node's value already equals the branch's, so
+/// without a value change the guard is never reached and this test passes even
+/// with the defect present.
+#[test]
+fn test_all_deleted_range_with_survivor_above_end_bound_verifies() {
+    let (db, _dir) = setup_db![
+        (b"\x10".as_slice(), b"a".as_slice()),
+        (b"\x56".as_slice(), b"b".as_slice()),
+        (b"\x56\x01".as_slice(), b"c".as_slice()),
+        (b"\xf1".as_slice(), b"d".as_slice())
+    ];
+    let (start_root, end_root) = commit_batch(
+        &db,
+        vec![
+            BatchOp::Delete { key: b"\x10" },
+            BatchOp::Delete { key: b"\x56" },
+            BatchOp::Put {
+                key: b"\x56\x01",
+                value: b"c2",
+            },
+            BatchOp::Delete { key: b"\xf1" },
+        ],
+    );
+
+    let (sk, ek) = (b"\x10\x00".as_slice(), b"\x56".as_slice());
+    let proof = db
+        .change_proof(
+            start_root.clone(),
+            end_root.clone(),
+            Some(sk),
+            Some(ek),
+            None,
+        )
+        .unwrap();
+    assert_eq!(proof.batch_ops().len(), 1);
+    verify(&db, &proof, &start_root, &end_root, Some(sk), Some(ek)).expect(
+        "honest change proof over [0x1000, 0x56] must verify. The surviving \
+         0x5601 sorts above the end bound, so it is out of range and its value \
+         must not be reported as UnexpectedValue",
     );
 }
