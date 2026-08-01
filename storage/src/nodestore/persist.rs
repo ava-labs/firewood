@@ -31,6 +31,8 @@ use bumpalo::Bump;
 use std::iter::FusedIterator;
 
 use crate::linear::FileIoError;
+use crate::node::ExtendableBytes;
+use crate::nodestore::primitives::SENTINEL_UNPADDED;
 use firewood_metrics::{GaugeExt, firewood_gauge, firewood_histogram};
 use std::time::Instant;
 
@@ -158,6 +160,9 @@ impl<N: NodeReader + RootReader> Iterator for UnPersistedNodeIterator<'_, N> {
 
 /// Helper function to serialize a node into a bump allocator and allocate storage for it
 ///
+/// For padded mode (normal): writes `[AreaIndex][node_data][padding]` using `as_bytes()`.
+/// For unpadded mode (archive): writes `[0xFF][varint length][node_data]`.
+///
 /// # Errors
 ///
 /// Returns a [`FileIoError`] if the node cannot be allocated in storage.
@@ -166,14 +171,38 @@ fn serialize_node_to_bump<'a>(
     shared_node: &crate::SharedNode,
     node_allocator: &mut NodeAllocator<'_, impl WritableStorage>,
 ) -> Result<(&'a [u8], crate::LinearAddress, usize), FileIoError> {
-    let mut bytes = bumpalo::collections::Vec::new_in(bump);
-    let area_size_index = shared_node
-        .as_bytes(&mut bytes)
-        .map_err(|e| node_allocator.io_error(e, 0, Some("allocate_node".to_owned())))?;
-    let (persisted_address, _) = node_allocator.allocate_node(bytes.as_slice())?;
-    bytes.shrink_to_fit();
-    let slice = bytes.into_bump_slice();
-    Ok((slice, persisted_address, area_size_index.size() as usize))
+    let is_unpadded = node_allocator.is_unpadded_mode();
+
+    if is_unpadded {
+        let mut node_body = bumpalo::collections::Vec::new_in(bump);
+        shared_node.as_ref().encode_body(&mut node_body);
+        let node_len = node_body.len();
+
+        // Build the full unpadded format: [0xFF][varint][data]
+        let mut output = bumpalo::collections::Vec::with_capacity_in(
+            node_len.saturating_add(11), // 1 for sentinel, 10 for max varint, node_len for data
+            bump,
+        );
+        output.push(SENTINEL_UNPADDED);
+        output.extend_var_int(node_len as u64);
+        output.extend_from_slice(&node_body);
+
+        let total_len = output.len();
+
+        let (persisted_address, _) = node_allocator.allocate_node(&output, true)?;
+
+        let slice = output.into_bump_slice();
+        Ok((slice, persisted_address, total_len))
+    } else {
+        let mut bytes = bumpalo::collections::Vec::new_in(bump);
+        let area_size_index = shared_node
+            .as_bytes(&mut bytes)
+            .map_err(|e| node_allocator.io_error(e, 0, Some("allocate_node".to_owned())))?;
+        let (persisted_address, _) = node_allocator.allocate_node(bytes.as_slice(), false)?;
+        bytes.shrink_to_fit();
+        let slice = bytes.into_bump_slice();
+        Ok((slice, persisted_address, area_size_index.size() as usize))
+    }
 }
 
 impl<S: WritableStorage> NodeStore<Committed, S> {
@@ -186,7 +215,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     fn flush_nodes(&self, header: &mut NodeStoreHeader) -> Result<(), FileIoError> {
         let flush_start = Instant::now();
 
-        let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), header);
+        let mut node_allocator =
+            NodeAllocator::new(self.storage.as_ref(), header, self.deleted_node_tracking);
         let mut bump = Bump::with_capacity(super::INITIAL_BUMP_SIZE);
 
         self.process_unpersisted_nodes(&mut bump, &mut node_allocator, super::INITIAL_BUMP_SIZE)?;
@@ -586,5 +616,33 @@ mod tests {
             .unwrap();
         assert_eq!(*child2_node.partial_path(), Path::from(&[4, 5, 6]));
         assert_eq!(child2_node.value(), Some(&b"value2"[..]));
+    }
+
+    #[test]
+    fn test_unpadded_round_trip() {
+        use crate::linear::memory::MemStore;
+
+        // Create a store with deletion tracking disabled (archive mode)
+        let mem_store = MemStore::default().into();
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let base = NodeStore::new_empty_committed(mem_store, DeletedNodeTracking::Disabled);
+
+        // Create a proposal with nodes
+        let mut proposal = NodeStore::new(&base).unwrap();
+        proposal
+            .root_mut()
+            .replace(create_leaf(&[1, 2, 3], b"value"));
+
+        // Convert to immutable proposal (this hashes and assigns addresses)
+        let immutable: NodeStore<Arc<ImmutableProposal>, _> = proposal.try_into().unwrap();
+
+        // Commit
+        let committed = immutable.as_committed();
+        committed.persist(&mut header).unwrap();
+
+        // Verify we can read the root back
+        let root = committed.root_node().expect("root should exist");
+        assert_eq!(*root.partial_path(), Path::from(&[1, 2, 3]));
+        assert_eq!(root.value(), Some(&b"value"[..]));
     }
 }

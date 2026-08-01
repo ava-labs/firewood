@@ -1598,7 +1598,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         self.storage
             .invalidate_cached_nodes(self.kind.deleted.iter());
         trace!("There are {} nodes to reap", self.kind.deleted.len());
-        let mut allocator = NodeAllocator::new(self.storage.as_ref(), header);
+        let mut allocator =
+            NodeAllocator::new(self.storage.as_ref(), header, self.deleted_node_tracking);
         for node in take(&mut self.kind.deleted) {
             allocator.delete_node(node)?;
         }

@@ -34,7 +34,9 @@ use std::iter::FusedIterator;
 use std::mem::size_of;
 use std::ops::{Index, IndexMut};
 
-use crate::{FreeListParent, MaybePersistedNode, ReadableStorage, WritableStorage};
+use crate::{
+    DeletedNodeTracking, FreeListParent, MaybePersistedNode, ReadableStorage, WritableStorage,
+};
 
 /// Returns the maximum size needed to encode a `VarInt`.
 const fn var_int_max_size<VI>() -> usize {
@@ -236,11 +238,26 @@ use super::NodeStore;
 pub struct NodeAllocator<'a, S> {
     storage: &'a S,
     header: &'a mut NodeStoreHeader,
+    deleted_node_tracking: DeletedNodeTracking,
 }
 
 impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
-    pub const fn new(storage: &'a S, header: &'a mut NodeStoreHeader) -> Self {
-        Self { storage, header }
+    pub const fn new(
+        storage: &'a S,
+        header: &'a mut NodeStoreHeader,
+        deleted_node_tracking: DeletedNodeTracking,
+    ) -> Self {
+        Self {
+            storage,
+            header,
+            deleted_node_tracking,
+        }
+    }
+
+    /// Returns `true` if this allocator should write unpadded nodes.
+    #[must_use]
+    pub const fn is_unpadded_mode(&self) -> bool {
+        !self.deleted_node_tracking.is_enabled()
     }
 
     /// Helper to convert an `io::Error` to a `FileIoError` with context.
@@ -313,7 +330,12 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
 
     /// Returns an address that can be used to store the given `node` and updates
     /// `self.header` to reflect the allocation. Doesn't actually write the node to storage.
-    /// Also returns the index of the free list the node was allocated from.
+    ///
+    /// For padded nodes (`is_unpadded == false`): allocates from free list or end,
+    /// returns `Some(AreaIndex)`.
+    ///
+    /// For unpadded nodes (`is_unpadded == true`): allocates exact size from end,
+    /// returns `None` for area index.
     ///
     /// # Errors
     ///
@@ -321,7 +343,19 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
     pub(crate) fn allocate_node(
         &mut self,
         node: &[u8],
-    ) -> Result<(LinearAddress, AreaIndex), FileIoError> {
+        is_unpadded: bool,
+    ) -> Result<(LinearAddress, Option<AreaIndex>), FileIoError> {
+        if is_unpadded {
+            // Allocate exact size from end
+            let size = node.len() as u64;
+            let addr = LinearAddress::new(self.header.size()).expect("node store size can't be 0");
+            self.header
+                .set_size(self.header.size().saturating_add(size));
+            trace!("Allocating unpadded from end: addr: {addr:?}, size: {size}");
+
+            firewood_counter!(NODES_ALLOCATED, "type" => "unpadded").increment(1);
+            return Ok((addr, None));
+        }
         let stored_area_size = node.len() as u64;
         let area_index = AreaIndex::from_size(stored_area_size).map_err(|e| {
             self.storage
@@ -340,13 +374,19 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
         let waste = area_index.size().saturating_sub(stored_area_size);
         firewood_counter!(BYTES_WASTED, "index" => index_name(area_index)).increment(waste);
 
-        Ok((addr, area_index))
+        Ok((addr, Some(area_index)))
     }
 }
 
 impl<S: WritableStorage> NodeAllocator<'_, S> {
     /// Deletes the `Node` and updates the header of the allocator.
     /// Nodes that are not persisted are just dropped.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on an unpadded node. This should never happen
+    /// because `DeletedNodeTracking::Disabled` prevents `reap_deleted`
+    /// from being called.
     ///
     /// # Errors
     ///
@@ -358,6 +398,13 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
         debug_assert!(addr.is_aligned());
 
         let area_meta = self.area_index_and_size(addr)?;
+
+        assert!(
+            !area_meta.is_unpadded,
+            "delete_node called on unpadded node at {addr}. \
+             This should never happen when DeletedNodeTracking::Disabled is set correctly."
+        );
+
         let area_size_index = area_meta
             .area_index
             .expect("delete_node should only be called on padded nodes");
