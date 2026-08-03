@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785744287756,
+  "lastUpdate": 1785744576200,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -8083,6 +8083,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 41.61430552445993,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Joachim Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "7c1c2bc9d5ee55d4097c2ecd07b543a3c42fdcf9",
+          "message": "refactor(storage)!: adopt arity-arrays for the U4 index type (#2147)\n\n## Why this should be merged\n\nFirst of three sequenced PRs migrating firewood-storage's hand-rolled\ntrie child/index containers onto the externally-tested `arity-arrays`\ncrate. This one is the small, foundational step: it makes\n`PathComponent.0` the `arity_arrays::index::U4` that the later\ncontainers index by, so the follow-up PRs need no index-conversion\nshims.\n\n- PR 2 adopts `arity_arrays::PackedArray` for `ProofNode.child_hashes`,\nclosing the #2099 P0 proof-deserialization memory-amplification\nvulnerability.\n- PR 3 rebases `Children` on `arity_arrays::FixedArray`.\n\nBuilds on the `arity-arrays = \"0.2.0\"` dependency. No on-disk or on-wire\nformat changes in this PR.\n\n## How this works\n\n- `U4` and `TryFromIntError` become re-exports of\n`arity_arrays::index::{U4, TryFromIntError}`. The hand-rolled 16-variant\n`Repr` enum, the inherent `U4` methods, `TryFrom<u8>`, and the\nformatting impls are removed — that behavior lives in, and is tested by,\n`arity-index`. `PathComponent::new_pair`/`join` are reimplemented inline\nbecause arity's `U4` exposes no `new_pair`/`join`.\n- arity's `TryFromIntError` is `#[non_exhaustive]`, so the two\nvalidation sites in `path/component.rs` (`path_from_unpacked_bytes` and\n`try_from_maybe_u4`) **obtain** the error from `U4::try_from` rather\nthan constructing a literal.\n- `PathComponent` is marked `#[repr(transparent)]` with compile-time\n`size_of` assertions, and its zero-copy `&[u8]`⇄`&[PathComponent]`\nconversions delegate byte validation (`U4::try_from_slice`) and the\n`U4`↔`u8` cast (`U4::as_u8_slice`) to `arity-index`, which Miri-tests\nthem.\n- Adds a path-scoped Miri CI job that runs the slice-cast tests under\n`-Zmiri-strict-provenance`, so a layout regression surfaces as UB rather\nthan a silently-passing test.\n\n## How this was tested\n\n- `cargo nextest run --workspace --features ethhash,logger\n--all-targets` — 737 passed, 16 skipped.\n- clippy (default and maxperf profiles, `-D warnings`) and `cargo doc\n--no-deps` clean.\n- `cargo miri test -p firewood-storage path::component` on\nnightly-2026-07-05 — 15 passed, no undefined behavior or leaks.\n- A characterization test guards the `new_pair`/`join` nibble mapping\n(asymmetric inputs catch an upper/lower swap); a round-trip test covers\nforward, reverse, reject, and empty-slice conversion.\n\n## Breaking Changes\n\n- `firewood-storage`: `U4` and `TryFromIntError` change identity to\nre-exported `arity-arrays` types. The crate is beta; direct `U4`\nconsumers are few and mostly reach it through `PathComponent`.\n\n## Follow-up (not blocking)\n\n- The Miri job runs on pull requests but only gates merges once it is\nadded to the branch's required status checks in repository settings.",
+          "timestamp": "2026-07-30T19:32:36Z",
+          "url": "https://github.com/ava-labs/firewood/commit/7c1c2bc9d5ee55d4097c2ecd07b543a3c42fdcf9"
+        },
+        "date": 1785744502338,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 162.69821137090747,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6146.349069076569,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 115.82705098230363,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5941.475375198225,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 85.69260339297188,
             "unit": "block_accept_ms/ggas"
           }
         ]
