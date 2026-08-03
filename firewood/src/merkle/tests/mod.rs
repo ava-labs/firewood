@@ -23,6 +23,7 @@ use firewood_storage::{
     Children, Committed, DeletedNodeTracking, MemStore, Mutable, NodeHashAlgorithm, NodeStore,
     NodeStoreHeader, PathComponent, Propose, RootReader, TrieHash, ValueDigest,
 };
+use test_case::test_case;
 
 // Returns n random key-value pairs.
 fn generate_random_kvs(rng: &firewood_storage::SeededRng, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
@@ -952,30 +953,13 @@ fn test_get_branch_from_nibbles_mut() {
 /// `start` is −∞, and a `None` `end` is +∞. `None` is distinct from `Some(&[])`,
 /// which is the empty key itself — conflating the two put every key out of
 /// range at the upper bound.
-#[test]
-fn test_in_proven_range_bounds() {
-    fn check(node: &[u8], start: &[u8], end: Option<&[u8]>, expected: bool) {
-        assert_eq!(
-            in_proven_range(node, start, end),
-            expected,
-            "node={node:?} start={start:?} end={end:?}"
-        );
-    }
-
-    check(&[5], &[3], Some(&[7]), true);
-    // Both bounds are inclusive.
-    check(&[3], &[3], Some(&[7]), true);
-    check(&[7], &[3], Some(&[7]), true);
-    check(&[2], &[3], Some(&[7]), false);
-    check(&[8], &[3], Some(&[7]), false);
-    // A longer key extending the bound sorts after it.
-    check(&[7, 0], &[3], Some(&[7]), false);
-    // An empty start is -inf.
-    check(&[0], &[], Some(&[7]), true);
-    // A None end is +inf.
-    check(&[9, 9], &[3], None, true);
-    check(&[], &[], None, true);
-    // Some(&[]) is the empty key, not +inf.
-    check(&[], &[], Some(&[]), true);
-    check(&[0], &[], Some(&[]), false);
+#[test_case(&[3], &[3], Some(&[7]), true ; "start bound is inclusive")]
+#[test_case(&[7], &[3], Some(&[7]), true ; "end bound is inclusive")]
+#[test_case(&[2], &[3], Some(&[7]), false ; "before start")]
+#[test_case(&[8], &[3], Some(&[7]), false ; "after end")]
+#[test_case(&[7, 0], &[3], Some(&[7]), false ; "longer key extending the end bound sorts after it")]
+#[test_case(&[9, 9], &[3], None, true ; "None end is positive infinity")]
+#[test_case(&[0], &[], Some(&[]), false ; "Some(empty) is the empty key, not positive infinity")]
+fn test_in_proven_range_bounds(node: &[u8], start: &[u8], end: Option<&[u8]>, expected: bool) {
+    assert_eq!(in_proven_range(node, start, end), expected);
 }
