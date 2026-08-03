@@ -19,6 +19,7 @@ pub struct Options {
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("deleting key {opts:?}");
     let key = opts.key.database_key()?;
+    let hex_key = hex::encode(&key);
     let cfg = DbConfig::builder()
         .node_hash_algorithm(opts.database.node_hash_algorithm.into())
         .create_if_missing(false)
@@ -30,6 +31,6 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     let proposal = db.propose(batch)?;
     proposal.commit()?;
 
-    println!("key {} deleted successfully", opts.key.key);
+    println!("key 0x{hex_key} deleted successfully");
     db.close()
 }

@@ -43,7 +43,7 @@ fn insert_key_value(db_path: &Path, key: &str, value: &str) {
         .args([value])
         .assert()
         .success()
-        .stdout(predicate::str::contains(key));
+        .stdout(format!("0x{}\n", hex::encode(key)));
 }
 
 #[cfg(feature = "ethhash")]
@@ -65,7 +65,8 @@ fn fwdctl_hex_key_round_trip() {
             .arg("--db")
             .arg(db_path)
             .assert()
-            .success();
+            .success()
+            .stdout("0x79656172\n");
 
         cargo_bin_cmd!()
             .args(["get", "year"])
@@ -80,7 +81,8 @@ fn fwdctl_hex_key_round_trip() {
             .arg("--db")
             .arg(db_path)
             .assert()
-            .success();
+            .success()
+            .stdout("key 0x79656172 deleted successfully\n");
 
         #[cfg(not(feature = "ethhash"))]
         cargo_bin_cmd!()
@@ -98,7 +100,7 @@ fn fwdctl_hex_key_round_trip() {
             .arg(db_path)
             .assert()
             .success()
-            .stderr(predicate::str::contains("Key 'year' not found"));
+            .stderr("Key '0x79656172' not found\n");
     });
 }
 
@@ -151,7 +153,8 @@ fn fwdctl_account_key_round_trip() {
             .arg("--db")
             .arg(db_path)
             .assert()
-            .success();
+            .success()
+            .stdout(format!("0x{ACCOUNT_HASH}\n"));
 
         cargo_bin_cmd!()
             .args(["get", "--account", ACCOUNT])
@@ -182,7 +185,8 @@ fn fwdctl_storage_key_round_trip() {
             .arg("--db")
             .arg(db_path)
             .assert()
-            .success();
+            .success()
+            .stdout(format!("0x{STORAGE_KEY}\n"));
 
         cargo_bin_cmd!()
             .args(["get", "--storage", SLOT, ACCOUNT])
@@ -199,6 +203,22 @@ fn fwdctl_storage_key_round_trip() {
             .assert()
             .success()
             .stdout(predicate::str::contains(STORAGE_KEY));
+
+        cargo_bin_cmd!()
+            .args(["delete", "--storage", SLOT, ACCOUNT])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout(format!("key 0x{STORAGE_KEY} deleted successfully\n"));
+
+        cargo_bin_cmd!()
+            .args(["get", "--storage", SLOT, ACCOUNT])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stderr(format!("Key '0x{STORAGE_KEY}' not found\n"));
     });
 }
 
@@ -286,7 +306,7 @@ fn fwdctl_delete_successful() {
             .arg(db_path)
             .assert()
             .success()
-            .stdout(predicate::str::contains("key year deleted successfully"));
+            .stdout("key 0x79656172 deleted successfully\n");
     });
 }
 

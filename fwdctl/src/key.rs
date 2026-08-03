@@ -15,7 +15,7 @@ pub struct KeyArgument {
         value_name = "KEY",
         help = "Key to operate on (UTF-8 by default; decoded or hashed when a key mode is set)"
     )]
-    pub key: String,
+    key: String,
 
     /// Decode KEY as hexadecimal bytes
     #[arg(long)]

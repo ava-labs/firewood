@@ -42,7 +42,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
             println!("{s:?}");
         }
         Ok(None) => {
-            eprintln!("Key '{}' not found", opts.key.key);
+            eprintln!("Key '0x{}' not found", hex::encode(&key));
         }
         Err(e) => return Err(e),
     }
