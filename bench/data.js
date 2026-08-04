@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785830084069,
+  "lastUpdate": 1785830236798,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -8177,6 +8177,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 44.10346286975454,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Alwan Juliawan",
+            "username": "wenn-id",
+            "email": "alwanjuliawan02@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "715affa7f9639ba1bda1e922e61858527eda1ce5",
+          "message": "feat(fwdctl): support hex and Ethereum keys (#2156)\n\n## Summary\n\n- add generic `--hex` key decoding to `fwdctl get`, `insert`, and\n`delete`\n- add feature-gated `--account` and `--storage <SLOT>` modes for\nEthereum key derivation\n- validate hex input lengths, reject conflicting modes, and document the\nCLI contract\n- add integration coverage for round trips, Keccak-derived keys,\nmalformed input, conflicts, and deletion\n\n## Key derivation\n\n- account: `keccak256(address)`\n- storage: `keccak256(address) || keccak256(slot)`\n\nCloses #1000.\n\n## Validation\n\n- `cargo fmt --check`\n- `cargo test -p firewood-fwdctl --test cli` (19 passed)\n- `cargo test -p firewood-fwdctl --features ethhash,logger\n--all-targets` (25 passed)\n- `cargo nextest run --workspace --features ethhash,logger\n--all-targets` (824 passed, 17 profile-skipped)\n- `cargo +nightly-2026-07-05 clippy -p firewood-fwdctl --features\nethhash,logger --all-targets -- -D warnings`\n- `cargo +nightly-2026-07-05 clippy --profile maxperf -p firewood-fwdctl\n--features ethhash,logger --all-targets -- -D warnings`\n- `RUSTDOCFLAGS=\"-D warnings\" cargo doc -p firewood-fwdctl --features\nethhash,logger --no-deps`\n- `markdownlint-cli2 fwdctl/README.md`",
+          "timestamp": "2026-08-03T15:41:50Z",
+          "url": "https://github.com/ava-labs/firewood/commit/715affa7f9639ba1bda1e922e61858527eda1ce5"
+        },
+        "date": 1785830235819,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 169.9708189804528,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5883.362838388179,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 110.10859212281369,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5693.913574764742,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 76.80380179930481,
             "unit": "block_accept_ms/ggas"
           }
         ]
