@@ -100,6 +100,8 @@ Run `cargo clippy --workspace --all-targets` and `cargo nextest run --workspace 
 | `--features ethhash,logger` | ✓     | ✓     |
 | `--all-features`            | ✓     | ✓     |
 
+`--all-features` requires rustc 1.94.1+, above the 1.94.0 workspace MSRV, because it enables `fwdctl`'s `launch` feature and its AWS SDK dependencies declare that floor. If `cargo` reports `rustc 1.94.0 is not supported by the following packages`, that is this constraint and not a defect in the PR under review.
+
 If the PR adds any new Cargo feature, test with and without it across the applicable matrix rows.
 
 **Header drift check:**

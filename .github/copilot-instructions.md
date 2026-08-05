@@ -25,6 +25,10 @@ compiles the ring backend.
 | `--features ethhash,logger` | ✓     | ✓     |
 | `--all-features`            | ✓     | ✓     |
 
+`--all-features` requires rustc 1.94.1 or newer — above the 1.94.0 workspace MSRV
+— because it enables `fwdctl`'s `launch` feature, whose AWS SDK dependencies
+declare that floor. The other three rows build on 1.94.0.
+
 ## Commit and PR Conventions
 
 Commit messages and PR titles must follow

@@ -27,7 +27,9 @@ Profiles:
   debug-no-default-features
   debug-no-features (default features)
   debug-ethhash-logger
-  debug-all-features (io-uring is active on Linux only)
+  debug-all-features (io-uring is active on Linux only; needs rustc 1.94.1+,
+                      above the 1.94.0 workspace MSRV, because fwdctl's
+                      launch feature pulls in the AWS SDK)
   maxperf-ethhash-logger
 EOF
 }
