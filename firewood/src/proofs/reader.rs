@@ -70,6 +70,12 @@ impl<'a> ProofReader<'a> {
         &self.data[self.offset..]
     }
 
+    /// The current read position within the underlying data.
+    #[must_use]
+    pub const fn offset(&self) -> usize {
+        self.offset
+    }
+
     pub fn advance(&mut self, n: usize) {
         #![expect(clippy::arithmetic_side_effects)]
         debug_assert!(self.offset + n <= self.data.len());

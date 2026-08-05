@@ -96,11 +96,11 @@ The FFI layer sets the context on each inbound call based on caller configuratio
 
 #### Proof wire compression
 
-| Metric                                | Type      | Labels             | Description                                                                                                                                                                    |
-| ------------------------------------- | --------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `firewood_proof_compressed_bytes`     | histogram | `op`, `proof_type` | Compressed frame size in bytes; `op=compress\|decompress`, `proof_type=range\|change`                                                                                           |
-| `firewood_proof_compression_ratio`    | histogram | `op`, `proof_type` | Canonical body bytes ÷ compressed frame bytes                                                                                                                                   |
-| `firewood_proof_decode_failures_total` | counter   | `reason`           | Frame-layer decode rejections; `reason=incomplete_length\|over_cap\|missing_frame\|invalid_frame\|trailing_data\|content_size_mismatch\|ratio_exceeded\|length_mismatch` |
+| Metric                                  | Type      | Labels       | Description                                                                                                                                                                              |
+| --------------------------------------- | --------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `firewood_proof_compressed_bytes`       | histogram | `op`, `kind` | Compressed frame size in bytes; `op=compress\|decompress`, `kind=range\|change`                                                                                                           |
+| `firewood_proof_compression_ratio`      | histogram | `op`, `kind` | Canonical body bytes ÷ compressed frame bytes                                                                                                                                             |
+| `firewood_proof_decode_failures_total`  | counter   | `reason`     | Frame-layer decode rejections; `reason=incomplete_length\|invalid_length\|over_cap\|missing_frame\|invalid_frame\|trailing_data\|content_size_mismatch\|ratio_exceeded\|length_mismatch` |
 
 #### Persist worker
 

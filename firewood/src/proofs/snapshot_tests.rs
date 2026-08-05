@@ -94,16 +94,21 @@ fn hash_mode_name(name: &str) -> String {
     format!("{mode}__{name}")
 }
 
-/// Serializes `node` inside a minimal [`FrozenRangeProof`] and returns the bytes
-/// after the fixed 32-byte proof header.
+/// An empty proof-node list, shared by the minimal proofs built below.
+fn empty_nodes() -> Proof<Box<[ProofNode]>> {
+    Proof::new(Box::<[ProofNode]>::from([]))
+}
+
+/// Serializes `node` inside a minimal [`FrozenRangeProof`] and returns its
+/// canonical (uncompressed) body.
 ///
-/// The returned slice begins with the varint-encoded start-proof node count,
+/// The returned bytes begin with the varint-encoded start-proof node count,
 /// followed by the [`ProofNode`] encoding, then the empty end-proof and
 /// key-values counts.
 fn node_bytes(node: &ProofNode) -> Vec<u8> {
     let proof = FrozenRangeProof::new(
         Proof::new(Box::new([node.clone()])),
-        Proof::new(Box::<[ProofNode]>::from([])),
+        empty_nodes(),
         Box::new([]),
     );
     let mut out = Vec::new();
@@ -146,11 +151,7 @@ fn range_proof_bytes(kvs: &[(&[u8], &[u8])]) -> Vec<u8> {
         .iter()
         .map(|(k, v)| (Box::from(*k), Box::from(*v)))
         .collect();
-    let proof = FrozenRangeProof::new(
-        Proof::new(Box::<[ProofNode]>::from([])),
-        Proof::new(Box::<[ProofNode]>::from([])),
-        kv_pairs,
-    );
+    let proof = FrozenRangeProof::new(empty_nodes(), empty_nodes(), kv_pairs);
     let mut out = Vec::new();
     proof.write_body_to_vec(&mut out);
     out
@@ -159,11 +160,7 @@ fn range_proof_bytes(kvs: &[(&[u8], &[u8])]) -> Vec<u8> {
 /// Serializes the canonical body of a [`FrozenChangeProof`] with empty node
 /// lists and the given batch operations.
 fn change_proof_bytes(ops: Box<[BatchOp<Key, Value>]>) -> Vec<u8> {
-    let proof = FrozenChangeProof::new(
-        Proof::new(Box::<[ProofNode]>::from([])),
-        Proof::new(Box::<[ProofNode]>::from([])),
-        ops,
-    );
+    let proof = FrozenChangeProof::new(empty_nodes(), empty_nodes(), ops);
     let mut out = Vec::new();
     proof.write_body_to_vec(&mut out);
     out
@@ -234,19 +231,9 @@ fn proof_header(name: &str, change: bool) {
     // never compressed).
     let mut out = Vec::new();
     if change {
-        FrozenChangeProof::new(
-            Proof::new(Box::<[ProofNode]>::from([])),
-            Proof::new(Box::<[ProofNode]>::from([])),
-            Box::new([]),
-        )
-        .write_to_vec(&mut out);
+        FrozenChangeProof::new(empty_nodes(), empty_nodes(), Box::new([])).write_to_vec(&mut out);
     } else {
-        FrozenRangeProof::new(
-            Proof::new(Box::<[ProofNode]>::from([])),
-            Proof::new(Box::<[ProofNode]>::from([])),
-            Box::new([]),
-        )
-        .write_to_vec(&mut out);
+        FrozenRangeProof::new(empty_nodes(), empty_nodes(), Box::new([])).write_to_vec(&mut out);
     }
     insta::assert_snapshot!(hash_mode_name(name), hex::encode(&out[..32]));
 }

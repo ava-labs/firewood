@@ -33,6 +33,7 @@
 //! - `reader`: Proof reading and deserialization utilities.
 //! - `ser`: Proof serialization implementation (internal).
 //! - `de`: Proof deserialization implementation (internal).
+//! - `frame`: zstd compression framing for serialized proof bodies (internal).
 //! - `childmask` (in `merkle`): Compact bitmap for tracking present children.
 //! - `magic`: Magic constants for proof format identification (internal).
 //!
@@ -41,7 +42,10 @@
 //! Proofs are serialized in a compact binary format that includes:
 //!
 //! 1. A 32-byte header identifying the proof type, version, hash mode, and branching factor
-//! 2. A sequence of proof nodes, each containing:
+//! 2. A varint with the canonical body's byte length, followed by a single zstd
+//!    frame compressing the body (see `frame` for the decode bounds and
+//!    canonicality rules)
+//! 3. The canonical (decompressed) body: a sequence of proof nodes, each containing:
 //!    - The node's key path (variable length)
 //!    - The node's value or value hash (if present)
 //!    - A bitmap indicating which children are present
@@ -50,8 +54,8 @@
 //! Change proofs additionally serialize their `batch_ops` as a sequence of tagged
 //! Put/Delete operations after the boundary proof nodes. See `ser.rs` for details.
 //!
-//! The serialization format is versioned to allow for future evolution while maintaining
-//! backward compatibility with proof verification.
+//! The serialization format is versioned to allow for future evolution; decoders
+//! reject versions they do not understand.
 //!
 //! # Range Proof Verification Algorithm
 //!
