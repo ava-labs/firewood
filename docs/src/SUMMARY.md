@@ -18,6 +18,8 @@
   - [mdBook documentation site](designs/2026-06-17-mdbook-documentation-site.md)
   - [Development container](designs/2026-06-22-devcontainer.md)
   - [Template](designs/template.md)
+  - [Proposals]()
+    - [v2 On-Disk File Format (proposed)](designs/2026-05-26-v2-file-format.md)
 
 # Integration
 
