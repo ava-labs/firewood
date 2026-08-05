@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785916725311,
+  "lastUpdate": 1785916783705,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -8271,6 +8271,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 79.85894595909528,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "rodrigo",
+            "username": "RodrigoVillar",
+            "email": "77309055+RodrigoVillar@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "6554045f262f2c07197afdda64fd0c1483d7e2ed",
+          "message": "ci: run CI and local prepush checks through shared just recipes (#2178)\n\n## Why this should be merged\n\nWhen working with coding agents, especially when building a stack of\nPRs, a lint or test failure in the base PR causes every PR above it to\nfail as well. The author then has to fix the base PR and rebase the rest\nof the stack, creating avoidable work and slowing developer velocity.\n\nWe should run as many checks as practical locally before pushing code.\nCI should be the final gate before merging into `main`, rather than the\nfirst place routine lint or unit-test failures are discovered. Although\nthe existing CI jobs are individually reproducible, there was no simple\nway to run the same collection of checks locally. CI runs many commands\nacross several jobs, making it easy for developers and coding agents to\nmiss a check before pushing.\n\n## How this works\n\nThis PR provides a small Justfile API shared by developers, coding\nagents, and CI:\n\n- `just lint` runs the macOS-compatible linting and documentation\nchecks.\n  - `just test` runs the macOS-compatible unit and FFI test suites.\n- `just prepush` runs both phases in the expected order (on my local\nmacbook, this took ~6.5 minutes to run)\n\nThe lower-level `ci-*` recipes are also used by GitHub Actions. Named\nRust profiles and their Cargo arguments are defined in one shared\nscript, avoiding duplicated command arguments between the Justfile and\nCI workflows.\n\n`AGENTS.md` now directs developers and coding agents to these commands\nbefore pushing. This gives both groups a consistent, simple interface\nfor reproducing as much of CI as possible locally.\n\nChecks that require a Linux environment, such as the `io-uring`\nall-features profile and differential fuzz jobs, remain CI-only.\n\n## How this was tested\n\nCI + ran `just` commands locally.\n\n> Note: for this PR to be merged, the `main` branch protection rules\nwill need to be modified to account for the new CI jobs. For example,\n`rust-lint (debug-ethhash-logger, --features ethhash,logger)` is now\njust `rust-lint (debug-ethhash-logger)` now that `profile-args` have\nbeen removed.\n\n## Breaking Changes\n\n- [ ] firewood\n- [ ] firewood-storage\n- [ ] firewood-ffi (C api)\n- [ ] firewood-go (Go api)\n- [ ] fwdctl",
+          "timestamp": "2026-08-04T20:55:24Z",
+          "url": "https://github.com/ava-labs/firewood/commit/6554045f262f2c07197afdda64fd0c1483d7e2ed"
+        },
+        "date": 1785916783139,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 160.56916199978303,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6227.845917271159,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 80.31182745346977,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6092.945033702968,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 51.90268169085117,
             "unit": "block_accept_ms/ggas"
           }
         ]
