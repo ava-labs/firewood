@@ -158,12 +158,11 @@ If `just` is not installed, use `./scripts/run-just.sh prepush`. The wrapper
 uses `just` when available, falls back to Nix when available, and otherwise
 prints installation instructions.
 
-The complete set of Rust profile names and Cargo arguments, including
-Linux-only profiles, is defined in `scripts/run-rust-ci.sh`. The macOS-compatible
-Just recipes select the portable subset, while CI uses the full set. The
-Justfile and CI workflows should pass profile names instead of duplicating Cargo
-feature and profile arguments. When changing a CI Rust matrix, update the shared
-script and both callers as needed.
+The complete set of Rust profile names and Cargo arguments is defined in
+`scripts/run-rust-ci.sh`. Every profile there is portable to macOS, so the Just
+recipes and CI run the same set. The Justfile and CI workflows should pass
+profile names instead of duplicating Cargo feature and profile arguments. When
+changing a CI Rust matrix, update the shared script and both callers as needed.
 
 All tests must pass, and there should be no clippy warnings.
 
@@ -177,18 +176,17 @@ default-profile test commands are useful during development, but do not replace
 ### Linux-only Checks
 
 The local `lint`, `test`, and `prepush` recipes are designed to run on macOS.
-They intentionally omit CI checks that require Linux:
+They intentionally omit CI checks that require Linux: the differential fuzz jobs,
+which use Linux-specific resource limits and tooling. GitHub Actions remains
+authoritative for those.
 
-- The `debug-all-features` Rust profile enables `io-uring`.
-- Differential fuzz jobs use Linux-specific resource limits and tooling.
-
-GitHub Actions remains authoritative for these checks. To reproduce the
-all-features Rust checks, use a Linux development environment and run:
-
-```bash
-just ci-rust clippy debug-all-features
-just ci-rust test debug-all-features
-```
+`--all-features` is *not* in that category. The `io-uring` feature is accepted on
+every platform but only takes effect on Linux, where `storage/build.rs` sets the
+`cfg(io_uring)` alias that gates the ring backend; elsewhere the feature is inert
+and the standard I/O path is used. So `debug-all-features` runs in `just lint`
+and `just test` like any other profile. Note this means the ring code itself is
+compiled only by the Linux CI jobs — a macOS-green `--all-features` run does not
+prove `storage/src/linear/io_uring.rs` builds.
 
 Do not add Linux-only commands to the macOS-compatible aggregate recipes.
 
