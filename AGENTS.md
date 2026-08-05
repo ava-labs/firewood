@@ -108,6 +108,29 @@ The `fwdctl` tool provides command-line operations on databases. See `fwdctl/REA
 
 For more information on coding conventions and constraints, please refer to [CONTRIBUTING.md](./CONTRIBUTING.md)
 
+## Design Documents
+
+Firewood records designs as living documentation in a single flat directory,
+`docs/src/designs/` (rendered in the mdBook site). Every design is `NNNN-<slug>.md`;
+its lifecycle state lives in the `status` frontmatter field, not in its location.
+Follow this workflow when writing a design document:
+
+- **Propose:** run `just new-design <slug>` to scaffold
+  `docs/src/designs/NNNN-<slug>.md` (with `status: proposed`) from the RFC-style
+  template, fill it in, and open a pull request for review.
+- **Promote:** once the design is implemented, promote it in place — a status flip,
+  not a file move, so its `NNNN-<slug>.md` path stays stable. Following the checklist
+  in `docs/src/designs/README.md`: flip the frontmatter `status` to `active`, drop the
+  proposal-only sections, rewrite future-tense prose into the present tense, add
+  cross-links to the implementing PR(s), and update the index in
+  `docs/src/designs/README.md` and `docs/src/SUMMARY.md`.
+- `active` designs describe what the code does today; keep them up to date as the
+  design changes.
+
+When the `superpowers:brainstorming` skill produces a Firewood design spec, save it to
+`docs/src/designs/NNNN-<slug>.md` (via `just new-design`) — override the skill's
+default `docs/superpowers/specs/` location.
+
 ## Commit and PR Title Convention
 
 Commit messages and PR titles **must** follow the
