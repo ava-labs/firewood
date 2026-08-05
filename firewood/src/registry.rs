@@ -32,6 +32,8 @@ firewood_metrics::define_metrics! {
         PROPOSAL_COMMITS_TRIVIAL = "firewood_proposal_commits_trivial_total",
         /// Number of root store persist operations
         PERSIST_ROOT_STORE     = "firewood_persist_root_store_total",
+        /// Proof wire decode failures in the compressed-frame layer, by reason
+        PROOF_DECODE_FAILURES  = "firewood_proof_decode_failures_total",
     },
     gauges: {
         /// Current number of uncommitted proposals
@@ -66,6 +68,10 @@ firewood_metrics::define_metrics! {
         PERSIST_SUBMIT_DURATION_SECONDS = "firewood_persist_submit_duration_seconds" native(2.0, 160, 1e-9),
         /// Number of key/value pairs contained in a generated proof, by proof kind
         PROOF_KEYS = "firewood_proof_keys" buckets([0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0, 2048.0, 4096.0, 8192.0, 16_384.0, 32_768.0, 65_536.0, 131_072.0]),
+        /// Compressed proof frame size in bytes, by op (compress/decompress) and proof type
+        PROOF_COMPRESSED_BYTES = "firewood_proof_compressed_bytes" buckets([1024.0, 4096.0, 16_384.0, 65_536.0, 262_144.0, 1_048_576.0, 2_097_152.0, 4_194_304.0, 8_388_608.0, 16_777_216.0, 33_554_432.0]),
+        /// Canonical body bytes / compressed frame bytes, by op (compress/decompress) and proof type
+        PROOF_COMPRESSION_RATIO = "firewood_proof_compression_ratio" buckets([0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0]),
     },
 }
 

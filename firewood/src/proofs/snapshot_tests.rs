@@ -4,10 +4,11 @@
 //! Snapshot tests for [`ProofNode`] wire serialization.
 //!
 //! Each test constructs a canonical [`ProofNode`] variant and snapshots the
-//! hex-encoded bytes that follow the fixed 32-byte proof header when it is
-//! serialized inside a minimal [`FrozenRangeProof`]. The header itself is
-//! excluded because it encodes only proof-level metadata (magic, version,
-//! hash mode, proof type); those node snapshots target only the node encoding.
+//! hex-encoded canonical (uncompressed) proof body when it is serialized
+//! inside a minimal [`FrozenRangeProof`]. The 32-byte header and the zstd
+//! framing are excluded: the header encodes only proof-level metadata, and
+//! the compressed bytes are not bit-stable across zstd versions; the
+//! canonical body is the meaningful encoding to pin.
 //!
 //! Snapshot files live in `src/proofs/snapshots/`. Run `just snapshot-proof-nodes`
 //! to write them on the first run or to regenerate them after an intentional
@@ -54,7 +55,7 @@
 //!
 //! [`proof_header`] snapshots the full 32-byte header (whose `hash_mode` byte
 //! differs between SHA-256 and Keccak-256), so it is prefixed via
-//! [`hash_mode_name`]. [`key_value`] and [`batch_op`] snapshot `bytes[32..]`
+//! [`hash_mode_name`]. [`key_value`] and [`batch_op`] snapshot the canonical body
 //! and are feature-independent (raw byte slices / fixed opcodes); their explicit
 //! snapshot names carry a `key_values__` / `batch_ops__` group prefix so they
 //! stay unique within the flattened module (snapshot names are keyed by module
@@ -106,10 +107,11 @@ fn node_bytes(node: &ProofNode) -> Vec<u8> {
         Box::new([]),
     );
     let mut out = Vec::new();
-    proof.write_to_vec(&mut out);
-    // Skip the fixed 32-byte proof header (magic, version, hash mode, proof type,
-    // reserved); only the node encoding is under scrutiny in these tests.
-    out[32..].to_vec()
+    // Snapshot the canonical (uncompressed) body: the wire compresses this
+    // body behind the 32-byte header, and zstd output is not bit-stable
+    // across library versions, so the body is the meaningful thing to pin.
+    proof.write_body_to_vec(&mut out);
+    out
 }
 
 /// Builds a [`ProofNode`] from nibble slices. All child hashes use the zero hash
@@ -137,8 +139,8 @@ fn make_node(
     }
 }
 
-/// Serializes a [`FrozenRangeProof`] with empty node lists and the given key-value
-/// pairs. Returns all bytes including the 32-byte proof header.
+/// Serializes the canonical body of a [`FrozenRangeProof`] with empty node
+/// lists and the given key-value pairs.
 fn range_proof_bytes(kvs: &[(&[u8], &[u8])]) -> Vec<u8> {
     let kv_pairs: Box<[(Key, Value)]> = kvs
         .iter()
@@ -150,12 +152,12 @@ fn range_proof_bytes(kvs: &[(&[u8], &[u8])]) -> Vec<u8> {
         kv_pairs,
     );
     let mut out = Vec::new();
-    proof.write_to_vec(&mut out);
+    proof.write_body_to_vec(&mut out);
     out
 }
 
-/// Serializes a [`FrozenChangeProof`] with empty node lists and the given batch
-/// operations. Returns all bytes including the 32-byte proof header.
+/// Serializes the canonical body of a [`FrozenChangeProof`] with empty node
+/// lists and the given batch operations.
 fn change_proof_bytes(ops: Box<[BatchOp<Key, Value>]>) -> Vec<u8> {
     let proof = FrozenChangeProof::new(
         Proof::new(Box::<[ProofNode]>::from([])),
@@ -163,7 +165,7 @@ fn change_proof_bytes(ops: Box<[BatchOp<Key, Value>]>) -> Vec<u8> {
         ops,
     );
     let mut out = Vec::new();
-    proof.write_to_vec(&mut out);
+    proof.write_body_to_vec(&mut out);
     out
 }
 
@@ -228,15 +230,28 @@ fn branch_node(
 #[test_case("range", false ; "range")]
 #[test_case("change", true ; "change")]
 fn proof_header(name: &str, change: bool) {
-    let bytes = if change {
-        change_proof_bytes(Box::new([]))[..32].to_vec()
+    // The header is the first 32 bytes of the real wire encoding (it is
+    // never compressed).
+    let mut out = Vec::new();
+    if change {
+        FrozenChangeProof::new(
+            Proof::new(Box::<[ProofNode]>::from([])),
+            Proof::new(Box::<[ProofNode]>::from([])),
+            Box::new([]),
+        )
+        .write_to_vec(&mut out);
     } else {
-        range_proof_bytes(&[])[..32].to_vec()
-    };
-    insta::assert_snapshot!(hash_mode_name(name), hex::encode(bytes));
+        FrozenRangeProof::new(
+            Proof::new(Box::<[ProofNode]>::from([])),
+            Proof::new(Box::<[ProofNode]>::from([])),
+            Box::new([]),
+        )
+        .write_to_vec(&mut out);
+    }
+    insta::assert_snapshot!(hash_mode_name(name), hex::encode(&out[..32]));
 }
 
-/// Key-value pair encoding — snapshots `bytes[32..]` of a [`FrozenRangeProof`]
+/// Key-value pair encoding — snapshots the canonical body of a [`FrozenRangeProof`]
 /// with empty node lists. Key-value encoding uses raw byte slices and is
 /// identical under both hash modes, so no prefix is needed.
 ///
@@ -248,11 +263,11 @@ fn proof_header(name: &str, change: bool) {
 fn key_value(name: &str, pairs: &[(&[u8], &[u8])]) {
     insta::assert_snapshot!(
         format!("key_values__{name}"),
-        hex::encode(&range_proof_bytes(pairs)[32..])
+        hex::encode(range_proof_bytes(pairs))
     );
 }
 
-/// Batch operation encoding — snapshots `bytes[32..]` of a [`FrozenChangeProof`]
+/// Batch operation encoding — snapshots the canonical body of a [`FrozenChangeProof`]
 /// with empty node lists. Batch ops use fixed opcodes and raw byte slices;
 /// encoding is identical under both hash modes.
 ///
@@ -276,6 +291,6 @@ fn key_value(name: &str, pairs: &[(&[u8], &[u8])]) {
 fn batch_op(name: &str, ops: Box<[BatchOp<Key, Value>]>) {
     insta::assert_snapshot!(
         format!("batch_ops__{name}"),
-        hex::encode(&change_proof_bytes(ops)[32..])
+        hex::encode(change_proof_bytes(ops))
     );
 }

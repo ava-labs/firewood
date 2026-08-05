@@ -34,6 +34,12 @@ impl FrozenRangeProof {
         reason = "Header and ProofType are not exported"
     )]
     /// - A 32-byte [`Header`] with the proof type set to [`ProofType::Range`].
+    /// - A variable-length integer with the exact byte length of the canonical
+    ///   body, followed by a single zstd frame compressing that body (see
+    ///   `proofs::frame` for the framing, bounds, and canonicality rules).
+    ///
+    /// The canonical body, once decompressed, is:
+    ///
     /// - The start proof, serialized as a _sequence_ of [`ProofNode`]s
     /// - The end proof, serialized as a _sequence_ of [`ProofNode`]s
     /// - The key-value pairs, serialized as a _sequence_ of `(key, value)` tuples.
@@ -79,6 +85,17 @@ impl FrozenRangeProof {
     /// Variable-length integers are encoded using unsigned LEB128.
     pub fn write_to_vec(&self, out: &mut Vec<u8>) {
         Header::from(ProofType::Range).write_item(out);
+        let body_start = out.len();
+        self.write_item(out);
+        super::frame::compress_body_in_place(out, body_start, "range");
+    }
+
+    /// Serializes this proof's canonical (uncompressed) body — the bytes
+    /// that [`FrozenRangeProof::write_to_vec`] compresses after the
+    /// header. This is the byte sequence to hash, sign, or compare when
+    /// proofs need a canonical identity (zstd output is not bit-stable
+    /// across library versions).
+    pub fn write_body_to_vec(&self, out: &mut Vec<u8>) {
         self.write_item(out);
     }
 }
@@ -86,6 +103,14 @@ impl FrozenRangeProof {
 impl FrozenChangeProof {
     pub fn write_to_vec(&self, out: &mut Vec<u8>) {
         Header::from(ProofType::Change).write_item(out);
+        let body_start = out.len();
+        self.write_item(out);
+        super::frame::compress_body_in_place(out, body_start, "change");
+    }
+
+    /// Serializes this proof's canonical (uncompressed) body. See
+    /// [`FrozenRangeProof::write_body_to_vec`].
+    pub fn write_body_to_vec(&self, out: &mut Vec<u8>) {
         self.write_item(out);
     }
 }
