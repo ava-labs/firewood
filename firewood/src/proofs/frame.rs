@@ -134,7 +134,7 @@ fn validate_frame(frame: &[u8], frame_offset: usize) -> Result<usize, ReadError>
 ///   [`MAX_DECOMPRESSED_LEN`] and at [`MAX_COMPRESSION_RATIO`] × the
 ///   compressed frame length.
 /// - The decompressed byte count must equal the declared content size
-///   (zstd also enforces this; kept as a cheap backstop).
+///   (zstd also enforces this; can potentially remove this).
 ///
 /// `frame_offset` makes error offsets absolute within the wire message;
 /// body-parser errors are offsets into the decompressed body.

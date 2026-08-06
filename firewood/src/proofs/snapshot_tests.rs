@@ -77,7 +77,8 @@ use test_case::test_case;
 
 use firewood_storage::{Children, IntoHashType, PathComponent, TrieHash, ValueDigest};
 
-use super::types::{Proof, ProofNode};
+use super::header::Header;
+use super::types::{Proof, ProofNode, ProofType};
 use crate::api::{FrozenChangeProof, FrozenRangeProof};
 use crate::db::BatchOp;
 use crate::merkle::{Key, Value};
@@ -227,28 +228,14 @@ fn branch_node(
 /// `range` (`proof_type` `0x01`) and `change` (`proof_type` `0x02`) otherwise
 /// share the same magic `fwdproof`, version `0x00`, `branch_factor` `0x10`, and
 /// 20 zero reserved bytes.
-#[test_case("range", false ; "range")]
-#[test_case("change", true ; "change")]
-fn proof_header(name: &str, change: bool) {
-    // The header is the first 32 bytes of the real wire encoding (it is
-    // never compressed).
-    let mut out = Vec::new();
-    if change {
-        FrozenChangeProof::new(
-            Proof::new(Box::<[ProofNode]>::from([])),
-            Proof::new(Box::<[ProofNode]>::from([])),
-            Box::new([]),
-        )
-        .write_to_vec(&mut out);
-    } else {
-        FrozenRangeProof::new(
-            Proof::new(Box::<[ProofNode]>::from([])),
-            Proof::new(Box::<[ProofNode]>::from([])),
-            Box::new([]),
-        )
-        .write_to_vec(&mut out);
-    }
-    insta::assert_snapshot!(hash_mode_name(name), hex::encode(&out[..32]));
+#[test_case("range", ProofType::Range ; "range")]
+#[test_case("change", ProofType::Change ; "change")]
+fn proof_header(name: &str, proof_type: ProofType) {
+    let header = Header::from(proof_type);
+    insta::assert_snapshot!(
+        hash_mode_name(name),
+        hex::encode(bytemuck::bytes_of(&header))
+    );
 }
 
 /// Key-value pair encoding — snapshots the canonical body of a [`FrozenRangeProof`]

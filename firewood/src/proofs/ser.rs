@@ -86,11 +86,9 @@ impl FrozenRangeProof {
         write_framed(self, ProofType::Range, out);
     }
 
-    /// Serializes this proof's canonical (uncompressed) body — the bytes
-    /// that [`FrozenRangeProof::write_to_vec`] compresses after the
-    /// header. This is the byte sequence to hash, sign, or compare when
-    /// proofs need a canonical identity (zstd output is not bit-stable
-    /// across library versions).
+    /// Serializes this proof's canonical (uncompressed) body: the bytes
+    /// [`FrozenRangeProof::write_to_vec`] compresses after the header, and
+    /// the sequence to hash or compare for a proof's canonical identity.
     pub fn write_body_to_vec(&self, out: &mut Vec<u8>) {
         self.write_item(out);
     }

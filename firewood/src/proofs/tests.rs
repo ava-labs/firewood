@@ -22,11 +22,9 @@ fn raw_header(proof_type: ProofType) -> Vec<u8> {
     bytemuck::bytes_of(&Header::from(proof_type)).to_vec()
 }
 
-/// Re-frames `header || canonical body` into wire bytes (compressing the
-/// body the way `write_to_vec` does) and parses. Inputs shorter than a
-/// header pass through unframed so the truncated-header tests still hit
-/// the header error.
-fn parse_range_canonical(data: &[u8]) -> Result<FrozenRangeProof, ReadError> {
+/// Compresses the body of uncompressed `header || body` bytes into wire
+/// form, then parses. Inputs shorter than a header parse as-is.
+fn compress_and_parse_range(data: &[u8]) -> Result<FrozenRangeProof, ReadError> {
     match data.split_at_checked(32) {
         Some((header, body)) => {
             let mut wire = header.to_vec();
@@ -37,8 +35,8 @@ fn parse_range_canonical(data: &[u8]) -> Result<FrozenRangeProof, ReadError> {
     }
 }
 
-/// See [`parse_range_canonical`].
-fn parse_change_canonical(data: &[u8]) -> Result<FrozenChangeProof, ReadError> {
+/// See [`compress_and_parse_range`].
+fn compress_and_parse_change(data: &[u8]) -> Result<FrozenChangeProof, ReadError> {
     match data.split_at_checked(32) {
         Some((header, body)) => {
             let mut wire = header.to_vec();
@@ -51,7 +49,7 @@ fn parse_change_canonical(data: &[u8]) -> Result<FrozenChangeProof, ReadError> {
 
 /// Returns a valid range proof plus its canonical uncompressed bytes
 /// (`header || body`) for the byte-taxonomy tests. Parse the result with
-/// [`parse_range_canonical`].
+/// [`compress_and_parse_range`].
 fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
     let merkle = crate::merkle::tests::init_merkle((0u8..=10).map(|k| ([k], [k])));
     let proof = merkle
@@ -146,7 +144,7 @@ fn test_invalid_header(
 
     mutator(&mut data);
 
-    match parse_range_canonical(&data) {
+    match compress_and_parse_range(&data) {
         Err(ReadError::InvalidHeader(err)) => assert!(expected(&err), "unexpected error: {err}"),
         other => panic!("Expected ReadError::InvalidHeader, got: {other:?}"),
     }
@@ -188,7 +186,7 @@ fn test_incomplete_item(
 
     mutator(&proof, &mut data);
 
-    match parse_range_canonical(&data) {
+    match compress_and_parse_range(&data) {
         Err(ReadError::IncompleteItem {
             item: found_item,
             offset: _,
@@ -263,7 +261,7 @@ fn test_invalid_item(
 
     mutator(&proof, &mut data);
 
-    match parse_range_canonical(&data) {
+    match compress_and_parse_range(&data) {
         Err(ReadError::InvalidItem {
             item: found_item,
             offset: _,
@@ -304,7 +302,7 @@ fn test_partial_key_len_exceeds_key_len() {
         invalid_partial_len.encode_var_vec(),
     );
 
-    match parse_range_canonical(&data) {
+    match compress_and_parse_range(&data) {
         Err(ReadError::InvalidItem {
             item,
             expected,
@@ -334,7 +332,7 @@ fn test_empty_proof() {
         0, // key-value pairs length = 0
     ];
 
-    match parse_range_canonical(&bytes) {
+    match compress_and_parse_range(&bytes) {
         Ok(proof) => {
             assert!(proof.start_proof().is_empty());
             assert!(proof.end_proof().is_empty());
@@ -382,7 +380,7 @@ fn test_change_proof_invalid_header(
 
     mutator(&mut data);
 
-    match parse_change_canonical(&data) {
+    match compress_and_parse_change(&data) {
         Err(ReadError::InvalidHeader(err)) => assert!(expected(&err), "unexpected error: {err}"),
         other => panic!("Expected ReadError::InvalidHeader, got: {other:?}"),
     }
@@ -419,7 +417,7 @@ fn test_change_proof_incomplete_item(
 
     mutator(&mut data);
 
-    match parse_change_canonical(&data) {
+    match compress_and_parse_change(&data) {
         Err(ReadError::IncompleteItem {
             item: found_item,
             offset: _,
@@ -476,7 +474,7 @@ fn test_change_proof_invalid_item(
 
     mutator(&proof, &mut data);
 
-    match parse_change_canonical(&data) {
+    match compress_and_parse_change(&data) {
         Err(ReadError::InvalidItem {
             item: found_item,
             offset: _,
@@ -527,7 +525,7 @@ fn make_proof_node(
 
 /// Wraps a single `ProofNode` in a minimal `FrozenRangeProof` and serializes it.
 /// Returns the proof plus its canonical uncompressed bytes
-/// (`header || body`); parse with [`parse_range_canonical`].
+/// (`header || body`); parse with [`compress_and_parse_range`].
 fn make_range_proof_from_single_node(node: ProofNode) -> (FrozenRangeProof, Vec<u8>) {
     let proof = FrozenRangeProof::new(
         Proof::new(Box::new([node])),
@@ -542,7 +540,7 @@ fn make_range_proof_from_single_node(node: ProofNode) -> (FrozenRangeProof, Vec<
 /// Verifies that parsing the canonical bytes and re-serializing the
 /// canonical body produces the same bytes.
 fn assert_range_proof_round_trip(serialized: Vec<u8>) {
-    let parsed = parse_range_canonical(&serialized).expect("deserialization should succeed");
+    let parsed = compress_and_parse_range(&serialized).expect("deserialization should succeed");
     let mut re_serialized = raw_header(ProofType::Range);
     parsed.write_body_to_vec(&mut re_serialized);
     assert_eq!(serialized, re_serialized, "round-trip bytes must match");
@@ -652,7 +650,7 @@ fn test_invalid_path_nibble() {
     let node = make_proof_node(&[1, 2, 3], 0, None, &[]);
     let (_, mut data) = make_range_proof_from_single_node(node);
     data[34] = 0x10; // first key byte set to an invalid nibble (16 > 15)
-    match parse_range_canonical(&data) {
+    match compress_and_parse_range(&data) {
         Err(ReadError::InvalidItem { item, .. }) => assert_eq!(item, "path"),
         other => panic!("Expected InvalidItem {{ item: \"path\" }}, got: {other:?}"),
     }
@@ -663,7 +661,7 @@ fn test_invalid_value_digest_discriminant() {
     let node = make_proof_node(&[1, 2, 3], 0, Some(Box::from(b"v".as_slice())), &[]);
     let (_, mut data) = make_range_proof_from_single_node(node);
     data[39] = 2; // invalid ValueDigest discriminant (must be 0 or 1)
-    match parse_range_canonical(&data) {
+    match compress_and_parse_range(&data) {
         Err(ReadError::InvalidItem {
             item,
             expected,
@@ -692,7 +690,7 @@ fn test_incomplete_item_known_layout(
     let node = make_proof_node(&[1, 2, 3], 0, None, &[]);
     let (_, mut data) = make_range_proof_from_single_node(node);
     data.truncate(truncate_at);
-    match parse_range_canonical(&data) {
+    match compress_and_parse_range(&data) {
         Err(ReadError::IncompleteItem {
             item: found_item,
             expected,
@@ -713,7 +711,7 @@ fn test_incomplete_trie_hash() {
     let node = make_proof_node(&[1], 0, None, &[7]);
     let (_, mut data) = make_range_proof_from_single_node(node);
     data.truncate(39); // ChildMask ends at [38]; TrieHash starts at [39]
-    match parse_range_canonical(&data) {
+    match compress_and_parse_range(&data) {
         Err(ReadError::IncompleteItem {
             item,
             expected,
@@ -734,7 +732,7 @@ fn test_incomplete_hash_type_discriminant() {
     let node = make_proof_node(&[1], 0, None, &[7]);
     let (_, mut data) = make_range_proof_from_single_node(node);
     data.truncate(39); // ChildMask ends at [38]; HashType discriminant is at [39]
-    match parse_range_canonical(&data) {
+    match compress_and_parse_range(&data) {
         Err(ReadError::IncompleteItem {
             item,
             expected,
@@ -757,7 +755,7 @@ fn test_invalid_hash_type_discriminant() {
     let node = make_proof_node(&[1], 0, None, &[7]);
     let (_, mut data) = make_range_proof_from_single_node(node);
     data[39] = 2; // invalid HashType discriminant (must be 0 or 1)
-    match parse_range_canonical(&data) {
+    match compress_and_parse_range(&data) {
         Err(ReadError::InvalidItem {
             item,
             expected,
@@ -781,7 +779,7 @@ fn test_change_proof_incomplete_batch_op_discriminant() {
     //   [34]=0x03 (batch_ops count=3)    [35]=0x00 (first BatchOp discriminant)
     let (_, mut data) = create_valid_change_proof();
     data.truncate(35); // cut before the first BatchOp discriminant byte
-    match parse_change_canonical(&data) {
+    match compress_and_parse_change(&data) {
         Err(ReadError::InvalidItem {
             item,
             expected,
@@ -924,7 +922,7 @@ fn test_slow_malformed_proof_fuzz() {
     let rng = SeededRng::from_env_or_random();
     for i in 0..200 {
         // Corrupt the *canonical* bytes (header || body), not the wire:
-        // this test targets the body parser via parse_range_canonical.
+        // this test targets the body parser via compress_and_parse_range.
         let (proof, _) = generate_random_range_proof(&rng);
         let mut data = raw_header(ProofType::Range);
         proof.write_body_to_vec(&mut data);
@@ -943,7 +941,7 @@ fn test_slow_malformed_proof_fuzz() {
         }
         debug!("iteration {i}: corrupted bytes: {}", hex::encode(&data));
 
-        match parse_range_canonical(&data) {
+        match compress_and_parse_range(&data) {
             Err(err) => {
                 debug!("iteration {i}: parse error (expected): {err}");
             }
@@ -983,7 +981,7 @@ fn test_dos_array_length_bounds() {
     // Calculate the remaining bytes after parsing the new varint (offset 32 + encoded varint len)
     let remainder_len = data.len() - 32 - malicious_num_items.required_space();
 
-    match parse_range_canonical(&data) {
+    match compress_and_parse_range(&data) {
         Err(ReadError::InvalidItem {
             item,
             expected,

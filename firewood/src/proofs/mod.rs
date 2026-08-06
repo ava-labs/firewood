@@ -53,8 +53,8 @@
 //! Change proofs additionally serialize their `batch_ops` as a sequence of tagged
 //! Put/Delete operations after the boundary proof nodes. See `ser.rs` for details.
 //!
-//! The serialization format is versioned to allow for future evolution; decoders
-//! reject versions they do not understand.
+//! The serialization format is versioned to allow for future evolution while maintaining
+//! backward compatibility with proof verification.
 //!
 //! # Range Proof Verification Algorithm
 //!
