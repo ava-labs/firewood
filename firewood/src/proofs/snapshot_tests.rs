@@ -74,7 +74,7 @@
 
 use test_case::test_case;
 
-use firewood_storage::{Children, IntoHashType, PathComponent, TrieHash, ValueDigest};
+use firewood_storage::{Children, PathComponent, TrieHash, ValueDigest};
 
 use super::types::{Proof, ProofNode};
 use crate::api::{FrozenChangeProof, FrozenRangeProof};
@@ -127,7 +127,7 @@ fn make_node(
     let mut child_hashes = Children::new();
     for &nibble in child_nibbles {
         child_hashes[PathComponent::try_new(nibble).unwrap()] =
-            Some(TrieHash::from([0u8; 32]).into_hash_type());
+            Some(TrieHash::from([0u8; 32]).into());
     }
     ProofNode {
         key,
