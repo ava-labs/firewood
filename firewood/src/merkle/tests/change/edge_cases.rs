@@ -5,10 +5,10 @@
 
 use super::*;
 
-#[test]
-fn test_empty_batch_ops_with_nonempty_proofs() {
+#[firewood_macros::hash_mode]
+fn test_empty_batch_ops_with_nonempty_proofs<H: HashMode>() {
     let (source, target, root1_target, _ds, _dt) =
-        setup_source_target![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+        setup_source_target![mode = H; (b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
 
     // Change only \x30 (outside range [\x10, \x20])
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x30", b"changed")]);
@@ -26,15 +26,22 @@ fn test_empty_batch_ops_with_nonempty_proofs() {
     assert!(!proof.start_proof().is_empty());
     assert!(!proof.end_proof().is_empty());
 
-    let ctx =
-        verify_change_proof_structure(&proof, root2, Some(b"\x10"), Some(b"\x20"), None).unwrap();
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2,
+        Some(b"\x10"),
+        Some(b"\x20"),
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
-#[test]
-fn test_odd_depth_proof_node_accepted() {
+#[firewood_macros::hash_mode]
+fn test_odd_depth_proof_node_accepted<H: HashMode>() {
     let (source, target, root1_target, _ds, _dt) =
-        setup_source_target![(b"\x12", b"v0"), (b"\x13", b"v1"), (b"\x50", b"v2")];
+        setup_source_target![mode = H; (b"\x12", b"v0"), (b"\x13", b"v1"), (b"\x50", b"v2")];
 
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x50", b"changed")]);
 
@@ -49,22 +56,19 @@ fn test_odd_depth_proof_node_accepted() {
     assert!(
         proof
             .start_proof()
-            .value_digest(
-                b"\x14",
-                &root2,
-                firewood_storage::DefaultHashMode::ALGORITHM
-            )
+            .value_digest(b"\x14", &root2, H::ALGORITHM)
             .unwrap()
             .is_none()
     );
-    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x14"), None, None).unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x14"), None, H::ALGORITHM, None)
+        .unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
-#[test]
-fn test_start_proof_inclusion_with_children_below() {
+#[firewood_macros::hash_mode]
+fn test_start_proof_inclusion_with_children_below<H: HashMode>() {
     let (source, target, root1_target, _ds, _dt) =
-        setup_source_target![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
+        setup_source_target![mode = H; (b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
 
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\xf0", b"changed")]);
 
@@ -75,23 +79,20 @@ fn test_start_proof_inclusion_with_children_below() {
     assert!(
         proof
             .start_proof()
-            .value_digest(
-                b"\xab",
-                &root2,
-                firewood_storage::DefaultHashMode::ALGORITHM
-            )
+            .value_digest(b"\xab", &root2, H::ALGORITHM)
             .unwrap()
             .is_some(),
         "start proof should be an inclusion proof for \\xab"
     );
-    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\xab"), None, None).unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\xab"), None, H::ALGORITHM, None)
+        .unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
-#[test]
-fn test_end_proof_inclusion_with_children_below() {
+#[firewood_macros::hash_mode]
+fn test_end_proof_inclusion_with_children_below<H: HashMode>() {
     let (source, target, root1_target, _ds, _dt) =
-        setup_source_target![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
+        setup_source_target![mode = H; (b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
 
     let (root1_source, root2) = setup_2nd_commit!(
         source,
@@ -110,15 +111,26 @@ fn test_end_proof_inclusion_with_children_below() {
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
     assert!(proof.start_proof().is_empty());
-    let ctx =
-        verify_change_proof_structure(&proof, root2, None, None, NonZeroUsize::new(1)).unwrap();
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2,
+        None,
+        None,
+        H::ALGORITHM,
+        NonZeroUsize::new(1),
+    )
+    .unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
-#[test]
-fn test_divergence_parent_start_key_exhausted() {
-    let (source, target, root1_target, _ds, _dt) =
-        setup_source_target![(b"\x12\x01", b"v0"), (b"\x12\x02", b"v1"), (b"\xf0", b"v2")];
+#[firewood_macros::hash_mode]
+fn test_divergence_parent_start_key_exhausted<H: HashMode>() {
+    let (source, target, root1_target, _ds, _dt) = setup_source_target![
+        mode = H;
+        (b"\x12\x01", b"v0"),
+        (b"\x12\x02", b"v1"),
+        (b"\xf0", b"v2")
+    ];
 
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\xf0", b"changed")]);
 
@@ -136,17 +148,20 @@ fn test_divergence_parent_start_key_exhausted() {
     assert!(
         proof
             .start_proof()
-            .value_digest(
-                b"\x12",
-                &root2,
-                firewood_storage::DefaultHashMode::ALGORITHM
-            )
+            .value_digest(b"\x12", &root2, H::ALGORITHM)
             .unwrap()
             .is_none(),
         "start proof should be an exclusion proof for \\x12"
     );
-    let ctx =
-        verify_change_proof_structure(&proof, root2, Some(b"\x12"), Some(b"\xf0"), None).unwrap();
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2,
+        Some(b"\x12"),
+        Some(b"\xf0"),
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
@@ -168,10 +183,10 @@ fn test_divergence_parent_start_key_exhausted() {
 // The change proof query uses start=\x10 (the branch node), end=None.
 // Only \x30 changes ("c" -> "changed"), but the verifier must still
 // validate that \x10's children are intact.
-#[test]
-fn test_start_tail_last_node_children_checked() {
+#[firewood_macros::hash_mode]
+fn test_start_tail_last_node_children_checked<H: HashMode>() {
     let (source, target, root1_target, _ds, _dt) =
-        setup_source_target![(b"\x10\x01", b"a"), (b"\x10\x02", b"b"), (b"\x30", b"c")];
+        setup_source_target![mode = H; (b"\x10\x01", b"a"), (b"\x10\x02", b"b"), (b"\x30", b"c")];
 
     // Only modify \x30 on the source; \x10's children are untouched
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x30", b"changed")]);
@@ -184,24 +199,23 @@ fn test_start_tail_last_node_children_checked() {
     assert!(
         proof
             .start_proof()
-            .value_digest(
-                b"\x10",
-                &root2,
-                firewood_storage::DefaultHashMode::ALGORITHM
-            )
+            .value_digest(b"\x10", &root2, H::ALGORITHM)
             .unwrap()
             .is_none(),
         "start proof should be an exclusion proof for \\x10"
     );
-    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10"), None, None).unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10"), None, H::ALGORITHM, None)
+        .unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
-#[test]
-fn test_start_proof_exclusion_for_deleted_key() {
-    let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+#[firewood_macros::hash_mode]
+fn test_start_proof_exclusion_for_deleted_key<H: HashMode>() {
+    let (source, _dir_source) =
+        setup_db![mode = H; (b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
     let root1_source = source.root_hash().unwrap();
-    let (target, _dir_target) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+    let (target, _dir_target) =
+        setup_db![mode = H; (b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
     let root1_target = target.root_hash().unwrap();
 
     source
@@ -224,16 +238,13 @@ fn test_start_proof_exclusion_for_deleted_key() {
     assert!(
         proof
             .start_proof()
-            .value_digest(
-                b"\x10",
-                &root2,
-                firewood_storage::DefaultHashMode::ALGORITHM
-            )
+            .value_digest(b"\x10", &root2, H::ALGORITHM)
             .unwrap()
             .is_none(),
         "start proof should be an exclusion proof for deleted \\x10"
     );
-    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10"), None, None).unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10"), None, H::ALGORITHM, None)
+        .unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
@@ -247,10 +258,10 @@ fn test_start_proof_exclusion_for_deleted_key() {
 /// between the proposal (R1 + empty ops) and the end trie (R2), but
 /// because `\x00\x10` < `\x00\x10\x20` the value check should be
 /// skipped.
-#[test]
-fn test_disjoint_proof() {
+#[firewood_macros::hash_mode]
+fn test_disjoint_proof<H: HashMode>() {
     // R1: trie with a single key \x00
-    let (db, _dir) = setup_db![(b"\x00", b"v0")];
+    let (db, _dir) = setup_db![mode = H; (b"\x00", b"v0")];
 
     // R2: add \x00\x10 (outside query range [\x00\x10\x20, \x00\x10\x30])
     let (root1, root2) = setup_2nd_commit!(db, [(b"\x00\x10", b"v1")]);
@@ -274,6 +285,7 @@ fn test_disjoint_proof() {
         root2,
         Some(first.as_slice()),
         Some(last.as_slice()),
+        H::ALGORITHM,
         None,
     )
     .unwrap();
@@ -285,16 +297,18 @@ fn test_disjoint_proof() {
 /// exercises the fixed path — a Delete near `start_key` under a shared
 /// branch produces a valid proof. Before the fix, the proof generator
 /// omitted the divergent child, leaving a verification gap.
-#[test]
-fn test_boundary_child_gap_closed_for_start_key() {
+#[firewood_macros::hash_mode]
+fn test_boundary_child_gap_closed_for_start_key<H: HashMode>() {
     // \x10\x50 and \x10\x58 share a branch at nibble path [1,0].
     let (source, _dir_source) = setup_db![
+        mode = H;
         (b"\x10\x50", b"a"),
         (b"\x10\x58", b"b"),
         (b"\x30\x00", b"c")
     ];
     let root1_source = source.root_hash().unwrap();
     let (target, _dir_target) = setup_db![
+        mode = H;
         (b"\x10\x50", b"a"),
         (b"\x10\x58", b"b"),
         (b"\x30\x00", b"c")
@@ -328,9 +342,15 @@ fn test_boundary_child_gap_closed_for_start_key() {
         .unwrap();
     assert_eq!(honest.batch_ops().len(), 2); // Delete(\x10\x50) + Put(\x30\x00)
 
-    let ctx =
-        verify_change_proof_structure(&honest, root2, Some(b"\x10\x50"), Some(b"\x30\x00"), None)
-            .unwrap();
+    let ctx = verify_change_proof_structure(
+        &honest,
+        root2,
+        Some(b"\x10\x50"),
+        Some(b"\x30\x00"),
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
     verify_and_check(&target, &honest, &ctx, root1_target).unwrap();
 }
 
@@ -340,10 +360,10 @@ fn test_boundary_child_gap_closed_for_start_key() {
 /// Keys `\x10\x50` and `\x10\x58` share a branch with partial path containing
 /// nibble 5. `start_key` `\x10\x40` diverges at nibble 4 < 5, so the start
 /// boundary is "before" the terminal — no children are marked outside.
-#[test]
-fn test_terminal_divergence_within_partial_path() {
+#[firewood_macros::hash_mode]
+fn test_terminal_divergence_within_partial_path<H: HashMode>() {
     let (source, target, root1_target, _ds, _dt) =
-        setup_source_target![(b"\x10\x50", b"a"), (b"\x10\x58", b"b"), (b"\x30", b"c")];
+        setup_source_target![mode = H; (b"\x10\x50", b"a"), (b"\x10\x58", b"b"), (b"\x30", b"c")];
 
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x30", b"changed")]);
 
@@ -351,7 +371,9 @@ fn test_terminal_divergence_within_partial_path() {
         .change_proof(root1_source, root2.clone(), Some(b"\x10\x40"), None, None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
-    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10\x40"), None, None).unwrap();
+    let ctx =
+        verify_change_proof_structure(&proof, root2, Some(b"\x10\x40"), None, H::ALGORITHM, None)
+            .unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
@@ -363,9 +385,10 @@ fn test_terminal_divergence_within_partial_path() {
 /// with children at nibbles 1, 2, and 3. `start_key` `\x10\x05` has
 /// on-path nibble 5 at the terminal, so nibbles 1, 2, and 3 are all
 /// below 5 and marked outside.
-#[test]
-fn test_terminal_ancestor_all_children_outside() {
+#[firewood_macros::hash_mode]
+fn test_terminal_ancestor_all_children_outside<H: HashMode>() {
     let (source, target, root1_target, _ds, _dt) = setup_source_target![
+        mode = H;
         (b"\x10\x01", b"a"),
         (b"\x10\x02", b"b"),
         (b"\x10\x03", b"c"),
@@ -384,7 +407,9 @@ fn test_terminal_ancestor_all_children_outside() {
     let terminal = proof.start_proof().as_ref().last().unwrap();
     assert_eq!(terminal.key.len(), 3);
 
-    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10\x05"), None, None).unwrap();
+    let ctx =
+        verify_change_proof_structure(&proof, root2, Some(b"\x10\x05"), None, H::ALGORITHM, None)
+            .unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
@@ -395,9 +420,10 @@ fn test_terminal_ancestor_all_children_outside() {
 /// key is exhausted before the node's partial path is fully consumed.
 /// All children of this terminal are in-range (>= `\x10`), so none are
 /// marked outside by `compute_outside_children`.
-#[test]
-fn test_terminal_divergent_node_all_children_in_range() {
+#[firewood_macros::hash_mode]
+fn test_terminal_divergent_node_all_children_in_range<H: HashMode>() {
     let (source, target, root1_target, _ds, _dt) = setup_source_target![
+        mode = H;
         (b"\x10\x01", b"a"),
         (b"\x10\x02", b"b"),
         (b"\x10\x03", b"c"),
@@ -418,7 +444,8 @@ fn test_terminal_divergent_node_all_children_in_range() {
     let terminal = proof.start_proof().as_ref().last().unwrap();
     assert_eq!(terminal.key.len(), 3);
 
-    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10"), None, None).unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10"), None, H::ALGORITHM, None)
+        .unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
@@ -428,10 +455,10 @@ fn test_terminal_divergent_node_all_children_in_range() {
 ///
 /// Key `\x20` is a prefix of `\x20\xab`. `end_key` = `\x20` — children of
 /// the `\x20` node extend beyond `end_key` and must use proof hashes.
-#[test]
-fn test_right_edge_boundary_prefix_of_terminal() {
+#[firewood_macros::hash_mode]
+fn test_right_edge_boundary_prefix_of_terminal<H: HashMode>() {
     let (source, target, root1_target, _ds, _dt) =
-        setup_source_target![(b"\x10", b"a"), (b"\x20", b"b"), (b"\x20\xab", b"c")];
+        setup_source_target![mode = H; (b"\x10", b"a"), (b"\x20", b"b"), (b"\x20\xab", b"c")];
 
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x10", b"changed")]);
 
@@ -439,7 +466,8 @@ fn test_right_edge_boundary_prefix_of_terminal() {
         .change_proof(root1_source, root2.clone(), None, Some(b"\x20"), None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
-    let ctx = verify_change_proof_structure(&proof, root2, None, Some(b"\x20"), None).unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, None, Some(b"\x20"), H::ALGORITHM, None)
+        .unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
@@ -451,9 +479,10 @@ fn test_right_edge_boundary_prefix_of_terminal() {
 /// range `[\x10\x50, \x30]` excludes `\x10` (it's a proper prefix of `start_key`),
 /// so `\x10` is out-of-range. The start proof path passes through `\x10`, and
 /// reconciliation must adopt the proof's value (`"new_pfx"`) to match `end_root`.
-#[test]
-fn test_out_of_range_value_change_adopted() {
+#[firewood_macros::hash_mode]
+fn test_out_of_range_value_change_adopted<H: HashMode>() {
     let (source, target, root1_target, _ds, _dt) = setup_source_target![
+        mode = H;
         (b"\x10", b"old_pfx"),
         (b"\x10\x50", b"val0000"),
         (b"\x30", b"val1000")
@@ -473,8 +502,15 @@ fn test_out_of_range_value_change_adopted() {
         .unwrap();
     // Only \x30 is in range [\x10\x50, \x30]; \x10's change is out of range.
     assert_eq!(proof.batch_ops().len(), 1);
-    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10\x50"), Some(b"\x30"), None)
-        .unwrap();
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2,
+        Some(b"\x10\x50"),
+        Some(b"\x30"),
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
@@ -488,9 +524,10 @@ fn test_out_of_range_value_change_adopted() {
 /// caused `EndRootMismatch` during root hash verification. Now, the
 /// out-of-range callback clears the stale value so the hash matches
 /// `end_root`.
-#[test]
-fn test_change_proof_prefix_key_deleted_in_end_root() {
+#[firewood_macros::hash_mode]
+fn test_change_proof_prefix_key_deleted_in_end_root<H: HashMode>() {
     let (db, _dir) = setup_db![
+        mode = H;
         (b"\xab", b"prefix_value"),
         (b"\xab\xcd", b"full_key"),
         (b"\xab\xef", b"sibling"),
@@ -532,6 +569,7 @@ fn test_change_proof_prefix_key_deleted_in_end_root() {
         root2.clone(),
         Some(b"\xab\x00".as_slice()),
         Some(b"\xff".as_slice()),
+        H::ALGORITHM,
         None,
     )
     .unwrap();
@@ -544,11 +582,13 @@ fn test_change_proof_prefix_key_deleted_in_end_root() {
 /// is an exclusion proof. Start and end proofs take different code paths
 /// (`compute_right_edge_key`, `verify_boundary_proof` with different
 /// `boundary_op`), so both sides need coverage.
-#[test]
-fn test_end_proof_exclusion_for_deleted_key() {
-    let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+#[firewood_macros::hash_mode]
+fn test_end_proof_exclusion_for_deleted_key<H: HashMode>() {
+    let (source, _dir_source) =
+        setup_db![mode = H; (b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
     let root1_source = source.root_hash().unwrap();
-    let (target, _dir_target) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+    let (target, _dir_target) =
+        setup_db![mode = H; (b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
     let root1_target = target.root_hash().unwrap();
 
     source
@@ -571,25 +611,22 @@ fn test_end_proof_exclusion_for_deleted_key() {
     assert!(
         proof
             .end_proof()
-            .value_digest(
-                b"\x30",
-                &root2,
-                firewood_storage::DefaultHashMode::ALGORITHM
-            )
+            .value_digest(b"\x30", &root2, H::ALGORITHM)
             .unwrap()
             .is_none(),
         "end proof should be an exclusion proof for deleted \\x30"
     );
-    let ctx = verify_change_proof_structure(&proof, root2, None, Some(b"\x30"), None).unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, None, Some(b"\x30"), H::ALGORITHM, None)
+        .unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
 /// Single-point range: `start_key == end_key`. Both boundary proofs anchor
 /// at the same key. If that key was changed, `batch_ops` has exactly 1 entry.
-#[test]
-fn test_single_point_range() {
+#[firewood_macros::hash_mode]
+fn test_single_point_range<H: HashMode>() {
     let (source, target, root1_target, _ds, _dt) =
-        setup_source_target![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
+        setup_source_target![mode = H; (b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
 
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x20", b"changed")]);
 
@@ -607,27 +644,26 @@ fn test_single_point_range() {
     assert!(
         proof
             .start_proof()
-            .value_digest(
-                b"\x20",
-                &root2,
-                firewood_storage::DefaultHashMode::ALGORITHM
-            )
+            .value_digest(b"\x20", &root2, H::ALGORITHM)
             .unwrap()
             .is_some()
     );
     assert!(
         proof
             .end_proof()
-            .value_digest(
-                b"\x20",
-                &root2,
-                firewood_storage::DefaultHashMode::ALGORITHM
-            )
+            .value_digest(b"\x20", &root2, H::ALGORITHM)
             .unwrap()
             .is_some()
     );
-    let ctx =
-        verify_change_proof_structure(&proof, root2, Some(b"\x20"), Some(b"\x20"), None).unwrap();
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2,
+        Some(b"\x20"),
+        Some(b"\x20"),
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
@@ -640,9 +676,10 @@ fn test_single_point_range() {
 /// Bounded proof `[\x10, None]` excludes the deleted key.
 ///
 /// Found by `ChangeProofVerification.tla` `HonestProofAccepted` invariant.
-#[test]
-fn test_out_of_range_root_compression() {
+#[firewood_macros::hash_mode]
+fn test_out_of_range_root_compression<H: HashMode>() {
     let (db, _dir) = setup_db![
+        mode = H;
         (b"\x01", b"alpha"),
         (b"\x10", b"betax"),
         (b"\x11", b"gamma")
@@ -685,18 +722,25 @@ fn test_out_of_range_root_compression() {
         "root should compress to [1] after deletion"
     );
 
-    let ctx =
-        verify_change_proof_structure(&proof, root2.clone(), Some(b"\x10"), None, None).unwrap();
+    let ctx = verify_change_proof_structure(
+        &proof,
+        root2.clone(),
+        Some(b"\x10"),
+        None,
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
     verify_and_check(&db, &proof, &ctx, root1).unwrap();
 }
 
 /// Reverse of root compression: out-of-range insert adds a key at a new
 /// first nibble, expanding root's `partial_path` from `[1]` to `[]`.
-#[test]
-fn test_out_of_range_root_expansion() {
-    let (source, _dir_source) = setup_db![(b"\x10", b"a"), (b"\x11", b"b")];
+#[firewood_macros::hash_mode]
+fn test_out_of_range_root_expansion<H: HashMode>() {
+    let (source, _dir_source) = setup_db![mode = H; (b"\x10", b"a"), (b"\x11", b"b")];
     let root1_source = source.root_hash().unwrap();
-    let (target, _dir_target) = setup_db![(b"\x10", b"a"), (b"\x11", b"b")];
+    let (target, _dir_target) = setup_db![mode = H; (b"\x10", b"a"), (b"\x11", b"b")];
     let root1_target = target.root_hash().unwrap();
 
     // Insert \x01 (nibble 0, out of range) and change \x10 (in range).
@@ -727,16 +771,17 @@ fn test_out_of_range_root_expansion() {
         "root should expand to [] after insertion"
     );
 
-    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10"), None, None).unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10"), None, H::ALGORITHM, None)
+        .unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
 /// The root node itself has a value (key `b""`) that changes between
 /// revisions. Tests that root-level value deltas are handled correctly.
-#[test]
-fn test_root_value_change() {
+#[firewood_macros::hash_mode]
+fn test_root_value_change<H: HashMode>() {
     let (source, target, root1_target, _ds, _dt) =
-        setup_source_target![(b"", b"root_old"), (b"\x10", b"v0")];
+        setup_source_target![mode = H; (b"", b"root_old"), (b"\x10", b"v0")];
 
     let (root1_source, root2) =
         setup_2nd_commit!(source, [(b"", b"root_new"), (b"\x10", b"changed")]);
@@ -746,7 +791,7 @@ fn test_root_value_change() {
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 2);
 
-    let ctx = verify_change_proof_structure(&proof, root2, None, None, None).unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, None, None, H::ALGORITHM, None).unwrap();
     verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 }
 
@@ -755,10 +800,15 @@ fn test_root_value_change() {
 /// proving trie may not have the value at these out-of-range positions,
 /// so `compute_root_hash_with_proofs` must fall back to the proof node's
 /// Hash digest.
-#[cfg(not(feature = "ethhash"))]
-#[test]
-fn test_change_proof_with_hashed_out_of_range_value() {
+///
+/// In ethhash mode this out-of-range key is a would-be account node at
+/// depth 32, whose live-hashing account semantics (RLP-encoded value,
+/// storageRoot splicing) don't apply to a raw 64-byte blob — the test is
+/// pinned to `MerkleDbHash`, which hashes the raw value directly.
+#[firewood_macros::hash_mode(merkledb)]
+fn test_change_proof_with_hashed_out_of_range_value<H: HashMode>() {
     let (source, target, root1_target, _ds, _dt) = setup_source_target![
+        mode = H;
         (b"\x10", [0u8; 64].as_slice()),
         (b"\x10\x50", b"child"),
         (b"\x30", b"other")
@@ -797,8 +847,14 @@ fn test_change_proof_with_hashed_out_of_range_value() {
     proof.write_to_vec(&mut serialized);
     let deserialized = crate::api::FrozenChangeProof::from_slice(&serialized).unwrap();
 
-    let ctx =
-        verify_change_proof_structure(&deserialized, root2, Some(b"\x10\x50"), Some(b"\x30"), None)
-            .unwrap();
+    let ctx = verify_change_proof_structure(
+        &deserialized,
+        root2,
+        Some(b"\x10\x50"),
+        Some(b"\x30"),
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
     verify_and_check(&target, &deserialized, &ctx, root1_target).unwrap();
 }
