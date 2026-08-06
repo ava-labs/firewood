@@ -5,7 +5,6 @@ use criterion::profiler::Profiler;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use firewood::api::{Db as _, DbView as _, Proposal as _, Reconstructible as _};
 use firewood::db::{BatchOp, Db, DbConfig, UseParallel};
-use firewood_storage::NodeHashAlgorithm;
 use pprof::ProfilerGuard;
 use rand::{RngExt, distr::Alphanumeric};
 use std::fs::File;
@@ -96,7 +95,7 @@ fn bench_proposal_chain(criterion: &mut Criterion) {
                     let db_dir = TempDir::new().unwrap();
                     let db_path = db_dir.path().join("benchmark_db");
                     let cfg = DbConfig::builder()
-                        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+                        .node_hash_algorithm(<firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM)
                         .truncate(true)
                         .build();
                     let db = Db::new(db_path, cfg).unwrap();
@@ -135,7 +134,7 @@ fn bench_reconstructed_chain(criterion: &mut Criterion) {
                     // extra threads muddying up any flamegraphs when creating the
                     // initial proposal
                     let cfg = DbConfig::builder()
-                        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+                        .node_hash_algorithm(<firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM)
                         .truncate(true)
                         .use_parallel(UseParallel::Never)
                         .build();

@@ -5,8 +5,7 @@ use std::num::{NonZeroU64, NonZeroUsize};
 
 use firewood::{
     api::{
-        self, ArcDynDbView, Db as _, DbView, FrozenChangeProof, HashKey, HashKeyExt, IntoBatchIter,
-        KeyType,
+        self, ArcDynDbView, DynDb, FrozenChangeProof, HashKey, HashKeyExt, IntoBatchIter, KeyType,
     },
     db::{CommittedView, Db, DbConfig},
     manager::RevisionManagerConfig,
@@ -147,8 +146,8 @@ impl DatabaseHandleArgs<'_> {
 ///
 #[derive(Debug)]
 pub struct DatabaseHandle {
-    /// The database
-    db: Db,
+    /// The database, erased behind the object-safe write boundary.
+    db: Box<dyn DynDb>,
     metrics_context: MetricsContext,
 }
 
@@ -177,7 +176,7 @@ impl DatabaseHandle {
             return Err(invalid_data("database path cannot be empty"));
         }
 
-        let db = Db::new(path, cfg)?;
+        let db: Box<dyn DynDb> = Box::new(Db::new(path, cfg)?);
         Ok(Self {
             db,
             metrics_context,
@@ -189,6 +188,7 @@ impl DatabaseHandle {
     /// # Errors
     ///
     /// Never errors.
+    #[must_use]
     pub fn current_root_hash(&self) -> Option<HashKey> {
         self.db.root_hash()
     }
@@ -205,7 +205,7 @@ impl DatabaseHandle {
             });
         };
 
-        self.db.revision(root)?.val(key)
+        self.db.revision(root)?.val(key.as_ref())
     }
 
     /// Creates and commits a proposal with the given values.
@@ -230,11 +230,9 @@ impl DatabaseHandle {
     /// accessing the database.
     pub fn get_revision(&self, root: HashKey) -> Result<GetRevisionResult<'_>, api::Error> {
         let view = self.db.view(root.clone())?;
-        let historical = match self.db.committed_view(root.clone()) {
-            Ok(rev) => Some(rev),
-            Err(api::Error::RevisionNotFound { .. }) => None,
-            Err(err) => return Err(err),
-        };
+        // The opaque committed parent is available only in the build's default
+        // hash mode (see [`DynDb::committed_view`]).
+        let historical = self.db.committed_view(root.clone())?;
         Ok(GetRevisionResult {
             handle: RevisionHandle::new(view, historical, self.metrics_context, self),
             root_hash: root,
@@ -251,7 +249,8 @@ impl DatabaseHandle {
         parent: &CommittedView,
         batch: impl IntoBatchIter,
     ) -> Result<firewood::db::ReconstructedView<'db>, api::Error> {
-        self.db.reconstruct_from_view(parent, batch)
+        let ops = crate::proposal::collect_owned_batch(batch)?;
+        self.db.reconstruct_from_view(parent, ops)
     }
 
     pub(crate) fn view(&self, root: HashKey) -> Result<ArcDynDbView, api::Error> {
@@ -264,9 +263,25 @@ impl DatabaseHandle {
         last_key: Option<impl KeyType>,
         key_values: impl IntoIterator<Item: api::KeyValuePair>,
     ) -> Result<CreateProposalResult<'_>, api::Error> {
+        // Collect the key/value pairs into the dyn-boundary `OwnedBatch` shape
+        // (Put ops), preserving the caller's [first_key, last_key] range.
+        let first_key = first_key.map(|k| k.as_ref().to_vec());
+        let last_key = last_key.map(|k| k.as_ref().to_vec());
+        let ops: api::OwnedBatch = key_values
+            .into_iter()
+            .map(|pair| {
+                let (key, value) = api::KeyValuePair::try_into_tuple(pair)
+                    .map_err(|e| api::Error::from(e.into()))?;
+                Ok::<_, api::Error>(api::BatchOp::Put {
+                    key: key.as_ref().into(),
+                    value: value.as_ref().into(),
+                })
+            })
+            .collect::<Result<Vec<_>, api::Error>>()?
+            .into_boxed_slice();
         CreateProposalResult::new(self, || {
             self.db
-                .merge_key_value_range(first_key, last_key, key_values)
+                .merge_key_value_range(first_key.as_deref(), last_key.as_deref(), ops)
         })
     }
 
@@ -315,7 +330,7 @@ impl DatabaseHandle {
     ///
     /// An error is returned if there was an i/o error while dumping the trie.
     pub fn dump_to_string(&self) -> Result<String, api::Error> {
-        self.db.dump_to_string().map_err(api::Error::from)
+        self.db.dump_to_string()
     }
 
     /// Closes the database gracefully.
@@ -337,8 +352,9 @@ impl<'db> CView<'db> for &'db crate::DatabaseHandle {
     fn create_proposal(
         self,
         values: impl IntoBatchIter,
-    ) -> Result<firewood::db::Proposal<'db>, api::Error> {
-        self.db.propose(values)
+    ) -> Result<Box<dyn api::DynProposal<'db> + 'db>, api::Error> {
+        let ops = crate::proposal::collect_owned_batch(values)?;
+        self.db.propose(ops)
     }
 }
 

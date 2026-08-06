@@ -49,7 +49,11 @@ fn test_odd_depth_proof_node_accepted() {
     assert!(
         proof
             .start_proof()
-            .value_digest(b"\x14", &root2)
+            .value_digest(
+                b"\x14",
+                &root2,
+                firewood_storage::DefaultHashMode::ALGORITHM
+            )
             .unwrap()
             .is_none()
     );
@@ -71,7 +75,11 @@ fn test_start_proof_inclusion_with_children_below() {
     assert!(
         proof
             .start_proof()
-            .value_digest(b"\xab", &root2)
+            .value_digest(
+                b"\xab",
+                &root2,
+                firewood_storage::DefaultHashMode::ALGORITHM
+            )
             .unwrap()
             .is_some(),
         "start proof should be an inclusion proof for \\xab"
@@ -128,7 +136,11 @@ fn test_divergence_parent_start_key_exhausted() {
     assert!(
         proof
             .start_proof()
-            .value_digest(b"\x12", &root2)
+            .value_digest(
+                b"\x12",
+                &root2,
+                firewood_storage::DefaultHashMode::ALGORITHM
+            )
             .unwrap()
             .is_none(),
         "start proof should be an exclusion proof for \\x12"
@@ -172,7 +184,11 @@ fn test_start_tail_last_node_children_checked() {
     assert!(
         proof
             .start_proof()
-            .value_digest(b"\x10", &root2)
+            .value_digest(
+                b"\x10",
+                &root2,
+                firewood_storage::DefaultHashMode::ALGORITHM
+            )
             .unwrap()
             .is_none(),
         "start proof should be an exclusion proof for \\x10"
@@ -208,7 +224,11 @@ fn test_start_proof_exclusion_for_deleted_key() {
     assert!(
         proof
             .start_proof()
-            .value_digest(b"\x10", &root2)
+            .value_digest(
+                b"\x10",
+                &root2,
+                firewood_storage::DefaultHashMode::ALGORITHM
+            )
             .unwrap()
             .is_none(),
         "start proof should be an exclusion proof for deleted \\x10"
@@ -551,7 +571,11 @@ fn test_end_proof_exclusion_for_deleted_key() {
     assert!(
         proof
             .end_proof()
-            .value_digest(b"\x30", &root2)
+            .value_digest(
+                b"\x30",
+                &root2,
+                firewood_storage::DefaultHashMode::ALGORITHM
+            )
             .unwrap()
             .is_none(),
         "end proof should be an exclusion proof for deleted \\x30"
@@ -583,14 +607,22 @@ fn test_single_point_range() {
     assert!(
         proof
             .start_proof()
-            .value_digest(b"\x20", &root2)
+            .value_digest(
+                b"\x20",
+                &root2,
+                firewood_storage::DefaultHashMode::ALGORITHM
+            )
             .unwrap()
             .is_some()
     );
     assert!(
         proof
             .end_proof()
-            .value_digest(b"\x20", &root2)
+            .value_digest(
+                b"\x20",
+                &root2,
+                firewood_storage::DefaultHashMode::ALGORITHM
+            )
             .unwrap()
             .is_some()
     );

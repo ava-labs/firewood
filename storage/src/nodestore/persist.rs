@@ -36,7 +36,7 @@ use crate::linear::FileIoError;
 use firewood_metrics::{GaugeExt, firewood_gauge, firewood_histogram};
 use std::time::Instant;
 
-use crate::{MaybePersistedNode, NodeReader, WritableStorage};
+use crate::{HashMode, MaybePersistedNode, NodeReader, WritableStorage};
 
 #[cfg(test)]
 use crate::RootReader;
@@ -163,14 +163,14 @@ impl<N: NodeReader + RootReader> Iterator for UnPersistedNodeIterator<'_, N> {
 /// # Errors
 ///
 /// Returns a [`FileIoError`] if the node cannot be allocated in storage.
-fn serialize_node_to_bump<'a>(
+fn serialize_node_to_bump<'a, H: HashMode>(
     bump: &'a bumpalo::Bump,
     shared_node: &crate::SharedNode,
     node_allocator: &mut NodeAllocator<'_, impl WritableStorage>,
 ) -> Result<(&'a [u8], crate::LinearAddress, usize), FileIoError> {
     let mut bytes = bumpalo::collections::Vec::new_in(bump);
     let area_size_index = shared_node
-        .as_bytes(&mut bytes)
+        .as_bytes::<H, _>(&mut bytes)
         .map_err(|e| node_allocator.io_error(e, 0, Some("allocate_node".to_owned())))?;
     let (persisted_address, _) = node_allocator.allocate_node(bytes.as_slice())?;
     bytes.shrink_to_fit();
@@ -178,7 +178,7 @@ fn serialize_node_to_bump<'a>(
     Ok((slice, persisted_address, area_size_index.size() as usize))
 }
 
-impl<S: WritableStorage> NodeStore<Committed, S> {
+impl<S: WritableStorage, H: HashMode> NodeStore<Committed, S, H> {
     /// Persist all the nodes of a proposal to storage, updating the header with new allocations.
     ///
     /// # Errors
@@ -223,7 +223,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
             // Serialize the node into the bump allocator
             let (slice, persisted_address, idx_size) =
-                serialize_node_to_bump(bump, &shared_node, node_allocator)?;
+                serialize_node_to_bump::<H>(bump, &shared_node, node_allocator)?;
 
             // NOTE(#1488): we need to set the address so that the parent node can
             // reference it when they are serialized within the same batch.
@@ -309,7 +309,7 @@ mod tests {
     use super::*;
     use crate::{
         Child, Children, DeletedNodeTracking, HashType, ImmutableProposal, LinearAddress,
-        NodeHashAlgorithm, NodeStore, NodeStoreHeader, Path, PathComponent, SharedNode,
+        NodeStore, NodeStoreHeader, Path, PathComponent, SharedNode,
         linear::memory::MemStore,
         node::{BranchNode, LeafNode, Node},
         nodestore::{Mutable, Propose},
@@ -366,7 +366,8 @@ mod tests {
     #[test]
     fn test_empty_nodestore() {
         let mem_store = MemStore::default().into();
-        let store = NodeStore::new_empty_proposal(mem_store, DeletedNodeTracking::Enabled);
+        let store: NodeStore<Mutable<Propose>, _> =
+            NodeStore::new_empty_proposal(mem_store, DeletedNodeTracking::Enabled);
         let mut iter = UnPersistedNodeIterator::new(&store);
 
         assert!(iter.next().is_none());
@@ -529,8 +530,9 @@ mod tests {
     fn test_into_committed_with_generic_storage() {
         // Create a base committed store with MemStore
         let mem_store = MemStore::default();
-        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
-        let base_committed =
+        let mut header =
+            NodeStoreHeader::new(<crate::DefaultHashMode as crate::HashMode>::ALGORITHM);
+        let base_committed: NodeStore<Committed, _> =
             NodeStore::new_empty_committed(mem_store.into(), DeletedNodeTracking::Enabled);
 
         // Create a mutable proposal from the base
