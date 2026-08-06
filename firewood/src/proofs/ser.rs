@@ -120,7 +120,7 @@ fn write_framed(proof: &impl WriteItem, proof_type: ProofType, out: &mut Vec<u8>
     Header::from(proof_type).write_item(out);
     let body_start = out.len();
     proof.write_item(out);
-    super::frame::compress_body_in_place(out, body_start, proof_type);
+    super::frame::compress_body_in_place(out, body_start);
 }
 
 trait PushVarInt {

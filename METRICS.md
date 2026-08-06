@@ -94,14 +94,6 @@ The FFI layer sets the context on each inbound call based on caller configuratio
 | `firewood_node_removes_total`            | counter | `prefix`, `result` | Remove operations; `prefix=true\|false`, `result=success\|nonexistent`       |
 | `firewood_change_proof_iterations_total` | counter | —                  | Iterator `next()` calls during change-proof generation                       |
 
-#### Proof wire compression
-
-| Metric                                  | Type      | Labels       | Description                                                                                                                                                                              |
-| --------------------------------------- | --------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `firewood_proof_compressed_bytes`       | histogram | `op`, `kind` | Compressed frame size in bytes; `op=compress\|decompress`, `kind=range\|change`                                                                                                           |
-| `firewood_proof_compression_ratio`      | histogram | `op`, `kind` | Canonical body bytes ÷ compressed frame bytes                                                                                                                                             |
-| `firewood_proof_decode_failures_total`  | counter   | `reason`     | Frame-layer decode rejections; `reason=missing_frame\|invalid_frame\|trailing_data\|missing_content_size\|over_cap\|ratio_exceeded\|length_mismatch`                                     |
-
 #### Persist worker
 
 | Metric                                         | Type      | Labels    | Description                                                                                 |

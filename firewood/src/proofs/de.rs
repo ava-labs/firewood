@@ -45,11 +45,7 @@ impl FrozenRangeProof {
 
         match header.version {
             0 => {
-                let body = super::frame::decompress_body(
-                    reader.remainder(),
-                    size_of::<Header>(),
-                    ProofType::Range,
-                )?;
+                let body = super::frame::decompress_body(reader.remainder(), size_of::<Header>())?;
                 let mut reader = V0Reader::new(ProofReader::new(&body), header);
                 let this = reader.read_v0_item()?;
                 if reader.remainder().is_empty() {
@@ -117,11 +113,7 @@ impl FrozenChangeProof {
             ));
         }
 
-        let body = super::frame::decompress_body(
-            reader.remainder(),
-            size_of::<Header>(),
-            ProofType::Change,
-        )?;
+        let body = super::frame::decompress_body(reader.remainder(), size_of::<Header>())?;
         let mut reader = V0Reader::new(ProofReader::new(&body), header);
         let this = reader.read_v0_item()?;
         if reader.remainder().is_empty() {
