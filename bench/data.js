@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785916783705,
+  "lastUpdate": 1786002807837,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -8318,6 +8318,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 51.90268169085117,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Joachim Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "8489542089cb5da8aad3fdbb58e8a8613e4a0d19",
+          "message": "fix(changelog): detect the bare breaking-change label (#2160)\n\n## Why this should be merged\n\nThe label taxonomy refactor made `breaking-change` the canonical label\nand demoted the per-crate `breaking-change/<crate>` forms to aliases in\n`.github/labels.yml`, but `cliff.toml` was not updated with it. Its\nmatcher gates on `starting_with(\"breaking-change/\")`, which a bare\n`breaking-change` label never satisfies, so label-driven breaking-change\nmarking has been silently dead since the refactor.\n\nSilently is the problem. Conventional-commit detection (`feat!:`,\n`BREAKING CHANGE:` footer) still works, so most breaking entries were\nstill marked and the gap was invisible. Only a change that is breaking\n*by label alone* — no `!` in its subject — went unmarked. PR #2000 is\nexactly that case: labelled `breaking-change`, subject `fix(storage):\npin committed parent in Reconstructed to prevent reaping`, and absent\nfrom the changelog's breaking entries.\n\n## How this works\n\nThe matcher now handles both label forms. The bare label marks the entry\nbreaking with no scope list; the scoped form additionally records the\ncrate, as before. The render at the end of the loop already tolerated an\nempty scope list, emitting `[**breaking**]` without a trailing scope, so\nno template change was needed there.\n\nBoth forms are kept rather than replacing one with the other, because\n`labels.yml` retains the scoped names as aliases — they can still arrive\nfrom the API on a PR labelled before a sync run. A comment now ties this\nblock to `labels.yml` explicitly, so the next taxonomy change updates\nboth files instead of drifting again; nothing previously connected them,\nwhich is how this was missed.\n\n## How this was tested\n\nRendered real history through git-cliff 2.13.1 with the GitHub\nintegration live, before and after:\n\n- #2000 (bare label, no `!`) — unmarked before, `[**breaking**]` after.\nThe bug, fixed.\n- #2147 and #1858 (bare label *and* `!`) — marked exactly once both\nbefore and after; the two signals are idempotent, not additive.\n- #2134 (no label, no `!`) — unmarked, so the new branch does not\nover-match.\n- #2068 (`no-changelog`) — still skipped entirely.\n\nRegenerating the whole changelog at v0.8.0 with and without the fix\ndiffers by exactly one line: #2000's marker. No other historical entry\nchanges.",
+          "timestamp": "2026-08-05T23:59:30Z",
+          "url": "https://github.com/ava-labs/firewood/commit/8489542089cb5da8aad3fdbb58e8a8613e4a0d19"
+        },
+        "date": 1786002806589,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 172.78887935398313,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5787.409489191458,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 72.08225036070797,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5672.125768341806,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 41.78002095506815,
             "unit": "block_accept_ms/ggas"
           }
         ]
