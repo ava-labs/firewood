@@ -48,15 +48,14 @@ impl FrozenRangeProof {
                 let body = super::frame::decompress_body(reader.remainder(), size_of::<Header>())?;
                 let mut reader = V0Reader::new(ProofReader::new(&body), header);
                 let this = reader.read_v0_item()?;
-                if reader.remainder().is_empty() {
-                    Ok(this)
-                } else {
-                    Err(reader.invalid_item(
+                if !reader.remainder().is_empty() {
+                    return Err(reader.invalid_item(
                         "trailing bytes",
                         "no data after the proof",
                         format!("{} bytes", reader.remainder().len()),
-                    ))
+                    ));
                 }
+                Ok(this)
             }
             found => Err(ReadError::InvalidHeader(
                 InvalidHeader::UnsupportedVersion { found },
@@ -116,15 +115,14 @@ impl FrozenChangeProof {
         let body = super::frame::decompress_body(reader.remainder(), size_of::<Header>())?;
         let mut reader = V0Reader::new(ProofReader::new(&body), header);
         let this = reader.read_v0_item()?;
-        if reader.remainder().is_empty() {
-            Ok(this)
-        } else {
-            Err(reader.invalid_item(
+        if !reader.remainder().is_empty() {
+            return Err(reader.invalid_item(
                 "trailing bytes",
                 "no data after the proof",
                 format!("{} bytes", reader.remainder().len()),
-            ))
+            ));
         }
+        Ok(this)
     }
 }
 
