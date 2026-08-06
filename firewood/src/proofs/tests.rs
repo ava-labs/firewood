@@ -4,13 +4,16 @@
 use integer_encoding::VarInt;
 use test_case::test_case;
 
-use firewood_storage::{Children, PathComponent, SeededRng, TrieHash, ValueDigest, logger::debug};
+use firewood_storage::{
+    Children, HashType, NodeHashAlgorithm, PathComponent, SeededRng, TrieHash, ValueDigest,
+    logger::debug,
+};
 
 use super::{
     header::InvalidHeader,
     magic,
-    reader::ReadError,
-    types::{Proof, ProofNode, ProofType},
+    reader::{ProofReader, ReadError},
+    types::{Proof, ProofError, ProofNode, ProofType},
 };
 use crate::api::{FrozenChangeProof, FrozenRangeProof};
 use crate::db::BatchOp;
@@ -994,8 +997,15 @@ mod box_array_deserialization_tests {
     }
 
     fn v0_reader(data: &[u8]) -> V0Reader<'_> {
-        let inner = ProofReader::new(data);
-        V0Reader::new(inner, Header::from(ProofType::Range))
+        // Resolve the algorithm from the header itself, mirroring the
+        // production validate-then-into_body flow. (These tests exercise
+        // mode-independent reads, so any consistent mode works.)
+        let header = Header::from(ProofType::Range);
+        let (_, algorithm) = header
+            .validate(Some(ProofType::Range))
+            .expect("default header should be valid");
+        let inner = ProofReader::new(data).into_body(algorithm);
+        V0Reader::new(inner, header)
     }
 
     #[test]
@@ -1083,4 +1093,162 @@ mod box_array_deserialization_tests {
             })
         ));
     }
+}
+
+#[test]
+fn test_header_validate_accepts_both_hash_modes() {
+    let (_, base) = create_valid_range_proof();
+
+    for (byte, expected) in [
+        (0u8, NodeHashAlgorithm::MerkleDB),
+        (1u8, NodeHashAlgorithm::Ethereum),
+    ] {
+        let mut data = base.clone();
+        data[9] = byte;
+
+        let mut reader = ProofReader::new(&data);
+        let header = reader
+            .read_header()
+            .expect("header should parse successfully");
+
+        let (proof_type, algorithm) = header
+            .validate(Some(ProofType::Range))
+            .expect("hash_mode should validate");
+
+        assert_eq!(proof_type, ProofType::Range);
+        assert_eq!(
+            algorithm, expected,
+            "hash_mode {byte} should resolve to {expected:?}"
+        );
+    }
+
+    // A byte that maps to no known algorithm is still rejected.
+    let mut data = base;
+    data[9] = 99;
+    let mut reader = ProofReader::new(&data);
+    let header = reader
+        .read_header()
+        .expect("header should parse successfully");
+
+    match header.validate(Some(ProofType::Range)) {
+        Err(InvalidHeader::UnsupportedHashMode { found: 99 }) => {}
+        other => panic!("expected UnsupportedHashMode {{ found: 99 }}, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_hash_type_read_dispatches_on_threaded_mode() {
+    let raw = [0x11u8; 32];
+
+    // Ethereum wire layout: a 0x00 discriminant followed by the 32 hash bytes.
+    let mut eth_bytes = vec![0x00u8];
+    eth_bytes.extend_from_slice(&raw);
+    let mut eth_reader = ProofReader::new(&eth_bytes).into_body(NodeHashAlgorithm::Ethereum);
+    let decoded = eth_reader
+        .read_item::<HashType>()
+        .expect("eth HashType should decode under Ethereum mode");
+    assert_eq!(decoded, HashType::from(TrieHash::from(raw)));
+    assert!(eth_reader.remainder().is_empty(), "all eth bytes consumed");
+
+    // MerkleDB wire layout: bare 32 bytes, no discriminant.
+    let mut mdb_reader = ProofReader::new(&raw).into_body(NodeHashAlgorithm::MerkleDB);
+    let decoded = mdb_reader
+        .read_item::<HashType>()
+        .expect("merkledb HashType should decode under MerkleDB mode");
+    assert_eq!(decoded, HashType::from(TrieHash::from(raw)));
+    assert!(
+        mdb_reader.remainder().is_empty(),
+        "all merkledb bytes consumed"
+    );
+}
+
+#[test]
+fn test_verify_range_proof_rejects_hash_mode_mismatch() {
+    let (proof, _) = create_valid_range_proof();
+    let other_mode = if proof.hash_mode().is_ethereum() {
+        NodeHashAlgorithm::MerkleDB
+    } else {
+        NodeHashAlgorithm::Ethereum
+    };
+
+    // Root hash and keys are irrelevant: the guard fires before any hashing or
+    // structural checks. Use a placeholder root.
+    let result = crate::merkle::verify_range_proof(
+        Some(&[2u8]),
+        Some(&[8u8]),
+        &TrieHash::from([0u8; 32]),
+        other_mode,
+        &proof,
+    );
+
+    match result {
+        Err(crate::api::Error::ProofError(ProofError::HashModeMismatch { expected, found })) => {
+            assert_eq!(expected, other_mode);
+            assert_eq!(found, proof.hash_mode());
+        }
+        other => panic!("expected HashModeMismatch, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_verify_change_proof_structure_rejects_hash_mode_mismatch() {
+    let (proof, _) = create_valid_change_proof();
+    let other_mode = if proof.hash_mode().is_ethereum() {
+        NodeHashAlgorithm::MerkleDB
+    } else {
+        NodeHashAlgorithm::Ethereum
+    };
+
+    // The guard fires before any hashing or structural checks; end_root and keys
+    // are placeholders.
+    let result = crate::verify_change_proof_structure(
+        &proof,
+        TrieHash::from([0u8; 32]),
+        Some(&[2u8]),
+        Some(&[8u8]),
+        other_mode,
+        None,
+    );
+
+    match result {
+        Err(crate::api::Error::ProofError(ProofError::HashModeMismatch { expected, found })) => {
+            assert_eq!(expected, other_mode);
+            assert_eq!(found, proof.hash_mode());
+        }
+        other => panic!("expected HashModeMismatch, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_value_digest_hash_read_arm_is_unconditional() {
+    // ValueDigest::Hash wire layout: 0x01 digest discriminant + a HashType.
+    // In MerkleDB mode the HashType is a bare 32-byte hash (no inner
+    // discriminant), so this is the canonical on-wire shape of a Hash digest.
+    let mut bytes = vec![0x01u8];
+    bytes.extend_from_slice(&[0x22u8; 32]);
+
+    let mut reader = ProofReader::new(&bytes).into_body(NodeHashAlgorithm::MerkleDB);
+    let decoded = reader
+        .read_item::<ValueDigest<&[u8]>>()
+        .expect("0x01 Hash discriminant must be accepted unconditionally");
+    match decoded {
+        ValueDigest::Hash(h) => assert_eq!(h, HashType::from(TrieHash::from([0x22u8; 32]))),
+        ValueDigest::Value(_) => panic!("expected ValueDigest::Hash"),
+    }
+    assert!(reader.remainder().is_empty(), "all bytes consumed");
+
+    // Across modes: an Ethereum-seeded reader also accepts the 0x01 digest
+    // discriminant unconditionally; the inner HashType then follows the eth
+    // encoding (0x00 Hash discriminant + 32 bytes).
+    let mut eth_bytes = vec![0x01u8, 0x00u8];
+    eth_bytes.extend_from_slice(&[0x33u8; 32]);
+    let mut eth_reader = ProofReader::new(&eth_bytes).into_body(NodeHashAlgorithm::Ethereum);
+    let eth_decoded = eth_reader
+        .read_item::<ValueDigest<&[u8]>>()
+        .expect("0x01 Hash discriminant must be accepted in eth mode too");
+    match eth_decoded {
+        ValueDigest::Hash(h) => assert_eq!(h, HashType::from(TrieHash::from([0x33u8; 32]))),
+        ValueDigest::Value(_) => panic!("expected ValueDigest::Hash"),
+    }
+    assert!(eth_reader.remainder().is_empty(), "all bytes consumed");
 }
