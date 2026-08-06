@@ -43,8 +43,8 @@
 //!
 //! 1. A 32-byte header identifying the proof type, version, hash mode, and branching factor
 //! 2. A single zstd frame compressing the canonical body (see `frame` for the
-//!    decode bounds and canonicality rules)
-//! 3. The canonical (decompressed) body: a sequence of proof nodes, each containing:
+//!    decode bounds and canonicality rules). The canonical body is a sequence
+//!    of proof nodes, each containing:
 //!    - The node's key path (variable length)
 //!    - The node's value or value hash (if present)
 //!    - A bitmap indicating which children are present

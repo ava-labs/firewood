@@ -9,7 +9,7 @@ use firewood_storage::{
 };
 
 use super::{
-    header::InvalidHeader,
+    header::{Header, InvalidHeader},
     magic,
     reader::ReadError,
     types::{Proof, ProofNode, ProofType},
@@ -19,14 +19,7 @@ use crate::db::BatchOp;
 
 /// Builds the 32-byte proof header
 fn raw_header(proof_type: ProofType) -> Vec<u8> {
-    let mut out = Vec::with_capacity(32);
-    out.extend_from_slice(magic::PROOF_HEADER);
-    out.push(0); // version
-    out.push(magic::HASH_MODE);
-    out.push(magic::BRANCH_FACTOR);
-    out.push(proof_type as u8);
-    out.extend_from_slice(&[0u8; 20]);
-    out
+    bytemuck::bytes_of(&Header::from(proof_type)).to_vec()
 }
 
 /// Re-frames `header || canonical body` into wire bytes (compressing the
@@ -1212,11 +1205,8 @@ fn test_frame_rejects_over_cap_content_size() {
 }
 
 /// Wire mutations the frame layer must reject with
-/// `InvalidItem { item: "compressed body frame" }`. Each case runs against
-/// both proof types — the frame layer is shared, so this pins that both
-/// `from_slice` paths stay on it. Skippable and concatenated trailing
-/// frames are the shapes the raw decompressor would silently accept; only
-/// the exact-frame-size check rejects them.
+/// `InvalidItem { item: "compressed body frame" }`.
+/// Each case runs against both proof types.
 #[test_case(|wire| wire.push(0xAB) ; "trailing byte")]
 #[test_case(|wire| wire[32] ^= 0xFF ; "corrupt frame magic")]
 #[test_case(|wire| { wire.pop(); } ; "truncated frame")]
@@ -1322,16 +1312,10 @@ fn test_frame_accepts_max_decompressed_len_exactly() {
     assert_eq!(decoded, body);
 }
 
-/// The compressed wire tail (the zstd frame) of the proof built by
-/// [`golden_proof`], captured from the encoder when the compressed format
-/// shipped (zstd 1.5.7).
-///
-/// zstd's *encoder output* is not bit-stable across library versions, so the
-/// encoder is free to produce different bytes than these — but the zstd
-/// *format* is stable, so this exact byte string must continue to **decode**
-/// forever. This pins the wire framing (single frame, frame content size)
-/// against accidental changes; the canonical-body snapshot tests pin the
-/// body encoding.
+/// The zstd frame of [`golden_proof`]'s wire encoding, captured at zstd
+/// 1.5.7. Encoder output may drift across zstd versions, but the format is
+/// stable: these exact bytes must decode forever (decode-side wire
+/// compatibility).
 const GOLDEN_WIRE_TAIL: &str =
     "28b52ffd201bd90000000002046b6579310676616c756531046b6579320676616c756532";
 
@@ -1391,12 +1375,7 @@ fn test_slow_malformed_wire_fuzz() {
                 parsed.write_to_vec(&mut re_bytes);
                 let re_parsed = FrozenRangeProof::from_slice(&re_bytes)
                     .expect("re-serialized proof should parse cleanly");
-                let mut re_re_bytes = Vec::new();
-                re_parsed.write_to_vec(&mut re_re_bytes);
-                assert_eq!(
-                    re_bytes, re_re_bytes,
-                    "re-serialized proof must be idempotent"
-                );
+                assert_eq!(parsed, re_parsed, "roundtrip must preserve the proof");
             }
         }
     }

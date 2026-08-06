@@ -10,9 +10,8 @@
 //! zstd frame     // compresses the proof's canonical body
 //! ```
 //!
-//! The canonical body is the serialized body of one range or change proof
-//! (see `FrozenRangeProof::write_body_to_vec`); the header's proof type
-//! says which.
+//! The canonical body is one range or change proof's V0 body (see
+//! `write_body_to_vec` in `ser.rs`); the header's proof type says which.
 //!
 //! ## Determinism and canonicality
 //!
@@ -137,9 +136,8 @@ fn validate_frame(frame: &[u8], frame_offset: usize) -> Result<usize, ReadError>
 /// - The decompressed byte count must equal the declared content size
 ///   (zstd also enforces this; kept as a cheap backstop).
 ///
-/// `frame_offset` is the frame's offset within the wire message, so error
-/// offsets are absolute into the received bytes. Errors from parsing the
-/// returned body are relative to the decompressed body, not the wire.
+/// `frame_offset` makes error offsets absolute within the wire message;
+/// body-parser errors are offsets into the decompressed body.
 pub(super) fn decompress_body(frame: &[u8], frame_offset: usize) -> Result<Vec<u8>, ReadError> {
     if frame.is_empty() {
         return Err(ReadError::IncompleteItem {
