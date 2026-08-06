@@ -34,8 +34,7 @@ impl FrozenRangeProof {
         reason = "Header and ProofType are not exported"
     )]
     /// - A 32-byte [`Header`] with the proof type set to [`ProofType::Range`].
-    /// - A variable-length integer with the exact byte length of the canonical
-    ///   body, followed by a single zstd frame compressing that body (see
+    /// - A single zstd frame compressing the canonical body (see
     ///   `proofs::frame` for the framing, bounds, and canonicality rules).
     ///
     /// The canonical body, once decompressed, is:
@@ -121,7 +120,7 @@ fn write_framed(proof: &impl WriteItem, proof_type: ProofType, out: &mut Vec<u8>
     Header::from(proof_type).write_item(out);
     let body_start = out.len();
     proof.write_item(out);
-    super::frame::compress_body_in_place(out, body_start, proof_type.name());
+    super::frame::compress_body_in_place(out, body_start, proof_type);
 }
 
 trait PushVarInt {

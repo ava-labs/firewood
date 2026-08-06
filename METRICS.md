@@ -100,7 +100,7 @@ The FFI layer sets the context on each inbound call based on caller configuratio
 | --------------------------------------- | --------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `firewood_proof_compressed_bytes`       | histogram | `op`, `kind` | Compressed frame size in bytes; `op=compress\|decompress`, `kind=range\|change`                                                                                                           |
 | `firewood_proof_compression_ratio`      | histogram | `op`, `kind` | Canonical body bytes ÷ compressed frame bytes                                                                                                                                             |
-| `firewood_proof_decode_failures_total`  | counter   | `reason`     | Frame-layer decode rejections; `reason=incomplete_length\|invalid_length\|over_cap\|missing_frame\|invalid_frame\|trailing_data\|content_size_mismatch\|ratio_exceeded\|length_mismatch` |
+| `firewood_proof_decode_failures_total`  | counter   | `reason`     | Frame-layer decode rejections; `reason=missing_frame\|invalid_frame\|trailing_data\|missing_content_size\|over_cap\|ratio_exceeded\|length_mismatch`                                     |
 
 #### Persist worker
 

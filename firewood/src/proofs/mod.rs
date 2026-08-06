@@ -42,9 +42,8 @@
 //! Proofs are serialized in a compact binary format that includes:
 //!
 //! 1. A 32-byte header identifying the proof type, version, hash mode, and branching factor
-//! 2. A varint with the canonical body's byte length, followed by a single zstd
-//!    frame compressing the body (see `frame` for the decode bounds and
-//!    canonicality rules)
+//! 2. A single zstd frame compressing the canonical body (see `frame` for the
+//!    decode bounds and canonicality rules)
 //! 3. The canonical (decompressed) body: a sequence of proof nodes, each containing:
 //!    - The node's key path (variable length)
 //!    - The node's value or value hash (if present)

@@ -41,11 +41,11 @@ fn empty_nodes() -> Proof<Box<[ProofNode]>> {
 /// *canonical* bytes — offsets and error expectations target the body
 /// parser — so this helper re-frames them before parsing. Inputs shorter
 /// than a header are passed through unchanged (header errors fire first).
-fn frame_canonical(data: &[u8], kind: &'static str) -> Vec<u8> {
+fn frame_canonical(data: &[u8], proof_type: ProofType) -> Vec<u8> {
     match data.split_at_checked(32) {
         Some((header, body)) => {
             let mut wire = header.to_vec();
-            super::frame::write_compressed_body(body, &mut wire, kind);
+            super::frame::write_compressed_body(body, &mut wire, proof_type);
             wire
         }
         None => data.to_vec(),
@@ -54,12 +54,12 @@ fn frame_canonical(data: &[u8], kind: &'static str) -> Vec<u8> {
 
 /// Parses `header || canonical body` bytes via [`frame_canonical`].
 fn parse_range_canonical(data: &[u8]) -> Result<FrozenRangeProof, ReadError> {
-    FrozenRangeProof::from_slice(&frame_canonical(data, "range"))
+    FrozenRangeProof::from_slice(&frame_canonical(data, ProofType::Range))
 }
 
 /// See [`parse_range_canonical`].
 fn parse_change_canonical(data: &[u8]) -> Result<FrozenChangeProof, ReadError> {
-    FrozenChangeProof::from_slice(&frame_canonical(data, "change"))
+    FrozenChangeProof::from_slice(&frame_canonical(data, ProofType::Change))
 }
 
 /// Returns a valid range proof plus its canonical uncompressed bytes
@@ -1179,15 +1179,11 @@ fn test_frame_wire_is_compressed_and_versioned() {
 
     assert_eq!(&wire[..8], magic::PROOF_HEADER);
     assert_eq!(wire[8], 0, "compressed wire keeps version byte 0");
-    // The declared uncompressed length equals the canonical body length.
-    let (declared, width) =
-        <usize as integer_encoding::VarInt>::decode_var(&wire[32..]).expect("length varint");
-    assert_eq!(declared, canonical_body.len());
-    // A zstd frame (magic 0xFD2FB528, little-endian) follows the varint.
+    // A zstd frame (magic 0xFD2FB528, little-endian) follows the header.
     assert_eq!(
-        &wire[32 + width..36 + width],
+        &wire[32..36],
         &[0x28, 0xB5, 0x2F, 0xFD],
-        "zstd frame magic must follow the length varint"
+        "zstd frame magic must follow the header"
     );
     // The wire is actually compressed, not stored.
     assert!(
@@ -1199,36 +1195,19 @@ fn test_frame_wire_is_compressed_and_versioned() {
 }
 
 #[test]
-fn test_frame_rejects_overdeclared_length() {
-    let mut wire = range_wire();
-    // Replace the full length varint (whatever its width) with an
-    // over-cap declaration.
-    let (_, width) =
-        <usize as integer_encoding::VarInt>::decode_var(&wire[32..]).expect("length varint");
-    let huge: usize = super::frame::MAX_DECOMPRESSED_LEN + 1;
-    let mut varint = [0u8; 10];
-    let n = integer_encoding::VarInt::encode_var(huge, &mut varint);
-    wire.splice(32..32 + width, varint[..n].iter().copied());
-    let err = FrozenRangeProof::from_slice(&wire).expect_err("oversized declaration");
+fn test_frame_rejects_over_cap_content_size() {
+    // A frame whose header declares a content size just over the cap: the
+    // decoder must reject it before allocating.
+    let body = vec![0u8; super::frame::MAX_DECOMPRESSED_LEN + 1];
+    let mut wire = raw_header(ProofType::Range);
+    super::frame::write_compressed_body(&body, &mut wire, ProofType::Range);
+    let err = FrozenRangeProof::from_slice(&wire).expect_err("over-cap content size");
     assert!(
-        matches!(err, ReadError::InvalidItem { item, .. } if item == "compressed body length"),
-        "got {err:?}"
-    );
-}
-
-#[test]
-fn test_frame_rejects_wrong_declared_length() {
-    // The declared varint no longer matches the content size recorded in
-    // the zstd frame header, which is caught before any allocation.
-    let mut wire = range_wire();
-    let (declared, width) =
-        <usize as integer_encoding::VarInt>::decode_var(&wire[32..]).expect("varint");
-    let mut varint = [0u8; 10];
-    let n = integer_encoding::VarInt::encode_var(declared + 1, &mut varint);
-    wire.splice(32..32 + width, varint[..n].iter().copied());
-    let err = FrozenRangeProof::from_slice(&wire).expect_err("length mismatch");
-    assert!(
-        matches!(err, ReadError::InvalidItem { item, .. } if item == "compressed body length"),
+        matches!(
+            err,
+            ReadError::InvalidItem { item, expected, .. }
+                if item == "compressed body length" && expected.contains("MAX_DECOMPRESSED_LEN")
+        ),
         "got {err:?}"
     );
 }
@@ -1253,9 +1232,7 @@ fn test_frame_rejects_corrupt_frame_magic() {
     // by proof hash verification, not by the frame. Content flips are
     // exercised probabilistically by test_slow_malformed_wire_fuzz.
     let mut wire = range_wire();
-    let (_, width) =
-        <usize as integer_encoding::VarInt>::decode_var(&wire[32..]).expect("length varint");
-    wire[32 + width] ^= 0xFF;
+    wire[32] ^= 0xFF;
     let err = FrozenRangeProof::from_slice(&wire).expect_err("corrupt frame magic");
     assert!(
         matches!(err, ReadError::InvalidItem { item, .. } if item == "compressed body frame"),
@@ -1275,41 +1252,12 @@ fn test_frame_rejects_truncated_frame() {
 }
 
 #[test]
-fn test_frame_rejects_missing_length() {
-    // Nothing after the header: the length varint itself is missing.
-    let wire = range_wire()[..32].to_vec();
-    let err = FrozenRangeProof::from_slice(&wire).expect_err("missing length varint");
-    assert!(
-        matches!(err, ReadError::IncompleteItem { item, .. } if item == "compressed body length"),
-        "got {err:?}"
-    );
-}
-
-#[test]
 fn test_frame_rejects_missing_frame() {
-    // A valid length varint with nothing after it: the frame is missing.
-    let mut wire = range_wire();
-    let (_, width) =
-        <usize as integer_encoding::VarInt>::decode_var(&wire[32..]).expect("length varint");
-    wire.truncate(32 + width);
+    // Nothing after the header: the frame is missing.
+    let wire = range_wire()[..32].to_vec();
     let err = FrozenRangeProof::from_slice(&wire).expect_err("missing frame");
     assert!(
         matches!(err, ReadError::IncompleteItem { item, .. } if item == "compressed body frame"),
-        "got {err:?}"
-    );
-}
-
-#[test]
-fn test_frame_rejects_overflowing_length_varint() {
-    // Ten 0xFF continuation bytes overflow a u64 varint; the reader must
-    // report it as an invalid (not incomplete) length.
-    let mut wire = range_wire();
-    let (_, width) =
-        <usize as integer_encoding::VarInt>::decode_var(&wire[32..]).expect("length varint");
-    wire.splice(32..32 + width, [0xFF; 10]);
-    let err = FrozenRangeProof::from_slice(&wire).expect_err("overflowing varint");
-    assert!(
-        matches!(err, ReadError::InvalidItem { item, .. } if item == "compressed body length"),
         "got {err:?}"
     );
 }
@@ -1325,7 +1273,6 @@ fn test_frame_rejects_frame_without_content_size() {
     let frame = zstd::stream::encode_all(body, super::frame::ZSTD_LEVEL)
         .expect("stream compression of an in-memory buffer");
     let mut wire = canonical[..32].to_vec();
-    wire.extend_from_slice(&body.len().encode_var_vec());
     wire.extend_from_slice(&frame);
     let err = FrozenRangeProof::from_slice(&wire).expect_err("frame without content size");
     assert!(
@@ -1384,7 +1331,7 @@ fn test_frame_rejects_excessive_compression_ratio() {
     // allocating the 4 MiB.
     let body = vec![0u8; 4 * 1024 * 1024];
     let mut wire = raw_header(ProofType::Range);
-    super::frame::write_compressed_body(&body, &mut wire, "range");
+    super::frame::write_compressed_body(&body, &mut wire, ProofType::Range);
     let err = FrozenRangeProof::from_slice(&wire).expect_err("compression bomb");
     assert!(
         matches!(
@@ -1405,15 +1352,14 @@ fn test_frame_accepts_high_but_legal_ratio() {
     let rng = SeededRng::from_env_or_random();
     let block: Vec<u8> = (0..1024).map(|_| rng.random::<u8>()).collect();
     let body = block.repeat(100);
-    let mut data = Vec::new();
-    super::frame::write_compressed_body(&body, &mut data, "range");
-    let frame_len = data.len() - body.len().required_space();
+    let mut frame = Vec::new();
+    super::frame::write_compressed_body(&body, &mut frame, ProofType::Range);
     assert!(
-        body.len() > 32 * frame_len,
-        "test premise: ratio must be well above honest proofs (frame is {frame_len} bytes)"
+        body.len() > 32 * frame.len(),
+        "test premise: ratio must be well above honest proofs (frame is {} bytes)",
+        frame.len()
     );
-    let mut reader = super::reader::ProofReader::new(&data);
-    let decoded = super::frame::decompress_body(&mut reader, "range")
+    let decoded = super::frame::decompress_body(&frame, 0, ProofType::Range)
         .expect("ratio under MAX_COMPRESSION_RATIO must decode");
     assert_eq!(decoded, body);
 }
@@ -1427,10 +1373,9 @@ fn test_frame_accepts_max_decompressed_len_exactly() {
     let block: Vec<u8> = (0..1024 * 1024).map(|_| rng.random::<u8>()).collect();
     let body = block.repeat(super::frame::MAX_DECOMPRESSED_LEN / block.len());
     assert_eq!(body.len(), super::frame::MAX_DECOMPRESSED_LEN);
-    let mut data = Vec::new();
-    super::frame::write_compressed_body(&body, &mut data, "range");
-    let mut reader = super::reader::ProofReader::new(&data);
-    let decoded = super::frame::decompress_body(&mut reader, "range")
+    let mut frame = Vec::new();
+    super::frame::write_compressed_body(&body, &mut frame, ProofType::Range);
+    let decoded = super::frame::decompress_body(&frame, 0, ProofType::Range)
         .expect("body exactly at MAX_DECOMPRESSED_LEN must decode");
     assert_eq!(decoded, body);
 }
@@ -1450,18 +1395,18 @@ fn test_frame_change_proof_rejects_trailing_bytes() {
     );
 }
 
-/// The compressed wire tail (`varint(body_len) :: zstd frame`) of the proof
-/// built by [`golden_proof`], captured from the encoder when the compressed
-/// format shipped (zstd 1.5.7).
+/// The compressed wire tail (the zstd frame) of the proof built by
+/// [`golden_proof`], captured from the encoder when the compressed format
+/// shipped (zstd 1.5.7).
 ///
 /// zstd's *encoder output* is not bit-stable across library versions, so the
 /// encoder is free to produce different bytes than these — but the zstd
 /// *format* is stable, so this exact byte string must continue to **decode**
-/// forever. This pins the wire framing (length varint, single frame, frame
-/// content size) against accidental changes; the canonical-body snapshot
-/// tests pin the body encoding.
+/// forever. This pins the wire framing (single frame, frame content size)
+/// against accidental changes; the canonical-body snapshot tests pin the
+/// body encoding.
 const GOLDEN_WIRE_TAIL: &str =
-    "1b28b52ffd201bd90000000002046b6579310676616c756531046b6579320676616c756532";
+    "28b52ffd201bd90000000002046b6579310676616c756531046b6579320676616c756532";
 
 fn golden_proof() -> FrozenRangeProof {
     FrozenRangeProof::new(
@@ -1495,8 +1440,8 @@ fn test_frame_golden_vector_decodes() {
 fn test_slow_malformed_wire_fuzz() {
     // Complements test_slow_malformed_proof_fuzz (which corrupts the
     // canonical body and re-frames it): mutating the wire bytes directly
-    // exercises the frame layer itself — the header, the length varint,
-    // the zstd frame header, and the frame payload.
+    // exercises the frame layer itself — the header, the zstd frame
+    // header, and the frame payload.
     let rng = SeededRng::from_env_or_random();
     for i in 0..200 {
         let proof = generate_random_range_proof(&rng);
