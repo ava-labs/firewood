@@ -17,8 +17,7 @@ use super::{
 use crate::api::{FrozenChangeProof, FrozenRangeProof};
 use crate::db::BatchOp;
 
-/// Builds the 32-byte proof header by hand (magic, version 0, hash mode,
-/// branch factor, proof type, reserved).
+/// Builds the 32-byte proof header
 fn raw_header(proof_type: ProofType) -> Vec<u8> {
     let mut out = Vec::with_capacity(32);
     out.extend_from_slice(magic::PROOF_HEADER);
@@ -30,12 +29,10 @@ fn raw_header(proof_type: ProofType) -> Vec<u8> {
     out
 }
 
-/// Parses `header || canonical body` bytes by framing the body the way
-/// [`FrozenRangeProof::write_to_vec`] does (the wire compresses the body
-/// behind the header). The byte-taxonomy tests below craft and mutate the
-/// *canonical* bytes — offsets and error expectations target the body
-/// parser — so this helper re-frames them before parsing. Inputs shorter
-/// than a header are passed through unchanged (header errors fire first).
+/// Re-frames `header || canonical body` into wire bytes (compressing the
+/// body the way `write_to_vec` does) and parses. Inputs shorter than a
+/// header pass through unframed so the truncated-header tests still hit
+/// the header error.
 fn parse_range_canonical(data: &[u8]) -> Result<FrozenRangeProof, ReadError> {
     match data.split_at_checked(32) {
         Some((header, body)) => {
@@ -108,13 +105,11 @@ fn test_range_proof_roundtrip() {
 
 #[test]
 fn test_change_proof_roundtrip() {
-    let (proof, canonical) = create_valid_change_proof();
+    let (proof, _) = create_valid_change_proof();
     let mut wire = Vec::new();
     proof.write_to_vec(&mut wire);
     let parsed = FrozenChangeProof::from_slice(&wire).expect("roundtrip should succeed");
-    let mut reparsed_canonical = raw_header(ProofType::Change);
-    parsed.write_body_to_vec(&mut reparsed_canonical);
-    assert_eq!(canonical, reparsed_canonical);
+    assert_eq!(proof, parsed);
     let mut re_serialized = Vec::new();
     parsed.write_to_vec(&mut re_serialized);
     assert_eq!(wire, re_serialized, "re-serialization must be idempotent");
@@ -1146,10 +1141,6 @@ mod box_array_deserialization_tests {
     }
 }
 
-// =============================================================================
-// Compressed-frame tests (the wire layer added by `proofs::frame`)
-// =============================================================================
-
 fn range_wire() -> Vec<u8> {
     let (proof, _) = create_valid_range_proof();
     let mut wire = Vec::new();
@@ -1157,11 +1148,16 @@ fn range_wire() -> Vec<u8> {
     wire
 }
 
+fn change_wire() -> Vec<u8> {
+    let (proof, _) = create_valid_change_proof();
+    let mut wire = Vec::new();
+    proof.write_to_vec(&mut wire);
+    wire
+}
+
 #[test]
 fn test_frame_wire_is_compressed_and_versioned() {
-    // A compressible proof: many repetitive key-value pairs, so the zstd
-    // frame must come out genuinely smaller than the canonical body (a
-    // stored-uncompressed frame would fail the size assertion below).
+    // A compressible proof
     let kvs: Box<[_]> = (0u16..512)
         .map(|i| {
             (
@@ -1215,39 +1211,39 @@ fn test_frame_rejects_over_cap_content_size() {
     );
 }
 
-#[test]
-fn test_frame_rejects_trailing_bytes_after_frame() {
+/// Wire mutations the frame layer must reject with
+/// `InvalidItem { item: "compressed body frame" }`. Each case runs against
+/// both proof types — the frame layer is shared, so this pins that both
+/// `from_slice` paths stay on it. Skippable and concatenated trailing
+/// frames are the shapes the raw decompressor would silently accept; only
+/// the exact-frame-size check rejects them.
+#[test_case(|wire| wire.push(0xAB) ; "trailing byte")]
+#[test_case(|wire| wire[32] ^= 0xFF ; "corrupt frame magic")]
+#[test_case(|wire| { wire.pop(); } ; "truncated frame")]
+#[test_case(|wire| {
+    // zstd skippable frame (magic 0x184D2A50, little-endian, 4-byte payload)
+    wire.extend_from_slice(&[0x50, 0x2A, 0x4D, 0x18]);
+    wire.extend_from_slice(&4u32.to_le_bytes());
+    wire.extend_from_slice(&[0xAB; 4]);
+} ; "trailing skippable frame")]
+#[test_case(|wire| {
+    // a second, fully valid zstd frame (compressing zero bytes)
+    let empty = zstd::bulk::compress(&[], crate::proofs::frame::ZSTD_LEVEL)
+        .expect("compress empty buffer");
+    wire.extend_from_slice(&empty);
+} ; "trailing concatenated frame")]
+fn test_frame_rejects_malformed_wire(mutate: fn(&mut Vec<u8>)) {
     let mut wire = range_wire();
-    wire.push(0xAB);
-    let err = FrozenRangeProof::from_slice(&wire).expect_err("trailing bytes");
+    mutate(&mut wire);
+    let err = FrozenRangeProof::from_slice(&wire).expect_err("range wire must be rejected");
     assert!(
         matches!(err, ReadError::InvalidItem { item, .. } if item == "compressed body frame"),
         "got {err:?}"
     );
-}
 
-#[test]
-fn test_frame_rejects_corrupt_frame_magic() {
-    // Flip the first byte of the zstd frame magic. Deeper *content*
-    // corruption is not deterministically detectable at this layer — the
-    // producer rule pins "no checksum", so a flipped literal byte can
-    // decode to a different-but-still-parseable body; tampering is caught
-    // by proof hash verification, not by the frame. Content flips are
-    // exercised probabilistically by test_slow_malformed_wire_fuzz.
-    let mut wire = range_wire();
-    wire[32] ^= 0xFF;
-    let err = FrozenRangeProof::from_slice(&wire).expect_err("corrupt frame magic");
-    assert!(
-        matches!(err, ReadError::InvalidItem { item, .. } if item == "compressed body frame"),
-        "got {err:?}"
-    );
-}
-
-#[test]
-fn test_frame_rejects_truncated_frame() {
-    let mut wire = range_wire();
-    wire.pop();
-    let err = FrozenRangeProof::from_slice(&wire).expect_err("truncated frame");
+    let mut wire = change_wire();
+    mutate(&mut wire);
+    let err = FrozenChangeProof::from_slice(&wire).expect_err("change wire must be rejected");
     assert!(
         matches!(err, ReadError::InvalidItem { item, .. } if item == "compressed body frame"),
         "got {err:?}"
@@ -1288,44 +1284,6 @@ fn test_frame_rejects_frame_without_content_size() {
     );
 }
 
-/// Appends `extra` after the zstd frame of a valid range-proof wire.
-fn wire_with_trailing(extra: &[u8]) -> Vec<u8> {
-    let mut wire = range_wire();
-    wire.extend_from_slice(extra);
-    wire
-}
-
-#[test]
-fn test_frame_rejects_trailing_skippable_frame() {
-    // A zstd skippable frame (magic 0x184D2A50–5F, little-endian) with a
-    // 4-byte payload. `ZSTD_decompressDCtx` silently skips these, so only
-    // the exact-frame-size check rejects it.
-    let mut skippable = vec![0x50, 0x2A, 0x4D, 0x18];
-    skippable.extend_from_slice(&4u32.to_le_bytes());
-    skippable.extend_from_slice(&[0xAB; 4]);
-    let wire = wire_with_trailing(&skippable);
-    let err = FrozenRangeProof::from_slice(&wire).expect_err("trailing skippable frame");
-    assert!(
-        matches!(err, ReadError::InvalidItem { item, .. } if item == "compressed body frame"),
-        "got {err:?}"
-    );
-}
-
-#[test]
-fn test_frame_rejects_trailing_concatenated_frame() {
-    // A second, fully valid zstd frame (compressing zero bytes) appended
-    // after the body frame. `ZSTD_decompressDCtx` decompresses
-    // concatenated frames, so only the exact-frame-size check rejects it.
-    let empty_frame =
-        zstd::bulk::compress(&[], super::frame::ZSTD_LEVEL).expect("compress empty buffer");
-    let wire = wire_with_trailing(&empty_frame);
-    let err = FrozenRangeProof::from_slice(&wire).expect_err("trailing concatenated frame");
-    assert!(
-        matches!(err, ReadError::InvalidItem { item, .. } if item == "compressed body frame"),
-        "got {err:?}"
-    );
-}
-
 #[test]
 fn test_frame_rejects_excessive_compression_ratio() {
     // A 4 MiB all-zero body compresses to a few hundred bytes: under the
@@ -1347,31 +1305,12 @@ fn test_frame_rejects_excessive_compression_ratio() {
 }
 
 #[test]
-fn test_frame_accepts_high_but_legal_ratio() {
-    // A ~100x compression ratio: far above what honest proofs reach
-    // (~2.3x) but still under MAX_COMPRESSION_RATIO — the decoder must
-    // accept it. A 1 KiB random block repeated 100x compresses to roughly
-    // one block plus match commands.
-    let rng = SeededRng::from_env_or_random();
-    let block: Vec<u8> = (0..1024).map(|_| rng.random::<u8>()).collect();
-    let body = block.repeat(100);
-    let mut frame = Vec::new();
-    super::frame::write_compressed_body(&body, &mut frame);
-    assert!(
-        body.len() > 32 * frame.len(),
-        "test premise: ratio must be well above honest proofs (frame is {} bytes)",
-        frame.len()
-    );
-    let decoded = super::frame::decompress_body(&frame, 0)
-        .expect("ratio under MAX_COMPRESSION_RATIO must decode");
-    assert_eq!(decoded, body);
-}
-
-#[test]
 fn test_frame_accepts_max_decompressed_len_exactly() {
     // A body of exactly MAX_DECOMPRESSED_LEN must pass the length cap
     // (the bound is inclusive). A random 1 MiB block repeated 32x keeps
-    // the compression ratio ~32x, safely inside MAX_COMPRESSION_RATIO.
+    // the compression ratio ~32x — well above honest proofs (~2.3x) but
+    // inside MAX_COMPRESSION_RATIO, so this doubles as the accept-side
+    // coverage for high-but-legal ratios.
     let rng = SeededRng::from_env_or_random();
     let block: Vec<u8> = (0..1024 * 1024).map(|_| rng.random::<u8>()).collect();
     let body = block.repeat(super::frame::MAX_DECOMPRESSED_LEN / block.len());
@@ -1381,21 +1320,6 @@ fn test_frame_accepts_max_decompressed_len_exactly() {
     let decoded = super::frame::decompress_body(&frame, 0)
         .expect("body exactly at MAX_DECOMPRESSED_LEN must decode");
     assert_eq!(decoded, body);
-}
-
-#[test]
-fn test_frame_change_proof_rejects_trailing_bytes() {
-    // The frame layer is shared between proof types; pin the change-proof
-    // wire path too.
-    let (proof, _) = create_valid_change_proof();
-    let mut wire = Vec::new();
-    proof.write_to_vec(&mut wire);
-    wire.push(0xAB);
-    let err = FrozenChangeProof::from_slice(&wire).expect_err("trailing bytes");
-    assert!(
-        matches!(err, ReadError::InvalidItem { item, .. } if item == "compressed body frame"),
-        "got {err:?}"
-    );
 }
 
 /// The compressed wire tail (the zstd frame) of the proof built by
@@ -1441,10 +1365,8 @@ fn test_frame_golden_vector_decodes() {
 
 #[test]
 fn test_slow_malformed_wire_fuzz() {
-    // Complements test_slow_malformed_proof_fuzz (which corrupts the
-    // canonical body and re-frames it): mutating the wire bytes directly
-    // exercises the frame layer itself — the header, the zstd frame
-    // header, and the frame payload.
+    // Wire-level complement of test_slow_malformed_proof_fuzz: corrupts
+    // the compressed wire instead of the canonical body.
     let rng = SeededRng::from_env_or_random();
     for i in 0..200 {
         let (_, mut data) = generate_random_range_proof(&rng);
