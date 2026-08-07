@@ -82,24 +82,13 @@ fn validate_frame(frame: &[u8], frame_offset: usize) -> Result<usize, ReadError>
         });
     }
 
-    let content_size = match zstd::zstd_safe::get_frame_content_size(frame) {
-        Ok(Some(content_size)) => content_size,
-        Ok(None) => {
+    let Ok(Some(content_size)) = zstd::zstd_safe::get_frame_content_size(frame) else {
             return Err(ReadError::InvalidItem {
                 item: "frame content size",
                 offset: frame_offset,
                 expected: "a content size in the frame header",
                 found: "no content size".to_owned(),
             });
-        }
-        Err(_) => {
-            return Err(ReadError::InvalidItem {
-                item: "compressed body frame",
-                offset: frame_offset,
-                expected: "a zstd frame with a readable header",
-                found: "unreadable frame header".to_owned(),
-            });
-        }
     };
 
     let decoded_len = usize::try_from(content_size)
