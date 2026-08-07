@@ -1244,7 +1244,7 @@ fn test_frame_rejects_missing_frame() {
     let wire = range_wire()[..32].to_vec();
     let err = FrozenRangeProof::from_slice(&wire).expect_err("missing frame");
     assert!(
-        matches!(err, ReadError::IncompleteItem { item, .. } if item == "compressed body frame"),
+        matches!(err, ReadError::InvalidItem { item, .. } if item == "compressed body frame"),
         "got {err:?}"
     );
 }
@@ -1332,6 +1332,23 @@ fn golden_proof() -> FrozenRangeProof {
             ),
         ]),
     )
+}
+
+#[test]
+fn test_frame_rejects_content_size_mismatch() {
+    // Bump the declared content size in the frame header (the golden
+    // frame is single-segment, so its 1-byte FCS field sits at frame
+    // offset 5). The frame now declares 28 bytes but decompresses to 27;
+    // decompress_body relies on zstd rejecting this, so pin it.
+    let mut wire = raw_header(ProofType::Range);
+    wire.extend_from_slice(&hex::decode(GOLDEN_WIRE_TAIL).expect("valid hex"));
+    assert_eq!(wire[37], 0x1b, "golden frame content-size byte moved");
+    wire[37] += 1;
+    let err = FrozenRangeProof::from_slice(&wire).expect_err("content size mismatch");
+    assert!(
+        matches!(err, ReadError::InvalidItem { item, .. } if item == "compressed body frame"),
+        "got {err:?}"
+    );
 }
 
 #[test]

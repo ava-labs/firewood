@@ -83,12 +83,12 @@ fn validate_frame(frame: &[u8], frame_offset: usize) -> Result<usize, ReadError>
     }
 
     let Ok(Some(content_size)) = zstd::zstd_safe::get_frame_content_size(frame) else {
-            return Err(ReadError::InvalidItem {
-                item: "frame content size",
-                offset: frame_offset,
-                expected: "a content size in the frame header",
-                found: "no content size".to_owned(),
-            });
+        return Err(ReadError::InvalidItem {
+            item: "frame content size",
+            offset: frame_offset,
+            expected: "a content size in the frame header",
+            found: "no content size".to_owned(),
+        });
     };
 
     let decoded_len = usize::try_from(content_size)
@@ -122,39 +122,18 @@ fn validate_frame(frame: &[u8], frame_offset: usize) -> Result<usize, ReadError>
 /// - The frame header must declare a content size, capped at
 ///   [`MAX_DECOMPRESSED_LEN`] and at [`MAX_COMPRESSION_RATIO`] × the
 ///   compressed frame length.
-/// - The decompressed byte count must equal the declared content size
-///   (zstd also enforces this; can potentially remove this).
 ///
 /// `frame_offset` makes error offsets absolute within the wire message;
 /// body-parser errors are offsets into the decompressed body.
 pub(super) fn decompress_body(frame: &[u8], frame_offset: usize) -> Result<Vec<u8>, ReadError> {
-    if frame.is_empty() {
-        return Err(ReadError::IncompleteItem {
-            item: "compressed body frame",
-            offset: frame_offset,
-            expected: 1,
-            found: 0,
-        });
-    }
-
     let decoded_len = validate_frame(frame, frame_offset)?;
 
     let mut body = vec![0u8; decoded_len];
-    let written = zstd::bulk::decompress_to_buffer(frame, &mut body).map_err(|err| {
-        ReadError::InvalidItem {
-            item: "compressed body frame",
-            offset: frame_offset,
-            expected: "a valid zstd frame",
-            found: err.to_string(),
-        }
+    zstd::bulk::decompress_to_buffer(frame, &mut body).map_err(|err| ReadError::InvalidItem {
+        item: "compressed body frame",
+        offset: frame_offset,
+        expected: "a valid zstd frame",
+        found: err.to_string(),
     })?;
-    if written != decoded_len {
-        return Err(ReadError::InvalidItem {
-            item: "frame content size",
-            offset: frame_offset,
-            expected: "content size equal to decompressed length",
-            found: format!("declared {decoded_len}, got {written}"),
-        });
-    }
     Ok(body)
 }
