@@ -12,6 +12,8 @@ env:
 jobs:
   bench:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
@@ -27,13 +29,31 @@ jobs:
       - name: Build
         run: cargo build --frozen --profile maxperf --features ethhash,logger,test_utils --workspace --benches
       - name: Run firewood crate hashop benchmark
-        run: cargo bench --frozen --profile maxperf --features ethhash,logger,test_utils -p firewood --bench hashops -- --noplot
+        run: cargo bench --frozen --profile maxperf --features ethhash,logger,test_utils -p firewood --bench hashops -- --output-format bencher --noplot | tee rust-benchmarks.txt
       - name: Run firewood crate defer_persist benchmark
-        run: cargo bench --frozen --profile maxperf --features ethhash,logger,test_utils -p firewood --bench defer_persist -- --noplot
+        run: cargo bench --frozen --profile maxperf --features ethhash,logger,test_utils -p firewood --bench defer_persist -- --output-format bencher --noplot | tee -a rust-benchmarks.txt
       - name: Run storage crate benchmarks
-        run: cargo bench --frozen --profile maxperf --features ethhash,logger -p firewood-storage --bench serializer -- --noplot
-      - name: Upload benchmark results
-        uses: actions/upload-artifact@v7
+        run: cargo bench --frozen --profile maxperf --features ethhash,logger -p firewood-storage --bench serializer -- --output-format bencher --noplot | tee -a rust-benchmarks.txt
+      - name: Determine results location
+        id: location
+        env:
+          BENCHMARK_REF: ${{ github.ref }}
+          BENCHMARK_REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "$BENCHMARK_REF" == "refs/heads/main" ]]; then
+            echo "data-dir=bench" >> "$GITHUB_OUTPUT"
+          else
+            echo "data-dir=dev/bench/${BENCHMARK_REF_NAME//\//-}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish Rust benchmark results
+        if: github.repository == 'ava-labs/firewood'
+        uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba
         with:
-          name: benchmark-results
-          path: target/criterion
+          name: Rust Benchmarks
+          tool: cargo
+          output-file-path: rust-benchmarks.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          summary-always: true
+          auto-push: true
+          gh-pages-branch: benchmark-data
+          benchmark-data-dir-path: ${{ steps.location.outputs.data-dir }}
