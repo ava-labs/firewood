@@ -20,7 +20,7 @@ use crate::merkle::{Merkle, Value, verify_change_proof_root_hash};
 use crate::verify_change_proof_structure;
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
-use firewood_metrics::{firewood_counter, firewood_histogram};
+use firewood_metrics::{firewood_counter, firewood_gauge, firewood_histogram};
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, CommittedParentHash, FileBacked, FileIoError,
     HashedNodeReader, ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage,
@@ -174,6 +174,12 @@ impl Db {
             .manager(cfg.manager)
             .build();
         let manager = RevisionManager::new(config_manager)?;
+        firewood_gauge!(
+            BUILD_INFO,
+            "git_sha" => env!("FIREWOOD_GIT_SHA"),
+            "git_tag" => env!("FIREWOOD_GIT_TAG")
+        )
+        .set(1.0);
         let db = Self {
             manager,
             use_parallel: cfg.use_parallel,
