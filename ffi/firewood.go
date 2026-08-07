@@ -141,7 +141,7 @@ type config struct {
 	// revisions is the maximum number of historical revisions to keep in memory.
 	// If rootStoreDir is set, then any revisions removed from memory will still be kept on disk.
 	// Otherwise, any revisions removed from memory will no longer be kept on disk.
-	// Must be >= 2 and > deferredPersistenceCommitCount.
+	// Must be >= 2 and > maxRevisionRecoveryLag.
 	revisions uint
 	// readCacheStrategy is the caching strategy used for the node cache.
 	readCacheStrategy CacheStrategy
@@ -149,19 +149,19 @@ type config struct {
 	rootStore bool
 	// expensiveMetricsEnabled controls whether expensive metrics recording is enabled.
 	expensiveMetricsEnabled bool
-	// deferredPersistenceCommitCount determines the maximum number of unpersisted
-	// revisions that can exist at a given time.
-	// Note: revisions must be > deferredPersistenceCommitCount
-	deferredPersistenceCommitCount uint64
+	// maxRevisionRecoveryLag determines the maximum number of latest committed
+	// revisions that may need to be recommitted after a crash.
+	// Note: revisions must be > maxRevisionRecoveryLag
+	maxRevisionRecoveryLag uint64
 }
 
 func defaultConfig() *config {
 	return &config{
-		nodeCacheSizeInBytes:           128_000_000,
-		freeListCacheEntries:           1_000_000,
-		revisions:                      100,
-		readCacheStrategy:              OnlyCacheWrites,
-		deferredPersistenceCommitCount: 1,
+		nodeCacheSizeInBytes:   128_000_000,
+		freeListCacheEntries:   1_000_000,
+		revisions:              100,
+		readCacheStrategy:      OnlyCacheWrites,
+		maxRevisionRecoveryLag: 1,
 	}
 }
 
@@ -198,7 +198,7 @@ func WithFreeListCacheEntries(entries uint) Option {
 // WithRevisions sets the maximum number of historical revisions to keep in memory.
 // If RootStoreDir is set, then any revisions removed from memory will still be kept on disk.
 // Otherwise, any revisions removed from memory will no longer be kept on disk.
-// Must be >= 2 and > WithDeferredPersistenceCommitCount.
+// Must be >= 2 and > WithMaxRevisionRecoveryLag.
 // Default: 100
 func WithRevisions(revisions uint) Option {
 	return func(c *config) {
@@ -233,13 +233,18 @@ func WithExpensiveMetrics() Option {
 	}
 }
 
-// WithDeferredPersistenceCommitCount sets the maximum number of unpersisted revisions
-// that can exist at a time. Note: `commitCount` must be greater than 0 and WithRevisions
-// must be greater than `commitCount`.
+// WithMaxRevisionRecoveryLag sets the maximum number of latest committed
+// revisions that may need to be recommitted after a crash. This bounds the lag
+// between the latest committed revision and the latest revision recoverable from
+// disk.
+//
+// Note: `maxRevisionRecoveryLag` must be greater than 0 and WithRevisions
+// must be greater than `maxRevisionRecoveryLag`.
+//
 // Default: 1
-func WithDeferredPersistenceCommitCount(commitCount uint64) Option {
+func WithMaxRevisionRecoveryLag(maxRevisionRecoveryLag uint64) Option {
 	return func(c *config) {
-		c.deferredPersistenceCommitCount = commitCount
+		c.maxRevisionRecoveryLag = maxRevisionRecoveryLag
 	}
 }
 
@@ -300,16 +305,16 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	defer pinner.Unpin()
 
 	args := C.struct_DatabaseHandleArgs{
-		dir:                               newBorrowedBytes([]byte(dbDir), &pinner),
-		node_cache_memory_limit:           C.size_t(conf.nodeCacheSizeInBytes),
-		free_list_cache_size:              C.size_t(conf.freeListCacheEntries),
-		revisions:                         C.size_t(conf.revisions),
-		strategy:                          C.uint8_t(conf.readCacheStrategy),
-		truncate:                          C.bool(conf.truncate),
-		root_store:                        C.bool(conf.rootStore),
-		expensive_metrics:                 C.bool(conf.expensiveMetricsEnabled),
-		node_hash_algorithm:               C.enum_NodeHashAlgorithm(nodeHashAlgorithm),
-		deferred_persistence_commit_count: C.uint64_t(conf.deferredPersistenceCommitCount),
+		dir:                       newBorrowedBytes([]byte(dbDir), &pinner),
+		node_cache_memory_limit:   C.size_t(conf.nodeCacheSizeInBytes),
+		free_list_cache_size:      C.size_t(conf.freeListCacheEntries),
+		revisions:                 C.size_t(conf.revisions),
+		strategy:                  C.uint8_t(conf.readCacheStrategy),
+		truncate:                  C.bool(conf.truncate),
+		root_store:                C.bool(conf.rootStore),
+		expensive_metrics:         C.bool(conf.expensiveMetricsEnabled),
+		node_hash_algorithm:       C.enum_NodeHashAlgorithm(nodeHashAlgorithm),
+		max_revision_recovery_lag: C.uint64_t(conf.maxRevisionRecoveryLag),
 	}
 
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))

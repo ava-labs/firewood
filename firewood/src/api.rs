@@ -202,15 +202,15 @@ pub enum Error {
     #[error("feature not supported in this build: {0}")]
     FeatureNotSupported(String),
 
-    #[error("commit count must be positive")]
-    ZeroCommitCount,
+    #[error("max revision recovery lag must be positive")]
+    ZeroRevisionRecoveryLag,
 
     #[error(
-        "max_revisions ({max_revisions}) must be > deferred_persistence_commit_count ({commit_count})"
+        "max_revisions ({max_revisions}) must be > max_revision_recovery_lag ({max_revision_recovery_lag})"
     )]
     InsufficientRevisions {
         max_revisions: usize,
-        commit_count: u64,
+        max_revision_recovery_lag: u64,
     },
 }
 
@@ -238,10 +238,10 @@ impl From<RevisionManagerError> for Error {
             PersistError(err) => Self::DeferredPersistenceError(err),
             InsufficientRevisions {
                 max_revisions,
-                commit_count,
+                max_revision_recovery_lag,
             } => Self::InsufficientRevisions {
                 max_revisions,
-                commit_count,
+                max_revision_recovery_lag,
             },
         }
     }
