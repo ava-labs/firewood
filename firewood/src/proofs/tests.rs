@@ -1216,7 +1216,7 @@ fn test_frame_rejects_over_cap_content_size() {
 } ; "trailing skippable frame")]
 #[test_case(|wire| {
     // a second, fully valid zstd frame (compressing zero bytes)
-    let empty = zstd::bulk::compress(&[], crate::proofs::frame::ZSTD_LEVEL)
+    let empty = zstd::bulk::compress(&[], zstd::DEFAULT_COMPRESSION_LEVEL)
         .expect("compress empty buffer");
     wire.extend_from_slice(&empty);
 } ; "trailing concatenated frame")]
@@ -1257,7 +1257,7 @@ fn test_frame_rejects_frame_without_content_size() {
     // frame; the decoder must reject it before allocating.
     let (_, canonical) = create_valid_range_proof();
     let body = &canonical[32..];
-    let frame = zstd::stream::encode_all(body, super::frame::ZSTD_LEVEL)
+    let frame = zstd::stream::encode_all(body, zstd::DEFAULT_COMPRESSION_LEVEL)
         .expect("stream compression of an in-memory buffer");
     let mut wire = canonical[..32].to_vec();
     wire.extend_from_slice(&frame);

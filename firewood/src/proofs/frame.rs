@@ -3,76 +3,53 @@
 
 //! # Compressed proof body framing
 //!
-//! Serialized proofs carry their body inside a single zstd frame:
+//! Serialized proofs consist of a `Header` followed by the zstd-compressed
+//! range or change proof.
 //!
-//! ```text
-//! Header (32 bytes, uncompressed)
-//! zstd frame     // compresses the proof's canonical body
-//! ```
-//!
-//! The canonical body is one range or change proof's V0 body (see
-//! `write_body_to_vec` in `ser.rs`); the header's proof type says which.
-//!
-//! ## Determinism and canonicality
-//!
-//! The producer pins the zstd parameters: level [`ZSTD_LEVEL`], single
-//! frame, no dictionary, no checksum. zstd output is not bit-identical
-//! across library versions; **the decompressed body is the canonical
-//! form**.
+//! While the body of the deserialized proof is canonical, compression is not.
+
+use zstd::zstd_safe;
 
 use super::reader::ReadError;
 
-/// zstd compression level pinned by the producer rule.
-/// Level 3 is zstd's default and best measured tradeoff.
-pub(super) const ZSTD_LEVEL: i32 = 3;
-
 /// Upper bound on the declared uncompressed body length.
-pub(super) const MAX_DECOMPRESSED_LEN: usize = 32 * 1024 * 1024;
+///
+// TODO(AminR443): make this configurable at the DB layer.
+pub(super) const MAX_DECOMPRESSED_LEN: usize = 32 * 1024 * 1024; // 32 MiB
 
 /// Upper bound on the ratio between the declared uncompressed body length
 /// and the compressed frame length. Bounds the decoder's allocation by the
 /// bytes the peer actually sent (decompression-bomb defense).
 pub(super) const MAX_COMPRESSION_RATIO: usize = 128;
 
-/// Appends the zstd frame compressing `body`.
-#[cfg(test)]
-pub(super) fn write_compressed_body(body: &[u8], out: &mut Vec<u8>) {
-    let compressed =
-        zstd::bulk::compress(body, ZSTD_LEVEL).expect("couldn't allocate zstd context");
-    out.extend_from_slice(&compressed);
-}
-
 /// Compresses `out[body_start..]` (the canonical body, serialized in place
 /// after the header) into a zstd frame, replacing it. Avoids a separate
 /// body buffer.
 pub(super) fn compress_body_in_place(out: &mut Vec<u8>, body_start: usize) {
-    debug_assert!(body_start <= out.len());
     #[expect(
         clippy::indexing_slicing,
         reason = "callers record body_start as out.len() before appending the body"
     )]
-    let compressed = zstd::bulk::compress(&out[body_start..], ZSTD_LEVEL)
-        .expect("couldn't allocate zstd context");
+    let compressed = zstd::bulk::compress(&out[body_start..], zstd::DEFAULT_COMPRESSION_LEVEL)
+        .expect("zstd compressor allocation failed");
     out.truncate(body_start);
     out.extend_from_slice(&compressed);
 }
 
-/// Enforces the pre-allocation bounds (see [`decompress_body`]) and
-/// returns the frame's declared content size.
+/// Enforces the pre-allocation bounds (see [`decompress_body`]) and returns
+/// the frame's declared content size.
+///
+/// Exactly one zstd frame must span all of `frame`: the raw decompressor
+/// accepts concatenated frames and silently skips skippable ones, which
+/// would otherwise be an attacker-controlled padding channel.
 fn validate_frame(frame: &[u8], frame_offset: usize) -> Result<usize, ReadError> {
-    // `find_frame_compressed_size` measures only the *first* frame.
-    // Requiring it to span the entire remainder leaves no room for
-    // trailing concatenated or skippable frames, which the raw
-    // decompressor would otherwise silently accept — an
-    // attacker-controlled padding channel.
-    let frame_size = zstd::zstd_safe::find_frame_compressed_size(frame).map_err(|code| {
-        ReadError::InvalidItem {
+    let frame_size =
+        zstd_safe::find_frame_compressed_size(frame).map_err(|code| ReadError::InvalidItem {
             item: "compressed body frame",
             offset: frame_offset,
             expected: "a valid zstd frame",
-            found: zstd::zstd_safe::get_error_name(code).to_owned(),
-        }
-    })?;
+            found: zstd_safe::get_error_name(code).to_owned(),
+        })?;
     if frame_size != frame.len() {
         return Err(ReadError::InvalidItem {
             item: "compressed body frame",
@@ -82,7 +59,7 @@ fn validate_frame(frame: &[u8], frame_offset: usize) -> Result<usize, ReadError>
         });
     }
 
-    let Ok(Some(content_size)) = zstd::zstd_safe::get_frame_content_size(frame) else {
+    let Ok(Some(content_size)) = zstd_safe::get_frame_content_size(frame) else {
         return Err(ReadError::InvalidItem {
             item: "frame content size",
             offset: frame_offset,
@@ -136,4 +113,12 @@ pub(super) fn decompress_body(frame: &[u8], frame_offset: usize) -> Result<Vec<u
         found: err.to_string(),
     })?;
     Ok(body)
+}
+
+/// Appends the zstd frame compressing `body`.
+#[cfg(test)]
+pub(super) fn write_compressed_body(body: &[u8], out: &mut Vec<u8>) {
+    let compressed = zstd::bulk::compress(body, zstd::DEFAULT_COMPRESSION_LEVEL)
+        .expect("zstd compressor allocation failed");
+    out.extend_from_slice(&compressed);
 }

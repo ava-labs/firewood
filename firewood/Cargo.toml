@@ -34,9 +34,9 @@ firewood-storage.workspace = true
 hex.workspace = true
 integer-encoding.workspace = true
 thiserror.workspace = true
-zstd.workspace = true
 # Regular dependencies
 typed-builder = "0.23.2"
+zstd = { version = "0.13.3", default-features = false }
 rayon = "1.12.0"
 parking_lot.workspace = true
 lender = "0.7.0"
