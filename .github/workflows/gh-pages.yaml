@@ -19,11 +19,8 @@ on:
   # allow manual trigger because we cannot "retry" a deploy step
   workflow_dispatch:
   # Rebuild pages after benchmark workflow completes.
-  # Currently only scheduled runs (which run on main) trigger this.
-  # If we later add feature branch benchmarks, remove `branches` filter -
-  # data separation is handled in track-performance.yml (bench/ vs dev/bench/).
   workflow_run:
-    workflows: ["C-Chain Reexecution Performance Tracking"]
+    workflows: ["C-Chain Reexecution Performance Tracking", "firewood-benchmarks"]
     types: [completed]
 
 env:
