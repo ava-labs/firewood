@@ -776,7 +776,7 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
       `proposed/`/`active/` folders). It contains a single RFC-style `template.md` and a
       `README.md` documenting the model + status-flip promotion checklist + a link to the
       backfill tracking issue.
-- [ ] The fully-written `2024-08-13-on-disk-format-and-addressing.md` seed is in place.
+- [x] The fully-written `2024-08-13-on-disk-format-and-addressing.md` seed is in place.
 - [x] Design docs carry the YAML frontmatter schema (`title`, `status`, `category`,
       `authors`, optional `tracking-issue`) with **no date fields**; the in-repo
       `[preprocessor.frontmatter-strip]` jq script strips it so it does not render. This
