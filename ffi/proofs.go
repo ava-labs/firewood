@@ -294,17 +294,29 @@ func (p *RangeProof) FindNextKey() (*NextKeyRange, error) {
 // This method can only be called anytime after the proof is created.
 func (p *RangeProof) CodeHashes() iter.Seq2[Hash, error] {
 	return func(yield func(Hash, error) bool) {
-		iter, err := getCodeHashIteratorFromCodeHashIteratorResult(C.fwd_range_proof_code_hash_iter(p.handle))
+		p.lease.mu.RLock()
+		it, err := getCodeHashIteratorFromCodeHashIteratorResult(C.fwd_range_proof_code_hash_iter(p.handle))
+		p.lease.mu.RUnlock()
 		if err != nil {
 			yield(EmptyRoot, err)
 			return
 		}
+		// The Rust code iterator borrows the proof's key-values for its whole
+		// lifetime (CodeIteratorHandle<'p>), so the proof must stay alive until
+		// iteration finishes, not just for the create call above. Free the
+		// iterator and then KeepAlive p in the same deferred call: freeing first
+		// releases the borrow, and the trailing KeepAlive keeps the proof
+		// reachable across the entire loop so its GC finalizer cannot free the
+		// borrowed-from context mid-iteration. Concurrently calling Free during
+		// iteration remains unsupported, as elsewhere on RangeProof.
 		defer func() {
-			if err := iter.Free(); err != nil {
-				panic(err)
+			freeErr := it.Free()
+			runtime.KeepAlive(p)
+			if freeErr != nil {
+				panic(freeErr)
 			}
 		}()
-		for hash, err := iter.Next(); ; hash, err = iter.Next() {
+		for hash, err := it.Next(); ; hash, err = it.Next() {
 			if err != nil {
 				yield(EmptyRoot, err)
 				return
