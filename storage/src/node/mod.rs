@@ -197,51 +197,15 @@ impl Node {
         }
     }
 
-    /// Given a [Node], returns a set of bytes to write to storage
-    /// The format is as follows:
+    /// Encodes the node payload without any storage-specific prefix.
     ///
-    /// For a branch:
-    ///  - Byte 0:
-    ///   - Bit 0: always 0
-    ///   - Bit 1: indicates if the branch has a value
-    ///   - Bits 2-5: the number of children
-    ///   - Bits 6-7: 0: empty `partial_path`, 1: 1 nibble, 2: 2 nibbles, 3: length is encoded in the next byte
-    ///
-    /// The remaining bytes are in the following order:
-    ///   - The partial path, possibly preceeded by the length if it is longer than 3 nibbles (varint encoded)
-    ///   - The number of children, if the branch factor is 256
-    ///   - The children. If the number of children == [`BranchNode::MAX_CHILDREN`], then the children are just
-    ///     addresses with hashes. Otherwise, they are offset, address, hash tuples.
-    ///
-    /// For a leaf:
-    ///  - Byte 0:
-    ///    - Bit 0: always 1
-    ///    - Bits 1-7: the length of the partial path. If the partial path is longer than 126 nibbles, this is set to
-    ///      126 and the length is encoded in the next byte.
-    ///
-    /// The remaining bytes are in the following order:
-    ///    - The partial path, possibly preceeded by the length if it is longer than 126 nibbles (varint encoded)
-    ///    - The value, always preceeded by the length, varint encoded
-    ///
-    /// Note that this means the first byte cannot be 255, which would be a leaf with 127 nibbles. We save this extra
-    /// value to mark this as a freed area.
-    ///
-    /// The first byte of the encoding is the area size index, which is calculated from the total
-    /// size of the encoded node. This method returns the `AreaIndex` for the encoded node.
-    ///
-    /// TODO(rkuris): We could pack two bytes of the partial path into one and handle the odd byte length
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the encoded size exceeds the maximum area size.
-    pub fn as_bytes<T>(&self, encoded: &mut T) -> Result<AreaIndex, Error>
+    /// This writes the node's intrinsic encoding beginning with the node-type byte,
+    /// but does not write the leading area index used by padded storage or any
+    /// archive-mode framing.
+    pub fn encode_body<T>(&self, encoded: &mut T)
     where
-        T: ExtendableBytes + AsRef<[u8]> + std::ops::IndexMut<usize, Output = u8>,
+        T: ExtendableBytes,
     {
-        // Push placeholder for area size index (will be updated later)
-        let area_size_index_position = encoded.as_ref().len();
-        encoded.push(0);
-
         match self {
             Node::Branch(b) => {
                 let child_iter = b.children.iter_present();
@@ -320,6 +284,53 @@ impl Node {
                 encoded.extend_from_slice(&l.value);
             }
         }
+    }
+
+    /// Given a [Node], returns a set of bytes to write to storage
+    /// The format is as follows:
+    ///
+    /// For a branch:
+    ///  - Byte 0:
+    ///   - Bit 0: always 0
+    ///   - Bit 1: indicates if the branch has a value
+    ///   - Bits 2-5: the number of children
+    ///   - Bits 6-7: 0: empty `partial_path`, 1: 1 nibble, 2: 2 nibbles, 3: length is encoded in the next byte
+    ///
+    /// The remaining bytes are in the following order:
+    ///   - The partial path, possibly preceeded by the length if it is longer than 3 nibbles (varint encoded)
+    ///   - The number of children, if the branch factor is 256
+    ///   - The children. If the number of children == [`BranchNode::MAX_CHILDREN`], then the children are just
+    ///     addresses with hashes. Otherwise, they are offset, address, hash tuples.
+    ///
+    /// For a leaf:
+    ///  - Byte 0:
+    ///    - Bit 0: always 1
+    ///    - Bits 1-7: the length of the partial path. If the partial path is longer than 126 nibbles, this is set to
+    ///      126 and the length is encoded in the next byte.
+    ///
+    /// The remaining bytes are in the following order:
+    ///    - The partial path, possibly preceeded by the length if it is longer than 126 nibbles (varint encoded)
+    ///    - The value, always preceeded by the length, varint encoded
+    ///
+    /// Note that this means the first byte cannot be 255, which would be a leaf with 127 nibbles. We save this extra
+    /// value to mark this as a freed area.
+    ///
+    /// The first byte of the encoding is the area size index, which is calculated from the total
+    /// size of the encoded node. This method returns the `AreaIndex` for the encoded node.
+    ///
+    /// TODO(rkuris): We could pack two bytes of the partial path into one and handle the odd byte length
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the encoded size exceeds the maximum area size.
+    pub fn as_bytes<T>(&self, encoded: &mut T) -> Result<AreaIndex, Error>
+    where
+        T: ExtendableBytes + AsRef<[u8]> + std::ops::IndexMut<usize, Output = u8>,
+    {
+        // Push placeholder for area size index (will be updated later)
+        let area_size_index_position = encoded.as_ref().len();
+        encoded.push(0);
+        self.encode_body(encoded);
 
         // Calculate the area index from the encoded length (subtract position to get just this node's size)
         let node_size = encoded
