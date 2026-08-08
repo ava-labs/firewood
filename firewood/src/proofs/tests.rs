@@ -4,9 +4,7 @@
 use integer_encoding::VarInt;
 use test_case::test_case;
 
-use firewood_storage::{
-    Children, IntoHashType, PathComponent, SeededRng, TrieHash, ValueDigest, logger::debug,
-};
+use firewood_storage::{Children, PathComponent, SeededRng, TrieHash, ValueDigest, logger::debug};
 
 use super::{
     header::InvalidHeader,
@@ -474,7 +472,7 @@ fn make_proof_node(
     let mut child_hashes = Children::new();
     for &nibble in child_nibbles {
         child_hashes[PathComponent::try_new(nibble).unwrap()] =
-            Some(TrieHash::from([0u8; 32]).into_hash_type());
+            Some(TrieHash::from([0u8; 32]).into());
     }
     ProofNode {
         key,
@@ -777,7 +775,7 @@ fn generate_random_proof_node(rng: &SeededRng) -> ProofNode {
     for nibble in 0u8..16 {
         if rng.random::<bool>() {
             child_hashes[PathComponent::try_new(nibble).unwrap()] =
-                Some(TrieHash::from(rng.random::<[u8; 32]>()).into_hash_type());
+                Some(TrieHash::from(rng.random::<[u8; 32]>()).into());
         }
     }
     ProofNode {
