@@ -34,6 +34,11 @@ impl FrozenRangeProof {
         reason = "Header and ProofType are not exported"
     )]
     /// - A 32-byte [`Header`] with the proof type set to [`ProofType::Range`].
+    /// - A single zstd frame compressing the canonical body (see
+    ///   `proofs::frame` for the framing, bounds, and canonicality rules).
+    ///
+    /// The canonical body, once decompressed, is:
+    ///
     /// - The start proof, serialized as a _sequence_ of [`ProofNode`]s
     /// - The end proof, serialized as a _sequence_ of [`ProofNode`]s
     /// - The key-value pairs, serialized as a _sequence_ of `(key, value)` tuples.
@@ -78,16 +83,42 @@ impl FrozenRangeProof {
     ///
     /// Variable-length integers are encoded using unsigned LEB128.
     pub fn write_to_vec(&self, out: &mut Vec<u8>) {
-        Header::from(ProofType::Range).write_item(out);
+        write_framed(self, ProofType::Range, out);
+    }
+
+    /// Serializes this proof's canonical (uncompressed) body: the bytes
+    /// [`FrozenRangeProof::write_to_vec`] compresses after the header, and
+    /// the sequence to hash or compare for a proof's canonical identity.
+    pub fn write_body_to_vec(&self, out: &mut Vec<u8>) {
         self.write_item(out);
     }
 }
 
 impl FrozenChangeProof {
+    /// Serializes this proof into the provided byte vector.
+    ///
+    /// The format matches [`FrozenRangeProof::write_to_vec`] with the proof
+    /// type set to change, and the canonical body carries the batch
+    /// operations in place of the key-value pairs.
     pub fn write_to_vec(&self, out: &mut Vec<u8>) {
-        Header::from(ProofType::Change).write_item(out);
+        write_framed(self, ProofType::Change, out);
+    }
+
+    /// Serializes this proof's canonical (uncompressed) body. See
+    /// [`FrozenRangeProof::write_body_to_vec`].
+    pub fn write_body_to_vec(&self, out: &mut Vec<u8>) {
         self.write_item(out);
     }
+}
+
+/// Writes the header for `proof_type`, serializes `proof`'s canonical body
+/// after it, and compresses the body in place into the wire framing (see
+/// `proofs::frame`).
+fn write_framed(proof: &impl WriteItem, proof_type: ProofType, out: &mut Vec<u8>) {
+    Header::from(proof_type).write_item(out);
+    let body_start = out.len();
+    proof.write_item(out);
+    super::frame::compress_body_in_place(out, body_start);
 }
 
 trait PushVarInt {
