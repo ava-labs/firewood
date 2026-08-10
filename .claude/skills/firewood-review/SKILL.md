@@ -93,12 +93,12 @@ Use `--target-dir target/review` for ALL cargo commands to avoid conflicting wit
 
 Run `cargo clippy --workspace --all-targets` and `cargo nextest run --workspace --all-targets` for each feature set:
 
-| Feature flags               | macOS | Linux |
-| --------------------------- | ----- | ----- |
-| (none)                      | ✓     | ✓     |
-| `--no-default-features`     | ✓     | ✓     |
-| `--features ethhash,logger` | ✓     | ✓     |
-| `--all-features`            | ✓     | ✓     |
+| Feature flags           | macOS | Linux |
+| ----------------------- | ----- | ----- |
+| (none)                  | ✓     | ✓     |
+| `--no-default-features` | ✓     | ✓     |
+| `--features logger`     | ✓     | ✓     |
+| `--all-features`        | ✓     | ✓     |
 
 `--all-features` requires rustc 1.94.1+, above the 1.94.0 workspace MSRV, because it enables `fwdctl`'s `launch` feature and its AWS SDK dependencies declare that floor. If `cargo` reports `rustc 1.94.0 is not supported by the following packages`, that is this constraint and not a defect in the PR under review.
 
@@ -122,7 +122,7 @@ Non-zero exit = stale header → blocking finding. Write results to `$SCRATCH/ru
 Go bindings require the FFI build to use the workspace `target/` dir (the `LDFLAGS` in `ffi/firewood.go` reference it directly — do not use `--target-dir` here):
 
 ```bash
-cargo build -p firewood-ffi -F ethhash,logger --frozen
+cargo build -p firewood-ffi -F logger --frozen
 cd ffi
 ./scripts/lint.sh
 go test ./... -race

@@ -26,11 +26,9 @@ Commands:
 Profiles:
   debug-no-default-features
   debug-no-features (default features)
-  debug-ethhash-logger
   debug-all-features (io-uring is active on Linux only; needs rustc 1.94.1+,
                       above the 1.94.0 workspace MSRV, because fwdctl's
                       launch feature pulls in the AWS SDK)
-  maxperf-ethhash-logger
 EOF
 }
 
@@ -56,17 +54,9 @@ case "$profile" in
         ;;
     debug-no-features)
         ;;
-    debug-ethhash-logger)
-        cargo_args=(--features ethhash,logger)
-        nextest_args=(--features ethhash,logger)
-        ;;
     debug-all-features)
         cargo_args=(--all-features)
         nextest_args=(--all-features)
-        ;;
-    maxperf-ethhash-logger)
-        cargo_args=(--profile maxperf --features ethhash,logger)
-        nextest_args=(--cargo-profile maxperf --features ethhash,logger)
         ;;
     *)
         echo "error: unknown Rust CI profile '$profile'" >&2

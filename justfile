@@ -55,7 +55,7 @@ ci-build-ffi hash_mode:
     set -euo pipefail
     case "{{hash_mode}}" in
         firewood) features=() ;;
-        ethhash) features=(--features ethhash,logger) ;;
+        ethhash) features=(--features logger) ;;
         *) echo "error: unknown FFI hash mode '{{hash_mode}}'" >&2; exit 2 ;;
     esac
     # ${features[@]+…} guard: empty-array expansion errors under `set -u` on
@@ -91,9 +91,7 @@ lint:
     ./scripts/run-just.sh ci-check-todos
     ./scripts/run-just.sh ci-rust clippy debug-no-default-features
     ./scripts/run-just.sh ci-rust clippy debug-no-features
-    ./scripts/run-just.sh ci-rust clippy debug-ethhash-logger
     ./scripts/run-just.sh ci-rust clippy debug-all-features
-    ./scripts/run-just.sh ci-rust clippy maxperf-ethhash-logger
     ./scripts/run-just.sh ci-lint-markdown
     ./scripts/run-just.sh ci-docs
     ./scripts/run-just.sh ci-lint-ffi
@@ -104,9 +102,7 @@ lint:
 test:
     ./scripts/run-just.sh ci-rust test debug-no-default-features
     ./scripts/run-just.sh ci-rust test debug-no-features
-    ./scripts/run-just.sh ci-rust test debug-ethhash-logger
     ./scripts/run-just.sh ci-rust test debug-all-features
-    ./scripts/run-just.sh ci-rust test maxperf-ethhash-logger
     ./scripts/run-just.sh ci-build-ffi firewood
     ./scripts/run-just.sh ci-test-ffi firewood
     ./scripts/run-just.sh ci-test-ffi-compat firewood
@@ -121,30 +117,28 @@ prepush: lint test
 #
 # Run this after any intentional change to the proof binary format (ser.rs,
 # de.rs, childmask, or header). Covers ProofNode encoding, the 32-byte proof
-# header, key-value pair encoding, and BatchOp encoding. The recipe writes
-# snapshots for the MerkleDB (SHA-256) mode first, then for the Ethereum
-# (Keccak-256, ethhash) mode. Existing snapshots are overwritten when their
+# header, key-value pair encoding, and BatchOp encoding. The hash mode is a
+# runtime choice, so a single run regenerates both the MerkleDB (SHA-256) and
+# Ethereum (Keccak-256) snapshots. Existing snapshots are overwritten when their
 # content changes.
 #
 # After running, review the diffs in src/proofs/snapshots/ and commit them
 # alongside the format change.
 snapshot-proof-nodes:
-    INSTA_UPDATE=always cargo nextest run -p firewood --features logger         -E 'test(~snapshot_tests)'
-    INSTA_UPDATE=always cargo nextest run -p firewood --features ethhash,logger -E 'test(~snapshot_tests)'
+    INSTA_UPDATE=always cargo nextest run -p firewood --features logger -E 'test(~snapshot_tests)'
 
 # Regenerate firewood-storage node serialization snapshots for both hash modes.
 #
 # Run this after any intentional change to Serializable impls (TrieHash,
-# FreeArea, HashOrRlp) or to Node::as_bytes / Node::from_reader. The recipe
-# writes snapshots for the MerkleDB (SHA-256) mode first, then for the
-# Ethereum (Keccak-256, ethhash) mode. Existing snapshots are overwritten
-# when their content changes.
+# FreeArea, HashOrRlp) or to Node::as_bytes / Node::from_reader. The hash mode
+# is a runtime choice, so a single run regenerates both the MerkleDB (SHA-256)
+# and Ethereum (Keccak-256) snapshots. Existing snapshots are overwritten when
+# their content changes.
 #
 # After running, review the diffs in storage/src/node/snapshots/ and commit
 # them alongside the format change.
 snapshot-nodes:
-    INSTA_UPDATE=always cargo nextest run -p firewood-storage --features logger         -E 'test(~snapshot_tests)'
-    INSTA_UPDATE=always cargo nextest run -p firewood-storage --features ethhash,logger -E 'test(~snapshot_tests)'
+    INSTA_UPDATE=always cargo nextest run -p firewood-storage --features logger -E 'test(~snapshot_tests)'
 
 # Regenerate all snapshots across the workspace for both hash modes.
 #
@@ -266,7 +260,7 @@ test-ffi-nix-go-bindings: build-ffi-nix
     cd result/ffi
 
     # - cgocheck2 is expensive but provides complete pointer checks
-    # - use hash mode ethhash since the flake builds with `--features ethhash,logger`
+    # - use hash mode ethhash to exercise Ethereum-compatible hashing at runtime
     GOEXPERIMENT=cgocheck2 TEST_FIREWOOD_HASH_MODE=ethhash ${GO} test ./...
 
 # Ensure the FFI flake is up-to-date
@@ -299,7 +293,6 @@ release-step-update-rust-dependencies:
 
     echo "Executing tests to ensure upgrades did not break anything..."
     cargo test --workspace --all-targets -F logger
-    cargo test --workspace --all-targets -F ethhash,logger
 
 # RELEASE PREP: refresh changelog
 release-step-refresh-changelog tag:

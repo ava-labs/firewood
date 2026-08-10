@@ -64,16 +64,18 @@ benchmark/            # Performance benchmarking suite
 - **Commit**: Operation of applying Proposals to the most recent Revision
 - **Batch**: Ordered set of Put/Delete operations
 
+## Hash Modes
+
+The node-hashing scheme is a per-database runtime choice (selected when a
+database is created and recorded in its file header), not a Cargo feature:
+
+- **MerkleDB mode**: SHA-256 hashing compatible with merkledb
+- **Ethereum mode**: Keccak-256 hashing; understands "account" nodes at
+  specific depths with RLP-encoded values and computes the account trie hash
+  as the actual root. See `storage/src/hashers/ethhash.rs` for implementation
+  details.
+
 ## Feature Flags
-
-### `ethhash`
-
-By default, Firewood uses SHA-256 hashing compatible with merkledb. Enable this feature for Ethereum compatibility:
-
-- Changes hashing from SHA-256 to Keccak-256
-- Understands "account" nodes at specific depths with RLP-encoded values
-- Computes account trie hash as actual root
-- See `firewood/storage/src/hashers/ethhash.rs` for implementation details
 
 ### `logging`
 
@@ -89,7 +91,7 @@ Firewood Rust FFI bindings:
 ```bash
 cd ffi/src                                              # Go to Rust binding directory
 cargo clean                                             # Remove any existing bindings
-cargo build --profile maxperf --features ethhash,logger # Generate bindings
+cargo build --profile maxperf --features logger         # Generate bindings
 ```
 
 To then have Golang utilize these new bindings:
@@ -170,7 +172,7 @@ All tests must pass, and there should be no clippy warnings.
 ### Toolchain Floor for `--all-features`
 
 The workspace declares `rust-version = "1.94.0"`, and that is accurate for the
-default build, `--no-default-features`, and `--features ethhash,logger`.
+default build, `--no-default-features`, and `--features logger`.
 `--all-features` needs **1.94.1**.
 
 `--all-features` turns on `fwdctl`'s `launch` feature, which pulls in the AWS SDK
@@ -282,7 +284,7 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
 
 4. **Beta Status**: The API may change. Don't assume stability guarantees.
 
-5. **Feature Flags**: Be aware of `ethhash` feature flag when discussing Ethereum compatibility vs. default merkledb compatibility.
+5. **Hash Modes**: The hashing scheme (Ethereum Keccak-256 vs. merkledb SHA-256) is a per-database runtime choice, not a compile-time feature.
 
 6. **Documentation**: Public APIs should be well-documented. The documentation
    check is included in `./scripts/run-just.sh lint`; run `./scripts/run-just.sh ci-docs` to invoke it

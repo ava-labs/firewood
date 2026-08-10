@@ -26,20 +26,11 @@ To use
 
 ## Key input modes
 
-The `get`, `insert`, and `delete` commands accept UTF-8 or hexadecimal keys.
-Build with the `ethhash` feature to also derive Firewood keys from Ethereum
-inputs:
-
-```sh
-cargo build --release --bin fwdctl --features ethhash
-```
-
 The `get`, `insert`, and `delete` commands accept the following key modes:
 
 * With no key option, `KEY` remains a UTF-8 string, preserving the default
   behavior.
-* `--hex` decodes `KEY` as hexadecimal bytes. This mode is available in both
-  default and `ethhash` builds.
+* `--hex` decodes `KEY` as hexadecimal bytes.
 * `--account` decodes `KEY` as an Ethereum address (exactly 20 bytes of hex) and
   uses `keccak256(address)` as the database key.
 * `--storage SLOT` decodes `KEY` as a 20-byte Ethereum address and `SLOT` as a

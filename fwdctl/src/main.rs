@@ -23,12 +23,13 @@ pub mod replay;
 pub mod root;
 
 // The node-hashing scheme is now a per-database runtime choice. For a fresh
-// database the default is the binary's compile-time scheme (`DefaultHashMode`);
-// for an existing database the header's scheme is auto-detected and honored.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
+// database the default is the locked Ethereum scheme; for an existing database
+// the header's scheme is auto-detected and honored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, ValueEnum)]
 pub enum NodeHashAlgorithm {
     #[value(name = "merkle-db")]
     MerkleDB,
+    #[default]
     #[value(name = "ethereum")]
     Ethereum,
 }
@@ -69,13 +70,13 @@ pub struct DatabasePath {
     /// Also available under the `--hash-mode` alias. For an existing database
     /// the header's scheme is honored; this selects the scheme for a fresh
     /// database (or which concrete mode to open with). The default is the
-    /// binary's compile-time scheme.
+    /// locked Ethereum scheme.
     #[arg(
         long,
         visible_alias = "hash-mode",
         value_enum,
         required = false,
-        default_value_t = <firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM.into(),
+        default_value_t = NodeHashAlgorithm::default(),
         help = "The node hash algorithm to use when opening the database",
     )]
     pub node_hash_algorithm: NodeHashAlgorithm,
@@ -119,7 +120,7 @@ impl DatabasePath {
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
-#[command(version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_COMMIT_SHA"), ", ", env!("ETHHASH_FEATURE"), ")"))]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_COMMIT_SHA"), ")"))]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

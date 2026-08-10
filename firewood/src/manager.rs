@@ -707,7 +707,8 @@ impl<H: HashMode> RevisionManager<H> {
 
 #[cfg(test)]
 mod tests {
-    use firewood_storage::{DefaultHashMode, EthHash, RootReader};
+    use firewood_storage::EthHash;
+    use firewood_storage::RootReader;
 
     use super::*;
 
@@ -755,14 +756,14 @@ mod tests {
             .build();
 
         // First database instance should open successfully
-        let first_manager = RevisionManager::<DefaultHashMode>::new(config.clone());
+        let first_manager = RevisionManager::<EthHash>::new(config.clone());
         assert!(
             first_manager.is_ok(),
             "First database should open successfully"
         );
 
         // Second database instance should fail to open due to file locking
-        let second_manager = RevisionManager::<DefaultHashMode>::new(config.clone());
+        let second_manager = RevisionManager::<EthHash>::new(config.clone());
         assert!(
             second_manager.is_err(),
             "Second database should fail to open"
@@ -782,7 +783,7 @@ mod tests {
         drop(first_manager.unwrap());
 
         // Now the second database should open successfully
-        let third_manager = RevisionManager::<DefaultHashMode>::new(config);
+        let third_manager = RevisionManager::<EthHash>::new(config);
         assert!(
             third_manager.is_ok(),
             "Database should open after first instance is dropped"
@@ -816,7 +817,7 @@ mod tests {
             )
             .build();
 
-        let manager = Arc::new(RevisionManager::<DefaultHashMode>::new(config).unwrap());
+        let manager = Arc::new(RevisionManager::<EthHash>::new(config).unwrap());
 
         // Create an initial proposal and commit it to have a non-empty base
         let base_revision = manager.current_revision();
@@ -828,7 +829,7 @@ mod tests {
                 value: b"value".to_vec().into_boxed_slice(),
             }));
         }
-        let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _, DefaultHashMode>> =
+        let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _, EthHash>> =
             Arc::new(proposal.try_into().unwrap());
         manager.add_proposal(proposal.clone());
         manager.commit(proposal).unwrap();
@@ -916,7 +917,7 @@ mod tests {
                         }));
                     }
 
-                    let immutable: Arc<NodeStore<Arc<ImmutableProposal>, _, DefaultHashMode>> =
+                    let immutable: Arc<NodeStore<Arc<ImmutableProposal>, _, EthHash>> =
                         Arc::new(match new_proposal.try_into() {
                             Ok(p) => p,
                             Err(e) => {
@@ -985,7 +986,7 @@ mod tests {
             .root_store(false)
             .build();
 
-        let _manager = RevisionManager::<DefaultHashMode>::new(config).unwrap();
+        let _manager = RevisionManager::<EthHash>::new(config).unwrap();
 
         // Verify that the root_store directory does NOT exist
         let root_store_dir = db_path.join("root_store");
@@ -1008,7 +1009,7 @@ mod tests {
             .root_store(true)
             .build();
 
-        let _manager = RevisionManager::<DefaultHashMode>::new(config).unwrap();
+        let _manager = RevisionManager::<EthHash>::new(config).unwrap();
 
         // Verify that the root_store directory DOES exist
         let root_store_dir = db_path.join("root_store");
@@ -1035,7 +1036,7 @@ mod tests {
             )
             .build();
 
-        let result = RevisionManager::<DefaultHashMode>::new(config);
+        let result = RevisionManager::<EthHash>::new(config);
         assert!(result.is_err());
 
         // `max_revisions` == `commit_count`
@@ -1049,7 +1050,7 @@ mod tests {
             )
             .build();
 
-        let result = RevisionManager::<DefaultHashMode>::new(config);
+        let result = RevisionManager::<EthHash>::new(config);
         assert!(result.is_err());
 
         // `max_revisions` > `commit_count`
@@ -1064,7 +1065,7 @@ mod tests {
             )
             .build();
 
-        let result = RevisionManager::<DefaultHashMode>::new(config);
+        let result = RevisionManager::<EthHash>::new(config);
         assert!(result.is_ok());
     }
 

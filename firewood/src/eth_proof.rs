@@ -436,8 +436,7 @@ mod merkledb_gate_tests {
 }
 
 // eth_getProof is an Ethereum-only surface (runtime-gated); these tests stay single-mode.
-#[cfg(all(test, feature = "ethhash"))]
-#[expect(clippy::unwrap_used, clippy::indexing_slicing)]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::merkle::tests::init_merkle;

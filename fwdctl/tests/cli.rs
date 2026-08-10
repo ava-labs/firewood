@@ -56,13 +56,9 @@ fn insert_key_value(db_path: &Path, key: &str, value: &str) {
         .stdout(format!("0x{}\n", hex::encode(key)));
 }
 
-#[cfg(feature = "ethhash")]
 const ACCOUNT: &str = "00112233445566778899aabbccddeeff00112233";
-#[cfg(feature = "ethhash")]
 const SLOT: &str = "0000000000000000000000000000000000000000000000000000000000000001";
-#[cfg(feature = "ethhash")]
 const ACCOUNT_HASH: &str = "b7ff4d50bd18751616802a406c94b190f1a3fd4fc82b06db40943e0119c5e8bc";
-#[cfg(feature = "ethhash")]
 const STORAGE_KEY: &str = "b7ff4d50bd18751616802a406c94b190f1a3fd4fc82b06db40943e0119c5e8bcb10e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf6";
 
 #[test]
@@ -94,16 +90,6 @@ fn fwdctl_hex_key_round_trip() {
             .success()
             .stdout("key 0x79656172 deleted successfully\n");
 
-        #[cfg(not(feature = "ethhash"))]
-        cargo_bin_cmd!()
-            .args(["get", "year"])
-            .arg("--db")
-            .arg(db_path)
-            .assert()
-            .success()
-            .stdout(predicate::str::contains("Database is empty"));
-
-        #[cfg(feature = "ethhash")]
         cargo_bin_cmd!()
             .args(["get", "year"])
             .arg("--db")
@@ -123,7 +109,6 @@ fn fwdctl_hex_key_rejects_malformed_input() {
         .stderr(predicate::str::contains("key must be hexadecimal"));
 }
 
-#[cfg(feature = "ethhash")]
 #[test]
 fn fwdctl_key_modes_conflict() {
     cargo_bin_cmd!()
@@ -135,7 +120,6 @@ fn fwdctl_key_modes_conflict() {
         ));
 }
 
-#[cfg(feature = "ethhash")]
 #[test]
 fn fwdctl_key_hashing_is_documented_in_help() {
     cargo_bin_cmd!()
@@ -152,7 +136,6 @@ fn fwdctl_key_hashing_is_documented_in_help() {
         ));
 }
 
-#[cfg(feature = "ethhash")]
 #[test]
 fn fwdctl_account_key_round_trip() {
     with_tmpdir(|db_path| {
@@ -184,7 +167,6 @@ fn fwdctl_account_key_round_trip() {
     });
 }
 
-#[cfg(feature = "ethhash")]
 #[test]
 fn fwdctl_storage_key_round_trip() {
     with_tmpdir(|db_path| {
@@ -232,7 +214,6 @@ fn fwdctl_storage_key_round_trip() {
     });
 }
 
-#[cfg(feature = "ethhash")]
 #[test]
 fn fwdctl_account_rejects_malformed_hex() {
     cargo_bin_cmd!()
@@ -248,7 +229,6 @@ fn fwdctl_account_rejects_malformed_hex() {
         ));
 }
 
-#[cfg(feature = "ethhash")]
 #[test]
 fn fwdctl_storage_rejects_wrong_length() {
     cargo_bin_cmd!()

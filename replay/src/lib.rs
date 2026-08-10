@@ -384,11 +384,8 @@ mod tests {
     fn create_test_db() -> (tempfile::TempDir, Box<dyn DynDb>) {
         let tmpdir = tempdir().expect("create tempdir");
         let db_path = tmpdir.path().join("test.db");
-        let algorithm = if cfg!(feature = "ethhash") {
-            NodeHashAlgorithm::Ethereum
-        } else {
-            NodeHashAlgorithm::MerkleDB
-        };
+        // Replay operates on Ethereum-mode (C-Chain) databases.
+        let algorithm = NodeHashAlgorithm::Ethereum;
         let cfg = DbConfig::builder()
             .node_hash_algorithm(algorithm)
             .truncate(true)
