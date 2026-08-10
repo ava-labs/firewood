@@ -714,8 +714,6 @@ pub mod __private {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used)]
-
     use super::*;
 
     fn isolated<F, R>(f: F) -> R

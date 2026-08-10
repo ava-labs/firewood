@@ -247,7 +247,6 @@ enum MaybePersisted {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod test {
     use nonzero_ext::nonzero;
 

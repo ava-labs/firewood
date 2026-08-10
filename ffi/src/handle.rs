@@ -2,17 +2,15 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::sync::Arc;
 
 use firewood::{
     api::{
         self, ArcDynDbView, Db as _, DbView, FrozenChangeProof, HashKey, HashKeyExt, IntoBatchIter,
         KeyType,
     },
-    db::{Db, DbConfig},
+    db::{CommittedView, Db, DbConfig},
     manager::RevisionManagerConfig,
 };
-use firewood_storage::{Committed, FileBacked, NodeStore};
 
 use crate::{BatchOp, BorrowedBytes, CView, CreateProposalResult};
 
@@ -31,11 +29,11 @@ pub enum NodeHashAlgorithm {
     Ethereum = 1,
 }
 
-impl From<NodeHashAlgorithm> for firewood_storage::NodeHashAlgorithm {
+impl From<NodeHashAlgorithm> for firewood::NodeHashAlgorithm {
     fn from(alg: NodeHashAlgorithm) -> Self {
         match alg {
-            NodeHashAlgorithm::MerkleDB => firewood_storage::NodeHashAlgorithm::MerkleDB,
-            NodeHashAlgorithm::Ethereum => firewood_storage::NodeHashAlgorithm::Ethereum,
+            NodeHashAlgorithm::MerkleDB => firewood::NodeHashAlgorithm::MerkleDB,
+            NodeHashAlgorithm::Ethereum => firewood::NodeHashAlgorithm::Ethereum,
         }
     }
 }
@@ -232,7 +230,7 @@ impl DatabaseHandle {
     /// accessing the database.
     pub fn get_revision(&self, root: HashKey) -> Result<GetRevisionResult<'_>, api::Error> {
         let view = self.db.view(root.clone())?;
-        let historical = match self.db.revision(root.clone()) {
+        let historical = match self.db.committed_view(root.clone()) {
             Ok(rev) => Some(rev),
             Err(api::Error::RevisionNotFound { .. }) => None,
             Err(err) => return Err(err),
@@ -243,14 +241,14 @@ impl DatabaseHandle {
         })
     }
 
-    /// Reconstructs a view on top of an existing historical node store.
+    /// Reconstructs a view on top of an existing historical revision.
     ///
     /// # Errors
     ///
     /// Returns an error if reconstruction fails.
     pub fn reconstruct_from_view<'db>(
         &'db self,
-        parent: &Arc<NodeStore<Committed, FileBacked>>,
+        parent: &CommittedView,
         batch: impl IntoBatchIter,
     ) -> Result<firewood::db::ReconstructedView<'db>, api::Error> {
         self.db.reconstruct_from_view(parent, batch)

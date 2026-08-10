@@ -39,7 +39,7 @@ as well as carefully managing the free list during the creation and expiration o
 
 ## Architecture Diagram
 
-![architecture diagram](./docs/assets/architecture.svg)
+![architecture diagram](./docs/src/assets/architecture.svg)
 
 ## Terminology
 

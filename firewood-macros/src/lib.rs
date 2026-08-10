@@ -147,8 +147,6 @@ fn generate_metrics_wrapper(input_fn: &ItemFn, ident: &syn::Ident) -> proc_macro
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used)]
-
     use super::*;
 
     #[test]

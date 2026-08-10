@@ -466,9 +466,6 @@ pub fn verify_change_proof_structure(
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used, reason = "Tests can use unwrap")]
-    #![expect(clippy::indexing_slicing, reason = "Tests can use indexing")]
-
     use super::*;
     use crate::merkle::{Key, Value};
 

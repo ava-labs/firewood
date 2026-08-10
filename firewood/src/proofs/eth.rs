@@ -295,7 +295,6 @@ fn proof_child_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
 }
 
 #[cfg(test)]
-#[expect(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use super::*;
     use firewood_storage::{IntoHashType, PathBuf, RlpList, TrieHash, TriePathFromUnpackedBytes};

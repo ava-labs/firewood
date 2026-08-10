@@ -562,7 +562,10 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::arithmetic_side_effects)]
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "test helpers use plain `+= 1` counters rather than checked/wrapping arithmetic"
+)]
 mod tests {
     use crate::{
         Proof,
@@ -999,7 +1002,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::indexing_slicing)]
     fn test_diff_interleaved_keys() {
         // m1: a, c, e
         // m2: b, c, d, f
@@ -1854,7 +1856,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::indexing_slicing)]
     fn test_change_proof_into_iterator() {
         let key_values: Box<[BatchOp<Key, Value>]> = Box::new([
             BatchOp::Put {

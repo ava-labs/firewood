@@ -185,6 +185,9 @@ func TestReconstructedDropThenUse(t *testing.T) {
 
 	err = reconstructed.Reconstruct(batch[:1])
 	r.ErrorIs(err, ErrDroppedReconstructed)
+
+	_, err = reconstructed.EthGetProof(keys[0], nil)
+	r.ErrorIs(err, ErrDroppedReconstructed)
 }
 
 // TestReconstructedClone verifies that a Reconstruct call on a clone does

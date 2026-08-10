@@ -35,17 +35,59 @@ use crate::{CacheReadStrategy, CachedNode, LinearAddress, MaybePersistedNode, Sh
 
 use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
 
-/// A [`ReadableStorage`] and [`WritableStorage`] backed by a file
+/// A [`ReadableStorage`] and [`WritableStorage`] backed by a single on-disk file.
+///
+/// This is the persistent storage backend for a node store. It owns the open
+/// file handle — which can be advisory-locked via [`Self::lock`] to stop another
+/// process from opening the same database — along with two in-memory LRU caches
+/// that sit in front of it: one for trie nodes and one for free-list links.
+///
+/// Reads and writes go through positioned (`pread`/`pwrite`) syscalls, so they
+/// share no file cursor and take no per-handle lock; the caches absorb most
+/// reads so that the hot path rarely touches disk. The only serialization
+/// points are the two cache mutexes and, on the io-uring path, the ring's
+/// internal lock.
 #[derive(Debug)]
 pub struct FileBacked {
+    /// Path of the on-disk database file.
     filename: PathBuf,
+    /// In-memory cache of trie nodes keyed by their on-disk [`LinearAddress`].
+    ///
+    /// This cache is *memory-bounded* (its capacity is a byte budget, not an
+    /// entry count) and sits on the hot read path: every node lookup checks it
+    /// before falling back to disk. Reads populate it according to
+    /// [`Self::cache_read_strategy`]; writes always populate it.
     cache: Mutex<MemLruCache<LinearAddress, CachedNode>>,
+    /// In-memory cache of free-list links, mapping a freed node's
+    /// [`LinearAddress`] to the address of the next free node in that list
+    /// ([`None`] marks the end of the list).
+    ///
+    /// This cache is *entry-count bounded* and accelerates node allocation by
+    /// avoiding a disk read to walk the free list. A lookup is destructive: a
+    /// cache hit pops the entry, since allocating from the free list consumes it.
     free_list_cache: Mutex<EntryLruCache<LinearAddress, Option<LinearAddress>>>,
+    /// Policy controlling which reads get inserted into [`Self::cache`]
+    /// (no reads, branch reads only, or all reads). Writes are always cached
+    /// regardless of this setting.
     cache_read_strategy: CacheReadStrategy,
+    /// The node hashing algorithm (MerkleDB or Ethereum) this file was opened
+    /// with. Reported via [`ReadableStorage::node_hash_algorithm`] so callers
+    /// can detect a mismatch between the file and the running build.
     node_hash_algorithm: crate::NodeHashAlgorithm,
-    // keep before `fd` so that it is dropped first (fields are dropped in the order they are declared)
-    #[cfg(feature = "io-uring")]
+    /// `io_uring` proxy used to submit batched writes to the file
+    /// (see [`WritableStorage::write_batch`]). The proxy owns only the
+    /// `io_uring` instance, not the descriptor — `fd` is passed by `RawFd` into
+    /// each `write_batch` call.
+    ///
+    /// Present only under `cfg(io_uring)`, that is on Linux with the `io-uring`
+    /// feature enabled.
+    ///
+    /// Declared before `fd` so that it is dropped first (struct fields are
+    /// dropped in declaration order).
+    #[cfg(io_uring)]
     ring: super::io_uring::IoUringProxy,
+    /// The open file handle backing this storage, wrapped so that the advisory
+    /// lock taken by [`Self::lock`] is released when the handle is dropped.
     fd: UnlockOnDrop,
 }
 
@@ -86,7 +128,7 @@ impl FileBacked {
                 context: Some("file open".to_owned()),
             })?;
 
-        #[cfg(feature = "io-uring")]
+        #[cfg(io_uring)]
         let ring = super::io_uring::IoUringProxy::new().map_err(|err| FileIoError {
             inner: err,
             filename: Some(path.clone()),
@@ -100,7 +142,7 @@ impl FileBacked {
             cache_read_strategy,
             filename: path,
             node_hash_algorithm,
-            #[cfg(feature = "io-uring")]
+            #[cfg(io_uring)]
             ring,
             fd: UnlockOnDrop(fd),
         })
@@ -198,7 +240,10 @@ impl WritableStorage for FileBacked {
             .map_err(|e| self.file_io_error(e, offset, Some("write".to_owned())))
     }
 
-    #[cfg(feature = "io-uring")]
+    /// Overrides the serial [`WritableStorage::write_batch`] default with a
+    /// single batched ring submission. Compiled in only under `cfg(io_uring)`;
+    /// otherwise the trait default applies.
+    #[cfg(io_uring)]
     fn write_batch<'a, I: IntoIterator<Item = (u64, &'a [u8])> + Clone>(
         &self,
         writes: I,
@@ -343,8 +388,6 @@ impl std::ops::DerefMut for UnlockOnDrop {
 
 #[cfg(test)]
 mod test {
-    #![expect(clippy::unwrap_used)]
-
     use crate::NodeHashAlgorithm;
 
     use super::*;

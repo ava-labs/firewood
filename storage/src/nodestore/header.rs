@@ -358,7 +358,7 @@ impl NodeStoreHeader {
             endian_test: 1,
             root_address: None,
             version: Version::new(),
-            free_lists: Default::default(),
+            free_lists: FreeLists::default(),
             area_size_hash: AREA_SIZES_HASH,
             node_hash_algorithm: node_hash_algorithm as u64,
             root_hash: TrieHash::empty().into(),
@@ -584,7 +584,7 @@ mod tests {
 
         // Check the header is correctly initialized.
         assert_eq!(header.version, Version::new());
-        let empty_free_list: FreeLists = Default::default();
+        let empty_free_list = FreeLists::default();
         assert_eq!(*header.free_lists(), empty_free_list);
     }
 }

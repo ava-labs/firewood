@@ -2238,6 +2238,22 @@ struct EthProofResult fwd_eth_get_proof(const struct RevisionHandle *revision,
                                         BorrowedBytes2D storage_keys);
 
 /**
+ * Produce an `eth_getProof`-compatible proof against a reconstructed view
+ * rather than a committed revision.
+ *
+ * See [`fwd_eth_get_proof`] for the proof format, arguments, return values,
+ * and key-encoding requirements.
+ *
+ * # Safety
+ *
+ * As [`fwd_eth_get_proof`], except `reconstructed` must be a valid pointer to
+ * a [`ReconstructedHandle`].
+ */
+struct EthProofResult fwd_eth_get_proof_on_reconstructed(const struct ReconstructedHandle *reconstructed,
+                                                         BorrowedBytes account_key,
+                                                         BorrowedBytes2D storage_keys);
+
+/**
  * Frees the memory associated with a `ChangeProofContext`.
  *
  * # Arguments

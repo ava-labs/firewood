@@ -254,8 +254,6 @@ impl<T: TriePath + ?Sized> TriePathAsPackedBytes for T {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used)]
-
     use test_case::test_case;
 
     use super::*;

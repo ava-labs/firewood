@@ -1,9 +1,13 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![allow(clippy::unwrap_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration test binary; unwrap failures surface as test failures"
+)]
 
 use predicates::prelude::*;
+use std::fmt::Write;
 use std::fs;
 use std::path::Path;
 
@@ -39,7 +43,211 @@ fn insert_key_value(db_path: &Path, key: &str, value: &str) {
         .args([value])
         .assert()
         .success()
-        .stdout(predicate::str::contains(key));
+        .stdout(format!("0x{}\n", hex::encode(key)));
+}
+
+#[cfg(feature = "ethhash")]
+const ACCOUNT: &str = "00112233445566778899aabbccddeeff00112233";
+#[cfg(feature = "ethhash")]
+const SLOT: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+#[cfg(feature = "ethhash")]
+const ACCOUNT_HASH: &str = "b7ff4d50bd18751616802a406c94b190f1a3fd4fc82b06db40943e0119c5e8bc";
+#[cfg(feature = "ethhash")]
+const STORAGE_KEY: &str = "b7ff4d50bd18751616802a406c94b190f1a3fd4fc82b06db40943e0119c5e8bcb10e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf6";
+
+#[test]
+fn fwdctl_hex_key_round_trip() {
+    with_tmpdir(|db_path| {
+        create_db(db_path);
+
+        cargo_bin_cmd!()
+            .args(["insert", "--hex", "79656172", "2023"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout("0x79656172\n");
+
+        cargo_bin_cmd!()
+            .args(["get", "year"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("2023"));
+
+        cargo_bin_cmd!()
+            .args(["delete", "--hex", "79656172"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout("key 0x79656172 deleted successfully\n");
+
+        #[cfg(not(feature = "ethhash"))]
+        cargo_bin_cmd!()
+            .args(["get", "year"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Database is empty"));
+
+        #[cfg(feature = "ethhash")]
+        cargo_bin_cmd!()
+            .args(["get", "year"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stderr("Key '0x79656172' not found\n");
+    });
+}
+
+#[test]
+fn fwdctl_hex_key_rejects_malformed_input() {
+    cargo_bin_cmd!()
+        .args(["get", "--hex", "not-hex"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("key must be hexadecimal"));
+}
+
+#[cfg(feature = "ethhash")]
+#[test]
+fn fwdctl_key_modes_conflict() {
+    cargo_bin_cmd!()
+        .args(["get", "--hex", "--account", ACCOUNT])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "the argument '--hex' cannot be used with '--account'",
+        ));
+}
+
+#[cfg(feature = "ethhash")]
+#[test]
+fn fwdctl_key_hashing_is_documented_in_help() {
+    cargo_bin_cmd!()
+        .args(["get", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--account"))
+        .stdout(predicate::str::contains(
+            "Hash KEY as a 20-byte hex Ethereum account address",
+        ))
+        .stdout(predicate::str::contains("--storage <SLOT>"))
+        .stdout(predicate::str::contains(
+            "Hash KEY as a 20-byte hex Ethereum account address and SLOT as a 32-byte hex storage key",
+        ));
+}
+
+#[cfg(feature = "ethhash")]
+#[test]
+fn fwdctl_account_key_round_trip() {
+    with_tmpdir(|db_path| {
+        create_db(db_path);
+
+        cargo_bin_cmd!()
+            .args(["insert", "--account", ACCOUNT, "account value"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout(format!("0x{ACCOUNT_HASH}\n"));
+
+        cargo_bin_cmd!()
+            .args(["get", "--account", ACCOUNT])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("account value"));
+
+        cargo_bin_cmd!()
+            .args(["dump", "--hex"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(ACCOUNT_HASH));
+    });
+}
+
+#[cfg(feature = "ethhash")]
+#[test]
+fn fwdctl_storage_key_round_trip() {
+    with_tmpdir(|db_path| {
+        create_db(db_path);
+
+        cargo_bin_cmd!()
+            .args(["insert", "--storage", SLOT, ACCOUNT, "storage value"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout(format!("0x{STORAGE_KEY}\n"));
+
+        cargo_bin_cmd!()
+            .args(["get", "--storage", SLOT, ACCOUNT])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("storage value"));
+
+        cargo_bin_cmd!()
+            .args(["dump", "--hex"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(STORAGE_KEY));
+
+        cargo_bin_cmd!()
+            .args(["delete", "--storage", SLOT, ACCOUNT])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stdout(format!("key 0x{STORAGE_KEY} deleted successfully\n"));
+
+        cargo_bin_cmd!()
+            .args(["get", "--storage", SLOT, ACCOUNT])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success()
+            .stderr(format!("Key '0x{STORAGE_KEY}' not found\n"));
+    });
+}
+
+#[cfg(feature = "ethhash")]
+#[test]
+fn fwdctl_account_rejects_malformed_hex() {
+    cargo_bin_cmd!()
+        .args([
+            "get",
+            "--account",
+            "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "account must be exactly 20 bytes of hexadecimal",
+        ));
+}
+
+#[cfg(feature = "ethhash")]
+#[test]
+fn fwdctl_storage_rejects_wrong_length() {
+    cargo_bin_cmd!()
+        .args(["get", "--storage", "abcd", ACCOUNT])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "storage key must be exactly 32 bytes (64 hex digits); got 2 bytes",
+        ));
 }
 
 #[test]
@@ -98,7 +306,7 @@ fn fwdctl_delete_successful() {
             .arg(db_path)
             .assert()
             .success()
-            .stdout(predicate::str::contains("key year deleted successfully"));
+            .stdout("key 0x79656172 deleted successfully\n");
     });
 }
 
@@ -395,5 +603,203 @@ fn test_slow_fwdctl_check_db_with_data() {
             .arg(db_path)
             .assert()
             .success();
+    });
+}
+
+#[test]
+fn test_slow_fwdctl_import_csv() {
+    with_tmpdir(|tmp_dir| {
+        let db_path1 = tmp_dir.join("db1");
+        create_db(&db_path1);
+        insert_key_value(&db_path1, "a", "1");
+        insert_key_value(&db_path1, "b", "2");
+        insert_key_value(&db_path1, "c", "3");
+
+        let dump_file = tmp_dir.join("dump.csv");
+
+        cargo_bin_cmd!()
+            .arg("dump")
+            .arg("--db")
+            .arg(&db_path1)
+            .args(["--output-format", "csv"])
+            .args(["--output-file-name"])
+            .arg(&dump_file)
+            .assert()
+            .success();
+
+        let db_path2 = tmp_dir.join("db2");
+        cargo_bin_cmd!()
+            .arg("import")
+            .arg("--db")
+            .arg(&db_path2)
+            .args(["--input-format", "csv"])
+            .args(["--input-file-name"])
+            .arg(&dump_file)
+            .assert()
+            .success();
+
+        let dump_file2 = tmp_dir.join("dump2.csv");
+        cargo_bin_cmd!()
+            .arg("dump")
+            .arg("--db")
+            .arg(&db_path2)
+            .args(["--output-format", "csv"])
+            .args(["--output-file-name"])
+            .arg(&dump_file2)
+            .assert()
+            .success();
+
+        let contents1 = fs::read_to_string(&dump_file).expect("Should read dump file");
+        let contents2 = fs::read_to_string(&dump_file2).expect("Should read dump file 2");
+        assert_eq!(contents1, contents2);
+    });
+}
+
+#[test]
+fn test_slow_fwdctl_import_csv_hex() {
+    with_tmpdir(|tmp_dir| {
+        let db_path1 = tmp_dir.join("db1");
+        create_db(&db_path1);
+        insert_key_value(&db_path1, "a", "1");
+        insert_key_value(&db_path1, "b", "2");
+
+        let dump_file = tmp_dir.join("dump.csv");
+
+        cargo_bin_cmd!()
+            .arg("dump")
+            .arg("--db")
+            .arg(&db_path1)
+            .args(["--output-format", "csv"])
+            .args(["--output-file-name"])
+            .arg(&dump_file)
+            .arg("--hex")
+            .assert()
+            .success();
+
+        let db_path2 = tmp_dir.join("db2");
+        cargo_bin_cmd!()
+            .arg("import")
+            .arg("--db")
+            .arg(&db_path2)
+            .args(["--input-format", "csv"])
+            .args(["--input-file-name"])
+            .arg(&dump_file)
+            .arg("--hex")
+            .assert()
+            .success();
+
+        let dump_file2 = tmp_dir.join("dump2.csv");
+        cargo_bin_cmd!()
+            .arg("dump")
+            .arg("--db")
+            .arg(&db_path2)
+            .args(["--output-format", "csv"])
+            .args(["--output-file-name"])
+            .arg(&dump_file2)
+            .arg("--hex")
+            .assert()
+            .success();
+
+        let contents1 = fs::read_to_string(&dump_file).expect("Should read dump file");
+        let contents2 = fs::read_to_string(&dump_file2).expect("Should read dump file 2");
+        assert_eq!(contents1, contents2);
+    });
+}
+
+#[test]
+fn test_slow_fwdctl_import_csv_malformed() {
+    with_tmpdir(|tmp_dir| {
+        let db_path = tmp_dir.join("db");
+        create_db(&db_path);
+
+        let dump_file = tmp_dir.join("malformed.csv");
+        // Row 1: good
+        // Row 2: 1 column (skip)
+        // Row 3: good
+        // Row 4: 3 columns (skip because strict deserialize enforces exactly 2)
+        // Row 5: invalid hex in key (skip)
+        fs::write(&dump_file, "61,31\n62\n63,33\n64,34,35\nzz,36\n").unwrap();
+
+        cargo_bin_cmd!()
+            .arg("import")
+            .arg("--db")
+            .arg(&db_path)
+            .args(["--input-file-name"])
+            .arg(&dump_file)
+            .arg("--hex")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Successfully imported 2 keys"));
+    });
+}
+
+#[test]
+fn test_slow_fwdctl_import_large_random_database() {
+    with_tmpdir(|tmp_dir| {
+        //Generate a large random database dump
+        let dump_file1 = tmp_dir.join("bulk1.csv");
+        let mut csv_content = String::with_capacity(100_000 * 25);
+        for i in 0..100_000 {
+            // Using standard key/value pairs
+            let _ = writeln!(csv_content, "key_{i:06},value_{i:06}");
+        }
+        fs::write(&dump_file1, csv_content).unwrap();
+
+        // Import it into db1
+        let db_path1 = tmp_dir.join("db1");
+        cargo_bin_cmd!()
+            .arg("import")
+            .arg("--db")
+            .arg(&db_path1)
+            .args(["--input-file-name"])
+            .arg(&dump_file1)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(
+                "Successfully imported 100000 keys",
+            ));
+
+        // Export db1 to dump_file2
+        let dump_file2 = tmp_dir.join("bulk2.csv");
+        cargo_bin_cmd!()
+            .arg("dump")
+            .arg("--db")
+            .arg(&db_path1)
+            .args(["--output-format", "csv"])
+            .args(["--output-file-name"])
+            .arg(&dump_file2)
+            .assert()
+            .success();
+
+        // Import dump_file2 into db2
+        let db_path2 = tmp_dir.join("db2");
+        cargo_bin_cmd!()
+            .arg("import")
+            .arg("--db")
+            .arg(&db_path2)
+            .args(["--input-file-name"])
+            .arg(&dump_file2)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(
+                "Successfully imported 100000 keys",
+            ));
+
+        // Export db2 to dump_file3
+        let dump_file3 = tmp_dir.join("bulk3.csv");
+        cargo_bin_cmd!()
+            .arg("dump")
+            .arg("--db")
+            .arg(&db_path2)
+            .args(["--output-format", "csv"])
+            .args(["--output-file-name"])
+            .arg(&dump_file3)
+            .assert()
+            .success();
+
+        //Compare the two exported databases to ensure exact match!
+        let contents1 = fs::read_to_string(&dump_file2).expect("Should read dump file 2");
+        let contents2 = fs::read_to_string(&dump_file3).expect("Should read dump file 3");
+        assert_eq!(contents1, contents2, "The exported databases do not match!");
     });
 }

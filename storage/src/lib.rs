@@ -482,7 +482,6 @@ pub fn format_node_value<W: std::io::Write + ?Sized>(
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod format_node_value_tests {
     use super::*;
 

@@ -464,11 +464,6 @@ const fn minimal_be_len(n: usize) -> usize {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    reason = "tests use unwrap and direct indexing to keep assertions readable"
-)]
 mod tests {
     use super::*;
     use test_case::test_case;

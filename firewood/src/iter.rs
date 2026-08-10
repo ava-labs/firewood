@@ -650,7 +650,6 @@ impl<I: Iterator<Item = T>, T: KeyValuePair, K: KeyType> Iterator for FilteredKe
 }
 
 #[cfg(test)]
-#[expect(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::merkle::Merkle;
@@ -1003,7 +1002,6 @@ mod tests {
         let mut iter = merkle.key_value_iter_from_key(start.unwrap_or_default());
 
         // we iterate twice because we should get a None then start over
-        #[expect(clippy::indexing_slicing)]
         for k in start.map(|r| r[0]).unwrap_or_default()..=u8::MAX {
             let next = iter.next().map(|kv| {
                 let (k, v) = kv.unwrap();
