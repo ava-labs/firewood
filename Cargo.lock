@@ -1931,6 +1931,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+ "test-case",
  "trybuild",
 ]
 
@@ -1973,6 +1974,7 @@ dependencies = [
  "derive-where",
  "enum-as-inner",
  "fastrace",
+ "firewood-macros",
  "firewood-metrics",
  "fjall",
  "git-version",

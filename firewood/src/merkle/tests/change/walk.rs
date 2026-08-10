@@ -58,9 +58,9 @@ fn ranges(trace: &[(String, String)]) -> String {
 ///
 /// Returns `Err` if the walk exceeds `max_rounds`, which is how a non-advancing
 /// continuation surfaces.
-fn sync_walk(
-    source: &Db<DefaultHashMode>,
-    target: &Db<DefaultHashMode>,
+fn sync_walk<H: HashMode>(
+    source: &Db<H>,
+    target: &Db<H>,
     start_root: &api::HashKey,
     end_root: &api::HashKey,
     end_key: Option<&[u8]>,
@@ -180,9 +180,9 @@ fn deletes(
 
 /// Two databases that start in sync, and the roots either side of one batch of
 /// changes applied only to `source`.
-struct Fixture {
-    source: Db<DefaultHashMode>,
-    target: Db<DefaultHashMode>,
+struct Fixture<H: HashMode> {
+    source: Db<H>,
+    target: Db<H>,
     keys: Vec<Vec<u8>>,
     start_root: api::HashKey,
     end_root: api::HashKey,
@@ -198,49 +198,49 @@ struct Fixture {
 /// The removals matter because a walk resumes from the key just above the last
 /// op, so a removed last op means resuming above a key the end revision no longer
 /// holds.
-fn go_shaped_fixture(has_deletes: bool) -> Fixture {
+fn go_shaped_fixture<H: HashMode>(has_deletes: bool) -> Fixture<H> {
     let keys = hundred_keys();
     let mut changes = puts(&keys, 50..100, b"v0");
     if has_deletes {
         changes.extend(deletes(&keys, (0..40).step_by(2)));
     }
-    fixture_from(keys, 0..50, changes)
+    fixture_from::<H>(keys, 0..50, changes)
 }
 
 /// 100 shared keys with two clusters of changes: `key50..key59` and
 /// `key80..key89`. A bounded walk between the clusters must leave the upper one
 /// alone, which is what makes this shape useful.
-fn clustered_fixture() -> Fixture {
+fn clustered_fixture<H: HashMode>() -> Fixture<H> {
     let keys = hundred_keys();
     let mut changes = puts(&keys, 50..60, b"v1");
     changes.extend(puts(&keys, 80..90, b"v1"));
-    fixture_from(keys, 0..100, changes)
+    fixture_from::<H>(keys, 0..100, changes)
 }
 
 /// 100 shared keys where `key50..key59` are removed and `key80` is changed. A
 /// bounded walk below `key80` must apply the removals and leave that change
 /// alone, and its closing round starts just above a removed key.
-fn removed_cluster_fixture() -> Fixture {
+fn removed_cluster_fixture<H: HashMode>() -> Fixture<H> {
     let keys = hundred_keys();
     let mut changes = deletes(&keys, 50..60);
     changes.extend(puts(&keys, 80..81, b"v1"));
-    fixture_from(keys, 0..100, changes)
+    fixture_from::<H>(keys, 0..100, changes)
 }
 
 /// Four keys `10/20/30/40`, with `10` changed and `20`/`30` removed. A cap of two
 /// makes the first reply stop on the removal of `20`.
-fn small_removal_fixture() -> Fixture {
+fn small_removal_fixture<H: HashMode>() -> Fixture<H> {
     let keys: Vec<Vec<u8>> = [0x10, 0x20, 0x30, 0x40].map(|b| vec![b]).into();
     let mut changes = puts(&keys, 0..1, b"A");
     changes.extend(deletes(&keys, 1..3));
     let shared = 0..keys.len();
-    fixture_from(keys, shared, changes)
+    fixture_from::<H>(keys, shared, changes)
 }
 
 /// The root a client should hold after applying exactly `ops` to the shared
 /// starting state, which is every key in `keys` at `v0`.
-fn root_after(keys: &[Vec<u8>], ops: Vec<BatchOp<Vec<u8>, Vec<u8>>>) -> api::HashKey {
-    let (db, _dir) = new_db();
+fn root_after<H: HashMode>(keys: &[Vec<u8>], ops: Vec<BatchOp<Vec<u8>, Vec<u8>>>) -> api::HashKey {
+    let (db, _dir) = new_db::<H>();
     db.propose(puts(keys, 0..keys.len(), b"v0"))
         .unwrap()
         .commit()
@@ -252,13 +252,13 @@ fn root_after(keys: &[Vec<u8>], ops: Vec<BatchOp<Vec<u8>, Vec<u8>>>) -> api::Has
 /// Two synced databases holding `keys[shared]` at `v0`, with `changes` applied to
 /// `source` only. Keys outside `shared` exist in neither database until `changes`
 /// introduces them.
-fn fixture_from(
+fn fixture_from<H: HashMode>(
     keys: Vec<Vec<u8>>,
     shared: std::ops::Range<usize>,
     changes: Vec<BatchOp<Vec<u8>, Vec<u8>>>,
-) -> Fixture {
-    let (source, ds) = new_db();
-    let (target, dt) = new_db();
+) -> Fixture<H> {
+    let (source, ds) = new_db::<H>();
+    let (target, dt) = new_db::<H>();
     let shared = puts(&keys, shared, b"v0");
     source.propose(shared.clone()).unwrap().commit().unwrap();
     target.propose(shared).unwrap().commit().unwrap();
@@ -296,11 +296,12 @@ fn assert_keys_strictly_increase(walk: &Walk) {
 /// An unbounded walk must reach `end_root`, and must do it in one round per batch
 /// of changes plus the round that ends the walk. Anything more means the
 /// continuation repeated a range.
+#[firewood_macros::hash_mode]
 #[test_case(false, 10 ; "no deletes")]
 #[test_case(true, 10 ; "with deletes")]
 #[test_case(false, 1 ; "one op per round")]
-fn test_unbounded_walk_reaches_end_root(has_deletes: bool, limit: usize) {
-    let f = go_shaped_fixture(has_deletes);
+fn test_unbounded_walk_reaches_end_root<H: HashMode>(has_deletes: bool, limit: usize) {
+    let f = go_shaped_fixture::<H>(has_deletes);
     let walk = sync_walk(
         &f.source,
         &f.target,
@@ -338,15 +339,16 @@ fn test_unbounded_walk_reaches_end_root(has_deletes: bool, limit: usize) {
 /// In every case the client must end holding exactly the changes at or below the
 /// bound, which is what `root_with_only(keys, applied)` checks; a key fetched
 /// above the bound would make that root disagree.
+#[firewood_macros::hash_mode]
 #[test_case(b"key40", 1, 50..50 ; "below both clusters")]
 #[test_case(b"key65", 2, 50..60 ; "between the clusters")]
 #[test_case(b"key59", 1, 50..60 ; "on the last changed key")]
-fn test_bounded_walk_stops_at_its_bound(
+fn test_bounded_walk_stops_at_its_bound<H: HashMode>(
     bound: &[u8],
     expected_rounds: usize,
     applied: std::ops::Range<usize>,
 ) {
-    let f = clustered_fixture();
+    let f = clustered_fixture::<H>();
     let walk = sync_walk(
         &f.source,
         &f.target,
@@ -362,7 +364,7 @@ fn test_bounded_walk_stops_at_its_bound(
     assert_keys_strictly_increase(&walk);
     assert_eq!(
         f.target.root_hash().unwrap(),
-        root_after(&f.keys, puts(&f.keys, applied, b"v1")),
+        root_after::<H>(&f.keys, puts(&f.keys, applied, b"v1")),
         "the client must hold exactly the changes at or below the bound: {}",
         ranges(&walk.trace)
     );
@@ -376,9 +378,9 @@ fn test_bounded_walk_stops_at_its_bound(
 /// last removal while the requested bound is still higher. The closing round
 /// therefore begins just above a removed key, finds nothing, and ends the walk.
 /// The change at `key80` sits above the bound and must be left untouched.
-#[test]
-fn test_bounded_walk_closing_round_starts_above_a_removed_key() {
-    let f = removed_cluster_fixture();
+#[firewood_macros::hash_mode]
+fn test_bounded_walk_closing_round_starts_above_a_removed_key<H: HashMode>() {
+    let f = removed_cluster_fixture::<H>();
     let end = b"key65";
     let walk = sync_walk(
         &f.source,
@@ -402,7 +404,7 @@ fn test_bounded_walk_closing_round_starts_above_a_removed_key() {
     assert_keys_strictly_increase(&walk);
     assert_eq!(
         f.target.root_hash().unwrap(),
-        root_after(&f.keys, deletes(&f.keys, 50..60)),
+        root_after::<H>(&f.keys, deletes(&f.keys, 50..60)),
         "the removals are applied and the change above the bound is not: {}",
         ranges(&walk.trace)
     );
@@ -419,9 +421,9 @@ fn test_bounded_walk_closing_round_starts_above_a_removed_key() {
 /// This is the walk-level counterpart to the narrowing tests in `edge_cases.rs`:
 /// those pin the right edge for a single reply, this pins that a client following
 /// the ordinary loop reaches the end revision.
-#[test]
-fn test_walk_stopping_short_on_a_removal_converges() {
-    let f = small_removal_fixture();
+#[firewood_macros::hash_mode]
+fn test_walk_stopping_short_on_a_removal_converges<H: HashMode>() {
+    let f = small_removal_fixture::<H>();
     let walk = sync_walk(
         &f.source,
         &f.target,

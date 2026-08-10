@@ -1,0 +1,5 @@
+error: #[hash_mode] requires a generic function with a hash-mode type parameter, e.g. `fn name<H: HashMode>()`
+ --> tests/compile_fail/hash_mode_non_generic.rs:4:1
+  |
+4 | fn t() {}
+  | ^^^^^^
