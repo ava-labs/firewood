@@ -13,9 +13,9 @@ pub struct ReconstructedHandle<'db> {
     handle: &'db DatabaseHandle,
 }
 
-impl<'db> DbView for ReconstructedHandle<'db> {
+impl DbView for ReconstructedHandle<'_> {
     type Iter<'view>
-        = <firewood::db::ReconstructedView<'db> as DbView>::Iter<'view>
+        = BoxKeyValueIter<'view>
     where
         Self: 'view;
 
@@ -76,7 +76,7 @@ impl<'db> ReconstructedHandle<'db> {
             .expect("infallible; see issue #1329");
         CreateIteratorResult(IteratorHandle::new(
             self.reconstructed.view(),
-            Box::new(it) as BoxKeyValueIter<'_>,
+            it,
             self.metrics_context(),
         ))
     }
