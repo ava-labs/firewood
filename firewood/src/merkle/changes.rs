@@ -605,11 +605,14 @@ mod tests {
     impl TestDb {
         pub fn new() -> Self {
             let tmpdir = tempfile::tempdir().unwrap();
-            let dbconfig = DbConfig::builder().truncate(true).build();
+            let dbconfig = DbConfig::builder()
+                .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+                .truncate(true)
+                .build();
             let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
                 .iter()
                 .collect();
-            let db = Db::new(dbpath, dbconfig.clone()).unwrap();
+            let db = Db::<DefaultHashMode>::new_with_hash_mode(dbpath, dbconfig).unwrap();
             TestDb { db }
         }
     }

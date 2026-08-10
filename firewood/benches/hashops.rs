@@ -6,8 +6,9 @@
 use criterion::profiler::Profiler;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use firewood::Merkle;
-use firewood::api::{Db as _, Proposal as _};
+use firewood::api;
 use firewood::db::{BatchOp, DbConfig};
+use firewood::open;
 use firewood_storage::{DefaultHashMode, DeletedNodeTracking, HashMode, MemStore, NodeStore};
 use pprof::ProfilerGuard;
 use rand::{RngExt, distr::Alphanumeric};
@@ -104,14 +105,15 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
         .bench_function("commit", |b| {
             b.iter_batched(
                 || {
-                    let batch_ops: Vec<_> =
+                    let batch_ops: api::OwnedBatch =
                         repeat_with(|| rng.sample_iter(&Alphanumeric).take(KEY_LEN).collect())
                             .map(|key: Vec<_>| BatchOp::Put {
-                                key,
-                                value: vec![b'v'],
+                                key: key.into_boxed_slice(),
+                                value: vec![b'v'].into_boxed_slice(),
                             })
                             .take(N)
-                            .collect();
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice();
                     batch_ops
                 },
                 |batch_ops| {
@@ -121,7 +123,7 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
                         .node_hash_algorithm(DefaultHashMode::ALGORITHM)
                         .truncate(true)
                         .build();
-                    let db = firewood::db::Db::new(db_path, cfg).unwrap();
+                    let db = open(db_path, cfg).unwrap();
 
                     db.propose(batch_ops).unwrap().commit().unwrap();
                 },
