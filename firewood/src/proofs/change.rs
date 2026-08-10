@@ -306,17 +306,22 @@ fn verify_boundary_proof<C: ProofCollection>(
 /// generator may stop short of it, so the number of operations in a reply says
 /// nothing about whether the reply is complete.
 ///
-/// # A redundant trailing `Delete` buys a no-progress round
+/// # A trailing `Delete` of a key absent from both revisions
 ///
-/// A `Delete` asserts that its key is absent from `end_root`, not that it was
-/// present before — which is what makes re-applying a proof, and applying
-/// overlapping proofs, safe. So a `Delete` naming a key absent from both revisions
-/// is true but says nothing, and narrowing anchors on it: the reply verifies,
-/// changes nothing, and the caller resumes one key higher. Telling that apart from
-/// a useful `Delete` would require the key to be present in the caller's state,
-/// which is exactly what those two properties rely on not being required. So this
-/// is a denial-of-service avenue rather than a correctness one — nothing false is
-/// accepted — and it exists for unbounded requests regardless of this arm.
+/// A `Delete` asserts that its key is absent from `end_root`. It does not assert
+/// that the key was present beforehand, which is what makes re-applying a proof,
+/// and applying overlapping proofs, safe.
+///
+/// A `Delete` naming a key absent from `start_root` as well is therefore true and
+/// also inert: the edge narrows to it, the reply verifies, applying it leaves the
+/// caller's state unchanged, and the caller resumes one key higher. A generator
+/// can repeat that indefinitely.
+///
+/// Rejecting such a `Delete` would mean requiring its key to be present in the
+/// caller's state, which is what re-application and overlapping proofs depend on
+/// not being required. So this is a denial-of-service avenue rather than a
+/// correctness one: nothing false is accepted. An unbounded request is equally
+/// exposed, since the edge is the last op's key there in every case.
 fn compute_right_edge_key<'a>(
     proof: &FrozenChangeProof,
     end_root: &HashKey,
