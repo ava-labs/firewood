@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786087971885,
+  "lastUpdate": 1786347247191,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -8506,6 +8506,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 80.14198345186237,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "rodrigo",
+            "username": "RodrigoVillar",
+            "email": "77309055+RodrigoVillar@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "249a13966466347ebba3e50ea6e6a3dea54754e9",
+          "message": "refactor(db): let revision manager own consistency checks (#2186)\n\n## Why this should be merged\n\nWhile working on #1754, I noticed that `Db::check()` mostly relegates to\n`RevisionManager::check()` - by moving the actual logic of `check()` to\nthe `RevisionManager` (getting latest revision and the header file), we\ncan remove the `locked_header()` method from the `Db` type.\n\n## How this works\n\nSimple refactor\n\n## How this was tested\n\nCI\n\n## Breaking Changes\n\n- [ ] firewood\n- [ ] firewood-storage\n- [ ] firewood-ffi (C api)\n- [ ] firewood-go (Go api)\n- [ ] fwdctl",
+          "timestamp": "2026-08-07T21:35:43Z",
+          "url": "https://github.com/ava-labs/firewood/commit/249a13966466347ebba3e50ea6e6a3dea54754e9"
+        },
+        "date": 1786347245680,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 164.2860195010584,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6086.945213214309,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 114.73646602998714,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5886.829495571576,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 82.31220098377571,
             "unit": "block_accept_ms/ggas"
           }
         ]
