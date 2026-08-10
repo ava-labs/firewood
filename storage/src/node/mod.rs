@@ -619,9 +619,9 @@ than 126 bytes as the length would be encoded in multiple bytes.
     /// by the hash codec output (`0x00` + 32 raw bytes for a full hash). These
     /// bytes must stay byte-for-byte stable so existing databases keep working.
     ///
-    /// Eth-only golden (not `#[cfg(feature = "ethhash")]`-gated): both hashers
+    /// Eth-only golden (not cfg-gated): both hashers
     /// compile into one binary since PR 3, so the test names `EthHash`
-    /// explicitly instead of relying on a compile-time feature gate.
+    /// explicitly.
     #[test]
     fn test_eth_child_hash_region_exact_bytes() {
         // A partial branch with a single child at slot 15, no value. Distinct

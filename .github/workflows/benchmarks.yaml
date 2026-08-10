@@ -29,7 +29,7 @@ env:
   # One value serving two purposes: the profile name understood by
   # scripts/run-rust-ci.sh, and the Swatinem/rust-cache shared-key, so the
   # warming job and the matrix legs cannot drift apart.
-  PROFILE_KEY: maxperf-ethhash-logger-test_utils
+  PROFILE_KEY: maxperf-logger-test_utils
 
 jobs:
   # Derives the bench matrix from cargo metadata rather than a hand-maintained

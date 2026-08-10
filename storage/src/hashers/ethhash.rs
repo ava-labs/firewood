@@ -5,10 +5,10 @@
 //!
 //! This module implements the [`EthHash`] [`HashMode`] for firewood nodes so
 //! that the resulting root hash matches what an Ethereum Modified Merkle
-//! Patricia Trie (MPT) would produce for the same key/value set. It is always
-//! compiled (both hash modes coexist in one binary); [`EthHash`] is the active
-//! mode when the `ethhash` feature selects it as `DefaultHashMode` (used for
-//! Avalanche C-Chain state).
+//! Patricia Trie (MPT) would produce for the same key/value set. Both hash
+//! modes coexist in one binary; [`EthHash`] is the active mode when a database
+//! is opened with Ethereum hashing selected at runtime (used for Avalanche
+//! C-Chain state).
 //!
 //! ## Why this is non-trivial
 //!

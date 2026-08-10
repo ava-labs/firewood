@@ -964,8 +964,8 @@ mod test {
     use std::path::Path;
 
     use firewood_storage::{
-        CheckOpt, CheckerError, DefaultHashMode, EthHash, HashMode, LinearAddress,
-        MaybePersistedNode, MerkleDbHash, NodeHashAlgorithm, TrieHash,
+        CheckOpt, CheckerError, EthHash, HashMode, LinearAddress, MaybePersistedNode, MerkleDbHash,
+        NodeHashAlgorithm, TrieHash,
     };
     use nonzero_ext::nonzero;
 
@@ -1141,12 +1141,11 @@ mod test {
 
     #[test]
     fn reconstructed_views_preserve_runtime_hash_mode() {
+        let algorithm = NodeHashAlgorithm::MerkleDB;
         let dir = tempfile::tempdir().unwrap();
         let db = open(
             dir.path(),
-            DbConfig::builder()
-                .node_hash_algorithm(DefaultHashMode::ALGORITHM)
-                .build(),
+            DbConfig::builder().node_hash_algorithm(algorithm).build(),
         )
         .unwrap();
 
@@ -1163,18 +1162,12 @@ mod test {
         let reconstructed = db
             .reconstruct_from_view(&committed, runtime_mode_puts(&[]))
             .unwrap();
-        assert_eq!(
-            reconstructed.node_hash_algorithm(),
-            DefaultHashMode::ALGORITHM
-        );
+        assert_eq!(reconstructed.node_hash_algorithm(), algorithm);
 
         let reconstructed = reconstructed
             .reconstruct(runtime_mode_puts(&[("b", "2")]))
             .unwrap();
-        assert_eq!(
-            reconstructed.node_hash_algorithm(),
-            DefaultHashMode::ALGORITHM
-        );
+        assert_eq!(reconstructed.node_hash_algorithm(), algorithm);
         assert_eq!(
             reconstructed.val(b"a").unwrap().as_deref(),
             Some(b"1".as_slice())
@@ -1411,7 +1404,7 @@ mod test {
 
     #[test]
     fn test_reconstruct_clone_is_independent() {
-        let db = TestDb::<DefaultHashMode>::new();
+        let db = TestDb::<EthHash>::new();
 
         // Build a base committed revision.
         let initial = db
@@ -1993,8 +1986,8 @@ mod test {
         }
 
         // All keys should be deleted in both implementations.
-        // When the trie is completely empty, root_hash() may return None (e.g. without
-        // the ethhash feature). In that case, the trie is empty and all keys are deleted.
+        // When the trie is completely empty, root_hash() may return None (e.g. in
+        // MerkleDB mode). In that case, the trie is empty and all keys are deleted.
         assert_eq!(
             parallel_db.root_hash(),
             single_db.root_hash(),

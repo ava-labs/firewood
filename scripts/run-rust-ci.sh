@@ -29,12 +29,11 @@ Commands:
 Profiles:
   debug-no-default-features
   debug-no-features (default features)
-  debug-ethhash-logger
   debug-all-features (io-uring is active on Linux only; needs rustc 1.94.1+,
                       above the 1.94.0 workspace MSRV, because fwdctl's
                       launch feature pulls in the AWS SDK)
-  maxperf-ethhash-logger
-  maxperf-ethhash-logger-test_utils (benchmarks; test_utils gates the internals
+  maxperf-logger
+  maxperf-logger-test_utils (benchmarks; test_utils gates the internals
                       several bench targets declare in required-features)
 
 Use scripts/list-bench-targets.sh to enumerate valid bench target names.
@@ -73,21 +72,17 @@ case "$profile" in
         ;;
     debug-no-features)
         ;;
-    debug-ethhash-logger)
-        cargo_args=(--features ethhash,logger)
-        nextest_args=(--features ethhash,logger)
-        ;;
     debug-all-features)
         cargo_args=(--all-features)
         nextest_args=(--all-features)
         ;;
-    maxperf-ethhash-logger)
-        cargo_args=(--profile maxperf --features ethhash,logger)
-        nextest_args=(--cargo-profile maxperf --features ethhash,logger)
+    maxperf-logger)
+        cargo_args=(--profile maxperf --features logger)
+        nextest_args=(--cargo-profile maxperf --features logger)
         ;;
-    maxperf-ethhash-logger-test_utils)
-        cargo_args=(--profile maxperf --features ethhash,logger,test_utils)
-        nextest_args=(--cargo-profile maxperf --features ethhash,logger,test_utils)
+    maxperf-logger-test_utils)
+        cargo_args=(--profile maxperf --features logger,test_utils)
+        nextest_args=(--cargo-profile maxperf --features logger,test_utils)
         ;;
     *)
         echo "error: unknown Rust CI profile '$profile'" >&2
@@ -121,7 +116,7 @@ case "$command" in
         # an otherwise warm target directory. Workspace scoping also lets one
         # feature string cover every member: a feature applies to whichever
         # members declare it and is a no-op for the rest, whereas
-        # `-p firewood-triehash --features ethhash,...` is an error because that
+        # `-p firewood-triehash --features logger,...` is an error because that
         # package declares no features at all.
         #
         # Selecting a single target by name requires bench names to be unique
