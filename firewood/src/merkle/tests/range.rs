@@ -1,6 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use super::verify_range_proof;
 use super::*;
 use crate::RangeProof;
 use firewood_storage::U4;
@@ -220,12 +221,7 @@ fn test_missing_key_proof() {
         assert_eq!(proof.len(), 1);
 
         proof
-            .verify(
-                key,
-                None::<&[u8]>,
-                &root_hash,
-                firewood_storage::DefaultHashMode::ALGORITHM,
-            )
+            .verify(key, None::<&[u8]>, &root_hash, DefaultHashMode::ALGORITHM)
             .unwrap();
     }
 }
@@ -256,7 +252,7 @@ fn test_truncated_bounded_range_proof_round_trip() {
 
     // Verify with the *original* requested bounds — the only ones the caller
     // can provide. End_proof anchors at the last returned key, not `end`.
-    verify_range_proof(Some(&start), Some(&end), &root_hash, &range_proof).unwrap();
+    let _ = verify_range_proof(Some(&start), Some(&end), &root_hash, &range_proof).unwrap();
 }
 
 #[test]
@@ -275,7 +271,7 @@ fn test_full_range_proof_verifies_unbounded() {
     assert!(range_proof.start_proof().is_empty());
     assert!(range_proof.end_proof().is_empty());
 
-    verify_range_proof::<_>(
+    let _ = verify_range_proof::<_>(
         Option::<&[u8]>::None,
         Option::<&[u8]>::None,
         &root_hash,
@@ -310,7 +306,7 @@ fn test_terminal_strict_prefix_of_last_kv_verifies() {
     // Honest proof contains the three in-range keys.
     assert_eq!(range_proof.key_values().len(), 3);
 
-    verify_range_proof(
+    let _ = verify_range_proof(
         Some(b"\x05".as_slice()),
         Some(b"\x10\x30".as_slice()),
         &root_hash,
@@ -364,7 +360,7 @@ fn test_dropped_trailing_key_accepted_as_partial_coverage() {
     // `[0x05, 0x10]`. It is *not* the verifier's job to enforce that the
     // proven range matches the requested range — partial coverage is a
     // valid outcome the caller is responsible for handling.
-    verify_range_proof(
+    let proven = verify_range_proof(
         Some(b"\x05".as_slice()),
         Some(b"\x10\x30".as_slice()),
         &root_hash,
@@ -372,9 +368,14 @@ fn test_dropped_trailing_key_accepted_as_partial_coverage() {
     )
     .unwrap();
 
-    // The caller's `last_kv < requested_last` check is what flags partial
-    // coverage and should drive a follow-up request.
-    assert!(tampered.key_values().last().unwrap().0.as_ref() < b"\x10\x30".as_slice());
+    // The verifier now *reports* the partial coverage rather than leaving
+    // the caller to re-derive it: the proven upper bound is `0x10`, not the
+    // requested `0x10\x30`. A caller that replaces state over the requested
+    // bound would delete `0x10\x10` on the strength of a proof that stops
+    // at `0x10`.
+    assert_eq!(proven.start.as_deref(), Some(b"\x05".as_slice()));
+    assert_eq!(proven.end.as_deref(), Some(b"\x10".as_slice()));
+    assert!(proven.end.as_deref().unwrap() < b"\x10\x30".as_slice());
 }
 
 #[test]
@@ -450,7 +451,7 @@ fn test_divergent_terminal_past_last_kv() {
     assert_eq!(range_proof.key_values().len(), 1);
     assert_eq!(range_proof.key_values()[0].0.as_ref(), b"\x05");
 
-    verify_range_proof(
+    let _ = verify_range_proof(
         Some(b"\x05".as_slice()),
         Some(b"\x10\x30".as_slice()),
         &root_hash,
@@ -484,7 +485,7 @@ fn test_divergent_terminal_before_first_kv() {
     assert_eq!(range_proof.key_values().len(), 1);
     assert_eq!(range_proof.key_values()[0].0.as_ref(), b"\x10");
 
-    verify_range_proof(
+    let _ = verify_range_proof(
         Some(b"\x07".as_slice()),
         Some(b"\x10".as_slice()),
         &root_hash,
@@ -517,7 +518,7 @@ fn test_range_proof() {
 
         let root_hash = merkle.nodestore().root_hash().unwrap();
 
-        verify_range_proof(
+        let _ = verify_range_proof(
             Some(items[start].0),
             Some(items[end - 1].0),
             &root_hash,
@@ -758,7 +759,7 @@ fn test_range_proof_with_non_existent_proof() {
 
         let root_hash = merkle.nodestore().root_hash().unwrap();
 
-        verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof).unwrap();
+        let _ = verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof).unwrap();
     }
 
     // Special case, two edge proofs for two edge key.
@@ -774,7 +775,7 @@ fn test_range_proof_with_non_existent_proof() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    verify_range_proof(Some(first), Some(last), &root_hash, &range_proof).unwrap();
+    let _ = verify_range_proof(Some(first), Some(last), &root_hash, &range_proof).unwrap();
 }
 
 #[test]
@@ -875,7 +876,7 @@ fn test_one_element_range_proof() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    verify_range_proof(
+    let _ = verify_range_proof(
         Some(items[start].0),
         Some(items[start].0),
         &root_hash,
@@ -892,7 +893,7 @@ fn test_one_element_range_proof() {
 
     let range_proof_2 = RangeProof::new(start_proof_2, end_proof_2, key_values_2.into());
 
-    verify_range_proof(
+    let _ = verify_range_proof(
         Some(&first),
         Some(items[start].0),
         &root_hash,
@@ -909,7 +910,7 @@ fn test_one_element_range_proof() {
 
     let range_proof_3 = RangeProof::new(start_proof_3, end_proof_3, key_values_3.into());
 
-    verify_range_proof(
+    let _ = verify_range_proof(
         Some(items[start].0),
         Some(&last),
         &root_hash,
@@ -925,7 +926,7 @@ fn test_one_element_range_proof() {
 
     let range_proof_4 = RangeProof::new(start_proof_4, end_proof_4, key_values_4.into());
 
-    verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof_4).unwrap();
+    let _ = verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof_4).unwrap();
 
     // Test the mini trie with only a single element.
     let key = rng.random::<[u8; 32]>();
@@ -942,7 +943,7 @@ fn test_one_element_range_proof() {
 
     let root_hash_mini = merkle_mini.nodestore().root_hash().unwrap();
 
-    verify_range_proof(Some(first), Some(&key), &root_hash_mini, &range_proof_5).unwrap();
+    let _ = verify_range_proof(Some(first), Some(&key), &root_hash_mini, &range_proof_5).unwrap();
 }
 
 #[test]
@@ -969,7 +970,7 @@ fn test_all_elements_proof() {
     let range_proof_2 =
         RangeProof::new(start_proof_2, end_proof_2, key_values_2.into_boxed_slice());
 
-    verify_range_proof(
+    let _ = verify_range_proof(
         Some(items[start].0),
         Some(items[end].0),
         &root_hash,
@@ -988,7 +989,7 @@ fn test_all_elements_proof() {
     let range_proof_3 =
         RangeProof::new(start_proof_3, end_proof_3, key_values_3.into_boxed_slice());
 
-    verify_range_proof(Some(first), Some(last), &root_hash, &range_proof_3).unwrap();
+    let _ = verify_range_proof(Some(first), Some(last), &root_hash, &range_proof_3).unwrap();
 }
 
 #[test]
@@ -1009,7 +1010,7 @@ fn test_empty_range_proof() {
     let key_values: KeyValuePairs = Vec::new();
     let range_proof = RangeProof::new(proof.clone(), proof, key_values.into_boxed_slice());
 
-    verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof).unwrap();
+    let _ = verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof).unwrap();
 }
 
 #[test]
@@ -1138,7 +1139,8 @@ fn test_single_side_range_proof() {
 
             let root_hash = merkle.nodestore().root_hash().unwrap();
 
-            verify_range_proof(Some(start), Some(items[case].0), &root_hash, &range_proof).unwrap();
+            let _ = verify_range_proof(Some(start), Some(items[case].0), &root_hash, &range_proof)
+                .unwrap();
         }
     }
 }
@@ -1173,7 +1175,8 @@ fn test_reverse_single_side_range_proof() {
 
             let root_hash = merkle.nodestore().root_hash().unwrap();
 
-            verify_range_proof(Some(items[case].0), Some(end), &root_hash, &range_proof).unwrap();
+            let _ = verify_range_proof(Some(items[case].0), Some(end), &root_hash, &range_proof)
+                .unwrap();
         }
     }
 }
@@ -1205,7 +1208,7 @@ fn test_both_sides_range_proof() {
 
         let root_hash = merkle.nodestore().root_hash().unwrap();
 
-        verify_range_proof(Some(start), Some(end), &root_hash, &range_proof).unwrap();
+        let _ = verify_range_proof(Some(start), Some(end), &root_hash, &range_proof).unwrap();
     }
 }
 
@@ -1329,7 +1332,7 @@ fn test_range_proof_keys_with_shared_prefix() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    verify_range_proof(Some(&start), Some(&end), &root_hash, &range_proof).unwrap();
+    let _ = verify_range_proof(Some(&start), Some(&end), &root_hash, &range_proof).unwrap();
 }
 
 #[test]
@@ -1370,7 +1373,7 @@ fn test_bloated_range_proof() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    verify_range_proof(Some(&target.0), Some(&target.0), &root_hash, &range_proof).unwrap();
+    let _ = verify_range_proof(Some(&target.0), Some(&target.0), &root_hash, &range_proof).unwrap();
 }
 
 #[test]
@@ -1551,7 +1554,7 @@ fn test_range_proof_fuzz() {
                 let range_proof = merkle
                     .range_proof(Some(items[start].0), Some(items[end].0), None)
                     .unwrap();
-                verify_range_proof(
+                let _ = verify_range_proof(
                     Some(items[start].0),
                     Some(items[end].0),
                     &root_hash,
@@ -1570,8 +1573,9 @@ fn test_range_proof_fuzz() {
                 let range_proof = merkle
                     .range_proof(Some(&first), Some(items[end].0), None)
                     .unwrap();
-                verify_range_proof(Some(&first), Some(items[end].0), &root_hash, &range_proof)
-                    .unwrap();
+                let _ =
+                    verify_range_proof(Some(&first), Some(items[end].0), &root_hash, &range_proof)
+                        .unwrap();
             }
             // Right edge is non-existent
             2 => {
@@ -1586,8 +1590,9 @@ fn test_range_proof_fuzz() {
                 let range_proof = merkle
                     .range_proof(Some(items[start].0), Some(&last), None)
                     .unwrap();
-                verify_range_proof(Some(items[start].0), Some(&last), &root_hash, &range_proof)
-                    .unwrap();
+                let _ =
+                    verify_range_proof(Some(items[start].0), Some(&last), &root_hash, &range_proof)
+                        .unwrap();
             }
             // Both edges are non-existent
             3 => {
@@ -1603,7 +1608,8 @@ fn test_range_proof_fuzz() {
                     continue;
                 }
                 let range_proof = merkle.range_proof(Some(&first), Some(&last), None).unwrap();
-                verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof).unwrap();
+                let _ = verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof)
+                    .unwrap();
             }
             // Single element
             4 => {
@@ -1611,7 +1617,7 @@ fn test_range_proof_fuzz() {
                 let range_proof = merkle
                     .range_proof(Some(items[idx].0), Some(items[idx].0), None)
                     .unwrap();
-                verify_range_proof(
+                let _ = verify_range_proof(
                     Some(items[idx].0),
                     Some(items[idx].0),
                     &root_hash,
@@ -2011,7 +2017,7 @@ fn test_range_proof_with_limit() {
 
     // The end proof should anchor at items[2] (last returned), not items[9].
     // Verify the truncated proof against the last returned key.
-    verify_range_proof(
+    let _ = verify_range_proof(
         Some(&items[0].0),
         Some(&items[2].0),
         &root_hash,
@@ -2025,7 +2031,7 @@ fn test_range_proof_with_limit() {
         .unwrap();
     assert_eq!(full_proof.key_values().len(), 10);
 
-    verify_range_proof(
+    let _ = verify_range_proof(
         Some(&items[0].0),
         Some(&items[9].0),
         &root_hash,
@@ -2117,7 +2123,7 @@ fn test_right_edge_boundary_prefix_of_terminal() {
     );
     // End proof should only have 2 proof nodes.
     assert_eq!(proof.end_proof().len(), 2);
-    verify_range_proof(None::<&[u8]>, Some(b"\x20"), &root_hash, &proof).unwrap();
+    let _ = verify_range_proof(None::<&[u8]>, Some(b"\x20"), &root_hash, &proof).unwrap();
 }
 
 /// Regression test: range proof verification must handle `ValueDigest::Hash`
@@ -2136,8 +2142,6 @@ fn test_right_edge_boundary_prefix_of_terminal() {
 #[cfg(not(feature = "ethhash"))]
 #[test]
 fn test_range_proof_with_hashed_value() {
-    use firewood_storage::NodeHashAlgorithm;
-
     // Value >= 32 bytes triggers ValueDigest::Hash in merkledb mode
     let big_value = vec![0xab_u8; 32];
     let merkle = init_merkle([
@@ -2168,14 +2172,7 @@ fn test_range_proof_with_hashed_value() {
     );
 
     // This must pass — the Hash digest matches the branch value.
-    crate::merkle::verify_range_proof(
-        Some(b"\x10"),
-        Some(b"\x30"),
-        &root_hash,
-        NodeHashAlgorithm::MerkleDB,
-        &deserialized,
-    )
-    .unwrap();
+    let _ = verify_range_proof(Some(b"\x10"), Some(b"\x30"), &root_hash, &deserialized).unwrap();
 }
 
 /// Regression test: empty range proof with a Hash digest at an out-of-range
@@ -2186,8 +2183,6 @@ fn test_range_proof_with_hashed_value() {
 #[cfg(not(feature = "ethhash"))]
 #[test]
 fn test_empty_range_proof_with_hashed_value() {
-    use firewood_storage::NodeHashAlgorithm;
-
     // \x10 has a large value (>= 32 bytes), \x10\x20 makes \x10 a branch.
     // Range is past all keys — empty key-value list.
     let big_value = vec![0xab_u8; 32];
@@ -2209,14 +2204,7 @@ fn test_empty_range_proof_with_hashed_value() {
     let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
 
     // This must pass — the Hash proof node is out of range.
-    crate::merkle::verify_range_proof(
-        Some(b"\x30"),
-        Some(b"\x40"),
-        &root_hash,
-        NodeHashAlgorithm::MerkleDB,
-        &deserialized,
-    )
-    .unwrap();
+    let _ = verify_range_proof(Some(b"\x30"), Some(b"\x40"), &root_hash, &deserialized).unwrap();
 }
 
 /// Multi-level trie with hashed values at multiple branch depths.
@@ -2237,8 +2225,6 @@ fn test_empty_range_proof_with_hashed_value() {
 #[cfg(not(feature = "ethhash"))]
 #[test]
 fn test_multi_level_range_proof_with_hashed_values() {
-    use firewood_storage::NodeHashAlgorithm;
-
     let merkle = init_merkle([
         (b"abc" as &[u8], [0; 64].as_slice()),
         (b"abc123", [1; 64].as_slice()),
@@ -2277,12 +2263,119 @@ fn test_multi_level_range_proof_with_hashed_values() {
     // This exercises:
     // - "abc" out-of-range: Hash fallback in compute_root_hash_with_proofs
     // - "abcdef" in-range: Hash fast path in reconcile_branch_proof_node
-    crate::merkle::verify_range_proof(
-        Some(b"abc123"),
-        Some(b"\xff"),
-        &root_hash,
-        NodeHashAlgorithm::MerkleDB,
-        &deserialized,
+    let _ = verify_range_proof(Some(b"abc123"), Some(b"\xff"), &root_hash, &deserialized).unwrap();
+}
+
+#[test]
+fn test_proven_right_edge() {
+    use crate::merkle::{ProvenRange, RightBoundary, proven_right_edge};
+    use std::borrow::Cow;
+
+    // InRange(Some) — the end proof anchors at a real key, so that key is
+    // the inclusive proven bound. This is the truncated-reply shape.
+    assert_eq!(
+        proven_right_edge(
+            &RightBoundary::InRange(Some(b"\x10")),
+            Some(b"\x10"),
+            Some(b"\x10\x30")
+        ),
+        Some(Box::from(b"\x10".as_slice()))
+    );
+
+    // InRange(None) — an unbounded request stays unbounded.
+    assert_eq!(
+        proven_right_edge(&RightBoundary::InRange(None), Some(b"\x10"), None),
+        None
+    );
+
+    // OutOfRange with the requested bound below the terminal: the request is
+    // fully covered, so the requested bound is proven.
+    assert_eq!(
+        proven_right_edge(
+            &RightBoundary::OutOfRange(Cow::Borrowed(b"\x10\x50")),
+            Some(b"\x10\x10"),
+            Some(b"\x10\x30")
+        ),
+        Some(Box::from(b"\x10\x30".as_slice()))
+    );
+
+    // OutOfRange with the requested bound exactly equal to the terminal: the
+    // guard is `end < k`, strictly, so equality does not count as covered.
+    // This strictness is load-bearing: with `<=` here, a `requested_end`
+    // exactly equal to the end-proof terminal would report as proven a key
+    // that provably *exists* in the source trie and was withheld —
+    // authorizing its local deletion.
+    assert_eq!(
+        proven_right_edge(
+            &RightBoundary::OutOfRange(Cow::Borrowed(b"\x10\x50")),
+            Some(b"\x10\x10"),
+            Some(b"\x10\x50")
+        ),
+        Some(Box::from(b"\x10\x10".as_slice()))
+    );
+
+    // OutOfRange with the requested bound at or above the terminal: fall back
+    // to last_kv rather than claim the unrepresentable predecessor of the
+    // terminal. Conservative on purpose.
+    assert_eq!(
+        proven_right_edge(
+            &RightBoundary::OutOfRange(Cow::Borrowed(b"\x10\x50")),
+            Some(b"\x10\x10"),
+            Some(b"\x99")
+        ),
+        Some(Box::from(b"\x10\x10".as_slice()))
+    );
+
+    // OutOfRange with no requested bound: same conservative fallback.
+    assert_eq!(
+        proven_right_edge(
+            &RightBoundary::OutOfRange(Cow::Borrowed(b"\x10\x50")),
+            Some(b"\x10\x10"),
+            None
+        ),
+        Some(Box::from(b"\x10\x10".as_slice()))
+    );
+
+    // The type is constructible and comparable — pins the field names.
+    let pr = ProvenRange {
+        start: Some(Box::from(b"\x05".as_slice())),
+        end: Some(Box::from(b"\x10".as_slice())),
+    };
+    assert_eq!(pr.start.as_deref(), Some(b"\x05".as_slice()));
+    assert_eq!(pr.end.as_deref(), Some(b"\x10".as_slice()));
+}
+
+#[test]
+fn test_verification_context_reports_truncated_right_edge() {
+    use crate::verify_range_proof_structure;
+    use std::num::NonZeroUsize;
+
+    let items: &[(&[u8], &[u8])] = &[
+        (b"\x05", b"a"),
+        (b"\x10", b"b"),
+        (b"\x20", b"c"),
+        (b"\x30", b"d"),
+    ];
+    let merkle = init_merkle(items.iter().copied());
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    // Ask for the whole keyspace but cap the reply at two pairs, so the
+    // responder truncates and the proof anchors at its own last key.
+    let limit = NonZeroUsize::new(2).unwrap();
+    let proof = merkle.range_proof(None, None, Some(limit)).unwrap();
+    assert_eq!(proof.key_values().len(), 2);
+
+    let ctx = verify_range_proof_structure(
+        &proof,
+        root_hash,
+        None,
+        None,
+        DefaultHashMode::ALGORITHM,
+        Some(limit),
     )
     .unwrap();
+
+    // The request was unbounded, but only `[.., 0x10]` is proven.
+    assert_eq!(ctx.end_key, None);
+    assert_eq!(ctx.right_edge_key.as_deref(), Some(b"\x10".as_slice()));
 }

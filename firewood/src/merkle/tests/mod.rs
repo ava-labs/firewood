@@ -35,7 +35,7 @@ fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     last_key: Option<impl KeyType>,
     root_hash: &TrieHash,
     proof: &RangeProof<impl KeyType, impl ValueType, H>,
-) -> Result<(), Error> {
+) -> Result<ProvenRange, Error> {
     crate::merkle::verify_range_proof(
         first_key,
         last_key,

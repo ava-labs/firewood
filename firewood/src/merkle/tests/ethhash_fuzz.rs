@@ -482,7 +482,7 @@ fn check_valid_range_proof(
         .unwrap_or_else(|e| panic!("range_proof should succeed ({locator}): {e}"));
     let range_proof = maybe_serialize_round_trip_range(rng, range_proof);
     // This fuzzer is ethhash-gated, so every proof it builds is Ethereum-mode.
-    verify_range_proof(first, last, root, NodeHashAlgorithm::Ethereum, &range_proof)
+    let _ = verify_range_proof(first, last, root, NodeHashAlgorithm::Ethereum, &range_proof)
         .unwrap_or_else(|e| panic!("valid range proof should verify ({locator}): {e}"));
     range_proof
 }

@@ -74,16 +74,30 @@ pub type KeyRange = (Box<[u8]>, Option<Box<[u8]>>);
 /// Stored so that downstream logic (root hash verification, `find_next_key`)
 /// can reference the original verification parameters without re-validating.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct RangeProofVerificationContext {
     /// The expected root hash of the trie.
     pub root: HashKey,
     /// The lower bound of the verified key range, if any.
     pub start_key: Option<Box<[u8]>>,
-    /// The upper bound of the verified key range, if any.
+    /// The upper bound the caller **requested**, if any.
     pub end_key: Option<Box<[u8]>>,
     /// The maximum number of key/value pairs the proof was permitted to
     /// contain. `None` means no limit.
     pub max_length: Option<NonZeroUsize>,
+    /// The actual right edge of the **proven** range, inclusive. Equals
+    /// `end_key` when the responder covered the whole request, and a smaller
+    /// key when the reply was truncated. `None` means unbounded above.
+    ///
+    /// Mirrors [`ChangeProofVerificationContext::right_edge_key`].
+    ///
+    /// A caller applying the proof must bound the write to this key rather
+    /// than to `end_key`: the span `(right_edge_key, end_key]` carries no
+    /// proof, so replacing state across it deletes local keys that were
+    /// never covered.
+    ///
+    /// [`ChangeProofVerificationContext::right_edge_key`]: crate::ChangeProofVerificationContext::right_edge_key
+    pub right_edge_key: Option<Box<[u8]>>,
 }
 
 /// Verify structural properties of a range proof and produce a
@@ -121,13 +135,14 @@ pub fn verify_range_proof_structure(
         ));
     }
 
-    verify_range_proof(start_key, end_key, &root, algorithm, proof)?;
+    let proven = verify_range_proof(start_key, end_key, &root, algorithm, proof)?;
 
     Ok(RangeProofVerificationContext {
         root,
         start_key: start_key.map(Box::from),
         end_key: end_key.map(Box::from),
         max_length,
+        right_edge_key: proven.end,
     })
 }
 
