@@ -239,12 +239,12 @@ fn assert_range_proof_roundtrips(
     root_hash: &TrieHash,
     range_proof: &crate::api::FrozenRangeProof,
 ) {
-    verify_range_proof(first, last, root_hash, range_proof).unwrap();
+    let _ = verify_range_proof(first, last, root_hash, range_proof).unwrap();
 
     let mut serialized = Vec::new();
     range_proof.write_to_vec(&mut serialized);
     let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
-    verify_range_proof(first, last, root_hash, &deserialized).unwrap();
+    let _ = verify_range_proof(first, last, root_hash, &deserialized).unwrap();
 }
 
 /// The pieces a fold test needs from [`build_account_trie`].
@@ -495,7 +495,7 @@ fn test_range_proof_accounts_have_computed_storage_root() {
         .unwrap();
 
     // The range proof must verify against the committed root hash.
-    verify_range_proof(
+    let _ = verify_range_proof(
         Some(left_key.as_ref()),
         Some(right_key.as_ref()),
         &root_hash,
@@ -659,7 +659,7 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
         .collect();
 
     let range_proof = RangeProof::new(start_proof, end_proof, key_values);
-    verify_range_proof(
+    let _ = verify_range_proof(
         Some(left_key.as_ref()),
         Some(right_key.as_ref()),
         &root_hash,
@@ -719,7 +719,7 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
         .range_proof(Some(left_key.as_ref()), Some(right_key.as_ref()), None)
         .unwrap();
 
-    verify_range_proof(
+    let _ = verify_range_proof(
         Some(left_key.as_ref()),
         Some(right_key.as_ref()),
         &root_hash,
