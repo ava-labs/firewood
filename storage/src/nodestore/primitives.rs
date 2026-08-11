@@ -21,6 +21,33 @@ use std::num::NonZeroU64;
 // See build.rs for how this is generated
 include!(concat!(env!("OUT_DIR"), "/area_sizes.rs"));
 
+/// Sentinel byte indicating an unpadded, non-freeable node.
+///
+/// Used as the first byte on disk instead of an [`AreaIndex`] when
+/// [`DeletedNodeTracking::Disabled`] (archive mode). Nodes with this
+/// sentinel can never be freed because their size is not aligned to any
+/// area size class.
+///
+/// Value 0xFF is chosen because:
+/// - Valid [`AreaIndex`] values are 0-22, so no collision
+/// - Free areas use 0xFF as the *second* byte (after a valid `AreaIndex`),
+///   so the format `[valid_index][0xFF]` for free areas is distinct from
+///   `[0xFF][...]` for unpadded nodes
+pub const SENTINEL_UNPADDED: u8 = 0xFF;
+
+/// Returns the number of bytes needed to encode a `u64` as a varint.
+#[inline]
+#[must_use]
+pub const fn varint_encoded_size(value: u64) -> usize {
+    if value == 0 {
+        return 1;
+    }
+
+    #[expect(clippy::arithmetic_side_effects)]
+    let bits_needed = 64u32 - value.leading_zeros();
+    (bits_needed as usize).saturating_add(6) / 7
+}
+
 /// Returns an iterator over all valid area sizes.
 // TODO(rkuris): return a named iterator
 pub(crate) fn area_size_iter() -> impl DoubleEndedIterator<Item = (AreaIndex, u64)> {
@@ -327,5 +354,32 @@ mod tests {
     fn test_area_index_try_from_usize_out_of_bounds() {
         assert!(AreaIndex::try_from(AreaIndex::NUM_AREA_SIZES).is_err());
         assert!(AreaIndex::try_from(usize::MAX).is_err());
+    }
+
+    #[test]
+    fn test_varint_encoded_size() {
+        // Single byte: 0-127
+        assert_eq!(varint_encoded_size(0), 1);
+        assert_eq!(varint_encoded_size(1), 1);
+        assert_eq!(varint_encoded_size(127), 1);
+
+        // Two bytes: 128-16383
+        assert_eq!(varint_encoded_size(128), 2);
+        assert_eq!(varint_encoded_size(16383), 2);
+
+        // Three bytes: 16384-2097151
+        assert_eq!(varint_encoded_size(16384), 3);
+
+        // Max u64: 10 bytes
+        assert_eq!(varint_encoded_size(u64::MAX), 10);
+    }
+
+    #[test]
+    fn test_sentinel_value() {
+        assert_eq!(SENTINEL_UNPADDED, 0xFF);
+        // Verify it doesn't collide with any valid AreaIndex
+        for i in 0..=AreaIndex::MAX.get() {
+            assert_ne!(i, SENTINEL_UNPADDED);
+        }
     }
 }
