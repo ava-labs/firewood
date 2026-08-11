@@ -58,8 +58,15 @@ pub struct VerifyRangeProofArgs<'a, 'db> {
     /// The upper bound of the key range that the proof is expected to cover. If
     /// `None`, the proof is expected to cover to the end of the keyspace.
     ///
-    /// This is ignored if the proof is truncated and does not cover the full,
-    /// in which case the upper bound key is the final key in the key-value pairs.
+    /// This is an upper bound on what the proof *may* cover, not an assertion
+    /// that it does. A responder may truncate its reply, in which case the
+    /// proven range ends at the proof's own right edge instead. Verification
+    /// accepts that as a valid partial result.
+    ///
+    /// The apply path writes over the **proven** range, so keys between the
+    /// proven edge and this bound are left untouched rather than deleted. The
+    /// caller owns the remainder: use `fwd_range_proof_find_next_key` to get the
+    /// next range to request, and keep going until it reports nothing left.
     pub end_key: Maybe<BorrowedBytes<'a>>,
     /// The maximum number of key/value pairs that the proof is expected to cover.
     /// If the proof contains more items than this, it is considered invalid. If
@@ -141,6 +148,27 @@ impl<'db> RangeProofContext<'db> {
         Ok(())
     }
 
+    /// Returns the upper bound of the range the proof actually proves.
+    ///
+    /// The responder may have truncated its reply, in which case
+    /// `(right_edge_key, end_key]` carries no proof — merging over the
+    /// caller's requested `end_key` instead of this bound would delete local
+    /// keys the proof never mentioned.
+    ///
+    /// `right_edge_key == None` legitimately means "proven to the end of the
+    /// keyspace", so this must not fall back to `None` when the verification
+    /// context is missing: that would authorise deleting the whole tail
+    /// instead of correctly reporting an unbounded proven range. A successful
+    /// [`Self::verify`] guarantees the context is populated, which is why
+    /// this asserts with `expect` rather than degrading to that default.
+    fn proven_end(&self) -> Option<&[u8]> {
+        self.verification
+            .as_ref()
+            .expect("verify() populates the verification context on success")
+            .right_edge_key
+            .as_deref()
+    }
+
     /// Verify the range proof and prepare a proposal against the given database
     /// without committing it.
     ///
@@ -166,7 +194,8 @@ impl<'db> RangeProofContext<'db> {
             return Ok(());
         }
 
-        let proposal = db.merge_key_value_range(start_key, end_key, self.proof.key_values())?;
+        let proven_end = self.proven_end();
+        let proposal = db.merge_key_value_range(start_key, proven_end, self.proof.key_values())?;
         self.proposal_state = Some(ProposalState::Proposed(proposal.handle));
 
         Ok(())
@@ -204,7 +233,8 @@ impl<'db> RangeProofContext<'db> {
             Some(ProposalState::Proposed(proposal)) => proposal,
             None => {
                 allow_rebase = false;
-                db.merge_key_value_range(start_key, end_key, self.proof.key_values())?
+                let proven_end = self.proven_end();
+                db.merge_key_value_range(start_key, proven_end, self.proof.key_values())?
                     .handle
             }
         };
@@ -214,8 +244,9 @@ impl<'db> RangeProofContext<'db> {
             && allow_rebase
         {
             // proposal is stale, try rebasing and committing again
+            let proven_end = self.proven_end();
             let proposal_handle = db
-                .merge_key_value_range(start_key, end_key, self.proof.key_values())?
+                .merge_key_value_range(start_key, proven_end, self.proof.key_values())?
                 .handle;
             proposal_handle.commit_proposal()
         } else {

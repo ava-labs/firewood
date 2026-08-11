@@ -857,8 +857,15 @@ typedef struct VerifyRangeProofArgs {
    * The upper bound of the key range that the proof is expected to cover. If
    * `None`, the proof is expected to cover to the end of the keyspace.
    *
-   * This is ignored if the proof is truncated and does not cover the full,
-   * in which case the upper bound key is the final key in the key-value pairs.
+   * This is an upper bound on what the proof *may* cover, not an assertion
+   * that it does. A responder may truncate its reply, in which case the
+   * proven range ends at the proof's own right edge instead. Verification
+   * accepts that as a valid partial result.
+   *
+   * The apply path writes over the **proven** range, so keys between the
+   * proven edge and this bound are left untouched rather than deleted. The
+   * caller owns the remainder: use `fwd_range_proof_find_next_key` to get the
+   * next range to request, and keep going until it reports nothing left.
    */
   struct Maybe_BorrowedBytes end_key;
   /**

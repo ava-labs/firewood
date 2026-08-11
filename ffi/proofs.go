@@ -186,6 +186,15 @@ func (p *RangeProof) Verify(
 // call to [*Database.VerifyAndCommitRangeProof] will skip verification and commit the
 // prepared proposal.
 //
+// The prepared proposal only covers the range the proof actually proves,
+// which can be narrower than [endKey]: a responder is allowed to truncate
+// its reply, in which case the proof anchors at its own right edge instead
+// of the requested one. Keys beyond that proven edge are left untouched
+// rather than deleted. A sync-client caller must keep calling
+// [*RangeProof.FindNextKey] and requesting, verifying, and applying the
+// ranges it returns until it returns nil, to be sure the full [startKey,
+// endKey] span has actually been synchronized.
+//
 // Because this method prepares a proposal, the database must be kept alive
 // until the proof is committed or freed.
 func (db *Database) VerifyRangeProof(
@@ -235,6 +244,12 @@ func (db *Database) VerifyRangeProof(
 // [rootHash]. If the proof is valid, it is committed to the database and the
 // new root hash is returned. The resulting root hash may not equal the
 // provided root hash if the proof was truncated due to [maxLength].
+//
+// The commit only applies the range the proof actually proves, which can be
+// narrower than [endKey] when the responder truncated its reply; keys past
+// the proven edge are left untouched rather than deleted. The caller owns
+// the remainder: keep calling [*RangeProof.FindNextKey] and requesting,
+// verifying, and committing the ranges it returns until it returns nil.
 func (db *Database) VerifyAndCommitRangeProof(
 	proof *RangeProof,
 	startKey, endKey Maybe[[]byte],
