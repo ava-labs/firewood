@@ -15,7 +15,7 @@ use super::{
     types::{Proof, ProofNode, ProofType},
 };
 use crate::api::{FrozenChangeProof, FrozenRangeProof};
-use crate::db::BatchOp;
+use crate::db::{BatchOp, ProofConfig};
 
 fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
     let merkle = crate::merkle::tests::init_merkle((0u8..=10).map(|k| ([k], [k])));
@@ -276,6 +276,22 @@ fn test_partial_key_len_exceeds_key_len() {
         }
         other => panic!("Expected ReadError::InvalidItem, got: {other:?}"),
     }
+}
+
+#[test]
+fn test_proof_config_rejects_over_max_len() {
+    let (_, serialized) = create_valid_range_proof();
+    // A config whose cap is one byte below the real proof rejects it before
+    // parsing; the default config (32 MiB) accepts it.
+    let tight = ProofConfig::builder()
+        .max_decompressed_len(serialized.len() - 1)
+        .build();
+    match FrozenRangeProof::from_slice_with_config(&serialized, &tight) {
+        Err(ReadError::InvalidItem { item, .. }) => assert_eq!(item, "proof length"),
+        other => panic!("expected proof-length rejection, got: {other:?}"),
+    }
+    FrozenRangeProof::from_slice_with_config(&serialized, &ProofConfig::default())
+        .expect("default config must accept a normal proof");
 }
 
 #[test]

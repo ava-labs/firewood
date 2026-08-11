@@ -8,7 +8,7 @@ use firewood::{
         self, ArcDynDbView, Db as _, DbView, FrozenChangeProof, HashKey, HashKeyExt, IntoBatchIter,
         KeyType,
     },
-    db::{CommittedView, Db, DbConfig},
+    db::{CommittedView, Db, DbConfig, ProofConfig},
     manager::RevisionManagerConfig,
 };
 
@@ -191,6 +191,12 @@ impl DatabaseHandle {
     /// Never errors.
     pub fn current_root_hash(&self) -> Option<HashKey> {
         self.db.root_hash()
+    }
+
+    /// The size limits applied when decoding serialized proofs.
+    #[must_use]
+    pub const fn proof_config(&self) -> ProofConfig {
+        self.db.proof_config()
     }
 
     /// Returns a value from the database for the given key from the latest root hash.

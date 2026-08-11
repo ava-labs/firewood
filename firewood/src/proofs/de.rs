@@ -15,10 +15,24 @@ use super::{
 use crate::merkle::childmask::ChildMask;
 use crate::{
     api::{FrozenChangeProof, FrozenRangeProof},
-    db::BatchOp,
+    db::{BatchOp, ProofConfig},
     merkle::{Key, Value},
     proofs::magic::{BATCH_DELETE, BATCH_DELETE_RANGE, BATCH_PUT},
 };
+
+/// Rejects a serialized proof whose length exceeds
+/// [`ProofConfig::max_decompressed_len`], before any parsing allocates.
+fn check_proof_len(data: &[u8], config: &ProofConfig) -> Result<(), ReadError> {
+    if data.len() > config.max_decompressed_len {
+        return Err(ReadError::InvalidItem {
+            item: "proof length",
+            offset: 0,
+            expected: "length within the configured maximum",
+            found: format!("{} > {}", data.len(), config.max_decompressed_len),
+        });
+    }
+    Ok(())
+}
 #[cfg(feature = "ethhash")]
 use firewood_storage::HashType;
 use firewood_storage::{Children, PathBuf, TrieHash, TriePathFromUnpackedBytes, ValueDigest};
@@ -36,6 +50,19 @@ impl FrozenRangeProof {
     /// Returns a [`ReadError`] if the data is invalid. See the enum variants for
     /// the possible reasons.
     pub fn from_slice(data: &[u8]) -> Result<Self, ReadError> {
+        Self::from_slice_with_config(data, &ProofConfig::default())
+    }
+
+    /// Parses a `FrozenRangeProof`, enforcing `config`'s size limits.
+    ///
+    /// See [`FrozenRangeProof::from_slice`]. `config` bounds the resources
+    /// spent decoding an attacker-controlled proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ReadError`] if the data is invalid or exceeds a limit.
+    pub fn from_slice_with_config(data: &[u8], config: &ProofConfig) -> Result<Self, ReadError> {
+        check_proof_len(data, config)?;
         let mut reader = ProofReader::new(data);
 
         let header = reader.read_item::<Header>()?;
@@ -97,6 +124,17 @@ impl FrozenChangeProof {
     /// Returns a [`ReadError`] if the data is invalid. See the enum variants for
     /// the possible reasons.
     pub fn from_slice(data: &[u8]) -> Result<Self, ReadError> {
+        Self::from_slice_with_config(data, &ProofConfig::default())
+    }
+
+    /// Parses a `FrozenChangeProof`, enforcing `config`'s size limits. See
+    /// [`FrozenRangeProof::from_slice_with_config`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ReadError`] if the data is invalid or exceeds a limit.
+    pub fn from_slice_with_config(data: &[u8], config: &ProofConfig) -> Result<Self, ReadError> {
+        check_proof_len(data, config)?;
         let mut reader = ProofReader::new(data);
 
         let header = reader.read_item::<Header>()?;
