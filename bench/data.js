@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786347300830,
+  "lastUpdate": 1786432959853,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -8600,6 +8600,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 53.91703682098596,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Mark Xian",
+            "username": "xianjianlf2",
+            "email": "mark-xian@foxmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "9e2e9723d464efa1e7cbb42013f568d03390b4e4",
+          "message": "fix(fwdctl): escape JSON dump strings (#2177)\n\nFixes #2176\n\nThe JSON dump handler previously interpolated keys and values directly\ninto quoted strings, producing invalid JSON when records contained\nquotes, backslashes, control characters, or newlines.\n\nThis adds a streaming JSON string escaper and covers the\nspecial-character cases with an integration test.\n\nValidation:\n- cargo fmt --all -- --check\n- cargo test -p firewood-fwdctl --test cli\n- cargo clippy -p firewood-fwdctl --all-targets -- -D warnings",
+          "timestamp": "2026-08-10T15:22:58Z",
+          "url": "https://github.com/ava-labs/firewood/commit/9e2e9723d464efa1e7cbb42013f568d03390b4e4"
+        },
+        "date": 1786432958699,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 166.59855265201875,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6002.453107073152,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 75.59405288624576,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5876.931805691388,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 47.79576610296541,
             "unit": "block_accept_ms/ggas"
           }
         ]
