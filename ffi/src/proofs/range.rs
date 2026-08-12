@@ -116,10 +116,10 @@ impl<'db> RangeProofContext<'db> {
         max_length: Option<NonZeroUsize>,
     ) -> Result<(), api::Error> {
         if let Some(ref ctx) = self.verification {
-            if ctx.root == root
-                && ctx.start_key.as_deref() == start_key
-                && ctx.end_key.as_deref() == end_key
-                && ctx.max_length == max_length
+            if *ctx.root() == root
+                && ctx.start_key() == start_key
+                && ctx.end_key() == end_key
+                && ctx.max_length() == max_length
             {
                 // already verified with the same context
                 return Ok(());
@@ -156,8 +156,7 @@ impl<'db> RangeProofContext<'db> {
         self.verification
             .as_ref()
             .expect("verify() populates the verification context on success")
-            .right_edge_key
-            .as_deref()
+            .right_edge_key()
     }
 
     /// Verify the range proof and prepare a proposal against the given database
@@ -277,7 +276,7 @@ impl<'db> RangeProofContext<'db> {
             Some(ProposalState::Proposed(ref proposal)) => Ok(proposal.root_hash()),
             None => Err(api::Error::ProofError(ProofError::Unverified)),
         }?;
-        if root_hash.as_ref() == Some(&verification.root) {
+        if root_hash.as_ref() == Some(verification.root()) {
             return Ok(None);
         }
 
