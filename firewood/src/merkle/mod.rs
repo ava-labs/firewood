@@ -480,7 +480,12 @@ fn change_outside_children<S: ReadableStorage>(
         // outside substitutes the proof's hash for it, which on an unvalidated
         // proof would hide in-range state that is never checked against the
         // batch ops.
-        if terminal.node.child_hashes[on_path].is_some() {
+        if terminal
+            .node
+            .child_hashes
+            .iter_present()
+            .any(|(index, _)| index == on_path.0)
+        {
             return Err(api::Error::ProofError(
                 ProofError::ExclusionProofMissingChild,
             ));
