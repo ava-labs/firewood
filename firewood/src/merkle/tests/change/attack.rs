@@ -404,12 +404,12 @@ fn test_crafted_conflicting_proof_nodes_rejected() {
     );
 
     // Skip structural validation (the modified hash chain won't pass).
-    let ctx = ChangeProofVerificationContext {
-        end_root: root2,
-        start_key: Some(b"\x10".to_vec().into()),
-        end_key: Some(b"\x20".to_vec().into()),
-        right_edge_key: Some(b"\x20".to_vec().into()),
-    };
+    let ctx = ChangeProofVerificationContext::for_test(
+        root2,
+        Some(b"\x10".to_vec().into()),
+        Some(b"\x20".to_vec().into()),
+        Some(b"\x20".to_vec().into()),
+    );
 
     let parent = db.revision(root1).unwrap();
     let proposal = db.apply_change_proof_to_parent(&crafted, &*parent).unwrap();
@@ -456,12 +456,8 @@ fn test_crafted_value_at_odd_nibble_length_rejected() {
     );
 
     // Skip structural validation (injected value breaks the hash chain).
-    let ctx = ChangeProofVerificationContext {
-        end_root: root2,
-        start_key: Some(b"\x10".to_vec().into()),
-        end_key: None,
-        right_edge_key: None,
-    };
+    let ctx =
+        ChangeProofVerificationContext::for_test(root2, Some(b"\x10".to_vec().into()), None, None);
 
     let parent = db.revision(root1).unwrap();
     let proposal = db.apply_change_proof_to_parent(&crafted, &*parent).unwrap();
@@ -539,12 +535,12 @@ fn test_crafted_divergence_at_depth_zero() {
         .apply_change_proof_to_parent(&crafted, &*parent)
         .unwrap();
 
-    let verification = ChangeProofVerificationContext {
-        end_root: root2,
-        start_key: Some(b"\x10".to_vec().into()),
-        end_key: Some(b"\xa1".to_vec().into()),
-        right_edge_key: Some(b"\xa1".to_vec().into()),
-    };
+    let verification = ChangeProofVerificationContext::for_test(
+        root2,
+        Some(b"\x10".to_vec().into()),
+        Some(b"\xa1".to_vec().into()),
+        Some(b"\xa1".to_vec().into()),
+    );
 
     let err = verify_change_proof_root_hash(&crafted, &verification, &proposal).unwrap_err();
     assert!(

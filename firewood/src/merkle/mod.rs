@@ -498,10 +498,8 @@ fn change_outside_children<S: ReadableStorage>(
     proving_merkle: &Merkle<NodeStore<Mutable<Propose>, S>>,
     range: CollapseRange<'_>,
 ) -> Result<HashMap<PathBuf, ChildMask>, api::Error> {
-    let start_boundary = EdgeBoundary::Left(verification.start_key.as_deref());
-    let end_boundary = EdgeBoundary::Right(RightBoundary::InRange(
-        verification.right_edge_key.as_deref(),
-    ));
+    let start_boundary = EdgeBoundary::Left(verification.start_key());
+    let end_boundary = EdgeBoundary::Right(RightBoundary::InRange(verification.right_edge_key()));
     let start_proof = proof.start_proof();
     let end_proof = proof.end_proof();
 
@@ -1338,7 +1336,7 @@ pub fn verify_change_proof_root_hash(
     // end_root. Also covers the degenerate case of an empty diff.
     if start_nodes.is_empty() && end_nodes.is_empty() {
         let computed = api::DbView::root_hash(proposal).unwrap_or_else(HashKey::empty);
-        if computed != verification.end_root {
+        if computed != *verification.end_root() {
             return Err(api::Error::ProofError(ProofError::EndRootMismatch));
         }
         return Ok(());
@@ -1372,8 +1370,7 @@ pub fn verify_change_proof_root_hash(
     // A divergent terminal that overshoots to the nearest existing key after
     // start_key is in range, and a value mismatch there is a real error.
     let start_key_nibbles: Vec<u8> = verification
-        .start_key
-        .as_deref()
+        .start_key()
         .map(|k| NibblesIterator::new(k).collect())
         .unwrap_or_default();
 
@@ -1381,8 +1378,7 @@ pub fn verify_change_proof_root_hash(
     // slice matters: an empty slice sorts as the minimum key, which would mark
     // every key out of range at the upper bound.
     let end_key_nibbles: Option<Vec<u8>> = verification
-        .right_edge_key
-        .as_deref()
+        .right_edge_key()
         .map(|k| NibblesIterator::new(k).collect());
 
     let range = CollapseRange {
@@ -1481,7 +1477,7 @@ pub fn verify_change_proof_root_hash(
     let computed =
         compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children);
 
-    if computed != verification.end_root {
+    if computed != *verification.end_root() {
         return Err(api::Error::ProofError(ProofError::EndRootMismatch));
     }
 
