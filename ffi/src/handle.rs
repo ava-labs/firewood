@@ -119,17 +119,19 @@ pub struct DatabaseHandleArgs<'a> {
 
 impl DatabaseHandleArgs<'_> {
     fn as_proof_config(&self) -> ProofConfig {
-        let mut cfg = ProofConfig::default();
-        if self.proof_target_size != 0 {
-            cfg.target_size = self.proof_target_size;
-        }
-        if self.proof_max_decompressed_len != 0 {
-            cfg.max_decompressed_len = self.proof_max_decompressed_len;
-        }
-        if self.proof_max_compression_ratio != 0 {
-            cfg.max_compression_ratio = self.proof_max_compression_ratio;
-        }
-        cfg
+        let defaults = ProofConfig::default();
+        let or = |v: usize, default: usize| if v == 0 { default } else { v };
+        ProofConfig::builder()
+            .target_size(or(self.proof_target_size, defaults.target_size))
+            .max_decompressed_len(or(
+                self.proof_max_decompressed_len,
+                defaults.max_decompressed_len,
+            ))
+            .max_compression_ratio(or(
+                self.proof_max_compression_ratio,
+                defaults.max_compression_ratio,
+            ))
+            .build()
     }
 
     fn as_rev_manager_config(&self) -> Result<RevisionManagerConfig, api::Error> {

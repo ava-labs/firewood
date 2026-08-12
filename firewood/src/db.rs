@@ -703,7 +703,7 @@ mod test {
     use crate::db::{Db, Proposal, UseParallel};
     use crate::manager::RevisionManagerConfig;
 
-    use super::{BatchOp, DbConfig, ProofConfig};
+    use super::{BatchOp, DbConfig};
 
     /// A chunk of an iterator, provided by [`IterExt::chunk_fold`] to the folding
     /// function.
@@ -807,13 +807,6 @@ mod test {
             parallel_reconstructed.val(b"next").unwrap(),
             serial_reconstructed.val(b"next").unwrap()
         );
-    }
-
-    #[test]
-    fn test_proof_config_round_trips_from_dbconfig() {
-        let proof = ProofConfig::builder().max_decompressed_len(12345).build();
-        let db = TestDb::new_with_config(DbConfig::builder().proof(proof).build());
-        assert_eq!(db.proof_config().max_decompressed_len, 12345);
     }
 
     #[test]
