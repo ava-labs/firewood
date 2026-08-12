@@ -12,16 +12,15 @@
 //! `start_key`", and gets back a proof whose compressed wire form fits, with a
 //! right edge so the next chunk resumes after the last returned key.
 //!
-//! The sizing engine is **streaming**: walk the key-value (or diff) iterator
-//! once, accumulating the exact uncompressed body size, stop at the budget
-//! mapped through a compression-ratio estimate, then prove the edges and
-//! serialize. It materializes no throwaway proofs; if the first serialization
-//! misses the budget it re-estimates the ratio from the measured wire length
-//! and extends or truncates a bounded number of times.
+//! The engine ([`stream_sized`]) walks the key-value (or diff) iterator once,
+//! accumulating the exact uncompressed body size, stops at the budget mapped
+//! through a compression-ratio estimate, then proves the edges and serializes.
+//! It materializes no throwaway proofs; if the first serialization misses the
+//! budget it re-estimates the ratio from the measured wire length and extends
+//! or truncates a bounded number of times.
 //!
 //! Both entry points guarantee ≥ 1 payload entry even if a single entry
-//! exceeds the budget (callers must be able to make progress), and return
-//! [`SizedProofStats`] describing the work performed.
+//! exceeds the budget, so a paging caller can always make progress.
 
 #![expect(
     clippy::cast_precision_loss,
@@ -53,45 +52,22 @@ const DEFAULT_COMPRESSION_RATIO: f64 = 0.52;
 /// Maximum extend/truncate passes after the first serialization.
 const MAX_ADJUST: usize = 6;
 
-/// Work accounting for one sized-proof request.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SizedProofStats {
-    /// Single-key edge proofs (the left edge and each right-edge rebuild).
-    pub edge_proofs: u32,
-    /// Serializations of a candidate proof (each includes one zstd compression).
-    pub serializations: u32,
-    /// Total payload entries materialized, including any later thrown away.
-    pub kvs_materialized: u64,
-    /// Payload entries in the returned proof.
-    pub kv_count: u32,
-    /// Compressed wire length of the returned proof.
-    pub wire_len: u64,
-    /// True if the proof reached the natural end of the keyspace/diff.
+/// A sized range proof and its compressed wire bytes (already computed for
+/// sizing — send these rather than re-serialize). `natural_end` is true when
+/// the payload reached the end of the keyspace (paging is done).
+#[derive(Debug)]
+pub struct SizedProof {
+    pub proof: FrozenRangeProof,
+    pub wire: Vec<u8>,
     pub natural_end: bool,
 }
 
-/// Result of a sized range-proof request: the proof, its compressed wire bytes
-/// (already computed for sizing — callers should send these rather than
-/// re-serialize), and the work stats.
-#[derive(Debug)]
-pub struct SizedProof {
-    /// The generated proof.
-    pub proof: FrozenRangeProof,
-    /// The compressed wire bytes.
-    pub wire: Vec<u8>,
-    /// Work accounting.
-    pub stats: SizedProofStats,
-}
-
-/// Result of a sized change-proof request. See [`SizedProof`].
+/// A sized change proof and its compressed wire bytes. See [`SizedProof`].
 #[derive(Debug)]
 pub struct SizedChangeProof {
-    /// The generated proof.
     pub proof: FrozenChangeProof,
-    /// The compressed wire bytes.
     pub wire: Vec<u8>,
-    /// Work accounting.
-    pub stats: SizedProofStats,
+    pub natural_end: bool,
 }
 
 /// Exact uncompressed body bytes one `(key, value)` payload entry costs:
@@ -124,25 +100,127 @@ fn varint_len(v: u64) -> u64 {
     v.encode_var(&mut buf) as u64
 }
 
-fn serialize_range(proof: &FrozenRangeProof, stats: &mut SizedProofStats) -> Vec<u8> {
-    let mut out = Vec::new();
-    proof.write_to_vec(&mut out);
-    stats.serializations = stats.serializations.saturating_add(1);
-    out
-}
-
-fn serialize_change(proof: &FrozenChangeProof, stats: &mut SizedProofStats) -> Vec<u8> {
-    let mut out = Vec::new();
-    proof.write_to_vec(&mut out);
-    stats.serializations = stats.serializations.saturating_add(1);
-    out
-}
-
 /// Uncompressed body budget: the compressed budget scaled up by `ratio`, less
 /// the fixed edge overhead.
 fn payload_budget(ratio: f64, budget: usize, fixed: u64) -> u64 {
     let total = (budget as f64 / ratio) as u64;
     total.saturating_sub(fixed)
+}
+
+/// The largest proof, built from `items` (already positioned at the start
+/// key), whose compressed wire fits `budget`. `cost` sizes one item's
+/// uncompressed body bytes; `build(items, natural_end)` assembles the proof
+/// and its right edge; `serialize` produces the compressed wire. `fixed` is
+/// the measured edge overhead. Returns `(proof, wire, natural_end)`.
+///
+/// Grows until over budget, then truncates back under. Once we truncate we
+/// stop extending: truncation drops the tail of `kept`, but the iterator (and
+/// any carried-over item) sit past the pre-truncate end, so extending
+/// afterward would skip the gap between them.
+fn stream_sized<I, P, Pf>(
+    mut items: I,
+    budget: usize,
+    mut ratio: f64,
+    fixed: u64,
+    cost: impl Fn(&P) -> u64,
+    build: impl Fn(&[P], bool) -> Result<Pf, api::Error>,
+    serialize: impl Fn(&Pf) -> Vec<u8>,
+) -> Result<(Pf, Vec<u8>, bool), api::Error>
+where
+    I: Iterator<Item = Result<P, api::Error>>,
+{
+    let mut kept: Vec<P> = Vec::new();
+    let mut body = 0u64;
+    let mut natural = true;
+    // The item that overflowed the running budget; the iterator has advanced
+    // past it, so it is carried into the next extension pass.
+    let mut pending: Option<P> = None;
+
+    let mut budget_body = payload_budget(ratio, budget, fixed);
+    for item in items.by_ref() {
+        let p = item?;
+        let c = cost(&p);
+        if !kept.is_empty() && body.saturating_add(c) > budget_body {
+            natural = false;
+            pending = Some(p);
+            break;
+        }
+        body = body.saturating_add(c);
+        kept.push(p);
+    }
+
+    let mut proof = build(&kept, natural)?;
+    let mut wire = serialize(&proof);
+
+    let mut truncated = false;
+    for _ in 0..MAX_ADJUST {
+        if wire.len() <= budget && (natural || wire.len() as f64 >= budget as f64 * ACCEPT_FLOOR) {
+            break;
+        }
+        if wire.len() > budget {
+            let per = (wire.len() as f64 / kept.len() as f64).max(1.0);
+            let over = wire.len().saturating_sub(budget);
+            let drop = ((over as f64 / per).ceil() as usize).saturating_add(8);
+            let keep = kept.len().saturating_sub(drop).max(1);
+            kept.truncate(keep);
+            truncated = true;
+            natural = false;
+            proof = build(&kept, natural)?;
+            wire = serialize(&proof);
+            if keep == 1 {
+                break;
+            }
+        } else {
+            if truncated {
+                break;
+            }
+            ratio = (wire.len() as f64 / body.saturating_add(fixed) as f64).clamp(0.05, 2.0);
+            budget_body = payload_budget(ratio, budget, fixed);
+            let mut extended = false;
+            // The carried-over item goes first: the iterator is already past it.
+            let carried = pending.take().into_iter().map(Ok);
+            for item in carried.chain(items.by_ref()) {
+                let p = item?;
+                let c = cost(&p);
+                if body.saturating_add(c) > budget_body {
+                    natural = false;
+                    pending = Some(p);
+                    extended = true;
+                    break;
+                }
+                body = body.saturating_add(c);
+                kept.push(p);
+                extended = true;
+                natural = true;
+            }
+            if !extended {
+                break; // stream exhausted
+            }
+            proof = build(&kept, natural)?;
+            wire = serialize(&proof);
+        }
+    }
+
+    Ok((proof, wire, natural))
+}
+
+/// Fixed edge overhead: the empty-payload wire size (left edge), plus the same
+/// again (or a floor) reserved for the right edge.
+fn edge_overhead(empty_wire_len: usize) -> u64 {
+    let start = empty_wire_len as u64;
+    start.saturating_add(start.max(6 * 1024))
+}
+
+fn to_wire_range(proof: &FrozenRangeProof) -> Vec<u8> {
+    let mut out = Vec::new();
+    proof.write_to_vec(&mut out);
+    out
+}
+
+fn to_wire_change(proof: &FrozenChangeProof) -> Vec<u8> {
+    let mut out = Vec::new();
+    proof.write_to_vec(&mut out);
+    out
 }
 
 impl<T: TrieReader> Merkle<T> {
@@ -153,153 +231,60 @@ impl<T: TrieReader> Merkle<T> {
     /// uncompressed, e.g. from the previous chunk); it is re-measured against
     /// the real serialized length after the first pass.
     ///
-    /// The returned proof always contains at least one key-value pair (so a
-    /// caller paging through the keyspace can make progress), even if that
-    /// single pair exceeds the budget.
+    /// The returned proof always contains at least one key-value pair, so a
+    /// caller paging through the keyspace can make progress even if that single
+    /// pair exceeds the budget.
     ///
     /// # Errors
     ///
     /// Any error from proof generation ([`Merkle::prove`]) or iteration.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "single-pass accumulation plus its bounded convergence loop"
-    )]
     pub fn range_proof_sized(
         &self,
         start_key: Option<&[u8]>,
         budget: usize,
         ratio_hint: Option<f64>,
     ) -> Result<SizedProof, api::Error> {
-        let mut ratio = ratio_hint.unwrap_or(DEFAULT_COMPRESSION_RATIO);
-        let mut stats = SizedProofStats::default();
-
-        // Left edge is fixed; measure its exact wire cost by serializing an
-        // empty-payload proof around it.
+        let ratio = ratio_hint.unwrap_or(DEFAULT_COMPRESSION_RATIO);
         let start_proof = match start_key {
-            Some(key) => {
-                stats.edge_proofs = stats.edge_proofs.saturating_add(1);
-                self.prove(key).map_err(api::Error::from)?
-            }
+            Some(key) => self.prove(key).map_err(api::Error::from)?,
             None => Proof::default(),
         };
-        let edge_probe: FrozenRangeProof =
-            RangeProof::new(start_proof.clone(), Proof::default(), Box::new([]));
-        let mut scratch = Vec::new();
-        edge_probe.write_to_vec(&mut scratch);
-        let start_overhead = scratch.len() as u64;
-        // The right edge is a chain of similar depth; reserve the same (or a
-        // floor for the no-left-edge first chunk).
-        let end_allowance = start_overhead.max(6 * 1024);
-        let fixed = start_overhead.saturating_add(end_allowance);
+        let empty = RangeProof::new(start_proof.clone(), Proof::default(), Box::new([]));
+        let fixed = edge_overhead(to_wire_range(&empty).len());
 
-        let mut kvs: Vec<(Key, Value)> = Vec::new();
-        let mut body = 0u64;
-        let mut iter = self.key_value_iter_from_key(start_key.unwrap_or_default());
-        let mut natural = true;
-        // The pair that overflowed the running budget. The iterator has
-        // already advanced past it, so it must be carried into any extension
-        // pass or the payload would have a gap.
-        let mut pending: Option<(Key, Value)> = None;
-
-        let mut budget_body = payload_budget(ratio, budget, fixed);
-        for item in iter.by_ref() {
-            let (k, v) = item.map_err(api::Error::from)?;
-            let cost = kv_body_bytes(&k, &v);
-            if !kvs.is_empty() && body.saturating_add(cost) > budget_body {
-                natural = false;
-                pending = Some((k, v));
-                break;
-            }
-            body = body.saturating_add(cost);
-            kvs.push((k, v));
-        }
-        stats.kvs_materialized = kvs.len() as u64;
-
-        let assemble = |kvs: &[(Key, Value)],
-                        natural: bool,
-                        stats: &mut SizedProofStats|
-         -> Result<FrozenRangeProof, api::Error> {
-            let end_proof = if natural {
+        let items = self
+            .key_value_iter_from_key(start_key.unwrap_or_default())
+            .map(|r| r.map_err(api::Error::from));
+        let build = |kvs: &[(Key, Value)], natural: bool| -> Result<FrozenRangeProof, api::Error> {
+            let end = if natural {
                 Proof::default()
             } else {
                 let (last, _) = kvs
                     .last()
                     .ok_or_else(|| api::Error::InternalError("empty sized payload".into()))?;
-                stats.edge_proofs = stats.edge_proofs.saturating_add(1);
                 self.prove(last).map_err(api::Error::from)?
             };
             Ok(RangeProof::new(
                 start_proof.clone(),
-                end_proof,
+                end,
                 kvs.to_vec().into_boxed_slice(),
             ))
         };
 
-        let mut proof = assemble(&kvs, natural, &mut stats)?;
-        let mut wire = serialize_range(&proof, &mut stats);
-
-        // Measure the real ratio, then extend (iterator is still positioned)
-        // or truncate to converge on the budget. Once we truncate we stop
-        // extending: truncation drops the tail of `kvs`, but `pending` and the
-        // iterator are positioned past the pre-truncate end, so extending
-        // afterward would skip the gap between them.
-        let mut truncated = false;
-        for _ in 0..MAX_ADJUST {
-            if wire.len() <= budget
-                && (natural || wire.len() as f64 >= budget as f64 * ACCEPT_FLOOR)
-            {
-                break;
-            }
-            if wire.len() > budget {
-                let bpk = (wire.len() as f64 / kvs.len() as f64).max(1.0);
-                let over = wire.len().saturating_sub(budget);
-                let drop = ((over as f64 / bpk).ceil() as usize).saturating_add(8);
-                let keep = kvs.len().saturating_sub(drop).max(1);
-                kvs.truncate(keep);
-                truncated = true;
-                natural = false;
-                proof = assemble(&kvs, natural, &mut stats)?;
-                wire = serialize_range(&proof, &mut stats);
-                if keep == 1 {
-                    break;
-                }
-            } else {
-                if truncated {
-                    break;
-                }
-                ratio = (wire.len() as f64 / body.saturating_add(fixed) as f64).clamp(0.05, 2.0);
-                budget_body = payload_budget(ratio, budget, fixed);
-                let mut extended = false;
-                // The carried-over pair goes first: the iterator is already
-                // past it.
-                let carried = pending.take().into_iter().map(Ok);
-                for item in carried.chain(iter.by_ref()) {
-                    let (k, v) = item.map_err(api::Error::from)?;
-                    let cost = kv_body_bytes(&k, &v);
-                    if body.saturating_add(cost) > budget_body {
-                        natural = false;
-                        pending = Some((k, v));
-                        extended = true;
-                        break;
-                    }
-                    body = body.saturating_add(cost);
-                    kvs.push((k, v));
-                    extended = true;
-                    natural = true;
-                }
-                stats.kvs_materialized = kvs.len() as u64;
-                if !extended {
-                    break; // keyspace exhausted
-                }
-                proof = assemble(&kvs, natural, &mut stats)?;
-                wire = serialize_range(&proof, &mut stats);
-            }
-        }
-
-        stats.kv_count = kvs.len() as u32;
-        stats.wire_len = wire.len() as u64;
-        stats.natural_end = natural;
-        Ok(SizedProof { proof, wire, stats })
+        let (proof, wire, natural_end) = stream_sized(
+            items,
+            budget,
+            ratio,
+            fixed,
+            |(k, v)| kv_body_bytes(k, v),
+            build,
+            to_wire_range,
+        )?;
+        Ok(SizedProof {
+            proof,
+            wire,
+            natural_end,
+        })
     }
 }
 
@@ -314,11 +299,6 @@ impl<T: HashedNodeReader> Merkle<T> {
     /// # Errors
     ///
     /// Any error from proof generation or diff iteration.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "single-pass accumulation plus its bounded convergence loop, \
-                  mirroring the range-proof streaming implementation"
-    )]
     pub fn change_proof_sized(
         &self,
         source_trie: &T,
@@ -326,127 +306,51 @@ impl<T: HashedNodeReader> Merkle<T> {
         budget: usize,
         ratio_hint: Option<f64>,
     ) -> Result<SizedChangeProof, api::Error> {
-        let mut ratio = ratio_hint.unwrap_or(DEFAULT_COMPRESSION_RATIO);
-        let mut stats = SizedProofStats::default();
-
+        let ratio = ratio_hint.unwrap_or(DEFAULT_COMPRESSION_RATIO);
         let start_proof = match start_key {
-            Some(key) => {
-                stats.edge_proofs = stats.edge_proofs.saturating_add(1);
-                self.prove(key).map_err(api::Error::from)?
-            }
+            Some(key) => self.prove(key).map_err(api::Error::from)?,
             None => Proof::default(),
         };
-        let edge_probe: FrozenChangeProof =
-            ChangeProof::new(start_proof.clone(), Proof::default(), Box::new([]));
-        let mut scratch = Vec::new();
-        edge_probe.write_to_vec(&mut scratch);
-        let start_overhead = scratch.len() as u64;
-        let end_allowance = start_overhead.max(6 * 1024);
-        let fixed = start_overhead.saturating_add(end_allowance);
+        let empty = ChangeProof::new(start_proof.clone(), Proof::default(), Box::new([]));
+        let fixed = edge_overhead(to_wire_change(&empty).len());
 
-        let mut ops: Vec<BatchOp<Key, Value>> = Vec::new();
-        let mut body = 0u64;
-        let mut iter = DiffMerkleNodeStream::new(
+        let items = DiffMerkleNodeStream::new(
             source_trie,
             self.nodestore(),
             start_key.unwrap_or_default().into(),
         )
-        .map_err(api::Error::from)?;
-        let mut natural = true;
-        let mut pending: Option<BatchOp<Key, Value>> = None;
-
-        let mut budget_body = payload_budget(ratio, budget, fixed);
-        for item in iter.by_ref() {
-            let op = item.map_err(api::Error::from)?;
-            let cost = op_body_bytes(&op);
-            if !ops.is_empty() && body.saturating_add(cost) > budget_body {
-                natural = false;
-                pending = Some(op);
-                break;
-            }
-            body = body.saturating_add(cost);
-            ops.push(op);
-        }
-        stats.kvs_materialized = ops.len() as u64;
-
-        // Unlike range proofs, the plain change-proof API (with no requested
-        // end key) proves the last op key even at the natural end, so the
-        // right edge is unconditional for non-empty payloads.
-        let assemble = |ops: &[BatchOp<Key, Value>],
-                        stats: &mut SizedProofStats|
+        .map_err(api::Error::from)?
+        .map(|r| r.map_err(api::Error::from));
+        // Unlike range proofs, the plain change-proof API (no requested end
+        // key) proves the last op key even at the natural end, so the right
+        // edge is unconditional for non-empty payloads.
+        let build = |ops: &[BatchOp<Key, Value>],
+                     _natural: bool|
          -> Result<FrozenChangeProof, api::Error> {
-            let end_proof = match ops.last() {
-                Some(op) => {
-                    stats.edge_proofs = stats.edge_proofs.saturating_add(1);
-                    self.prove(op.key()).map_err(api::Error::from)?
-                }
+            let end = match ops.last() {
+                Some(op) => self.prove(op.key()).map_err(api::Error::from)?,
                 None => Proof::default(),
             };
             Ok(ChangeProof::new(
                 start_proof.clone(),
-                end_proof,
+                end,
                 ops.to_vec().into_boxed_slice(),
             ))
         };
 
-        let mut proof = assemble(&ops, &mut stats)?;
-        let mut wire = serialize_change(&proof, &mut stats);
-
-        // See `range_proof_sized`: stop extending once we truncate.
-        let mut truncated = false;
-        for _ in 0..MAX_ADJUST {
-            if wire.len() <= budget
-                && (natural || wire.len() as f64 >= budget as f64 * ACCEPT_FLOOR)
-            {
-                break;
-            }
-            if wire.len() > budget {
-                let bpo = (wire.len() as f64 / ops.len() as f64).max(1.0);
-                let over = wire.len().saturating_sub(budget);
-                let drop = ((over as f64 / bpo).ceil() as usize).saturating_add(8);
-                let keep = ops.len().saturating_sub(drop).max(1);
-                ops.truncate(keep);
-                truncated = true;
-                natural = false;
-                proof = assemble(&ops, &mut stats)?;
-                wire = serialize_change(&proof, &mut stats);
-                if keep == 1 {
-                    break;
-                }
-            } else {
-                if truncated {
-                    break;
-                }
-                ratio = (wire.len() as f64 / body.saturating_add(fixed) as f64).clamp(0.05, 2.0);
-                budget_body = payload_budget(ratio, budget, fixed);
-                let mut extended = false;
-                let carried = pending.take().into_iter().map(Ok);
-                for item in carried.chain(iter.by_ref()) {
-                    let op = item.map_err(api::Error::from)?;
-                    let cost = op_body_bytes(&op);
-                    if body.saturating_add(cost) > budget_body {
-                        natural = false;
-                        pending = Some(op);
-                        extended = true;
-                        break;
-                    }
-                    body = body.saturating_add(cost);
-                    ops.push(op);
-                    extended = true;
-                    natural = true;
-                }
-                stats.kvs_materialized = ops.len() as u64;
-                if !extended {
-                    break;
-                }
-                proof = assemble(&ops, &mut stats)?;
-                wire = serialize_change(&proof, &mut stats);
-            }
-        }
-
-        stats.kv_count = ops.len() as u32;
-        stats.wire_len = wire.len() as u64;
-        stats.natural_end = natural;
-        Ok(SizedChangeProof { proof, wire, stats })
+        let (proof, wire, natural_end) = stream_sized(
+            items,
+            budget,
+            ratio,
+            fixed,
+            op_body_bytes,
+            build,
+            to_wire_change,
+        )?;
+        Ok(SizedChangeProof {
+            proof,
+            wire,
+            natural_end,
+        })
     }
 }

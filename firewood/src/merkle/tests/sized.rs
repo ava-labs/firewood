@@ -73,23 +73,18 @@ fn test_sized_fits_and_matches_plain_api() {
         "{} > {budget}",
         sized.wire.len()
     );
-    assert!(sized.stats.kv_count >= 1);
-    assert_eq!(sized.stats.wire_len as usize, sized.wire.len());
+    let kv_count = sized.proof.key_values().len();
+    assert!(kv_count >= 1);
 
     // Byte-equivalence with the plain API at the same kv count.
     let reference = merkle
-        .range_proof(
-            None,
-            None,
-            std::num::NonZeroUsize::new(sized.stats.kv_count as usize),
-        )
+        .range_proof(None, None, std::num::NonZeroUsize::new(kv_count))
         .expect("reference proof");
     let mut ref_wire = Vec::new();
     reference.write_to_vec(&mut ref_wire);
     assert_eq!(
         ref_wire, sized.wire,
-        "sized proof differs from plain API at kv_count={}",
-        sized.stats.kv_count
+        "sized proof differs from plain API at kv_count={kv_count}"
     );
 }
 
@@ -124,7 +119,7 @@ fn test_sized_paging_covers_keyspace() {
         }
         seen += sized.proof.key_values().len();
         chunks += 1;
-        if sized.stats.natural_end {
+        if sized.natural_end {
             break;
         }
         let last = sized
@@ -153,7 +148,7 @@ fn test_sized_single_kv_exceeding_budget_still_progresses() {
         .range_proof_sized(None, 512, None)
         .expect("sized proof");
     assert!(
-        sized.stats.kv_count >= 1,
+        !sized.proof.key_values().is_empty(),
         "must return at least one kv to make progress"
     );
 }
@@ -174,22 +169,22 @@ fn test_change_sized_fits_and_matches_plain_api() {
         "{} > {budget}",
         sized.wire.len()
     );
-    assert!(sized.stats.kv_count >= 1);
+    let op_count = sized.proof.batch_ops().len();
+    assert!(op_count >= 1);
 
     let reference = target
         .change_proof(
             None,
             None,
             source.nodestore(),
-            std::num::NonZeroUsize::new(sized.stats.kv_count as usize),
+            std::num::NonZeroUsize::new(op_count),
         )
         .expect("reference change proof");
     let mut ref_wire = Vec::new();
     reference.write_to_vec(&mut ref_wire);
     assert_eq!(
         ref_wire, sized.wire,
-        "sized change proof differs from plain API at op_count={}",
-        sized.stats.kv_count
+        "sized change proof differs from plain API at op_count={op_count}"
     );
 }
 
@@ -225,7 +220,7 @@ fn test_change_sized_paging_covers_diff() {
         }
         seen += sized.proof.batch_ops().len();
         chunks += 1;
-        if sized.stats.natural_end {
+        if sized.natural_end {
             break;
         }
         let last = sized
