@@ -126,10 +126,10 @@ fn test_tampered_right_edge_delete_to_put_is_rejected() {
             verify(&db, &mutated, &start_root, &end_root, None, None),
             Err(api::Error::ProofError(crate::ProofError::EndRootMismatch))
         ),
-        "SOUNDNESS BUG: change-proof verification accepted a proof whose batch op for \
-         0xf51c was forged from Delete to Put (the key shares the right-edge's 0xf5 \
-         branch and sorts below the deleted anchor 0xf5cd, so it is wrongly treated \
-         as out-of-range and validated against the proof node instead of the proposal)"
+        "an in-range key left in the proposal must force its boundary child to be \
+         recomputed, not taken from the proof. 0xf51c sorts below the deleted \
+         anchor 0xf5cd, so it is in range even though it sits under the right \
+         edge's 0xf5 branch"
     );
 }
 
@@ -178,9 +178,11 @@ fn test_out_of_range_delete_past_end_bound_verifies() {
 
 /// A forged in-range Delete-to-Put must be rejected. `0x56` is in range
 /// (`0x56 < 0x5600`) and a prefix of the non-existent end bound `0x5600`,
-/// while `0x5601` is out of range (`> 0x5600`) sharing the `0x56` path. The
-/// in-range `0x56` must be validated against the batch. Taking its subtree
-/// from the proof instead would let the forged value through.
+/// while `0x5601` is out of range (`> 0x5600`) sharing the `0x56` path. `0x56`
+/// sits at the boundary terminal as a branch value, so being in range is what
+/// keeps that value from being cleared: it is hashed from the proposal, which
+/// surfaces the forged value. Clearing it would let the proof supply the digest
+/// instead and the forgery would go unchecked.
 #[test]
 fn test_forged_in_range_delete_to_put_is_rejected() {
     let (db, _dir) = setup_db![
@@ -208,9 +210,9 @@ fn test_forged_in_range_delete_to_put_is_rejected() {
             verify(&db, &forged, &start_root, &end_root, Some(sk), Some(ek)),
             Err(api::Error::ProofError(crate::ProofError::EndRootMismatch))
         ),
-        "SOUNDNESS BUG: a forged in-range Delete{{0x56}}->Put was accepted. \
-         The in-range 0x56 must be validated against the batch, not taken \
-         from the proof"
+        "an in-range branch value must be kept and hashed from the proposal, not \
+         cleared and supplied by the proof. 0x56 is in range (0x56 < 0x5600) even \
+         though it prefixes the end bound"
     );
 }
 
@@ -303,9 +305,9 @@ fn test_unbounded_end_omitted_in_range_delete_is_rejected() {
             verify(&db, &forged, &start_root, &end_root, Some(sk), None),
             Err(api::Error::ProofError(crate::ProofError::EndRootMismatch))
         ),
-        "SOUNDNESS BUG: an unbounded-end change proof omitting the in-range \
-         Delete{{0x53}} was accepted. The key remains in the proposal and its \
-         subtree must be recomputed, not taken from the start proof"
+        "an in-range key left in the proposal must force its boundary child to be \
+         recomputed, not taken from the proof. With no end bound the range is \
+         [0x52, +∞), so 0x53 is in range"
     );
 }
 
@@ -362,10 +364,9 @@ fn test_split_boundary_child_omitted_in_range_delete_is_rejected() {
             verify(&db, &forged, &start_root, &end_root, Some(sk), Some(ek)),
             Err(api::Error::ProofError(crate::ProofError::EndRootMismatch))
         ),
-        "SOUNDNESS BUG: an omitted in-range Delete{{0xfb10}} was accepted even \
-         though the boundary child also holds the out-of-range 0xfb90. The \
-         in-range key remains in the proposal and its subtree must be \
-         recomputed, not taken from the proof"
+        "a split boundary child must be recomputed from the proposal. The end \
+         boundary's child holds the in-range 0xfb10 as well as the out-of-range \
+         0xfb90, so it cannot be taken from the proof"
     );
 }
 
@@ -422,9 +423,8 @@ fn test_split_start_boundary_child_omitted_in_range_delete_is_rejected() {
             verify(&db, &forged, &start_root, &end_root, Some(sk), Some(ek)),
             Err(api::Error::ProofError(crate::ProofError::EndRootMismatch))
         ),
-        "SOUNDNESS BUG: an omitted in-range Delete{{0xd490}} was accepted even \
-         though the start boundary child also holds the out-of-range 0xd410. The \
-         in-range key remains in the proposal and its subtree must be recomputed, \
-         not taken from the start proof"
+        "a split boundary child must be recomputed from the proposal. The start \
+         boundary's child holds the in-range 0xd490 as well as the out-of-range \
+         0xd410, so it cannot be taken from the proof"
     );
 }
