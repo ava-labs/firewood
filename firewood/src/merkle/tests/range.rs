@@ -2373,6 +2373,6 @@ fn test_verification_context_reports_truncated_right_edge() {
     .unwrap();
 
     // The request was unbounded, but only `[.., 0x10]` is proven.
-    assert_eq!(ctx.end_key, None);
-    assert_eq!(ctx.right_edge_key.as_deref(), Some(b"\x10".as_slice()));
+    assert_eq!(ctx.end_key(), None);
+    assert_eq!(ctx.right_edge_key(), Some(b"\x10".as_slice()));
 }
