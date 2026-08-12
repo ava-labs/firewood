@@ -163,13 +163,19 @@ pub async fn launch_instance(
                 .resource_type(ResourceType::Instance)
                 .set_tags(Some(tags))
                 .build(),
+        )
+        .tag_specifications(
+            TagSpecification::builder()
+                .resource_type(ResourceType::Volume)
+                .set_tags(Some(vec![owner_tag.clone()]))
+                .build(),
+        )
+        .tag_specifications(
+            TagSpecification::builder()
+                .resource_type(ResourceType::NetworkInterface)
+                .set_tags(Some(vec![owner_tag]))
+                .build(),
         );
-    request = request.tag_specifications(
-        TagSpecification::builder()
-            .resource_type(ResourceType::Volume)
-            .set_tags(Some(vec![owner_tag]))
-            .build(),
-    );
 
     if let Some(key) = &opts.key_name {
         request = request.key_name(key);
