@@ -272,7 +272,6 @@ impl AccountFields {
 /// `unreachable!()`. This emitter runs at any depth, so it must surface
 /// inline-RLP children as `RlpItem::Raw` (verbatim inlining) for a
 /// verifier to walk them.
-#[cfg(feature = "ethhash")]
 fn proof_child_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
     match child {
         Some(HashType::Hash(hash)) => RlpItem::Bytes(hash.as_slice()),
@@ -281,22 +280,10 @@ fn proof_child_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
     }
 }
 
-#[cfg(not(feature = "ethhash"))]
-fn proof_child_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
-    // Without ethhash, HashType is just a 32-byte TrieHash and there is no
-    // inline-RLP form; every present child is referenced by hash.
-    match child {
-        Some(hash) => RlpItem::Bytes(hash.as_slice()),
-        None => RlpItem::Empty,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use firewood_storage::{
-        DenseChildren, IntoHashType, PathBuf, RlpList, TrieHash, TriePathFromUnpackedBytes,
-    };
+    use firewood_storage::{DenseChildren, PathBuf, RlpList, TrieHash, TriePathFromUnpackedBytes};
 
     fn pathbuf_from_nibbles(nibbles: &[u8]) -> PathBuf {
         let components =
@@ -344,7 +331,7 @@ mod tests {
     }
 
     fn hash_child(byte: u8) -> HashType {
-        TrieHash::from([byte; 32]).into_hash_type()
+        TrieHash::from([byte; 32]).into()
     }
 
     #[test]

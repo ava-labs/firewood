@@ -51,8 +51,8 @@ use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
 use firewood_storage::hash_node_as_storage_trie_root_parts;
 use firewood_storage::{
     Children, DefaultHashMode, DenseChildren, FileIoError, HashMode, HashType, Hashable,
-    IntoHashType, IntoSplitPath, NibblesIterator, Path, PathBuf, PathComponent, PathIterItem,
-    Preimage, RlpError, SplitPath, TrieHash, TriePath, ValueDigest,
+    IntoSplitPath, NibblesIterator, Path, PathBuf, PathComponent, PathIterItem, Preimage, RlpError,
+    SplitPath, TrieHash, TriePath, ValueDigest,
 };
 use thiserror::Error;
 
@@ -111,6 +111,11 @@ pub enum ProofError {
     /// Unexpected value
     #[error("unexpected value")]
     UnexpectedValue,
+
+    /// A proof contained a hashed value digest under a hashing mode that only
+    /// supports literal values.
+    #[error("hashed value digest is not supported by the active hash mode")]
+    UnexpectedValueDigest,
 
     /// Value mismatch
     #[error("value mismatch")]
@@ -509,6 +514,8 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
     ///   expected hash from its parent (or `root_hash` for the first node).
     /// - [`ProofError::ValueAtOddNibbleLength`] — a node whose key has an odd
     ///   number of nibbles carries a value digest, which is structurally invalid.
+    /// - [`ProofError::UnexpectedValueDigest`] — a node carries a hashed value
+    ///   digest under a scheme that only produces literal values.
     /// - [`ProofError::ShouldBePrefixOfProvenKey`] — an intermediate node's key
     ///   is not a prefix of `key`.
     /// - [`ProofError::ShouldBePrefixOfNextKey`] — a node's key is not a prefix
@@ -534,7 +541,7 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
             return Err(ProofError::Empty);
         };
 
-        let mut expected_hash = root_hash.clone().into_hash_type();
+        let mut expected_hash = HashType::from(root_hash.clone());
 
         // Indicates whether the current node is hashed as a standalone storage-trie
         // root: set to true one iteration prior to reaching the lone storage child
@@ -566,6 +573,14 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
             // have a `value_digest`.
             if !node.full_path().len().is_multiple_of(2) && node.value_digest().is_some() {
                 return Err(ProofError::ValueAtOddNibbleLength);
+            }
+
+            // Reject a hashed value digest under the Ethereum scheme, which
+            // only ever emits literal values.
+            if DefaultHashMode::ALGORITHM.is_ethereum()
+                && matches!(node.value_digest(), Some(ValueDigest::Hash(_)))
+            {
+                return Err(ProofError::UnexpectedValueDigest);
             }
 
             if let Some(next_node) = iter.peek() {
@@ -933,6 +948,43 @@ mod tests {
         assert!(matches!(
             proof.value_digest([0x50u8], &root_hash),
             Err(ProofError::ShouldBePrefixOfNextKey),
+        ));
+    }
+
+    /// Under the Ethereum scheme a hashed value digest must be rejected
+    /// outright. It cannot be caught by the root-hash check: eth's preimage
+    /// encoding ignores a `Hash` digest, so a node carrying one hashes exactly
+    /// like the valueless node it was forged from. Without the guard, such a
+    /// proof would verify as asserting a value the trie does not hold.
+    #[cfg(feature = "ethhash")]
+    #[test]
+    fn eth_hashed_value_digest_is_rejected() {
+        use firewood_storage::U4;
+
+        // Honest trie: a root branch with two children and no value.
+        let leaf = make_node(&[3, 0], 1, Some(b"val_b"), DenseChildren::new());
+        let mut root_children = DenseChildren::new();
+        root_children.insert(U4::new_masked(3), leaf.to_hash());
+        root_children.insert(U4::new_masked(5), HashType::from([0xCCu8; 32]));
+        let honest_root = make_node(&[], 0, None, root_children.clone());
+        let root_hash: TrieHash = honest_root.to_hash().into_triehash();
+
+        // Forged root: same structure, plus a fabricated hashed digest for the
+        // empty key.
+        let mut forged_root = make_node(&[], 0, None, root_children);
+        forged_root.value_digest = Some(ValueDigest::Hash(HashType::from([0xABu8; 32])));
+
+        // The forgery is invisible to the hash check.
+        assert_eq!(
+            forged_root.to_hash(),
+            honest_root.to_hash(),
+            "eth preimage encoding must ignore a Hash digest for this test to be meaningful"
+        );
+
+        // So the guard has to reject it explicitly.
+        assert!(matches!(
+            Proof::new(vec![forged_root]).value_digest(b"", &root_hash),
+            Err(ProofError::UnexpectedValueDigest),
         ));
     }
 }
