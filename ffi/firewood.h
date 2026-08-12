@@ -1851,7 +1851,6 @@ struct NextKeyRangeResult fwd_change_proof_find_next_key(const struct ChangeProo
  *
  * # Arguments
  *
- * * `db` - An optional database handle to get proof size limits, uses default config if none
  * * `bytes` - The bytes to deserialize the proof from.
  *
  * # Returns
@@ -1863,8 +1862,7 @@ struct NextKeyRangeResult fwd_change_proof_find_next_key(const struct ChangeProo
  *   [`fwd_db_verify_and_commit_change_proof`] to verify the proof.
  * - [`ChangeProofResult::Err`] containing an error message if the proof could not be parsed.
  */
-struct ChangeProofResult fwd_change_proof_from_bytes(const struct DatabaseHandle *db,
-                                                     BorrowedBytes bytes);
+struct ChangeProofResult fwd_change_proof_from_bytes(BorrowedBytes bytes);
 
 /**
  * Serialize a `ChangeProof` to bytes.
@@ -2933,7 +2931,6 @@ struct NextKeyRangeResult fwd_range_proof_find_next_key(struct RangeProofContext
  *
  * # Arguments
  *
- * * `db` - An optional database handle to get proof size limits, uses default config if none
  * - `bytes` - The bytes to deserialize the proof from.
  *
  * # Returns
@@ -2944,8 +2941,7 @@ struct NextKeyRangeResult fwd_range_proof_find_next_key(struct RangeProofContext
  *   well-formed. The verify method must be called to ensure the proof is cryptographically valid.
  * - [`RangeProofResult::Err`] containing an error message if the proof could not be parsed.
  */
-struct RangeProofResult fwd_range_proof_from_bytes(const struct DatabaseHandle *db,
-                                                   BorrowedBytes bytes);
+struct RangeProofResult fwd_range_proof_from_bytes(BorrowedBytes bytes);
 
 /**
  * Serialize a `RangeProof` to bytes.

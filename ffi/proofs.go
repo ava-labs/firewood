@@ -154,22 +154,6 @@ func (db *Database) RangeProof(
 	return getRangeProofFromRangeProofResult(C.fwd_db_range_proof(db.handle, args))
 }
 
-// RangeProofFromBytes deserializes a [RangeProof] from [data], enforcing the
-// database's configured proof size limits.
-func (db *Database) RangeProofFromBytes(data []byte) (*RangeProof, error) {
-	db.handleLock.RLock()
-	defer db.handleLock.RUnlock()
-	if db.handle == nil {
-		return nil, errDBClosed
-	}
-
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	return getRangeProofFromRangeProofResult(
-		C.fwd_range_proof_from_bytes(db.handle, newBorrowedBytes(data, &pinner)))
-}
-
 // Verify verifies the provided range [proof] proves the values in the range
 // [startKey, endKey] are included in the tree with the given [rootHash]. If the
 // proof is valid, nil is returned; otherwise an error describing why the proof is
@@ -368,7 +352,7 @@ func (p *RangeProof) UnmarshalBinary(data []byte) error {
 
 	start := time.Now()
 	handle, err := getRangeProofFromRangeProofResult(
-		C.fwd_range_proof_from_bytes(nil, newBorrowedBytes(data, &pinner)))
+		C.fwd_range_proof_from_bytes(newBorrowedBytes(data, &pinner)))
 	proofUnmarshalDuration.WithLabelValues("range").Observe(time.Since(start).Seconds())
 
 	if err == nil {
@@ -438,28 +422,6 @@ func (db *Database) ChangeProof(
 	}
 
 	proof, err := getChangeProofFromChangeProofResult(C.fwd_db_change_proof(db.handle, args))
-	if err != nil {
-		return nil, err
-	}
-
-	runtime.SetFinalizer(proof, (*ChangeProof).Free)
-	return proof, nil
-}
-
-// ChangeProofFromBytes deserializes a [ChangeProof] from [data], enforcing the
-// database's configured proof size limits.
-func (db *Database) ChangeProofFromBytes(data []byte) (*ChangeProof, error) {
-	db.handleLock.RLock()
-	defer db.handleLock.RUnlock()
-	if db.handle == nil {
-		return nil, errDBClosed
-	}
-
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	proof, err := getChangeProofFromChangeProofResult(
-		C.fwd_change_proof_from_bytes(db.handle, newBorrowedBytes(data, &pinner)))
 	if err != nil {
 		return nil, err
 	}
@@ -598,7 +560,7 @@ func (p *ChangeProof) UnmarshalBinary(data []byte) error {
 
 	start := time.Now()
 	handle, err := getChangeProofFromChangeProofResult(
-		C.fwd_change_proof_from_bytes(nil, newBorrowedBytes(data, &pinner)))
+		C.fwd_change_proof_from_bytes(newBorrowedBytes(data, &pinner)))
 	proofUnmarshalDuration.WithLabelValues("change").Observe(time.Since(start).Seconds())
 
 	if err == nil {
