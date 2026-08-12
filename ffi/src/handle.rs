@@ -107,15 +107,17 @@ pub struct DatabaseHandleArgs<'a> {
     /// Note: `revisions` must be > `deferred_persistence_commit_count`.
     pub deferred_persistence_commit_count: u64,
 
-    /// Proof size limits. A `0` value for any field uses the default.
+    /// The expected serialized proof size. `0` uses the default.
     pub proof_target_size: usize,
+
+    /// The hard cap on a decoded proof body. `0` uses the default.
     pub proof_max_decompressed_len: usize,
+
+    /// The max ratio of uncompressed body to compressed frame length. `0` uses the default.
     pub proof_max_compression_ratio: usize,
 }
 
 impl DatabaseHandleArgs<'_> {
-    /// Builds a [`ProofConfig`] from the args, using the default for any field
-    /// left `0`.
     fn as_proof_config(&self) -> ProofConfig {
         let mut cfg = ProofConfig::default();
         if self.proof_target_size != 0 {

@@ -153,10 +153,11 @@ type config struct {
 	// revisions that can exist at a given time.
 	// Note: revisions must be > deferredPersistenceCommitCount
 	deferredPersistenceCommitCount uint64
-	// proof size limits applied when serializing/deserializing proofs.
-	// A zero value for any field uses the default.
-	proofTargetSize          uint
-	proofMaxDecompressedLen  uint
+	// proofTargetSize is the expected serialized proof size; 0 uses the default.
+	proofTargetSize uint
+	// proofMaxDecompressedLen is the hard cap on a decoded proof body; 0 uses the default.
+	proofMaxDecompressedLen uint
+	// proofMaxCompressionRatio is the max ratio of uncompressed to compressed length; 0 uses the default.
 	proofMaxCompressionRatio uint
 }
 
