@@ -294,8 +294,7 @@ pub extern "C" fn fwd_change_proof_to_bytes(proof: Option<&ChangeProofContext>) 
 ///
 /// # Arguments
 ///
-/// * `db` - An optional database handle. If non-null, its configured proof
-///   size limits are enforced; if null, the default limits are used.
+/// * `db` - An optional database handle to get proof size limits, uses default config if none
 /// * `bytes` - The bytes to deserialize the proof from.
 ///
 /// # Returns

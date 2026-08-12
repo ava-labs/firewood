@@ -155,9 +155,7 @@ func (db *Database) RangeProof(
 }
 
 // RangeProofFromBytes deserializes a [RangeProof] from [data], enforcing the
-// database's configured proof size limits. Unlike [RangeProof.UnmarshalBinary]
-// (which uses the default limits), this applies the limits configured on the
-// database.
+// database's configured proof size limits.
 func (db *Database) RangeProofFromBytes(data []byte) (*RangeProof, error) {
 	db.handleLock.RLock()
 	defer db.handleLock.RUnlock()
@@ -449,9 +447,7 @@ func (db *Database) ChangeProof(
 }
 
 // ChangeProofFromBytes deserializes a [ChangeProof] from [data], enforcing the
-// database's configured proof size limits. Unlike
-// [ChangeProof.UnmarshalBinary] (which uses the default limits), this applies
-// the limits configured on the database.
+// database's configured proof size limits.
 func (db *Database) ChangeProofFromBytes(data []byte) (*ChangeProof, error) {
 	db.handleLock.RLock()
 	defer db.handleLock.RUnlock()

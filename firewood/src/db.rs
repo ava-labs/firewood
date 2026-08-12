@@ -99,28 +99,18 @@ pub enum UseParallel {
     Always,
 }
 
-/// Size limits governing how a serialized proof is decoded.
-///
-/// These bound the resources spent decoding an attacker-controlled proof.
-/// The compression-related limits take effect once proofs are compressed on
-/// the wire; today only [`ProofConfig::max_decompressed_len`] is enforced,
-/// as a cap on the serialized proof length.
+/// Size limits governing how a proof is serialized and deserialized.
 #[derive(Clone, Copy, TypedBuilder, Debug)]
 #[non_exhaustive]
 pub struct ProofConfig {
-    /// Expected serialized proof size in the state-sync regime (the
-    /// production message size is ~2 MiB). Informational; callers may use it
-    /// to size buffers.
+    /// Expected serialized proof size.
     #[builder(default = 2 * 1024 * 1024)] // 2 MiB
     pub target_size: usize,
-    /// Hard cap on a decoded proof body. A proof whose body exceeds this is
-    /// rejected before the body is allocated. Defaults to 16x `target_size`.
+    /// Hard cap on a decoded proof body.
     #[builder(default = 32 * 1024 * 1024)] // 32 MiB
     pub max_decompressed_len: usize,
-    /// Upper bound on the ratio between the declared uncompressed body length
-    /// and the compressed frame length, bounding decoder allocation by the
-    /// bytes actually received (decompression-bomb defense). Takes effect once
-    /// proofs are compressed on the wire.
+    /// Upper bound on the ratio between the uncompressed body length
+    /// and the compressed frame length.
     #[builder(default = 128)]
     pub max_compression_ratio: usize,
 }
@@ -156,7 +146,7 @@ pub struct DbConfig {
     /// Whether to enable `RootStore`.
     #[builder(default = false)]
     pub root_store: bool,
-    /// Size limits applied when decoding serialized proofs.
+    /// Size limits applied when serializing/deseralizing proofs.
     #[builder(default = ProofConfig::builder().build())]
     pub proof: ProofConfig,
 }
@@ -218,7 +208,7 @@ impl Db {
         Ok(db)
     }
 
-    /// The size limits applied when decoding serialized proofs.
+    /// The size limits applied when serializing/deserializing proofs.
     #[must_use]
     pub const fn proof_config(&self) -> ProofConfig {
         self.proof_config
