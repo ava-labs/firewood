@@ -282,7 +282,7 @@ fn test_partial_key_len_exceeds_key_len() {
 fn test_proof_config_rejects_over_max_len() {
     let (_, serialized) = create_valid_range_proof();
     // A config whose cap is one byte below the real proof rejects it before
-    // parsing; the default config (32 MiB) accepts it.
+    // parsing; the default config accepts it.
     let tight = ProofConfig::builder()
         .max_decompressed_len(serialized.len() - 1)
         .build();

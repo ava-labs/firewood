@@ -1728,6 +1728,12 @@ typedef struct DatabaseHandleArgs {
    * Note: `revisions` must be > `deferred_persistence_commit_count`.
    */
   uint64_t deferred_persistence_commit_count;
+  /**
+   * Proof size limits. A `0` value for any field uses the default.
+   */
+  size_t proof_target_size;
+  size_t proof_max_decompressed_len;
+  size_t proof_max_compression_ratio;
 } DatabaseHandleArgs;
 
 /**

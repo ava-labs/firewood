@@ -106,9 +106,30 @@ pub struct DatabaseHandleArgs<'a> {
     ///
     /// Note: `revisions` must be > `deferred_persistence_commit_count`.
     pub deferred_persistence_commit_count: u64,
+
+    /// Proof size limits. A `0` value for any field uses the default.
+    pub proof_target_size: usize,
+    pub proof_max_decompressed_len: usize,
+    pub proof_max_compression_ratio: usize,
 }
 
 impl DatabaseHandleArgs<'_> {
+    /// Builds a [`ProofConfig`] from the args, using the default for any field
+    /// left `0`.
+    fn as_proof_config(&self) -> ProofConfig {
+        let mut cfg = ProofConfig::default();
+        if self.proof_target_size != 0 {
+            cfg.target_size = self.proof_target_size;
+        }
+        if self.proof_max_decompressed_len != 0 {
+            cfg.max_decompressed_len = self.proof_max_decompressed_len;
+        }
+        if self.proof_max_compression_ratio != 0 {
+            cfg.max_compression_ratio = self.proof_max_compression_ratio;
+        }
+        cfg
+    }
+
     fn as_rev_manager_config(&self) -> Result<RevisionManagerConfig, api::Error> {
         let cache_read_strategy = match self.strategy {
             0 => firewood::manager::CacheReadStrategy::WritesOnly,
@@ -166,6 +187,7 @@ impl DatabaseHandle {
             .truncate(args.truncate)
             .manager(args.as_rev_manager_config()?)
             .root_store(args.root_store)
+            .proof(args.as_proof_config())
             .build();
 
         let path = args
@@ -193,7 +215,7 @@ impl DatabaseHandle {
         self.db.root_hash()
     }
 
-    /// The size limits applied when decoding serialized proofs.
+    /// The size limits applied when serializing/deserializing proofs.
     #[must_use]
     pub const fn proof_config(&self) -> ProofConfig {
         self.db.proof_config()
