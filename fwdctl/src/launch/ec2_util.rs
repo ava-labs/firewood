@@ -28,6 +28,8 @@ const UBUNTU_NOBLE_AMI_NAME_PATTERN: &str =
     "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-{arch}-server-*";
 /// Root EBS volume size (GiB) for launched benchmark instances.
 const ROOT_VOLUME_SIZE_GIB: i32 = 50;
+/// Tag key identifying the AWS caller responsible for the instance.
+const OWNER_TAG_KEY: &str = "Owner";
 /// Tag key used to identify instances managed by `fwdctl`.
 const MANAGED_BY_TAG_KEY: &str = "ManagedBy";
 /// Tag value used to identify instances managed by `fwdctl`.
@@ -135,6 +137,7 @@ pub async fn launch_instance(
     let instance_name = build_instance_name(opts);
     let username = get_aws_username().await;
     let tags = build_tags(opts, &instance_name, &username);
+    let owner_tag = Tag::builder().key(OWNER_TAG_KEY).value(&username).build();
     let root_device_name = ami_root_device_name(ec2, ami_id).await?;
 
     let root_volume = BlockDeviceMapping::builder()
@@ -161,6 +164,12 @@ pub async fn launch_instance(
                 .set_tags(Some(tags))
                 .build(),
         );
+    request = request.tag_specifications(
+        TagSpecification::builder()
+            .resource_type(ResourceType::Volume)
+            .set_tags(Some(vec![owner_tag]))
+            .build(),
+    );
 
     if let Some(key) = &opts.key_name {
         request = request.key_name(key);
@@ -175,7 +184,12 @@ pub async fn launch_instance(
     }
 
     info!("Requesting EC2 instance: {}", opts.instance_type);
-    let response = request.send().await?;
+    // EC2 applies TagSpecifications as part of RunInstances. If tagging is not
+    // authorized, the request fails instead of creating an unowned instance.
+    let response = request
+        .send()
+        .await
+        .map_err(|error| LaunchError::OwnerTag(super::format_aws_sdk_error(&error)))?;
 
     response
         .instances()
@@ -209,6 +223,7 @@ fn build_tags(opts: &DeployOptions, instance_name: &str, username: &str) -> Vec<
     let mut tags = vec![
         tag("Name", instance_name),
         tag("Component", "firewood"),
+        tag(OWNER_TAG_KEY, username),
         tag("ManagedBy", "fwdctl"),
         tag("LaunchedBy", username),
     ];
