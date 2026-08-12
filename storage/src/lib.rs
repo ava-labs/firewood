@@ -80,6 +80,7 @@ pub use path::{
     ComponentIter, IntoSplitPath, JoinedPath, PackedBytes, PackedPathComponents, PackedPathRef,
     PartialPath, PathBuf, PathCommonPrefix, PathComponent, PathComponentSliceExt, PathGuard,
     SplitPath, TriePath, TriePathAsPackedBytes, TriePathFromPackedBytes, TriePathFromUnpackedBytes,
+    prefix_successor,
 };
 pub use trie_hash::{InvalidTrieHashLength, TrieHash};
 pub use tries::{

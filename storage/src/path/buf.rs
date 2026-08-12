@@ -204,3 +204,68 @@ impl Extend<PathComponent> for PathGuard<'_> {
         self.buf.extend(iter);
     }
 }
+
+/// Returns the smallest nibble path that sorts after every path carrying
+/// `prefix`, or `None` when no such path exists (the prefix is empty or
+/// all-`F`, so paths carrying it extend to the top of the key space).
+///
+/// Trailing maximal (`0xF`) components carry out of the increment and are
+/// dropped, so the result can be shorter than the input and its component
+/// count can change parity. Interpreted as a prefix, the returned path is
+/// the exclusive upper bound of the key span `prefix` names.
+#[must_use]
+pub fn prefix_successor(prefix: &[PathComponent]) -> Option<PathBuf> {
+    for (index, component) in prefix.iter().enumerate().rev() {
+        if let Some(next) = component.checked_next() {
+            let mut successor: PathBuf = prefix.iter().take(index).copied().collect();
+            successor.push(next);
+            return Some(successor);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn components(nibbles: &[u8]) -> PathBuf {
+        nibbles
+            .iter()
+            .map(|&n| PathComponent::try_new(n).expect("test nibble in range"))
+            .collect()
+    }
+
+    #[test]
+    fn successor_increments_the_last_component() {
+        assert_eq!(
+            prefix_successor(&components(&[0xA, 0x7, 0x1])),
+            Some(components(&[0xA, 0x7, 0x2]))
+        );
+    }
+
+    #[test]
+    fn successor_carries_out_of_trailing_max_components() {
+        // Trailing 0xF components are dropped by the carry, so the result is
+        // shorter than the input and its parity flips.
+        assert_eq!(
+            prefix_successor(&components(&[0xA, 0xF])),
+            Some(components(&[0xB]))
+        );
+        assert_eq!(
+            prefix_successor(&components(&[0xA, 0xF, 0xF])),
+            Some(components(&[0xB]))
+        );
+    }
+
+    #[test]
+    fn successor_of_an_all_max_prefix_is_none() {
+        assert_eq!(prefix_successor(&components(&[0xF, 0xF])), None);
+    }
+
+    #[test]
+    fn successor_of_the_empty_prefix_is_none() {
+        // The empty prefix covers the entire key space; nothing sorts above it.
+        assert_eq!(prefix_successor(&[]), None);
+    }
+}

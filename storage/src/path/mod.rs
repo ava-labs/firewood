@@ -7,7 +7,7 @@ mod joined;
 mod packed;
 mod split;
 
-pub use self::buf::{PartialPath, PathBuf, PathGuard};
+pub use self::buf::{PartialPath, PathBuf, PathGuard, prefix_successor};
 pub use self::component::{ComponentIter, PathComponent, PathComponentSliceExt};
 pub use self::joined::JoinedPath;
 pub use self::packed::{PackedBytes, PackedPathComponents, PackedPathRef};
