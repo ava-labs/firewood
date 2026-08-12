@@ -1,4 +1,4 @@
-// Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2026, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
 //! Tests for size-targeted streaming proof generation.
@@ -7,6 +7,8 @@
     clippy::arithmetic_side_effects,
     reason = "test-only index and size arithmetic on small, bounded values"
 )]
+
+use test_case::test_case;
 
 use super::init_merkle;
 
@@ -22,10 +24,9 @@ fn test_kvs(n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
     (0..n)
         .map(|_| {
             let key: Vec<u8> = (0..32).map(|_| (rand() & 0xFF) as u8).collect();
-            // First byte fixed below 0xC0 so no value can parse as an RLP
-            // list: ethhash's account handling re-encodes values that look
-            // like account RLP, which would break the byte-equality
-            // assertions here.
+            // First byte fixed below 0xC0 so no value can parse as an RLP list:
+            // ethhash re-encodes values that look like account RLP, which would
+            // break the byte-equality assertions here.
             let value: Vec<u8> = std::iter::once(0x42u8)
                 .chain((0..(8 + (rand() % 64) as usize)).map(|_| (rand() & 0xFF) as u8))
                 .collect();
@@ -35,8 +36,7 @@ fn test_kvs(n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
 }
 
 fn modified_kvs(base: &[(Vec<u8>, Vec<u8>)]) -> Vec<(Vec<u8>, Vec<u8>)> {
-    // Modify every 3rd value, delete every 7th key, add fresh keys — a
-    // realistic diff shape.
+    // Modify every 3rd value, delete every 7th key, add fresh keys.
     let mut out: Vec<(Vec<u8>, Vec<u8>)> = base
         .iter()
         .enumerate()
@@ -59,22 +59,24 @@ fn modified_kvs(base: &[(Vec<u8>, Vec<u8>)]) -> Vec<(Vec<u8>, Vec<u8>)> {
     out
 }
 
-#[test]
-fn test_sized_fits_and_matches_plain_api() {
+// A tiny budget forces a single entry that can't fit (progress guarantee); a
+// normal budget exercises the fit-and-fill path.
+#[test_case(512)]
+#[test_case(32 * 1024)]
+fn test_range_sized_fits_and_matches_plain_api(budget: usize) {
     let kvs = test_kvs(2000);
     let merkle = init_merkle(kvs.iter().map(|(k, v)| (k.clone(), v.clone())));
-    let budget = 32 * 1024;
 
     let sized = merkle
         .range_proof_sized(None, budget, None)
         .expect("sized proof");
+    let kv_count = sized.proof.key_values().len();
+    assert!(kv_count >= 1, "must return at least one kv");
     assert!(
-        sized.wire.len() <= budget,
-        "{} > {budget}",
+        sized.wire.len() <= budget || kv_count == 1,
+        "{} > {budget} with {kv_count} kvs",
         sized.wire.len()
     );
-    let kv_count = sized.proof.key_values().len();
-    assert!(kv_count >= 1);
 
     // Byte-equivalence with the plain API at the same kv count.
     let reference = merkle
@@ -82,14 +84,47 @@ fn test_sized_fits_and_matches_plain_api() {
         .expect("reference proof");
     let mut ref_wire = Vec::new();
     reference.write_to_vec(&mut ref_wire);
+    assert_eq!(ref_wire, sized.wire, "sized proof differs from plain API");
+}
+
+#[test_case(512)]
+#[test_case(16 * 1024)]
+fn test_change_sized_fits_and_matches_plain_api(budget: usize) {
+    let base = test_kvs(1500);
+    let source = init_merkle(base.iter().map(|(k, v)| (k.clone(), v.clone())));
+    let new = modified_kvs(&base);
+    let target = init_merkle(new.iter().map(|(k, v)| (k.clone(), v.clone())));
+
+    let sized = target
+        .change_proof_sized(source.nodestore(), None, budget, None)
+        .expect("sized change proof");
+    let op_count = sized.proof.batch_ops().len();
+    assert!(op_count >= 1, "must return at least one op");
+    assert!(
+        sized.wire.len() <= budget || op_count == 1,
+        "{} > {budget} with {op_count} ops",
+        sized.wire.len()
+    );
+
+    let reference = target
+        .change_proof(
+            None,
+            None,
+            source.nodestore(),
+            std::num::NonZeroUsize::new(op_count),
+        )
+        .expect("reference change proof");
+    let mut ref_wire = Vec::new();
+    reference.write_to_vec(&mut ref_wire);
     assert_eq!(
         ref_wire, sized.wire,
-        "sized proof differs from plain API at kv_count={kv_count}"
+        "sized change proof differs from plain API"
     );
 }
 
-#[test]
-fn test_sized_paging_covers_keyspace() {
+#[test_case(8 * 1024)]
+#[test_case(24 * 1024)]
+fn test_range_sized_paging_covers_keyspace(budget: usize) {
     let kvs = test_kvs(3000);
     // Later inserts overwrite earlier ones; mirror that with a BTreeMap.
     let sorted: Vec<(Vec<u8>, Vec<u8>)> = kvs
@@ -99,7 +134,6 @@ fn test_sized_paging_covers_keyspace() {
         .into_iter()
         .collect();
     let merkle = init_merkle(kvs.iter().map(|(k, v)| (k.clone(), v.clone())));
-    let budget = 24 * 1024;
 
     let mut seen = 0usize;
     let mut start: Option<Vec<u8>> = None;
@@ -122,13 +156,12 @@ fn test_sized_paging_covers_keyspace() {
         if sized.natural_end {
             break;
         }
-        let last = sized
+        let mut next = sized
             .proof
             .key_values()
             .last()
             .map(|(k, _)| k.to_vec())
             .expect("non-empty chunk");
-        let mut next = last;
         next.push(0);
         start = Some(next);
         assert!(chunks < 1000, "runaway paging");
@@ -137,62 +170,12 @@ fn test_sized_paging_covers_keyspace() {
     assert!(chunks > 1, "budget should force multiple chunks");
 }
 
-#[test]
-fn test_sized_single_kv_exceeding_budget_still_progresses() {
-    let kvs = [
-        (vec![1u8; 32], vec![7u8; 4096]),
-        (vec![2u8; 32], vec![8u8; 4096]),
-    ];
-    let merkle = init_merkle(kvs.iter().map(|(k, v)| (k.clone(), v.clone())));
-    let sized = merkle
-        .range_proof_sized(None, 512, None)
-        .expect("sized proof");
-    assert!(
-        !sized.proof.key_values().is_empty(),
-        "must return at least one kv to make progress"
-    );
-}
-
-#[test]
-fn test_change_sized_fits_and_matches_plain_api() {
-    let base = test_kvs(1500);
-    let new = modified_kvs(&base);
-    let source = init_merkle(base.iter().map(|(k, v)| (k.clone(), v.clone())));
-    let target = init_merkle(new.iter().map(|(k, v)| (k.clone(), v.clone())));
-    let budget = 16 * 1024;
-
-    let sized = target
-        .change_proof_sized(source.nodestore(), None, budget, None)
-        .expect("sized change proof");
-    assert!(
-        sized.wire.len() <= budget,
-        "{} > {budget}",
-        sized.wire.len()
-    );
-    let op_count = sized.proof.batch_ops().len();
-    assert!(op_count >= 1);
-
-    let reference = target
-        .change_proof(
-            None,
-            None,
-            source.nodestore(),
-            std::num::NonZeroUsize::new(op_count),
-        )
-        .expect("reference change proof");
-    let mut ref_wire = Vec::new();
-    reference.write_to_vec(&mut ref_wire);
-    assert_eq!(
-        ref_wire, sized.wire,
-        "sized change proof differs from plain API at op_count={op_count}"
-    );
-}
-
-#[test]
-fn test_change_sized_paging_covers_diff() {
+#[test_case(4 * 1024)]
+#[test_case(8 * 1024)]
+fn test_change_sized_paging_covers_diff(budget: usize) {
     let base = test_kvs(2000);
-    let new = modified_kvs(&base);
     let source = init_merkle(base.iter().map(|(k, v)| (k.clone(), v.clone())));
+    let new = modified_kvs(&base);
     let target = init_merkle(new.iter().map(|(k, v)| (k.clone(), v.clone())));
 
     // Reference diff: one unbounded change proof.
@@ -202,7 +185,6 @@ fn test_change_sized_paging_covers_diff() {
     let expected = full.batch_ops();
     assert!(expected.len() > 100, "diff should be non-trivial");
 
-    let budget = 8 * 1024;
     let mut seen = 0usize;
     let mut start: Option<Vec<u8>> = None;
     let mut chunks = 0;
@@ -211,10 +193,9 @@ fn test_change_sized_paging_covers_diff() {
             .change_proof_sized(source.nodestore(), start.as_deref(), budget, None)
             .expect("sized change proof");
         for (i, op) in sized.proof.batch_ops().iter().enumerate() {
-            let exp = &expected[seen + i];
             assert_eq!(
                 format!("{op:?}"),
-                format!("{exp:?}"),
+                format!("{:?}", expected[seen + i]),
                 "chunk {chunks} op {i} out of sequence"
             );
         }
@@ -223,13 +204,12 @@ fn test_change_sized_paging_covers_diff() {
         if sized.natural_end {
             break;
         }
-        let last = sized
+        let mut next = sized
             .proof
             .batch_ops()
             .last()
             .map(|op| op.key().to_vec())
             .expect("non-empty chunk");
-        let mut next = last;
         next.push(0);
         start = Some(next);
         assert!(chunks < 1000, "runaway paging");

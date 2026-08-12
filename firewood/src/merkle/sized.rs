@@ -1,4 +1,4 @@
-// Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2026, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
 //! Size-targeted proof generation: the largest range/change proof that fits a
@@ -89,15 +89,15 @@ fn edge_overhead(empty_wire_len: usize) -> u64 {
 /// Grows to fill the budget (correcting the ratio estimate against the real
 /// wire length), then shrinks to fit. It never grows after shrinking: the
 /// iterator sits past the pre-shrink tail, so re-growing would skip a gap.
-fn stream_sized<Item, Pf>(
+fn stream_sized<Item, BuiltProof>(
     mut items: impl Iterator<Item = Result<Item, api::Error>>,
     budget: usize,
     mut ratio: f64,
     fixed: u64,
     cost: impl Fn(&Item) -> u64,
-    build: impl Fn(&[Item], bool) -> Result<Pf, api::Error>,
-    to_wire: impl Fn(&Pf) -> Vec<u8>,
-) -> Result<(Pf, Vec<u8>, bool), api::Error> {
+    build: impl Fn(&[Item], bool) -> Result<BuiltProof, api::Error>,
+    to_wire: impl Fn(&BuiltProof) -> Vec<u8>,
+) -> Result<(BuiltProof, Vec<u8>, bool), api::Error> {
     let mut kept: Vec<Item> = Vec::new();
     let mut body = 0u64;
     let mut natural = true;
