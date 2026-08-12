@@ -137,7 +137,6 @@ pub async fn launch_instance(
     let instance_name = build_instance_name(opts);
     let username = get_aws_username().await;
     let tags = build_tags(opts, &instance_name, &username);
-    let owner_tag = Tag::builder().key(OWNER_TAG_KEY).value(&username).build();
     let root_device_name = ami_root_device_name(ec2, ami_id).await?;
 
     let root_volume = BlockDeviceMapping::builder()
@@ -161,19 +160,19 @@ pub async fn launch_instance(
         .tag_specifications(
             TagSpecification::builder()
                 .resource_type(ResourceType::Instance)
-                .set_tags(Some(tags))
+                .set_tags(Some(tags.clone()))
                 .build(),
         )
         .tag_specifications(
             TagSpecification::builder()
                 .resource_type(ResourceType::Volume)
-                .set_tags(Some(vec![owner_tag.clone()]))
+                .set_tags(Some(tags.clone()))
                 .build(),
         )
         .tag_specifications(
             TagSpecification::builder()
                 .resource_type(ResourceType::NetworkInterface)
-                .set_tags(Some(vec![owner_tag]))
+                .set_tags(Some(tags))
                 .build(),
         );
 
