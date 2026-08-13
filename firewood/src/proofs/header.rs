@@ -38,12 +38,16 @@ const _: () = {
     assert!(size_of::<Header>() == 32);
 };
 
-impl From<ProofType> for Header {
-    fn from(proof_type: ProofType) -> Self {
+impl From<(ProofType, NodeHashAlgorithm)> for Header {
+    fn from((proof_type, hash_mode): (ProofType, NodeHashAlgorithm)) -> Self {
+        let hash_mode = match hash_mode {
+            NodeHashAlgorithm::MerkleDB => magic::MERKLEDB_HASH_MODE,
+            NodeHashAlgorithm::Ethereum => magic::ETHEREUM_HASH_MODE,
+        };
         Self {
             magic: *magic::PROOF_HEADER,
             version: magic::PROOF_VERSION,
-            hash_mode: magic::HASH_MODE,
+            hash_mode,
             branch_factor: magic::BRANCH_FACTOR,
             proof_type: proof_type as u8,
             _reserved: [0; 20],
