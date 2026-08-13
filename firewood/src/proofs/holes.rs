@@ -20,10 +20,11 @@ use firewood_storage::{Children, PathBuf, TriePathAsPackedBytes, prefix_successo
 /// conversions instead of exposing the prefix and leaving them to callers.
 /// `#[non_exhaustive]` here is belt-and-braces: the private field and
 /// `pub(crate)` constructor already block external construction and exhaustive
-/// matching. It is kept because the merge gates require it, and because it
-/// documents that the internal representation is not part of the contract.
-/// Do not delete it as redundant.
+/// matching. It documents that the internal representation is not part of
+/// the contract.
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Deliberate, not redundant with the private field / pub(crate) constructor
+// above: do not delete this as redundant.
 #[non_exhaustive]
 pub struct KeySpan {
     prefix: PathBuf,
@@ -31,9 +32,13 @@ pub struct KeySpan {
 
 impl KeySpan {
     /// Creates a span from its nibble prefix.
-    // No production caller exists yet: PR2's hole-detection walk constructs
-    // these. Tests already call this, so drop the allow once that walk lands.
-    #[allow(dead_code)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "PR2's hole-detection walk is the first production caller"
+        )
+    )]
     pub(crate) const fn new(prefix: PathBuf) -> Self {
         Self { prefix }
     }
@@ -92,11 +97,14 @@ impl KeySpan {
 /// third shape is possible, because a nibble prefix is either even-length or it
 /// is not.
 #[derive(Debug, Clone, PartialEq, Eq)]
-// `Children<Box<[u8]>>` is a fixed 16-slot array (one fat pointer per nibble),
-// so `PerNibble` is unavoidably larger than `Whole`. Boxing it would trade a
-// one-time allocation for a smaller enum footprint solely to satisfy this
-// lint; that trade isn't worth making for a value returned once per call.
-#[allow(clippy::large_enum_variant)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "`Children<Box<[u8]>>` is a fixed 16-slot array (one fat pointer per nibble), so \
+              `PerNibble` is unavoidably larger than `Whole`; boxing it would not trade away an \
+              allocation (the odd arm already performs sixteen), only enum footprint, and the \
+              FFI consumer that inherits this type benefits more from a stable, directly \
+              pattern-matchable shape than from a smaller enum"
+)]
 pub enum DeletePrefixes {
     /// The nibble prefix is even-length and packs to a single byte prefix.
     Whole(Box<[u8]>),
@@ -107,7 +115,7 @@ pub enum DeletePrefixes {
 
 impl IntoIterator for DeletePrefixes {
     type Item = Box<[u8]>;
-    type IntoIter = Box<dyn Iterator<Item = Box<[u8]>>>;
+    type IntoIter = Box<dyn Iterator<Item = Box<[u8]>> + Send>;
 
     /// Yields the prefixes regardless of arm, for callers that only want to
     /// apply every one of them.
@@ -187,9 +195,12 @@ mod tests {
         else {
             panic!("an odd-length nibble prefix has no single byte-prefix form");
         };
+        let mut count = 0;
         for (nibble, prefix) in completions {
             assert_eq!(&*prefix, &[0xA7, 0x10 | nibble.as_u8()]);
+            count += 1;
         }
+        assert_eq!(count, 16, "one completion per nibble");
     }
 
     #[test]
@@ -206,9 +217,9 @@ mod tests {
         assert!(prefix.is_empty());
     }
 
-    /// The gate property (merge-gates § PR1): the union of the returned byte
-    /// prefixes covers exactly `as_key_range`'s half-open interval, checked
-    /// exhaustively over all 0-, 1-, and 2-byte keys plus 3-byte spot keys.
+    /// The union of the returned byte prefixes covers exactly
+    /// `as_key_range`'s half-open interval, checked exhaustively over all 0-,
+    /// 1-, and 2-byte keys plus 3-byte spot keys.
     fn assert_prefixes_match_range(span: &KeySpan) {
         let (lower, upper) = span.as_key_range();
         let prefixes: Vec<Box<[u8]>> = span.delete_prefixes().into_iter().collect();
@@ -216,7 +227,7 @@ mod tests {
         let mut keys: Vec<Vec<u8>> = vec![Vec::new()];
         keys.extend((0u8..=u8::MAX).map(|b| vec![b]));
         keys.extend((0u16..=u16::MAX).map(|k| k.to_be_bytes().to_vec()));
-        keys.extend((0u16..=u16::MAX).step_by(251).map(|k| {
+        keys.extend((0u16..=u16::MAX).step_by(16).map(|k| {
             let mut key = k.to_be_bytes().to_vec();
             key.push(0x5A);
             key
@@ -244,5 +255,7 @@ mod tests {
         assert_prefixes_match_range(&span(&[0xA, 0x7, 0x1]));
         assert_prefixes_match_range(&span(&[0xF]));
         assert_prefixes_match_range(&span(&[0xA, 0xF, 0xF]));
+        assert_prefixes_match_range(&span(&[0x0]));
+        assert_prefixes_match_range(&span(&[0xA, 0x7, 0x1, 0x3, 0x5]));
     }
 }
