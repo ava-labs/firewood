@@ -193,6 +193,14 @@ fn probe_through_an_unhashed_child_reports_unhashed() {
     // The `Child::Node` arm returns `UnhashedChild` before checking whether
     // `rest` is empty, so a probe that runs through the unhashed child
     // rather than ending on it takes the same path. Exercise that case too.
+    //
+    // The `0x6` is load-bearing, not arbitrary: nibble iteration yields the
+    // high nibble first, so the leaf's partial path from b"abc" (0x61 0x62
+    // 0x63) begins with 0x6. This probe therefore names a position under
+    // which local keys genuinely exist — the case where collapsing
+    // `UnhashedChild` into `Empty` would order the deletion of correct data.
+    // Substituting any other nibble here still reaches the same arm but
+    // silently drops that property.
     let outcome =
         descend_to_prefix(&reconstructed, &components(&[0xA, 0x6])).expect("descent succeeds");
     assert!(matches!(outcome, ProbeOutcome::UnhashedChild));

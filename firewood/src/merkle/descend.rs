@@ -23,6 +23,14 @@ pub(crate) enum ProbeOutcome {
     /// the probed prefix. A failed read of the *root* node also lands here
     /// (see the `# Errors` section on [`descend_to_prefix`]), so `Empty` is
     /// not proof that no keys exist under the probed prefix.
+    ///
+    /// Consequently `Empty` must never be the sole basis for deleting key
+    /// space. A caller that holds a `HashedNodeReader` — a strictly stronger
+    /// bound than this function's `TrieReader`, so not available here — can
+    /// separate the cases: `root_address()` and `root_hash()` come from the
+    /// nodestore's header rather than a node read, so an address present
+    /// alongside an `Empty` probe at the root means the read failed rather
+    /// than the trie being empty.
     Empty,
     /// The probe ends exactly on a child edge: this is the parent's stored
     /// hash for that child, usable verbatim in either hash mode. Under
@@ -48,16 +56,24 @@ pub(crate) enum ProbeOutcome {
     /// disagree with the canonical one. `EdgeExact` is immune to this: it
     /// returns the parent's already-stored commitment rather than re-deriving
     /// one from a value.
+    ///
+    /// Note that the repair is driven by the node's child hashes, which is
+    /// what the paragraph above warns may be missing. The two caveats compose
+    /// rather than conflict: an absent child hash is an error in either path,
+    /// never a value to substitute around.
     AtNode {
         /// The node covering the probed prefix.
         node: SharedNode,
         /// How many of the node's partial-path components the probe consumed.
         consumed: usize,
     },
-    /// The descent needed a hash that does not exist: the probed path runs
-    /// through or ends at a [`Child::Node`], which carries no hash. Distinct
-    /// from [`Self::Empty`] because reading "unhashed" as "no local keys"
-    /// would let a caller order the deletion of locally correct data.
+    /// The descent could not establish a hash for the probed position. The
+    /// only reachable cause is a probed path that runs through or ends at a
+    /// [`Child::Node`], which carries no hash; this is also the outcome the
+    /// descent falls back to if one of its own structural invariants is ever
+    /// broken. Distinct from [`Self::Empty`] because reading "unhashed" as
+    /// "no local keys" would let a caller order the deletion of locally
+    /// correct data.
     UnhashedChild,
 }
 
@@ -66,9 +82,11 @@ pub(crate) enum ProbeOutcome {
 /// # Errors
 ///
 /// Reads below the root propagate any [`FileIoError`] from the underlying
-/// store. A failure to read the *root* node does not: the underlying
-/// `root_node` accessor returns an `Option` and discards the error, so that
-/// case is reported as [`ProbeOutcome::Empty`] instead of an error.
+/// store. A failure to read the *root* node does not: the `root_node`
+/// accessor returns an `Option`, so any store that reads the root from disk
+/// has no way to surface the error, and that case is reported as
+/// [`ProbeOutcome::Empty`] instead. (Stores that hold their root in memory do
+/// no such read and have no error to lose.)
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "PR2's subtree_hash is the first caller")
