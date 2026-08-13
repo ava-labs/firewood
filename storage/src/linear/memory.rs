@@ -11,7 +11,7 @@
 )]
 
 use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
-use crate::NodeHashAlgorithm;
+use crate::{HashMode, NodeHashAlgorithm};
 use firewood_metrics::firewood_counter;
 use parking_lot::Mutex;
 use std::io::Cursor;
@@ -30,6 +30,15 @@ impl MemStore {
         Self {
             bytes: Mutex::new(bytes),
             node_hash_algorithm,
+        }
+    }
+
+    /// Create a new, empty [`MemStore`] with the specified [`HashMode`].
+    #[must_use]
+    pub const fn default<H: HashMode>() -> Self {
+        Self {
+            bytes: Mutex::new(Vec::new()),
+            node_hash_algorithm: H::ALGORITHM,
         }
     }
 }
