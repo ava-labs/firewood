@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786519998671,
+  "lastUpdate": 1786606270534,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -8788,6 +8788,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 48.28093116861322,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "rodrigo",
+            "username": "RodrigoVillar",
+            "email": "77309055+RodrigoVillar@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "e7c2aecd2c1bb77cea26ea6e2312c7bc6ce5597b",
+          "message": "refactor(storage): fold HashOrRlp into HashType [4/9] (#2150)\n\n## Why this should be merged\n\nAfter `HashType` becomes the shared hash-or-inline-RLP representation,\nkeeping the older `HashOrRlp` type and the custom `IntoHashType`\nconversion trait leaves two names and two conversion paths for the same\nconcept.\n\nIn the stack, this removes transitional duplication created by reaching\nthe shared representation in PR 3. It leaves one hash-reference type and\nstandard conversion path for the proof and typed-database work in PRs 5\nand 6, while remaining a focused API cleanup rather than mixing those\nhigher-level changes into the representation PR.\n\n## How this works\n\nThis change moves the remaining `HashOrRlp` implementation directly\nonto`HashType`, removes the duplicate type and module, and replaces\n`IntoHashType` call sites with standard `From`/`Into` conversions or\ndirect `HashType` values. It also moves `TrieHash` into its own\nmode-independent module so digest bytes remain distinct from the\nrepresentation used for child references.\n\n## How this was tested\n\nCI.\n\n## Breaking Changes\n\n- [ ] firewood\n- [ ] firewood-storage\n- [ ] firewood-ffi (C api)\n- [ ] firewood-go (Go api)\n- [ ] fwdctl",
+          "timestamp": "2026-08-12T19:56:20Z",
+          "url": "https://github.com/ava-labs/firewood/commit/e7c2aecd2c1bb77cea26ea6e2312c7bc6ce5597b"
+        },
+        "date": 1786606269530,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 171.02018324723193,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5847.263059906618,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 73.31483527387475,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5727.505186813948,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 44.77776528395184,
             "unit": "block_accept_ms/ggas"
           }
         ]
