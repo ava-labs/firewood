@@ -38,6 +38,15 @@ const _: () = {
     assert!(size_of::<Header>() == 32);
 };
 
+/// Fields resolved from a successfully validated proof header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ValidatedHeader {
+    /// The type of proof encoded in the body.
+    pub(super) proof_type: ProofType,
+    /// The node-hashing algorithm used to encode the proof body.
+    pub(super) node_hash_algorithm: NodeHashAlgorithm,
+}
+
 impl From<(ProofType, NodeHashAlgorithm)> for Header {
     fn from((proof_type, hash_mode): (ProofType, NodeHashAlgorithm)) -> Self {
         let hash_mode = match hash_mode {
@@ -56,8 +65,7 @@ impl From<(ProofType, NodeHashAlgorithm)> for Header {
 }
 
 impl Header {
-    /// Validates the header, returning the discovered proof type and the
-    /// resolved [`NodeHashAlgorithm`] the proof was encoded with.
+    /// Validates the header and returns its resolved fields.
     ///
     /// If `expected_type` is `Some`, the proof type must match (in which case the
     /// returned proof type can be ignored). The resolved algorithm is taken from
@@ -75,7 +83,7 @@ impl Header {
     pub(super) fn validate(
         &self,
         expected_type: Option<ProofType>,
-    ) -> Result<(ProofType, NodeHashAlgorithm), InvalidHeader> {
+    ) -> Result<ValidatedHeader, InvalidHeader> {
         if self.magic != *magic::PROOF_HEADER {
             return Err(InvalidHeader::InvalidMagic { found: self.magic });
         }
@@ -110,7 +118,10 @@ impl Header {
                     expected: Some(expected),
                 })
             }
-            (Some(found), _) => Ok((found, algorithm)),
+            (Some(found), _) => Ok(ValidatedHeader {
+                proof_type: found,
+                node_hash_algorithm: algorithm,
+            }),
         }
     }
 }

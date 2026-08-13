@@ -37,7 +37,7 @@ impl FrozenRangeProof {
         let mut reader = ProofReader::new(data);
 
         let header = reader.read_header()?;
-        let (_, algorithm) = header
+        let validated_header = header
             .validate(Some(ProofType::Range))
             .map_err(ReadError::InvalidHeader)?;
 
@@ -45,7 +45,10 @@ impl FrozenRangeProof {
             0 => {
                 // Body reads dispatch on the proof's own self-describing mode
                 // so this binary reads either wire format.
-                let mut reader = V0Reader::new(reader.into_body(algorithm), header);
+                let mut reader = V0Reader::new(
+                    reader.into_body(validated_header.node_hash_algorithm),
+                    header,
+                );
                 let this = reader.read_v0_item()?;
                 if reader.remainder().is_empty() {
                     Ok(this)
@@ -100,7 +103,7 @@ impl FrozenChangeProof {
         let mut reader = ProofReader::new(data);
 
         let header = reader.read_header()?;
-        let (_, algorithm) = header
+        let validated_header = header
             .validate(Some(ProofType::Change))
             .map_err(ReadError::InvalidHeader)?;
 
@@ -114,7 +117,10 @@ impl FrozenChangeProof {
 
         // Body reads dispatch on the proof's own self-describing mode so this
         // binary reads either wire format.
-        let mut reader = V0Reader::new(reader.into_body(algorithm), header);
+        let mut reader = V0Reader::new(
+            reader.into_body(validated_header.node_hash_algorithm),
+            header,
+        );
         let this = reader.read_v0_item()?;
         if reader.remainder().is_empty() {
             Ok(this)

@@ -1052,10 +1052,10 @@ mod box_array_deserialization_tests {
         // production validate-then-into_body flow. (These tests exercise
         // mode-independent reads, so any consistent mode works.)
         let header = Header::from((ProofType::Range, DefaultHashMode::ALGORITHM));
-        let (_, algorithm) = header
+        let validated_header = header
             .validate(Some(ProofType::Range))
             .expect("default header should be valid");
-        let inner = ProofReader::new(data).into_body(algorithm);
+        let inner = ProofReader::new(data).into_body(validated_header.node_hash_algorithm);
         V0Reader::new(inner, header)
     }
 
@@ -1162,13 +1162,13 @@ fn test_header_validate_accepts_both_hash_modes() {
             .read_header()
             .expect("header should parse successfully");
 
-        let (proof_type, algorithm) = header
+        let validated_header = header
             .validate(Some(ProofType::Range))
             .expect("hash_mode should validate");
 
-        assert_eq!(proof_type, ProofType::Range);
+        assert_eq!(validated_header.proof_type, ProofType::Range);
         assert_eq!(
-            algorithm, expected,
+            validated_header.node_hash_algorithm, expected,
             "hash_mode {byte} should resolve to {expected:?}"
         );
     }
