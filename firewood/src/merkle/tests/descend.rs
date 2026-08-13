@@ -56,8 +56,8 @@ fn probe_at_child_edge_returns_stored_hash() {
     let merkle = fixture();
     let outcome = descend_to_prefix(merkle.nodestore(), &components(&[0xA]))
         .expect("descent reads no disk in this fixture");
-    // Assert the payload, not just the variant: PR2 uses this hash verbatim
-    // as the subtree commitment for the probed position, so "it is the
+    // Assert the payload, not just the variant: a caller forming this
+    // position's subtree commitment uses this hash verbatim, so "it is the
     // parent's stored hash for that slot" is the actual contract.
     let ProbeOutcome::EdgeExact(hash) = outcome else {
         panic!("a probe ending on a child edge yields EdgeExact");
@@ -84,18 +84,44 @@ fn probe_mid_edge_lands_on_the_node_with_partial_consumption() {
     let merkle = fixture();
     // The leaf under B has partial path [0,5,5]; probing [B,0] ends inside
     // that edge with two components unconsumed — the genuinely mid-edge
-    // case, where a caller must re-encode with the adjusted split.
+    // case, where a caller must re-encode with the adjusted split. This test
+    // is the sole guard against swapping the two `if` checks in the descent
+    // loop, so assert the node's full partial path rather than just
+    // `consumed`, which the end-of-edge test asserts identically.
     let outcome =
         descend_to_prefix(merkle.nodestore(), &components(&[0xB, 0x0])).expect("descent succeeds");
-    assert!(matches!(outcome, ProbeOutcome::AtNode { consumed: 1, .. }));
+    let ProbeOutcome::AtNode { node, consumed } = outcome else {
+        panic!("a probe ending mid-edge yields AtNode");
+    };
+    assert_eq!(consumed, 1);
+    assert_eq!(
+        node.partial_path().as_components(),
+        &components(&[0x0, 0x5, 0x5])[..]
+    );
 }
 
 #[test]
 fn probe_diverging_inside_a_compressed_path_is_empty() {
     let merkle = fixture();
-    // Child A's branch has partial [7]; probing [A,8] diverges inside it.
+    // Child A's branch has partial [7]; both probes below diverge inside it,
+    // but they pin down different things.
+
+    // [A,8] diverges into slot 8, which is absent regardless of the
+    // divergence check: even without it, falling through to child selection
+    // on the diverged nibble would hit `None` and return `Empty` anyway.
+    // This probe alone would stay green if the divergence check were
+    // deleted.
     let outcome =
         descend_to_prefix(merkle.nodestore(), &components(&[0xA, 0x8])).expect("descent succeeds");
+    assert!(matches!(outcome, ProbeOutcome::Empty));
+
+    // [A,1] diverges into slot 1, which is occupied (the fixture holds key
+    // 0xA711): without the divergence check, falling through would treat the
+    // diverged nibble as a child selector, find slot 1 populated, and return
+    // `EdgeExact` — a hash for a position that holds no keys under the
+    // probed prefix. This is the case that actually pins the check.
+    let outcome =
+        descend_to_prefix(merkle.nodestore(), &components(&[0xA, 0x1])).expect("descent succeeds");
     assert!(matches!(outcome, ProbeOutcome::Empty));
 }
 
@@ -164,12 +190,17 @@ fn probe_through_an_unhashed_child_reports_unhashed() {
     let outcome = descend_to_prefix(&reconstructed, &components(&[0xA])).expect("descent succeeds");
     assert!(matches!(outcome, ProbeOutcome::UnhashedChild));
 
+    // The `Child::Node` arm returns `UnhashedChild` before checking whether
+    // `rest` is empty, so a probe that runs through the unhashed child
+    // rather than ending on it takes the same path. Exercise that case too.
+    let outcome =
+        descend_to_prefix(&reconstructed, &components(&[0xA, 0x6])).expect("descent succeeds");
+    assert!(matches!(outcome, ProbeOutcome::UnhashedChild));
+
     // After forcing the hash, Child::Node is swapped for MaybePersisted and
-    // the same probe resolves normally.
+    // the same probe resolves normally. `rest` is empty and the slot now
+    // carries a hash, so the outcome is deterministically EdgeExact.
     assert!(reconstructed.root_hash().is_some());
     let outcome = descend_to_prefix(&reconstructed, &components(&[0xA])).expect("descent succeeds");
-    assert!(matches!(
-        outcome,
-        ProbeOutcome::EdgeExact(_) | ProbeOutcome::AtNode { .. }
-    ));
+    assert!(matches!(outcome, ProbeOutcome::EdgeExact(_)));
 }
