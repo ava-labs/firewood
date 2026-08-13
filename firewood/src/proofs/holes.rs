@@ -23,8 +23,9 @@ use firewood_storage::{Children, PathBuf, TriePathAsPackedBytes, prefix_successo
 /// matching. It documents that the internal representation is not part of
 /// the contract.
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Deliberate, not redundant with the private field / pub(crate) constructor
-// above: do not delete this as redundant.
+// Kept deliberately. The private field and pub(crate) constructor below
+// already block construction; this additionally documents that the
+// representation is not contractual. Do not delete.
 #[non_exhaustive]
 pub struct KeySpan {
     prefix: PathBuf,
@@ -233,12 +234,28 @@ mod tests {
             key
         }));
 
+        let mut in_range_count = 0usize;
         for key in keys {
             let in_range =
                 key.as_slice() >= &*lower && upper.as_deref().is_none_or(|u| key.as_slice() < u);
             let covered = prefixes.iter().any(|p| key.starts_with(p));
             assert_eq!(in_range, covered, "key {key:02x?}");
+            if in_range {
+                in_range_count = in_range_count.saturating_add(1);
+            }
         }
+
+        // Without this, a span whose bounds sit outside the key universe above
+        // passes vacuously: every assertion compares `false == false` and the
+        // call advertises coverage it does not have. A span deeper than four
+        // nibbles has three-byte bounds, and the only three-byte keys here are
+        // stepped and end in a pinned byte, so unreachable spans are easy to
+        // add by accident.
+        assert!(
+            in_range_count > 0,
+            "no key in the test universe falls inside this span, so every \
+             assertion above passed vacuously"
+        );
     }
 
     #[test]
@@ -247,6 +264,11 @@ mod tests {
         assert_prefixes_match_range(&span(&[0xA, 0x7]));
         assert_prefixes_match_range(&span(&[0x0, 0x0]));
         assert_prefixes_match_range(&span(&[0xF, 0xF]));
+        // Four nibbles: both bounds are two bytes (`a713`..`a714`), so the
+        // exhaustive two-byte universe brackets the boundary exactly. This is
+        // the deep mid-byte-divergence case; its coverage depends on neither
+        // the three-byte step nor that key's pinned final byte.
+        assert_prefixes_match_range(&span(&[0xA, 0x7, 0x1, 0x3]));
     }
 
     #[test]
@@ -256,6 +278,5 @@ mod tests {
         assert_prefixes_match_range(&span(&[0xF]));
         assert_prefixes_match_range(&span(&[0xA, 0xF, 0xF]));
         assert_prefixes_match_range(&span(&[0x0]));
-        assert_prefixes_match_range(&span(&[0xA, 0x7, 0x1, 0x3, 0x5]));
     }
 }
