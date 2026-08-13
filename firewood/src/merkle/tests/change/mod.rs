@@ -6,7 +6,7 @@ use crate::ChangeProofVerificationContext;
 use crate::api::{self, BatchOp, Db as DbTrait, DbView, FrozenChangeProof, HashKey, Proposal as _};
 use crate::db::{Db, DbConfig};
 use crate::merkle::verify_change_proof_root_hash;
-use firewood_storage::{NodeHashAlgorithm, PathComponentSliceExt};
+use firewood_storage::{DefaultHashMode, HashMode, PathComponentSliceExt};
 
 /// Test wrapper around [`crate::verify_change_proof_structure`] that supplies
 /// the compile-default hash mode as the expected `algorithm` (the mode every
@@ -25,7 +25,7 @@ fn verify_change_proof_structure(
         end_root,
         start_key,
         end_key,
-        NodeHashAlgorithm::compile_option(),
+        DefaultHashMode::ALGORITHM,
         max_length,
     )
 }

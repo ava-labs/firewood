@@ -25,8 +25,9 @@ use crate::{
 };
 use crate::{ProofError, ProofNode};
 use firewood_storage::{
-    Committed, DeletedNodeTracking, DenseChildren, MemStore, Mutable, NodeHashAlgorithm, NodeStore,
-    NodeStoreHeader, PathComponent, Propose, RootReader, TrieHash, ValueDigest,
+    Committed, DefaultHashMode, DeletedNodeTracking, DenseChildren, HashMode, MemStore, Mutable,
+    NodeHashAlgorithm, NodeStore, NodeStoreHeader, PathComponent, Propose, RootReader, TrieHash,
+    ValueDigest,
 };
 
 /// Test wrapper around [`crate::merkle::verify_range_proof`] that supplies the
@@ -43,7 +44,7 @@ fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         first_key,
         last_key,
         root_hash,
-        NodeHashAlgorithm::compile_option(),
+        DefaultHashMode::ALGORITHM,
         proof,
     )
 }

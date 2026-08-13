@@ -22,9 +22,9 @@ use crate::verify_change_proof_structure;
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_metrics::{firewood_counter, firewood_histogram};
 use firewood_storage::{
-    CheckOpt, CheckerReport, Committed, CommittedParentHash, FileBacked, FileIoError,
-    HashedNodeReader, ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage,
-    Reconstructed, TrieReader,
+    CheckOpt, CheckerReport, Committed, CommittedParentHash, DefaultHashMode, FileBacked,
+    FileIoError, HashMode, HashedNodeReader, ImmutableProposal, NodeHashAlgorithm, NodeStore,
+    Parentable, ReadableStorage, Reconstructed, TrieReader,
 };
 use std::io::Write;
 use std::num::NonZeroUsize;
@@ -342,7 +342,7 @@ impl Db {
             end_root.clone(),
             start_key,
             end_key,
-            NodeHashAlgorithm::compile_option(),
+            DefaultHashMode::ALGORITHM,
             max_length,
         )?;
         let parent = self.manager.current_revision();
