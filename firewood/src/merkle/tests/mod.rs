@@ -972,12 +972,13 @@ fn test_get_branch_from_nibbles_mut() {
     assert!(leaf.is_none());
 }
 
-/// `in_proven_range` decides which boundary proof nodes the reconcile loops in
-/// `verify_change_proof_root_hash` treat as in-range. Its bound conventions are
-/// easy to get wrong, so pin them directly: both bounds are inclusive, an empty
-/// `start` is −∞, and a `None` `end` is +∞. `None` is distinct from `Some(&[])`,
-/// which is the empty key itself — conflating the two put every key out of
-/// range at the upper bound.
+/// `CollapseRange::contains` decides which boundary proof nodes the reconcile
+/// loops in `verify_change_proof_root_hash` treat as in-range, and which branch
+/// values `collapse_strip` clears. Its bound conventions are easy to get wrong,
+/// so pin them directly: both bounds are inclusive, an empty `start` is −∞, and
+/// a `None` `end` is +∞. `None` is distinct from `Some(&[])`, which is the empty
+/// key itself — conflating the two put every key out of range at the upper
+/// bound.
 #[test_case(&[3], &[3], Some(&[7]), true ; "start bound is inclusive")]
 #[test_case(&[7], &[3], Some(&[7]), true ; "end bound is inclusive")]
 #[test_case(&[2], &[3], Some(&[7]), false ; "before start")]
@@ -985,6 +986,6 @@ fn test_get_branch_from_nibbles_mut() {
 #[test_case(&[7, 0], &[3], Some(&[7]), false ; "longer key extending the end bound sorts after it")]
 #[test_case(&[9, 9], &[3], None, true ; "None end is positive infinity")]
 #[test_case(&[0], &[], Some(&[]), false ; "Some(empty) is the empty key, not positive infinity")]
-fn test_in_proven_range_bounds(node: &[u8], start: &[u8], end: Option<&[u8]>, expected: bool) {
-    assert_eq!(in_proven_range(node, start, end), expected);
+fn test_collapse_range_contains(node: &[u8], start: &[u8], end: Option<&[u8]>, expected: bool) {
+    assert_eq!(CollapseRange { start, end }.contains(node), expected);
 }

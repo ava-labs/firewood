@@ -1221,18 +1221,6 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
     Ok(())
 }
 
-/// Whether a boundary proof node at `node` sits inside the proven range
-/// `[start, end]`, in nibbles. An empty `start` is −∞ and a `None` `end` is +∞.
-///
-/// Both reconcile loops in [`verify_change_proof_root_hash`] ask this same
-/// question: a node's position is in range or it is not, regardless of which
-/// proof carried it. Testing only the near bound would judge a divergent
-/// terminal beyond the far bound as in-range, and report its legitimately
-/// differing value as `UnexpectedValue`.
-fn in_proven_range(node: &[u8], start: &[u8], end: Option<&[u8]>) -> bool {
-    node >= start && end.is_none_or(|end| node <= end)
-}
-
 /// Verify that the proposal (`start_root` + `batch_ops`) is consistent with
 /// `end_root` within the proven range (phase 3 of change proof verification).
 ///
@@ -1328,6 +1316,11 @@ pub fn verify_change_proof_root_hash(
         .as_deref()
         .map(|k| NibblesIterator::new(k).collect());
 
+    let range = CollapseRange {
+        start: start_key_nibbles.as_slice(),
+        end: end_key_nibbles.as_deref(),
+    };
+
     for proof_node in start_nodes {
         proving_merkle.reconcile_branch_proof_node(proof_node, |pn, _branch_value| {
             let node_nibbles: Vec<u8> = pn.key.iter().map(|c| c.as_u8()).collect();
@@ -1335,11 +1328,7 @@ pub fn verify_change_proof_root_hash(
             // already holds the correct value, so the only way the proof node
             // and branch disagree is tampering — e.g. a dropped in-range `Put`
             // whose boundary proof still carries the omitted key's hash.
-            if in_proven_range(
-                &node_nibbles,
-                &start_key_nibbles,
-                end_key_nibbles.as_deref(),
-            ) {
+            if range.contains(&node_nibbles) {
                 Err(ProofError::UnexpectedValue)
             } else {
                 match &pn.value_digest {
@@ -1361,11 +1350,7 @@ pub fn verify_change_proof_root_hash(
             // undershoot to the nearest existing key, so at an out-of-range
             // position the proposal's branch value legitimately differs from the
             // proof's, and the proof's is adopted.
-            if in_proven_range(
-                &node_nibbles,
-                &start_key_nibbles,
-                end_key_nibbles.as_deref(),
-            ) {
+            if range.contains(&node_nibbles) {
                 Err(ProofError::UnexpectedValue)
             } else {
                 match &pn.value_digest {
@@ -1394,10 +1379,6 @@ pub fn verify_change_proof_root_hash(
     // Out-of-range children are stripped. Stripping an off-path child that
     // holds an in-range key indicates tampered operations and triggers
     // rejection.
-    let range = CollapseRange {
-        start: start_key_nibbles.as_slice(),
-        end: end_key_nibbles.as_deref(),
-    };
     for [parent, child] in start_nodes.array_windows() {
         proving_merkle.collapse_branch_to_path(&parent.key, &child.key, Some(range))?;
     }
