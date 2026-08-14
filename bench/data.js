@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786692613455,
+  "lastUpdate": 1786692659240,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -8929,6 +8929,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 48.34688436613074,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "rodrigo",
+            "username": "RodrigoVillar",
+            "email": "77309055+RodrigoVillar@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "932bd16ae7b2fb033db6a5914dd35f56bf49e1bd",
+          "message": "refactor(proofs): dispatch proof parsing on the self-describing header byte [5/9] (#2121)\n\n## Why this should be merged\n\nProofs already identify their hashing scheme in the header, but parsing\nstill depends on the binary's compile-time mode. That can decode the\nproof body with the wrong grammar and prevents one process from safely\nparsing proofs from both schemes.\n\nIn the stack, this is the first runtime dispatch boundary: proof bytes\nselect their parser from their own header, using the common\nrepresentation established by PRs 3 and 4. It deliberately stops short\nof runtime database selection; PR 6\nmakes the typed database core mode-generic, and PR 7 exposes that\ncapability to mode-agnostic callers.\n\n## How this works\n\nThis change makes header validation resolve a `NodeHashAlgorithm` and\nthreads that value into a body-phase `ProofReader`. Reads of\nmode-dependent values then dispatch on the algorithm carried by the\nreader. Unknown header values are rejected, while verification APIs take\nthe caller's expected algorithm and fail with `HashModeMismatch` before\nhashing when it differs from the proof's self-described mode.\n\nThis PR is intentionally limited to parsing and early validation. Trie\nhashing continues to use the compile-selected implementation until the\ntyped stack is genericized in the next PR. Consequently, a proof can be\nparsed regardless of its header mode in this PR, but it can only be\ncryptographically validated when that mode matches the binary's\ncompile-time mode. The database and FFI call sites therefore pass the\ncompile-selected mode as their expectation, and the mismatch guard\nrejects an opposite-mode proof before it can be hashed with the wrong\nalgorithm.\n\nPR 6 removes this binary-level restriction by dispatching proof hashing\nand the typed database stack through the supplied runtime algorithm.\nFrom that point onward, the remaining mismatch guard compares the proof\nheader with the validation context: standalone verification can use the\nproof's own mode, while database-bound change-proof verification\nrequires the proof mode to match that database's mode. PR 7 then exposes\nboth typed implementations\nthrough one runtime-selected, object-safe binary.\n\n## How this was tested\n\nAdded tests for accepting both known header modes, rejecting unknown\nmodes, decoding `HashType` with the threaded runtime mode, rejecting\nrange- and change-proof mode mismatches, and parsing hashed value\ndigests independently of the compile-time feature.\n\n## Breaking Changes\n\n- [ ] firewood\n- [ ] firewood-storage\n- [ ] firewood-ffi (C api)\n- [ ] firewood-go (Go api)\n- [ ] fwdctl",
+          "timestamp": "2026-08-14T00:08:12Z",
+          "url": "https://github.com/ava-labs/firewood/commit/932bd16ae7b2fb033db6a5914dd35f56bf49e1bd"
+        },
+        "date": 1786692657627,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 168.42628373916753,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5937.315588751248,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 109.41966517883262,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5749.742974068368,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 75.54577871869442,
             "unit": "block_accept_ms/ggas"
           }
         ]
