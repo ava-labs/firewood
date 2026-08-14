@@ -335,10 +335,12 @@ fn verify_boundary_proof<C: ProofCollection>(
 /// next request covers the remainder.
 ///
 /// The second arm costs a wasted round: a `Delete` of a key absent from both
-/// revisions is true but inert, so the reply verifies, nothing changes, and a
-/// generator can repeat it. Rejecting it would require the key to be present in
-/// the caller's state, which is what idempotent re-application and overlapping
-/// proofs depend on not requiring. Nothing false is accepted.
+/// revisions is true but inert, so the reply verifies and nothing changes. The
+/// caller resumes just past that key, so the next reply can be padded the same
+/// way with a fresh absent key, indefinitely. Rejecting such a `Delete` would
+/// require the key to be present in the caller's state, which is what idempotent
+/// re-application and overlapping proofs depend on not requiring. Nothing false
+/// is accepted.
 fn compute_right_edge_key<'a>(
     proof: &FrozenChangeProof,
     end_root: &HashKey,
