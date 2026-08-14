@@ -1877,7 +1877,7 @@ dependencies = [
  "firewood-metrics",
  "firewood-replay",
  "metrics",
- "metrics-exporter-prometheus",
+ "metrics-collector-prometheus",
  "parking_lot",
  "test-case",
  "tikv-jemalloc-ctl",
@@ -3173,17 +3173,33 @@ dependencies = [
 
 [[package]]
 name = "metrics"
-version = "0.24.3"
-source = "git+https://github.com/demosdemon/metrics.git?rev=b12dd4b4ab096147199520f9cc1b47fbd8186f10#b12dd4b4ab096147199520f9cc1b47fbd8186f10"
+version = "0.24.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89550ee9f79e88fef3119de263694973a8adb26c21d75322164fb8c493039fe2"
 dependencies = [
  "portable-atomic",
  "rapidhash",
 ]
 
 [[package]]
+name = "metrics-collector-prometheus"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fdd5fcb31576ed124954c1ecbbbfd4b12f5d92c1f519143935ab885475f29d1"
+dependencies = [
+ "evmap",
+ "indexmap 2.14.0",
+ "metrics",
+ "metrics-util",
+ "quanta",
+ "thiserror",
+]
+
+[[package]]
 name = "metrics-exporter-prometheus"
-version = "0.18.1"
-source = "git+https://github.com/demosdemon/metrics.git?rev=b12dd4b4ab096147199520f9cc1b47fbd8186f10#b12dd4b4ab096147199520f9cc1b47fbd8186f10"
+version = "0.18.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1db0d8f1fc9e62caebd0319e11eaec5822b0186c171568f0480b46a0137f9108"
 dependencies = [
  "base64",
  "evmap",
@@ -3202,8 +3218,9 @@ dependencies = [
 
 [[package]]
 name = "metrics-util"
-version = "0.20.1"
-source = "git+https://github.com/demosdemon/metrics.git?rev=b12dd4b4ab096147199520f9cc1b47fbd8186f10#b12dd4b4ab096147199520f9cc1b47fbd8186f10"
+version = "0.20.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96f8722f8562635f92f8ed992f26df0532266eb03d5202607c20c0d7e9745e13"
 dependencies = [
  "aho-corasick",
  "crossbeam-epoch",

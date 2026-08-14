@@ -67,16 +67,16 @@ just release-step-update-rust-dependencies
 The recipe runs `cargo upgrade`, `cargo upgrade --incompatible`, `cargo update
 --verbose`, and the test suite to verify nothing broke.
 
-Crates listed under `[patch.crates-io]` in `Cargo.toml` reference specific git
-revisions and cannot be upgraded through the registry. Exclude them explicitly
-when running `cargo upgrade`:
+The workspace currently patches no crates. If a `[patch.crates-io]` section is
+reintroduced in `Cargo.toml`, the crates it lists reference specific git
+revisions and cannot be upgraded through the registry, so exclude them
+explicitly when running `cargo upgrade`:
 
 ```shell
 cargo upgrade --exclude <patched-crate-name>
 ```
 
-Check `[patch.crates-io]` in `Cargo.toml` to see the current set of patched
-crates. Update them separately by adjusting the revision in `Cargo.toml` and
+Update patched crates separately by adjusting the revision in `Cargo.toml` and
 opening a dedicated PR.
 
 If an incompatible upgrade requires code changes that are out of scope for the
@@ -252,13 +252,25 @@ The crates.io workflow does **not** run until the GitHub release is published.
 ### After publishing the release
 
 Publishing triggers the crates.io workflow ([`.github/workflows/publish.yaml`](.github/workflows/publish.yaml)),
-which obtains a short-lived OIDC token from crates.io (trusted publishing is
-pre-configured for this workflow) and publishes each crate in topological
-dependency order, automatically skipping:
+which authenticates with the `CARGO_TOKEN` repository secret and runs one
+`cargo publish -p <crate>` step per crate, ordered so that each crate is
+published after everything it depends on.
 
-- Crates whose current version is already published.
-- Crates that transitively depend on a `[patch.crates-io]` git reference
-  (crates.io rejects non-registry dependencies).
+The workflow is a flat list of steps with no conditional logic, so watch for
+these cases:
+
+- **A crate whose version was not bumped.** crates.io rejects a re-publish of an
+  existing version, and every step runs with `continue-on-error: false`, so the
+  job fails at that crate and the ones after it never publish. Bump every crate
+  you intend to release, and re-run the workflow after fixing a partial failure.
+- **A crate with a non-registry dependency.** Every dependency must resolve to a
+  registry version, so a `[patch.crates-io]` entry pointing at a git revision
+  makes each crate that transitively depends on it unpublishable. (Workspace
+  members are fine: they carry both `path` and `version`, and `cargo publish`
+  rewrites them to the registry version.) The workspace currently patches
+  nothing.
+- **`firewood-triehash` is not published.** Its step is commented out pending
+  version-bump detection.
 
 ## Milestone
 
