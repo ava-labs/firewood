@@ -1807,6 +1807,7 @@ name = "firewood"
 version = "0.8.0"
 dependencies = [
  "aquamarine",
+ "arity-arrays",
  "bytemuck",
  "bytemuck_derive",
  "clap",
@@ -1905,6 +1906,7 @@ dependencies = [
  "hex",
  "humantime",
  "indicatif",
+ "json-escape",
  "log",
  "nonzero_ext",
  "num-format",
@@ -2930,6 +2932,15 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "json-escape"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef6fd1644b881a0cb8030578c318e14840e543876e98f7bc9215270fd55ca5db"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]

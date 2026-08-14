@@ -2,7 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood_storage::{
-    Mutable, NodeStore, Propose, ReadableStorage, ValueDigest, logger::warn, replace_list_field,
+    DefaultHashMode, HashMode, Mutable, NodeStore, Propose, ReadableStorage, ValueDigest,
+    logger::warn, replace_list_field,
 };
 
 use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
@@ -50,6 +51,12 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
             return Err(ProofError::ValueAtOddNibbleLength);
         }
 
+        if DefaultHashMode::ALGORITHM.is_ethereum()
+            && matches!(proof_node.value_digest, Some(ValueDigest::Hash(_)))
+        {
+            return Err(ProofError::UnexpectedValueDigest);
+        }
+
         self.insert_branch_from_nibbles(&key_nibbles)?;
 
         // insert_branch_from_nibbles guarantees a branch exists at this path
@@ -59,7 +66,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
 
         let proof_value = match proof_node.value_digest.as_ref() {
             Some(ValueDigest::Value(v)) => Some(v.as_ref()),
-            #[cfg(not(feature = "ethhash"))]
             Some(digest @ ValueDigest::Hash(_)) => {
                 // In merkledb mode, large values (>= 32 bytes) are stored as
                 // hashes in serialized proofs. If the branch's value hashes to
@@ -97,7 +103,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         // caller (`verify_change_proof_root_hash`) still gates acceptance on the
         // final root-hash check, so relaxing here only avoids a spurious per-node
         // `UnexpectedValue`. It never widens what proofs are accepted.
-        if cfg!(feature = "ethhash")
+        if DefaultHashMode::ALGORITHM.is_ethereum()
             && proof_node.key.len() == ACCOUNT_DEPTH_NIBBLES
             && let (Some(pv), Some(bv)) = (proof_value, branch.value.as_deref())
             && account_values_equal_except_storage_root(pv, bv)

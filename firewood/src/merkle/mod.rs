@@ -27,10 +27,10 @@ use crate::{
 use firewood_metrics::{HistogramExt, firewood_counter, firewood_histogram};
 use firewood_storage::MemStore;
 use firewood_storage::{
-    BranchNode, Child, Children, DeletedNodeTracking, FileIoError, HashType, HashableShunt,
-    HashedNodeReader, ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, Mutable,
-    MutableKind, NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, Propose,
-    ReadableStorage, SharedNode, TrieHash, TrieReader, U4, ValueDigest,
+    BranchNode, Child, Children, DefaultHashMode, DeletedNodeTracking, FileIoError, HashMode,
+    HashType, HashableShunt, HashedNodeReader, ImmutableProposal, LeafNode, MaybePersistedNode,
+    Mutable, MutableKind, NibblesIterator, Node, NodeHashAlgorithm, NodeStore, Path, PathBuf,
+    PathComponent, Propose, ReadableStorage, SharedNode, TrieHash, TrieReader, U4, ValueDigest,
 };
 use firewood_storage::{
     hash_node_as_storage_trie_root_for_node, hash_node_as_storage_trie_root_parts,
@@ -500,7 +500,9 @@ fn build_branch_parts<'b>(
         // Apply the storage-trie-root fold for the account's lone storage
         // child; the dispatch lives here at the parent so the child's recursive
         // call doesn't need to carry a flag.
-        let child_hash = if cfg!(feature = "ethhash") && single_storage_child == Some(nibble) {
+        let child_hash = if DefaultHashMode::ALGORITHM.is_ethereum()
+            && single_storage_child == Some(nibble)
+        {
             compute_root_hash_as_storage_trie_root(
                 child_node,
                 &full_key,
@@ -517,7 +519,8 @@ fn build_branch_parts<'b>(
 
     // For children outside the proven range, use proof node hashes.
     if let (Some(pn), Some(outside)) = (proof_node, outside_mask) {
-        for (nibble, hash) in pn.child_hashes.iter_present() {
+        for (index, hash) in pn.child_hashes.iter_present() {
+            let nibble = PathComponent(index);
             if outside.is_set(nibble.0) {
                 child_hashes[nibble] = Some(hash.clone());
             }
@@ -556,7 +559,7 @@ fn single_effective_account_child(
     proof_node: Option<&ProofNode>,
     outside_mask: Option<&ChildMask>,
 ) -> Option<PathComponent> {
-    if !cfg!(feature = "ethhash") || full_key.len() != ACCOUNT_DEPTH_NIBBLES {
+    if !DefaultHashMode::ALGORITHM.is_ethereum() || full_key.len() != ACCOUNT_DEPTH_NIBBLES {
         return None;
     }
 
@@ -572,7 +575,8 @@ fn single_effective_account_child(
     }
     // Out-of-range children, taken from the proof node.
     if let (Some(pn), Some(mask)) = (proof_node, outside_mask) {
-        for (nibble, _) in pn.child_hashes.iter_present() {
+        for (index, _) in pn.child_hashes.iter_present() {
+            let nibble = PathComponent(index);
             if mask.is_set(nibble.0) {
                 if only_child.is_some() {
                     return None;
@@ -769,17 +773,36 @@ fn right_edge<'a>(
 /// this loop is the canonical way to assemble full-range coverage from
 /// truncated proofs.
 ///
+/// # Node Hashing Algorithm
+///
+/// `algorithm` is the hash mode the caller expects the proof to be encoded
+/// with. If the proof's own self-describing mode (resolved from its header byte
+/// at parse time) disagrees, verification is rejected up front with
+/// [`ProofError::HashModeMismatch`].
+///
 /// # Errors
 ///
 /// Returns [`api::Error::ProofError`] if the proof is structurally invalid,
-/// keys are outside the requested range, boundary proofs fail verification,
-/// or the reconstructed root hash doesn't match.
+/// the proof's hash mode does not match `algorithm`, keys are outside the
+/// requested range, boundary proofs fail verification, or the reconstructed
+/// root hash doesn't match.
 pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     first_key: Option<impl KeyType>,
     last_key: Option<impl KeyType>,
     root_hash: &TrieHash,
+    algorithm: NodeHashAlgorithm,
     proof: &RangeProof<impl KeyType, impl ValueType, H>,
 ) -> Result<(), api::Error> {
+    // Reject a proof whose self-describing mode disagrees with the caller's
+    // expectation before any hashing happens. Node hashing below still follows
+    // the compile default, so only matching-mode proofs may proceed.
+    if proof.hash_mode() != algorithm {
+        return Err(api::Error::ProofError(ProofError::HashModeMismatch {
+            expected: algorithm,
+            found: proof.hash_mode(),
+        }));
+    }
+
     let first_key_bytes: Option<&[u8]> = first_key.as_ref().map(AsRef::as_ref);
     let last_key_bytes: Option<&[u8]> = last_key.as_ref().map(AsRef::as_ref);
 
@@ -1060,7 +1083,7 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
     let computed =
         compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children);
 
-    let expected = root_hash.clone().into_hash_type();
+    let expected = HashType::from(root_hash.clone());
     if computed != expected {
         return Err(api::Error::ProofError(ProofError::UnexpectedHash {
             expected,
@@ -1256,7 +1279,7 @@ pub fn verify_change_proof_root_hash(
     let computed =
         compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children);
 
-    if computed != verification.end_root.clone().into_hash_type() {
+    if computed != verification.end_root {
         return Err(api::Error::ProofError(ProofError::EndRootMismatch));
     }
 
