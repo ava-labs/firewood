@@ -319,45 +319,27 @@ fn verify_boundary_proof<C: ProofCollection>(
 }
 
 /// Compute the right edge of the proven range: the key the end proof is anchored
-/// at. Verification asserts completeness up to this key and no further.
+/// at. Verification asserts completeness up to it and no further.
 ///
 /// A generator that stops short anchors its end proof at the last op it sent
 /// rather than at `end_key`. A value lookup at the last op key decides which:
 ///
-/// - A value there: the proof's terminal is that key, so that is the edge.
-/// - A valid statement that the key is absent, with a trailing `Delete`: a reply
-///   that stopped there is indistinguishable from one that did not, because a
-///   proof of absence cannot identify the key it was built for. The edge is that
-///   key, so verification judges the range the reply provably covers rather than
-///   demanding operations it never claimed to carry.
+/// - A value there: that key is the proof's terminal, so it is the edge.
+/// - Absent, with a trailing `Delete`: a proof of absence cannot name the key it
+///   was built for, so a truncated reply looks identical to a complete one. Take
+///   that key and judge the range the reply provably covers.
 /// - Otherwise: `end_key`, or the last op key when the request was unbounded.
 ///
-/// Narrowing is safe and costs nothing. The lookup succeeds only for a proof that
-/// is a complete statement about that key, so the boundary check there has every
-/// node it needs; every op sits at or below the edge; and the caller's next
-/// request, computed from the last op by [`find_next_key_after_change_proof`],
-/// covers the remainder either way.
+/// Narrowing is sound. The lookup succeeds only for a proof that is a complete
+/// statement about that key, every op sits at or below the edge, and the caller's
+/// next request covers the remainder.
 ///
-/// The lookup examines the proof, not the caller's limit. A limit is advisory: a
-/// generator may stop short of it, so the number of operations in a reply says
-/// nothing about whether the reply is complete.
-///
-/// # A trailing `Delete` of a key absent from both revisions
-///
-/// A `Delete` asserts that its key is absent from `end_root`. It does not assert
-/// that the key was present beforehand, which is what makes re-applying a proof,
-/// and applying overlapping proofs, safe.
-///
-/// A `Delete` naming a key absent from `start_root` as well is therefore true and
-/// also inert: the edge narrows to it, the reply verifies, applying it leaves the
-/// caller's state unchanged, and the caller resumes one key higher. A generator
-/// can repeat that indefinitely.
-///
-/// Rejecting such a `Delete` would mean requiring its key to be present in the
-/// caller's state, which is what re-application and overlapping proofs depend on
-/// not being required. So this is a denial-of-service avenue rather than a
-/// correctness one: nothing false is accepted. An unbounded request is equally
-/// exposed, since the edge is the last op's key there in every case.
+/// The second arm costs a wasted round: a `Delete` of a key absent from both
+/// revisions is true but inert, so the reply verifies, nothing changes, and a
+/// generator can repeat it. Rejecting it would require the key to be present in
+/// the caller's state, which is what idempotent re-application and overlapping
+/// proofs depend on not requiring. Nothing false is accepted, and an unbounded
+/// request is equally exposed since the edge is the last op's key there anyway.
 fn compute_right_edge_key<'a>(
     proof: &FrozenChangeProof,
     end_root: &HashKey,
