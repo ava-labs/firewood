@@ -339,8 +339,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
 
         let child_node = child.as_shared_node(&self.nodestore)?;
         let pfx = build_child_prefix(acc_prefix, nibble.0.as_u8(), &child_node);
-        let key_in_range =
-            pfx.as_ref() >= range.start && range.end.is_none_or(|end| pfx.as_ref() <= end);
+        let key_in_range = range.contains(pfx.as_ref());
 
         let Some(branch) = child_node.as_branch() else {
             return Ok(key_in_range);
