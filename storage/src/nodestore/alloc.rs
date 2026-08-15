@@ -20,7 +20,6 @@
 //! - **`AreaType`** - 0xFF for free areas, otherwise node type data (1 byte)
 //! - **`NodeData`** - Serialized node content
 
-use super::area_index_and_size;
 use super::primitives::{AreaIndex, LinearAddress, index_name};
 use crate::linear::FileIoError;
 use crate::logger::trace;
@@ -254,7 +253,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
         self.storage.file_io_error(error, offset, context)
     }
 
-    /// Returns (index, `area_size`) for the stored area at `addr`.
+    /// Returns [`AreaMetadata`] for the stored area at `addr`.
     /// `index` is the index of `area_size` in the array of valid block sizes.
     ///
     /// # Errors
@@ -263,8 +262,8 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
     pub(crate) fn area_index_and_size(
         &self,
         addr: LinearAddress,
-    ) -> Result<(AreaIndex, u64), FileIoError> {
-        area_index_and_size(self.storage, addr)
+    ) -> Result<super::AreaMetadata, FileIoError> {
+        super::area_index_and_size(self.storage, addr)
     }
 
     /// Attempts to allocate from the free lists for `index`.
@@ -358,7 +357,10 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
         };
         debug_assert!(addr.is_aligned());
 
-        let (area_size_index, _) = self.area_index_and_size(addr)?;
+        let area_meta = self.area_index_and_size(addr)?;
+        let area_size_index = area_meta
+            .area_index
+            .expect("delete_node should only be called on padded nodes");
         trace!("Deleting node at {addr:?} of size {area_size_index}");
         firewood_counter!(DELETE_NODE, "index" => index_name(area_size_index)).increment(1);
         firewood_counter!(SPACE_FREED, "index" => index_name(area_size_index))
