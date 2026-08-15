@@ -2,9 +2,13 @@
 default:
     ./scripts/run-just.sh --list
 
-# Run a Rust command with a named CI profile.
-ci-rust command profile:
-    ./scripts/run-rust-ci.sh "{{command}}" "{{profile}}"
+# Run a Rust command with a named CI profile; only `bench` takes a trailing arg.
+ci-rust command profile *args:
+    ./scripts/run-rust-ci.sh "{{command}}" "{{profile}}" {{args}}
+
+# Emit workspace bench targets as a GitHub Actions matrix (optional name regex).
+ci-bench-matrix filter="":
+    ./scripts/list-bench-targets.sh "{{filter}}"
 
 # Check Rust formatting as CI does.
 ci-format:
