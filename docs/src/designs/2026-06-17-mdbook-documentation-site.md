@@ -763,7 +763,7 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
       canonical repo. A `smoke` job (`needs: [build, deploy]`) runs after `deploy`
       (non-PR events) and `curl --fail`s `/`, `/rustdoc/`, `/rustdoc/firewood/`, and
       `/ffi/`, plus `/bench/` only when the build reports benchmark history.
-- [ ] Introduction and a fully-authored `getting-started/dev-environment.md`
+- [x] Introduction and a fully-authored `getting-started/dev-environment.md`
       (macOS, Docker, remote SSH) are written. *Structural completeness*
       (reviewer-checkable): every section contains the concrete install/build/verify
       commands from the outline.
