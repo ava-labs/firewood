@@ -2,6 +2,11 @@
 
 This section covers running and measuring Firewood.
 
+## Deployment
+
+- [Deploying AvalancheGo with Firewood](deploying-avalanchego.md) — build, configure,
+  provision, and operate an AvalancheGo node that stores EVM state in Firewood.
+
 ## `fwdctl`
 
 `fwdctl` is the command-line tool for operating on a Firewood database. See its
