@@ -28,6 +28,7 @@
 # Operations
 
 - [Operations & Benchmarking](operations/README.md)
+  - [Deploying AvalancheGo with Firewood](operations/deploying-avalanchego.md)
 
 # Reference
 
