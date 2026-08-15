@@ -73,18 +73,45 @@ pub type KeyRange = (Box<[u8]>, Option<Box<[u8]>>);
 /// Verification context captured after structural validation of a range proof.
 /// Stored so that downstream logic (root hash verification, `find_next_key`)
 /// can reference the original verification parameters without re-validating.
+///
+/// Constructible only by [`verify_range_proof_structure`]; fields are private
+/// so a context cannot be forged or altered after verification.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct RangeProofVerificationContext {
+    root: HashKey,
+    start_key: Option<Box<[u8]>>,
+    end_key: Option<Box<[u8]>>,
+    max_length: Option<NonZeroUsize>,
+    right_edge_key: Option<Box<[u8]>>,
+}
+
+impl RangeProofVerificationContext {
     /// The expected root hash of the trie.
-    pub root: HashKey,
+    #[must_use]
+    pub const fn root(&self) -> &HashKey {
+        &self.root
+    }
+
     /// The lower bound of the verified key range, if any.
-    pub start_key: Option<Box<[u8]>>,
+    #[must_use]
+    pub fn start_key(&self) -> Option<&[u8]> {
+        self.start_key.as_deref()
+    }
+
     /// The upper bound the caller **requested**, if any.
-    pub end_key: Option<Box<[u8]>>,
+    #[must_use]
+    pub fn end_key(&self) -> Option<&[u8]> {
+        self.end_key.as_deref()
+    }
+
     /// The maximum number of key/value pairs the proof was permitted to
     /// contain. `None` means no limit.
-    pub max_length: Option<NonZeroUsize>,
+    #[must_use]
+    pub const fn max_length(&self) -> Option<NonZeroUsize> {
+        self.max_length
+    }
+
     /// The actual right edge of the **proven** range, inclusive. Equals
     /// `end_key` when the responder covered the whole request, and a smaller
     /// key when the reply was truncated. `None` means unbounded above.
@@ -97,7 +124,10 @@ pub struct RangeProofVerificationContext {
     /// never covered.
     ///
     /// [`ChangeProofVerificationContext::right_edge_key`]: crate::ChangeProofVerificationContext::right_edge_key
-    pub right_edge_key: Option<Box<[u8]>>,
+    #[must_use]
+    pub fn right_edge_key(&self) -> Option<&[u8]> {
+        self.right_edge_key.as_deref()
+    }
 }
 
 /// Verify structural properties of a range proof and produce a

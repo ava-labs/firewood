@@ -835,7 +835,7 @@ fn test_truncation_narrows_to_the_last_op(
         "fixture must end in the expected op kind"
     );
     assert_eq!(
-        ctx.right_edge_key.as_deref(),
+        ctx.right_edge_key(),
         Some(expected_edge),
         "the range must narrow to the last operation's key"
     );
@@ -885,7 +885,7 @@ fn test_truncation_classification_under_a_prefix_key(
         .unwrap();
     let ctx = verify_change_proof_structure(&proof, root2, None, Some(b"\x20"), limit).unwrap();
 
-    assert_eq!(ctx.right_edge_key.as_deref(), expected_edge);
+    assert_eq!(ctx.right_edge_key(), expected_edge);
 }
 
 /// A proof covering its whole requested range keeps its full proven range when the
@@ -932,8 +932,8 @@ fn test_prefix_bound_does_not_narrow_a_complete_proof() {
 
     let ctx = verify_change_proof_structure(&proof, root2, None, Some(b"\x10\x20"), None).unwrap();
     assert_eq!(
-        ctx.right_edge_key.as_deref(),
-        ctx.end_key.as_deref(),
+        ctx.right_edge_key(),
+        ctx.end_key(),
         "a complete proof keeps the range it was asked for"
     );
 
@@ -975,13 +975,13 @@ fn test_a_terminal_at_the_last_operation_narrows_the_range() {
 
     let ctx = verify_change_proof_structure(&proof, root2, None, Some(b"\xff"), None).unwrap();
     assert_eq!(
-        ctx.right_edge_key.as_deref(),
+        ctx.right_edge_key(),
         Some(&b"\x10"[..]),
         "the terminal-valued node narrows the range to the last op's key"
     );
     assert_ne!(
-        ctx.right_edge_key.as_deref(),
-        ctx.end_key.as_deref(),
+        ctx.right_edge_key(),
+        ctx.end_key(),
         "the narrowed edge sits below the requested bound"
     );
     verify_and_check(&target, &proof, &ctx, root1).unwrap();
@@ -1120,13 +1120,13 @@ fn test_stopping_short_on_a_delete_is_accepted_over_the_narrowed_range() {
     )
     .unwrap();
     assert_eq!(
-        ctx.right_edge_key.as_deref(),
+        ctx.right_edge_key(),
         Some(&b"\x20"[..]),
         "the proven range narrows to the trailing removal's key"
     );
     assert_ne!(
-        ctx.right_edge_key.as_deref(),
-        ctx.end_key.as_deref(),
+        ctx.right_edge_key(),
+        ctx.end_key(),
         "the narrowed edge sits below the requested bound"
     );
     verify_and_check(&f.target, &f.proof, &ctx, f.start_root).unwrap();
@@ -1150,7 +1150,7 @@ fn test_stopping_short_below_a_surviving_key_is_accepted() {
     )
     .unwrap();
     assert_eq!(
-        ctx.right_edge_key.as_deref(),
+        ctx.right_edge_key(),
         Some(&b"\x20"[..]),
         "the proven range narrows to the trailing removal's key"
     );
@@ -1244,7 +1244,7 @@ fn test_an_unrelated_end_proof_does_not_narrow() {
         // and the proof must still be rejected.
         Ok(ctx) => {
             assert_eq!(
-                ctx.right_edge_key.as_deref(),
+                ctx.right_edge_key(),
                 Some(&b"\xff"[..]),
                 "an end proof that cannot be anchored at the last operation keeps the wide range"
             );
