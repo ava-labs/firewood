@@ -21,7 +21,7 @@ use firewood_storage::{HashedNodeReader, TrieReader};
 use integer_encoding::VarInt;
 
 use super::{Key, Merkle, Value};
-use crate::api::{self, FrozenChangeProof, FrozenRangeProof};
+use crate::api::{self, FrozenChangeProof, FrozenProof, FrozenRangeProof};
 use crate::db::BatchOp;
 use crate::merkle::changes::DiffMerkleNodeStream;
 use crate::proofs::{ChangeProof, Proof, RangeProof};
@@ -236,21 +236,6 @@ impl<T: TrieReader> Merkle<T> {
         let items = self
             .key_value_iter_from_key(start_key.unwrap_or_default())
             .map(|r| r.map_err(api::Error::from));
-        let build = |kvs: &[(Key, Value)], natural: bool| -> Result<FrozenRangeProof, api::Error> {
-            let end = if natural {
-                Proof::default()
-            } else {
-                let (last, _) = kvs
-                    .last()
-                    .ok_or_else(|| api::Error::InternalError("empty sized payload".into()))?;
-                self.prove(last).map_err(api::Error::from)?
-            };
-            Ok(RangeProof::new(
-                start_proof.clone(),
-                end,
-                kvs.to_vec().into_boxed_slice(),
-            ))
-        };
 
         let (proof, wire, natural_end) = stream_sized(
             items,
@@ -258,7 +243,7 @@ impl<T: TrieReader> Merkle<T> {
             ratio,
             fixed,
             |(k, v)| kv_body_bytes(k, v),
-            build,
+            |kvs, natural| self.build_range_chunk(&start_proof, kvs, natural),
             to_wire_range,
         )?;
         if start_key.is_none() && proof.key_values().is_empty() {
@@ -269,6 +254,25 @@ impl<T: TrieReader> Merkle<T> {
             wire,
             natural_end,
         })
+    }
+
+    /// One paged range-proof chunk: the right edge proves the last kv, or
+    /// nothing when the payload reached the natural end of the keyspace.
+    fn build_range_chunk(
+        &self,
+        start_proof: &FrozenProof,
+        kvs: &[(Key, Value)],
+        natural: bool,
+    ) -> Result<FrozenRangeProof, api::Error> {
+        let end = match kvs.last() {
+            Some((last, _)) if !natural => self.prove(last).map_err(api::Error::from)?,
+            _ => Proof::default(),
+        };
+        Ok(RangeProof::new(
+            start_proof.clone(),
+            end,
+            kvs.to_vec().into_boxed_slice(),
+        ))
     }
 }
 
@@ -304,21 +308,6 @@ impl<T: HashedNodeReader> Merkle<T> {
         )
         .map_err(api::Error::from)?
         .map(|r| r.map_err(api::Error::from));
-        // The plain change-proof API proves the last op key even at the natural
-        // end, so the right edge is unconditional for a non-empty payload.
-        let build = |ops: &[BatchOp<Key, Value>],
-                     _natural: bool|
-         -> Result<FrozenChangeProof, api::Error> {
-            let end = match ops.last() {
-                Some(op) => self.prove(op.key()).map_err(api::Error::from)?,
-                None => Proof::default(),
-            };
-            Ok(ChangeProof::new(
-                start_proof.clone(),
-                end,
-                ops.to_vec().into_boxed_slice(),
-            ))
-        };
 
         let (proof, wire, natural_end) = stream_sized(
             items,
@@ -326,7 +315,7 @@ impl<T: HashedNodeReader> Merkle<T> {
             ratio,
             fixed,
             op_body_bytes,
-            build,
+            |ops, _natural| self.build_change_chunk(&start_proof, ops),
             to_wire_change,
         )?;
         Ok(SizedProof {
@@ -334,5 +323,24 @@ impl<T: HashedNodeReader> Merkle<T> {
             wire,
             natural_end,
         })
+    }
+
+    /// One paged change-proof chunk: the plain change-proof API proves the
+    /// last op key even at the natural end, so the right edge is
+    /// unconditional for a non-empty payload.
+    fn build_change_chunk(
+        &self,
+        start_proof: &FrozenProof,
+        ops: &[BatchOp<Key, Value>],
+    ) -> Result<FrozenChangeProof, api::Error> {
+        let end = match ops.last() {
+            Some(op) => self.prove(op.key()).map_err(api::Error::from)?,
+            None => Proof::default(),
+        };
+        Ok(ChangeProof::new(
+            start_proof.clone(),
+            end,
+            ops.to_vec().into_boxed_slice(),
+        ))
     }
 }
