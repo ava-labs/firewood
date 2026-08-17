@@ -154,6 +154,16 @@ func (db *Database) RangeProof(
 	return getRangeProofFromRangeProofResult(C.fwd_db_range_proof(db.handle, args))
 }
 
+// rangeProofFromBytes is the single cgo call site for
+// C.fwd_range_proof_from_bytes. A nil db uses the default proof size limits.
+func rangeProofFromBytes(db *C.DatabaseHandle, data []byte) (*RangeProof, error) {
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	return getRangeProofFromRangeProofResult(
+		C.fwd_range_proof_from_bytes(db, newBorrowedBytes(data, &pinner)))
+}
+
 // RangeProofFromBytes deserializes a [RangeProof] from [data], enforcing the
 // database's configured proof size limits. Unlike [RangeProof.UnmarshalBinary]
 // (which uses the default limits), this applies the limits configured on the
@@ -165,11 +175,7 @@ func (db *Database) RangeProofFromBytes(data []byte) (*RangeProof, error) {
 		return nil, errDBClosed
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	return getRangeProofFromRangeProofResult(
-		C.fwd_range_proof_from_bytes(db.handle, newBorrowedBytes(data, &pinner)))
+	return rangeProofFromBytes(db.handle, data)
 }
 
 // Verify verifies the provided range [proof] proves the values in the range
@@ -365,12 +371,8 @@ func (p *RangeProof) UnmarshalBinary(data []byte) error {
 		return err
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
 	start := time.Now()
-	handle, err := getRangeProofFromRangeProofResult(
-		C.fwd_range_proof_from_bytes(nil, newBorrowedBytes(data, &pinner)))
+	handle, err := rangeProofFromBytes(nil, data)
 	proofUnmarshalDuration.WithLabelValues("range").Observe(time.Since(start).Seconds())
 
 	if err == nil {
@@ -448,6 +450,16 @@ func (db *Database) ChangeProof(
 	return proof, nil
 }
 
+// changeProofFromBytes is the single cgo call site for
+// C.fwd_change_proof_from_bytes. A nil db uses the default proof size limits.
+func changeProofFromBytes(db *C.DatabaseHandle, data []byte) (*ChangeProof, error) {
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	return getChangeProofFromChangeProofResult(
+		C.fwd_change_proof_from_bytes(db, newBorrowedBytes(data, &pinner)))
+}
+
 // ChangeProofFromBytes deserializes a [ChangeProof] from [data], enforcing the
 // database's configured proof size limits. Unlike
 // [ChangeProof.UnmarshalBinary] (which uses the default limits), this applies
@@ -459,11 +471,7 @@ func (db *Database) ChangeProofFromBytes(data []byte) (*ChangeProof, error) {
 		return nil, errDBClosed
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	proof, err := getChangeProofFromChangeProofResult(
-		C.fwd_change_proof_from_bytes(db.handle, newBorrowedBytes(data, &pinner)))
+	proof, err := changeProofFromBytes(db.handle, data)
 	if err != nil {
 		return nil, err
 	}
@@ -597,12 +605,8 @@ func (p *ChangeProof) UnmarshalBinary(data []byte) error {
 		return err
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
 	start := time.Now()
-	handle, err := getChangeProofFromChangeProofResult(
-		C.fwd_change_proof_from_bytes(nil, newBorrowedBytes(data, &pinner)))
+	handle, err := changeProofFromBytes(nil, data)
 	proofUnmarshalDuration.WithLabelValues("change").Observe(time.Since(start).Seconds())
 
 	if err == nil {
