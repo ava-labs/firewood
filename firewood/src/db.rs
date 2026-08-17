@@ -480,7 +480,6 @@ impl Db {
 
     /// Generate a range proof from `start_key` for the revision at `root`,
     /// sized to approach `budget` compressed wire bytes without exceeding it.
-    /// See [`Merkle::range_proof_sized`].
     ///
     /// # Errors
     ///
@@ -501,7 +500,6 @@ impl Db {
 
     /// Generate a change proof between two revisions from `start_key`, sized
     /// to approach `budget` compressed wire bytes without exceeding it.
-    /// See [`Merkle::change_proof_sized`].
     ///
     /// # Errors
     ///
