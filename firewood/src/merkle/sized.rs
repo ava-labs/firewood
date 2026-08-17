@@ -109,8 +109,6 @@ fn stream_sized<B: ChunkBuilder>(
     for _ in 0..=MAX_GROW {
         // Uncompressed body budget = compressed budget ÷ ratio − overhead.
         let budget_body = ((budget as f64 / ratio) as u64).saturating_sub(fixed);
-        // Keep items while they fit; always take the first so paging
-        // progresses even when a single item exceeds the whole budget.
         let before = kept.len();
         while let Some(peeked) = items.peek() {
             if let Ok(item) = peeked
