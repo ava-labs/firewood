@@ -8,9 +8,9 @@ use crate::logger::warn;
 use crate::nodestore::alloc::FreeAreaWithMetadata;
 use crate::nodestore::primitives::{AreaIndex, area_size_iter};
 use crate::{
-    CheckerError, Committed, FileIoError, HashType, HashedNodeReader, IntoHashType, LinearAddress,
-    Mutable, Node, NodeReader, NodeStore, Path, Propose, ReadableStorage, RootReader,
-    StoredAreaParent, TrieNodeParent, WritableStorage, nodestore::NodeStoreHeader,
+    CheckerError, Committed, DefaultHashMode, FileIoError, HashMode, HashType, HashedNodeReader,
+    LinearAddress, Mutable, Node, NodeReader, NodeStore, Path, Propose, ReadableStorage,
+    RootReader, StoredAreaParent, TrieNodeParent, WritableStorage, nodestore::NodeStoreHeader,
 };
 
 #[cfg(not(feature = "ethhash"))]
@@ -36,17 +36,6 @@ fn extra_read_pages(addr: LinearAddress, bytes: u64) -> Option<u64> {
     let pages_read = end_page.saturating_sub(start_page).saturating_add(1); // Include the first page
     let min_pages = bytes.saturating_add(OS_PAGE_SIZE - 1) / OS_PAGE_SIZE; // Round up to the nearest page
     Some(pages_read.saturating_sub(min_pages))
-}
-
-#[cfg(feature = "ethhash")]
-fn is_valid_key(key: &Path) -> bool {
-    const VALID_ETH_KEY_SIZES: [usize; 2] = [64, 128]; // in number of nibbles - two nibbles make a byte
-    VALID_ETH_KEY_SIZES.contains(&key.0.len())
-}
-
-#[cfg(not(feature = "ethhash"))]
-fn is_valid_key(key: &Path) -> bool {
-    key.0.len().is_multiple_of(2)
 }
 
 #[expect(clippy::result_large_err)]
@@ -204,7 +193,7 @@ where
                 if let Some(root_address) = root.as_linear_address() {
                     let (trie_stats, trie_errors) = self.visit_trie(
                         root_address,
-                        root_hash.into_hash_type(),
+                        root_hash.into(),
                         &mut visited,
                         opt.progress_bar.as_ref(),
                         opt.hash_check,
@@ -325,7 +314,7 @@ where
         // if the node has a value, check that the key is valid
         let mut current_path_prefix = path_prefix.clone();
         current_path_prefix.0.extend_from_slice(node.partial_path());
-        if node.value().is_some() && !is_valid_key(&current_path_prefix) {
+        if node.value().is_some() && !DefaultHashMode::is_valid_key(&current_path_prefix) {
             return Err(vec![CheckerError::InvalidKey {
                 key: current_path_prefix,
                 address: subtrie_root_address,

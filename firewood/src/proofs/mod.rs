@@ -150,8 +150,8 @@
 //! keys), or absent edge proofs (when the range covers the entire
 //! keyspace).
 //!
-//! Note: `requested_start_key` and `right_edge_key` (which equals
-//! `requested_end_key` unless the proof was truncated) are used during
+//! Note: `requested_start_key` and `right_edge_key` (the key the end proof is
+//! anchored at — see `compute_right_edge_key`) are used during
 //! root hash verification (Phase 3) to distinguish in-range from
 //! out-of-range nodes. This determines which proof node values to
 //! adopt during branch expansion and which children to check during
@@ -208,11 +208,12 @@
 //! so the hash computation reflects `end_root`.
 //!
 //! For exclusion proofs, the terminal proof node may overshoot the
-//! boundary key to the nearest existing key. Such nodes are in-range
-//! (>= `requested_start_key` for start proofs, <= `requested_end_key`
-//! for end proofs) and
-//! value conflicts there are real errors — the proposal already has
-//! the correct value from the batch_ops.
+//! boundary key to the nearest existing key. Such a node is in-range only
+//! when it lies within both bounds, `[requested_start_key,
+//! right_edge_key]`, and a value conflict there is a real error — the
+//! proposal already has the correct value from the batch_ops. Testing one
+//! bound alone would judge a terminal beyond the far bound as in-range,
+//! and report its legitimately differing value as an error.
 //!
 //! ### Step 3 — Branch collapsing
 //!
@@ -240,6 +241,14 @@
 //! `start_root` structure that doesn't exist in `end_root` and will be
 //! accounted for by the proof's boundary hashes.
 //!
+//! **Values at intermediate nodes** follow the same range rule. A node whose
+//! own key is out of range has its value cleared, so Step 4 can supply the
+//! digest the proof carries for `end_root`. A node whose key is in range keeps
+//! its value, so it is validated against `batch_ops` — dropping it would let a
+//! forged or omitted in-range op whose key is a prefix of the boundary slip
+//! through. Because a node that keeps its value must survive, it is never
+//! flattened into its only child.
+//!
 //! `collapse_root_to_path` applies the same logic to the root itself,
 //! handling cases where out-of-range deletions caused `end_root`'s root
 //! to path-compress (e.g., root partial_path changes from `[]` to
@@ -250,6 +259,22 @@
 //! `compute_outside_children` determines which children at each
 //! boundary proof node fall outside the proven range (left of
 //! `requested_start_key` or right of `right_edge_key`).
+//!
+//! A boundary terminal's on-path child — the child the boundary key descends
+//! into — is resolved against the **proving trie**: it is marked outside only
+//! when the proposal holds no in-range key under it. An omitted in-range
+//! delete or a forged op leaves its key in the proposal, so that child stays
+//! in range and is recomputed rather than taken from the proof, and the
+//! mismatch is caught. An omitted in-range put leaves the proposal with no
+//! child there at all, which is likewise kept in range and recomputed. An
+//! unbounded right edge is treated as +∞ here, not as an empty (minimum) key.
+//!
+//! Marking that child outside substitutes the proof's child hash for it, which
+//! is safe only when the proof has no hash at that nibble — otherwise it could
+//! supply one that hides in-range state. Structural verification (phase 1)
+//! already guarantees this for any valid exclusion proof
+//! (`ExclusionProofMissingChild`), and [`verify_change_proof_root_hash`] checks
+//! it locally so the guarantee does not depend on phase 1 having run.
 //!
 //! `compute_root_hash_with_proofs` recursively walks the **proving trie**:
 //!
@@ -313,6 +338,17 @@ pub use self::types::{
     EmptyProofCollection, Proof, ProofCollection, ProofEdge, ProofError, ProofNode, ProofType,
 };
 
+/// Returns the smallest byte string strictly greater than `key`: `key` with a
+/// `0x00` byte appended, since nothing sorts between the two. Total — every byte
+/// string has one, including the empty key.
+///
+/// [`find_next_key_after_change_proof`] uses it to resume strictly above the last
+/// key a proof covered. Both request bounds are inclusive, so resuming at that key
+/// would cover it again and never advance.
+fn lex_successor(key: &[u8]) -> Box<[u8]> {
+    [key, &[0]].concat().into_boxed_slice()
+}
+
 pub(super) mod magic {
     //! Magic constants for proof format identification.
     //!
@@ -327,18 +363,16 @@ pub(super) mod magic {
     pub const PROOF_VERSION: u8 = 0;
 
     /// Hash mode identifier for SHA-256 hashing
-    #[cfg(not(feature = "ethhash"))]
-    pub const HASH_MODE: u8 = 0;
+    pub const MERKLEDB_HASH_MODE: u8 = 0;
 
     /// Hash mode identifier for Keccak-256 hashing (Ethereum-compatible)
-    #[cfg(feature = "ethhash")]
-    pub const HASH_MODE: u8 = 1;
+    pub const ETHEREUM_HASH_MODE: u8 = 1;
 
     /// Returns the human-readable name for a hash mode identifier.
     pub const fn hash_mode_name(v: u8) -> &'static str {
         match v {
-            0 => "sha256",
-            1 => "keccak256",
+            MERKLEDB_HASH_MODE => "sha256",
+            ETHEREUM_HASH_MODE => "keccak256",
             _ => "unknown",
         }
     }
