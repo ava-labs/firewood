@@ -48,18 +48,6 @@ fn varint_len(v: u64) -> u64 {
     v.encode_var(&mut buf) as u64
 }
 
-/// Uncompressed body budget = compressed budget ÷ ratio, minus edge overhead.
-fn payload_budget(ratio: f64, budget: usize, fixed: u64) -> u64 {
-    ((budget as f64 / ratio) as u64).saturating_sub(fixed)
-}
-
-/// Fixed edge overhead: the left edge's empty-proof wire size, plus the same
-/// again (or a 6 KiB floor) reserved for the right edge.
-fn edge_overhead(empty_wire_len: usize) -> u64 {
-    let start = empty_wire_len as u64;
-    start.saturating_add(start.max(6 * 1024))
-}
-
 /// One proof flavor for [`stream_sized`]: what an item costs in uncompressed
 /// body bytes, how to assemble a chunk proof, and how to serialize it.
 trait ChunkBuilder {
@@ -77,101 +65,72 @@ trait ChunkBuilder {
     fn wire(proof: &Self::Proof) -> Vec<u8>;
 }
 
-/// Streaming state for [`stream_sized`]: the items not yet consumed, the
-/// prefix kept so far, and its summed body-byte cost.
-struct SizedStream<B: ChunkBuilder, I: Iterator<Item = Result<B::Item, api::Error>>> {
-    items: std::iter::Peekable<I>,
-    kept: Vec<B::Item>,
-    /// Summed [`ChunkBuilder::item_cost`] of everything in `kept`.
-    body: u64,
-}
-
-impl<B: ChunkBuilder, I: Iterator<Item = Result<B::Item, api::Error>>> SizedStream<B, I> {
-    fn new(items: I) -> Self {
-        Self {
-            items: items.peekable(),
-            kept: Vec::new(),
-            body: 0,
-        }
-    }
-
-    /// Move items into `kept` until the next one would push `body` past
-    /// `budget_body`. The first item is always taken so a chunk is never
-    /// empty while items remain. Returns the number of items appended.
-    fn fill(&mut self, budget_body: u64) -> Result<usize, api::Error> {
-        let before = self.kept.len();
-        while let Some(peeked) = self.items.peek() {
-            if let Ok(item) = peeked {
-                let item_body = B::item_cost(item);
-                if !self.kept.is_empty() && self.body.saturating_add(item_body) > budget_body {
-                    break;
-                }
-            }
-            let Some(item) = self.items.next() else { break };
-            let item = item?;
-            self.body = self.body.saturating_add(B::item_cost(&item));
-            self.kept.push(item);
-        }
-        Ok(self.kept.len().saturating_sub(before))
-    }
-
-    /// True once every item has been consumed into `kept`: the natural end
-    /// of the keyspace or diff.
-    fn is_exhausted(&mut self) -> bool {
-        self.items.peek().is_none()
-    }
-}
-
 /// The largest proof `builder` can assemble from `items` (positioned at the
 /// start key) whose compressed wire fits `budget`. `ratio` seeds the
 /// compressed ÷ uncompressed estimate. Returns `(proof, wire, at_natural_end)`.
 ///
-/// Reserves edge overhead measured from an empty chunk, then runs three
-/// steps: an initial fill using the estimated ratio, grow passes that
-/// re-derive the ratio from the real wire length, and a final shrink that
-/// truncates until the wire fits. It never grows after shrinking: the
-/// truncated tail was already consumed from the iterator, so refilling would
-/// skip a key gap.
+/// Grows: fills to the ratio-estimated body budget, re-deriving the ratio
+/// from the real wire length until the wire reaches the accept floor.
+/// Then shrinks: truncates until the wire fits. It never grows after
+/// shrinking — the truncated tail was already consumed from the iterator,
+/// so refilling would skip a key gap.
 fn stream_sized<B: ChunkBuilder>(
     builder: &B,
     items: impl Iterator<Item = Result<B::Item, api::Error>>,
     budget: usize,
     mut ratio: f64,
 ) -> Result<(B::Proof, Vec<u8>, bool), api::Error> {
-    let fixed = edge_overhead(B::wire(&builder.build(&[], true)?).len());
-    let mut stream = SizedStream::<B, _>::new(items);
+    let mut items = items.peekable();
+    let mut kept: Vec<B::Item> = Vec::new();
+    let mut body = 0u64; // summed item_cost of `kept`
+    let mut natural = true;
 
-    stream.fill(payload_budget(ratio, budget, fixed))?;
-    let mut natural = stream.is_exhausted();
-    let mut proof = builder.build(&stream.kept, natural)?;
+    // The empty chunk's wire doubles as the fixed edge overhead: its length
+    // (the left edge), plus the same again (or a 6 KiB floor) for the right
+    // edge.
+    let mut proof = builder.build(&[], true)?;
     let mut wire = B::wire(&proof);
+    let fixed = (wire.len() as u64).saturating_add((wire.len() as u64).max(6 * 1024));
 
-    // Grow: correct the ratio estimate against the real wire length and
-    // refill, until the wire reaches the accept floor or the items run out.
-    for _ in 0..MAX_GROW {
+    for _ in 0..=MAX_GROW {
+        // Uncompressed body budget = compressed budget ÷ ratio − overhead.
+        let budget_body = ((budget as f64 / ratio) as u64).saturating_sub(fixed);
+        // Keep items while they fit; always take the first so paging
+        // progresses even when a single item exceeds the whole budget.
+        let before = kept.len();
+        while let Some(peeked) = items.peek() {
+            if let Ok(item) = peeked
+                && !kept.is_empty()
+                && body.saturating_add(B::item_cost(item)) > budget_body
+            {
+                break;
+            }
+            let Some(item) = items.next() else { break };
+            let item = item?;
+            body = body.saturating_add(B::item_cost(&item));
+            kept.push(item);
+        }
+        if kept.len() == before {
+            break;
+        }
+        natural = items.peek().is_none();
+        proof = builder.build(&kept, natural)?;
+        wire = B::wire(&proof);
         if natural || wire.len() as f64 >= budget as f64 * ACCEPT_FLOOR {
             break;
         }
-        ratio = (wire.len() as f64 / stream.body.saturating_add(fixed) as f64).clamp(0.05, 2.0);
-        if stream.fill(payload_budget(ratio, budget, fixed))? == 0 {
-            break;
-        }
-        natural = stream.is_exhausted();
-        proof = builder.build(&stream.kept, natural)?;
-        wire = B::wire(&proof);
+        ratio = (wire.len() as f64 / body.saturating_add(fixed) as f64).clamp(0.05, 2.0);
     }
 
     // Shrink: drop entries (estimated from the measured bytes per entry)
-    // until the wire fits, but never below one entry so paging progresses.
-    while wire.len() > budget && stream.kept.len() > 1 {
-        let per_entry = (wire.len() as f64 / stream.kept.len() as f64).max(1.0);
-        let over = wire.len().saturating_sub(budget);
-        let drop = ((over as f64 / per_entry).ceil() as usize).saturating_add(8);
-        stream
-            .kept
-            .truncate(stream.kept.len().saturating_sub(drop).max(1));
+    // until the wire fits, but never below one so paging progresses.
+    while wire.len() > budget && kept.len() > 1 {
+        let per_entry = (wire.len() as f64 / kept.len() as f64).max(1.0);
+        let over = wire.len().saturating_sub(budget) as f64;
+        let drop = ((over / per_entry).ceil() as usize).saturating_add(8);
+        kept.truncate(kept.len().saturating_sub(drop).max(1));
         natural = false;
-        proof = builder.build(&stream.kept, natural)?;
+        proof = builder.build(&kept, natural)?;
         wire = B::wire(&proof);
     }
 
