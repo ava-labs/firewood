@@ -43,28 +43,6 @@ pub struct SizedProof<P> {
     pub natural_end: bool,
 }
 
-/// Uncompressed body bytes for one key-value entry.
-fn kv_body_bytes(key: &[u8], value: &[u8]) -> u64 {
-    varint_len(key.len() as u64)
-        .saturating_add(key.len() as u64)
-        .saturating_add(varint_len(value.len() as u64))
-        .saturating_add(value.len() as u64)
-}
-
-/// Uncompressed body bytes for one batch op (1-byte tag + key, + value for `Put`).
-fn op_body_bytes(op: &BatchOp<Key, Value>) -> u64 {
-    let key = op.key();
-    let mut bytes = 1u64
-        .saturating_add(varint_len(key.len() as u64))
-        .saturating_add(key.len() as u64);
-    if let BatchOp::Put { value, .. } = op {
-        bytes = bytes
-            .saturating_add(varint_len(value.len() as u64))
-            .saturating_add(value.len() as u64);
-    }
-    bytes
-}
-
 fn varint_len(v: u64) -> u64 {
     let mut buf = [0u8; 10];
     v.encode_var(&mut buf) as u64
@@ -82,27 +60,38 @@ fn edge_overhead(empty_wire_len: usize) -> u64 {
     start.saturating_add(start.max(6 * 1024))
 }
 
-/// Streaming state for [`stream_sized`]: the items not yet consumed, the
-/// prefix kept so far, and its summed body-byte cost.
-struct SizedStream<Item, I: Iterator<Item = Result<Item, api::Error>>, C> {
-    items: std::iter::Peekable<I>,
-    kept: Vec<Item>,
-    /// Summed `cost` of everything in `kept`.
-    body: u64,
-    cost: C,
+/// One proof flavor for [`stream_sized`]: what an item costs in uncompressed
+/// body bytes, how to assemble a chunk proof, and how to serialize it.
+trait ChunkBuilder {
+    type Item;
+    type Proof;
+
+    /// Uncompressed body bytes `item` contributes to the payload.
+    fn item_cost(item: &Self::Item) -> u64;
+
+    /// The chunk proof (payload plus right edge) for `items`;
+    /// `at_natural_end` is true when `items` reached the end of the stream.
+    fn build(&self, items: &[Self::Item], at_natural_end: bool) -> Result<Self::Proof, api::Error>;
+
+    /// Compressed wire bytes for `proof`.
+    fn wire(proof: &Self::Proof) -> Vec<u8>;
 }
 
-impl<Item, I, C> SizedStream<Item, I, C>
-where
-    I: Iterator<Item = Result<Item, api::Error>>,
-    C: Fn(&Item) -> u64,
-{
-    fn new(items: I, cost: C) -> Self {
+/// Streaming state for [`stream_sized`]: the items not yet consumed, the
+/// prefix kept so far, and its summed body-byte cost.
+struct SizedStream<B: ChunkBuilder, I: Iterator<Item = Result<B::Item, api::Error>>> {
+    items: std::iter::Peekable<I>,
+    kept: Vec<B::Item>,
+    /// Summed [`ChunkBuilder::item_cost`] of everything in `kept`.
+    body: u64,
+}
+
+impl<B: ChunkBuilder, I: Iterator<Item = Result<B::Item, api::Error>>> SizedStream<B, I> {
+    fn new(items: I) -> Self {
         Self {
             items: items.peekable(),
             kept: Vec::new(),
             body: 0,
-            cost,
         }
     }
 
@@ -113,14 +102,14 @@ where
         let before = self.kept.len();
         while let Some(peeked) = self.items.peek() {
             if let Ok(item) = peeked {
-                let item_body = (self.cost)(item);
+                let item_body = B::item_cost(item);
                 if !self.kept.is_empty() && self.body.saturating_add(item_body) > budget_body {
                     break;
                 }
             }
             let Some(item) = self.items.next() else { break };
             let item = item?;
-            self.body = self.body.saturating_add((self.cost)(&item));
+            self.body = self.body.saturating_add(B::item_cost(&item));
             self.kept.push(item);
         }
         Ok(self.kept.len().saturating_sub(before))
@@ -133,31 +122,29 @@ where
     }
 }
 
-/// The largest proof built from `items` (positioned at the start key) whose
-/// compressed wire fits `budget`. `cost` sizes an item's body bytes;
-/// `build(items, at_natural_end)` assembles the proof and right edge;
-/// `to_wire` compresses it. Returns `(proof, wire, at_natural_end)`.
+/// The largest proof `builder` can assemble from `items` (positioned at the
+/// start key) whose compressed wire fits `budget`. `ratio` seeds the
+/// compressed ÷ uncompressed estimate. Returns `(proof, wire, at_natural_end)`.
 ///
-/// Runs in three steps: an initial fill using the estimated compression
-/// ratio, grow passes that re-derive the ratio from the real wire length,
-/// and a final shrink that truncates until the wire fits. It never grows
-/// after shrinking: the truncated tail was already consumed from the
-/// iterator, so refilling would skip a key gap.
-fn stream_sized<Item, BuiltProof>(
-    items: impl Iterator<Item = Result<Item, api::Error>>,
+/// Reserves edge overhead measured from an empty chunk, then runs three
+/// steps: an initial fill using the estimated ratio, grow passes that
+/// re-derive the ratio from the real wire length, and a final shrink that
+/// truncates until the wire fits. It never grows after shrinking: the
+/// truncated tail was already consumed from the iterator, so refilling would
+/// skip a key gap.
+fn stream_sized<B: ChunkBuilder>(
+    builder: &B,
+    items: impl Iterator<Item = Result<B::Item, api::Error>>,
     budget: usize,
     mut ratio: f64,
-    fixed: u64,
-    cost: impl Fn(&Item) -> u64,
-    build: impl Fn(&[Item], bool) -> Result<BuiltProof, api::Error>,
-    to_wire: impl Fn(&BuiltProof) -> Vec<u8>,
-) -> Result<(BuiltProof, Vec<u8>, bool), api::Error> {
-    let mut stream = SizedStream::new(items, cost);
+) -> Result<(B::Proof, Vec<u8>, bool), api::Error> {
+    let fixed = edge_overhead(B::wire(&builder.build(&[], true)?).len());
+    let mut stream = SizedStream::<B, _>::new(items);
 
     stream.fill(payload_budget(ratio, budget, fixed))?;
     let mut natural = stream.is_exhausted();
-    let mut proof = build(&stream.kept, natural)?;
-    let mut wire = to_wire(&proof);
+    let mut proof = builder.build(&stream.kept, natural)?;
+    let mut wire = B::wire(&proof);
 
     // Grow: correct the ratio estimate against the real wire length and
     // refill, until the wire reaches the accept floor or the items run out.
@@ -170,8 +157,8 @@ fn stream_sized<Item, BuiltProof>(
             break;
         }
         natural = stream.is_exhausted();
-        proof = build(&stream.kept, natural)?;
-        wire = to_wire(&proof);
+        proof = builder.build(&stream.kept, natural)?;
+        wire = B::wire(&proof);
     }
 
     // Shrink: drop entries (estimated from the measured bytes per entry)
@@ -184,23 +171,95 @@ fn stream_sized<Item, BuiltProof>(
             .kept
             .truncate(stream.kept.len().saturating_sub(drop).max(1));
         natural = false;
-        proof = build(&stream.kept, natural)?;
-        wire = to_wire(&proof);
+        proof = builder.build(&stream.kept, natural)?;
+        wire = B::wire(&proof);
     }
 
     Ok((proof, wire, natural))
 }
 
-fn to_wire_range(proof: &FrozenRangeProof) -> Vec<u8> {
-    let mut out = Vec::new();
-    proof.write_to_vec(&mut out);
-    out
+/// Range-proof chunks: the right edge proves the last kv, or nothing when
+/// the payload reached the natural end of the keyspace.
+struct RangeChunkBuilder<'a, T> {
+    merkle: &'a Merkle<T>,
+    start_proof: &'a FrozenProof,
 }
 
-fn to_wire_change(proof: &FrozenChangeProof) -> Vec<u8> {
-    let mut out = Vec::new();
-    proof.write_to_vec(&mut out);
-    out
+impl<T: TrieReader> ChunkBuilder for RangeChunkBuilder<'_, T> {
+    type Item = (Key, Value);
+    type Proof = FrozenRangeProof;
+
+    fn item_cost((key, value): &Self::Item) -> u64 {
+        varint_len(key.len() as u64)
+            .saturating_add(key.len() as u64)
+            .saturating_add(varint_len(value.len() as u64))
+            .saturating_add(value.len() as u64)
+    }
+
+    fn build(&self, kvs: &[Self::Item], at_natural_end: bool) -> Result<Self::Proof, api::Error> {
+        let end = match kvs.last() {
+            Some((last, _)) if !at_natural_end => {
+                self.merkle.prove(last).map_err(api::Error::from)?
+            }
+            _ => Proof::default(),
+        };
+        Ok(RangeProof::new(
+            self.start_proof.clone(),
+            end,
+            kvs.to_vec().into_boxed_slice(),
+        ))
+    }
+
+    fn wire(proof: &Self::Proof) -> Vec<u8> {
+        let mut out = Vec::new();
+        proof.write_to_vec(&mut out);
+        out
+    }
+}
+
+/// Change-proof chunks: the plain change-proof API proves the last op key
+/// even at the natural end, so the right edge is unconditional for a
+/// non-empty payload.
+struct ChangeChunkBuilder<'a, T> {
+    merkle: &'a Merkle<T>,
+    start_proof: &'a FrozenProof,
+}
+
+impl<T: HashedNodeReader> ChunkBuilder for ChangeChunkBuilder<'_, T> {
+    type Item = BatchOp<Key, Value>;
+    type Proof = FrozenChangeProof;
+
+    /// 1-byte tag + key, + value for `Put`.
+    fn item_cost(op: &Self::Item) -> u64 {
+        let key = op.key();
+        let mut bytes = 1u64
+            .saturating_add(varint_len(key.len() as u64))
+            .saturating_add(key.len() as u64);
+        if let BatchOp::Put { value, .. } = op {
+            bytes = bytes
+                .saturating_add(varint_len(value.len() as u64))
+                .saturating_add(value.len() as u64);
+        }
+        bytes
+    }
+
+    fn build(&self, ops: &[Self::Item], _at_natural_end: bool) -> Result<Self::Proof, api::Error> {
+        let end = match ops.last() {
+            Some(op) => self.merkle.prove(op.key()).map_err(api::Error::from)?,
+            None => Proof::default(),
+        };
+        Ok(ChangeProof::new(
+            self.start_proof.clone(),
+            end,
+            ops.to_vec().into_boxed_slice(),
+        ))
+    }
+
+    fn wire(proof: &Self::Proof) -> Vec<u8> {
+        let mut out = Vec::new();
+        proof.write_to_vec(&mut out);
+        out
+    }
 }
 
 impl<T: TrieReader> Merkle<T> {
@@ -225,26 +284,22 @@ impl<T: TrieReader> Merkle<T> {
         budget: usize,
         ratio_hint: Option<f64>,
     ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
-        let ratio = ratio_hint.unwrap_or(DEFAULT_COMPRESSION_RATIO);
         let start_proof = match start_key {
             Some(key) => self.prove(key).map_err(api::Error::from)?,
             None => Proof::default(),
         };
-        let empty = RangeProof::new(start_proof.clone(), Proof::default(), Box::new([]));
-        let fixed = edge_overhead(to_wire_range(&empty).len());
-
         let items = self
             .key_value_iter_from_key(start_key.unwrap_or_default())
             .map(|r| r.map_err(api::Error::from));
 
         let (proof, wire, natural_end) = stream_sized(
+            &RangeChunkBuilder {
+                merkle: self,
+                start_proof: &start_proof,
+            },
             items,
             budget,
-            ratio,
-            fixed,
-            |(k, v)| kv_body_bytes(k, v),
-            |kvs, natural| self.build_range_chunk(&start_proof, kvs, natural),
-            to_wire_range,
+            ratio_hint.unwrap_or(DEFAULT_COMPRESSION_RATIO),
         )?;
         if start_key.is_none() && proof.key_values().is_empty() {
             return Err(api::Error::RangeProofOnEmptyTrie);
@@ -254,25 +309,6 @@ impl<T: TrieReader> Merkle<T> {
             wire,
             natural_end,
         })
-    }
-
-    /// One paged range-proof chunk: the right edge proves the last kv, or
-    /// nothing when the payload reached the natural end of the keyspace.
-    fn build_range_chunk(
-        &self,
-        start_proof: &FrozenProof,
-        kvs: &[(Key, Value)],
-        natural: bool,
-    ) -> Result<FrozenRangeProof, api::Error> {
-        let end = match kvs.last() {
-            Some((last, _)) if !natural => self.prove(last).map_err(api::Error::from)?,
-            _ => Proof::default(),
-        };
-        Ok(RangeProof::new(
-            start_proof.clone(),
-            end,
-            kvs.to_vec().into_boxed_slice(),
-        ))
     }
 }
 
@@ -293,14 +329,10 @@ impl<T: HashedNodeReader> Merkle<T> {
         budget: usize,
         ratio_hint: Option<f64>,
     ) -> Result<SizedProof<FrozenChangeProof>, api::Error> {
-        let ratio = ratio_hint.unwrap_or(DEFAULT_COMPRESSION_RATIO);
         let start_proof = match start_key {
             Some(key) => self.prove(key).map_err(api::Error::from)?,
             None => Proof::default(),
         };
-        let empty = ChangeProof::new(start_proof.clone(), Proof::default(), Box::new([]));
-        let fixed = edge_overhead(to_wire_change(&empty).len());
-
         let items = DiffMerkleNodeStream::new(
             source_trie,
             self.nodestore(),
@@ -310,37 +342,18 @@ impl<T: HashedNodeReader> Merkle<T> {
         .map(|r| r.map_err(api::Error::from));
 
         let (proof, wire, natural_end) = stream_sized(
+            &ChangeChunkBuilder {
+                merkle: self,
+                start_proof: &start_proof,
+            },
             items,
             budget,
-            ratio,
-            fixed,
-            op_body_bytes,
-            |ops, _natural| self.build_change_chunk(&start_proof, ops),
-            to_wire_change,
+            ratio_hint.unwrap_or(DEFAULT_COMPRESSION_RATIO),
         )?;
         Ok(SizedProof {
             proof,
             wire,
             natural_end,
         })
-    }
-
-    /// One paged change-proof chunk: the plain change-proof API proves the
-    /// last op key even at the natural end, so the right edge is
-    /// unconditional for a non-empty payload.
-    fn build_change_chunk(
-        &self,
-        start_proof: &FrozenProof,
-        ops: &[BatchOp<Key, Value>],
-    ) -> Result<FrozenChangeProof, api::Error> {
-        let end = match ops.last() {
-            Some(op) => self.prove(op.key()).map_err(api::Error::from)?,
-            None => Proof::default(),
-        };
-        Ok(ChangeProof::new(
-            start_proof.clone(),
-            end,
-            ops.to_vec().into_boxed_slice(),
-        ))
     }
 }
