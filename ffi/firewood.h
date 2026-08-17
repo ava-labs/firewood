@@ -1729,10 +1729,6 @@ typedef struct DatabaseHandleArgs {
    */
   uint64_t deferred_persistence_commit_count;
   /**
-   * The expected serialized proof size. `0` uses the default.
-   */
-  size_t proof_target_size;
-  /**
    * The hard cap on a decoded proof body. `0` uses the default.
    */
   size_t proof_max_decompressed_len;

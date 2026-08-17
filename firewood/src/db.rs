@@ -99,13 +99,10 @@ pub enum UseParallel {
     Always,
 }
 
-/// Size limits governing how a proof is serialized and deserialized.
+/// Size limits governing how a proof is deserialized.
 #[derive(Clone, Copy, TypedBuilder, Debug)]
 #[non_exhaustive]
 pub struct ProofConfig {
-    /// Expected serialized proof size.
-    #[builder(default = 2 * 1024 * 1024)] // 2 MiB
-    pub target_size: usize,
     /// Hard cap on a decoded proof body.
     #[builder(default = 32 * 1024 * 1024)] // 32 MiB
     pub max_decompressed_len: usize,
