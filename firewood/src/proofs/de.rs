@@ -15,7 +15,7 @@ use super::{
 use crate::merkle::childmask::ChildMask;
 use crate::{
     api::{FrozenChangeProof, FrozenRangeProof},
-    db::BatchOp,
+    db::{BatchOp, ProofConfig},
     merkle::{Key, Value},
     proofs::magic::{BATCH_DELETE, BATCH_DELETE_RANGE, BATCH_PUT},
 };
@@ -34,6 +34,16 @@ impl FrozenRangeProof {
     /// Returns a [`ReadError`] if the data is invalid. See the enum variants for
     /// the possible reasons.
     pub fn from_slice(data: &[u8]) -> Result<Self, ReadError> {
+        Self::from_slice_with_config(data, &ProofConfig::default())
+    }
+
+    /// Parses a `FrozenRangeProof`, enforcing `config`'s proof-decode limits.
+    /// [`FrozenRangeProof::from_slice`] uses [`ProofConfig::default`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ReadError`] if the data is invalid or exceeds a limit.
+    pub fn from_slice_with_config(data: &[u8], config: &ProofConfig) -> Result<Self, ReadError> {
         let mut reader = ProofReader::new(data);
 
         let header = reader.read_header()?;
@@ -46,7 +56,8 @@ impl FrozenRangeProof {
                 // Decompress the framed body, then dispatch body reads on the
                 // proof's own self-describing mode so this binary reads either
                 // wire format.
-                let body = super::frame::decompress_body(reader.remainder(), size_of::<Header>())?;
+                let body =
+                    super::frame::decompress_body(reader.remainder(), size_of::<Header>(), config)?;
                 let mut reader = V0Reader::new(
                     ProofReader::new(&body).into_body(validated_header.node_hash_algorithm),
                     header,
@@ -101,6 +112,16 @@ impl FrozenChangeProof {
     /// Returns a [`ReadError`] if the data is invalid. See the enum variants for
     /// the possible reasons.
     pub fn from_slice(data: &[u8]) -> Result<Self, ReadError> {
+        Self::from_slice_with_config(data, &ProofConfig::default())
+    }
+
+    /// Parses a `FrozenChangeProof`, enforcing `config`'s proof-decode limits.
+    /// See [`FrozenRangeProof::from_slice_with_config`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ReadError`] if the data is invalid or exceeds a limit.
+    pub fn from_slice_with_config(data: &[u8], config: &ProofConfig) -> Result<Self, ReadError> {
         let mut reader = ProofReader::new(data);
 
         let header = reader.read_header()?;
@@ -118,7 +139,7 @@ impl FrozenChangeProof {
 
         // Decompress the framed body, then dispatch body reads on the proof's
         // own self-describing mode so this binary reads either wire format.
-        let body = super::frame::decompress_body(reader.remainder(), size_of::<Header>())?;
+        let body = super::frame::decompress_body(reader.remainder(), size_of::<Header>(), config)?;
         let mut reader = V0Reader::new(
             ProofReader::new(&body).into_body(validated_header.node_hash_algorithm),
             header,

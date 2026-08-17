@@ -211,6 +211,12 @@ impl DatabaseHandle {
         self.db.root_hash()
     }
 
+    /// The size limits applied when serializing/deserializing proofs.
+    #[must_use]
+    pub const fn proof_config(&self) -> ProofConfig {
+        self.db.proof_config()
+    }
+
     /// Returns a value from the database for the given key from the latest root hash.
     ///
     /// # Errors

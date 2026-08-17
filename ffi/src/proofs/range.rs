@@ -557,10 +557,12 @@ pub extern "C" fn fwd_range_proof_to_bytes(proof: Option<&RangeProofContext>) ->
 /// - [`RangeProofResult::Err`] containing an error message if the proof could not be parsed.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_range_proof_from_bytes(
+    db: Option<&DatabaseHandle>,
     bytes: BorrowedBytes<'_>,
 ) -> RangeProofResult<'static> {
+    let config = db.map(DatabaseHandle::proof_config).unwrap_or_default();
     crate::invoke(move || {
-        FrozenRangeProof::from_slice(&bytes)
+        FrozenRangeProof::from_slice_with_config(&bytes, &config)
             .map_err(|err| api::Error::ProofError(ProofError::Deserialization(err)))
     })
 }

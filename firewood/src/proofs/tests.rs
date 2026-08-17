@@ -16,7 +16,7 @@ use super::{
     types::{Proof, ProofError, ProofNode, ProofType},
 };
 use crate::api::{FrozenChangeProof, FrozenRangeProof};
-use crate::db::BatchOp;
+use crate::db::{BatchOp, ProofConfig};
 
 /// Builds the 32-byte proof header
 fn raw_header(proof_type: ProofType) -> Vec<u8> {
@@ -1279,7 +1279,7 @@ fn test_frame_wire_is_compressed_and_versioned() {
 fn test_frame_rejects_over_cap_content_size() {
     // A frame whose header declares a content size just over the cap: the
     // decoder must reject it before allocating.
-    let body = vec![0u8; super::frame::MAX_DECOMPRESSED_LEN + 1];
+    let body = vec![0u8; ProofConfig::default().max_decompressed_len + 1];
     let mut wire = raw_header(ProofType::Range);
     super::frame::write_compressed_body(&body, &mut wire);
     let err = FrozenRangeProof::from_slice(&wire).expect_err("over-cap content size");
@@ -1287,7 +1287,7 @@ fn test_frame_rejects_over_cap_content_size() {
         matches!(
             err,
             ReadError::InvalidItem { item, expected, .. }
-                if item == "frame content size" && expected.contains("MAX_DECOMPRESSED_LEN")
+                if item == "frame content size" && expected.contains("configured maximum")
         ),
         "got {err:?}"
     );
@@ -1377,7 +1377,7 @@ fn test_frame_rejects_excessive_compression_ratio() {
         matches!(
             err,
             ReadError::InvalidItem { item, expected, .. }
-                if item == "frame content size" && expected.contains("MAX_COMPRESSION_RATIO")
+                if item == "frame content size" && expected.contains("compression ratio")
         ),
         "got {err:?}"
     );
@@ -1391,12 +1391,13 @@ fn test_frame_accepts_max_decompressed_len_exactly() {
     // inside MAX_COMPRESSION_RATIO, so this doubles as the accept-side
     // coverage for high-but-legal ratios.
     let rng = SeededRng::from_env_or_random();
+    let cap = ProofConfig::default().max_decompressed_len;
     let block: Vec<u8> = (0..1024 * 1024).map(|_| rng.random::<u8>()).collect();
-    let body = block.repeat(super::frame::MAX_DECOMPRESSED_LEN / block.len());
-    assert_eq!(body.len(), super::frame::MAX_DECOMPRESSED_LEN);
+    let body = block.repeat(cap / block.len());
+    assert_eq!(body.len(), cap);
     let mut frame = Vec::new();
     super::frame::write_compressed_body(&body, &mut frame);
-    let decoded = super::frame::decompress_body(&frame, 0)
+    let decoded = super::frame::decompress_body(&frame, 0, &ProofConfig::default())
         .expect("body exactly at MAX_DECOMPRESSED_LEN must decode");
     assert_eq!(decoded, body);
 }
