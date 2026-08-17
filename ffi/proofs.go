@@ -7,6 +7,8 @@ package ffi
 // #include "firewood.h"
 // #cgo noescape fwd_db_range_proof
 // #cgo nocallback fwd_db_range_proof
+// #cgo noescape fwd_db_range_proof_sized
+// #cgo nocallback fwd_db_range_proof_sized
 // #cgo noescape fwd_range_proof_from_bytes
 // #cgo nocallback fwd_range_proof_from_bytes
 // #cgo noescape fwd_range_proof_verify
@@ -29,6 +31,8 @@ package ffi
 // #cgo nocallback fwd_free_range_proof
 // #cgo noescape fwd_db_change_proof
 // #cgo nocallback fwd_db_change_proof
+// #cgo noescape fwd_db_change_proof_sized
+// #cgo nocallback fwd_db_change_proof_sized
 // #cgo noescape fwd_change_proof_from_bytes
 // #cgo nocallback fwd_change_proof_from_bytes
 // #cgo noescape fwd_db_verify_change_proof
@@ -113,6 +117,26 @@ type ChangeProof struct {
 	handle *C.ChangeProofContext
 }
 
+// SizedRangeProof is a size-targeted range proof: the proof, its serialized
+// wire bytes (already computed during sizing — send these rather than
+// re-marshaling), whether the proof reached the natural end of the keyspace,
+// and the measured compression ratio to pass as the ratioHint for the next
+// chunk.
+type SizedRangeProof struct {
+	Proof      *RangeProof
+	Wire       []byte
+	NaturalEnd bool
+	Ratio      float64
+}
+
+// SizedChangeProof is a size-targeted change proof; see [SizedRangeProof].
+type SizedChangeProof struct {
+	Proof      *ChangeProof
+	Wire       []byte
+	NaturalEnd bool
+	Ratio      float64
+}
+
 // NextKeyRange represents a range of keys to fetch from the database. The start
 // key is inclusive while the end key is exclusive. If the end key is Nothing,
 // the range is unbounded in that direction.
@@ -152,6 +176,36 @@ func (db *Database) RangeProof(
 	}
 
 	return getRangeProofFromRangeProofResult(C.fwd_db_range_proof(db.handle, args))
+}
+
+// RangeProofSized returns a range proof from [startKey] sized to approach
+// [budget] compressed wire bytes without exceeding it — unless a single
+// entry alone does, so paging always progresses. If NaturalEnd is false,
+// request the next chunk starting after the last key in the proof, passing
+// Ratio as [ratioHint]. Pass ratioHint <= 0 for no hint.
+func (db *Database) RangeProofSized(
+	rootHash Hash,
+	startKey Maybe[[]byte],
+	budget uint64,
+	ratioHint float64,
+) (*SizedRangeProof, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
+
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	args := C.CreateSizedRangeProofArgs{
+		root:       newCHashKey(rootHash),
+		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
+		budget:     C.uint64_t(budget),
+		ratio_hint: C.double(ratioHint),
+	}
+
+	return getSizedRangeProofFromResult(C.fwd_db_range_proof_sized(db.handle, args))
 }
 
 // rangeProofFromBytes is the single cgo call site for
@@ -450,6 +504,44 @@ func (db *Database) ChangeProof(
 	return proof, nil
 }
 
+// ChangeProofSized returns a change proof between [startRoot] and [endRoot]
+// from [startKey], sized to approach [budget] compressed wire bytes without
+// exceeding it — unless a single op alone does, so paging always progresses.
+// If NaturalEnd is false, request the next chunk starting after the last op
+// key in the proof, passing Ratio as [ratioHint]. Pass ratioHint <= 0 for no
+// hint.
+func (db *Database) ChangeProofSized(
+	startRoot, endRoot Hash,
+	startKey Maybe[[]byte],
+	budget uint64,
+	ratioHint float64,
+) (*SizedChangeProof, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
+
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	args := C.CreateSizedChangeProofArgs{
+		start_root: newCHashKey(startRoot),
+		end_root:   newCHashKey(endRoot),
+		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
+		budget:     C.uint64_t(budget),
+		ratio_hint: C.double(ratioHint),
+	}
+
+	sized, err := getSizedChangeProofFromResult(C.fwd_db_change_proof_sized(db.handle, args))
+	if err != nil {
+		return nil, err
+	}
+
+	runtime.SetFinalizer(sized.Proof, (*ChangeProof).Free)
+	return sized, nil
+}
+
 // changeProofFromBytes is the single cgo call site for
 // C.fwd_change_proof_from_bytes. A nil db uses the default proof size limits.
 func changeProofFromBytes(db *C.DatabaseHandle, data []byte) (*ChangeProof, error) {
@@ -743,6 +835,62 @@ func getRangeProofFromRangeProofResult(result C.RangeProofResult) (*RangeProof, 
 		return nil, err
 	default:
 		return nil, fmt.Errorf("unknown C.RangeProofResult tag: %d", result.tag)
+	}
+}
+
+func getSizedRangeProofFromResult(result C.SizedRangeProofResult) (*SizedRangeProof, error) {
+	switch result.tag {
+	case C.SizedRangeProofResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.SizedRangeProofResult_RevisionNotFound:
+		return nil, ErrRevisionNotFound
+	case C.SizedRangeProofResult_EmptyTrie:
+		return nil, errEmptyTrie
+	case C.SizedRangeProofResult_Ok:
+		ok := *(*C.SizedRangeProof)(unsafe.Pointer(&result.anon0))
+		wireOwned := newOwnedBytes(ok.wire)
+		wire := wireOwned.CopiedBytes()
+		if err := wireOwned.Free(); err != nil {
+			return nil, err
+		}
+		return &SizedRangeProof{
+			Proof:      &RangeProof{handle: ok.proof},
+			Wire:       wire,
+			NaturalEnd: bool(ok.natural_end),
+			Ratio:      float64(ok.ratio),
+		}, nil
+	case C.SizedRangeProofResult_Err:
+		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+	default:
+		return nil, fmt.Errorf("unknown C.SizedRangeProofResult tag: %d", result.tag)
+	}
+}
+
+func getSizedChangeProofFromResult(result C.SizedChangeProofResult) (*SizedChangeProof, error) {
+	switch result.tag {
+	case C.SizedChangeProofResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.SizedChangeProofResult_StartRevisionNotFound:
+		return nil, ErrStartRevisionNotFound
+	case C.SizedChangeProofResult_EndRevisionNotFound:
+		return nil, ErrEndRevisionNotFound
+	case C.SizedChangeProofResult_Ok:
+		ok := *(*C.SizedChangeProof)(unsafe.Pointer(&result.anon0))
+		wireOwned := newOwnedBytes(ok.wire)
+		wire := wireOwned.CopiedBytes()
+		if err := wireOwned.Free(); err != nil {
+			return nil, err
+		}
+		return &SizedChangeProof{
+			Proof:      &ChangeProof{handle: ok.proof},
+			Wire:       wire,
+			NaturalEnd: bool(ok.natural_end),
+			Ratio:      float64(ok.ratio),
+		}, nil
+	case C.SizedChangeProofResult_Err:
+		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+	default:
+		return nil, fmt.Errorf("unknown C.SizedChangeProofResult tag: %d", result.tag)
 	}
 }
 

@@ -309,6 +309,35 @@ impl DatabaseHandle {
             .change_proof(start_hash, end_hash, start_key, end_key, limit)
     }
 
+    /// Create a size-targeted range proof.
+    ///
+    /// Delegates to [`firewood::db::Db::range_proof_sized`].
+    pub(crate) fn range_proof_sized(
+        &self,
+        root: HashKey,
+        start_key: Option<&[u8]>,
+        budget: usize,
+        ratio_hint: Option<f64>,
+    ) -> Result<firewood::SizedProof<api::FrozenRangeProof>, api::Error> {
+        self.db
+            .range_proof_sized(root, start_key, budget, ratio_hint)
+    }
+
+    /// Create a size-targeted change proof.
+    ///
+    /// Delegates to [`firewood::db::Db::change_proof_sized`].
+    pub(crate) fn change_proof_sized(
+        &self,
+        start_hash: HashKey,
+        end_hash: HashKey,
+        start_key: Option<&[u8]>,
+        budget: usize,
+        ratio_hint: Option<f64>,
+    ) -> Result<firewood::SizedProof<api::FrozenChangeProof>, api::Error> {
+        self.db
+            .change_proof_sized(start_hash, end_hash, start_key, budget, ratio_hint)
+    }
+
     /// Verify a change proof and create a proposal from it.
     ///
     /// Performs structural validation, applies batch ops to the latest
