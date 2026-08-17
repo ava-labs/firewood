@@ -9,8 +9,9 @@
 //! non-final chunks at least half full; (4) an entry over the budget comes
 //! back alone and paging passes it; (5) empty trie errors like the plain
 //! API, exhausted start keys / identical tries return empty + `natural_end`;
-//! (6) wrong ratio hints and compressible values (shrink and grow paths)
-//! still satisfy 1–3.
+//! (6) wrong or non-finite ratio hints and compressible values (shrink and
+//! grow paths) still satisfy 1–3, and the returned `ratio` is a usable hint
+//! for the next chunk.
 
 #![expect(
     clippy::arithmetic_side_effects,
@@ -102,17 +103,19 @@ fn op_parts(op: &BatchOp<Key, Value>) -> (&[u8], Option<&[u8]>) {
 }
 
 /// Page from the keyspace start until `natural_end`, each chunk restarting
-/// at the successor of the previous last key.
+/// at the successor of the previous last key and reusing the measured ratio.
 fn page_range_chunks<T: TrieReader>(
     merkle: &Merkle<T>,
     budget: usize,
 ) -> Vec<SizedProof<FrozenRangeProof>> {
     let mut chunks = Vec::new();
     let mut start: Option<Vec<u8>> = None;
+    let mut hint: Option<f64> = None;
     loop {
         let sized = merkle
-            .range_proof_sized(start.as_deref(), budget, None)
+            .range_proof_sized(start.as_deref(), budget, hint)
             .expect("sized proof");
+        hint = Some(sized.ratio);
         start = sized.proof.key_values().last().map(|(k, _)| {
             let mut next = k.to_vec();
             next.push(0);
@@ -147,6 +150,8 @@ fn assert_covers(chunks: &[SizedProof<FrozenRangeProof>], expected: &[(Vec<u8>, 
 #[test_case(32 * 1024, None; "default ratio hint")]
 #[test_case(32 * 1024, Some(0.05); "optimistic hint overfills then shrinks")]
 #[test_case(32 * 1024, Some(2.0); "pessimistic hint underfills then grows")]
+#[test_case(32 * 1024, Some(f64::NAN); "NaN hint is sanitized")]
+#[test_case(32 * 1024, Some(0.0); "zero hint is sanitized")]
 #[test_case(4 * 1024 * 1024, None; "budget covering the whole trie")]
 fn test_range_sized_fits_and_matches_plain_api(budget: usize, ratio_hint: Option<f64>) {
     let kvs = test_kvs(2000, false);
@@ -164,6 +169,7 @@ fn test_range_sized_fits_and_matches_plain_api(budget: usize, ratio_hint: Option
         sized.wire.len()
     );
     assert_eq!(sized.natural_end, kv_count == total);
+    assert!(sized.ratio.is_finite(), "ratio must be a usable next hint");
 
     let reference = merkle
         .range_proof(None, None, NonZeroUsize::new(kv_count))
@@ -199,6 +205,7 @@ fn test_change_sized_fits_and_matches_plain_api(budget: usize, ratio_hint: Optio
         sized.wire.len()
     );
     assert_eq!(sized.natural_end, op_count == total);
+    assert!(sized.ratio.is_finite(), "ratio must be a usable next hint");
 
     let reference = target
         .change_proof(None, None, source.nodestore(), NonZeroUsize::new(op_count))
@@ -248,11 +255,13 @@ fn test_change_sized_paging_covers_diff(budget: usize) {
 
     let mut seen = 0usize;
     let mut start: Option<Vec<u8>> = None;
+    let mut hint: Option<f64> = None;
     let mut chunks = 0usize;
     loop {
         let sized = target
-            .change_proof_sized(source.nodestore(), start.as_deref(), budget, None)
+            .change_proof_sized(source.nodestore(), start.as_deref(), budget, hint)
             .expect("sized change proof");
+        hint = Some(sized.ratio);
         let len = sized.wire.len();
         assert!(len <= budget, "chunk {chunks}: {len} > {budget}");
         if !sized.natural_end {

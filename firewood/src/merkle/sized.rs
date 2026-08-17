@@ -1,11 +1,14 @@
 // Copyright (C) 2026, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-//! Size-targeted proof generation: the largest range/change proof that fits a
-//! compressed wire byte budget, starting at a key. Streams the payload once,
-//! estimating compressed size through a ratio, and proves a right edge so the
-//! caller can page. Returns ≥ 1 entry while data remains so paging always
-//! makes progress, even past an entry larger than the budget.
+//! Size-targeted proof generation: a range/change proof whose compressed
+//! wire size lands close to — and, except for a lone oversized entry, at or
+//! under — a byte budget, starting at a key. Streams the payload once,
+//! sizing the chunk through a measured compression-ratio estimate in a small
+//! bounded number of proof builds; it deliberately trades exact maximality
+//! for that bound, so a chunk is near-budget, not the largest possible.
+//! Returns ≥ 1 entry while data remains so paging always makes progress,
+//! even past an entry larger than the budget.
 
 #![expect(
     clippy::cast_precision_loss,
@@ -26,21 +29,26 @@ use crate::db::BatchOp;
 use crate::merkle::changes::DiffMerkleNodeStream;
 use crate::proofs::{ChangeProof, Proof, RangeProof};
 
-/// Stop growing once the wire reaches this fraction of the budget.
+/// Stop growing once the wire reaches this fraction of the budget
 const ACCEPT_FLOOR: f64 = 0.95;
-/// Assumed compressed ÷ uncompressed ratio when the caller gives no hint
-/// (~0.5 measured on C-Chain proof bodies).
+/// Assumed compressed/uncompressed ratio when the caller gives no hint
 const DEFAULT_COMPRESSION_RATIO: f64 = 0.52;
+/// Ratio hints and measurements are clamped into `RATIO_MIN..=RATIO_MAX`
+const RATIO_MIN: f64 = 0.05;
+const RATIO_MAX: f64 = 2.0;
 /// Cap on ratio-correction (grow) passes.
 const MAX_GROW: usize = 6;
 
-/// A sized proof `P` with its compressed `wire` bytes. `natural_end` is true
-/// once paging has reached the end of the keyspace/diff.
+/// A sized proof `P` with its compressed `wire` bytes.
 #[derive(Debug)]
 pub struct SizedProof<P> {
     pub proof: P,
     pub wire: Vec<u8>,
+    /// True once paging has reached the end of the keyspace/diff.
     pub natural_end: bool,
+    /// Measured compression ratio of this chunk; pass it as `ratio_hint`
+    /// when requesting the next chunk.
+    pub ratio: f64,
 }
 
 fn varint_len(v: u64) -> u64 {
@@ -65,21 +73,28 @@ trait ChunkBuilder {
     fn wire(proof: &Self::Proof) -> Vec<u8>;
 }
 
-/// The largest proof `builder` can assemble from `items` (positioned at the
-/// start key) whose compressed wire fits `budget`. `ratio` seeds the
-/// compressed ÷ uncompressed estimate. Returns `(proof, wire, at_natural_end)`.
+/// A chunk proof `builder` assembles from a prefix of `items` (positioned at
+/// the start key), sized to approach `budget` compressed wire bytes without
+/// exceeding it — unless a single item alone does. `ratio_hint` seeds the
+/// compressed ÷ uncompressed estimate and is sanitized here.
 ///
 /// Grows: fills to the ratio-estimated body budget, re-deriving the ratio
 /// from the real wire length until the wire reaches the accept floor.
 /// Then shrinks: truncates until the wire fits. It never grows after
 /// shrinking — the truncated tail was already consumed from the iterator,
-/// so refilling would skip a key gap.
+/// so refilling would skip a key gap. Both bounds are deliberate: the chunk
+/// is near-budget in a handful of proof builds, not the exact largest
+/// fitting prefix.
 fn stream_sized<B: ChunkBuilder>(
     builder: &B,
     items: impl Iterator<Item = Result<B::Item, api::Error>>,
     budget: usize,
-    mut ratio: f64,
-) -> Result<(B::Proof, Vec<u8>, bool), api::Error> {
+    ratio_hint: Option<f64>,
+) -> Result<SizedProof<B::Proof>, api::Error> {
+    let mut ratio = ratio_hint
+        .filter(|r| r.is_finite())
+        .unwrap_or(DEFAULT_COMPRESSION_RATIO)
+        .clamp(RATIO_MIN, RATIO_MAX);
     let mut items = items.peekable();
     let mut kept: Vec<B::Item> = Vec::new();
     let mut body = 0u64; // summed item_cost of `kept`
@@ -119,22 +134,39 @@ fn stream_sized<B: ChunkBuilder>(
         if natural || wire.len() as f64 >= budget as f64 * ACCEPT_FLOOR {
             break;
         }
-        ratio = (wire.len() as f64 / body.saturating_add(fixed) as f64).clamp(0.05, 2.0);
+        ratio = (wire.len() as f64 / body.saturating_add(fixed) as f64).clamp(RATIO_MIN, RATIO_MAX);
     }
 
-    // Shrink: drop entries (estimated from the measured bytes per entry)
-    // until the wire fits, but never below one so paging progresses.
+    // Shrink: drop entries until the wire fits, but never below one so
+    // paging progresses. Each step drops half of what the average per-entry
+    // size suggests: the average understates what the tail entries actually
+    // contribute when compressibility is uneven, and a full-step drop can
+    // land far below the budget. Half-steps converge in a few builds while
+    // keeping the chunk near the budget.
     while wire.len() > budget && kept.len() > 1 {
         let per_entry = (wire.len() as f64 / kept.len() as f64).max(1.0);
         let over = wire.len().saturating_sub(budget) as f64;
-        let drop = ((over / per_entry).ceil() as usize).saturating_add(8);
+        let drop = ((over / per_entry / 2.0).ceil() as usize).max(1);
         kept.truncate(kept.len().saturating_sub(drop).max(1));
         natural = false;
         proof = builder.build(&kept, natural)?;
         wire = B::wire(&proof);
     }
 
-    Ok((proof, wire, natural))
+    // Report the measured ratio so the caller can seed the next chunk.
+    let body_kept = kept
+        .iter()
+        .fold(0u64, |sum, item| sum.saturating_add(B::item_cost(item)));
+    if body_kept > 0 {
+        ratio = (wire.len() as f64 / body_kept.saturating_add(fixed) as f64)
+            .clamp(RATIO_MIN, RATIO_MAX);
+    }
+    Ok(SizedProof {
+        proof,
+        wire,
+        natural_end: natural,
+        ratio,
+    })
 }
 
 /// Range-proof chunks: the right edge proves the last kv, or nothing when
@@ -222,10 +254,13 @@ impl<T: HashedNodeReader> ChunkBuilder for ChangeChunkBuilder<'_, T> {
 }
 
 impl<T: TrieReader> Merkle<T> {
-    /// The largest range proof from `start_key` whose compressed wire fits
-    /// `budget`, plus a right edge for paging. `ratio_hint` seeds the
-    /// compression estimate — pass the previous chunk's measured ratio, or
-    /// `None` on the first chunk.
+    /// A range proof from `start_key` sized to approach `budget` compressed
+    /// wire bytes without exceeding it, plus a right edge for paging. The
+    /// chunk is near-budget, produced in a handful of proof builds — not
+    /// guaranteed to be the largest possible prefix that fits. `ratio_hint`
+    /// seeds the compression estimate — pass the previous chunk's
+    /// [`SizedProof::ratio`], or `None` on the first chunk; non-finite or
+    /// out-of-range hints are sanitized.
     ///
     /// Returns at least one key-value pair while keys at or after `start_key`
     /// remain (a single entry may exceed `budget`; paging still progresses).
@@ -251,32 +286,29 @@ impl<T: TrieReader> Merkle<T> {
             .key_value_iter_from_key(start_key.unwrap_or_default())
             .map(|r| r.map_err(api::Error::from));
 
-        let (proof, wire, natural_end) = stream_sized(
+        let sized = stream_sized(
             &RangeChunkBuilder {
                 merkle: self,
                 start_proof: &start_proof,
             },
             items,
             budget,
-            ratio_hint.unwrap_or(DEFAULT_COMPRESSION_RATIO),
+            ratio_hint,
         )?;
-        if start_key.is_none() && proof.key_values().is_empty() {
+        if start_key.is_none() && sized.proof.key_values().is_empty() {
             return Err(api::Error::RangeProofOnEmptyTrie);
         }
-        Ok(SizedProof {
-            proof,
-            wire,
-            natural_end,
-        })
+        Ok(sized)
     }
 }
 
 impl<T: HashedNodeReader> Merkle<T> {
-    /// The largest change proof (against `source_trie`) from `start_key` whose
-    /// compressed wire fits `budget`. Mirrors [`Merkle::range_proof_sized`],
-    /// returning at least one op while diff entries remain. Identical tries
-    /// (or a `start_key` past the last difference) yield an empty payload
-    /// with `natural_end` set, matching [`Merkle::change_proof`].
+    /// A change proof (against `source_trie`) from `start_key` sized to
+    /// approach `budget` compressed wire bytes without exceeding it. Mirrors
+    /// [`Merkle::range_proof_sized`], returning at least one op while diff
+    /// entries remain. Identical tries (or a `start_key` past the last
+    /// difference) yield an empty payload with `natural_end` set, matching
+    /// [`Merkle::change_proof`].
     ///
     /// # Errors
     ///
@@ -300,19 +332,14 @@ impl<T: HashedNodeReader> Merkle<T> {
         .map_err(api::Error::from)?
         .map(|r| r.map_err(api::Error::from));
 
-        let (proof, wire, natural_end) = stream_sized(
+        stream_sized(
             &ChangeChunkBuilder {
                 merkle: self,
                 start_proof: &start_proof,
             },
             items,
             budget,
-            ratio_hint.unwrap_or(DEFAULT_COMPRESSION_RATIO),
-        )?;
-        Ok(SizedProof {
-            proof,
-            wire,
-            natural_end,
-        })
+            ratio_hint,
+        )
     }
 }
