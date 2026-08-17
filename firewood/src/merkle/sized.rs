@@ -71,8 +71,8 @@ trait ChunkBuilder {
 /// `budget` compressed wire bytes without exceeding it unless a single
 /// item alone does.
 ///
-/// The proof is grown/shrunk by estimate, and is decided by real 
-/// serialized length. The output is near-budget, not the exact 
+/// The proof is grown/shrunk by estimate, and is decided by real
+/// serialized length. The output is near-budget, not the exact
 /// largest fitting prefix.
 fn stream_sized<B: ChunkBuilder>(
     builder: &B,

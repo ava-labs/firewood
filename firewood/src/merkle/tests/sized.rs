@@ -1,17 +1,9 @@
 // Copyright (C) 2026, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-//! Tests for [`Merkle::range_proof_sized`] / [`Merkle::change_proof_sized`].
-//!
-//! Contract: (1) wire ≤ budget unless a lone entry can't fit; (2) wire is
-//! byte-identical to the plain proof API at the same entry count; (3) paging
-//! by `natural_end` + last-key successor covers the keyspace/diff in order,
-//! non-final chunks at least half full; (4) an entry over the budget comes
-//! back alone and paging passes it; (5) empty trie errors like the plain
-//! API, exhausted start keys / identical tries return empty + `natural_end`;
-//! (6) wrong or non-finite ratio hints and compressible values (shrink and
-//! grow paths) still satisfy 1–3, and the returned `ratio` is a usable hint
-//! for the next chunk.
+//! Tests for [`Merkle::range_proof_sized`] / [`Merkle::change_proof_sized`]:
+//! budget fit, byte equality with the plain proof APIs, paging coverage,
+//! oversized entries, empty inputs, and bad ratio hints.
 
 #![expect(
     clippy::arithmetic_side_effects,
@@ -39,10 +31,8 @@ fn xorshift(seed: &mut u64) -> u64 {
     *seed
 }
 
-/// 32-byte pseudo-random keys. Values start with `0x42` so they never parse
-/// as RLP lists (ethhash re-encodes account-shaped values, breaking the
-/// byte-equality asserts). `compressible`: constant-byte values (real ratio
-/// far below the default estimate → grow path) vs pseudo-random (shrink path).
+/// 32-byte pseudo-random keys. Values start with 0x42 so ethhash never
+/// re-encodes them. `compressible` picks constant vs pseudo-random values.
 fn test_kvs(n: usize, compressible: bool) -> Vec<(Vec<u8>, Vec<u8>)> {
     let mut seed = SEED;
     (0..n)
@@ -63,8 +53,7 @@ fn test_kvs(n: usize, compressible: bool) -> Vec<(Vec<u8>, Vec<u8>)> {
         .collect()
 }
 
-/// Modify every 3rd value, delete every 7th key, add fresh keys: the diff
-/// contains puts, deletes, and inserts.
+/// Modify every 3rd value, delete every 7th key, add fresh keys.
 fn modified_kvs(base: &[(Vec<u8>, Vec<u8>)]) -> Vec<(Vec<u8>, Vec<u8>)> {
     let mut out: Vec<(Vec<u8>, Vec<u8>)> = base
         .iter()
@@ -97,13 +86,12 @@ fn sorted_unique(kvs: &[(Vec<u8>, Vec<u8>)]) -> Vec<(Vec<u8>, Vec<u8>)> {
         .collect()
 }
 
-/// Comparable op parts; diffs only emit `Put`/`Delete`, so this is exact.
+/// (key, value) for comparison; diffs only emit `Put`/`Delete`.
 fn op_parts(op: &BatchOp<Key, Value>) -> (&[u8], Option<&[u8]>) {
     (&**op.key(), op.value().map(|v| &**v))
 }
 
-/// Page from the keyspace start until `natural_end`, each chunk restarting
-/// at the successor of the previous last key and reusing the measured ratio.
+/// Page from the start until `natural_end`.
 fn page_range_chunks<T: TrieReader>(
     merkle: &Merkle<T>,
     budget: usize,
@@ -131,7 +119,7 @@ fn page_range_chunks<T: TrieReader>(
     }
 }
 
-/// The chunks' payloads must concatenate to exactly `expected`, in order.
+/// Chunk payloads must concatenate to exactly `expected`.
 fn assert_covers(chunks: &[SizedProof<FrozenRangeProof>], expected: &[(Vec<u8>, Vec<u8>)]) {
     let got: Vec<(Vec<u8>, Vec<u8>)> = chunks
         .iter()
@@ -144,8 +132,7 @@ fn assert_covers(chunks: &[SizedProof<FrozenRangeProof>], expected: &[(Vec<u8>, 
     assert_eq!(got.len(), expected.len(), "coverage incomplete");
 }
 
-// Contracts 1+2+6: fits (lone entry excepted), byte-equal to the plain API
-// at the same count, natural_end ⇔ full coverage, bad hints tolerated.
+// Fits the budget (lone entry excepted), byte-equal to the plain API.
 #[test_case(512, None; "tiny budget forces a single entry")]
 #[test_case(32 * 1024, None; "default ratio hint")]
 #[test_case(32 * 1024, Some(0.05); "optimistic hint overfills then shrinks")]
@@ -215,8 +202,7 @@ fn test_change_sized_fits_and_matches_plain_api(budget: usize, ratio_hint: Optio
     assert_eq!(ref_wire, sized.wire);
 }
 
-// Contract 3 (+6): exact in-order coverage; every chunk ≤ budget; non-final
-// chunks ≥ budget/2 — fails if the estimator never grows on compressible data.
+// Paging covers the keyspace in order; chunks fit and stay reasonably full.
 #[test_case(8 * 1024, false; "incompressible values")]
 #[test_case(24 * 1024, false; "incompressible values with larger budget")]
 #[test_case(8 * 1024, true; "compressible values exercise the grow path")]
@@ -240,7 +226,7 @@ fn test_range_sized_paging_covers_keyspace(budget: usize, compressible: bool) {
     assert_covers(&chunks, &expected);
 }
 
-// Contract 3 for change proofs: exact in-order diff coverage while paging.
+// Paging covers the diff in order.
 #[test_case(4 * 1024)]
 #[test_case(8 * 1024)]
 fn test_change_sized_paging_covers_diff(budget: usize) {
@@ -296,10 +282,9 @@ fn test_change_sized_paging_covers_diff(budget: usize) {
     assert!(chunks > 1);
 }
 
-// Contract 4: a 64 KiB entry under an 8 KiB budget. Over-budget chunks are
-// legitimate only at one entry; besides the big entry's own chunk, its
-// successor may also exceed the budget (its start proof carries the node
-// holding the value — under ethhash the full RLP encoding).
+// An entry larger than the budget comes back alone; paging moves past it.
+// The successor chunk can also exceed the budget: its start proof carries
+// the node holding the big value.
 #[test]
 fn test_range_sized_progresses_past_oversized_entry() {
     let budget = 8 * 1024;
@@ -333,7 +318,7 @@ fn test_range_sized_progresses_past_oversized_entry() {
     );
 }
 
-// Contract 5: empty trie errors exactly like the plain API.
+// Empty trie errors like the plain API.
 #[test]
 fn test_range_sized_empty_trie_errors_like_plain_api() {
     let merkle = init_merkle(Vec::<(Vec<u8>, Vec<u8>)>::new());
@@ -347,8 +332,7 @@ fn test_range_sized_empty_trie_errors_like_plain_api() {
     ));
 }
 
-// Contract 5: start key past the last key → empty payload, natural_end,
-// byte-equal to the plain API.
+// Start key past the last key: empty payload, natural_end set.
 #[test]
 fn test_range_sized_start_past_last_key_yields_empty_natural_end() {
     let merkle = init_merkle(test_kvs(500, false));
@@ -368,8 +352,7 @@ fn test_range_sized_start_past_last_key_yields_empty_natural_end() {
     assert_eq!(plain_wire, sized.wire);
 }
 
-// Contract 5: identical tries → empty change proof, natural_end, byte-equal
-// to the plain API.
+// Identical tries: empty change proof, natural_end set.
 #[test]
 fn test_change_sized_identical_tries_yield_empty_natural_end() {
     let kvs = test_kvs(300, false);
