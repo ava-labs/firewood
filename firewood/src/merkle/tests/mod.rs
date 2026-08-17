@@ -19,11 +19,37 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use super::*;
+use crate::proofs::range::RangeProof;
+use crate::{
+    ProofCollection,
+    api::{Error, KeyType, ValueType},
+};
 use crate::{ProofError, ProofNode};
 use firewood_storage::{
-    Children, Committed, DeletedNodeTracking, MemStore, Mutable, NodeHashAlgorithm, NodeStore,
-    NodeStoreHeader, PathComponent, Propose, RootReader, TrieHash, ValueDigest,
+    Committed, DefaultHashMode, DeletedNodeTracking, DenseChildren, HashMode, MemStore, Mutable,
+    NodeHashAlgorithm, NodeStore, NodeStoreHeader, PathComponent, Propose, RootReader, TrieHash,
+    ValueDigest,
 };
+use test_case::test_case;
+
+/// Test wrapper around [`crate::merkle::verify_range_proof`] that supplies the
+/// compile-default hash mode as the expected `algorithm` (the mode every proof
+/// built in the test binary carries). Shadows the glob-imported real function
+/// so the many existing call sites need not pass the mode explicitly.
+fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
+    first_key: Option<impl KeyType>,
+    last_key: Option<impl KeyType>,
+    root_hash: &TrieHash,
+    proof: &RangeProof<impl KeyType, impl ValueType, H>,
+) -> Result<(), Error> {
+    crate::merkle::verify_range_proof(
+        first_key,
+        last_key,
+        root_hash,
+        DefaultHashMode::ALGORITHM,
+        proof,
+    )
+}
 
 // Returns n random key-value pairs.
 fn generate_random_kvs(rng: &firewood_storage::SeededRng, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
@@ -223,7 +249,7 @@ fn test_branch_proof_node(
         key,
         partial_len: 0,
         value_digest,
-        child_hashes: Children::new(),
+        child_hashes: DenseChildren::new(),
     }
 }
 
@@ -945,4 +971,22 @@ fn test_get_branch_from_nibbles_mut() {
         ],
     );
     assert!(leaf.is_none());
+}
+
+/// `CollapseRange::contains` decides which boundary proof nodes the reconcile
+/// loops in `verify_change_proof_root_hash` treat as in-range, and which branch
+/// values `collapse_strip` clears. Its bound conventions are easy to get wrong,
+/// so pin them directly: both bounds are inclusive, an empty `start` is −∞, and
+/// a `None` `end` is +∞. `None` is distinct from `Some(&[])`, which is the empty
+/// key itself — conflating the two put every key out of range at the upper
+/// bound.
+#[test_case(&[3], &[3], Some(&[7]), true ; "start bound is inclusive")]
+#[test_case(&[7], &[3], Some(&[7]), true ; "end bound is inclusive")]
+#[test_case(&[2], &[3], Some(&[7]), false ; "before start")]
+#[test_case(&[8], &[3], Some(&[7]), false ; "after end")]
+#[test_case(&[7, 0], &[3], Some(&[7]), false ; "longer key extending the end bound sorts after it")]
+#[test_case(&[9, 9], &[3], None, true ; "None end is positive infinity")]
+#[test_case(&[0], &[], Some(&[]), false ; "Some(empty) is the empty key, not positive infinity")]
+fn test_collapse_range_contains(node: &[u8], start: &[u8], end: Option<&[u8]>, expected: bool) {
+    assert_eq!(CollapseRange { start, end }.contains(node), expected);
 }

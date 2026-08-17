@@ -1728,6 +1728,14 @@ typedef struct DatabaseHandleArgs {
    * Note: `revisions` must be > `deferred_persistence_commit_count`.
    */
   uint64_t deferred_persistence_commit_count;
+  /**
+   * The hard cap on a decoded proof body. `0` uses the default.
+   */
+  size_t proof_max_decompressed_len;
+  /**
+   * The max ratio of uncompressed body to compressed frame length. `0` uses the default.
+   */
+  size_t proof_max_compression_ratio;
 } DatabaseHandleArgs;
 
 /**
@@ -1850,7 +1858,8 @@ struct NextKeyRangeResult fwd_change_proof_find_next_key(const struct ChangeProo
  *   [`fwd_db_verify_and_commit_change_proof`] to verify the proof.
  * - [`ChangeProofResult::Err`] containing an error message if the proof could not be parsed.
  */
-struct ChangeProofResult fwd_change_proof_from_bytes(BorrowedBytes bytes);
+struct ChangeProofResult fwd_change_proof_from_bytes(const struct DatabaseHandle *db,
+                                                     BorrowedBytes bytes);
 
 /**
  * Serialize a `ChangeProof` to bytes.
@@ -2929,7 +2938,8 @@ struct NextKeyRangeResult fwd_range_proof_find_next_key(struct RangeProofContext
  *   well-formed. The verify method must be called to ensure the proof is cryptographically valid.
  * - [`RangeProofResult::Err`] containing an error message if the proof could not be parsed.
  */
-struct RangeProofResult fwd_range_proof_from_bytes(BorrowedBytes bytes);
+struct RangeProofResult fwd_range_proof_from_bytes(const struct DatabaseHandle *db,
+                                                   BorrowedBytes bytes);
 
 /**
  * Serialize a `RangeProof` to bytes.

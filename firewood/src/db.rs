@@ -22,9 +22,9 @@ use crate::verify_change_proof_structure;
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_metrics::{firewood_counter, firewood_histogram};
 use firewood_storage::{
-    CheckOpt, CheckerReport, Committed, CommittedParentHash, FileBacked, FileIoError,
-    HashedNodeReader, ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage,
-    Reconstructed, TrieReader,
+    CheckOpt, CheckerReport, Committed, CommittedParentHash, DefaultHashMode, FileBacked,
+    FileIoError, HashMode, HashedNodeReader, ImmutableProposal, NodeHashAlgorithm, NodeStore,
+    Parentable, ReadableStorage, Reconstructed, TrieReader,
 };
 use std::io::Write;
 use std::num::NonZeroUsize;
@@ -99,6 +99,25 @@ pub enum UseParallel {
     Always,
 }
 
+/// Size limits governing how a proof is deserialized.
+#[derive(Clone, Copy, TypedBuilder, Debug)]
+#[non_exhaustive]
+pub struct ProofConfig {
+    /// Hard cap on a decoded proof body.
+    #[builder(default = 32 * 1024 * 1024)] // 32 MiB
+    pub max_decompressed_len: usize,
+    /// Upper bound on the ratio between the uncompressed body length
+    /// and the compressed frame length.
+    #[builder(default = 128)]
+    pub max_compression_ratio: usize,
+}
+
+impl Default for ProofConfig {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
 /// Database configuration.
 #[derive(Clone, TypedBuilder, Debug)]
 #[non_exhaustive]
@@ -124,6 +143,9 @@ pub struct DbConfig {
     /// Whether to enable `RootStore`.
     #[builder(default = false)]
     pub root_store: bool,
+    /// Size limits applied when serializing/deseralizing proofs.
+    #[builder(default = ProofConfig::builder().build())]
+    pub proof: ProofConfig,
 }
 
 /// A database instance.
@@ -135,6 +157,7 @@ pub struct DbConfig {
 pub struct Db {
     manager: RevisionManager,
     use_parallel: UseParallel,
+    proof_config: ProofConfig,
 }
 
 impl api::Db for Db {
@@ -177,8 +200,15 @@ impl Db {
         let db = Self {
             manager,
             use_parallel: cfg.use_parallel,
+            proof_config: cfg.proof,
         };
         Ok(db)
+    }
+
+    /// The size limits applied when serializing/deserializing proofs.
+    #[must_use]
+    pub const fn proof_config(&self) -> ProofConfig {
+        self.proof_config
     }
 
     /// Synchronously get a view, either committed or proposed
@@ -336,8 +366,15 @@ impl Db {
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
     ) -> Result<Proposal<'_>, api::Error> {
-        let verification =
-            verify_change_proof_structure(proof, end_root.clone(), start_key, end_key, max_length)?;
+        // Expected mode is the compile default - a proof with a different mode is rejected.
+        let verification = verify_change_proof_structure(
+            proof,
+            end_root.clone(),
+            start_key,
+            end_key,
+            DefaultHashMode::ALGORITHM,
+            max_length,
+        )?;
         let parent = self.manager.current_revision();
         let proposal = self.apply_change_proof_to_parent(proof, &*parent)?;
         verify_change_proof_root_hash(proof, &verification, &proposal)?;

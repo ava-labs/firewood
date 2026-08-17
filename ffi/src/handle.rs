@@ -8,7 +8,7 @@ use firewood::{
         self, ArcDynDbView, Db as _, DbView, FrozenChangeProof, HashKey, HashKeyExt, IntoBatchIter,
         KeyType,
     },
-    db::{CommittedView, Db, DbConfig},
+    db::{CommittedView, Db, DbConfig, ProofConfig},
     manager::RevisionManagerConfig,
 };
 
@@ -106,9 +106,26 @@ pub struct DatabaseHandleArgs<'a> {
     ///
     /// Note: `revisions` must be > `deferred_persistence_commit_count`.
     pub deferred_persistence_commit_count: u64,
+
+    /// The hard cap on a decoded proof body. `0` uses the default.
+    pub proof_max_decompressed_len: usize,
+
+    /// The max ratio of uncompressed body to compressed frame length. `0` uses the default.
+    pub proof_max_compression_ratio: usize,
 }
 
 impl DatabaseHandleArgs<'_> {
+    fn as_proof_config(&self) -> ProofConfig {
+        let mut cfg = ProofConfig::default();
+        if self.proof_max_decompressed_len != 0 {
+            cfg.max_decompressed_len = self.proof_max_decompressed_len;
+        }
+        if self.proof_max_compression_ratio != 0 {
+            cfg.max_compression_ratio = self.proof_max_compression_ratio;
+        }
+        cfg
+    }
+
     fn as_rev_manager_config(&self) -> Result<RevisionManagerConfig, api::Error> {
         let cache_read_strategy = match self.strategy {
             0 => firewood::manager::CacheReadStrategy::WritesOnly,
@@ -166,6 +183,7 @@ impl DatabaseHandle {
             .truncate(args.truncate)
             .manager(args.as_rev_manager_config()?)
             .root_store(args.root_store)
+            .proof(args.as_proof_config())
             .build();
 
         let path = args
@@ -191,6 +209,12 @@ impl DatabaseHandle {
     /// Never errors.
     pub fn current_root_hash(&self) -> Option<HashKey> {
         self.db.root_hash()
+    }
+
+    /// The size limits applied when deserializing proofs.
+    #[must_use]
+    pub const fn proof_config(&self) -> ProofConfig {
+        self.db.proof_config()
     }
 
     /// Returns a value from the database for the given key from the latest root hash.

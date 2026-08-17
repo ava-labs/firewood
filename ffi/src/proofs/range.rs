@@ -4,7 +4,7 @@
 use std::num::NonZeroUsize;
 
 use firewood::{
-    KeyRange, ProofError, RangeProofVerificationContext,
+    KeyRange, NodeHashAlgorithm, ProofError, RangeProofVerificationContext,
     api::{self, DbView, FrozenRangeProof, HashKey},
 };
 use firewood_metrics::{MetricsContext, firewood_counter};
@@ -129,11 +129,13 @@ impl<'db> RangeProofContext<'db> {
 
         debug_assert!(self.verification.is_none());
 
+        // Expected mode is compile-time default - any proof with a different mode is rejected up front.
         self.verification = Some(firewood::verify_range_proof_structure(
             &self.proof,
             root,
             start_key,
             end_key,
+            NodeHashAlgorithm::compile_option(),
             max_length,
         )?);
         Ok(())
@@ -555,10 +557,12 @@ pub extern "C" fn fwd_range_proof_to_bytes(proof: Option<&RangeProofContext>) ->
 /// - [`RangeProofResult::Err`] containing an error message if the proof could not be parsed.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_range_proof_from_bytes(
+    db: Option<&DatabaseHandle>,
     bytes: BorrowedBytes<'_>,
 ) -> RangeProofResult<'static> {
+    let config = db.map(DatabaseHandle::proof_config).unwrap_or_default();
     crate::invoke(move || {
-        FrozenRangeProof::from_slice(&bytes)
+        FrozenRangeProof::from_slice_with_config(&bytes, &config)
             .map_err(|err| api::Error::ProofError(ProofError::Deserialization(err)))
     })
 }

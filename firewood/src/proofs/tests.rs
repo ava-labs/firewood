@@ -5,21 +5,22 @@ use integer_encoding::VarInt;
 use test_case::test_case;
 
 use firewood_storage::{
-    Children, IntoHashType, PathComponent, SeededRng, TrieHash, ValueDigest, logger::debug,
+    DefaultHashMode, DenseChildren, HashMode, HashType, NodeHashAlgorithm, PathComponent,
+    SeededRng, TrieHash, ValueDigest, logger::debug,
 };
 
 use super::{
     header::{Header, InvalidHeader},
     magic,
-    reader::ReadError,
-    types::{Proof, ProofNode, ProofType},
+    reader::{ProofReader, ReadError},
+    types::{Proof, ProofError, ProofNode, ProofType},
 };
 use crate::api::{FrozenChangeProof, FrozenRangeProof};
-use crate::db::BatchOp;
+use crate::db::{BatchOp, ProofConfig};
 
 /// Builds the 32-byte proof header
 fn raw_header(proof_type: ProofType) -> Vec<u8> {
-    bytemuck::bytes_of(&Header::from(proof_type)).to_vec()
+    bytemuck::bytes_of(&Header::from((proof_type, DefaultHashMode::ALGORITHM))).to_vec()
 }
 
 /// Compresses the body of uncompressed `header || body` bytes into wire
@@ -60,8 +61,8 @@ fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
     (proof, serialized)
 }
 
-fn create_valid_change_proof() -> (FrozenChangeProof, Vec<u8>) {
-    let proof = FrozenChangeProof::new(
+fn create_valid_change_proof(hash_mode: NodeHashAlgorithm) -> (FrozenChangeProof, Vec<u8>) {
+    let proof = FrozenChangeProof::with_hash_mode(
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([
@@ -76,6 +77,7 @@ fn create_valid_change_proof() -> (FrozenChangeProof, Vec<u8>) {
                 prefix: Box::from(b"key3".as_slice()),
             },
         ]),
+        hash_mode,
     );
     let mut serialized = raw_header(ProofType::Change);
     proof.write_body_to_vec(&mut serialized);
@@ -94,16 +96,62 @@ fn test_range_proof_roundtrip() {
     assert_eq!(wire, re_serialized, "re-serialization must be idempotent");
 }
 
-#[test]
-fn test_change_proof_roundtrip() {
-    let (proof, _) = create_valid_change_proof();
+#[test_case(NodeHashAlgorithm::MerkleDB; "merkledb")]
+#[test_case(NodeHashAlgorithm::Ethereum; "ethereum")]
+fn test_change_proof_roundtrip(hash_mode: NodeHashAlgorithm) {
+    let (proof, _) = create_valid_change_proof(hash_mode);
     let mut wire = Vec::new();
     proof.write_to_vec(&mut wire);
     let parsed = FrozenChangeProof::from_slice(&wire).expect("roundtrip should succeed");
     assert_eq!(proof, parsed);
+    assert_eq!(parsed.hash_mode(), hash_mode);
     let mut re_serialized = Vec::new();
     parsed.write_to_vec(&mut re_serialized);
     assert_eq!(wire, re_serialized, "re-serialization must be idempotent");
+}
+
+const fn hash_mode_byte(hash_mode: NodeHashAlgorithm) -> u8 {
+    match hash_mode {
+        NodeHashAlgorithm::MerkleDB => magic::MERKLEDB_HASH_MODE,
+        NodeHashAlgorithm::Ethereum => magic::ETHEREUM_HASH_MODE,
+    }
+}
+
+/// Ensures mode-dependent proof-node fields round-trip using the proof's recorded hash mode.
+#[test_case(NodeHashAlgorithm::MerkleDB; "merkledb")]
+#[test_case(NodeHashAlgorithm::Ethereum; "ethereum")]
+fn test_mode_dependent_proof_node_roundtrip(hash_mode: NodeHashAlgorithm) {
+    let mut node = make_proof_node(&[1], 0, Some(vec![0xabu8; 32].into_boxed_slice()), &[]);
+    node.child_hashes.insert(
+        PathComponent::try_new(7).unwrap().0,
+        TrieHash::from([0xabu8; 32]).into(),
+    );
+
+    let range = FrozenRangeProof::with_hash_mode(
+        Proof::new(Box::new([node])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Box::new([]),
+        hash_mode,
+    );
+    let mut serialized = Vec::new();
+    range.write_to_vec(&mut serialized);
+
+    let parsed = FrozenRangeProof::from_slice(&serialized)
+        .expect("range proof should parse in its recorded mode");
+    assert_eq!(parsed.hash_mode(), hash_mode);
+    let value_digest = parsed
+        .start_proof()
+        .first()
+        .and_then(|node| node.value_digest.as_ref())
+        .expect("fixture should contain a value digest");
+    assert_eq!(
+        matches!(value_digest, ValueDigest::Hash(_)),
+        hash_mode == NodeHashAlgorithm::MerkleDB
+    );
+
+    let mut reserialized = Vec::new();
+    parsed.write_to_vec(&mut reserialized);
+    assert_eq!(reserialized, serialized);
 }
 
 #[test_case(
@@ -323,7 +371,7 @@ fn test_empty_proof() {
     let bytes = [
         b'f', b'w', b'd', b'p', b'r', b'o', b'o', b'f', // magic
         0, // version
-        magic::HASH_MODE,
+        hash_mode_byte(DefaultHashMode::ALGORITHM),
         magic::BRANCH_FACTOR,
         ProofType::Range as u8,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // reserved
@@ -376,7 +424,7 @@ fn test_change_proof_invalid_header(
     mutator: impl FnOnce(&mut Vec<u8>),
     expected: impl FnOnce(&InvalidHeader) -> bool,
 ) {
-    let (_, mut data) = create_valid_change_proof();
+    let (_, mut data) = create_valid_change_proof(DefaultHashMode::ALGORITHM);
 
     mutator(&mut data);
 
@@ -413,7 +461,7 @@ fn test_change_proof_incomplete_item(
     expected_len: usize,
     found_len: usize,
 ) {
-    let (_, mut data) = create_valid_change_proof();
+    let (_, mut data) = create_valid_change_proof(DefaultHashMode::ALGORITHM);
 
     mutator(&mut data);
 
@@ -470,7 +518,7 @@ fn test_change_proof_invalid_item(
     expected: &'static str,
     found: &'static str,
 ) {
-    let (proof, mut data) = create_valid_change_proof();
+    let (proof, mut data) = create_valid_change_proof(DefaultHashMode::ALGORITHM);
 
     mutator(&proof, &mut data);
 
@@ -510,10 +558,12 @@ fn make_proof_node(
         .iter()
         .map(|&n| PathComponent::try_new(n).unwrap())
         .collect();
-    let mut child_hashes = Children::new();
+    let mut child_hashes = DenseChildren::new();
     for &nibble in child_nibbles {
-        child_hashes[PathComponent::try_new(nibble).unwrap()] =
-            Some(TrieHash::from([0u8; 32]).into_hash_type());
+        child_hashes.insert(
+            PathComponent::try_new(nibble).unwrap().0,
+            TrieHash::from([0u8; 32]).into(),
+        );
     }
     ProofNode {
         key,
@@ -777,7 +827,7 @@ fn test_change_proof_incomplete_batch_op_discriminant() {
     // Layout of create_valid_change_proof() after the 32-byte header:
     //   [32]=0x00 (start_proof count=0)  [33]=0x00 (end_proof count=0)
     //   [34]=0x03 (batch_ops count=3)    [35]=0x00 (first BatchOp discriminant)
-    let (_, mut data) = create_valid_change_proof();
+    let (_, mut data) = create_valid_change_proof(DefaultHashMode::ALGORITHM);
     data.truncate(35); // cut before the first BatchOp discriminant byte
     match compress_and_parse_change(&data) {
         Err(ReadError::InvalidItem {
@@ -815,11 +865,13 @@ fn generate_random_proof_node(rng: &SeededRng) -> ProofNode {
         let value: Box<[u8]> = (0..val_len).map(|_| rng.random::<u8>()).collect();
         ValueDigest::Value(value)
     });
-    let mut child_hashes = Children::new();
+    let mut child_hashes = DenseChildren::new();
     for nibble in 0u8..16 {
         if rng.random::<bool>() {
-            child_hashes[PathComponent::try_new(nibble).unwrap()] =
-                Some(TrieHash::from(rng.random::<[u8; 32]>()).into_hash_type());
+            child_hashes.insert(
+                PathComponent::try_new(nibble).unwrap().0,
+                TrieHash::from(rng.random::<[u8; 32]>()).into(),
+            );
         }
     }
     ProofNode {
@@ -1002,6 +1054,38 @@ fn test_dos_array_length_bounds() {
     }
 }
 
+#[test_case(b"", &[0u8] ; "empty key")]
+#[test_case(b"a", &[b'a', 0] ; "single byte")]
+#[test_case(b"\xff", &[0xff, 0] ; "maximum byte does not carry")]
+#[test_case(b"ab\x00", &[b'a', b'b', 0, 0] ; "key already ending in zero")]
+fn test_lex_successor(key: &[u8], expected: &[u8]) {
+    assert_eq!(&*super::lex_successor(key), expected);
+}
+
+#[test_case(b"" ; "empty key")]
+#[test_case(b"a" ; "single byte")]
+#[test_case(b"\xff\xff" ; "maximum bytes")]
+#[test_case(b"key50" ; "multi byte")]
+fn test_lex_successor_is_least_strict_upper_bound(key: &[u8]) {
+    let successor = super::lex_successor(key);
+    assert!(&*successor > key, "the successor must sort above the key");
+
+    // Nothing sorts strictly between a key and its successor. A string that
+    // diverges from `key` at some byte is either below `key` entirely or above
+    // the successor, so it can never land between them; only a string extending
+    // `key` could. Every extension begins with a byte of at least 0, so it is at
+    // or above the successor, and the ones beginning with 0 are the cases where
+    // that is least obvious.
+    for extra in [&[0u8][..], &[0, 0], &[0, 0xff], &[1], &[0xff]] {
+        let mut extension = key.to_vec();
+        extension.extend_from_slice(extra);
+        assert!(
+            extension[..] >= successor[..],
+            "{extension:?} sorts between {key:?} and its successor"
+        );
+    }
+}
+
 mod box_array_deserialization_tests {
     use std::num::NonZeroUsize;
 
@@ -1041,8 +1125,15 @@ mod box_array_deserialization_tests {
     }
 
     fn v0_reader(data: &[u8]) -> V0Reader<'_> {
-        let inner = ProofReader::new(data);
-        V0Reader::new(inner, Header::from(ProofType::Range))
+        // Resolve the algorithm from the header itself, mirroring the
+        // production validate-then-into_body flow. (These tests exercise
+        // mode-independent reads, so any consistent mode works.)
+        let header = Header::from((ProofType::Range, DefaultHashMode::ALGORITHM));
+        let validated_header = header
+            .validate(Some(ProofType::Range))
+            .expect("default header should be valid");
+        let inner = ProofReader::new(data).into_body(validated_header.node_hash_algorithm);
+        V0Reader::new(inner, header)
     }
 
     #[test]
@@ -1140,7 +1231,7 @@ fn range_wire() -> Vec<u8> {
 }
 
 fn change_wire() -> Vec<u8> {
-    let (proof, _) = create_valid_change_proof();
+    let (proof, _) = create_valid_change_proof(NodeHashAlgorithm::MerkleDB);
     let mut wire = Vec::new();
     proof.write_to_vec(&mut wire);
     wire
@@ -1188,7 +1279,7 @@ fn test_frame_wire_is_compressed_and_versioned() {
 fn test_frame_rejects_over_cap_content_size() {
     // A frame whose header declares a content size just over the cap: the
     // decoder must reject it before allocating.
-    let body = vec![0u8; super::frame::MAX_DECOMPRESSED_LEN + 1];
+    let body = vec![0u8; ProofConfig::default().max_decompressed_len + 1];
     let mut wire = raw_header(ProofType::Range);
     super::frame::write_compressed_body(&body, &mut wire);
     let err = FrozenRangeProof::from_slice(&wire).expect_err("over-cap content size");
@@ -1196,7 +1287,7 @@ fn test_frame_rejects_over_cap_content_size() {
         matches!(
             err,
             ReadError::InvalidItem { item, expected, .. }
-                if item == "frame content size" && expected.contains("MAX_DECOMPRESSED_LEN")
+                if item == "frame content size" && expected.contains("configured maximum")
         ),
         "got {err:?}"
     );
@@ -1286,7 +1377,7 @@ fn test_frame_rejects_excessive_compression_ratio() {
         matches!(
             err,
             ReadError::InvalidItem { item, expected, .. }
-                if item == "frame content size" && expected.contains("MAX_COMPRESSION_RATIO")
+                if item == "frame content size" && expected.contains("compression ratio")
         ),
         "got {err:?}"
     );
@@ -1300,12 +1391,13 @@ fn test_frame_accepts_max_decompressed_len_exactly() {
     // inside MAX_COMPRESSION_RATIO, so this doubles as the accept-side
     // coverage for high-but-legal ratios.
     let rng = SeededRng::from_env_or_random();
+    let cap = ProofConfig::default().max_decompressed_len;
     let block: Vec<u8> = (0..1024 * 1024).map(|_| rng.random::<u8>()).collect();
-    let body = block.repeat(super::frame::MAX_DECOMPRESSED_LEN / block.len());
-    assert_eq!(body.len(), super::frame::MAX_DECOMPRESSED_LEN);
+    let body = block.repeat(cap / block.len());
+    assert_eq!(body.len(), cap);
     let mut frame = Vec::new();
     super::frame::write_compressed_body(&body, &mut frame);
-    let decoded = super::frame::decompress_body(&frame, 0)
+    let decoded = super::frame::decompress_body(&frame, 0, &ProofConfig::default())
         .expect("body exactly at MAX_DECOMPRESSED_LEN must decode");
     assert_eq!(decoded, body);
 }
@@ -1394,4 +1486,161 @@ fn test_slow_malformed_wire_fuzz() {
             }
         }
     }
+}
+#[test]
+fn test_header_validate_accepts_both_hash_modes() {
+    let (_, base) = create_valid_range_proof();
+
+    for (byte, expected) in [
+        (magic::MERKLEDB_HASH_MODE, NodeHashAlgorithm::MerkleDB),
+        (magic::ETHEREUM_HASH_MODE, NodeHashAlgorithm::Ethereum),
+    ] {
+        let mut data = base.clone();
+        data[9] = byte;
+
+        let mut reader = ProofReader::new(&data);
+        let header = reader
+            .read_header()
+            .expect("header should parse successfully");
+
+        let validated_header = header
+            .validate(Some(ProofType::Range))
+            .expect("hash_mode should validate");
+
+        assert_eq!(validated_header.proof_type, ProofType::Range);
+        assert_eq!(
+            validated_header.node_hash_algorithm, expected,
+            "hash_mode {byte} should resolve to {expected:?}"
+        );
+    }
+
+    // A byte that maps to no known algorithm is still rejected.
+    let mut data = base;
+    data[9] = 99;
+    let mut reader = ProofReader::new(&data);
+    let header = reader
+        .read_header()
+        .expect("header should parse successfully");
+
+    match header.validate(Some(ProofType::Range)) {
+        Err(InvalidHeader::UnsupportedHashMode { found: 99 }) => {}
+        other => panic!("expected UnsupportedHashMode {{ found: 99 }}, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_hash_type_read_dispatches_on_threaded_mode() {
+    let raw = [0x11u8; 32];
+
+    // Ethereum wire layout: a 0x00 discriminant followed by the 32 hash bytes.
+    let mut eth_bytes = vec![0x00u8];
+    eth_bytes.extend_from_slice(&raw);
+    let mut eth_reader = ProofReader::new(&eth_bytes).into_body(NodeHashAlgorithm::Ethereum);
+    let decoded = eth_reader
+        .read_item::<HashType>()
+        .expect("eth HashType should decode under Ethereum mode");
+    assert_eq!(decoded, HashType::from(TrieHash::from(raw)));
+    assert!(eth_reader.remainder().is_empty(), "all eth bytes consumed");
+
+    // MerkleDB wire layout: bare 32 bytes, no discriminant.
+    let mut mdb_reader = ProofReader::new(&raw).into_body(NodeHashAlgorithm::MerkleDB);
+    let decoded = mdb_reader
+        .read_item::<HashType>()
+        .expect("merkledb HashType should decode under MerkleDB mode");
+    assert_eq!(decoded, HashType::from(TrieHash::from(raw)));
+    assert!(
+        mdb_reader.remainder().is_empty(),
+        "all merkledb bytes consumed"
+    );
+}
+
+#[test]
+fn test_verify_range_proof_rejects_hash_mode_mismatch() {
+    let (proof, _) = create_valid_range_proof();
+    let other_mode = if proof.hash_mode().is_ethereum() {
+        NodeHashAlgorithm::MerkleDB
+    } else {
+        NodeHashAlgorithm::Ethereum
+    };
+
+    // Root hash and keys are irrelevant: the guard fires before any hashing or
+    // structural checks. Use a placeholder root.
+    let result = crate::merkle::verify_range_proof(
+        Some(&[2u8]),
+        Some(&[8u8]),
+        &TrieHash::from([0u8; 32]),
+        other_mode,
+        &proof,
+    );
+
+    match result {
+        Err(crate::api::Error::ProofError(ProofError::HashModeMismatch { expected, found })) => {
+            assert_eq!(expected, other_mode);
+            assert_eq!(found, proof.hash_mode());
+        }
+        other => panic!("expected HashModeMismatch, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_verify_change_proof_structure_rejects_hash_mode_mismatch() {
+    let (proof, _) = create_valid_change_proof(DefaultHashMode::ALGORITHM);
+    let other_mode = if proof.hash_mode().is_ethereum() {
+        NodeHashAlgorithm::MerkleDB
+    } else {
+        NodeHashAlgorithm::Ethereum
+    };
+
+    // The guard fires before any hashing or structural checks; end_root and keys
+    // are placeholders.
+    let result = crate::verify_change_proof_structure(
+        &proof,
+        TrieHash::from([0u8; 32]),
+        Some(&[2u8]),
+        Some(&[8u8]),
+        other_mode,
+        None,
+    );
+
+    match result {
+        Err(crate::api::Error::ProofError(ProofError::HashModeMismatch { expected, found })) => {
+            assert_eq!(expected, other_mode);
+            assert_eq!(found, proof.hash_mode());
+        }
+        other => panic!("expected HashModeMismatch, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_value_digest_hash_read_arm_is_unconditional() {
+    // ValueDigest::Hash wire layout: 0x01 digest discriminant + a HashType.
+    // In MerkleDB mode the HashType is a bare 32-byte hash (no inner
+    // discriminant), so this is the canonical on-wire shape of a Hash digest.
+    let mut bytes = vec![0x01u8];
+    bytes.extend_from_slice(&[0x22u8; 32]);
+
+    let mut reader = ProofReader::new(&bytes).into_body(NodeHashAlgorithm::MerkleDB);
+    let decoded = reader
+        .read_item::<ValueDigest<&[u8]>>()
+        .expect("0x01 Hash discriminant must be accepted unconditionally");
+    match decoded {
+        ValueDigest::Hash(h) => assert_eq!(h, HashType::from(TrieHash::from([0x22u8; 32]))),
+        ValueDigest::Value(_) => panic!("expected ValueDigest::Hash"),
+    }
+    assert!(reader.remainder().is_empty(), "all bytes consumed");
+
+    // Across modes: an Ethereum-seeded reader also accepts the 0x01 digest
+    // discriminant unconditionally; the inner HashType then follows the eth
+    // encoding (0x00 Hash discriminant + 32 bytes).
+    let mut eth_bytes = vec![0x01u8, 0x00u8];
+    eth_bytes.extend_from_slice(&[0x33u8; 32]);
+    let mut eth_reader = ProofReader::new(&eth_bytes).into_body(NodeHashAlgorithm::Ethereum);
+    let eth_decoded = eth_reader
+        .read_item::<ValueDigest<&[u8]>>()
+        .expect("0x01 Hash discriminant must be accepted in eth mode too");
+    match eth_decoded {
+        ValueDigest::Hash(h) => assert_eq!(h, HashType::from(TrieHash::from([0x33u8; 32]))),
+        ValueDigest::Value(_) => panic!("expected ValueDigest::Hash"),
+    }
+    assert!(eth_reader.remainder().is_empty(), "all bytes consumed");
 }
