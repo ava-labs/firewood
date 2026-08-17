@@ -219,7 +219,7 @@ fn exclusion_with_proof_value_present() {
     debug!("{proof:#?}");
     assert_eq!(
         proof.as_ref().first().unwrap().to_hash(),
-        root_hash.clone().into_hash_type()
+        HashType::from(root_hash.clone())
     );
 
     // Ensure at least one node in the proof carries a value (proof value present)
@@ -269,7 +269,7 @@ fn proof_path_construction_and_corruption() {
     let mut corrupt: Proof<Vec<ProofNode>> = proof.clone().into_mutable();
     if let Some(first) = (*corrupt).first_mut() {
         // Set all child hashes to empty so traversal fails
-        first.child_hashes = Children::new();
+        first.child_hashes = DenseChildren::new();
     }
     let corrupt = corrupt.into_immutable();
     let err = corrupt
