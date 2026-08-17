@@ -75,7 +75,9 @@
 
 use test_case::test_case;
 
-use firewood_storage::{Children, IntoHashType, PathComponent, TrieHash, ValueDigest};
+use firewood_storage::{
+    DefaultHashMode, DenseChildren, HashMode, PathComponent, TrieHash, ValueDigest,
+};
 
 use super::header::Header;
 use super::types::{Proof, ProofNode, ProofType};
@@ -127,10 +129,12 @@ fn make_node(
         .iter()
         .map(|&n| PathComponent::try_new(n).unwrap())
         .collect();
-    let mut child_hashes = Children::new();
+    let mut child_hashes = DenseChildren::new();
     for &nibble in child_nibbles {
-        child_hashes[PathComponent::try_new(nibble).unwrap()] =
-            Some(TrieHash::from([0u8; 32]).into_hash_type());
+        child_hashes.insert(
+            PathComponent::try_new(nibble).unwrap().0,
+            TrieHash::from([0u8; 32]).into(),
+        );
     }
     ProofNode {
         key,
@@ -231,7 +235,7 @@ fn branch_node(
 #[test_case("range", ProofType::Range ; "range")]
 #[test_case("change", ProofType::Change ; "change")]
 fn proof_header(name: &str, proof_type: ProofType) {
-    let header = Header::from(proof_type);
+    let header = Header::from((proof_type, DefaultHashMode::ALGORITHM));
     insta::assert_snapshot!(
         hash_mode_name(name),
         hex::encode(bytemuck::bytes_of(&header))

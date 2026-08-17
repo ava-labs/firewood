@@ -153,6 +153,10 @@ type config struct {
 	// revisions that can exist at a given time.
 	// Note: revisions must be > deferredPersistenceCommitCount
 	deferredPersistenceCommitCount uint64
+	// proofMaxDecompressedLen is the hard cap on a decoded proof body; 0 uses the default.
+	proofMaxDecompressedLen uint
+	// proofMaxCompressionRatio is the max ratio of uncompressed to compressed length; 0 uses the default.
+	proofMaxCompressionRatio uint
 }
 
 func defaultConfig() *config {
@@ -182,6 +186,15 @@ func WithTruncate(truncate bool) Option {
 func WithNodeCacheSizeInBytes(sizeInBytes uint) Option {
 	return func(c *config) {
 		c.nodeCacheSizeInBytes = sizeInBytes
+	}
+}
+
+// WithProofSizeLimits sets the size limits applied when serializing and
+// deserializing proofs. A zero value for any limit uses the default.
+func WithProofSizeLimits(maxDecompressedLen, maxCompressionRatio uint) Option {
+	return func(c *config) {
+		c.proofMaxDecompressedLen = maxDecompressedLen
+		c.proofMaxCompressionRatio = maxCompressionRatio
 	}
 }
 
@@ -310,6 +323,8 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 		expensive_metrics:                 C.bool(conf.expensiveMetricsEnabled),
 		node_hash_algorithm:               C.enum_NodeHashAlgorithm(nodeHashAlgorithm),
 		deferred_persistence_commit_count: C.uint64_t(conf.deferredPersistenceCommitCount),
+		proof_max_decompressed_len:        C.size_t(conf.proofMaxDecompressedLen),
+		proof_max_compression_ratio:       C.size_t(conf.proofMaxCompressionRatio),
 	}
 
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))

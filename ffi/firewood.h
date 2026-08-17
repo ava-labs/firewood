@@ -1728,6 +1728,14 @@ typedef struct DatabaseHandleArgs {
    * Note: `revisions` must be > `deferred_persistence_commit_count`.
    */
   uint64_t deferred_persistence_commit_count;
+  /**
+   * The hard cap on a decoded proof body. `0` uses the default.
+   */
+  size_t proof_max_decompressed_len;
+  /**
+   * The max ratio of uncompressed body to compressed frame length. `0` uses the default.
+   */
+  size_t proof_max_compression_ratio;
 } DatabaseHandleArgs;
 
 /**
