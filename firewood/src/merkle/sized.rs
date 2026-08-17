@@ -4,7 +4,8 @@
 //! Size-targeted proof generation: the largest range/change proof that fits a
 //! compressed wire byte budget, starting at a key. Streams the payload once,
 //! estimating compressed size through a ratio, and proves a right edge so the
-//! caller can page. Always returns ≥ 1 entry so paging makes progress.
+//! caller can page. Returns ≥ 1 entry while data remains so paging always
+//! makes progress, even past an entry larger than the budget.
 
 #![expect(
     clippy::cast_precision_loss,
@@ -81,16 +82,69 @@ fn edge_overhead(empty_wire_len: usize) -> u64 {
     start.saturating_add(start.max(6 * 1024))
 }
 
+/// Streaming state for [`stream_sized`]: the items not yet consumed, the
+/// prefix kept so far, and its summed body-byte cost.
+struct SizedStream<Item, I: Iterator<Item = Result<Item, api::Error>>, C> {
+    items: std::iter::Peekable<I>,
+    kept: Vec<Item>,
+    /// Summed `cost` of everything in `kept`.
+    body: u64,
+    cost: C,
+}
+
+impl<Item, I, C> SizedStream<Item, I, C>
+where
+    I: Iterator<Item = Result<Item, api::Error>>,
+    C: Fn(&Item) -> u64,
+{
+    fn new(items: I, cost: C) -> Self {
+        Self {
+            items: items.peekable(),
+            kept: Vec::new(),
+            body: 0,
+            cost,
+        }
+    }
+
+    /// Move items into `kept` until the next one would push `body` past
+    /// `budget_body`. The first item is always taken so a chunk is never
+    /// empty while items remain. Returns the number of items appended.
+    fn fill(&mut self, budget_body: u64) -> Result<usize, api::Error> {
+        let before = self.kept.len();
+        while let Some(peeked) = self.items.peek() {
+            if let Ok(item) = peeked {
+                let item_body = (self.cost)(item);
+                if !self.kept.is_empty() && self.body.saturating_add(item_body) > budget_body {
+                    break;
+                }
+            }
+            let Some(item) = self.items.next() else { break };
+            let item = item?;
+            self.body = self.body.saturating_add((self.cost)(&item));
+            self.kept.push(item);
+        }
+        Ok(self.kept.len().saturating_sub(before))
+    }
+
+    /// True once every item has been consumed into `kept`: the natural end
+    /// of the keyspace or diff.
+    fn is_exhausted(&mut self) -> bool {
+        self.items.peek().is_none()
+    }
+}
+
 /// The largest proof built from `items` (positioned at the start key) whose
 /// compressed wire fits `budget`. `cost` sizes an item's body bytes;
 /// `build(items, at_natural_end)` assembles the proof and right edge;
 /// `to_wire` compresses it. Returns `(proof, wire, at_natural_end)`.
 ///
-/// Grows to fill the budget (correcting the ratio estimate against the real
-/// wire length), then shrinks to fit. It never grows after shrinking: the
-/// iterator sits past the pre-shrink tail, so re-growing would skip a gap.
+/// Runs in three steps: an initial fill using the estimated compression
+/// ratio, grow passes that re-derive the ratio from the real wire length,
+/// and a final shrink that truncates until the wire fits. It never grows
+/// after shrinking: the truncated tail was already consumed from the
+/// iterator, so refilling would skip a key gap.
 fn stream_sized<Item, BuiltProof>(
-    mut items: impl Iterator<Item = Result<Item, api::Error>>,
+    items: impl Iterator<Item = Result<Item, api::Error>>,
     budget: usize,
     mut ratio: f64,
     fixed: u64,
@@ -98,78 +152,39 @@ fn stream_sized<Item, BuiltProof>(
     build: impl Fn(&[Item], bool) -> Result<BuiltProof, api::Error>,
     to_wire: impl Fn(&BuiltProof) -> Vec<u8>,
 ) -> Result<(BuiltProof, Vec<u8>, bool), api::Error> {
-    let mut kept: Vec<Item> = Vec::new();
-    let mut body = 0u64;
-    let mut natural = true;
-    // Item that overflowed the budget; the iterator is past it, so it is
-    // carried into the next grow pass.
-    let mut pending: Option<Item> = None;
+    let mut stream = SizedStream::new(items, cost);
 
-    // Append items (starting with any carried-over one) from `items` until the
-    // body budget is hit. Returns how many were added.
-    let mut fill = |kept: &mut Vec<Item>,
-                    body: &mut u64,
-                    natural: &mut bool,
-                    pending: &mut Option<Item>,
-                    budget_body: u64|
-     -> Result<usize, api::Error> {
-        let before = kept.len();
-        let carried = pending.take().into_iter().map(Ok);
-        for item in carried.chain(items.by_ref()) {
-            let it = item?;
-            let c = cost(&it);
-            if !kept.is_empty() && body.saturating_add(c) > budget_body {
-                *natural = false;
-                *pending = Some(it);
-                return Ok(kept.len().saturating_sub(before));
-            }
-            *body = body.saturating_add(c);
-            kept.push(it);
-            *natural = true;
-        }
-        Ok(kept.len().saturating_sub(before))
-    };
-
-    let mut budget_body = payload_budget(ratio, budget, fixed);
-    fill(
-        &mut kept,
-        &mut body,
-        &mut natural,
-        &mut pending,
-        budget_body,
-    )?;
-    let mut proof = build(&kept, natural)?;
+    stream.fill(payload_budget(ratio, budget, fixed))?;
+    let mut natural = stream.is_exhausted();
+    let mut proof = build(&stream.kept, natural)?;
     let mut wire = to_wire(&proof);
 
-    // Grow: correct the ratio from the real wire length and refill.
+    // Grow: correct the ratio estimate against the real wire length and
+    // refill, until the wire reaches the accept floor or the items run out.
     for _ in 0..MAX_GROW {
-        if wire.len() as f64 >= budget as f64 * ACCEPT_FLOOR {
+        if natural || wire.len() as f64 >= budget as f64 * ACCEPT_FLOOR {
             break;
         }
-        ratio = (wire.len() as f64 / body.saturating_add(fixed) as f64).clamp(0.05, 2.0);
-        budget_body = payload_budget(ratio, budget, fixed);
-        if fill(
-            &mut kept,
-            &mut body,
-            &mut natural,
-            &mut pending,
-            budget_body,
-        )? == 0
-        {
-            break; // stream exhausted
+        ratio = (wire.len() as f64 / stream.body.saturating_add(fixed) as f64).clamp(0.05, 2.0);
+        if stream.fill(payload_budget(ratio, budget, fixed))? == 0 {
+            break;
         }
-        proof = build(&kept, natural)?;
+        natural = stream.is_exhausted();
+        proof = build(&stream.kept, natural)?;
         wire = to_wire(&proof);
     }
 
-    // Shrink: truncate until it fits, using the measured bytes/entry.
-    while wire.len() > budget && kept.len() > 1 {
-        let per = (wire.len() as f64 / kept.len() as f64).max(1.0);
+    // Shrink: drop entries (estimated from the measured bytes per entry)
+    // until the wire fits, but never below one entry so paging progresses.
+    while wire.len() > budget && stream.kept.len() > 1 {
+        let per_entry = (wire.len() as f64 / stream.kept.len() as f64).max(1.0);
         let over = wire.len().saturating_sub(budget);
-        let drop = ((over as f64 / per).ceil() as usize).saturating_add(8);
-        kept.truncate(kept.len().saturating_sub(drop).max(1));
+        let drop = ((over as f64 / per_entry).ceil() as usize).saturating_add(8);
+        stream
+            .kept
+            .truncate(stream.kept.len().saturating_sub(drop).max(1));
         natural = false;
-        proof = build(&kept, natural)?;
+        proof = build(&stream.kept, natural)?;
         wire = to_wire(&proof);
     }
 
@@ -192,11 +207,18 @@ impl<T: TrieReader> Merkle<T> {
     /// The largest range proof from `start_key` whose compressed wire fits
     /// `budget`, plus a right edge for paging. `ratio_hint` seeds the
     /// compression estimate — pass the previous chunk's measured ratio, or
-    /// `None` on the first chunk. Always returns ≥ 1 key-value pair.
+    /// `None` on the first chunk.
+    ///
+    /// Returns at least one key-value pair while keys at or after `start_key`
+    /// remain (a single entry may exceed `budget`; paging still progresses).
+    /// A `start_key` past the last key yields an empty payload with
+    /// `natural_end` set.
     ///
     /// # Errors
     ///
-    /// Any error from proof generation ([`Merkle::prove`]) or iteration.
+    /// * [`api::Error::RangeProofOnEmptyTrie`] - if the trie is empty and
+    ///   `start_key` is `None`, matching [`Merkle::range_proof`].
+    /// * Any error from proof generation ([`Merkle::prove`]) or iteration.
     pub fn range_proof_sized(
         &self,
         start_key: Option<&[u8]>,
@@ -239,6 +261,9 @@ impl<T: TrieReader> Merkle<T> {
             build,
             to_wire_range,
         )?;
+        if start_key.is_none() && proof.key_values().is_empty() {
+            return Err(api::Error::RangeProofOnEmptyTrie);
+        }
         Ok(SizedProof {
             proof,
             wire,
@@ -249,8 +274,10 @@ impl<T: TrieReader> Merkle<T> {
 
 impl<T: HashedNodeReader> Merkle<T> {
     /// The largest change proof (against `source_trie`) from `start_key` whose
-    /// compressed wire fits `budget`. Mirrors [`Merkle::range_proof_sized`];
-    /// always returns ≥ 1 op.
+    /// compressed wire fits `budget`. Mirrors [`Merkle::range_proof_sized`],
+    /// returning at least one op while diff entries remain. Identical tries
+    /// (or a `start_key` past the last difference) yield an empty payload
+    /// with `natural_end` set, matching [`Merkle::change_proof`].
     ///
     /// # Errors
     ///
