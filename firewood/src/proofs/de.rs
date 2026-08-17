@@ -38,7 +38,6 @@ impl FrozenRangeProof {
     }
 
     /// Parses a `FrozenRangeProof`, enforcing `config`'s proof-decode limits.
-    /// [`FrozenRangeProof::from_slice`] uses [`ProofConfig::default`].
     ///
     /// # Errors
     ///
@@ -116,7 +115,6 @@ impl FrozenChangeProof {
     }
 
     /// Parses a `FrozenChangeProof`, enforcing `config`'s proof-decode limits.
-    /// See [`FrozenRangeProof::from_slice_with_config`].
     ///
     /// # Errors
     ///
