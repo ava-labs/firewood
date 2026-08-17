@@ -2,13 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 //! Size-targeted proof generation: a range/change proof whose compressed
-//! wire size lands close to — and, except for a lone oversized entry, at or
-//! under — a byte budget, starting at a key. Streams the payload once,
-//! sizing the chunk through a measured compression-ratio estimate in a small
-//! bounded number of proof builds; it deliberately trades exact maximality
-//! for that bound, so a chunk is near-budget, not the largest possible.
-//! Returns ≥ 1 entry while data remains so paging always makes progress,
-//! even past an entry larger than the budget.
+//! wire size targets the specified byte budget.
 
 #![expect(
     clippy::cast_precision_loss,
@@ -73,18 +67,13 @@ trait ChunkBuilder {
     fn wire(proof: &Self::Proof) -> Vec<u8>;
 }
 
-/// A chunk proof `builder` assembles from a prefix of `items` (positioned at
-/// the start key), sized to approach `budget` compressed wire bytes without
-/// exceeding it — unless a single item alone does. `ratio_hint` seeds the
-/// compressed ÷ uncompressed estimate and is sanitized here.
+/// Assembles a proof from a prefix of `items`, sized to approach
+/// `budget` compressed wire bytes without exceeding it unless a single
+/// item alone does.
 ///
-/// Grows: fills to the ratio-estimated body budget, re-deriving the ratio
-/// from the real wire length until the wire reaches the accept floor.
-/// Then shrinks: truncates until the wire fits. It never grows after
-/// shrinking — the truncated tail was already consumed from the iterator,
-/// so refilling would skip a key gap. Both bounds are deliberate: the chunk
-/// is near-budget in a handful of proof builds, not the exact largest
-/// fitting prefix.
+/// The proof is grown/shrunk by estimate, and is decided by real 
+/// serialized length. The output is near-budget, not the exact 
+/// largest fitting prefix.
 fn stream_sized<B: ChunkBuilder>(
     builder: &B,
     items: impl Iterator<Item = Result<B::Item, api::Error>>,
@@ -161,7 +150,6 @@ fn stream_sized<B: ChunkBuilder>(
         ratio,
     })
 }
-
 
 struct RangeChunkBuilder<'a, T> {
     merkle: &'a Merkle<T>,
@@ -284,7 +272,7 @@ impl<T: TrieReader> Merkle<T> {
 impl<T: HashedNodeReader> Merkle<T> {
     /// Generates a change proof sized to target `budget` compressed
     /// wire bytes without exceeding it.
-    /// 
+    ///
     /// # Errors
     ///
     /// Any error from proof generation or diff iteration.
