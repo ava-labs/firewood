@@ -100,12 +100,11 @@ fn stream_sized<B: ChunkBuilder>(
     let mut body = 0u64; // summed item_cost of `kept`
     let mut natural = true;
 
-    // The empty chunk's wire doubles as the fixed edge overhead: its length
-    // (the left edge), plus the same again (or a 6 KiB floor) for the right
-    // edge.
+    // estimate edge overhead
+    // TODO(AminR443): the 6KiB constant is very rough estimate. use a better estimate/method.
     let mut proof = builder.build(&[], true)?;
     let mut wire = B::wire(&proof);
-    let fixed = (wire.len() as u64).saturating_add((wire.len() as u64).max(6 * 1024));
+    let fixed = (wire.len() as u64).saturating_add((wire.len() as u64).max(6 * 1024)); // 6KiB
 
     for _ in 0..=MAX_GROW {
         // Uncompressed body budget = compressed budget ÷ ratio − overhead.
@@ -138,11 +137,7 @@ fn stream_sized<B: ChunkBuilder>(
     }
 
     // Shrink: drop entries until the wire fits, but never below one so
-    // paging progresses. Each step drops half of what the average per-entry
-    // size suggests: the average understates what the tail entries actually
-    // contribute when compressibility is uneven, and a full-step drop can
-    // land far below the budget. Half-steps converge in a few builds while
-    // keeping the chunk near the budget.
+    // paging progresses.
     while wire.len() > budget && kept.len() > 1 {
         let per_entry = (wire.len() as f64 / kept.len() as f64).max(1.0);
         let over = wire.len().saturating_sub(budget) as f64;
@@ -169,8 +164,7 @@ fn stream_sized<B: ChunkBuilder>(
     })
 }
 
-/// Range-proof chunks: the right edge proves the last kv, or nothing when
-/// the payload reached the natural end of the keyspace.
+
 struct RangeChunkBuilder<'a, T> {
     merkle: &'a Merkle<T>,
     start_proof: &'a FrozenProof,
@@ -208,9 +202,6 @@ impl<T: TrieReader> ChunkBuilder for RangeChunkBuilder<'_, T> {
     }
 }
 
-/// Change-proof chunks: the plain change-proof API proves the last op key
-/// even at the natural end, so the right edge is unconditional for a
-/// non-empty payload.
 struct ChangeChunkBuilder<'a, T> {
     merkle: &'a Merkle<T>,
     start_proof: &'a FrozenProof,
@@ -254,18 +245,8 @@ impl<T: HashedNodeReader> ChunkBuilder for ChangeChunkBuilder<'_, T> {
 }
 
 impl<T: TrieReader> Merkle<T> {
-    /// A range proof from `start_key` sized to approach `budget` compressed
-    /// wire bytes without exceeding it, plus a right edge for paging. The
-    /// chunk is near-budget, produced in a handful of proof builds — not
-    /// guaranteed to be the largest possible prefix that fits. `ratio_hint`
-    /// seeds the compression estimate — pass the previous chunk's
-    /// [`SizedProof::ratio`], or `None` on the first chunk; non-finite or
-    /// out-of-range hints are sanitized.
-    ///
-    /// Returns at least one key-value pair while keys at or after `start_key`
-    /// remain (a single entry may exceed `budget`; paging still progresses).
-    /// A `start_key` past the last key yields an empty payload with
-    /// `natural_end` set.
+    /// Generates a range proof sized to target `budget` compressed
+    /// wire bytes without exceeding it.
     ///
     /// # Errors
     ///
@@ -303,13 +284,9 @@ impl<T: TrieReader> Merkle<T> {
 }
 
 impl<T: HashedNodeReader> Merkle<T> {
-    /// A change proof (against `source_trie`) from `start_key` sized to
-    /// approach `budget` compressed wire bytes without exceeding it. Mirrors
-    /// [`Merkle::range_proof_sized`], returning at least one op while diff
-    /// entries remain. Identical tries (or a `start_key` past the last
-    /// difference) yield an empty payload with `natural_end` set, matching
-    /// [`Merkle::change_proof`].
-    ///
+    /// Generates a change proof sized to target `budget` compressed
+    /// wire bytes without exceeding it.
+    /// 
     /// # Errors
     ///
     /// Any error from proof generation or diff iteration.
