@@ -29,8 +29,9 @@ use firewood_storage::MemStore;
 use firewood_storage::{
     BranchNode, Child, Children, DefaultHashMode, DeletedNodeTracking, FileIoError, HashMode,
     HashType, HashableShunt, HashedNodeReader, ImmutableProposal, LeafNode, MaybePersistedNode,
-    Mutable, MutableKind, NibblesIterator, Node, NodeHashAlgorithm, NodeStore, Path, PathBuf,
-    PathComponent, Propose, ReadableStorage, SharedNode, TrieHash, TrieReader, U4, ValueDigest,
+    Mutable, MutableKind, NibblesIterator, Node, NodeHashAlgorithm, NodeReader, NodeStore, Path,
+    PathBuf, PathComponent, Propose, ReadableStorage, SharedNode, TrieHash, TrieReader, U4,
+    ValueDigest,
 };
 use firewood_storage::{
     hash_node_as_storage_trie_root_for_node, hash_node_as_storage_trie_root_parts,
@@ -505,32 +506,38 @@ fn change_outside_children<S: ReadableStorage>(
 /// Compute the hash of a node in the proving trie, merging child hashes
 /// from proof nodes for subtrees outside the proven range.
 ///
-/// For branch nodes, in-range children that are in-memory (`Child::Node`)
-/// are hashed recursively. Persisted children (`AddressWithHash`,
-/// `MaybePersisted`) already carry their hash and are used directly.
-/// Out-of-range children get their hash from the corresponding proof node.
+/// For branch nodes, in-range children that are in-memory (`Child::Node`) are
+/// hashed recursively. Persisted children (`AddressWithHash`, `MaybePersisted`)
+/// already carry their hash and are used directly, except at account depth under
+/// `ethhash`, where the stored hash may have been folded and is re-derived from
+/// `storage` instead. Out-of-range children get their hash from the corresponding
+/// proof node.
+///
+/// `storage` reads persisted children when their stored hash cannot be trusted.
 ///
 /// Hashes the node as a normal trie node. Under `ethhash`, when this node
 /// is the single storage child of an account at depth 64, the parent
 /// instead invokes `compute_root_hash_as_storage_trie_root` to apply the
 /// storage-trie-root fold.
-fn compute_root_hash_with_proofs(
+fn compute_root_hash_with_proofs<R: NodeReader>(
     node: &Node,
     path_prefix: &[PathComponent],
     proof_nodes: &HashMap<PathBuf, &ProofNode>,
     outside_children: &HashMap<PathBuf, ChildMask>,
-) -> HashType {
+    storage: &R,
+) -> Result<HashType, api::Error> {
     match node {
-        Node::Leaf(_) => HashableShunt::from_node(path_prefix, node).to_hash(),
+        Node::Leaf(_) => Ok(HashableShunt::from_node(path_prefix, node).to_hash()),
         Node::Branch(branch) => {
-            let parts = build_branch_parts(branch, path_prefix, proof_nodes, outside_children);
-            HashableShunt::new(
+            let parts =
+                build_branch_parts(branch, path_prefix, proof_nodes, outside_children, storage)?;
+            Ok(HashableShunt::new(
                 path_prefix,
                 parts.partial_path,
                 parts.value_digest,
                 parts.child_hashes,
             )
-            .to_hash()
+            .to_hash())
         }
     }
 }
@@ -540,31 +547,35 @@ fn compute_root_hash_with_proofs(
 /// account boundaries when this node is the account's lone storage child;
 /// the fold matches what live hashing produced when the storage trie was
 /// first written.
-fn compute_root_hash_as_storage_trie_root(
+fn compute_root_hash_as_storage_trie_root<R: NodeReader>(
     node: &Node,
     account_prefix: &[PathComponent],
     branch_nibble: PathComponent,
     proof_nodes: &HashMap<PathBuf, &ProofNode>,
     outside_children: &HashMap<PathBuf, ChildMask>,
-) -> HashType {
+    storage: &R,
+) -> Result<HashType, api::Error> {
     match node {
-        Node::Leaf(_) => {
-            hash_node_as_storage_trie_root_for_node(account_prefix, branch_nibble, node)
-        }
+        Node::Leaf(_) => Ok(hash_node_as_storage_trie_root_for_node(
+            account_prefix,
+            branch_nibble,
+            node,
+        )),
         Node::Branch(branch) => {
             let path_prefix: PathBuf = account_prefix
                 .iter()
                 .copied()
                 .chain(once(branch_nibble))
                 .collect();
-            let parts = build_branch_parts(branch, &path_prefix, proof_nodes, outside_children);
-            hash_node_as_storage_trie_root_parts(
+            let parts =
+                build_branch_parts(branch, &path_prefix, proof_nodes, outside_children, storage)?;
+            Ok(hash_node_as_storage_trie_root_parts(
                 account_prefix,
                 branch_nibble,
                 parts.partial_path,
                 parts.value_digest,
                 parts.child_hashes,
-            )
+            ))
         }
     }
 }
@@ -583,12 +594,13 @@ struct BranchParts<'b> {
 /// points. Walks `branch`'s children (recursing into in-range subtrees,
 /// copying proof-node hashes for out-of-range slots) and returns the parts
 /// the caller needs to hash this node by either terminal helper.
-fn build_branch_parts<'b>(
+fn build_branch_parts<'b, R: firewood_storage::NodeReader>(
     branch: &'b BranchNode,
     path_prefix: &[PathComponent],
     proof_nodes: &HashMap<PathBuf, &'b ProofNode>,
     outside_children: &HashMap<PathBuf, ChildMask>,
-) -> BranchParts<'b> {
+    storage: &R,
+) -> Result<BranchParts<'b>, api::Error> {
     // Build full key for this node: path_prefix ++ partial_path
     let full_key: PathBuf = path_prefix
         .iter()
@@ -604,6 +616,16 @@ fn build_branch_parts<'b>(
 
     let mut child_hashes: Children<Option<HashType>> = Children::new();
 
+    // A persisted child already carries its hash, so it can normally be used
+    // directly instead of resolving and recursing. That shortcut is unsafe at
+    // account depth under `ethhash`: whether live hashing folded a child as the
+    // account's storage-trie root depends on the child count when it hashed, and
+    // reconcile and collapse can change that count afterwards. The stored hash
+    // cannot be trusted to match the fold this reconstruction needs, so an
+    // account's children are always re-derived.
+    let at_account_depth =
+        DefaultHashMode::ALGORITHM.is_ethereum() && full_key.len() == ACCOUNT_DEPTH_NIBBLES;
+
     // For children inside the proven range, compute hashes recursively.
     // For children outside the range, use proof node hashes (set below).
     let mut child_prefix: PathBuf = full_key.iter().copied().collect();
@@ -612,10 +634,34 @@ fn build_branch_parts<'b>(
         if outside_mask.is_some_and(|m| m.is_set(nibble.0)) {
             continue;
         }
-        // Persisted children already carry their hash — use it directly
-        // instead of resolving and recursing into the subtree.
         if let Child::AddressWithHash(_, hash) | Child::MaybePersisted(_, hash) = child {
-            child_hashes[nibble] = Some(hash.clone());
+            if !at_account_depth {
+                child_hashes[nibble] = Some(hash.clone());
+                continue;
+            }
+            let needs_fold = single_storage_child == Some(nibble);
+            let resolved = child.as_shared_node(storage)?;
+            child_prefix.push(nibble);
+            let child_hash = if needs_fold {
+                compute_root_hash_as_storage_trie_root(
+                    &resolved,
+                    &full_key,
+                    nibble,
+                    proof_nodes,
+                    outside_children,
+                    storage,
+                )?
+            } else {
+                compute_root_hash_with_proofs(
+                    &resolved,
+                    &child_prefix,
+                    proof_nodes,
+                    outside_children,
+                    storage,
+                )?
+            };
+            child_hashes[nibble] = Some(child_hash);
+            child_prefix.pop();
             continue;
         }
         let Child::Node(child_node) = child else {
@@ -625,19 +671,25 @@ fn build_branch_parts<'b>(
         // Apply the storage-trie-root fold for the account's lone storage
         // child; the dispatch lives here at the parent so the child's recursive
         // call doesn't need to carry a flag.
-        let child_hash = if DefaultHashMode::ALGORITHM.is_ethereum()
-            && single_storage_child == Some(nibble)
-        {
-            compute_root_hash_as_storage_trie_root(
-                child_node,
-                &full_key,
-                nibble,
-                proof_nodes,
-                outside_children,
-            )
-        } else {
-            compute_root_hash_with_proofs(child_node, &child_prefix, proof_nodes, outside_children)
-        };
+        let child_hash =
+            if DefaultHashMode::ALGORITHM.is_ethereum() && single_storage_child == Some(nibble) {
+                compute_root_hash_as_storage_trie_root(
+                    child_node,
+                    &full_key,
+                    nibble,
+                    proof_nodes,
+                    outside_children,
+                    storage,
+                )?
+            } else {
+                compute_root_hash_with_proofs(
+                    child_node,
+                    &child_prefix,
+                    proof_nodes,
+                    outside_children,
+                    storage,
+                )?
+            };
         child_hashes[nibble] = Some(child_hash);
         child_prefix.pop();
     }
@@ -663,11 +715,11 @@ fn build_branch_parts<'b>(
             proof_node.and_then(|pn| pn.value_digest.as_ref().map(ValueDigest::as_ref))
         });
 
-    BranchParts {
+    Ok(BranchParts {
         partial_path: branch.partial_path.as_components(),
         value_digest,
         child_hashes,
-    }
+    })
 }
 
 /// At a depth-64 account branch, return the slot of the single effective
@@ -1207,8 +1259,13 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
         return Err(api::Error::ProofError(ProofError::Empty));
     };
 
-    let computed =
-        compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children);
+    let computed = compute_root_hash_with_proofs(
+        &root_node,
+        &[],
+        &proof_node_map,
+        &outside_children,
+        proving_merkle.nodestore(),
+    )?;
 
     let expected = HashType::from(root_hash.clone());
     if computed != expected {
@@ -1409,8 +1466,13 @@ pub fn verify_change_proof_root_hash(
         .root()
         .expect("a non-empty proof reconciliation always leaves behind a root node");
 
-    let computed =
-        compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children);
+    let computed = compute_root_hash_with_proofs(
+        &root_node,
+        &[],
+        &proof_node_map,
+        &outside_children,
+        proving_merkle.nodestore(),
+    )?;
 
     if computed != verification.end_root {
         return Err(api::Error::ProofError(ProofError::EndRootMismatch));

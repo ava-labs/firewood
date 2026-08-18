@@ -327,3 +327,120 @@ fn test_change_proof_single_storage_child_truncated() {
     let empty_root_target = target.root_hash().unwrap();
     verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
 }
+
+/// An honest change proof must verify when a storage slot deleted outside the
+/// range leaves the account with only one slot inside it.
+///
+/// The account has two storage slots, `0x10` and `0x99`. The end trie changes
+/// `0x10` and deletes `0x99`. The range stops at `<account>||0x95`, so `0x10`
+/// is inside it and `0x99` is outside.
+///
+/// A deletion outside the range is never reported, so the verifier rebuilds the
+/// account with both slots still present while the real end trie has one. For
+/// the two roots to agree, the verifier has to notice that nothing inside the
+/// range sits under `0x99`, take that side from the proof instead of rebuilding
+/// it, and then hash the single remaining slot as the account's storage root —
+/// which is what ethhash does for an account with exactly one slot.  The test
+/// asserts the proof verifies. If the `0x99` side is rebuilt instead of
+/// taken from the proof, the account keeps two slots and its storage root is
+/// wrong. If the remaining slot is not hashed as the storage root, the account
+/// has one slot but still hashes wrong. Either way, verification fails with
+/// `EndRootMismatch`.
+#[test]
+fn test_change_proof_boundary_child_folds_single_storage_child() {
+    let account_value = rlp_encode_account(1, 100, &[0u8; 32], &empty_code_hash());
+    let in_range = key_under_account(&ACCOUNT_KEY, 0x10);
+    let out_of_range = key_under_account(&ACCOUNT_KEY, 0x99);
+    let slot_a = rlp_encode_storage(&[1u8; 32]);
+    let slot_b = rlp_encode_storage(&[2u8; 32]);
+
+    let (source, target, root1_target, _ds, _dt) = setup_source_target![
+        (ACCOUNT_KEY.as_ref(), account_value.as_ref()),
+        (in_range.as_ref(), slot_a.as_ref()),
+        (out_of_range.as_ref(), slot_b.as_ref())
+    ];
+
+    let root1_source = source.root_hash().unwrap();
+    let slot_a_new = rlp_encode_storage(&[3u8; 32]);
+    let end_batch: Vec<BatchOp<&[u8], &[u8]>> = vec![
+        BatchOp::Put {
+            key: in_range.as_ref(),
+            value: slot_a_new.as_ref(),
+        },
+        BatchOp::Delete {
+            key: out_of_range.as_ref(),
+        },
+    ];
+    source.propose(end_batch).unwrap().commit().unwrap();
+    let root2 = source.root_hash().unwrap();
+
+    let end_key = key_under_account(&ACCOUNT_KEY, 0x95);
+    let proof = source
+        .change_proof(
+            root1_source,
+            root2.clone(),
+            None,
+            Some(end_key.as_ref()),
+            None,
+        )
+        .unwrap();
+    let ctx =
+        verify_change_proof_structure(&proof, root2, None, Some(end_key.as_ref()), None).unwrap();
+    verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
+}
+
+/// An honest change proof must verify when the end trie adds a storage slot
+/// outside the range to an account that has exactly one slot inside it.
+///
+/// The account starts with one storage slot, `0x10`. The end trie rewrites the
+/// account's own value and adds `0x99`. The range stops at `<account>||0x95`, so
+/// `0x10` is inside it and `0x99` is outside.
+///
+/// The proposal is hashed while the account still has one storage child, so live
+/// hashing folds that child as the account's storage root. Reconciling the end
+/// proof then adds the out-of-range side, giving the account two children, and the
+/// reconstruction needs the child's plain hash rather than the folded one. Reading
+/// the count after reconciliation cannot distinguish the two, so an account's
+/// persisted children must always be resolved rather than trusted.
+#[test]
+fn test_change_proof_added_out_of_range_slot_unfolds_in_range_slot() {
+    let account_value = rlp_encode_account(1, 100, &[0u8; 32], &empty_code_hash());
+    let in_range = key_under_account(&ACCOUNT_KEY, 0x10);
+    let out_of_range = key_under_account(&ACCOUNT_KEY, 0x99);
+    let slot_a = rlp_encode_storage(&[1u8; 32]);
+    let slot_b = rlp_encode_storage(&[2u8; 32]);
+
+    let (source, target, root1_target, _ds, _dt) = setup_source_target![
+        (ACCOUNT_KEY.as_ref(), account_value.as_ref()),
+        (in_range.as_ref(), slot_a.as_ref())
+    ];
+
+    let root1_source = source.root_hash().unwrap();
+    let account_value2 = rlp_encode_account(2, 200, &[0u8; 32], &empty_code_hash());
+    let end_batch: Vec<BatchOp<&[u8], &[u8]>> = vec![
+        BatchOp::Put {
+            key: ACCOUNT_KEY.as_ref(),
+            value: account_value2.as_ref(),
+        },
+        BatchOp::Put {
+            key: out_of_range.as_ref(),
+            value: slot_b.as_ref(),
+        },
+    ];
+    source.propose(end_batch).unwrap().commit().unwrap();
+    let root2 = source.root_hash().unwrap();
+
+    let end_key = key_under_account(&ACCOUNT_KEY, 0x95);
+    let proof = source
+        .change_proof(
+            root1_source,
+            root2.clone(),
+            None,
+            Some(end_key.as_ref()),
+            None,
+        )
+        .unwrap();
+    let ctx =
+        verify_change_proof_structure(&proof, root2, None, Some(end_key.as_ref()), None).unwrap();
+    verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
+}

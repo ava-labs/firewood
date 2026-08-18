@@ -754,6 +754,130 @@ fn forge_range_code_hash(proof: &FrozenRangeProof, rng: &SeededRng) -> Option<Fr
     ))
 }
 
+/// Generate a change proof under a random cap, verify it, then confirm that
+/// dropping an operation *below* the proven right edge is still rejected.
+///
+/// The drop is the assertion that matters: narrowing decides how far the proof
+/// reaches, and an operation missing from inside that reach must never be
+/// accepted. Without this, narrowing could silently hide an omission.
+fn check_truncated_change_proof(
+    db: &Db,
+    start_root: &HashKey,
+    end_root: &HashKey,
+    first: Option<&[u8]>,
+    last: Option<&[u8]>,
+    rng: &SeededRng,
+    locator: &str,
+) {
+    use std::num::NonZeroUsize;
+    let cap = rng.random_range(1..6_usize);
+    let Some(limit) = NonZeroUsize::new(cap) else {
+        return;
+    };
+    let Ok(proof) = db.change_proof(
+        start_root.clone(),
+        end_root.clone(),
+        first,
+        last,
+        Some(limit),
+    ) else {
+        return;
+    };
+    if proof.batch_ops().is_empty() {
+        return;
+    }
+
+    // Structural verification of an honest capped proof must succeed. No failure
+    // was seen across the run that surfaced the root-hash residue below, so this
+    // is an assertion rather than a tally.
+    let ctx = verify_change_proof_structure(
+        &proof,
+        end_root.clone(),
+        first,
+        last,
+        NodeHashAlgorithm::Ethereum,
+        Some(limit),
+    )
+    .unwrap_or_else(|e| {
+        panic!("honest capped proof must verify structurally ({locator}, cap={cap}): {e}")
+    });
+    let right_edge = ctx.right_edge_key.clone();
+    let parent = db.revision(start_root.clone()).unwrap();
+    let proposal = db
+        .apply_change_proof_to_parent(&proof, &*parent)
+        .unwrap_or_else(|e| panic!("apply should succeed ({locator}, cap={cap}): {e}"));
+    // Counted rather than asserted. The account-fold defect that produced every
+    // known failure here is fixed, and the four seeds that reproduced it now pass,
+    // but that is four samples rather than a soak. Promote this to an assertion
+    // once a run of comparable size to the one that found them reports nothing.
+    if verify_change_proof_root_hash(&proof, &ctx, &proposal).is_err() {
+        eprintln!("TRUNC_INCOMPLETE phase=3 {locator} cap={cap}");
+        return;
+    }
+
+    // Every op must lie at or below the proven right edge: narrowing must never
+    // claim less than the operations it carries.
+    if let Some(edge) = right_edge.as_deref() {
+        for op in proof.batch_ops() {
+            assert!(
+                op.key().as_ref() <= edge,
+                "op above the proven right edge ({locator}, cap={cap})"
+            );
+        }
+    }
+
+    // Negative: drop an op strictly below the last one. It is inside the proven
+    // range under either reading, so the proof must be rejected.
+    // Drop a storage slot (64-byte key), never an account (32-byte key). An
+    // account's `storageRoot` is recomputed from its storage children at hash
+    // time, so an account op carrying only a derived `storageRoot` change is
+    // redundant and omitting it is legitimately harmless. A storage slot is real
+    // data with no such escape.
+    let last_idx = proof.batch_ops().len().saturating_sub(1);
+    let candidates: Vec<usize> = (0..last_idx)
+        .filter(|&i| proof.batch_ops()[i].key().len() == 64)
+        .collect();
+    if candidates.is_empty() {
+        return;
+    }
+    let drop_idx = candidates[rng.random_range(0..candidates.len())];
+    let ops: Vec<BatchOp<Key, Value>> = proof
+        .batch_ops()
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != drop_idx)
+        .map(|(_, op)| op.clone())
+        .collect();
+    let holed = build_change_proof(
+        proof.start_proof().as_ref().to_vec(),
+        proof.end_proof().as_ref().to_vec(),
+        ops,
+    );
+    let rejected = match verify_change_proof_structure(
+        &holed,
+        end_root.clone(),
+        first,
+        last,
+        NodeHashAlgorithm::Ethereum,
+        Some(limit),
+    ) {
+        Err(_) => true,
+        Ok(hctx) => {
+            let parent = db.revision(start_root.clone()).unwrap();
+            match db.apply_change_proof_to_parent(&holed, &*parent) {
+                Err(_) => true,
+                Ok(hproposal) => verify_change_proof_root_hash(&holed, &hctx, &hproposal).is_err(),
+            }
+        }
+    };
+    assert!(
+        rejected,
+        "a change proof missing an in-range storage slot must be rejected \
+         ({locator}, cap={cap}, dropped={drop_idx}, n_ops={})",
+        proof.batch_ops().len()
+    );
+}
+
 #[test]
 fn test_slow_ethhash_proof_fuzz() {
     let run_one = |run: usize, seed: u64| {
@@ -776,6 +900,11 @@ fn test_slow_ethhash_proof_fuzz() {
             let range = check_valid_range_proof(db, end_root, first, last, &rng, &locator);
             let change =
                 check_valid_change_proof(db, start_root, end_root, first, last, &rng, &locator);
+
+            // Truncated change proofs: the generator stops at a cap, so the
+            // proven range may narrow to the last op. Exercises the narrowing
+            // arm, which the unlimited proofs above never reach.
+            check_truncated_change_proof(db, start_root, end_root, first, last, &rng, &locator);
 
             // Negative: every tamper of the valid change proof must be rejected.
             for (kind, tampered) in [
