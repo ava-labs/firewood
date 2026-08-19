@@ -99,6 +99,25 @@ pub enum UseParallel {
     Always,
 }
 
+/// Size limits governing how a proof is deserialized.
+#[derive(Clone, Copy, TypedBuilder, Debug)]
+#[non_exhaustive]
+pub struct ProofConfig {
+    /// Hard cap on a decoded proof body.
+    #[builder(default = 32 * 1024 * 1024)] // 32 MiB
+    pub max_decompressed_len: usize,
+    /// Upper bound on the ratio between the uncompressed body length
+    /// and the compressed frame length.
+    #[builder(default = 128)]
+    pub max_compression_ratio: usize,
+}
+
+impl Default for ProofConfig {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
 /// Database configuration.
 #[derive(Clone, TypedBuilder, Debug)]
 #[non_exhaustive]
@@ -124,6 +143,9 @@ pub struct DbConfig {
     /// Whether to enable `RootStore`.
     #[builder(default = false)]
     pub root_store: bool,
+    /// Size limits applied when deserializing proofs.
+    #[builder(default = ProofConfig::builder().build())]
+    pub proof: ProofConfig,
 }
 
 /// A database instance.
@@ -135,6 +157,7 @@ pub struct DbConfig {
 pub struct Db {
     manager: RevisionManager,
     use_parallel: UseParallel,
+    proof_config: ProofConfig,
 }
 
 impl api::Db for Db {
@@ -177,8 +200,15 @@ impl Db {
         let db = Self {
             manager,
             use_parallel: cfg.use_parallel,
+            proof_config: cfg.proof,
         };
         Ok(db)
+    }
+
+    /// The size limits applied when serializing/deserializing proofs.
+    #[must_use]
+    pub const fn proof_config(&self) -> ProofConfig {
+        self.proof_config
     }
 
     /// Synchronously get a view, either committed or proposed
