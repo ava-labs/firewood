@@ -143,7 +143,7 @@ pub struct DbConfig {
     /// Whether to enable `RootStore`.
     #[builder(default = false)]
     pub root_store: bool,
-    /// Size limits applied when serializing/deseralizing proofs.
+    /// Size limits applied when deserializing proofs.
     #[builder(default = ProofConfig::builder().build())]
     pub proof: ProofConfig,
 }

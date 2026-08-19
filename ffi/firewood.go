@@ -189,8 +189,9 @@ func WithNodeCacheSizeInBytes(sizeInBytes uint) Option {
 	}
 }
 
-// WithProofSizeLimits sets the size limits applied when serializing and
-// deserializing proofs. A zero value for any limit uses the default.
+// WithProofSizeLimits sets the size limits applied when deserializing
+// proofs. A zero value for any limit uses the default.
+// Default: maxDecompressedLen 32 MiB, maxCompressionRatio 128
 func WithProofSizeLimits(maxDecompressedLen, maxCompressionRatio uint) Option {
 	return func(c *config) {
 		c.proofMaxDecompressedLen = maxDecompressedLen
