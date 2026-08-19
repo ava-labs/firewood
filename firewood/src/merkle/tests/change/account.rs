@@ -328,98 +328,82 @@ fn test_change_proof_single_storage_child_truncated() {
     verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
 }
 
-/// An honest change proof must verify when a storage slot deleted outside the
-/// range leaves the account with only one slot inside it.
+/// How the end trie changes the account's out-of-range storage slot, for the
+/// parameterized fold test below.
+#[derive(Debug, Clone, Copy)]
+enum OutOfRangeSlot {
+    /// The end trie deletes it, leaving one slot inside the range.
+    Deleted,
+    /// The end trie adds it to an account that had one slot inside the range.
+    Added,
+}
+
+/// Both directions of the account storage-trie-root fold. An honest change proof
+/// must verify whether the end trie deletes the out-of-range storage slot or adds
+/// it.
 ///
-/// The account has two storage slots, `0x10` and `0x99`. The end trie changes
-/// `0x10` and deletes `0x99`. The range stops at `<account>||0x95`, so `0x10`
-/// is inside it and `0x99` is outside.
+/// The account's slot `0x10` is inside the range and `0x99` is outside it, because
+/// the range stops at `<account>||0x95`. `ethhash` hashes an account's lone
+/// storage slot as the account's own storage root. Call that the fold.
+/// - `boundary_child_folds_single_storage_child` starts with both slots and
+///   deletes `0x99`. A deletion outside the range is never reported, so the
+///   verifier must take the `0x99` side from the proof rather than rebuild it.
+///   That leaves one slot, which needs the fold.
+/// - `added_out_of_range_slot_unfolds_in_range_slot` starts with only `0x10` and
+///   adds `0x99`. The proposal is hashed while the account still has one child, so
+///   live hashing folds `0x10`. Reconciling the end proof then adds the
+///   out-of-range side, and the reconstruction needs the plain hash instead.
 ///
-/// A deletion outside the range is never reported, so the verifier must take the
-/// `0x99` side from the proof rather than rebuild it. That leaves the account with
-/// one slot, which `ethhash` then hashes as the account's storage root. Getting
-/// either step wrong fails with `EndRootMismatch`.
-#[test]
-fn test_change_proof_boundary_child_folds_single_storage_child() {
+/// A child count read after reconciliation cannot tell those two cases apart,
+/// which is why an account's persisted children are always re-derived. Getting
+/// either direction wrong fails with `EndRootMismatch`.
+#[test_case(OutOfRangeSlot::Deleted ; "boundary_child_folds_single_storage_child")]
+#[test_case(OutOfRangeSlot::Added ; "added_out_of_range_slot_unfolds_in_range_slot")]
+fn test_change_proof_account_fold_across_the_range_boundary(slot: OutOfRangeSlot) {
     let account_value = rlp_encode_account(1, 100, &[0u8; 32], &empty_code_hash());
     let in_range = key_under_account(&ACCOUNT_KEY, 0x10);
     let out_of_range = key_under_account(&ACCOUNT_KEY, 0x99);
     let slot_a = rlp_encode_storage(&[1u8; 32]);
     let slot_b = rlp_encode_storage(&[2u8; 32]);
 
-    let (source, target, root1_target, _ds, _dt) = setup_source_target![
-        (ACCOUNT_KEY.as_ref(), account_value.as_ref()),
-        (in_range.as_ref(), slot_a.as_ref()),
-        (out_of_range.as_ref(), slot_b.as_ref())
-    ];
+    // `Deleted` needs the out-of-range slot present up front; `Added` introduces
+    // it in the end batch.
+    let (source, target, root1_target, _ds, _dt) = match slot {
+        OutOfRangeSlot::Deleted => setup_source_target![
+            (ACCOUNT_KEY.as_ref(), account_value.as_ref()),
+            (in_range.as_ref(), slot_a.as_ref()),
+            (out_of_range.as_ref(), slot_b.as_ref())
+        ],
+        OutOfRangeSlot::Added => setup_source_target![
+            (ACCOUNT_KEY.as_ref(), account_value.as_ref()),
+            (in_range.as_ref(), slot_a.as_ref())
+        ],
+    };
 
     let root1_source = source.root_hash().unwrap();
     let slot_a_new = rlp_encode_storage(&[3u8; 32]);
-    let end_batch: Vec<BatchOp<&[u8], &[u8]>> = vec![
-        BatchOp::Put {
-            key: in_range.as_ref(),
-            value: slot_a_new.as_ref(),
-        },
-        BatchOp::Delete {
-            key: out_of_range.as_ref(),
-        },
-    ];
-    source.propose(end_batch).unwrap().commit().unwrap();
-    let root2 = source.root_hash().unwrap();
-
-    let end_key = key_under_account(&ACCOUNT_KEY, 0x95);
-    let proof = source
-        .change_proof(
-            root1_source,
-            root2.clone(),
-            None,
-            Some(end_key.as_ref()),
-            None,
-        )
-        .unwrap();
-    let ctx =
-        verify_change_proof_structure(&proof, root2, None, Some(end_key.as_ref()), None).unwrap();
-    verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
-}
-
-/// An honest change proof must verify when the end trie adds a storage slot
-/// outside the range to an account that has exactly one slot inside it.
-///
-/// The account starts with one storage slot, `0x10`. The end trie rewrites the
-/// account's own value and adds `0x99`. The range stops at `<account>||0x95`, so
-/// `0x10` is inside it and `0x99` is outside.
-///
-/// The proposal is hashed while the account still has one storage child, so live
-/// hashing folds that child as the account's storage root. Reconciling the end
-/// proof then adds the out-of-range side, so the reconstruction needs the plain
-/// hash instead. A child count read after reconciliation cannot tell those two
-/// cases apart, which is why an account's persisted children are always
-/// re-derived.
-#[test]
-fn test_change_proof_added_out_of_range_slot_unfolds_in_range_slot() {
-    let account_value = rlp_encode_account(1, 100, &[0u8; 32], &empty_code_hash());
-    let in_range = key_under_account(&ACCOUNT_KEY, 0x10);
-    let out_of_range = key_under_account(&ACCOUNT_KEY, 0x99);
-    let slot_a = rlp_encode_storage(&[1u8; 32]);
-    let slot_b = rlp_encode_storage(&[2u8; 32]);
-
-    let (source, target, root1_target, _ds, _dt) = setup_source_target![
-        (ACCOUNT_KEY.as_ref(), account_value.as_ref()),
-        (in_range.as_ref(), slot_a.as_ref())
-    ];
-
-    let root1_source = source.root_hash().unwrap();
     let account_value2 = rlp_encode_account(2, 200, &[0u8; 32], &empty_code_hash());
-    let end_batch: Vec<BatchOp<&[u8], &[u8]>> = vec![
-        BatchOp::Put {
-            key: ACCOUNT_KEY.as_ref(),
-            value: account_value2.as_ref(),
-        },
-        BatchOp::Put {
-            key: out_of_range.as_ref(),
-            value: slot_b.as_ref(),
-        },
-    ];
+    let end_batch: Vec<BatchOp<&[u8], &[u8]>> = match slot {
+        OutOfRangeSlot::Deleted => vec![
+            BatchOp::Put {
+                key: in_range.as_ref(),
+                value: slot_a_new.as_ref(),
+            },
+            BatchOp::Delete {
+                key: out_of_range.as_ref(),
+            },
+        ],
+        OutOfRangeSlot::Added => vec![
+            BatchOp::Put {
+                key: ACCOUNT_KEY.as_ref(),
+                value: account_value2.as_ref(),
+            },
+            BatchOp::Put {
+                key: out_of_range.as_ref(),
+                value: slot_b.as_ref(),
+            },
+        ],
+    };
     source.propose(end_batch).unwrap().commit().unwrap();
     let root2 = source.root_hash().unwrap();
 
