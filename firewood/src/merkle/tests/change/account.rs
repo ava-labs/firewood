@@ -60,9 +60,9 @@ fn source_with_four_storage_children() -> (Db, tempfile::TempDir, api::HashKey, 
 }
 
 /// Bound choice for the parameterized partial-storage-children test below.
-/// Resolved to an `Option<&[u8]>` against the fixed `ACCOUNT_KEY` and a
-/// fixed mid-storage probe (`0x40`, between the storage children at 0x30
-/// and 0x60).
+/// Resolved to an `Option<&[u8]>` against the fixed `ACCOUNT_KEY` and probe
+/// keys under it, each named for where it falls among the storage children at
+/// 0x10, 0x30, 0x60 and 0xC0.
 #[derive(Debug, Clone, Copy)]
 enum Bound {
     /// No bound on this side of the range.
@@ -70,10 +70,15 @@ enum Bound {
     /// Bound exactly at `account_key` (32 bytes; the start-proof
     /// terminates at the account branch itself).
     AtAccount,
+    /// Bound at suffix 0x00, after the account key and before its first
+    /// storage child, so the account is in range with none of its storage.
+    BeforeStorage,
     /// Bound in the middle of the account's storage children, between
     /// storage[1] and storage[2] (64 bytes; the proof reconciliation
     /// runs through the storage trie).
     MidStorage,
+    /// Bound at suffix 0xB0, between storage[2] and storage[3].
+    LateStorage,
 }
 
 /// Change proof from empty to a single account with four storage children
@@ -86,22 +91,36 @@ enum Bound {
 /// account stays in range.
 /// - `left_half_end_bound_only` and `start_at_account_end_mid_storage` keep the
 ///   account in range with a storage subset → trigger the defect (fail pre-fix).
+/// - `account_in_range_no_storage_in_range` is the zero-storage extreme of that
+///   subset: the end bound excludes every storage child, so live hashing gives
+///   the account an empty `storageRoot` while the proof carries the full one →
+///   triggers the defect.
 /// - `right_half_start_bound_only` puts the account out of range via the start
 ///   bound, so its value is never compared: a guard that passes with and
 ///   without the fix.
+/// - `both_bounds_inside_account_storage` also puts the account out of range via
+///   the start bound, leaving only storage[2] in range. It exercises both edges
+///   of the storage trie in one proof, and is likewise a guard.
 #[test_case(Bound::None, Bound::MidStorage ; "left_half_end_bound_only")]
 #[test_case(Bound::AtAccount, Bound::MidStorage ; "start_at_account_end_mid_storage")]
+#[test_case(Bound::None, Bound::BeforeStorage ; "account_in_range_no_storage_in_range")]
 #[test_case(Bound::MidStorage, Bound::None ; "right_half_start_bound_only")]
+#[test_case(Bound::MidStorage, Bound::LateStorage ; "both_bounds_inside_account_storage")]
 fn test_change_proof_partial_storage_children_against_empty(start_bound: Bound, end_bound: Bound) {
     let (source, _dir_source, empty_root, root2) = source_with_four_storage_children();
 
-    // Mid-storage probe between the storage children at suffixes 0x30 and 0x60.
+    // Probe keys under the account, each named for where it falls among the
+    // storage children at suffixes 0x10, 0x30, 0x60 and 0xC0.
+    let before_storage = key_under_account(&ACCOUNT_KEY, 0x00);
     let mid_storage = key_under_account(&ACCOUNT_KEY, 0x40);
+    let late_storage = key_under_account(&ACCOUNT_KEY, 0xB0);
     let resolve = |bound: Bound| -> Option<&[u8]> {
         match bound {
             Bound::None => None,
             Bound::AtAccount => Some(ACCOUNT_KEY.as_ref()),
+            Bound::BeforeStorage => Some(before_storage.as_ref()),
             Bound::MidStorage => Some(mid_storage.as_ref()),
+            Bound::LateStorage => Some(late_storage.as_ref()),
         }
     };
     let start_key = resolve(start_bound);
@@ -212,77 +231,6 @@ fn test_change_proof_arbitrary_order_right_then_left_converges() {
         final_root, full_root,
         "final root after applying both batches should match source"
     );
-}
-
-/// Both a start and an end boundary land inside one account's storage
-/// trie: start between storage[1] (0x30) and storage[2] (0x60), end between
-/// storage[2] and storage[3] (0xC0). The account sorts before the start bound
-/// so it is out-of-range and only the middle storage child (0x60) is in range.
-/// Because the account is out-of-range its value is never compared, so this is
-/// a **guard**: it passes with and without the relaxation, exercising both
-/// edges of the storage trie in a single proof without a false-positive.
-/// Verified against an empty target.
-#[test]
-fn test_change_proof_both_bounds_inside_account_storage() {
-    let (source, _dir_source, empty_root, root2) = source_with_four_storage_children();
-
-    let start = key_under_account(&ACCOUNT_KEY, 0x40);
-    let end = key_under_account(&ACCOUNT_KEY, 0xB0);
-
-    let proof = source
-        .change_proof(
-            empty_root.clone(),
-            root2.clone(),
-            Some(start.as_ref()),
-            Some(end.as_ref()),
-            None,
-        )
-        .unwrap();
-    let ctx = verify_change_proof_structure(
-        &proof,
-        root2.clone(),
-        Some(start.as_ref()),
-        Some(end.as_ref()),
-        None,
-    )
-    .unwrap();
-
-    let (target, _dir_target) = setup_db![];
-    let empty_root_target = target.root_hash().unwrap();
-    verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
-}
-
-/// The account is in-range, but a tight end bound (just past the account
-/// key, before its first storage slot at suffix 0x10) excludes ALL of its
-/// storage children. The proposal inserts the account with no storage children,
-/// so live hashing gives it the *empty* storageRoot while the proof carries the
-/// full one. This is the zero-storage extreme of the partial-storage case. It
-/// **triggers the defect**: `UnexpectedValue` before the
-/// `account_values_equal_except_storage_root` relaxation, passes after.
-/// Verified against an empty target.
-#[test]
-fn test_change_proof_account_in_range_no_storage_in_range() {
-    let (source, _dir_source, empty_root, root2) = source_with_four_storage_children();
-
-    // end sits between the account key and its first storage slot (suffix
-    // 0x10), so the account is in range but none of its storage children are.
-    let end = key_under_account(&ACCOUNT_KEY, 0x00);
-
-    let proof = source
-        .change_proof(
-            empty_root.clone(),
-            root2.clone(),
-            None,
-            Some(end.as_ref()),
-            None,
-        )
-        .unwrap();
-    let ctx = verify_change_proof_structure(&proof, root2.clone(), None, Some(end.as_ref()), None)
-        .unwrap();
-
-    let (target, _dir_target) = setup_db![];
-    let empty_root_target = target.root_hash().unwrap();
-    verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
 }
 
 /// K=1 boundary: an account with a single storage child, which can never be a
