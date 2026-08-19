@@ -506,14 +506,12 @@ fn change_outside_children<S: ReadableStorage>(
 /// Compute the hash of a node in the proving trie, merging child hashes
 /// from proof nodes for subtrees outside the proven range.
 ///
-/// For branch nodes, in-range children that are in-memory (`Child::Node`) are
+/// For branch nodes, in-range children that are in memory (`Child::Node`) are
 /// hashed recursively. Persisted children (`AddressWithHash`, `MaybePersisted`)
 /// already carry their hash and are used directly, except at account depth under
-/// `ethhash`, where the stored hash may have been folded and is re-derived from
-/// `storage` instead. Out-of-range children get their hash from the corresponding
-/// proof node.
-///
-/// `storage` reads persisted children when their stored hash cannot be trusted.
+/// `ethhash`. There the stored hash may not match the fold this reconstruction
+/// needs, so the child is read back through `storage` and re-derived.
+/// Out-of-range children get their hash from the corresponding proof node.
 ///
 /// Hashes the node as a normal trie node. Under `ethhash`, when this node
 /// is the single storage child of an account at depth 64, the parent
@@ -619,8 +617,7 @@ fn build_branch_parts<'b, R: firewood_storage::NodeReader>(
     // Whether live hashing folded a child as the account's storage-trie root
     // depends on the child count when it hashed, and reconcile and collapse can
     // change that count afterwards. A persisted child's stored hash therefore
-    // cannot be trusted to match the fold this reconstruction needs, so at
-    // account depth every child is re-derived instead of being taken directly.
+    // cannot be trusted at account depth, so every child there is re-derived.
     let at_account_depth =
         DefaultHashMode::ALGORITHM.is_ethereum() && full_key.len() == ACCOUNT_DEPTH_NIBBLES;
 

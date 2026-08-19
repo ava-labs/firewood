@@ -1261,9 +1261,9 @@ fn test_an_unrelated_end_proof_does_not_narrow() {
 /// no-op rather than a contradiction.
 ///
 /// This is not an artificial case. `Db::verify_change_proof` always builds its
-/// proposal from the database's current revision, so a client that receives a
-/// proof it has already applied hits exactly this path: the proposal is built
-/// from `end_root` rather than `start_root`, and both must hash to `end_root`.
+/// proposal from the database's current revision. A client that re-receives a
+/// proof it has already applied therefore builds the proposal from `end_root`
+/// rather than `start_root`, and it must still hash to `end_root`.
 #[test]
 fn test_same_change_proof_applied_twice_succeeds() {
     let (source, target, root1, _ds, _dt) = setup_source_target![
@@ -1306,7 +1306,7 @@ fn test_same_change_proof_applied_twice_succeeds() {
         "target should now be at end_root"
     );
 
-    // Second application of the very same proof, now from end_root.
+    // Second application of the same proof, now from end_root.
     let ctx2 = verify_change_proof_structure(&proof, root2.clone(), None, None, None).unwrap();
     verify_and_check(&target, &proof, &ctx2, root2)
         .expect("re-applying the same proof must verify");

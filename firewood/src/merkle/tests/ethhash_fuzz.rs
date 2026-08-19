@@ -755,11 +755,11 @@ fn forge_range_code_hash(proof: &FrozenRangeProof, rng: &SeededRng) -> Option<Fr
 }
 
 /// Generate a change proof under a random cap, verify it, then confirm that
-/// dropping an operation *below* the proven right edge is still rejected.
+/// dropping an operation below the proven right edge is still rejected.
 ///
-/// The drop is the assertion that matters: narrowing decides how far the proof
-/// reaches, and an operation missing from inside that reach must never be
-/// accepted. Without this, narrowing could silently hide an omission.
+/// Capping is what makes the proven range narrow to the last operation, and the
+/// drop checks the consequence. An operation missing from inside the narrowed
+/// range must never be accepted, or narrowing could hide an omission.
 fn check_truncated_change_proof(
     db: &Db,
     start_root: &HashKey,
@@ -807,8 +807,8 @@ fn check_truncated_change_proof(
         panic!("honest capped proof root hash should verify ({locator}, cap={cap}): {e}")
     });
 
-    // Every op must lie at or below the proven right edge: narrowing must never
-    // claim less than the operations it carries.
+    // Every op must lie at or below the proven right edge. Narrowing must never
+    // claim a smaller range than the operations the proof carries.
     if let Some(edge) = right_edge.as_deref() {
         for op in proof.batch_ops() {
             assert!(
@@ -818,13 +818,13 @@ fn check_truncated_change_proof(
         }
     }
 
-    // Negative: drop an op strictly below the last one. It is inside the proven
-    // range under either reading, so the proof must be rejected.
-    // Drop a storage slot (64-byte key), never an account (32-byte key). An
-    // account's `storageRoot` is recomputed from its storage children at hash
-    // time, so an account op carrying only a derived `storageRoot` change is
-    // redundant and omitting it is legitimately harmless. A storage slot is real
-    // data with no such escape.
+    // Negative: drop an op below the last one. It is inside the proven range
+    // whether or not narrowing moved the right edge, so the proof must be
+    // rejected.
+    //
+    // Only storage slots (64-byte keys) are dropped. An account's `storageRoot`
+    // is recomputed from its children at hash time, so omitting an account op
+    // that carries only a derived `storageRoot` change is harmless.
     let last_idx = proof.batch_ops().len().saturating_sub(1);
     let candidates: Vec<usize> = (0..last_idx)
         .filter(|&i| proof.batch_ops()[i].key().len() == 64)

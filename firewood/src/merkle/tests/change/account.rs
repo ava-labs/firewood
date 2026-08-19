@@ -335,17 +335,10 @@ fn test_change_proof_single_storage_child_truncated() {
 /// `0x10` and deletes `0x99`. The range stops at `<account>||0x95`, so `0x10`
 /// is inside it and `0x99` is outside.
 ///
-/// A deletion outside the range is never reported, so the verifier rebuilds the
-/// account with both slots still present while the real end trie has one. For
-/// the two roots to agree, the verifier has to notice that nothing inside the
-/// range sits under `0x99`, take that side from the proof instead of rebuilding
-/// it, and then hash the single remaining slot as the account's storage root —
-/// which is what ethhash does for an account with exactly one slot.  The test
-/// asserts the proof verifies. If the `0x99` side is rebuilt instead of
-/// taken from the proof, the account keeps two slots and its storage root is
-/// wrong. If the remaining slot is not hashed as the storage root, the account
-/// has one slot but still hashes wrong. Either way, verification fails with
-/// `EndRootMismatch`.
+/// A deletion outside the range is never reported, so the verifier must take the
+/// `0x99` side from the proof rather than rebuild it. That leaves the account with
+/// one slot, which `ethhash` then hashes as the account's storage root. Getting
+/// either step wrong fails with `EndRootMismatch`.
 #[test]
 fn test_change_proof_boundary_child_folds_single_storage_child() {
     let account_value = rlp_encode_account(1, 100, &[0u8; 32], &empty_code_hash());
@@ -398,10 +391,10 @@ fn test_change_proof_boundary_child_folds_single_storage_child() {
 ///
 /// The proposal is hashed while the account still has one storage child, so live
 /// hashing folds that child as the account's storage root. Reconciling the end
-/// proof then adds the out-of-range side, giving the account two children, and the
-/// reconstruction needs the child's plain hash rather than the folded one. Reading
-/// the count after reconciliation cannot distinguish the two, so an account's
-/// persisted children must always be resolved rather than trusted.
+/// proof then adds the out-of-range side, so the reconstruction needs the plain
+/// hash instead. A child count read after reconciliation cannot tell those two
+/// cases apart, which is why an account's persisted children are always
+/// re-derived.
 #[test]
 fn test_change_proof_added_out_of_range_slot_unfolds_in_range_slot() {
     let account_value = rlp_encode_account(1, 100, &[0u8; 32], &empty_code_hash());
