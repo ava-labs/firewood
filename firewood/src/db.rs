@@ -16,6 +16,7 @@ use crate::api::{
 };
 use crate::iter::MerkleKeyValueIter;
 use crate::merkle::changes::DiffMerkleNodeStream;
+use crate::merkle::sized::SizedProof;
 use crate::merkle::{Merkle, Value, verify_change_proof_root_hash};
 use crate::verify_change_proof_structure;
 
@@ -184,6 +185,9 @@ impl api::Db for Db {
         self.propose_with_parent(batch, &self.manager.current_revision())
     }
 }
+
+/// A merkle over a committed revision, as resolved by the revision manager.
+type CommittedMerkle = Merkle<Arc<NodeStore<Committed, FileBacked>>>;
 
 impl Db {
     /// Create a new database instance.
@@ -443,8 +447,18 @@ impl Db {
         end_key: Option<&[u8]>,
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenChangeProof, api::Error> {
-        // Resolve end revision first so we return EndRevisionNotFound when both
-        // hashes are missing (matching the FFI's prior error-precedence rule).
+        let (start_merkle, end_merkle) = self.change_proof_revisions(start_hash, end_hash)?;
+        end_merkle.change_proof(start_key, end_key, start_merkle.nodestore(), limit)
+    }
+
+    /// Resolve the two revisions of a change proof as `(start, end)` merkles.
+    /// End is resolved first so `EndRevisionNotFound` wins when both hashes
+    /// are missing (the FFI's error-precedence rule).
+    fn change_proof_revisions(
+        &self,
+        start_hash: HashKey,
+        end_hash: HashKey,
+    ) -> Result<(CommittedMerkle, CommittedMerkle), api::Error> {
         let end_rev = self.manager.revision(end_hash).map_err(|err| {
             let err = api::Error::from(err);
             if let api::Error::RevisionNotFound { provided } = err {
@@ -461,9 +475,47 @@ impl Db {
                 err
             }
         })?;
-        let start_merkle = Merkle::from(start_rev);
-        let end_merkle = Merkle::from(end_rev);
-        end_merkle.change_proof(start_key, end_key, start_merkle.nodestore(), limit)
+        Ok((Merkle::from(start_rev), Merkle::from(end_rev)))
+    }
+
+    /// Generate a range proof from `start_key` for the revision at `root`,
+    /// sized to approach `budget` compressed wire bytes without exceeding it.
+    ///
+    /// # Errors
+    ///
+    /// - [`api::Error::RevisionNotFound`] if `root` is not found.
+    /// - [`api::Error::RangeProofOnEmptyTrie`] if the trie is empty and
+    ///   `start_key` is `None`.
+    /// - Other I/O or structural errors during proof generation.
+    pub fn range_proof_sized(
+        &self,
+        root: HashKey,
+        start_key: Option<&[u8]>,
+        budget: usize,
+        ratio_hint: Option<f64>,
+    ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
+        let rev = self.manager.revision(root)?;
+        Merkle::from(rev).range_proof_sized(start_key, budget, ratio_hint)
+    }
+
+    /// Generate a change proof between two revisions from `start_key`, sized
+    /// to approach `budget` compressed wire bytes without exceeding it.
+    ///
+    /// # Errors
+    ///
+    /// - [`api::Error::EndRevisionNotFound`] if `end_hash` is not found.
+    /// - [`api::Error::StartRevisionNotFound`] if `start_hash` is not found.
+    /// - Other I/O or structural errors during proof generation.
+    pub fn change_proof_sized(
+        &self,
+        start_hash: HashKey,
+        end_hash: HashKey,
+        start_key: Option<&[u8]>,
+        budget: usize,
+        ratio_hint: Option<f64>,
+    ) -> Result<SizedProof<FrozenChangeProof>, api::Error> {
+        let (start_merkle, end_merkle) = self.change_proof_revisions(start_hash, end_hash)?;
+        end_merkle.change_proof_sized(start_merkle.nodestore(), start_key, budget, ratio_hint)
     }
 
     /// Closes the database gracefully.

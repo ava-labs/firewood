@@ -1060,3 +1060,111 @@ func TestChangeProofMarshalWorksAfterVerify(t *testing.T) {
 	r.NoError(err)
 	r.Equal(marshalledBefore, marshalledAfter)
 }
+
+// TestRangeProofSizedSyncsWholeKeyspace pages sized range proofs from dbA into
+// dbB like a syncing client: each chunk fits the budget, its wire bytes match
+// the proof's own serialization, and the final committed root matches.
+func TestRangeProofSizedSyncsWholeKeyspace(t *testing.T) {
+	r := require.New(t)
+	dbA := newTestDatabase(t)
+	dbB := newTestDatabase(t)
+
+	_, _, batch := kvForTest(3000)
+	root, err := dbA.Update(batch)
+	r.NoError(err)
+
+	const budget = 2048
+	startKey := nothing()
+	ratioHint := 0.0
+	chunks := 0
+	for {
+		sized, err := dbA.RangeProofSized(root, startKey, budget, ratioHint)
+		r.NoError(err)
+		assertProofNotNil(t, sized.Proof)
+		ratioHint = sized.Ratio
+		r.Greater(ratioHint, 0.0)
+
+		marshaled, err := sized.Proof.MarshalBinary()
+		r.NoError(err)
+		r.Equal(marshaled, sized.Wire, "wire must match the proof serialization")
+		r.LessOrEqual(len(sized.Wire), budget)
+
+		_, err = dbB.VerifyAndCommitRangeProof(sized.Proof, startKey, nothing(), root, rangeProofLenUnbounded)
+		r.NoError(err)
+
+		if sized.NaturalEnd {
+			r.NoError(sized.Proof.Free())
+			break
+		}
+		next, err := sized.Proof.FindNextKey()
+		r.NoError(err)
+		r.NotNil(next, "non-final chunk must yield a next key range")
+		startKey = something(next.StartKey())
+		r.NoError(next.Free())
+		r.NoError(sized.Proof.Free())
+
+		chunks++
+		r.Less(chunks, 1000, "runaway paging")
+	}
+	r.Positive(chunks, "budget should force multiple chunks")
+	r.Equal(root, dbB.Root())
+}
+
+// TestChangeProofSizedPagesWholeDiff pages sized change proofs across a diff:
+// each chunk fits the budget, its wire bytes match the proof's own
+// serialization, and paging terminates via NaturalEnd.
+func TestChangeProofSizedPagesWholeDiff(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	_, _, batch := kvForTest(3000)
+	startRoot, err := db.Update(batch[:1500])
+	r.NoError(err)
+	endRoot, err := db.Update(batch[1500:])
+	r.NoError(err)
+
+	const budget = 2048
+	startKey := nothing()
+	ratioHint := 0.0
+	chunks := 0
+	for {
+		sized, err := db.ChangeProofSized(startRoot, endRoot, startKey, budget, ratioHint)
+		r.NoError(err)
+		r.NotNil(sized.Proof)
+		ratioHint = sized.Ratio
+		r.Greater(ratioHint, 0.0)
+
+		marshaled, err := sized.Proof.MarshalBinary()
+		r.NoError(err)
+		r.Equal(marshaled, sized.Wire, "wire must match the proof serialization")
+		r.LessOrEqual(len(sized.Wire), budget)
+
+		if sized.NaturalEnd {
+			r.NoError(sized.Proof.Free())
+			break
+		}
+		next, err := sized.Proof.FindNextKey(nothing())
+		r.NoError(err)
+		r.NotNil(next, "non-final chunk must yield a next key range")
+		startKey = something(next.StartKey())
+		r.NoError(next.Free())
+		r.NoError(sized.Proof.Free())
+
+		chunks++
+		r.Less(chunks, 1000, "runaway paging")
+	}
+	r.Positive(chunks, "budget should force multiple chunks")
+}
+
+// TestRangeProofSizedNonExistentRoot mirrors TestRangeProofNonExistentRoot.
+func TestRangeProofSizedNonExistentRoot(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	_, _, batch := kvForTest(10)
+	_, err := db.Update(batch)
+	r.NoError(err)
+
+	_, err = db.RangeProofSized(Hash{1}, nothing(), 4096, 0)
+	r.ErrorIs(err, ErrRevisionNotFound)
+}

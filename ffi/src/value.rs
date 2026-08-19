@@ -23,8 +23,8 @@ pub(crate) use self::results::{CResult, NullHandleResult};
 pub use self::results::{
     ChangeProofResult, CodeIteratorResult, EthProofResult, HandleResult, HashResult,
     IteratorResult, KeyValueBatchResult, KeyValueResult, NextKeyRangeResult, ProposalResult,
-    RangeProofResult, ReconstructedResult, RenderedMetricsResult, RevisionResult, ValueResult,
-    VoidResult,
+    RangeProofResult, ReconstructedResult, RenderedMetricsResult, RevisionResult, SizedChangeProof,
+    SizedChangeProofResult, SizedRangeProof, SizedRangeProofResult, ValueResult, VoidResult,
 };
 
 /// Maybe is a C-compatible optional type using a tagged union pattern.
