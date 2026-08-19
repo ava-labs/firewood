@@ -305,9 +305,13 @@ pub extern "C" fn fwd_change_proof_to_bytes(proof: Option<&ChangeProofContext>) 
 ///   [`fwd_db_verify_and_commit_change_proof`] to verify the proof.
 /// - [`ChangeProofResult::Err`] containing an error message if the proof could not be parsed.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_change_proof_from_bytes(bytes: BorrowedBytes) -> ChangeProofResult {
+pub extern "C" fn fwd_change_proof_from_bytes(
+    db: Option<&DatabaseHandle>,
+    bytes: BorrowedBytes,
+) -> ChangeProofResult {
+    let config = db.map(DatabaseHandle::proof_config).unwrap_or_default();
     crate::invoke(move || {
-        FrozenChangeProof::from_slice(&bytes)
+        FrozenChangeProof::from_slice_with_config(&bytes, &config)
             .map_err(|err| api::Error::ProofError(ProofError::Deserialization(err)))
     })
 }

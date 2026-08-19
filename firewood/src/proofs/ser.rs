@@ -36,6 +36,11 @@ impl FrozenRangeProof {
         reason = "Header and ProofType are not exported"
     )]
     /// - A 32-byte [`Header`] with the proof type set to [`ProofType::Range`].
+    /// - A single zstd frame compressing the canonical body (see
+    ///   `proofs::frame` for the framing, bounds, and canonicality rules).
+    ///
+    /// The canonical body, once decompressed, is:
+    ///
     /// - The start proof, serialized as a _sequence_ of [`ProofNode`]s
     /// - The end proof, serialized as a _sequence_ of [`ProofNode`]s
     /// - The key-value pairs, serialized as a _sequence_ of `(key, value)` tuples.
@@ -80,25 +85,38 @@ impl FrozenRangeProof {
     ///
     /// Variable-length integers are encoded using unsigned LEB128.
     pub fn write_to_vec(&self, out: &mut Vec<u8>) {
-        // The proof's hash mode determines the child-hash wire layout and the
-        // value-digest hashing rule; use its self-describing mode rather than
-        // the compile default.
+        write_framed(self, ProofType::Range, self.hash_mode(), out);
+    }
+
+    /// Serializes this proof's canonical (uncompressed) body: the bytes
+    /// [`FrozenRangeProof::write_to_vec`] compresses after the header, and
+    /// the sequence to hash or compare for a proof's canonical identity.
+    pub fn write_body_to_vec(&self, out: &mut Vec<u8>) {
         let mut w = ProofWriter {
             out,
             mode: self.hash_mode(),
         };
-        Header::from((ProofType::Range, w.mode)).write_item(&mut w);
         self.write_item(&mut w);
     }
 }
 
 impl FrozenChangeProof {
+    /// Serializes this proof into the provided byte vector.
+    ///
+    /// The format matches [`FrozenRangeProof::write_to_vec`] with the proof
+    /// type set to change, and the canonical body carries the batch
+    /// operations in place of the key-value pairs.
     pub fn write_to_vec(&self, out: &mut Vec<u8>) {
+        write_framed(self, ProofType::Change, self.hash_mode(), out);
+    }
+
+    /// Serializes this proof's canonical (uncompressed) body. See
+    /// [`FrozenRangeProof::write_body_to_vec`].
+    pub fn write_body_to_vec(&self, out: &mut Vec<u8>) {
         let mut w = ProofWriter {
             out,
             mode: self.hash_mode(),
         };
-        Header::from((ProofType::Change, w.mode)).write_item(&mut w);
         self.write_item(&mut w);
     }
 }
@@ -115,6 +133,22 @@ impl ProofWriter<'_> {
     const fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
         self.mode
     }
+}
+
+/// Writes the mode-stamped header for `proof_type`, serializes `proof`'s
+/// canonical body after it through a [`ProofWriter`] in `mode`, then
+/// compresses the body in place into the wire framing (see `proofs::frame`).
+fn write_framed(
+    proof: &impl WriteItem,
+    proof_type: ProofType,
+    mode: NodeHashAlgorithm,
+    out: &mut Vec<u8>,
+) {
+    let mut w = ProofWriter { out, mode };
+    Header::from((proof_type, mode)).write_item(&mut w);
+    let body_start = w.out.len();
+    proof.write_item(&mut w);
+    super::frame::compress_body_in_place(w.out, body_start);
 }
 
 trait PushVarInt {
