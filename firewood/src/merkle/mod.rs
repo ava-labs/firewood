@@ -616,15 +616,32 @@ fn build_branch_parts<'b, R: firewood_storage::NodeReader>(
 
     let mut child_hashes: Children<Option<HashType>> = Children::new();
 
-    // A persisted child already carries its hash, so it can normally be used
-    // directly instead of resolving and recursing. That shortcut is unsafe at
-    // account depth under `ethhash`: whether live hashing folded a child as the
-    // account's storage-trie root depends on the child count when it hashed, and
-    // reconcile and collapse can change that count afterwards. The stored hash
-    // cannot be trusted to match the fold this reconstruction needs, so an
-    // account's children are always re-derived.
+    // Whether live hashing folded a child as the account's storage-trie root
+    // depends on the child count when it hashed, and reconcile and collapse can
+    // change that count afterwards. A persisted child's stored hash therefore
+    // cannot be trusted to match the fold this reconstruction needs, so at
+    // account depth every child is re-derived instead of being taken directly.
     let at_account_depth =
         DefaultHashMode::ALGORITHM.is_ethereum() && full_key.len() == ACCOUNT_DEPTH_NIBBLES;
+
+    // Hash one child, applying the storage-trie-root fold when that child is the
+    // account's lone storage child. The dispatch lives here at the parent so the
+    // child's recursive call doesn't need to carry a flag. `single_storage_child`
+    // is `Some` only under `ethhash` at account depth, so it carries that test.
+    let hash_child = |node: &Node, nibble: PathComponent, prefix: &[PathComponent]| {
+        if single_storage_child == Some(nibble) {
+            compute_root_hash_as_storage_trie_root(
+                node,
+                &full_key,
+                nibble,
+                proof_nodes,
+                outside_children,
+                storage,
+            )
+        } else {
+            compute_root_hash_with_proofs(node, prefix, proof_nodes, outside_children, storage)
+        }
+    };
 
     // For children inside the proven range, compute hashes recursively.
     // For children outside the range, use proof node hashes (set below).
@@ -634,63 +651,22 @@ fn build_branch_parts<'b, R: firewood_storage::NodeReader>(
         if outside_mask.is_some_and(|m| m.is_set(nibble.0)) {
             continue;
         }
-        if let Child::AddressWithHash(_, hash) | Child::MaybePersisted(_, hash) = child {
-            if !at_account_depth {
-                child_hashes[nibble] = Some(hash.clone());
-                continue;
-            }
-            let needs_fold = single_storage_child == Some(nibble);
-            let resolved = child.as_shared_node(storage)?;
-            child_prefix.push(nibble);
-            let child_hash = if needs_fold {
-                compute_root_hash_as_storage_trie_root(
-                    &resolved,
-                    &full_key,
-                    nibble,
-                    proof_nodes,
-                    outside_children,
-                    storage,
-                )?
-            } else {
-                compute_root_hash_with_proofs(
-                    &resolved,
-                    &child_prefix,
-                    proof_nodes,
-                    outside_children,
-                    storage,
-                )?
-            };
-            child_hashes[nibble] = Some(child_hash);
-            child_prefix.pop();
+        // Away from account depth a persisted child's stored hash is already the
+        // form this reconstruction needs, so it is used without recursing.
+        if !at_account_depth
+            && let Child::AddressWithHash(_, hash) | Child::MaybePersisted(_, hash) = child
+        {
+            child_hashes[nibble] = Some(hash.clone());
             continue;
         }
-        let Child::Node(child_node) = child else {
-            unreachable!()
-        };
         child_prefix.push(nibble);
-        // Apply the storage-trie-root fold for the account's lone storage
-        // child; the dispatch lives here at the parent so the child's recursive
-        // call doesn't need to carry a flag.
-        let child_hash =
-            if DefaultHashMode::ALGORITHM.is_ethereum() && single_storage_child == Some(nibble) {
-                compute_root_hash_as_storage_trie_root(
-                    child_node,
-                    &full_key,
-                    nibble,
-                    proof_nodes,
-                    outside_children,
-                    storage,
-                )?
-            } else {
-                compute_root_hash_with_proofs(
-                    child_node,
-                    &child_prefix,
-                    proof_nodes,
-                    outside_children,
-                    storage,
-                )?
-            };
-        child_hashes[nibble] = Some(child_hash);
+        child_hashes[nibble] = Some(match child {
+            Child::Node(node) => hash_child(node, nibble, &child_prefix)?,
+            Child::AddressWithHash(..) | Child::MaybePersisted(..) => {
+                let resolved = child.as_shared_node(storage)?;
+                hash_child(&resolved, nibble, &child_prefix)?
+            }
+        });
         child_prefix.pop();
     }
 
