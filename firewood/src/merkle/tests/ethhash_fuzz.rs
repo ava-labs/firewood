@@ -787,9 +787,6 @@ fn check_truncated_change_proof(
         return;
     }
 
-    // Structural verification of an honest capped proof must succeed. No failure
-    // was seen across the run that surfaced the root-hash residue below, so this
-    // is an assertion rather than a tally.
     let ctx = verify_change_proof_structure(
         &proof,
         end_root.clone(),
@@ -806,14 +803,9 @@ fn check_truncated_change_proof(
     let proposal = db
         .apply_change_proof_to_parent(&proof, &*parent)
         .unwrap_or_else(|e| panic!("apply should succeed ({locator}, cap={cap}): {e}"));
-    // Counted rather than asserted. The account-fold defect that produced every
-    // known failure here is fixed, and the four seeds that reproduced it now pass,
-    // but that is four samples rather than a soak. Promote this to an assertion
-    // once a run of comparable size to the one that found them reports nothing.
-    if verify_change_proof_root_hash(&proof, &ctx, &proposal).is_err() {
-        eprintln!("TRUNC_INCOMPLETE phase=3 {locator} cap={cap}");
-        return;
-    }
+    verify_change_proof_root_hash(&proof, &ctx, &proposal).unwrap_or_else(|e| {
+        panic!("honest capped proof root hash should verify ({locator}, cap={cap}): {e}")
+    });
 
     // Every op must lie at or below the proven right edge: narrowing must never
     // claim less than the operations it carries.
