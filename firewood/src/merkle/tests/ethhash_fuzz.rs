@@ -774,15 +774,17 @@ fn check_truncated_change_proof(
     let Some(limit) = NonZeroUsize::new(cap) else {
         return;
     };
-    let Ok(proof) = db.change_proof(
-        start_root.clone(),
-        end_root.clone(),
-        first,
-        last,
-        Some(limit),
-    ) else {
-        return;
-    };
+    let proof = db
+        .change_proof(
+            start_root.clone(),
+            end_root.clone(),
+            first,
+            last,
+            Some(limit),
+        )
+        .unwrap_or_else(|e| {
+            panic!("capped change_proof should succeed ({locator}, cap={cap}): {e}")
+        });
     if proof.batch_ops().is_empty() {
         return;
     }

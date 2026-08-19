@@ -541,10 +541,10 @@ fn compute_root_hash_with_proofs<R: NodeReader>(
 }
 
 /// Compute the hash of a node as a standalone storage-trie root, applying
-/// the account-branch-nibble fold. Invoked by the parent at depth-64
-/// account boundaries when this node is the account's lone storage child;
-/// the fold matches what live hashing produced when the storage trie was
-/// first written.
+/// the account-branch-nibble fold. Invoked by the parent at depth-64 account
+/// boundaries when this node is the account's lone storage child. The fold is
+/// recomputed here rather than read from a stored hash, because a stored hash
+/// reflects whatever child count applied when that hash was written.
 fn compute_root_hash_as_storage_trie_root<R: NodeReader>(
     node: &Node,
     account_prefix: &[PathComponent],
@@ -617,7 +617,8 @@ fn build_branch_parts<'b, R: firewood_storage::NodeReader>(
     // Whether live hashing folded a child as the account's storage-trie root
     // depends on the child count when it hashed, and reconcile and collapse can
     // change that count afterwards. A persisted child's stored hash therefore
-    // cannot be trusted at account depth, so every child there is re-derived.
+    // cannot be trusted at account depth, so every in-range child there is
+    // re-derived.
     let at_account_depth =
         DefaultHashMode::ALGORITHM.is_ethereum() && full_key.len() == ACCOUNT_DEPTH_NIBBLES;
 
