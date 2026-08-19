@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787123240775,
+  "lastUpdate": 1787123649124,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -9211,6 +9211,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 45.02218989149219,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "bernard-avalabs",
+            "username": "bernard-avalabs",
+            "email": "53795885+bernard-avalabs@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "1e3de11a7512a7c341862e16ebbed3f577c8eaf9",
+          "message": "fix(merkle): test both range bounds in the reconcile guards (#2174)\n\n## Why this should be merged\n\nFixes #2154 and #2145.\n\nIssue #2154 comes from the two reconcile loops in\n`verify_change_proof_root_hash`. Each loop decides whether a boundary\nproof node falls inside the proven range, but each one checked only a\nsingle bound. The start-proof loop tested `node_nibbles >=\nstart_key_nibbles`. The end-proof loop tested `node_nibbles <=\nend_key_nibbles`.\n\nSo a node can fall outside the range on the side its own loop does not\ncheck, and still be treated as in-range. The verifier then compares that\nnode's value against the proposal, finds a difference, and returns\n`UnexpectedValue`. The proof is honest, but it gets rejected.\n\nTo hit this, delete every key inside a bounded range and leave one\nsurviving key that sorts after the end bound. The start proof must still\ninclude that survivor, since it is the only key left in the end trie.\nThe survivor sits past the right edge, so it is out of range, but the\nstart-proof loop has no upper bound and accepts it as in-range. No limit\nor truncation is involved. A sync that hits this case stalls, and the\nclient cannot work around it.\n\nIssue #2145 has the same cause and is fixed by the same change. Both\nboundary proofs are generated from the end trie, so for a range\ncontaining no keys the start proof is an exclusion proof whose terminal\nis the nearest end-trie key at or after `start_key`. That terminal can\nsort past the end bound, and the start-proof loop again treats it as\nin-range.\n\n## How this works\n\n`end_key_nibbles` and the `CollapseRange` built from it are now computed\nbefore the start-proof loop, instead of after both loops. Both loops\nthen call one shared predicate, `CollapseRange::contains`, which checks\nboth bounds. `child_in_range` and `collapse_strip` already ran the same\ncomparison inline, so they now call it too, leaving one copy in the\ncodebase instead of three.\n\nOne predicate is enough because both loops ask the same question.\nWhether a node sits inside the range depends on where the node is, not\non which proof carried it. The old code had two conditions that were\nmeant to be symmetric, and they were not.\n\n`CollapseRange::contains` is stricter than the two one-sided checks it\nreplaces, so more boundary nodes now take their value from the proof\ninstead of raising `UnexpectedValue`. That is safe because no batch\noperation can sit at such a position. `verify_change_proof_structure`\nrejects a proof whose first operation sorts below `start_key`, or whose\nlast sorts above `end_key`, and requires the operations to be strictly\nincreasing. Every branch of `compute_right_edge_key` returns a right\nedge at or above the last operation's key. So every operation key falls\ninside `[start_key, right_edge_key]`, and a position the predicate\nexcludes has no operation on it. An operation there would have raised\nthe right edge to cover it.\n\nThe value taken from the proof is still checked.\n`verify_change_proof_structure` verifies each boundary proof against\n`end_root`, which chains every proof node's hash to the root.\n`verify_change_proof_root_hash` then recomputes that node's hash from\nthe proving trie. Neither step can admit a value `end_root` does not\nhave. No in-range node changes behaviour.\n\nIt also corrects documentation that had drifted:\n\n- `proofs/mod.rs` still described the one-bound rule in the algorithm\nspec. It also said `requested_end_key` where the code uses\n`right_edge_key`. Those two differ when a proof is truncated, and\n`verify_change_proof_root_hash` points readers at this spec.\n- The start-loop comment listed \"divergent nodes whose key is NOT a\nprefix of `start_key`\" as out-of-range. That is wrong. Such a node often\nsorts after `start_key`, which puts it in range, and the check below the\ncomment exists to catch exactly that case.\n- The end-loop comment described the mismatch backwards. The proof\nnode's value is always `end_root`'s. It is the proposal's value that\ndiffers.\n- Added a `# Errors` bullet for `ProofError::Empty`, returned when the\nend revision has no root because every key in the database was deleted.\n\n## How this was tested\n\n`test_all_deleted_range_with_survivor_above_end_bound_verifies` covers\nthe case above. With the fix reverted it fails with\n`ProofError(UnexpectedValue)`. With the fix applied it passes.\n\nThe `Put` that rewrites `0x5601` in that test is required, and a comment\nnow says so. Without a value change, `reconcile_branch_proof_node`\nreturns early and never reaches the check, so the test would pass even\nwith the bug present.\n\n`test_key_empty_range_verifies` covers #2145, using the fixture from\nthat issue: start trie `{0x20}`, end trie `{0xe0}`, range `[0x60,\n0xb0]`. It also fails with `ProofError(UnexpectedValue)` when the fix is\nreverted.\n\n`test_collapse_range_contains` pins the bound conventions as seven\n`test_case` entries.\n\n`test_crafted_forged_value_detected` and\n`test_crafted_tampered_start_key_value_detected` both pass, and both\nfail if `CollapseRange::contains` is made to return false for bounded\nranges. That confirms the verifier still rejects a tampered value inside\na bounded range. Dropping the lower-bound comparison fails tests across\n`account`, `edge_cases`, and `empty`. Dropping the upper-bound\ncomparison reinstates the original bug, which the new regression test\ncatches. Because the predicate is now shared, either experiment also\nchanges which branch values `collapse_strip` clears.\n\nFull workspace matrix, all with `--all-targets`. nextest passes with no\nfeatures, with `--no-default-features`, with `ethhash,logger`, and on\nthe `ci` profile including every `test_slow_*` test. Clippy is clean on\n`nightly-2026-07-05` for those three feature rows plus `maxperf`. `cargo\nfmt --check` and `cargo doc --no-deps` are clean, and `ffi/firewood.h`\ndid not change.\n\n## Breaking Changes\n\nNone. The API is unchanged. Verification behaviour changes as intended:\nhonest proofs that were rejected with `UnexpectedValue` at an\nout-of-range boundary node now verify.",
+          "timestamp": "2026-08-15T01:03:19Z",
+          "url": "https://github.com/ava-labs/firewood/commit/1e3de11a7512a7c341862e16ebbed3f577c8eaf9"
+        },
+        "date": 1787123647452,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 163.31023315195594,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6123.3149980842045,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 118.32260195495239,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5912.847781137888,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 88.47002863062058,
             "unit": "block_accept_ms/ggas"
           }
         ]
