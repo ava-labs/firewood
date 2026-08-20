@@ -22,6 +22,9 @@ pub mod launch;
 pub mod replay;
 pub mod root;
 
+// The node-hashing scheme is now a per-database runtime choice. For a fresh
+// database the default is the binary's compile-time scheme (`DefaultHashMode`);
+// for an existing database the header's scheme is auto-detected and honored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
 pub enum NodeHashAlgorithm {
     #[value(name = "merkle-db")]
@@ -30,21 +33,20 @@ pub enum NodeHashAlgorithm {
     Ethereum,
 }
 
-impl Default for NodeHashAlgorithm {
-    fn default() -> Self {
-        if firewood_storage::NodeHashAlgorithm::compile_option().is_ethereum() {
-            NodeHashAlgorithm::Ethereum
-        } else {
-            NodeHashAlgorithm::MerkleDB
-        }
-    }
-}
-
 impl From<NodeHashAlgorithm> for firewood_storage::NodeHashAlgorithm {
     fn from(algorithm: NodeHashAlgorithm) -> Self {
         match algorithm {
             NodeHashAlgorithm::MerkleDB => firewood_storage::NodeHashAlgorithm::MerkleDB,
             NodeHashAlgorithm::Ethereum => firewood_storage::NodeHashAlgorithm::Ethereum,
+        }
+    }
+}
+
+impl From<firewood_storage::NodeHashAlgorithm> for NodeHashAlgorithm {
+    fn from(algorithm: firewood_storage::NodeHashAlgorithm) -> Self {
+        match algorithm {
+            firewood_storage::NodeHashAlgorithm::MerkleDB => NodeHashAlgorithm::MerkleDB,
+            firewood_storage::NodeHashAlgorithm::Ethereum => NodeHashAlgorithm::Ethereum,
         }
     }
 }
@@ -63,14 +65,55 @@ pub struct DatabasePath {
     pub dbpath: PathBuf,
 
     /// The node hash algorithm to use when opening the database.
+    ///
+    /// Also available under the `--hash-mode` alias. For an existing database
+    /// the header's scheme is honored; this selects the scheme for a fresh
+    /// database (or which concrete mode to open with). The default is the
+    /// binary's compile-time scheme.
     #[arg(
         long,
+        visible_alias = "hash-mode",
         value_enum,
         required = false,
-        default_value_t = NodeHashAlgorithm::default(),
+        default_value_t = <firewood_storage::DefaultHashMode as firewood_storage::HashMode>::ALGORITHM.into(),
         help = "The node hash algorithm to use when opening the database",
     )]
     pub node_hash_algorithm: NodeHashAlgorithm,
+}
+
+impl DatabasePath {
+    /// The node-hashing scheme to open the database with.
+    ///
+    /// For an existing database the persisted header scheme is auto-detected
+    /// and honored, so read commands work without the user passing
+    /// `--hash-mode`/`--node-hash-algorithm`. If the database file is absent or
+    /// cannot be read, the requested (`--hash-mode`) value is used (e.g. for a
+    /// fresh database).
+    #[must_use]
+    pub fn resolve_node_hash_algorithm(&self) -> firewood_storage::NodeHashAlgorithm {
+        use firewood_storage::{
+            CacheReadStrategy, FileBacked, NodeHashAlgorithm as StorageAlgorithm, NodeStoreHeader,
+        };
+        use nonzero_ext::nonzero;
+
+        let requested: StorageAlgorithm = self.node_hash_algorithm.into();
+        let db_file = self.dbpath.join("firewood.db");
+
+        // Peek the header read-only (no advisory lock) to learn the on-disk
+        // scheme; fall back to the requested scheme for a fresh/unreadable DB.
+        FileBacked::new(
+            db_file,
+            nonzero!(1usize),
+            nonzero!(1usize),
+            false,
+            false,
+            CacheReadStrategy::WritesOnly,
+            requested,
+        )
+        .ok()
+        .and_then(|fb| NodeStoreHeader::peek_node_hash_algorithm(&fb).ok())
+        .unwrap_or(requested)
+    }
 }
 
 #[derive(Parser)]

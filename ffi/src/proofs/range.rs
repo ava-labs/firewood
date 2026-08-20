@@ -4,7 +4,7 @@
 use std::num::NonZeroUsize;
 
 use firewood::{
-    KeyRange, NodeHashAlgorithm, ProofError, RangeProofVerificationContext,
+    KeyRange, ProofError, RangeProofVerificationContext,
     api::{self, DbView, FrozenRangeProof, HashKey},
 };
 use firewood_metrics::{MetricsContext, firewood_counter};
@@ -129,13 +129,16 @@ impl<'db> RangeProofContext<'db> {
 
         debug_assert!(self.verification.is_none());
 
-        // Expected mode is compile-time default - any proof with a different mode is rejected up front.
+        // This standalone verify path has no database handle in scope, so
+        // there is no caller-side mode to assert: verify under the proof's own
+        // self-describing mode. A cross-mode forgery is still caught by
+        // hashing because it cannot reproduce `root` under the wrong scheme.
         self.verification = Some(firewood::verify_range_proof_structure(
             &self.proof,
             root,
             start_key,
             end_key,
-            NodeHashAlgorithm::compile_option(),
+            self.proof.hash_mode(),
             max_length,
         )?);
         Ok(())
@@ -263,7 +266,7 @@ impl<'db> RangeProofContext<'db> {
     }
 
     fn code_hash_iter(&self) -> Result<CodeIteratorHandle<'_>, api::Error> {
-        CodeIteratorHandle::from_key_values(self.proof.key_values())
+        CodeIteratorHandle::from_key_values(self.proof.hash_mode(), self.proof.key_values())
     }
 }
 

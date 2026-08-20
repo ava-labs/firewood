@@ -35,7 +35,9 @@ use crate::api::{
 use crate::db::{Db, DbConfig};
 use crate::merkle::{Key, Value, verify_change_proof_root_hash, verify_range_proof};
 use crate::verify_change_proof_structure;
-use firewood_storage::{DefaultHashMode, NodeHashAlgorithm, SeededRng, replace_list_field};
+use firewood_storage::{
+    DefaultHashMode, HashMode, NodeHashAlgorithm, SeededRng, replace_list_field,
+};
 use rand::seq::SliceRandom;
 
 /// An account's key paired with its sorted, distinct storage-slot bytes (byte
@@ -278,7 +280,13 @@ fn build_shaped_db(rng: &SeededRng) -> ShapedFixture {
         }
     }
     let dir = tempfile::tempdir().unwrap();
-    let db = Db::new(dir.path(), DbConfig::builder().build()).unwrap();
+    let db = Db::<DefaultHashMode>::new_with_hash_mode(
+        dir.path(),
+        DbConfig::builder()
+            .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+            .build(),
+    )
+    .unwrap();
     let start_batch: Vec<BatchOp<Vec<u8>, Vec<u8>>> = state
         .iter()
         .map(|(k, v)| BatchOp::Put {

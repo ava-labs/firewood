@@ -34,6 +34,16 @@ fn create_db(db_path: &Path) {
         .success();
 }
 
+fn create_db_with_hash_mode(db_path: &Path, hash_mode: &str) {
+    cargo_bin_cmd!()
+        .arg("create")
+        .arg("--db")
+        .arg(db_path)
+        .args(["--hash-mode", hash_mode])
+        .assert()
+        .success();
+}
+
 fn insert_key_value(db_path: &Path, key: &str, value: &str) {
     cargo_bin_cmd!()
         .arg("insert")
@@ -623,42 +633,50 @@ fn test_slow_fwdctl_dump_with_hex() {
 
 #[test]
 fn fwdctl_check_empty_db() {
-    with_tmpdir(|db_path| {
-        create_db(db_path);
+    for hash_mode in ["merkle-db", "ethereum"] {
+        with_tmpdir(|db_path| {
+            create_db_with_hash_mode(db_path, hash_mode);
 
-        cargo_bin_cmd!()
-            .arg("check")
-            .arg("--db")
-            .arg(db_path)
-            .assert()
-            .success();
-    });
+            // `check` must infer the mode from the existing database header.
+            cargo_bin_cmd!()
+                .arg("check")
+                .arg("--db")
+                .arg(db_path)
+                .assert()
+                .success();
+        });
+    }
 }
 
 #[test]
 fn test_slow_fwdctl_check_db_with_data() {
     use rand::{RngExt, distr::Alphanumeric};
 
-    with_tmpdir(|db_path| {
-        let rng = firewood_storage::SeededRng::from_env_or_random();
-        let mut sample_iter = rng.sample_iter(Alphanumeric).map(char::from);
+    for hash_mode in ["merkle-db", "ethereum"] {
+        with_tmpdir(|db_path| {
+            let rng = firewood_storage::SeededRng::from_env_or_random();
+            let mut sample_iter = rng.sample_iter(Alphanumeric).map(char::from);
 
-        create_db(db_path);
+            create_db_with_hash_mode(db_path, hash_mode);
 
-        // TODO(#2047): bulk loading data instead of inserting one by one
-        for _ in 0..4 {
-            let key = sample_iter.by_ref().take(64).collect::<String>();
-            let value = sample_iter.by_ref().take(10).collect::<String>();
-            insert_key_value(db_path, &key, &value);
-        }
+            // TODO(#2047): bulk loading data instead of inserting one by one
+            for _ in 0..4 {
+                let key = sample_iter.by_ref().take(64).collect::<String>();
+                let value = sample_iter.by_ref().take(10).collect::<String>();
+                insert_key_value(db_path, &key, &value);
+            }
 
-        cargo_bin_cmd!()
-            .arg("check")
-            .arg("--db")
-            .arg(db_path)
-            .assert()
-            .success();
-    });
+            // Exercise mode-specific hash recomputation after inferring the
+            // mode from the existing database header.
+            cargo_bin_cmd!()
+                .arg("check")
+                .arg("--db")
+                .arg(db_path)
+                .arg("--hash-check")
+                .assert()
+                .success();
+        });
+    }
 }
 
 #[test]
