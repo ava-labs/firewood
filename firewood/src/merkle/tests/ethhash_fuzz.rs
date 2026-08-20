@@ -754,12 +754,14 @@ fn forge_range_code_hash(proof: &FrozenRangeProof, rng: &SeededRng) -> Option<Fr
     ))
 }
 
-/// Generate a change proof under a random cap, verify it, then confirm that
-/// dropping an operation below the proven right edge is still rejected.
+/// Generate a change proof carrying at most a few operations, verify it, then
+/// confirm that dropping an operation below the proven right edge is still
+/// rejected.
 ///
-/// Capping is what makes the proven range narrow to the last operation, and the
-/// drop checks the consequence. An operation missing from inside the narrowed
-/// range must never be accepted, or narrowing could hide an omission.
+/// That limit makes the generator stop before the requested end bound, so the
+/// proven range narrows to the last operation included. The drop checks the
+/// consequence. An operation missing from inside the narrowed range must never
+/// be accepted, or narrowing could hide an omission.
 fn check_truncated_change_proof(
     db: &Db,
     start_root: &HashKey,
@@ -770,10 +772,8 @@ fn check_truncated_change_proof(
     locator: &str,
 ) {
     use std::num::NonZeroUsize;
-    let cap = rng.random_range(1..6_usize);
-    let Some(limit) = NonZeroUsize::new(cap) else {
-        return;
-    };
+    // The range starts at 1, so the limit is always valid.
+    let limit = NonZeroUsize::new(rng.random_range(1..6_usize)).expect("range starts at 1");
     let proof = db
         .change_proof(
             start_root.clone(),
@@ -783,7 +783,7 @@ fn check_truncated_change_proof(
             Some(limit),
         )
         .unwrap_or_else(|e| {
-            panic!("capped change_proof should succeed ({locator}, cap={cap}): {e}")
+            panic!("truncated change_proof should succeed ({locator}, limit={limit}): {e}")
         });
     if proof.batch_ops().is_empty() {
         return;
@@ -798,15 +798,15 @@ fn check_truncated_change_proof(
         Some(limit),
     )
     .unwrap_or_else(|e| {
-        panic!("honest capped proof must verify structurally ({locator}, cap={cap}): {e}")
+        panic!("honest truncated proof must verify structurally ({locator}, limit={limit}): {e}")
     });
     let right_edge = ctx.right_edge_key.clone();
     let parent = db.revision(start_root.clone()).unwrap();
     let proposal = db
         .apply_change_proof_to_parent(&proof, &*parent)
-        .unwrap_or_else(|e| panic!("apply should succeed ({locator}, cap={cap}): {e}"));
+        .unwrap_or_else(|e| panic!("apply should succeed ({locator}, limit={limit}): {e}"));
     verify_change_proof_root_hash(&proof, &ctx, &proposal).unwrap_or_else(|e| {
-        panic!("honest capped proof root hash should verify ({locator}, cap={cap}): {e}")
+        panic!("honest truncated proof root hash should verify ({locator}, limit={limit}): {e}")
     });
 
     // Every op must lie at or below the proven right edge. Narrowing must never
@@ -815,7 +815,7 @@ fn check_truncated_change_proof(
         for op in proof.batch_ops() {
             assert!(
                 op.key().as_ref() <= edge,
-                "op above the proven right edge ({locator}, cap={cap})"
+                "op above the proven right edge ({locator}, limit={limit})"
             );
         }
     }
@@ -867,7 +867,7 @@ fn check_truncated_change_proof(
     assert!(
         rejected,
         "a change proof missing an in-range storage slot must be rejected \
-         ({locator}, cap={cap}, dropped={drop_idx}, n_ops={})",
+         ({locator}, limit={limit}, dropped={drop_idx}, n_ops={})",
         proof.batch_ops().len()
     );
 }
@@ -895,9 +895,9 @@ fn test_slow_ethhash_proof_fuzz() {
             let change =
                 check_valid_change_proof(db, start_root, end_root, first, last, &rng, &locator);
 
-            // Truncated change proofs: the generator stops at a cap, so the
-            // proven range may narrow to the last op. Exercises the narrowing
-            // arm, which the unlimited proofs above never reach.
+            // Truncated change proofs: the generator stops at the limit, so
+            // the proven range may narrow to the last op. The proofs above pass
+            // no limit, so they never reach that narrowing.
             check_truncated_change_proof(db, start_root, end_root, first, last, &rng, &locator);
 
             // Negative: every tamper of the valid change proof must be rejected.
