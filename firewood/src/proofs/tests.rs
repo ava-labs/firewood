@@ -1231,7 +1231,7 @@ fn range_wire() -> Vec<u8> {
 }
 
 fn change_wire() -> Vec<u8> {
-    let (proof, _) = create_valid_change_proof(NodeHashAlgorithm::MerkleDB);
+    let (proof, _) = create_valid_change_proof(DefaultHashMode::ALGORITHM);
     let mut wire = Vec::new();
     proof.write_to_vec(&mut wire);
     wire
