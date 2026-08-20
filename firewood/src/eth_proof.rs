@@ -415,21 +415,18 @@ fn nibbles_match_packed(nibbles: &[PathComponent], packed: &[u8]) -> bool {
 
 #[cfg(test)]
 mod merkledb_gate_tests {
-    use std::sync::Arc;
-
     use super::*;
-    use firewood_storage::{
-        Committed, DeletedNodeTracking, MemStore, MerkleDbHash, NodeHashAlgorithm, NodeStore,
-    };
+    use crate::merkle::tests::init_merkle;
 
     /// A MerkleDB view must refuse to emit eth proofs. This test runs in both
     /// feature configurations.
     #[test]
     fn eth_get_proof_rejected_in_merkledb_mode() {
-        let storage = Arc::new(MemStore::new(Vec::new(), NodeHashAlgorithm::MerkleDB));
-        let nodestore: NodeStore<Committed, _, MerkleDbHash> =
-            NodeStore::new_empty_committed(storage, DeletedNodeTracking::Enabled);
-        let err = eth_get_proof(&nodestore, &[0u8; 32], &[])
+        let merkle = init_merkle::<firewood_storage::MerkleDbHash, _, _, _>(std::iter::empty::<(
+            &[u8],
+            &[u8],
+        )>());
+        let err = eth_get_proof(merkle.nodestore(), &[0u8; 32], &[])
             .expect_err("merkledb-mode database must not emit eth proofs");
         assert!(
             matches!(err, Error::FeatureNotSupported(_)),
@@ -438,6 +435,7 @@ mod merkledb_gate_tests {
     }
 }
 
+// eth_getProof is an Ethereum-only surface (runtime-gated); these tests stay single-mode.
 #[cfg(all(test, feature = "ethhash"))]
 #[expect(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
@@ -510,7 +508,8 @@ mod tests {
     #[test]
     fn absent_account_returns_zero_fields_and_proof_bytes() {
         // Empty trie; ask for any account.
-        let merkle = init_merkle(std::iter::empty::<(&[u8], &[u8])>());
+        let merkle =
+            init_merkle::<firewood_storage::EthHash, _, _, _>(std::iter::empty::<(&[u8], &[u8])>());
         let key = [0x11u8; 32];
         let proof = eth_get_proof(merkle.nodestore(), &key, &[]).unwrap();
         assert_eq!(proof.nonce, 0);
@@ -527,7 +526,8 @@ mod tests {
         let key = [0x22u8; 32];
         let balance = [0x12, 0x34];
         let value = account_rlp(7, &balance);
-        let merkle = init_merkle([(key.as_slice(), value.as_ref())]);
+        let merkle =
+            init_merkle::<firewood_storage::EthHash, _, _, _>([(key.as_slice(), value.as_ref())]);
         let proof = eth_get_proof(merkle.nodestore(), &key, &[]).unwrap();
         assert_eq!(proof.nonce, 7);
         // balance is right-aligned in 32 bytes.
@@ -550,7 +550,7 @@ mod tests {
         let mut full_slot = account_key.to_vec();
         full_slot.extend_from_slice(&slot_key);
 
-        let merkle = init_merkle([
+        let merkle = init_merkle::<firewood_storage::EthHash, _, _, _>([
             (account_key.as_slice(), acc_val.as_ref()),
             (full_slot.as_slice(), slot_val.as_ref()),
         ]);
@@ -687,7 +687,7 @@ mod tests {
         let missing = [0xffu8; 32];
         let v1 = account_rlp(1, &[]);
         let v2 = account_rlp(2, &[]);
-        let merkle = init_merkle([
+        let merkle = init_merkle::<firewood_storage::EthHash, _, _, _>([
             (acc1.as_slice(), v1.as_ref()),
             (acc2.as_slice(), v2.as_ref()),
         ]);
@@ -726,7 +726,7 @@ mod tests {
         let acc2 = [0x20u8; 32];
         let v1 = account_rlp(11, &[]);
         let v2 = account_rlp(22, &[]);
-        let merkle = init_merkle([
+        let merkle = init_merkle::<firewood_storage::EthHash, _, _, _>([
             (acc1.as_slice(), v1.as_ref()),
             (acc2.as_slice(), v2.as_ref()),
         ]);
@@ -754,7 +754,7 @@ mod tests {
         let mut full_b = account_key.to_vec();
         full_b.extend_from_slice(&slot_b);
 
-        let merkle = init_merkle([
+        let merkle = init_merkle::<firewood_storage::EthHash, _, _, _>([
             (account_key.as_slice(), acc_val.as_ref()),
             (full_a.as_slice(), b"val-a".as_slice()),
             (full_b.as_slice(), b"val-b".as_slice()),
@@ -803,7 +803,7 @@ mod tests {
         let mut full_b = account_key.to_vec();
         full_b.extend_from_slice(&slot_b);
 
-        let merkle = init_merkle([
+        let merkle = init_merkle::<firewood_storage::EthHash, _, _, _>([
             (account_key.as_slice(), acc_val.as_ref()),
             (full_a.as_slice(), VAL_A),
             (full_b.as_slice(), VAL_B),
