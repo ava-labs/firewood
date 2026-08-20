@@ -1909,7 +1909,7 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
 impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K>, S, H>> {
     fn read_for_update(&mut self, child: Child) -> Result<Node, FileIoError> {
         match child {
-            Child::Node(node) => Ok(node),
+            Child::Node(node) => Ok(*node),
             Child::AddressWithHash(addr, _) => self.nodestore.read_for_update(addr.into()),
             Child::MaybePersisted(node, _) => self.nodestore.read_for_update(node),
         }
@@ -1996,7 +1996,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
 
                 // Shorten the node's partial path since it has a new parent.
                 node.update_partial_path(partial_path);
-                branch.children[child_index] = Some(Child::Node(node));
+                branch.children[child_index] = Some(Child::Node(Box::new(node)));
                 firewood_counter!(INSERT, "operation" => "above").increment(1);
 
                 Ok(Node::Branch(Box::new(branch)))
@@ -2018,13 +2018,13 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                                 value,
                                 partial_path,
                             });
-                            branch.children[child_index] = Some(Child::Node(new_leaf));
+                            branch.children[child_index] = Some(Child::Node(Box::new(new_leaf)));
                             firewood_counter!(INSERT, "operation" => "below").increment(1);
                             return Ok(node);
                         };
                         let child = self.read_for_update(child)?;
                         let child = self.insert_helper(child, partial_path.as_ref(), value)?;
-                        branch.children[child_index] = Some(Child::Node(child));
+                        branch.children[child_index] = Some(Child::Node(Box::new(child)));
                         Ok(node)
                     }
                     Node::Leaf(leaf) => {
@@ -2040,7 +2040,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                             partial_path,
                         });
 
-                        branch.children[child_index] = Some(Child::Node(new_leaf));
+                        branch.children[child_index] = Some(Child::Node(Box::new(new_leaf)));
 
                         firewood_counter!(INSERT, "operation" => "split").increment(1);
                         Ok(Node::Branch(Box::new(branch)))
@@ -2064,13 +2064,13 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 };
 
                 node.update_partial_path(node_partial_path);
-                branch.children[node_index] = Some(Child::Node(node));
+                branch.children[node_index] = Some(Child::Node(Box::new(node)));
 
                 let new_leaf = Node::Leaf(LeafNode {
                     value,
                     partial_path: key_partial_path,
                 });
-                branch.children[key_index] = Some(Child::Node(new_leaf));
+                branch.children[key_index] = Some(Child::Node(Box::new(new_leaf)));
 
                 firewood_counter!(INSERT, "operation" => "split").increment(1);
                 Ok(Node::Branch(Box::new(branch)))
@@ -2115,7 +2115,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 };
 
                 node.update_partial_path(partial_path);
-                branch.children[child_index] = Some(Child::Node(node));
+                branch.children[child_index] = Some(Child::Node(Box::new(node)));
 
                 Ok(Node::Branch(Box::new(branch)))
             }
@@ -2130,13 +2130,13 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                                 value: None,
                                 children: Children::new(),
                             }));
-                            branch.children[child_index] = Some(Child::Node(new_branch));
+                            branch.children[child_index] = Some(Child::Node(Box::new(new_branch)));
                             return Ok(node);
                         };
 
                         let child = self.read_for_update(child)?;
                         let child = self.insert_branch_helper(child, partial_path.as_ref())?;
-                        branch.children[child_index] = Some(Child::Node(child));
+                        branch.children[child_index] = Some(Child::Node(Box::new(child)));
                         Ok(node)
                     }
                     Node::Leaf(leaf) => {
@@ -2151,7 +2151,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                             value: None,
                             children: Children::new(),
                         }));
-                        branch.children[child_index] = Some(Child::Node(new_branch));
+                        branch.children[child_index] = Some(Child::Node(Box::new(new_branch)));
 
                         Ok(Node::Branch(Box::new(branch)))
                     }
@@ -2168,14 +2168,14 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 };
 
                 node.update_partial_path(node_partial_path);
-                branch.children[node_index] = Some(Child::Node(node));
+                branch.children[node_index] = Some(Child::Node(Box::new(node)));
 
                 let new_branch = Node::Branch(Box::new(BranchNode {
                     partial_path: key_partial_path,
                     value: None,
                     children: Children::new(),
                 }));
-                branch.children[key_index] = Some(Child::Node(new_branch));
+                branch.children[key_index] = Some(Child::Node(Box::new(new_branch)));
 
                 Ok(Node::Branch(Box::new(branch)))
             }
@@ -2316,7 +2316,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                         let (child, removed_value) =
                             self.remove_helper(child, child_partial_path.as_ref())?;
 
-                        branch.children[child_index] = child.map(Child::Node);
+                        branch.children[child_index] = child.map(|n| Child::Node(Box::new(n)));
 
                         Ok((self.flatten_branch(branch)?, removed_value))
                     }
@@ -2411,7 +2411,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                         let child =
                             self.remove_prefix_helper(child, child_partial_path.as_ref(), deleted)?;
 
-                        branch.children[child_index] = child.map(Child::Node);
+                        branch.children[child_index] = child.map(|n| Child::Node(Box::new(n)));
 
                         self.flatten_branch(branch)
                     }
