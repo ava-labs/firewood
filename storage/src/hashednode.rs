@@ -2,8 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::{
-    Children, DefaultHashMode, HashMode, HashType, HashableShunt, IntoSplitPath, Node, Path,
-    PathComponent, SplitPath, TrieHash,
+    Children, HashMode, HashType, HashableShunt, IntoSplitPath, Node, Path, PathComponent,
+    SplitPath, TrieHash,
 };
 use smallvec::SmallVec;
 
@@ -193,28 +193,4 @@ pub trait Hashable: std::fmt::Debug {
     /// Each element is a child's index and hash.
     /// Yields 0 elements if the node is a leaf.
     fn children(&self) -> Children<Option<HashType>>;
-}
-
-/// A preimage of a hash.
-pub trait Preimage: std::fmt::Debug {
-    /// Returns the hash of this preimage.
-    fn to_hash(&self) -> HashType;
-
-    /// Write this hash preimage to `buf`.
-    fn write(&self, buf: &mut impl HasUpdate);
-}
-
-/// A single blanket implementation that delegates to the compile-selected
-/// [`DefaultHashMode`].
-///
-/// Threading a generic `H: HashMode` through these call sites (so a caller can
-/// pick the scheme at runtime) is deferred to a follow-up PR.
-impl<T: Hashable> Preimage for T {
-    fn to_hash(&self) -> HashType {
-        DefaultHashMode::to_hash(self)
-    }
-
-    fn write(&self, buf: &mut impl HasUpdate) {
-        DefaultHashMode::write_preimage(self, buf);
-    }
 }

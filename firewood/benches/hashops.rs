@@ -9,7 +9,7 @@ use firewood::Merkle;
 use firewood::api;
 use firewood::db::{BatchOp, DbConfig};
 use firewood::open;
-use firewood_storage::{DefaultHashMode, DeletedNodeTracking, HashMode, MemStore, NodeStore};
+use firewood_storage::{DeletedNodeTracking, EthHash, HashMode, MemStore, NodeStore};
 use pprof::ProfilerGuard;
 use rand::{RngExt, distr::Alphanumeric};
 use std::fs::File;
@@ -70,8 +70,8 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
         .bench_function("insert", |b| {
             b.iter_batched(
                 || {
-                    let store = Arc::new(MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM));
-                    let nodestore: NodeStore<_, _, DefaultHashMode> =
+                    let store = Arc::new(MemStore::new(Vec::new(), EthHash::ALGORITHM));
+                    let nodestore: NodeStore<_, _, EthHash> =
                         NodeStore::new_empty_proposal(store, DeletedNodeTracking::Enabled);
                     let merkle = Merkle::from(nodestore);
 
@@ -120,7 +120,9 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
                     let db_path = TempDir::new().unwrap();
                     let db_path = db_path.path().join("benchmark_db");
                     let cfg = DbConfig::builder()
-                        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+                        .node_hash_algorithm(
+                            <firewood_storage::EthHash as firewood_storage::HashMode>::ALGORITHM,
+                        )
                         .truncate(true)
                         .build();
                     let db = open(db_path, cfg).unwrap();

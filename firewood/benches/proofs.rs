@@ -17,7 +17,7 @@ use firewood::Merkle;
 use firewood::api::DbView as _;
 use firewood::verify_range_proof_structure;
 use firewood_storage::{
-    DefaultHashMode, DeletedNodeTracking, HashMode, MemStore, NodeStore, SeededRng,
+    DeletedNodeTracking, HashMode, MemStore, MerkleDbHash, NodeStore, SeededRng,
 };
 use rand::{RngExt, distr::Alphanumeric};
 
@@ -25,10 +25,11 @@ use rand::{RngExt, distr::Alphanumeric};
 fn bench_proofs(criterion: &mut Criterion) {
     // Fixture: 1000 random 32-byte keys, 1-byte values, hashed and frozen.
     let rng = &SeededRng::from_option(Some(1234));
-    let store = Arc::new(MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM));
-    let nodestore: NodeStore<_, _, DefaultHashMode> =
+    let store = Arc::new(MemStore::new(Vec::new(), MerkleDbHash::ALGORITHM));
+    let nodestore: NodeStore<_, _, MerkleDbHash> =
         NodeStore::new_empty_proposal(store, DeletedNodeTracking::Enabled);
     let mut merkle = Merkle::from(nodestore);
+    let algorithm = MerkleDbHash::ALGORITHM;
 
     let mut keys: Vec<Vec<u8>> =
         repeat_with(|| rng.sample_iter(&Alphanumeric).take(32).collect::<Vec<u8>>())
@@ -59,12 +60,7 @@ fn bench_proofs(criterion: &mut Criterion) {
         let proof = view.single_key_proof(mid).unwrap();
         b.iter(|| {
             proof
-                .verify(
-                    mid,
-                    Some(b"v".as_slice()),
-                    &root_hash,
-                    DefaultHashMode::ALGORITHM,
-                )
+                .verify(mid, Some(b"v".as_slice()), &root_hash, algorithm)
                 .unwrap();
         });
     });
@@ -79,7 +75,7 @@ fn bench_proofs(criterion: &mut Criterion) {
                 root_hash.clone(),
                 Some(first),
                 Some(last),
-                DefaultHashMode::ALGORITHM,
+                algorithm,
                 limit,
             )
             .unwrap();

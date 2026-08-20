@@ -15,7 +15,7 @@ use firewood::api::{self, DynDb, KeyType, ValueType};
 use firewood::db::{BatchOp, DbConfig};
 use firewood::manager::RevisionManagerConfig;
 use firewood::open;
-use firewood_storage::{DefaultHashMode, HashMode};
+use firewood_storage::{EthHash, HashMode};
 use rand::{RngExt, distr::Alphanumeric};
 
 #[derive(Parser, Debug)]
@@ -60,7 +60,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .max_revisions(args.revisions)
         .build();
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+        .node_hash_algorithm(EthHash::ALGORITHM)
         .truncate(args.truncate)
         .manager(mgrcfg)
         .build();

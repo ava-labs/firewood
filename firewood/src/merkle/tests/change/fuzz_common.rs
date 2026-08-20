@@ -9,7 +9,7 @@ use crate::api::{BatchOp, FrozenChangeProof, FrozenRangeProof, HashKey};
 use crate::db::Db;
 use crate::merkle::{Key, Value};
 use crate::{ChangeProof, Proof, ProofNode, verify_change_proof_structure};
-use firewood_storage::{DefaultHashMode, NodeHashAlgorithm, SeededRng};
+use firewood_storage::{EthHash, NodeHashAlgorithm, SeededRng};
 
 /// Build a `FrozenChangeProof` from mutated parts.
 pub(in crate::merkle::tests) fn build_change_proof(
@@ -40,7 +40,7 @@ pub(in crate::merkle::tests) fn build_range_proof(
 /// Whether a change proof is rejected by the structural check or, failing
 /// that, the root-hash check (its proposal won't match `end_root`).
 pub(in crate::merkle::tests) fn change_proof_rejected(
-    db: &Db<DefaultHashMode>,
+    db: &Db<EthHash>,
     proof: &FrozenChangeProof,
     start_root: &HashKey,
     end_root: &HashKey,
