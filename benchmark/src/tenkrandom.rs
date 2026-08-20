@@ -12,6 +12,7 @@ use std::time::Instant;
 use firewood::api::{Db as _, Proposal as _};
 use firewood::db::{BatchOp, Db};
 use firewood::logger::debug;
+use firewood_storage::DefaultHashMode;
 
 use crate::{Args, TestRunner};
 use sha2::{Digest, Sha256};
@@ -20,7 +21,7 @@ use sha2::{Digest, Sha256};
 pub struct TenKRandom;
 
 impl TestRunner for TenKRandom {
-    fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>> {
+    fn run(&self, db: &Db<DefaultHashMode>, args: &Args) -> Result<(), Box<dyn Error>> {
         let mut low = 0;
         let mut high = args.global_opts.number_of_batches * args.global_opts.batch_size;
         let twenty_five_pct = args.global_opts.batch_size / 4;

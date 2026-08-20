@@ -73,6 +73,10 @@ impl DbView for RevisionHandle<'_> {
     where
         Self: 'view;
 
+    fn node_hash_algorithm(&self) -> firewood::NodeHashAlgorithm {
+        self.view.node_hash_algorithm()
+    }
+
     fn root_hash(&self) -> Option<HashKey> {
         self.view.root_hash()
     }
