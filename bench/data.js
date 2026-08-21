@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787296314807,
+  "lastUpdate": 1787296333117,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -9399,6 +9399,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 74.08588472405505,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "rodrigo",
+            "username": "RodrigoVillar",
+            "email": "77309055+RodrigoVillar@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "ef649ae12addbb1a0ad8ede5a91580936e4c2b38",
+          "message": "refactor: thread HashMode through the typed database stack [6/9] (#2135)\n\n## Why this should be merged\n\nParsing a proof by runtime mode is not enough if database, trie,\nstorage, and reconstruction operations still hash through a\ncompile-selected default. The selected mode must be represented\nthroughout the typed implementation before a safe object-erased runtime\nentry point can be added.\n\nIn the stack, this is the typed core of the migration. It consumes the\nlow-level mode abstraction, shared representation, codecs, and proof\ndispatch from PRs 2 through 5, then makes every database operation\nconsistently generic over one hash mode. PR 7 can therefore add runtime\nselection as a thin object-safe boundary instead of duplicating database\nlogic.\n\n## How this works\n\nThis change threads an explicit `H: HashMode` through `Db`, `Proposal`,\n`RevisionManager`, persistence, `Merkle`, proof generation and\nverification, `NodeStore`, checker paths, and reconstruction state.\nMode-dependent hashing\nand account behavior dispatch through `H` rather than feature gates.\n\nProof reconciliation also receives the explicit runtime\n`NodeHashAlgorithm`. That value controls the defensive value-digest\nguard and the Ethereum account-value relaxation because a range-proving\ntrie can have a structural type that differs from the proof mode. This\nkeeps policy tied to the proof being processed rather than accidentally\ninferring it from a helper type.\n\nThis PR remains a typed refactor: production construction still uses the\ntemporary compile-selected bridge, and object-safe runtime selection is\nadded separately.\n\n## How this was tested\n\nCI.\n\n## Breaking Changes\n\n- [ ] firewood\n- [ ] firewood-storage\n- [ ] firewood-ffi (C api)\n- [ ] firewood-go (Go api)\n- [ ] fwdctl",
+          "timestamp": "2026-08-20T19:15:33Z",
+          "url": "https://github.com/ava-labs/firewood/commit/ef649ae12addbb1a0ad8ede5a91580936e4c2b38"
+        },
+        "date": 1787296331677,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 163.1510395889222,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6129.2897827658035,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 82.08475957781256,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5989.898594783368,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 54.466227809466204,
             "unit": "block_accept_ms/ggas"
           }
         ]
