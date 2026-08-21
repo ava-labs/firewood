@@ -10,7 +10,7 @@ use crate::hashednode::hash_node;
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::{BranchNode, Node};
-use crate::rlp::{NULL_RLP, RlpItem, encode_list, replace_list_field};
+use crate::rlp::{EMPTY_TRIE_ROOT, RlpItem, encode_list, replace_list_field};
 use crate::{
     Child, Children, HashMode, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage,
     SharedNode, TrieHash,
@@ -304,7 +304,7 @@ pub fn hash_node_as_storage_trie_root_for_node<H: HashMode>(
 #[must_use]
 fn compute_storage_trie_root(child_hashes: &Children<Option<HashType>>) -> TrieHash {
     if child_hashes.count() == 0 {
-        return TrieHash::from(Keccak256::digest(NULL_RLP));
+        return TrieHash::from(EMPTY_TRIE_ROOT);
     }
     let mut child_hashes = child_hashes.clone();
     if let Some((_, child)) = child_hashes.take_only_child() {
