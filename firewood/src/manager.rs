@@ -10,7 +10,7 @@ use nonzero_ext::nonzero;
 use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, VecDeque};
 use std::io;
-use std::num::{NonZero, NonZeroU64};
+use std::num::{NonZero, NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
@@ -619,8 +619,11 @@ impl<H: HashMode> RevisionManager<H> {
         // nightly release). The get_or_init should be replaced with get_or_try_init once it
         // is available to allow the error to be passed back to the caller.
         self.threadpool.get_or_init(|| {
+            let workers = std::thread::available_parallelism()
+                .map_or(BranchNode::MAX_CHILDREN, NonZeroUsize::get)
+                .min(BranchNode::MAX_CHILDREN);
             ThreadPoolBuilder::new()
-                .num_threads(BranchNode::MAX_CHILDREN)
+                .num_threads(workers)
                 .build()
                 .expect("Error in creating threadpool")
         })
