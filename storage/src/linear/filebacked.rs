@@ -185,6 +185,11 @@ impl ReadableStorage for FileBacked {
         cached
     }
 
+    fn take_cached_node(&self, addr: LinearAddress) -> Option<SharedNode> {
+        let mut guard = self.cache.lock();
+        guard.remove_entry(&addr).map(|(_, cached)| cached.0)
+    }
+
     fn free_list_cache(&self, addr: LinearAddress) -> Option<Option<LinearAddress>> {
         // BLOCKING: mutex lock on the free-list LRU cache. Called during node allocation on
         // every proposal/commit. Contends with writes that also update the free-list cache.
