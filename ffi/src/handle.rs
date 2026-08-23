@@ -8,7 +8,7 @@ use firewood::{
         self, ArcDynDbView, Db as _, DbView, FrozenChangeProof, HashKey, HashKeyExt, IntoBatchIter,
         KeyType,
     },
-    db::{CommittedView, Db, DbConfig, ProofConfig},
+    db::{CommittedView, Db, DbConfig},
     manager::RevisionManagerConfig,
 };
 
@@ -35,6 +35,27 @@ impl From<NodeHashAlgorithm> for firewood::NodeHashAlgorithm {
             NodeHashAlgorithm::MerkleDB => firewood::NodeHashAlgorithm::MerkleDB,
             NodeHashAlgorithm::Ethereum => firewood::NodeHashAlgorithm::Ethereum,
         }
+    }
+}
+
+/// Size limits applied when deserializing proofs.
+///
+/// Mirrors `firewood::db::ProofConfig`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ProofConfig {
+    /// The hard cap on a decoded proof body, in bytes. Must be non-zero.
+    pub max_decompressed_len: usize,
+    /// The max ratio of uncompressed body to compressed frame length. Must be non-zero.
+    pub max_compression_ratio: usize,
+}
+
+impl From<ProofConfig> for firewood::db::ProofConfig {
+    fn from(cfg: ProofConfig) -> Self {
+        Self::builder()
+            .max_decompressed_len(cfg.max_decompressed_len)
+            .max_compression_ratio(cfg.max_compression_ratio)
+            .build()
     }
 }
 
@@ -107,26 +128,12 @@ pub struct DatabaseHandleArgs<'a> {
     /// Note: `revisions` must be > `deferred_persistence_commit_count`.
     pub deferred_persistence_commit_count: u64,
 
-    /// The hard cap on a decoded proof body. `0` uses the default.
-    pub proof_max_decompressed_len: usize,
-
-    /// The max ratio of uncompressed body to compressed frame length. `0` uses the default.
-    pub proof_max_compression_ratio: usize,
+    /// The size limits applied when deserializing proofs.
+    pub proof: ProofConfig,
 }
 
 impl DatabaseHandleArgs<'_> {
-    fn as_proof_config(&self) -> ProofConfig {
-        let mut cfg = ProofConfig::default();
-        if self.proof_max_decompressed_len != 0 {
-            cfg.max_decompressed_len = self.proof_max_decompressed_len;
-        }
-        if self.proof_max_compression_ratio != 0 {
-            cfg.max_compression_ratio = self.proof_max_compression_ratio;
-        }
-        cfg
-    }
-
-    fn as_rev_manager_config(&self) -> Result<RevisionManagerConfig, api::Error> {
+    fn to_rev_manager_config(&self) -> Result<RevisionManagerConfig, api::Error> {
         let cache_read_strategy = match self.strategy {
             0 => firewood::manager::CacheReadStrategy::WritesOnly,
             1 => firewood::manager::CacheReadStrategy::BranchReads,
@@ -181,9 +188,9 @@ impl DatabaseHandle {
         let cfg = DbConfig::builder()
             .node_hash_algorithm(args.node_hash_algorithm.into())
             .truncate(args.truncate)
-            .manager(args.as_rev_manager_config()?)
+            .manager(args.to_rev_manager_config()?)
             .root_store(args.root_store)
-            .proof(args.as_proof_config())
+            .proof(args.proof.into())
             .build();
 
         let path = args

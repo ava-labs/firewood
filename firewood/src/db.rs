@@ -205,7 +205,7 @@ impl Db {
         Ok(db)
     }
 
-    /// The size limits applied when serializing/deserializing proofs.
+    /// The size limits applied when deserializing proofs.
     #[must_use]
     pub const fn proof_config(&self) -> ProofConfig {
         self.proof_config

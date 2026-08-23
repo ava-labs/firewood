@@ -1650,6 +1650,22 @@ typedef struct HandleResult {
 } HandleResult;
 
 /**
+ * Size limits applied when deserializing proofs.
+ *
+ * Mirrors `firewood::db::ProofConfig`.
+ */
+typedef struct ProofConfig {
+  /**
+   * The hard cap on a decoded proof body, in bytes. Must be non-zero.
+   */
+  size_t max_decompressed_len;
+  /**
+   * The max ratio of uncompressed body to compressed frame length. Must be non-zero.
+   */
+  size_t max_compression_ratio;
+} ProofConfig;
+
+/**
  * Arguments for creating or opening a database. These are passed to [`fwd_open_db`]
  *
  * [`fwd_open_db`]: crate::fwd_open_db
@@ -1729,13 +1745,9 @@ typedef struct DatabaseHandleArgs {
    */
   uint64_t deferred_persistence_commit_count;
   /**
-   * The hard cap on a decoded proof body. `0` uses the default.
+   * The size limits applied when deserializing proofs.
    */
-  size_t proof_max_decompressed_len;
-  /**
-   * The max ratio of uncompressed body to compressed frame length. `0` uses the default.
-   */
-  size_t proof_max_compression_ratio;
+  struct ProofConfig proof;
 } DatabaseHandleArgs;
 
 /**
