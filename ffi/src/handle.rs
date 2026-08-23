@@ -133,7 +133,7 @@ pub struct DatabaseHandleArgs<'a> {
 }
 
 impl DatabaseHandleArgs<'_> {
-    fn to_rev_manager_config(&self) -> Result<RevisionManagerConfig, api::Error> {
+    fn as_rev_manager_config(&self) -> Result<RevisionManagerConfig, api::Error> {
         let cache_read_strategy = match self.strategy {
             0 => firewood::manager::CacheReadStrategy::WritesOnly,
             1 => firewood::manager::CacheReadStrategy::BranchReads,
@@ -188,7 +188,7 @@ impl DatabaseHandle {
         let cfg = DbConfig::builder()
             .node_hash_algorithm(args.node_hash_algorithm.into())
             .truncate(args.truncate)
-            .manager(args.to_rev_manager_config()?)
+            .manager(args.as_rev_manager_config()?)
             .root_store(args.root_store)
             .proof(args.proof.into())
             .build();
