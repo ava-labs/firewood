@@ -5,7 +5,6 @@
 // insert some random keys using the front-end API.
 
 use clap::Parser;
-use firewood_storage::NodeHashAlgorithm;
 use std::collections::HashMap;
 use std::error::Error;
 use std::num::NonZeroUsize;
@@ -15,6 +14,7 @@ use std::time::Instant;
 use firewood::api::{Db as _, DbView, KeyType, Proposal as _, ValueType};
 use firewood::db::{BatchOp, Db, DbConfig};
 use firewood::manager::RevisionManagerConfig;
+use firewood_storage::{DefaultHashMode, HashMode};
 use rand::{RngExt, distr::Alphanumeric};
 
 #[derive(Parser, Debug)]
@@ -59,7 +59,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .max_revisions(args.revisions)
         .build();
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
         .truncate(args.truncate)
         .manager(mgrcfg)
         .build();

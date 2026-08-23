@@ -27,8 +27,8 @@ use crate::{
 use firewood_metrics::{HistogramExt, firewood_counter, firewood_histogram};
 use firewood_storage::MemStore;
 use firewood_storage::{
-    BranchNode, Child, Children, DefaultHashMode, DeletedNodeTracking, FileIoError, HashMode,
-    HashType, HashableShunt, HashedNodeReader, ImmutableProposal, LeafNode, MaybePersistedNode,
+    BranchNode, Child, Children, DeletedNodeTracking, EthHash, FileIoError, HashMode, HashType,
+    HashableShunt, HashedNodeReader, ImmutableProposal, LeafNode, MaybePersistedNode, MerkleDbHash,
     Mutable, MutableKind, NibblesIterator, Node, NodeHashAlgorithm, NodeStore, Path, PathBuf,
     PathComponent, Propose, ReadableStorage, SharedNode, TrieHash, TrieReader, U4, ValueDigest,
 };
@@ -53,13 +53,13 @@ use childmask::ChildMask;
 use collapse::{BoundaryChildSource, CollapseRange};
 
 macro_rules! write_attributes {
-    ($writer:ident, $node:expr, $value:expr) => {
+    ($writer:ident, $node:expr, $value:expr, $algorithm:expr) => {
         if !$node.partial_path.0.is_empty() {
             write!($writer, " pp={:x}", $node.partial_path)
                 .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
         }
         if !$value.is_empty() {
-            firewood_storage::format_node_value($value, $writer)
+            firewood_storage::format_node_value($value, $algorithm, $writer)
                 .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
         }
     };
@@ -140,6 +140,7 @@ fn verify_edge<H: ProofCollection + ?Sized>(
     edge_proof: &Proof<H>,
     root_hash: &TrieHash,
     edge: ProofEdge,
+    algorithm: NodeHashAlgorithm,
 ) -> Result<(), api::Error> {
     if edge_proof.is_empty() {
         return Ok(());
@@ -180,11 +181,11 @@ fn verify_edge<H: ProofCollection + ?Sized>(
         let expected_value: Option<&[u8]> =
             edge_kv.and_then(|(key, value)| (bound == key).then_some(value));
         edge_proof
-            .verify(bound, expected_value, root_hash)
+            .verify(bound, expected_value, root_hash, algorithm)
             .map_err(|e| api::Error::ProofError(annotate(e)))?;
     } else if let Some((edge_key, edge_value)) = edge_kv {
         edge_proof
-            .verify(edge_key, Some(edge_value), root_hash)
+            .verify(edge_key, Some(edge_value), root_hash, algorithm)
             .map_err(|e| api::Error::ProofError(annotate(e)))?;
     }
 
@@ -443,10 +444,10 @@ fn compute_outside_children<'a>(
 ///
 /// `range` must be the nibble expansion of `verification`'s `start_key` and
 /// `right_edge_key`.
-fn change_outside_children<S: ReadableStorage>(
+fn change_outside_children<S: ReadableStorage, H: HashMode>(
     proof: &FrozenChangeProof,
     verification: &ChangeProofVerificationContext,
-    proving_merkle: &Merkle<NodeStore<Mutable<Propose>, S>>,
+    proving_merkle: &Merkle<NodeStore<Mutable<Propose>, S, H>>,
     range: CollapseRange<'_>,
 ) -> Result<HashMap<PathBuf, ChildMask>, api::Error> {
     let start_boundary = EdgeBoundary::Left(verification.start_key.as_deref());
@@ -514,23 +515,26 @@ fn change_outside_children<S: ReadableStorage>(
 /// is the single storage child of an account at depth 64, the parent
 /// instead invokes `compute_root_hash_as_storage_trie_root` to apply the
 /// storage-trie-root fold.
-fn compute_root_hash_with_proofs(
+fn compute_root_hash_with_proofs<H: HashMode>(
     node: &Node,
     path_prefix: &[PathComponent],
     proof_nodes: &HashMap<PathBuf, &ProofNode>,
     outside_children: &HashMap<PathBuf, ChildMask>,
 ) -> HashType {
     match node {
-        Node::Leaf(_) => HashableShunt::from_node(path_prefix, node).to_hash(),
+        Node::Leaf(_) => {
+            let shunt = HashableShunt::from_node(path_prefix, node);
+            H::to_hash(&shunt)
+        }
         Node::Branch(branch) => {
-            let parts = build_branch_parts(branch, path_prefix, proof_nodes, outside_children);
-            HashableShunt::new(
+            let parts = build_branch_parts::<H>(branch, path_prefix, proof_nodes, outside_children);
+            let shunt = HashableShunt::new(
                 path_prefix,
                 parts.partial_path,
                 parts.value_digest,
                 parts.child_hashes,
-            )
-            .to_hash()
+            );
+            H::to_hash(&shunt)
         }
     }
 }
@@ -540,7 +544,7 @@ fn compute_root_hash_with_proofs(
 /// account boundaries when this node is the account's lone storage child;
 /// the fold matches what live hashing produced when the storage trie was
 /// first written.
-fn compute_root_hash_as_storage_trie_root(
+fn compute_root_hash_as_storage_trie_root<H: HashMode>(
     node: &Node,
     account_prefix: &[PathComponent],
     branch_nibble: PathComponent,
@@ -549,7 +553,7 @@ fn compute_root_hash_as_storage_trie_root(
 ) -> HashType {
     match node {
         Node::Leaf(_) => {
-            hash_node_as_storage_trie_root_for_node(account_prefix, branch_nibble, node)
+            hash_node_as_storage_trie_root_for_node::<H>(account_prefix, branch_nibble, node)
         }
         Node::Branch(branch) => {
             let path_prefix: PathBuf = account_prefix
@@ -557,8 +561,9 @@ fn compute_root_hash_as_storage_trie_root(
                 .copied()
                 .chain(once(branch_nibble))
                 .collect();
-            let parts = build_branch_parts(branch, &path_prefix, proof_nodes, outside_children);
-            hash_node_as_storage_trie_root_parts(
+            let parts =
+                build_branch_parts::<H>(branch, &path_prefix, proof_nodes, outside_children);
+            hash_node_as_storage_trie_root_parts::<H, _, _>(
                 account_prefix,
                 branch_nibble,
                 parts.partial_path,
@@ -583,7 +588,7 @@ struct BranchParts<'b> {
 /// points. Walks `branch`'s children (recursing into in-range subtrees,
 /// copying proof-node hashes for out-of-range slots) and returns the parts
 /// the caller needs to hash this node by either terminal helper.
-fn build_branch_parts<'b>(
+fn build_branch_parts<'b, H: HashMode>(
     branch: &'b BranchNode,
     path_prefix: &[PathComponent],
     proof_nodes: &HashMap<PathBuf, &'b ProofNode>,
@@ -599,8 +604,13 @@ fn build_branch_parts<'b>(
     let outside_mask = outside_children.get(&full_key);
     let proof_node = proof_nodes.get(&full_key);
 
-    let single_storage_child =
-        single_effective_account_child(&full_key, branch, proof_node.copied(), outside_mask);
+    let single_storage_child = single_effective_account_child(
+        &full_key,
+        branch,
+        proof_node.copied(),
+        outside_mask,
+        H::ALGORITHM,
+    );
 
     let mut child_hashes: Children<Option<HashType>> = Children::new();
 
@@ -625,10 +635,8 @@ fn build_branch_parts<'b>(
         // Apply the storage-trie-root fold for the account's lone storage
         // child; the dispatch lives here at the parent so the child's recursive
         // call doesn't need to carry a flag.
-        let child_hash = if DefaultHashMode::ALGORITHM.is_ethereum()
-            && single_storage_child == Some(nibble)
-        {
-            compute_root_hash_as_storage_trie_root(
+        let child_hash = if H::ALGORITHM.is_ethereum() && single_storage_child == Some(nibble) {
+            compute_root_hash_as_storage_trie_root::<H>(
                 child_node,
                 &full_key,
                 nibble,
@@ -636,7 +644,12 @@ fn build_branch_parts<'b>(
                 outside_children,
             )
         } else {
-            compute_root_hash_with_proofs(child_node, &child_prefix, proof_nodes, outside_children)
+            compute_root_hash_with_proofs::<H>(
+                child_node,
+                &child_prefix,
+                proof_nodes,
+                outside_children,
+            )
         };
         child_hashes[nibble] = Some(child_hash);
         child_prefix.pop();
@@ -683,8 +696,9 @@ fn single_effective_account_child(
     branch: &BranchNode,
     proof_node: Option<&ProofNode>,
     outside_mask: Option<&ChildMask>,
+    algorithm: NodeHashAlgorithm,
 ) -> Option<PathComponent> {
-    if !DefaultHashMode::ALGORITHM.is_ethereum() || full_key.len() != ACCOUNT_DEPTH_NIBBLES {
+    if !algorithm.is_ethereum() || full_key.len() != ACCOUNT_DEPTH_NIBBLES {
         return None;
     }
 
@@ -911,6 +925,7 @@ fn right_edge<'a>(
 /// the proof's hash mode does not match `algorithm`, keys are outside the
 /// requested range, boundary proofs fail verification, or the reconstructed
 /// root hash doesn't match.
+#[allow(clippy::too_many_lines)]
 pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     first_key: Option<impl KeyType>,
     last_key: Option<impl KeyType>,
@@ -919,8 +934,7 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     proof: &RangeProof<impl KeyType, impl ValueType, H>,
 ) -> Result<(), api::Error> {
     // Reject a proof whose self-describing mode disagrees with the caller's
-    // expectation before any hashing happens. Node hashing below still follows
-    // the compile default, so only matching-mode proofs may proceed.
+    // expectation before hashing it with that expected algorithm.
     if proof.hash_mode() != algorithm {
         return Err(api::Error::ProofError(ProofError::HashModeMismatch {
             expected: algorithm,
@@ -997,6 +1011,7 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
             proof.start_proof(),
             root_hash,
             ProofEdge::Left,
+            algorithm,
         )?;
     }
 
@@ -1025,6 +1040,7 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
                 proof.end_proof(),
                 root_hash,
                 ProofEdge::Right,
+                algorithm,
             )?;
         }
         RightBoundary::OutOfRange(bound) => {
@@ -1060,14 +1076,24 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         key_values,
     )?;
 
-    verify_range_proof_root_hash(
-        &all_proof_nodes,
-        key_values,
-        proof,
-        first_key_bytes,
-        right_boundary,
-        root_hash,
-    )
+    match algorithm {
+        NodeHashAlgorithm::Ethereum => verify_range_proof_root_hash::<H, EthHash>(
+            &all_proof_nodes,
+            key_values,
+            proof,
+            first_key_bytes,
+            right_boundary,
+            root_hash,
+        ),
+        NodeHashAlgorithm::MerkleDB => verify_range_proof_root_hash::<H, MerkleDbHash>(
+            &all_proof_nodes,
+            key_values,
+            proof,
+            first_key_bytes,
+            right_boundary,
+            root_hash,
+        ),
+    }
 }
 
 /// Verifies that proof nodes with values within the range are included in `key_values`.
@@ -1134,18 +1160,19 @@ fn verify_proof_node_values(
 /// `right_boundary` describes the right edge of the proven range. When the
 /// variant is [`RightBoundary::OutOfRange`], the boundary key sits at the
 /// end-proof's terminal node and is treated as outside the proven range.
-fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
+fn verify_range_proof_root_hash<P: ProofCollection<Node = ProofNode>, H: HashMode>(
     all_proof_nodes: &[&ProofNode],
     key_values: &[(impl KeyType, impl ValueType)],
-    proof: &RangeProof<impl KeyType, impl ValueType, H>,
+    proof: &RangeProof<impl KeyType, impl ValueType, P>,
     first_key_bytes: Option<&[u8]>,
     right_boundary: RightBoundary<'_>,
     root_hash: &TrieHash,
 ) -> Result<(), api::Error> {
     // Build in-memory merkle from key-value pairs
-    let memstore = MemStore::default();
+    let memstore = MemStore::new(Vec::new(), H::ALGORITHM);
     let nodestore = NodeStore::new_empty_proposal(memstore.into(), DeletedNodeTracking::Enabled);
-    let mut proving_merkle: Merkle<NodeStore<Mutable<Propose>, MemStore>> = Merkle::from(nodestore);
+    let mut proving_merkle: Merkle<NodeStore<Mutable<Propose>, MemStore, H>> =
+        Merkle::from(nodestore);
 
     for (key, value) in key_values {
         proving_merkle.insert(key.as_ref(), value.as_ref().into())?;
@@ -1168,13 +1195,15 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
         //    value here can only be out of range.)
         //  - ValueDigest::None: Unreachable — if the trie has a value, the
         //    proof node will carry Value or Hash, not None.
-        proving_merkle.reconcile_branch_proof_node(proof_node, |pn, branch_value| {
-            match &pn.value_digest {
+        proving_merkle.reconcile_branch_proof_node(
+            proof_node,
+            H::ALGORITHM,
+            |pn, branch_value| match &pn.value_digest {
                 Some(ValueDigest::Value(v)) => Ok(Some(v.clone())),
                 _ if branch_value.is_none() => Ok(None),
                 _ => Err(ProofError::UnexpectedValue),
-            }
-        })?;
+            },
+        )?;
         match proof_node_map.entry(proof_node.key.clone()) {
             std::collections::hash_map::Entry::Occupied(existing) => {
                 if *existing.get() != *proof_node {
@@ -1208,7 +1237,7 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
     };
 
     let computed =
-        compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children);
+        compute_root_hash_with_proofs::<H>(&root_node, &[], &proof_node_map, &outside_children);
 
     let expected = HashType::from(root_hash.clone());
     if computed != expected {
@@ -1255,10 +1284,10 @@ fn verify_range_proof_root_hash<H: ProofCollection<Node = ProofNode>>(
 /// from the proof, which is safe only if the proof has no hash there. This
 /// function checks that itself rather than inheriting it from the structural
 /// pass, so that substitution does not depend on the ordering above.
-pub fn verify_change_proof_root_hash(
+pub fn verify_change_proof_root_hash<H: HashMode>(
     proof: &FrozenChangeProof,
     verification: &ChangeProofVerificationContext,
-    proposal: &crate::db::Proposal<'_>,
+    proposal: &crate::db::Proposal<'_, H>,
 ) -> Result<(), api::Error> {
     let start_nodes: &[ProofNode] = proof.start_proof().as_ref();
     let end_nodes: &[ProofNode] = proof.end_proof().as_ref();
@@ -1307,7 +1336,6 @@ pub fn verify_change_proof_root_hash(
         .as_deref()
         .map(|k| NibblesIterator::new(k).collect())
         .unwrap_or_default();
-
     // `None` is an unbounded right edge (+∞). Keeping it distinct from an empty
     // slice matters: an empty slice sorts as the minimum key, which would mark
     // every key out of range at the upper bound.
@@ -1322,21 +1350,25 @@ pub fn verify_change_proof_root_hash(
     };
 
     for proof_node in start_nodes {
-        proving_merkle.reconcile_branch_proof_node(proof_node, |pn, _branch_value| {
-            let node_nibbles: Vec<u8> = pn.key.iter().map(|c| c.as_u8()).collect();
-            // Reaching this guard in range is always a real error: the proposal
-            // already holds the correct value, so the only way the proof node
-            // and branch disagree is tampering — e.g. a dropped in-range `Put`
-            // whose boundary proof still carries the omitted key's hash.
-            if range.contains(&node_nibbles) {
-                Err(ProofError::UnexpectedValue)
-            } else {
-                match &pn.value_digest {
-                    Some(ValueDigest::Value(v)) => Ok(Some(v.clone())),
-                    _ => Ok(None),
+        proving_merkle.reconcile_branch_proof_node(
+            proof_node,
+            H::ALGORITHM,
+            |pn, _branch_value| {
+                let node_nibbles: Vec<u8> = pn.key.iter().map(|c| c.as_u8()).collect();
+                // Reaching this guard in range is always a real error: the proposal
+                // already holds the correct value, so the only way the proof node
+                // and branch disagree is tampering — e.g. a dropped in-range `Put`
+                // whose boundary proof still carries the omitted key's hash.
+                if range.contains(&node_nibbles) {
+                    Err(ProofError::UnexpectedValue)
+                } else {
+                    match &pn.value_digest {
+                        Some(ValueDigest::Value(v)) => Ok(Some(v.clone())),
+                        _ => Ok(None),
+                    }
                 }
-            }
-        })?;
+            },
+        )?;
         proof_node_map.insert(proof_node.key.clone(), proof_node);
     }
 
@@ -1344,21 +1376,25 @@ pub fn verify_change_proof_root_hash(
     // of the right boundary may have out-of-range values that differ
     // from the proposal.
     for proof_node in end_nodes {
-        proving_merkle.reconcile_branch_proof_node(proof_node, |pn, _branch_value| {
-            let node_nibbles: Vec<u8> = pn.key.iter().map(|c| c.as_u8()).collect();
-            // Symmetric to the start proof. An exclusion proof's terminal can
-            // undershoot to the nearest existing key, so at an out-of-range
-            // position the proposal's branch value legitimately differs from the
-            // proof's, and the proof's is adopted.
-            if range.contains(&node_nibbles) {
-                Err(ProofError::UnexpectedValue)
-            } else {
-                match &pn.value_digest {
-                    Some(ValueDigest::Value(v)) => Ok(Some(v.clone())),
-                    _ => Ok(None),
+        proving_merkle.reconcile_branch_proof_node(
+            proof_node,
+            H::ALGORITHM,
+            |pn, _branch_value| {
+                let node_nibbles: Vec<u8> = pn.key.iter().map(|c| c.as_u8()).collect();
+                // Symmetric to the start proof. An exclusion proof's terminal can
+                // undershoot to the nearest existing key, so at an out-of-range
+                // position the proposal's branch value legitimately differs from the
+                // proof's, and the proof's is adopted.
+                if range.contains(&node_nibbles) {
+                    Err(ProofError::UnexpectedValue)
+                } else {
+                    match &pn.value_digest {
+                        Some(ValueDigest::Value(v)) => Ok(Some(v.clone())),
+                        _ => Ok(None),
+                    }
                 }
-            }
-        })?;
+            },
+        )?;
         match proof_node_map.entry(proof_node.key.clone()) {
             std::collections::hash_map::Entry::Occupied(existing) => {
                 if *existing.get() != proof_node {
@@ -1410,7 +1446,7 @@ pub fn verify_change_proof_root_hash(
         .expect("a non-empty proof reconciliation always leaves behind a root node");
 
     let computed =
-        compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children);
+        compute_root_hash_with_proofs::<H>(&root_node, &[], &proof_node_map, &outside_children);
 
     if computed != verification.end_root {
         return Err(api::Error::ProofError(ProofError::EndRootMismatch));
@@ -1438,12 +1474,17 @@ impl<T: TrieReader> Merkle<T> {
     pub fn prove(&self, key: &[u8]) -> Result<FrozenProof, ProofError> {
         self.root().ok_or(ProofError::Empty)?;
 
+        // Source the account storage-root fix policy from the source DB's
+        // runtime algorithm so a cross-mode DB emits correctly-fixed proof
+        // nodes regardless of the build's compile default.
+        let algorithm = self.nodestore().node_hash_algorithm();
+
         // PathIterator yields every node on the path from root toward
         // `key`, including divergent nodes whose partial_path doesn't
         // match (they prove the key's absence in exclusion proofs).
         let proof = self
             .path_iter(key)?
-            .map(|node| node.map(ProofNode::from))
+            .map(|node| node.map(|item| ProofNode::from_path_item(item, algorithm)))
             .collect::<Result<_, _>>()?;
 
         Ok(Proof::new(proof))
@@ -1591,7 +1632,16 @@ impl<T: TrieReader> Merkle<T> {
 
         firewood_histogram!(PROOF_KEYS, "kind" => "range").record_integer(key_values.len());
 
-        Ok(RangeProof::new(start_proof, end_proof, key_values))
+        // Stamp the proof with the source DB's runtime hash mode (not the
+        // build's compile default) so it serializes in the correct wire format
+        // and round-trips for a cross-mode DB.
+        let algorithm = self.nodestore().node_hash_algorithm();
+        Ok(RangeProof::with_hash_mode(
+            start_proof,
+            end_proof,
+            key_values,
+            algorithm,
+        ))
     }
 
     pub(crate) fn get_value(&self, key: &[u8]) -> Result<Option<Value>, FileIoError> {
@@ -1632,9 +1682,15 @@ impl<T: TrieReader> Merkle<T> {
                 .map_err(|e| FileIoError::new(e, None, 0, None))?;
         }
 
+        let algorithm = self.nodestore.node_hash_algorithm();
         match &*node.as_shared_node(&self.nodestore)? {
             Node::Branch(b) => {
-                write_attributes!(writer, b, &b.value.clone().unwrap_or(Box::from([])));
+                write_attributes!(
+                    writer,
+                    b,
+                    &b.value.clone().unwrap_or(Box::from([])),
+                    algorithm
+                );
                 writeln!(writer, "\"]")
                     .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
                 for (childidx, child) in &b.children {
@@ -1661,7 +1717,7 @@ impl<T: TrieReader> Merkle<T> {
                 }
             }
             Node::Leaf(l) => {
-                write_attributes!(writer, l, &l.value);
+                write_attributes!(writer, l, &l.value, algorithm);
                 writeln!(writer, "\" shape=rect]")
                     .map_err(|e| FileIoError::from_generic_no_file(e, "write leaf"))?;
             }
@@ -1799,27 +1855,36 @@ impl<T: HashedNodeReader> Merkle<T> {
 
         firewood_histogram!(PROOF_KEYS, "kind" => "change").record_integer(batch_ops.len());
 
-        Ok(ChangeProof::new(start_proof, end_proof, batch_ops))
+        // Stamp the proof with the source DB's runtime hash mode (not the
+        // build's compile default) so it serializes in the correct wire format
+        // and round-trips for a cross-mode DB.
+        let algorithm = self.nodestore().node_hash_algorithm();
+        Ok(ChangeProof::with_hash_mode(
+            start_proof,
+            end_proof,
+            batch_ops,
+            algorithm,
+        ))
     }
 }
 
 #[cfg(test)]
-impl<F: firewood_storage::Parentable, S: ReadableStorage> Merkle<NodeStore<F, S>> {
+impl<F: firewood_storage::Parentable, S: ReadableStorage, H: HashMode> Merkle<NodeStore<F, S, H>> {
     /// Forks the current Merkle trie into a new mutable proposal.
     ///
     /// ## Errors
     ///
     /// Returns an error if the nodestore cannot be created. See [`NodeStore::new`].
-    pub fn fork(&self) -> Result<Merkle<NodeStore<Mutable<Propose>, S>>, FileIoError> {
+    pub fn fork(&self) -> Result<Merkle<NodeStore<Mutable<Propose>, S, H>>, FileIoError> {
         NodeStore::new(&self.nodestore).map(Into::into)
     }
 }
 
-impl<S: ReadableStorage> TryFrom<Merkle<NodeStore<Mutable<Propose>, S>>>
-    for Merkle<NodeStore<Arc<ImmutableProposal>, S>>
+impl<S: ReadableStorage, H: HashMode> TryFrom<Merkle<NodeStore<Mutable<Propose>, S, H>>>
+    for Merkle<NodeStore<Arc<ImmutableProposal>, S, H>>
 {
     type Error = FileIoError;
-    fn try_from(m: Merkle<NodeStore<Mutable<Propose>, S>>) -> Result<Self, Self::Error> {
+    fn try_from(m: Merkle<NodeStore<Mutable<Propose>, S, H>>) -> Result<Self, Self::Error> {
         Ok(Merkle {
             nodestore: m.nodestore.try_into()?,
         })
@@ -1827,7 +1892,7 @@ impl<S: ReadableStorage> TryFrom<Merkle<NodeStore<Mutable<Propose>, S>>>
 }
 
 #[cfg(any(test, feature = "test_utils"))]
-impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
+impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> {
     /// Convert a merkle backed by a `Mutable<Propose>` into an `ImmutableProposal`
     ///
     /// This function is only used in benchmarks and tests
@@ -1836,12 +1901,12 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     ///
     /// Panics if the conversion fails. This should only be used in tests or benchmarks.
     #[must_use]
-    pub fn hash(self) -> Merkle<NodeStore<Arc<ImmutableProposal>, S>> {
+    pub fn hash(self) -> Merkle<NodeStore<Arc<ImmutableProposal>, S, H>> {
         self.try_into().expect("failed to convert")
     }
 }
 
-impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
+impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K>, S, H>> {
     fn read_for_update(&mut self, child: Child) -> Result<Node, FileIoError> {
         match child {
             Child::Node(node) => Ok(node),
@@ -2446,7 +2511,7 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
     }
 }
 
-impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
+impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> {
     /// Returns the node mapped to by `key_nibbles` where each key element is a
     /// single nibble.
     #[cfg(test)]

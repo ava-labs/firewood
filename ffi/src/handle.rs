@@ -4,6 +4,7 @@
 use std::num::{NonZeroU64, NonZeroUsize};
 
 use firewood::{
+    DefaultHashMode,
     api::{
         self, ArcDynDbView, Db as _, DbView, FrozenChangeProof, HashKey, HashKeyExt, IntoBatchIter,
         KeyType,
@@ -172,7 +173,7 @@ impl DatabaseHandleArgs<'_> {
 #[derive(Debug)]
 pub struct DatabaseHandle {
     /// The database
-    db: Db,
+    db: Db<DefaultHashMode>,
     metrics_context: MetricsContext,
 }
 
@@ -362,7 +363,7 @@ impl<'db> CView<'db> for &'db crate::DatabaseHandle {
     fn create_proposal(
         self,
         values: impl IntoBatchIter,
-    ) -> Result<firewood::db::Proposal<'db>, api::Error> {
+    ) -> Result<firewood::db::Proposal<'db, DefaultHashMode>, api::Error> {
         self.db.propose(values)
     }
 }
