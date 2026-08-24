@@ -242,35 +242,36 @@ impl<'a, T: AsRef<[u8]> + ?Sized> KeyValueTrieRoot<'a, T> {
         Ok(self)
     }
 
-    /// Hashes this trie, returning a hashed trie.
+    /// Hashes this trie under the hash mode `H`, returning a hashed trie.
     #[must_use]
-    pub fn into_hashed_trie(self: Box<Self>) -> Box<HashedKeyValueTrieRoot<'a, T>> {
-        HashedKeyValueTrieRoot::new(PathGuard::new(&mut PathBuf::new_const()), self)
+    pub fn into_hashed_trie<H: crate::HashMode>(
+        self: Box<Self>,
+    ) -> Box<HashedKeyValueTrieRoot<'a, T>> {
+        HashedKeyValueTrieRoot::new::<H>(PathGuard::new(&mut PathBuf::new_const()), self)
     }
 }
 
 impl<'a, T: AsRef<[u8]> + ?Sized> HashedKeyValueTrieRoot<'a, T> {
     /// Constructs a new hashed key-value trie node from the given un-hashed
-    /// node.
+    /// node, hashing under the scheme `H`.
     #[must_use]
-    pub fn new(
+    pub fn new<H: crate::HashMode>(
         mut leading_path: PathGuard<'_>,
         #[expect(clippy::boxed_local)] node: Box<KeyValueTrieRoot<'a, T>>,
     ) -> Box<Self> {
-        let children = node
-            .children
-            .map(|pc, child| child.map(|child| Self::new(leading_path.fork_append(pc), child)));
+        let children = node.children.map(|pc, child| {
+            child.map(|child| Self::new::<H>(leading_path.fork_append(pc), child))
+        });
 
         Box::new(Self {
-            computed: HashableShunt::new(
+            computed: H::to_hash(&HashableShunt::new(
                 leading_path.as_slice(),
                 node.partial_path,
                 node.value.map(|v| ValueDigest::Value(v.as_ref())),
                 children
                     .each_ref()
                     .map(|_, c| c.as_deref().map(|c| c.computed.clone())),
-            )
-            .to_hash(),
+            )),
             leading_path: leading_path.as_slice().into(),
             partial_path: node.partial_path,
             value: node.value,
@@ -690,7 +691,7 @@ mod tests {
         let root = KeyValueTrieRoot::<str>::from_slice(slice)
             .unwrap()
             .unwrap()
-            .into_hashed_trie();
+            .into_hashed_trie::<crate::DefaultHashMode>();
 
         assert_eq!(*root.computed(), root_hash);
         assert_eq!(*root.computed(), crate::Preimage::to_hash(&*root));

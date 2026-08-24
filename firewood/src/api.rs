@@ -6,7 +6,7 @@ use crate::merkle::parallel::CreateProposalError;
 use crate::merkle::{Key, Value};
 use crate::persist_worker::PersistError;
 use crate::{Proof, ProofError, ProofNode, RangeProof};
-use firewood_storage::{DefaultHashMode, FileIoError, HashMode, TrieHash};
+use firewood_storage::{DefaultHashMode, FileIoError, HashMode, NodeHashAlgorithm, TrieHash};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -197,6 +197,14 @@ pub enum Error {
         max_revisions: usize,
         commit_count: u64,
     },
+
+    #[error(
+        "node hash algorithm mismatch: hash mode expects {expected:?}, config specifies {found:?}"
+    )]
+    HashModeMismatch {
+        expected: NodeHashAlgorithm,
+        found: NodeHashAlgorithm,
+    },
 }
 
 impl From<std::convert::Infallible> for Error {
@@ -265,6 +273,9 @@ pub trait Db {
     where
         Self: 'db;
 
+    /// The node-hashing scheme this database uses.
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm;
+
     /// Get a reference to a specific view based on a hash
     ///
     /// # Arguments
@@ -322,6 +333,9 @@ pub trait DbView {
     type Iter<'view>: Iterator<Item = Result<(Key, Value), FileIoError>>
     where
         Self: 'view;
+
+    /// The node-hashing scheme the view's backing database was created with.
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm;
 
     /// Get the root hash for the current [`DbView`]
     ///
@@ -397,6 +411,9 @@ pub type ArcDynDbView = Arc<dyn DynDbView>;
 
 /// A dyn-safe version of [`DbView`].
 pub trait DynDbView: Debug + Send + Sync + 'static {
+    /// The node-hashing scheme the view's backing database was created with.
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm;
+
     /// Get the root hash for the current [`DynDbView`]
     ///
     /// # Note
@@ -466,6 +483,10 @@ impl<T: Debug + DbView + Send + Sync + 'static> DynDbView for T
 where
     for<'view> T::Iter<'view>: Sized,
 {
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        DbView::node_hash_algorithm(self)
+    }
+
     fn root_hash(&self) -> Option<HashKey> {
         DbView::root_hash(self)
     }
@@ -520,7 +541,7 @@ pub trait Reconstructible: DbView {
         Self: Sized;
 
     /// The underlying database
-    fn db(&self) -> &crate::db::Db;
+    fn db(&self) -> &crate::db::Db<DefaultHashMode>;
 }
 
 /// A proposal for a new revision of the database.

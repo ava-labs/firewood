@@ -13,6 +13,7 @@ use fastrace::prelude::SpanContext;
 use fastrace::{Span, func_path};
 use firewood::api::{Db as _, Proposal as _};
 use firewood::db::Db;
+use firewood_storage::DefaultHashMode;
 use log::info;
 
 use pretty_duration::pretty_duration;
@@ -23,7 +24,7 @@ use crate::{Args, TestRunner};
 pub struct Create;
 
 impl TestRunner for Create {
-    fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>> {
+    fn run(&self, db: &Db<DefaultHashMode>, args: &Args) -> Result<(), Box<dyn Error>> {
         let keys = args.global_opts.batch_size;
         let start = Instant::now();
 
