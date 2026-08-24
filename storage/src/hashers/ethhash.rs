@@ -107,7 +107,7 @@ use crate::eth_encoding::nibbles_to_eth_compact;
 use crate::logger::warn;
 use crate::node::ExtendableBytes;
 use crate::node::branch::Serializable;
-use crate::rlp::{NULL_RLP, RlpItem, encode_list, replace_list_field};
+use crate::rlp::{EMPTY_TRIE_ROOT, RlpItem, encode_list, replace_list_field};
 use crate::{
     BranchNode, EthHash, HashMode, HashType, Hashable, NodeHashAlgorithm, Path, TrieHash, TriePath,
     ValueDigest, hashednode::HasUpdate, logger::trace,
@@ -184,9 +184,8 @@ impl HashMode for EthHash {
             // For accounts, splice the empty-trie storage root hash into the
             // account RLP. If the splice fails (malformed value), fall back
             // to the raw value.
-            let empty_root = Keccak256::digest(NULL_RLP);
             let account_value: Option<Box<[u8]>> = if is_account {
-                value_bytes.and_then(|bytes| replace_list_field(bytes, 2, empty_root.as_ref()).ok())
+                value_bytes.and_then(|bytes| replace_list_field(bytes, 2, &EMPTY_TRIE_ROOT).ok())
             } else {
                 None
             };
