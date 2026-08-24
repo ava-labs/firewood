@@ -240,11 +240,11 @@ func TestNodeHashAlgorithmValidation(t *testing.T) {
 	case ethereumOnly:
 		r.NoError(dbEth.Close(oneSecCtx(t)))
 		r.Error(errMerkledb)
-		r.ErrorContains(errMerkledb, "node store hash algorithm mismatch: want to initialize with MerkleDB, but build option is for Ethereum")
+		r.ErrorContains(errMerkledb, "node hash algorithm mismatch: hash mode expects Ethereum, config specifies MerkleDB")
 	case merkledbOnly:
 		r.NoError(dbMerkledb.Close(oneSecCtx(t)))
 		r.Error(errEth)
-		r.ErrorContains(errEth, "node store hash algorithm mismatch: want to initialize with Ethereum, but build option is for MerkleDB")
+		r.ErrorContains(errEth, "node hash algorithm mismatch: hash mode expects MerkleDB, config specifies Ethereum")
 	case bothOrNeither:
 		// Both succeeded or both failed - this should not happen
 		r.Failf("Expected exactly one hash type to succeed", "got errEth=%v, errNative=%v", errEth, errMerkledb)

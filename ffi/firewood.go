@@ -153,9 +153,9 @@ type config struct {
 	// revisions that can exist at a given time.
 	// Note: revisions must be > deferredPersistenceCommitCount
 	deferredPersistenceCommitCount uint64
-	// proofMaxDecompressedLen is the hard cap on a decoded proof body; 0 uses the default.
+	// proofMaxDecompressedLen is the hard cap on a decoded proof body.
 	proofMaxDecompressedLen uint
-	// proofMaxCompressionRatio is the max ratio of uncompressed to compressed length; 0 uses the default.
+	// proofMaxCompressionRatio is the max ratio of uncompressed to compressed length.
 	proofMaxCompressionRatio uint
 }
 
@@ -166,6 +166,8 @@ func defaultConfig() *config {
 		revisions:                      100,
 		readCacheStrategy:              OnlyCacheWrites,
 		deferredPersistenceCommitCount: 1,
+		proofMaxDecompressedLen:        32 * 1024 * 1024,
+		proofMaxCompressionRatio:       128,
 	}
 }
 
@@ -189,8 +191,9 @@ func WithNodeCacheSizeInBytes(sizeInBytes uint) Option {
 	}
 }
 
-// WithProofSizeLimits sets the size limits applied when serializing and
-// deserializing proofs. A zero value for any limit uses the default.
+// WithProofSizeLimits sets the size limits applied when deserializing proofs.
+// Both limits must be non-zero.
+// Default: maxDecompressedLen 32 MiB, maxCompressionRatio 128
 func WithProofSizeLimits(maxDecompressedLen, maxCompressionRatio uint) Option {
 	return func(c *config) {
 		c.proofMaxDecompressedLen = maxDecompressedLen
@@ -308,6 +311,10 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	if conf.freeListCacheEntries < 1 {
 		return nil, fmt.Errorf("free list cache entries must be >= 1, got %d", conf.freeListCacheEntries)
 	}
+	if conf.proofMaxDecompressedLen < 1 || conf.proofMaxCompressionRatio < 1 {
+		return nil, fmt.Errorf("proof size limits must be >= 1, got %d and %d",
+			conf.proofMaxDecompressedLen, conf.proofMaxCompressionRatio)
+	}
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
@@ -323,8 +330,10 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 		expensive_metrics:                 C.bool(conf.expensiveMetricsEnabled),
 		node_hash_algorithm:               C.enum_NodeHashAlgorithm(nodeHashAlgorithm),
 		deferred_persistence_commit_count: C.uint64_t(conf.deferredPersistenceCommitCount),
-		proof_max_decompressed_len:        C.size_t(conf.proofMaxDecompressedLen),
-		proof_max_compression_ratio:       C.size_t(conf.proofMaxCompressionRatio),
+		proof: C.struct_ProofConfig{
+			max_decompressed_len:  C.size_t(conf.proofMaxDecompressedLen),
+			max_compression_ratio: C.size_t(conf.proofMaxCompressionRatio),
+		},
 	}
 
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))

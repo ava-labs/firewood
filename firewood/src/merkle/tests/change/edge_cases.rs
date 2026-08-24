@@ -8,6 +8,8 @@ use std::num::NonZeroUsize;
 use tempfile::TempDir;
 use test_case::test_case;
 
+use firewood_storage::{DefaultHashMode, HashMode};
+
 #[test]
 fn test_empty_batch_ops_with_nonempty_proofs() {
     let (source, target, root1_target, _ds, _dt) =
@@ -52,7 +54,7 @@ fn test_odd_depth_proof_node_accepted() {
     assert!(
         proof
             .start_proof()
-            .value_digest(b"\x14", &root2)
+            .value_digest(b"\x14", &root2, DefaultHashMode::ALGORITHM)
             .unwrap()
             .is_none()
     );
@@ -74,7 +76,7 @@ fn test_start_proof_inclusion_with_children_below() {
     assert!(
         proof
             .start_proof()
-            .value_digest(b"\xab", &root2)
+            .value_digest(b"\xab", &root2, DefaultHashMode::ALGORITHM)
             .unwrap()
             .is_some(),
         "start proof should be an inclusion proof for \\xab"
@@ -131,7 +133,7 @@ fn test_divergence_parent_start_key_exhausted() {
     assert!(
         proof
             .start_proof()
-            .value_digest(b"\x12", &root2)
+            .value_digest(b"\x12", &root2, DefaultHashMode::ALGORITHM)
             .unwrap()
             .is_none(),
         "start proof should be an exclusion proof for \\x12"
@@ -175,7 +177,7 @@ fn test_start_tail_last_node_children_checked() {
     assert!(
         proof
             .start_proof()
-            .value_digest(b"\x10", &root2)
+            .value_digest(b"\x10", &root2, DefaultHashMode::ALGORITHM)
             .unwrap()
             .is_none(),
         "start proof should be an exclusion proof for \\x10"
@@ -211,7 +213,7 @@ fn test_start_proof_exclusion_for_deleted_key() {
     assert!(
         proof
             .start_proof()
-            .value_digest(b"\x10", &root2)
+            .value_digest(b"\x10", &root2, DefaultHashMode::ALGORITHM)
             .unwrap()
             .is_none(),
         "start proof should be an exclusion proof for deleted \\x10"
@@ -554,7 +556,7 @@ fn test_end_proof_exclusion_for_deleted_key() {
     assert!(
         proof
             .end_proof()
-            .value_digest(b"\x30", &root2)
+            .value_digest(b"\x30", &root2, DefaultHashMode::ALGORITHM)
             .unwrap()
             .is_none(),
         "end proof should be an exclusion proof for deleted \\x30"
@@ -586,14 +588,14 @@ fn test_single_point_range() {
     assert!(
         proof
             .start_proof()
-            .value_digest(b"\x20", &root2)
+            .value_digest(b"\x20", &root2, DefaultHashMode::ALGORITHM)
             .unwrap()
             .is_some()
     );
     assert!(
         proof
             .end_proof()
-            .value_digest(b"\x20", &root2)
+            .value_digest(b"\x20", &root2, DefaultHashMode::ALGORITHM)
             .unwrap()
             .is_some()
     );
@@ -926,7 +928,10 @@ fn test_prefix_bound_does_not_narrow_a_complete_proof() {
         "both nodes carry a value, which is what makes this a false-positive risk"
     );
     assert!(
-        proof.end_proof().value_digest(b"\x10", &root2).is_err(),
+        proof
+            .end_proof()
+            .value_digest(b"\x10", &root2, DefaultHashMode::ALGORITHM)
+            .is_err(),
         "a proof anchored at the bound must refuse to answer about a shorter key"
     );
 
@@ -967,7 +972,7 @@ fn test_a_terminal_at_the_last_operation_narrows_the_range() {
     assert!(
         proof
             .end_proof()
-            .value_digest(b"\x10", &root2)
+            .value_digest(b"\x10", &root2, DefaultHashMode::ALGORITHM)
             .unwrap()
             .is_some(),
         "the terminal is the last op's own node and carries its value"
@@ -993,8 +998,8 @@ type FrozenBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
 /// A proof that stops short on a `Delete`, with the databases and roots it was
 /// built from.
 struct StoppedShort {
-    source: Db,
-    target: Db,
+    source: Db<DefaultHashMode>,
+    target: Db<DefaultHashMode>,
     start_root: api::HashKey,
     end_root: api::HashKey,
     proof: FrozenChangeProof,

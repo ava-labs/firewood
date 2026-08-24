@@ -15,7 +15,7 @@ use std::os::raw::c_int;
 
 use criterion::profiler::Profiler;
 use criterion::{Bencher, Criterion, criterion_group, criterion_main};
-use firewood_storage::{Children, LeafNode, Node, Path, PathComponent};
+use firewood_storage::{Children, DefaultHashMode, LeafNode, Node, Path, PathComponent};
 use pprof::ProfilerGuard;
 use smallvec::SmallVec;
 
@@ -70,12 +70,17 @@ fn manual_deserializer(b: &mut Bencher, input: &Vec<u8>) {
         .as_slice()
         .split_first()
         .expect("always has at least one byte");
-    b.iter(|| Node::from_reader(&mut std::io::Cursor::new(input)).expect("to deserialize node"));
+    b.iter(|| {
+        Node::from_reader::<DefaultHashMode>(&mut std::io::Cursor::new(input))
+            .expect("to deserialize node")
+    });
 }
 
 fn to_bytes(input: &Node) -> Vec<u8> {
     let mut bytes = Vec::new();
-    let _area_index = input.as_bytes(&mut bytes).expect("to serialize node");
+    let _area_index = input
+        .as_bytes::<DefaultHashMode, _>(&mut bytes)
+        .expect("to serialize node");
     bytes
 }
 

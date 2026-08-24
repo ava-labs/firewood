@@ -69,11 +69,25 @@ fn shared_path_proof() {
 
     let key = key1;
     let proof = merkle.prove(key).unwrap();
-    proof.verify(key, Some(value1), &root_hash).unwrap();
+    proof
+        .verify(
+            key,
+            Some(value1),
+            &root_hash,
+            firewood_storage::DefaultHashMode::ALGORITHM,
+        )
+        .unwrap();
 
     let key = key2;
     let proof = merkle.prove(key).unwrap();
-    proof.verify(key, Some(value2), &root_hash).unwrap();
+    proof
+        .verify(
+            key,
+            Some(value2),
+            &root_hash,
+            firewood_storage::DefaultHashMode::ALGORITHM,
+        )
+        .unwrap();
 }
 
 #[test]
@@ -86,7 +100,14 @@ fn single_key_proof_with_one_node() {
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let proof = merkle.prove(key).unwrap();
-    proof.verify(key, Some(value), &root_hash).unwrap();
+    proof
+        .verify(
+            key,
+            Some(value),
+            &root_hash,
+            firewood_storage::DefaultHashMode::ALGORITHM,
+        )
+        .unwrap();
 }
 
 #[test]
@@ -99,10 +120,24 @@ fn two_key_proof_without_shared_path() {
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let proof = merkle.prove(key1).unwrap();
-    proof.verify(key1, Some(key1), &root_hash).unwrap();
+    proof
+        .verify(
+            key1,
+            Some(key1),
+            &root_hash,
+            firewood_storage::DefaultHashMode::ALGORITHM,
+        )
+        .unwrap();
 
     let proof = merkle.prove(key2).unwrap();
-    proof.verify(key2, Some(key2), &root_hash).unwrap();
+    proof
+        .verify(
+            key2,
+            Some(key2),
+            &root_hash,
+            firewood_storage::DefaultHashMode::ALGORITHM,
+        )
+        .unwrap();
 }
 
 #[test]
@@ -133,7 +168,14 @@ fn test_proof() {
         // during hashing. The proof must be verified against what was actually
         // committed, not what was originally inserted.
         let stored_val = merkle.get_value(key).unwrap().expect("key should exist");
-        proof.verify(key, Some(&stored_val), &root_hash).unwrap();
+        proof
+            .verify(
+                key,
+                Some(&stored_val),
+                &root_hash,
+                firewood_storage::DefaultHashMode::ALGORITHM,
+            )
+            .unwrap();
     }
 }
 
@@ -154,7 +196,14 @@ fn test_proof_end_with_leaf() {
     let proof = merkle.prove(key).unwrap();
     assert!(!proof.is_empty());
 
-    proof.verify(key, Some(b"reindeer"), &root_hash).unwrap();
+    proof
+        .verify(
+            key,
+            Some(b"reindeer"),
+            &root_hash,
+            firewood_storage::DefaultHashMode::ALGORITHM,
+        )
+        .unwrap();
 }
 
 #[test]
@@ -173,7 +222,14 @@ fn test_proof_end_with_branch() {
     let proof = merkle.prove(key).unwrap();
     assert!(!proof.is_empty());
 
-    proof.verify(key, Some(b"verb"), &root_hash).unwrap();
+    proof
+        .verify(
+            key,
+            Some(b"verb"),
+            &root_hash,
+            firewood_storage::DefaultHashMode::ALGORITHM,
+        )
+        .unwrap();
 }
 
 #[test]
@@ -194,7 +250,16 @@ fn test_bad_proof() {
         new_proof.pop();
 
         // TODO(demosdemon): verify error result matches expected error
-        assert!(new_proof.verify(key, Some(value), &root_hash).is_err());
+        assert!(
+            new_proof
+                .verify(
+                    key,
+                    Some(value),
+                    &root_hash,
+                    firewood_storage::DefaultHashMode::ALGORITHM
+                )
+                .is_err()
+        );
     }
 }
 
@@ -227,7 +292,12 @@ fn exclusion_with_proof_value_present() {
 
     // Exclusion should verify with expected None even if proof includes node values
     proof
-        .verify(missing, Option::<&[u8]>::None, &root_hash)
+        .verify(
+            missing,
+            Option::<&[u8]>::None,
+            &root_hash,
+            firewood_storage::DefaultHashMode::ALGORITHM,
+        )
         .unwrap();
 }
 
@@ -263,7 +333,14 @@ fn proof_path_construction_and_corruption() {
     }
 
     // Sanity: proof verifies
-    proof.verify(key, Some(val.as_slice()), &root_hash).unwrap();
+    proof
+        .verify(
+            key,
+            Some(val.as_slice()),
+            &root_hash,
+            firewood_storage::DefaultHashMode::ALGORITHM,
+        )
+        .unwrap();
 
     // Negative: corrupt the path by clearing children of the first node
     let mut corrupt: Proof<Vec<ProofNode>> = proof.clone().into_mutable();
@@ -273,7 +350,12 @@ fn proof_path_construction_and_corruption() {
     }
     let corrupt = corrupt.into_immutable();
     let err = corrupt
-        .verify(key, Some(val.as_slice()), &root_hash)
+        .verify(
+            key,
+            Some(val.as_slice()),
+            &root_hash,
+            firewood_storage::DefaultHashMode::ALGORITHM,
+        )
         .unwrap_err();
     // Node traversal should fail
     assert!(matches!(
@@ -318,7 +400,11 @@ fn truncated_exclusion_proof_rejected() {
     let full_proof = merkle.prove(b"\x15").unwrap();
     assert!(
         full_proof
-            .value_digest(b"\x15", &root_hash)
+            .value_digest(
+                b"\x15",
+                &root_hash,
+                firewood_storage::DefaultHashMode::ALGORITHM
+            )
             .unwrap()
             .is_none(),
         "full proof should be a valid exclusion proof"
@@ -335,7 +421,11 @@ fn truncated_exclusion_proof_rejected() {
 
     // The truncated proof must be rejected — the remaining terminal node
     // has a child toward \x15 but the proof doesn't include it.
-    let result = truncated.value_digest(b"\x15", &root_hash);
+    let result = truncated.value_digest(
+        b"\x15",
+        &root_hash,
+        firewood_storage::DefaultHashMode::ALGORITHM,
+    );
     assert!(
         matches!(result, Err(crate::ProofError::ExclusionProofMissingChild)),
         "truncated exclusion proof should be rejected with ExclusionProofMissingChild, got {result:?}"

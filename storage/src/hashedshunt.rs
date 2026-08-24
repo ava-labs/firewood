@@ -1,7 +1,9 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{Children, HashType, Hashable, JoinedPath, SplitPath, ValueDigest};
+use crate::{
+    Children, DefaultHashMode, HashMode, HashType, Hashable, JoinedPath, SplitPath, ValueDigest,
+};
 
 /// A shunt for a hasheable trie that we can use to compute the hash of a node
 /// using component parts.
@@ -28,11 +30,6 @@ impl<'a, P1: SplitPath, P2: SplitPath> HashableShunt<'a, P1, P2> {
             child_hashes,
         }
     }
-
-    /// Calculates the hash of this shunt.
-    pub fn to_hash(&self) -> HashType {
-        crate::Preimage::to_hash(self)
-    }
 }
 
 impl<P1: SplitPath, P2: SplitPath> std::fmt::Debug for HashableShunt<'_, P1, P2> {
@@ -45,7 +42,7 @@ impl<P1: SplitPath, P2: SplitPath> std::fmt::Debug for HashableShunt<'_, P1, P2>
                 &self.value.as_ref().map(|v| v.as_ref().map(hex::encode)),
             )
             .field("child_hashes", &self.child_hashes)
-            .field("hash", &self.to_hash())
+            .field("hash", &DefaultHashMode::to_hash(self))
             .finish()
     }
 }
