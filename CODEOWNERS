@@ -1,4 +1,3 @@
 # CODEOWNERS
-# Note: more specific rules overrule wildcard
+# Note: more specific rules overrule the wildcard rule. Always include @ava-labs/platform-firewood when adding more specific rules.
 *        @ava-labs/platform-firewood
-/ffi     @ava-labs/platform-firewood @alarso16 
