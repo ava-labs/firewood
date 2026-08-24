@@ -5,6 +5,7 @@ use firewood::api::{self, Db as _};
 use firewood::db::{Db, DbConfig};
 use firewood::iter::MerkleKeyValueIter;
 use firewood::{Key, Value};
+use firewood_storage::DefaultHashMode;
 use firewood_storage::FileIoError;
 use std::borrow::Cow;
 use std::error::Error;
@@ -318,7 +319,7 @@ impl OutputHandler for StdoutOutputHandler {
 
 fn create_output_handler(
     opts: &Options,
-    db: &Db,
+    db: &Db<DefaultHashMode>,
 ) -> Result<Option<Box<dyn OutputHandler + Send + Sync>>, Box<dyn Error>> {
     let hex = opts.hex;
     let mut file_name = opts.output_file_name.clone();

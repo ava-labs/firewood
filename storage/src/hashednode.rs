@@ -38,21 +38,26 @@ impl<'a, P: SplitPath> HashableShunt<'a, P, &'a [PathComponent]> {
     }
 }
 
-/// Returns the hash of `node`, which is at the given `path_prefix`.
+/// Returns the hash of `node`, which is at the given `path_prefix`, under the
+/// hashing scheme `H`.
 #[must_use]
-pub fn hash_node(node: &Node, path_prefix: &Path) -> HashType {
-    HashableShunt::from_node(path_prefix.as_components(), node).to_hash()
+pub fn hash_node<H: HashMode>(node: &Node, path_prefix: &Path) -> HashType {
+    H::to_hash(&HashableShunt::from_node(path_prefix.as_components(), node))
 }
 
 /// Returns the serialized representation of `node` used as the pre-image
-/// when hashing the node. The node is at the given `path_prefix`.
+/// when hashing the node under the scheme `H`. The node is at the given
+/// `path_prefix`.
 #[must_use]
-pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
+pub fn hash_preimage<H: HashMode>(node: &Node, path_prefix: &Path) -> Box<[u8]> {
     // Key, 3 options, value digest
     #[expect(clippy::arithmetic_side_effects)]
     let est_len = node.partial_path().len() + path_prefix.len() + 3 + HashType::empty().len();
     let mut buf = Vec::with_capacity(est_len);
-    HashableShunt::from_node(path_prefix.as_components(), node).write(&mut buf);
+    H::write_preimage(
+        &HashableShunt::from_node(path_prefix.as_components(), node),
+        &mut buf,
+    );
     buf.into_boxed_slice()
 }
 

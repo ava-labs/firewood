@@ -15,7 +15,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use fastrace_opentelemetry::OpenTelemetryReporter;
 use firewood::logger::trace;
-use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::{DefaultHashMode, HashMode};
 use log::LevelFilter;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
@@ -158,7 +158,7 @@ enum TestName {
 }
 
 trait TestRunner {
-    fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>>;
+    fn run(&self, db: &Db<DefaultHashMode>, args: &Args) -> Result<(), Box<dyn Error>>;
 
     fn generate_inserts(
         start: u64,
@@ -236,7 +236,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .max_revisions(args.global_opts.revisions)
         .build();
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
         .truncate(matches!(args.test_name, TestName::Create))
         .manager(mgrcfg)
         .build();

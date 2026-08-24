@@ -23,15 +23,6 @@ pub struct MemStore {
     node_hash_algorithm: NodeHashAlgorithm,
 }
 
-impl Default for MemStore {
-    fn default() -> Self {
-        Self {
-            bytes: Mutex::new(Vec::new()),
-            node_hash_algorithm: NodeHashAlgorithm::compile_option(),
-        }
-    }
-}
-
 impl MemStore {
     /// Create a new, empty [`MemStore`]
     #[must_use]
@@ -97,7 +88,7 @@ mod test {
     #[test_case(&[(0,&[1, 2, 3]),(2,&[4])],(0,&[1,2,4]); "overwrite end of store")]
     #[test_case(&[(0,&[1, 2, 3]),(2,&[4,5])],(0,&[1,2,4,5]); "overwrite/extend end of store")]
     fn test_in_mem_write_linear_store(writes: &[(u64, &[u8])], expected: (u64, &[u8])) {
-        let store = MemStore::default();
+        let store = MemStore::new(Vec::new(), NodeHashAlgorithm::MerkleDB);
         assert_eq!(store.size().unwrap(), 0);
 
         for write in writes {

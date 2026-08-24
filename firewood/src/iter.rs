@@ -5,7 +5,7 @@ use crate::api::{KeyType, KeyValuePair};
 use crate::merkle::{Key, Value};
 
 use firewood_storage::{
-    BranchNode, Child, DefaultHashMode, FileIoError, HashMode, NibblesIterator, Node, PathBuf,
+    BranchNode, Child, FileIoError, NibblesIterator, Node, NodeHashAlgorithm, PathBuf,
     PathComponent, PathIterItem, SharedNode, TriePathFromUnpackedBytes, TrieReader,
 };
 use std::cmp::Ordering;
@@ -314,6 +314,11 @@ impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
             result
                 .map(|(key, node)| {
                     let must_recompute = self.iter.merkle.must_recompute_storage_hash();
+                    // Source the account storage-root fix policy from the source
+                    // DB's runtime algorithm, not the build's compile default, so
+                    // a cross-mode DB emits range-proof key_values that match its
+                    // proof nodes.
+                    let algorithm = self.iter.merkle.node_hash_algorithm();
                     match &*node {
                         Node::Branch(branch) => {
                             let Some(value) = branch.value.as_ref() else {
@@ -325,13 +330,14 @@ impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
                             } else {
                                 firewood_storage::Children::new()
                             };
-                            fix_account_value(key, value, &child_hashes, must_recompute)
+                            fix_account_value(key, value, &child_hashes, must_recompute, algorithm)
                         }
                         Node::Leaf(leaf) => fix_account_value(
                             key,
                             &leaf.value,
                             &firewood_storage::Children::new(),
                             must_recompute,
+                            algorithm,
                         ),
                     }
                 })
@@ -342,17 +348,22 @@ impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
 
 impl<T: TrieReader> FusedIterator for MerkleKeyValueIter<'_, T> {}
 
-/// For ethhash account nodes (32-byte key) on databases that require storageRoot
+/// For Ethereum account nodes (32-byte key) on databases that require storageRoot
 /// recomputation, replace the storageRoot with the correct hash computed from the
 /// node's children. This ensures range proof `key_values` match the proof nodes.
-/// Without ethhash this is a no-op.
+///
+/// The eth-ness check is the source DB's runtime `algorithm`, not the build's
+/// compile default, so a `Db<EthHash>` opened in a non-ethhash binary still
+/// applies the fix (and a `Db<MerkleDbHash>` in an ethhash binary does not).
+/// `must_recompute` is an independent version flag, not an eth-ness proxy.
 fn fix_account_value(
     key: Key,
     value: &[u8],
     child_hashes: &firewood_storage::Children<Option<firewood_storage::HashType>>,
     must_recompute: bool,
+    algorithm: NodeHashAlgorithm,
 ) -> Option<(Key, Value)> {
-    if DefaultHashMode::ALGORITHM.is_ethereum()
+    if algorithm.is_ethereum()
         && must_recompute
         && key.len() == 32
         && let Some(fixed) = firewood_storage::fix_account_storage_root_value(value, child_hashes)
@@ -652,7 +663,8 @@ mod tests {
     use super::*;
     use crate::merkle::Merkle;
     use firewood_storage::{
-        DeletedNodeTracking, ImmutableProposal, MemStore, Mutable, NodeStore, Propose,
+        DefaultHashMode, DeletedNodeTracking, HashMode, ImmutableProposal, MemStore, Mutable,
+        NodeStore, Propose,
     };
     use std::sync::Arc;
     use test_case::test_case;
@@ -667,8 +679,9 @@ mod tests {
         };
     }
 
-    pub(super) fn create_test_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
-        let memstore = MemStore::default();
+    pub(super) fn create_test_merkle()
+    -> Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>> {
+        let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
         let memstore = Arc::new(memstore);
         let nodestore = NodeStore::new_empty_proposal(memstore, DeletedNodeTracking::Enabled);
         Merkle::from(nodestore)
@@ -852,7 +865,8 @@ mod tests {
     ///  1   F
     ///
     /// The number next to each branch is the position of the child in the branch's children array.
-    fn created_populated_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
+    fn created_populated_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>>
+    {
         let mut merkle = create_test_merkle();
 
         merkle
@@ -1141,7 +1155,7 @@ mod tests {
 
         merkle.insert(&branch, branch.into()).unwrap();
 
-        let immutable_merkle: Merkle<NodeStore<Arc<ImmutableProposal>, _>> =
+        let immutable_merkle: Merkle<NodeStore<Arc<ImmutableProposal>, _, DefaultHashMode>> =
             merkle.try_into().unwrap();
         println!("{}", immutable_merkle.dump_to_string().unwrap());
         merkle = immutable_merkle.fork().unwrap();

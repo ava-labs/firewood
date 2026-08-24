@@ -9,8 +9,8 @@ use askama::Template;
 use clap::Args;
 use firewood::api;
 use firewood_storage::{
-    CacheReadStrategy, CheckOpt, DBStats, DeletedNodeTracking, FileBacked, NodeStore,
-    NodeStoreHeader,
+    CacheReadStrategy, CheckOpt, DBStats, DefaultHashMode, DeletedNodeTracking, FileBacked,
+    NodeStore, NodeStoreHeader,
 };
 use indicatif::{ProgressBar, ProgressFinish, ProgressStyle};
 use nonzero_ext::nonzero;
@@ -80,7 +80,8 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     } else {
         DeletedNodeTracking::Enabled
     };
-    let nodestore = NodeStore::open(&header, storage, deleted_node_tracking)?;
+    let nodestore: NodeStore<_, _, DefaultHashMode> =
+        NodeStore::open(&header, storage, deleted_node_tracking)?;
     let check_report = nodestore.check(&header, check_ops);
 
     println!("Errors ({}): ", check_report.errors.len());
