@@ -7,8 +7,9 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use clap::Args;
-use firewood::api::{self, Db as DbApi};
-use firewood::db::{Db, DbConfig};
+use firewood::api;
+use firewood::db::DbConfig;
+use firewood::open;
 use firewood_replay::replay_from_file;
 
 use crate::DatabasePath;
@@ -38,7 +39,7 @@ pub struct Options {
     )]
     pub max_commits: Option<u64>,
 
-    /// Truncate the database before replaying (default: true for new databases).
+    /// Truncate the database before replaying.
     #[arg(
         long,
         required = false,
@@ -56,19 +57,24 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
         opts.database.dbpath.display()
     );
 
+    // Detect the mode before opening so truncation preserves the database's
+    // persisted hashing scheme.
+    let node_hash_algorithm = opts.database.node_hash_algorithm()?;
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(opts.database.node_hash_algorithm.into())
+        .node_hash_algorithm(node_hash_algorithm)
+        .create_if_missing(false)
         .truncate(opts.truncate)
         .build();
-    let db = Db::new(opts.database.dbpath.clone(), cfg)?;
+    let db = open(opts.database.dbpath.clone(), cfg)?;
 
     let start = Instant::now();
 
-    let result = replay_from_file(&opts.replay_log, &db, opts.max_commits).map_err(|e| {
-        api::Error::InternalError(Box::new(std::io::Error::other(format!(
-            "replay failed: {e}"
-        ))))
-    })?;
+    let result =
+        replay_from_file(&opts.replay_log, db.as_ref(), opts.max_commits).map_err(|e| {
+            api::Error::InternalError(Box::new(std::io::Error::other(format!(
+                "replay failed: {e}"
+            ))))
+        })?;
 
     let elapsed = start.elapsed();
 
@@ -80,7 +86,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     }
 
     // Print the root hash from the database for verification
-    if let Some(root) = DbApi::root_hash(&db) {
+    if let Some(root) = db.root_hash() {
         println!("Database root: {}", hex::encode(root));
     }
 

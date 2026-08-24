@@ -14,13 +14,12 @@
 //! themselves. This matches go-ethereum's behavior and keeps a single
 //! error type on the public API.
 
-#[cfg(all(test, feature = "ethhash"))]
-use firewood_storage::NodeHashAlgorithm;
-use firewood_storage::{PackedPathRef, PathComponent, TriePathFromPackedBytes, ValueDigest};
-#[cfg(feature = "ethhash")]
+use firewood_storage::{
+    EthHash, HashMode, PackedPathRef, PathComponent, TriePathFromPackedBytes, ValueDigest,
+};
 use firewood_storage::{RlpList, TrieHash};
 
-use crate::api::{DbView, Error, HashKey, HashKeyExt};
+use crate::api::{DbView, Error, HashKey};
 use crate::proofs::ProofError;
 use crate::proofs::eth::{
     ACCOUNT_DEPTH_NIBBLES, AccountFields, account_storage_root_rlp, proof_node_to_mpt_rlp,
@@ -49,7 +48,6 @@ const KECCAK_EMPTY: [u8; 32] = [
 /// if any of the first four account fields is not encoded as bytes. Returns
 /// [`ProofError::InvalidAccountCodeHashLength`] if the `codeHash` field is not
 /// 32 bytes.
-#[cfg(feature = "ethhash")]
 pub fn account_code_hash(value: &[u8]) -> Result<Option<HashKey>, ProofError> {
     let code_hash_slice = RlpList::parse(value)
         .and_then(|list| list.nth_bytes(3))
@@ -85,20 +83,15 @@ pub struct EthProof {
 impl Default for EthProof {
     /// "Absent account" shape: zero `nonce` and `balance`, `code_hash` =
     /// `keccak("")` (the empty-code hash), `storage_hash` =
-    /// [`HashKey::default_root_hash`] (the empty-trie root in eth mode).
-    /// Matches what an ethereum verifier expects to see for a missing
-    /// account.
-    ///
-    /// Under merkledb mode `default_root_hash` returns `None`, so
-    /// `storage_hash` falls back to all zeros. Callers should not reach
-    /// this case — [`eth_get_proof`] gates on `is_ethereum()` before any
-    /// `EthProof` is constructed.
+    /// [`EthHash::default_root_hash`] (the Ethereum empty-trie root). This
+    /// shape is Ethereum-only: [`eth_get_proof`] gates on `is_ethereum()`
+    /// before constructing an `EthProof`.
     fn default() -> Self {
         Self {
             nonce: 0,
             balance: [0u8; 32],
             code_hash: KECCAK_EMPTY,
-            storage_hash: HashKey::default_root_hash()
+            storage_hash: EthHash::default_root_hash()
                 .as_deref()
                 .copied()
                 .unwrap_or_default(),
@@ -126,6 +119,7 @@ pub struct EthStorageProof {
 /// Trie keys here are the already-keccak-hashed 32-byte forms (firewood
 /// stores accounts at `keccak256(address)` and slots at
 /// `keccak256(address) ++ keccak256(slot_key)` — callers do the hashing).
+/// The hashing mode is obtained from [`DbView::node_hash_algorithm`].
 ///
 /// # Returns
 ///
@@ -475,13 +469,6 @@ mod tests {
             RlpItem::Bytes(&[0u8; 32]), // storageRoot — fixed up by firewood
             RlpItem::Bytes(code_hash),
         ])
-    }
-
-    /// Confirm an ethhash build passes the runtime mode gate. The gate's
-    /// *negative* path is covered by `merkledb_gate_tests` above.
-    #[test]
-    fn mode_gate_passes_under_ethhash() {
-        assert!(NodeHashAlgorithm::compile_option().is_ethereum());
     }
 
     /// `KECCAK_EMPTY` is a hardcoded literal; confirm it really is
