@@ -67,7 +67,7 @@ impl DerefMut for PathGuard<'_> {
 
 /// Classified children for ethereum hash processing
 pub(super) struct ClassifiedChildren<'a> {
-    pub(super) unhashed: Vec<(PathComponent, Node)>,
+    pub(super) unhashed: Vec<PathComponent>,
     pub(super) hashed: Vec<(PathComponent, (MaybePersistedNode, &'a mut HashType))>,
 }
 
@@ -95,7 +95,7 @@ where
                         let maybe_persisted_node = MaybePersistedNode::from(*a);
                         acc.hashed.push((idx, (maybe_persisted_node, h)));
                     }
-                    Some(Child::Node(node)) => acc.unhashed.push((idx, node.clone())),
+                    Some(Child::Node(_)) => acc.unhashed.push(idx),
                     Some(Child::MaybePersisted(maybe_persisted, h)) => {
                         // For MaybePersisted, it's important to remember that we've already hashed it
                         acc.hashed.push((idx, (maybe_persisted.clone(), h)));
@@ -170,7 +170,7 @@ where
                 }
                 // handle the single-child case for an account special below
                 if hashed.is_empty() && unhashed.len() == 1 {
-                    Some(unhashed.last().expect("only one").0)
+                    Some(*unhashed.last().expect("only one"))
                 } else {
                     None
                 }
