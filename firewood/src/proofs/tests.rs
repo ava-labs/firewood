@@ -59,6 +59,13 @@ fn compress_and_parse_change(data: &[u8]) -> Result<FrozenChangeProof, ReadError
 
 /// Returns a valid range proof plus its canonical uncompressed bytes
 /// (`header || body`) for the byte-taxonomy tests.
+///
+/// This particular proof (keys `[2]..[8]` over `([k], [k])` for `k in 0..=10`,
+/// capped at 5 key-values) is chosen because the cap makes every wire feature
+/// non-empty at once — a two-node start proof, a two-node end proof, and five
+/// key-values — so a mutation test exists for each section, while the
+/// single-byte keys keep the byte offsets those tests hard-code small and
+/// stable.
 fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
     let merkle = crate::merkle::tests::init_merkle((0u8..=10).map(|k| ([k], [k])));
     let proof = merkle
@@ -70,6 +77,11 @@ fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
 }
 
 /// Change-proof counterpart of [`create_valid_range_proof`].
+///
+/// The empty start and end proofs pin the batch-op section to fixed offsets
+/// right after the header (see the layout comments where tests mutate it),
+/// and one operation of each kind (`Put`, `Delete`, `DeleteRange`) covers all
+/// three opcodes on the wire.
 fn create_valid_change_proof(hash_mode: NodeHashAlgorithm) -> (FrozenChangeProof, Vec<u8>) {
     let proof = FrozenChangeProof::with_hash_mode(
         Proof::new(Box::<[ProofNode]>::from([])),
