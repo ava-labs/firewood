@@ -58,16 +58,7 @@ fn compress_and_parse_change(data: &[u8]) -> Result<FrozenChangeProof, ReadError
 }
 
 /// Returns a valid range proof plus its canonical uncompressed bytes
-/// (`header || body`) for the byte-taxonomy tests. Parse the result with
-/// [`compress_and_parse_range`].
-///
-/// The proof is built over a trie holding the eleven single-byte pairs
-/// `([k], [k])` for `k in 0..=10`, requesting the range `[2]..[8]` capped at
-/// 5 key-values. That yields a two-node start proof, a two-node end proof
-/// (the cap cuts the range short at `[6]`), and the five key-values
-/// `([2], [2])..=([6], [6])` — every wire feature the mutation tests target
-/// offsets in, while staying small enough that the offsets documented
-/// alongside the tests are tractable.
+/// (`header || body`) for the byte-taxonomy tests.
 fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
     let merkle = crate::merkle::tests::init_merkle((0u8..=10).map(|k| ([k], [k])));
     let proof = merkle
@@ -78,14 +69,7 @@ fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
     (proof, serialized)
 }
 
-/// Returns a valid change proof plus its canonical uncompressed bytes
-/// (`header || body`), the change-proof counterpart of
-/// [`create_valid_range_proof`]. Parse with [`compress_and_parse_change`].
-///
-/// The proof has empty start and end proofs and one batch operation of each
-/// kind (`Put`, `Delete`, `DeleteRange`), so the batch-op discriminant and
-/// payload offsets the mutation tests target are fixed and documented where
-/// used (see the layout comments in `test_change_proof_invalid_item`).
+/// Change-proof counterpart of [`create_valid_range_proof`].
 fn create_valid_change_proof(hash_mode: NodeHashAlgorithm) -> (FrozenChangeProof, Vec<u8>) {
     let proof = FrozenChangeProof::with_hash_mode(
         Proof::new(Box::<[ProofNode]>::from([])),

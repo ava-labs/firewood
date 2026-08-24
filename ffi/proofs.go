@@ -154,8 +154,6 @@ func (db *Database) RangeProof(
 	return getRangeProofFromRangeProofResult(C.fwd_db_range_proof(db.handle, args))
 }
 
-// rangeProofFromBytes is the single cgo call site for
-// C.fwd_range_proof_from_bytes. A nil db uses the default proof size limits.
 func rangeProofFromBytes(db *C.DatabaseHandle, data []byte) (*RangeProof, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
@@ -450,8 +448,6 @@ func (db *Database) ChangeProof(
 	return proof, nil
 }
 
-// changeProofFromBytes is the single cgo call site for
-// C.fwd_change_proof_from_bytes. A nil db uses the default proof size limits.
 func changeProofFromBytes(db *C.DatabaseHandle, data []byte) (*ChangeProof, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
