@@ -72,24 +72,23 @@ pub type DefaultHashMode = EthHash;
 #[cfg(not(feature = "ethhash"))]
 pub type DefaultHashMode = MerkleDbHash;
 
+const _: () = {
+    // `DefaultHashMode` must stay coupled to the `ethhash` feature: it is
+    // the cfg-selected default `H` until the flag is removed.
+    let expected = if cfg!(feature = "ethhash") {
+        NodeHashAlgorithm::Ethereum
+    } else {
+        NodeHashAlgorithm::MerkleDB
+    };
+    assert!(DefaultHashMode::ALGORITHM as u8 == expected as u8);
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn path_of_len(len: usize) -> Path {
         Path((0..len).map(|_| 0u8).collect())
-    }
-
-    #[test]
-    fn default_hash_mode_matches_compile_option() {
-        // `DefaultHashMode` must stay coupled to the `ethhash` feature: it is
-        // the cfg-selected default `H` until the flag is removed.
-        let expected = if cfg!(feature = "ethhash") {
-            NodeHashAlgorithm::Ethereum
-        } else {
-            NodeHashAlgorithm::MerkleDB
-        };
-        assert_eq!(DefaultHashMode::ALGORITHM, expected);
     }
 
     #[test]
