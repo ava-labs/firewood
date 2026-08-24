@@ -7,8 +7,8 @@ ci-rust command profile:
     ./scripts/run-rust-ci.sh "{{command}}" "{{profile}}"
 
 # Run one bench target by name with the CI profile.
-ci-rust-bench profile target:
-    ./scripts/run-rust-ci.sh bench "{{profile}}" "{{target}}"
+ci-rust-bench profile target *args:
+    ./scripts/run-rust-ci.sh bench "{{profile}}" "{{target}}" {{args}}
 
 # Emit workspace bench targets as a GitHub Actions matrix (optional name regex).
 ci-bench-matrix filter="":

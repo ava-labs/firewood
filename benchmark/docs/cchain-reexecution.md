@@ -189,9 +189,16 @@ Results are published to GitHub Pages via
 Firewood team. It serves two purposes:
 
 - **Rust docs** — built from `main` on every push via `cargo doc`
-- **Benchmark history** — triggered after `track-performance.yml` completes;
-  merges the `benchmark-data` branch into the pages deployment so docs and
-  benchmark trends are served from a single GitHub Pages site
+- **Benchmark history** — triggered after `track-performance.yml` or
+  `benchmarks.yaml` completes; merges the `benchmark-data` branch into the pages
+  deployment so docs and benchmark trends are served from a single GitHub Pages
+  site
+
+The Rust Criterion microbenchmarks (`benchmarks.yaml`) publish to the same page
+as the C-Chain results — same data directory, a separate **Rust
+Microbenchmarks** chart section below the C-Chain charts — and run on the same
+weekday cron cadence (05:10 UTC, just after the 05:00 and 05:05 UTC C-Chain
+runs; the offset keeps the two workflows from appending to `data.js` at once).
 
 Links:
 

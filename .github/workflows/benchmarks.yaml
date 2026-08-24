@@ -1,8 +1,13 @@
 name: firewood-benchmarks
 
 on:
-  push:
-    branches: [main]
+  # Same weekday cadence as track-performance.yml (05:00/05:05 UTC), offset by
+  # ten minutes: both workflows append to data.js on the benchmark-data branch,
+  # and the offset keeps them from doing so concurrently. One cron suffices
+  # where C-Chain needs two, because the Criterion targets take no per-time
+  # parameters — the C-Chain crons only select block ranges.
+  schedule:
+    - cron: '10 5 * * 1-5'
   workflow_dispatch:
     inputs:
       bench-filter:
@@ -116,10 +121,23 @@ jobs:
           shared-key: ${{ env.PROFILE_KEY }}
       - name: Cargo Fetch (run `cargo generate-lockfile` if this fails)
         run: cargo fetch --locked --verbose
+      # `--output-format bencher` is the format the `cargo` tool of
+      # github-action-benchmark parses; Criterion's default output is not
+      # machine-readable. The publish job concatenates these per-leg files.
       - name: Benchmark
         env:
           BENCH: ${{ matrix.bench }}
-        run: ./scripts/run-just.sh ci-rust-bench "$PROFILE_KEY" "$BENCH"
+        run: |
+          set -o pipefail
+          ./scripts/run-just.sh ci-rust-bench "$PROFILE_KEY" "$BENCH" --output-format bencher \
+            | tee "bench-output-${BENCH}.txt"
+      - name: Upload bencher output
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-output-${{ matrix.package }}-${{ matrix.bench }}
+          path: bench-output-${{ matrix.bench }}.txt
+          if-no-files-found: error
+          retention-days: 30
       - name: Upload benchmark results
         uses: actions/upload-artifact@v7
         with:
@@ -129,6 +147,63 @@ jobs:
           path: target/criterion
           if-no-files-found: error
           retention-days: 30
+
+  # Publishes the whole sweep in one github-action-benchmark invocation.
+  # Publishing per matrix leg would have every leg push to the benchmark-data
+  # branch at once, racing on the same data.js.
+  #
+  # The data directory is the one track-performance.yml writes, with a distinct
+  # `name`: github-action-benchmark renders one page per data directory and
+  # groups the charts on it by `name`, so sharing the directory puts the
+  # Criterion charts on the C-Chain benchmark page as their own section. A
+  # nested `bench/rust/` would produce a second, separate page instead.
+  #
+  # Skipped on a filtered dispatch, which benches a subset and would otherwise
+  # record a partial sweep into the trend history, and on forks, which have
+  # neither the branch nor the permissions to push to.
+  publish:
+    needs: bench
+    if: ${{ github.repository == 'ava-labs/firewood' && !inputs.bench-filter }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # github-action-benchmark pushes to the benchmark-data branch
+    # Shared with any other publisher to the benchmark-data branch. Never set
+    # cancel-in-progress here: a cancelled publish drops that run's results.
+    concurrency:
+      group: benchmark-data-publish
+      cancel-in-progress: false
+    steps:
+      - name: Download bencher output
+        uses: actions/download-artifact@v8
+        with:
+          pattern: bench-output-*
+          path: bench-output
+          merge-multiple: true
+      - name: Combine bencher output
+        run: cat bench-output/*.txt > rust-bench-output.txt
+      # github.ref controls where results are stored, mirroring
+      # track-performance.yml:
+      # - main branch → bench/ (official history)
+      # - feature branches → dev/bench/{branch}/ (experimental, won't pollute trends)
+      - name: Determine results location
+        id: location
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "data-dir=bench" >> "$GITHUB_OUTPUT"
+          else
+            echo "data-dir=dev/bench/$(echo '${{ github.ref_name }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish benchmark results
+        uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # @v1.22.1
+        with:
+          name: Rust Microbenchmarks
+          tool: 'cargo'
+          output-file-path: rust-bench-output.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          summary-always: true
+          auto-push: true
+          gh-pages-branch: benchmark-data
+          benchmark-data-dir-path: ${{ steps.location.outputs.data-dir }}
 
   # Recombines the per-leg artifacts so `benchmark-results` remains a single
   # download, as it was when the benches ran in one job.
@@ -149,14 +224,16 @@ jobs:
 
   # A matrix with zero legs reports `skipped`, not `failure`, so aggregate the
   # results explicitly rather than trusting the individual job statuses.
-  # `build` is the one job allowed to be skipped, because a filtered dispatch
-  # deliberately skips it; a skipped `bench` still fails the run.
+  # `build` and `publish` are the jobs allowed to be skipped, because a filtered
+  # dispatch and a fork deliberately skip them; a skipped `bench` still fails
+  # the run.
   benchmarks-required:
     if: ${{ always() }}
     needs:
       - discover
       - build
       - bench
+      - publish
       - merge-results
     runs-on: ubuntu-latest
     steps:
@@ -168,7 +245,7 @@ jobs:
             jq -r '
               to_entries[]
               | select(
-                  if .key == "build"
+                  if .key | IN("build", "publish")
                   then .value.result | IN("success", "skipped") | not
                   else .value.result != "success"
                   end
