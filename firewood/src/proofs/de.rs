@@ -24,24 +24,23 @@ use integer_encoding::VarInt;
 use std::num::NonZeroUsize;
 
 impl FrozenRangeProof {
-    /// Parses a `FrozenRangeProof` from the given byte slice.
+    /// Test convenience for [`Self::from_slice_with_config`] with the
+    /// default [`ProofConfig`].
+    #[cfg(test)]
+    pub(crate) fn from_slice(data: &[u8]) -> Result<Self, ReadError> {
+        Self::from_slice_with_config(data, &ProofConfig::default())
+    }
+
+    /// Parses a `FrozenRangeProof` from the given byte slice, enforcing
+    /// `config`'s proof-decode limits.
     ///
     /// Currently only V0 proofs are supported. See [`FrozenRangeProof::write_to_vec`]
     /// for the serialization format.
     ///
     /// # Errors
     ///
-    /// Returns a [`ReadError`] if the data is invalid. See the enum variants for
-    /// the possible reasons.
-    pub fn from_slice(data: &[u8]) -> Result<Self, ReadError> {
-        Self::from_slice_with_config(data, &ProofConfig::default())
-    }
-
-    /// Parses a `FrozenRangeProof`, enforcing `config`'s proof-decode limits.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`ReadError`] if the data is invalid or exceeds a limit.
+    /// Returns a [`ReadError`] if the data is invalid or exceeds a limit. See
+    /// the enum variants for the possible reasons.
     pub fn from_slice_with_config(data: &[u8], config: &ProofConfig) -> Result<Self, ReadError> {
         let mut reader = ProofReader::new(data);
 
@@ -101,24 +100,23 @@ impl<T: Version0> Version0 for Box<[T]> {
 }
 
 impl FrozenChangeProof {
-    /// Parses a `FrozenChangeProof` from the given byte slice.
+    /// Test convenience for [`Self::from_slice_with_config`] with the
+    /// default [`ProofConfig`].
+    #[cfg(test)]
+    pub(crate) fn from_slice(data: &[u8]) -> Result<Self, ReadError> {
+        Self::from_slice_with_config(data, &ProofConfig::default())
+    }
+
+    /// Parses a `FrozenChangeProof` from the given byte slice, enforcing
+    /// `config`'s proof-decode limits.
     ///
     /// Currently only V0 proofs are supported. See [`FrozenChangeProof::write_to_vec`]
     /// for the serialization format.
     ///
     /// # Errors
     ///
-    /// Returns a [`ReadError`] if the data is invalid. See the enum variants for
-    /// the possible reasons.
-    pub fn from_slice(data: &[u8]) -> Result<Self, ReadError> {
-        Self::from_slice_with_config(data, &ProofConfig::default())
-    }
-
-    /// Parses a `FrozenChangeProof`, enforcing `config`'s proof-decode limits.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`ReadError`] if the data is invalid or exceeds a limit.
+    /// Returns a [`ReadError`] if the data is invalid or exceeds a limit. See
+    /// the enum variants for the possible reasons.
     pub fn from_slice_with_config(data: &[u8], config: &ProofConfig) -> Result<Self, ReadError> {
         let mut reader = ProofReader::new(data);
 

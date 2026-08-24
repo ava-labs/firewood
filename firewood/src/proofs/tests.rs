@@ -18,15 +18,24 @@ use super::{
 use crate::api::{FrozenChangeProof, FrozenRangeProof};
 use crate::db::{BatchOp, ProofConfig};
 
-/// Builds the 32-byte proof header
+/// Length of the serialized proof header, which the wire stores uncompressed.
+const HEADER_LEN: usize = size_of::<Header>();
+
+/// Builds the serialized proof header
 fn raw_header(proof_type: ProofType) -> Vec<u8> {
     bytemuck::bytes_of(&Header::from((proof_type, DefaultHashMode::ALGORITHM))).to_vec()
 }
 
-/// Compresses the body of uncompressed `header || body` bytes into wire
-/// form, then parses. Inputs shorter than a header parse as-is.
+/// Builds real wire bytes from `data` in uncompressed `header || body` form
+/// (the layout the byte-taxonomy tests mutate at known offsets) by
+/// zstd-compressing the body half, then parses the result.
+///
+/// Data too short to contain a header has no body to compress and is parsed
+/// as-is: the header is stored uncompressed on the wire, so the parser sees
+/// exactly what a truncated wire message would contain. The header-truncation
+/// cases rely on this to reach the parser's short-header error.
 fn compress_and_parse_range(data: &[u8]) -> Result<FrozenRangeProof, ReadError> {
-    match data.split_at_checked(32) {
+    match data.split_at_checked(HEADER_LEN) {
         Some((header, body)) => {
             let mut wire = header.to_vec();
             super::frame::write_compressed_body(body, &mut wire);
@@ -38,7 +47,7 @@ fn compress_and_parse_range(data: &[u8]) -> Result<FrozenRangeProof, ReadError> 
 
 /// See [`compress_and_parse_range`].
 fn compress_and_parse_change(data: &[u8]) -> Result<FrozenChangeProof, ReadError> {
-    match data.split_at_checked(32) {
+    match data.split_at_checked(HEADER_LEN) {
         Some((header, body)) => {
             let mut wire = header.to_vec();
             super::frame::write_compressed_body(body, &mut wire);
@@ -51,6 +60,14 @@ fn compress_and_parse_change(data: &[u8]) -> Result<FrozenChangeProof, ReadError
 /// Returns a valid range proof plus its canonical uncompressed bytes
 /// (`header || body`) for the byte-taxonomy tests. Parse the result with
 /// [`compress_and_parse_range`].
+///
+/// The proof is built over a trie holding the eleven single-byte pairs
+/// `([k], [k])` for `k in 0..=10`, requesting the range `[2]..[8]` capped at
+/// 5 key-values. That yields a two-node start proof, a two-node end proof
+/// (the cap cuts the range short at `[6]`), and the five key-values
+/// `([2], [2])..=([6], [6])` — every wire feature the mutation tests target
+/// offsets in, while staying small enough that the offsets documented
+/// alongside the tests are tractable.
 fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
     let merkle = crate::merkle::tests::init_merkle((0u8..=10).map(|k| ([k], [k])));
     let proof = merkle
@@ -61,6 +78,14 @@ fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
     (proof, serialized)
 }
 
+/// Returns a valid change proof plus its canonical uncompressed bytes
+/// (`header || body`), the change-proof counterpart of
+/// [`create_valid_range_proof`]. Parse with [`compress_and_parse_change`].
+///
+/// The proof has empty start and end proofs and one batch operation of each
+/// kind (`Put`, `Delete`, `DeleteRange`), so the batch-op discriminant and
+/// payload offsets the mutation tests target are fixed and documented where
+/// used (see the layout comments in `test_change_proof_invalid_item`).
 fn create_valid_change_proof(hash_mode: NodeHashAlgorithm) -> (FrozenChangeProof, Vec<u8>) {
     let proof = FrozenChangeProof::with_hash_mode(
         Proof::new(Box::<[ProofNode]>::from([])),

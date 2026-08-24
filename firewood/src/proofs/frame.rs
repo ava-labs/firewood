@@ -10,21 +10,15 @@
 
 use zstd::zstd_safe;
 
+use super::header::Header;
 use super::reader::ReadError;
 use crate::db::ProofConfig;
 
-/// Compresses `out[body_start..]` (the canonical body, serialized in place
-/// after the header) into a zstd frame, replacing it. Avoids a separate
-/// body buffer.
-pub(super) fn compress_body_in_place(out: &mut Vec<u8>, body_start: usize) {
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "callers record body_start as out.len() before appending the body"
-    )]
-    let compressed = zstd::bulk::compress(&out[body_start..], zstd::DEFAULT_COMPRESSION_LEVEL)
-        .expect("zstd compressor allocation failed");
-    out.truncate(body_start);
-    out.extend_from_slice(&compressed);
+/// Writes the wire message: `header` followed by the single zstd frame
+/// compressing `body` (the canonical serialized body).
+pub(super) fn write_framed(header: &Header, body: &[u8], out: &mut Vec<u8>) {
+    out.extend_from_slice(bytemuck::bytes_of(header));
+    write_compressed_body(body, out);
 }
 
 /// Enforces the pre-allocation bounds (see [`decompress_body`]) against
@@ -118,8 +112,8 @@ pub(super) fn decompress_body(
     Ok(body)
 }
 
-/// Appends the zstd frame compressing `body`.
-#[cfg(test)]
+/// Appends the single zstd frame compressing `body` (the canonical
+/// serialized body that follows the header on the wire).
 pub(super) fn write_compressed_body(body: &[u8], out: &mut Vec<u8>) {
     let compressed = zstd::bulk::compress(body, zstd::DEFAULT_COMPRESSION_LEVEL)
         .expect("zstd compressor allocation failed");
