@@ -19,16 +19,11 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use super::*;
-use crate::proofs::range::RangeProof;
-use crate::{
-    ProofCollection,
-    api::{Error, KeyType, ValueType},
-};
+use crate::api::Error;
 use crate::{ProofError, ProofNode};
 use firewood_storage::{
     Committed, DefaultHashMode, DeletedNodeTracking, DenseChildren, HashMode, MemStore, Mutable,
-    NodeHashAlgorithm, NodeStore, NodeStoreHeader, PathComponent, Propose, RootReader, TrieHash,
-    ValueDigest,
+    NodeStore, NodeStoreHeader, PathComponent, Propose, RootReader, TrieHash, ValueDigest,
 };
 use test_case::test_case;
 
@@ -68,15 +63,17 @@ fn generate_random_kvs(rng: &firewood_storage::SeededRng, n: usize) -> Vec<(Vec<
 }
 
 fn into_committed(
-    merkle: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>,
+    merkle: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>>,
     header: &mut NodeStoreHeader,
-) -> Merkle<NodeStore<Committed, MemStore>> {
+) -> Merkle<NodeStore<Committed, MemStore, DefaultHashMode>> {
     let ns = merkle.into_inner().as_committed();
     ns.persist(header).unwrap();
     ns.into()
 }
 
-pub(crate) fn init_merkle<I, K, V>(iter: I) -> Merkle<NodeStore<Committed, MemStore>>
+pub(crate) fn init_merkle<I, K, V>(
+    iter: I,
+) -> Merkle<NodeStore<Committed, MemStore, DefaultHashMode>>
 where
     I: Clone + IntoIterator<Item = (K, V)>,
     K: AsRef<[u8]>,
@@ -88,7 +85,10 @@ where
 
 pub(crate) fn init_merkle_with_header<I, K, V>(
     iter: I,
-) -> (Merkle<NodeStore<Committed, MemStore>>, NodeStoreHeader)
+) -> (
+    Merkle<NodeStore<Committed, MemStore, DefaultHashMode>>,
+    NodeStoreHeader,
+)
 where
     I: Clone + IntoIterator<Item = (K, V)>,
     K: AsRef<[u8]>,
@@ -96,9 +96,9 @@ where
 {
     let memstore = Arc::new(MemStore::new(
         Vec::with_capacity(64 * 1024),
-        NodeHashAlgorithm::compile_option(),
+        DefaultHashMode::ALGORITHM,
     ));
-    let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+    let mut header = NodeStoreHeader::new(DefaultHashMode::ALGORITHM);
     let base = Merkle::from(NodeStore::new_empty_committed(
         memstore.clone(),
         DeletedNodeTracking::Enabled,
@@ -227,8 +227,8 @@ fn insert_one() {
     merkle.insert(b"abc", Box::new([])).unwrap();
 }
 
-fn create_in_memory_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
-    let memstore = MemStore::default();
+fn create_in_memory_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>> {
+    let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
 
     let nodestore = NodeStore::new_empty_proposal(memstore.into(), DeletedNodeTracking::Enabled);
 
@@ -470,7 +470,7 @@ fn remove_prefix_exact() {
     }
 }
 
-fn two_byte_all_keys() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
+fn two_byte_all_keys() -> Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>> {
     let mut merkle = create_in_memory_merkle();
     for key_val in u8::MIN..=u8::MAX {
         let key = [key_val, key_val];
@@ -593,19 +593,42 @@ fn single_key_proof() {
         let proof = merkle.prove(&key).unwrap();
 
         proof
-            .verify(key.clone(), Some(value.clone()), &root_hash)
+            .verify(
+                key.clone(),
+                Some(value.clone()),
+                &root_hash,
+                DefaultHashMode::ALGORITHM,
+            )
             .unwrap();
 
         {
             // Test that the proof is invalid when the value is different
             let mut value = value.clone();
             value[0] = value[0].wrapping_add(1);
-            assert!(proof.verify(key.clone(), Some(value), &root_hash).is_err());
+            assert!(
+                proof
+                    .verify(
+                        key.clone(),
+                        Some(value),
+                        &root_hash,
+                        DefaultHashMode::ALGORITHM
+                    )
+                    .is_err()
+            );
         }
 
         {
             // Test that the proof is invalid when the hash is different
-            assert!(proof.verify(key, Some(value), &TrieHash::empty()).is_err());
+            assert!(
+                proof
+                    .verify(
+                        key,
+                        Some(value),
+                        &TrieHash::empty(),
+                        DefaultHashMode::ALGORITHM
+                    )
+                    .is_err()
+            );
         }
     }
 }
@@ -903,8 +926,9 @@ fn test_root_hash_reversed_deletions() -> Result<(), FileIoError> {
                     NodeStore::new(immutable_merkle_before_removal.nodestore()).unwrap(),
                 );
                 merkle.remove(k).unwrap();
-                let immutable_merkle_after_removal: Merkle<NodeStore<Arc<ImmutableProposal>, _>> =
-                    merkle.try_into().unwrap();
+                let immutable_merkle_after_removal: Merkle<
+                    NodeStore<Arc<ImmutableProposal>, _, DefaultHashMode>,
+                > = merkle.try_into().unwrap();
                 new_hashes.push((
                     immutable_merkle_after_removal.nodestore.root_hash(),
                     k,
@@ -943,7 +967,7 @@ fn remove_nonexistent_with_one() {
 
 #[test]
 fn test_get_branch_from_nibbles_mut() {
-    type TestMerkle = Merkle<NodeStore<Mutable<Propose>, MemStore>>;
+    type TestMerkle = Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>>;
     let mut merkle = create_in_memory_merkle();
     merkle.insert(b"\xab", Box::from([1])).unwrap();
     merkle.insert(b"\xac", Box::from([2])).unwrap();

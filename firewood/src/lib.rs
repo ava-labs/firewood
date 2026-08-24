@@ -187,6 +187,9 @@ pub use firewood_storage::logger;
 /// Hashing mode used for trie nodes.
 pub use firewood_storage::NodeHashAlgorithm;
 
+#[doc(hidden)]
+pub use firewood_storage::DefaultHashMode;
+
 /// Root or node hash used by Firewood tries.
 ///
 /// This is the same type exposed as [`api::HashKey`] in the database API.

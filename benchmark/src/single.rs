@@ -13,6 +13,7 @@
 use crate::TestRunner;
 use firewood::api::{Db as _, Proposal as _};
 use firewood::db::{BatchOp, Db};
+use firewood_storage::DefaultHashMode;
 use log::debug;
 use pretty_duration::pretty_duration;
 use sha2::{Digest, Sha256};
@@ -23,7 +24,7 @@ use std::time::Instant;
 pub struct Single;
 
 impl TestRunner for Single {
-    fn run(&self, db: &Db, args: &crate::Args) -> Result<(), Box<dyn Error>> {
+    fn run(&self, db: &Db<DefaultHashMode>, args: &crate::Args) -> Result<(), Box<dyn Error>> {
         let start = Instant::now();
         let inner_keys: Vec<_> = (0..args.global_opts.batch_size)
             .map(|i| Sha256::digest(i.to_ne_bytes()))

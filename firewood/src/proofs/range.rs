@@ -191,7 +191,7 @@ pub struct RangeProof<K, V, H> {
     key_values: Box<[(K, V)]>,
     /// The hash algorithm this proof was constructed or parsed with. For proofs
     /// built in this binary it is the compile default; for proofs parsed via
-    /// [`FrozenRangeProof::from_slice`](crate::api::FrozenRangeProof::from_slice)
+    /// [`FrozenRangeProof::from_slice_with_config`](crate::api::FrozenRangeProof::from_slice_with_config)
     /// it is resolved from the self-describing header byte.
     /// [`ProofError::HashModeMismatch`]).
     hash_mode: NodeHashAlgorithm,
@@ -259,7 +259,7 @@ where
 
     /// Like [`RangeProof::new`], but records the [`NodeHashAlgorithm`] the proof
     /// was encoded with. Used by the parse path
-    /// ([`FrozenRangeProof::from_slice`](crate::api::FrozenRangeProof::from_slice))
+    /// ([`FrozenRangeProof::from_slice_with_config`](crate::api::FrozenRangeProof::from_slice_with_config))
     /// to stamp the mode resolved from the self-describing header byte.
     #[must_use]
     pub(crate) const fn with_hash_mode(

@@ -21,6 +21,7 @@
 use crate::TestRunner;
 use firewood::api::{Db as _, Proposal as _};
 use firewood::db::{BatchOp, Db};
+use firewood_storage::DefaultHashMode;
 use log::{debug, trace};
 use pretty_duration::pretty_duration;
 use rand::prelude::*;
@@ -39,7 +40,7 @@ pub struct Args {
 pub struct Zipf;
 
 impl TestRunner for Zipf {
-    fn run(&self, db: &Db, args: &crate::Args) -> Result<(), Box<dyn Error>> {
+    fn run(&self, db: &Db<DefaultHashMode>, args: &crate::Args) -> Result<(), Box<dyn Error>> {
         let exponent = if let crate::TestName::Zipf(args) = &args.test_name {
             args.exponent
         } else {

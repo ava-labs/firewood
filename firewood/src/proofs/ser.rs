@@ -85,13 +85,20 @@ impl FrozenRangeProof {
     ///
     /// Variable-length integers are encoded using unsigned LEB128.
     pub fn write_to_vec(&self, out: &mut Vec<u8>) {
-        write_framed(self, ProofType::Range, self.hash_mode(), out);
+        let header = Header::from((ProofType::Range, self.hash_mode()));
+        out.extend_from_slice(bytemuck::bytes_of(&header));
+        let mut body = Vec::new();
+        self.write_body_to_vec(&mut body);
+        super::frame::write_compressed_body(&body, out);
     }
 
     /// Serializes this proof's canonical (uncompressed) body: the bytes
     /// [`FrozenRangeProof::write_to_vec`] compresses after the header, and
     /// the sequence to hash or compare for a proof's canonical identity.
     pub fn write_body_to_vec(&self, out: &mut Vec<u8>) {
+        // The proof's hash mode determines the child-hash wire layout and the
+        // value-digest hashing rule; use its self-describing mode rather than
+        // the compile default.
         let mut w = ProofWriter {
             out,
             mode: self.hash_mode(),
@@ -107,7 +114,11 @@ impl FrozenChangeProof {
     /// type set to change, and the canonical body carries the batch
     /// operations in place of the key-value pairs.
     pub fn write_to_vec(&self, out: &mut Vec<u8>) {
-        write_framed(self, ProofType::Change, self.hash_mode(), out);
+        let header = Header::from((ProofType::Change, self.hash_mode()));
+        out.extend_from_slice(bytemuck::bytes_of(&header));
+        let mut body = Vec::new();
+        self.write_body_to_vec(&mut body);
+        super::frame::write_compressed_body(&body, out);
     }
 
     /// Serializes this proof's canonical (uncompressed) body. See
@@ -133,22 +144,6 @@ impl ProofWriter<'_> {
     const fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
         self.mode
     }
-}
-
-/// Writes the mode-stamped header for `proof_type`, serializes `proof`'s
-/// canonical body after it through a [`ProofWriter`] in `mode`, then
-/// compresses the body in place into the wire framing (see `proofs::frame`).
-fn write_framed(
-    proof: &impl WriteItem,
-    proof_type: ProofType,
-    mode: NodeHashAlgorithm,
-    out: &mut Vec<u8>,
-) {
-    let mut w = ProofWriter { out, mode };
-    Header::from((proof_type, mode)).write_item(&mut w);
-    let body_start = w.out.len();
-    proof.write_item(&mut w);
-    super::frame::compress_body_in_place(w.out, body_start);
 }
 
 trait PushVarInt {
@@ -274,12 +269,6 @@ impl<T: AsRef<[u8]>> WriteItem for ValueDigest<T> {
                 h.write_item(w);
             }
         }
-    }
-}
-
-impl WriteItem for Header {
-    fn write_item(&self, w: &mut ProofWriter<'_>) {
-        w.out.extend_from_slice(bytemuck::bytes_of(self));
     }
 }
 

@@ -25,7 +25,7 @@ pub struct ChangeProof<K: AsRef<[u8]> + Debug, V: AsRef<[u8]> + Debug, H> {
     batch_ops: Box<[BatchOp<K, V>]>,
     /// The hash algorithm this proof was constructed or parsed with. For proofs
     /// built in this binary it is the compile default; for proofs parsed via
-    /// [`FrozenChangeProof::from_slice`](crate::api::FrozenChangeProof::from_slice)
+    /// [`FrozenChangeProof::from_slice_with_config`](crate::api::FrozenChangeProof::from_slice_with_config)
     /// it is resolved from the self-describing header byte.
     hash_mode: NodeHashAlgorithm,
 }
@@ -73,7 +73,7 @@ where
 
     /// Like [`ChangeProof::new`], but records the [`NodeHashAlgorithm`] the proof
     /// was encoded with. Used by the parse path
-    /// ([`FrozenChangeProof::from_slice`](crate::api::FrozenChangeProof::from_slice))
+    /// ([`FrozenChangeProof::from_slice_with_config`](crate::api::FrozenChangeProof::from_slice_with_config))
     /// to stamp the mode resolved from the self-describing header byte.
     #[must_use]
     pub(crate) const fn with_hash_mode(
@@ -292,8 +292,9 @@ fn verify_boundary_proof<C: ProofCollection>(
     boundary_op: Option<&FrozenBatchOp>,
     mismatch_error: ProofError,
     edge: ProofEdge,
+    algorithm: NodeHashAlgorithm,
 ) -> Result<(), api::Error> {
-    let result = match proof.value_digest(key, end_root) {
+    let result = match proof.value_digest(key, end_root, algorithm) {
         Ok(result) => result,
         Err(ProofError::Empty) => None,
         // Any `UnexpectedHash` from this boundary `value_digest` walk is by
@@ -347,11 +348,12 @@ fn compute_right_edge_key<'a>(
     end_root: &HashKey,
     last_op_key: Option<&'a [u8]>,
     end_key: Option<&'a [u8]>,
+    algorithm: NodeHashAlgorithm,
 ) -> Option<&'a [u8]> {
     let Some(anchor) = last_op_key else {
         return end_key;
     };
-    match proof.end_proof().value_digest(anchor, end_root) {
+    match proof.end_proof().value_digest(anchor, end_root, algorithm) {
         Ok(Some(_)) => Some(anchor),
         Ok(None) if matches!(proof.batch_ops().last(), Some(BatchOp::Delete { .. })) => {
             Some(anchor)
@@ -387,6 +389,7 @@ fn compute_right_edge_key<'a>(
 ///
 /// On success, returns a [`ChangeProofVerificationContext`] capturing the
 /// verification parameters for use by downstream root hash verification.
+#[expect(clippy::too_many_lines)]
 pub fn verify_change_proof_structure(
     proof: &FrozenChangeProof,
     end_root: HashKey,
@@ -501,6 +504,7 @@ pub fn verify_change_proof_structure(
             boundary_op,
             ProofError::StartProofOperationMismatch,
             ProofEdge::Left,
+            algorithm,
         )?;
     }
 
@@ -526,7 +530,7 @@ pub fn verify_change_proof_structure(
     }
 
     let last_op_key = last_op.map(|op| op.key().as_ref());
-    let right_edge_key = compute_right_edge_key(proof, &end_root, last_op_key, end_key);
+    let right_edge_key = compute_right_edge_key(proof, &end_root, last_op_key, end_key, algorithm);
 
     // Verify the end boundary proof against end_root at right_edge_key, the key
     // the verifier treats as the proof's anchor. When that key is the last batch
@@ -543,6 +547,7 @@ pub fn verify_change_proof_structure(
             end_boundary_op,
             ProofError::EndProofOperationMismatch,
             ProofEdge::Right,
+            algorithm,
         )?;
     }
 
