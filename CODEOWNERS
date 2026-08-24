@@ -1,5 +1,3 @@
 # CODEOWNERS
-# Note: more specific rules overrule wildcard
-*        @rkuris @demosdemon @RodrigoVillar @bernard-avalabs
-/ffi     @rkuris @demosdemon @alarso16 @RodrigoVillar @bernard-avalabs
-/fwdctl  @rkuris @demosdemon @RodrigoVillar @bernard-avalabs @aminR443
+# Note: more specific rules overrule the wildcard rule. Always include @ava-labs/platform-firewood when adding more specific rules.
+*        @ava-labs/platform-firewood

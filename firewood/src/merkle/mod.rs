@@ -925,7 +925,7 @@ fn right_edge<'a>(
 /// the proof's hash mode does not match `algorithm`, keys are outside the
 /// requested range, boundary proofs fail verification, or the reconstructed
 /// root hash doesn't match.
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines)]
 pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     first_key: Option<impl KeyType>,
     last_key: Option<impl KeyType>,
