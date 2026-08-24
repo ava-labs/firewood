@@ -793,7 +793,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     fn test_slow_concurrent_view_during_commit() {
         use firewood_storage::{
             ImmutableProposal, LeafNode, NibblesIterator, Node, NodeStore, Path,

@@ -96,7 +96,6 @@ where
     }
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub enum UseParallel {
     Never,
