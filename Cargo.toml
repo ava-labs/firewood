@@ -36,7 +36,6 @@ missing_debug_implementations = "warn"
 
 [workspace.lints.clippy]
 allow_attributes = "warn"
-# allow_attributes_without_reason = "warn"
 unwrap_used = "warn"
 indexing_slicing = "warn"
 explicit_deref_methods = "warn"
