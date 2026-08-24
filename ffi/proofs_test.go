@@ -5,7 +5,6 @@ package ffi
 
 import (
 	"encoding/hex"
-	"iter"
 	"runtime"
 	"sync"
 	"testing"
@@ -74,6 +73,19 @@ func newVerifiedRangeProof(
 	r.NoError(proof.Verify(root, startKey, endKey, proofLen))
 
 	return proof
+}
+
+// ethAccountWithCodeHash returns a 32-byte account key, the RLP-encoded account
+// stored under it, and the code hash embedded in that account. Only
+// account-length keys reach the code-hash extractor, so this is the minimal
+// fixture that makes a proof yield exactly one code hash.
+func ethAccountWithCodeHash(t *testing.T) ([32]byte, []byte, Hash) {
+	t.Helper()
+
+	key := [32]byte{0x12, 0x34, 0x56} // account keys must be 32 bytes
+	val, err := hex.DecodeString("f8440164a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
+	require.NoError(t, err)
+	return key, val, stringToHash(t, "044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
 }
 
 // newSerializedRangeProof generates a range proof for the given parameters and
@@ -499,54 +511,75 @@ func TestRangeProofVerifyTwiceIdempotent(t *testing.T) {
 	r.NoError(db.Close(oneSecCtx(t)))
 }
 
-// TestRangeProofCodeHashesKeepsProofAlive is a regression test for the
-// code-hash iterator's borrow of the proof. The Rust CodeIteratorHandle holds
-// Box<dyn Iterator + 'p> over the proof's key-values, so the RangeProof must
-// stay alive for the whole iteration, not just the create call. CodeHashes uses
-// p only to create the iterator and then iterates the borrowing handle, so
-// without an explicit keepalive the proof can be garbage-collected mid-iteration
-// and its finalizer frees the key-values the iterator is still reading.
+// TestCodeIteratorRetainsProof pins the lifetime contract between a code-hash
+// iterator and the proof it borrows. Rust's CodeIteratorHandle<'p> wraps
+// Box<dyn Iterator + 'p> over the proof's key-values, so the iterator must hold
+// a Go reference to that proof; without one the proof is collectible the moment
+// CodeHashes stops mentioning it, and its finalizer frees the data the iterator
+// is still reading.
 //
-// A runtime.AddCleanup canary detects the root condition directly: if the proof
-// is reclaimed while the iterator is live, the cleanup fires. It is dropped from
-// the caller's scope so only the CodeHashes closure references it.
-func TestRangeProofCodeHashesKeepsProofAlive(t *testing.T) {
-	r := require.New(t)
+// The assertion is the reference itself rather than an observation of the
+// garbage collector. A reachable object is never collected, so proving the
+// reference exists proves the lifetime property outright -- deterministically,
+// with no forced collections, no timing, and no tuned constants. Probing the GC
+// can only ever fail to disprove the property within some arbitrary budget.
+func TestCodeIteratorRetainsProof(t *testing.T) {
 	if selectedHashMode != ethhashKey {
-		t.Skip("code hashes are only produced in ethhash mode")
+		t.Skip("code hash iterators are only created for ethereum-mode proofs")
 	}
 
-	db := newTestDatabase(t)
-	key := [32]byte{0x12, 0x34, 0x56} // account key must be length 32
-	val, err := hex.DecodeString("f8440164a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
-	r.NoError(err)
-	root, err := db.Update([]BatchOp{Put(key[:], val)})
-	r.NoError(err)
-	proofBytes := newSerializedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenUnbounded)
+	tests := []struct {
+		name string
+		// newProof builds a proof over the account fixture and registers its
+		// own cleanup. The concrete pointer is returned as the interface so
+		// the assertion below compares what the iterator actually stored.
+		newProof func(*testing.T, *require.Assertions, *Database) codeHashSource
+	}{
+		{
+			"range",
+			func(t *testing.T, r *require.Assertions, db *Database) codeHashSource {
+				key, val, _ := ethAccountWithCodeHash(t)
+				root, err := db.Update([]BatchOp{Put(key[:], val)})
+				r.NoError(err)
+				return newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenUnbounded)
+			},
+		},
+		{
+			"change",
+			func(t *testing.T, r *require.Assertions, db *Database) codeHashSource {
+				// Baseline insert so the change proof's start root is non-empty.
+				startRoot, err := db.Update([]BatchOp{Put([]byte("baseline"), []byte("v"))})
+				r.NoError(err)
+				key, val, _ := ethAccountWithCodeHash(t)
+				endRoot, err := db.Update([]BatchOp{Put(key[:], val)})
+				r.NoError(err)
 
-	collected := make(chan struct{})
-	// Build the iterator in a nested scope so the only remaining reference to the
-	// proof is the one captured by the CodeHashes closure.
-	seq := func() iter.Seq2[Hash, error] {
-		p := new(RangeProof)
-		r.NoError(p.UnmarshalBinary(proofBytes)) // arms the Free finalizer
-		runtime.AddCleanup(p, func(struct{}) { close(collected) }, struct{}{})
-		return p.CodeHashes()
-	}()
+				proof, err := db.ChangeProof(startRoot, endRoot, nothing(), nothing(), changeProofLenUnbounded)
+				r.NoError(err)
+				t.Cleanup(func() { r.NoError(proof.Free()) })
+				return proof
+			},
+		},
+	}
 
-	for _, err := range seq {
-		r.NoError(err)
-		// Mid-iteration: try hard to reclaim the proof. If CodeHashes stopped
-		// referencing it after creating the iterator, it is collectible here.
-		for range 50 {
-			runtime.GC()
-			select {
-			case <-collected:
-				r.FailNow("RangeProof was garbage-collected mid-iteration; CodeHashes must keep the proof alive while its borrowed iterator is live")
-			default:
-			}
-			runtime.Gosched()
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			db := newTestDatabase(t)
+			proof := tt.newProof(t, r, db)
+
+			it, err := proof.codeIterator()
+			r.NoError(err)
+			// Registered after the proof's own cleanup, so it runs first: the
+			// borrow is released before the borrowed-from proof is freed.
+			t.Cleanup(func() { r.NoError(it.Free()) })
+
+			// A nil owner means the Rust borrow is backed by no Go reference
+			// at all, which is the regression this test exists to catch;
+			// check it separately so the failure says so.
+			r.NotNil(it.owner, "%T.codeIterator() must retain the proof it borrows", proof)
+			r.Same(proof, it.owner, "%T.codeIterator() retained the wrong proof", proof)
+		})
 	}
 }
 
@@ -554,12 +587,7 @@ func TestRangeProofCodeHashes(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	// RLP encoded account with code hash
-	key := [32]byte{0x12, 0x34, 0x56} // key must be length 32
-	val, err := hex.DecodeString("f8440164a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
-	r.NoError(err)
-	codeHash := stringToHash(t, "044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
-
+	key, val, codeHash := ethAccountWithCodeHash(t)
 	root, err := db.Update([]BatchOp{Put(key[:], val)})
 	r.NoError(err)
 
@@ -590,12 +618,7 @@ func TestChangeProofCodeHashes(t *testing.T) {
 	startRoot, err := db.Update([]BatchOp{Put([]byte("baseline"), []byte("v"))})
 	r.NoError(err)
 
-	// RLP encoded account with code hash — same blob as TestRangeProofCodeHashes.
-	key := [32]byte{0x12, 0x34, 0x56} // key must be length 32
-	val, err := hex.DecodeString("f8440164a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
-	r.NoError(err)
-	codeHash := stringToHash(t, "044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
-
+	key, val, codeHash := ethAccountWithCodeHash(t)
 	endRoot, err := db.Update([]BatchOp{Put(key[:], val)})
 	r.NoError(err)
 
@@ -738,55 +761,6 @@ func TestChangeProofSetFinalizerReset(t *testing.T) {
 
 		t.Cleanup(func() { _ = p.Free() })
 	})
-}
-
-// TestChangeProofCodeHashesKeepsProofAlive is the ChangeProof analogue of
-// TestRangeProofCodeHashesKeepsProofAlive. The Rust code iterator borrows the
-// proof's data for its whole lifetime (CodeIteratorHandle<'p>), so
-// ChangeProof.CodeHashes must keep the proof alive across iteration; otherwise
-// the proof can be garbage-collected mid-iteration and its finalizer frees the
-// key-values the iterator is still reading. A runtime.AddCleanup canary detects
-// that condition directly.
-func TestChangeProofCodeHashesKeepsProofAlive(t *testing.T) {
-	r := require.New(t)
-	if selectedHashMode != ethhashKey {
-		t.Skip("code hashes are only produced in ethhash mode")
-	}
-
-	db := newTestDatabase(t)
-	startRoot, err := db.Update([]BatchOp{Put([]byte("baseline"), []byte("v"))})
-	r.NoError(err)
-	key := [32]byte{0x12, 0x34, 0x56} // account key must be length 32
-	val, err := hex.DecodeString("f8440164a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
-	r.NoError(err)
-	endRoot, err := db.Update([]BatchOp{Put(key[:], val)})
-	r.NoError(err)
-	proofBytes := newSerializedChangeProof(t, db, startRoot, endRoot, nothing(), nothing())
-
-	collected := make(chan struct{})
-	// Build the iterator in a nested scope so the only remaining reference to the
-	// proof is the one captured by the CodeHashes closure.
-	seq := func() iter.Seq2[Hash, error] {
-		p := new(ChangeProof)
-		r.NoError(p.UnmarshalBinary(proofBytes)) // arms the Free finalizer
-		runtime.AddCleanup(p, func(struct{}) { close(collected) }, struct{}{})
-		return p.CodeHashes()
-	}()
-
-	for _, err := range seq {
-		r.NoError(err)
-		// Mid-iteration: try hard to reclaim the proof. If CodeHashes stopped
-		// referencing it after creating the iterator, it is collectible here.
-		for range 50 {
-			runtime.GC()
-			select {
-			case <-collected:
-				r.FailNow("ChangeProof was garbage-collected mid-iteration; CodeHashes must keep the proof alive while its borrowed iterator is live")
-			default:
-			}
-			runtime.Gosched()
-		}
-	}
 }
 
 func TestChangeProofEmptyDB(t *testing.T) {
