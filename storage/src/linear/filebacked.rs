@@ -393,8 +393,6 @@ impl std::ops::DerefMut for UnlockOnDrop {
 
 #[cfg(test)]
 mod test {
-    #![allow(clippy::unwrap_used)]
-
     use super::*;
     use crate::{DefaultHashMode, HashMode};
     use nonzero_ext::nonzero;

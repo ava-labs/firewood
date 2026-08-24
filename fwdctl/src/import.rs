@@ -209,7 +209,7 @@ fn process_csv(
     Ok(())
 }
 
-#[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
+#[expect(clippy::cast_precision_loss, clippy::cast_sign_loss)]
 fn maybe_log_status(
     total_imported: usize,
     start_time: Instant,
@@ -249,7 +249,7 @@ fn commit_batch(
 /// `total_imported` realistically never exceeds a few billion keys in a single
 /// import run, well within `f64`'s 52-bit mantissa precision, and is always
 /// non-negative — so the precision/sign-loss lints are safe to suppress here.
-#[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
+#[expect(clippy::cast_precision_loss, clippy::cast_sign_loss)]
 fn keys_per_second(total_imported: usize, duration: Duration) -> usize {
     let secs = duration.as_secs_f64();
     if secs > 0.0 {

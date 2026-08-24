@@ -92,7 +92,7 @@ impl<'p> CodeIteratorHandle<'p> {
     ///
     /// - Returns `api::Error::FeatureNotSupported` if the `ethhash` feature
     ///   is not enabled.
-    #[cfg_attr(not(feature = "ethhash"), allow(unused_variables))]
+    #[cfg_attr(not(feature = "ethhash"), expect(unused_variables))]
     pub fn from_key_values(key_values: &'p [KeyValuePair]) -> Result<Self, api::Error> {
         #[cfg(not(feature = "ethhash"))]
         {
@@ -131,7 +131,7 @@ impl<'p> CodeIteratorHandle<'p> {
     ///
     /// - Returns `api::Error::FeatureNotSupported` if the `ethhash` feature
     ///   is not enabled.
-    #[cfg_attr(not(feature = "ethhash"), allow(unused_variables))]
+    #[cfg_attr(not(feature = "ethhash"), expect(unused_variables))]
     pub fn from_batch_ops(
         batch_ops: &'p [BatchOp<firewood::Key, firewood::Value>],
     ) -> Result<Self, api::Error> {
