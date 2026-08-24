@@ -221,7 +221,7 @@ impl DatabaseHandle {
 
     /// The size limits applied when deserializing proofs.
     #[must_use]
-    pub const fn proof_config(&self) -> ProofConfig {
+    pub const fn proof_config(&self) -> firewood::db::ProofConfig {
         self.db.proof_config()
     }
 
