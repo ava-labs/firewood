@@ -102,7 +102,7 @@ impl ProposalHandle<'_> {
 
     /// Creates an iterator on the proposal starting from the given key.
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
+    #[expect(clippy::missing_panics_doc)]
     pub fn iter_from(&self, first_key: Option<&[u8]>) -> CreateIteratorResult<'_> {
         let it = self
             .iter_option(first_key)
