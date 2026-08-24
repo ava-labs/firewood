@@ -85,13 +85,11 @@ impl FrozenRangeProof {
     ///
     /// Variable-length integers are encoded using unsigned LEB128.
     pub fn write_to_vec(&self, out: &mut Vec<u8>) {
+        let header = Header::from((ProofType::Range, self.hash_mode()));
+        out.extend_from_slice(bytemuck::bytes_of(&header));
         let mut body = Vec::new();
         self.write_body_to_vec(&mut body);
-        super::frame::write_framed(
-            &Header::from((ProofType::Range, self.hash_mode())),
-            &body,
-            out,
-        );
+        super::frame::write_compressed_body(&body, out);
     }
 
     /// Serializes this proof's canonical (uncompressed) body: the bytes
@@ -113,13 +111,11 @@ impl FrozenChangeProof {
     /// type set to change, and the canonical body carries the batch
     /// operations in place of the key-value pairs.
     pub fn write_to_vec(&self, out: &mut Vec<u8>) {
+        let header = Header::from((ProofType::Change, self.hash_mode()));
+        out.extend_from_slice(bytemuck::bytes_of(&header));
         let mut body = Vec::new();
         self.write_body_to_vec(&mut body);
-        super::frame::write_framed(
-            &Header::from((ProofType::Change, self.hash_mode())),
-            &body,
-            out,
-        );
+        super::frame::write_compressed_body(&body, out);
     }
 
     /// Serializes this proof's canonical (uncompressed) body. See

@@ -10,16 +10,8 @@
 
 use zstd::zstd_safe;
 
-use super::header::Header;
 use super::reader::ReadError;
 use crate::db::ProofConfig;
-
-/// Writes the wire message: `header` followed by the single zstd frame
-/// compressing `body` (the canonical serialized body).
-pub(super) fn write_framed(header: &Header, body: &[u8], out: &mut Vec<u8>) {
-    out.extend_from_slice(bytemuck::bytes_of(header));
-    write_compressed_body(body, out);
-}
 
 /// Enforces the pre-allocation bounds (see [`decompress_body`]) against
 /// `config` and returns the frame's declared content size.
