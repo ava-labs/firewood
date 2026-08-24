@@ -580,23 +580,23 @@ mod tests {
     };
 
     use firewood_storage::{
-        Committed, DeletedNodeTracking, FileBacked, FileIoError, HashedNodeReader,
-        ImmutableProposal, MemStore, Mutable, NodeStore, Propose, SeededRng, TestRecorder,
-        TrieReader,
+        Committed, DefaultHashMode, DeletedNodeTracking, FileBacked, FileIoError, HashMode,
+        HashedNodeReader, ImmutableProposal, MemStore, Mutable, NodeStore, Propose, SeededRng,
+        TestRecorder, TrieReader,
     };
     use lender::Lender;
     use std::{collections::HashSet, ops::Deref, path::PathBuf, sync::Arc};
     use test_case::test_case;
 
     type BatchOpVec = Vec<BatchOp<Box<[u8]>, Box<[u8]>>>;
-    type ImmutableMemstore = Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>;
+    type ImmutableMemstore = Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>>;
 
     struct TestDb {
-        db: Db,
+        db: Db<DefaultHashMode>,
     }
 
     impl Deref for TestDb {
-        type Target = Db;
+        type Target = Db<DefaultHashMode>;
         fn deref(&self) -> &Self::Target {
             &self.db
         }
@@ -626,17 +626,17 @@ mod tests {
         DiffMerkleNodeStream::new(tree_left.nodestore(), tree_right.nodestore(), start_key)
     }
 
-    fn create_test_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
-        let memstore = MemStore::default();
+    fn create_test_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>> {
+        let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
         let nodestore =
             NodeStore::new_empty_proposal(Arc::new(memstore), DeletedNodeTracking::Enabled);
         Merkle::from(nodestore)
     }
 
     fn populate_merkle(
-        mut merkle: Merkle<NodeStore<Mutable<Propose>, MemStore>>,
+        mut merkle: Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>>,
         items: &[(&[u8], &[u8])],
-    ) -> Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> {
+    ) -> Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>> {
         for (key, value) in items {
             merkle
                 .insert(key, value.to_vec().into_boxed_slice())
@@ -646,9 +646,9 @@ mod tests {
     }
 
     fn apply_ops_and_freeze(
-        base: &Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>,
+        base: &Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>>,
         ops: &[BatchOp<Key, Value>],
-    ) -> Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> {
+    ) -> Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>> {
         let mut fork = base.fork().unwrap();
         for op in ops {
             match op {
@@ -819,7 +819,7 @@ mod tests {
                 .unwrap();
         }
         // freeze and compute the hash
-        let merkle: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
+        let merkle: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>> =
             merkle.try_into().unwrap();
         assert!(HashedNodeReader::root_hash(merkle.nodestore()).is_some());
 
@@ -873,9 +873,9 @@ mod tests {
 
     #[test]
     fn test_diff_empty_trees() {
-        let m1: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
+        let m1: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>> =
             create_test_merkle().try_into().unwrap();
-        let m2: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
+        let m2: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>> =
             create_test_merkle().try_into().unwrap();
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
@@ -904,7 +904,7 @@ mod tests {
             (b"key2".as_slice(), b"value2".as_slice()),
         ];
 
-        let m1: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
+        let m1: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>> =
             create_test_merkle().try_into().unwrap();
         let m2 = populate_merkle(create_test_merkle(), &items);
 
@@ -931,7 +931,7 @@ mod tests {
         ];
 
         let m1 = populate_merkle(create_test_merkle(), &items);
-        let m2: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
+        let m2: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>> =
             create_test_merkle().try_into().unwrap();
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
@@ -1473,9 +1473,9 @@ mod tests {
 
         // Compute ops and immutable views according to mutability flags
         let (ops, m1_immut, m2_immut): (BatchOpVec, ImmutableMemstore, ImmutableMemstore) = {
-            let m1_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
+            let m1_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>> =
                 m1.try_into().unwrap();
-            let m2_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
+            let m2_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>> =
                 m2.try_into().unwrap();
             let ops = diff_merkle_iterator(&m1_immut, &m2_immut, Box::new([]))
                 .unwrap()
@@ -1493,12 +1493,15 @@ mod tests {
     fn test_db_fuzz(num_iterations: usize, num_items: usize) {
         fn one_iteration(
             rng: &SeededRng,
-            db: &Db,
-            committed: Arc<NodeStore<Committed, FileBacked>>,
+            db: &Db<DefaultHashMode>,
+            committed: Arc<NodeStore<Committed, FileBacked, DefaultHashMode>>,
             committed_keys: &mut HashSet<Vec<u8>>,
             num_items: usize,
             start_val: usize,
-        ) -> (Arc<NodeStore<Committed, FileBacked>>, usize) {
+        ) -> (
+            Arc<NodeStore<Committed, FileBacked, DefaultHashMode>>,
+            usize,
+        ) {
             const CHANCE_COMMIT_PERCENT: usize = 25;
             let proposal = NodeStore::new(&committed).unwrap();
             let mut merkle = Merkle::from(proposal);
@@ -1522,7 +1525,7 @@ mod tests {
             // Randomly choose between comparing the committed nodestore against a
             // mutable proposal or an immutable proposal.
             let ops = {
-                let immutable: NodeStore<Arc<ImmutableProposal>, FileBacked> =
+                let immutable: NodeStore<Arc<ImmutableProposal>, FileBacked, DefaultHashMode> =
                     nodestore.try_into().unwrap();
                 diff_merkle_iterator(&committed.clone().into(), &immutable.into(), Box::new([]))
                     .unwrap()
@@ -1655,7 +1658,7 @@ mod tests {
                 }
             }
             let nodestore = merkle.into_inner();
-            let target_immutable: NodeStore<Arc<ImmutableProposal>, FileBacked> =
+            let target_immutable: NodeStore<Arc<ImmutableProposal>, FileBacked, DefaultHashMode> =
                 nodestore.try_into().unwrap();
 
             // Now generate a diff iterator, but only create a vector from the first

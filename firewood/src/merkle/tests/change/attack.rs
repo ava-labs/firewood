@@ -10,7 +10,7 @@ type OwnedBatchOps = Vec<BatchOp<Box<[u8]>, Box<[u8]>>>;
 /// Helper: returns true if the (possibly corrupted) proof is rejected by
 /// either the structural check or the root hash check.
 fn is_rejected(
-    db: &Db,
+    db: &Db<DefaultHashMode>,
     proof: &FrozenChangeProof,
     end_root: api::HashKey,
     start_key: Option<&[u8]>,
@@ -762,7 +762,7 @@ fn gap_boundaries() -> ([u8; 32], [u8; 32]) {
 /// for the 5-key setup, inject a spurious operation, and assert rejection.
 #[allow(clippy::too_many_arguments)]
 fn inject_and_assert_rejected(
-    db: &Db,
+    db: &Db<DefaultHashMode>,
     root1: api::HashKey,
     root2: api::HashKey,
     valid_proof: &FrozenChangeProof,

@@ -19,6 +19,10 @@ impl<'db> DbView for ReconstructedHandle<'db> {
     where
         Self: 'view;
 
+    fn node_hash_algorithm(&self) -> firewood::NodeHashAlgorithm {
+        self.reconstructed.node_hash_algorithm()
+    }
+
     fn root_hash(&self) -> Option<HashKey> {
         self.reconstructed.root_hash()
     }
