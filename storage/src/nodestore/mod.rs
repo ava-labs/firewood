@@ -428,7 +428,13 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> NodeStore<Mutable<K>, S, H
     /// Returns a [`FileIoError`] if the node cannot be read.
     #[inline]
     pub fn read_for_update(&mut self, node: MaybePersistedNode) -> Result<Node, FileIoError> {
-        let arc_wrapped_node = node.as_shared_node(self)?;
+        let arc_wrapped_node = match node.persisted_address() {
+            Some(addr) => match self.storage.take_cached_node(addr) {
+                Some(cached) => cached,
+                None => self.read_node_with_num_bytes_from_disk(addr)?.0,
+            },
+            None => node.as_shared_node(self)?,
+        };
         // Skip building the future-delete log when delete tracking is off
         // (it would never be consumed). This branch is on an immutable flag
         // and is perfectly predicted.

@@ -144,6 +144,18 @@ impl MaybePersistedNode {
         }
     }
 
+    /// Returns the address only when the node is fully persisted, i.e. its
+    /// contents are on disk and a caller may drop any in-memory copy and still
+    /// be able to re-read it. Unlike [`Self::as_linear_address`] this excludes
+    /// `Allocated`, whose contents have an address but have not been written yet.
+    #[must_use]
+    pub fn persisted_address(&self) -> Option<LinearAddress> {
+        match &*self.0.lock() {
+            MaybePersisted::Persisted(address) => Some(*address),
+            MaybePersisted::Unpersisted(_) | MaybePersisted::Allocated(_, _) => None,
+        }
+    }
+
     /// Returns a reference to the unpersisted node if it is unpersisted.
     ///
     /// # Returns
