@@ -5,6 +5,8 @@ mod change;
 mod collapse;
 #[cfg(feature = "ethhash")]
 mod ethhash;
+#[cfg(feature = "ethhash")]
+mod ethhash_fuzz;
 // TODO(rkuris): get the hashes from merkledb and verify compatibility with branch factor 256
 mod proof;
 mod range;
@@ -16,11 +18,32 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use super::*;
+use crate::api::Error;
 use crate::{ProofError, ProofNode};
 use firewood_storage::{
-    Children, Committed, DeletedNodeTracking, MemStore, Mutable, NodeHashAlgorithm, NodeStore,
-    NodeStoreHeader, PathComponent, Propose, RootReader, TrieHash, ValueDigest,
+    Committed, DefaultHashMode, DeletedNodeTracking, DenseChildren, HashMode, MemStore, Mutable,
+    NodeStore, NodeStoreHeader, PathComponent, Propose, RootReader, TrieHash, ValueDigest,
 };
+use test_case::test_case;
+
+/// Test wrapper around [`crate::merkle::verify_range_proof`] that supplies the
+/// compile-default hash mode as the expected `algorithm` (the mode every proof
+/// built in the test binary carries). Shadows the glob-imported real function
+/// so the many existing call sites need not pass the mode explicitly.
+fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
+    first_key: Option<impl KeyType>,
+    last_key: Option<impl KeyType>,
+    root_hash: &TrieHash,
+    proof: &RangeProof<impl KeyType, impl ValueType, H>,
+) -> Result<(), Error> {
+    crate::merkle::verify_range_proof(
+        first_key,
+        last_key,
+        root_hash,
+        DefaultHashMode::ALGORITHM,
+        proof,
+    )
+}
 
 // Returns n random key-value pairs.
 fn generate_random_kvs(rng: &firewood_storage::SeededRng, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
@@ -39,15 +62,17 @@ fn generate_random_kvs(rng: &firewood_storage::SeededRng, n: usize) -> Vec<(Vec<
 }
 
 fn into_committed(
-    merkle: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>,
+    merkle: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>>,
     header: &mut NodeStoreHeader,
-) -> Merkle<NodeStore<Committed, MemStore>> {
+) -> Merkle<NodeStore<Committed, MemStore, DefaultHashMode>> {
     let ns = merkle.into_inner().as_committed();
     ns.persist(header).unwrap();
     ns.into()
 }
 
-pub(crate) fn init_merkle<I, K, V>(iter: I) -> Merkle<NodeStore<Committed, MemStore>>
+pub(crate) fn init_merkle<I, K, V>(
+    iter: I,
+) -> Merkle<NodeStore<Committed, MemStore, DefaultHashMode>>
 where
     I: Clone + IntoIterator<Item = (K, V)>,
     K: AsRef<[u8]>,
@@ -59,7 +84,10 @@ where
 
 pub(crate) fn init_merkle_with_header<I, K, V>(
     iter: I,
-) -> (Merkle<NodeStore<Committed, MemStore>>, NodeStoreHeader)
+) -> (
+    Merkle<NodeStore<Committed, MemStore, DefaultHashMode>>,
+    NodeStoreHeader,
+)
 where
     I: Clone + IntoIterator<Item = (K, V)>,
     K: AsRef<[u8]>,
@@ -67,9 +95,9 @@ where
 {
     let memstore = Arc::new(MemStore::new(
         Vec::with_capacity(64 * 1024),
-        NodeHashAlgorithm::compile_option(),
+        DefaultHashMode::ALGORITHM,
     ));
-    let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+    let mut header = NodeStoreHeader::new(DefaultHashMode::ALGORITHM);
     let base = Merkle::from(NodeStore::new_empty_committed(
         memstore.clone(),
         DeletedNodeTracking::Enabled,
@@ -198,8 +226,8 @@ fn insert_one() {
     merkle.insert(b"abc", Box::new([])).unwrap();
 }
 
-fn create_in_memory_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
-    let memstore = MemStore::default();
+fn create_in_memory_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>> {
+    let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
 
     let nodestore = NodeStore::new_empty_proposal(memstore.into(), DeletedNodeTracking::Enabled);
 
@@ -220,7 +248,7 @@ fn test_branch_proof_node(
         key,
         partial_len: 0,
         value_digest,
-        child_hashes: Children::new(),
+        child_hashes: DenseChildren::new(),
     }
 }
 
@@ -441,7 +469,7 @@ fn remove_prefix_exact() {
     }
 }
 
-fn two_byte_all_keys() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
+fn two_byte_all_keys() -> Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>> {
     let mut merkle = create_in_memory_merkle();
     for key_val in u8::MIN..=u8::MAX {
         let key = [key_val, key_val];
@@ -564,19 +592,42 @@ fn single_key_proof() {
         let proof = merkle.prove(&key).unwrap();
 
         proof
-            .verify(key.clone(), Some(value.clone()), &root_hash)
+            .verify(
+                key.clone(),
+                Some(value.clone()),
+                &root_hash,
+                DefaultHashMode::ALGORITHM,
+            )
             .unwrap();
 
         {
             // Test that the proof is invalid when the value is different
             let mut value = value.clone();
             value[0] = value[0].wrapping_add(1);
-            assert!(proof.verify(key.clone(), Some(value), &root_hash).is_err());
+            assert!(
+                proof
+                    .verify(
+                        key.clone(),
+                        Some(value),
+                        &root_hash,
+                        DefaultHashMode::ALGORITHM
+                    )
+                    .is_err()
+            );
         }
 
         {
             // Test that the proof is invalid when the hash is different
-            assert!(proof.verify(key, Some(value), &TrieHash::empty()).is_err());
+            assert!(
+                proof
+                    .verify(
+                        key,
+                        Some(value),
+                        &TrieHash::empty(),
+                        DefaultHashMode::ALGORITHM
+                    )
+                    .is_err()
+            );
         }
     }
 }
@@ -874,8 +925,9 @@ fn test_root_hash_reversed_deletions() -> Result<(), FileIoError> {
                     NodeStore::new(immutable_merkle_before_removal.nodestore()).unwrap(),
                 );
                 merkle.remove(k).unwrap();
-                let immutable_merkle_after_removal: Merkle<NodeStore<Arc<ImmutableProposal>, _>> =
-                    merkle.try_into().unwrap();
+                let immutable_merkle_after_removal: Merkle<
+                    NodeStore<Arc<ImmutableProposal>, _, DefaultHashMode>,
+                > = merkle.try_into().unwrap();
                 new_hashes.push((
                     immutable_merkle_after_removal.nodestore.root_hash(),
                     k,
@@ -914,7 +966,7 @@ fn remove_nonexistent_with_one() {
 
 #[test]
 fn test_get_branch_from_nibbles_mut() {
-    type TestMerkle = Merkle<NodeStore<Mutable<Propose>, MemStore>>;
+    type TestMerkle = Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>>;
     let mut merkle = create_in_memory_merkle();
     merkle.insert(b"\xab", Box::from([1])).unwrap();
     merkle.insert(b"\xac", Box::from([2])).unwrap();
@@ -942,4 +994,22 @@ fn test_get_branch_from_nibbles_mut() {
         ],
     );
     assert!(leaf.is_none());
+}
+
+/// `CollapseRange::contains` decides which boundary proof nodes the reconcile
+/// loops in `verify_change_proof_root_hash` treat as in-range, and which branch
+/// values `collapse_strip` clears. Its bound conventions are easy to get wrong,
+/// so pin them directly: both bounds are inclusive, an empty `start` is −∞, and
+/// a `None` `end` is +∞. `None` is distinct from `Some(&[])`, which is the empty
+/// key itself — conflating the two put every key out of range at the upper
+/// bound.
+#[test_case(&[3], &[3], Some(&[7]), true ; "start bound is inclusive")]
+#[test_case(&[7], &[3], Some(&[7]), true ; "end bound is inclusive")]
+#[test_case(&[2], &[3], Some(&[7]), false ; "before start")]
+#[test_case(&[8], &[3], Some(&[7]), false ; "after end")]
+#[test_case(&[7, 0], &[3], Some(&[7]), false ; "longer key extending the end bound sorts after it")]
+#[test_case(&[9, 9], &[3], None, true ; "None end is positive infinity")]
+#[test_case(&[0], &[], Some(&[]), false ; "Some(empty) is the empty key, not positive infinity")]
+fn test_collapse_range_contains(node: &[u8], start: &[u8], end: Option<&[u8]>, expected: bool) {
+    assert_eq!(CollapseRange { start, end }.contains(node), expected);
 }

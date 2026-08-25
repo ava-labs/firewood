@@ -6,38 +6,24 @@
 //! Both proof types can yield the set of contract code hashes referenced by
 //! their account values (Ethereum tries only). The extraction is pure RLP
 //! parsing of bytes already in the proof — no verification is required.
+//! Malformed account values are surfaced as iterator errors; entries with
+//! non-account keys, empty code hashes, or invalid code-hash lengths are skipped
+//! to preserve the C API's historical iteration behavior.
 //!
 //! Per-proof-type entry points live in `range.rs` and `change.rs`; this
 //! module owns the shared [`CodeIteratorHandle`], the per-element extraction
 //! logic, and the type-agnostic FFI exports (`fwd_code_hash_iter_next`,
 //! `fwd_code_hash_iter_free`).
 
-#[cfg(feature = "ethhash")]
-use firewood_storage::{RlpList, TrieHash};
-
-#[cfg(feature = "ethhash")]
-use firewood::ProofError;
-
-use firewood::api::{self, BatchOp};
+use firewood::{
+    NodeHashAlgorithm, ProofError,
+    api::{self, BatchOp},
+};
 
 use crate::{HashKey, HashResult, VoidResult};
-
-#[cfg(feature = "ethhash")]
-const EMPTY_CODE_HASH: [u8; 32] = [
-    // "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
-    0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03, 0xc0,
-    0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85, 0xa4, 0x70,
-];
-
 #[non_exhaustive]
 pub struct CodeIteratorHandle<'p> {
-    #[cfg(feature = "ethhash")]
     inner: BoxCodeHashIter<'p>,
-    // uninhabitable fields make the struct impossible to construct when the feature is disabled
-    #[cfg(not(feature = "ethhash"))]
-    void: std::convert::Infallible,
-    #[cfg(not(feature = "ethhash"))]
-    marker: std::marker::PhantomData<&'p ()>,
 }
 
 impl std::fmt::Debug for CodeIteratorHandle<'_> {
@@ -48,34 +34,42 @@ impl std::fmt::Debug for CodeIteratorHandle<'_> {
 
 type KeyValuePair = (Box<[u8]>, Box<[u8]>);
 
-#[cfg(feature = "ethhash")]
 type BoxCodeHashIter<'p> = Box<dyn Iterator<Item = Result<HashKey, api::Error>> + 'p>;
 
-#[cfg(feature = "ethhash")]
+/// Reject code-hash iteration on a non-Ethereum proof. Code hashes only exist
+/// in Ethereum account values; this is the runtime replacement for the former
+/// compile-time `ethhash`-feature gate.
+fn require_ethereum(algorithm: NodeHashAlgorithm) -> Result<(), api::Error> {
+    if algorithm.is_ethereum() {
+        Ok(())
+    } else {
+        Err(api::Error::FeatureNotSupported(
+            "code hash iteration requires an ethereum-mode proof".to_owned(),
+        ))
+    }
+}
+
 fn extract_code_hash(key: &[u8], value: &[u8]) -> Option<Result<HashKey, api::Error>> {
     if key.len() != 32 {
         return None;
     }
 
-    let Ok(code_hash_slice) = RlpList::parse(value).and_then(|l| l.nth_bytes(3)) else {
-        return Some(Err(api::Error::ProofError(ProofError::InvalidValueFormat)));
-    };
-    let code_hash: HashKey = TrieHash::try_from(code_hash_slice).ok()?.into();
-    if code_hash == TrieHash::from(EMPTY_CODE_HASH).into() {
-        return None;
+    match firewood::account_code_hash(value) {
+        Ok(Some(code_hash)) => Some(Ok(code_hash.into())),
+        Ok(None) => None,
+        Err(ProofError::InvalidAccountCodeHashLength { .. }) => {
+            // Keep the C iterator's historical contract: a wrong-length codeHash
+            // skips this account and allows later valid code hashes to be yielded.
+            None
+        }
+        Err(err) => Some(Err(api::Error::ProofError(err))),
     }
-
-    Some(Ok(code_hash))
 }
 
 impl Iterator for CodeIteratorHandle<'_> {
     type Item = Result<HashKey, api::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        #[cfg(not(feature = "ethhash"))]
-        match self.void {}
-
-        #[cfg(feature = "ethhash")]
         self.inner.next()
     }
 }
@@ -96,33 +90,26 @@ impl<'p> CodeIteratorHandle<'p> {
     ///
     /// # Errors
     ///
-    /// - Returns `api::Error::FeatureNotSupported` if the `ethhash` feature
-    ///   is not enabled.
-    #[cfg_attr(not(feature = "ethhash"), allow(unused_variables))]
-    pub fn from_key_values(key_values: &'p [KeyValuePair]) -> Result<Self, api::Error> {
-        #[cfg(not(feature = "ethhash"))]
-        {
-            Err(api::Error::FeatureNotSupported(
-                "ethhash code hash iterator".to_owned(),
-            ))
-        }
-
-        #[cfg(feature = "ethhash")]
-        {
-            Ok(CodeIteratorHandle {
-                inner: Box::new(
-                    key_values
-                        .iter()
-                        .filter_map(|(key, value)| extract_code_hash(key, value)),
-                ),
-            })
-        }
+    /// - Returns `api::Error::FeatureNotSupported` if `algorithm` is not an
+    ///   ethereum-mode proof.
+    pub fn from_key_values(
+        algorithm: NodeHashAlgorithm,
+        key_values: &'p [KeyValuePair],
+    ) -> Result<Self, api::Error> {
+        require_ethereum(algorithm)?;
+        Ok(CodeIteratorHandle {
+            inner: Box::new(
+                key_values
+                    .iter()
+                    .filter_map(|(key, value)| extract_code_hash(key, value)),
+            ),
+        })
     }
 
     /// Create a new code hash iterator from the given change-proof batch
-    /// operations. Non-`Put` ops are skipped, and `Put` ops whose key is
-    /// not 32 bytes or whose value does not RLP-decode as an account are
-    /// also skipped.
+    /// operations. Non-`Put` ops, `Put` ops whose key is not 32 bytes, empty
+    /// code hashes, and invalid code-hash lengths are skipped. Malformed
+    /// account values are surfaced as iterator errors.
     ///
     /// The iterator must be freed after use.
     ///
@@ -135,28 +122,19 @@ impl<'p> CodeIteratorHandle<'p> {
     ///
     /// # Errors
     ///
-    /// - Returns `api::Error::FeatureNotSupported` if the `ethhash` feature
-    ///   is not enabled.
-    #[cfg_attr(not(feature = "ethhash"), allow(unused_variables))]
+    /// - Returns `api::Error::FeatureNotSupported` if `algorithm` is not an
+    ///   ethereum-mode proof.
     pub fn from_batch_ops(
+        algorithm: NodeHashAlgorithm,
         batch_ops: &'p [BatchOp<firewood::Key, firewood::Value>],
     ) -> Result<Self, api::Error> {
-        #[cfg(not(feature = "ethhash"))]
-        {
-            Err(api::Error::FeatureNotSupported(
-                "ethhash code hash iterator".to_owned(),
-            ))
-        }
-
-        #[cfg(feature = "ethhash")]
-        {
-            Ok(CodeIteratorHandle {
-                inner: Box::new(batch_ops.iter().filter_map(|op| match op {
-                    BatchOp::Put { key, value } => extract_code_hash(key, value),
-                    _ => None,
-                })),
-            })
-        }
+        require_ethereum(algorithm)?;
+        Ok(CodeIteratorHandle {
+            inner: Box::new(batch_ops.iter().filter_map(|op| match op {
+                BatchOp::Put { key, value } => extract_code_hash(key, value),
+                _ => None,
+            })),
+        })
     }
 }
 
@@ -205,5 +183,44 @@ pub extern "C" fn fwd_code_hash_iter_free(iter: Option<Box<CodeIteratorHandle>>)
 impl crate::MetricsContextExt for CodeIteratorHandle<'_> {
     fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_code_hash;
+
+    #[test]
+    fn wrong_length_code_hash_is_skipped() {
+        let key = [0; 32];
+
+        // RLP account list: [nonce="", balance="", storageRoot=[0; 32],
+        // codeHash=[0x33; 31]]. The final field is intentionally one byte
+        // short so this exercises the wrong-length skip path.
+        let mut account_rlp_with_short_code_hash = vec![
+            0xf8, // Long-form RLP list with a one-byte payload length.
+            0x43, // List payload length: 67 bytes.
+            0x80, // Empty nonce.
+            0x80, // Empty balance.
+            0xa0, // storageRoot is a 32-byte string.
+        ];
+        account_rlp_with_short_code_hash.extend([0; 32]); // Zero storageRoot bytes.
+        account_rlp_with_short_code_hash.push(0x9f); // codeHash is a 31-byte string.
+        account_rlp_with_short_code_hash.extend([0x33; 31]); // Short codeHash bytes.
+
+        assert!(extract_code_hash(&key, &account_rlp_with_short_code_hash).is_none());
+    }
+
+    #[test]
+    fn malformed_account_value_is_returned_as_error() {
+        let key = [0; 32];
+        let result = extract_code_hash(&key, b"not an account").expect("account key is valid");
+
+        assert_eq!(
+            result
+                .expect_err("malformed account value should return an iterator error")
+                .to_string(),
+            "proof error: invalid Ethereum account value format: expected a list, found a byte string"
+        );
     }
 }

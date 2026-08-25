@@ -22,14 +22,14 @@ package ffi
 import "C"
 
 import (
-	"errors"
 	"fmt"
 	"runtime"
 	"sync"
 	"unsafe"
 )
 
-var errDroppedProposal = errors.New("proposal already dropped")
+// errDroppedProposal wraps [ErrDropped].
+var errDroppedProposal = fmt.Errorf("proposal %w", ErrDropped)
 
 // Proposal represents a set of proposed changes to be committed to the database.
 // Proposals are created via [Database.Propose] or [Proposal.Propose], and must be
@@ -71,9 +71,9 @@ func (p *Proposal) Root() Hash {
 // Get retrieves the value for the given key.
 // If the key does not exist, it returns nil.
 func (p *Proposal) Get(key []byte) ([]byte, error) {
-	p.keepAliveHandle.mu.RLock()
-	defer p.keepAliveHandle.mu.RUnlock()
-	if p.ptr == nil {
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
+	if p.dropped {
 		return nil, errDroppedProposal
 	}
 
@@ -92,8 +92,8 @@ func (p *Proposal) Get(key []byte) ([]byte, error) {
 //
 // It returns an error if this Proposal has already been committed or released.
 func (p *Proposal) Iter(key []byte) (*Iterator, error) {
-	p.keepAliveHandle.mu.RLock()
-	defer p.keepAliveHandle.mu.RUnlock()
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
 	if p.dropped {
 		return nil, errDroppedProposal
 	}
@@ -103,7 +103,7 @@ func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 
 	itResult := C.fwd_iter_on_proposal(p.ptr, newBorrowedBytes(key, &pinner))
 
-	return getIteratorFromIteratorResult(itResult)
+	return getIteratorFromIteratorResult(itResult, p.lease.registry)
 }
 
 // Propose is equivalent to [Database.Propose] except that the new proposal is
@@ -115,9 +115,9 @@ func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 // with an empty value stores an empty value; use [Delete] or [PrefixDelete] to
 // remove keys.
 func (p *Proposal) Propose(batch []BatchOp) (*Proposal, error) {
-	p.keepAliveHandle.mu.RLock()
-	defer p.keepAliveHandle.mu.RUnlock()
-	if p.ptr == nil {
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
+	if p.dropped {
 		return nil, errDroppedProposal
 	}
 
@@ -125,7 +125,7 @@ func (p *Proposal) Propose(batch []BatchOp) (*Proposal, error) {
 	defer pinner.Unpin()
 
 	kvp := newKeyValuePairsFromBatch(batch, &pinner)
-	return getProposalFromProposalResult(C.fwd_propose_on_proposal(p.ptr, kvp), p.keepAliveHandle.outstandingHandles, p.commitLock)
+	return getProposalFromProposalResult(C.fwd_propose_on_proposal(p.ptr, kvp), p.lease.registry, p.commitLock)
 }
 
 // Commit commits the proposal and returns any errors.
@@ -138,7 +138,7 @@ func (p *Proposal) Propose(batch []BatchOp) (*Proposal, error) {
 // operations that access it (such as [Database.Get] and [Database.Propose]) will
 // block until this function returns.
 func (p *Proposal) Commit() error {
-	return p.keepAliveHandle.disown(true /* evenOnError */, func() error {
+	return p.lease.release(func() error {
 		if p.dropped {
 			return errDroppedProposal
 		}
@@ -170,7 +170,7 @@ func (p *Proposal) Commit() error {
 // block until this function returns.
 func (p *Proposal) CommitWithRebase() (Hash, error) {
 	var hash Hash
-	err := p.keepAliveHandle.disown(true /* evenOnError */, func() error {
+	err := p.lease.release(func() error {
 		if p.dropped {
 			return errDroppedProposal
 		}
@@ -196,8 +196,8 @@ func (p *Proposal) CommitWithRebase() (Hash, error) {
 //
 // Returns errDroppedProposal if this Proposal has already been committed or released.
 func (p *Proposal) Dump() (string, error) {
-	p.keepAliveHandle.mu.RLock()
-	defer p.keepAliveHandle.mu.RUnlock()
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
 	if p.dropped {
 		return "", errDroppedProposal
 	}
@@ -211,7 +211,7 @@ func (p *Proposal) Dump() (string, error) {
 }
 
 // getProposalFromProposalResult converts a C.ProposalResult to a Proposal or error.
-func getProposalFromProposalResult(result C.ProposalResult, wg *sync.WaitGroup, commitLock *sync.Mutex) (*Proposal, error) {
+func getProposalFromProposalResult(result C.ProposalResult, registry *keepAliveRegistry, commitLock *sync.Mutex) (*Proposal, error) {
 	switch result.tag {
 	case C.ProposalResult_NullHandlePointer:
 		return nil, errDBClosed
@@ -219,9 +219,13 @@ func getProposalFromProposalResult(result C.ProposalResult, wg *sync.WaitGroup, 
 		body := (*C.ProposalResult_Ok_Body)(unsafe.Pointer(&result.anon0))
 		hashKey := *(*Hash)(unsafe.Pointer(&body.root_hash._0))
 		proposal := &Proposal{
-			handle:     createHandle(body.handle, wg, func(p *C.ProposalHandle) C.VoidResult { return C.fwd_free_proposal(p) }),
+			handle:     newHandle(body.handle, func(p *C.ProposalHandle) C.VoidResult { return C.fwd_free_proposal(p) }),
 			root:       hashKey,
 			commitLock: commitLock,
+		}
+		// attach calls proposal.Drop on the closed-registry path; nothing else to clean up.
+		if err := proposal.lease.attach(registry, proposal.Drop); err != nil {
+			return nil, err
 		}
 		runtime.AddCleanup(proposal, drop[*C.ProposalHandle], proposal.handle)
 		return proposal, nil

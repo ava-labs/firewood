@@ -3,6 +3,8 @@
 
 use std::{fmt::Debug, num::NonZeroUsize};
 
+use firewood_storage::{DefaultHashMode, HashMode, NodeHashAlgorithm};
+
 use crate::{
     Proof, ProofCollection, ProofError,
     api::{self, FrozenChangeProof, HashKey},
@@ -20,6 +22,11 @@ pub struct ChangeProof<K: AsRef<[u8]> + Debug, V: AsRef<[u8]> + Debug, H> {
     start_proof: Proof<H>,
     end_proof: Proof<H>,
     batch_ops: Box<[BatchOp<K, V>]>,
+    /// The hash algorithm this proof was constructed or parsed with. For proofs
+    /// built in this binary it is the compile default; for proofs parsed via
+    /// [`FrozenChangeProof::from_slice`](crate::api::FrozenChangeProof::from_slice)
+    /// it is resolved from the self-describing header byte.
+    hash_mode: NodeHashAlgorithm,
 }
 
 impl<K, V, H> std::fmt::Debug for ChangeProof<K, V, H>
@@ -34,6 +41,7 @@ where
             .field("start_proof", &self.start_proof)
             .field("end_proof", &self.end_proof)
             .field("batch_ops", &self.batch_ops)
+            .field("hash_mode", &self.hash_mode)
             .finish()
     }
 }
@@ -52,11 +60,39 @@ where
         end_proof: Proof<H>,
         key_values: Box<[BatchOp<K, V>]>,
     ) -> Self {
+        // Proofs built in this binary carry the compile-default mode; the parse
+        // path stamps the resolved header mode via `new_with_hash_mode`.
+        Self::with_hash_mode(
+            start_proof,
+            end_proof,
+            key_values,
+            DefaultHashMode::ALGORITHM,
+        )
+    }
+
+    /// Like [`ChangeProof::new`], but records the [`NodeHashAlgorithm`] the proof
+    /// was encoded with. Used by the parse path
+    /// ([`FrozenChangeProof::from_slice`](crate::api::FrozenChangeProof::from_slice))
+    /// to stamp the mode resolved from the self-describing header byte.
+    #[must_use]
+    pub(crate) const fn with_hash_mode(
+        start_proof: Proof<H>,
+        end_proof: Proof<H>,
+        key_values: Box<[BatchOp<K, V>]>,
+        hash_mode: NodeHashAlgorithm,
+    ) -> Self {
         Self {
             start_proof,
             end_proof,
             batch_ops: key_values,
+            hash_mode,
         }
+    }
+
+    /// The hash algorithm this proof was constructed or parsed with.
+    #[must_use]
+    pub const fn hash_mode(&self) -> NodeHashAlgorithm {
+        self.hash_mode
     }
 
     /// Returns a reference to the start proof, which may be empty.
@@ -164,11 +200,19 @@ pub struct ChangeProofVerificationContext {
     pub start_key: Option<Box<[u8]>>,
     /// The upper bound of the verified key range, if any.
     pub end_key: Option<Box<[u8]>>,
-    /// The actual right edge of the proven range. This equals `end_key`
-    /// when all items fit within the limit, or the last key in `batch_ops`
-    /// when the proof may have been truncated (`batch_ops.len() ==
-    /// max_length`). The root hash verifier uses this as the right
-    /// boundary for `compute_outside_children` and reconciliation.
+    /// The right edge of the range the proof proves: the key the end proof is
+    /// anchored at, as the verifier determines it. This is `end_key` when the
+    /// proof covers the requested range, and the last key in `batch_ops` when the
+    /// proof stops short of it — or when stopping short cannot be ruled out.
+    /// `compute_right_edge_key` decides it and documents each case. Verification
+    /// asserts completeness over `[start_key, right_edge_key]` only, which can be
+    /// narrower than the range requested.
+    ///
+    /// The root hash verifier uses this as the right boundary for
+    /// `compute_outside_children` and reconciliation. A caller continuing past
+    /// this proof must resume strictly above the last operation's key, because
+    /// both bounds of a request are inclusive —
+    /// [`find_next_key_after_change_proof`] computes that resume point.
     pub right_edge_key: Option<Box<[u8]>>,
 }
 
@@ -176,13 +220,27 @@ type FrozenBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
 
 /// Determine the next key range to fetch after this change proof.
 ///
-/// Inspects the proof structure only — does not require a proposal.
-/// `end_key` is the original requested upper bound passed to the proof
-/// generator.
+/// `end_key` must be the upper bound of the request that produced `proof`.
 ///
-/// Returns `None` if the proof confirms there are no more keys in the
-/// requested range; otherwise returns `Some((last_op.key, end_key))` as
-/// a continuation.
+/// Returns `None` when nothing further remains to fetch; otherwise returns a
+/// continuation whose start is the smallest key strictly above the last key this
+/// proof covered, paired with the same `end_key`.
+///
+/// The continuation starts strictly above the last covered key because both
+/// bounds of a proof request are inclusive. A continuation that started at that
+/// key would cover it again, report the same last key, and never advance.
+///
+/// # Trusting `None`
+///
+/// `None` means the requested range holds no further changes, and that is only
+/// true of a proof whose root hash has been verified — by
+/// [`Db::verify_change_proof`] or [`verify_change_proof_root_hash`]. Structural
+/// validation alone accepts a proof with no operations for a range that does have
+/// changes, because every check that would notice is expressed against the
+/// operation list, which an empty list satisfies.
+///
+/// [`Db::verify_change_proof`]: crate::db::Db::verify_change_proof
+/// [`verify_change_proof_root_hash`]: crate::merkle::verify_change_proof_root_hash
 ///
 /// # Errors
 ///
@@ -194,8 +252,10 @@ pub fn find_next_key_after_change_proof(
     end_key: Option<&[u8]>,
 ) -> Result<Option<super::range::KeyRange>, api::Error> {
     let Some(last_op) = proof.batch_ops().last() else {
-        // No changes in this range. If bounded, continue from end_key.
-        return Ok(end_key.map(|ek| (Box::from(ek), None)));
+        // The proof reports no changes in the requested range, so nothing in
+        // that range remains to fetch. Whether the caller wants keys beyond
+        // `end_key` is its own bookkeeping, not something this proof can say.
+        return Ok(None);
     };
 
     if proof.end_proof().is_empty() {
@@ -211,7 +271,10 @@ pub fn find_next_key_after_change_proof(
         }
     }
 
-    Ok(Some((last_op.key().clone(), end_key.map(Box::from))))
+    Ok(Some((
+        super::lex_successor(last_op.key()),
+        end_key.map(Box::from),
+    )))
 }
 
 /// Verify a boundary proof against `end_root` and optionally check that the
@@ -228,8 +291,9 @@ fn verify_boundary_proof<C: ProofCollection>(
     boundary_op: Option<&FrozenBatchOp>,
     mismatch_error: ProofError,
     edge: ProofEdge,
+    algorithm: NodeHashAlgorithm,
 ) -> Result<(), api::Error> {
-    let result = match proof.value_digest(key, end_root) {
+    let result = match proof.value_digest(key, end_root, algorithm) {
         Ok(result) => result,
         Err(ProofError::Empty) => None,
         // Any `UnexpectedHash` from this boundary `value_digest` walk is by
@@ -255,36 +319,45 @@ fn verify_boundary_proof<C: ProofCollection>(
     }
 }
 
-/// Compute the right edge of the proven range.
+/// Compute the right edge of the proven range: the key the end proof is anchored
+/// at. Verification asserts completeness up to it and no further.
 ///
-/// The proof may have been truncated by the generator's limit when:
-///   1. `batch_ops.len() == max_length` (limit was potentially hit)
-///   2. the end proof is an inclusion proof of the last batch op key
-///      (the generator produced the proof at that key, not at `end_key`)
+/// A generator that stops short anchors its end proof at the last op it sent
+/// rather than at `end_key`. A value lookup at the last op key decides which:
 ///
-/// When truncated, the right edge is `last_op_key`. Otherwise it is
-/// `end_key` (falling back to `last_op_key` for unbounded ranges).
+/// - A value there: that key is the proof's terminal, so it is the edge.
+/// - Absent, with a trailing `Delete`: a proof of absence cannot name the key it
+///   was built for, so a truncated reply looks identical to a complete one. Take
+///   that key and judge the range the reply provably covers.
+/// - Otherwise: `end_key`, or the last op key when the request was unbounded.
+///
+/// Narrowing is sound. The lookup succeeds only for a proof that is a complete
+/// statement about that key, every op sits at or below the edge, and the caller's
+/// next request covers the remainder.
+///
+/// The second arm costs a wasted round: a `Delete` of a key absent from both
+/// revisions is true but inert, so the reply verifies and nothing changes. The
+/// caller resumes just past that key, so the next reply can be padded the same
+/// way with a fresh absent key, indefinitely. Rejecting such a `Delete` would
+/// require the key to be present in the caller's state, which is what idempotent
+/// re-application and overlapping proofs depend on not requiring. Nothing false
+/// is accepted.
 fn compute_right_edge_key<'a>(
     proof: &FrozenChangeProof,
     end_root: &HashKey,
     last_op_key: Option<&'a [u8]>,
     end_key: Option<&'a [u8]>,
-    max_length: Option<NonZeroUsize>,
+    algorithm: NodeHashAlgorithm,
 ) -> Option<&'a [u8]> {
-    let possibly_truncated = max_length.is_some_and(|n| proof.batch_ops().len() == n.get());
-    let truncated = possibly_truncated
-        && last_op_key.is_some_and(|k| {
-            proof
-                .end_proof()
-                .value_digest(k, end_root)
-                .ok()
-                .flatten()
-                .is_some()
-        });
-    if truncated {
-        last_op_key
-    } else {
-        end_key.or(last_op_key)
+    let Some(anchor) = last_op_key else {
+        return end_key;
+    };
+    match proof.end_proof().value_digest(anchor, end_root, algorithm) {
+        Ok(Some(_)) => Some(anchor),
+        Ok(None) if matches!(proof.batch_ops().last(), Some(BatchOp::Delete { .. })) => {
+            Some(anchor)
+        }
+        _ => end_key.or(Some(anchor)),
     }
 }
 
@@ -300,20 +373,39 @@ fn compute_right_edge_key<'a>(
 /// - Start and end proof hash chain verification against `end_root`
 /// - End proof inclusion/exclusion consistency with the last batch operation
 ///
+/// # Node Hashing Algorithm
+///
+/// `algorithm` is the hash mode the caller expects the proof to be encoded
+/// with. If the proof's own self-describing mode (from its header byte)
+/// disagrees, verification is rejected up front with
+/// [`ProofError::HashModeMismatch`] before any node hashing happens.
+///
 /// # Errors
 ///
-/// Returns [`api::Error::ProofError`] if the proof is structurally invalid
-/// or boundary proof hash chains fail verification.
+/// Returns [`api::Error::ProofError`] if the proof is structurally invalid,
+/// the proof's hash mode does not match `algorithm`, or boundary proof hash
+/// chains fail verification.
 ///
 /// On success, returns a [`ChangeProofVerificationContext`] capturing the
 /// verification parameters for use by downstream root hash verification.
+#[expect(clippy::too_many_lines)]
 pub fn verify_change_proof_structure(
     proof: &FrozenChangeProof,
     end_root: HashKey,
     start_key: Option<&[u8]>,
     end_key: Option<&[u8]>,
+    algorithm: NodeHashAlgorithm,
     max_length: Option<NonZeroUsize>,
 ) -> Result<ChangeProofVerificationContext, api::Error> {
+    // Reject a proof whose self-describing mode disagrees with the caller's
+    // expectation before any hashing happens.
+    if proof.hash_mode() != algorithm {
+        return Err(api::Error::ProofError(ProofError::HashModeMismatch {
+            expected: algorithm,
+            found: proof.hash_mode(),
+        }));
+    }
+
     let batch_ops = proof.batch_ops();
 
     // --- O(1) checks first ---
@@ -411,6 +503,7 @@ pub fn verify_change_proof_structure(
             boundary_op,
             ProofError::StartProofOperationMismatch,
             ProofEdge::Left,
+            algorithm,
         )?;
     }
 
@@ -436,13 +529,13 @@ pub fn verify_change_proof_structure(
     }
 
     let last_op_key = last_op.map(|op| op.key().as_ref());
-    let right_edge_key = compute_right_edge_key(proof, &end_root, last_op_key, end_key, max_length);
+    let right_edge_key = compute_right_edge_key(proof, &end_root, last_op_key, end_key, algorithm);
 
-    // Verify end boundary proof against end_root. The end proof was
-    // generated for right_edge_key. The boundary_op check applies when
-    // the right edge matches the last batch op key (meaning the proof
-    // must be consistent with the op type); otherwise the key is just a
-    // range bound and both inclusion/exclusion are valid.
+    // Verify the end boundary proof against end_root at right_edge_key, the key
+    // the verifier treats as the proof's anchor. When that key is the last batch
+    // op's key, the proof must be consistent with the op type, so pass the op;
+    // otherwise the key is just a range bound and both inclusion and exclusion
+    // are valid.
     let end_boundary_op =
         last_op.filter(|op| right_edge_key.is_some_and(|k| op.key().as_ref() == k));
     if let Some(key) = right_edge_key {
@@ -453,6 +546,7 @@ pub fn verify_change_proof_structure(
             end_boundary_op,
             ProofError::EndProofOperationMismatch,
             ProofEdge::Right,
+            algorithm,
         )?;
     }
 

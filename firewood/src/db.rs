@@ -12,7 +12,7 @@ mod tests;
 pub use crate::api::BatchOp;
 use crate::api::{
     self, ArcDynDbView, FrozenChangeProof, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter,
-    KeyType, KeyValuePair, OptionalHashKeyExt,
+    KeyType, KeyValuePair,
 };
 use crate::iter::MerkleKeyValueIter;
 use crate::merkle::changes::DiffMerkleNodeStream;
@@ -21,10 +21,12 @@ use crate::verify_change_proof_structure;
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_metrics::{firewood_counter, firewood_gauge, firewood_histogram};
+#[cfg(test)]
+use firewood_storage::DefaultHashMode;
 use firewood_storage::{
-    CheckOpt, CheckerReport, Committed, CommittedParentHash, FileBacked, FileIoError,
-    HashedNodeReader, ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage,
-    Reconstructed, ReconstructionSource, TrieReader,
+    CheckOpt, CheckerReport, Committed, CommittedParentHash, EthHash, FileBacked, FileIoError,
+    HashMode, HashedNodeReader, ImmutableProposal, MerkleDbHash, Mutable, NodeHashAlgorithm,
+    NodeStore, Parentable, Propose, ReadableStorage, Recon, Reconstructed, TrieReader,
 };
 use std::io::Write;
 use std::num::NonZeroUsize;
@@ -42,17 +44,22 @@ pub enum DbError {
     FileIo(#[from] FileIoError),
 }
 
-impl<P, S: ReadableStorage> api::DbView for NodeStore<P, S>
+impl<P, S: ReadableStorage, H: HashMode> api::DbView for NodeStore<P, S, H>
 where
-    NodeStore<P, S>: HashedNodeReader,
+    NodeStore<P, S, H>: HashedNodeReader,
 {
     type Iter<'view>
         = MerkleKeyValueIter<'view, Self>
     where
         Self: 'view;
 
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        H::ALGORITHM
+    }
+
     fn root_hash(&self) -> Option<HashKey> {
-        HashedNodeReader::root_hash(self).or_default_root_hash()
+        // Resolve the empty-trie root via the runtime hash mode `H`.
+        HashedNodeReader::root_hash(self).or_else(H::default_root_hash)
     }
 
     fn val<K: api::KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
@@ -91,7 +98,6 @@ where
     }
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub enum UseParallel {
     Never,
@@ -104,7 +110,10 @@ pub enum UseParallel {
 #[non_exhaustive]
 pub struct DbConfig {
     /// The algorithm used for hashing nodes (required).
-    #[cfg_attr(test, builder(default = NodeHashAlgorithm::compile_option()))]
+    ///
+    /// In tests this defaults to the feature-selected compatibility algorithm.
+    /// Production callers must select the algorithm explicitly.
+    #[cfg_attr(test, builder(default = DefaultHashMode::ALGORITHM))]
     pub node_hash_algorithm: NodeHashAlgorithm,
     /// Whether to create the DB if it doesn't exist.
     #[builder(default = true)]
@@ -132,18 +141,22 @@ pub struct DbConfig {
 /// to ensure the latest committed revision is persisted to disk. Dropping a
 /// database without calling `close()` may result in committed data being lost.
 #[derive(Debug)]
-pub struct Db {
-    manager: RevisionManager,
+pub struct Db<H> {
+    manager: RevisionManager<H>,
     use_parallel: UseParallel,
 }
 
-impl api::Db for Db {
-    type Historical = NodeStore<Committed, FileBacked>;
+impl<H: HashMode> api::Db for Db<H> {
+    type Historical = NodeStore<Committed, FileBacked, H>;
 
     type Proposal<'db>
-        = Proposal<'db>
+        = Proposal<'db, H>
     where
         Self: 'db;
+
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        H::ALGORITHM
+    }
 
     fn revision(&self, root_hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
         let nodestore = self.manager.revision(root_hash)?;
@@ -151,29 +164,171 @@ impl api::Db for Db {
     }
 
     fn root_hash(&self) -> Option<HashKey> {
-        self.manager.root_hash().or_default_root_hash()
+        self.manager.root_hash().or_else(H::default_root_hash)
     }
 
     fn propose(&self, batch: impl IntoBatchIter) -> Result<Self::Proposal<'_>, api::Error> {
         // Proposal created from db
         firewood_counter!(PROPOSALS_CREATED, "base" => "db").increment(1);
 
-        self.propose_with_parent(batch, &self.manager.current_revision())
+        self.propose_with_parent(batch, &*self.manager.current_revision())
     }
 }
 
-impl Db {
-    /// Create a new database instance.
-    pub fn new<P: AsRef<Path>>(db_dir: P, cfg: DbConfig) -> Result<Self, api::Error> {
+// The dyn boundary: erase a concrete `Db<H>` to `Box<dyn DynDb>` so a single
+// binary can hold databases of different hash modes behind one type. The
+// generic batch is pre-collected into an `OwnedBatch` at the boundary because a
+// generic `impl IntoBatchIter` method is not object-safe.
+impl<H: HashMode> api::DynDb for Db<H> {
+    fn revision(&self, hash: HashKey) -> Result<ArcDynDbView, api::Error> {
+        let nodestore = self.manager.revision(hash)?;
+        Ok(nodestore as ArcDynDbView)
+    }
+
+    fn root_hash(&self) -> Option<HashKey> {
+        api::Db::root_hash(self)
+    }
+
+    fn view(&self, hash: HashKey) -> Result<ArcDynDbView, api::Error> {
+        Db::view(self, hash)
+    }
+
+    fn propose(
+        &self,
+        ops: api::OwnedBatch,
+    ) -> Result<Box<dyn api::DynProposal<'_> + '_>, api::Error> {
+        let proposal = api::Db::propose(self, ops)?;
+        Ok(Box::new(proposal))
+    }
+
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        H::ALGORITHM
+    }
+
+    fn dump_to_string(&self) -> Result<String, api::Error> {
+        Db::dump_to_string(self).map_err(api::Error::from)
+    }
+
+    fn change_proof(
+        &self,
+        start_hash: HashKey,
+        end_hash: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenChangeProof, api::Error> {
+        Db::change_proof(self, start_hash, end_hash, start_key, end_key, limit)
+    }
+
+    fn verify_change_proof(
+        &self,
+        proof: &FrozenChangeProof,
+        end_root: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<Box<dyn api::DynProposal<'_> + '_>, api::Error> {
+        let proposal =
+            Db::verify_change_proof(self, proof, end_root, start_key, end_key, max_length)?;
+        Ok(Box::new(proposal))
+    }
+
+    fn merge_key_value_range(
+        &self,
+        first_key: Option<&[u8]>,
+        last_key: Option<&[u8]>,
+        key_values: api::OwnedKeyValuePairs,
+    ) -> Result<Box<dyn api::DynProposal<'_> + '_>, api::Error> {
+        let proposal = Db::merge_key_value_range(self, first_key, last_key, key_values)?;
+        Ok(Box::new(proposal))
+    }
+
+    fn reconstruct_from_view(
+        &self,
+        parent: &CommittedView,
+        batch: api::OwnedBatch,
+    ) -> Result<ReconstructedView<'_>, api::Error> {
+        Db::reconstruct_from_view(self, parent, batch)
+    }
+
+    fn reconstruct_from_reconstructed<'db>(
+        &'db self,
+        parent: ReconstructedView<'db>,
+        batch: api::OwnedBatch,
+    ) -> Result<ReconstructedView<'db>, api::Error> {
+        Db::reconstruct_from_reconstructed(self, parent.nodestore, batch)
+    }
+
+    fn committed_view(&self, hash: HashKey) -> Result<Option<CommittedView>, api::Error> {
+        match Db::committed_view(self, hash) {
+            Ok(view) => Ok(Some(view)),
+            // `hash` names a proposal, not a committed revision.
+            Err(api::Error::RevisionNotFound { .. }) => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn close(self: Box<Self>) -> Result<(), api::Error> {
+        Db::close(*self)
+    }
+}
+
+/// Open or create a database, selecting the concrete hash mode at runtime from
+/// [`DbConfig::node_hash_algorithm`], and return it as an erased [`api::DynDb`].
+/// This is the public way to construct a database; the concrete [`Db<H>`](Db)
+/// type is an implementation detail.
+///
+/// For an existing database, the configured algorithm must match the algorithm
+/// persisted in the header; a mismatch is an error. For a fresh database, it
+/// is the node-hashing scheme to create with. A single binary can open both an
+/// Ethereum and a MerkleDB database.
+///
+/// # Errors
+///
+/// Returns an error if the database cannot be opened, or if the configured node
+/// hash algorithm does not match an existing database's header.
+pub fn open<P: AsRef<Path>>(db_dir: P, cfg: DbConfig) -> Result<Box<dyn api::DynDb>, api::Error> {
+    Ok(match cfg.node_hash_algorithm {
+        NodeHashAlgorithm::Ethereum => Box::new(Db::<EthHash>::new_with_hash_mode(db_dir, cfg)?),
+        NodeHashAlgorithm::MerkleDB => {
+            Box::new(Db::<MerkleDbHash>::new_with_hash_mode(db_dir, cfg)?)
+        }
+    })
+}
+
+impl<H: HashMode> Db<H> {
+    /// Synchronously get an opaque handle to a committed historical revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`api::Error::RevisionNotFound`] if `root_hash` does not identify
+    /// an available committed revision.
+    pub fn committed_view(&self, root_hash: HashKey) -> Result<CommittedView, api::Error> {
+        Ok(CommittedView {
+            nodestore: self.manager.revision(root_hash)?,
+        })
+    }
+
+    /// Create or open a database with the hash mode fixed by `H`.
+    // In-crate tests and benchmarks need typed construction; public callers use `open`.
+    pub(crate) fn new_with_hash_mode<P: AsRef<Path>>(
+        db_dir: P,
+        cfg: DbConfig,
+    ) -> Result<Self, api::Error> {
+        if cfg.node_hash_algorithm != H::ALGORITHM {
+            return Err(api::Error::HashModeMismatch {
+                expected: H::ALGORITHM,
+                found: cfg.node_hash_algorithm,
+            });
+        }
         let config_manager = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
-            .node_hash_algorithm(cfg.node_hash_algorithm)
             .create(cfg.create_if_missing)
             .truncate(cfg.truncate)
             .root_store(cfg.root_store)
             .manager(cfg.manager)
             .build();
-        let manager = RevisionManager::new(config_manager)?;
+        let manager = RevisionManager::<H>::new(config_manager)?;
         firewood_gauge!(
             BUILD_INFO,
             "git_sha" => env!("FIREWOOD_GIT_SHA"),
@@ -212,9 +367,7 @@ impl Db {
 
     /// Check the database for consistency
     pub fn check(&self, opt: CheckOpt) -> CheckerReport {
-        let latest_rev_nodestore = self.manager.current_revision();
-        let header = self.manager.locked_header();
-        latest_rev_nodestore.check(&header, opt)
+        self.manager.check(opt)
     }
 
     /// Create a proposal with a specified parent. A proposal is created in parallel if `use_parallel`
@@ -227,16 +380,16 @@ impl Db {
     fn propose_with_parent<F: Parentable>(
         &self,
         batch: impl IntoBatchIter,
-        parent: &NodeStore<F, FileBacked>,
-    ) -> Result<Proposal<'_>, api::Error> {
+        parent: &NodeStore<F, FileBacked, H>,
+    ) -> Result<Proposal<'_, H>, api::Error> {
         let propose_start = std::time::Instant::now();
         // Return immediately if the background thread is no longer running.
         self.manager.check_persist_error()?;
-        let proposal = NodeStore::new(parent)?;
+        let proposal: NodeStore<Mutable<Propose>, FileBacked, H> = NodeStore::new(parent)?;
         let mutable_nodestore = self
             .manager
             .apply_batch(&self.use_parallel, proposal, batch)?;
-        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
+        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked, H>> =
             Arc::new(mutable_nodestore.try_into()?);
         self.manager.add_proposal(immutable.clone());
 
@@ -263,7 +416,7 @@ impl Db {
         first_key: Option<impl KeyType>,
         last_key: Option<impl KeyType>,
         key_values: impl IntoIterator<Item: KeyValuePair>,
-    ) -> Result<Proposal<'_>, api::Error> {
+    ) -> Result<Proposal<'_, H>, api::Error> {
         self.merge_key_value_range_with_parent(
             first_key,
             last_key,
@@ -286,10 +439,10 @@ impl Db {
         first_key: Option<impl KeyType>,
         last_key: Option<impl KeyType>,
         key_values: impl IntoIterator<Item: KeyValuePair>,
-        parent: &NodeStore<F, FileBacked>,
-    ) -> Result<Proposal<'_>, api::Error>
+        parent: &NodeStore<F, FileBacked, H>,
+    ) -> Result<Proposal<'_, H>, api::Error>
     where
-        NodeStore<F, FileBacked>: TrieReader,
+        NodeStore<F, FileBacked, H>: TrieReader,
     {
         let merkle = Merkle::from(parent);
         let merge_ops = merkle.merge_key_value_range(first_key, last_key, key_values);
@@ -299,10 +452,10 @@ impl Db {
     pub fn apply_change_proof_to_parent<F: Parentable>(
         &self,
         batch_ops: impl IntoBatchIter,
-        parent: &NodeStore<F, FileBacked>,
-    ) -> Result<Proposal<'_>, api::Error>
+        parent: &NodeStore<F, FileBacked, H>,
+    ) -> Result<Proposal<'_, H>, api::Error>
     where
-        NodeStore<F, FileBacked>: HashedNodeReader,
+        NodeStore<F, FileBacked, H>: HashedNodeReader,
     {
         // Create a new proposal from the parent
         let merkle = Merkle::from(parent);
@@ -331,9 +484,18 @@ impl Db {
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
-    ) -> Result<Proposal<'_>, api::Error> {
-        let verification =
-            verify_change_proof_structure(proof, end_root.clone(), start_key, end_key, max_length)?;
+    ) -> Result<Proposal<'_, H>, api::Error> {
+        // The DB's hash mode is its type parameter `H`; the proof is verified
+        // against that mode. The verifier rejects a proof whose header
+        // advertises a different mode.
+        let verification = verify_change_proof_structure(
+            proof,
+            end_root.clone(),
+            start_key,
+            end_key,
+            H::ALGORITHM,
+            max_length,
+        )?;
         let parent = self.manager.current_revision();
         let proposal = self.apply_change_proof_to_parent(proof, &*parent)?;
         verify_change_proof_root_hash(proof, &verification, &proposal)?;
@@ -347,21 +509,20 @@ impl Db {
     /// # Errors
     ///
     /// Returns an error if reconstruction fails.
-    pub fn reconstruct_from_view<P>(
+    pub fn reconstruct_from_view(
         &self,
-        parent: &Arc<NodeStore<P, FileBacked>>,
+        parent: &CommittedView,
         batch: impl IntoBatchIter,
-    ) -> Result<ReconstructedView<'_>, api::Error>
-    where
-        P: ReconstructionSource<FileBacked>,
-        NodeStore<P, FileBacked>: TrieReader,
-    {
-        let next_nodestore = parent.reconstruction_child()?;
-        let mutable_nodestore = RevisionManager::apply_batch_recon(next_nodestore, batch)?;
+    ) -> Result<ReconstructedView<'_>, api::Error> {
+        // A `CommittedView` can only be produced by a database of its own hash
+        // mode, so a mismatch here means handles from two databases were mixed.
+        debug_assert_eq!(parent.nodestore.node_hash_algorithm(), H::ALGORITHM);
+        let nodestore =
+            Arc::clone(&parent.nodestore).begin_reconstruction(api::collect_owned_batch(batch)?)?;
 
         Ok(ReconstructedView {
             db: self,
-            nodestore: Arc::new(mutable_nodestore.into()),
+            nodestore,
         })
     }
 
@@ -375,15 +536,16 @@ impl Db {
     /// Returns an error if reconstruction fails.
     fn reconstruct_from_reconstructed(
         &self,
-        parent: Arc<NodeStore<Reconstructed<FileBacked>, FileBacked>>,
+        parent: api::ArcDynReconstructed,
         batch: impl IntoBatchIter,
     ) -> Result<ReconstructedView<'_>, api::Error> {
-        let next_nodestore = parent.into();
-        let mutable_nodestore = RevisionManager::apply_batch_recon(next_nodestore, batch)?;
+        // See `reconstruct_from_view`: a mismatch means mixed-database handles.
+        debug_assert_eq!(parent.node_hash_algorithm(), H::ALGORITHM);
+        let nodestore = parent.reconstruct_next(api::collect_owned_batch(batch)?)?;
 
         Ok(ReconstructedView {
             db: self,
-            nodestore: Arc::new(mutable_nodestore.into()),
+            nodestore,
         })
     }
 
@@ -440,32 +602,91 @@ impl Db {
 }
 
 #[derive(Debug)]
-/// A user-visible database proposal
-pub struct Proposal<'db> {
-    nodestore: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>,
-    db: &'db Db,
+/// A user-visible database proposal.
+///
+/// `H` mirrors the parent [`Db`]'s hash mode so the proof verify/write paths
+/// can name it.
+pub struct Proposal<'db, H> {
+    nodestore: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked, H>>,
+    db: &'db Db<H>,
 }
 
 #[derive(Clone, Debug)]
+/// Opaque handle to a historical committed revision.
+///
+/// Use this as the parent argument to [`Db::reconstruct_from_view`]. The
+/// revision's hash mode is erased so the handle works for every mode without
+/// naming it.
+pub struct CommittedView {
+    nodestore: api::ArcDynCommittedRevision,
+}
+
+#[derive(Debug)]
 /// A user-visible reconstructed view.
+///
+/// The reconstructed state's hash mode is erased so the view can be produced
+/// from a runtime-selected `Db<H>` in any hash mode without naming `H`.
 pub struct ReconstructedView<'db> {
-    nodestore: Arc<NodeStore<Reconstructed<FileBacked>, FileBacked>>,
-    db: &'db Db,
+    nodestore: api::ArcDynReconstructed,
+    db: &'db dyn api::DynDb,
+}
+
+impl Clone for ReconstructedView<'_> {
+    fn clone(&self) -> Self {
+        Self {
+            nodestore: self.nodestore.clone(),
+            db: self.db,
+        }
+    }
 }
 
 impl ReconstructedView<'_> {
     /// Returns the view backing this reconstructed state.
     #[must_use]
     pub fn view(&self) -> ArcDynDbView {
-        self.nodestore.clone()
+        Arc::clone(&self.nodestore) as ArcDynDbView
     }
 }
 
-impl api::DbView for Proposal<'_> {
+// The erased reconstruction capabilities. These blanket impls cover every
+// hash mode `H`, which is what lets the non-generic `CommittedView` and
+// `ReconstructedView` handles work for any mode.
+impl<H: HashMode> api::DynCommittedRevision for NodeStore<Committed, FileBacked, H> {
+    fn begin_reconstruction(
+        self: Arc<Self>,
+        batch: api::OwnedBatch,
+    ) -> Result<api::ArcDynReconstructed, api::Error> {
+        let mutable = self.reconstruction_child()?;
+        let mutable = RevisionManager::<H>::apply_batch_recon(mutable, batch)?;
+        let reconstructed: NodeStore<Reconstructed<FileBacked, H>, FileBacked, H> = mutable.into();
+        Ok(Arc::new(reconstructed))
+    }
+}
+
+impl<H: HashMode> api::DynReconstructed for NodeStore<Reconstructed<FileBacked, H>, FileBacked, H> {
+    fn reconstruct_next(
+        self: Arc<Self>,
+        batch: api::OwnedBatch,
+    ) -> Result<api::ArcDynReconstructed, api::Error> {
+        // Convert through `From<Arc<NodeStore<Reconstructed<_>, _, _>>>` so a
+        // uniquely-held `Arc` moves the in-memory root (`Arc::try_unwrap` fast
+        // path) instead of deep-cloning the subtree on every chain step.
+        let mutable: NodeStore<Mutable<Recon<FileBacked, H>>, FileBacked, H> = self.into();
+        let mutable = RevisionManager::<H>::apply_batch_recon(mutable, batch)?;
+        let reconstructed: NodeStore<Reconstructed<FileBacked, H>, FileBacked, H> = mutable.into();
+        Ok(Arc::new(reconstructed))
+    }
+}
+
+impl<H: HashMode> api::DbView for Proposal<'_, H> {
     type Iter<'view>
-        = MerkleKeyValueIter<'view, NodeStore<Arc<ImmutableProposal>, FileBacked>>
+        = MerkleKeyValueIter<'view, NodeStore<Arc<ImmutableProposal>, FileBacked, H>>
     where
         Self: 'view;
+
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        H::ALGORITHM
+    }
 
     fn root_hash(&self) -> Option<api::HashKey> {
         api::DbView::root_hash(&*self.nodestore)
@@ -497,8 +718,8 @@ impl api::DbView for Proposal<'_> {
     }
 }
 
-impl<'db> api::Proposal for Proposal<'db> {
-    type Proposal = Proposal<'db>;
+impl<'db, H: HashMode> api::Proposal for Proposal<'db, H> {
+    type Proposal = Proposal<'db, H>;
 
     fn propose(&self, batch: impl IntoBatchIter) -> Result<Self::Proposal, api::Error> {
         self.create_proposal(batch)
@@ -509,7 +730,73 @@ impl<'db> api::Proposal for Proposal<'db> {
     }
 }
 
-impl Proposal<'_> {
+// The dyn boundary for proposals. A borrowing `Proposal<'_, H>` cannot be
+// `DynDbView` (that trait is `'static`), so its read surface is mirrored here
+// by delegating to the proposal's `DbView` impl, and `view()` exposes the
+// `'static` `ArcDynDbView` for the iterator/reconstruct paths.
+impl<'db, H: HashMode> api::DynProposal<'db> for Proposal<'db, H> {
+    fn root_hash(&self) -> Option<HashKey> {
+        api::DbView::root_hash(self)
+    }
+
+    fn val(&self, key: &[u8]) -> Result<Option<Value>, api::Error> {
+        api::DbView::val(self, key)
+    }
+
+    fn single_key_proof(&self, key: &[u8]) -> Result<FrozenProof, api::Error> {
+        api::DbView::single_key_proof(self, key)
+    }
+
+    fn range_proof(
+        &self,
+        first_key: Option<&[u8]>,
+        last_key: Option<&[u8]>,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenRangeProof, api::Error> {
+        api::DbView::range_proof(self, first_key, last_key, limit)
+    }
+
+    fn iter_option(
+        &self,
+        first_key: Option<&[u8]>,
+    ) -> Result<api::BoxKeyValueIter<'_>, api::Error> {
+        // NOTE: `Result::map` does not work here because the compiler cannot
+        // correctly infer the unsizing coercion (see the `DynDbView` blanket).
+        match api::DbView::iter_option(self, first_key) {
+            Ok(iter) => Ok(Box::new(iter)),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn dump_to_string(&self) -> Result<String, api::Error> {
+        api::DbView::dump_to_string(self)
+    }
+
+    fn view(&self) -> ArcDynDbView {
+        Proposal::view(self)
+    }
+
+    fn propose(
+        &self,
+        ops: api::OwnedBatch,
+    ) -> Result<Box<dyn api::DynProposal<'db> + 'db>, api::Error> {
+        // `create_proposal` builds a fresh nodestore borrowing the parent
+        // `Db<H>` (lifetime `'db`), not `self`, so the result genuinely lives
+        // for `'db` even though it is created through `&self`.
+        let proposal = self.create_proposal(ops)?;
+        Ok(Box::new(proposal))
+    }
+
+    fn commit(self: Box<Self>) -> Result<(), api::Error> {
+        api::Proposal::commit(*self)
+    }
+
+    fn commit_with_rebase(self: Box<Self>) -> Result<Option<HashKey>, api::Error> {
+        Proposal::commit_with_rebase(*self)
+    }
+}
+
+impl<H: HashMode> Proposal<'_, H> {
     /// Commit the proposal, automatically rebasing if the parent revision
     /// is no longer the latest.
     ///
@@ -551,12 +838,13 @@ impl Proposal<'_> {
             // entry is not guaranteed to still be empty once `max_revisions`
             // has been exceeded.
             let empty_parent;
-            let old_parent_ref: &NodeStore<Committed, FileBacked> = if let Some(rev) = &old_parent {
-                rev
-            } else {
-                empty_parent = nodestore.empty_committed_sibling();
-                &empty_parent
-            };
+            let old_parent_ref: &NodeStore<Committed, FileBacked, H> =
+                if let Some(rev) = &old_parent {
+                    rev
+                } else {
+                    empty_parent = nodestore.empty_committed_sibling();
+                    &empty_parent
+                };
             let diff = DiffMerkleNodeStream::new(old_parent_ref, &*nodestore, Box::default())?;
             let batch_ops: Vec<BatchOp<crate::merkle::Key, crate::merkle::Value>> =
                 diff.collect::<Result<_, _>>()?;
@@ -589,27 +877,31 @@ impl Proposal<'_> {
 
     /// Returns a reference to the inner nodestore.
     #[must_use]
-    pub(crate) fn inner_nodestore(&self) -> &NodeStore<Arc<ImmutableProposal>, FileBacked> {
+    pub(crate) fn inner_nodestore(&self) -> &NodeStore<Arc<ImmutableProposal>, FileBacked, H> {
         &self.nodestore
     }
 }
 
 impl api::DbView for ReconstructedView<'_> {
     type Iter<'view>
-        = MerkleKeyValueIter<'view, NodeStore<Reconstructed<FileBacked>, FileBacked>>
+        = api::BoxKeyValueIter<'view>
     where
         Self: 'view;
 
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
+        self.nodestore.node_hash_algorithm()
+    }
+
     fn root_hash(&self) -> Option<api::HashKey> {
-        api::DbView::root_hash(&*self.nodestore)
+        self.nodestore.root_hash()
     }
 
     fn val<K: KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
-        api::DbView::val(&*self.nodestore, key)
+        self.nodestore.val(key.as_ref())
     }
 
     fn single_key_proof<K: KeyType>(&self, key: K) -> Result<FrozenProof, api::Error> {
-        api::DbView::single_key_proof(&*self.nodestore, key)
+        self.nodestore.single_key_proof(key.as_ref())
     }
 
     fn range_proof<K: KeyType>(
@@ -618,18 +910,25 @@ impl api::DbView for ReconstructedView<'_> {
         last_key: Option<K>,
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, api::Error> {
-        api::DbView::range_proof(&*self.nodestore, first_key, last_key, limit)
+        self.nodestore.range_proof(
+            first_key.as_ref().map(AsRef::as_ref),
+            last_key.as_ref().map(AsRef::as_ref),
+            limit,
+        )
     }
 
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
-        api::DbView::iter_option(&*self.nodestore, first_key)
+        self.nodestore
+            .iter_option(first_key.as_ref().map(AsRef::as_ref))
     }
 
     fn dump_to_string(&self) -> Result<String, api::Error> {
-        api::DbView::dump_to_string(&*self.nodestore)
+        self.nodestore.dump_to_string()
     }
 }
 
+// The owning database is reached through the erased [`api::DynDb`] so
+// reconstruction works off a runtime-selected `Db<H>` in any hash mode.
 impl<'a> api::Reconstructible for ReconstructedView<'a> {
     type Reconstructed = ReconstructedView<'a>;
 
@@ -637,11 +936,12 @@ impl<'a> api::Reconstructible for ReconstructedView<'a> {
     where
         Self: Sized,
     {
-        self.db
-            .reconstruct_from_reconstructed(self.nodestore, batch)
+        let ops = api::collect_owned_batch(batch)?;
+        let db = self.db;
+        db.reconstruct_from_reconstructed(self, ops)
     }
 
-    fn db(&self) -> &crate::db::Db {
+    fn db(&self) -> &dyn api::DynDb {
         self.db
     }
 }
@@ -655,14 +955,17 @@ mod test {
     use std::ops::{Deref, DerefMut};
     use std::path::Path;
 
-    use firewood_storage::{CheckOpt, CheckerError, LinearAddress, MaybePersistedNode, TrieHash};
+    use firewood_storage::{
+        CheckOpt, CheckerError, DefaultHashMode, HashMode, LinearAddress, MaybePersistedNode,
+        NodeHashAlgorithm, TrieHash,
+    };
     use nonzero_ext::nonzero;
 
-    use crate::api::{Db as _, DbView, HashKeyExt, Proposal as _, Reconstructible};
+    use crate::api::{self, Db as _, DbView, HashKeyExt, Proposal as _, Reconstructible};
     use crate::db::{Db, Proposal, UseParallel};
     use crate::manager::RevisionManagerConfig;
 
-    use super::{BatchOp, DbConfig};
+    use super::{BatchOp, DbConfig, open};
 
     /// A chunk of an iterator, provided by [`IterExt::chunk_fold`] to the folding
     /// function.
@@ -700,11 +1003,180 @@ mod test {
 
     impl<T: Iterator> IterExt for T {}
 
-    impl Db {
+    impl Db<DefaultHashMode> {
         /// Wait until all pending commits have been persisted.
         fn wait_persisted(&self) {
             self.manager.wait_persisted();
         }
+    }
+
+    fn runtime_mode_puts(pairs: &[(&str, &str)]) -> api::OwnedBatch {
+        pairs
+            .iter()
+            .map(|(key, value)| BatchOp::Put {
+                key: key.as_bytes().into(),
+                value: value.as_bytes().into(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn runtime_hash_modes_work_side_by_side() {
+        let ethereum_dir = tempfile::tempdir().unwrap();
+        let ethereum_db = open(
+            ethereum_dir.path(),
+            DbConfig::builder()
+                .node_hash_algorithm(NodeHashAlgorithm::Ethereum)
+                .build(),
+        )
+        .unwrap();
+
+        let merkledb_dir = tempfile::tempdir().unwrap();
+        let merkledb_db = open(
+            merkledb_dir.path(),
+            DbConfig::builder()
+                .node_hash_algorithm(NodeHashAlgorithm::MerkleDB)
+                .build(),
+        )
+        .unwrap();
+
+        // Both implementations remain live behind the same object-safe interface.
+        assert_eq!(
+            ethereum_db.node_hash_algorithm(),
+            NodeHashAlgorithm::Ethereum
+        );
+        assert_eq!(
+            ethereum_db.root_hash().map(hex::encode).as_deref(),
+            Some("56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421")
+        );
+
+        assert_eq!(
+            merkledb_db.node_hash_algorithm(),
+            NodeHashAlgorithm::MerkleDB
+        );
+        assert_eq!(merkledb_db.root_hash(), None);
+
+        ethereum_db
+            .propose(runtime_mode_puts(&[("a", "1")]))
+            .unwrap()
+            .commit()
+            .unwrap();
+        merkledb_db
+            .propose(runtime_mode_puts(&[("a", "1")]))
+            .unwrap()
+            .commit()
+            .unwrap();
+
+        let ethereum_root = ethereum_db.root_hash().expect("committed trie has a root");
+        assert_eq!(
+            hex::encode(ethereum_root.clone()),
+            "59b697a4db0c475540486215c1e8f64945a4a0ad8d291de6cd9021c4fbf639dd"
+        );
+        let ethereum_proof = ethereum_db
+            .view(ethereum_root)
+            .unwrap()
+            .range_proof(None, None, None)
+            .unwrap();
+        assert_eq!(ethereum_proof.hash_mode(), NodeHashAlgorithm::Ethereum);
+
+        let merkledb_root = merkledb_db.root_hash().expect("committed trie has a root");
+        assert_eq!(
+            hex::encode(merkledb_root.clone()),
+            "1ffe11ce995a9c07021d6f8a8c5b1817e6375dd0ea27296b91a8d48db2858bc9"
+        );
+        let merkledb_proof = merkledb_db
+            .view(merkledb_root)
+            .unwrap()
+            .range_proof(None, None, None)
+            .unwrap();
+        assert_eq!(merkledb_proof.hash_mode(), NodeHashAlgorithm::MerkleDB);
+
+        ethereum_db.close().unwrap();
+        merkledb_db.close().unwrap();
+
+        // The persisted header restores the selected algorithm and root.
+        let ethereum_db = open(
+            ethereum_dir.path(),
+            DbConfig::builder()
+                .node_hash_algorithm(NodeHashAlgorithm::Ethereum)
+                .build(),
+        )
+        .unwrap();
+        assert_eq!(
+            ethereum_db.node_hash_algorithm(),
+            NodeHashAlgorithm::Ethereum
+        );
+        assert_eq!(
+            ethereum_db.root_hash().map(hex::encode).as_deref(),
+            Some("59b697a4db0c475540486215c1e8f64945a4a0ad8d291de6cd9021c4fbf639dd")
+        );
+
+        let merkledb_db = open(
+            merkledb_dir.path(),
+            DbConfig::builder()
+                .node_hash_algorithm(NodeHashAlgorithm::MerkleDB)
+                .build(),
+        )
+        .unwrap();
+        assert_eq!(
+            merkledb_db.node_hash_algorithm(),
+            NodeHashAlgorithm::MerkleDB
+        );
+        assert_eq!(
+            merkledb_db.root_hash().map(hex::encode).as_deref(),
+            Some("1ffe11ce995a9c07021d6f8a8c5b1817e6375dd0ea27296b91a8d48db2858bc9")
+        );
+
+        ethereum_db.close().unwrap();
+        merkledb_db.close().unwrap();
+    }
+
+    #[test]
+    fn reconstructed_views_preserve_runtime_hash_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open(
+            dir.path(),
+            DbConfig::builder()
+                .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+                .build(),
+        )
+        .unwrap();
+
+        db.propose(runtime_mode_puts(&[("a", "1")]))
+            .unwrap()
+            .commit()
+            .unwrap();
+
+        let root = db.root_hash().expect("committed trie has a root");
+        let committed = db
+            .committed_view(root)
+            .unwrap()
+            .expect("root is a committed revision");
+        let reconstructed = db
+            .reconstruct_from_view(&committed, runtime_mode_puts(&[]))
+            .unwrap();
+        assert_eq!(
+            reconstructed.node_hash_algorithm(),
+            DefaultHashMode::ALGORITHM
+        );
+
+        let reconstructed = reconstructed
+            .reconstruct(runtime_mode_puts(&[("b", "2")]))
+            .unwrap();
+        assert_eq!(
+            reconstructed.node_hash_algorithm(),
+            DefaultHashMode::ALGORITHM
+        );
+        assert_eq!(
+            reconstructed.val(b"a").unwrap().as_deref(),
+            Some(b"1".as_slice())
+        );
+        assert_eq!(
+            reconstructed.val(b"b").unwrap().as_deref(),
+            Some(b"2".as_slice())
+        );
+
+        db.close().unwrap();
     }
 
     /// Reconstruction always uses the serial path (`apply_batch_recon`), but the base
@@ -730,9 +1202,11 @@ mod test {
         serial_proposal.commit().unwrap();
 
         let parallel_historical = parallel_db
-            .revision(parallel_db.root_hash().unwrap())
+            .committed_view(parallel_db.root_hash().unwrap())
             .unwrap();
-        let serial_historical = serial_db.revision(serial_db.root_hash().unwrap()).unwrap();
+        let serial_historical = serial_db
+            .committed_view(serial_db.root_hash().unwrap())
+            .unwrap();
 
         let reconstruct_batch = vec![
             BatchOp::Put {
@@ -857,7 +1331,7 @@ mod test {
         initial.commit().unwrap();
 
         let historical_hash = db.root_hash().unwrap();
-        let historical = db.revision(historical_hash).unwrap();
+        let historical = db.committed_view(historical_hash).unwrap();
 
         let reconstructed = db
             .reconstruct_from_view(
@@ -883,6 +1357,46 @@ mod test {
     }
 
     #[test]
+    fn test_reconstruct_from_committed_view_uses_requested_revision() {
+        let db = TestDb::new();
+        let key = b"k";
+        let historical_value = b"historical";
+        let latest_value = b"latest";
+
+        db.propose(vec![BatchOp::Put {
+            key,
+            value: historical_value,
+        }])
+        .unwrap()
+        .commit()
+        .unwrap();
+        let historical_hash = db.root_hash().unwrap();
+
+        db.propose(vec![BatchOp::Put {
+            key,
+            value: latest_value,
+        }])
+        .unwrap()
+        .commit()
+        .unwrap();
+
+        let historical = db.committed_view(historical_hash).unwrap();
+        let reconstructed = db
+            .reconstruct_from_view(&historical, Vec::<BatchOp<&[u8], &[u8]>>::new())
+            .unwrap();
+
+        assert_eq!(&*reconstructed.val(key).unwrap().unwrap(), historical_value);
+        assert_eq!(
+            &*db.revision(db.root_hash().unwrap())
+                .unwrap()
+                .val(key)
+                .unwrap()
+                .unwrap(),
+            latest_value
+        );
+    }
+
+    #[test]
     fn test_reconstruct_clone_is_independent() {
         let db = TestDb::new();
 
@@ -895,7 +1409,7 @@ mod test {
             .unwrap();
         initial.commit().unwrap();
         let historical_hash = db.root_hash().unwrap();
-        let historical = db.revision(historical_hash).unwrap();
+        let historical = db.committed_view(historical_hash).unwrap();
 
         // Build a reconstructed view on top of the historical revision.
         let original = db
@@ -953,7 +1467,7 @@ mod test {
             .unwrap();
         initial.commit().unwrap();
         let historical_hash = db.root_hash().unwrap();
-        let historical = db.revision(historical_hash).unwrap();
+        let historical = db.committed_view(historical_hash).unwrap();
 
         // Build a reconstructed view on top of the historical revision.
         let original = db
@@ -985,7 +1499,7 @@ mod test {
         initial.commit().unwrap();
 
         let historical_hash = db.root_hash().unwrap();
-        let historical = db.revision(historical_hash).unwrap();
+        let historical = db.committed_view(historical_hash).unwrap();
 
         let original = db
             .reconstruct_from_view(&historical, Vec::<BatchOp<&[u8], &[u8]>>::new())
@@ -1601,7 +2115,7 @@ mod test {
 
         let proposals = ops.iter().chunk_fold(
             NUM_KEYS,
-            Vec::<Proposal<'_>>::with_capacity(NUM_PROPOSALS),
+            Vec::<Proposal<'_, DefaultHashMode>>::with_capacity(NUM_PROPOSALS),
             |mut proposals, ops| {
                 let proposal = if let Some(parent) = proposals.last() {
                     parent.propose(ops).unwrap()
@@ -1649,7 +2163,8 @@ mod test {
         let testdb = TestDb::new();
         let db = &*testdb;
 
-        let (tx, rx) = std::sync::mpsc::sync_channel::<Proposal<'_>>(CHANNEL_CAPACITY);
+        let (tx, rx) =
+            std::sync::mpsc::sync_channel::<Proposal<'_, DefaultHashMode>>(CHANNEL_CAPACITY);
         let (result_tx, result_rx) = std::sync::mpsc::sync_channel(CHANNEL_CAPACITY);
 
         // scope will block until all scope-spawned threads finish
@@ -1886,7 +2401,37 @@ mod test {
     fn test_nonexistent_directory() {
         let tmpdir = tempfile::tempdir().unwrap();
 
-        assert!(Db::new(tmpdir, DbConfig::builder().create_if_missing(false).build()).is_err());
+        assert!(
+            Db::<DefaultHashMode>::new_with_hash_mode(
+                tmpdir,
+                DbConfig::builder()
+                    .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+                    .create_if_missing(false)
+                    .build(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_new_rejects_hash_mode_mismatch() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let configured_algorithm = match DefaultHashMode::ALGORITHM {
+            NodeHashAlgorithm::MerkleDB => NodeHashAlgorithm::Ethereum,
+            NodeHashAlgorithm::Ethereum => NodeHashAlgorithm::MerkleDB,
+        };
+        let config = DbConfig::builder()
+            .node_hash_algorithm(configured_algorithm)
+            .build();
+
+        let error = Db::<DefaultHashMode>::new_with_hash_mode(tmpdir.path(), config).unwrap_err();
+        assert!(matches!(
+            error,
+            api::Error::HashModeMismatch {
+                expected: DefaultHashMode::ALGORITHM,
+                found,
+            } if found == configured_algorithm
+        ));
     }
 
     #[test]
@@ -2218,7 +2763,7 @@ mod test {
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
     pub(super) struct TestDb {
-        db: Option<Db>,
+        db: Option<Db<DefaultHashMode>>,
         tmpdir: tempfile::TempDir,
         dbconfig: DbConfig,
     }
@@ -2230,7 +2775,7 @@ mod test {
         }
     }
     impl Deref for TestDb {
-        type Target = Db;
+        type Target = Db<DefaultHashMode>;
         fn deref(&self) -> &Self::Target {
             self.db.as_ref().unwrap()
         }
@@ -2243,12 +2788,17 @@ mod test {
 
     impl TestDb {
         pub fn new() -> Self {
-            TestDb::new_with_config(DbConfig::builder().build())
+            TestDb::new_with_config(
+                DbConfig::builder()
+                    .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+                    .build(),
+            )
         }
 
         pub fn new_with_config(dbconfig: DbConfig) -> Self {
             let tmpdir = tempfile::tempdir().unwrap();
-            let db = Db::new(tmpdir.as_ref(), dbconfig.clone()).unwrap();
+            let db = Db::<DefaultHashMode>::new_with_hash_mode(tmpdir.as_ref(), dbconfig.clone())
+                .unwrap();
             TestDb {
                 db: Some(db),
                 tmpdir,
@@ -2263,7 +2813,11 @@ mod test {
         pub fn reopen(mut self) -> Self {
             self.db.take().unwrap().close().unwrap();
 
-            let db = Db::new(self.tmpdir.path(), self.dbconfig.clone()).unwrap();
+            let db = Db::<DefaultHashMode>::new_with_hash_mode(
+                self.tmpdir.path(),
+                self.dbconfig.clone(),
+            )
+            .unwrap();
             self.db = Some(db);
             self
         }
@@ -2280,8 +2834,15 @@ mod test {
         pub fn replace(mut self) -> Self {
             self.db.take().unwrap().close().unwrap();
 
-            self.dbconfig = DbConfig::builder().truncate(true).build();
-            let db = Db::new(self.tmpdir.path(), self.dbconfig.clone()).unwrap();
+            self.dbconfig = DbConfig::builder()
+                .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+                .truncate(true)
+                .build();
+            let db = Db::<DefaultHashMode>::new_with_hash_mode(
+                self.tmpdir.path(),
+                self.dbconfig.clone(),
+            )
+            .unwrap();
             self.db = Some(db);
             self
         }

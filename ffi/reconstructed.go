@@ -22,18 +22,18 @@ package ffi
 import "C"
 
 import (
-	"errors"
 	"fmt"
 	"runtime"
 	"sync"
 	"unsafe"
 )
 
-var ErrDroppedReconstructed = errors.New("reconstructed view already dropped")
+// ErrDroppedReconstructed wraps [ErrDropped].
+var ErrDroppedReconstructed = fmt.Errorf("reconstructed view %w", ErrDropped)
 
 // Lock ordering for Reconstructed:
 //
-//	keepAliveHandle.mu (A)  before  rootMu (B)
+//	lease.mu (A)  before  rootMu (B)
 //
 // Every method that acquires both locks does so in A-then-B order:
 //
@@ -45,7 +45,7 @@ var ErrDroppedReconstructed = errors.New("reconstructed view already dropped")
 //
 // Cross-type: Reconstructed never touches commitLock, so there is no
 // ordering constraint with Proposal.Commit or Database.Close beyond the
-// outstandingHandles WaitGroup.
+// keep-alive registry's outstanding-handle count.
 
 // Reconstructed is a linear, read-only reconstructed view over a historical
 // revision.
@@ -69,9 +69,9 @@ type Reconstructed struct {
 // Unlike other methods, Root remains usable after [Reconstructed.Drop] and
 // returns the last cached root (or [EmptyRoot] if the root was never computed).
 func (r *Reconstructed) Root() Hash {
-	// Lock order: keepAliveHandle.mu before rootMu, matching Reconstruct().
-	r.keepAliveHandle.mu.RLock()
-	defer r.keepAliveHandle.mu.RUnlock()
+	// Lock order: lease.mu before rootMu, matching Reconstruct().
+	r.lease.mu.RLock()
+	defer r.lease.mu.RUnlock()
 
 	r.rootMu.Lock()
 	defer r.rootMu.Unlock()
@@ -80,7 +80,7 @@ func (r *Reconstructed) Root() Hash {
 		return r.root
 	}
 
-	if r.ptr == nil {
+	if r.dropped {
 		return EmptyRoot
 	}
 
@@ -97,8 +97,8 @@ func (r *Reconstructed) Root() Hash {
 
 // Get retrieves the value for the given key in this reconstructed view.
 func (r *Reconstructed) Get(key []byte) ([]byte, error) {
-	r.keepAliveHandle.mu.RLock()
-	defer r.keepAliveHandle.mu.RUnlock()
+	r.lease.mu.RLock()
+	defer r.lease.mu.RUnlock()
 
 	if r.dropped {
 		return nil, ErrDroppedReconstructed
@@ -115,8 +115,8 @@ func (r *Reconstructed) Get(key []byte) ([]byte, error) {
 
 // Iter creates an iterator over the reconstructed view.
 func (r *Reconstructed) Iter(key []byte) (*Iterator, error) {
-	r.keepAliveHandle.mu.RLock()
-	defer r.keepAliveHandle.mu.RUnlock()
+	r.lease.mu.RLock()
+	defer r.lease.mu.RUnlock()
 
 	if r.dropped {
 		return nil, ErrDroppedReconstructed
@@ -126,7 +126,7 @@ func (r *Reconstructed) Iter(key []byte) (*Iterator, error) {
 	defer pinner.Unpin()
 
 	itResult := C.fwd_iter_on_reconstructed(r.ptr, newBorrowedBytes(key, &pinner))
-	return getIteratorFromIteratorResult(itResult)
+	return getIteratorFromIteratorResult(itResult, r.lease.registry)
 }
 
 // Reconstruct applies a new batch on top of this reconstructed view.
@@ -135,8 +135,8 @@ func (r *Reconstructed) Iter(key []byte) (*Iterator, error) {
 // On error, the receiver is no longer usable and its resources are fully released;
 // calling [Reconstructed.Drop] is not required (but safe as a no-op).
 func (r *Reconstructed) Reconstruct(batch []BatchOp) error {
-	r.keepAliveHandle.mu.Lock()
-	defer r.keepAliveHandle.mu.Unlock()
+	r.lease.mu.Lock()
+	defer r.lease.mu.Unlock()
 
 	if r.dropped {
 		return ErrDroppedReconstructed
@@ -150,21 +150,20 @@ func (r *Reconstructed) Reconstruct(batch []BatchOp) error {
 	// The old handle is consumed by the FFI call regardless of outcome.
 	r.ptr = nil
 
-	newHandle, err := getReconstructedHandleFromResult(result, nil)
+	newHandle, err := decodeReconstructedResult(result)
 	if err != nil {
 		// The old handle was consumed by the FFI call, so mark as dropped
 		// and disown the keep-alive lease so Database.Close is not blocked.
 		r.dropped = true
-		if r.keepAliveHandle.outstandingHandles != nil {
-			r.keepAliveHandle.outstandingHandles.Done()
-			r.keepAliveHandle.outstandingHandles = nil
-		}
+		// We already hold r.lease.mu (Lock) for the wider critical
+		// section, so use releaseLocked to avoid re-entering mu.
+		r.lease.releaseLocked()
 		return err
 	}
 
 	r.ptr = newHandle
 
-	// Lock order matches Root(): keepAliveHandle.mu (already held) before rootMu.
+	// Lock order matches Root(): lease.mu (already held) before rootMu.
 	r.rootMu.Lock()
 	r.root = EmptyRoot
 	r.rootSet = false
@@ -177,21 +176,21 @@ func (r *Reconstructed) Reconstruct(batch []BatchOp) error {
 // underlying view with the receiver. The two handles can be used, reconstructed,
 // and freed independently.
 func (r *Reconstructed) Clone() (*Reconstructed, error) {
-	r.keepAliveHandle.mu.RLock()
-	defer r.keepAliveHandle.mu.RUnlock()
+	r.lease.mu.RLock()
+	defer r.lease.mu.RUnlock()
 
 	if r.dropped {
 		return nil, ErrDroppedReconstructed
 	}
 
 	result := C.fwd_clone_reconstructed(r.ptr)
-	return getReconstructedFromResult(result, r.keepAliveHandle.outstandingHandles)
+	return getReconstructedFromResult(result, r.lease.registry)
 }
 
 // Dump returns a DOT (Graphviz) representation of this reconstructed view.
 func (r *Reconstructed) Dump() (string, error) {
-	r.keepAliveHandle.mu.RLock()
-	defer r.keepAliveHandle.mu.RUnlock()
+	r.lease.mu.RLock()
+	defer r.lease.mu.RUnlock()
 
 	if r.dropped {
 		return "", ErrDroppedReconstructed
@@ -205,32 +204,12 @@ func (r *Reconstructed) Dump() (string, error) {
 	return string(bytes), nil
 }
 
-func getReconstructedFromResult(result C.ReconstructedResult, wg *sync.WaitGroup) (*Reconstructed, error) {
-	switch result.tag {
-	case C.ReconstructedResult_NullHandlePointer:
-		return nil, errDBClosed
-	case C.ReconstructedResult_Ok:
-		body := (*C.ReconstructedResult_Ok_Body)(unsafe.Pointer(&result.anon0))
-		reconstructed := &Reconstructed{
-			handle: createHandle(body.handle, wg, func(h *C.ReconstructedHandle) C.VoidResult {
-				return C.fwd_free_reconstructed(h)
-			}),
-			root: EmptyRoot,
-		}
-		runtime.AddCleanup(reconstructed, drop[*C.ReconstructedHandle], reconstructed.handle)
-		return reconstructed, nil
-	case C.ReconstructedResult_Err:
-		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
-		return nil, err
-	default:
-		return nil, fmt.Errorf("unknown C.ReconstructedResult tag: %d", result.tag)
-	}
-}
-
-func getReconstructedHandleFromResult(
-	result C.ReconstructedResult,
-	_ *sync.WaitGroup,
-) (*C.ReconstructedHandle, error) {
+// decodeReconstructedResult unwraps a C.ReconstructedResult to the raw
+// C handle, converting tag-encoded variants into Go errors. Used both by
+// the wrapping constructor [getReconstructedFromResult] and by
+// [Reconstructed.Reconstruct], which swaps the inner pointer without
+// allocating a new wrapper.
+func decodeReconstructedResult(result C.ReconstructedResult) (*C.ReconstructedHandle, error) {
 	switch result.tag {
 	case C.ReconstructedResult_NullHandlePointer:
 		return nil, errDBClosed
@@ -238,9 +217,27 @@ func getReconstructedHandleFromResult(
 		body := (*C.ReconstructedResult_Ok_Body)(unsafe.Pointer(&result.anon0))
 		return body.handle, nil
 	case C.ReconstructedResult_Err:
-		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
-		return nil, err
+		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 	default:
 		return nil, fmt.Errorf("unknown C.ReconstructedResult tag: %d", result.tag)
 	}
+}
+
+func getReconstructedFromResult(result C.ReconstructedResult, registry *keepAliveRegistry) (*Reconstructed, error) {
+	cHandle, err := decodeReconstructedResult(result)
+	if err != nil {
+		return nil, err
+	}
+	reconstructed := &Reconstructed{
+		handle: newHandle(cHandle, func(h *C.ReconstructedHandle) C.VoidResult {
+			return C.fwd_free_reconstructed(h)
+		}),
+		root: EmptyRoot,
+	}
+	// attach calls reconstructed.Drop on the closed-registry path; nothing else to clean up.
+	if err := reconstructed.lease.attach(registry, reconstructed.Drop); err != nil {
+		return nil, err
+	}
+	runtime.AddCleanup(reconstructed, drop[*C.ReconstructedHandle], reconstructed.handle)
+	return reconstructed, nil
 }

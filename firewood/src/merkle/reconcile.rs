@@ -2,13 +2,14 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood_storage::{
-    Mutable, NodeStore, Propose, ReadableStorage, ValueDigest, logger::warn, replace_list_field,
+    HashMode, Mutable, NodeHashAlgorithm, NodeStore, Propose, ReadableStorage, ValueDigest,
+    logger::warn, replace_list_field,
 };
 
 use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
 use crate::{ProofError, ProofNode, Value, merkle::Merkle};
 
-impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
+impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> {
     /// Reconciles a branch proof node against the in-memory proving merkle.
     ///
     /// This helper creates any missing branch structure for the proof node's
@@ -21,6 +22,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     ///
     /// * `proof_node` - A branch proof node containing the key (as nibble
     ///   path components) and an optional value digest to reconcile.
+    /// * `algorithm` - The runtime hashing mode of the proof being reconciled.
     /// * `on_conflict` - Called only when the proof node's value and the
     ///   existing branch value conflict. It receives the proof node and the
     ///   branch's current value (`None` if the branch holds no value, e.g.
@@ -36,6 +38,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     pub(crate) fn reconcile_branch_proof_node(
         &mut self,
         proof_node: &ProofNode,
+        algorithm: NodeHashAlgorithm,
         on_conflict: impl FnOnce(&ProofNode, Option<&[u8]>) -> Result<Option<Value>, ProofError>,
     ) -> Result<(), ProofError> {
         let key_nibbles: Box<[u8]> = proof_node
@@ -50,6 +53,11 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
             return Err(ProofError::ValueAtOddNibbleLength);
         }
 
+        if algorithm.is_ethereum() && matches!(proof_node.value_digest, Some(ValueDigest::Hash(_)))
+        {
+            return Err(ProofError::UnexpectedValueDigest);
+        }
+
         self.insert_branch_from_nibbles(&key_nibbles)?;
 
         // insert_branch_from_nibbles guarantees a branch exists at this path
@@ -59,7 +67,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
 
         let proof_value = match proof_node.value_digest.as_ref() {
             Some(ValueDigest::Value(v)) => Some(v.as_ref()),
-            #[cfg(not(feature = "ethhash"))]
             Some(digest @ ValueDigest::Hash(_)) => {
                 // In merkledb mode, large values (>= 32 bytes) are stored as
                 // hashes in serialized proofs. If the branch's value hashes to
@@ -97,7 +104,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
         // caller (`verify_change_proof_root_hash`) still gates acceptance on the
         // final root-hash check, so relaxing here only avoids a spurious per-node
         // `UnexpectedValue`. It never widens what proofs are accepted.
-        if cfg!(feature = "ethhash")
+        if algorithm.is_ethereum()
             && proof_node.key.len() == ACCOUNT_DEPTH_NIBBLES
             && let (Some(pv), Some(bv)) = (proof_value, branch.value.as_deref())
             && account_values_equal_except_storage_root(pv, bv)

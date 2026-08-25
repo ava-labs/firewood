@@ -15,10 +15,11 @@
 //! error type on the public API.
 
 use firewood_storage::{
-    NodeHashAlgorithm, PackedPathRef, PathComponent, TriePathFromPackedBytes, ValueDigest,
+    EthHash, HashMode, PackedPathRef, PathComponent, TriePathFromPackedBytes, ValueDigest,
 };
+use firewood_storage::{RlpList, TrieHash};
 
-use crate::api::{DbView, Error, HashKey, HashKeyExt};
+use crate::api::{DbView, Error, HashKey};
 use crate::proofs::ProofError;
 use crate::proofs::eth::{
     ACCOUNT_DEPTH_NIBBLES, AccountFields, account_storage_root_rlp, proof_node_to_mpt_rlp,
@@ -31,9 +32,34 @@ const STORAGE_LEAF_DEPTH_NIBBLES: usize = ACCOUNT_DEPTH_NIBBLES + 64;
 
 /// `keccak256("")` — the `codeHash` value for accounts with no contract code.
 const KECCAK_EMPTY: [u8; 32] = [
+    // "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
     0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03, 0xc0,
     0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85, 0xa4, 0x70,
 ];
+
+/// Extract a non-empty Ethereum account code hash from an RLP-encoded account value.
+///
+/// Returns `Ok(None)` for accounts with the empty-code hash.
+///
+/// # Errors
+///
+/// Returns [`ProofError::InvalidAccountValueFormat`] if `value` is not an
+/// RLP-encoded Ethereum account, if the account has fewer than four fields, or
+/// if any of the first four account fields is not encoded as bytes. Returns
+/// [`ProofError::InvalidAccountCodeHashLength`] if the `codeHash` field is not
+/// 32 bytes.
+pub fn account_code_hash(value: &[u8]) -> Result<Option<HashKey>, ProofError> {
+    let code_hash_slice = RlpList::parse(value)
+        .and_then(|list| list.nth_bytes(3))
+        .map_err(|source| ProofError::InvalidAccountValueFormat { source })?;
+    let code_hash = TrieHash::try_from(code_hash_slice)
+        .map_err(|err| ProofError::InvalidAccountCodeHashLength { len: err.0 })?;
+    if code_hash == TrieHash::from(KECCAK_EMPTY) {
+        return Ok(None);
+    }
+
+    Ok(Some(code_hash))
+}
 
 /// One `eth_getProof` response, modulo JSON formatting.
 #[derive(Debug, PartialEq, Eq)]
@@ -57,20 +83,15 @@ pub struct EthProof {
 impl Default for EthProof {
     /// "Absent account" shape: zero `nonce` and `balance`, `code_hash` =
     /// `keccak("")` (the empty-code hash), `storage_hash` =
-    /// [`HashKey::default_root_hash`] (the empty-trie root in eth mode).
-    /// Matches what an ethereum verifier expects to see for a missing
-    /// account.
-    ///
-    /// Under merkledb mode `default_root_hash` returns `None`, so
-    /// `storage_hash` falls back to all zeros. Callers should not reach
-    /// this case — [`eth_get_proof`] gates on `is_ethereum()` before any
-    /// `EthProof` is constructed.
+    /// [`EthHash::default_root_hash`] (the Ethereum empty-trie root). This
+    /// shape is Ethereum-only: [`eth_get_proof`] gates on `is_ethereum()`
+    /// before constructing an `EthProof`.
     fn default() -> Self {
         Self {
             nonce: 0,
             balance: [0u8; 32],
             code_hash: KECCAK_EMPTY,
-            storage_hash: HashKey::default_root_hash()
+            storage_hash: EthHash::default_root_hash()
                 .as_deref()
                 .copied()
                 .unwrap_or_default(),
@@ -98,6 +119,7 @@ pub struct EthStorageProof {
 /// Trie keys here are the already-keccak-hashed 32-byte forms (firewood
 /// stores accounts at `keccak256(address)` and slots at
 /// `keccak256(address) ++ keccak256(slot_key)` — callers do the hashing).
+/// The hashing mode is obtained from [`DbView::node_hash_algorithm`].
 ///
 /// # Returns
 ///
@@ -122,7 +144,7 @@ pub fn eth_get_proof<V>(
 where
     V: DbView + ?Sized,
 {
-    if !NodeHashAlgorithm::compile_option().is_ethereum() {
+    if !view.node_hash_algorithm().is_ethereum() {
         return Err(Error::FeatureNotSupported(
             "eth_get_proof requires ethereum hash mode".into(),
         ));
@@ -357,10 +379,7 @@ fn fetch_only_storage_child<V>(
 where
     V: DbView + ?Sized,
 {
-    let Some((nibble, _)) = (&account_node.child_hashes)
-        .into_iter()
-        .find(|(_, c)| c.is_some())
-    else {
+    let Some((nibble, _)) = account_node.child_hashes.iter_present().next() else {
         return Ok(None);
     };
 
@@ -394,18 +413,23 @@ fn nibbles_match_packed(nibbles: &[PathComponent], packed: &[u8]) -> bool {
     nibbles.iter().copied().eq(packed_ref)
 }
 
-/// The negative half of [`eth_get_proof`]'s runtime mode gate: a merkledb-mode
-/// (non-ethhash) build must refuse to emit eth proofs. The positive half lives
-/// in the `ethhash`-gated `tests` module below.
-#[cfg(all(test, not(feature = "ethhash")))]
+#[cfg(test)]
 mod merkledb_gate_tests {
-    use super::*;
-    use crate::merkle::tests::init_merkle;
+    use std::sync::Arc;
 
+    use super::*;
+    use firewood_storage::{
+        Committed, DeletedNodeTracking, MemStore, MerkleDbHash, NodeHashAlgorithm, NodeStore,
+    };
+
+    /// A MerkleDB view must refuse to emit eth proofs. This test runs in both
+    /// feature configurations.
     #[test]
-    fn eth_get_proof_rejected_without_ethhash() {
-        let merkle = init_merkle(std::iter::empty::<(&[u8], &[u8])>());
-        let err = eth_get_proof(merkle.nodestore(), &[0u8; 32], &[])
+    fn eth_get_proof_rejected_in_merkledb_mode() {
+        let storage = Arc::new(MemStore::new(Vec::new(), NodeHashAlgorithm::MerkleDB));
+        let nodestore: NodeStore<Committed, _, MerkleDbHash> =
+            NodeStore::new_empty_committed(storage, DeletedNodeTracking::Enabled);
+        let err = eth_get_proof(&nodestore, &[0u8; 32], &[])
             .expect_err("merkledb-mode database must not emit eth proofs");
         assert!(
             matches!(err, Error::FeatureNotSupported(_)),
@@ -427,6 +451,10 @@ mod tests {
     }
 
     fn account_rlp(nonce: u64, balance_be: &[u8]) -> Box<[u8]> {
+        account_rlp_with_code_hash(nonce, balance_be, &KECCAK_EMPTY)
+    }
+
+    fn account_rlp_with_code_hash(nonce: u64, balance_be: &[u8], code_hash: &[u8]) -> Box<[u8]> {
         // storageRoot and codeHash get fixed up by firewood during hashing
         // if the input is stale; we supply real values here so the on-disk
         // codeHash matches what we'd expect after decoding.
@@ -439,16 +467,8 @@ mod tests {
             RlpItem::Bytes(nonce_min),
             RlpItem::Bytes(balance_be),
             RlpItem::Bytes(&[0u8; 32]), // storageRoot — fixed up by firewood
-            RlpItem::Bytes(&KECCAK_EMPTY),
+            RlpItem::Bytes(code_hash),
         ])
-    }
-
-    /// Confirm an ethhash build passes the runtime mode gate. The gate's
-    /// *negative* path is covered by `merkledb_gate_tests` below, which only
-    /// compiles without the `ethhash` feature.
-    #[test]
-    fn mode_gate_passes_under_ethhash() {
-        assert!(NodeHashAlgorithm::compile_option().is_ethereum());
     }
 
     /// `KECCAK_EMPTY` is a hardcoded literal; confirm it really is
@@ -456,6 +476,35 @@ mod tests {
     #[test]
     fn keccak_empty_matches_keccak_of_empty_input() {
         assert_eq!(keccak(b""), KECCAK_EMPTY);
+    }
+
+    #[test]
+    fn account_code_hash_decodes_all_outcomes() {
+        let non_empty_code_hash = [0x22; 32];
+        let non_empty = account_rlp_with_code_hash(1, &[0x01], &non_empty_code_hash);
+        assert_eq!(
+            account_code_hash(&non_empty).unwrap(),
+            Some(non_empty_code_hash.into())
+        );
+
+        let empty = account_rlp(1, &[0x01]);
+        assert_eq!(account_code_hash(&empty).unwrap(), None);
+
+        let bad_rlp = account_code_hash(b"not an account").unwrap_err();
+        assert!(
+            matches!(bad_rlp, ProofError::InvalidAccountValueFormat { .. }),
+            "expected account value format error, got {bad_rlp:?}"
+        );
+
+        let wrong_length = account_rlp_with_code_hash(1, &[0x01], &[0x33; 31]);
+        let wrong_length_err = account_code_hash(&wrong_length).unwrap_err();
+        assert!(
+            matches!(
+                wrong_length_err,
+                ProofError::InvalidAccountCodeHashLength { len: 31 }
+            ),
+            "expected account code hash length error, got {wrong_length_err:?}"
+        );
     }
 
     #[test]

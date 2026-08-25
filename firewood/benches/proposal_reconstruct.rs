@@ -3,9 +3,10 @@
 
 use criterion::profiler::Profiler;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use firewood::api::{Db as _, DbView as _, Proposal as _, Reconstructible as _};
-use firewood::db::{BatchOp, Db, DbConfig, UseParallel};
-use firewood_storage::NodeHashAlgorithm;
+use firewood::api::{self, DbView as _, Reconstructible as _};
+use firewood::db::{BatchOp, DbConfig, UseParallel};
+use firewood::open;
+use firewood_storage::{DefaultHashMode, HashMode};
 use pprof::ProfilerGuard;
 use rand::{RngExt, distr::Alphanumeric};
 use std::fs::File;
@@ -21,8 +22,7 @@ const PROPOSAL_ITEMS: usize = 100;
 const KEY_LEN: usize = 16;
 const VALUE_LEN: usize = 32;
 
-type BenchOp = BatchOp<Vec<u8>, Vec<u8>>;
-type BenchBatch = Vec<BenchOp>;
+type BenchBatch = api::OwnedBatch;
 
 // To enable flamegraph output:
 // cargo bench --bench proposal_reconstruct -- reconstructed_chain/nested --profile-time=5
@@ -66,12 +66,21 @@ impl Profiler for FlamegraphProfiler {
 
 fn make_batch(rng: &firewood_storage::SeededRng, count: usize) -> BenchBatch {
     repeat_with(|| {
-        let key: Vec<u8> = rng.sample_iter(&Alphanumeric).take(KEY_LEN).collect();
-        let value: Vec<u8> = rng.sample_iter(&Alphanumeric).take(VALUE_LEN).collect();
+        let key = rng
+            .sample_iter(&Alphanumeric)
+            .take(KEY_LEN)
+            .collect::<Vec<u8>>()
+            .into_boxed_slice();
+        let value = rng
+            .sample_iter(&Alphanumeric)
+            .take(VALUE_LEN)
+            .collect::<Vec<u8>>()
+            .into_boxed_slice();
         BatchOp::Put { key, value }
     })
     .take(count)
-    .collect()
+    .collect::<Vec<_>>()
+    .into_boxed_slice()
 }
 
 fn generate_batches() -> (BenchBatch, Vec<BenchBatch>) {
@@ -96,10 +105,10 @@ fn bench_proposal_chain(criterion: &mut Criterion) {
                     let db_dir = TempDir::new().unwrap();
                     let db_path = db_dir.path().join("benchmark_db");
                     let cfg = DbConfig::builder()
-                        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+                        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
                         .truncate(true)
                         .build();
-                    let db = Db::new(db_path, cfg).unwrap();
+                    let db = open(db_path, cfg).unwrap();
 
                     db.propose(initial).unwrap().commit().unwrap();
 
@@ -135,11 +144,11 @@ fn bench_reconstructed_chain(criterion: &mut Criterion) {
                     // extra threads muddying up any flamegraphs when creating the
                     // initial proposal
                     let cfg = DbConfig::builder()
-                        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+                        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
                         .truncate(true)
                         .use_parallel(UseParallel::Never)
                         .build();
-                    let db = Db::new(db_path, cfg).unwrap();
+                    let db = open(db_path, cfg).unwrap();
 
                     db.propose(initial).unwrap().commit().unwrap();
 
@@ -147,7 +156,7 @@ fn bench_reconstructed_chain(criterion: &mut Criterion) {
                     let first_batch = batches_iter.next().unwrap();
                     db.propose(first_batch).unwrap().commit().unwrap();
                     let root_hash = db.root_hash().unwrap();
-                    let historical = db.revision(root_hash).unwrap();
+                    let historical = db.committed_view(root_hash).unwrap().unwrap();
 
                     let second_batch = batches_iter.next().unwrap();
                     let mut reconstructed =

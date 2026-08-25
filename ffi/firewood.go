@@ -58,14 +58,12 @@ const RootLength = C.sizeof_HashKey
 // Hash is the type used for all firewood hashes.
 type Hash [RootLength]byte
 
-// NodeHashAlgorithm represents the node hashing algorithm used by the database;
-// this must match the algorithm previously used to crate the database.
+// NodeHashAlgorithm represents the node hashing algorithm used by the database.
+// It is a per-database runtime choice: a single binary can open databases of
+// either algorithm. When opening an existing database, the algorithm must match
+// the one the database was created with.
 //
 // Currently, there are only two variants but more may be added in the future.
-// At this time, the node hash algorithm used when opening the database must
-// match the compile-time feature used when building the FFI library. This
-// restriction will be lifted after #1088, which enables runtime selection of
-// the node hashing algorithm.
 type NodeHashAlgorithm C.enum_NodeHashAlgorithm
 
 const (
@@ -78,7 +76,14 @@ const (
 var (
 	// EmptyRoot is the zero value for [Hash]
 	EmptyRoot Hash
-	// ErrActiveKeepAliveHandles is returned when attempting to close a database with unfreed memory.
+	// ErrActiveKeepAliveHandles is returned by [Database.Close] when the
+	// supplied context is cancelled before every outstanding handle that
+	// holds a keep-alive lease on the database has been released. That
+	// set includes [Proposal], [Revision], [Reconstructed], [Iterator],
+	// and verified [RangeProof] instances (which retain a lease until
+	// [RangeProof.Free] runs). Pass [WithForceCloseHandles] to drop the
+	// registered handle types automatically; [RangeProof] is not
+	// auto-dropped and must still be released by the caller.
 	ErrActiveKeepAliveHandles = errors.New("cannot close database with active keep-alive handles")
 
 	errDBClosed = errors.New("firewood database already closed")
@@ -102,9 +107,19 @@ type Database struct {
 	// handle is returned and accepted by cgo functions. It MUST be treated as
 	// an opaque value without special meaning.
 	// https://en.wikipedia.org/wiki/Blinkenlights
-	handle             *C.DatabaseHandle
-	handleLock         sync.RWMutex
-	outstandingHandles sync.WaitGroup
+	handle     *C.DatabaseHandle
+	handleLock sync.RWMutex
+
+	// keepAlives tracks every outstanding [Proposal], [Revision],
+	// [Reconstructed], [Iterator], and verified [RangeProof] — the
+	// types that hold a borrow on the underlying Rust database and
+	// therefore must not outlive it. It carries both the
+	// outstanding-handle count that [Database.Close] waits on and the
+	// registry of drop callbacks that [WithForceCloseHandles] uses to
+	// release the registered subset forcibly. [RangeProof] participates
+	// in the count but is not registered for force-drop (see
+	// VerifyRangeProof for why).
+	keepAlives *keepAliveRegistry
 
 	// commitLock is used to ensure that methods accessing or modifying the latest
 	// revision do not conflict.
@@ -246,13 +261,13 @@ const (
 // algorithm and database options. The database directory will be created at the
 // provided path if it does not already exist.
 //
-// The [nodeHashAlgorithm] is required and must match the compile-time feature:
-//   - NodeHashAlgorithmEthereum if the ethhash feature is enabled
-//   - NodeHashAlgorithmMerkleDB if the ethhash feature is disabled
+// The [nodeHashAlgorithm] is required and selects the database's hashing mode at
+// runtime, on a per-database basis:
+//   - EthereumNodeHashing for Ethereum-compatible (Keccak-256) hashing
+//   - MerkleDBNodeHashing for MerkleDB-compatible (SHA-256) hashing
 //
-// In the future, the node hash algorithm will be configurable at runtime and
-// no longer need to match compile-time features but will instead select the
-// desired hashing mode.
+// A single binary supports both modes. When opening an existing database, the
+// algorithm must match the one the database was created with.
 //
 // If no [Option] is provided, sensible defaults will be used.
 // See the With* functions for details about each configuration parameter and its default value.
@@ -350,7 +365,7 @@ func (db *Database) Propose(batch []BatchOp) (*Proposal, error) {
 	defer pinner.Unpin()
 
 	kvp := newKeyValuePairsFromBatch(batch, &pinner)
-	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), &db.outstandingHandles, &db.commitLock)
+	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), db.keepAlives, &db.commitLock)
 }
 
 // Get retrieves the value for the given key from the most recent revision.
@@ -446,7 +461,7 @@ func (db *Database) Revision(root Hash) (*Revision, error) {
 	rev, err := getRevisionFromResult(C.fwd_get_revision(
 		db.handle,
 		newCHashKey(root),
-	), &db.outstandingHandles)
+	), db.keepAlives)
 	if err != nil {
 		return nil, err
 	}
@@ -454,45 +469,108 @@ func (db *Database) Revision(root Hash) (*Revision, error) {
 	return rev, nil
 }
 
+// CloseOption configures the behavior of [Database.Close].
+type CloseOption func(*closeConfig)
+
+type closeConfig struct {
+	forceCloseHandles bool
+}
+
+// WithForceCloseHandles makes [Database.Close] forcibly drop every outstanding
+// [Proposal], [Revision], [Reconstructed], and [Iterator] before closing the
+// database, instead of waiting for the caller to release them. Verified
+// [RangeProof] handles are not auto-dropped — they must be released via
+// [RangeProof.Free] before Close can complete.
+//
+// Each handle is dropped once even if its underlying free errors, so a
+// failing free cannot stall the close. Dropping a handle can still wait
+// for an in-flight operation on it to finish, so a slow reader can delay
+// the close past the deadline. Drop errors are joined and returned, and
+// the database close is still attempted on a best-effort basis.
+//
+// While force-close is in progress, attempts to construct derived handles
+// (for example via [Proposal.Propose] or [Revision.Iter]) fail with an
+// error indicating the database is closed: a child constructor that would
+// otherwise race the close is rejected rather than leaking past it.
+//
+// Methods on a force-dropped handle behave the same as if the caller had
+// explicitly invoked Drop.
+func WithForceCloseHandles() CloseOption {
+	return func(c *closeConfig) {
+		c.forceCloseHandles = true
+	}
+}
+
 // Close releases the memory associated with the Database and stops the
 // background persistence thread.
 //
-// This blocks until all outstanding keep-alive handles are disowned or the
-// [context.Context] is cancelled. That is, until all Revisions and Proposals
-// created from this Database are either unreachable or one of
-// [Proposal.Commit], [Proposal.Drop], or [Revision.Drop] has been called on
-// them. Unreachable objects will be automatically released before Close returns,
-// unless an alternate GC finalizer is set on them.
+// By default Close blocks until all outstanding keep-alive handles are
+// disowned or the [context.Context] is cancelled. That is, until every
+// [Proposal], [Revision], [Reconstructed], [Iterator], and verified
+// [RangeProof] created from this Database is either unreachable or has
+// been explicitly released via [Proposal.Commit], [Proposal.Drop],
+// [Revision.Drop], [Reconstructed.Drop], [Iterator.Drop], or
+// [RangeProof.Free]. Unreachable objects are released by their finalizers
+// before Close returns. If the context expires first,
+// [ErrActiveKeepAliveHandles] is returned and [C.fwd_close_db] is not
+// called.
 //
-// This is safe to call multiple times; subsequent calls after the first will do
-// nothing.
-func (db *Database) Close(ctx context.Context) error {
+// Pass [WithForceCloseHandles] to forcibly drop every outstanding handle
+// instead of waiting for the caller to release them. See
+// [WithForceCloseHandles] for details on its semantics, including how ctx
+// cancellation is reported and which handle types are not auto-dropped.
+//
+// Safe to call multiple times; subsequent calls after the first are no-ops
+// and return nil.
+func (db *Database) Close(ctx context.Context, opts ...CloseOption) error {
+	cfg := closeConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	db.handleLock.Lock()
 	defer db.handleLock.Unlock()
 	if db.handle == nil {
 		return nil
 	}
 
-	done := make(chan struct{})
-	go func() {
-		db.outstandingHandles.Wait()
-		close(done)
-	}()
+	var forcedDropErr error
+	if cfg.forceCloseHandles {
+		forcedDropErr = db.keepAlives.closeAndForceDrop(ctx)
+	}
 
-	select {
-	case <-done:
-	case <-ctx.Done():
-		return fmt.Errorf("%w: %w", ctx.Err(), ErrActiveKeepAliveHandles)
+	// waitForKeepAlives decides whether handles remain: nil once the count
+	// drains (even if ctx is already cancelled), ErrActiveKeepAliveHandles
+	// otherwise.
+	if err := db.waitForKeepAlives(ctx); err != nil {
+		// Graceful path: bookkeeping says handles are still live. Don't
+		// touch fwd_close_db — we'd be freeing the Db out from under
+		// objects whose Rust-side counterparts borrow it.
+		return errors.Join(forcedDropErr, err)
 	}
 
 	db.commitLock.Lock()
 	defer db.commitLock.Unlock()
-	if err := getErrorFromVoidResult(C.fwd_close_db(db.handle)); err != nil {
-		return fmt.Errorf("unexpected error when closing database: %w", err)
+	// Clear db.handle before fwd_close_db so any retry of Close is a no-op
+	// rather than re-entering with a possibly-freed pointer, regardless of
+	// whether the close succeeds or errors.
+	handle := db.handle
+	db.handle = nil
+	if err := getErrorFromVoidResult(C.fwd_close_db(handle)); err != nil {
+		return errors.Join(forcedDropErr, fmt.Errorf("unexpected error when closing database: %w", err))
 	}
 
-	db.handle = nil // Prevent double free
+	return forcedDropErr
+}
 
+// waitForKeepAlives blocks until the outstanding-handle count reaches
+// zero or ctx fires. Returns nil on drain, a wrapped
+// [ErrActiveKeepAliveHandles] on cancellation. Caller should hold
+// db.handleLock.Lock to prevent creating more handles.
+func (db *Database) waitForKeepAlives(ctx context.Context) error {
+	if err := db.keepAlives.waitDrained(ctx); err != nil {
+		return fmt.Errorf("%w: %w", ErrActiveKeepAliveHandles, err)
+	}
 	return nil
 }
 

@@ -144,6 +144,18 @@ impl MaybePersistedNode {
         }
     }
 
+    /// Returns the address only when the node is fully persisted, i.e. its
+    /// contents are on disk and a caller may drop any in-memory copy and still
+    /// be able to re-read it. Unlike [`Self::as_linear_address`] this excludes
+    /// `Allocated`, whose contents have an address but have not been written yet.
+    #[must_use]
+    pub fn persisted_address(&self) -> Option<LinearAddress> {
+        match &*self.0.lock() {
+            MaybePersisted::Persisted(address) => Some(*address),
+            MaybePersisted::Unpersisted(_) | MaybePersisted::Allocated(_, _) => None,
+        }
+    }
+
     /// Returns a reference to the unpersisted node if it is unpersisted.
     ///
     /// # Returns
@@ -250,14 +262,18 @@ enum MaybePersisted {
 mod test {
     use nonzero_ext::nonzero;
 
-    use crate::{DeletedNodeTracking, LeafNode, MemStore, Node, NodeStore, Path};
+    use crate::{
+        Committed, DefaultHashMode, DeletedNodeTracking, HashMode, LeafNode, MemStore, Node,
+        NodeStore, Path,
+    };
 
     use super::*;
 
     #[test]
     fn test_maybe_persisted_node() -> Result<(), FileIoError> {
-        let mem_store = MemStore::default().into();
-        let store = NodeStore::new_empty_committed(mem_store, DeletedNodeTracking::Enabled);
+        let mem_store = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM).into();
+        let store: NodeStore<Committed, MemStore, DefaultHashMode> =
+            NodeStore::new_empty_committed(mem_store, DeletedNodeTracking::Enabled);
         let node = SharedNode::new(Node::Leaf(LeafNode {
             partial_path: Path::new(),
             value: vec![0].into(),
@@ -287,8 +303,9 @@ mod test {
 
     #[test]
     fn test_clone_shares_underlying_shared_node() -> Result<(), FileIoError> {
-        let mem_store = MemStore::default().into();
-        let store = NodeStore::new_empty_committed(mem_store, DeletedNodeTracking::Enabled);
+        let mem_store = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM).into();
+        let store: NodeStore<Committed, MemStore, DefaultHashMode> =
+            NodeStore::new_empty_committed(mem_store, DeletedNodeTracking::Enabled);
         let node = SharedNode::new(Node::Leaf(LeafNode {
             partial_path: Path::new(),
             value: vec![42].into(),

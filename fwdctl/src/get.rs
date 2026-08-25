@@ -3,29 +3,31 @@
 
 use clap::Args;
 
-use firewood::api::{self, Db as _, DbView as _};
-use firewood::db::{Db, DbConfig};
+use firewood::api;
+use firewood::db::DbConfig;
+use firewood::open;
 
-use crate::DatabasePath;
+use crate::{DatabasePath, key::KeyArgument};
 
 #[derive(Debug, Args)]
 pub struct Options {
     #[command(flatten)]
     pub database: DatabasePath,
 
-    /// The key to get the value for
-    #[arg(required = true, value_name = "KEY", help = "Key to get")]
-    pub key: String,
+    #[command(flatten)]
+    pub key: KeyArgument,
 }
 
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("get key value pair {opts:?}");
+    let key = opts.key.database_key()?;
+    let algorithm = opts.database.node_hash_algorithm()?;
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(opts.database.node_hash_algorithm.into())
+        .node_hash_algorithm(algorithm)
         .create_if_missing(false)
         .truncate(false);
 
-    let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
+    let db = open(opts.database.dbpath.clone(), cfg.build())?;
 
     let hash = db.root_hash();
 
@@ -36,13 +38,13 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
 
     let rev = db.revision(hash)?;
 
-    match rev.val(opts.key.as_bytes()) {
+    match rev.val(&key) {
         Ok(Some(val)) => {
             let s = String::from_utf8_lossy(val.as_ref());
             println!("{s:?}");
         }
         Ok(None) => {
-            eprintln!("Key '{}' not found", opts.key);
+            eprintln!("Key '0x{}' not found", hex::encode(&key));
         }
         Err(e) => return Err(e),
     }

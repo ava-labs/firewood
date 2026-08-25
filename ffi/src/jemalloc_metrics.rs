@@ -7,8 +7,8 @@
 //! through the `metrics` crate, mirroring the same stats that `metriki-jemalloc`
 //! exposes: active, allocated, metadata, mapped, resident, retained.
 
+use firewood::logger;
 use firewood_metrics::GaugeExt;
-use firewood_storage::logger;
 use metrics::describe_gauge;
 use tikv_jemalloc_ctl::{epoch, stats};
 

@@ -2,8 +2,9 @@
 // See the file LICENSE.md for licensing terms.
 
 use clap::Args;
-use firewood::api::{self, Db as _, Proposal as _};
-use firewood::db::{BatchOp, Db, DbConfig};
+use firewood::api::{self, DynDb};
+use firewood::db::{BatchOp, DbConfig};
+use firewood::open;
 use humantime::{format_duration, parse_duration};
 use std::fs::File;
 use std::path::PathBuf;
@@ -78,11 +79,11 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("import database {opts:?}");
 
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(opts.database.node_hash_algorithm.into())
-        .create_if_missing(true)
+        .node_hash_algorithm(opts.database.node_hash_algorithm()?)
+        .create_if_missing(false)
         .truncate(false);
 
-    let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
+    let db = open(opts.database.dbpath.clone(), cfg.build())?;
 
     let reader: Box<dyn std::io::Read> = if let Some(path) = &opts.input_file_name {
         Box::new(File::open(path)?)
@@ -100,13 +101,13 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
 
     match opts.input_format {
         InputFormat::Csv => {
-            process_csv(opts, reader, &db, &mut state, start_time)?;
+            process_csv(opts, reader, db.as_ref(), &mut state, start_time)?;
         }
     }
 
     // Insert remaining ops
     if !state.batch_ops.is_empty() {
-        commit_batch(&mut state.batch_ops, &db, &mut state.total_imported)?;
+        commit_batch(&mut state.batch_ops, db.as_ref(), &mut state.total_imported)?;
     }
 
     let total_duration = start_time.elapsed();
@@ -138,7 +139,7 @@ fn parse_string(s: &str, hex: bool) -> Result<Vec<u8>, api::Error> {
 fn process_csv(
     opts: &Options,
     reader: Box<dyn std::io::Read>,
-    db: &Db,
+    db: &dyn DynDb,
     state: &mut ImportState,
     start_time: Instant,
 ) -> Result<(), api::Error> {
@@ -208,7 +209,7 @@ fn process_csv(
     Ok(())
 }
 
-#[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
+#[expect(clippy::cast_precision_loss, clippy::cast_sign_loss)]
 fn maybe_log_status(
     total_imported: usize,
     start_time: Instant,
@@ -232,11 +233,11 @@ fn maybe_log_status(
 
 fn commit_batch(
     batch_ops: &mut Vec<BatchOp<Vec<u8>, Vec<u8>>>,
-    db: &Db,
+    db: &dyn DynDb,
     total_imported: &mut usize,
 ) -> Result<(), api::Error> {
     let remaining = batch_ops.len();
-    let proposal = db.propose(batch_ops.drain(..))?;
+    let proposal = db.propose(api::collect_owned_batch(batch_ops.drain(..))?)?;
     proposal.commit()?;
     // Use wrapping_add because overflow is practically unreachable here
     *total_imported = total_imported.wrapping_add(remaining);
@@ -248,7 +249,7 @@ fn commit_batch(
 /// `total_imported` realistically never exceeds a few billion keys in a single
 /// import run, well within `f64`'s 52-bit mantissa precision, and is always
 /// non-negative — so the precision/sign-loss lints are safe to suppress here.
-#[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
+#[expect(clippy::cast_precision_loss, clippy::cast_sign_loss)]
 fn keys_per_second(total_imported: usize, duration: Duration) -> usize {
     let secs = duration.as_secs_f64();
     if secs > 0.0 {

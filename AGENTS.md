@@ -10,7 +10,8 @@ and EVM-compatible blockchains that store state in Merkle tries.
 
 **Key Characteristics:**
 
-- Written in Rust (edition 2024, MSRV 1.94.0)
+- Written in Rust (edition 2024, MSRV 1.94.0 — but see
+  [Toolchain Floor for `--all-features`](#toolchain-floor-for---all-features))
 - Beta-level software with evolving API
 - Compaction-less database that directly stores trie nodes on-disk
 - Not built on generic KV stores (LevelDB/RocksDB)
@@ -139,40 +140,102 @@ of the change.
 
 ## PR Strategy
 
-Before submitting/updating a PR, run the following
+Before submitting or updating a PR, run the local pre-push checks:
 
 ```bash
-cargo fmt                                                               # Format code
-cargo nextest run --workspace --features ethhash,logger --all-targets   # Run tests
-cargo +nightly-2026-07-05 clippy --workspace --features ethhash,logger --all-targets                    # Linter
-cargo +nightly-2026-07-05 clippy --profile maxperf --features ethhash,logger --workspace --all-targets  # Linter (maxperf: debug-assertions off)
-cargo doc --no-deps                                                     # Ensure docs build
+just prepush
 ```
+
+This runs `just lint` followed by `just test`. These recipes use the same
+lower-level `ci-*` recipes as GitHub Actions, keeping the local and CI commands
+in sync. Run either phase separately while iterating:
+
+```bash
+just lint
+just test
+```
+
+If `just` is not installed, use `./scripts/run-just.sh prepush`. The wrapper
+uses `just` when available, falls back to Nix when available, and otherwise
+prints installation instructions.
+
+The complete set of Rust profile names and Cargo arguments is defined in
+`scripts/run-rust-ci.sh`. Every profile there is portable to macOS, so the Just
+recipes and CI run the same set. The Justfile and CI workflows should pass
+profile names instead of duplicating Cargo feature and profile arguments. When
+changing a CI Rust matrix, update the shared script and both callers as needed.
 
 All tests must pass, and there should be no clippy warnings.
 
-### Slow Tests
+### Toolchain Floor for `--all-features`
 
-If your PR modifies code that is tested by any test prefixed with `test_slow_`, you should also run the full test suite with the `ci` profile to ensure those tests pass:
+The workspace declares `rust-version = "1.94.0"`, and that is accurate for the
+default build, `--no-default-features`, and `--features ethhash,logger`.
+`--all-features` needs **1.94.1**.
 
-```bash
-cargo nextest run --workspace --features ethhash,logger --all-targets --profile ci
+`--all-features` turns on `fwdctl`'s `launch` feature, which pulls in the AWS SDK
+(`aws-config`, `aws-sdk-ec2`, `aws-sdk-ssm`, `aws-sdk-sts`, and their
+`aws-smithy-*` dependencies). Every one of those crates declares
+`rust-version = "1.94.1"`. Cargo refuses the build before compiling anything:
+
+```text
+error: rustc 1.94.0 is not supported by the following packages:
+  aws-config@1.9.0 requires rustc 1.94.1
+  ...
 ```
 
-The `ci` profile includes slow tests that are skipped in the default profile for faster local development.
+This is unrelated to the platform gating described under
+[Linux-only Checks](#linux-only-checks) — it applies equally on macOS and Linux.
+
+On exactly 1.94.0, either use a newer toolchain for `debug-all-features` (any
+1.94.1+ release works, and CI is well ahead of the floor), or downgrade the AWS
+crates as the error suggests. The workspace `rust-version` is deliberately left at
+1.94.0 so the floor reflects what the shipped library crates need rather than what
+an optional `fwdctl` feature needs; bumping it to 1.94.1 is the alternative if the
+split proves confusing in practice.
+
+### Slow Tests
+
+`just test` runs every portable Rust test profile with nextest's `ci` profile,
+so tests prefixed with `test_slow_` are included automatically. Targeted or
+default-profile test commands are useful during development, but do not replace
+`just test` before pushing.
+
+### Linux-only Checks
+
+The local `lint`, `test`, and `prepush` recipes are designed to run on macOS.
+They intentionally omit CI checks that require Linux: the differential fuzz jobs,
+which use Linux-specific resource limits and tooling. GitHub Actions remains
+authoritative for those.
+
+`--all-features` is *not* in that category. The `io-uring` feature is accepted on
+every platform but only takes effect on Linux, where `storage/build.rs` sets the
+`cfg(io_uring)` alias that gates the ring backend; elsewhere the feature is inert
+and the standard I/O path is used. So `debug-all-features` runs in `just lint`
+and `just test` like any other profile. Note this means the ring code itself is
+compiled only by the Linux CI jobs — a macOS-green `--all-features` run does not
+prove `storage/src/linear/io_uring.rs` builds.
+
+Do not add Linux-only commands to the macOS-compatible aggregate recipes.
+
+Two further CI checks have no local aggregate equivalent: the license-header
+check (a GitHub Action) and the `examples` job. The examples can be run
+manually with `just ci-rust benchmark-example <profile>` and
+`just ci-rust insert-example <profile>`.
 
 ### Markdown Linter
 
-If your PR touches any Markdown file, run the following:
+`just lint` and `just prepush` run the Markdown checks used by CI. To run only
+the repository-wide Markdown check, use:
 
 ```bash
-markdownlint-cli2 .
+just ci-lint-markdown
 ```
 
 If the linter fails, run the following to fix any lint errors:
 
 ```bash
-markdownlint-cli2 . --fix
+just fix-markdown
 ```
 
 If you don't have `markdownlint-cli2` available on your system, run the
@@ -212,7 +275,8 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
    blocks without documentation and strong justification. Unsafe code could be
    utilized in the `ffi` crate.
 
-2. **Testing**: Any changes should include appropriate tests. Run `cargo nextest run --release` to verify.
+2. **Testing**: Any changes should include appropriate tests. Run targeted tests
+   while iterating and `./scripts/run-just.sh prepush` before handoff.
 
 3. **Performance Context**: This is a database designed for blockchain state. Performance matters. Consider allocation patterns and hot paths.
 
@@ -220,7 +284,9 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
 
 5. **Feature Flags**: Be aware of `ethhash` feature flag when discussing Ethereum compatibility vs. default merkledb compatibility.
 
-6. **Documentation**: Public APIs should be well-documented. Run `cargo doc --no-deps` to check.
+6. **Documentation**: Public APIs should be well-documented. The documentation
+   check is included in `./scripts/run-just.sh lint`; run `./scripts/run-just.sh ci-docs` to invoke it
+   separately.
 
 7. **Workspace Awareness**: This is a multi-crate workspace. Changes may affect multiple crates. Check `Cargo.toml` for workspace structure.
 
@@ -230,5 +296,5 @@ See [`CODE_REVIEW.md`](./CODE_REVIEW.md) for the complete set of code review che
 
 ## Additional Resources
 
-- [Auto-generated docs](https://ava-labs.github.io/firewood/firewood/)
+- [Auto-generated docs](https://ava-labs.github.io/firewood/rustdoc/firewood/)
 - [Issue tracker](https://github.com/ava-labs/firewood/issues)

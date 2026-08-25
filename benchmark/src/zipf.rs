@@ -19,8 +19,8 @@
 )]
 
 use crate::TestRunner;
-use firewood::api::{Db as _, Proposal as _};
-use firewood::db::{BatchOp, Db};
+use firewood::api::{self, DynDb};
+use firewood::db::BatchOp;
 use log::{debug, trace};
 use pretty_duration::pretty_duration;
 use rand::prelude::*;
@@ -39,7 +39,7 @@ pub struct Args {
 pub struct Zipf;
 
 impl TestRunner for Zipf {
-    fn run(&self, db: &Db, args: &crate::Args) -> Result<(), Box<dyn Error>> {
+    fn run(&self, db: &dyn DynDb, args: &crate::Args) -> Result<(), Box<dyn Error>> {
         let exponent = if let crate::TestName::Zipf(args) = &args.test_name {
             args.exponent
         } else {
@@ -71,7 +71,9 @@ impl TestRunner for Zipf {
                     distinct.len()
                 );
             }
-            let proposal = db.propose(batch).expect("proposal should succeed");
+            let proposal = db
+                .propose(api::collect_owned_batch(batch)?)
+                .expect("proposal should succeed");
             proposal.commit()?;
 
             if log::log_enabled!(log::Level::Debug) {

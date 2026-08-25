@@ -10,7 +10,7 @@ type OwnedBatchOps = Vec<BatchOp<Box<[u8]>, Box<[u8]>>>;
 /// Helper: returns true if the (possibly corrupted) proof is rejected by
 /// either the structural check or the root hash check.
 fn is_rejected(
-    db: &Db,
+    db: &Db<DefaultHashMode>,
     proof: &FrozenChangeProof,
     end_root: api::HashKey,
     start_key: Option<&[u8]>,
@@ -388,13 +388,14 @@ fn test_crafted_conflicting_proof_nodes_rejected() {
     let root_node = &mut end_nodes[0];
     let child_hash = root_node
         .child_hashes
-        .iter_mut()
-        .find_map(|(_, h)| h.as_mut())
+        .iter_present_mut()
+        .next()
+        .map(|(_, h)| h)
         .expect("root node should have at least one child hash");
     let bytes: [u8; 32] = child_hash.clone().into_triehash().into();
     let mut new_bytes = bytes;
     new_bytes[0] ^= 1;
-    *child_hash = firewood_storage::TrieHash::from(new_bytes).into_hash_type();
+    *child_hash = firewood_storage::TrieHash::from(new_bytes).into();
 
     let crafted = FrozenChangeProof::new(
         crate::Proof::new(valid.start_proof().as_ref().into()),
@@ -617,7 +618,7 @@ fn test_crafted_stripped_divergent_child_rejected() {
         .expect("should have a proof node at [1, 0, 5]");
 
     let nibble_8 = firewood_storage::PathComponent::try_new(8).unwrap();
-    start_nodes[branch_idx].child_hashes[nibble_8] = None;
+    start_nodes[branch_idx].child_hashes.remove(nibble_8.0);
 
     let crafted = FrozenChangeProof::new(
         crate::Proof::new(start_nodes.into_boxed_slice()),
@@ -759,9 +760,9 @@ fn gap_boundaries() -> ([u8; 32], [u8; 32]) {
 
 /// Helper for the common adversarial pattern: generate a valid bounded proof
 /// for the 5-key setup, inject a spurious operation, and assert rejection.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn inject_and_assert_rejected(
-    db: &Db,
+    db: &Db<DefaultHashMode>,
     root1: api::HashKey,
     root2: api::HashKey,
     valid_proof: &FrozenChangeProof,

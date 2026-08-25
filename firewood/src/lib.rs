@@ -118,6 +118,8 @@
 /// Database module for Firewood.
 pub mod db;
 
+pub use db::open;
+
 /// Iterator module, for both node and key-value streams
 pub mod iter;
 
@@ -157,6 +159,7 @@ pub mod proofs;
 pub mod eth_proof;
 
 // Re-export commonly used proof types at the crate root for ergonomic access
+pub use eth_proof::account_code_hash;
 pub use eth_proof::{EthProof, EthStorageProof, eth_get_proof};
 pub use merkle::{Key, Value, verify_change_proof_root_hash, verify_range_proof};
 pub use proofs::{
@@ -181,7 +184,15 @@ mod batch_op;
 /// Expose the storage logger
 pub use firewood_storage::logger;
 
-#[cfg(all(test, feature = "logger"))]
+/// Hashing mode used for trie nodes.
+pub use firewood_storage::NodeHashAlgorithm;
+
+/// Root or node hash used by Firewood tries.
+///
+/// This is the same type exposed as [`api::HashKey`] in the database API.
+pub use firewood_storage::TrieHash;
+
+#[cfg(all(not(miri), test, feature = "logger"))]
 // SAFETY: Called pre-main in test builds only. Does not panic (try_init + ok),
 // uses thread-safe logger initialization, and only reads env vars (safe pre-main).
 #[ctor::ctor(unsafe)]

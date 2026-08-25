@@ -129,11 +129,16 @@ impl<'db> RangeProofContext<'db> {
 
         debug_assert!(self.verification.is_none());
 
+        // This standalone verify path has no database handle in scope, so
+        // there is no caller-side mode to assert: verify under the proof's own
+        // self-describing mode. A cross-mode forgery is still caught by
+        // hashing because it cannot reproduce `root` under the wrong scheme.
         self.verification = Some(firewood::verify_range_proof_structure(
             &self.proof,
             root,
             start_key,
             end_key,
+            self.proof.hash_mode(),
             max_length,
         )?);
         Ok(())
@@ -261,7 +266,7 @@ impl<'db> RangeProofContext<'db> {
     }
 
     fn code_hash_iter(&self) -> Result<CodeIteratorHandle<'_>, api::Error> {
-        CodeIteratorHandle::from_key_values(self.proof.key_values())
+        CodeIteratorHandle::from_key_values(self.proof.hash_mode(), self.proof.key_values())
     }
 }
 

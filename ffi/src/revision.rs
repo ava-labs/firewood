@@ -6,14 +6,13 @@ use crate::reconstructed::ReconstructedHandle;
 use crate::{CreateIteratorResult, DatabaseHandle, IteratorHandle};
 use firewood::api;
 use firewood::api::{ArcDynDbView, BoxKeyValueIter, DbView, HashKey};
+use firewood::db::CommittedView;
 use firewood_metrics::MetricsContext;
-use firewood_storage::{Committed, FileBacked, NodeStore};
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct RevisionHandle<'db> {
     view: ArcDynDbView,
-    historical: Option<Arc<NodeStore<Committed, FileBacked>>>,
+    historical: Option<CommittedView>,
     metrics_context: MetricsContext,
     handle: &'db DatabaseHandle,
 }
@@ -22,7 +21,7 @@ impl<'db> RevisionHandle<'db> {
     /// Creates a new revision handle for the provided database view.
     pub(crate) fn new(
         view: ArcDynDbView,
-        historical: Option<Arc<NodeStore<Committed, FileBacked>>>,
+        historical: Option<CommittedView>,
         metrics_context: MetricsContext,
         handle: &'db DatabaseHandle,
     ) -> RevisionHandle<'db> {
@@ -36,7 +35,7 @@ impl<'db> RevisionHandle<'db> {
 
     /// Creates an iterator on the revision starting from the given key.
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
+    #[expect(clippy::missing_panics_doc)]
     pub fn iter_from(&self, first_key: Option<&[u8]>) -> CreateIteratorResult<'_> {
         let it = self
             .view
@@ -73,6 +72,10 @@ impl DbView for RevisionHandle<'_> {
         = BoxKeyValueIter<'view>
     where
         Self: 'view;
+
+    fn node_hash_algorithm(&self) -> firewood::NodeHashAlgorithm {
+        self.view.node_hash_algorithm()
+    }
 
     fn root_hash(&self) -> Option<HashKey> {
         self.view.root_hash()

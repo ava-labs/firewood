@@ -71,11 +71,10 @@ pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
     // is just to satisfy clippy::indexing_slicing.
     let key: &[PathComponent] = node.key.as_ref();
     let partial_path = key.get(node.partial_len..).unwrap_or(&[]);
-    // The account-node concept only exists in ethhash mode. Without that
-    // feature, depth-64 nodes are plain MPT nodes and no special handling
-    // fires.
-    let is_account = firewood_storage::NodeHashAlgorithm::compile_option().is_ethereum()
-        && key.len() == ACCOUNT_DEPTH_NIBBLES;
+    // This emitter produces Ethereum MPT RLP and is only reached from
+    // `eth_get_proof`, which has already rejected non-ethereum databases at
+    // runtime. A node at account depth is therefore always an account node.
+    let is_account = key.len() == ACCOUNT_DEPTH_NIBBLES;
     let value_bytes = node.value_digest.as_ref().and_then(ValueDigest::value);
 
     if node.child_hashes.count() == 0 {
@@ -106,8 +105,8 @@ pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
     // Branch (has children).
     let mut items: [RlpItem<'_>; BranchNode::MAX_CHILDREN + 1] =
         [RlpItem::Empty; BranchNode::MAX_CHILDREN + 1];
-    for ((_, child), slot) in (&node.child_hashes).into_iter().zip(items.iter_mut()) {
-        *slot = proof_child_rlp_item(child.as_ref());
+    for ((_, child), slot) in node.child_hashes.iter().zip(items.iter_mut()) {
+        *slot = proof_child_rlp_item(child);
     }
     // The 17th element is the value. Account nodes carry their value in
     // account RLP that gets spliced in below, not in the branch slot.
@@ -125,7 +124,7 @@ pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
     // hasher hashed.
     let inner_bytes: Box<[u8]> = if is_account {
         match value_bytes {
-            Some(v) => fix_account_storage_root_value(v, &node.child_hashes)
+            Some(v) => fix_account_storage_root_value(v, &Children::from(&node.child_hashes))
                 .unwrap_or_else(|| Box::from(v)),
             None => branch_bytes,
         }
@@ -186,11 +185,8 @@ pub fn account_storage_root_rlp(account_node: &ProofNode) -> Option<Box<[u8]>> {
     }
     let mut items: [RlpItem<'_>; BranchNode::MAX_CHILDREN + 1] =
         [RlpItem::Empty; BranchNode::MAX_CHILDREN + 1];
-    for ((_, child), slot) in (&account_node.child_hashes)
-        .into_iter()
-        .zip(items.iter_mut())
-    {
-        *slot = proof_child_rlp_item(child.as_ref());
+    for ((_, child), slot) in account_node.child_hashes.iter().zip(items.iter_mut()) {
+        *slot = proof_child_rlp_item(child);
     }
     // The 17th slot stays empty: at the storage trie root there is no value.
     Some(encode_list(&items))
@@ -275,7 +271,6 @@ impl AccountFields {
 /// `unreachable!()`. This emitter runs at any depth, so it must surface
 /// inline-RLP children as `RlpItem::Raw` (verbatim inlining) for a
 /// verifier to walk them.
-#[cfg(feature = "ethhash")]
 fn proof_child_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
     match child {
         Some(HashType::Hash(hash)) => RlpItem::Bytes(hash.as_slice()),
@@ -284,20 +279,10 @@ fn proof_child_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
     }
 }
 
-#[cfg(not(feature = "ethhash"))]
-fn proof_child_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
-    // Without ethhash, HashType is just a 32-byte TrieHash and there is no
-    // inline-RLP form; every present child is referenced by hash.
-    match child {
-        Some(hash) => RlpItem::Bytes(hash.as_slice()),
-        None => RlpItem::Empty,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use firewood_storage::{IntoHashType, PathBuf, RlpList, TrieHash, TriePathFromUnpackedBytes};
+    use firewood_storage::{DenseChildren, PathBuf, RlpList, TrieHash, TriePathFromUnpackedBytes};
 
     fn pathbuf_from_nibbles(nibbles: &[u8]) -> PathBuf {
         let components =
@@ -310,7 +295,7 @@ mod tests {
             key: pathbuf_from_nibbles(nibbles),
             partial_len: 0,
             value_digest: Some(ValueDigest::Value(value.into())),
-            child_hashes: Children::new(),
+            child_hashes: DenseChildren::new(),
         }
     }
 
@@ -331,7 +316,7 @@ mod tests {
             key: pathbuf_from_nibbles(&[1, 2]),
             partial_len: 0,
             value_digest: None,
-            child_hashes: Children::new(),
+            child_hashes: DenseChildren::new(),
         };
         let bytes = proof_node_to_mpt_rlp(&node);
         assert_eq!(bytes.len(), 1);
@@ -345,15 +330,15 @@ mod tests {
     }
 
     fn hash_child(byte: u8) -> HashType {
-        TrieHash::from([byte; 32]).into_hash_type()
+        TrieHash::from([byte; 32]).into()
     }
 
     #[test]
     fn branch_empty_partial_path_emits_seventeen_field_list() {
         // Branch with one 32-byte hash child at index 7, no value, empty
         // partial path. Expected output: a single 17-element RLP list.
-        let mut children: Children<Option<HashType>> = Children::new();
-        children.replace(PathComponent::ALL[7], Some(hash_child(0xAB)));
+        let mut children = DenseChildren::new();
+        children.insert(PathComponent::ALL[7].0, hash_child(0xAB));
         let node = ProofNode {
             key: pathbuf_from_nibbles(&[]),
             partial_len: 0,
@@ -381,8 +366,8 @@ mod tests {
         // Non-account branch with non-empty partial path; the 17-element
         // branch RLP exceeds 31 bytes, so the verifier needs both the
         // inner branch and an outer extension that hash-references it.
-        let mut children: Children<Option<HashType>> = Children::new();
-        children.replace(PathComponent::ALL[3], Some(hash_child(0xCD)));
+        let mut children = DenseChildren::new();
+        children.insert(PathComponent::ALL[3].0, hash_child(0xCD));
         let node = ProofNode {
             key: pathbuf_from_nibbles(&[5, 6, 7]),
             partial_len: 0,

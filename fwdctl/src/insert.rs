@@ -2,19 +2,19 @@
 // See the file LICENSE.md for licensing terms.
 
 use clap::Args;
-use firewood::api::{self, Db as _, Proposal as _};
-use firewood::db::{BatchOp, Db, DbConfig};
+use firewood::api;
+use firewood::db::{BatchOp, DbConfig};
+use firewood::open;
 
-use crate::DatabasePath;
+use crate::{DatabasePath, key::KeyArgument};
 
 #[derive(Debug, Args)]
 pub struct Options {
     #[command(flatten)]
     pub database: DatabasePath,
 
-    /// The key to insert
-    #[arg(required = true, value_name = "KEY", help = "Key to insert")]
-    pub key: String,
+    #[command(flatten)]
+    pub key: KeyArgument,
 
     /// The value to insert
     #[arg(required = true, value_name = "VALUE", help = "Value to insert")]
@@ -23,20 +23,23 @@ pub struct Options {
 
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("inserting key value pair {opts:?}");
+    let key = opts.key.database_key()?;
+    let hex_key = hex::encode(&key);
+    let algorithm = opts.database.node_hash_algorithm()?;
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(opts.database.node_hash_algorithm.into())
+        .node_hash_algorithm(algorithm)
         .create_if_missing(false)
         .truncate(false);
 
-    let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
+    let db = open(opts.database.dbpath.clone(), cfg.build())?;
 
-    let batch: Vec<BatchOp<Vec<u8>, Vec<u8>>> = vec![BatchOp::Put {
-        key: opts.key.clone().into(),
-        value: opts.value.bytes().collect(),
-    }];
+    let batch: api::OwnedBatch = Box::new([BatchOp::Put {
+        key: key.into_boxed_slice(),
+        value: opts.value.clone().into_bytes().into_boxed_slice(),
+    }]);
     let proposal = db.propose(batch)?;
     proposal.commit()?;
 
-    println!("{}", opts.key);
+    println!("0x{hex_key}");
     db.close()
 }

@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0] - 2026-07-09
+
+### 🚀 Features
+
+- *(fwdctl)* Add import command ([#2082](https://github.com/ava-labs/firewood/pull/2082))
+- *(ffi)* Close option to force-close outstanding FFI handles for avalanchego async execution engine ([#1976](https://github.com/ava-labs/firewood/pull/1976))
+
+### 🐛 Bug Fixes
+
+- *(proofs)* Change-proof verification accepts forged batch ops ([#2109](https://github.com/ava-labs/firewood/pull/2109))
+- *(storage)* Validate AreaIndex::TryFrom<usize> against NUM_AREA_SIZES ([#2119](https://github.com/ava-labs/firewood/pull/2119))
+
+### 📚 Documentation
+
+- *(storage)* Document FileBacked struct and its fields ([#2112](https://github.com/ava-labs/firewood/pull/2112))
+- Document the lint-suppression policy ([#2116](https://github.com/ava-labs/firewood/pull/2116))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(deps)* Bump golang.org/x/net from 0.52.0 to 0.55.0 in /ffi/tests/firewood ([#2113](https://github.com/ava-labs/firewood/pull/2113))
+- *(clippy)* Allow unwrap and indexing in tests ([#2117](https://github.com/ava-labs/firewood/pull/2117))
+- Run clippy on a pinned nightly, gate maxperf, and add a weekly nightly lint ([#2115](https://github.com/ava-labs/firewood/pull/2115))
+- *(deps)* Bump golang.org/x/crypto from 0.51.0 to 0.52.0 in /ffi/tests/firewood ([#2127](https://github.com/ava-labs/firewood/pull/2127))
+- *(deps)* Bump golang.org/x/crypto from 0.45.0 to 0.52.0 in /ffi/tests/eth ([#2129](https://github.com/ava-labs/firewood/pull/2129))
+
 ## [0.7.0] - 2026-06-29
 
 ### 🚀 Features

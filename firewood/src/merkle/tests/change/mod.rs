@@ -2,17 +2,45 @@
 // See the file LICENSE.md for licensing terms.
 
 use super::*;
-use crate::api::{self, BatchOp, Db as DbTrait, DbView, FrozenChangeProof, Proposal as _};
+use crate::ChangeProofVerificationContext;
+use crate::api::{self, BatchOp, Db as DbTrait, DbView, FrozenChangeProof, HashKey, Proposal as _};
 use crate::db::{Db, DbConfig};
 use crate::merkle::verify_change_proof_root_hash;
-use crate::{ChangeProofVerificationContext, verify_change_proof_structure};
-use firewood_storage::PathComponentSliceExt;
+use firewood_storage::{DefaultHashMode, HashMode, PathComponentSliceExt};
+
+/// Test wrapper around [`crate::verify_change_proof_structure`] that supplies
+/// the compile-default hash mode as the expected `algorithm` (the mode every
+/// proof built in the test binary carries). Defined here so the many existing
+/// call sites in the change-proof test submodules (which `use super::*`) need
+/// not pass the mode explicitly.
+fn verify_change_proof_structure(
+    proof: &FrozenChangeProof,
+    end_root: HashKey,
+    start_key: Option<&[u8]>,
+    end_key: Option<&[u8]>,
+    max_length: Option<std::num::NonZeroUsize>,
+) -> Result<ChangeProofVerificationContext, api::Error> {
+    crate::verify_change_proof_structure(
+        proof,
+        end_root,
+        start_key,
+        end_key,
+        DefaultHashMode::ALGORITHM,
+        max_length,
+    )
+}
 
 // ── Test infrastructure ────────────────────────────────────────────────────
 
-pub(super) fn new_db() -> (Db, tempfile::TempDir) {
+pub(super) fn new_db() -> (Db<DefaultHashMode>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
-    let db = Db::new(dir.path(), DbConfig::builder().build()).unwrap();
+    let db = Db::<DefaultHashMode>::new_with_hash_mode(
+        dir.path(),
+        DbConfig::builder()
+            .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+            .build(),
+    )
+    .unwrap();
     (db, dir)
 }
 
@@ -80,7 +108,7 @@ macro_rules! setup_source_target {
 /// proving trie is built from the proposal's in-range keys, boundary
 /// proof nodes are reconciled into it, and a hybrid root hash is computed.
 pub(super) fn verify_and_check(
-    db: &Db,
+    db: &Db<DefaultHashMode>,
     proof: &FrozenChangeProof,
     verification: &ChangeProofVerificationContext,
     start_root: api::HashKey,
@@ -104,6 +132,10 @@ mod edge_cases;
 // root hash, so change proofs from an empty database can't be generated.
 #[cfg(feature = "ethhash")]
 mod empty;
+// Helpers shared by fuzz tests. Gated to the only current consumer.
+#[cfg(feature = "ethhash")]
+pub(super) mod fuzz_common;
 mod partial;
 mod regression;
 mod structural;
+mod walk;

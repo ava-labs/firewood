@@ -22,7 +22,40 @@ To use
 * `fwdctl delete`: Delete a key/value pair from the database.
 * `fwdctl root`: Get the root hash of the key/value trie.
 * `fwdctl dump`: Dump the contents of the key/value store.
+* `fwdctl import`: Import key/value pairs into an existing database.
+* `fwdctl replay`: Replay recorded operations against an existing database.
 * `fwdctl launch` (requires `--features launch`): Launch and manage AWS benchmark runs.
+
+## Key input modes
+
+The `get`, `insert`, and `delete` commands accept UTF-8 or hexadecimal keys.
+Build with the `ethhash` feature to also derive Firewood keys from Ethereum
+inputs:
+
+```sh
+cargo build --release --bin fwdctl --features ethhash
+```
+
+The `get`, `insert`, and `delete` commands accept the following key modes:
+
+* With no key option, `KEY` remains a UTF-8 string, preserving the default
+  behavior.
+* `--hex` decodes `KEY` as hexadecimal bytes. This mode is available in both
+  default and `ethhash` builds.
+* `--account` decodes `KEY` as an Ethereum address (exactly 20 bytes of hex) and
+  uses `keccak256(address)` as the database key.
+* `--storage SLOT` decodes `KEY` as a 20-byte Ethereum address and `SLOT` as a
+  32-byte storage key, then uses
+  `keccak256(address) || keccak256(slot)` as the database key.
+
+Hex inputs may start with `0x`. For example:
+
+```sh
+fwdctl get --hex 79656172
+fwdctl get --account 0x00112233445566778899aabbccddeeff00112233
+fwdctl get --storage 0x0000000000000000000000000000000000000000000000000000000000000001 \
+  0x00112233445566778899aabbccddeeff00112233
+```
 
 ## Launch command
 
@@ -47,11 +80,17 @@ For full launch usage, defaults, and scenario configuration, see [README.launch.
 * fwdctl create
 
 ```sh
-# Check available options when creating a database, including the defaults.
+# Check available options when creating a database.
 $ fwdctl create -h
-# Create a new, blank instance of firewood using the default directory name "firewood".
-$ fwdctl create firewood
+# Create a new MerkleDB-compatible database in the default "firewood" directory.
+$ fwdctl create --hash-mode merkle-db
+# Create an Ethereum-compatible database at a specific path.
+$ fwdctl create --db eth-firewood --hash-mode ethereum
 ```
+
+The hashing mode is required when creating a database and is persisted in its
+header. All other commands, including `import` and `replay`, require an existing
+database and detect its hashing mode from that header.
 
 * fwdctl get KEY
 

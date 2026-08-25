@@ -2,17 +2,13 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::sync::Arc;
 
 use firewood::{
-    api::{
-        self, ArcDynDbView, Db as _, DbView, FrozenChangeProof, HashKey, HashKeyExt, IntoBatchIter,
-        KeyType,
-    },
-    db::{Db, DbConfig},
+    api::{self, ArcDynDbView, DynDb, FrozenChangeProof, HashKey, IntoBatchIter, KeyType},
+    db::{CommittedView, DbConfig},
     manager::RevisionManagerConfig,
+    open,
 };
-use firewood_storage::{Committed, FileBacked, NodeStore};
 
 use crate::{BatchOp, BorrowedBytes, CView, CreateProposalResult};
 
@@ -31,11 +27,11 @@ pub enum NodeHashAlgorithm {
     Ethereum = 1,
 }
 
-impl From<NodeHashAlgorithm> for firewood_storage::NodeHashAlgorithm {
+impl From<NodeHashAlgorithm> for firewood::NodeHashAlgorithm {
     fn from(alg: NodeHashAlgorithm) -> Self {
         match alg {
-            NodeHashAlgorithm::MerkleDB => firewood_storage::NodeHashAlgorithm::MerkleDB,
-            NodeHashAlgorithm::Ethereum => firewood_storage::NodeHashAlgorithm::Ethereum,
+            NodeHashAlgorithm::MerkleDB => firewood::NodeHashAlgorithm::MerkleDB,
+            NodeHashAlgorithm::Ethereum => firewood::NodeHashAlgorithm::Ethereum,
         }
     }
 }
@@ -97,11 +93,12 @@ pub struct DatabaseHandleArgs<'a> {
 
     /// The hashing mode to use for the database.
     ///
-    /// This must match the compile-time feature:
-    /// - [`NodeHashAlgorithm::Ethereum`] if the `ethhash` feature is enabled
-    /// - [`NodeHashAlgorithm::MerkleDB`] if the `ethhash` feature is disabled
-    ///
-    /// Opening returns an error if this does not match the compile-time feature.
+    /// This is the per-database node-hashing scheme, selected at runtime. For
+    /// an existing database it must match the scheme persisted in the file
+    /// header (a mismatch is an error); for a fresh database it is the scheme
+    /// to create with. A single binary can open both
+    /// [`NodeHashAlgorithm::Ethereum`] and [`NodeHashAlgorithm::MerkleDB`]
+    /// databases regardless of the database's runtime hash mode.
     pub node_hash_algorithm: NodeHashAlgorithm,
 
     /// The maximum number of unpersisted revisions that can exist at a given time.
@@ -149,8 +146,8 @@ impl DatabaseHandleArgs<'_> {
 ///
 #[derive(Debug)]
 pub struct DatabaseHandle {
-    /// The database
-    db: Db,
+    /// The database, erased to the runtime-selected hash mode.
+    db: Box<dyn DynDb>,
     metrics_context: MetricsContext,
 }
 
@@ -179,7 +176,9 @@ impl DatabaseHandle {
             return Err(invalid_data("database path cannot be empty"));
         }
 
-        let db = Db::new(path, cfg)?;
+        // Select the concrete `Db<H>` at runtime from the configured algorithm,
+        // validated against the on-disk header, and hold it erased.
+        let db = open(path, cfg)?;
         Ok(Self {
             db,
             metrics_context,
@@ -191,6 +190,7 @@ impl DatabaseHandle {
     /// # Errors
     ///
     /// Never errors.
+    #[must_use]
     pub fn current_root_hash(&self) -> Option<HashKey> {
         self.db.root_hash()
     }
@@ -202,12 +202,10 @@ impl DatabaseHandle {
     /// An error is returned if there was an i/o error while reading the value.
     pub fn get_latest(&self, key: impl KeyType) -> Result<Option<Box<[u8]>>, api::Error> {
         let Some(root) = self.current_root_hash() else {
-            return Err(api::Error::RevisionNotFound {
-                provided: HashKey::default_root_hash(),
-            });
+            return Err(api::Error::RevisionNotFound { provided: None });
         };
 
-        self.db.revision(root)?.val(key)
+        self.db.revision(root)?.val(key.as_ref())
     }
 
     /// Creates and commits a proposal with the given values.
@@ -232,28 +230,27 @@ impl DatabaseHandle {
     /// accessing the database.
     pub fn get_revision(&self, root: HashKey) -> Result<GetRevisionResult<'_>, api::Error> {
         let view = self.db.view(root.clone())?;
-        let historical = match self.db.revision(root.clone()) {
-            Ok(rev) => Some(rev),
-            Err(api::Error::RevisionNotFound { .. }) => None,
-            Err(err) => return Err(err),
-        };
+        // The opaque committed parent is `None` when `root` names a proposal
+        // rather than a committed revision (see [`DynDb::committed_view`]).
+        let historical = self.db.committed_view(root.clone())?;
         Ok(GetRevisionResult {
             handle: RevisionHandle::new(view, historical, self.metrics_context, self),
             root_hash: root,
         })
     }
 
-    /// Reconstructs a view on top of an existing historical node store.
+    /// Reconstructs a view on top of an existing historical revision.
     ///
     /// # Errors
     ///
     /// Returns an error if reconstruction fails.
     pub fn reconstruct_from_view<'db>(
         &'db self,
-        parent: &Arc<NodeStore<Committed, FileBacked>>,
+        parent: &CommittedView,
         batch: impl IntoBatchIter,
     ) -> Result<firewood::db::ReconstructedView<'db>, api::Error> {
-        self.db.reconstruct_from_view(parent, batch)
+        let ops = crate::proposal::collect_owned_batch(batch)?;
+        self.db.reconstruct_from_view(parent, ops)
     }
 
     pub(crate) fn view(&self, root: HashKey) -> Result<ArcDynDbView, api::Error> {
@@ -266,9 +263,19 @@ impl DatabaseHandle {
         last_key: Option<impl KeyType>,
         key_values: impl IntoIterator<Item: api::KeyValuePair>,
     ) -> Result<CreateProposalResult<'_>, api::Error> {
+        let first_key = first_key.map(|k| k.as_ref().to_vec());
+        let last_key = last_key.map(|k| k.as_ref().to_vec());
+        let key_values: api::OwnedKeyValuePairs = key_values
+            .into_iter()
+            .map(|pair| {
+                let (key, value) = api::KeyValuePair::try_into_tuple(pair)
+                    .map_err(|e| api::Error::from(e.into()))?;
+                Ok::<_, api::Error>((key.as_ref().into(), value.as_ref().into()))
+            })
+            .collect::<Result<_, api::Error>>()?;
         CreateProposalResult::new(self, || {
             self.db
-                .merge_key_value_range(first_key, last_key, key_values)
+                .merge_key_value_range(first_key.as_deref(), last_key.as_deref(), key_values)
         })
     }
 
@@ -317,7 +324,7 @@ impl DatabaseHandle {
     ///
     /// An error is returned if there was an i/o error while dumping the trie.
     pub fn dump_to_string(&self) -> Result<String, api::Error> {
-        self.db.dump_to_string().map_err(api::Error::from)
+        self.db.dump_to_string()
     }
 
     /// Closes the database gracefully.
@@ -339,8 +346,9 @@ impl<'db> CView<'db> for &'db crate::DatabaseHandle {
     fn create_proposal(
         self,
         values: impl IntoBatchIter,
-    ) -> Result<firewood::db::Proposal<'db>, api::Error> {
-        self.db.propose(values)
+    ) -> Result<Box<dyn api::DynProposal<'db> + 'db>, api::Error> {
+        let ops = crate::proposal::collect_owned_batch(values)?;
+        self.db.propose(ops)
     }
 }
 
