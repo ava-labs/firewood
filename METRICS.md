@@ -61,9 +61,9 @@ The FFI layer sets the context on each inbound call based on caller configuratio
 
 #### Build information
 
-| Metric                | Type  | Labels               | Description                                                                                                                                                |
-| --------------------- | ----- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `firewood_build_info` | gauge | `git_sha`, `git_tag` | Constant `1`, set when a database is opened. `git_sha` is the commit built from (`unknown` outside a git checkout); `git_tag` is empty if HEAD is untagged |
+| Metric                | Type  | Labels                    | Description                                                                                                                                                                                                                                                                                 |
+| --------------------- | ----- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `firewood_build_info` | gauge | `version`, `git_describe` | Constant `1`, set when a database is opened. `version` is the cargo package version; `git_describe` is the `git describe` output (with a `-modified` suffix for a dirty worktree, empty outside a git checkout). Both are the same values the nodestore header persists into new databases. |
 
 #### Proposals
 
