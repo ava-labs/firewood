@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787555757277,
+  "lastUpdate": 1787641642392,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -9540,6 +9540,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 84.21336588021434,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "rodrigo",
+            "username": "RodrigoVillar",
+            "email": "77309055+RodrigoVillar@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "e57680a0f6df2b34d097eb13d7c8b6e15c1302b2",
+          "message": "feat!: runtime hash-mode selection [7/9] (#2122)\n\n## Why this should be merged\n\nThe typed stack can represent either hashing scheme, but callers still\nneed a single stable type that can open and operate on databases whose\nmode is chosen at runtime. The FFI, CLI, and other mode-agnostic\nconsumers should not need to duplicate every operation over\n`Db<EthHash>` and `Db<MerkleDbHash>`.\n\nThis is the point in the stack where a single Firewood binary can open\nand operate on Ethereum and MerkleDB databases at the same time. Each\ndatabase still uses exactly one mode, recorded in its header, but the\nmode is no longer fixed for the process as a whole.\n\nIn the stack, this is the user-visible payoff of the preceding\nrefactors: it erases the typed implementation from PR 6 behind a\nruntime-selected interface used by the FFI, CLI, and other mode-agnostic\ncallers. PR 8 then broadens\ndual-mode test coverage, and PR 9 removes the now-obsolete compile-time\nfeature and compatibility bridge.\n\n## How this works\n\nThis change adds object-safe database, proposal, committed-revision, and\nreconstruction traits, plus owned batch and boxed iterator boundaries\nwhere generic methods are not object-safe. The new `firewood::open`\nentry point reads `DbConfig::node_hash_algorithm`, constructs the\ncorresponding typed database, and returns `Box<dyn DynDb>`. Existing\ndatabase headers are validated against the requested mode before use.\n\nThe FFI, `fwdctl`, replay, benchmark, proof, and reconstruction paths\nare moved onto the erased boundary. Runtime mode information remains\navailable on views, and Ethereum-only operations explicitly reject\nMerkleDB databases rather than relying on compile-time availability.\n\nThe `ethhash` feature remains temporarily in this PR as a compatibility\nbridge; it no longer prevents the binary from serving both modes. The\nfollowing test PR exercises both implementations in one binary, and the\nfinal PR removes the\nfeature and the remaining compile-time compatibility shims entirely.\n\n## How this was tested\n\nDatabase tests open Ethereum and MerkleDB databases side by side, verify\nempty and committed roots, check proof metadata, and confirm persisted\nheaders restore the selected mode after reopening. Reconstruction is\ntested through `DefaultHashMode` under both CI feature configurations.\nUnit tests also cover configured hash-mode mismatches and header\nvalidation.\n\n## Breaking Changes\n\n_Note_: `fwdctl` create now requires an explicit `--hash-mode\n<merkle-db|ethereum>`. Every other database command requires an existing\ndatabase and detects its hashing mode from the persisted header. In\nparticular, `import` and `replay` no longer create databases; run\n`fwdctl create` first. `replay` still truncates the existing database by\ndefault while preserving its selected hashing mode.\n\n- [x] firewood\n- [x] firewood-storage\n- [ ] firewood-ffi (C api)\n- [ ] firewood-go (Go api)\n- [x] fwdctl",
+          "timestamp": "2026-08-24T18:46:22Z",
+          "url": "https://github.com/ava-labs/firewood/commit/e57680a0f6df2b34d097eb13d7c8b6e15c1302b2"
+        },
+        "date": 1787641641155,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 171.73857598242176,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5822.803608796399,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 77.21215859737933,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5694.076207309327,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 49.28481600443886,
             "unit": "block_accept_ms/ggas"
           }
         ]
