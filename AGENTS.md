@@ -140,24 +140,41 @@ of the change.
 
 ## PR Strategy
 
-Before submitting or updating a PR, run the local pre-push checks:
+GitHub Actions is authoritative for the full check matrix. Locally, the default
+gate before submitting or updating a PR is the light one:
+
+```bash
+just prepush-lite
+```
+
+That runs `ci-format`, `ci-check-todos`, clippy and tests for the single
+`debug-ethhash-logger` profile, `ci-lint-markdown`, and `ci-docs`. Note that
+`ci-format` only *checks* formatting — run `cargo fmt` yourself to apply it.
+
+The full local matrix is available when a change warrants it — in particular
+when it touches the FFI, workspace dependencies, or code gated behind a feature
+that `debug-ethhash-logger` does not enable:
 
 ```bash
 just prepush
 ```
 
-This runs `just lint` followed by `just test`. These recipes use the same
-lower-level `ci-*` recipes as GitHub Actions, keeping the local and CI commands
-in sync. Run either phase separately while iterating:
+That is `just lint` followed by `just test`. Run either phase separately while
+iterating:
 
 ```bash
 just lint
 just test
 ```
 
-If `just` is not installed, use `./scripts/run-just.sh prepush`. The wrapper
-uses `just` when available, falls back to Nix when available, and otherwise
-prints installation instructions.
+All of these recipes use the same lower-level `ci-*` recipes as GitHub Actions,
+keeping the local and CI commands in sync. Individual profiles are reachable
+directly — `just ci-rust clippy debug-all-features`, for example — which is
+usually cheaper than a whole phase when you already know what needs checking.
+
+If `just` is not installed, use `./scripts/run-just.sh prepush-lite`. The
+wrapper uses `just` when available, falls back to Nix when available, and
+otherwise prints installation instructions.
 
 The complete set of Rust profile names and Cargo arguments is defined in
 `scripts/run-rust-ci.sh`. Every profile there is portable to macOS, so the Just
@@ -203,10 +220,10 @@ default-profile test commands are useful during development, but do not replace
 
 ### Linux-only Checks
 
-The local `lint`, `test`, and `prepush` recipes are designed to run on macOS.
-They intentionally omit CI checks that require Linux: the differential fuzz jobs,
-which use Linux-specific resource limits and tooling. GitHub Actions remains
-authoritative for those.
+The local `lint`, `test`, `prepush`, and `prepush-lite` recipes are designed to
+run on macOS. They intentionally omit CI checks that require Linux: the
+differential fuzz jobs, which use Linux-specific resource limits and tooling.
+GitHub Actions remains authoritative for those.
 
 `--all-features` is *not* in that category. The `io-uring` feature is accepted on
 every platform but only takes effect on Linux, where `storage/build.rs` sets the
@@ -225,8 +242,8 @@ manually with `just ci-rust benchmark-example <profile>` and
 
 ### Markdown Linter
 
-`just lint` and `just prepush` run the Markdown checks used by CI. To run only
-the repository-wide Markdown check, use:
+`just lint`, `just prepush`, and `just prepush-lite` run the Markdown checks
+used by CI. To run only the repository-wide Markdown check, use:
 
 ```bash
 just ci-lint-markdown
@@ -276,7 +293,9 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
    utilized in the `ffi` crate.
 
 2. **Testing**: Any changes should include appropriate tests. Run targeted tests
-   while iterating and `./scripts/run-just.sh prepush` before handoff.
+   while iterating and `./scripts/run-just.sh prepush-lite` before handoff;
+   reach for the full `prepush` only when the change touches the FFI or a
+   feature combination `debug-ethhash-logger` does not cover.
 
 3. **Performance Context**: This is a database designed for blockchain state. Performance matters. Consider allocation patterns and hot paths.
 
@@ -285,8 +304,9 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
 5. **Feature Flags**: Be aware of `ethhash` feature flag when discussing Ethereum compatibility vs. default merkledb compatibility.
 
 6. **Documentation**: Public APIs should be well-documented. The documentation
-   check is included in `./scripts/run-just.sh lint`; run `./scripts/run-just.sh ci-docs` to invoke it
-   separately.
+   check is included in `./scripts/run-just.sh lint` and
+   `./scripts/run-just.sh prepush-lite`; run `./scripts/run-just.sh ci-docs` to
+   invoke it separately.
 
 7. **Workspace Awareness**: This is a multi-crate workspace. Changes may affect multiple crates. Check `Cargo.toml` for workspace structure.
 
