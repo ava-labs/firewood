@@ -159,10 +159,7 @@ that `debug-ethhash-logger` does not enable:
 just prepush
 ```
 
-That is `just lint` followed by `just test`: 23 sub-invocations, which build
-`maxperf-ethhash-logger` (fat LTO) twice, drag in the AWS SDK via
-`debug-all-features`, and run six Go/cgo FFI steps. Expect roughly 15 minutes
-with a warm cache and considerably more cold. Run either phase separately while
+That is `just lint` followed by `just test`. Run either phase separately while
 iterating:
 
 ```bash
