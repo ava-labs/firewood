@@ -108,6 +108,9 @@ func TestMetrics(t *testing.T) {
 
 	if logPath != "" {
 		r.True(assertNonEmptyFile(t, logPath))
+		logContents, readErr := os.ReadFile(logPath)
+		r.NoError(readErr)
+		r.Contains(string(logContents), "db_tag="+dbTag)
 	}
 }
 
