@@ -233,9 +233,7 @@ func TestTagMetricsConcurrentTLSIsolation(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, workers)
 	for i := range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for c := range commits {
 				key := fmt.Appendf(nil, "%s_key_%d", tags[i], c)
 				if _, err := dbs[i].Update([]BatchOp{Put(key, []byte("value"))}); err != nil {
@@ -243,7 +241,7 @@ func TestTagMetricsConcurrentTLSIsolation(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)
