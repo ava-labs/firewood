@@ -1258,3 +1258,49 @@ fn test_an_unrelated_end_proof_does_not_narrow() {
         }
     }
 }
+
+/// A proof whose forged operations would drive verification thousands of levels
+/// deep is rejected at deserialization, before any trie is rebuilt.
+#[cfg(feature = "ethhash")]
+#[test]
+fn test_deep_forged_ops_rejected_at_deserialization() {
+    let (source, _dir_s) = setup_db![];
+    let (root1, root2) = setup_2nd_commit!(source, [(b"\x10", b"v0")]);
+    let honest = source
+        .change_proof(root1, root2.clone(), None, None, None)
+        .unwrap();
+
+    // 3000 keys forming a prefix chain, each sorting below the honest final op so
+    // the end-proof anchor check on the last op still passes.
+    let mut keys: Vec<Vec<u8>> = (0..3000)
+        .map(|i| {
+            let mut k = vec![0x00u8; i];
+            k.push(0x01);
+            k
+        })
+        .collect();
+    keys.sort();
+    let mut ops: Vec<BatchOp<Key, Value>> = keys
+        .iter()
+        .map(|k| BatchOp::Put {
+            key: k.clone().into_boxed_slice(),
+            value: b"v".to_vec().into_boxed_slice(),
+        })
+        .collect();
+    ops.extend(honest.batch_ops().iter().cloned());
+    let forged = crate::merkle::tests::change::fuzz_common::build_change_proof(
+        honest.start_proof().as_ref().to_vec(),
+        honest.end_proof().as_ref().to_vec(),
+        ops,
+    );
+
+    let mut bytes = Vec::new();
+    forged.write_to_vec(&mut bytes);
+    let err = FrozenChangeProof::from_slice(&bytes)
+        .expect_err("a proof carrying over-long keys must not deserialize");
+    let rendered = format!("{err:?}");
+    assert!(
+        rendered.contains("key length"),
+        "expected the key-length bound to reject it, got {rendered}"
+    );
+}

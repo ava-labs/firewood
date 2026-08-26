@@ -67,6 +67,32 @@ impl FrozenRangeProof {
     }
 }
 
+/// Maximum length, in bytes, of a key accepted from a serialized proof.
+///
+/// Trie depth cannot exceed a key's nibble count, and the walks that rebuild a
+/// trie during proof verification are bounded by trie depth. A peer's keys
+/// therefore decide how deep verification goes, so an unbounded key length lets a
+/// peer choose unbounded work. This bound is sixteen times the deepest key the
+/// `ethhash` format defines, which is a 32-byte account hash followed by a
+/// 32-byte slot hash.
+pub(crate) const MAX_KEY_BYTES: usize = 1024;
+
+/// [`MAX_KEY_BYTES`] expressed in nibbles, for proof-node paths, which arrive
+/// unpacked.
+pub(crate) const MAX_KEY_NIBBLES: usize = MAX_KEY_BYTES * 2;
+
+/// Rejects a packed key longer than [`MAX_KEY_BYTES`].
+fn check_key_bytes(reader: &V0Reader<'_>, key: &[u8]) -> Result<(), ReadError> {
+    if key.len() > MAX_KEY_BYTES {
+        return Err(reader.invalid_item(
+            "key length",
+            "at most 1024 bytes",
+            format!("{} bytes", key.len()),
+        ));
+    }
+    Ok(())
+}
+
 impl<T: Version0> Version0 for Box<[T]> {
     fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
         let num_items = reader
@@ -172,16 +198,24 @@ impl Version0 for BatchOp<Key, Value> {
             .read_item::<u8>()
             .map_err(|err| err.set_item("option discriminant"))?
         {
-            BATCH_PUT => Ok(BatchOp::Put {
-                key: reader.read_item()?,
-                value: reader.read_item()?,
-            }),
-            BATCH_DELETE => Ok(BatchOp::Delete {
-                key: reader.read_item()?,
-            }),
-            BATCH_DELETE_RANGE => Ok(BatchOp::DeleteRange {
-                prefix: reader.read_item()?,
-            }),
+            BATCH_PUT => {
+                let key: Key = reader.read_item()?;
+                check_key_bytes(reader, &key)?;
+                Ok(BatchOp::Put {
+                    key,
+                    value: reader.read_item()?,
+                })
+            }
+            BATCH_DELETE => {
+                let key: Key = reader.read_item()?;
+                check_key_bytes(reader, &key)?;
+                Ok(BatchOp::Delete { key })
+            }
+            BATCH_DELETE_RANGE => {
+                let prefix: Key = reader.read_item()?;
+                check_key_bytes(reader, &prefix)?;
+                Ok(BatchOp::DeleteRange { prefix })
+            }
             found => Err(reader.invalid_item("option discriminant", "0, 1, or 2", found)),
         }
     }
@@ -223,13 +257,22 @@ impl Version0 for ProofNode {
 impl Version0 for PathBuf {
     fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
         let bytes = reader.read_item::<&[u8]>()?;
-        TriePathFromUnpackedBytes::path_from_unpacked_bytes(bytes).map_err(|_| {
-            reader.invalid_item(
-                "path",
-                "valid nibbles",
-                format!("invalid nibbles: {}", hex::encode(bytes)),
-            )
-        })
+        let path: PathBuf =
+            TriePathFromUnpackedBytes::path_from_unpacked_bytes(bytes).map_err(|_| {
+                reader.invalid_item(
+                    "path",
+                    "valid nibbles",
+                    format!("invalid nibbles: {}", hex::encode(bytes)),
+                )
+            })?;
+        if path.len() > MAX_KEY_NIBBLES {
+            return Err(reader.invalid_item(
+                "path length",
+                "at most 2048 nibbles",
+                format!("{} nibbles", path.len()),
+            ));
+        }
+        Ok(path)
     }
 }
 
@@ -237,7 +280,9 @@ impl Version0 for (Box<[u8]>, Box<[u8]>) {
     const MIN_BYTES_PER_ITEM: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
     fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
-        Ok((reader.read_item()?, reader.read_item()?))
+        let key: Box<[u8]> = reader.read_item()?;
+        check_key_bytes(reader, &key)?;
+        Ok((key, reader.read_item()?))
     }
 }
 

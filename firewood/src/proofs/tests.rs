@@ -1335,3 +1335,93 @@ fn test_value_digest_hash_read_arm_is_unconditional() {
     }
     assert!(eth_reader.remainder().is_empty(), "all bytes consumed");
 }
+
+/// Builds a change proof carrying one `Put` whose key is `key_len` bytes.
+fn change_proof_with_key_len(key_len: usize) -> Vec<u8> {
+    let proof = FrozenChangeProof::with_hash_mode(
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Box::new([BatchOp::Put {
+            key: vec![0u8; key_len].into_boxed_slice(),
+            value: Box::from(b"v".as_slice()),
+        }]),
+        DefaultHashMode::ALGORITHM,
+    );
+    let mut serialized = Vec::new();
+    proof.write_to_vec(&mut serialized);
+    serialized
+}
+
+/// A key at the bound deserializes; one byte over is rejected.
+///
+/// Trie depth cannot exceed a key's nibble count, so this bound is what keeps
+/// peer-supplied keys from deciding how deep verification walks.
+#[test_case(1024, true ; "at the bound")]
+#[test_case(1025, false ; "one byte over")]
+fn test_batch_op_key_length_bound(key_len: usize, accepted: bool) {
+    let data = change_proof_with_key_len(key_len);
+    let result = FrozenChangeProof::from_slice(&data);
+    assert_eq!(
+        result.is_ok(),
+        accepted,
+        "key of {key_len} bytes: expected accepted={accepted}, got {result:?}"
+    );
+    if !accepted {
+        match result {
+            Err(ReadError::InvalidItem { item, expected, .. }) => {
+                assert_eq!(item, "key length");
+                assert_eq!(expected, "at most 1024 bytes");
+            }
+            other => panic!("expected InvalidItem for an over-long key, got {other:?}"),
+        }
+    }
+}
+
+/// The same bound applies to a range proof's key-value pairs.
+#[test_case(1024, true ; "at the bound")]
+#[test_case(1025, false ; "one byte over")]
+fn test_range_proof_key_length_bound(key_len: usize, accepted: bool) {
+    let proof = FrozenRangeProof::with_hash_mode(
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Box::new([(
+            vec![0u8; key_len].into_boxed_slice(),
+            Box::from(b"v".as_slice()),
+        )]),
+        DefaultHashMode::ALGORITHM,
+    );
+    let mut data = Vec::new();
+    proof.write_to_vec(&mut data);
+    assert_eq!(
+        FrozenRangeProof::from_slice(&data).is_ok(),
+        accepted,
+        "key of {key_len} bytes"
+    );
+}
+
+/// A proof node's path is nibbles, so it is bounded in nibbles rather than bytes.
+#[test_case(2048, true ; "at the bound")]
+#[test_case(2049, false ; "one nibble over")]
+fn test_proof_node_path_length_bound(nibbles: usize, accepted: bool) {
+    let node = ProofNode {
+        key: (0..nibbles)
+            .map(|_| PathComponent::try_new(0).expect("0 is a valid nibble"))
+            .collect(),
+        partial_len: 0,
+        value_digest: None,
+        child_hashes: DenseChildren::new(),
+    };
+    let proof = FrozenRangeProof::with_hash_mode(
+        Proof::new(Box::<[ProofNode]>::from([node])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Box::new([]),
+        DefaultHashMode::ALGORITHM,
+    );
+    let mut data = Vec::new();
+    proof.write_to_vec(&mut data);
+    assert_eq!(
+        FrozenRangeProof::from_slice(&data).is_ok(),
+        accepted,
+        "path of {nibbles} nibbles"
+    );
+}

@@ -49,7 +49,9 @@ fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
 fn generate_random_kvs(rng: &firewood_storage::SeededRng, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
     let mut kvs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for _ in 0..n {
-        let key_len = rng.random_range(1..=4096);
+        // Keys are capped at the proof key-length bound so generated data can
+        // round-trip through proof serialization. Values are not bounded.
+        let key_len = rng.random_range(1..=512);
         let key: Vec<u8> = (0..key_len).map(|_| rng.random()).collect();
 
         let val_len = rng.random_range(1..=4096);
