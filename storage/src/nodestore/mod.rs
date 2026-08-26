@@ -514,6 +514,16 @@ impl<T, S, H> NodeStore<Mutable<T>, S, H> {
     pub const fn root_mut(&mut self) -> &mut Option<Node> {
         &mut self.kind.root
     }
+
+    /// Borrows the root of this mutable nodestore.
+    ///
+    /// Prefer this over [`RootReader::root_node`] for read-only walks. That
+    /// returns an owned `SharedNode`, which for a mutable nodestore means cloning
+    /// the root, and `Node` owns its children by value, so the derived `Clone`
+    /// recurses once per trie level.
+    pub const fn root_ref(&self) -> Option<&Node> {
+        self.kind.root.as_ref()
+    }
 }
 
 impl<S: WritableStorage, H: HashMode> NodeStore<Mutable<Propose>, S, H> {
