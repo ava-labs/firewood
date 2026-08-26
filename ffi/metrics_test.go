@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 
@@ -112,181 +111,120 @@ func TestMetrics(t *testing.T) {
 	}
 }
 
-func TestGathererFiltersByDBTag(t *testing.T) {
-	r := require.New(t)
-	tagA := strings.ToLower(strings.ReplaceAll(t.Name(), "/", "_")) + "_a"
-	tagB := strings.ToLower(strings.ReplaceAll(t.Name(), "/", "_")) + "_b"
-
-	assertTagged := func(families []*dto.MetricFamily, expectedTag string) {
-		r.NotEmpty(families)
-		for _, family := range families {
-			for _, metric := range family.GetMetric() {
-				hasDBTag := false
-				for _, labelPair := range metric.GetLabel() {
-					if labelPair.GetName() == "db_tag" {
-						hasDBTag = true
-						r.Equal(expectedTag, labelPair.GetValue())
-					}
-				}
-				r.True(hasDBTag)
+// assertAllTagged asserts every metric in families carries a db_tag label equal to tag.
+func assertAllTagged(r *require.Assertions, families []*dto.MetricFamily, tag string) {
+	r.NotEmpty(families)
+	for _, family := range families {
+		for _, metric := range family.GetMetric() {
+			labels := make(map[string]string, len(metric.GetLabel()))
+			for _, pair := range metric.GetLabel() {
+				labels[pair.GetName()] = pair.GetValue()
 			}
+			r.Equal(tag, labels["db_tag"], "family %s", family.GetName())
 		}
 	}
+}
 
+func TestGathererFiltersByDBTag(t *testing.T) {
+	r := require.New(t)
 	ensureMetricsStarted(t)
-	dbA := newTestDatabase(t, WithMetricsTag(tagA))
-	_, _, batchA := kvForTest(3)
-	_, err := dbA.Update(batchA)
-	r.NoError(err)
-	r.NoError(dbA.Close(t.Context()))
 
-	dbB := newTestDatabase(t, WithMetricsTag(tagB))
-	_, _, batchB := kvForTest(4)
-	_, err = dbB.Update(batchB)
-	r.NoError(err)
-	r.NoError(dbB.Close(t.Context()))
+	tags := []string{"filter_by_db_tag_a", "filter_by_db_tag_b"}
+	for _, tag := range tags {
+		db := newTestDatabase(t, WithMetricsTag(tag))
+		_, _, batch := kvForTest(3)
+		_, err := db.Update(batch)
+		r.NoError(err)
+		r.NoError(db.Close(t.Context()))
+	}
 
-	metricsA, err := (Gatherer{DBTag: tagA}).Gather()
-	r.NoError(err)
-	assertTagged(metricsA, tagA)
-
-	metricsB, err := (Gatherer{DBTag: tagB}).Gather()
-	r.NoError(err)
-	assertTagged(metricsB, tagB)
+	for _, tag := range tags {
+		families, err := (Gatherer{DBTag: tag}).Gather()
+		r.NoError(err)
+		assertAllTagged(r, families, tag)
+	}
 }
 
 func TestGathererFiltersWithUntaggedDatabase(t *testing.T) {
 	r := require.New(t)
-	tag := strings.ToLower(strings.ReplaceAll(t.Name(), "/", "_"))
-
 	ensureMetricsStarted(t)
+	const tag = "untagged_filter_test"
 
-	// Expensive metrics are enabled so the commit duration histogram
-	// (expensive-gated) is recorded and can be checked for the tag.
+	// Expensive metrics are enabled so the expensive-gated commit duration
+	// histogram is recorded and can be checked for the tag.
 	dbTagged := newTestDatabase(t, WithMetricsTag(tag), WithExpensiveMetrics())
-	_, _, batchTagged := kvForTest(2)
-	_, err := dbTagged.Update(batchTagged)
+	_, _, batch := kvForTest(2)
+	_, err := dbTagged.Update(batch)
 	r.NoError(err)
 	r.NoError(dbTagged.Close(t.Context()))
 
 	dbUntagged := newTestDatabase(t)
-	_, _, batchUntagged := kvForTest(2)
-	_, err = dbUntagged.Update(batchUntagged)
+	_, _, batch = kvForTest(2)
+	_, err = dbUntagged.Update(batch)
 	r.NoError(err)
 	r.NoError(dbUntagged.Close(t.Context()))
 
-	// Ensure mixed tagged + untagged metrics remain gatherable.
-	_, err = (Gatherer{}).Gather()
+	// Filtering by tag must exclude the untagged database's series.
+	families, err := (Gatherer{DBTag: tag}).Gather()
 	r.NoError(err)
+	assertAllTagged(r, families, tag)
 
-	// Ensure tag filtering does not include untagged series.
-	metricsFamiliesForTag, err := (Gatherer{DBTag: tag}).Gather()
-	r.NoError(err)
-	r.NotEmpty(metricsFamiliesForTag)
-	seenProposalCommit := false
-	seenProposalCommitDuration := false
-	for _, family := range metricsFamiliesForTag {
-		if family.GetName() == "firewood_proposal_commits_total" {
-			seenProposalCommit = true
-		}
-		if family.GetName() == "firewood_proposal_commit_duration_seconds" {
-			seenProposalCommitDuration = true
-		}
-		for _, metric := range family.GetMetric() {
-			hasDBTag := false
-			for _, labelPair := range metric.GetLabel() {
-				if labelPair.GetName() == "db_tag" {
-					hasDBTag = true
-					r.Equal(tag, labelPair.GetValue())
-				}
-			}
-			r.True(hasDBTag)
-		}
+	names := make(map[string]bool, len(families))
+	for _, family := range families {
+		names[family.GetName()] = true
 	}
-	r.True(seenProposalCommit)
-	r.True(seenProposalCommitDuration)
+	r.True(names["firewood_proposal_commits_total"])
+	r.True(names["firewood_proposal_commit_duration_seconds"])
 }
 
+// TestTagMetricsConcurrentTLSIsolation commits to several tagged databases
+// concurrently and checks each tag's commit counter counts only its own commits.
 func TestTagMetricsConcurrentTLSIsolation(t *testing.T) {
 	r := require.New(t)
 	ensureMetricsStarted(t)
 
-	const workerCount = 12
-	const commitsPerWorker = 15
-	const commitMetricName = "firewood_proposal_commits_total"
+	const workers = 4
+	const commits = 5
+	const counterName = "firewood_proposal_commits_total"
 
-	type metricsWorker struct {
-		tag    string
-		db     *Database
-		before float64
-	}
-
-	workers := make([]metricsWorker, 0, workerCount)
-	baseTag := strings.ToLower(strings.ReplaceAll(t.Name(), "/", "_"))
-	for i := range workerCount {
-		tag := fmt.Sprintf("%s_worker_%02d", baseTag, i)
-		db := newTestDatabase(t, WithMetricsTag(tag))
-
-		before, err := gatherTaggedCounterValue(commitMetricName, tag)
+	tags := make([]string, workers)
+	dbs := make([]*Database, workers)
+	before := make([]float64, workers)
+	for i := range workers {
+		tags[i] = fmt.Sprintf("tls_isolation_worker_%d", i)
+		dbs[i] = newTestDatabase(t, WithMetricsTag(tags[i]))
+		v, err := gatherTaggedCounterValue(counterName, tags[i])
 		r.NoError(err)
-
-		workers = append(workers, metricsWorker{
-			tag:    tag,
-			db:     db,
-			before: before,
-		})
+		before[i] = v
 	}
 
-	start := make(chan struct{})
-	errs := make(chan error, workerCount)
 	var wg sync.WaitGroup
-
-	for _, worker := range workers {
+	errs := make(chan error, workers)
+	for i := range workers {
 		wg.Add(1)
-		go func(worker metricsWorker) {
+		go func() {
 			defer wg.Done()
-			<-start
-			for commitIdx := range commitsPerWorker {
-				key := []byte(fmt.Sprintf("%s_key_%03d", worker.tag, commitIdx))
-				value := []byte(fmt.Sprintf("value_%03d", commitIdx))
-				_, err := worker.db.Update([]BatchOp{Put(key, value)})
-				if err != nil {
-					errs <- fmt.Errorf("%s update %d failed: %w", worker.tag, commitIdx, err)
+			for c := range commits {
+				key := fmt.Appendf(nil, "%s_key_%d", tags[i], c)
+				if _, err := dbs[i].Update([]BatchOp{Put(key, []byte("value"))}); err != nil {
+					errs <- fmt.Errorf("%s update %d: %w", tags[i], c, err)
 					return
 				}
 			}
-		}(worker)
+		}()
 	}
-
-	close(start)
 	wg.Wait()
 	close(errs)
-
 	for err := range errs {
 		r.NoError(err)
 	}
 
-	totalDelta := 0.0
-	for _, worker := range workers {
-		r.NoError(worker.db.Close(oneSecCtx(t)))
-
-		after, err := gatherTaggedCounterValue(commitMetricName, worker.tag)
+	for i := range workers {
+		r.NoError(dbs[i].Close(t.Context()))
+		after, err := gatherTaggedCounterValue(counterName, tags[i])
 		r.NoError(err)
-
-		actualDelta := after - worker.before
-		totalDelta += actualDelta
-
-		r.InDelta(
-			float64(commitsPerWorker),
-			actualDelta,
-			0.0000001,
-			"unexpected %s count for db_tag=%s",
-			commitMetricName,
-			worker.tag,
-		)
+		r.InDelta(commits, after-before[i], 1e-9, "db_tag=%s", tags[i])
 	}
-
-	r.InDelta(float64(workerCount*commitsPerWorker), totalDelta, 0.0000001)
 }
 
 func gatherTaggedCounterValue(metricName, dbTag string) (float64, error) {

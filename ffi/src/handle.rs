@@ -92,11 +92,12 @@ pub struct DatabaseHandleArgs<'a> {
     /// Expensive metrics are disabled by default.
     pub expensive_metrics: bool,
 
-    /// Optional tag used to separate metrics and logs per database.
-    ///
-    /// If empty, no tag is applied.
+    /// Tag used to separate metrics and logs per database.
     ///
     /// This must be a valid UTF-8 string.
+    ///
+    /// If empty, no tag is applied and this database's metrics are recorded
+    /// with the default `db_tag="untagged"` label.
     pub db_tag: BorrowedBytes<'a>,
 
     /// The hashing mode to use for the database.
@@ -376,10 +377,6 @@ fn parse_db_tag(db_tag: BorrowedBytes<'_>) -> Result<Option<metrics::SharedStrin
         .as_str()
         .map_err(|err| invalid_data(format!("database tag contains invalid utf-8: {err}")))?;
 
-    if db_tag.is_empty() {
-        Ok(None)
-    } else {
-        let db_tag = Arc::<str>::from(db_tag);
-        Ok(Some(metrics::SharedString::from(db_tag)))
-    }
+    // Arc<str> keeps the per-recording clone of the tag a refcount bump.
+    Ok((!db_tag.is_empty()).then(|| metrics::SharedString::from(Arc::<str>::from(db_tag))))
 }

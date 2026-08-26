@@ -234,7 +234,7 @@ func WithExpensiveMetrics() Option {
 }
 
 // WithMetricsTag sets a tag to attach to metrics and logs emitted for this database.
-// Default: empty (no tag)
+// Default: empty (no tag; metrics are recorded with the fallback db_tag="untagged" label)
 func WithMetricsTag(tag string) Option {
 	return func(c *config) {
 		c.metricsTag = tag
