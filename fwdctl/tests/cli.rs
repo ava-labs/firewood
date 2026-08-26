@@ -25,11 +25,23 @@ fn with_tmpdir(test: impl FnOnce(&Path)) {
     test(tmpdir.path());
 }
 
+/// Creates a database in the build's compatibility mode for legacy CLI tests.
+/// Tests that exercise runtime selection use `create_db_with_hash_mode` instead.
 fn create_db(db_path: &Path) {
+    let hash_mode = if cfg!(feature = "ethhash") {
+        "ethereum"
+    } else {
+        "merkle-db"
+    };
+    create_db_with_hash_mode(db_path, hash_mode);
+}
+
+fn create_db_with_hash_mode(db_path: &Path, hash_mode: &str) {
     cargo_bin_cmd!()
         .arg("create")
         .arg("--db")
         .arg(db_path)
+        .args(["--hash-mode", hash_mode])
         .assert()
         .success();
 }
@@ -265,6 +277,19 @@ fn fwdctl_prints_version() {
 #[test]
 fn fwdctl_creates_database() {
     with_tmpdir(create_db);
+}
+
+#[test]
+fn fwdctl_create_requires_hash_mode() {
+    with_tmpdir(|db_path| {
+        cargo_bin_cmd!()
+            .arg("create")
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("--node-hash-algorithm"));
+    });
 }
 
 #[test]
@@ -623,42 +648,50 @@ fn test_slow_fwdctl_dump_with_hex() {
 
 #[test]
 fn fwdctl_check_empty_db() {
-    with_tmpdir(|db_path| {
-        create_db(db_path);
+    for hash_mode in ["merkle-db", "ethereum"] {
+        with_tmpdir(|db_path| {
+            create_db_with_hash_mode(db_path, hash_mode);
 
-        cargo_bin_cmd!()
-            .arg("check")
-            .arg("--db")
-            .arg(db_path)
-            .assert()
-            .success();
-    });
+            // `check` must infer the mode from the existing database header.
+            cargo_bin_cmd!()
+                .arg("check")
+                .arg("--db")
+                .arg(db_path)
+                .assert()
+                .success();
+        });
+    }
 }
 
 #[test]
 fn test_slow_fwdctl_check_db_with_data() {
     use rand::{RngExt, distr::Alphanumeric};
 
-    with_tmpdir(|db_path| {
-        let rng = firewood_storage::SeededRng::from_env_or_random();
-        let mut sample_iter = rng.sample_iter(Alphanumeric).map(char::from);
+    for hash_mode in ["merkle-db", "ethereum"] {
+        with_tmpdir(|db_path| {
+            let rng = firewood_storage::SeededRng::from_env_or_random();
+            let mut sample_iter = rng.sample_iter(Alphanumeric).map(char::from);
 
-        create_db(db_path);
+            create_db_with_hash_mode(db_path, hash_mode);
 
-        // TODO(#2047): bulk loading data instead of inserting one by one
-        for _ in 0..4 {
-            let key = sample_iter.by_ref().take(64).collect::<String>();
-            let value = sample_iter.by_ref().take(10).collect::<String>();
-            insert_key_value(db_path, &key, &value);
-        }
+            // TODO(#2047): bulk loading data instead of inserting one by one
+            for _ in 0..4 {
+                let key = sample_iter.by_ref().take(64).collect::<String>();
+                let value = sample_iter.by_ref().take(10).collect::<String>();
+                insert_key_value(db_path, &key, &value);
+            }
 
-        cargo_bin_cmd!()
-            .arg("check")
-            .arg("--db")
-            .arg(db_path)
-            .assert()
-            .success();
-    });
+            // Exercise mode-specific hash recomputation after inferring the
+            // mode from the existing database header.
+            cargo_bin_cmd!()
+                .arg("check")
+                .arg("--db")
+                .arg(db_path)
+                .arg("--hash-check")
+                .assert()
+                .success();
+        });
+    }
 }
 
 #[test]
@@ -683,6 +716,7 @@ fn test_slow_fwdctl_import_csv() {
             .success();
 
         let db_path2 = tmp_dir.join("db2");
+        create_db(&db_path2);
         cargo_bin_cmd!()
             .arg("import")
             .arg("--db")
@@ -732,6 +766,7 @@ fn test_slow_fwdctl_import_csv_hex() {
             .success();
 
         let db_path2 = tmp_dir.join("db2");
+        create_db(&db_path2);
         cargo_bin_cmd!()
             .arg("import")
             .arg("--db")
@@ -802,6 +837,7 @@ fn test_slow_fwdctl_import_large_random_database() {
 
         // Import it into db1
         let db_path1 = tmp_dir.join("db1");
+        create_db(&db_path1);
         cargo_bin_cmd!()
             .arg("import")
             .arg("--db")
@@ -828,6 +864,7 @@ fn test_slow_fwdctl_import_large_random_database() {
 
         // Import dump_file2 into db2
         let db_path2 = tmp_dir.join("db2");
+        create_db(&db_path2);
         cargo_bin_cmd!()
             .arg("import")
             .arg("--db")

@@ -49,13 +49,13 @@ mod gauge_value {
         fn as_f64(self) -> f64;
     }
     impl GaugeValue for u64 {
-        #[allow(clippy::cast_precision_loss)]
+        #[expect(clippy::cast_precision_loss)]
         fn as_f64(self) -> f64 {
             self as f64
         }
     }
     impl GaugeValue for usize {
-        #[allow(clippy::cast_precision_loss)]
+        #[expect(clippy::cast_precision_loss)]
         fn as_f64(self) -> f64 {
             self as f64
         }
@@ -94,7 +94,7 @@ pub trait CounterExt {
 }
 
 impl CounterExt for metrics::Counter {
-    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     fn increment_f64(&self, value: f64) {
         self.increment(value as u64);
     }

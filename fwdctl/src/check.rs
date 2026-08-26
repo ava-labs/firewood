@@ -9,8 +9,8 @@ use askama::Template;
 use clap::Args;
 use firewood::api;
 use firewood_storage::{
-    CacheReadStrategy, CheckOpt, DBStats, DefaultHashMode, DeletedNodeTracking, FileBacked,
-    NodeStore, NodeStoreHeader,
+    CacheReadStrategy, CheckOpt, DBStats, DeletedNodeTracking, EthHash, FileBacked, HashMode,
+    MerkleDbHash, NodeHashAlgorithm, NodeStore, NodeStoreHeader,
 };
 use indicatif::{ProgressBar, ProgressFinish, ProgressStyle};
 use nonzero_ext::nonzero;
@@ -44,6 +44,13 @@ pub struct Options {
 }
 
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
+    match opts.database.node_hash_algorithm()? {
+        NodeHashAlgorithm::Ethereum => run_with_hash_mode::<EthHash>(opts),
+        NodeHashAlgorithm::MerkleDB => run_with_hash_mode::<MerkleDbHash>(opts),
+    }
+}
+
+fn run_with_hash_mode<H: HashMode>(opts: &Options) -> Result<(), api::Error> {
     let db_path = PathBuf::from(&opts.database.dbpath).join("firewood.db");
     let node_cache_memory_limit = nonzero!(1usize);
     let free_list_cache_size = nonzero!(1usize);
@@ -55,7 +62,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
         false,
         false,                         // don't create if missing
         CacheReadStrategy::WritesOnly, // we scan the database once - no need to cache anything
-        opts.database.node_hash_algorithm.into(),
+        H::ALGORITHM,
     )?;
     let storage = Arc::new(fb);
 
@@ -80,8 +87,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     } else {
         DeletedNodeTracking::Enabled
     };
-    let nodestore: NodeStore<_, _, DefaultHashMode> =
-        NodeStore::open(&header, storage, deleted_node_tracking)?;
+    let nodestore: NodeStore<_, _, H> = NodeStore::open(&header, storage, deleted_node_tracking)?;
     let check_report = nodestore.check(&header, check_ops);
 
     println!("Errors ({}): ", check_report.errors.len());

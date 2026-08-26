@@ -15,6 +15,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use fastrace_opentelemetry::OpenTelemetryReporter;
 use firewood::logger::trace;
+use firewood::open;
 use firewood_storage::{DefaultHashMode, HashMode};
 use log::LevelFilter;
 use sha2::{Digest, Sha256};
@@ -24,7 +25,8 @@ use std::fmt::Display;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
-use firewood::db::{BatchOp, Db, DbConfig};
+use firewood::api::DynDb;
+use firewood::db::{BatchOp, DbConfig};
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
 
 use fastrace::collector::Config;
@@ -158,7 +160,7 @@ enum TestName {
 }
 
 trait TestRunner {
-    fn run(&self, db: &Db<DefaultHashMode>, args: &Args) -> Result<(), Box<dyn Error>>;
+    fn run(&self, db: &dyn DynDb, args: &Args) -> Result<(), Box<dyn Error>>;
 
     fn generate_inserts(
         start: u64,
@@ -241,24 +243,24 @@ fn main() -> Result<(), Box<dyn Error>> {
         .manager(mgrcfg)
         .build();
 
-    let db = Db::new(args.global_opts.dbname.clone(), cfg).expect("db initiation should succeed");
+    let db = open(args.global_opts.dbname.clone(), cfg).expect("db initiation should succeed");
 
     match args.test_name {
         TestName::Create => {
             let runner = create::Create;
-            runner.run(&db, &args)?;
+            runner.run(db.as_ref(), &args)?;
         }
         TestName::TenKRandom => {
             let runner = tenkrandom::TenKRandom;
-            runner.run(&db, &args)?;
+            runner.run(db.as_ref(), &args)?;
         }
         TestName::Zipf(_) => {
             let runner = zipf::Zipf;
-            runner.run(&db, &args)?;
+            runner.run(db.as_ref(), &args)?;
         }
         TestName::Single => {
             let runner = single::Single;
-            runner.run(&db, &args)?;
+            runner.run(db.as_ref(), &args)?;
         }
     }
 

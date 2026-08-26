@@ -1,30 +1,30 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood::{
-    DefaultHashMode,
-    api::{self, BoxKeyValueIter, DbView, HashKey, IntoBatchIter, Proposal as _},
-};
+use firewood::api::{self, BoxKeyValueIter, DbView, DynProposal, HashKey};
 
 use crate::{IteratorHandle, iterator::CreateIteratorResult, metrics::MetricsContextExt};
+
+/// Collect a batch-op iterator into an owned, dyn-boundary-friendly batch.
+pub(crate) use firewood::api::collect_owned_batch;
 
 /// An opaque wrapper around a Proposal that also retains a reference to the
 /// database handle it was created from.
 #[derive(Debug)]
 pub struct ProposalHandle<'db> {
     hash_key: Option<HashKey>,
-    proposal: firewood::db::Proposal<'db, DefaultHashMode>,
+    proposal: Box<dyn DynProposal<'db> + 'db>,
     handle: &'db crate::DatabaseHandle,
 }
 
-impl<'db> DbView for ProposalHandle<'db> {
+impl DbView for ProposalHandle<'_> {
     type Iter<'view>
-        = <firewood::db::Proposal<'db, DefaultHashMode> as DbView>::Iter<'view>
+        = BoxKeyValueIter<'view>
     where
         Self: 'view;
 
     fn node_hash_algorithm(&self) -> firewood::NodeHashAlgorithm {
-        self.proposal.node_hash_algorithm()
+        self.proposal.view().node_hash_algorithm()
     }
 
     fn root_hash(&self) -> Option<HashKey> {
@@ -32,11 +32,11 @@ impl<'db> DbView for ProposalHandle<'db> {
     }
 
     fn val<K: api::KeyType>(&self, key: K) -> Result<Option<firewood::Value>, api::Error> {
-        self.proposal.val(key)
+        self.proposal.val(key.as_ref())
     }
 
     fn single_key_proof<K: api::KeyType>(&self, key: K) -> Result<api::FrozenProof, api::Error> {
-        self.proposal.single_key_proof(key)
+        self.proposal.single_key_proof(key.as_ref())
     }
 
     fn range_proof<K: api::KeyType>(
@@ -45,14 +45,19 @@ impl<'db> DbView for ProposalHandle<'db> {
         last_key: Option<K>,
         limit: Option<std::num::NonZeroUsize>,
     ) -> Result<api::FrozenRangeProof, api::Error> {
-        self.proposal.range_proof(first_key, last_key, limit)
+        self.proposal.range_proof(
+            first_key.as_ref().map(AsRef::as_ref),
+            last_key.as_ref().map(AsRef::as_ref),
+            limit,
+        )
     }
 
     fn iter_option<K: api::KeyType>(
         &self,
         first_key: Option<K>,
     ) -> Result<Self::Iter<'_>, api::Error> {
-        self.proposal.iter_option(first_key)
+        self.proposal
+            .iter_option(first_key.as_ref().map(AsRef::as_ref))
     }
 
     fn dump_to_string(&self) -> Result<String, api::Error> {
@@ -97,7 +102,7 @@ impl ProposalHandle<'_> {
 
     /// Creates an iterator on the proposal starting from the given key.
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
+    #[expect(clippy::missing_panics_doc)]
     pub fn iter_from(&self, first_key: Option<&[u8]>) -> CreateIteratorResult<'_> {
         let it = self
             .iter_option(first_key)
@@ -118,7 +123,7 @@ pub struct CreateProposalResult<'db> {
 impl<'db> CreateProposalResult<'db> {
     pub(crate) fn new(
         handle: &'db crate::DatabaseHandle,
-        f: impl FnOnce() -> Result<firewood::db::Proposal<'db, DefaultHashMode>, api::Error>,
+        f: impl FnOnce() -> Result<Box<dyn DynProposal<'db> + 'db>, api::Error>,
     ) -> Result<Self, api::Error> {
         let proposal = f()?;
 
@@ -152,7 +157,7 @@ pub trait CView<'db> {
     /// proposal.
     fn handle(&self) -> &'db crate::DatabaseHandle;
 
-    /// Create a [`firewood::db::Proposal`] with the provided key-value pairs.
+    /// Create an erased proposal with the provided key-value pairs.
     ///
     /// # Errors
     ///
@@ -160,8 +165,8 @@ pub trait CView<'db> {
     /// created.
     fn create_proposal(
         self,
-        values: impl IntoBatchIter,
-    ) -> Result<firewood::db::Proposal<'db, DefaultHashMode>, api::Error>;
+        values: impl api::IntoBatchIter,
+    ) -> Result<Box<dyn DynProposal<'db> + 'db>, api::Error>;
 
     /// Create a [`ProposalHandle`] from the values.
     ///
@@ -171,7 +176,7 @@ pub trait CView<'db> {
     /// created or if the proposal is empty.
     fn create_proposal_handle(
         self,
-        values: impl IntoBatchIter,
+        values: impl api::IntoBatchIter,
     ) -> Result<CreateProposalResult<'db>, api::Error>
     where
         Self: Sized,
@@ -188,9 +193,10 @@ impl<'db> CView<'db> for &ProposalHandle<'db> {
 
     fn create_proposal(
         self,
-        values: impl IntoBatchIter,
-    ) -> Result<firewood::db::Proposal<'db, DefaultHashMode>, api::Error> {
-        self.proposal.propose(values)
+        values: impl api::IntoBatchIter,
+    ) -> Result<Box<dyn DynProposal<'db> + 'db>, api::Error> {
+        let ops = collect_owned_batch(values)?;
+        self.proposal.propose(ops)
     }
 }
 

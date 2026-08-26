@@ -522,6 +522,42 @@ where
     }
 }
 
+/// A shareable committed revision that can start a reconstruction chain.
+///
+/// This is the erased capability behind
+/// [`CommittedView`](crate::db::CommittedView): the blanket impl in `db.rs`
+/// covers the committed nodestore of every hash mode, so reconstruction works
+/// regardless of the mode the database was opened with.
+pub(crate) trait DynCommittedRevision: DynDbView {
+    /// Start a reconstruction chain from this committed revision by applying
+    /// `batch`, producing an erased reconstructed state.
+    fn begin_reconstruction(
+        self: Arc<Self>,
+        batch: OwnedBatch,
+    ) -> Result<ArcDynReconstructed, Error>;
+}
+
+/// A shareable reconstructed state that can continue a reconstruction chain.
+///
+/// This is the erased capability behind
+/// [`ReconstructedView`](crate::db::ReconstructedView); like
+/// [`DynCommittedRevision`], its blanket impl in `db.rs` covers every hash
+/// mode.
+pub(crate) trait DynReconstructed: DynDbView {
+    /// Continue the reconstruction chain by applying `batch` on top of this
+    /// state.
+    ///
+    /// Consumes the `Arc` so that a uniquely-held state can move its in-memory
+    /// root into the next step instead of deep-cloning it.
+    fn reconstruct_next(self: Arc<Self>, batch: OwnedBatch) -> Result<ArcDynReconstructed, Error>;
+}
+
+/// A shareable, erased committed revision usable as a reconstruction parent.
+pub(crate) type ArcDynCommittedRevision = Arc<dyn DynCommittedRevision>;
+
+/// A shareable, erased reconstructed state.
+pub(crate) type ArcDynReconstructed = Arc<dyn DynReconstructed>;
+
 /// A reconstructible database view.
 ///
 /// This trait models linear reconstruction by consuming `self` and returning
@@ -541,7 +577,7 @@ pub trait Reconstructible: DbView {
         Self: Sized;
 
     /// The underlying database
-    fn db(&self) -> &crate::db::Db<DefaultHashMode>;
+    fn db(&self) -> &dyn DynDb;
 }
 
 /// A proposal for a new revision of the database.
@@ -574,6 +610,200 @@ pub trait Proposal: DbView {
     /// A new proposal
     #[expect(clippy::missing_errors_doc)]
     fn propose(&self, data: impl IntoBatchIter) -> Result<Self::Proposal, Error>;
+}
+
+/// A batch already collected into owned key/value pairs.
+///
+/// The [`DynDb`]/[`DynProposal`] boundary cannot accept an `impl IntoBatchIter`
+/// (a generic method is not dispatchable through a vtable), so the generic
+/// batch is pre-collected into this concrete, owned shape at the boundary.
+pub type OwnedBatch = Box<[BatchOp<Box<[u8]>, Box<[u8]>>]>;
+
+/// Key/value pairs collected into an owned shape for range merging across the
+/// [`DynDb`] boundary.
+pub type OwnedKeyValuePairs = Box<[(Key, Value)]>;
+
+/// Collect a generic batch into the concrete [`OwnedBatch`] shape required at
+/// the dyn boundary.
+///
+/// # Errors
+///
+/// Returns an error if the batch iterator yields one.
+pub fn collect_owned_batch(batch: impl IntoBatchIter) -> Result<OwnedBatch, Error> {
+    batch
+        .into_batch_iter::<Error>()
+        .map(|res| {
+            res.map(|op| match op {
+                BatchOp::Put { key, value } => BatchOp::Put {
+                    key: key.as_ref().into(),
+                    value: value.as_ref().into(),
+                },
+                BatchOp::Delete { key } => BatchOp::Delete {
+                    key: key.as_ref().into(),
+                },
+                BatchOp::DeleteRange { prefix } => BatchOp::DeleteRange {
+                    prefix: prefix.as_ref().into(),
+                },
+            })
+        })
+        .collect()
+}
+
+/// The object-safe erasure of [`Db`], used to hold databases of different
+/// hash modes behind one type since [`Db`] itself is not object-safe. The
+/// blanket impl lives next to the concrete `Db<H>` in `db.rs`.
+pub trait DynDb: Debug + Send + Sync + 'static {
+    /// Object-safe version of [`Db::revision`], returning a shareable,
+    /// `'static` view instead of `Arc<Self::Historical>`.
+    #[expect(clippy::missing_errors_doc)]
+    fn revision(&self, hash: TrieHash) -> Result<ArcDynDbView, Error>;
+
+    /// Object-safe version of [`Db::root_hash`].
+    fn root_hash(&self) -> Option<TrieHash>;
+
+    /// Object-safe version of [`Db::view`](crate::db::Db::view).
+    #[expect(clippy::missing_errors_doc)]
+    fn view(&self, hash: HashKey) -> Result<ArcDynDbView, Error>;
+
+    /// Object-safe version of [`Db::propose`], taking an already-collected
+    /// [`OwnedBatch`] since a generic `impl IntoBatchIter` parameter cannot
+    /// cross a vtable.
+    #[expect(clippy::missing_errors_doc)]
+    fn propose(&self, ops: OwnedBatch) -> Result<Box<dyn DynProposal<'_> + '_>, Error>;
+
+    /// The node-hashing scheme this database uses.
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm;
+
+    /// Dump the latest revision's trie to a string.
+    #[expect(clippy::missing_errors_doc)]
+    fn dump_to_string(&self) -> Result<String, Error>;
+
+    /// Object-safe version of [`Db::change_proof`](crate::db::Db::change_proof).
+    #[expect(clippy::missing_errors_doc)]
+    fn change_proof(
+        &self,
+        start_hash: HashKey,
+        end_hash: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenChangeProof, Error>;
+
+    /// Object-safe version of
+    /// [`Db::verify_change_proof`](crate::db::Db::verify_change_proof).
+    #[expect(clippy::missing_errors_doc)]
+    fn verify_change_proof(
+        &self,
+        proof: &FrozenChangeProof,
+        end_root: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<Box<dyn DynProposal<'_> + '_>, Error>;
+
+    /// Object-safe version of
+    /// [`Db::merge_key_value_range`](crate::db::Db::merge_key_value_range),
+    /// taking already-collected [`OwnedKeyValuePairs`].
+    #[expect(clippy::missing_errors_doc)]
+    fn merge_key_value_range(
+        &self,
+        first_key: Option<&[u8]>,
+        last_key: Option<&[u8]>,
+        key_values: OwnedKeyValuePairs,
+    ) -> Result<Box<dyn DynProposal<'_> + '_>, Error>;
+
+    /// Object-safe version of
+    /// [`Db::reconstruct_from_view`](crate::db::Db::reconstruct_from_view),
+    /// taking an already-collected [`OwnedBatch`].
+    #[expect(clippy::missing_errors_doc)]
+    fn reconstruct_from_view(
+        &self,
+        parent: &crate::db::CommittedView,
+        batch: OwnedBatch,
+    ) -> Result<crate::db::ReconstructedView<'_>, Error>;
+
+    /// Reconstruct a view from a reconstructed parent by applying batch
+    /// operations (used internally by [`Reconstructible::reconstruct`]).
+    #[expect(clippy::missing_errors_doc)]
+    fn reconstruct_from_reconstructed<'db>(
+        &'db self,
+        parent: crate::db::ReconstructedView<'db>,
+        batch: OwnedBatch,
+    ) -> Result<crate::db::ReconstructedView<'db>, Error>;
+
+    /// Object-safe version of
+    /// [`Db::committed_view`](crate::db::Db::committed_view).
+    ///
+    /// Returns `Ok(None)` when `hash` names a proposal rather than a committed
+    /// revision.
+    #[expect(clippy::missing_errors_doc)]
+    fn committed_view(&self, hash: TrieHash) -> Result<Option<crate::db::CommittedView>, Error>;
+
+    /// Object-safe version of [`Db::close`](crate::db::Db::close), consuming
+    /// the box instead of `self` by value.
+    #[expect(clippy::missing_errors_doc)]
+    fn close(self: Box<Self>) -> Result<(), Error>;
+}
+
+/// A dyn-safe version of [`Proposal`].
+///
+/// Unlike [`DynDbView`], this trait is **not** `'static`: a [`Proposal`]
+/// borrows its parent database, so it cannot outlive it. That borrow is why
+/// `DynProposal` cannot simply extend `DynDbView` (whose `'static` bound a
+/// borrowing proposal cannot satisfy); instead it carries the same read
+/// surface directly, plus the proposal-only `propose`/`commit` operations in
+/// their object-safe form (`commit` consumes the box rather than `self` by
+/// value). The proposal's shareable, `'static` view is reachable via [`DynProposal::view`].
+pub trait DynProposal<'db>: Debug + Send + Sync {
+    /// Object-safe version of [`DbView::root_hash`].
+    fn root_hash(&self) -> Option<HashKey>;
+
+    /// Object-safe version of [`DbView::val`].
+    #[expect(clippy::missing_errors_doc)]
+    fn val(&self, key: &[u8]) -> Result<Option<Value>, Error>;
+
+    /// Object-safe version of [`DbView::single_key_proof`].
+    #[expect(clippy::missing_errors_doc)]
+    fn single_key_proof(&self, key: &[u8]) -> Result<FrozenProof, Error>;
+
+    /// Object-safe version of [`DbView::range_proof`].
+    #[expect(clippy::missing_errors_doc)]
+    fn range_proof(
+        &self,
+        first_key: Option<&[u8]>,
+        last_key: Option<&[u8]>,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenRangeProof, Error>;
+
+    /// Object-safe version of [`DbView::iter_option`].
+    #[expect(clippy::missing_errors_doc)]
+    fn iter_option(&self, first_key: Option<&[u8]>) -> Result<BoxKeyValueIter<'_>, Error>;
+
+    /// Object-safe version of [`DbView::dump_to_string`].
+    #[expect(clippy::missing_errors_doc)]
+    fn dump_to_string(&self) -> Result<String, Error>;
+
+    /// Returns the shareable, `'static` view backing this proposal.
+    fn view(&self) -> ArcDynDbView;
+
+    /// Object-safe version of [`Proposal::propose`].
+    ///
+    /// The returned proposal shares the parent database's `'db` lifetime, so it
+    /// may outlive the borrow of `self` (proposal chaining keeps the original
+    /// database handle alive, not the parent proposal).
+    #[expect(clippy::missing_errors_doc)]
+    fn propose(&self, ops: OwnedBatch) -> Result<Box<dyn DynProposal<'db> + 'db>, Error>;
+
+    /// Object-safe version of [`Proposal::commit`], consuming the box instead
+    /// of `self` by value.
+    #[expect(clippy::missing_errors_doc)]
+    fn commit(self: Box<Self>) -> Result<(), Error>;
+
+    /// Object-safe version of
+    /// [`Proposal::commit_with_rebase`](crate::db::Proposal::commit_with_rebase),
+    /// consuming the box instead of `self` by value.
+    #[expect(clippy::missing_errors_doc)]
+    fn commit_with_rebase(self: Box<Self>) -> Result<Option<HashKey>, Error>;
 }
 
 #[cfg(test)]

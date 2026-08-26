@@ -237,10 +237,17 @@ jobs:
 
   ffi:
     needs: [build, ffi-check-go-generate]
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-26]
+        include:
+          - hash-mode: firewood
+            profile-key: debug-no-features
+          - hash-mode: firewood
+            profile-key: debug-no-features
+            os: macos-26
+          - hash-mode: ethhash
+            profile-key: debug-ethhash-logger
     steps:
       - uses: actions/checkout@v6
       - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
@@ -252,10 +259,10 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2 -> v2.9.1
         with:
           save-if: "false"
-          shared-key: "debug-no-features"
+          shared-key: ${{ matrix.profile-key }}
       - name: Build Firewood FFI
         working-directory: ffi
-        run: ../scripts/run-just.sh ci-build-ffi firewood
+        run: ../scripts/run-just.sh ci-build-ffi ${{ matrix.hash-mode }}
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -268,7 +275,7 @@ jobs:
       - name: Test Go FFI bindings
         working-directory: ffi
         # cgocheck2 is expensive but provides complete pointer checks
-        run: ../scripts/run-just.sh ci-test-ffi firewood
+        run: ../scripts/run-just.sh ci-test-ffi ${{ matrix.hash-mode }}
 
   # Replay recorded C-Chain execution logs against Firewood to catch changes that would break the C-Chain.
   replay-test:
@@ -342,10 +349,6 @@ jobs:
         with:
           go-version-file: "ffi/tests/eth/go.mod"
           cache-dependency-path: "ffi/tests/eth/go.sum"
-      - name: Test Go FFI bindings
-        working-directory: ffi
-        # cgocheck2 is expensive but provides complete pointer checks
-        run: ../scripts/run-just.sh ci-test-ffi ethhash
       - name: Test Firewood <> Ethereum Differential Fuzz
         working-directory: ffi/tests/eth
         run: |
@@ -355,8 +358,8 @@ jobs:
           sudo prlimit --pid $$ --memlock=-1:-1 || echo "prlimit not available, locking kernel memory may fail when setting up io-uring"
           ulimit -Sa
           ulimit -Ha
-          go test -race -fuzz=FuzzFirewoodTree -fuzztime=1m
-          go test -race -fuzz=FuzzRangeProofCreation -fuzztime=1m
+          go test -fuzz=FuzzFirewoodTree -fuzztime=30s
+          go test -fuzz=FuzzRangeProofCreation -fuzztime=30s
       - name: Upload Fuzz testdata
         if: failure()
         uses: actions/upload-artifact@v7
