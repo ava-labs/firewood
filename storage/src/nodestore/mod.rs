@@ -69,7 +69,7 @@ pub use hash::{
 pub use hash_algo::{NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError};
 pub use primitives::{AreaIndex, LinearAddress};
 // Re-export types from header module
-pub use header::NodeStoreHeader;
+pub use header::{CargoVersion, GitDescribe, NodeStoreHeader};
 
 /// The [`NodeStore`] handles the serialization of nodes and
 /// free space management of nodes in the page store. It lays out the format

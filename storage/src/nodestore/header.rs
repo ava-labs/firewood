@@ -172,7 +172,9 @@ pub struct CargoVersion {
 const _: () = assert!(CargoVersion::CARGO_PKG_VERSION_LEN <= 32);
 
 impl CargoVersion {
-    const CARGO_PKG_VERSION: &'static str = env!("CARGO_PKG_VERSION");
+    /// Value written to new database headers and reported via the
+    /// `firewood_build_info` metric.
+    pub const CARGO_PKG_VERSION: &'static str = env!("CARGO_PKG_VERSION");
     const CARGO_PKG_VERSION_LEN: usize = Self::CARGO_PKG_VERSION.len();
 
     // craft in constant context to avoid runtime `memcpy` call for `new()`
@@ -182,7 +184,9 @@ impl CargoVersion {
         Self { bytes }
     };
 
+    /// The length of the version string, excluding the null padding.
     #[inline]
+    #[must_use]
     pub fn len(&self) -> usize {
         self.bytes
             .iter()
@@ -190,10 +194,15 @@ impl CargoVersion {
             .unwrap_or(self.bytes.len())
     }
 
+    /// Returns true when no version was recorded.
+    #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.bytes[0] == 0
     }
 
+    /// The version string, with the null padding trimmed. Borrows unless the
+    /// stored bytes are not valid UTF-8.
+    #[must_use]
     pub fn as_str(&self) -> std::borrow::Cow<'_, str> {
         // will not allocate for properly sourced values
         #[expect(clippy::indexing_slicing, reason = "len() ensures we stay in bounds")]
@@ -201,6 +210,8 @@ impl CargoVersion {
     }
 }
 
+/// Holds the build version string padded to 64 bytes with null bytes, captured
+/// at build time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Zeroable, Pod)]
 #[repr(transparent)]
 pub struct GitDescribe {
@@ -211,7 +222,8 @@ pub struct GitDescribe {
 const _: () = assert!(GitDescribe::GIT_DESCRIBE_LEN <= 64);
 
 impl GitDescribe {
-    const GIT_DESCRIBE: &'static str = git_version::git_version!(fallback = "");
+    /// The `git describe` output, or empty when built outside a git checkout.
+    pub const GIT_DESCRIBE: &'static str = git_version::git_version!(fallback = "");
     const GIT_DESCRIBE_LEN: usize = Self::GIT_DESCRIBE.len();
 
     // craft in constant context to avoid runtime `memcpy` call for `new()`
@@ -221,7 +233,9 @@ impl GitDescribe {
         Self { bytes }
     };
 
+    /// The length of the describe string, excluding the null padding.
     #[inline]
+    #[must_use]
     pub fn len(&self) -> usize {
         self.bytes
             .iter()
@@ -229,10 +243,16 @@ impl GitDescribe {
             .unwrap_or(self.bytes.len())
     }
 
+    /// Returns true when no describe output was recorded, which is the case for
+    /// builds made outside a git checkout.
+    #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.bytes[0] == 0
     }
 
+    /// The describe string, with the null padding trimmed. Borrows unless the
+    /// stored bytes are not valid UTF-8.
+    #[must_use]
     pub fn as_str(&self) -> std::borrow::Cow<'_, str> {
         // will not allocate for properly sourced values
         #[expect(clippy::indexing_slicing, reason = "len() ensures we stay in bounds")]

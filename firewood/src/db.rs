@@ -20,13 +20,14 @@ use crate::merkle::{Merkle, Value, verify_change_proof_root_hash};
 use crate::verify_change_proof_structure;
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
-use firewood_metrics::{firewood_counter, firewood_histogram};
+use firewood_metrics::{firewood_counter, firewood_gauge, firewood_histogram};
 #[cfg(test)]
 use firewood_storage::DefaultHashMode;
 use firewood_storage::{
-    CheckOpt, CheckerReport, Committed, CommittedParentHash, EthHash, FileBacked, FileIoError,
-    HashMode, HashedNodeReader, ImmutableProposal, MerkleDbHash, Mutable, NodeHashAlgorithm,
-    NodeStore, Parentable, Propose, ReadableStorage, Recon, Reconstructed, TrieReader,
+    CargoVersion, CheckOpt, CheckerReport, Committed, CommittedParentHash, EthHash, FileBacked,
+    FileIoError, GitDescribe, HashMode, HashedNodeReader, ImmutableProposal, MerkleDbHash, Mutable,
+    NodeHashAlgorithm, NodeStore, Parentable, Propose, ReadableStorage, Recon, Reconstructed,
+    TrieReader,
 };
 use std::io::Write;
 use std::num::NonZeroUsize;
@@ -329,6 +330,12 @@ impl<H: HashMode> Db<H> {
             .manager(cfg.manager)
             .build();
         let manager = RevisionManager::<H>::new(config_manager)?;
+        firewood_gauge!(
+            BUILD_INFO,
+            "version" => CargoVersion::CARGO_PKG_VERSION,
+            "git_describe" => GitDescribe::GIT_DESCRIBE
+        )
+        .set(1.0);
         let db = Self {
             manager,
             use_parallel: cfg.use_parallel,
