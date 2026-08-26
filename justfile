@@ -117,6 +117,15 @@ test:
 # Run every macOS-compatible pre-push check, with linting first.
 prepush: lint test
 
+# `prepush`, minus the four extra Rust profiles, the FFI steps, and ci-machete.
+prepush-lite:
+    ./scripts/run-just.sh ci-format
+    ./scripts/run-just.sh ci-check-todos
+    ./scripts/run-just.sh ci-rust clippy debug-ethhash-logger
+    ./scripts/run-just.sh ci-rust test debug-ethhash-logger
+    ./scripts/run-just.sh ci-lint-markdown
+    ./scripts/run-just.sh ci-docs
+
 # Regenerate proof wire serialization snapshots for both hash modes.
 #
 # Run this after any intentional change to the proof binary format (ser.rs,
