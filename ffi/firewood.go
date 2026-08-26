@@ -149,6 +149,8 @@ type config struct {
 	rootStore bool
 	// expensiveMetricsEnabled controls whether expensive metrics recording is enabled.
 	expensiveMetricsEnabled bool
+	// metricsTag separates metrics and logs by database handle.
+	metricsTag string
 	// deferredPersistenceCommitCount determines the maximum number of unpersisted
 	// revisions that can exist at a given time.
 	// Note: revisions must be > deferredPersistenceCommitCount
@@ -233,6 +235,14 @@ func WithExpensiveMetrics() Option {
 	}
 }
 
+// WithMetricsTag sets a tag to attach to metrics and logs emitted for this database.
+// Default: empty (no tag)
+func WithMetricsTag(tag string) Option {
+	return func(c *config) {
+		c.metricsTag = tag
+	}
+}
+
 // WithDeferredPersistenceCommitCount sets the maximum number of unpersisted revisions
 // that can exist at a time. Note: `commitCount` must be greater than 0 and WithRevisions
 // must be greater than `commitCount`.
@@ -309,6 +319,7 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 		root_store:                        C.bool(conf.rootStore),
 		expensive_metrics:                 C.bool(conf.expensiveMetricsEnabled),
 		node_hash_algorithm:               C.enum_NodeHashAlgorithm(nodeHashAlgorithm),
+		db_tag:                            newBorrowedBytes([]byte(conf.metricsTag), &pinner),
 		deferred_persistence_commit_count: C.uint64_t(conf.deferredPersistenceCommitCount),
 	}
 

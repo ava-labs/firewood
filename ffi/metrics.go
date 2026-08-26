@@ -52,10 +52,77 @@ func init() {
 
 var _ prometheus.Gatherer = (*Gatherer)(nil)
 
-type Gatherer struct{}
+// Gatherer is a [prometheus.Gatherer] that collects metrics from the firewood
+// library.
+//
+// If DBTag is non-empty, only metrics carrying a `db_tag` label equal to DBTag
+// are returned, allowing metrics from multiple databases in the same process
+// to be separated.
+type Gatherer struct {
+	DBTag string
+}
 
-func (Gatherer) Gather() ([]*dto.MetricFamily, error) {
-	return GatherRenderedMetrics()
+func (g Gatherer) Gather() ([]*dto.MetricFamily, error) {
+	families, err := GatherRenderedMetrics()
+	if err != nil {
+		return nil, err
+	}
+
+	if g.DBTag == "" {
+		return families, nil
+	}
+
+	filtered := make([]*dto.MetricFamily, 0, len(families))
+	for _, mf := range families {
+		mf = filterMetricFamilyByDBTag(mf, g.DBTag)
+		if mf == nil {
+			continue
+		}
+		filtered = append(filtered, mf)
+	}
+
+	return filtered, nil
+}
+
+// filterMetricFamilyByDBTag returns a copy of the metric family containing only
+// the metrics that carry a `db_tag` label equal to dbTag, or nil if no metric
+// matches.
+func filterMetricFamilyByDBTag(mf *dto.MetricFamily, dbTag string) *dto.MetricFamily {
+	if mf == nil {
+		return nil
+	}
+
+	filteredMetrics := make([]*dto.Metric, 0, len(mf.Metric))
+	for _, metric := range mf.Metric {
+		if metricHasDBTag(metric, dbTag) {
+			filteredMetrics = append(filteredMetrics, metric)
+		}
+	}
+
+	if len(filteredMetrics) == 0 {
+		return nil
+	}
+
+	return &dto.MetricFamily{
+		Name:   mf.Name,
+		Help:   mf.Help,
+		Type:   mf.Type,
+		Unit:   mf.Unit,
+		Metric: filteredMetrics,
+	}
+}
+
+func metricHasDBTag(metric *dto.Metric, dbTag string) bool {
+	if metric == nil {
+		return false
+	}
+
+	for _, labelPair := range metric.Label {
+		if labelPair.GetName() == "db_tag" && labelPair.GetValue() == dbTag {
+			return true
+		}
+	}
+	return false
 }
 
 // GatherRenderedMetrics collects structured metrics from the global recorder

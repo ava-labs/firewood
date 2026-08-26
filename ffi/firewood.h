@@ -1713,6 +1713,14 @@ typedef struct DatabaseHandleArgs {
    */
   bool expensive_metrics;
   /**
+   * Optional tag used to separate metrics and logs per database.
+   *
+   * If empty, no tag is applied.
+   *
+   * This must be a valid UTF-8 string.
+   */
+  BorrowedBytes db_tag;
+  /**
    * The hashing mode to use for the database.
    *
    * This must match the compile-time feature:
