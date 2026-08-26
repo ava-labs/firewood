@@ -210,12 +210,6 @@ impl MetricsContext {
     pub fn db_tag(&self) -> Option<&str> {
         self.db_tag.as_deref()
     }
-
-    /// Returns an owned database tag attached to this context, if any.
-    #[must_use]
-    pub fn db_tag_owned(&self) -> Option<SharedString> {
-        self.db_tag.clone()
-    }
 }
 
 thread_local! {
