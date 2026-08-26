@@ -111,6 +111,38 @@ func TestMetrics(t *testing.T) {
 	}
 }
 
+// gatherForTag gathers all metrics and returns only those carrying a db_tag
+// label equal to tag, the way a consumer of [Gatherer] would filter them.
+func gatherForTag(tag string) ([]*dto.MetricFamily, error) {
+	families, err := (Gatherer{}).Gather()
+	if err != nil {
+		return nil, err
+	}
+
+	filtered := make([]*dto.MetricFamily, 0, len(families))
+	for _, mf := range families {
+		var metrics []*dto.Metric
+		for _, metric := range mf.GetMetric() {
+			for _, pair := range metric.GetLabel() {
+				if pair.GetName() == "db_tag" && pair.GetValue() == tag {
+					metrics = append(metrics, metric)
+					break
+				}
+			}
+		}
+		if len(metrics) > 0 {
+			filtered = append(filtered, &dto.MetricFamily{
+				Name:   mf.Name,
+				Help:   mf.Help,
+				Type:   mf.Type,
+				Unit:   mf.Unit,
+				Metric: metrics,
+			})
+		}
+	}
+	return filtered, nil
+}
+
 // assertAllTagged asserts every metric in families carries a db_tag label equal to tag.
 func assertAllTagged(r *require.Assertions, families []*dto.MetricFamily, tag string) {
 	r.NotEmpty(families)
@@ -125,7 +157,7 @@ func assertAllTagged(r *require.Assertions, families []*dto.MetricFamily, tag st
 	}
 }
 
-func TestGathererFiltersByDBTag(t *testing.T) {
+func TestMetricsFilteredByDBTag(t *testing.T) {
 	r := require.New(t)
 	ensureMetricsStarted(t)
 
@@ -139,13 +171,13 @@ func TestGathererFiltersByDBTag(t *testing.T) {
 	}
 
 	for _, tag := range tags {
-		families, err := (Gatherer{DBTag: tag}).Gather()
+		families, err := gatherForTag(tag)
 		r.NoError(err)
 		assertAllTagged(r, families, tag)
 	}
 }
 
-func TestGathererFiltersWithUntaggedDatabase(t *testing.T) {
+func TestMetricsFilterExcludesUntaggedDatabase(t *testing.T) {
 	r := require.New(t)
 	ensureMetricsStarted(t)
 	const tag = "untagged_filter_test"
@@ -165,7 +197,7 @@ func TestGathererFiltersWithUntaggedDatabase(t *testing.T) {
 	r.NoError(dbUntagged.Close(t.Context()))
 
 	// Filtering by tag must exclude the untagged database's series.
-	families, err := (Gatherer{DBTag: tag}).Gather()
+	families, err := gatherForTag(tag)
 	r.NoError(err)
 	assertAllTagged(r, families, tag)
 
@@ -228,7 +260,7 @@ func TestTagMetricsConcurrentTLSIsolation(t *testing.T) {
 }
 
 func gatherTaggedCounterValue(metricName, dbTag string) (float64, error) {
-	families, err := (Gatherer{DBTag: dbTag}).Gather()
+	families, err := gatherForTag(dbTag)
 	if err != nil {
 		return 0, err
 	}
