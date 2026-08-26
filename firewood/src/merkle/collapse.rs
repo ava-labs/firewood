@@ -1,6 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::merkle::SharedNode;
 use std::cmp::Ordering;
 
 use firewood_storage::{
@@ -324,8 +325,13 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
     ///
     /// Reads the child node, computes its full nibble prefix, and checks
     /// whether the key is in range. For leaves this is a direct comparison.
-    /// For branches, recurses into children whose nibble passes
+    /// For branches, descends into children whose nibble passes
     /// [`nibble_in_range`] to resolve straddling positions.
+    ///
+    /// The search is a worklist rather than recursion. It answers a single
+    /// question about a whole subtree, so visit order does not matter, and subtree
+    /// depth follows key length, which is attacker-controlled during proof
+    /// verification. Recursing per level would be a stack-exhaustion sink.
     fn child_in_range(
         &self,
         child: &Child,
@@ -333,28 +339,41 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
         nibble: PathComponent,
         range: CollapseRange<'_>,
     ) -> Result<bool, api::Error> {
-        if !nibble_in_range(acc_prefix, nibble, range) {
-            return Ok(false);
+        // Each entry is a resolved node paired with its own full nibble prefix.
+        // Resolving at push time matches the recursive version, which resolved
+        // each child as it descended into it.
+        let mut work: Vec<(SharedNode, Box<[u8]>)> = Vec::new();
+        if nibble_in_range(acc_prefix, nibble, range) {
+            let node = child.as_shared_node(&self.nodestore)?;
+            let pfx = build_child_prefix(acc_prefix, nibble.0.as_u8(), &node);
+            work.push((node, pfx));
         }
 
-        let child_node = child.as_shared_node(&self.nodestore)?;
-        let pfx = build_child_prefix(acc_prefix, nibble.0.as_u8(), &child_node);
-        let key_in_range = range.contains(pfx.as_ref());
+        while let Some((node, pfx)) = work.pop() {
+            let key_in_range = range.contains(pfx.as_ref());
 
-        let Some(branch) = child_node.as_branch() else {
-            return Ok(key_in_range);
-        };
-
-        if key_in_range && branch.value.is_some() {
-            return Ok(true);
-        }
-
-        for (child_nibble, child_slot) in &branch.children {
-            let Some(inner_child) = child_slot else {
+            let Some(branch) = node.as_branch() else {
+                // A leaf is in range exactly when its own key is.
+                if key_in_range {
+                    return Ok(true);
+                }
                 continue;
             };
-            if self.child_in_range(inner_child, &pfx, child_nibble, range)? {
+
+            if key_in_range && branch.value.is_some() {
                 return Ok(true);
+            }
+
+            for (child_nibble, child_slot) in &branch.children {
+                let Some(inner_child) = child_slot else {
+                    continue;
+                };
+                if !nibble_in_range(&pfx, child_nibble, range) {
+                    continue;
+                }
+                let inner_node = inner_child.as_shared_node(&self.nodestore)?;
+                let inner_pfx = build_child_prefix(&pfx, child_nibble.0.as_u8(), &inner_node);
+                work.push((inner_node, inner_pfx));
             }
         }
         Ok(false)
