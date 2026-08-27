@@ -6,6 +6,7 @@
 //! This module contains all node hashing functionality for the nodestore, including
 //! specialized support for Ethereum-compatible hash processing.
 
+use crate::U4;
 use crate::hashednode::hash_node;
 use crate::linear::FileIoError;
 use crate::logger::trace;
@@ -17,51 +18,69 @@ use crate::{
 };
 use crate::{HashableShunt, JoinedPath, PathComponent, SplitPath, ValueDigest};
 use sha3::{Digest, Keccak256};
+use smallvec::SmallVec;
 
 use super::NodeReader;
 
-use std::ops::{Deref, DerefMut};
 
-/// Wrapper around a path that makes sure we truncate what gets extended to the path after it goes out of scope
-/// This allows the same memory space to be reused for different path prefixes
-#[derive(Debug)]
-struct PathGuard<'a> {
-    path: &'a mut Path,
-    original_length: usize,
-}
+/// Hashes a finished frame. `path` must already be truncated to the node's own
+/// prefix.
+fn finish_hash_frame<H: HashMode>(
+    mut frame: HashFrame,
+    path: &Path,
+) -> (MaybePersistedNode, HashType) {
+    // For account-depth nodes (branch or leaf), persist the computed storageRoot
+    // into the node's RLP-encoded value. Ethereum scheme only.
+    if H::ALGORITHM.is_ethereum() {
+        update_account_storage_root(&mut frame.node, path);
+    }
 
-impl<'a> PathGuard<'a> {
-    fn new(path: &'a mut PathGuard<'_>) -> Self {
-        Self {
-            original_length: path.0.len(),
-            path: &mut path.path,
+    let hash = match frame.fake_root_extra_nibble {
+        Some(nibble) if H::ALGORITHM.is_ethereum() => {
+            hash_node_as_storage_trie_root_for_node::<H>(path.as_components(), nibble, &frame.node)
         }
-    }
+        _ => hash_node::<H>(&frame.node, path),
+    };
 
-    fn from_path(path: &'a mut Path) -> Self {
+    (SharedNode::new(frame.node).into(), hash)
+}
+
+/// One node part-way through hashing.
+///
+/// `cursor` is the next child slot to examine and `pending` is the slot waiting
+/// on the hash of the frame above it, so a frame can be suspended and resumed.
+/// `prefix_len` is the length of the shared path buffer that belongs to this
+/// node, which the buffer is truncated back to before the node is hashed.
+struct HashFrame {
+    node: Node,
+    prefix_len: usize,
+    /// Whether the per-branch preparation has run. Deferring it to the loop
+    /// keeps it in one place rather than at each push site.
+    prepared: bool,
+    cursor: u8,
+    pending: Option<PathComponent>,
+    /// The slot this branch will fold as its storage-trie root, told to the child
+    /// when the walk descends into it. Only ever set under the Ethereum scheme.
+    make_fake_root: Option<PathComponent>,
+    /// What this node's parent told it, if the parent folds this node.
+    fake_root_extra_nibble: Option<PathComponent>,
+}
+
+impl HashFrame {
+    const fn new(
+        node: Node,
+        prefix_len: usize,
+        fake_root_extra_nibble: Option<PathComponent>,
+    ) -> Self {
         Self {
-            original_length: path.0.len(),
-            path,
+            node,
+            prefix_len,
+            prepared: false,
+            cursor: 0,
+            pending: None,
+            make_fake_root: None,
+            fake_root_extra_nibble,
         }
-    }
-}
-
-impl Drop for PathGuard<'_> {
-    fn drop(&mut self) {
-        self.path.0.truncate(self.original_length);
-    }
-}
-
-impl Deref for PathGuard<'_> {
-    type Target = Path;
-    fn deref(&self) -> &Self::Target {
-        self.path
-    }
-}
-
-impl DerefMut for PathGuard<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.path
     }
 }
 
@@ -110,133 +129,173 @@ where
     /// if this is called from the root, or it should include the partial path if this is called
     /// on a subtrie. Returns the hashed node and its hash.
     ///
+    /// The walk is iterative. Trie depth follows key length, which is
+    /// attacker-controlled during proof verification, so recursing per level would
+    /// be a stack-exhaustion sink. Frames live on the heap, and one path buffer is
+    /// extended when descending and truncated back to a frame's own prefix when
+    /// that frame is hashed.
+    ///
     /// # Errors
     ///
     /// Can return a `FileIoError` if it is unable to read a node that it is hashing.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the frame stack is empty while the walk is still running, which
+    /// cannot happen: a frame is only popped when it is finished, and the walk
+    /// returns as soon as popping empties the stack.
     pub fn hash_helper(
         &self,
         node: Node,
-        mut root_path: Path,
+        root_path: Path,
     ) -> Result<(MaybePersistedNode, HashType), FileIoError> {
-        self.hash_helper_inner(node, PathGuard::from_path(&mut root_path), None)
-    }
+        let mut path = root_path;
+        let prefix_len = path.0.len();
+        // Only branches take frames, so this holds the branch depth of the current
+        // path, which is around seven for a million uniformly distributed keys.
+        // Inline capacity covers that without allocating, while staying small
+        // enough that the inline buffer is not itself a per-call cost. Deeper tries
+        // spill to the heap, which is the point: depth then costs memory rather
+        // than stack.
+        let mut stack: SmallVec<[HashFrame; 8]> = SmallVec::new();
+        stack.push(HashFrame::new(node, prefix_len, None));
+        let mut carried: Option<(MaybePersistedNode, HashType)> = None;
 
-    /// Recursive helper that hashes the given `node` and the subtree rooted at it.
-    /// This function takes a mut `node` to update the hash in place.
-    /// The `path_prefix` is also mut because we will extend it to the path of the child we are hashing in recursive calls - it will be restored after the recursive call returns.
-    ///
-    /// `fake_root_extra_nibble` carries an Ethereum account branch's child nibble
-    /// when folding a single storage child into its storage-trie root.
-    fn hash_helper_inner(
-        &self,
-        mut node: Node,
-        mut path_prefix: PathGuard<'_>,
-        fake_root_extra_nibble: Option<PathComponent>,
-    ) -> Result<(MaybePersistedNode, HashType), FileIoError> {
-        // If this is a branch, find all unhashed children and recursively hash them.
-        trace!("hashing {node:?} at {path_prefix:?}");
-        if let Node::Branch(ref mut b) = node {
-            // special case code for ethereum hashes at the account level
-            // Both lengths are usize counts of nibbles in a trie path, so their
-            // sum cannot overflow on any platform firewood targets.
-            let make_fake_root = if H::ALGORITHM.is_ethereum()
-                && path_prefix.0.len().wrapping_add(b.partial_path.0.len()) == 64
-            {
-                // looks like we're at an account branch
-                // tally up how many hashes we need to deal with
-                let ClassifiedChildren {
-                    unhashed,
-                    mut hashed,
-                } = self.ethhash_classify_children(&mut b.children);
-                trace!("hashed {hashed:?} unhashed {unhashed:?}");
-                // we were left with one hashed node that must be rehashed
-                if let [(child_idx, (child_node, child_hash))] = &mut hashed[..] {
-                    let shared = child_node.as_shared_node(&self)?;
-                    let hash = {
-                        let mut path_guard = PathGuard::new(&mut path_prefix);
-                        path_guard.0.extend(b.partial_path.0.iter().copied());
-                        if unhashed.is_empty() {
-                            hash_node_as_storage_trie_root_for_node::<H>(
-                                path_guard.as_components(),
-                                *child_idx,
-                                &shared,
-                            )
-                        } else {
-                            path_guard.0.push(child_idx.as_u8());
-                            hash_node::<H>(&shared, &path_guard)
-                        }
+        loop {
+            let frame = stack.last_mut().expect("the stack is never empty here");
+
+            // Install the hash produced by the child frame that just finished, and
+            // restore the path to this node's own prefix.
+            if let Some(slot) = frame.pending.take() {
+                let (child_node, child_hash) =
+                    carried.take().expect("a finished frame yields a hash");
+                if let Node::Branch(ref mut b) = frame.node {
+                    b.children[slot] = Some(Child::MaybePersisted(child_node, child_hash));
+                    trace!("child now {:?}", b.children[slot]);
+                }
+                path.0.truncate(frame.prefix_len);
+            }
+
+            if !frame.prepared {
+                frame.prepared = true;
+                self.prepare_account_branch(frame, &mut path)?;
+            }
+
+            // Find the next child that still needs hashing.
+            let mut descend: Option<(PathComponent, Node)> = None;
+            if let Node::Branch(ref mut b) = frame.node {
+                while frame.cursor < BranchNode::MAX_CHILDREN as u8 {
+                    let nibble = PathComponent(U4::new_masked(frame.cursor));
+                    debug_assert!(frame.cursor < BranchNode::MAX_CHILDREN as u8);
+                    frame.cursor = frame.cursor.wrapping_add(1);
+                    // Empty slots are None and already-hashed variants are
+                    // Some(None) here, so only Some(Some(node)) descends.
+                    let Some(child_node) = b.children[nibble].as_mut().and_then(Child::as_mut_node)
+                    else {
+                        continue;
                     };
-                    **child_hash = hash;
+                    // Take the child out; a hashed variant replaces it on the way back.
+                    descend = Some((nibble, std::mem::take(child_node)));
+                    break;
                 }
-                // handle the single-child case for an account special below
-                if hashed.is_empty() && unhashed.len() == 1 {
-                    Some(*unhashed.last().expect("only one"))
-                } else {
-                    None
+            }
+
+            let Some((nibble, child_node)) = descend else {
+                // Every child is hashed, so this node can be hashed.
+                let frame = stack.pop().expect("the stack is never empty here");
+                path.0.truncate(frame.prefix_len);
+                let hashed = finish_hash_frame::<H>(frame, &path);
+                if stack.is_empty() {
+                    return Ok(hashed);
                 }
-            } else {
-                // not a single child
-                None
+                carried = Some(hashed);
+                continue;
             };
 
-            // branch children cases:
-            // 1. 1 child, already hashed
-            // 2. >1 child, already hashed,
-            // 3. 1 hashed child, 1 unhashed child
-            // 4. 0 hashed, 1 unhashed <-- handle child special
-            // 5. 1 hashed, >0 unhashed <-- rehash case
-            // 6. everything already hashed
-
-            for (nibble, child) in &mut b.children {
-                // If this is empty or already hashed, we're done
-                // Empty matches None, and non-Node types match Some(None) here, so we want
-                // Some(Some(node))
-                let Some(child_node) = child.as_mut().and_then(|child| child.as_mut_node()) else {
-                    continue;
-                };
-
-                // remove the child from the children array, we will replace it with a hashed variant
-                let child_node = std::mem::take(child_node);
-
-                // Hash this child and update
-                let (child_node, child_hash) = {
-                    // we extend and truncate path_prefix to reduce memory allocations]
-                    let mut child_path_prefix = PathGuard::new(&mut path_prefix);
-                    child_path_prefix.0.extend(b.partial_path.0.iter().copied());
-                    // Under the Ethereum scheme, when an account branch has a
-                    // single unhashed child we don't push the nibble (it is
-                    // folded into the storage-trie-root hash instead).
-                    if !(H::ALGORITHM.is_ethereum() && make_fake_root.is_some()) {
-                        child_path_prefix.0.push(nibble.as_u8());
-                    }
-                    self.hash_helper_inner(child_node, child_path_prefix, make_fake_root)?
-                };
-
-                *child = Some(Child::MaybePersisted(child_node, child_hash));
-                trace!("child now {child:?}");
+            // Extend the path to the child. The account fold omits the nibble,
+            // matching what live hashing produced for a lone storage child.
+            if let Node::Branch(ref b) = frame.node {
+                path.0.extend(b.partial_path.0.iter().copied());
             }
-        }
-
-        // For account-depth nodes (branch or leaf), persist the computed
-        // storageRoot into the node's RLP-encoded value. Ethereum scheme only.
-        if H::ALGORITHM.is_ethereum() {
-            update_account_storage_root(&mut node, &path_prefix);
-        }
-
-        // At this point, we either have a leaf or a branch with all children hashed.
-        // if the encoded child hash <32 bytes then we use that RLP
-        let hash = match fake_root_extra_nibble {
-            Some(nibble) if H::ALGORITHM.is_ethereum() => {
-                hash_node_as_storage_trie_root_for_node::<H>(
-                    path_prefix.as_components(),
-                    nibble,
-                    &node,
-                )
+            let inherited = frame.make_fake_root;
+            if !(H::ALGORITHM.is_ethereum() && inherited.is_some()) {
+                path.0.push(nibble.as_u8());
             }
-            _ => hash_node::<H>(&node, &path_prefix),
+
+            let child_prefix_len = path.0.len();
+
+            // A leaf has no children to wait on, so it is hashed here rather than
+            // costing a frame. Leaves dominate a realistic trie, so this keeps most
+            // nodes off the stack entirely.
+            if matches!(child_node, Node::Leaf(_)) {
+                let leaf = HashFrame::new(child_node, child_prefix_len, inherited);
+                let (hashed, hash) = finish_hash_frame::<H>(leaf, &path);
+                path.0.truncate(frame.prefix_len);
+                if let Node::Branch(ref mut b) = frame.node {
+                    b.children[nibble] = Some(Child::MaybePersisted(hashed, hash));
+                    trace!("child now {:?}", b.children[nibble]);
+                }
+                continue;
+            }
+
+            frame.pending = Some(nibble);
+            stack.push(HashFrame::new(child_node, child_prefix_len, inherited));
+        }
+    }
+
+    /// Rehashes an account branch's children before its own children are walked.
+    ///
+    /// An account branch left with a single already-hashed child must have that
+    /// child rehashed, because whether it folds as the account's storage-trie root
+    /// depends on how many children the account has. A lone unhashed child is
+    /// recorded so the walk folds it when it descends.
+    ///
+    /// Does nothing unless the scheme is Ethereum, which is the only scheme with an
+    /// account-branch fold.
+    fn prepare_account_branch(
+        &self,
+        frame: &mut HashFrame,
+        path: &mut Path,
+    ) -> Result<(), FileIoError> {
+        if !H::ALGORITHM.is_ethereum() {
+            return Ok(());
+        }
+        let Node::Branch(ref mut b) = frame.node else {
+            return Ok(());
         };
-
-        Ok((SharedNode::new(node).into(), hash))
+        // Both lengths are nibble counts in a trie path, so their sum cannot
+        // overflow on any platform firewood targets.
+        if frame.prefix_len.wrapping_add(b.partial_path.0.len()) != 64 {
+            return Ok(());
+        }
+        let ClassifiedChildren {
+            unhashed,
+            mut hashed,
+        } = self.ethhash_classify_children(&mut b.children);
+        trace!("hashed {hashed:?} unhashed {unhashed:?}");
+        if let [(child_idx, (child_node, child_hash))] = &mut hashed[..] {
+            let shared = child_node.as_shared_node(&self)?;
+            let restore = path.0.len();
+            path.0.extend(b.partial_path.0.iter().copied());
+            let hash = if unhashed.is_empty() {
+                hash_node_as_storage_trie_root_for_node::<H>(
+                    path.as_components(),
+                    *child_idx,
+                    &shared,
+                )
+            } else {
+                path.0.push(child_idx.as_u8());
+                hash_node::<H>(&shared, path)
+            };
+            path.0.truncate(restore);
+            **child_hash = hash;
+        }
+        frame.make_fake_root = if hashed.is_empty() && unhashed.len() == 1 {
+            Some(*unhashed.last().expect("only one"))
+        } else {
+            None
+        };
+        Ok(())
     }
 
     /// Hash `node` at `path_prefix`, applying the Ethereum storage-trie-root
