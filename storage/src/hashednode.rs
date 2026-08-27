@@ -106,78 +106,6 @@ impl<A: smallvec::Array<Item = u8>> HasUpdate for SmallVec<A> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{BranchNode, Child, LeafNode, LinearAddress, MaybePersistedNode};
-
-    #[test]
-    fn leaf_is_ready_to_hash() {
-        let leaf = Node::Leaf(LeafNode {
-            partial_path: Path::new(),
-            value: Box::from([1, 2, 3]),
-        });
-
-        assert!(HashedNode::try_from(&leaf).is_ok());
-    }
-
-    #[test]
-    fn hashed_children_are_collected() {
-        let address_hash = HashType::from([1; 32]);
-        let maybe_persisted_hash = HashType::from([2; 32]);
-        let address = LinearAddress::new(16).expect("address is aligned");
-        let maybe_persisted =
-            MaybePersistedNode::from(LinearAddress::new(32).expect("address is aligned"));
-        let mut children = Children::new();
-        children[PathComponent::ALL[1]] =
-            Some(Child::AddressWithHash(address, address_hash.clone()));
-        children[PathComponent::ALL[2]] = Some(Child::MaybePersisted(
-            maybe_persisted,
-            maybe_persisted_hash.clone(),
-        ));
-        let branch = Node::Branch(Box::new(BranchNode {
-            partial_path: Path::new(),
-            value: None,
-            children,
-        }));
-
-        let hashed = HashedNode::try_from(&branch).expect("all children are hashed");
-
-        assert_eq!(
-            hashed.child_hashes()[PathComponent::ALL[1]],
-            Some(address_hash)
-        );
-        assert_eq!(
-            hashed.child_hashes()[PathComponent::ALL[2]],
-            Some(maybe_persisted_hash)
-        );
-    }
-
-    #[test]
-    fn unhashed_child_is_rejected() {
-        let mut children = Children::new();
-        children[PathComponent::ALL[7]] = Some(Child::Node(Node::Leaf(LeafNode {
-            partial_path: Path::new(),
-            value: Box::from([1]),
-        })));
-        let branch = Node::Branch(Box::new(BranchNode {
-            partial_path: Path::new(),
-            value: None,
-            children,
-        }));
-
-        let Err(error) = HashedNode::try_from(&branch) else {
-            panic!("unhashed child should be rejected");
-        };
-        assert_eq!(
-            error,
-            UnhashedChildError {
-                index: PathComponent::ALL[7]
-            }
-        );
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 /// A `ValueDigest` is either a node's value or the hash of its value.
 pub enum ValueDigest<T> {
@@ -317,5 +245,77 @@ impl<T: Hashable> Preimage for T {
 
     fn write(&self, buf: &mut impl HasUpdate) {
         DefaultHashMode::write_preimage(self, buf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{BranchNode, Child, LeafNode, LinearAddress, MaybePersistedNode};
+
+    #[test]
+    fn leaf_is_ready_to_hash() {
+        let leaf = Node::Leaf(LeafNode {
+            partial_path: Path::new(),
+            value: Box::from([1, 2, 3]),
+        });
+
+        assert!(HashedNode::try_from(&leaf).is_ok());
+    }
+
+    #[test]
+    fn hashed_children_are_collected() {
+        let address_hash = HashType::from([1; 32]);
+        let maybe_persisted_hash = HashType::from([2; 32]);
+        let address = LinearAddress::new(16).expect("address is aligned");
+        let maybe_persisted =
+            MaybePersistedNode::from(LinearAddress::new(32).expect("address is aligned"));
+        let mut children = Children::new();
+        children[PathComponent::ALL[1]] =
+            Some(Child::AddressWithHash(address, address_hash.clone()));
+        children[PathComponent::ALL[2]] = Some(Child::MaybePersisted(
+            maybe_persisted,
+            maybe_persisted_hash.clone(),
+        ));
+        let branch = Node::Branch(Box::new(BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children,
+        }));
+
+        let hashed = HashedNode::try_from(&branch).expect("all children are hashed");
+
+        assert_eq!(
+            hashed.child_hashes()[PathComponent::ALL[1]],
+            Some(address_hash)
+        );
+        assert_eq!(
+            hashed.child_hashes()[PathComponent::ALL[2]],
+            Some(maybe_persisted_hash)
+        );
+    }
+
+    #[test]
+    fn unhashed_child_is_rejected() {
+        let mut children = Children::new();
+        children[PathComponent::ALL[7]] = Some(Child::Node(Node::Leaf(LeafNode {
+            partial_path: Path::new(),
+            value: Box::from([1]),
+        })));
+        let branch = Node::Branch(Box::new(BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children,
+        }));
+
+        let Err(error) = HashedNode::try_from(&branch) else {
+            panic!("unhashed child should be rejected");
+        };
+        assert_eq!(
+            error,
+            UnhashedChildError {
+                index: PathComponent::ALL[7]
+            }
+        );
     }
 }

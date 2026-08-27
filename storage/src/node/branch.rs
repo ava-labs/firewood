@@ -305,7 +305,6 @@ impl BranchNode {
     ///   - Any child is a [`Child::Node`] variant as it does not have an address.
     ///   - Any child is a [`Child::MaybePersisted`] variant that is not yet
     ///     persisted, as we do not yet know its address.
-    ///
     #[must_use]
     pub fn children_addresses(&self) -> Children<Option<LinearAddress>> {
         self.children
