@@ -196,7 +196,6 @@ where
 /// Constructible only by [`verify_change_proof_structure`]; fields are private
 /// so a context cannot be forged or altered after verification.
 #[derive(Debug)]
-#[non_exhaustive]
 pub struct ChangeProofVerificationContext {
     end_root: HashKey,
     start_key: Option<Box<[u8]>>,
