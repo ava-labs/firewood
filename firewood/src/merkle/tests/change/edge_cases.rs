@@ -1304,3 +1304,70 @@ fn test_deep_forged_ops_rejected_at_deserialization() {
         "expected the key-length bound to reject it, got {rendered}"
     );
 }
+
+/// A change proof over a trie as deep as the key-length bound allows survives a
+/// default stack.
+///
+/// The range-proof guard covers the walks that rebuild and hash a proving trie.
+/// Change-proof verification does more: it applies the peer's batch ops, which
+/// reaches the removal walks, and collapses the proving trie to the shape
+/// `end_root` has, which reaches the collapse walks. Both are driven to a depth
+/// the peer chooses, and neither was covered until this test.
+///
+/// A stack overflow aborts the process rather than panicking, so a regression
+/// here fails as a killed test rather than an assertion.
+#[test]
+fn test_max_bounded_depth_change_proof_survives_default_stack() {
+    // std::thread's default stack is 2 MiB on every Tier-1 platform and firewood
+    // sets stack_size nowhere, so this is the size production threads get.
+    let handle = std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            // Key i is i zero bytes followed by 0x11, so each key shares one more
+            // byte with its predecessor than the last and the trie is a chain
+            // rather than a bush. The longest key is 1024 bytes, putting the trie
+            // 2048 nibbles deep, which is exactly what the bound admits.
+            const KEYS: usize = 1024;
+            let keys: Vec<Vec<u8>> = (0..KEYS)
+                .map(|i| {
+                    let mut key = vec![0x00u8; i];
+                    key.push(0x11);
+                    key
+                })
+                .collect();
+
+            let (source, _dir_source) = new_db();
+            let (target, _dir_target) = new_db();
+            for db in [&source, &target] {
+                let puts: Vec<BatchOp<&[u8], &[u8]>> = keys
+                    .iter()
+                    .map(|key| BatchOp::Put {
+                        key: key.as_slice(),
+                        value: b"v".as_slice(),
+                    })
+                    .collect();
+                db.propose(puts).unwrap().commit().unwrap();
+            }
+            let root1_source = source.root_hash().unwrap();
+            let root1_target = target.root_hash().unwrap();
+
+            // Deleting the deepest key is what drives the removal walk the full
+            // length of the chain, and the collapse walk with it.
+            let deepest = keys.last().expect("KEYS is non-zero");
+            let deletion: Vec<BatchOp<&[u8], &[u8]>> = vec![BatchOp::Delete {
+                key: deepest.as_slice(),
+            }];
+            source.propose(deletion).unwrap().commit().unwrap();
+            let root2 = source.root_hash().unwrap();
+
+            let proof = source
+                .change_proof(root1_source, root2.clone(), None, None, None)
+                .unwrap();
+            let ctx = verify_change_proof_structure(&proof, root2, None, None, None).unwrap();
+            verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
+        })
+        .unwrap();
+    handle
+        .join()
+        .expect("a change proof at the key-length bound must not exhaust the stack");
+}
