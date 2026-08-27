@@ -8,9 +8,9 @@ use crate::logger::warn;
 use crate::nodestore::alloc::FreeAreaWithMetadata;
 use crate::nodestore::primitives::{AreaIndex, area_size_iter};
 use crate::{
-    CheckerError, Committed, FileIoError, HashMode, HashType, HashedNodeReader, LinearAddress,
-    Mutable, Node, NodeReader, NodeStore, Path, Propose, ReadableStorage, RootReader,
-    StoredAreaParent, TrieNodeParent, WritableStorage, nodestore::NodeStoreHeader,
+    CheckerError, Committed, FileIoError, HashMode, HashType, HashedNode, HashedNodeReader,
+    LinearAddress, Mutable, Node, NodeReader, NodeStore, Path, Propose, ReadableStorage,
+    RootReader, StoredAreaParent, TrieNodeParent, WritableStorage, nodestore::NodeStoreHeader,
 };
 
 use std::cmp::Ordering;
@@ -323,7 +323,12 @@ where
 
         // compute the hash of the node and check it against the stored hash
         if hash_check {
-            let hash = Self::compute_node_ethhash(&node, &path_prefix, has_peers);
+            let hash = Self::compute_node_ethhash(
+                HashedNode::try_from(node.as_ref())
+                    .expect("nodes read from storage never have unhashed children"),
+                &path_prefix,
+                has_peers,
+            );
             if hash != subtrie_root_hash {
                 return Err(vec![CheckerError::HashMismatch {
                     path: current_path_prefix,
@@ -736,8 +741,8 @@ mod test {
     };
     use crate::nodestore::primitives::area_size_iter;
     use crate::{
-        BranchNode, Child, Children, DefaultHashMode, FreeListParent, HashMode, ImmutableProposal,
-        LeafNode, NodeStore, Path, PathComponent, area_index, hash_node,
+        BranchNode, Child, Children, DefaultHashMode, FreeListParent, HashMode, HashedNode,
+        ImmutableProposal, LeafNode, NodeStore, Path, PathComponent, area_index, hash_node,
     };
     use std::sync::Arc;
 
@@ -776,7 +781,10 @@ mod test {
             value: Box::new([6, 7, 8]),
         });
         let leaf_addr = LinearAddress::new(high_watermark).unwrap();
-        let leaf_hash = hash_node::<DefaultHashMode>(&leaf, &Path::from([2, 0, 3, 1]));
+        let leaf_hash = hash_node::<DefaultHashMode>(
+            HashedNode::try_from(&leaf).expect("leaves have no children"),
+            &Path::from([2, 0, 3, 1]),
+        );
         let (bytes_written, stored_area_size) =
             test_write_new_node(nodestore, &leaf, high_watermark);
         high_watermark += stored_area_size;
@@ -792,7 +800,10 @@ mod test {
             children: branch_children,
         }));
         let branch_addr = LinearAddress::new(high_watermark).unwrap();
-        let branch_hash = hash_node::<DefaultHashMode>(&branch, &Path::from([2, 0]));
+        let branch_hash = hash_node::<DefaultHashMode>(
+            HashedNode::try_from(&branch).expect("branch fixture children are hashed"),
+            &Path::from([2, 0]),
+        );
         let (bytes_written, stored_area_size) =
             test_write_new_node(nodestore, &branch, high_watermark);
         high_watermark += stored_area_size;
@@ -809,7 +820,10 @@ mod test {
             children: root_children,
         }));
         let root_addr = LinearAddress::new(high_watermark).unwrap();
-        let root_hash = hash_node::<DefaultHashMode>(&root, &Path::new());
+        let root_hash = hash_node::<DefaultHashMode>(
+            HashedNode::try_from(&root).expect("root fixture children are hashed"),
+            &Path::new(),
+        );
         let (bytes_written, stored_area_size) =
             test_write_new_node(nodestore, &root, high_watermark);
         high_watermark += stored_area_size;
@@ -1030,12 +1044,15 @@ mod test {
         // Compute the current branch hash
         #[cfg(feature = "ethhash")]
         let computed_hash = NodeStore::<Committed, MemStore, DefaultHashMode>::compute_node_ethhash(
-            branch_node,
+            HashedNode::try_from(&*branch_node).expect("branch fixture children are hashed"),
             &Path::from([2, 0]),
             false,
         );
         #[cfg(not(feature = "ethhash"))]
-        let computed_hash = hash_node::<DefaultHashMode>(branch_node, &Path::from([2, 0]));
+        let computed_hash = hash_node::<DefaultHashMode>(
+            HashedNode::try_from(&*branch_node).expect("branch fixture children are hashed"),
+            &Path::from([2, 0]),
+        );
 
         // Get parent stored hash
         let (root_node, _) = test_trie

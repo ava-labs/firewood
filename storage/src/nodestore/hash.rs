@@ -6,7 +6,7 @@
 //! This module contains all node hashing functionality for the nodestore, including
 //! specialized support for Ethereum-compatible hash processing.
 
-use crate::hashednode::hash_node;
+use crate::hashednode::{HashedNode, hash_node};
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::{BranchNode, Node};
@@ -159,11 +159,18 @@ where
                             hash_node_as_storage_trie_root_for_node::<H>(
                                 path_guard.as_components(),
                                 *child_idx,
-                                &shared,
+                                HashedNode::try_from(shared.as_ref()).expect(
+                                    "nodes reached via as_shared_node are persisted or already hashed",
+                                ),
                             )
                         } else {
                             path_guard.0.push(child_idx.as_u8());
-                            hash_node::<H>(&shared, &path_guard)
+                            hash_node::<H>(
+                                HashedNode::try_from(shared.as_ref()).expect(
+                                    "nodes reached via as_shared_node are persisted or already hashed",
+                                ),
+                                &path_guard,
+                            )
                         }
                     };
                     **child_hash = hash;
@@ -225,15 +232,17 @@ where
 
         // At this point, we either have a leaf or a branch with all children hashed.
         // if the encoded child hash <32 bytes then we use that RLP
+        let hashed_node = HashedNode::try_from(&node)
+            .expect("the loop above replaced every Child::Node with Child::MaybePersisted");
         let hash = match fake_root_extra_nibble {
             Some(nibble) if H::ALGORITHM.is_ethereum() => {
                 hash_node_as_storage_trie_root_for_node::<H>(
                     path_prefix.as_components(),
                     nibble,
-                    &node,
+                    hashed_node,
                 )
             }
-            _ => hash_node::<H>(&node, &path_prefix),
+            _ => hash_node::<H>(hashed_node, &path_prefix),
         };
 
         Ok((SharedNode::new(node).into(), hash))
@@ -244,7 +253,7 @@ where
     /// Ethereum. Under the MerkleDB scheme `H::ALGORITHM.is_ethereum()` is a
     /// compile-time `false`, so this reduces to a plain [`hash_node`].
     pub(crate) fn compute_node_ethhash(
-        node: &Node,
+        node: HashedNode<'_>,
         path_prefix: &Path,
         have_peers: bool,
     ) -> HashType {
@@ -269,14 +278,12 @@ where
 pub fn hash_node_as_storage_trie_root_for_node<H: HashMode>(
     account_full_prefix: &[PathComponent],
     branch_nibble: PathComponent,
-    node: &Node,
+    node: HashedNode<'_>,
 ) -> HashType {
+    let (node, child_hashes) = node.into_parts();
     let (value_digest, children) = match node {
-        Node::Branch(b) => (
-            b.value.as_deref().map(ValueDigest::Value),
-            b.children_hashes(),
-        ),
-        Node::Leaf(l) => (Some(ValueDigest::Value(l.value.as_ref())), Children::new()),
+        Node::Branch(b) => (b.value.as_deref().map(ValueDigest::Value), child_hashes),
+        Node::Leaf(l) => (Some(ValueDigest::Value(l.value.as_ref())), child_hashes),
     };
     hash_node_as_storage_trie_root_parts::<H, _, _>(
         account_full_prefix,
@@ -384,8 +391,9 @@ fn update_account_storage_root(node: &mut Node, path_prefix: &Path) {
             let Some(old_value) = b.value.as_ref() else {
                 return;
             };
-            let child_hashes = b.children_hashes();
-            if let Some(new_value) = fix_account_storage_root_value(old_value, &child_hashes) {
+            if let Ok(child_hashes) = b.children_hashes()
+                && let Some(new_value) = fix_account_storage_root_value(old_value, &child_hashes)
+            {
                 b.value = Some(new_value);
             }
         }

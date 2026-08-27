@@ -326,7 +326,7 @@ impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
                                 return None;
                             };
                             let child_hashes = if must_recompute && key.len() == 32 {
-                                branch.children_hashes()
+                                branch.known_children_hashes()
                             } else {
                                 firewood_storage::Children::new()
                             };

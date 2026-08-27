@@ -14,6 +14,7 @@ use crate::{
 };
 use std::fmt::{Debug, Formatter};
 use std::io::Read;
+use thiserror::Error;
 
 pub(crate) trait Serializable {
     fn write_to<W: ExtendableBytes>(&self, vec: &mut W);
@@ -174,6 +175,14 @@ impl Child {
     }
 }
 
+/// An occupied branch child that does not have a hash yet.
+#[derive(Debug, Error, PartialEq, Eq)]
+#[error("child at index {index:?} is not hashed")]
+pub struct UnhashedChildError {
+    /// The index of the unhashed child.
+    pub index: PathComponent,
+}
+
 #[derive(PartialEq, Eq, Clone)]
 /// A branch node
 pub struct BranchNode {
@@ -253,18 +262,35 @@ impl BranchNode {
             .map(|_, c| c.as_ref().and_then(Child::persist_info))
     }
 
+    /// Returns a set of hashes for each child.
+    ///
+    /// The index of the hash in the returned array corresponds to the index of the child
+    /// in the branch node.
+    ///
+    /// Returns an error if an occupied child is not yet hashed.
+    pub fn children_hashes(&self) -> Result<Children<Option<HashType>>, UnhashedChildError> {
+        let mut hashes = Children::new();
+        for (index, child) in &self.children {
+            let Some(child) = child else {
+                continue;
+            };
+            let Some(hash) = child.hash() else {
+                return Err(UnhashedChildError { index });
+            };
+            hashes[index] = Some(hash.clone());
+        }
+        Ok(hashes)
+    }
+
     /// Returns a set of hashes for each child that has a hash set.
     ///
     /// The index of the hash in the returned array corresponds to the index of the child
     /// in the branch node.
     ///
-    /// Note: This function will skip any child is a [`Child::Node`] variant
-    /// as it is still mutable and has not been hashed yet.
-    ///
-    /// This is an unintentional side effect of the current implementation. Future
-    /// changes will have this check implemented structurally to prevent such cases.
+    /// This skips children that are not yet hashed. Callers that require every child
+    /// to be hashed must use [`Self::children_hashes`].
     #[must_use]
-    pub fn children_hashes(&self) -> Children<Option<HashType>> {
+    pub fn known_children_hashes(&self) -> Children<Option<HashType>> {
         self.children
             .each_ref()
             .map(|_, c| c.as_ref().and_then(Child::hash).cloned())
@@ -280,8 +306,6 @@ impl BranchNode {
     ///   - Any child is a [`Child::MaybePersisted`] variant that is not yet
     ///     persisted, as we do not yet know its address.
     ///
-    /// This is an unintentional side effect of the current implementation. Future
-    /// changes will have this check implemented structurally to prevent such cases.
     #[must_use]
     pub fn children_addresses(&self) -> Children<Option<LinearAddress>> {
         self.children

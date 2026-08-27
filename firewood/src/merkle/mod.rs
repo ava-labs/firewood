@@ -28,9 +28,10 @@ use firewood_metrics::{HistogramExt, firewood_counter, firewood_histogram};
 use firewood_storage::MemStore;
 use firewood_storage::{
     BranchNode, Child, Children, DeletedNodeTracking, EthHash, FileIoError, HashMode, HashType,
-    HashableShunt, HashedNodeReader, ImmutableProposal, LeafNode, MaybePersistedNode, MerkleDbHash,
-    Mutable, MutableKind, NibblesIterator, Node, NodeHashAlgorithm, NodeStore, Path, PathBuf,
-    PathComponent, Propose, ReadableStorage, SharedNode, TrieHash, TrieReader, U4, ValueDigest,
+    HashableShunt, HashedNode, HashedNodeReader, ImmutableProposal, LeafNode, MaybePersistedNode,
+    MerkleDbHash, Mutable, MutableKind, NibblesIterator, Node, NodeHashAlgorithm, NodeStore, Path,
+    PathBuf, PathComponent, Propose, ReadableStorage, SharedNode, TrieHash, TrieReader, U4,
+    ValueDigest,
 };
 use firewood_storage::{
     hash_node_as_storage_trie_root_for_node, hash_node_as_storage_trie_root_parts,
@@ -523,7 +524,10 @@ fn compute_root_hash_with_proofs<H: HashMode>(
 ) -> HashType {
     match node {
         Node::Leaf(_) => {
-            let shunt = HashableShunt::from_node(path_prefix, node);
+            let shunt = HashableShunt::from_node(
+                path_prefix,
+                HashedNode::try_from(node).expect("leaves have no children"),
+            );
             H::to_hash(&shunt)
         }
         Node::Branch(branch) => {
@@ -552,9 +556,11 @@ fn compute_root_hash_as_storage_trie_root<H: HashMode>(
     outside_children: &HashMap<PathBuf, ChildMask>,
 ) -> HashType {
     match node {
-        Node::Leaf(_) => {
-            hash_node_as_storage_trie_root_for_node::<H>(account_prefix, branch_nibble, node)
-        }
+        Node::Leaf(_) => hash_node_as_storage_trie_root_for_node::<H>(
+            account_prefix,
+            branch_nibble,
+            HashedNode::try_from(node).expect("leaves have no children"),
+        ),
         Node::Branch(branch) => {
             let path_prefix: PathBuf = account_prefix
                 .iter()
