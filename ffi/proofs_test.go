@@ -721,33 +721,23 @@ func TestChangeProofSetFinalizerReset(t *testing.T) {
 	r.NoError(err)
 	proofBytes := newSerializedChangeProof(t, db, startRoot, endRoot, nothing(), nothing())
 
-	tests := []struct {
-		name string
-		// run performs a sequence that reaches a finalizer-setting path twice
-		// and returns the resulting proof for cleanup. It must not panic.
-		run func(*require.Assertions) *ChangeProof
-	}{
-		{"create_then_unmarshal", func(r *require.Assertions) *ChangeProof {
-			p, err := db.ChangeProof(startRoot, endRoot, nothing(), nothing(), changeProofLenUnbounded)
-			r.NoError(err)
-			r.NoError(p.UnmarshalBinary(proofBytes))
-			return p
-		}},
-		{"unmarshal_then_unmarshal", func(r *require.Assertions) *ChangeProof {
-			p := new(ChangeProof)
-			r.NoError(p.UnmarshalBinary(proofBytes))
-			r.NoError(p.UnmarshalBinary(proofBytes))
-			return p
-		}},
-	}
+	t.Run("create_then_unmarshal", func(t *testing.T) {
+		r := require.New(t)
+		p, err := db.ChangeProof(startRoot, endRoot, nothing(), nothing(), changeProofLenUnbounded)
+		r.NoError(err)
+		r.NoError(p.UnmarshalBinary(proofBytes))
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := require.New(t)
-			p := tt.run(r) // must not fatally panic with "finalizer already set"
-			t.Cleanup(func() { _ = p.Free() })
-		})
-	}
+		t.Cleanup(func() { _ = p.Free() })
+	})
+
+	t.Run("unmarshal_then_unmarshal", func(t *testing.T) {
+		r := require.New(t)
+		p := new(ChangeProof)
+		r.NoError(p.UnmarshalBinary(proofBytes))
+		r.NoError(p.UnmarshalBinary(proofBytes))
+
+		t.Cleanup(func() { _ = p.Free() })
+	})
 }
 
 // TestChangeProofCodeHashesKeepsProofAlive is the ChangeProof analogue of
