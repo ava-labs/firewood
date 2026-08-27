@@ -77,7 +77,6 @@ pub type KeyRange = (Box<[u8]>, Option<Box<[u8]>>);
 /// Constructible only by [`verify_range_proof_structure`]; fields are private
 /// so a context cannot be forged or altered after verification.
 #[derive(Debug)]
-#[non_exhaustive]
 pub struct RangeProofVerificationContext {
     root: HashKey,
     start_key: Option<Box<[u8]>>,
