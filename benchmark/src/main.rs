@@ -231,6 +231,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mgrcfg = RevisionManagerConfig::builder()
         .node_cache_memory_limit(args.global_opts.cache_memory_limit)
+        // Budget enough free-list cache for four batches' worth of freed nodes,
+        // expressed in the kibibytes those entries occupy.
         .freelist_memory_limit_kb(
             NonZeroUsize::new(
                 (4 * args.global_opts.batch_size as usize * FREE_LIST_CACHE_ENTRY_SIZE)

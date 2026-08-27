@@ -88,7 +88,7 @@ pub use tries::{
 };
 pub use u4::{TryFromIntError, U4};
 
-pub use linear::filebacked::{FREE_LIST_CACHE_ENTRY_SIZE, FileBacked, freelist_entries_for_kb};
+pub use linear::filebacked::{FREE_LIST_CACHE_ENTRY_SIZE, FileBacked};
 pub use linear::memory::MemStore;
 pub use node::persist::MaybePersistedNode;
 pub use rlp::{

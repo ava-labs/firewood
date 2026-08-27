@@ -106,8 +106,7 @@ pub const FREE_LIST_CACHE_ENTRY_SIZE: usize =
 
 /// Convert a free-list cache memory budget in kibibytes into the entry count
 /// that fits in it, rounded down but never below one entry.
-#[must_use]
-pub fn freelist_entries_for_kb(memory_limit_kb: NonZero<usize>) -> NonZero<usize> {
+pub(crate) fn freelist_entries_for_kb(memory_limit_kb: NonZero<usize>) -> NonZero<usize> {
     let entries = memory_limit_kb.get().saturating_mul(1024) / FREE_LIST_CACHE_ENTRY_SIZE;
     NonZero::new(entries).unwrap_or(NonZero::<usize>::MIN)
 }
