@@ -16,7 +16,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use fastrace_opentelemetry::OpenTelemetryReporter;
 use firewood::logger::trace;
 use firewood::open;
-use firewood_storage::{DefaultHashMode, HashMode};
+use firewood_storage::{DefaultHashMode, FREE_LIST_CACHE_ENTRY_SIZE, HashMode};
 use log::LevelFilter;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
@@ -231,8 +231,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mgrcfg = RevisionManagerConfig::builder()
         .node_cache_memory_limit(args.global_opts.cache_memory_limit)
-        .free_list_cache_size(
-            NonZeroUsize::new(4 * args.global_opts.batch_size as usize).expect("batch size > 0"),
+        .freelist_memory_limit_kb(
+            NonZeroUsize::new(
+                (4 * args.global_opts.batch_size as usize * FREE_LIST_CACHE_ENTRY_SIZE)
+                    .div_ceil(1024),
+            )
+            .expect("batch size > 0"),
         )
         .cache_read_strategy(args.global_opts.cache_read_strategy.clone().into())
         .max_revisions(args.global_opts.revisions)
