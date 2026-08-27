@@ -2286,3 +2286,46 @@ fn test_multi_level_range_proof_with_hashed_values() {
     )
     .unwrap();
 }
+
+/// A trie as deep as the key-length bound allows survives a default stack.
+///
+/// The key-length bound exists to cap trie depth, because the walks that build
+/// and hash a trie during proof verification run once per level and a peer's
+/// keys decide how many levels there are. The bound is only worth its number if
+/// the deepest key it still admits is one the code survives, so this builds
+/// exactly that trie and proves the whole generate-and-verify round trip
+/// completes.
+///
+/// A stack overflow aborts the process rather than panicking, so a regression
+/// here fails as a signal rather than an assertion.
+#[test]
+fn test_max_bounded_depth_survives_default_stack() {
+    // Key i is i zero bytes followed by 0x11, so each key shares one more byte
+    // with its predecessor than the last and the trie is a chain rather than a
+    // bush. Lengths run 1..=1024 bytes, putting the longest key exactly at the
+    // bound and the trie at 2048 nibbles deep.
+    const KEYS: usize = 1024;
+
+    // std::thread's default stack is 2 MiB on every Tier-1 platform and firewood
+    // sets stack_size nowhere, so this is the size production threads get.
+    let handle = std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let mut items: KeyValuePairs = (0..KEYS)
+                .map(|i| {
+                    let mut key = vec![0x00u8; i];
+                    key.push(0x11);
+                    (key.into_boxed_slice(), Box::from(b"v".as_slice()))
+                })
+                .collect();
+            items.sort_unstable();
+            let merkle = init_merkle(items);
+            let root_hash = merkle.nodestore().root_hash().unwrap();
+            let proof = merkle.range_proof(None, None, None).unwrap();
+            verify_range_proof(None::<&[u8]>, None::<&[u8]>, &root_hash, &proof).unwrap();
+        })
+        .unwrap();
+    handle
+        .join()
+        .expect("a trie at the key-length bound must not exhaust the stack");
+}
