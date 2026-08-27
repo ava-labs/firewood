@@ -438,7 +438,7 @@ func (db *Database) ChangeProof(
 		return nil, err
 	}
 
-	runtime.SetFinalizer(proof, (*ChangeProof).Free)
+	proof.setFreeFinalizer()
 	return proof, nil
 }
 
@@ -508,6 +508,10 @@ func (db *Database) VerifyAndCommitChangeProof(
 func (proof *ChangeProof) FindNextKey(endKey Maybe[[]byte]) (*NextKeyRange, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
+	// Keep the proof reachable across the cgo call so its GC finalizer cannot
+	// free the handle mid-call once the receiver is otherwise dead. (ChangeProof
+	// holds no lease, so KeepAlive stands in for RangeProof's read-lock.)
+	defer runtime.KeepAlive(proof)
 
 	return getNextKeyRangeFromNextKeyRangeResult(
 		C.fwd_change_proof_find_next_key(proof.handle, newMaybeBorrowedBytes(endKey, &pinner)),
@@ -525,17 +529,27 @@ func (proof *ChangeProof) FindNextKey(endKey Maybe[[]byte]) (*NextKeyRange, erro
 // DeleteRange entries are skipped.
 func (p *ChangeProof) CodeHashes() iter.Seq2[Hash, error] {
 	return func(yield func(Hash, error) bool) {
-		iter, err := getCodeHashIteratorFromCodeHashIteratorResult(C.fwd_change_proof_code_hash_iter(p.handle))
+		it, err := getCodeHashIteratorFromCodeHashIteratorResult(C.fwd_change_proof_code_hash_iter(p.handle))
 		if err != nil {
 			yield(EmptyRoot, err)
 			return
 		}
+		// The Rust code iterator borrows the proof's data for its whole lifetime
+		// (CodeIteratorHandle<'p>), so the proof must stay alive until iteration
+		// finishes, not just for the create call above. Free the iterator and
+		// then KeepAlive p in the same deferred call: freeing releases the
+		// borrow, and the trailing KeepAlive keeps the proof reachable across the
+		// loop so its GC finalizer cannot free the borrowed-from context
+		// mid-iteration. Concurrently calling Free during iteration remains
+		// unsupported, as elsewhere on ChangeProof.
 		defer func() {
-			if err := iter.Free(); err != nil {
-				panic(err)
+			freeErr := it.Free()
+			runtime.KeepAlive(p)
+			if freeErr != nil {
+				panic(freeErr)
 			}
 		}()
-		for hash, err := iter.Next(); ; hash, err = iter.Next() {
+		for hash, err := it.Next(); ; hash, err = it.Next() {
 			if err != nil {
 				yield(EmptyRoot, err)
 				return
@@ -554,6 +568,8 @@ func (p *ChangeProof) CodeHashes() iter.Seq2[Hash, error] {
 //
 // The format is unspecified and opaque to firewood.
 func (p *ChangeProof) MarshalBinary() ([]byte, error) {
+	defer runtime.KeepAlive(p)
+
 	start := time.Now()
 	result, err := getValueFromValueResult(C.fwd_change_proof_to_bytes(p.handle))
 	proofMarshalDuration.WithLabelValues("change").Observe(time.Since(start).Seconds())
@@ -578,7 +594,7 @@ func (p *ChangeProof) UnmarshalBinary(data []byte) error {
 	if err == nil {
 		p.handle = handle.handle
 		handle.handle = nil
-		runtime.SetFinalizer(p, (*ChangeProof).Free)
+		p.setFreeFinalizer()
 	}
 
 	return err
@@ -607,6 +623,17 @@ func (p *ChangeProof) Free() error {
 	p.handle = nil
 
 	return nil
+}
+
+// setFreeFinalizer registers (*ChangeProof).Free as p's finalizer, replacing any
+// finalizer a previous life of p may already carry. runtime.SetFinalizer fatally
+// panics if a finalizer is already set, and a ChangeProof can legitimately reach
+// a finalizer-setting path more than once (a from-create proof re-loaded via
+// UnmarshalBinary, or a repeated UnmarshalBinary), so clear any existing
+// finalizer first. SetFinalizer(p, nil) is a no-op when none is set.
+func (p *ChangeProof) setFreeFinalizer() {
+	runtime.SetFinalizer(p, nil)
+	runtime.SetFinalizer(p, (*ChangeProof).Free)
 }
 
 // StartKey returns the inclusive start key of this key range.
