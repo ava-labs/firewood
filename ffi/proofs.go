@@ -711,22 +711,12 @@ func getNextKeyRangeFromNextKeyRangeResult(result C.NextKeyRangeResult) (*NextKe
 // instead of silently reintroducing the use-after-free described on
 // [codeIterator].
 func newCodeIterator(result C.CodeIteratorResult, owner codeHashSource) (*codeIterator, error) {
-	it, err := getCodeHashIteratorFromCodeHashIteratorResult(result)
-	if err != nil {
-		return nil, err
-	}
-
-	it.owner = owner
-	return it, nil
-}
-
-func getCodeHashIteratorFromCodeHashIteratorResult(result C.CodeIteratorResult) (*codeIterator, error) {
 	switch result.tag {
 	case C.CodeIteratorResult_NullHandlePointer:
 		return nil, errDBClosed
 	case C.CodeIteratorResult_Ok:
 		ptr := *(**C.CodeIteratorHandle)(unsafe.Pointer(&result.anon0))
-		return &codeIterator{handle: ptr}, nil
+		return &codeIterator{handle: ptr, owner: owner}, nil
 	case C.CodeIteratorResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 		return nil, err
