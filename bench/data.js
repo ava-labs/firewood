@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787728366334,
+  "lastUpdate": 1787822988543,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -9728,6 +9728,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 79.51767369786275,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "1abf47a0e1b5d6c1f72a5820720d195664bb2dc8",
+          "message": "feat: add firewood_build_info metric with git sha and tag (#2126)\n\n## Why this should be merged\n\nOperators currently have no way to tell from metrics which firewood\nbuild a node is running. A constant build-info gauge is the standard\nPrometheus pattern for joining version info onto other metrics.\n\n## How this works\n\nA new `build.rs` captures the git commit sha and any exact-match tag at\nbuild time via rustc-env, with rerun-if-changed hooks on the git dir so\nvalues stay fresh across checkouts. `Db::new` sets the\n`firewood_build_info` gauge to a constant 1 with `git_sha` and `git_tag`\nlabels when a database is opened. Falls back to `sha=unknown` / empty\ntag when built outside a git checkout (e.g. from a published crate).\n\n## How this was tested\n\n`cargo nextest run --workspace --features ethhash,logger --all-targets`;\n`cargo +nightly-2026-07-05 clippy` with `-D warnings` (debug and\nmaxperf) per the updated PR gate; `cargo doc --no-deps`;\n`markdownlint-cli2` on METRICS.md.\n\n## Breaking Changes\n\nnone.",
+          "timestamp": "2026-08-26T16:28:26Z",
+          "url": "https://github.com/ava-labs/firewood/commit/1abf47a0e1b5d6c1f72a5820720d195664bb2dc8"
+        },
+        "date": 1787822987699,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 174.74800619422678,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5722.525949100285,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 110.22199831973292,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5534.641173319726,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 75.24651418004271,
             "unit": "block_accept_ms/ggas"
           }
         ]
