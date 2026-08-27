@@ -22,7 +22,6 @@ use smallvec::SmallVec;
 
 use super::NodeReader;
 
-
 /// Hashes a finished frame. `path` must already be truncated to the node's own
 /// prefix.
 fn finish_hash_frame<H: HashMode>(
@@ -151,13 +150,14 @@ where
     ) -> Result<(MaybePersistedNode, HashType), FileIoError> {
         let mut path = root_path;
         let prefix_len = path.0.len();
-        // Only branches take frames, so this holds the branch depth of the current
-        // path, which is around seven for a million uniformly distributed keys.
+        // Past the root, only branches take frames, so this holds the branch depth
+        // of the current path, around seven for a million uniformly distributed keys.
         // Inline capacity covers that without allocating, while staying small
         // enough that the inline buffer is not itself a per-call cost. Deeper tries
         // spill to the heap, which is the point: depth then costs memory rather
         // than stack.
         let mut stack: SmallVec<[HashFrame; 8]> = SmallVec::new();
+        trace!("hashing {node:?} at {path:?}");
         stack.push(HashFrame::new(node, prefix_len, None));
         let mut carried: Option<(MaybePersistedNode, HashType)> = None;
 
@@ -228,6 +228,7 @@ where
             // costing a frame. Leaves dominate a realistic trie, so this keeps most
             // nodes off the stack entirely.
             if matches!(child_node, Node::Leaf(_)) {
+                trace!("hashing {child_node:?} at {path:?}");
                 let leaf = HashFrame::new(child_node, child_prefix_len, inherited);
                 let (hashed, hash) = finish_hash_frame::<H>(leaf, &path);
                 path.0.truncate(frame.prefix_len);
@@ -239,6 +240,7 @@ where
             }
 
             frame.pending = Some(nibble);
+            trace!("hashing {child_node:?} at {path:?}");
             stack.push(HashFrame::new(child_node, child_prefix_len, inherited));
         }
     }

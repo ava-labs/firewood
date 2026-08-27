@@ -68,8 +68,8 @@ pub(crate) enum BoundaryChildSource {
 /// This is a fast, nibble-level check used by [`Merkle::child_in_range`] as
 /// a first pass. It may return `true` for straddling nibbles — positions
 /// where the boundary passes through the subtree — even if no actual keys
-/// in the subtree are in range. `child_in_range` recurses into the subtree
-/// to resolve those cases.
+/// in the subtree are in range. `child_in_range` searches the subtree to
+/// resolve those cases.
 fn nibble_in_range(acc_prefix: &[u8], nibble: PathComponent, range: CollapseRange<'_>) -> bool {
     let CollapseRange { start, end } = range;
     let depth = acc_prefix.len();
@@ -360,8 +360,8 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
         range: CollapseRange<'_>,
     ) -> Result<bool, api::Error> {
         // Each entry is a resolved node paired with its own full nibble prefix.
-        // Resolving at push time matches the recursive version, which resolved
-        // each child as it descended into it.
+        // Children are resolved when pushed rather than when popped, so a read
+        // error surfaces at the point the child is reached.
         let mut work: Vec<(SharedNode, Box<[u8]>)> = Vec::new();
         if nibble_in_range(acc_prefix, nibble, range) {
             let node = child.as_shared_node(&self.nodestore)?;

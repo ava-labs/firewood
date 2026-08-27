@@ -10,6 +10,7 @@ use firewood_storage::{
 };
 
 use super::{
+    de::{MAX_KEY_BYTES, MAX_KEY_NIBBLES},
     header::InvalidHeader,
     magic,
     reader::{ProofReader, ReadError},
@@ -1356,8 +1357,8 @@ fn change_proof_with_key_len(key_len: usize) -> Vec<u8> {
 ///
 /// Trie depth cannot exceed a key's nibble count, so this bound is what keeps
 /// peer-supplied keys from deciding how deep verification walks.
-#[test_case(1024, true ; "at the bound")]
-#[test_case(1025, false ; "one byte over")]
+#[test_case(MAX_KEY_BYTES, true ; "at the bound")]
+#[test_case(MAX_KEY_BYTES + 1, false ; "one byte over")]
 fn test_batch_op_key_length_bound(key_len: usize, accepted: bool) {
     let data = change_proof_with_key_len(key_len);
     let result = FrozenChangeProof::from_slice(&data);
@@ -1370,7 +1371,7 @@ fn test_batch_op_key_length_bound(key_len: usize, accepted: bool) {
         match result {
             Err(ReadError::InvalidItem { item, expected, .. }) => {
                 assert_eq!(item, "key length");
-                assert_eq!(expected, "at most 1024 bytes");
+                assert_eq!(expected, format!("at most {MAX_KEY_BYTES} bytes"));
             }
             other => panic!("expected InvalidItem for an over-long key, got {other:?}"),
         }
@@ -1378,8 +1379,8 @@ fn test_batch_op_key_length_bound(key_len: usize, accepted: bool) {
 }
 
 /// The same bound applies to a range proof's key-value pairs.
-#[test_case(1024, true ; "at the bound")]
-#[test_case(1025, false ; "one byte over")]
+#[test_case(MAX_KEY_BYTES, true ; "at the bound")]
+#[test_case(MAX_KEY_BYTES + 1, false ; "one byte over")]
 fn test_range_proof_key_length_bound(key_len: usize, accepted: bool) {
     let proof = FrozenRangeProof::with_hash_mode(
         Proof::new(Box::<[ProofNode]>::from([])),
@@ -1400,8 +1401,8 @@ fn test_range_proof_key_length_bound(key_len: usize, accepted: bool) {
 }
 
 /// A proof node's path is nibbles, so it is bounded in nibbles rather than bytes.
-#[test_case(2048, true ; "at the bound")]
-#[test_case(2049, false ; "one nibble over")]
+#[test_case(MAX_KEY_NIBBLES, true ; "at the bound")]
+#[test_case(MAX_KEY_NIBBLES + 1, false ; "one nibble over")]
 fn test_proof_node_path_length_bound(nibbles: usize, accepted: bool) {
     let node = ProofNode {
         key: (0..nibbles)

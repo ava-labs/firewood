@@ -683,13 +683,8 @@ fn new_hash_frame<'b, H: HashMode>(
         .collect();
     let proof_node = proof_nodes.get(&full_key).copied();
     let outside_mask = outside_children.get(&full_key);
-    let single_storage_child = single_effective_account_child(
-        &full_key,
-        branch,
-        proof_node,
-        outside_mask,
-        H::ALGORITHM,
-    );
+    let single_storage_child =
+        single_effective_account_child(&full_key, branch, proof_node, outside_mask, H::ALGORITHM);
     HashFrame {
         branch,
         child_prefix: full_key.clone(),
@@ -766,8 +761,8 @@ fn finish_hash_frame<H: HashMode>(mut frame: HashFrame<'_>) -> HashType {
 ///
 /// An "effective" child is either an in-range branch child or an
 /// out-of-range child carried by the proof node — together they reflect
-/// the true on-disk shape. Proof verification only; live hashing has its
-/// own detection in `hash_helper_inner`. Without `ethhash` there is no
+/// the true on-disk shape. Proof verification only. Live hashing has its own
+/// detection in `prepare_account_branch`. Without `ethhash` there is no
 /// account-branch fold, so this always returns `None`.
 fn single_effective_account_child(
     full_key: &[PathComponent],
@@ -2033,16 +2028,19 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
     /// Map `key` to `value` into the subtrie rooted at `node`.
     /// Each element of `key` is 1 nibble.
     /// Returns the new root of the subtrie.
-    /// Inserts `value` at `key`, iteratively.
     ///
     /// The walk descends to a single child per level, transforms it, and reattaches
     /// it while unwinding. `insert_step` performs one level and reports whether to
     /// descend, so the path is held on the heap rather than the call stack. Trie
     /// depth is attacker-controlled through key length during proof verification,
     /// so recursion here would be a stack-exhaustion sink.
-    fn insert_helper(&mut self, node: Node, key: &[u8], value: Value) -> Result<Node, FileIoError> {
+    fn insert_helper(
+        &mut self,
+        mut node: Node,
+        key: &[u8],
+        value: Value,
+    ) -> Result<Node, FileIoError> {
         let mut parents: Vec<(Node, PathComponent)> = Vec::new();
-        let mut node = node;
         // The caller's key is borrowed for the first level. Only a descent needs an
         // owned buffer, so a shallow insert allocates nothing here.
         let mut owned_key: Option<Path> = None;
@@ -2075,6 +2073,8 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
 
     /// One level of [`insert_helper`]. Either finishes the insert or hands back the
     /// child to continue into, along with the parent it was taken from.
+    ///
+    /// [`insert_helper`]: Self::insert_helper
     fn insert_step(
         &mut self,
         mut node: Node,
@@ -2210,13 +2210,12 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
 
     /// Ensures a branch exists at `key` in the subtrie rooted at `node`.
     /// Each element of `key` is 1 nibble.
-    /// Splices a branch into the trie at `key`, iteratively. See [`insert_helper`]
-    /// for why this walk must not recurse.
+    ///
+    /// See [`insert_helper`] for why this walk must not recurse.
     ///
     /// [`insert_helper`]: Self::insert_helper
-    fn insert_branch_helper(&mut self, node: Node, key: &[u8]) -> Result<Node, FileIoError> {
+    fn insert_branch_helper(&mut self, mut node: Node, key: &[u8]) -> Result<Node, FileIoError> {
         let mut parents: Vec<(Node, PathComponent)> = Vec::new();
-        let mut node = node;
         let mut owned_key: Option<Path> = None;
 
         let result = loop {
@@ -2440,11 +2439,10 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
     /// verification, so recursion here would be a stack-exhaustion sink.
     fn remove_helper(
         &mut self,
-        node: Node,
+        mut node: Node,
         key: &[u8],
     ) -> Result<(Option<Node>, Option<Value>), FileIoError> {
         let mut parents: Vec<(Box<BranchNode>, PathComponent)> = Vec::new();
-        let mut node = node;
         // The caller's key is borrowed for the first level. Only a descent needs an
         // owned buffer, so a shallow removal allocates nothing here.
         let mut owned_key: Option<Path> = None;
@@ -2594,12 +2592,11 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
     /// sink.
     fn remove_prefix_helper(
         &mut self,
-        node: Node,
+        mut node: Node,
         key: &[u8],
         deleted: &mut usize,
     ) -> Result<Option<Node>, FileIoError> {
         let mut parents: Vec<(Box<BranchNode>, PathComponent)> = Vec::new();
-        let mut node = node;
         // The caller's key is borrowed for the first level. Only a descent needs an
         // owned buffer, so a shallow removal allocates nothing here.
         let mut owned_key: Option<Path> = None;

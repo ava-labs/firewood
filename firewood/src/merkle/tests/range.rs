@@ -2307,7 +2307,9 @@ fn test_max_bounded_depth_survives_default_stack() {
     const KEYS: usize = 1024;
 
     // std::thread's default stack is 2 MiB on every Tier-1 platform and firewood
-    // sets stack_size nowhere, so this is the size production threads get.
+    // sets stack_size nowhere, so this is what a Rust-side caller runs on.
+    // Verification reached through the FFI runs on the thread cgo calls from,
+    // whose stack the Go runtime sets; that size is not covered here.
     let handle = std::thread::Builder::new()
         .stack_size(2 * 1024 * 1024)
         .spawn(|| {
