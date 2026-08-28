@@ -10,8 +10,8 @@
 //! stripped.
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use firewood::{NodeHashAlgorithm, api::BatchOp, db::DbConfig, open};
-use firewood_storage::SeededRng;
+use firewood::{api::BatchOp, db::DbConfig, open};
+use firewood_storage::{DefaultHashMode, HashMode, SeededRng};
 
 const KEY_COUNT: usize = 10_000;
 const KEY_PREFIX: &[u8] = &[0xab, 0xcd];
@@ -32,6 +32,8 @@ fn build_batch(keys: &[[u8; KEY_LEN]], value: &[u8]) -> OwnedBatch {
         .into_boxed_slice()
 }
 
+// Sort the generated keys so the benchmark can select a narrow, contiguous
+// in-trie range and so the dense subtrie shape is deterministic across runs.
 #[expect(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 fn generate_sorted_keys(rng: &SeededRng) -> Vec<[u8; KEY_LEN]> {
     let mut keys: Vec<[u8; KEY_LEN]> = (0..KEY_COUNT)
@@ -63,8 +65,7 @@ fn bench_collapse(criterion: &mut Criterion) {
 
     let dir = tempfile::tempdir().expect("tempdir should be created");
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(NodeHashAlgorithm::MerkleDB)
-        .truncate(true)
+        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
         .build();
     let db = open(dir.path(), cfg).expect("db should open");
 
