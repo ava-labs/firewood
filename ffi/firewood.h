@@ -1679,11 +1679,14 @@ typedef struct DatabaseHandleArgs {
    */
   size_t node_cache_memory_limit;
   /**
-   * The size of the free list cache.
+   * The memory limit for the free-list cache in kibibytes.
+   *
+   * Nothing is preallocated; this is an upper bound on the memory the cache
+   * may grow to.
    *
    * Opening returns an error if this is zero.
    */
-  size_t free_list_cache_size;
+  size_t freelist_memory_limit_kb;
   /**
    * The maximum number of revisions to keep.
    *
