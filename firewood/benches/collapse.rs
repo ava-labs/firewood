@@ -71,8 +71,8 @@ fn bench_collapse(criterion: &mut Criterion) {
 
     let rng = SeededRng::new(0xdead_beef);
     let keys = generate_sorted_keys(&rng);
-    assert!(keys.len() >= KEY_COUNT);
 
+    // Create the initial revision from the full dense key set.
     let initial_batch = build_batch(&keys, b"initial");
     db.propose(initial_batch)
         .expect("propose should succeed")
@@ -80,14 +80,16 @@ fn bench_collapse(criterion: &mut Criterion) {
         .expect("commit should succeed");
     let start_root = db.root_hash().expect("start root should exist");
 
-    let window_start = keys.len() / 2;
-    let first = *keys.get(window_start).expect("index in range");
+    // Select a narrow, contiguous range of keys and the key in the middle to update.
+    let range_start = keys.len() / 2;
+    let first = *keys.get(range_start).expect("index in range");
     let last = *keys
-        .get(window_start.saturating_add(RANGE_SIZE - 1))
+        .get(range_start.saturating_add(RANGE_SIZE - 1))
         .expect("index in range");
 
+    // Create the second revision by updating a single key within the range.
     let update_key = *keys
-        .get(window_start.saturating_add(RANGE_SIZE / 2))
+        .get(range_start.saturating_add(RANGE_SIZE / 2))
         .expect("index in range");
     let update_batch = Box::from([BatchOp::Put {
         key: Box::from(update_key.as_slice()),
@@ -99,6 +101,7 @@ fn bench_collapse(criterion: &mut Criterion) {
         .expect("commit should succeed");
     let end_root = db.root_hash().expect("end root should exist");
 
+    // Generate the change proof once outside the benchmark loop.
     let proof = db
         .change_proof(
             start_root,
@@ -109,6 +112,7 @@ fn bench_collapse(criterion: &mut Criterion) {
         )
         .expect("change proof should be generated");
 
+    // Benchmark only the change-proof verification step.
     group.bench_function("change_proof/verify/dense_subtrie", |b| {
         b.iter(|| {
             db.verify_change_proof(
