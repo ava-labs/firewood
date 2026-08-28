@@ -80,7 +80,9 @@ fn bench_collapse(criterion: &mut Criterion) {
         .expect("commit should succeed");
     let start_root = db.root_hash().expect("start root should exist");
 
-    // Select a narrow, contiguous range of keys and the key in the middle to update.
+    // Select a narrow, contiguous range. A narrow (not full-trie) range is used
+    // intentionally because it forces `collapse_strip` to recurse into off-path
+    // subtries via `child_in_range`, which is the behavior introduced by #1952.
     let range_start = keys.len() / 2;
     let first = *keys.get(range_start).expect("index in range");
     let last = *keys
