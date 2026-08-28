@@ -238,10 +238,21 @@ pub(crate) enum AreaKind {
     Node,
 }
 
+/// Metadata about a stored area, read directly from its header bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StoredAreaInfo {
+    /// The kind of the area, as indicated by its `AreaType` byte.
+    pub(crate) kind: AreaKind,
+    /// The size class of the area.
+    pub(crate) index: AreaIndex,
+    /// The size of the area in bytes.
+    pub(crate) size: u64,
+}
+
 /// Reads the `AreaIndex` and `AreaType` bytes of the stored area at `address`,
-/// returning the kind of the area along with its `(AreaIndex, size)` info.
-/// Free areas are validated by parsing their next-free-block payload; node
-/// areas are only identified by their marker byte, not deserialized.
+/// returning its [`StoredAreaInfo`]. Free areas are validated by parsing their
+/// next-free-block payload; node areas are only identified by their marker
+/// byte, not deserialized.
 ///
 /// Note: legacy free areas written with the old 0x01 marker are reported as
 /// [`AreaKind::Node`] since that marker is ambiguous with a leaf node's first
@@ -251,21 +262,18 @@ pub(crate) enum AreaKind {
 ///
 /// Returns a [`FileIoError`] if the bytes cannot be read, the area index is
 /// invalid, or a free area's payload is malformed.
-pub(crate) fn read_area_kind_index_and_size<S: ReadableStorage>(
+pub(crate) fn read_stored_area_info<S: ReadableStorage>(
     storage: &S,
     address: LinearAddress,
-) -> Result<(AreaKind, AreaIndex, u64), FileIoError> {
+) -> Result<StoredAreaInfo, FileIoError> {
     let addr = address.get();
     let stream = storage.stream_from(addr)?;
-    read_area_kind_index_and_size_from_reader(stream).map_err(|e| {
-        storage.file_io_error(e, addr, Some("read_area_kind_index_and_size".to_owned()))
-    })
+    read_stored_area_info_from_reader(stream)
+        .map_err(|e| storage.file_io_error(e, addr, Some("read_stored_area_info".to_owned())))
 }
 
-fn read_area_kind_index_and_size_from_reader(
-    mut reader: impl Read,
-) -> std::io::Result<(AreaKind, AreaIndex, u64)> {
-    let area_index = AreaIndex::try_from(reader.read_byte()?)?;
+fn read_stored_area_info_from_reader(mut reader: impl Read) -> std::io::Result<StoredAreaInfo> {
+    let index = AreaIndex::try_from(reader.read_byte()?)?;
     let kind = match reader.read_byte()? {
         0xFF => {
             // validate the free area's payload: the next free block address
@@ -274,7 +282,11 @@ fn read_area_kind_index_and_size_from_reader(
         }
         _ => AreaKind::Node,
     };
-    Ok((kind, area_index, area_index.size()))
+    Ok(StoredAreaInfo {
+        kind,
+        index,
+        size: index.size(),
+    })
 }
 
 // Re-export the NodeStore types we need
@@ -1059,7 +1071,7 @@ mod tests {
     }
 
     #[test]
-    fn test_read_area_kind_index_and_size() {
+    fn test_read_stored_area_info() {
         use crate::Path;
         use crate::node::{LeafNode, Node};
         use test_utils::{test_write_free_area, test_write_new_node};
@@ -1073,14 +1085,14 @@ mod tests {
         let free_addr = NodeStoreHeader::SIZE;
         test_write_free_area(&nodestore, None, free_index, free_addr);
 
-        let (kind, index, size) = read_area_kind_index_and_size(
+        let info = read_stored_area_info(
             nodestore.storage.as_ref(),
             LinearAddress::new(free_addr).unwrap(),
         )
         .unwrap();
-        assert_eq!(kind, AreaKind::Free);
-        assert_eq!(index, free_index);
-        assert_eq!(size, free_index.size());
+        assert_eq!(info.kind, AreaKind::Free);
+        assert_eq!(info.index, free_index);
+        assert_eq!(info.size, free_index.size());
 
         // write a node area
         let node_addr = free_addr.checked_add(free_index.size()).unwrap();
@@ -1090,14 +1102,14 @@ mod tests {
         });
         let (_, node_area_size) = test_write_new_node(&nodestore, &node, node_addr);
 
-        let (kind, index, size) = read_area_kind_index_and_size(
+        let info = read_stored_area_info(
             nodestore.storage.as_ref(),
             LinearAddress::new(node_addr).unwrap(),
         )
         .unwrap();
-        assert_eq!(kind, AreaKind::Node);
-        assert_eq!(index.size(), node_area_size);
-        assert_eq!(size, node_area_size);
+        assert_eq!(info.kind, AreaKind::Node);
+        assert_eq!(info.index.size(), node_area_size);
+        assert_eq!(info.size, node_area_size);
     }
 
     #[test]

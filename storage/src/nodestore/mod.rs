@@ -1555,13 +1555,12 @@ where
         &self,
         address: LinearAddress,
     ) -> Result<(AreaIndex, u64), FileIoError> {
-        let (kind, index, size) =
-            alloc::read_area_kind_index_and_size(self.storage.as_ref(), address)?;
-        if kind == alloc::AreaKind::Node {
+        let info = alloc::read_stored_area_info(self.storage.as_ref(), address)?;
+        if info.kind == alloc::AreaKind::Node {
             // validate that the area contains a parsable node
             self.read_node(address)?;
         }
-        Ok((index, size))
+        Ok((info.index, info.size))
     }
 }
 
