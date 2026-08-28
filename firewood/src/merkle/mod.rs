@@ -66,48 +66,87 @@ macro_rules! write_attributes {
 }
 
 /// Returns the value mapped to by `key` in the subtrie rooted at `node`.
+/// Walks to the node at `key`, iteratively.
+///
+/// Trie depth is bounded by a key's nibble count, and the key-length bound admits
+/// keys far longer than this walk survived when it recursed, so a legal trie could
+/// abort the process on a read. Depth now costs heap rather than stack.
+///
+/// In-memory children are followed by reference. Turning one into an owned
+/// `SharedNode` clones it, and `Node` owns its children by value, so that clone
+/// recurses once per level and would reintroduce the sink this loop removes. Only
+/// a persisted child produces an owned node, which the borrow then points into, so
+/// resolving one ends the inner loop.
 fn get_helper<T: TrieReader>(
     nodestore: &T,
     node: &Node,
     key: &[u8],
 ) -> Result<Option<SharedNode>, FileIoError> {
-    // 4 possibilities for the position of the `key` relative to `node`:
-    // 1. The node is at `key`
-    // 2. The key is above the node (i.e. its ancestor)
-    // 3. The key is below the node (i.e. its descendant)
-    // 4. Neither is an ancestor of the other
-    let path_overlap = PrefixOverlap::from(key, node.partial_path());
-    let unique_key = path_overlap.unique_a;
-    let unique_node = path_overlap.unique_b;
+    let mut resolved: Option<SharedNode> = None;
+    let mut key = key;
 
-    match (
-        unique_key.split_first().map(|(index, path)| (*index, path)),
-        unique_node.split_first(),
-    ) {
-        (_, Some(_)) => {
-            // Case (2) or (4)
-            Ok(None)
-        }
-        (None, None) => Ok(Some(node.clone().into())), // 1. The node is at `key`
-        (Some((child_index, remaining_key)), None) => {
-            let child_index = PathComponent::try_new(child_index).expect("index is in bounds");
+    loop {
+        let mut current: &Node = match &resolved {
+            Some(shared) => shared,
+            None => node,
+        };
+
+        let next: SharedNode = loop {
+            // 4 possibilities for the position of the `key` relative to `current`:
+            // 1. The node is at `key`
+            // 2. The key is above the node (i.e. its ancestor)
             // 3. The key is below the node (i.e. its descendant)
-            match node {
-                Node::Leaf(_) => Ok(None),
-                Node::Branch(node) => match node.children[child_index].as_ref() {
-                    None => Ok(None),
-                    Some(Child::Node(child)) => get_helper(nodestore, child, remaining_key),
-                    Some(Child::AddressWithHash(addr, _)) => {
-                        let child = nodestore.read_node(*addr)?;
-                        get_helper(nodestore, &child, remaining_key)
-                    }
-                    Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                        let child = maybe_persisted.as_shared_node(nodestore)?;
-                        get_helper(nodestore, &child, remaining_key)
-                    }
-                },
+            // 4. Neither is an ancestor of the other
+            //
+            // The split index is taken rather than `PrefixOverlap`'s slices,
+            // because that unifies the lifetimes of both its arguments, which
+            // would tie the remaining key to `current` and so to `resolved`.
+            // Re-slicing `key` keeps the remainder borrowed from the caller's key
+            // alone, which is what lets `resolved` be replaced.
+            let partial_path = current.partial_path();
+            let split_index = key
+                .iter()
+                .zip(partial_path.iter())
+                .position(|(k, p)| *k != *p)
+                .unwrap_or_else(|| std::cmp::min(key.len(), partial_path.len()));
+
+            if split_index != partial_path.len() {
+                // Part of the partial path is unconsumed, so the key diverges from
+                // it or stops inside it. Case (2) or (4).
+                return Ok(None);
             }
-        }
+
+            let unique_key = key
+                .get(split_index..)
+                .expect("split index is at most the key length");
+
+            let Some((&child_index, remaining_key)) = unique_key.split_first() else {
+                // 1. The node is at `key`
+                return Ok(Some(current.clone().into()));
+            };
+            let child_index = PathComponent::try_new(child_index).expect("index is in bounds");
+
+            // 3. The key is below the node (i.e. its descendant)
+            let Node::Branch(branch) = current else {
+                return Ok(None);
+            };
+            match branch.children[child_index].as_ref() {
+                None => return Ok(None),
+                Some(Child::Node(child)) => {
+                    current = child;
+                    key = remaining_key;
+                }
+                Some(Child::AddressWithHash(addr, _)) => {
+                    key = remaining_key;
+                    break nodestore.read_node(*addr)?;
+                }
+                Some(Child::MaybePersisted(maybe_persisted, _)) => {
+                    key = remaining_key;
+                    break maybe_persisted.as_shared_node(nodestore)?;
+                }
+            }
+        };
+        resolved = Some(next);
     }
 }
 
