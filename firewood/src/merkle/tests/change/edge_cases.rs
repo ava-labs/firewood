@@ -8,7 +8,8 @@ use std::num::NonZeroUsize;
 use tempfile::TempDir;
 use test_case::test_case;
 
-use crate::merkle::tests::prefix_chain_keys;
+use crate::merkle::tests::{prefix_chain_keys, spawn_on_default_stack};
+use crate::proofs::de::MAX_KEY_BYTES;
 use firewood_storage::{DefaultHashMode, HashMode};
 
 #[test]
@@ -1296,4 +1297,49 @@ fn test_deep_forged_ops_rejected_at_deserialization() {
         rendered.contains("key length"),
         "expected the key-length bound to reject it, got {rendered}"
     );
+}
+
+/// A change proof over a trie as deep as the key-length bound allows survives a
+/// default stack.
+///
+/// The range-proof guard covers the walks that rebuild and hash a proving trie.
+/// Change-proof verification does more: it applies the peer's batch ops, which
+/// reaches the removal walks, and collapses the proving trie to the shape
+/// `end_root` has, which reaches the collapse walks. Both are driven to a depth
+/// the peer chooses, so this drives both to the deepest key the bound admits.
+#[test]
+fn test_max_bounded_depth_change_proof_survives_default_stack() {
+    spawn_on_default_stack(|| {
+        let keys = prefix_chain_keys(MAX_KEY_BYTES, 0x11);
+
+        let (source, _dir_source) = new_db();
+        let (target, _dir_target) = new_db();
+        for db in [&source, &target] {
+            let puts: Vec<BatchOp<&[u8], &[u8]>> = keys
+                .iter()
+                .map(|key| BatchOp::Put {
+                    key: key.as_slice(),
+                    value: b"v".as_slice(),
+                })
+                .collect();
+            db.propose(puts).unwrap().commit().unwrap();
+        }
+        let root1_source = source.root_hash().unwrap();
+        let root1_target = target.root_hash().unwrap();
+
+        // Deleting the deepest key is what drives the removal walk the full
+        // length of the chain, and the collapse walk with it.
+        let deepest = keys.last().expect("the chain is non-empty");
+        let deletion: Vec<BatchOp<&[u8], &[u8]>> = vec![BatchOp::Delete {
+            key: deepest.as_slice(),
+        }];
+        source.propose(deletion).unwrap().commit().unwrap();
+        let root2 = source.root_hash().unwrap();
+
+        let proof = source
+            .change_proof(root1_source, root2.clone(), None, None, None)
+            .unwrap();
+        let ctx = verify_change_proof_structure(&proof, root2, None, None, None).unwrap();
+        verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
+    });
 }
