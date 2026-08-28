@@ -43,6 +43,15 @@ pub enum Node {
     Leaf(LeafNode),
 }
 
+/// Inline capacity for the frame stacks of the iterative trie walks.
+///
+/// Past the root, only branches take frames, so a stack's depth follows the
+/// trie's branch depth, around seven at a million uniformly distributed keys.
+/// This capacity covers that without allocating, while staying small enough
+/// that the inline buffer is not itself a per-call cost. Deeper tries spill to
+/// the heap, which is the point: depth then costs memory rather than stack.
+pub(crate) const FRAME_STACK_INLINE_CAPACITY: usize = 8;
+
 impl lru_mem::HeapSize for Node {
     fn heap_size(&self) -> usize {
         match self {
