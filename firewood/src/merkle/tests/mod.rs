@@ -1007,6 +1007,96 @@ fn test_get_branch_from_nibbles_mut() {
 /// a `None` `end` is +∞. `None` is distinct from `Some(&[])`, which is the empty
 /// key itself — conflating the two put every key out of range at the upper
 /// bound.
+/// Reading and removing on an in-memory trie as deep as the key-length bound
+/// allows survives a default stack.
+///
+/// The committed-trie guards resolve every node they touch from storage, where a
+/// node's children are addresses, so each node is shallow. A mutable trie owns
+/// its nodes by value instead. A get walks that owned chain and clones the node
+/// it finds, and the shallowest key's node owns everything below it, so that
+/// clone spans the whole trie. A removal walks the same chain and reattaches it
+/// on the way back, and removing by prefix deletes the chain as a subtree. Each
+/// of those is driven as deep as the keys go, so this builds the deepest trie
+/// the bound admits and runs all of them on the stack size production threads
+/// get.
+///
+/// A stack overflow aborts the process rather than panicking, so a regression
+/// here fails as a killed test rather than an assertion.
+#[test]
+fn test_max_bounded_depth_in_memory_ops_survive_default_stack() {
+    // std::thread's default stack is 2 MiB on every Tier-1 platform and firewood
+    // sets stack_size nowhere, so this is the size Rust-spawned threads get.
+    let handle = std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            // The spine branches at every nibble, the deepest structure the
+            // bound admits. For every prefix of i zero bytes there are three
+            // keys: the prefix extended by another zero byte (the spine itself,
+            // so every spine branch carries a value), the prefix plus 0x10
+            // (diverging at the byte's first nibble), and the prefix plus 0x01
+            // (diverging at its second nibble). The longest key is 1024 bytes,
+            // putting the spine 2048 node levels deep.
+            const KEY_BYTES: usize = 1024;
+            let mut keys: Vec<Vec<u8>> = Vec::with_capacity(KEY_BYTES * 3);
+            for i in 0..KEY_BYTES {
+                let mut key = vec![0x00u8; i + 1];
+                keys.push(key.clone());
+                *key.last_mut().expect("key is non-empty") = 0x10;
+                keys.push(key.clone());
+                *key.last_mut().expect("key is non-empty") = 0x01;
+                keys.push(key);
+            }
+
+            let memstore = Arc::new(MemStore::new(
+                Vec::with_capacity(64 * 1024),
+                DefaultHashMode::ALGORITHM,
+            ));
+            let base: Merkle<NodeStore<Committed, MemStore, DefaultHashMode>> = Merkle::from(
+                NodeStore::new_empty_committed(memstore, DeletedNodeTracking::Enabled),
+            );
+            let mut merkle = base.fork().unwrap();
+            for key in &keys {
+                merkle.insert(key, Box::from(b"v".as_slice())).unwrap();
+            }
+
+            let shallowest: &[u8] = &[0x00];
+            let deepest = vec![0x00u8; KEY_BYTES];
+
+            // The node at the shallowest key owns the rest of the spine, so the
+            // clone that produces this get's result spans every level.
+            assert!(merkle.get_value(shallowest).unwrap().is_some());
+
+            // The deepest key drives the walk itself the full length of the spine.
+            assert!(merkle.get_value(&deepest).unwrap().is_some());
+
+            // Removing the deepest key walks to the tip and reattaches the spine
+            // on the way back.
+            assert!(merkle.remove(&deepest).unwrap().is_some());
+
+            // Removing by prefix walks to the shallowest key and deletes the
+            // whole subtree hanging under it, which is every key that starts
+            // with a zero byte. The tally is not asserted exactly because
+            // remove_prefix counts a branch's own value twice. The
+            // postcondition that matters is that the spine is gone.
+            let expected = keys.len() - 2;
+            let removed = merkle.remove_prefix(shallowest).unwrap();
+            assert!(
+                removed >= expected,
+                "expected the spine gone, got {removed}"
+            );
+            assert!(merkle.get_value(shallowest).unwrap().is_none());
+            assert!(merkle.get_value(&deepest).unwrap().is_none());
+
+            // The two keys that do not start with a zero byte remain.
+            assert!(merkle.get_value(&[0x01]).unwrap().is_some());
+            assert!(merkle.get_value(&[0x10]).unwrap().is_some());
+        })
+        .unwrap();
+    handle
+        .join()
+        .expect("in-memory ops at the key-length bound must not exhaust the stack");
+}
+
 #[test_case(&[3], &[3], Some(&[7]), true ; "start bound is inclusive")]
 #[test_case(&[7], &[3], Some(&[7]), true ; "end bound is inclusive")]
 #[test_case(&[2], &[3], Some(&[7]), false ; "before start")]
