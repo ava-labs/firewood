@@ -119,7 +119,7 @@ jobs:
       - name: Benchmark
         env:
           BENCH: ${{ matrix.bench }}
-        run: ./scripts/run-just.sh ci-rust bench "$PROFILE_KEY" "$BENCH"
+        run: ./scripts/run-just.sh ci-rust-bench "$PROFILE_KEY" "$BENCH"
       - name: Upload benchmark results
         uses: actions/upload-artifact@v7
         with:
