@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787909626781,
+  "lastUpdate": 1787909694203,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -9869,6 +9869,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 78.72675767619062,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Joachim Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon@leblanc.codes"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "62474b6e336593e24d1136cc50fd773804194d7d",
+          "message": "refactor(ffi): make the code-hash iterator's proof borrow structural (#2209)\n\n## Why this should be merged\n\n#2143 and #2144 each fixed a real use-after-free, and each proved it\nwith a test\nthat forced up to 50 collections per yielded hash and asserted a\n`runtime.AddCleanup` canary had not fired. Those tests could not\nestablish what\nthey claimed:\n\n- Asserting the GC did *not* collect something has no natural bound. The\n`50`\n  traded runtime for confidence; no value is ever *correct*.\n- Nothing verified the canary could fire at all, so one that silently\nstopped\n  working would pass forever.\n- The probe lived inside the `for … range seq` body with no yield count\nasserted, so a fixture that stopped producing code hashes would also\npass,\n  having asserted nothing.\n\nThe constant was really approximating a runtime rule the test never\nstated: the\nproof carries both a `Free` finalizer and the cleanup, and\n`runtime.AddCleanup`\nonly runs a cleanup *\"once it has been finalized and becomes unreachable\nwithout\nan associated finalizer\"* — at least two cycles plus two goroutine hops.\nSince\nonly *positive* facts about the collector are observable, this changes\nwhat is\nasserted rather than how hard the test tries.\n\n## How this works\n\nThe borrow becomes a fact the language guarantees: `codeIterator` holds\nthe\nproof, and the deferred `Free` in `codeHashSeq` captures the iterator,\nso the\nowner stays reachable for the whole iteration by ordinary liveness\nrules.\n\nThe durable part is that the owner is a required `newCodeIterator`\nargument\nrather than a field the caller assigns — a future refactor that forgets\nit fails\nto compile instead of silently reintroducing the use-after-free. The\nassertion\nonly pins that; it no longer depends on GC timing.\n\n`FindNextKey` and `MarshalBinary` keep their bare `runtime.KeepAlive`:\nno\nwrapper object outlives those calls, so there is no structural analogue,\nand\ntheir single fast cgo call leaves no window a deterministic test could\ntarget.\n\n## Notes\n\n**A coverage trade, stated explicitly:** the deleted tests were the only\nend-to-end exercise of `CodeHashes` under GC pressure, and that goes\naway. I\njudged it worth making, since they never established the property they\nclaimed.\nIf behavioural coverage is wanted back, an ordering assertion —\n\"collection\nhappened *after* iteration finished\", two positive events bounded by the\ntest\ndeadline — layers on without touching the production change.\n\n`TestCodeIteratorRetainsProof` skips in merkledb mode, where\n`fwd_*_code_hash_iter` errors and no iterator exists to inspect; that\nerror path\nstays covered by the `else` branch of `Test*CodeHashes`.\n\nMutation-checked: patching `newCodeIterator` to discard the owner fails\nboth\nsubtests with `*ffi.RangeProof.codeIterator() must retain the proof it\nborrows`.\n\n## Breaking Changes\n\nn/a",
+          "timestamp": "2026-08-27T19:41:45Z",
+          "url": "https://github.com/ava-labs/firewood/commit/62474b6e336593e24d1136cc50fd773804194d7d"
+        },
+        "date": 1787909692996,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 170.47870186820532,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5865.835374398181,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 74.5144018163142,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5743.204560898982,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 46.203663481654644,
             "unit": "block_accept_ms/ggas"
           }
         ]
