@@ -230,7 +230,7 @@ impl FreeArea {
 }
 
 /// Discriminates the contents of a stored area based on its `AreaType` byte.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum AreaKind {
     /// The area is free (`AreaType` is 0xFF).
     Free,
@@ -239,7 +239,6 @@ pub(crate) enum AreaKind {
 }
 
 /// Metadata about a stored area, read directly from its header bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StoredAreaInfo {
     /// The kind of the area, as indicated by its `AreaType` byte.
     pub(crate) kind: AreaKind,
