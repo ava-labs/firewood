@@ -23,6 +23,7 @@ pub use children::{Children, ChildrenSlots, DenseChildren};
 use enum_as_inner::EnumAsInner;
 use integer_encoding::{VarInt, VarIntReader as _};
 pub use leaf::LeafNode;
+use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::io::{Error, Read, Write};
 
@@ -34,13 +35,126 @@ pub mod persist;
 /// A node, either a Branch or Leaf
 
 // TODO(rkuris): explain why Branch is boxed but Leaf is not
-#[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
+#[derive(PartialEq, Eq, Debug, EnumAsInner)]
 #[repr(C)]
 pub enum Node {
     /// This node is a [`BranchNode`]
     Branch(Box<BranchNode>),
     /// This node is a [`LeafNode`]
     Leaf(LeafNode),
+}
+
+/// One branch part-way through being cloned.
+///
+/// `todo` is a bitmask of the child slots holding a branch that still needs
+/// copying, and `pending` is the slot waiting on the frame above it, so a frame
+/// can be suspended and resumed. A branch has at most 16 children, so the mask
+/// replaces a per-frame allocation.
+struct CloneFrame<'a> {
+    src: &'a BranchNode,
+    dst: Box<BranchNode>,
+    todo: u16,
+    pending: Option<PathComponent>,
+}
+
+impl<'a> CloneFrame<'a> {
+    /// Copies everything about `src` that does not recurse, and records which of
+    /// its slots do.
+    fn new(src: &'a BranchNode) -> Self {
+        let mut dst = Box::new(BranchNode {
+            partial_path: src.partial_path.clone(),
+            value: src.value.clone(),
+            children: Children::new(),
+        });
+        let mut todo: u16 = 0;
+
+        for (nibble, slot) in &src.children {
+            match slot {
+                None => {}
+                // A branch child owns a subtree, so it is the only thing that has
+                // to wait for a frame of its own.
+                Some(Child::Node(Node::Branch(_))) => todo |= 1u16 << nibble.0.as_u8(),
+                // A leaf owns no children, so copying one is flat.
+                Some(Child::Node(Node::Leaf(leaf))) => {
+                    dst.children[nibble] = Some(Child::Node(Node::Leaf(leaf.clone())));
+                }
+                // An address or an already-shared node is a cheap copy.
+                Some(cheap) => dst.children[nibble] = Some(cheap.clone()),
+            }
+        }
+
+        Self {
+            src,
+            dst,
+            todo,
+            pending: None,
+        }
+    }
+}
+
+/// Copies the subtree rooted at `root` without recursing.
+///
+/// A `Node` owns its children by value, so a derived clone descends once per trie
+/// level. Trie depth follows key length, and proof deserialization admits keys long
+/// enough for that to exhaust the stack, which aborts the process rather than
+/// returning an error. Frames live on the heap instead, so depth costs memory.
+fn clone_branch(root: &BranchNode) -> Box<BranchNode> {
+    // Inline capacity covers the branch depth of a realistic trie, around seven at
+    // a million uniformly distributed keys, so a shallow copy allocates nothing.
+    // Deeper tries spill to the heap, which is the point.
+    let mut stack: SmallVec<[CloneFrame<'_>; 8]> = SmallVec::new();
+    stack.push(CloneFrame::new(root));
+    let mut carried: Option<Box<BranchNode>> = None;
+
+    loop {
+        let frame = stack.last_mut().expect("the stack is never empty here");
+
+        // Install the copy produced by the frame that just finished.
+        if let Some(slot) = frame.pending.take() {
+            let child = carried.take().expect("a finished frame yields a branch");
+            frame.dst.children[slot] = Some(Child::Node(Node::Branch(child)));
+        }
+
+        if frame.todo == 0 {
+            // Every child is copied, so this frame is done.
+            let frame = stack.pop().expect("the stack is never empty here");
+            if stack.is_empty() {
+                return frame.dst;
+            }
+            carried = Some(frame.dst);
+            continue;
+        }
+
+        // Take the lowest outstanding slot, so children are copied in nibble order.
+        let index = frame.todo.trailing_zeros();
+        debug_assert!(index < 16, "todo is non-zero and only 16 bits wide");
+        frame.todo &= frame.todo.wrapping_sub(1);
+        let nibble = PathComponent(crate::U4::new_masked(
+            u8::try_from(index).expect("a non-zero u16 has at most 15 trailing zeros"),
+        ));
+
+        // `src` is borrowed from the original tree, not from `stack`, so reading it
+        // here leaves the stack free to grow below.
+        let src: &BranchNode = frame.src;
+        frame.pending = Some(nibble);
+
+        let Some(Child::Node(Node::Branch(child_src))) = src.children[nibble].as_ref() else {
+            unreachable!("todo only records slots holding a branch")
+        };
+        stack.push(CloneFrame::new(child_src));
+    }
+}
+
+impl Clone for Node {
+    /// Hand-written because the derived version recurses once per trie level. See
+    /// `clone_branch`.
+    fn clone(&self) -> Self {
+        match self {
+            // A leaf owns no children, so this is a flat copy.
+            Node::Leaf(leaf) => Node::Leaf(leaf.clone()),
+            Node::Branch(branch) => Node::Branch(clone_branch(branch)),
+        }
+    }
 }
 
 impl lru_mem::HeapSize for Node {
@@ -717,5 +831,104 @@ than 126 bytes as the length would be encoded in multiple bytes.
             area_index,
             "Area index should be calculated from node size only"
         );
+    }
+}
+
+#[cfg(test)]
+mod clone_tests {
+    use super::*;
+    use crate::{HashType, TrieHash};
+
+    /// Builds a chain `depth` branches deep, ending in a leaf, and hangs one of
+    /// each cheap child variant off the top so every arm of the copy is covered.
+    fn chain(depth: usize) -> Node {
+        let mut node = Node::Leaf(LeafNode {
+            partial_path: Path::from_nibbles_iterator([1u8, 2].into_iter()),
+            value: Box::from(b"leaf".as_slice()),
+        });
+
+        for level in 0..depth {
+            let mut children = Children::new();
+            children[PathComponent::try_new(0).unwrap()] = Some(Child::Node(node));
+            if level == depth.saturating_sub(1) {
+                // Only at the top, so the chain itself stays a single spine.
+                children[PathComponent::try_new(1).unwrap()] = Some(Child::AddressWithHash(
+                    LinearAddress::new(64).unwrap(),
+                    HashType::from(TrieHash::from([7u8; 32])),
+                ));
+                children[PathComponent::try_new(2).unwrap()] =
+                    Some(Child::Node(Node::Leaf(LeafNode {
+                        partial_path: Path::new(),
+                        value: Box::from(b"sibling".as_slice()),
+                    })));
+            }
+            node = Node::Branch(Box::new(BranchNode {
+                partial_path: Path::from_nibbles_iterator(
+                    [u8::try_from(level % 16).unwrap()].into_iter(),
+                ),
+                value: (level % 3 == 0).then(|| Box::from(b"v".as_slice())),
+                children,
+            }));
+        }
+        node
+    }
+
+    /// A clone equals its source. `Node` derives `PartialEq`, which compares the
+    /// whole subtree, so this is an exact oracle rather than a spot check.
+    #[test]
+    fn test_clone_equals_source() {
+        for depth in [0usize, 1, 2, 7, 40] {
+            let original = chain(depth);
+            let copy = original.clone();
+            assert_eq!(copy, original, "clone diverged at depth {depth}");
+        }
+    }
+
+    /// The copy is independent: mutating it must not touch the source.
+    #[test]
+    fn test_clone_is_deep_not_shared() {
+        let original = chain(5);
+        let mut copy = original.clone();
+
+        // Mutate deep inside the copy, not at its root, so a shallow copy that
+        // shared any subtree would show up here.
+        let mut cursor = copy.as_branch_mut().expect("chain(5) is a branch");
+        for _ in 0..3 {
+            let slot = PathComponent::try_new(0).unwrap();
+            let Some(Child::Node(Node::Branch(next))) = cursor.children[slot].as_mut() else {
+                panic!("the chain descends through slot 0")
+            };
+            cursor = next;
+        }
+        cursor.value = Some(Box::from(b"mutated".as_slice()));
+
+        assert_ne!(copy, original, "the mutation must be visible in the copy");
+        assert_eq!(
+            original,
+            chain(5),
+            "the source must be byte-identical to a freshly built chain"
+        );
+    }
+
+    /// A chain far deeper than a derived clone survives on a default stack.
+    ///
+    /// Neither the copy nor the source is compared or dropped here. `PartialEq` and
+    /// the drop glue are still derived, so both recurse per level and would abort
+    /// on a chain this deep, masking what this test is for. Completing the clone at
+    /// all is the assertion, since a stack overflow aborts the process.
+    #[test]
+    fn test_clone_survives_deep_chain() {
+        let handle = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                let original = chain(4096);
+                let copy = original.clone();
+                std::mem::forget(copy);
+                std::mem::forget(original);
+            })
+            .unwrap();
+        handle
+            .join()
+            .expect("cloning a deep chain must not exhaust the stack");
     }
 }
