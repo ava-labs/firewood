@@ -20,6 +20,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   # Benchmark results are the point of the run, so do not discard a merged
   # commit's results just because a newer commit arrived.
+  queue: ${{ github.event_name == 'workflow_dispatch' && 'single' || 'max' }}
   cancel-in-progress: false
 
 env:
