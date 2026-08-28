@@ -229,6 +229,54 @@ impl FreeArea {
     }
 }
 
+/// Discriminates the contents of a stored area based on its `AreaType` byte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AreaKind {
+    /// The area is free (`AreaType` is 0xFF).
+    Free,
+    /// The area contains a serialized node (any other `AreaType` value).
+    Node,
+}
+
+/// Reads the `AreaIndex` and `AreaType` bytes of the stored area at `address`,
+/// returning the kind of the area along with its `(AreaIndex, size)` info.
+/// Free areas are validated by parsing their next-free-block payload; node
+/// areas are only identified by their marker byte, not deserialized.
+///
+/// Note: legacy free areas written with the old 0x01 marker are reported as
+/// [`AreaKind::Node`] since that marker is ambiguous with a leaf node's first
+/// byte.
+///
+/// # Errors
+///
+/// Returns a [`FileIoError`] if the bytes cannot be read, the area index is
+/// invalid, or a free area's payload is malformed.
+pub(crate) fn read_area_kind_index_and_size<S: ReadableStorage>(
+    storage: &S,
+    address: LinearAddress,
+) -> Result<(AreaKind, AreaIndex, u64), FileIoError> {
+    let addr = address.get();
+    let stream = storage.stream_from(addr)?;
+    read_area_kind_index_and_size_from_reader(stream).map_err(|e| {
+        storage.file_io_error(e, addr, Some("read_area_kind_index_and_size".to_owned()))
+    })
+}
+
+fn read_area_kind_index_and_size_from_reader(
+    mut reader: impl Read,
+) -> std::io::Result<(AreaKind, AreaIndex, u64)> {
+    let area_index = AreaIndex::try_from(reader.read_byte()?)?;
+    let kind = match reader.read_byte()? {
+        0xFF => {
+            // validate the free area's payload: the next free block address
+            let _: u64 = reader.read_varint()?;
+            AreaKind::Free
+        }
+        _ => AreaKind::Node,
+    };
+    Ok((kind, area_index, area_index.size()))
+}
+
 // Re-export the NodeStore types we need
 use super::NodeStore;
 
@@ -1008,6 +1056,48 @@ mod tests {
         // `move_to_next_free_list` will do nothing since we are already at the end
         assert!(free_list_iter.current_free_list.is_none());
         assert!(free_list_iter.next_with_metadata().is_none());
+    }
+
+    #[test]
+    fn test_read_area_kind_index_and_size() {
+        use crate::Path;
+        use crate::node::{LeafNode, Node};
+        use test_utils::{test_write_free_area, test_write_new_node};
+
+        let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
+        let nodestore =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
+
+        // write a free area
+        let free_index = area_index!(3);
+        let free_addr = NodeStoreHeader::SIZE;
+        test_write_free_area(&nodestore, None, free_index, free_addr);
+
+        let (kind, index, size) = read_area_kind_index_and_size(
+            nodestore.storage.as_ref(),
+            LinearAddress::new(free_addr).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(kind, AreaKind::Free);
+        assert_eq!(index, free_index);
+        assert_eq!(size, free_index.size());
+
+        // write a node area
+        let node_addr = free_addr.checked_add(free_index.size()).unwrap();
+        let node = Node::Leaf(LeafNode {
+            partial_path: Path::from([0, 1, 2]),
+            value: vec![4, 5, 6, 7].into(),
+        });
+        let (_, node_area_size) = test_write_new_node(&nodestore, &node, node_addr);
+
+        let (kind, index, size) = read_area_kind_index_and_size(
+            nodestore.storage.as_ref(),
+            LinearAddress::new(node_addr).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(kind, AreaKind::Node);
+        assert_eq!(index.size(), node_area_size);
+        assert_eq!(size, node_area_size);
     }
 
     #[test]
