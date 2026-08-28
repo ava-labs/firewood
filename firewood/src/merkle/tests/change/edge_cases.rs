@@ -8,6 +8,7 @@ use std::num::NonZeroUsize;
 use tempfile::TempDir;
 use test_case::test_case;
 
+use crate::merkle::tests::prefix_chain_keys;
 use firewood_storage::{DefaultHashMode, HashMode};
 
 #[test]
@@ -1257,4 +1258,42 @@ fn test_an_unrelated_end_proof_does_not_narrow() {
                 .expect_err("a spliced end proof must not be accepted");
         }
     }
+}
+
+/// A proof whose forged operations would drive verification thousands of levels
+/// deep is rejected at deserialization, before any trie is rebuilt.
+#[test]
+fn test_deep_forged_ops_rejected_at_deserialization() {
+    let (source, _dir_s) = setup_db![(b"\x05", b"init")];
+    let (root1, root2) = setup_2nd_commit!(source, [(b"\x10", b"v0")]);
+    let honest = source.change_proof(root1, root2, None, None, None).unwrap();
+
+    // 3000 keys forming a prefix chain whose longest keys are far past the bound.
+    // The rest of the proof is the honest one, so the rejection is attributable
+    // to the key-length bound alone.
+    let mut keys: Vec<Vec<u8>> = prefix_chain_keys(3000, 0x01);
+    keys.sort();
+    let mut ops: Vec<BatchOp<Key, Value>> = keys
+        .iter()
+        .map(|k| BatchOp::Put {
+            key: k.clone().into_boxed_slice(),
+            value: Box::from(b"v".as_slice()),
+        })
+        .collect();
+    ops.extend(honest.batch_ops().iter().cloned());
+    let forged: FrozenChangeProof = crate::ChangeProof::new(
+        crate::Proof::new(honest.start_proof().as_ref().to_vec().into_boxed_slice()),
+        crate::Proof::new(honest.end_proof().as_ref().to_vec().into_boxed_slice()),
+        ops.into_boxed_slice(),
+    );
+
+    let mut bytes = Vec::new();
+    forged.write_to_vec(&mut bytes);
+    let err = FrozenChangeProof::from_slice(&bytes)
+        .expect_err("a proof carrying over-long keys must not deserialize");
+    let rendered = format!("{err:?}");
+    assert!(
+        rendered.contains("key length"),
+        "expected the key-length bound to reject it, got {rendered}"
+    );
 }

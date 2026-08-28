@@ -10,6 +10,7 @@ use firewood_storage::{
 };
 
 use super::{
+    de::{MAX_KEY_BYTES, MAX_KEY_NIBBLES},
     header::InvalidHeader,
     magic,
     reader::{ProofReader, ReadError},
@@ -1334,4 +1335,109 @@ fn test_value_digest_hash_read_arm_is_unconditional() {
         ValueDigest::Value(_) => panic!("expected ValueDigest::Hash"),
     }
     assert!(eth_reader.remainder().is_empty(), "all bytes consumed");
+}
+
+/// Builds a change proof carrying one `Put` whose key is `key_len` bytes.
+fn change_proof_with_key_len(key_len: usize) -> Vec<u8> {
+    let proof = FrozenChangeProof::with_hash_mode(
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Box::new([BatchOp::Put {
+            key: vec![0u8; key_len].into_boxed_slice(),
+            value: Box::from(b"v".as_slice()),
+        }]),
+        DefaultHashMode::ALGORITHM,
+    );
+    let mut serialized = Vec::new();
+    proof.write_to_vec(&mut serialized);
+    serialized
+}
+
+/// Asserts a bound test's deserialization outcome: accepted, or rejected with an
+/// `InvalidItem` naming the bounded item. Matching on the item keeps an unrelated
+/// deserialization failure from passing as the rejection.
+fn assert_bound_outcome<T: std::fmt::Debug>(
+    result: Result<T, ReadError>,
+    accepted: bool,
+    item_name: &str,
+    expected_msg: &str,
+) {
+    if accepted {
+        assert!(result.is_ok(), "expected acceptance, got {result:?}");
+        return;
+    }
+    match result {
+        Err(ReadError::InvalidItem { item, expected, .. }) => {
+            assert_eq!(item, item_name);
+            assert_eq!(expected, expected_msg);
+        }
+        other => panic!("expected InvalidItem for {item_name}, got {other:?}"),
+    }
+}
+
+/// A key at the bound deserializes. One byte over is rejected.
+///
+/// Trie depth cannot exceed a key's nibble count, so this bound is what keeps
+/// peer-supplied keys from deciding how deep verification walks.
+#[test_case(MAX_KEY_BYTES, true ; "at the bound")]
+#[test_case(MAX_KEY_BYTES + 1, false ; "one byte over")]
+fn test_batch_op_key_length_bound(key_len: usize, accepted: bool) {
+    let data = change_proof_with_key_len(key_len);
+    assert_bound_outcome(
+        FrozenChangeProof::from_slice(&data),
+        accepted,
+        "key length",
+        &format!("at most {MAX_KEY_BYTES} bytes"),
+    );
+}
+
+/// The same bound applies to a range proof's key-value pairs.
+#[test_case(MAX_KEY_BYTES, true ; "at the bound")]
+#[test_case(MAX_KEY_BYTES + 1, false ; "one byte over")]
+fn test_range_proof_key_length_bound(key_len: usize, accepted: bool) {
+    let proof = FrozenRangeProof::with_hash_mode(
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Box::new([(
+            vec![0u8; key_len].into_boxed_slice(),
+            Box::from(b"v".as_slice()),
+        )]),
+        DefaultHashMode::ALGORITHM,
+    );
+    let mut data = Vec::new();
+    proof.write_to_vec(&mut data);
+    assert_bound_outcome(
+        FrozenRangeProof::from_slice(&data),
+        accepted,
+        "key length",
+        &format!("at most {MAX_KEY_BYTES} bytes"),
+    );
+}
+
+/// A proof node's path is nibbles, so it is bounded in nibbles rather than bytes.
+#[test_case(MAX_KEY_NIBBLES, true ; "at the bound")]
+#[test_case(MAX_KEY_NIBBLES + 1, false ; "one nibble over")]
+fn test_proof_node_path_length_bound(nibbles: usize, accepted: bool) {
+    let node = ProofNode {
+        key: (0..nibbles)
+            .map(|_| PathComponent::try_new(0).expect("0 is a valid nibble"))
+            .collect(),
+        partial_len: 0,
+        value_digest: None,
+        child_hashes: DenseChildren::new(),
+    };
+    let proof = FrozenRangeProof::with_hash_mode(
+        Proof::new(Box::<[ProofNode]>::from([node])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Box::new([]),
+        DefaultHashMode::ALGORITHM,
+    );
+    let mut data = Vec::new();
+    proof.write_to_vec(&mut data);
+    assert_bound_outcome(
+        FrozenRangeProof::from_slice(&data),
+        accepted,
+        "path length",
+        &format!("at most {MAX_KEY_NIBBLES} nibbles"),
+    );
 }
