@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -43,9 +44,12 @@ func ensureMetricsStarted(t *testing.T) {
 	})
 }
 
-func ensureLogsStarted(t *testing.T, logPath string) {
+func ensureLogsStarted(t *testing.T) {
 	t.Helper()
 	initLogs.Do(func() {
+		logDir, err := os.MkdirTemp("", "firewood-logs")
+		require.NoError(t, err)
+		logPath := filepath.Join(logDir, "firewood.log")
 		logConfig := &LogConfig{
 			Path:        logPath,
 			FilterLevel: "trace",
@@ -65,7 +69,7 @@ func newDbWithMetricsAndLogs(t *testing.T, opts ...Option) (db *Database, logPat
 	t.Helper()
 	db = newTestDatabase(t, opts...)
 	ensureMetricsStarted(t)
-	ensureLogsStarted(t, filepath.Join(t.TempDir(), "firewood.log"))
+	ensureLogsStarted(t)
 	return db, activeLogPath
 }
 
@@ -217,6 +221,7 @@ func TestMetricsFilterExcludesUntaggedDatabase(t *testing.T) {
 func TestTagMetricsConcurrentTLSIsolation(t *testing.T) {
 	r := require.New(t)
 	ensureMetricsStarted(t)
+	ensureLogsStarted(t)
 
 	const workers = 4
 	const commits = 5
@@ -238,7 +243,7 @@ func TestTagMetricsConcurrentTLSIsolation(t *testing.T) {
 	for i := range workers {
 		wg.Go(func() {
 			for c := range commits {
-				key := fmt.Appendf(nil, "%s_key_%d", tags[i], c)
+				key := fmt.Appendf(nil, "key_%d", c)
 				if _, err := dbs[i].Update([]BatchOp{Put(key, []byte("value"))}); err != nil {
 					errs <- fmt.Errorf("%s update %d: %w", tags[i], c, err)
 					return
@@ -257,6 +262,20 @@ func TestTagMetricsConcurrentTLSIsolation(t *testing.T) {
 		after, err := gatherTaggedCounterValue(counterName, tags[i])
 		r.NoError(err)
 		r.InDelta(commits, after-before[i], 1e-9, "db_tag=%s", tags[i])
+	}
+
+	// logs concurrency test
+	// operations were byte-identical, so log counts should match
+	if activeLogPath != "" {
+		logContents, err := os.ReadFile(activeLogPath)
+		r.NoError(err)
+		s := string(logContents)
+		// prevent prefix matches
+		count0 := strings.Count(s, "db_tag="+tags[0]+"]")
+		r.Positive(count0)
+		for _, tag := range tags[1:] {
+			r.Equal(count0, strings.Count(s, "db_tag="+tag+"]"), "db_tag=%s", tag)
+		}
 	}
 }
 
