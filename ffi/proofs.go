@@ -121,8 +121,23 @@ type NextKeyRange struct {
 	endKey   Maybe[*ownedBytes]
 }
 
+// codeHashSource is a proof whose data a code-hash iterator borrows.
+// Implemented by [*RangeProof] and [*ChangeProof].
+type codeHashSource interface {
+	codeIterator() (*codeIterator, error)
+}
+
 type codeIterator struct {
 	handle *C.CodeIteratorHandle
+
+	// owner is the proof whose key-values the Rust iterator borrows. Rust's
+	// CodeIteratorHandle<'p> wraps Box<dyn Iterator + 'p> built from the
+	// proof's key-values, so the proof must stay reachable for the whole
+	// life of the iterator, not just for the call that created it. Holding
+	// it here makes that borrow an ordinary Go reference: an iterator
+	// cannot be live without keeping its proof reachable, so no hand-placed
+	// keepalive spanning the iteration is required.
+	owner codeHashSource
 }
 
 // RangeProof returns a proof that the values in the range [startKey, endKey] are
@@ -293,18 +308,34 @@ func (p *RangeProof) FindNextKey() (*NextKeyRange, error) {
 // Note: this method is only relevant for Ethereum tries.
 // This method can only be called anytime after the proof is created.
 func (p *RangeProof) CodeHashes() iter.Seq2[Hash, error] {
+	return codeHashSeq(p)
+}
+
+// codeIterator creates a code-hash iterator borrowing this proof's key-values.
+// The returned iterator holds p as its owner; see [codeIterator] for why that
+// reference is what keeps the borrow sound.
+func (p *RangeProof) codeIterator() (*codeIterator, error) {
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
+	return newCodeIterator(C.fwd_range_proof_code_hash_iter(p.handle), p)
+}
+
+// codeHashSeq yields the code hashes produced by an iterator borrowed from src.
+// Concurrently calling Free on src during iteration remains unsupported, as
+// elsewhere on both proof types.
+func codeHashSeq(src codeHashSource) iter.Seq2[Hash, error] {
 	return func(yield func(Hash, error) bool) {
-		iter, err := getCodeHashIteratorFromCodeHashIteratorResult(C.fwd_range_proof_code_hash_iter(p.handle))
+		it, err := src.codeIterator()
 		if err != nil {
 			yield(EmptyRoot, err)
 			return
 		}
 		defer func() {
-			if err := iter.Free(); err != nil {
+			if err := it.Free(); err != nil {
 				panic(err)
 			}
 		}()
-		for hash, err := iter.Next(); ; hash, err = iter.Next() {
+		for hash, err := it.Next(); ; hash, err = it.Next() {
 			if err != nil {
 				yield(EmptyRoot, err)
 				return
@@ -323,7 +354,14 @@ func (it *codeIterator) Next() (Hash, error) {
 	return getHashKeyFromHashResult(C.fwd_code_hash_iter_next(it.handle))
 }
 
+// Free releases the Rust iterator, ending its borrow of the owning proof.
 func (it *codeIterator) Free() error {
+	// The borrow ends with the call below, so the owner must remain reachable
+	// until it returns. Because the deferred Free in [codeHashSeq] captures
+	// the iterator, this also keeps the owner reachable for the whole
+	// iteration -- the Go reference, not this call, is what makes the borrow
+	// sound.
+	defer runtime.KeepAlive(it.owner)
 	return getErrorFromVoidResult(C.fwd_code_hash_iter_free(it.handle))
 }
 
@@ -426,7 +464,7 @@ func (db *Database) ChangeProof(
 		return nil, err
 	}
 
-	runtime.SetFinalizer(proof, (*ChangeProof).Free)
+	proof.setFreeFinalizer()
 	return proof, nil
 }
 
@@ -496,6 +534,10 @@ func (db *Database) VerifyAndCommitChangeProof(
 func (proof *ChangeProof) FindNextKey(endKey Maybe[[]byte]) (*NextKeyRange, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
+	// Keep the proof reachable across the cgo call so its GC finalizer cannot
+	// free the handle mid-call once the receiver is otherwise dead. (ChangeProof
+	// holds no lease, so KeepAlive stands in for RangeProof's read-lock.)
+	defer runtime.KeepAlive(proof)
 
 	return getNextKeyRangeFromNextKeyRangeResult(
 		C.fwd_change_proof_find_next_key(proof.handle, newMaybeBorrowedBytes(endKey, &pinner)),
@@ -512,36 +554,26 @@ func (proof *ChangeProof) FindNextKey(endKey Maybe[[]byte]) (*NextKeyRange, erro
 // (the post-state of accounts touched by the proof) are yielded; Delete and
 // DeleteRange entries are skipped.
 func (p *ChangeProof) CodeHashes() iter.Seq2[Hash, error] {
-	return func(yield func(Hash, error) bool) {
-		iter, err := getCodeHashIteratorFromCodeHashIteratorResult(C.fwd_change_proof_code_hash_iter(p.handle))
-		if err != nil {
-			yield(EmptyRoot, err)
-			return
-		}
-		defer func() {
-			if err := iter.Free(); err != nil {
-				panic(err)
-			}
-		}()
-		for hash, err := iter.Next(); ; hash, err = iter.Next() {
-			if err != nil {
-				yield(EmptyRoot, err)
-				return
-			}
-			if hash == EmptyRoot {
-				return
-			}
-			if !yield(hash, err) {
-				return
-			}
-		}
-	}
+	return codeHashSeq(p)
+}
+
+// codeIterator creates a code-hash iterator borrowing this proof's data. The
+// returned iterator holds p as its owner; see [codeIterator] for why that
+// reference is what keeps the borrow sound.
+//
+// Unlike [*RangeProof.codeIterator] there is no lease to read-lock: a
+// ChangeProof deliberately holds no database reference (see the Free doc
+// comment and https://github.com/ava-labs/firewood/issues/1978).
+func (p *ChangeProof) codeIterator() (*codeIterator, error) {
+	return newCodeIterator(C.fwd_change_proof_code_hash_iter(p.handle), p)
 }
 
 // MarshalBinary returns a serialized representation of this ChangeProof.
 //
 // The format is unspecified and opaque to firewood.
 func (p *ChangeProof) MarshalBinary() ([]byte, error) {
+	defer runtime.KeepAlive(p)
+
 	start := time.Now()
 	result, err := getValueFromValueResult(C.fwd_change_proof_to_bytes(p.handle))
 	proofMarshalDuration.WithLabelValues("change").Observe(time.Since(start).Seconds())
@@ -566,7 +598,7 @@ func (p *ChangeProof) UnmarshalBinary(data []byte) error {
 	if err == nil {
 		p.handle = handle.handle
 		handle.handle = nil
-		runtime.SetFinalizer(p, (*ChangeProof).Free)
+		p.setFreeFinalizer()
 	}
 
 	return err
@@ -595,6 +627,17 @@ func (p *ChangeProof) Free() error {
 	p.handle = nil
 
 	return nil
+}
+
+// setFreeFinalizer registers (*ChangeProof).Free as p's finalizer, replacing any
+// finalizer a previous life of p may already carry. runtime.SetFinalizer fatally
+// panics if a finalizer is already set, and a ChangeProof can legitimately reach
+// a finalizer-setting path more than once (a from-create proof re-loaded via
+// UnmarshalBinary, or a repeated UnmarshalBinary), so clear any existing
+// finalizer first. SetFinalizer(p, nil) is a no-op when none is set.
+func (p *ChangeProof) setFreeFinalizer() {
+	runtime.SetFinalizer(p, nil)
+	runtime.SetFinalizer(p, (*ChangeProof).Free)
 }
 
 // StartKey returns the inclusive start key of this key range.
@@ -662,13 +705,18 @@ func getNextKeyRangeFromNextKeyRangeResult(result C.NextKeyRangeResult) (*NextKe
 	}
 }
 
-func getCodeHashIteratorFromCodeHashIteratorResult(result C.CodeIteratorResult) (*codeIterator, error) {
+// newCodeIterator converts a code-iterator result into a [codeIterator] that
+// borrows owner. The owner is a required argument rather than a field assigned
+// by the caller so that a future refactor which forgets it fails to compile
+// instead of silently reintroducing the use-after-free described on
+// [codeIterator].
+func newCodeIterator(result C.CodeIteratorResult, owner codeHashSource) (*codeIterator, error) {
 	switch result.tag {
 	case C.CodeIteratorResult_NullHandlePointer:
 		return nil, errDBClosed
 	case C.CodeIteratorResult_Ok:
 		ptr := *(**C.CodeIteratorHandle)(unsafe.Pointer(&result.anon0))
-		return &codeIterator{handle: ptr}, nil
+		return &codeIterator{handle: ptr, owner: owner}, nil
 	case C.CodeIteratorResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 		return nil, err

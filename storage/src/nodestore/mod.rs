@@ -69,7 +69,7 @@ pub use hash::{
 pub use hash_algo::{NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError};
 pub use primitives::{AreaIndex, LinearAddress};
 // Re-export types from header module
-pub use header::NodeStoreHeader;
+pub use header::{CargoVersion, GitDescribe, NodeStoreHeader};
 
 /// The [`NodeStore`] handles the serialization of nodes and
 /// free space management of nodes in the page store. It lays out the format
@@ -1551,17 +1551,16 @@ where
     NodeStore<T, S, H>: NodeReader,
 {
     // Find the area index and size of the stored area at the given address if the area is valid.
-    // TODO(#2050): there should be a way to read stored area directly instead of try reading as a free area then as a node
     pub(crate) fn read_leaked_area(
         &self,
         address: LinearAddress,
     ) -> Result<(AreaIndex, u64), FileIoError> {
-        if alloc::FreeArea::from_storage(self.storage.as_ref(), address).is_err() {
+        let info = alloc::read_stored_area_info(self.storage.as_ref(), address)?;
+        if info.kind == alloc::AreaKind::Node {
+            // validate that the area contains a parsable node
             self.read_node(address)?;
         }
-
-        let area_index_and_size = self.area_index_and_size(address)?;
-        Ok(area_index_and_size)
+        Ok((info.index, info.size))
     }
 }
 

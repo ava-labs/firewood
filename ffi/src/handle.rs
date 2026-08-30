@@ -63,10 +63,13 @@ pub struct DatabaseHandleArgs<'a> {
     /// `RevisionManagerConfig`.
     pub node_cache_memory_limit: usize,
 
-    /// The size of the free list cache.
+    /// The memory limit for the free-list cache in kibibytes.
+    ///
+    /// Nothing is preallocated; this is an upper bound on the memory the cache
+    /// may grow to.
     ///
     /// Opening returns an error if this is zero.
-    pub free_list_cache_size: usize,
+    pub freelist_memory_limit_kb: usize,
 
     /// The maximum number of revisions to keep.
     ///
@@ -124,8 +127,8 @@ impl DatabaseHandleArgs<'_> {
             2 => firewood::manager::CacheReadStrategy::All,
             _ => return Err(invalid_data("invalid cache strategy")),
         };
-        let free_list_cache_size = NonZeroUsize::new(self.free_list_cache_size)
-            .ok_or_else(|| invalid_data("free list cache size should be non-zero"))?;
+        let freelist_memory_limit_kb = NonZeroUsize::new(self.freelist_memory_limit_kb)
+            .ok_or_else(|| invalid_data("freelist memory limit should be non-zero"))?;
         let commit_count = NonZeroU64::new(self.deferred_persistence_commit_count)
             .ok_or(api::Error::ZeroCommitCount)?;
 
@@ -135,7 +138,7 @@ impl DatabaseHandleArgs<'_> {
             let builder = RevisionManagerConfig::builder()
                 .max_revisions(self.revisions)
                 .cache_read_strategy(cache_read_strategy)
-                .free_list_cache_size(free_list_cache_size)
+                .freelist_memory_limit_kb(freelist_memory_limit_kb)
                 .deferred_persistence_commit_count(commit_count);
 
             if let Some(memory_limit) = memory_limit {

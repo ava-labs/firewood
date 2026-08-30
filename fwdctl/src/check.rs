@@ -53,12 +53,12 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
 fn run_with_hash_mode<H: HashMode>(opts: &Options) -> Result<(), api::Error> {
     let db_path = PathBuf::from(&opts.database.dbpath).join("firewood.db");
     let node_cache_memory_limit = nonzero!(1usize);
-    let free_list_cache_size = nonzero!(1usize);
+    let freelist_memory_limit_kb = nonzero!(1usize);
 
     let fb = FileBacked::new(
         db_path,
         node_cache_memory_limit,
-        free_list_cache_size,
+        freelist_memory_limit_kb,
         false,
         false,                         // don't create if missing
         CacheReadStrategy::WritesOnly, // we scan the database once - no need to cache anything

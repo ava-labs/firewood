@@ -75,6 +75,19 @@ func newVerifiedRangeProof(
 	return proof
 }
 
+// ethAccountWithCodeHash returns a 32-byte account key, the RLP-encoded account
+// stored under it, and the code hash embedded in that account. Only
+// account-length keys reach the code-hash extractor, so this is the minimal
+// fixture that makes a proof yield exactly one code hash.
+func ethAccountWithCodeHash(t *testing.T) ([32]byte, []byte, Hash) {
+	t.Helper()
+
+	key := [32]byte{0x12, 0x34, 0x56} // account keys must be 32 bytes
+	val, err := hex.DecodeString("f8440164a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
+	require.NoError(t, err)
+	return key, val, stringToHash(t, "044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
+}
+
 // newSerializedRangeProof generates a range proof for the given parameters and
 // returns its serialized bytes.
 func newSerializedRangeProof(
@@ -99,11 +112,10 @@ func newSerializedChangeProof(
 	db *Database,
 	startRoot, endRoot Hash,
 	startKey, endKey maybe,
-	proofLen uint32,
 ) []byte {
 	r := require.New(t)
 
-	proof, err := db.ChangeProof(startRoot, endRoot, startKey, endKey, proofLen)
+	proof, err := db.ChangeProof(startRoot, endRoot, startKey, endKey, changeProofLenUnbounded)
 	r.NoError(err)
 
 	proofBytes, err := proof.MarshalBinary()
@@ -499,16 +511,83 @@ func TestRangeProofVerifyTwiceIdempotent(t *testing.T) {
 	r.NoError(db.Close(oneSecCtx(t)))
 }
 
+// TestCodeIteratorRetainsProof pins the lifetime contract between a code-hash
+// iterator and the proof it borrows. Rust's CodeIteratorHandle<'p> wraps
+// Box<dyn Iterator + 'p> over the proof's key-values, so the iterator must hold
+// a Go reference to that proof; without one the proof is collectible the moment
+// CodeHashes stops mentioning it, and its finalizer frees the data the iterator
+// is still reading.
+//
+// The assertion is the reference itself rather than an observation of the
+// garbage collector. A reachable object is never collected, so proving the
+// reference exists proves the lifetime property outright -- deterministically,
+// with no forced collections, no timing, and no tuned constants. Probing the GC
+// can only ever fail to disprove the property within some arbitrary budget.
+func TestCodeIteratorRetainsProof(t *testing.T) {
+	if selectedHashMode != ethhashKey {
+		t.Skip("code hash iterators are only created for ethereum-mode proofs")
+	}
+
+	tests := []struct {
+		name string
+		// newProof builds a proof over the account fixture and registers its
+		// own cleanup. The concrete pointer is returned as the interface so
+		// the assertion below compares what the iterator actually stored.
+		newProof func(*testing.T, *require.Assertions, *Database) codeHashSource
+	}{
+		{
+			"range",
+			func(t *testing.T, r *require.Assertions, db *Database) codeHashSource {
+				key, val, _ := ethAccountWithCodeHash(t)
+				root, err := db.Update([]BatchOp{Put(key[:], val)})
+				r.NoError(err)
+				return newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenUnbounded)
+			},
+		},
+		{
+			"change",
+			func(t *testing.T, r *require.Assertions, db *Database) codeHashSource {
+				// Baseline insert so the change proof's start root is non-empty.
+				startRoot, err := db.Update([]BatchOp{Put([]byte("baseline"), []byte("v"))})
+				r.NoError(err)
+				key, val, _ := ethAccountWithCodeHash(t)
+				endRoot, err := db.Update([]BatchOp{Put(key[:], val)})
+				r.NoError(err)
+
+				proof, err := db.ChangeProof(startRoot, endRoot, nothing(), nothing(), changeProofLenUnbounded)
+				r.NoError(err)
+				t.Cleanup(func() { r.NoError(proof.Free()) })
+				return proof
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			db := newTestDatabase(t)
+			proof := tt.newProof(t, r, db)
+
+			it, err := proof.codeIterator()
+			r.NoError(err)
+			// Registered after the proof's own cleanup, so it runs first: the
+			// borrow is released before the borrowed-from proof is freed.
+			t.Cleanup(func() { r.NoError(it.Free()) })
+
+			// A nil owner means the Rust borrow is backed by no Go reference
+			// at all, which is the regression this test exists to catch;
+			// check it separately so the failure says so.
+			r.NotNil(it.owner, "%T.codeIterator() must retain the proof it borrows", proof)
+			r.Same(proof, it.owner, "%T.codeIterator() retained the wrong proof", proof)
+		})
+	}
+}
+
 func TestRangeProofCodeHashes(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	// RLP encoded account with code hash
-	key := [32]byte{0x12, 0x34, 0x56} // key must be length 32
-	val, err := hex.DecodeString("f8440164a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
-	r.NoError(err)
-	codeHash := stringToHash(t, "044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
-
+	key, val, codeHash := ethAccountWithCodeHash(t)
 	root, err := db.Update([]BatchOp{Put(key[:], val)})
 	r.NoError(err)
 
@@ -539,12 +618,7 @@ func TestChangeProofCodeHashes(t *testing.T) {
 	startRoot, err := db.Update([]BatchOp{Put([]byte("baseline"), []byte("v"))})
 	r.NoError(err)
 
-	// RLP encoded account with code hash — same blob as TestRangeProofCodeHashes.
-	key := [32]byte{0x12, 0x34, 0x56} // key must be length 32
-	val, err := hex.DecodeString("f8440164a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
-	r.NoError(err)
-	codeHash := stringToHash(t, "044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
-
+	key, val, codeHash := ethAccountWithCodeHash(t)
 	endRoot, err := db.Update([]BatchOp{Put(key[:], val)})
 	r.NoError(err)
 
@@ -649,6 +723,46 @@ func TestRangeProofFinalizerCleanup(t *testing.T) {
 	r.NoError(db.Close(t.Context()), "Database should be closeable after proof is garbage collected")
 }
 
+// TestChangeProofSetFinalizerReset guards against a double-SetFinalizer panic on
+// ChangeProof, mirroring TestRangeProofSetFinalizerReset. Both
+// Database.ChangeProof and UnmarshalBinary register the Free finalizer, and Free
+// does not clear it, so a proof that reaches a finalizer-setting path twice (a
+// from-create proof re-loaded via UnmarshalBinary, or a repeated UnmarshalBinary)
+// fatally panicked with "finalizer already set". Each sequence must leave the
+// proof with exactly one finalizer.
+//
+// (VerifyChangeProof does not set a finalizer, so there is no verify variant, and
+// ChangeProof has no lease, so there is no lease-attach variant.)
+func TestChangeProofSetFinalizerReset(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	_, _, batch := kvForTest(100)
+	startRoot, err := db.Update(batch[:50])
+	r.NoError(err)
+	endRoot, err := db.Update(batch)
+	r.NoError(err)
+	proofBytes := newSerializedChangeProof(t, db, startRoot, endRoot, nothing(), nothing())
+
+	t.Run("create_then_unmarshal", func(t *testing.T) {
+		r := require.New(t)
+		p, err := db.ChangeProof(startRoot, endRoot, nothing(), nothing(), changeProofLenUnbounded)
+		r.NoError(err)
+		r.NoError(p.UnmarshalBinary(proofBytes))
+
+		t.Cleanup(func() { _ = p.Free() })
+	})
+
+	t.Run("unmarshal_then_unmarshal", func(t *testing.T) {
+		r := require.New(t)
+		p := new(ChangeProof)
+		r.NoError(p.UnmarshalBinary(proofBytes))
+		r.NoError(p.UnmarshalBinary(proofBytes))
+
+		t.Cleanup(func() { _ = p.Free() })
+	})
+}
+
 func TestChangeProofEmptyDB(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
@@ -690,7 +804,7 @@ func TestChangeProofDiffersAfterUpdate(t *testing.T) {
 	r.NotEqual(root1, root2)
 
 	// Get a proof
-	proof1 := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing(), changeProofLenUnbounded)
+	proof1 := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing())
 	r.NoError(err)
 
 	// Insert more data
@@ -699,7 +813,7 @@ func TestChangeProofDiffersAfterUpdate(t *testing.T) {
 	r.NotEqual(root2, root3)
 
 	// Get a proof again
-	proof2 := newSerializedChangeProof(t, db, root2, root3, nothing(), nothing(), changeProofLenUnbounded)
+	proof2 := newSerializedChangeProof(t, db, root2, root3, nothing(), nothing())
 	// Ensure the proofs are different
 	r.NotEqual(proof1, proof2)
 }
@@ -717,7 +831,7 @@ func TestRoundTripChangeProofSerialization(t *testing.T) {
 	r.NoError(err)
 
 	// get a proof
-	proofBytes := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing(), changeProofLenUnbounded)
+	proofBytes := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing())
 
 	// Deserialize the proof.
 	proof := new(ChangeProof)
