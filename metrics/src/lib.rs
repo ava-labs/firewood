@@ -179,6 +179,7 @@ pub fn strip_doc_leading_space(s: &str) -> &str {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MetricsContext {
     expensive_metrics_enabled: bool,
+    // `SharedString` is optimized for metrics and is cheap to clone (per metric recording).
     db_tag: Option<SharedString>,
 }
 
@@ -216,7 +217,7 @@ thread_local! {
     static METRICS_CONTEXT: RefCell<Option<MetricsContext>> = const { RefCell::new(None) };
 }
 
-const DEFAULT_DB_TAG: &str = "untagged";
+const DEFAULT_DB_TAG: SharedString = SharedString::const_str("untagged");
 
 /// A guard that restores the previous thread-local [`MetricsContext`].
 #[derive(Debug)]
@@ -259,7 +260,7 @@ pub fn current_db_tag() -> Option<SharedString> {
 /// Returns the current metrics db tag, or a default "untagged" label.
 #[must_use]
 pub fn current_db_tag_label() -> SharedString {
-    current_db_tag().unwrap_or_else(|| SharedString::const_str(DEFAULT_DB_TAG))
+    current_db_tag().unwrap_or(DEFAULT_DB_TAG)
 }
 
 /// Returns whether expensive metrics are enabled for the current thread.
