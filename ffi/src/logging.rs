@@ -112,12 +112,14 @@ impl LogArgs<'_> {
         env_logger::Builder::new()
             .filter_level(level)
             .format(move |buffer, record| {
-                let db_tag = record_db_tag(record);
+                // matches env_logger's default format style
+                // TODO(AminR443): adopt slog format like avalanchego
+                // https://github.com/ava-labs/firewood/issues/2227
                 let timestamp = buffer.timestamp_millis();
-                if let Some(db_tag) = db_tag {
+                if let Some(db_tag) = record_db_tag(record) {
                     writeln!(
                         buffer,
-                        "{timestamp} [{}] [{}] [db_tag={db_tag}] {}",
+                        "[{timestamp} {:<5} {} db_tag={db_tag}] {}",
                         record.level(),
                         record.target(),
                         record.args()
@@ -125,7 +127,7 @@ impl LogArgs<'_> {
                 } else {
                     writeln!(
                         buffer,
-                        "{timestamp} [{}] [{}] {}",
+                        "[{timestamp} {:<5} {}] {}",
                         record.level(),
                         record.target(),
                         record.args()
