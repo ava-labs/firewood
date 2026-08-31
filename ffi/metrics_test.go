@@ -47,9 +47,6 @@ func ensureMetricsStarted(t *testing.T) {
 func ensureLogsStarted(t *testing.T) {
 	t.Helper()
 	initLogs.Do(func() {
-		// The global logger writes here for the rest of the process, so the
-		// file must outlive whichever test happens to initialize it first;
-		// t.TempDir() would be deleted when that test finishes.
 		logDir, err := os.MkdirTemp("", "firewood-logs") //nolint:usetesting // must outlive the initializing test
 		require.NoError(t, err)
 		logPath := filepath.Join(logDir, "firewood.log")
