@@ -34,7 +34,13 @@ fn verify_change_proof_structure(
 
 pub(super) fn new_db() -> (Db<DefaultHashMode>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
-    let db = Db::new(dir.path(), DbConfig::builder().build()).unwrap();
+    let db = Db::<DefaultHashMode>::new_with_hash_mode(
+        dir.path(),
+        DbConfig::builder()
+            .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+            .build(),
+    )
+    .unwrap();
     (db, dir)
 }
 

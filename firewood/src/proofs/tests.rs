@@ -9,6 +9,7 @@ use firewood_storage::{
     SeededRng, TrieHash, ValueDigest, logger::debug,
 };
 
+use super::frame::MAX_DECOMPRESSED_LEN;
 use super::{
     header::{Header, InvalidHeader},
     magic,
@@ -16,7 +17,7 @@ use super::{
     types::{Proof, ProofError, ProofNode, ProofType},
 };
 use crate::api::{FrozenChangeProof, FrozenRangeProof};
-use crate::db::{BatchOp, ProofConfig};
+use crate::db::BatchOp;
 
 /// Length of the serialized proof header, which the wire stores uncompressed.
 const HEADER_LEN: usize = size_of::<Header>();
@@ -1300,7 +1301,7 @@ fn test_frame_wire_is_compressed_and_versioned() {
 fn test_frame_rejects_over_cap_content_size() {
     // A frame whose header declares a content size just over the cap: the
     // decoder must reject it before allocating.
-    let body = vec![0u8; ProofConfig::default().max_decompressed_len + 1];
+    let body = vec![0u8; MAX_DECOMPRESSED_LEN + 1];
     let mut wire = raw_header(ProofType::Range);
     super::frame::write_compressed_body(&body, &mut wire);
     let err = FrozenRangeProof::from_slice(&wire).expect_err("over-cap content size");
@@ -1308,7 +1309,7 @@ fn test_frame_rejects_over_cap_content_size() {
         matches!(
             err,
             ReadError::InvalidItem { item, expected, .. }
-                if item == "frame content size" && expected.contains("configured maximum")
+                if item == "frame content size" && expected.contains("within the maximum")
         ),
         "got {err:?}"
     );
@@ -1407,18 +1408,18 @@ fn test_frame_rejects_excessive_compression_ratio() {
 #[test]
 fn test_frame_accepts_max_decompressed_len_exactly() {
     // A body of exactly MAX_DECOMPRESSED_LEN must pass the length cap
-    // (the bound is inclusive). A random 1 MiB block repeated 32x keeps
-    // the compression ratio ~32x — well above honest proofs (~2.3x) but
+    // (the bound is inclusive). A random 1 MiB block repeated to the cap
+    // keeps the compression ratio ~4x — above honest proofs (~2.3x) but
     // inside MAX_COMPRESSION_RATIO, so this doubles as the accept-side
     // coverage for high-but-legal ratios.
     let rng = SeededRng::from_env_or_random();
-    let cap = ProofConfig::default().max_decompressed_len;
+    let cap = MAX_DECOMPRESSED_LEN;
     let block: Vec<u8> = (0..1024 * 1024).map(|_| rng.random::<u8>()).collect();
     let body = block.repeat(cap / block.len());
     assert_eq!(body.len(), cap);
     let mut frame = Vec::new();
     super::frame::write_compressed_body(&body, &mut frame);
-    let decoded = super::frame::decompress_body(&frame, 0, &ProofConfig::default())
+    let decoded = super::frame::decompress_body(&frame, 0)
         .expect("body exactly at MAX_DECOMPRESSED_LEN must decode");
     assert_eq!(decoded, body);
 }

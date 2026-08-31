@@ -91,6 +91,11 @@ harness = false
 required-features = ["test_utils"]
 
 [[bench]]
+name = "collapse"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
 name = "proposal_reconstruct"
 harness = false
 

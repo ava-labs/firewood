@@ -10,7 +10,7 @@ use crate::hashednode::hash_node;
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::{BranchNode, Node};
-use crate::rlp::{NULL_RLP, RlpItem, encode_list, replace_list_field};
+use crate::rlp::{EMPTY_TRIE_ROOT, RlpItem, encode_list, replace_list_field};
 use crate::{
     Child, Children, HashMode, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage,
     SharedNode, TrieHash,
@@ -67,7 +67,7 @@ impl DerefMut for PathGuard<'_> {
 
 /// Classified children for ethereum hash processing
 pub(super) struct ClassifiedChildren<'a> {
-    pub(super) unhashed: Vec<(PathComponent, Node)>,
+    pub(super) unhashed: Vec<PathComponent>,
     pub(super) hashed: Vec<(PathComponent, (MaybePersistedNode, &'a mut HashType))>,
 }
 
@@ -95,7 +95,7 @@ where
                         let maybe_persisted_node = MaybePersistedNode::from(*a);
                         acc.hashed.push((idx, (maybe_persisted_node, h)));
                     }
-                    Some(Child::Node(node)) => acc.unhashed.push((idx, node.clone())),
+                    Some(Child::Node(_)) => acc.unhashed.push(idx),
                     Some(Child::MaybePersisted(maybe_persisted, h)) => {
                         // For MaybePersisted, it's important to remember that we've already hashed it
                         acc.hashed.push((idx, (maybe_persisted.clone(), h)));
@@ -170,7 +170,7 @@ where
                 }
                 // handle the single-child case for an account special below
                 if hashed.is_empty() && unhashed.len() == 1 {
-                    Some(unhashed.last().expect("only one").0)
+                    Some(*unhashed.last().expect("only one"))
                 } else {
                     None
                 }
@@ -304,7 +304,7 @@ pub fn hash_node_as_storage_trie_root_for_node<H: HashMode>(
 #[must_use]
 fn compute_storage_trie_root(child_hashes: &Children<Option<HashType>>) -> TrieHash {
     if child_hashes.count() == 0 {
-        return TrieHash::from(Keccak256::digest(NULL_RLP));
+        return TrieHash::from(EMPTY_TRIE_ROOT);
     }
     let mut child_hashes = child_hashes.clone();
     if let Some((_, child)) = child_hashes.take_only_child() {

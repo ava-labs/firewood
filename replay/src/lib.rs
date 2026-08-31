@@ -5,7 +5,7 @@
 //!
 //! This crate provides:
 //! - Serializable types representing database operations ([`DbOperation`])
-//! - An engine to replay operations against a [`Db`] instance
+//! - An engine to replay operations against a [`DynDb`] instance
 //!
 //! The log format uses length-prefixed `MessagePack` segments, allowing streaming
 //! writes and reads without loading the entire log into memory.
@@ -23,10 +23,10 @@ use std::collections::HashMap;
 use std::io::{self, Read};
 use std::time::Instant;
 
-use firewood::api::{self, Db as DbApi, DbView as DbViewApi, Proposal as ProposalApi};
-use firewood::db::{BatchOp, Db, Proposal};
+use firewood::api::{self, DynDb};
+use firewood::db::BatchOp;
 use firewood_metrics::firewood_histogram;
-use firewood_storage::{DefaultHashMode, InvalidTrieHashLength};
+use firewood_storage::InvalidTrieHashLength;
 
 pub mod registry;
 use serde::{Deserialize, Serialize};
@@ -178,35 +178,36 @@ pub enum ReplayError {
     UnknownProposal(ProposalId),
 }
 
-/// Alias for the batch operation type used in replay.
-type BoxedBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
+/// Type-erased proposal handle used while replaying proposal chains.
+type DynProposalBox<'db> = Box<dyn api::DynProposal<'db> + 'db>;
 
 /// Consumes a `Vec` of [`KeyValueOp`] and converts them to firewood batch operations.
 ///
 /// Takes ownership to avoid cloning keys and values in the hot path.
-fn into_batch_ops(pairs: Vec<KeyValueOp>) -> Vec<BoxedBatchOp> {
+fn into_batch_ops(pairs: Vec<KeyValueOp>) -> api::OwnedBatch {
     pairs
         .into_iter()
         .map(|op| match op.value {
             Some(value) => BatchOp::Put { key: op.key, value },
             None => BatchOp::DeleteRange { prefix: op.key },
         })
-        .collect()
+        .collect::<Vec<_>>()
+        .into_boxed_slice()
 }
 
 /// Retrieves a proposal reference from the map, returning an error if not found.
 fn get_proposal<'a, 'db>(
-    proposals: &'a HashMap<ProposalId, Proposal<'db, DefaultHashMode>>,
+    proposals: &'a HashMap<ProposalId, DynProposalBox<'db>>,
     id: ProposalId,
-) -> Result<&'a Proposal<'db, DefaultHashMode>, ReplayError> {
+) -> Result<&'a DynProposalBox<'db>, ReplayError> {
     proposals.get(&id).ok_or(ReplayError::UnknownProposal(id))
 }
 
 /// Removes and returns a proposal from the map, returning an error if not found.
 fn take_proposal<'db>(
-    proposals: &mut HashMap<ProposalId, Proposal<'db, DefaultHashMode>>,
+    proposals: &mut HashMap<ProposalId, DynProposalBox<'db>>,
     id: ProposalId,
-) -> Result<Proposal<'db, DefaultHashMode>, ReplayError> {
+) -> Result<DynProposalBox<'db>, ReplayError> {
     proposals
         .remove(&id)
         .ok_or(ReplayError::UnknownProposal(id))
@@ -216,28 +217,28 @@ fn take_proposal<'db>(
 ///
 /// Returns the root hash if the operation was a commit that produced one.
 fn apply_operation<'db>(
-    db: &'db Db<DefaultHashMode>,
-    proposals: &mut HashMap<ProposalId, Proposal<'db, DefaultHashMode>>,
+    db: &'db dyn DynDb,
+    proposals: &mut HashMap<ProposalId, DynProposalBox<'db>>,
     operation: DbOperation,
 ) -> Result<Option<Box<[u8]>>, ReplayError> {
     match operation {
         DbOperation::GetLatest(GetLatest { key }) => {
-            if let Some(root) = DbApi::root_hash(db) {
-                let view = DbApi::revision(db, root)?;
-                let _ = DbViewApi::val(&*view, key)?;
+            if let Some(root) = db.root_hash() {
+                let view = db.revision(root)?;
+                let _ = view.val(&key)?;
             }
             Ok(None)
         }
 
         DbOperation::GetFromProposal(GetFromProposal { proposal_id, key }) => {
             let proposal = get_proposal(proposals, proposal_id)?;
-            let _ = DbViewApi::val(proposal, key)?;
+            let _ = proposal.val(&key)?;
             Ok(None)
         }
 
         DbOperation::Batch(Batch { pairs }) => {
             let ops = into_batch_ops(pairs);
-            let proposal = DbApi::propose(db, ops)?;
+            let proposal = db.propose(ops)?;
             proposal.commit()?;
             Ok(None)
         }
@@ -248,7 +249,7 @@ fn apply_operation<'db>(
         }) => {
             let ops = into_batch_ops(pairs);
             let start = Instant::now();
-            let proposal = DbApi::propose(db, ops)?;
+            let proposal = db.propose(ops)?;
             firewood_histogram!(cheap: PROPOSE_DURATION_SECONDS)
                 .record(start.elapsed().as_secs_f64());
             proposals.insert(returned_proposal_id, proposal);
@@ -263,7 +264,7 @@ fn apply_operation<'db>(
             let ops = into_batch_ops(pairs);
             let start = Instant::now();
             let parent = get_proposal(proposals, proposal_id)?;
-            let new_proposal = ProposalApi::propose(parent, ops)?;
+            let new_proposal = parent.propose(ops)?;
             firewood_histogram!(cheap: PROPOSE_DURATION_SECONDS)
                 .record(start.elapsed().as_secs_f64());
             proposals.insert(returned_proposal_id, new_proposal);
@@ -308,10 +309,10 @@ fn apply_operation<'db>(
 /// - The log references an unknown proposal ID
 pub fn replay_from_reader<R: Read>(
     mut reader: R,
-    db: &Db<DefaultHashMode>,
+    db: &dyn DynDb,
     max_commits: Option<u64>,
 ) -> Result<Option<Box<[u8]>>, ReplayError> {
-    let mut proposals: HashMap<ProposalId, Proposal<'_, DefaultHashMode>> = HashMap::new();
+    let mut proposals: HashMap<ProposalId, DynProposalBox<'_>> = HashMap::new();
     let mut last_commit_hash = None;
     let mut commit_count = 0u64;
     let max = max_commits.unwrap_or(u64::MAX);
@@ -363,7 +364,7 @@ pub fn replay_from_reader<R: Read>(
 /// See [`replay_from_reader`] for detailed error conditions.
 pub fn replay_from_file(
     path: impl AsRef<std::path::Path>,
-    db: &Db<DefaultHashMode>,
+    db: &dyn DynDb,
     max_commits: Option<u64>,
 ) -> Result<Option<Box<[u8]>>, ReplayError> {
     let file = std::fs::File::open(path)?;
@@ -375,11 +376,12 @@ mod tests {
     use super::*;
     use firewood::db::DbConfig;
     use firewood::manager::RevisionManagerConfig;
+    use firewood::open;
     use firewood_storage::NodeHashAlgorithm;
     use std::io::Cursor;
     use tempfile::tempdir;
 
-    fn create_test_db() -> (tempfile::TempDir, Db<DefaultHashMode>) {
+    fn create_test_db() -> (tempfile::TempDir, Box<dyn DynDb>) {
         let tmpdir = tempdir().expect("create tempdir");
         let db_path = tmpdir.path().join("test.db");
         let algorithm = if cfg!(feature = "ethhash") {
@@ -392,7 +394,7 @@ mod tests {
             .truncate(true)
             .manager(RevisionManagerConfig::builder().build())
             .build();
-        let db = Db::new(&db_path, cfg).expect("db creation should succeed");
+        let db = open(&db_path, cfg).expect("db creation should succeed");
         (tmpdir, db)
     }
 
@@ -419,15 +421,13 @@ mod tests {
         let log = ReplayLog::new(vec![DbOperation::Batch(Batch { pairs })]);
         let buf = serialize_log(&log);
 
-        replay_from_reader(Cursor::new(buf), &db, None).expect("replay");
+        replay_from_reader(Cursor::new(buf), db.as_ref(), None).expect("replay");
 
-        let root = DbApi::root_hash(&db).expect("non-empty");
-        let view = DbApi::revision(&db, root).expect("revision");
+        let root = db.root_hash().expect("non-empty");
+        let view = db.revision(root).expect("revision");
 
         for i in 0u8..5 {
-            let val = DbViewApi::val(&*view, vec![i].as_slice())
-                .expect("val")
-                .expect("exists");
+            let val = view.val(vec![i].as_slice()).expect("val").expect("exists");
             assert_eq!(*val, [i.wrapping_add(100)]);
         }
     }
@@ -457,15 +457,13 @@ mod tests {
         let log = ReplayLog::new(ops);
         let buf = serialize_log(&log);
 
-        replay_from_reader(Cursor::new(buf), &db, None).expect("replay");
+        replay_from_reader(Cursor::new(buf), db.as_ref(), None).expect("replay");
 
-        let root = DbApi::root_hash(&db).expect("non-empty");
-        let view = DbApi::revision(&db, root).expect("revision");
+        let root = db.root_hash().expect("non-empty");
+        let view = db.revision(root).expect("revision");
 
         for i in 0u8..3 {
-            let val = DbViewApi::val(&*view, vec![i].as_slice())
-                .expect("val")
-                .expect("exists");
+            let val = view.val(vec![i].as_slice()).expect("val").expect("exists");
             assert_eq!(*val, [i.wrapping_mul(2)]);
         }
     }
@@ -503,13 +501,13 @@ mod tests {
         let log = ReplayLog::new(ops);
         let buf = serialize_log(&log);
 
-        replay_from_reader(Cursor::new(buf), &db, None).expect("replay");
+        replay_from_reader(Cursor::new(buf), db.as_ref(), None).expect("replay");
 
-        let root = DbApi::root_hash(&db).expect("non-empty");
-        let view = DbApi::revision(&db, root).expect("revision");
+        let root = db.root_hash().expect("non-empty");
+        let view = db.revision(root).expect("revision");
 
-        let v1 = DbViewApi::val(&*view, [1]).expect("val").expect("exists");
-        let v2 = DbViewApi::val(&*view, [2]).expect("val").expect("exists");
+        let v1 = view.val(&[1]).expect("val").expect("exists");
+        let v2 = view.val(&[2]).expect("val").expect("exists");
         assert_eq!(*v1, [10]);
         assert_eq!(*v2, [20]);
     }
@@ -517,7 +515,7 @@ mod tests {
     #[test]
     fn replay_empty_log_succeeds() {
         let (_tmpdir, db) = create_test_db();
-        let result = replay_from_reader(Cursor::new(Vec::new()), &db, None);
+        let result = replay_from_reader(Cursor::new(Vec::new()), db.as_ref(), None);
         assert!(result.is_ok());
         assert!(result.expect("ok").is_none());
     }

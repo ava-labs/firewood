@@ -15,7 +15,8 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use fastrace_opentelemetry::OpenTelemetryReporter;
 use firewood::logger::trace;
-use firewood_storage::{DefaultHashMode, HashMode};
+use firewood::open;
+use firewood_storage::{DefaultHashMode, FREE_LIST_CACHE_ENTRY_SIZE, HashMode};
 use log::LevelFilter;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
@@ -24,7 +25,8 @@ use std::fmt::Display;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
-use firewood::db::{BatchOp, Db, DbConfig};
+use firewood::api::DynDb;
+use firewood::db::{BatchOp, DbConfig};
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
 
 use fastrace::collector::Config;
@@ -158,7 +160,7 @@ enum TestName {
 }
 
 trait TestRunner {
-    fn run(&self, db: &Db<DefaultHashMode>, args: &Args) -> Result<(), Box<dyn Error>>;
+    fn run(&self, db: &dyn DynDb, args: &Args) -> Result<(), Box<dyn Error>>;
 
     fn generate_inserts(
         start: u64,
@@ -229,8 +231,14 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mgrcfg = RevisionManagerConfig::builder()
         .node_cache_memory_limit(args.global_opts.cache_memory_limit)
-        .free_list_cache_size(
-            NonZeroUsize::new(4 * args.global_opts.batch_size as usize).expect("batch size > 0"),
+        // Budget enough free-list cache for four batches' worth of freed nodes,
+        // expressed in the kibibytes those entries occupy.
+        .freelist_memory_limit_kb(
+            NonZeroUsize::new(
+                (4 * args.global_opts.batch_size as usize * FREE_LIST_CACHE_ENTRY_SIZE)
+                    .div_ceil(1024),
+            )
+            .expect("batch size > 0"),
         )
         .cache_read_strategy(args.global_opts.cache_read_strategy.clone().into())
         .max_revisions(args.global_opts.revisions)
@@ -241,24 +249,24 @@ fn main() -> Result<(), Box<dyn Error>> {
         .manager(mgrcfg)
         .build();
 
-    let db = Db::new(args.global_opts.dbname.clone(), cfg).expect("db initiation should succeed");
+    let db = open(args.global_opts.dbname.clone(), cfg).expect("db initiation should succeed");
 
     match args.test_name {
         TestName::Create => {
             let runner = create::Create;
-            runner.run(&db, &args)?;
+            runner.run(db.as_ref(), &args)?;
         }
         TestName::TenKRandom => {
             let runner = tenkrandom::TenKRandom;
-            runner.run(&db, &args)?;
+            runner.run(db.as_ref(), &args)?;
         }
         TestName::Zipf(_) => {
             let runner = zipf::Zipf;
-            runner.run(&db, &args)?;
+            runner.run(db.as_ref(), &args)?;
         }
         TestName::Single => {
             let runner = single::Single;
-            runner.run(&db, &args)?;
+            runner.run(db.as_ref(), &args)?;
         }
     }
 

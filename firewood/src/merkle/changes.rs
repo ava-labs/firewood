@@ -605,11 +605,14 @@ mod tests {
     impl TestDb {
         pub fn new() -> Self {
             let tmpdir = tempfile::tempdir().unwrap();
-            let dbconfig = DbConfig::builder().truncate(true).build();
+            let dbconfig = DbConfig::builder()
+                .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+                .truncate(true)
+                .build();
             let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
                 .iter()
                 .collect();
-            let db = Db::new(dbpath, dbconfig.clone()).unwrap();
+            let db = Db::<DefaultHashMode>::new_with_hash_mode(dbpath, dbconfig).unwrap();
             TestDb { db }
         }
     }
@@ -1772,7 +1775,7 @@ mod tests {
 
             // Check the number of next calls on two full tree traversals.
             let diff_nexts_before =
-                recorder.counter_value(crate::registry::CHANGE_PROOF_NEXT, &[]);
+                recorder.counter_value(crate::registry::CHANGE_PROOF_NEXT, &[("db_tag", "untagged")]);
 
             let mut preorder_it = PreOrderIterator::new(m1.nodestore(), &Key::default()).unwrap();
             while preorder_it.next().is_some() {}
@@ -1780,20 +1783,20 @@ mod tests {
             while preorder_it.next().is_some() {}
 
             let diff_nexts_after =
-                recorder.counter_value(crate::registry::CHANGE_PROOF_NEXT, &[]);
+                recorder.counter_value(crate::registry::CHANGE_PROOF_NEXT, &[("db_tag", "untagged")]);
             let diff_iteration_count = diff_nexts_after - diff_nexts_before;
             println!("Next calls from traversing tries: {diff_iteration_count}");
 
             // DIFF TEST: Measure next calls from hash-optimized diff operation
             let diff_nexts_before =
-                recorder.counter_value(crate::registry::CHANGE_PROOF_NEXT, &[]);
+                recorder.counter_value(crate::registry::CHANGE_PROOF_NEXT, &[("db_tag", "untagged")]);
 
             let diff_stream =
                 DiffMerkleNodeStream::new(m1.nodestore(), m2.nodestore(), Box::new([])).unwrap();
             let diff_immutable_results_count = diff_stream.count();
 
             let diff_nexts_after =
-                recorder.counter_value(crate::registry::CHANGE_PROOF_NEXT, &[]);
+                recorder.counter_value(crate::registry::CHANGE_PROOF_NEXT, &[("db_tag", "untagged")]);
             let diff_immutable_nexts = diff_nexts_after - diff_nexts_before;
 
             println!("Diff next calls: {diff_immutable_nexts}");

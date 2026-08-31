@@ -15,7 +15,7 @@ use super::{
 use crate::merkle::childmask::ChildMask;
 use crate::{
     api::{FrozenChangeProof, FrozenRangeProof},
-    db::{BatchOp, ProofConfig},
+    db::BatchOp,
     merkle::{Key, Value},
     proofs::magic::{BATCH_DELETE, BATCH_DELETE_RANGE, BATCH_PUT},
 };
@@ -24,15 +24,8 @@ use integer_encoding::VarInt;
 use std::num::NonZeroUsize;
 
 impl FrozenRangeProof {
-    /// Test convenience for [`Self::from_slice_with_config`] with the
-    /// default [`ProofConfig`].
-    #[cfg(test)]
-    pub(crate) fn from_slice(data: &[u8]) -> Result<Self, ReadError> {
-        Self::from_slice_with_config(data, &ProofConfig::default())
-    }
-
-    /// Parses a `FrozenRangeProof` from the given byte slice, enforcing
-    /// `config`'s proof-decode limits.
+    /// Parses a `FrozenRangeProof` from the given byte slice, enforcing the
+    /// proof-decode size limits (see `proofs::frame`).
     ///
     /// Currently only V0 proofs are supported. See [`FrozenRangeProof::write_to_vec`]
     /// for the serialization format.
@@ -41,7 +34,7 @@ impl FrozenRangeProof {
     ///
     /// Returns a [`ReadError`] if the data is invalid or exceeds a limit. See
     /// the enum variants for the possible reasons.
-    pub fn from_slice_with_config(data: &[u8], config: &ProofConfig) -> Result<Self, ReadError> {
+    pub fn from_slice(data: &[u8]) -> Result<Self, ReadError> {
         let mut reader = ProofReader::new(data);
 
         let header = reader.read_header()?;
@@ -54,8 +47,7 @@ impl FrozenRangeProof {
                 // Decompress the framed body, then dispatch body reads on the
                 // proof's own self-describing mode so this binary reads either
                 // wire format.
-                let body =
-                    super::frame::decompress_body(reader.remainder(), size_of::<Header>(), config)?;
+                let body = super::frame::decompress_body(reader.remainder(), size_of::<Header>())?;
                 let mut reader = V0Reader::new(
                     ProofReader::new(&body).into_body(validated_header.node_hash_algorithm),
                     header,
@@ -100,15 +92,8 @@ impl<T: Version0> Version0 for Box<[T]> {
 }
 
 impl FrozenChangeProof {
-    /// Test convenience for [`Self::from_slice_with_config`] with the
-    /// default [`ProofConfig`].
-    #[cfg(test)]
-    pub(crate) fn from_slice(data: &[u8]) -> Result<Self, ReadError> {
-        Self::from_slice_with_config(data, &ProofConfig::default())
-    }
-
-    /// Parses a `FrozenChangeProof` from the given byte slice, enforcing
-    /// `config`'s proof-decode limits.
+    /// Parses a `FrozenChangeProof` from the given byte slice, enforcing the
+    /// proof-decode size limits (see `proofs::frame`).
     ///
     /// Currently only V0 proofs are supported. See [`FrozenChangeProof::write_to_vec`]
     /// for the serialization format.
@@ -117,7 +102,7 @@ impl FrozenChangeProof {
     ///
     /// Returns a [`ReadError`] if the data is invalid or exceeds a limit. See
     /// the enum variants for the possible reasons.
-    pub fn from_slice_with_config(data: &[u8], config: &ProofConfig) -> Result<Self, ReadError> {
+    pub fn from_slice(data: &[u8]) -> Result<Self, ReadError> {
         let mut reader = ProofReader::new(data);
 
         let header = reader.read_header()?;
@@ -135,7 +120,7 @@ impl FrozenChangeProof {
 
         // Decompress the framed body, then dispatch body reads on the proof's
         // own self-describing mode so this binary reads either wire format.
-        let body = super::frame::decompress_body(reader.remainder(), size_of::<Header>(), config)?;
+        let body = super::frame::decompress_body(reader.remainder(), size_of::<Header>())?;
         let mut reader = V0Reader::new(
             ProofReader::new(&body).into_body(validated_header.node_hash_algorithm),
             header,

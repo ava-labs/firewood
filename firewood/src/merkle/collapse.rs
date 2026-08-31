@@ -111,7 +111,7 @@ fn nibble_in_range(acc_prefix: &[u8], nibble: PathComponent, range: CollapseRang
 fn build_child_prefix(prefix: &[u8], nibble: u8, node: &Node) -> Box<[u8]> {
     let pp = &node.partial_path().0;
     // slice lengths are bounded by isize::MAX. Sum cannot overflow.
-    #[allow(clippy::arithmetic_side_effects)]
+    #[expect(clippy::arithmetic_side_effects)]
     let capacity = prefix.len() + 1 + pp.len();
     let mut v = Vec::with_capacity(capacity);
     v.extend_from_slice(prefix);

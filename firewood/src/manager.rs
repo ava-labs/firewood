@@ -49,8 +49,16 @@ pub struct RevisionManagerConfig {
     #[builder(default = nonzero!(192_000_000_usize))]
     node_cache_memory_limit: NonZero<usize>,
 
-    #[builder(default_code = "NonZero::new(1000000).expect(\"non-zero\")")]
-    free_list_cache_size: NonZero<usize>,
+    /// The memory limit for the free-list cache in kibibytes.
+    ///
+    /// The cache maps a freed node's address to the next entry in its free list,
+    /// so allocation can reuse space without reading it from disk. This limit is
+    /// an upper bound converted into an entry count; nothing is preallocated, so
+    /// the memory is only used once that many nodes have been freed.
+    ///
+    /// Defaults to 4MB.
+    #[builder(default = nonzero!(4096_usize))]
+    freelist_memory_limit_kb: NonZero<usize>,
 
     #[builder(default = CacheReadStrategy::WritesOnly)]
     cache_read_strategy: CacheReadStrategy,
@@ -178,7 +186,7 @@ impl<H: HashMode> RevisionManager<H> {
         let fb = FileBacked::new(
             file,
             config.manager.node_cache_memory_limit,
-            config.manager.free_list_cache_size,
+            config.manager.freelist_memory_limit_kb,
             config.truncate,
             config.create,
             config.manager.cache_read_strategy,
@@ -793,7 +801,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     fn test_slow_concurrent_view_during_commit() {
         use firewood_storage::{
             ImmutableProposal, LeafNode, NibblesIterator, Node, NodeStore, Path,

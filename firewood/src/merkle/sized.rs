@@ -14,6 +14,7 @@
 )]
 #![allow(dead_code)]
 
+use firewood_metrics::{HistogramExt, firewood_histogram};
 use firewood_storage::{HashedNodeReader, TrieReader};
 use integer_encoding::VarInt;
 

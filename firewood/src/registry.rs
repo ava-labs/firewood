@@ -34,6 +34,8 @@ firewood_metrics::define_metrics! {
         PERSIST_ROOT_STORE     = "firewood_persist_root_store_total",
     },
     gauges: {
+        /// Build information; constant 1 with `version` and `git_describe` labels
+        BUILD_INFO             = "firewood_build_info",
         /// Current number of uncommitted proposals
         PROPOSALS_UNCOMMITTED  = "firewood_proposals_uncommitted",
         /// Current number of active revisions

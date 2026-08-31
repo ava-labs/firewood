@@ -125,7 +125,7 @@ impl<H: HashMode> PersistWorker<H> {
     /// Creates a new `PersistWorker` and starts the background thread.
     ///
     /// Returns the worker for sending messages to the background thread.
-    #[allow(clippy::large_types_passed_by_value)]
+    #[expect(clippy::large_types_passed_by_value)]
     pub(crate) fn new(
         commit_count: NonZeroU64,
         header: NodeStoreHeader,
@@ -413,7 +413,7 @@ impl<H> PersistChannel<H> {
     }
 
     #[cfg(test)]
-    #[allow(clippy::arithmetic_side_effects)]
+    #[expect(clippy::arithmetic_side_effects)]
     fn wait_all_released(&self) {
         use firewood_storage::logger::warn;
         use std::time::Duration;

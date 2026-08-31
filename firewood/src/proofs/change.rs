@@ -25,7 +25,7 @@ pub struct ChangeProof<K: AsRef<[u8]> + Debug, V: AsRef<[u8]> + Debug, H> {
     batch_ops: Box<[BatchOp<K, V>]>,
     /// The hash algorithm this proof was constructed or parsed with. For proofs
     /// built in this binary it is the compile default; for proofs parsed via
-    /// [`FrozenChangeProof::from_slice_with_config`](crate::api::FrozenChangeProof::from_slice_with_config)
+    /// [`FrozenChangeProof::from_slice`](crate::api::FrozenChangeProof::from_slice)
     /// it is resolved from the self-describing header byte.
     hash_mode: NodeHashAlgorithm,
 }
@@ -73,7 +73,7 @@ where
 
     /// Like [`ChangeProof::new`], but records the [`NodeHashAlgorithm`] the proof
     /// was encoded with. Used by the parse path
-    /// ([`FrozenChangeProof::from_slice_with_config`](crate::api::FrozenChangeProof::from_slice_with_config))
+    /// ([`FrozenChangeProof::from_slice`](crate::api::FrozenChangeProof::from_slice))
     /// to stamp the mode resolved from the self-describing header byte.
     #[must_use]
     pub(crate) const fn with_hash_mode(

@@ -1650,22 +1650,6 @@ typedef struct HandleResult {
 } HandleResult;
 
 /**
- * Size limits applied when deserializing proofs.
- *
- * Mirrors `firewood::db::ProofConfig`.
- */
-typedef struct ProofConfig {
-  /**
-   * The hard cap on a decoded proof body, in bytes. Must be non-zero.
-   */
-  size_t max_decompressed_len;
-  /**
-   * The max ratio of uncompressed body to compressed frame length. Must be non-zero.
-   */
-  size_t max_compression_ratio;
-} ProofConfig;
-
-/**
  * Arguments for creating or opening a database. These are passed to [`fwd_open_db`]
  *
  * [`fwd_open_db`]: crate::fwd_open_db
@@ -1695,11 +1679,14 @@ typedef struct DatabaseHandleArgs {
    */
   size_t node_cache_memory_limit;
   /**
-   * The size of the free list cache.
+   * The memory limit for the free-list cache in kibibytes.
+   *
+   * Nothing is preallocated; this is an upper bound on the memory the cache
+   * may grow to.
    *
    * Opening returns an error if this is zero.
    */
-  size_t free_list_cache_size;
+  size_t freelist_memory_limit_kb;
   /**
    * The maximum number of revisions to keep.
    *
@@ -1729,13 +1716,23 @@ typedef struct DatabaseHandleArgs {
    */
   bool expensive_metrics;
   /**
+   * Tag used to separate metrics and logs per database.
+   *
+   * This must be a valid UTF-8 string.
+   *
+   * If empty, no tag is applied and this database's metrics are recorded
+   * with the default `db_tag="untagged"` label.
+   */
+  BorrowedBytes db_tag;
+  /**
    * The hashing mode to use for the database.
    *
-   * This must match the compile-time feature:
-   * - [`NodeHashAlgorithm::Ethereum`] if the `ethhash` feature is enabled
-   * - [`NodeHashAlgorithm::MerkleDB`] if the `ethhash` feature is disabled
-   *
-   * Opening returns an error if this does not match the compile-time feature.
+   * This is the per-database node-hashing scheme, selected at runtime. For
+   * an existing database it must match the scheme persisted in the file
+   * header (a mismatch is an error); for a fresh database it is the scheme
+   * to create with. A single binary can open both
+   * [`NodeHashAlgorithm::Ethereum`] and [`NodeHashAlgorithm::MerkleDB`]
+   * databases regardless of the database's runtime hash mode.
    */
   enum NodeHashAlgorithm node_hash_algorithm;
   /**
@@ -1744,10 +1741,6 @@ typedef struct DatabaseHandleArgs {
    * Note: `revisions` must be > `deferred_persistence_commit_count`.
    */
   uint64_t deferred_persistence_commit_count;
-  /**
-   * The size limits applied when deserializing proofs.
-   */
-  struct ProofConfig proof;
 } DatabaseHandleArgs;
 
 /**
@@ -1870,8 +1863,7 @@ struct NextKeyRangeResult fwd_change_proof_find_next_key(const struct ChangeProo
  *   [`fwd_db_verify_and_commit_change_proof`] to verify the proof.
  * - [`ChangeProofResult::Err`] containing an error message if the proof could not be parsed.
  */
-struct ChangeProofResult fwd_change_proof_from_bytes(const struct DatabaseHandle *db,
-                                                     BorrowedBytes bytes);
+struct ChangeProofResult fwd_change_proof_from_bytes(BorrowedBytes bytes);
 
 /**
  * Serialize a `ChangeProof` to bytes.
@@ -2950,8 +2942,7 @@ struct NextKeyRangeResult fwd_range_proof_find_next_key(struct RangeProofContext
  *   well-formed. The verify method must be called to ensure the proof is cryptographically valid.
  * - [`RangeProofResult::Err`] containing an error message if the proof could not be parsed.
  */
-struct RangeProofResult fwd_range_proof_from_bytes(const struct DatabaseHandle *db,
-                                                   BorrowedBytes bytes);
+struct RangeProofResult fwd_range_proof_from_bytes(BorrowedBytes bytes);
 
 /**
  * Serialize a `RangeProof` to bytes.
