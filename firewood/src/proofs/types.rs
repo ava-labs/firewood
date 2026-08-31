@@ -421,7 +421,7 @@ impl ProofNode {
     /// storage roots when required.
     pub(crate) fn from_path_item(item: PathIterItem, algorithm: NodeHashAlgorithm) -> Self {
         let child_hashes = if let Some(branch) = item.node.as_branch() {
-            branch.children_hashes()
+            branch.known_children_hashes()
         } else {
             Children::new()
         };

@@ -59,7 +59,7 @@ pub mod macros;
 pub mod registry;
 // re-export these so callers don't need to know where they are
 pub use checker::{CheckOpt, CheckerReport, DBStats, FreeListsStats, TrieStats};
-pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
+pub use hashednode::{Hashable, HashedNode, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use hashedshunt::HashableShunt;
 pub use hashmode::{DefaultHashMode, EthHash, HashMode, MerkleDbHash};
 pub use hashtype::HashType;
@@ -67,6 +67,7 @@ pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
 pub use node::{
     BranchNode, Child, Children, ChildrenSlots, DenseChildren, LeafNode, Node, PathIterItem,
+    UnhashedChildError,
 };
 pub use nodestore::{
     AreaIndex, CargoVersion, Committed, CommittedId, CommittedParentHash, DeletedNodeTracking,

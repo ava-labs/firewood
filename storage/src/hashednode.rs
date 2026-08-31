@@ -3,31 +3,59 @@
 
 use crate::{
     Children, DefaultHashMode, HashMode, HashType, HashableShunt, IntoSplitPath, Node, Path,
-    PathComponent, SplitPath, TrieHash,
+    PathComponent, SplitPath, TrieHash, UnhashedChildError,
 };
 use smallvec::SmallVec;
 
+/// A [`Node`] that is ready to be hashed: every child of the node is hashed,
+/// so the node's hash preimage can be built without silently dropping a child.
+#[derive(Debug)]
+pub struct HashedNode<'a> {
+    node: &'a Node,
+    child_hashes: Children<Option<HashType>>,
+}
+
+impl<'a> TryFrom<&'a Node> for HashedNode<'a> {
+    type Error = UnhashedChildError;
+
+    fn try_from(node: &'a Node) -> Result<Self, Self::Error> {
+        let child_hashes = match node {
+            Node::Branch(branch) => branch.children_hashes()?,
+            Node::Leaf(_) => Children::new(),
+        };
+        Ok(Self { node, child_hashes })
+    }
+}
+
+impl<'a> HashedNode<'a> {
+    /// Returns the underlying node.
+    #[must_use]
+    pub const fn node(&self) -> &'a Node {
+        self.node
+    }
+
+    /// Returns the hashes of the node's children.
+    #[must_use]
+    pub const fn child_hashes(&self) -> &Children<Option<HashType>> {
+        &self.child_hashes
+    }
+
+    pub(crate) fn into_parts(self) -> (&'a Node, Children<Option<HashType>>) {
+        (self.node, self.child_hashes)
+    }
+}
+
 impl<'a, P: SplitPath> HashableShunt<'a, P, &'a [PathComponent]> {
     /// Creates a new [`HashableShunt`] from the given `node` at the given `prefix`.
-    pub fn from_node(prefix: P, node: &'a Node) -> Self {
+    pub fn from_node(prefix: P, node: HashedNode<'a>) -> Self {
+        let (node, child_hashes) = node.into_parts();
         match node {
-            Node::Branch(node) => {
-                // All child hashes should be filled in.
-                // TODO(#2052): Enforce this with the type system.
-                debug_assert!(
-                    node.children
-                        .iter()
-                        .all(|(_, c)| !matches!(c, Some(crate::Child::Node(_)))),
-                    "branch children: {:?}",
-                    node.children
-                );
-                Self::new(
-                    prefix,
-                    node.partial_path.as_components(),
-                    node.value.as_deref().map(ValueDigest::Value),
-                    node.children_hashes(),
-                )
-            }
+            Node::Branch(node) => Self::new(
+                prefix,
+                node.partial_path.as_components(),
+                node.value.as_deref().map(ValueDigest::Value),
+                child_hashes,
+            ),
             Node::Leaf(node) => Self::new(
                 prefix,
                 node.partial_path.as_components(),
@@ -41,7 +69,7 @@ impl<'a, P: SplitPath> HashableShunt<'a, P, &'a [PathComponent]> {
 /// Returns the hash of `node`, which is at the given `path_prefix`, under the
 /// hashing scheme `H`.
 #[must_use]
-pub fn hash_node<H: HashMode>(node: &Node, path_prefix: &Path) -> HashType {
+pub fn hash_node<H: HashMode>(node: HashedNode<'_>, path_prefix: &Path) -> HashType {
     H::to_hash(&HashableShunt::from_node(path_prefix.as_components(), node))
 }
 
@@ -49,10 +77,11 @@ pub fn hash_node<H: HashMode>(node: &Node, path_prefix: &Path) -> HashType {
 /// when hashing the node under the scheme `H`. The node is at the given
 /// `path_prefix`.
 #[must_use]
-pub fn hash_preimage<H: HashMode>(node: &Node, path_prefix: &Path) -> Box<[u8]> {
+pub fn hash_preimage<H: HashMode>(node: HashedNode<'_>, path_prefix: &Path) -> Box<[u8]> {
     // Key, 3 options, value digest
     #[expect(clippy::arithmetic_side_effects)]
-    let est_len = node.partial_path().len() + path_prefix.len() + 3 + HashType::empty().len();
+    let est_len =
+        node.node().partial_path().len() + path_prefix.len() + 3 + HashType::empty().len();
     let mut buf = Vec::with_capacity(est_len);
     H::write_preimage(
         &HashableShunt::from_node(path_prefix.as_components(), node),
@@ -216,5 +245,77 @@ impl<T: Hashable> Preimage for T {
 
     fn write(&self, buf: &mut impl HasUpdate) {
         DefaultHashMode::write_preimage(self, buf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{BranchNode, Child, LeafNode, LinearAddress, MaybePersistedNode};
+
+    #[test]
+    fn leaf_is_ready_to_hash() {
+        let leaf = Node::Leaf(LeafNode {
+            partial_path: Path::new(),
+            value: Box::from([1, 2, 3]),
+        });
+
+        assert!(HashedNode::try_from(&leaf).is_ok());
+    }
+
+    #[test]
+    fn hashed_children_are_collected() {
+        let address_hash = HashType::from([1; 32]);
+        let maybe_persisted_hash = HashType::from([2; 32]);
+        let address = LinearAddress::new(16).expect("address is aligned");
+        let maybe_persisted =
+            MaybePersistedNode::from(LinearAddress::new(32).expect("address is aligned"));
+        let mut children = Children::new();
+        children[PathComponent::ALL[1]] =
+            Some(Child::AddressWithHash(address, address_hash.clone()));
+        children[PathComponent::ALL[2]] = Some(Child::MaybePersisted(
+            maybe_persisted,
+            maybe_persisted_hash.clone(),
+        ));
+        let branch = Node::Branch(Box::new(BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children,
+        }));
+
+        let hashed = HashedNode::try_from(&branch).expect("all children are hashed");
+
+        assert_eq!(
+            hashed.child_hashes()[PathComponent::ALL[1]],
+            Some(address_hash)
+        );
+        assert_eq!(
+            hashed.child_hashes()[PathComponent::ALL[2]],
+            Some(maybe_persisted_hash)
+        );
+    }
+
+    #[test]
+    fn unhashed_child_is_rejected() {
+        let mut children = Children::new();
+        children[PathComponent::ALL[7]] = Some(Child::Node(Node::Leaf(LeafNode {
+            partial_path: Path::new(),
+            value: Box::from([1]),
+        })));
+        let branch = Node::Branch(Box::new(BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children,
+        }));
+
+        let Err(error) = HashedNode::try_from(&branch) else {
+            panic!("unhashed child should be rejected");
+        };
+        assert_eq!(
+            error,
+            UnhashedChildError {
+                index: PathComponent::ALL[7]
+            }
+        );
     }
 }

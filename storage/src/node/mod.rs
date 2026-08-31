@@ -18,7 +18,7 @@ use crate::node::branch::ReadSerializable;
 use crate::nodestore::AreaIndex;
 use crate::{HashMode, LinearAddress, Path, PathBuf, PathComponent, SharedNode};
 use bitfield::bitfield;
-pub use branch::{BranchNode, Child};
+pub use branch::{BranchNode, Child, UnhashedChildError};
 pub use children::{Children, ChildrenSlots, DenseChildren};
 use enum_as_inner::EnumAsInner;
 use integer_encoding::{VarInt, VarIntReader as _};
