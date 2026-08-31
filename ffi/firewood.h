@@ -1716,6 +1716,15 @@ typedef struct DatabaseHandleArgs {
    */
   bool expensive_metrics;
   /**
+   * Tag used to separate metrics and logs per database.
+   *
+   * This must be a valid UTF-8 string.
+   *
+   * If empty, no tag is applied and this database's metrics are recorded
+   * with the default `db_tag="untagged"` label.
+   */
+  BorrowedBytes db_tag;
+  /**
    * The hashing mode to use for the database.
    *
    * This is the per-database node-hashing scheme, selected at runtime. For
