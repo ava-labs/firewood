@@ -174,10 +174,11 @@ impl<T: TrieReader> ChunkBuilder for RangeChunkBuilder<'_, T> {
             }
             _ => Proof::default(),
         };
-        Ok(RangeProof::new(
+        Ok(RangeProof::with_hash_mode(
             self.start_proof.clone(),
             end,
             kvs.to_vec().into_boxed_slice(),
+            self.merkle.nodestore().node_hash_algorithm(),
         ))
     }
 
@@ -216,10 +217,11 @@ impl<T: HashedNodeReader> ChunkBuilder for ChangeChunkBuilder<'_, T> {
             Some(op) => self.merkle.prove(op.key()).map_err(api::Error::from)?,
             None => Proof::default(),
         };
-        Ok(ChangeProof::new(
+        Ok(ChangeProof::with_hash_mode(
             self.start_proof.clone(),
             end,
             ops.to_vec().into_boxed_slice(),
+            self.merkle.nodestore().node_hash_algorithm(),
         ))
     }
 
@@ -265,6 +267,8 @@ impl<T: TrieReader> Merkle<T> {
         if start_key.is_none() && sized.proof.key_values().is_empty() {
             return Err(api::Error::RangeProofOnEmptyTrie);
         }
+        firewood_histogram!(PROOF_KEYS, "kind" => "range")
+            .record_integer(sized.proof.key_values().len());
         Ok(sized)
     }
 }
@@ -295,7 +299,7 @@ impl<T: HashedNodeReader> Merkle<T> {
         .map_err(api::Error::from)?
         .map(|r| r.map_err(api::Error::from));
 
-        stream_sized(
+        let sized = stream_sized(
             &ChangeChunkBuilder {
                 merkle: self,
                 start_proof: &start_proof,
@@ -303,6 +307,9 @@ impl<T: HashedNodeReader> Merkle<T> {
             items,
             budget,
             ratio_hint,
-        )
+        )?;
+        firewood_histogram!(PROOF_KEYS, "kind" => "change")
+            .record_integer(sized.proof.batch_ops().len());
+        Ok(sized)
     }
 }

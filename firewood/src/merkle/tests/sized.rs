@@ -170,6 +170,8 @@ fn test_range_sized_fits_and_matches_plain_api(budget: usize, ratio_hint: Option
 #[test_case(16 * 1024, None; "default ratio hint")]
 #[test_case(16 * 1024, Some(0.05); "optimistic hint overfills then shrinks")]
 #[test_case(16 * 1024, Some(2.0); "pessimistic hint underfills then grows")]
+#[test_case(16 * 1024, Some(f64::NAN); "NaN hint is sanitized")]
+#[test_case(16 * 1024, Some(0.0); "zero hint is sanitized")]
 #[test_case(4 * 1024 * 1024, None; "budget covering the whole diff")]
 fn test_change_sized_fits_and_matches_plain_api(budget: usize, ratio_hint: Option<f64>) {
     let base = test_kvs(1500, false);
@@ -316,6 +318,17 @@ fn test_range_sized_progresses_past_oversized_entry() {
             .any(|c| &*c.proof.key_values()[0].0 == big_key.as_slice()),
         "big entry's chunk must be over budget"
     );
+}
+
+// A zero budget still returns one entry so paging progresses.
+#[test]
+fn test_range_sized_zero_budget_returns_single_entry() {
+    let merkle = init_merkle(test_kvs(100, false));
+    let sized = merkle
+        .range_proof_sized(None, 0, None)
+        .expect("sized proof");
+    assert_eq!(sized.proof.key_values().len(), 1);
+    assert!(!sized.natural_end);
 }
 
 // Empty trie errors like the plain API.
