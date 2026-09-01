@@ -242,18 +242,14 @@ impl RightBoundary<'_> {
     }
 }
 
-/// The key range a verified range proof actually proves.
+/// The inclusive key range a verified range proof actually proves, returned by
+/// [`verify_range_proof`]. `None` on either side means unbounded.
 ///
-/// Returned by [`verify_range_proof`]. `start` is always the caller's
-/// requested lower bound: anchored there by `verify_edge` when a start proof
-/// is present, and by the root-hash reconstruction otherwise. `end` is the
-/// upper bound the end proof anchors at, which may be **narrower** than the
-/// caller's requested bound when the responder truncated its reply. `None`
-/// on either side means unbounded.
-///
-/// A caller applying the proof must replace state over *this* range, not
-/// over the range it requested. Keys in `(end, requested_end]` are not
-/// covered by the proof, and deleting them is unproven data loss.
+/// `start` is always the caller's requested lower bound. `end` is the bound the
+/// end proof anchors at, which is **narrower** than the requested one when the
+/// responder truncated its reply. Callers that replace state from a proof must
+/// bound the write to this range — see
+/// [`Db::merge_key_value_range`](crate::db::Db::merge_key_value_range).
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 #[must_use]
@@ -888,11 +884,8 @@ fn reject_odd_nibble_value_digests(proof_nodes: &[ProofNode]) -> Result<(), Proo
 /// key scenario (`test_dropped_trailing_key_accepted_as_partial_coverage`)
 /// is the canonical case, since the attacker shrunk it on purpose. This is
 /// a *valid* outcome, not a verification error: [`verify_range_proof`]
-/// reports the narrower bound via [`ProvenRange`], and the caller continues
-/// with [`find_next_key_after_range_proof`]. No data is hidden — at most
-/// one extra round trip is induced, and the attacker gains nothing.
-///
-/// [`find_next_key_after_range_proof`]: crate::find_next_key_after_range_proof
+/// reports the narrower bound via [`ProvenRange`]. No data is hidden — at
+/// most one extra round trip is induced, and the attacker gains nothing.
 ///
 /// # Why we still take `fallback_last`
 ///
@@ -982,20 +975,12 @@ fn right_edge<'a>(
 ///
 /// # Returns
 ///
-/// The [`ProvenRange`] the proof establishes. A successful return does
-/// **not** guarantee that the proof covered the caller's full requested
-/// range `[first_key, last_key]`: the proof generator may have truncated
-/// the response (e.g. hit a max-length limit), in which case `end` is
-/// **narrower** than `last_key`. This is a valid outcome of verification,
-/// not an error.
-///
-/// A caller that applies the proof must bound the write to the returned
-/// range; the span past it is unproven. Continue with
-/// [`find_next_key_after_range_proof`] to cover the remainder — the next
-/// reply can be truncated again, so plan for a loop, not one extra round
-/// trip.
-///
-/// [`find_next_key_after_range_proof`]: crate::find_next_key_after_range_proof
+/// The [`ProvenRange`] the proof establishes. Success does **not** mean the
+/// proof covered the requested `[first_key, last_key]`: a generator that
+/// truncated its response (e.g. hit a max-length limit) yields a `ProvenRange`
+/// whose `end` is narrower than `last_key`. That is a valid outcome of
+/// verification, not an error, and the returned range is what the caller may
+/// act on.
 ///
 /// # Node Hashing Algorithm
 ///

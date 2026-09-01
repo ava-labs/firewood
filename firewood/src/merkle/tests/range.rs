@@ -2041,18 +2041,15 @@ fn test_range_proof_with_limit() {
 }
 
 #[test]
-// Demonstrates that verify_range_proof does not verify that proof node values
-// match the corresponding values in key_values. A malicious prover can supply
-// correct proof nodes (with the real value) but incorrect key_values at an
-// intermediate proof-path position. Reconciliation silently overwrites the
-// wrong value with the proof's correct one, the hash check passes, and the
-// caller trusts the wrong key_values.
+// A malicious prover can supply correct proof nodes (carrying the real value)
+// alongside incorrect key_values at an intermediate proof-path position.
+// Verification rejects this with `ProofNodeValueMismatch` rather than letting
+// reconciliation overwrite the tampered value and pass the hash check.
 //
 // Trie: ("b", "v1"), ("ba", "v2"), ("bc", "v3")
 // Range: ["a", "bc"]
-// The end proof for "bc" traverses the "b" node (which carries "v1").
-// We change "b"'s value in key_values to "WRONG" — verification should fail
-// but currently passes.
+// The end proof for "bc" traverses the "b" node (which carries "v1"), and "b"'s
+// value in key_values is changed to "WRONG".
 fn test_bad_range_proof_value_mismatch_on_proof_path() {
     let items = [("b", "v1"), ("ba", "v2"), ("bc", "v3")];
     let merkle = init_merkle(items);

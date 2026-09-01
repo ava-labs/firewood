@@ -85,17 +85,15 @@ pub struct RangeProofVerificationContext {
     /// The maximum number of key/value pairs the proof was permitted to
     /// contain. `None` means no limit.
     pub max_length: Option<NonZeroUsize>,
-    /// The actual right edge of the **proven** range, inclusive. Equals
-    /// `end_key` when the responder covered the whole request, and a smaller
-    /// key when the reply was truncated. `None` means unbounded above.
+    /// The inclusive right edge of the **proven** range — [`ProvenRange::end`]
+    /// as returned by verification. Equals `end_key` when the responder covered
+    /// the whole request, a smaller key when the reply was truncated, and
+    /// `None` when unbounded above. Callers applying the proof must bound the
+    /// write to this key, not to `end_key`.
     ///
     /// Mirrors [`ChangeProofVerificationContext::right_edge_key`].
     ///
-    /// A caller applying the proof must bound the write to this key rather
-    /// than to `end_key`: the span `(right_edge_key, end_key]` carries no
-    /// proof, so replacing state across it deletes local keys that were
-    /// never covered.
-    ///
+    /// [`ProvenRange::end`]: crate::ProvenRange::end
     /// [`ChangeProofVerificationContext::right_edge_key`]: crate::ChangeProofVerificationContext::right_edge_key
     pub right_edge_key: Option<Box<[u8]>>,
 }
@@ -207,8 +205,9 @@ pub struct RangeProof<K, V, H> {
     /// The hash algorithm this proof was constructed or parsed with. For proofs
     /// built in this binary it is the compile default; for proofs parsed via
     /// [`FrozenRangeProof::from_slice`](crate::api::FrozenRangeProof::from_slice)
-    /// it is resolved from the self-describing header byte.
-    /// [`ProofError::HashModeMismatch`]).
+    /// it is resolved from the self-describing header byte. A mismatch against
+    /// the algorithm a verifier expects is rejected with
+    /// [`ProofError::HashModeMismatch`].
     hash_mode: NodeHashAlgorithm,
 }
 

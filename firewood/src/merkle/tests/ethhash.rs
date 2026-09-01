@@ -603,8 +603,8 @@ fn zero_storage_root_in_rlp(value: &[u8], replacement: &[u8; 32]) -> Vec<u8> {
 /// root hash, but stale zeros in the stored account values.
 ///
 /// Then generate a range proof and verify it still passes. The proof-time fix
-/// in `ProofNode::from()` should detect the zeros and recompute the correct
-/// storageRoot from the node's children.
+/// in `ProofNode::from_path_item` should detect the zeros and recompute the
+/// correct storageRoot from the node's children.
 #[test]
 fn test_range_proof_fixes_legacy_zeroed_storage_root() {
     use crate::RangeProof;
