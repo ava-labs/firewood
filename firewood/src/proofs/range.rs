@@ -60,11 +60,10 @@ use std::num::NonZeroUsize;
 
 use firewood_storage::{DefaultHashMode, HashMode, NodeHashAlgorithm};
 
+use super::types::{Proof, ProofCollection};
 use crate::api::{self, FrozenRangeProof, HashKey};
 use crate::merkle::verify_range_proof;
 use crate::proofs::ProofError;
-
-use super::types::{Proof, ProofCollection};
 
 /// `(start_key, end_key)` describing the next key range to fetch after a
 /// range or change proof. Returned by `find_next_key_after_*_proof`.
@@ -360,9 +359,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::api::TryIntoBatch;
-
     use super::*;
+    use crate::api::TryIntoBatch;
 
     #[test]
     fn test_range_proof_iterator() {

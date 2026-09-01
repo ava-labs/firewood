@@ -7,6 +7,11 @@
 //! It supports parsing proof headers, proof nodes, and range proofs with full
 //! validation of the format.
 
+use std::num::NonZeroUsize;
+
+use firewood_storage::{HashType, PathBuf, TrieHash, TriePathFromUnpackedBytes, ValueDigest};
+use integer_encoding::VarInt;
+
 use super::{
     header::InvalidHeader,
     reader::{ProofReader, ReadError, ReadItem, V0Reader, Version0},
@@ -19,9 +24,6 @@ use crate::{
     merkle::{Key, Value},
     proofs::magic::{BATCH_DELETE, BATCH_DELETE_RANGE, BATCH_PUT},
 };
-use firewood_storage::{HashType, PathBuf, TrieHash, TriePathFromUnpackedBytes, ValueDigest};
-use integer_encoding::VarInt;
-use std::num::NonZeroUsize;
 
 impl FrozenRangeProof {
     /// Parses a `FrozenRangeProof` from the given byte slice.

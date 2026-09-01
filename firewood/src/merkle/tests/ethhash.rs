@@ -1,16 +1,16 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::api::OptionalHashKeyExt;
-use crate::merkle::Merkle;
-use firewood_storage::{Committed, DefaultHashMode, DeletedNodeTracking, MemStore, NodeStore};
-
-use super::*;
 use ethereum_types::H256;
+use firewood_storage::{Committed, DefaultHashMode, DeletedNodeTracking, MemStore, NodeStore};
 use hash_db::Hasher;
 use plain_hasher::PlainHasher;
 use sha3::{Digest, Keccak256};
 use test_case::test_case;
+
+use super::*;
+use crate::api::OptionalHashKeyExt;
+use crate::merkle::Merkle;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KeccakHasher;
@@ -552,8 +552,9 @@ fn clobber_value_in_memstore(
     value_bytes: &[u8],
     replacement: &[u8],
 ) -> usize {
-    use firewood_storage::{ReadableStorage, WritableStorage};
     use std::io::Read;
+
+    use firewood_storage::{ReadableStorage, WritableStorage};
     assert_eq!(value_bytes.len(), replacement.len());
 
     let mut buf = Vec::new();
@@ -602,8 +603,9 @@ fn zero_storage_root_in_rlp(value: &[u8], replacement: &[u8; 32]) -> Vec<u8> {
 /// storageRoot from the node's children.
 #[test]
 fn test_range_proof_fixes_legacy_zeroed_storage_root() {
-    use crate::RangeProof;
     use firewood_storage::WritableStorage;
+
+    use crate::RangeProof;
     type BoxedAccounts = Box<[(Box<[u8]>, Box<[u8]>)]>;
 
     let dummy_storage_root = [0u8; 32];

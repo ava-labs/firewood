@@ -3,9 +3,10 @@
 
 use std::fmt;
 
+use firewood::api;
+
 use crate::value::BorrowedBytes;
 use crate::{OwnedBytes, OwnedSlice};
-use firewood::api;
 
 /// A type alias for a rust-owned byte slice.
 pub type OwnedKeyValueBatch = OwnedSlice<OwnedKeyValuePair>;

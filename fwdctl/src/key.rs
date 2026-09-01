@@ -3,7 +3,6 @@
 
 use clap::Args;
 use firewood::api;
-
 #[cfg(feature = "ethhash")]
 use sha3::{Digest, Keccak256};
 

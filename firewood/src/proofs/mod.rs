@@ -327,7 +327,6 @@ pub use self::change::{
     ChangeProof, ChangeProofVerificationContext, find_next_key_after_change_proof,
     verify_change_proof_structure,
 };
-
 pub use self::header::InvalidHeader;
 pub use self::range::{
     KeyRange, RangeProof, RangeProofVerificationContext, find_next_key_after_range_proof,

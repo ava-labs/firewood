@@ -19,7 +19,6 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use parking_lot::Mutex;
 use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::num::NonZero;
@@ -29,11 +28,11 @@ use std::path::PathBuf;
 use firewood_metrics::{GaugeExt, firewood_counter, firewood_gauge, firewood_histogram};
 use lru::LruCache as EntryLruCache;
 use lru_mem::LruCache as MemLruCache;
-
-use crate::linear::ReadableNodeMode;
-use crate::{CacheReadStrategy, CachedNode, LinearAddress, MaybePersistedNode, SharedNode};
+use parking_lot::Mutex;
 
 use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
+use crate::linear::ReadableNodeMode;
+use crate::{CacheReadStrategy, CachedNode, LinearAddress, MaybePersistedNode, SharedNode};
 
 /// A [`ReadableStorage`] and [`WritableStorage`] backed by a single on-disk file.
 ///
@@ -415,11 +414,13 @@ impl std::ops::DerefMut for UnlockOnDrop {
 
 #[cfg(test)]
 mod test {
+    use std::io::Write;
+
+    use nonzero_ext::nonzero;
+    use tempfile::NamedTempFile;
+
     use super::*;
     use crate::{DefaultHashMode, HashMode};
-    use nonzero_ext::nonzero;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
     fn freelist_entries_from_memory_limit() {

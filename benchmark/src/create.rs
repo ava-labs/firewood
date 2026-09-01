@@ -13,7 +13,6 @@ use fastrace::prelude::SpanContext;
 use fastrace::{Span, func_path};
 use firewood::api::{self, DynDb};
 use log::info;
-
 use pretty_duration::pretty_duration;
 
 use crate::{Args, TestRunner};

@@ -12,9 +12,9 @@
 //! `reconcile_branch_proof_node`, that mismatch is rejected as
 //! `UnexpectedValue`.
 
-use super::*;
 use test_case::test_case;
 
+use super::*;
 use crate::merkle::tests::ethhash::{empty_code_hash, rlp_encode_account, rlp_encode_storage};
 
 /// The single account every test below builds its storage trie under.

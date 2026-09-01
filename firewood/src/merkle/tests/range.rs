@@ -1,9 +1,10 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use firewood_storage::U4;
+
 use super::*;
 use crate::RangeProof;
-use firewood_storage::U4;
 
 type KeyValuePairs = Vec<(Box<[u8]>, Box<[u8]>)>;
 

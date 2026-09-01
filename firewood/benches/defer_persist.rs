@@ -1,6 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::iter::repeat_with;
+use std::num::NonZeroU64;
+
 use criterion::{Criterion, criterion_group, criterion_main};
 use firewood::api;
 use firewood::db::{BatchOp, DbConfig};
@@ -8,8 +11,6 @@ use firewood::manager::RevisionManagerConfig;
 use firewood::open;
 use firewood_storage::{DefaultHashMode, HashMode};
 use rand::{RngExt, distr::Alphanumeric};
-use std::iter::repeat_with;
-use std::num::NonZeroU64;
 
 #[expect(clippy::unwrap_used)]
 fn bench_deferred_persistence<const N: usize, const COMMIT_COUNT: u64>(criterion: &mut Criterion) {

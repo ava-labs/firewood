@@ -1,13 +1,14 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::metrics::MetricsContextExt;
-use crate::reconstructed::ReconstructedHandle;
-use crate::{CreateIteratorResult, DatabaseHandle, IteratorHandle};
 use firewood::api;
 use firewood::api::{ArcDynDbView, BoxKeyValueIter, DbView, HashKey};
 use firewood::db::CommittedView;
 use firewood_metrics::MetricsContext;
+
+use crate::metrics::MetricsContextExt;
+use crate::reconstructed::ReconstructedHandle;
+use crate::{CreateIteratorResult, DatabaseHandle, IteratorHandle};
 
 #[derive(Debug)]
 pub struct RevisionHandle<'db> {

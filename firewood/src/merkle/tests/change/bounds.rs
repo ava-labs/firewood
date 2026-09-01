@@ -4,9 +4,10 @@
 //! End-to-end change proof verification across boundary configurations:
 //! no edges, left only, right only, and both edges.
 
-use super::*;
 use firewood_storage::{DefaultHashMode, HashMode};
 use test_case::test_case;
+
+use super::*;
 
 /// Left edge proof is present iff `requested_start_key` is set. Right edge
 /// proof is always present (generator produces one for non-empty batch ops).

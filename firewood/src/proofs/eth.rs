@@ -281,8 +281,9 @@ fn proof_child_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use firewood_storage::{DenseChildren, PathBuf, RlpList, TrieHash, TriePathFromUnpackedBytes};
+
+    use super::*;
 
     fn pathbuf_from_nibbles(nibbles: &[u8]) -> PathBuf {
         let components =

@@ -6,15 +6,23 @@
     reason = "Found 3 occurrences after enabling the lint."
 )]
 
-use nonzero_ext::nonzero;
-use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::num::{NonZero, NonZeroU64};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
+use firewood_metrics::{GaugeExt, firewood_counter, firewood_gauge, firewood_histogram};
+pub use firewood_storage::CacheReadStrategy;
+use firewood_storage::RootStore;
 use firewood_storage::logger::{trace, warn};
+use firewood_storage::{
+    BranchNode, CheckOpt, CheckerReport, Committed, CommittedId, DeletedNodeTracking, FileBacked,
+    FileIoError, HashMode, HashedNodeReader, ImmutableProposal, Mutable, MutableKind,
+    MutableReconNodeStore, NodeStore, NodeStoreHeader, Propose, TrieHash,
+};
+use nonzero_ext::nonzero;
+use parking_lot::{Mutex, RwLock};
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
 
@@ -23,14 +31,6 @@ use crate::db::{BatchOp, UseParallel};
 use crate::merkle::Merkle;
 use crate::merkle::parallel::ParallelMerkle;
 use crate::persist_worker::{PersistError, PersistWorker};
-use firewood_metrics::{GaugeExt, firewood_counter, firewood_gauge, firewood_histogram};
-pub use firewood_storage::CacheReadStrategy;
-use firewood_storage::RootStore;
-use firewood_storage::{
-    BranchNode, CheckOpt, CheckerReport, Committed, CommittedId, DeletedNodeTracking, FileBacked,
-    FileIoError, HashMode, HashedNodeReader, ImmutableProposal, Mutable, MutableKind,
-    MutableReconNodeStore, NodeStore, NodeStoreHeader, Propose, TrieHash,
-};
 
 pub(crate) const DB_FILE_NAME: &str = "firewood.db";
 
@@ -803,12 +803,13 @@ mod tests {
     #[test]
     #[expect(clippy::too_many_lines)]
     fn test_slow_concurrent_view_during_commit() {
-        use firewood_storage::{
-            ImmutableProposal, LeafNode, NibblesIterator, Node, NodeStore, Path,
-        };
         use std::sync::Barrier;
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         use std::thread;
+
+        use firewood_storage::{
+            ImmutableProposal, LeafNode, NibblesIterator, Node, NodeStore, Path,
+        };
 
         const NUM_ITERATIONS: usize = 1000;
         const NUM_VIEWER_THREADS: usize = 10;

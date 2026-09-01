@@ -417,10 +417,11 @@ fn nibbles_match_packed(nibbles: &[PathComponent], packed: &[u8]) -> bool {
 mod merkledb_gate_tests {
     use std::sync::Arc;
 
-    use super::*;
     use firewood_storage::{
         Committed, DeletedNodeTracking, MemStore, MerkleDbHash, NodeHashAlgorithm, NodeStore,
     };
+
+    use super::*;
 
     /// A MerkleDB view must refuse to emit eth proofs. This test runs in both
     /// feature configurations.
@@ -441,10 +442,11 @@ mod merkledb_gate_tests {
 #[cfg(all(test, feature = "ethhash"))]
 #[expect(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
-    use super::*;
-    use crate::merkle::tests::init_merkle;
     use firewood_storage::{NULL_RLP, NibblesIterator, RlpItem, RlpList, encode_list};
     use sha3::{Digest, Keccak256};
+
+    use super::*;
+    use crate::merkle::tests::init_merkle;
 
     fn keccak(bytes: &[u8]) -> [u8; 32] {
         Keccak256::digest(bytes).into()

@@ -1,13 +1,12 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use integer_encoding::VarInt;
-use test_case::test_case;
-
 use firewood_storage::{
     DefaultHashMode, DenseChildren, HashMode, HashType, NodeHashAlgorithm, PathComponent,
     SeededRng, TrieHash, ValueDigest, logger::debug,
 };
+use integer_encoding::VarInt;
+use test_case::test_case;
 
 use super::{
     header::InvalidHeader,
@@ -1044,10 +1043,11 @@ fn test_lex_successor_is_least_strict_upper_bound(key: &[u8]) {
 mod box_array_deserialization_tests {
     use std::num::NonZeroUsize;
 
+    use integer_encoding::VarInt;
+
     use super::*;
     use crate::proofs::header::Header;
     use crate::proofs::reader::{ProofReader, ReadError, V0Reader, Version0};
-    use integer_encoding::VarInt;
 
     #[derive(Debug, PartialEq)]
     struct Hash32([u8; 32]);

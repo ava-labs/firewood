@@ -1,11 +1,12 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use smallvec::SmallVec;
+
 use crate::{
     Children, DefaultHashMode, HashMode, HashType, HashableShunt, IntoSplitPath, Node, Path,
     PathComponent, SplitPath, TrieHash,
 };
-use smallvec::SmallVec;
 
 impl<'a, P: SplitPath> HashableShunt<'a, P, &'a [PathComponent]> {
     /// Creates a new [`HashableShunt`] from the given `node` at the given `prefix`.

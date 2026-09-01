@@ -8,6 +8,11 @@
 
 //! Merkledb compatible hashing algorithm.
 
+use std::io::{Error, Read};
+
+use integer_encoding::VarInt;
+use sha2::{Digest, Sha256};
+
 use crate::hashednode::{HasUpdate, Hashable};
 use crate::node::ExtendableBytes;
 use crate::node::branch::Serializable;
@@ -15,9 +20,6 @@ use crate::{
     HashMode, HashType, MerkleDbHash, NodeHashAlgorithm, Path, TrieHash, TriePath,
     TriePathAsPackedBytes, ValueDigest,
 };
-use integer_encoding::VarInt;
-use sha2::{Digest, Sha256};
-use std::io::{Error, Read};
 
 const MAX_VARINT_SIZE: usize = 10;
 const BITS_PER_NIBBLE: u64 = 4;

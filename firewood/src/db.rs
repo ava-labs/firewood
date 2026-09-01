@@ -9,17 +9,11 @@
 #[cfg(test)]
 mod tests;
 
-pub use crate::api::BatchOp;
-use crate::api::{
-    self, ArcDynDbView, FrozenChangeProof, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter,
-    KeyType, KeyValuePair,
-};
-use crate::iter::MerkleKeyValueIter;
-use crate::merkle::changes::DiffMerkleNodeStream;
-use crate::merkle::{Merkle, Value, verify_change_proof_root_hash};
-use crate::verify_change_proof_structure;
+use std::io::Write;
+use std::num::NonZeroUsize;
+use std::path::Path;
+use std::sync::Arc;
 
-use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_metrics::{firewood_counter, firewood_gauge, firewood_histogram};
 #[cfg(test)]
 use firewood_storage::DefaultHashMode;
@@ -29,12 +23,19 @@ use firewood_storage::{
     NodeHashAlgorithm, NodeStore, Parentable, Propose, ReadableStorage, Recon, Reconstructed,
     TrieReader,
 };
-use std::io::Write;
-use std::num::NonZeroUsize;
-use std::path::Path;
-use std::sync::Arc;
 use thiserror::Error;
 use typed_builder::TypedBuilder;
+
+pub use crate::api::BatchOp;
+use crate::api::{
+    self, ArcDynDbView, FrozenChangeProof, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter,
+    KeyType, KeyValuePair,
+};
+use crate::iter::MerkleKeyValueIter;
+use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
+use crate::merkle::changes::DiffMerkleNodeStream;
+use crate::merkle::{Merkle, Value, verify_change_proof_root_hash};
+use crate::verify_change_proof_structure;
 
 #[derive(Error, Debug)]
 #[non_exhaustive]
@@ -962,11 +963,10 @@ mod test {
     };
     use nonzero_ext::nonzero;
 
+    use super::{BatchOp, DbConfig, open};
     use crate::api::{self, Db as _, DbView, HashKeyExt, Proposal as _, Reconstructible};
     use crate::db::{Db, Proposal, UseParallel};
     use crate::manager::RevisionManagerConfig;
-
-    use super::{BatchOp, DbConfig, open};
 
     /// A chunk of an iterator, provided by [`IterExt::chunk_fold`] to the folding
     /// function.

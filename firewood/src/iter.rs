@@ -1,15 +1,16 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::api::{KeyType, KeyValuePair};
-use crate::merkle::{Key, Value};
+use std::cmp::Ordering;
+use std::iter::FusedIterator;
 
 use firewood_storage::{
     BranchNode, Child, FileIoError, NibblesIterator, Node, NodeHashAlgorithm, PathBuf,
     PathComponent, PathIterItem, SharedNode, TriePathFromUnpackedBytes, TrieReader,
 };
-use std::cmp::Ordering;
-use std::iter::FusedIterator;
+
+use crate::api::{KeyType, KeyValuePair};
+use crate::merkle::{Key, Value};
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode {
@@ -661,14 +662,16 @@ impl<I: Iterator<Item = T>, T: KeyValuePair, K: KeyType> Iterator for FilteredKe
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::merkle::Merkle;
+    use std::sync::Arc;
+
     use firewood_storage::{
         DefaultHashMode, DeletedNodeTracking, HashMode, ImmutableProposal, MemStore, Mutable,
         NodeStore, Propose,
     };
-    use std::sync::Arc;
     use test_case::test_case;
+
+    use super::*;
+    use crate::merkle::Merkle;
 
     macro_rules! path {
         ($($elem:expr),* $(,)?)=>{
