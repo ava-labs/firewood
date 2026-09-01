@@ -4,13 +4,12 @@
 use std::cmp::Ordering;
 
 use firewood_storage::{
-    BranchNode, Child, HashMode, Mutable, Node, NodeStore, Path, PathComponent, Propose,
-    ReadableStorage,
+    Child, HashMode, Mutable, Node, NodeStore, Path, PathComponent, Propose, ReadableStorage,
 };
 
 use crate::{
     ProofError, api,
-    merkle::{Merkle, SharedNode, get_helper, unwind_parents},
+    merkle::{Merkle, ParentFrames, SharedNode, get_helper, unwind_parents},
 };
 
 /// The proven range, in nibbles.
@@ -244,7 +243,7 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
     ) -> Result<Node, api::Error> {
         // Each frame is a branch the walk descended through and the nibble it left
         // by, so the child can be put back on the way out.
-        let mut parents: Vec<(Box<BranchNode>, PathComponent)> = Vec::new();
+        let mut parents: ParentFrames = ParentFrames::new();
 
         let current = loop {
             // get a reference to the partial path for ease of reading
@@ -461,7 +460,7 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
         acc_prefix: &[u8],
         range: Option<CollapseRange<'_>>,
     ) -> Result<Node, api::Error> {
-        let mut parents: Vec<(Box<BranchNode>, PathComponent)> = Vec::new();
+        let mut parents: ParentFrames = ParentFrames::new();
         // The caller's prefix is borrowed for the first level. Only a descent needs
         // an owned buffer, so a shallow strip allocates nothing here.
         let mut owned_prefix: Option<Box<[u8]>> = None;
