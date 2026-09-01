@@ -35,6 +35,7 @@ use firewood_storage::{
 use firewood_storage::{
     hash_node_as_storage_trie_root_for_node, hash_node_as_storage_trie_root_parts,
 };
+use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -1994,7 +1995,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
         key: &[u8],
         mut value: Value,
     ) -> Result<Node, FileIoError> {
-        let mut parents: Vec<(Box<BranchNode>, PathComponent)> = Vec::new();
+        let mut parents: ParentFrames = ParentFrames::new();
         // The caller's key is borrowed for the first level. Only a descent needs an
         // owned buffer, so a shallow insert allocates nothing here.
         let mut owned_key: Option<Path> = None;
@@ -2164,7 +2165,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
     ///
     /// [`insert_helper`]: Self::insert_helper
     fn insert_branch_helper(&mut self, mut node: Node, key: &[u8]) -> Result<Node, FileIoError> {
-        let mut parents: Vec<(Box<BranchNode>, PathComponent)> = Vec::new();
+        let mut parents: ParentFrames = ParentFrames::new();
         let mut owned_key: Option<Path> = None;
 
         let result = loop {
@@ -2769,10 +2770,16 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
     }
 }
 
+/// Parent frames for the walks that descend to one child per level. Inline
+/// capacity covers realistic trie depths, so a walk allocates nothing for its
+/// frames. See `FRAME_STACK_INLINE_CAPACITY` in the storage crate for the sizing
+/// rationale.
+type ParentFrames = SmallVec<[(Box<BranchNode>, PathComponent); 8]>;
+
 /// Reattaches each transformed child to the parent it was taken from, innermost
 /// first. Shared by the two insert walks, which descend without flattening on
 /// the way back.
-fn unwind_parents(mut parents: Vec<(Box<BranchNode>, PathComponent)>, mut node: Node) -> Node {
+fn unwind_parents(mut parents: ParentFrames, mut node: Node) -> Node {
     while let Some((mut parent, index)) = parents.pop() {
         parent.children[index] = Some(Child::Node(node));
         node = Node::Branch(parent);
