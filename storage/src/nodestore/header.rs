@@ -25,7 +25,9 @@
 //!
 
 use bytemuck_derive::{Pod, Zeroable};
+use std::fs::File;
 use std::io::{Error, ErrorKind, Read};
+use std::path::Path;
 
 use super::alloc::FreeLists;
 use super::primitives::{AREA_SIZES_HASH, LinearAddress};
@@ -170,7 +172,9 @@ pub struct CargoVersion {
 const _: () = assert!(CargoVersion::CARGO_PKG_VERSION_LEN <= 32);
 
 impl CargoVersion {
-    const CARGO_PKG_VERSION: &'static str = env!("CARGO_PKG_VERSION");
+    /// Value written to new database headers and reported via the
+    /// `firewood_build_info` metric.
+    pub const CARGO_PKG_VERSION: &'static str = env!("CARGO_PKG_VERSION");
     const CARGO_PKG_VERSION_LEN: usize = Self::CARGO_PKG_VERSION.len();
 
     // craft in constant context to avoid runtime `memcpy` call for `new()`
@@ -180,7 +184,9 @@ impl CargoVersion {
         Self { bytes }
     };
 
+    /// The length of the version string, excluding the null padding.
     #[inline]
+    #[must_use]
     pub fn len(&self) -> usize {
         self.bytes
             .iter()
@@ -188,10 +194,15 @@ impl CargoVersion {
             .unwrap_or(self.bytes.len())
     }
 
+    /// Returns true when no version was recorded.
+    #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.bytes[0] == 0
     }
 
+    /// The version string, with the null padding trimmed. Borrows unless the
+    /// stored bytes are not valid UTF-8.
+    #[must_use]
     pub fn as_str(&self) -> std::borrow::Cow<'_, str> {
         // will not allocate for properly sourced values
         #[expect(clippy::indexing_slicing, reason = "len() ensures we stay in bounds")]
@@ -199,6 +210,8 @@ impl CargoVersion {
     }
 }
 
+/// Holds the build version string padded to 64 bytes with null bytes, captured
+/// at build time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Zeroable, Pod)]
 #[repr(transparent)]
 pub struct GitDescribe {
@@ -209,7 +222,8 @@ pub struct GitDescribe {
 const _: () = assert!(GitDescribe::GIT_DESCRIBE_LEN <= 64);
 
 impl GitDescribe {
-    const GIT_DESCRIBE: &'static str = git_version::git_version!(fallback = "");
+    /// The `git describe` output, or empty when built outside a git checkout.
+    pub const GIT_DESCRIBE: &'static str = git_version::git_version!(fallback = "");
     const GIT_DESCRIBE_LEN: usize = Self::GIT_DESCRIBE.len();
 
     // craft in constant context to avoid runtime `memcpy` call for `new()`
@@ -219,7 +233,9 @@ impl GitDescribe {
         Self { bytes }
     };
 
+    /// The length of the describe string, excluding the null padding.
     #[inline]
+    #[must_use]
     pub fn len(&self) -> usize {
         self.bytes
             .iter()
@@ -227,10 +243,16 @@ impl GitDescribe {
             .unwrap_or(self.bytes.len())
     }
 
+    /// Returns true when no describe output was recorded, which is the case for
+    /// builds made outside a git checkout.
+    #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.bytes[0] == 0
     }
 
+    /// The describe string, with the null padding trimmed. Borrows unless the
+    /// stored bytes are not valid UTF-8.
+    #[must_use]
     pub fn as_str(&self) -> std::borrow::Cow<'_, str> {
         // will not allocate for properly sourced values
         #[expect(clippy::indexing_slicing, reason = "len() ensures we stay in bounds")]
@@ -275,7 +297,9 @@ pub struct NodeStoreHeader {
     /// The hash of the area sizes used in this database to prevent someone from changing the
     /// area sizes and trying to read old databases with the wrong area sizes.
     area_size_hash: [u8; 32],
-    /// Whether ethhash was enabled when this database was created.
+    /// The node-hashing scheme this database was created with, as a
+    /// [`NodeHashAlgorithm`] discriminant (`0` = MerkleDB, `1` = Ethereum).
+    /// This is the per-database runtime selector honored at open time.
     node_hash_algorithm: u64,
     /// The merkle root hash of the entire database when it was last committed.
     ///
@@ -329,16 +353,10 @@ impl NodeStoreHeader {
     pub fn read_from_storage<S: crate::linear::ReadableStorage>(
         storage: &S,
     ) -> Result<Self, crate::FileIoError> {
-        // TODO(#1088): remove this after implementing runtime selection of hash algorithms
-        storage.node_hash_algorithm().validate_init().map_err(|e| {
-            storage.file_io_error(e, 0, Some("NodeHashAlgorithm::validate_init".to_owned()))
-        })?;
-
         let mut this = bytemuck::zeroed::<Self>();
-        let header_bytes = bytemuck::bytes_of_mut(&mut this);
         storage
             .stream_from(0)?
-            .read_exact(header_bytes)
+            .read_exact(bytemuck::bytes_of_mut(&mut this))
             .map_err(|e| {
                 storage.file_io_error(e, 0, Some("NodeStoreHeader::read_from_storage".to_owned()))
             })?;
@@ -347,6 +365,40 @@ impl NodeStoreHeader {
         })?;
 
         Ok(this)
+    }
+
+    /// Reads only the node-hashing scheme persisted in the header, without
+    /// validating it against any requested algorithm.
+    ///
+    /// This is the auto-detection primitive: it lets a caller learn an existing
+    /// database's scheme so it can open with the matching one, instead of
+    /// having to guess and hit a `validate_open` mismatch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the header cannot be read or the persisted
+    /// discriminant is not a known [`NodeHashAlgorithm`].
+    pub fn read_node_hash_algorithm_from_file(
+        path: impl AsRef<Path>,
+    ) -> Result<NodeHashAlgorithm, crate::FileIoError> {
+        let path = path.as_ref();
+        let context = "NodeStoreHeader::read_node_hash_algorithm_from_file";
+        let mut file = File::open(path).map_err(|e| {
+            crate::FileIoError::new(e, Some(path.to_path_buf()), 0, Some(context.to_owned()))
+        })?;
+        let mut header = bytemuck::zeroed::<Self>();
+        file.read_exact(bytemuck::bytes_of_mut(&mut header))
+            .map_err(|e| {
+                crate::FileIoError::new(e, Some(path.to_path_buf()), 0, Some(context.to_owned()))
+            })?;
+        header.node_hash_algorithm().map_err(|e| {
+            crate::FileIoError::new(
+                e,
+                Some(path.to_path_buf()),
+                0,
+                Some("node_hash_algorithm".to_owned()),
+            )
+        })
     }
 
     /// Creates a new header with default values and no root address.
@@ -435,6 +487,22 @@ impl NodeStoreHeader {
     #[must_use]
     pub const fn root_address(&self) -> Option<LinearAddress> {
         self.root_address
+    }
+
+    /// The node-hashing scheme this database was created with, decoded from the
+    /// persisted header discriminant.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the persisted discriminant is not a known
+    /// [`NodeHashAlgorithm`] value.
+    fn node_hash_algorithm(&self) -> Result<NodeHashAlgorithm, Error> {
+        NodeHashAlgorithm::try_from(self.node_hash_algorithm).map_err(|err| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("hash mode flag in database header is invalid: {err}"),
+            )
+        })
     }
 
     /// Get the root hash.
@@ -531,7 +599,6 @@ impl NodeStoreHeader {
     }
 
     fn validate_node_hash_algorithm(&self, expected: NodeHashAlgorithm) -> Result<(), Error> {
-        expected.validate_init()?;
         NodeHashAlgorithm::try_from(self.node_hash_algorithm)
             .map_err(|err| {
                 std::io::Error::new(
@@ -562,6 +629,7 @@ const fn const_copy(src: &[u8], dst: &mut [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{DefaultHashMode, HashMode};
     use test_case::test_case;
 
     #[test]
@@ -580,11 +648,34 @@ mod tests {
 
     #[test]
     fn test_header_new() {
-        let header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let header = NodeStoreHeader::new(DefaultHashMode::ALGORITHM);
 
         // Check the header is correctly initialized.
         assert_eq!(header.version, Version::new());
         let empty_free_list = FreeLists::default();
         assert_eq!(*header.free_lists(), empty_free_list);
+    }
+
+    #[test_case(NodeHashAlgorithm::MerkleDB)]
+    #[test_case(NodeHashAlgorithm::Ethereum)]
+    fn reads_node_hash_algorithm_from_file(node_hash_algorithm: NodeHashAlgorithm) {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let path = tmpdir.path().join("firewood.db");
+        let header = NodeStoreHeader::new(node_hash_algorithm);
+        std::fs::write(&path, bytemuck::bytes_of(&header)).unwrap();
+
+        assert_eq!(
+            NodeStoreHeader::read_node_hash_algorithm_from_file(path).unwrap(),
+            node_hash_algorithm
+        );
+    }
+
+    #[test]
+    fn rejects_mismatched_node_hash_algorithm() {
+        let header = NodeStoreHeader::new(NodeHashAlgorithm::MerkleDB);
+
+        let error = header.validate(NodeHashAlgorithm::Ethereum).unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::Unsupported);
     }
 }

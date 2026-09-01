@@ -35,7 +35,12 @@ fn key_under_account(account_key: &[u8; 32], byte_32: u8) -> [u8; 64] {
 /// (`ACCOUNT_KEY`) with four storage children at suffixes 0x10/0x30/0x60/0xC0.
 /// Returns the DB and its tempdir guard (which the caller must keep alive),
 /// plus the empty and populated roots.
-fn source_with_four_storage_children() -> (Db, tempfile::TempDir, api::HashKey, api::HashKey) {
+fn source_with_four_storage_children() -> (
+    Db<DefaultHashMode>,
+    tempfile::TempDir,
+    api::HashKey,
+    api::HashKey,
+) {
     let storage_keys: Vec<[u8; 64]> = [0x10u8, 0x30, 0x60, 0xC0]
         .iter()
         .map(|&p| key_under_account(&ACCOUNT_KEY, p))
@@ -335,8 +340,8 @@ fn test_change_proof_single_storage_child_truncated() {
 /// that batch. The end bound puts the storage slot at suffix `0x10` inside the
 /// range and the one at `0x99` outside it.
 fn commit_and_verify_boundary_range(
-    source: &Db,
-    target: &Db,
+    source: &Db<DefaultHashMode>,
+    target: &Db<DefaultHashMode>,
     root1_target: api::HashKey,
     end_batch: Vec<BatchOp<&[u8], &[u8]>>,
 ) {

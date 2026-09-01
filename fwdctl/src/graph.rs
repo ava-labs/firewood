@@ -3,8 +3,9 @@
 
 use clap::Args;
 use firewood::api;
-use firewood::db::{Db, DbConfig};
-use std::io::stdout;
+use firewood::db::DbConfig;
+use firewood::open;
+use std::io::{Write, stdout};
 
 use crate::DatabasePath;
 
@@ -17,11 +18,11 @@ pub struct Options {
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("dump database {opts:?}");
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(opts.database.node_hash_algorithm.into())
+        .node_hash_algorithm(opts.database.node_hash_algorithm()?)
         .create_if_missing(false)
         .truncate(false);
 
-    let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
-    db.dump(&mut stdout())?;
+    let db = open(opts.database.dbpath.clone(), cfg.build())?;
+    stdout().write_all(db.dump_to_string()?.as_bytes())?;
     db.close()
 }

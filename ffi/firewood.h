@@ -1679,11 +1679,14 @@ typedef struct DatabaseHandleArgs {
    */
   size_t node_cache_memory_limit;
   /**
-   * The size of the free list cache.
+   * The memory limit for the free-list cache in kibibytes.
+   *
+   * Nothing is preallocated; this is an upper bound on the memory the cache
+   * may grow to.
    *
    * Opening returns an error if this is zero.
    */
-  size_t free_list_cache_size;
+  size_t freelist_memory_limit_kb;
   /**
    * The maximum number of revisions to keep.
    *
@@ -1713,13 +1716,23 @@ typedef struct DatabaseHandleArgs {
    */
   bool expensive_metrics;
   /**
+   * Tag used to separate metrics and logs per database.
+   *
+   * This must be a valid UTF-8 string.
+   *
+   * If empty, no tag is applied and this database's metrics are recorded
+   * with the default `db_tag="untagged"` label.
+   */
+  BorrowedBytes db_tag;
+  /**
    * The hashing mode to use for the database.
    *
-   * This must match the compile-time feature:
-   * - [`NodeHashAlgorithm::Ethereum`] if the `ethhash` feature is enabled
-   * - [`NodeHashAlgorithm::MerkleDB`] if the `ethhash` feature is disabled
-   *
-   * Opening returns an error if this does not match the compile-time feature.
+   * This is the per-database node-hashing scheme, selected at runtime. For
+   * an existing database it must match the scheme persisted in the file
+   * header (a mismatch is an error); for a fresh database it is the scheme
+   * to create with. A single binary can open both
+   * [`NodeHashAlgorithm::Ethereum`] and [`NodeHashAlgorithm::MerkleDB`]
+   * databases regardless of the database's runtime hash mode.
    */
   enum NodeHashAlgorithm node_hash_algorithm;
   /**

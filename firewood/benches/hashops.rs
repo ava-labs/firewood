@@ -6,9 +6,10 @@
 use criterion::profiler::Profiler;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use firewood::Merkle;
-use firewood::api::{Db as _, Proposal as _};
+use firewood::api;
 use firewood::db::{BatchOp, DbConfig};
-use firewood_storage::{DeletedNodeTracking, MemStore, NodeHashAlgorithm, NodeStore};
+use firewood::open;
+use firewood_storage::{DefaultHashMode, DeletedNodeTracking, HashMode, MemStore, NodeStore};
 use pprof::ProfilerGuard;
 use rand::{RngExt, distr::Alphanumeric};
 use std::fs::File;
@@ -69,8 +70,8 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
         .bench_function("insert", |b| {
             b.iter_batched(
                 || {
-                    let store = Arc::new(MemStore::default());
-                    let nodestore =
+                    let store = Arc::new(MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM));
+                    let nodestore: NodeStore<_, _, DefaultHashMode> =
                         NodeStore::new_empty_proposal(store, DeletedNodeTracking::Enabled);
                     let merkle = Merkle::from(nodestore);
 
@@ -104,24 +105,25 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
         .bench_function("commit", |b| {
             b.iter_batched(
                 || {
-                    let batch_ops: Vec<_> =
+                    let batch_ops: api::OwnedBatch =
                         repeat_with(|| rng.sample_iter(&Alphanumeric).take(KEY_LEN).collect())
                             .map(|key: Vec<_>| BatchOp::Put {
-                                key,
-                                value: vec![b'v'],
+                                key: key.into_boxed_slice(),
+                                value: vec![b'v'].into_boxed_slice(),
                             })
                             .take(N)
-                            .collect();
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice();
                     batch_ops
                 },
                 |batch_ops| {
                     let db_path = TempDir::new().unwrap();
                     let db_path = db_path.path().join("benchmark_db");
                     let cfg = DbConfig::builder()
-                        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+                        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
                         .truncate(true)
                         .build();
-                    let db = firewood::db::Db::new(db_path, cfg).unwrap();
+                    let db = open(db_path, cfg).unwrap();
 
                     db.propose(batch_ops).unwrap().commit().unwrap();
                 },

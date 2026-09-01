@@ -58,14 +58,12 @@ const RootLength = C.sizeof_HashKey
 // Hash is the type used for all firewood hashes.
 type Hash [RootLength]byte
 
-// NodeHashAlgorithm represents the node hashing algorithm used by the database;
-// this must match the algorithm previously used to crate the database.
+// NodeHashAlgorithm represents the node hashing algorithm used by the database.
+// It is a per-database runtime choice: a single binary can open databases of
+// either algorithm. When opening an existing database, the algorithm must match
+// the one the database was created with.
 //
 // Currently, there are only two variants but more may be added in the future.
-// At this time, the node hash algorithm used when opening the database must
-// match the compile-time feature used when building the FFI library. This
-// restriction will be lifted after #1088, which enables runtime selection of
-// the node hashing algorithm.
 type NodeHashAlgorithm C.enum_NodeHashAlgorithm
 
 const (
@@ -135,9 +133,9 @@ type config struct {
 	// nodeCacheSizeInBytes is the memory limit for the node cache in bytes.
 	// Must be non-zero.
 	nodeCacheSizeInBytes uint
-	// freeListCacheEntries is the number of entries in the freelist cache.
+	// freeListMemoryLimitKB is the memory limit for the freelist cache in kibibytes.
 	// Must be non-zero.
-	freeListCacheEntries uint
+	freeListMemoryLimitKB uint
 	// revisions is the maximum number of historical revisions to keep in memory.
 	// If rootStoreDir is set, then any revisions removed from memory will still be kept on disk.
 	// Otherwise, any revisions removed from memory will no longer be kept on disk.
@@ -149,6 +147,8 @@ type config struct {
 	rootStore bool
 	// expensiveMetricsEnabled controls whether expensive metrics recording is enabled.
 	expensiveMetricsEnabled bool
+	// metricsTag separates metrics and logs by database handle.
+	metricsTag string
 	// deferredPersistenceCommitCount determines the maximum number of unpersisted
 	// revisions that can exist at a given time.
 	// Note: revisions must be > deferredPersistenceCommitCount
@@ -158,7 +158,7 @@ type config struct {
 func defaultConfig() *config {
 	return &config{
 		nodeCacheSizeInBytes:           128_000_000,
-		freeListCacheEntries:           1_000_000,
+		freeListMemoryLimitKB:          4096,
 		revisions:                      100,
 		readCacheStrategy:              OnlyCacheWrites,
 		deferredPersistenceCommitCount: 1,
@@ -185,13 +185,14 @@ func WithNodeCacheSizeInBytes(sizeInBytes uint) Option {
 	}
 }
 
-// WithFreeListCacheEntries sets the number of entries in the freelist cache.
-// The freelist cache manages available disk space for reuse.
+// WithFreeListMemoryLimitKB sets the memory limit for the freelist cache in kibibytes.
+// The freelist cache manages available disk space for reuse. Nothing is
+// preallocated, so this is an upper bound on the memory the cache may use.
 // Must be non-zero.
-// Default: 1,000,000
-func WithFreeListCacheEntries(entries uint) Option {
+// Default: 4096 (4 MB)
+func WithFreeListMemoryLimitKB(memoryLimitKB uint) Option {
 	return func(c *config) {
-		c.freeListCacheEntries = entries
+		c.freeListMemoryLimitKB = memoryLimitKB
 	}
 }
 
@@ -233,6 +234,14 @@ func WithExpensiveMetrics() Option {
 	}
 }
 
+// WithMetricsTag sets a tag to attach to metrics and logs emitted for this database.
+// Default: empty (no tag; metrics are recorded with the fallback db_tag="untagged" label)
+func WithMetricsTag(tag string) Option {
+	return func(c *config) {
+		c.metricsTag = tag
+	}
+}
+
 // WithDeferredPersistenceCommitCount sets the maximum number of unpersisted revisions
 // that can exist at a time. Note: `commitCount` must be greater than 0 and WithRevisions
 // must be greater than `commitCount`.
@@ -263,13 +272,13 @@ const (
 // algorithm and database options. The database directory will be created at the
 // provided path if it does not already exist.
 //
-// The [nodeHashAlgorithm] is required and must match the compile-time feature:
-//   - NodeHashAlgorithmEthereum if the ethhash feature is enabled
-//   - NodeHashAlgorithmMerkleDB if the ethhash feature is disabled
+// The [nodeHashAlgorithm] is required and selects the database's hashing mode at
+// runtime, on a per-database basis:
+//   - EthereumNodeHashing for Ethereum-compatible (Keccak-256) hashing
+//   - MerkleDBNodeHashing for MerkleDB-compatible (SHA-256) hashing
 //
-// In the future, the node hash algorithm will be configurable at runtime and
-// no longer need to match compile-time features but will instead select the
-// desired hashing mode.
+// A single binary supports both modes. When opening an existing database, the
+// algorithm must match the one the database was created with.
 //
 // If no [Option] is provided, sensible defaults will be used.
 // See the With* functions for details about each configuration parameter and its default value.
@@ -292,8 +301,8 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	if conf.nodeCacheSizeInBytes < 1 {
 		return nil, fmt.Errorf("node cache size in bytes must be >= 1, got %d", conf.nodeCacheSizeInBytes)
 	}
-	if conf.freeListCacheEntries < 1 {
-		return nil, fmt.Errorf("free list cache entries must be >= 1, got %d", conf.freeListCacheEntries)
+	if conf.freeListMemoryLimitKB < 1 {
+		return nil, fmt.Errorf("free list memory limit in KB must be >= 1, got %d", conf.freeListMemoryLimitKB)
 	}
 
 	var pinner runtime.Pinner
@@ -302,13 +311,14 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	args := C.struct_DatabaseHandleArgs{
 		dir:                               newBorrowedBytes([]byte(dbDir), &pinner),
 		node_cache_memory_limit:           C.size_t(conf.nodeCacheSizeInBytes),
-		free_list_cache_size:              C.size_t(conf.freeListCacheEntries),
+		freelist_memory_limit_kb:          C.size_t(conf.freeListMemoryLimitKB),
 		revisions:                         C.size_t(conf.revisions),
 		strategy:                          C.uint8_t(conf.readCacheStrategy),
 		truncate:                          C.bool(conf.truncate),
 		root_store:                        C.bool(conf.rootStore),
 		expensive_metrics:                 C.bool(conf.expensiveMetricsEnabled),
 		node_hash_algorithm:               C.enum_NodeHashAlgorithm(nodeHashAlgorithm),
+		db_tag:                            newBorrowedBytes([]byte(conf.metricsTag), &pinner),
 		deferred_persistence_commit_count: C.uint64_t(conf.deferredPersistenceCommitCount),
 	}
 

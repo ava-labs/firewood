@@ -4,7 +4,7 @@
 use std::cmp::Ordering;
 
 use firewood_storage::{
-    Child, Mutable, Node, NodeStore, Path, PathComponent, Propose, ReadableStorage,
+    Child, HashMode, Mutable, Node, NodeStore, Path, PathComponent, Propose, ReadableStorage,
 };
 
 use crate::{
@@ -111,7 +111,7 @@ fn nibble_in_range(acc_prefix: &[u8], nibble: PathComponent, range: CollapseRang
 fn build_child_prefix(prefix: &[u8], nibble: u8, node: &Node) -> Box<[u8]> {
     let pp = &node.partial_path().0;
     // slice lengths are bounded by isize::MAX. Sum cannot overflow.
-    #[allow(clippy::arithmetic_side_effects)]
+    #[expect(clippy::arithmetic_side_effects)]
     let capacity = prefix.len() + 1 + pp.len();
     let mut v = Vec::with_capacity(capacity);
     v.extend_from_slice(prefix);
@@ -137,7 +137,7 @@ fn consume_partial_path<'a>(
     Ok(rest)
 }
 
-impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
+impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> {
     /// Collapse the proving trie's root so its structure matches the end
     /// trie's root path.
     ///
@@ -503,18 +503,18 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
 
 #[cfg(test)]
 mod tests {
-    use firewood_storage::{DeletedNodeTracking, MemStore};
+    use firewood_storage::{DefaultHashMode, DeletedNodeTracking, HashMode, MemStore};
 
     use super::*;
 
-    fn create_test_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
-        let memstore = MemStore::default();
+    fn create_test_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>> {
+        let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
         let nodestore =
             NodeStore::new_empty_proposal(memstore.into(), DeletedNodeTracking::Enabled);
         Merkle { nodestore }
     }
 
-    type TestMerkle = Merkle<NodeStore<Mutable<Propose>, MemStore>>;
+    type TestMerkle = Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>>;
 
     fn branch_child(m: &mut TestMerkle, keys: &[&[u8]], nibble: u8) -> Child {
         for key in keys {

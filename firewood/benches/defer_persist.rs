@@ -2,10 +2,11 @@
 // See the file LICENSE.md for licensing terms.
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use firewood::api::{Db as _, Proposal as _};
-use firewood::db::{BatchOp, Db, DbConfig};
+use firewood::api;
+use firewood::db::{BatchOp, DbConfig};
 use firewood::manager::RevisionManagerConfig;
-use firewood_storage::NodeHashAlgorithm;
+use firewood::open;
+use firewood_storage::{DefaultHashMode, HashMode};
 use rand::{RngExt, distr::Alphanumeric};
 use std::iter::repeat_with;
 use std::num::NonZeroU64;
@@ -26,8 +27,8 @@ fn bench_deferred_persistence<const N: usize, const COMMIT_COUNT: u64>(criterion
                     let batch_ops: Vec<_> =
                         repeat_with(|| rng.sample_iter(&Alphanumeric).take(KEY_LEN).collect())
                             .map(|key: Vec<_>| BatchOp::Put {
-                                key,
-                                value: vec![b'v'],
+                                key: key.into_boxed_slice(),
+                                value: vec![b'v'].into_boxed_slice(),
                             })
                             .take(N)
                             .collect();
@@ -36,7 +37,7 @@ fn bench_deferred_persistence<const N: usize, const COMMIT_COUNT: u64>(criterion
                 |batch_ops| {
                     let tmpdir = tempfile::tempdir().unwrap();
                     let dbcfg = DbConfig::builder()
-                        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+                        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
                         .manager(
                             RevisionManagerConfig::builder()
                                 .max_revisions(max_revisions)
@@ -44,10 +45,11 @@ fn bench_deferred_persistence<const N: usize, const COMMIT_COUNT: u64>(criterion
                                 .build(),
                         )
                         .build();
-                    let db = Db::new(tmpdir, dbcfg).unwrap();
+                    let db = open(tmpdir, dbcfg).unwrap();
 
                     for op in batch_ops {
-                        let proposal = db.propose(vec![op]).unwrap();
+                        let batch: api::OwnedBatch = Box::new([op]);
+                        let proposal = db.propose(batch).unwrap();
                         proposal.commit().unwrap();
                     }
 

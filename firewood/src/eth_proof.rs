@@ -15,12 +15,11 @@
 //! error type on the public API.
 
 use firewood_storage::{
-    NodeHashAlgorithm, PackedPathRef, PathComponent, TriePathFromPackedBytes, ValueDigest,
+    EthHash, HashMode, PackedPathRef, PathComponent, TriePathFromPackedBytes, ValueDigest,
 };
-#[cfg(feature = "ethhash")]
 use firewood_storage::{RlpList, TrieHash};
 
-use crate::api::{DbView, Error, HashKey, HashKeyExt};
+use crate::api::{DbView, Error, HashKey};
 use crate::proofs::ProofError;
 use crate::proofs::eth::{
     ACCOUNT_DEPTH_NIBBLES, AccountFields, account_storage_root_rlp, proof_node_to_mpt_rlp,
@@ -49,7 +48,6 @@ const KECCAK_EMPTY: [u8; 32] = [
 /// if any of the first four account fields is not encoded as bytes. Returns
 /// [`ProofError::InvalidAccountCodeHashLength`] if the `codeHash` field is not
 /// 32 bytes.
-#[cfg(feature = "ethhash")]
 pub fn account_code_hash(value: &[u8]) -> Result<Option<HashKey>, ProofError> {
     let code_hash_slice = RlpList::parse(value)
         .and_then(|list| list.nth_bytes(3))
@@ -85,20 +83,15 @@ pub struct EthProof {
 impl Default for EthProof {
     /// "Absent account" shape: zero `nonce` and `balance`, `code_hash` =
     /// `keccak("")` (the empty-code hash), `storage_hash` =
-    /// [`HashKey::default_root_hash`] (the empty-trie root in eth mode).
-    /// Matches what an ethereum verifier expects to see for a missing
-    /// account.
-    ///
-    /// Under merkledb mode `default_root_hash` returns `None`, so
-    /// `storage_hash` falls back to all zeros. Callers should not reach
-    /// this case — [`eth_get_proof`] gates on `is_ethereum()` before any
-    /// `EthProof` is constructed.
+    /// [`EthHash::default_root_hash`] (the Ethereum empty-trie root). This
+    /// shape is Ethereum-only: [`eth_get_proof`] gates on `is_ethereum()`
+    /// before constructing an `EthProof`.
     fn default() -> Self {
         Self {
             nonce: 0,
             balance: [0u8; 32],
             code_hash: KECCAK_EMPTY,
-            storage_hash: HashKey::default_root_hash()
+            storage_hash: EthHash::default_root_hash()
                 .as_deref()
                 .copied()
                 .unwrap_or_default(),
@@ -126,6 +119,7 @@ pub struct EthStorageProof {
 /// Trie keys here are the already-keccak-hashed 32-byte forms (firewood
 /// stores accounts at `keccak256(address)` and slots at
 /// `keccak256(address) ++ keccak256(slot_key)` — callers do the hashing).
+/// The hashing mode is obtained from [`DbView::node_hash_algorithm`].
 ///
 /// # Returns
 ///
@@ -150,7 +144,7 @@ pub fn eth_get_proof<V>(
 where
     V: DbView + ?Sized,
 {
-    if !NodeHashAlgorithm::compile_option().is_ethereum() {
+    if !view.node_hash_algorithm().is_ethereum() {
         return Err(Error::FeatureNotSupported(
             "eth_get_proof requires ethereum hash mode".into(),
         ));
@@ -419,18 +413,23 @@ fn nibbles_match_packed(nibbles: &[PathComponent], packed: &[u8]) -> bool {
     nibbles.iter().copied().eq(packed_ref)
 }
 
-/// The negative half of [`eth_get_proof`]'s runtime mode gate: a merkledb-mode
-/// (non-ethhash) build must refuse to emit eth proofs. The positive half lives
-/// in the `ethhash`-gated `tests` module below.
-#[cfg(all(test, not(feature = "ethhash")))]
+#[cfg(test)]
 mod merkledb_gate_tests {
-    use super::*;
-    use crate::merkle::tests::init_merkle;
+    use std::sync::Arc;
 
+    use super::*;
+    use firewood_storage::{
+        Committed, DeletedNodeTracking, MemStore, MerkleDbHash, NodeHashAlgorithm, NodeStore,
+    };
+
+    /// A MerkleDB view must refuse to emit eth proofs. This test runs in both
+    /// feature configurations.
     #[test]
-    fn eth_get_proof_rejected_without_ethhash() {
-        let merkle = init_merkle(std::iter::empty::<(&[u8], &[u8])>());
-        let err = eth_get_proof(merkle.nodestore(), &[0u8; 32], &[])
+    fn eth_get_proof_rejected_in_merkledb_mode() {
+        let storage = Arc::new(MemStore::new(Vec::new(), NodeHashAlgorithm::MerkleDB));
+        let nodestore: NodeStore<Committed, _, MerkleDbHash> =
+            NodeStore::new_empty_committed(storage, DeletedNodeTracking::Enabled);
+        let err = eth_get_proof(&nodestore, &[0u8; 32], &[])
             .expect_err("merkledb-mode database must not emit eth proofs");
         assert!(
             matches!(err, Error::FeatureNotSupported(_)),
@@ -470,14 +469,6 @@ mod tests {
             RlpItem::Bytes(&[0u8; 32]), // storageRoot — fixed up by firewood
             RlpItem::Bytes(code_hash),
         ])
-    }
-
-    /// Confirm an ethhash build passes the runtime mode gate. The gate's
-    /// *negative* path is covered by `merkledb_gate_tests` below, which only
-    /// compiles without the `ethhash` feature.
-    #[test]
-    fn mode_gate_passes_under_ethhash() {
-        assert!(NodeHashAlgorithm::compile_option().is_ethereum());
     }
 
     /// `KECCAK_EMPTY` is a hardcoded literal; confirm it really is

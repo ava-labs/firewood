@@ -960,7 +960,13 @@ pub extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle>>) -> VoidResult {
 /// - [`VoidResult::Ok`] if the flush succeeded or was a no-op.
 /// - [`VoidResult::Err`] if an I/O error occurred during the flush.
 #[unsafe(no_mangle)]
-#[allow(clippy::missing_const_for_fn)] // Can't be const when block-replay is enabled
+#[cfg_attr(
+    not(feature = "block-replay"),
+    expect(
+        clippy::missing_const_for_fn,
+        reason = "the no-op `VoidResult::Ok` body is const-able without block-replay, but invoke() isn't when the feature is on"
+    )
+)]
 pub extern "C" fn fwd_block_replay_flush() -> VoidResult {
     #[cfg(feature = "block-replay")]
     {
