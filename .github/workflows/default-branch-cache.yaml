@@ -9,6 +9,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # rust-toolchain.toml pins a nightly for `cargo fmt` and clippy, and it
+  # outranks rustup's default -- so a `toolchain: stable` input alone would not
+  # keep this workflow off the pin. RUSTUP_TOOLCHAIN does.
+  RUSTUP_TOOLCHAIN: stable
 
 jobs:
   build:

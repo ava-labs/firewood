@@ -16,6 +16,12 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: full
+  # The static libraries built here are consumed by Go projects, and on a tag
+  # they are attached to a release, so they come from the stable channel and
+  # never from the nightly rust-toolchain.toml pins for `cargo fmt` and clippy.
+  # That file outranks rustup's default, so the `toolchain: stable` input below
+  # is not on its own enough to guarantee it; RUSTUP_TOOLCHAIN is.
+  RUSTUP_TOOLCHAIN: stable
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
