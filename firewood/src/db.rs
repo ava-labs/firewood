@@ -1348,13 +1348,10 @@ mod test {
         let historical = db.committed_view(historical_hash).unwrap();
 
         let reconstructed = db
-            .reconstruct_from_view(
-                &historical,
-                vec![BatchOp::Put {
-                    key: b"base",
-                    value: b"v1",
-                }],
-            )
+            .reconstruct_from_view(&historical, vec![BatchOp::Put {
+                key: b"base",
+                value: b"v1",
+            }])
             .unwrap();
         assert!(reconstructed.root_hash().is_some());
         assert_eq!(&*reconstructed.val(b"base").unwrap().unwrap(), b"v1");
@@ -1427,13 +1424,10 @@ mod test {
 
         // Build a reconstructed view on top of the historical revision.
         let original = db
-            .reconstruct_from_view(
-                &historical,
-                vec![BatchOp::Put {
-                    key: b"shared",
-                    value: b"v1",
-                }],
-            )
+            .reconstruct_from_view(&historical, vec![BatchOp::Put {
+                key: b"shared",
+                value: b"v1",
+            }])
             .unwrap();
         let original_root = original.root_hash();
 
@@ -1485,13 +1479,10 @@ mod test {
 
         // Build a reconstructed view on top of the historical revision.
         let original = db
-            .reconstruct_from_view(
-                &historical,
-                vec![BatchOp::Put {
-                    key: b"shared",
-                    value: b"v1",
-                }],
-            )
+            .reconstruct_from_view(&historical, vec![BatchOp::Put {
+                key: b"shared",
+                value: b"v1",
+            }])
             .unwrap();
         let original_root = original.root_hash();
 

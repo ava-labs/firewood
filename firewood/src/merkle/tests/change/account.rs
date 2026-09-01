@@ -51,16 +51,13 @@ fn source_with_four_storage_children() -> (
     let account_value = rlp_encode_account(1, 100, &[0u8; 32], &empty_code_hash());
 
     let (source, dir) = setup_db![];
-    let (empty_root, root2) = setup_2nd_commit!(
-        source,
-        [
-            (ACCOUNT_KEY.as_ref(), account_value.as_ref()),
-            (storage_keys[0].as_ref(), storage_values[0].as_ref()),
-            (storage_keys[1].as_ref(), storage_values[1].as_ref()),
-            (storage_keys[2].as_ref(), storage_values[2].as_ref()),
-            (storage_keys[3].as_ref(), storage_values[3].as_ref()),
-        ]
-    );
+    let (empty_root, root2) = setup_2nd_commit!(source, [
+        (ACCOUNT_KEY.as_ref(), account_value.as_ref()),
+        (storage_keys[0].as_ref(), storage_values[0].as_ref()),
+        (storage_keys[1].as_ref(), storage_values[1].as_ref()),
+        (storage_keys[2].as_ref(), storage_values[2].as_ref()),
+        (storage_keys[3].as_ref(), storage_values[3].as_ref()),
+    ]);
     (source, dir, empty_root, root2)
 }
 
@@ -304,13 +301,10 @@ fn test_change_proof_single_storage_child_truncated() {
     let account_value = rlp_encode_account(1, 100, &[0u8; 32], &empty_code_hash());
 
     let (source, _dir_source) = setup_db![];
-    let (empty_root, root2) = setup_2nd_commit!(
-        source,
-        [
-            (ACCOUNT_KEY.as_ref(), account_value.as_ref()),
-            (storage_key.as_ref(), storage_value.as_ref()),
-        ]
-    );
+    let (empty_root, root2) = setup_2nd_commit!(source, [
+        (ACCOUNT_KEY.as_ref(), account_value.as_ref()),
+        (storage_key.as_ref(), storage_value.as_ref()),
+    ]);
 
     // end sits between the account key and its single storage slot (suffix
     // 0x10), so the account is in range but its one storage child is not.
@@ -389,20 +383,15 @@ fn test_change_proof_boundary_child_folds_single_storage_child() {
         (out_of_range.as_ref(), slot_b.as_ref())
     ];
 
-    commit_and_verify_boundary_range(
-        &source,
-        &target,
-        root1_target,
-        vec![
-            BatchOp::Put {
-                key: in_range.as_ref(),
-                value: slot_a_new.as_ref(),
-            },
-            BatchOp::Delete {
-                key: out_of_range.as_ref(),
-            },
-        ],
-    );
+    commit_and_verify_boundary_range(&source, &target, root1_target, vec![
+        BatchOp::Put {
+            key: in_range.as_ref(),
+            value: slot_a_new.as_ref(),
+        },
+        BatchOp::Delete {
+            key: out_of_range.as_ref(),
+        },
+    ]);
 }
 
 /// An honest change proof must verify when the end trie adds a storage slot
@@ -431,19 +420,14 @@ fn test_change_proof_added_out_of_range_slot_unfolds_in_range_slot() {
         (in_range.as_ref(), slot_a.as_ref())
     ];
 
-    commit_and_verify_boundary_range(
-        &source,
-        &target,
-        root1_target,
-        vec![
-            BatchOp::Put {
-                key: ACCOUNT_KEY.as_ref(),
-                value: account_value2.as_ref(),
-            },
-            BatchOp::Put {
-                key: out_of_range.as_ref(),
-                value: slot_b.as_ref(),
-            },
-        ],
-    );
+    commit_and_verify_boundary_range(&source, &target, root1_target, vec![
+        BatchOp::Put {
+            key: ACCOUNT_KEY.as_ref(),
+            value: account_value2.as_ref(),
+        },
+        BatchOp::Put {
+            key: out_of_range.as_ref(),
+            value: slot_b.as_ref(),
+        },
+    ]);
 }

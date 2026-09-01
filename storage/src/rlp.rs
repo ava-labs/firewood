@@ -657,10 +657,12 @@ mod tests {
         let updated = replace_list_field(&original, 2, replacement).unwrap();
         let list = RlpList::parse(&updated).unwrap();
         let items = list.fields().unwrap();
-        assert_eq!(
-            items,
-            vec![&[0x01][..], &[0x02][..], replacement, &[0xbb; 32][..]]
-        );
+        assert_eq!(items, vec![
+            &[0x01][..],
+            &[0x02][..],
+            replacement,
+            &[0xbb; 32][..]
+        ]);
     }
 
     #[test]

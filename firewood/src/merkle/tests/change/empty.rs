@@ -31,15 +31,12 @@ fn test_empty_start_trie_single_key_no_bounds() {
 #[test]
 fn test_empty_start_trie_bounded_inclusion() {
     let (db, _dir) = setup_db![];
-    let (empty_root, root2) = setup_2nd_commit!(
-        db,
-        [
-            (b"\x10", b"a"),
-            (b"\x20", b"b"),
-            (b"\x30", b"c"),
-            (b"\x40", b"d")
-        ]
-    );
+    let (empty_root, root2) = setup_2nd_commit!(db, [
+        (b"\x10", b"a"),
+        (b"\x20", b"b"),
+        (b"\x30", b"c"),
+        (b"\x40", b"d")
+    ]);
 
     let proof = db
         .change_proof(
@@ -94,16 +91,13 @@ fn test_empty_start_trie_bounded_exclusion() {
 #[test]
 fn test_empty_start_trie_prefix_keys() {
     let (db, _dir) = setup_db![];
-    let (empty_root, root2) = setup_2nd_commit!(
-        db,
-        [
-            (b"", b"root_val"),
-            (b"\x10", b"prefix"),
-            (b"\x10\x50", b"child1"),
-            (b"\x10\x50\xaa", b"grandchild"),
-            (b"\x20", b"other"),
-        ]
-    );
+    let (empty_root, root2) = setup_2nd_commit!(db, [
+        (b"", b"root_val"),
+        (b"\x10", b"prefix"),
+        (b"\x10\x50", b"child1"),
+        (b"\x10\x50\xaa", b"grandchild"),
+        (b"\x20", b"other"),
+    ]);
 
     let (target, _dir_target) = setup_db![];
     let empty_root_target = target.root_hash().unwrap();

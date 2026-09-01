@@ -33,10 +33,11 @@ fn test_partial_proof_verified(
     let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\x30", b"v1"), (b"\x50", b"v2")];
     let (target, _dir_target) = setup_db![(b"\x10", b"v0"), (b"\x30", b"v1"), (b"\x50", b"v2")];
     let root1_target = target.root_hash().unwrap();
-    let (root1_source, root2) = setup_2nd_commit!(
-        source,
-        [(b"\x10", b"c0"), (b"\x30", b"c1"), (b"\x50", b"c2")]
-    );
+    let (root1_source, root2) = setup_2nd_commit!(source, [
+        (b"\x10", b"c0"),
+        (b"\x30", b"c1"),
+        (b"\x50", b"c2")
+    ]);
     let limit_nz = limit.and_then(NonZeroUsize::new);
 
     let proof = source
@@ -56,10 +57,11 @@ fn test_partial_proof_round_trip() {
     let (target, _dir_target) = setup_db![(b"\x10", b"v0"), (b"\x20", b"v1"), (b"\x30", b"v2")];
     let root1_target = target.root_hash().unwrap();
 
-    let (root1_source, root2) = setup_2nd_commit!(
-        source,
-        [(b"\x10", b"c0"), (b"\x20", b"c1"), (b"\x30", b"c2")]
-    );
+    let (root1_source, root2) = setup_2nd_commit!(source, [
+        (b"\x10", b"c0"),
+        (b"\x20", b"c1"),
+        (b"\x30", b"c2")
+    ]);
     assert_eq!(root1_source, root1_target);
 
     // Round 1: partial (limit=1)

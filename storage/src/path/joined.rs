@@ -89,21 +89,15 @@ impl<P: SplitPath, S: SplitPath> SplitPath for JoinedPath<P, S> {
 
     fn split_first(self) -> Option<(super::PathComponent, Self)> {
         if let Some((first, prefix)) = self.prefix.split_first() {
-            Some((
-                first,
-                Self {
-                    prefix,
-                    suffix: self.suffix,
-                },
-            ))
+            Some((first, Self {
+                prefix,
+                suffix: self.suffix,
+            }))
         } else if let Some((first, suffix)) = self.suffix.split_first() {
-            Some((
-                first,
-                Self {
-                    prefix: P::default(),
-                    suffix,
-                },
-            ))
+            Some((first, Self {
+                prefix: P::default(),
+                suffix,
+            }))
         } else {
             None
         }

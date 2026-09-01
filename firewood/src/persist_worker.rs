@@ -75,7 +75,6 @@ pub enum PersistError {
 /// # Sequence diagram
 ///
 /// Below is an example when `max_persistence_gap` is set to 10:
-///
 #[cfg_attr(doc, aquamarine::aquamarine)]
 /// ```mermaid
 /// sequenceDiagram

@@ -394,11 +394,10 @@ mod tests {
     #[test]
     fn test_branch_with_single_child() {
         let leaf = create_leaf(&[7, 8], &[9, 10]);
-        let branch = create_branch(
-            &[1, 2],
-            Some(&[3, 4]),
-            vec![(PathComponent::ALL[5], leaf.clone())],
-        );
+        let branch = create_branch(&[1, 2], Some(&[3, 4]), vec![(
+            PathComponent::ALL[5],
+            leaf.clone(),
+        )]);
         let store = create_test_store_with_root(branch.clone());
         let mut iter =
             UnPersistedNodeIterator::new(&store).map(|node| node.as_shared_node(&store).unwrap());
@@ -424,15 +423,11 @@ mod tests {
             create_leaf(&[2], &[20]),
             create_leaf(&[3], &[30]),
         ];
-        let branch = create_branch(
-            &[0],
-            None,
-            vec![
-                (PathComponent::ALL[1], leaves[0].clone()),
-                (PathComponent::ALL[5], leaves[1].clone()),
-                (PathComponent::ALL[10], leaves[2].clone()),
-            ],
-        );
+        let branch = create_branch(&[0], None, vec![
+            (PathComponent::ALL[1], leaves[0].clone()),
+            (PathComponent::ALL[5], leaves[1].clone()),
+            (PathComponent::ALL[10], leaves[2].clone()),
+        ]);
         let store = create_test_store_with_root(branch.clone());
 
         // Collect all nodes
@@ -464,11 +459,10 @@ mod tests {
         // Create a nested structure: root -> branch1 -> leaf[0]
         //                                -> leaf[1]
         //                                -> branch2 -> leaf[2]
-        let inner_branch = create_branch(
-            &[10],
-            Some(&[50]),
-            vec![(PathComponent::ALL[0], leaves[2].clone())],
-        );
+        let inner_branch = create_branch(&[10], Some(&[50]), vec![(
+            PathComponent::ALL[0],
+            leaves[2].clone(),
+        )]);
 
         let mut children = Children::new();
         for (value, (_, slot)) in [
@@ -543,14 +537,10 @@ mod tests {
         // Add some nodes to the mutable store
         let leaf1 = create_leaf(&[1, 2, 3], b"value1");
         let leaf2 = create_leaf(&[4, 5, 6], b"value2");
-        let branch = create_branch(
-            &[0],
-            Some(b"branch_value"),
-            vec![
-                (PathComponent::ALL[1], leaf1.clone()),
-                (PathComponent::ALL[2], leaf2.clone()),
-            ],
-        );
+        let branch = create_branch(&[0], Some(b"branch_value"), vec![
+            (PathComponent::ALL[1], leaf1.clone()),
+            (PathComponent::ALL[2], leaf2.clone()),
+        ]);
 
         mutable_store.root_mut().replace(branch.clone());
 
