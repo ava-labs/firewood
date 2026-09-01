@@ -1,20 +1,29 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood_storage::{
-    DefaultHashMode, DenseChildren, HashMode, HashType, NodeHashAlgorithm, PathComponent,
-    SeededRng, TrieHash, ValueDigest, logger::debug,
-};
+use firewood_storage::DefaultHashMode;
+use firewood_storage::DenseChildren;
+use firewood_storage::HashMode;
+use firewood_storage::HashType;
+use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::PathComponent;
+use firewood_storage::SeededRng;
+use firewood_storage::TrieHash;
+use firewood_storage::ValueDigest;
+use firewood_storage::logger::debug;
 use integer_encoding::VarInt;
 use test_case::test_case;
 
-use super::{
-    header::InvalidHeader,
-    magic,
-    reader::{ProofReader, ReadError},
-    types::{Proof, ProofError, ProofNode, ProofType},
-};
-use crate::api::{FrozenChangeProof, FrozenRangeProof};
+use super::header::InvalidHeader;
+use super::magic;
+use super::reader::ProofReader;
+use super::reader::ReadError;
+use super::types::Proof;
+use super::types::ProofError;
+use super::types::ProofNode;
+use super::types::ProofType;
+use crate::api::FrozenChangeProof;
+use crate::api::FrozenRangeProof;
 use crate::db::BatchOp;
 
 fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
@@ -1047,7 +1056,10 @@ mod box_array_deserialization_tests {
 
     use super::*;
     use crate::proofs::header::Header;
-    use crate::proofs::reader::{ProofReader, ReadError, V0Reader, Version0};
+    use crate::proofs::reader::ProofReader;
+    use crate::proofs::reader::ReadError;
+    use crate::proofs::reader::V0Reader;
+    use crate::proofs::reader::Version0;
 
     #[derive(Debug, PartialEq)]
     struct Hash32([u8; 32]);

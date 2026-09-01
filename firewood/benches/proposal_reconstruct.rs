@@ -7,14 +7,23 @@ use std::iter::repeat_with;
 use std::os::raw::c_int;
 use std::path::Path;
 
+use criterion::BatchSize;
+use criterion::Criterion;
+use criterion::criterion_group;
+use criterion::criterion_main;
 use criterion::profiler::Profiler;
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use firewood::api::{self, DbView as _, Reconstructible as _};
-use firewood::db::{BatchOp, DbConfig, UseParallel};
+use firewood::api;
+use firewood::api::DbView as _;
+use firewood::api::Reconstructible as _;
+use firewood::db::BatchOp;
+use firewood::db::DbConfig;
+use firewood::db::UseParallel;
 use firewood::open;
-use firewood_storage::{DefaultHashMode, HashMode};
+use firewood_storage::DefaultHashMode;
+use firewood_storage::HashMode;
 use pprof::ProfilerGuard;
-use rand::{RngExt, distr::Alphanumeric};
+use rand::RngExt;
+use rand::distr::Alphanumeric;
 use tempfile::TempDir;
 
 const INITIAL_ITEMS: usize = 100;

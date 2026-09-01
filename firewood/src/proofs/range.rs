@@ -58,10 +58,15 @@
 
 use std::num::NonZeroUsize;
 
-use firewood_storage::{DefaultHashMode, HashMode, NodeHashAlgorithm};
+use firewood_storage::DefaultHashMode;
+use firewood_storage::HashMode;
+use firewood_storage::NodeHashAlgorithm;
 
-use super::types::{Proof, ProofCollection};
-use crate::api::{self, FrozenRangeProof, HashKey};
+use super::types::Proof;
+use super::types::ProofCollection;
+use crate::api;
+use crate::api::FrozenRangeProof;
+use crate::api::HashKey;
 use crate::merkle::verify_range_proof;
 use crate::proofs::ProofError;
 

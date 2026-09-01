@@ -1,11 +1,17 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::{fmt::Display, ops::Deref, sync::Arc};
+use std::fmt::Display;
+use std::ops::Deref;
+use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::{FileIoError, LinearAddress, Node, NodeReader, SharedNode};
+use crate::FileIoError;
+use crate::LinearAddress;
+use crate::Node;
+use crate::NodeReader;
+use crate::SharedNode;
 
 /// A node that is either in memory or on disk.
 ///
@@ -264,10 +270,15 @@ mod test {
     use nonzero_ext::nonzero;
 
     use super::*;
-    use crate::{
-        Committed, DefaultHashMode, DeletedNodeTracking, HashMode, LeafNode, MemStore, Node,
-        NodeStore, Path,
-    };
+    use crate::Committed;
+    use crate::DefaultHashMode;
+    use crate::DeletedNodeTracking;
+    use crate::HashMode;
+    use crate::LeafNode;
+    use crate::MemStore;
+    use crate::Node;
+    use crate::NodeStore;
+    use crate::Path;
 
     #[test]
     fn test_maybe_persisted_node() -> Result<(), FileIoError> {

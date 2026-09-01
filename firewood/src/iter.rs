@@ -4,13 +4,23 @@
 use std::cmp::Ordering;
 use std::iter::FusedIterator;
 
-use firewood_storage::{
-    BranchNode, Child, FileIoError, NibblesIterator, Node, NodeHashAlgorithm, PathBuf,
-    PathComponent, PathIterItem, SharedNode, TriePathFromUnpackedBytes, TrieReader,
-};
+use firewood_storage::BranchNode;
+use firewood_storage::Child;
+use firewood_storage::FileIoError;
+use firewood_storage::NibblesIterator;
+use firewood_storage::Node;
+use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::PathBuf;
+use firewood_storage::PathComponent;
+use firewood_storage::PathIterItem;
+use firewood_storage::SharedNode;
+use firewood_storage::TriePathFromUnpackedBytes;
+use firewood_storage::TrieReader;
 
-use crate::api::{KeyType, KeyValuePair};
-use crate::merkle::{Key, Value};
+use crate::api::KeyType;
+use crate::api::KeyValuePair;
+use crate::merkle::Key;
+use crate::merkle::Value;
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode {
@@ -664,10 +674,14 @@ impl<I: Iterator<Item = T>, T: KeyValuePair, K: KeyType> Iterator for FilteredKe
 mod tests {
     use std::sync::Arc;
 
-    use firewood_storage::{
-        DefaultHashMode, DeletedNodeTracking, HashMode, ImmutableProposal, MemStore, Mutable,
-        NodeStore, Propose,
-    };
+    use firewood_storage::DefaultHashMode;
+    use firewood_storage::DeletedNodeTracking;
+    use firewood_storage::HashMode;
+    use firewood_storage::ImmutableProposal;
+    use firewood_storage::MemStore;
+    use firewood_storage::Mutable;
+    use firewood_storage::NodeStore;
+    use firewood_storage::Propose;
     use test_case::test_case;
 
     use super::*;

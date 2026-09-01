@@ -3,13 +3,17 @@
 
 use std::fs::File;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use std::time::Instant;
 
 use clap::Args;
-use firewood::api::{self, DynDb};
-use firewood::db::{BatchOp, DbConfig};
+use firewood::api;
+use firewood::api::DynDb;
+use firewood::db::BatchOp;
+use firewood::db::DbConfig;
 use firewood::open;
-use humantime::{format_duration, parse_duration};
+use humantime::format_duration;
+use humantime::parse_duration;
 
 use crate::DatabasePath;
 

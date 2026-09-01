@@ -3,7 +3,8 @@
 
 use firewood_storage::FileIoError;
 
-use crate::api::{KeyType, ValueType};
+use crate::api::KeyType;
+use crate::api::ValueType;
 
 /// A key/value pair operation.
 ///

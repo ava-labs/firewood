@@ -15,12 +15,14 @@
 //! logic, and the type-agnostic FFI exports (`fwd_code_hash_iter_next`,
 //! `fwd_code_hash_iter_free`).
 
-use firewood::{
-    NodeHashAlgorithm, ProofError,
-    api::{self, BatchOp},
-};
+use firewood::NodeHashAlgorithm;
+use firewood::ProofError;
+use firewood::api;
+use firewood::api::BatchOp;
 
-use crate::{HashKey, HashResult, VoidResult};
+use crate::HashKey;
+use crate::HashResult;
+use crate::VoidResult;
 #[non_exhaustive]
 pub struct CodeIteratorHandle<'p> {
     inner: BoxCodeHashIter<'p>,

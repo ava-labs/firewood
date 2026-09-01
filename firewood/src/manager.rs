@@ -6,31 +6,58 @@
     reason = "Found 3 occurrences after enabling the lint."
 )]
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::io;
-use std::num::{NonZero, NonZeroU64};
+use std::num::NonZero;
+use std::num::NonZeroU64;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
+use std::sync::OnceLock;
 
-use firewood_metrics::{GaugeExt, firewood_counter, firewood_gauge, firewood_histogram};
+use firewood_metrics::GaugeExt;
+use firewood_metrics::firewood_counter;
+use firewood_metrics::firewood_gauge;
+use firewood_metrics::firewood_histogram;
+use firewood_storage::BranchNode;
 pub use firewood_storage::CacheReadStrategy;
+use firewood_storage::CheckOpt;
+use firewood_storage::CheckerReport;
+use firewood_storage::Committed;
+use firewood_storage::CommittedId;
+use firewood_storage::DeletedNodeTracking;
+use firewood_storage::FileBacked;
+use firewood_storage::FileIoError;
+use firewood_storage::HashMode;
+use firewood_storage::HashedNodeReader;
+use firewood_storage::ImmutableProposal;
+use firewood_storage::Mutable;
+use firewood_storage::MutableKind;
+use firewood_storage::MutableReconNodeStore;
+use firewood_storage::NodeStore;
+use firewood_storage::NodeStoreHeader;
+use firewood_storage::Propose;
 use firewood_storage::RootStore;
-use firewood_storage::logger::{trace, warn};
-use firewood_storage::{
-    BranchNode, CheckOpt, CheckerReport, Committed, CommittedId, DeletedNodeTracking, FileBacked,
-    FileIoError, HashMode, HashedNodeReader, ImmutableProposal, Mutable, MutableKind,
-    MutableReconNodeStore, NodeStore, NodeStoreHeader, Propose, TrieHash,
-};
+use firewood_storage::TrieHash;
+use firewood_storage::logger::trace;
+use firewood_storage::logger::warn;
 use nonzero_ext::nonzero;
-use parking_lot::{Mutex, RwLock};
-use rayon::{ThreadPool, ThreadPoolBuilder};
+use parking_lot::Mutex;
+use parking_lot::RwLock;
+use rayon::ThreadPool;
+use rayon::ThreadPoolBuilder;
 use typed_builder::TypedBuilder;
 
-use crate::api::{self, ArcDynDbView, HashKey, IntoBatchIter};
-use crate::db::{BatchOp, UseParallel};
+use crate::api;
+use crate::api::ArcDynDbView;
+use crate::api::HashKey;
+use crate::api::IntoBatchIter;
+use crate::db::BatchOp;
+use crate::db::UseParallel;
 use crate::merkle::Merkle;
 use crate::merkle::parallel::ParallelMerkle;
-use crate::persist_worker::{PersistError, PersistWorker};
+use crate::persist_worker::PersistError;
+use crate::persist_worker::PersistWorker;
 
 pub(crate) const DB_FILE_NAME: &str = "firewood.db";
 
@@ -715,7 +742,8 @@ impl<H: HashMode> RevisionManager<H> {
 
 #[cfg(test)]
 mod tests {
-    use firewood_storage::{DefaultHashMode, RootReader};
+    use firewood_storage::DefaultHashMode;
+    use firewood_storage::RootReader;
 
     use super::*;
     #[cfg(feature = "ethhash")]
@@ -804,12 +832,17 @@ mod tests {
     #[expect(clippy::too_many_lines)]
     fn test_slow_concurrent_view_during_commit() {
         use std::sync::Barrier;
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::atomic::AtomicBool;
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::atomic::Ordering;
         use std::thread;
 
-        use firewood_storage::{
-            ImmutableProposal, LeafNode, NibblesIterator, Node, NodeStore, Path,
-        };
+        use firewood_storage::ImmutableProposal;
+        use firewood_storage::LeafNode;
+        use firewood_storage::NibblesIterator;
+        use firewood_storage::Node;
+        use firewood_storage::NodeStore;
+        use firewood_storage::Path;
 
         const NUM_ITERATIONS: usize = 1000;
         const NUM_VIEWER_THREADS: usize = 10;
@@ -1090,7 +1123,10 @@ mod tests {
     #[cfg(feature = "ethhash")]
     #[test]
     fn test_revision_empty_root_after_eviction() {
-        use firewood_storage::{LeafNode, NibblesIterator, Node, Path};
+        use firewood_storage::LeafNode;
+        use firewood_storage::NibblesIterator;
+        use firewood_storage::Node;
+        use firewood_storage::Path;
 
         let empty_hash =
             HashKey::default_root_hash().expect("ethhash exposes a default empty-trie hash");

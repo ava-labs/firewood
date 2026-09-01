@@ -4,13 +4,18 @@
 use std::iter::repeat_with;
 use std::num::NonZeroU64;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::Criterion;
+use criterion::criterion_group;
+use criterion::criterion_main;
 use firewood::api;
-use firewood::db::{BatchOp, DbConfig};
+use firewood::db::BatchOp;
+use firewood::db::DbConfig;
 use firewood::manager::RevisionManagerConfig;
 use firewood::open;
-use firewood_storage::{DefaultHashMode, HashMode};
-use rand::{RngExt, distr::Alphanumeric};
+use firewood_storage::DefaultHashMode;
+use firewood_storage::HashMode;
+use rand::RngExt;
+use rand::distr::Alphanumeric;
 
 #[expect(clippy::unwrap_used)]
 fn bench_deferred_persistence<const N: usize, const COMMIT_COUNT: u64>(criterion: &mut Criterion) {

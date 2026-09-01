@@ -2,13 +2,18 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood::api;
-use firewood::api::{ArcDynDbView, BoxKeyValueIter, DbView, HashKey};
+use firewood::api::ArcDynDbView;
+use firewood::api::BoxKeyValueIter;
+use firewood::api::DbView;
+use firewood::api::HashKey;
 use firewood::db::CommittedView;
 use firewood_metrics::MetricsContext;
 
+use crate::CreateIteratorResult;
+use crate::DatabaseHandle;
+use crate::IteratorHandle;
 use crate::metrics::MetricsContextExt;
 use crate::reconstructed::ReconstructedHandle;
-use crate::{CreateIteratorResult, DatabaseHandle, IteratorHandle};
 
 #[derive(Debug)]
 pub struct RevisionHandle<'db> {

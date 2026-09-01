@@ -10,7 +10,8 @@
 use firewood::logger;
 use firewood_metrics::GaugeExt;
 use metrics::describe_gauge;
-use tikv_jemalloc_ctl::{epoch, stats};
+use tikv_jemalloc_ctl::epoch;
+use tikv_jemalloc_ctl::stats;
 
 /// A jemalloc stat to expose as a gauge metric.
 struct JemallocStat {

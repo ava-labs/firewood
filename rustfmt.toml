@@ -13,6 +13,11 @@
 # preserving whatever grouping each file happened to arrive with.
 group_imports = "StdExternalCrate"
 
+# One `use` per imported item, rather than brace lists. Verbose, but it makes
+# every import a single line, so adding or removing one is a one-line diff and
+# two branches touching different items of the same module do not conflict.
+imports_granularity = "Item"
+
 # Wrap the arguments of a function call whose last argument is a delimited
 # expression, rather than indenting the whole call one level deeper.
 overflow_delimited_expr = true

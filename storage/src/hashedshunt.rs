@@ -1,9 +1,14 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{
-    Children, DefaultHashMode, HashMode, HashType, Hashable, JoinedPath, SplitPath, ValueDigest,
-};
+use crate::Children;
+use crate::DefaultHashMode;
+use crate::HashMode;
+use crate::HashType;
+use crate::Hashable;
+use crate::JoinedPath;
+use crate::SplitPath;
+use crate::ValueDigest;
 
 /// A shunt for a hasheable trie that we can use to compute the hash of a node
 /// using component parts.

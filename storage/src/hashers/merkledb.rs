@@ -8,18 +8,26 @@
 
 //! Merkledb compatible hashing algorithm.
 
-use std::io::{Error, Read};
+use std::io::Error;
+use std::io::Read;
 
 use integer_encoding::VarInt;
-use sha2::{Digest, Sha256};
+use sha2::Digest;
+use sha2::Sha256;
 
-use crate::hashednode::{HasUpdate, Hashable};
+use crate::HashMode;
+use crate::HashType;
+use crate::MerkleDbHash;
+use crate::NodeHashAlgorithm;
+use crate::Path;
+use crate::TrieHash;
+use crate::TriePath;
+use crate::TriePathAsPackedBytes;
+use crate::ValueDigest;
+use crate::hashednode::HasUpdate;
+use crate::hashednode::Hashable;
 use crate::node::ExtendableBytes;
 use crate::node::branch::Serializable;
-use crate::{
-    HashMode, HashType, MerkleDbHash, NodeHashAlgorithm, Path, TrieHash, TriePath,
-    TriePathAsPackedBytes, ValueDigest,
-};
 
 const MAX_VARINT_SIZE: usize = 10;
 const BITS_PER_NIBBLE: u64 = 4;

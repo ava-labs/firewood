@@ -18,20 +18,28 @@ use std::fmt::Display;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::Parser;
+use clap::Subcommand;
+use clap::ValueEnum;
 use fastrace::collector::Config;
 use fastrace_opentelemetry::OpenTelemetryReporter;
 use firewood::api::DynDb;
-use firewood::db::{BatchOp, DbConfig};
+use firewood::db::BatchOp;
+use firewood::db::DbConfig;
 use firewood::logger::trace;
-use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
+use firewood::manager::CacheReadStrategy;
+use firewood::manager::RevisionManagerConfig;
 use firewood::open;
-use firewood_storage::{DefaultHashMode, FREE_LIST_CACHE_ENTRY_SIZE, HashMode};
+use firewood_storage::DefaultHashMode;
+use firewood_storage::FREE_LIST_CACHE_ENTRY_SIZE;
+use firewood_storage::HashMode;
 use log::LevelFilter;
 use opentelemetry::InstrumentationScope;
-use opentelemetry_otlp::{SpanExporter, WithExportConfig};
+use opentelemetry_otlp::SpanExporter;
+use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::Resource;
-use sha2::{Digest, Sha256};
+use sha2::Digest;
+use sha2::Sha256;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -282,7 +290,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn spawn_prometheus_listener(
     port: u16,
 ) -> Result<metrics_exporter_prometheus::PrometheusHandle, Box<dyn Error>> {
-    use std::net::{Ipv6Addr, SocketAddr};
+    use std::net::Ipv6Addr;
+    use std::net::SocketAddr;
     use std::time::Duration;
 
     use metrics_exporter_prometheus::PrometheusBuilder;

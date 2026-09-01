@@ -9,14 +9,29 @@ use std::ops::Range;
 use indicatif::ProgressBar;
 pub(crate) use range_set::LinearAddressRangeSet;
 
+use crate::CheckerError;
+use crate::Committed;
+use crate::FileIoError;
+use crate::HashMode;
+use crate::HashType;
+use crate::HashedNodeReader;
+use crate::LinearAddress;
+use crate::Mutable;
+use crate::Node;
+use crate::NodeReader;
+use crate::NodeStore;
+use crate::Path;
+use crate::Propose;
+use crate::ReadableStorage;
+use crate::RootReader;
+use crate::StoredAreaParent;
+use crate::TrieNodeParent;
+use crate::WritableStorage;
 use crate::logger::warn;
+use crate::nodestore::NodeStoreHeader;
 use crate::nodestore::alloc::FreeAreaWithMetadata;
-use crate::nodestore::primitives::{AreaIndex, area_size_iter};
-use crate::{
-    CheckerError, Committed, FileIoError, HashMode, HashType, HashedNodeReader, LinearAddress,
-    Mutable, Node, NodeReader, NodeStore, Path, Propose, ReadableStorage, RootReader,
-    StoredAreaParent, TrieNodeParent, WritableStorage, nodestore::NodeStoreHeader,
-};
+use crate::nodestore::primitives::AreaIndex;
+use crate::nodestore::primitives::area_size_iter;
 
 const OS_PAGE_SIZE: u64 = 4096;
 
@@ -728,18 +743,28 @@ mod test {
     use nonzero_ext::nonzero;
 
     use super::*;
+    use crate::BranchNode;
+    use crate::Child;
+    use crate::Children;
+    use crate::DefaultHashMode;
     use crate::DeletedNodeTracking;
+    use crate::FreeListParent;
+    use crate::HashMode;
+    use crate::ImmutableProposal;
+    use crate::LeafNode;
+    use crate::NodeStore;
+    use crate::Path;
+    use crate::PathComponent;
+    use crate::area_index;
+    use crate::hash_node;
     use crate::linear::memory::MemStore;
     use crate::nodestore::NodeStoreHeader;
     use crate::nodestore::alloc::FreeLists;
-    use crate::nodestore::alloc::test_utils::{
-        test_write_free_area, test_write_header, test_write_new_node, test_write_zeroed_area,
-    };
+    use crate::nodestore::alloc::test_utils::test_write_free_area;
+    use crate::nodestore::alloc::test_utils::test_write_header;
+    use crate::nodestore::alloc::test_utils::test_write_new_node;
+    use crate::nodestore::alloc::test_utils::test_write_zeroed_area;
     use crate::nodestore::primitives::area_size_iter;
-    use crate::{
-        BranchNode, Child, Children, DefaultHashMode, FreeListParent, HashMode, ImmutableProposal,
-        LeafNode, NodeStore, Path, PathComponent, area_index, hash_node,
-    };
 
     #[derive(Debug)]
     struct TestTrie {

@@ -3,14 +3,20 @@
 
 use std::cmp::Ordering;
 
-use firewood_storage::{
-    Child, HashMode, Mutable, Node, NodeStore, Path, PathComponent, Propose, ReadableStorage,
-};
+use firewood_storage::Child;
+use firewood_storage::HashMode;
+use firewood_storage::Mutable;
+use firewood_storage::Node;
+use firewood_storage::NodeStore;
+use firewood_storage::Path;
+use firewood_storage::PathComponent;
+use firewood_storage::Propose;
+use firewood_storage::ReadableStorage;
 
-use crate::{
-    ProofError, api,
-    merkle::{Merkle, get_helper},
-};
+use crate::ProofError;
+use crate::api;
+use crate::merkle::Merkle;
+use crate::merkle::get_helper;
 
 /// The proven range, in nibbles.
 ///
@@ -503,7 +509,10 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
 
 #[cfg(test)]
 mod tests {
-    use firewood_storage::{DefaultHashMode, DeletedNodeTracking, HashMode, MemStore};
+    use firewood_storage::DefaultHashMode;
+    use firewood_storage::DeletedNodeTracking;
+    use firewood_storage::HashMode;
+    use firewood_storage::MemStore;
 
     use super::*;
 

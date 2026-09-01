@@ -9,12 +9,15 @@
 use std::error::Error;
 use std::time::Instant;
 
-use firewood::api::{self, DynDb};
+use firewood::api;
+use firewood::api::DynDb;
 use firewood::db::BatchOp;
 use firewood::logger::debug;
-use sha2::{Digest, Sha256};
+use sha2::Digest;
+use sha2::Sha256;
 
-use crate::{Args, TestRunner};
+use crate::Args;
+use crate::TestRunner;
 
 #[derive(Clone, Default)]
 pub struct TenKRandom;

@@ -3,10 +3,12 @@
 
 use clap::Args;
 use firewood::api;
-use firewood::db::{BatchOp, DbConfig};
+use firewood::db::BatchOp;
+use firewood::db::DbConfig;
 use firewood::open;
 
-use crate::{DatabasePath, key::KeyArgument};
+use crate::DatabasePath;
+use crate::key::KeyArgument;
 
 #[derive(Debug, Args)]
 pub struct Options {

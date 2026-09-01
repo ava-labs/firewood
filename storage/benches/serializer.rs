@@ -14,9 +14,17 @@ use std::fs::File;
 use std::os::raw::c_int;
 use std::path::Path as FsPath;
 
+use criterion::Bencher;
+use criterion::Criterion;
+use criterion::criterion_group;
+use criterion::criterion_main;
 use criterion::profiler::Profiler;
-use criterion::{Bencher, Criterion, criterion_group, criterion_main};
-use firewood_storage::{Children, DefaultHashMode, LeafNode, Node, Path, PathComponent};
+use firewood_storage::Children;
+use firewood_storage::DefaultHashMode;
+use firewood_storage::LeafNode;
+use firewood_storage::Node;
+use firewood_storage::Path;
+use firewood_storage::PathComponent;
 use pprof::ProfilerGuard;
 use smallvec::SmallVec;
 

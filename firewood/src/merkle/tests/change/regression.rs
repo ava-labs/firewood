@@ -39,7 +39,8 @@
 //!   revision, so the start proof's exclusion terminal sorts past the end bound.
 
 use super::*;
-use crate::{ChangeProof, Proof};
+use crate::ChangeProof;
+use crate::Proof;
 
 /// `batch_ops` as they come off a generated proof.
 type OwnedOps = Box<[BatchOp<Box<[u8]>, Box<[u8]>>]>;

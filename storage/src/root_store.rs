@@ -7,21 +7,27 @@
 //! It is used only when enabled at database open time.
 
 use std::marker::PhantomData;
-use std::{
-    path::Path,
-    sync::{Arc, Weak},
-};
+use std::path::Path;
+use std::sync::Arc;
+use std::sync::Weak;
 
 use derive_where::derive_where;
 use firewood_metrics::firewood_counter;
-use fjall::{Config, Keyspace, PartitionCreateOptions, PartitionHandle, PersistMode};
+use fjall::Config;
+use fjall::Keyspace;
+use fjall::PartitionCreateOptions;
+use fjall::PartitionHandle;
+use fjall::PersistMode;
 use parking_lot::Mutex;
 use weak_table::WeakValueHashMap;
 
 use crate::TrieHash;
 use crate::hashmode::HashMode;
 use crate::linear::filebacked::FileBacked;
-use crate::nodestore::{Committed, DeletedNodeTracking, LinearAddress, NodeStore};
+use crate::nodestore::Committed;
+use crate::nodestore::DeletedNodeTracking;
+use crate::nodestore::LinearAddress;
+use crate::nodestore::NodeStore;
 
 /// Type alias for a committed revision stored in the root store.
 ///
@@ -196,10 +202,11 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::CacheReadStrategy;
     use crate::DefaultHashMode;
+    use crate::HashMode;
     use crate::linear::filebacked::FileBacked;
     use crate::nodestore::NodeStore;
-    use crate::{CacheReadStrategy, HashMode};
 
     #[test]
     fn test_cache_hit() {

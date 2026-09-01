@@ -9,9 +9,15 @@
 //! `child_in_range` recursion used to decide whether off-path children can be
 //! stripped.
 
-use criterion::{Criterion, criterion_group, criterion_main};
-use firewood::{api::BatchOp, db::DbConfig, open};
-use firewood_storage::{DefaultHashMode, HashMode, SeededRng};
+use criterion::Criterion;
+use criterion::criterion_group;
+use criterion::criterion_main;
+use firewood::api::BatchOp;
+use firewood::db::DbConfig;
+use firewood::open;
+use firewood_storage::DefaultHashMode;
+use firewood_storage::HashMode;
+use firewood_storage::SeededRng;
 
 const KEY_COUNT: usize = 10_000;
 const KEY_PREFIX: &[u8] = &[0xab, 0xcd];

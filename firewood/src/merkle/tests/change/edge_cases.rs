@@ -5,7 +5,8 @@
 
 use std::num::NonZeroUsize;
 
-use firewood_storage::{DefaultHashMode, HashMode};
+use firewood_storage::DefaultHashMode;
+use firewood_storage::HashMode;
 use tempfile::TempDir;
 use test_case::test_case;
 

@@ -20,22 +20,34 @@
 //! - **`AreaType`** - 0xFF for free areas, otherwise node type data (1 byte)
 //! - **`NodeData`** - Serialized node content
 
-use std::io::{Error, ErrorKind, Read};
+use std::io::Error;
+use std::io::ErrorKind;
+use std::io::Read;
 use std::iter::FusedIterator;
 use std::mem::size_of;
-use std::ops::{Index, IndexMut};
+use std::ops::Index;
+use std::ops::IndexMut;
 
-use bytemuck_derive::{Pod, Zeroable};
-use firewood_metrics::{firewood_counter, firewood_gauge};
+use bytemuck_derive::Pod;
+use bytemuck_derive::Zeroable;
+use firewood_metrics::firewood_counter;
+use firewood_metrics::firewood_gauge;
 use integer_encoding::VarIntReader;
 
 use super::area_index_and_size;
-use super::primitives::{AreaIndex, LinearAddress, index_name};
+use super::primitives::AreaIndex;
+use super::primitives::LinearAddress;
+use super::primitives::index_name;
+use crate::FreeListParent;
+use crate::HashMode;
+use crate::MaybePersistedNode;
+use crate::ReadableStorage;
+use crate::WritableStorage;
 use crate::linear::FileIoError;
 use crate::logger::trace;
-use crate::node::branch::{ReadSerializable, Serializable};
+use crate::node::branch::ReadSerializable;
+use crate::node::branch::Serializable;
 use crate::nodestore::NodeStoreHeader;
-use crate::{FreeListParent, HashMode, MaybePersistedNode, ReadableStorage, WritableStorage};
 
 /// Returns the maximum size needed to encode a `VarInt`.
 const fn var_int_max_size<VI>() -> usize {
@@ -693,10 +705,13 @@ fn read_bincode_varint_u64_le(reader: &mut impl Read) -> std::io::Result<u64> {
 #[cfg(test)]
 pub mod test_utils {
     use super::*;
+    use crate::DefaultHashMode;
+    use crate::HashMode;
     use crate::node::Node;
+    use crate::nodestore::Committed;
+    use crate::nodestore::NodeStore;
+    use crate::nodestore::NodeStoreHeader;
     use crate::nodestore::header::RootNodeInfo;
-    use crate::nodestore::{Committed, NodeStore, NodeStoreHeader};
-    use crate::{DefaultHashMode, HashMode};
 
     // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the size of the area on success.
     pub fn test_write_new_node<S: WritableStorage>(
@@ -758,12 +773,15 @@ pub mod test_utils {
 mod tests {
     use rand::seq::IteratorRandom;
     use test_case::test_case;
-    use test_utils::{test_write_free_area, test_write_header};
+    use test_utils::test_write_free_area;
+    use test_utils::test_write_header;
 
     use super::*;
+    use crate::DefaultHashMode;
+    use crate::DeletedNodeTracking;
+    use crate::HashMode;
     use crate::area_index;
     use crate::linear::memory::MemStore;
-    use crate::{DefaultHashMode, DeletedNodeTracking, HashMode};
 
     #[test_case(&[0x01, 0x01, 0x01, 0x2a], Some((area_index!(1), 42)); "old format")]
     // StoredArea::new(12, Area::<Node, _>::Free(FreeArea::new(None)));
@@ -960,7 +978,8 @@ mod tests {
     #[test]
     #[expect(clippy::arithmetic_side_effects)]
     fn free_lists_iter_skip_to_next_free_list() {
-        use test_utils::{test_write_free_area, test_write_header};
+        use test_utils::test_write_free_area;
+        use test_utils::test_write_header;
 
         const AREA_INDEX1: AreaIndex = area_index!(3);
         const AREA_INDEX1_PLUS_1: AreaIndex = area_index!(4);
@@ -1065,10 +1084,12 @@ mod tests {
 
     #[test]
     fn test_read_stored_area_info() {
-        use test_utils::{test_write_free_area, test_write_new_node};
+        use test_utils::test_write_free_area;
+        use test_utils::test_write_new_node;
 
         use crate::Path;
-        use crate::node::{LeafNode, Node};
+        use crate::node::LeafNode;
+        use crate::node::Node;
 
         let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
         let nodestore =

@@ -72,13 +72,19 @@
 //! | [`batch_op`] | `delete_range` | Single `DeleteRange` operation (opcode `0x02`) |
 //! | [`batch_op`] | `all_ops` | All three operations in sequence |
 
-use firewood_storage::{DenseChildren, PathComponent, TrieHash, ValueDigest};
+use firewood_storage::DenseChildren;
+use firewood_storage::PathComponent;
+use firewood_storage::TrieHash;
+use firewood_storage::ValueDigest;
 use test_case::test_case;
 
-use super::types::{Proof, ProofNode};
-use crate::api::{FrozenChangeProof, FrozenRangeProof};
+use super::types::Proof;
+use super::types::ProofNode;
+use crate::api::FrozenChangeProof;
+use crate::api::FrozenRangeProof;
 use crate::db::BatchOp;
-use crate::merkle::{Key, Value};
+use crate::merkle::Key;
+use crate::merkle::Value;
 
 /// Prefixes a snapshot name with the active hash mode so feature-split tests
 /// write distinct snapshot files. Bytes differ between modes, so `merkledb` and

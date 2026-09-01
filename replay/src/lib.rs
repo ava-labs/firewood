@@ -20,16 +20,19 @@
 //! A file may contain multiple segments appended sequentially.
 
 use std::collections::HashMap;
-use std::io::{self, Read};
+use std::io;
+use std::io::Read;
 use std::time::Instant;
 
-use firewood::api::{self, DynDb};
+use firewood::api;
+use firewood::api::DynDb;
 use firewood::db::BatchOp;
 use firewood_metrics::firewood_histogram;
 use firewood_storage::InvalidTrieHashLength;
 
 pub mod registry;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use serde_with::serde_as;
 use thiserror::Error;
 
