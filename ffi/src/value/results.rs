@@ -1,9 +1,10 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::fmt;
+
 use firewood::api;
 use firewood::{Key, Value};
-use std::fmt;
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{

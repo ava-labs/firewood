@@ -6,6 +6,11 @@
 //! This module contains all node hashing functionality for the nodestore, including
 //! specialized support for Ethereum-compatible hash processing.
 
+use std::ops::{Deref, DerefMut};
+
+use sha3::{Digest, Keccak256};
+
+use super::NodeReader;
 use crate::hashednode::hash_node;
 use crate::linear::FileIoError;
 use crate::logger::trace;
@@ -16,11 +21,6 @@ use crate::{
     SharedNode, TrieHash,
 };
 use crate::{HashableShunt, JoinedPath, PathComponent, SplitPath, ValueDigest};
-use sha3::{Digest, Keccak256};
-
-use super::NodeReader;
-
-use std::ops::{Deref, DerefMut};
 
 /// Wrapper around a path that makes sure we truncate what gets extended to the path after it goes out of scope
 /// This allows the same memory space to be reused for different path prefixes

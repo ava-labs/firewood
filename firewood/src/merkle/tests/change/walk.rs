@@ -15,11 +15,13 @@
 //! Every walk is capped. A continuation that fails to advance then fails the
 //! test as "did not converge" instead of hanging.
 
-use super::*;
-use crate::find_next_key_after_change_proof;
 use std::num::NonZeroUsize;
+
 use tempfile::TempDir;
 use test_case::test_case;
+
+use super::*;
+use crate::find_next_key_after_change_proof;
 
 /// An op as it arrives in a change proof.
 type WalkOp = BatchOp<Box<[u8]>, Box<[u8]>>;

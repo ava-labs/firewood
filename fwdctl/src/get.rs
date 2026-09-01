@@ -2,7 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 use clap::Args;
-
 use firewood::api;
 use firewood::db::DbConfig;
 use firewood::open;

@@ -1,9 +1,10 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::*;
 #[cfg(feature = "ethhash")]
 use test_case::test_case;
+
+use super::*;
 
 #[cfg(feature = "ethhash")]
 #[test]
