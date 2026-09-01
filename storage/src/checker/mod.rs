@@ -752,7 +752,6 @@ mod test {
     }
 
     /// Generate a test trie with the following structure:
-    ///
     #[cfg_attr(doc, aquamarine::aquamarine)]
     /// ```mermaid
     /// graph TD
