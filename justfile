@@ -15,8 +15,17 @@ ci-bench-matrix filter="":
     ./scripts/list-bench-targets.sh "{{filter}}"
 
 # Check Rust formatting as CI does.
+#
+# Formatting wants the nightly rust-toolchain.toml pin, so this clears
+# RUSTUP_TOOLCHAIN rather than inheriting a value exported by the shell or a
+# parent recipe. Recipes that build or run code set it to stable instead. See
+# AGENTS.md, "Toolchain Selection".
 ci-format:
-    cargo fmt -- --check
+    RUSTUP_TOOLCHAIN= cargo fmt -- --check
+
+# Apply the formatting `ci-format` checks.
+fmt:
+    RUSTUP_TOOLCHAIN= cargo fmt
 
 # Check TODO/FIXME annotations as CI does.
 ci-check-todos:
@@ -24,7 +33,7 @@ ci-check-todos:
 
 # Build Rust documentation with CI's warning policy.
 ci-docs:
-    RUSTDOCFLAGS="-D warnings" cargo doc --locked --document-private-items --no-deps
+    RUSTUP_TOOLCHAIN=stable RUSTDOCFLAGS="-D warnings" cargo doc --locked --document-private-items --no-deps
 
 # Lint the Markdown files selected by the shared markdownlint configuration.
 ci-lint-markdown:
@@ -59,7 +68,7 @@ ci-machete:
 
 # Build the Go FFI's Rust library; tests select hash mode at runtime.
 ci-build-ffi:
-    cargo build --locked -p firewood-ffi --features logger
+    RUSTUP_TOOLCHAIN=stable cargo build --locked -p firewood-ffi --features logger
 
 # Test the Go FFI against a Rust library built for a hash mode.
 ci-test-ffi hash_mode:
@@ -136,8 +145,8 @@ prepush-lite:
 # After running, review the diffs in src/proofs/snapshots/ and commit them
 # alongside the format change.
 snapshot-proof-nodes:
-    INSTA_UPDATE=always cargo nextest run -p firewood --features logger         -E 'test(~snapshot_tests)'
-    INSTA_UPDATE=always cargo nextest run -p firewood --features ethhash,logger -E 'test(~snapshot_tests)'
+    RUSTUP_TOOLCHAIN=stable INSTA_UPDATE=always cargo nextest run -p firewood --features logger         -E 'test(~snapshot_tests)'
+    RUSTUP_TOOLCHAIN=stable INSTA_UPDATE=always cargo nextest run -p firewood --features ethhash,logger -E 'test(~snapshot_tests)'
 
 # Regenerate firewood-storage node serialization snapshots for both hash modes.
 #
@@ -150,8 +159,8 @@ snapshot-proof-nodes:
 # After running, review the diffs in storage/src/node/snapshots/ and commit
 # them alongside the format change.
 snapshot-nodes:
-    INSTA_UPDATE=always cargo nextest run -p firewood-storage --features logger         -E 'test(~snapshot_tests)'
-    INSTA_UPDATE=always cargo nextest run -p firewood-storage --features ethhash,logger -E 'test(~snapshot_tests)'
+    RUSTUP_TOOLCHAIN=stable INSTA_UPDATE=always cargo nextest run -p firewood-storage --features logger         -E 'test(~snapshot_tests)'
+    RUSTUP_TOOLCHAIN=stable INSTA_UPDATE=always cargo nextest run -p firewood-storage --features ethhash,logger -E 'test(~snapshot_tests)'
 
 # Regenerate all snapshots across the workspace for both hash modes.
 #
@@ -292,6 +301,7 @@ update-ffi-flake: check-nix
 release-step-update-rust-dependencies:
     #!/usr/bin/env bash
     set -euo pipefail
+    export RUSTUP_TOOLCHAIN=stable
     echo "Checking that cargo-edit is installed and up-to-date..."
     cargo install --locked cargo-edit
 
