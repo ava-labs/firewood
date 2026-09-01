@@ -62,9 +62,14 @@ pub struct FileBacked {
     /// [`LinearAddress`] to the address of the next free node in that list
     /// ([`None`] marks the end of the list).
     ///
-    /// This cache is *entry-count bounded* and accelerates node allocation by
-    /// avoiding a disk read to walk the free list. A lookup is destructive: a
-    /// cache hit pops the entry, since allocating from the free list consumes it.
+    /// This cache accelerates node allocation by avoiding a disk read to walk
+    /// the free list. A lookup is destructive: a cache hit pops the entry, since
+    /// allocating from the free list consumes it.
+    ///
+    /// The cache is entry-count bounded, with the bound derived from a memory
+    /// budget (see [`FREE_LIST_CACHE_ENTRY_SIZE`]). Nothing is preallocated: the
+    /// budget is an upper bound that is only reached once that many nodes have
+    /// been freed.
     free_list_cache: Mutex<EntryLruCache<LinearAddress, Option<LinearAddress>>>,
     /// Policy controlling which reads get inserted into [`Self::cache`]
     /// (no reads, branch reads only, or all reads). Writes are always cached
@@ -91,6 +96,21 @@ pub struct FileBacked {
     fd: UnlockOnDrop,
 }
 
+/// Approximate heap cost, in bytes, of a single entry in the free-list cache.
+///
+/// Each entry is a boxed LRU node holding the key, the value and the two list
+/// links, plus a hash-map slot holding a pointer to the key and a pointer to
+/// the node.
+pub const FREE_LIST_CACHE_ENTRY_SIZE: usize =
+    size_of::<LinearAddress>() + size_of::<Option<LinearAddress>>() + 4 * size_of::<usize>();
+
+/// Convert a free-list cache memory budget in kibibytes into the entry count
+/// that fits in it, rounded down but never below one entry.
+pub(crate) fn freelist_entries_for_kb(memory_limit_kb: NonZero<usize>) -> NonZero<usize> {
+    let entries = memory_limit_kb.get().saturating_mul(1024) / FREE_LIST_CACHE_ENTRY_SIZE;
+    NonZero::new(entries).unwrap_or(NonZero::<usize>::MIN)
+}
+
 impl FileBacked {
     /// Acquire an advisory lock on the underlying file to prevent multiple processes
     /// from accessing it simultaneously
@@ -109,7 +129,7 @@ impl FileBacked {
     pub fn new(
         path: PathBuf,
         node_cache_memory_limit: NonZero<usize>,
-        free_list_cache_size: NonZero<usize>,
+        freelist_memory_limit_kb: NonZero<usize>,
         truncate: bool,
         create: bool,
         cache_read_strategy: CacheReadStrategy,
@@ -138,7 +158,9 @@ impl FileBacked {
 
         Ok(Self {
             cache: Mutex::new(MemLruCache::new(node_cache_memory_limit.get())),
-            free_list_cache: Mutex::new(EntryLruCache::new(free_list_cache_size)),
+            free_list_cache: Mutex::new(EntryLruCache::new(freelist_entries_for_kb(
+                freelist_memory_limit_kb,
+            ))),
             cache_read_strategy,
             filename: path,
             node_hash_algorithm,
@@ -398,6 +420,25 @@ mod test {
     use nonzero_ext::nonzero;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn freelist_entries_from_memory_limit() {
+        // one entry per FREE_LIST_CACHE_ENTRY_SIZE bytes of budget
+        assert_eq!(
+            freelist_entries_for_kb(nonzero!(4096usize)).get(),
+            4096 * 1024 / FREE_LIST_CACHE_ENTRY_SIZE
+        );
+        // the smallest budget still holds several entries
+        assert_eq!(
+            freelist_entries_for_kb(nonzero!(1usize)).get(),
+            1024 / FREE_LIST_CACHE_ENTRY_SIZE
+        );
+        // and the entry count never overflows for absurd budgets
+        assert_eq!(
+            freelist_entries_for_kb(NonZero::<usize>::MAX).get(),
+            usize::MAX / FREE_LIST_CACHE_ENTRY_SIZE
+        );
+    }
 
     #[test]
     fn basic_reader_test() {

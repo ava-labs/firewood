@@ -52,6 +52,11 @@ func init() {
 
 var _ prometheus.Gatherer = (*Gatherer)(nil)
 
+// Gatherer is a [prometheus.Gatherer] that collects metrics from the firewood
+// library.
+//
+// Metrics carry a `db_tag` label identifying the database that recorded them
+// (see [WithMetricsTag]).
 type Gatherer struct{}
 
 func (Gatherer) Gather() ([]*dto.MetricFamily, error) {

@@ -4,8 +4,10 @@
 package ffi
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -42,9 +44,12 @@ func ensureMetricsStarted(t *testing.T) {
 	})
 }
 
-func ensureLogsStarted(t *testing.T, logPath string) {
+func ensureLogsStarted(t *testing.T) {
 	t.Helper()
 	initLogs.Do(func() {
+		logDir, err := os.MkdirTemp("", "firewood-logs") //nolint:usetesting // must outlive the initializing test
+		require.NoError(t, err)
+		logPath := filepath.Join(logDir, "firewood.log")
 		logConfig := &LogConfig{
 			Path:        logPath,
 			FilterLevel: "trace",
@@ -64,7 +69,7 @@ func newDbWithMetricsAndLogs(t *testing.T, opts ...Option) (db *Database, logPat
 	t.Helper()
 	db = newTestDatabase(t, opts...)
 	ensureMetricsStarted(t)
-	ensureLogsStarted(t, filepath.Join(t.TempDir(), "firewood.log"))
+	ensureLogsStarted(t)
 	return db, activeLogPath
 }
 
@@ -74,7 +79,8 @@ func newDbWithMetricsAndLogs(t *testing.T, opts ...Option) (db *Database, logPat
 func TestMetrics(t *testing.T) {
 	r := require.New(t)
 
-	db, logPath := newDbWithMetricsAndLogs(t)
+	const dbTag = "metrics-test-db"
+	db, logPath := newDbWithMetricsAndLogs(t, WithMetricsTag(dbTag))
 	// batch update
 	_, _, batch := kvForTest(10)
 	_, err := db.Update(batch)
@@ -106,7 +112,199 @@ func TestMetrics(t *testing.T) {
 
 	if logPath != "" {
 		r.True(assertNonEmptyFile(t, logPath))
+		logContents, readErr := os.ReadFile(logPath)
+		r.NoError(readErr)
+		r.Contains(string(logContents), "db_tag="+dbTag)
 	}
+}
+
+// gatherForTag gathers all metrics and returns only those carrying a db_tag
+// label equal to tag, the way a consumer of [Gatherer] would filter them.
+func gatherForTag(tag string) ([]*dto.MetricFamily, error) {
+	families, err := (Gatherer{}).Gather()
+	if err != nil {
+		return nil, err
+	}
+
+	filtered := make([]*dto.MetricFamily, 0, len(families))
+	for _, mf := range families {
+		var metrics []*dto.Metric
+		for _, metric := range mf.GetMetric() {
+			for _, pair := range metric.GetLabel() {
+				if pair.GetName() == "db_tag" && pair.GetValue() == tag {
+					metrics = append(metrics, metric)
+					break
+				}
+			}
+		}
+		if len(metrics) > 0 {
+			filtered = append(filtered, &dto.MetricFamily{
+				Name:   mf.Name,
+				Help:   mf.Help,
+				Type:   mf.Type,
+				Unit:   mf.Unit,
+				Metric: metrics,
+			})
+		}
+	}
+	return filtered, nil
+}
+
+// assertAllTagged asserts every metric in families carries a db_tag label equal to tag.
+func assertAllTagged(r *require.Assertions, families []*dto.MetricFamily, tag string) {
+	r.NotEmpty(families)
+	for _, family := range families {
+		for _, metric := range family.GetMetric() {
+			labels := make(map[string]string, len(metric.GetLabel()))
+			for _, pair := range metric.GetLabel() {
+				labels[pair.GetName()] = pair.GetValue()
+			}
+			r.Equal(tag, labels["db_tag"], "family %s", family.GetName())
+		}
+	}
+}
+
+func TestMetricsFilteredByDBTag(t *testing.T) {
+	r := require.New(t)
+	ensureMetricsStarted(t)
+
+	tags := []string{"filter_by_db_tag_a", "filter_by_db_tag_b"}
+	for _, tag := range tags {
+		db := newTestDatabase(t, WithMetricsTag(tag))
+		_, _, batch := kvForTest(3)
+		_, err := db.Update(batch)
+		r.NoError(err)
+		r.NoError(db.Close(t.Context()))
+	}
+
+	for _, tag := range tags {
+		families, err := gatherForTag(tag)
+		r.NoError(err)
+		assertAllTagged(r, families, tag)
+	}
+}
+
+func TestMetricsFilterExcludesUntaggedDatabase(t *testing.T) {
+	r := require.New(t)
+	ensureMetricsStarted(t)
+	const tag = "untagged_filter_test"
+
+	// Expensive metrics are enabled so the expensive-gated commit duration
+	// histogram is recorded and can be checked for the tag.
+	dbTagged := newTestDatabase(t, WithMetricsTag(tag), WithExpensiveMetrics())
+	_, _, batch := kvForTest(2)
+	_, err := dbTagged.Update(batch)
+	r.NoError(err)
+	r.NoError(dbTagged.Close(t.Context()))
+
+	dbUntagged := newTestDatabase(t)
+	_, _, batch = kvForTest(2)
+	_, err = dbUntagged.Update(batch)
+	r.NoError(err)
+	r.NoError(dbUntagged.Close(t.Context()))
+
+	// Filtering by tag must exclude the untagged database's series.
+	families, err := gatherForTag(tag)
+	r.NoError(err)
+	assertAllTagged(r, families, tag)
+
+	names := make(map[string]bool, len(families))
+	for _, family := range families {
+		names[family.GetName()] = true
+	}
+	r.True(names["firewood_proposal_commits_total"])
+	r.True(names["firewood_proposal_commit_duration_seconds"])
+}
+
+// TestTagMetricsConcurrentTLSIsolation commits to several tagged databases
+// concurrently and checks each tag's commit counter counts only its own commits.
+func TestTagMetricsConcurrentTLSIsolation(t *testing.T) {
+	r := require.New(t)
+	ensureMetricsStarted(t)
+	ensureLogsStarted(t)
+
+	const workers = 4
+	const commits = 5
+	const counterName = "firewood_proposal_commits_total"
+
+	tags := make([]string, workers)
+	dbs := make([]*Database, workers)
+	before := make([]float64, workers)
+	for i := range workers {
+		tags[i] = fmt.Sprintf("tls_isolation_worker_%d", i)
+		dbs[i] = newTestDatabase(t, WithMetricsTag(tags[i]))
+		v, err := gatherTaggedCounterValue(counterName, tags[i])
+		r.NoError(err)
+		before[i] = v
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, workers)
+	for i := range workers {
+		wg.Go(func() {
+			for c := range commits {
+				key := fmt.Appendf(nil, "key_%d", c)
+				if _, err := dbs[i].Update([]BatchOp{Put(key, []byte("value"))}); err != nil {
+					errs <- fmt.Errorf("%s update %d: %w", tags[i], c, err)
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		r.NoError(err)
+	}
+
+	for i := range workers {
+		r.NoError(dbs[i].Close(t.Context()))
+		after, err := gatherTaggedCounterValue(counterName, tags[i])
+		r.NoError(err)
+		r.InDelta(commits, after-before[i], 1e-9, "db_tag=%s", tags[i])
+	}
+
+	// logs concurrency test
+	// operations were byte-identical, so log counts should match
+	if activeLogPath != "" {
+		logContents, err := os.ReadFile(activeLogPath)
+		r.NoError(err)
+		s := string(logContents)
+		// prevent prefix matches
+		count0 := strings.Count(s, "db_tag="+tags[0]+"]")
+		r.Positive(count0)
+		for _, tag := range tags[1:] {
+			r.Equal(count0, strings.Count(s, "db_tag="+tag+"]"), "db_tag=%s", tag)
+		}
+	}
+}
+
+func gatherTaggedCounterValue(metricName, dbTag string) (float64, error) {
+	families, err := gatherForTag(dbTag)
+	if err != nil {
+		return 0, err
+	}
+
+	total := 0.0
+	for _, family := range families {
+		if family.GetName() != metricName {
+			continue
+		}
+
+		if family.GetType() != dto.MetricType_COUNTER {
+			return 0, fmt.Errorf("metric %q is not a counter", metricName)
+		}
+
+		for _, metric := range family.GetMetric() {
+			counter := metric.GetCounter()
+			if counter == nil {
+				return 0, fmt.Errorf("counter metric %q missing counter value", metricName)
+			}
+			total += counter.GetValue()
+		}
+	}
+
+	return total, nil
 }
 
 func TestGatherRenderedMetrics(t *testing.T) {
