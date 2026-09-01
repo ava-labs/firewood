@@ -122,6 +122,6 @@ pub struct GetRevisionResult<'db> {
 
 impl crate::MetricsContextExt for RevisionHandle<'_> {
     fn metrics_context(&self) -> Option<MetricsContext> {
-        Some(self.metrics_context)
+        Some(self.metrics_context.clone())
     }
 }

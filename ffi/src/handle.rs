@@ -2,6 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::num::{NonZeroU64, NonZeroUsize};
+use std::sync::Arc;
 
 use firewood::{
     api::{self, ArcDynDbView, DynDb, FrozenChangeProof, HashKey, IntoBatchIter, KeyType},
@@ -62,10 +63,13 @@ pub struct DatabaseHandleArgs<'a> {
     /// `RevisionManagerConfig`.
     pub node_cache_memory_limit: usize,
 
-    /// The size of the free list cache.
+    /// The memory limit for the free-list cache in kibibytes.
+    ///
+    /// Nothing is preallocated; this is an upper bound on the memory the cache
+    /// may grow to.
     ///
     /// Opening returns an error if this is zero.
-    pub free_list_cache_size: usize,
+    pub freelist_memory_limit_kb: usize,
 
     /// The maximum number of revisions to keep.
     ///
@@ -91,6 +95,14 @@ pub struct DatabaseHandleArgs<'a> {
     /// Expensive metrics are disabled by default.
     pub expensive_metrics: bool,
 
+    /// Tag used to separate metrics and logs per database.
+    ///
+    /// This must be a valid UTF-8 string.
+    ///
+    /// If empty, no tag is applied and this database's metrics are recorded
+    /// with the default `db_tag="untagged"` label.
+    pub db_tag: BorrowedBytes<'a>,
+
     /// The hashing mode to use for the database.
     ///
     /// This is the per-database node-hashing scheme, selected at runtime. For
@@ -115,8 +127,8 @@ impl DatabaseHandleArgs<'_> {
             2 => firewood::manager::CacheReadStrategy::All,
             _ => return Err(invalid_data("invalid cache strategy")),
         };
-        let free_list_cache_size = NonZeroUsize::new(self.free_list_cache_size)
-            .ok_or_else(|| invalid_data("free list cache size should be non-zero"))?;
+        let freelist_memory_limit_kb = NonZeroUsize::new(self.freelist_memory_limit_kb)
+            .ok_or_else(|| invalid_data("freelist memory limit should be non-zero"))?;
         let commit_count = NonZeroU64::new(self.deferred_persistence_commit_count)
             .ok_or(api::Error::ZeroCommitCount)?;
 
@@ -126,7 +138,7 @@ impl DatabaseHandleArgs<'_> {
             let builder = RevisionManagerConfig::builder()
                 .max_revisions(self.revisions)
                 .cache_read_strategy(cache_read_strategy)
-                .free_list_cache_size(free_list_cache_size)
+                .freelist_memory_limit_kb(freelist_memory_limit_kb)
                 .deferred_persistence_commit_count(commit_count);
 
             if let Some(memory_limit) = memory_limit {
@@ -158,7 +170,8 @@ impl DatabaseHandle {
     ///
     /// If the path is empty, or if the configuration is invalid, this will return an error.
     pub fn new(args: DatabaseHandleArgs<'_>) -> Result<Self, api::Error> {
-        let metrics_context = MetricsContext::new(args.expensive_metrics);
+        let db_tag = parse_db_tag(args.db_tag)?;
+        let metrics_context = MetricsContext::new(args.expensive_metrics).with_db_tag(db_tag);
 
         let cfg = DbConfig::builder()
             .node_hash_algorithm(args.node_hash_algorithm.into())
@@ -234,7 +247,7 @@ impl DatabaseHandle {
         // rather than a committed revision (see [`DynDb::committed_view`]).
         let historical = self.db.committed_view(root.clone())?;
         Ok(GetRevisionResult {
-            handle: RevisionHandle::new(view, historical, self.metrics_context, self),
+            handle: RevisionHandle::new(view, historical, self.metrics_context.clone(), self),
             root_hash: root,
         })
     }
@@ -354,10 +367,19 @@ impl<'db> CView<'db> for &'db crate::DatabaseHandle {
 
 impl crate::MetricsContextExt for DatabaseHandle {
     fn metrics_context(&self) -> Option<MetricsContext> {
-        Some(self.metrics_context)
+        Some(self.metrics_context.clone())
     }
 }
 
 fn invalid_data(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> api::Error {
     api::Error::IO(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
+
+fn parse_db_tag(db_tag: BorrowedBytes<'_>) -> Result<Option<metrics::SharedString>, api::Error> {
+    let db_tag = db_tag
+        .as_str()
+        .map_err(|err| invalid_data(format!("database tag contains invalid utf-8: {err}")))?;
+
+    // Arc<str> keeps the per-recording clone of the tag a refcount bump.
+    Ok((!db_tag.is_empty()).then(|| metrics::SharedString::from(Arc::<str>::from(db_tag))))
 }
