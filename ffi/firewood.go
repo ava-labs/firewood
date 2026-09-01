@@ -133,9 +133,9 @@ type config struct {
 	// nodeCacheSizeInBytes is the memory limit for the node cache in bytes.
 	// Must be non-zero.
 	nodeCacheSizeInBytes uint
-	// freeListCacheEntries is the number of entries in the freelist cache.
+	// freeListMemoryLimitKB is the memory limit for the freelist cache in kibibytes.
 	// Must be non-zero.
-	freeListCacheEntries uint
+	freeListMemoryLimitKB uint
 	// revisions is the maximum number of historical revisions to keep in memory.
 	// If rootStoreDir is set, then any revisions removed from memory will still be kept on disk.
 	// Otherwise, any revisions removed from memory will no longer be kept on disk.
@@ -147,6 +147,8 @@ type config struct {
 	rootStore bool
 	// expensiveMetricsEnabled controls whether expensive metrics recording is enabled.
 	expensiveMetricsEnabled bool
+	// metricsTag separates metrics and logs by database handle.
+	metricsTag string
 	// deferredPersistenceCommitCount determines the maximum number of unpersisted
 	// revisions that can exist at a given time.
 	// Note: revisions must be > deferredPersistenceCommitCount
@@ -156,7 +158,7 @@ type config struct {
 func defaultConfig() *config {
 	return &config{
 		nodeCacheSizeInBytes:           128_000_000,
-		freeListCacheEntries:           1_000_000,
+		freeListMemoryLimitKB:          4096,
 		revisions:                      100,
 		readCacheStrategy:              OnlyCacheWrites,
 		deferredPersistenceCommitCount: 1,
@@ -183,13 +185,14 @@ func WithNodeCacheSizeInBytes(sizeInBytes uint) Option {
 	}
 }
 
-// WithFreeListCacheEntries sets the number of entries in the freelist cache.
-// The freelist cache manages available disk space for reuse.
+// WithFreeListMemoryLimitKB sets the memory limit for the freelist cache in kibibytes.
+// The freelist cache manages available disk space for reuse. Nothing is
+// preallocated, so this is an upper bound on the memory the cache may use.
 // Must be non-zero.
-// Default: 1,000,000
-func WithFreeListCacheEntries(entries uint) Option {
+// Default: 4096 (4 MB)
+func WithFreeListMemoryLimitKB(memoryLimitKB uint) Option {
 	return func(c *config) {
-		c.freeListCacheEntries = entries
+		c.freeListMemoryLimitKB = memoryLimitKB
 	}
 }
 
@@ -228,6 +231,14 @@ func WithRootStore() Option {
 func WithExpensiveMetrics() Option {
 	return func(c *config) {
 		c.expensiveMetricsEnabled = true
+	}
+}
+
+// WithMetricsTag sets a tag to attach to metrics and logs emitted for this database.
+// Default: empty (no tag; metrics are recorded with the fallback db_tag="untagged" label)
+func WithMetricsTag(tag string) Option {
+	return func(c *config) {
+		c.metricsTag = tag
 	}
 }
 
@@ -290,8 +301,8 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	if conf.nodeCacheSizeInBytes < 1 {
 		return nil, fmt.Errorf("node cache size in bytes must be >= 1, got %d", conf.nodeCacheSizeInBytes)
 	}
-	if conf.freeListCacheEntries < 1 {
-		return nil, fmt.Errorf("free list cache entries must be >= 1, got %d", conf.freeListCacheEntries)
+	if conf.freeListMemoryLimitKB < 1 {
+		return nil, fmt.Errorf("free list memory limit in KB must be >= 1, got %d", conf.freeListMemoryLimitKB)
 	}
 
 	var pinner runtime.Pinner
@@ -300,13 +311,14 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	args := C.struct_DatabaseHandleArgs{
 		dir:                               newBorrowedBytes([]byte(dbDir), &pinner),
 		node_cache_memory_limit:           C.size_t(conf.nodeCacheSizeInBytes),
-		free_list_cache_size:              C.size_t(conf.freeListCacheEntries),
+		freelist_memory_limit_kb:          C.size_t(conf.freeListMemoryLimitKB),
 		revisions:                         C.size_t(conf.revisions),
 		strategy:                          C.uint8_t(conf.readCacheStrategy),
 		truncate:                          C.bool(conf.truncate),
 		root_store:                        C.bool(conf.rootStore),
 		expensive_metrics:                 C.bool(conf.expensiveMetricsEnabled),
 		node_hash_algorithm:               C.enum_NodeHashAlgorithm(nodeHashAlgorithm),
+		db_tag:                            newBorrowedBytes([]byte(conf.metricsTag), &pinner),
 		deferred_persistence_commit_count: C.uint64_t(conf.deferredPersistenceCommitCount),
 	}
 

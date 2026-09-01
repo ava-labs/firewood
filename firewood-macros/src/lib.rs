@@ -128,16 +128,13 @@ fn generate_metrics_wrapper(input_fn: &ItemFn, ident: &syn::Ident) -> proc_macro
 
             let __metrics_result = { #fn_block };
 
-            // Use static label arrays to avoid runtime allocation
-            static __METRICS_LABELS_SUCCESS: &[(&str, &str)] = &[("success", "true")];
-            static __METRICS_LABELS_ERROR: &[(&str, &str)] = &[("success", "false")];
-            let __metrics_labels = if __metrics_result.is_err() {
-                __METRICS_LABELS_ERROR
+            // Pass the success label as an explicit `key => value` pair so the
+            // firewood-metrics facade can prepend the thread-local `db_tag` label.
+            if __metrics_result.is_err() {
+                ::firewood_metrics::firewood_counter!(#ident, "success" => "false").increment(1);
             } else {
-                __METRICS_LABELS_SUCCESS
-            };
-
-            ::firewood_metrics::firewood_counter!(#ident, __metrics_labels).increment(1);
+                ::firewood_metrics::firewood_counter!(#ident, "success" => "true").increment(1);
+            }
             ::firewood_metrics::firewood_histogram!(#duration_ident).record(__metrics_start.elapsed().as_secs_f64());
 
             __metrics_result
@@ -194,8 +191,9 @@ mod tests {
         let generated_code = result.to_string();
 
         // Verify key components are present in the generated code
-        assert!(generated_code.contains("__METRICS_LABELS_SUCCESS"));
-        assert!(generated_code.contains("__METRICS_LABELS_ERROR"));
+        assert!(generated_code.contains("firewood_counter"));
+        assert!(generated_code.contains("success") && generated_code.contains("true"));
+        assert!(generated_code.contains("success") && generated_code.contains("false"));
         assert!(generated_code.contains("TEST_METRIC"));
         assert!(generated_code.contains("TEST_METRIC_DURATION_SECONDS"));
         assert!(
