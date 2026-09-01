@@ -378,12 +378,11 @@ fn test_persisted_storage_root_one_storage_entry() {
     let storage_key = [1u8; 32];
     let storage_value = rlp_encode_storage(&[2u8; 32]);
 
-    let storage_root = commit_and_read_storage_root(
-        &account_addr,
-        &account_value,
-        &dummy_storage_root,
-        &[(&storage_key, &storage_value)],
-    );
+    let storage_root =
+        commit_and_read_storage_root(&account_addr, &account_value, &dummy_storage_root, &[(
+            &storage_key,
+            &storage_value,
+        )]);
 
     // Expected value: root hash of a standalone storage trie containing
     // just (storage_key, storage_value). Building it the same way the
@@ -414,15 +413,11 @@ fn test_persisted_storage_root_two_storage_entries() {
     let storage_value_a = rlp_encode_storage(&[0xAAu8; 32]);
     let storage_value_b = rlp_encode_storage(&[0xBBu8; 32]);
 
-    let storage_root = commit_and_read_storage_root(
-        &account_addr,
-        &account_value,
-        &dummy_storage_root,
-        &[
+    let storage_root =
+        commit_and_read_storage_root(&account_addr, &account_value, &dummy_storage_root, &[
             (&storage_key_a, &storage_value_a),
             (&storage_key_b, &storage_value_b),
-        ],
-    );
+        ]);
 
     let expected = init_merkle([
         (storage_key_a.as_slice(), storage_value_a.as_slice()),

@@ -30,7 +30,6 @@ impl FrozenRangeProof {
     /// # Format
     ///
     /// The V0 serialization format for a range proof is:
-    ///
     #[expect(
         rustdoc::private_intra_doc_links,
         reason = "Header and ProofType are not exported"

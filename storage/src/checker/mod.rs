@@ -751,7 +751,6 @@ mod test {
     }
 
     /// Generate a test trie with the following structure:
-    ///
     #[cfg_attr(doc, aquamarine::aquamarine)]
     /// ```mermaid
     /// graph TD
@@ -1159,17 +1158,14 @@ mod test {
         // fix the freelist
         let mut proposal =
             NodeStore::<Mutable<Propose>, _, DefaultHashMode>::new(&nodestore).unwrap();
-        let fix_report = proposal.fix(
-            &mut header,
-            CheckerReport {
-                errors,
-                db_stats: DBStats {
-                    high_watermark,
-                    trie_stats: TrieStats::default(),
-                    free_list_stats: stats,
-                },
+        let fix_report = proposal.fix(&mut header, CheckerReport {
+            errors,
+            db_stats: DBStats {
+                high_watermark,
+                trie_stats: TrieStats::default(),
+                free_list_stats: stats,
             },
-        );
+        });
         assert_eq!(fix_report.fixed.len(), expected_error_num);
         assert_eq!(fix_report.unfixable.len(), 0);
 

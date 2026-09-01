@@ -115,13 +115,10 @@ fn test_tampered_right_edge_delete_to_put_is_rejected() {
         (b"\xf5\x1c".as_slice(), b"victim".as_slice()), // <- 0xf51c (victim)
         (b"\xf5\xcd".as_slice(), b"anchor".as_slice())  // <- 0xf5cd (anchor)
     ];
-    let (start_root, end_root) = commit_batch(
-        &db,
-        vec![
-            BatchOp::Delete { key: b"\xf5\x1c" },
-            BatchOp::Delete { key: b"\xf5\xcd" },
-        ],
-    );
+    let (start_root, end_root) = commit_batch(&db, vec![
+        BatchOp::Delete { key: b"\xf5\x1c" },
+        BatchOp::Delete { key: b"\xf5\xcd" },
+    ]);
 
     // No-bounds change proof; its end proof anchors on the max op key 0xf5cd.
     let proof = db
@@ -153,20 +150,17 @@ fn test_tampered_right_edge_delete_to_put_is_rejected() {
 #[test]
 fn test_out_of_range_delete_past_end_bound_verifies() {
     let (db, _dir) = setup_db![(b"\xfb\x00".as_slice(), b"\x00".as_slice())];
-    let (start_root, end_root) = commit_batch(
-        &db,
-        vec![
-            BatchOp::Delete { key: b"\xfb\x00" },
-            BatchOp::Put {
-                key: b"\xf7",
-                value: b"\x00",
-            },
-            BatchOp::Put {
-                key: b"\xf1",
-                value: b"\x00",
-            },
-        ],
-    );
+    let (start_root, end_root) = commit_batch(&db, vec![
+        BatchOp::Delete { key: b"\xfb\x00" },
+        BatchOp::Put {
+            key: b"\xf7",
+            value: b"\x00",
+        },
+        BatchOp::Put {
+            key: b"\xf1",
+            value: b"\x00",
+        },
+    ]);
 
     let (sk, ek) = (b"\x00".as_slice(), b"\xfb".as_slice());
     let proof = db
@@ -249,16 +243,11 @@ fn test_out_of_range_delete_below_start_bound_verifies() {
         (b"\xd4".as_slice(), b"\x00".as_slice()),
         (b"\xdb".as_slice(), b"\x00".as_slice())
     ];
-    let (start_root, end_root) = commit_batch(
-        &db,
-        vec![
-            BatchOp::Delete { key: b"\xd4" },
-            BatchOp::Put {
-                key: b"\xd5",
-                value: b"\x00",
-            },
-        ],
-    );
+    let (start_root, end_root) =
+        commit_batch(&db, vec![BatchOp::Delete { key: b"\xd4" }, BatchOp::Put {
+            key: b"\xd5",
+            value: b"\x00",
+        }]);
 
     let (sk, ek) = (b"\xd4\x4f".as_slice(), b"\xf9".as_slice());
     let proof = db
@@ -344,13 +333,10 @@ fn test_split_boundary_child_omitted_in_range_delete_is_rejected() {
         (b"\xfb\x10".as_slice(), b"in".as_slice()),
         (b"\xfb\x90".as_slice(), b"out".as_slice())
     ];
-    let (start_root, end_root) = commit_batch(
-        &db,
-        vec![
-            BatchOp::Delete { key: b"\xfb\x10" },
-            BatchOp::Delete { key: b"\xfb\x90" },
-        ],
-    );
+    let (start_root, end_root) = commit_batch(&db, vec![
+        BatchOp::Delete { key: b"\xfb\x10" },
+        BatchOp::Delete { key: b"\xfb\x90" },
+    ]);
 
     let (sk, ek) = (b"\x00".as_slice(), b"\xfb\x50".as_slice());
     let proof = db
@@ -403,13 +389,10 @@ fn test_split_start_boundary_child_omitted_in_range_delete_is_rejected() {
         (b"\xd4\x90".as_slice(), b"in".as_slice()),
         (b"\xdb".as_slice(), b"a".as_slice())
     ];
-    let (start_root, end_root) = commit_batch(
-        &db,
-        vec![
-            BatchOp::Delete { key: b"\xd4\x10" },
-            BatchOp::Delete { key: b"\xd4\x90" },
-        ],
-    );
+    let (start_root, end_root) = commit_batch(&db, vec![
+        BatchOp::Delete { key: b"\xd4\x10" },
+        BatchOp::Delete { key: b"\xd4\x90" },
+    ]);
 
     let (sk, ek) = (b"\xd4\x50".as_slice(), b"\xf0".as_slice());
     let proof = db
@@ -465,18 +448,15 @@ fn test_all_deleted_range_with_survivor_above_end_bound_verifies() {
         (b"\x56\x01".as_slice(), b"c".as_slice()),
         (b"\xf1".as_slice(), b"d".as_slice())
     ];
-    let (start_root, end_root) = commit_batch(
-        &db,
-        vec![
-            BatchOp::Delete { key: b"\x10" },
-            BatchOp::Delete { key: b"\x56" },
-            BatchOp::Put {
-                key: b"\x56\x01",
-                value: b"c2",
-            },
-            BatchOp::Delete { key: b"\xf1" },
-        ],
-    );
+    let (start_root, end_root) = commit_batch(&db, vec![
+        BatchOp::Delete { key: b"\x10" },
+        BatchOp::Delete { key: b"\x56" },
+        BatchOp::Put {
+            key: b"\x56\x01",
+            value: b"c2",
+        },
+        BatchOp::Delete { key: b"\xf1" },
+    ]);
 
     let (sk, ek) = (b"\x10\x00".as_slice(), b"\x56".as_slice());
     let proof = db
@@ -509,16 +489,11 @@ fn test_all_deleted_range_with_survivor_above_end_bound_verifies() {
 #[test]
 fn test_key_empty_range_verifies() {
     let (db, _dir) = setup_db![(b"\x20".as_slice(), b"\x01".as_slice())];
-    let (start_root, end_root) = commit_batch(
-        &db,
-        vec![
-            BatchOp::Delete { key: b"\x20" },
-            BatchOp::Put {
-                key: b"\xe0",
-                value: b"\x01",
-            },
-        ],
-    );
+    let (start_root, end_root) =
+        commit_batch(&db, vec![BatchOp::Delete { key: b"\x20" }, BatchOp::Put {
+            key: b"\xe0",
+            value: b"\x01",
+        }]);
 
     let (sk, ek) = (b"\x60".as_slice(), b"\xb0".as_slice());
     let proof = db

@@ -1,0 +1,33 @@
+# Most options here are unstable, so they apply only on the nightly channel.
+# `rust-toolchain.toml` pins that nightly and `just fmt` uses it; formatting
+# with stable rustfmt prints a warning per unstable option and silently skips
+# it, which leaves changes `just ci-format` then reports. Only
+# `use_field_init_shorthand` and `use_try_shorthand` are stable and apply
+# everywhere.
+#
+# Each option below defaults to `Preserve` or `false`, so stable rustfmt never
+# undoes what nightly did here -- it only fails to apply it to new code.
+
+# Wrap the arguments of a function call whose last argument is a delimited
+# expression, rather than indenting the whole call one level deeper.
+overflow_delimited_expr = true
+
+# Normalize comment shape: `/* */` becomes `//` where it can, `//Text` gains its
+# space, and empty trailing `///` lines are dropped. It also runs the other way,
+# rewriting a trailing `//` comment as `/* */` when it shares a line with code
+# that continues past it -- so prefer putting such a comment on its own line
+# above the code rather than after it.
+normalize_comments = true
+
+# Convert `#[doc = "..."]` attributes to `///` comments.
+normalize_doc_attributes = true
+
+# Format the matcher side of `macro_rules!` arms, not just the expansion.
+format_macro_matchers = true
+
+# Write `Foo { bar }` rather than `Foo { bar: bar }`.
+use_field_init_shorthand = true
+
+# Write `?` rather than the `try!` macro. Unreachable on edition 2024, where
+# `try!` no longer exists; kept so the style cannot reappear.
+use_try_shorthand = true
