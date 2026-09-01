@@ -9,6 +9,20 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: full
 
+# Toolchain selection, which every job below that runs Rust tooling declares
+# explicitly:
+#
+# `rust-toolchain.toml` pins the nightly that formats and lints the workspace.
+# That file outranks `rustup default`, so the `toolchain:` input of
+# dtolnay/rust-toolchain no longer decides anything on its own -- without
+# `RUSTUP_TOOLCHAIN`, every job here would silently run the pin.
+#
+# So each job that compiles or runs the workspace sets `RUSTUP_TOOLCHAIN:
+# stable`, which does outrank the file. The three jobs the pin exists for --
+# `no-rust-cache-lint`, `rust-lint`, and `miri` -- set no toolchain at all and
+# let `rust-toolchain.toml` supply both the channel and its components, which is
+# what keeps the pinned date in exactly one file.
+
 jobs:
   # Keep this as the only CI status required by main's branch protection.
   # To make another job merge-blocking, add its job key to this list. This
@@ -68,6 +82,8 @@ jobs:
           - profile-key: debug-all-features
           - profile-key: maxperf-ethhash-logger
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v6
       - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
@@ -97,10 +113,11 @@ jobs:
       - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
         with:
           tool: just@1.46.0
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
-        with:
-          toolchain: stable
-          components: rustfmt
+      # No toolchain is named here. `rust-toolchain.toml` supplies the channel
+      # and the rustfmt component, and `rustup toolchain install` with no
+      # argument installs whatever that file names.
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
       - name: Check license headers
         uses: viperproject/check-license-header@e06c65614fa9f32e099838df4dd25440c5344b32 # @v2
         with:
@@ -133,10 +150,11 @@ jobs:
       - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
         with:
           tool: just@1.46.0
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
-        with:
-          toolchain: nightly-2026-07-05
-          components: clippy
+      # No toolchain is named here. `rust-toolchain.toml` supplies the channel
+      # and the clippy component, which is what keeps the pinned date in one
+      # file. Bumping the pin is a one-line change to that file.
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2 -> v2.9.1
         with:
           save-if: "false"
@@ -159,6 +177,8 @@ jobs:
           - profile-key: debug-all-features
           - profile-key: maxperf-ethhash-logger
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v6
       - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
@@ -188,6 +208,8 @@ jobs:
           - profile-key: debug-all-features
           - profile-key: maxperf-ethhash-logger
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v6
       - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
@@ -208,6 +230,8 @@ jobs:
   docs:
     needs: build
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v6
       - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
@@ -248,6 +272,8 @@ jobs:
             os: macos-26
           - hash-mode: ethhash
             profile-key: debug-ethhash-logger
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v6
       - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
@@ -293,6 +319,8 @@ jobs:
           - name: cchain-mainnet-250k
             replay-log: s3://firewood-cchain-replay-logs/cchain-mainnet-250k.replay
             expected-root: 69f6e82aa25242787095e7deff07568a3be4496654203ef8c343648c76ecda32
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
@@ -330,6 +358,8 @@ jobs:
   firewood-ethhash-differential-fuzz:
     needs: build
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v6
       - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
@@ -371,6 +401,8 @@ jobs:
   firewood-merkle-differential-fuzz:
     needs: build
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v6
       - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
@@ -411,6 +443,8 @@ jobs:
   stale-deps:
     needs: build
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v6
       - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
@@ -436,10 +470,11 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
-        with:
-          toolchain: nightly-2026-07-05
-          components: miri
+      # No toolchain is named here; `rust-toolchain.toml` supplies the channel.
+      # miri is requested per-job rather than added to that file's component
+      # list, because this is the only job that needs it.
+      - name: Install the pinned toolchain with miri
+        run: rustup toolchain install && rustup component add miri
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2
         with:
           shared-key: "miri"

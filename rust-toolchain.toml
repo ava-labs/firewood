@@ -1,0 +1,22 @@
+# The toolchain that formats and lints this workspace.
+#
+# Pinning to a dated nightly keeps a new toolchain release from breaking a
+# `-D warnings` gate out of band: the pin moves when someone bumps this file,
+# not when the channel does. `.github/workflows/lint-nightly.yaml` runs the
+# floating nightly on a schedule so that new lints still surface, just not
+# inside an unrelated pull request.
+#
+# This file is the only place the pinned date appears.
+#
+# It governs `cargo fmt`, clippy, and miri. Everything that builds or runs code
+# -- check, build, bench, test, the examples, the documentation, the published
+# crates, and the release artifacts -- uses stable instead, and says so by
+# setting RUSTUP_TOOLCHAIN, which outranks this file. See
+# `scripts/run-rust-ci.sh`, the `justfile`, and `.github/workflows/`.
+[toolchain]
+channel = "nightly-2026-07-05"
+profile = "minimal"
+# clippy and rustfmt are what the pin exists for. rust-src is for
+# rust-analyzer, which follows this file and so analyzes on the same toolchain
+# CI lints with.
+components = ["clippy", "rustfmt", "rust-src"]

@@ -5,6 +5,13 @@ on:
   release:
     types: [published]
 
+env:
+  # Released artifacts are built by the stable channel, never by the nightly
+  # rust-toolchain.toml pins for `cargo fmt` and clippy. That file outranks
+  # rustup's default, so the `toolchain: stable` input below is not on its own
+  # enough to guarantee it; RUSTUP_TOOLCHAIN is.
+  RUSTUP_TOOLCHAIN: stable
+
 jobs:
   publish-firewood-crate:
     name: firewood-lib
