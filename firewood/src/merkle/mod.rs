@@ -2390,7 +2390,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
         mut node: Node,
         key: &[u8],
     ) -> Result<(Option<Node>, Option<Value>), FileIoError> {
-        let mut parents: Vec<(Box<BranchNode>, PathComponent)> = Vec::new();
+        let mut parents: ParentFrames = ParentFrames::new();
         let mut owned_key: Option<Path> = None;
 
         let (target, removed_value) = loop {
@@ -2486,7 +2486,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
     /// flatten the branch, which can leave nothing behind, hence the `Option`.
     fn unwind_and_flatten(
         &mut self,
-        mut parents: Vec<(Box<BranchNode>, PathComponent)>,
+        mut parents: ParentFrames,
         mut node: Option<Node>,
     ) -> Result<Option<Node>, FileIoError> {
         while let Some((mut branch, index)) = parents.pop() {
@@ -2538,7 +2538,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
         key: &[u8],
         deleted: &mut usize,
     ) -> Result<Option<Node>, FileIoError> {
-        let mut parents: Vec<(Box<BranchNode>, PathComponent)> = Vec::new();
+        let mut parents: ParentFrames = ParentFrames::new();
         let mut owned_key: Option<Path> = None;
 
         let target = loop {
