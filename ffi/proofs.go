@@ -113,9 +113,10 @@ type ChangeProof struct {
 	handle *C.ChangeProofContext
 }
 
-// NextKeyRange represents a range of keys to fetch from the database. The start
-// key is inclusive while the end key is exclusive. If the end key is Nothing,
-// the range is unbounded in that direction.
+// NextKeyRange represents a range of keys to fetch from the database,
+// `(startKey, endKey]`: the start key is exclusive because it has already been
+// synchronized, and the end key is inclusive. If the end key is Nothing, the
+// range is unbounded in that direction.
 type NextKeyRange struct {
 	startKey *ownedBytes
 	endKey   Maybe[*ownedBytes]
@@ -201,14 +202,12 @@ func (p *RangeProof) Verify(
 // call to [*Database.VerifyAndCommitRangeProof] will skip verification and commit the
 // prepared proposal.
 //
-// The prepared proposal only covers the range the proof actually proves,
-// which can be narrower than [endKey]: a responder is allowed to truncate
-// its reply, in which case the proof anchors at its own right edge instead
-// of the requested one. Keys beyond that proven edge are left untouched
-// rather than deleted. A sync-client caller must keep calling
-// [*RangeProof.FindNextKey] and requesting, verifying, and applying the
-// ranges it returns until it returns nil, to be sure the full [startKey,
-// endKey] span has actually been synchronized.
+// The proposal replaces state across the range the proof proves: any existing
+// key in that range that the proof does not carry is deleted. The range runs
+// from [startKey] to the proof's right edge, which is [endKey] when the
+// responder covered the whole request and a smaller key when it truncated.
+// Keys past that edge are left as they are; [*RangeProof.FindNextKey] reports
+// where to resume.
 //
 // Because this method prepares a proposal, the database must be kept alive
 // until the proof is committed or freed.
@@ -260,11 +259,8 @@ func (db *Database) VerifyRangeProof(
 // new root hash is returned. The resulting root hash may not equal the
 // provided root hash if the proof was truncated due to [maxLength].
 //
-// The commit only applies the range the proof actually proves, which can be
-// narrower than [endKey] when the responder truncated its reply; keys past
-// the proven edge are left untouched rather than deleted. The caller owns
-// the remainder: keep calling [*RangeProof.FindNextKey] and requesting,
-// verifying, and committing the ranges it returns until it returns nil.
+// The commit replaces state across the proven range on the same terms as
+// [*Database.VerifyRangeProof].
 func (db *Database) VerifyAndCommitRangeProof(
 	proof *RangeProof,
 	startKey, endKey Maybe[[]byte],
@@ -655,17 +651,18 @@ func (p *ChangeProof) setFreeFinalizer() {
 	runtime.SetFinalizer(p, (*ChangeProof).Free)
 }
 
-// StartKey returns the inclusive start key of this key range.
+// StartKey returns the exclusive start key of this key range: it has already
+// been synchronized, so the next request begins strictly after it.
 func (r *NextKeyRange) StartKey() []byte {
 	return r.startKey.CopiedBytes()
 }
 
-// HasEndKey returns true if this key range has an exclusive end key.
+// HasEndKey returns true if this key range has an inclusive end key.
 func (r *NextKeyRange) HasEndKey() bool {
 	return r.endKey != nil && r.endKey.HasValue()
 }
 
-// EndKey returns the exclusive end key of this key range if it exists or nil if
+// EndKey returns the inclusive end key of this key range if it exists or nil if
 // it does not.
 func (r *NextKeyRange) EndKey() []byte {
 	if r.HasEndKey() {

@@ -410,27 +410,18 @@ impl<H: HashMode> Db<H> {
     /// the range that are not present in the provided key-values will be deleted,
     /// any duplicate keys will be overwritten, and any new keys will be inserted.
     ///
-    /// # Bounds must be proven, not requested
-    ///
-    /// When the key-values come from a verified range proof, `last_key` must be
-    /// the proof's **proven** right edge — [`ProvenRange::end`], surfaced as
-    /// [`RangeProofVerificationContext::right_edge_key`] — and not the bound the
-    /// caller requested. A truncated reply proves a narrower range than was
-    /// asked for, and the deletion above is unconditional: passing the requested
-    /// bound erases every local key in the uncovered span.
-    ///
-    /// If the proven edge is narrower than what was requested, the keys past it
-    /// are not yet proven, and this call leaves them untouched. Request the
-    /// next slice with [`find_next_key_after_range_proof`], verify it, and
-    /// merge it the same way; repeat until that call reports nothing left. The
-    /// next reply can be truncated again, so a single continuation is not
-    /// guaranteed to finish the job — plan for a loop, not one extra round trip.
+    /// Because that deletion is unconditional, `last_key` must be a bound the
+    /// caller can justify. When the key-values come from a verified range
+    /// proof, that is the proof's proven right edge ([`ProvenRange::end`]) and
+    /// not the bound the caller requested: a truncated reply proves less than
+    /// was asked for, and merging to the requested bound erases every local key
+    /// in the span the proof never covered. Cover the remainder by iterating
+    /// [`find_next_key_after_range_proof`] — each reply can truncate again.
     ///
     /// Invariant: `key_values` must be sorted by key in ascending order; however,
     /// because debug assertions are disabled, this is not checked.
     ///
     /// [`ProvenRange::end`]: crate::ProvenRange::end
-    /// [`RangeProofVerificationContext::right_edge_key`]: crate::RangeProofVerificationContext::right_edge_key
     /// [`find_next_key_after_range_proof`]: crate::find_next_key_after_range_proof
     pub fn merge_key_value_range(
         &self,
@@ -453,8 +444,7 @@ impl<H: HashMode> Db<H> {
     /// the range that are not present in the provided key-values will be deleted,
     /// any duplicate keys will be overwritten, and any new keys will be inserted.
     ///
-    /// See [`Db::merge_key_value_range`] for the proven-vs-requested bound obligation, which
-    /// applies identically here.
+    /// See [`Db::merge_key_value_range`] for the obligation `last_key` carries.
     ///
     /// Invariant: `key_values` must be sorted by key in ascending order; however,
     /// because debug assertions are disabled, this is not checked.

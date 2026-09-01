@@ -315,24 +315,13 @@ func TestRangeProofFindNextKey(t *testing.T) {
 	// Verify the proof
 	r.NoError(db.VerifyRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated))
 
-	// This proof was taken from db's own current state and verified against
-	// itself, so db already held everything at `root` before any merge ran.
-	// Bounding the merge to the proven range (rather than the full requested
-	// range) means merging the truncated key-values changes nothing: they
-	// already match, and the untouched tail past the proven edge is left
-	// alone. The resulting proposal's root is therefore exactly `root`,
-	// which is the FFI short-circuit's signal that the receiver is fully
-	// caught up, so FindNextKey correctly returns nil — both here, before
-	// commit, and after commit below, since the committed proposal is the
-	// same already-matching one.
-	//
-	// This assertion previously read NotNil and only held because the
-	// pre-fix apply path merged over the caller's unbounded end_key instead
-	// of the proven edge, deleting the 90 keys past the proof's coverage and
-	// corrupting db's root away from `root`. That corruption is what kept
-	// this short-circuit from ever firing, so the assertion was passing for
-	// the wrong reason. If this goes back to NotNil, the apply path is
-	// deleting data outside the proven range again.
+	// The proof was taken from db's own state, so merging it over the proven
+	// range is a no-op and the proposal keeps `root`. That equality is the
+	// FFI's "already caught up" short-circuit, so there is nothing left to
+	// fetch — before commit here and after commit below. A NotNil here means
+	// the apply path deleted outside the proven range and moved the root.
+	// TestRangeProofFindNextKeyDivergentReceiver covers a receiver that is
+	// genuinely behind.
 	nextRange, err := proof.FindNextKey()
 	r.NoError(err)
 	r.Nil(nextRange)
@@ -345,19 +334,15 @@ func TestRangeProofFindNextKey(t *testing.T) {
 	r.Nil(nextRange)
 }
 
-// TestRangeProofFindNextKeyDivergentReceiver covers the case
-// TestRangeProofFindNextKey no longer can: a receiver genuinely behind the
-// proof's target root, rather than one self-proving state it already has.
-// A truncated proof applied to an empty target must report more to fetch.
+// TestRangeProofFindNextKeyDivergentReceiver applies a truncated proof to an
+// empty target: a receiver genuinely behind the proof's root must report more
+// to fetch.
 func TestRangeProofFindNextKeyDivergentReceiver(t *testing.T) {
 	r := require.New(t)
 
 	dbSource := newTestDatabase(t)
 	dbTarget := newTestDatabase(t)
 
-	// kvForTest sorts keys (and their paired vals) lexicographically, so
-	// keys[:rangeProofLenTruncated] are exactly the trie-order prefix the
-	// truncated proof below proves.
 	keys, vals, batch := kvForTest(100)
 	sourceRoot, err := dbSource.Update(batch)
 	r.NoError(err)
@@ -368,14 +353,9 @@ func TestRangeProofFindNextKeyDivergentReceiver(t *testing.T) {
 	_, err = dbTarget.VerifyAndCommitRangeProof(proof, nothing(), nothing(), sourceRoot, rangeProofLenTruncated)
 	r.NoError(err)
 
-	// Smoke check that the merge actually writes the proven prefix into a
-	// divergent target, not just that it avoids over-deleting (that guard is
-	// TestRangeProofTruncatedDoesNotDeleteBeyondProvenEdge). This does NOT
-	// exercise proven_end's bound at all: dbTarget starts empty, so its trie
-	// iterator is exhausted before merge.rs's bound check ever runs, and
-	// every key-value is applied unconditionally regardless of the bound's
-	// value — see TestRangeProofTruncatedDeletesStaleKeyWithinProvenEdge for
-	// a test that actually discriminates a too-tight proven_end.
+	// The proven prefix is written. Against an empty target this says nothing
+	// about where the bound falls — only the sibling tests named in
+	// TestRangeProofTruncatedDeletesStaleKeyWithinProvenEdge do.
 	for i := range rangeProofLenTruncated {
 		got, err := dbTarget.Get(keys[i])
 		r.NoError(err, "Get key %d", i)
@@ -1229,10 +1209,9 @@ func TestChangeProofMarshalWorksAfterVerify(t *testing.T) {
 	r.Equal(marshalledBefore, marshalledAfter)
 }
 
-// A truncated range proof proves only a prefix of the requested range. Applying
-// it must not delete local keys past the proven edge — they are covered by no
-// proof. Regression test for the apply path bounding its write to the proven
-// edge rather than the requested end_key.
+// A truncated range proof proves only a prefix of the requested range, so
+// applying it must leave local keys past the proven edge alone: no proof covers
+// them.
 func TestRangeProofTruncatedDoesNotDeleteBeyondProvenEdge(t *testing.T) {
 	r := require.New(t)
 
@@ -1255,10 +1234,8 @@ func TestRangeProofTruncatedDoesNotDeleteBeyondProvenEdge(t *testing.T) {
 	_, err = dbTarget.VerifyAndCommitRangeProof(proof, nothing(), nothing(), sourceRoot, rangeProofLenTruncated)
 	r.NoError(err)
 
-	// Source and target held the same data, and the proof covered a prefix of
-	// it, so every original key must survive. Before the fix the apply path
-	// replaced the whole keyspace with the truncated reply and deleted the
-	// tail.
+	// Source and target held the same data and the proof covered a prefix of
+	// it, so every original key must survive.
 	for i, key := range keys {
 		got, err := dbTarget.Get(key)
 		r.NoError(err, "Get key %d", i)
@@ -1266,21 +1243,16 @@ func TestRangeProofTruncatedDoesNotDeleteBeyondProvenEdge(t *testing.T) {
 	}
 }
 
-// A truncated range proof proves that, within the proven prefix, only the
-// key-values the proof carries exist — anything else there must be deleted.
-// This is the mirror of TestRangeProofTruncatedDoesNotDeleteBeyondProvenEdge:
-// that test guards against a bound looser than the proof justifies
-// (over-deletion past the proven edge); this one guards against a bound
-// tighter than the proof justifies (under-deletion within it). A too-tight
-// proven_end stops the merge's trie scan before it reaches the synthetic
-// stale key below, leaving it in place.
+// Within the proven prefix, a range proof proves that only the key-values it
+// carries exist, so anything else there must be deleted. This is the mirror of
+// TestRangeProofTruncatedDoesNotDeleteBeyondProvenEdge, which guards a bound
+// looser than the proof justifies; a bound tighter than it justifies stops the
+// merge's trie scan short and strands the synthetic stale key below.
 //
-// TestRangeProofFindNextKeyDivergentReceiver's positive-apply check cannot
-// catch this: merge.rs's bound only ever gates the trie-side scan
-// (MergeKeyValueIter::new's stop_after_key), never the key-value side, and an
-// empty target's trie iterator is exhausted before that scan even starts —
-// every key-value gets applied regardless of the bound's value. A stale local
-// key is the only way to observe the bound at all.
+// Only a stale local key can observe the bound: it gates the trie-side scan
+// alone, so against an empty target (as in
+// TestRangeProofFindNextKeyDivergentReceiver) every key-value is applied
+// whatever the bound is.
 func TestRangeProofTruncatedDeletesStaleKeyWithinProvenEdge(t *testing.T) {
 	r := require.New(t)
 
@@ -1295,12 +1267,9 @@ func TestRangeProofTruncatedDeletesStaleKeyWithinProvenEdge(t *testing.T) {
 	_, err = dbTarget.Update(batch)
 	r.NoError(err)
 
-	// A key present only in dbTarget: a proper extension of keys[0], which
-	// therefore sorts strictly after it, and — verified below rather than
-	// assumed, since kvForTest's lexicographic order need not match
-	// insertion order — strictly before the proven edge at
-	// keys[rangeProofLenTruncated-1]. It is absent from the proof's
-	// key-values, so a correctly-bounded merge must delete it.
+	// A key present only in dbTarget, and absent from the proof's key-values,
+	// so a correctly-bounded merge must delete it. The assertions pin it inside
+	// the proven range rather than assuming it.
 	staleKey := append(append([]byte{}, keys[0]...), 0)
 	r.Negative(bytes.Compare(keys[0], staleKey), "synthetic key must sort after keys[0]")
 	r.Negative(bytes.Compare(staleKey, keys[rangeProofLenTruncated-1]),

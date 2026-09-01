@@ -26,7 +26,7 @@ pub struct CreateRangeProofArgs<'a> {
     /// The start key must be less than the end key if both are provided.
     pub start_key: Maybe<BorrowedBytes<'a>>,
     /// The end key of the range to prove. If `None`, the range ends at the end
-    /// of the keyspace or until `max_length` items have been been included in
+    /// of the keyspace or until `max_length` items have been included in
     /// the proof.
     ///
     /// If provided, end key is inclusive if not truncated. Otherwise, the end
@@ -58,15 +58,9 @@ pub struct VerifyRangeProofArgs<'a, 'db> {
     /// The upper bound of the key range that the proof is expected to cover. If
     /// `None`, the proof is expected to cover to the end of the keyspace.
     ///
-    /// This is an upper bound on what the proof *may* cover, not an assertion
-    /// that it does. A responder may truncate its reply, in which case the
-    /// proven range ends at the proof's own right edge instead. Verification
-    /// accepts that as a valid partial result.
-    ///
-    /// The apply path writes over the **proven** range, so keys between the
-    /// proven edge and this bound are left untouched rather than deleted. The
-    /// caller owns the remainder: use `fwd_range_proof_find_next_key` to get the
-    /// next range to request, and keep going until it reports nothing left.
+    /// This is a ceiling, not an assertion: a proof carrying a key above this
+    /// bound is invalid, but a truncated proof may prove less and anchor at
+    /// its own right edge instead.
     pub end_key: Maybe<BorrowedBytes<'a>>,
     /// The maximum number of key/value pairs that the proof is expected to cover.
     /// If the proof contains more items than this, it is considered invalid. If
@@ -74,7 +68,7 @@ pub struct VerifyRangeProofArgs<'a, 'db> {
     pub max_length: u32,
 }
 
-/// FFI context for for a parsed or generated range proof.
+/// FFI context for a parsed or generated range proof.
 #[derive(Debug)]
 pub struct RangeProofContext<'db> {
     proof: FrozenRangeProof,
@@ -151,19 +145,13 @@ impl<'db> RangeProofContext<'db> {
         Ok(())
     }
 
-    /// Returns the upper bound of the range the proof actually proves.
+    /// Returns the inclusive upper bound of the range the proof actually
+    /// proves, which may be narrower than the requested `end_key`. `None`
+    /// means proven to the end of the keyspace.
     ///
-    /// The responder may have truncated its reply, in which case
-    /// `(right_edge_key, end_key]` carries no proof — merging over the
-    /// caller's requested `end_key` instead of this bound would delete local
-    /// keys the proof never mentioned.
+    /// # Panics
     ///
-    /// `right_edge_key == None` legitimately means "proven to the end of the
-    /// keyspace", so this must not fall back to `None` when the verification
-    /// context is missing: that would authorise deleting the whole tail
-    /// instead of correctly reporting an unbounded proven range. A successful
-    /// [`Self::verify`] guarantees the context is populated, which is why
-    /// this asserts with `expect` rather than degrading to that default.
+    /// Panics unless [`Self::verify`] has succeeded first.
     fn proven_end(&self) -> Option<&[u8]> {
         self.verification
             .as_ref()
@@ -211,7 +199,7 @@ impl<'db> RangeProofContext<'db> {
     /// prepared, it is committed instead of preparing a new one.
     ///
     /// However, if the prepared proposal is no longer valid (e.g., the
-    /// database has changed since it was prepared), the proposal is discared
+    /// database has changed since it was prepared), the proposal is discarded
     /// and a just-in-time proposal is created and committed.
     ///
     /// After committing or if the proof has already been committed, the
@@ -266,7 +254,7 @@ impl<'db> RangeProofContext<'db> {
     /// Returns the next key range that should be fetched after processing this
     /// range proof, or [`None`] if there are no more keys to fetch.
     ///
-    /// The returned key range represents `(finalKey, endKey]` where finalKey is
+    /// The returned key range represents `(finalKey, endKey]` where `finalKey`
     /// is the last key known to be fully synchronized within the requested
     /// range. `finalKey` is exclusive, meaning it has already been processed.
     /// `endKey` is inclusive if provided during proof creation.
@@ -566,7 +554,7 @@ pub extern "C" fn fwd_range_proof_code_hash_iter<'a>(
 ///
 /// - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
 /// - [`ValueResult::Some`] containing the serialized bytes if successful.
-/// - [`ValueResult::Err`] if the caller provided a null pointer.
+/// - [`ValueResult::Err`] containing an error message if serialization panicked.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_range_proof_to_bytes(proof: Option<&RangeProofContext>) -> ValueResult {
     crate::invoke_with_handle(proof, |ctx| {
