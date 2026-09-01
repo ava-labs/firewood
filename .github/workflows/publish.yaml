@@ -5,6 +5,12 @@ on:
   release:
     types: [published]
 
+env:
+  # Build on stable, not the nightly rust-toolchain.toml pin; the
+  # `toolchain: stable` input alone does not do that. See AGENTS.md,
+  # "Toolchain Selection".
+  RUSTUP_TOOLCHAIN: stable
+
 jobs:
   publish-firewood-crate:
     name: firewood-lib
