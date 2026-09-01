@@ -2,6 +2,11 @@
 // See the file LICENSE.md for licensing terms.
 
 mod range_set;
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
+use std::ops::Range;
+
+use indicatif::ProgressBar;
 pub(crate) use range_set::LinearAddressRangeSet;
 
 use crate::logger::warn;
@@ -12,12 +17,6 @@ use crate::{
     Mutable, Node, NodeReader, NodeStore, Path, Propose, ReadableStorage, RootReader,
     StoredAreaParent, TrieNodeParent, WritableStorage, nodestore::NodeStoreHeader,
 };
-
-use std::cmp::Ordering;
-use std::collections::BTreeMap;
-use std::ops::Range;
-
-use indicatif::ProgressBar;
 
 const OS_PAGE_SIZE: u64 = 4096;
 
@@ -724,6 +723,8 @@ fn update_progress_bar(progress_bar: Option<&ProgressBar>, range_set: &LinearAdd
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use nonzero_ext::nonzero;
 
     use super::*;
@@ -739,7 +740,6 @@ mod test {
         BranchNode, Child, Children, DefaultHashMode, FreeListParent, HashMode, ImmutableProposal,
         LeafNode, NodeStore, Path, PathComponent, area_index, hash_node,
     };
-    use std::sync::Arc;
 
     #[derive(Debug)]
     struct TestTrie {

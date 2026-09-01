@@ -1,11 +1,13 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::node::ExtendableBytes;
-use crate::node::branch::Serializable;
+use std::fmt::{self, Debug, Display, Formatter};
+
 use sha2::digest::array::Array;
 use sha2::digest::consts::U32;
-use std::fmt::{self, Debug, Display, Formatter};
+
+use crate::node::ExtendableBytes;
+use crate::node::branch::Serializable;
 
 /// An error that occurs when trying to convert a slice to a `TrieHash`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, thiserror::Error)]

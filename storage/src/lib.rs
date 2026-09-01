@@ -63,8 +63,11 @@ pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use hashedshunt::HashableShunt;
 pub use hashmode::{DefaultHashMode, EthHash, HashMode, MerkleDbHash};
 pub use hashtype::HashType;
+pub use linear::filebacked::{FREE_LIST_CACHE_ENTRY_SIZE, FileBacked};
+pub use linear::memory::MemStore;
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
+pub use node::persist::MaybePersistedNode;
 pub use node::{
     BranchNode, Child, Children, ChildrenSlots, DenseChildren, LeafNode, Node, PathIterItem,
 };
@@ -81,16 +84,6 @@ pub use path::{
     PartialPath, PathBuf, PathCommonPrefix, PathComponent, PathComponentSliceExt, PathGuard,
     SplitPath, TriePath, TriePathAsPackedBytes, TriePathFromPackedBytes, TriePathFromUnpackedBytes,
 };
-pub use trie_hash::{InvalidTrieHashLength, TrieHash};
-pub use tries::{
-    DuplicateKeyError, HashedKeyValueTrieRoot, HashedTrieNode, IterAscending, IterDescending,
-    KeyValueTrieRoot, TrieEdgeIter, TrieEdgeState, TrieNode, TrieValueIter,
-};
-pub use u4::{TryFromIntError, U4};
-
-pub use linear::filebacked::{FREE_LIST_CACHE_ENTRY_SIZE, FileBacked};
-pub use linear::memory::MemStore;
-pub use node::persist::MaybePersistedNode;
 pub use rlp::{
     NULL_RLP, RlpError, RlpItem, RlpList, encode_list, parse_be_uint, parse_fixed,
     replace_list_field,
@@ -100,6 +93,12 @@ pub use root_store::RootStore;
 pub use test_utils::SeededRng;
 #[cfg(any(test, feature = "test_utils"))]
 pub use test_utils::TestRecorder;
+pub use trie_hash::{InvalidTrieHashLength, TrieHash};
+pub use tries::{
+    DuplicateKeyError, HashedKeyValueTrieRoot, HashedTrieNode, IterAscending, IterDescending,
+    KeyValueTrieRoot, TrieEdgeIter, TrieEdgeState, TrieNode, TrieValueIter,
+};
+pub use u4::{TryFromIntError, U4};
 
 /// A shared node, which is just a triophe Arc of a node
 pub type SharedNode = triomphe::Arc<Node>;

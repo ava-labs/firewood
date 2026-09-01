@@ -72,9 +72,8 @@
 //! | [`batch_op`] | `delete_range` | Single `DeleteRange` operation (opcode `0x02`) |
 //! | [`batch_op`] | `all_ops` | All three operations in sequence |
 
-use test_case::test_case;
-
 use firewood_storage::{DenseChildren, PathComponent, TrieHash, ValueDigest};
+use test_case::test_case;
 
 use super::types::{Proof, ProofNode};
 use crate::api::{FrozenChangeProof, FrozenRangeProof};

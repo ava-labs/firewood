@@ -1,8 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use parking_lot::Mutex;
 use std::{fmt::Display, ops::Deref, sync::Arc};
+
+use parking_lot::Mutex;
 
 use crate::{FileIoError, LinearAddress, Node, NodeReader, SharedNode};
 
@@ -262,12 +263,11 @@ enum MaybePersisted {
 mod test {
     use nonzero_ext::nonzero;
 
+    use super::*;
     use crate::{
         Committed, DefaultHashMode, DeletedNodeTracking, HashMode, LeafNode, MemStore, Node,
         NodeStore, Path,
     };
-
-    use super::*;
 
     #[test]
     fn test_maybe_persisted_node() -> Result<(), FileIoError> {

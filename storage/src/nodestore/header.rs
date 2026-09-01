@@ -23,10 +23,11 @@
 //! - Zero-padded to full size for consistent layout
 //! - Uses C-compatible representation for cross-language access
 
-use bytemuck_derive::{Pod, Zeroable};
 use std::fs::File;
 use std::io::{Error, ErrorKind, Read};
 use std::path::Path;
+
+use bytemuck_derive::{Pod, Zeroable};
 
 use super::alloc::FreeLists;
 use super::primitives::{AREA_SIZES_HASH, LinearAddress};
@@ -627,9 +628,10 @@ const fn const_copy(src: &[u8], dst: &mut [u8]) {
 
 #[cfg(test)]
 mod tests {
+    use test_case::test_case;
+
     use super::*;
     use crate::{DefaultHashMode, HashMode};
-    use test_case::test_case;
 
     #[test]
     fn test_version_new_is_valid() {

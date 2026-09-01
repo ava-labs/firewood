@@ -48,29 +48,10 @@ pub(crate) mod header;
 pub(crate) mod persist;
 pub(crate) mod primitives;
 
-use crate::arc_swap_triomphe::TriompheArc;
-use crate::linear::{OffsetReader, ReadableNodeMode};
-use crate::logger::{debug, trace};
-use crate::node::branch::ReadSerializable as _;
-use firewood_metrics::{firewood_counter, firewood_histogram};
-use smallvec::SmallVec;
-use std::fmt::Debug;
-use std::io::{Error, ErrorKind};
-use std::num::NonZeroU64;
-use std::sync::OnceLock;
-use std::time::Instant;
-
 // Re-export types from alloc module
 pub use alloc::NodeAllocator;
-pub use hash::{
-    fix_account_storage_root_value, hash_node_as_storage_trie_root_for_node,
-    hash_node_as_storage_trie_root_parts,
-};
-pub use hash_algo::{NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError};
-pub use primitives::{AreaIndex, LinearAddress};
-// Re-export types from header module
-pub use header::{CargoVersion, GitDescribe, NodeStoreHeader};
-
+use std::fmt::Debug;
+use std::io::{Error, ErrorKind};
 /// The [`NodeStore`] handles the serialization of nodes and
 /// free space management of nodes in the page store. It lays out the format
 /// of the [`PageStore`]. More specifically, it places a [`FileIdentifyingMagic`]
@@ -97,18 +78,35 @@ pub use header::{CargoVersion, GitDescribe, NodeStoreHeader};
 /// ```
 use std::marker::PhantomData;
 use std::mem::take;
+use std::num::NonZeroU64;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::time::Instant;
 
+use firewood_metrics::{firewood_counter, firewood_histogram};
+pub use hash::{
+    fix_account_storage_root_value, hash_node_as_storage_trie_root_for_node,
+    hash_node_as_storage_trie_root_parts,
+};
+pub use hash_algo::{NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError};
+// Re-export types from header module
+pub use header::{CargoVersion, GitDescribe, NodeStoreHeader};
+pub use primitives::{AreaIndex, LinearAddress};
+use smallvec::SmallVec;
+
+use super::linear::WritableStorage;
+use crate::arc_swap_triomphe::TriompheArc;
 use crate::hashednode::hash_node;
+use crate::linear::{OffsetReader, ReadableNodeMode};
+use crate::logger::{debug, trace};
 use crate::node::Node;
+use crate::node::branch::ReadSerializable as _;
 use crate::node::persist::MaybePersistedNode;
 use crate::{
     CacheReadStrategy, Child, DefaultHashMode, FileIoError, HashMode, HashType, Path,
     ReadableStorage, SharedNode, TrieHash,
 };
-
-use super::linear::WritableStorage;
 
 /// Initial size for the bump allocator used in node serialization batches.
 /// Set to the maximum area size to minimize allocations for large nodes.
@@ -1567,6 +1565,12 @@ where
 #[expect(clippy::cast_possible_truncation)]
 mod tests {
 
+    use std::error::Error;
+
+    use nonzero_ext::nonzero;
+    use primitives::area_size_iter;
+
+    use super::*;
     use crate::BranchNode;
     use crate::Children;
     use crate::FileBacked;
@@ -1575,11 +1579,6 @@ mod tests {
     use crate::NibblesIterator;
     use crate::PathComponent;
     use crate::linear::memory::MemStore;
-
-    use super::*;
-    use nonzero_ext::nonzero;
-    use primitives::area_size_iter;
-    use std::error::Error;
 
     #[test]
     fn area_sizes_aligned() {

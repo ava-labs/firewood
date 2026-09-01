@@ -6,10 +6,11 @@
     reason = "integration test binary; unwrap failures surface as test failures"
 )]
 
-use predicates::prelude::*;
 use std::fmt::Write;
 use std::fs;
 use std::path::Path;
+
+use predicates::prelude::*;
 
 const PRG: &str = "fwdctl";
 const VERSION: &str = env!("CARGO_PKG_VERSION");

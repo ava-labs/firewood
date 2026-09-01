@@ -8,6 +8,11 @@
 # Each option below defaults to `Preserve` or `false`, so stable rustfmt never
 # undoes what nightly did here -- it only fails to apply it to new code.
 
+# Sort imports into three groups separated by a blank line -- `std`/`core`/
+# `alloc`, then external crates, then `crate`/`self`/`super` -- instead of
+# preserving whatever grouping each file happened to arrive with.
+group_imports = "StdExternalCrate"
+
 # Wrap the arguments of a function call whose last argument is a delimited
 # expression, rather than indenting the whole call one level deeper.
 overflow_delimited_expr = true

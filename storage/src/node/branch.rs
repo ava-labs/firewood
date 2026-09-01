@@ -6,14 +6,15 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
+use std::fmt::{Debug, Formatter};
+use std::io::Read;
+
 use crate::node::ExtendableBytes;
 use crate::node::children::Children;
 use crate::{
     FileIoError, HashType, LeafNode, LinearAddress, MaybePersistedNode, Node, NodeReader, Path,
     PathComponent, SharedNode,
 };
-use std::fmt::{Debug, Formatter};
-use std::io::Read;
 
 pub(crate) trait Serializable {
     fn write_to<W: ExtendableBytes>(&self, vec: &mut W);

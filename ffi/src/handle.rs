@@ -10,11 +10,10 @@ use firewood::{
     manager::RevisionManagerConfig,
     open,
 };
-
-use crate::{BatchOp, BorrowedBytes, CView, CreateProposalResult};
+use firewood_metrics::MetricsContext;
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
-use firewood_metrics::MetricsContext;
+use crate::{BatchOp, BorrowedBytes, CView, CreateProposalResult};
 
 /// The hashing mode to use for the database.
 ///

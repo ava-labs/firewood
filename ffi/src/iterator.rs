@@ -2,11 +2,11 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::fmt;
+use std::iter::FusedIterator;
 
 use firewood::api::{self, ArcDynDbView, BoxKeyValueIter};
 use firewood::{Key, Value};
 use firewood_metrics::MetricsContext;
-use std::iter::FusedIterator;
 
 type KeyValueItem = (Key, Value);
 

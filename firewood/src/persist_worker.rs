@@ -47,6 +47,8 @@ use firewood_metrics::{
     GaugeExt, current_metrics_context, firewood_counter, firewood_gauge, firewood_histogram,
     set_metrics_context,
 };
+use firewood_storage::RootStore;
+use firewood_storage::logger::error;
 use firewood_storage::{
     Committed, FileBacked, FileIoError, HashMode, HashedNodeReader, LinearAddress, NodeStore,
     NodeStoreHeader, TrieHash,
@@ -54,9 +56,6 @@ use firewood_storage::{
 use parking_lot::{Condvar, Mutex, MutexGuard};
 
 use crate::manager::CommittedRevision;
-use firewood_storage::RootStore;
-
-use firewood_storage::logger::error;
 
 /// Error type for persistence operations.
 #[derive(Clone, Debug, thiserror::Error)]
@@ -414,8 +413,9 @@ impl<H> PersistChannel<H> {
     #[cfg(test)]
     #[expect(clippy::arithmetic_side_effects)]
     fn wait_all_released(&self) {
-        use firewood_storage::logger::warn;
         use std::time::Duration;
+
+        use firewood_storage::logger::warn;
 
         const WARN_INTERVAL: Duration = Duration::from_mins(1);
 

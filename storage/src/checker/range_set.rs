@@ -592,10 +592,10 @@ mod test_range_set {
 #[cfg(test)]
 mod test_linear_address_range_set {
 
-    use crate::{FreeListParent, PathComponent, TrieNodeParent, area_index};
+    use test_case::test_case;
 
     use super::*;
-    use test_case::test_case;
+    use crate::{FreeListParent, PathComponent, TrieNodeParent, area_index};
 
     const TEST_PARENT: StoredAreaParent = StoredAreaParent::TrieNode(TrieNodeParent::Root);
 

@@ -47,7 +47,6 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
 use firewood_storage::hash_node_as_storage_trie_root_parts;
 use firewood_storage::{
     Children, DenseChildren, EthHash, FileIoError, HashMode, HashType, Hashable, IntoSplitPath,
@@ -57,6 +56,7 @@ use firewood_storage::{
 use thiserror::Error;
 
 use crate::merkle::Value;
+use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
 
 /// Which edge of a range proof was being verified when an error occurred.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -894,8 +894,9 @@ impl ProofType {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use firewood_storage::DefaultHashMode;
+
+    use super::*;
 
     /// Build a `ProofNode` at the given nibble path with the given children and value.
     fn make_node(

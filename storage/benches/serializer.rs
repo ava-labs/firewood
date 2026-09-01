@@ -12,14 +12,13 @@
 
 use std::fs::File;
 use std::os::raw::c_int;
+use std::path::Path as FsPath;
 
 use criterion::profiler::Profiler;
 use criterion::{Bencher, Criterion, criterion_group, criterion_main};
 use firewood_storage::{Children, DefaultHashMode, LeafNode, Node, Path, PathComponent};
 use pprof::ProfilerGuard;
 use smallvec::SmallVec;
-
-use std::path::Path as FsPath;
 
 // For flamegraphs:
 // cargo bench --bench serializer -- --profile-time=5

@@ -64,8 +64,9 @@ fn write_all_with_sep(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use test_case::test_case;
+
+    use super::*;
 
     #[test_case(Some(0usize), "(4 hidden)"; "with limit 0")]
     #[test_case(Some(2usize), "apple, banana, ... (2 more hidden)"; "with limit 2")]

@@ -6,17 +6,17 @@
 //!
 //! It is used only when enabled at database open time.
 
-use firewood_metrics::firewood_counter;
-use fjall::{Config, Keyspace, PartitionCreateOptions, PartitionHandle, PersistMode};
-use parking_lot::Mutex;
 use std::marker::PhantomData;
 use std::{
     path::Path,
     sync::{Arc, Weak},
 };
-use weak_table::WeakValueHashMap;
 
 use derive_where::derive_where;
+use firewood_metrics::firewood_counter;
+use fjall::{Config, Keyspace, PartitionCreateOptions, PartitionHandle, PersistMode};
+use parking_lot::Mutex;
+use weak_table::WeakValueHashMap;
 
 use crate::TrieHash;
 use crate::hashmode::HashMode;
@@ -192,13 +192,14 @@ impl<H: HashMode> RootStore<H> {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZero;
+    use std::sync::Arc;
+
     use super::*;
     use crate::DefaultHashMode;
     use crate::linear::filebacked::FileBacked;
     use crate::nodestore::NodeStore;
     use crate::{CacheReadStrategy, HashMode};
-    use std::num::NonZero;
-    use std::sync::Arc;
 
     #[test]
     fn test_cache_hit() {

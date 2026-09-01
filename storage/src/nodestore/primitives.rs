@@ -306,10 +306,10 @@ impl From<NonZeroU64> for LinearAddress {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use crate::TrieHash;
     use sha2::{Digest, Sha256};
+
+    use super::*;
+    use crate::TrieHash;
 
     #[test]
     fn test_area_size_hash_matches_old_calculation() {

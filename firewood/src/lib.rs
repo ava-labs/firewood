@@ -160,6 +160,8 @@ pub mod eth_proof;
 // Re-export commonly used proof types at the crate root for ergonomic access
 pub use eth_proof::account_code_hash;
 pub use eth_proof::{EthProof, EthStorageProof, eth_get_proof};
+// Re-export the proc macro from firewood-macros
+pub use firewood_macros::metrics;
 pub use merkle::{Key, Value, verify_change_proof_root_hash, verify_range_proof};
 pub use proofs::{
     ChangeProof, ChangeProofVerificationContext, EmptyProofCollection, InvalidHeader, KeyRange,
@@ -167,9 +169,6 @@ pub use proofs::{
     RangeProofVerificationContext, ReadError, find_next_key_after_change_proof,
     find_next_key_after_range_proof, verify_change_proof_structure, verify_range_proof_structure,
 };
-
-// Re-export the proc macro from firewood-macros
-pub use firewood_macros::metrics;
 
 // Persistence worker module
 mod persist_worker;
@@ -180,16 +179,14 @@ pub mod api;
 /// A batch operation and associated types
 mod batch_op;
 
-/// Expose the storage logger
-pub use firewood_storage::logger;
-
 /// Hashing mode used for trie nodes.
 pub use firewood_storage::NodeHashAlgorithm;
-
 /// Root or node hash used by Firewood tries.
 ///
 /// This is the same type exposed as [`api::HashKey`] in the database API.
 pub use firewood_storage::TrieHash;
+/// Expose the storage logger
+pub use firewood_storage::logger;
 
 #[cfg(all(not(miri), test, feature = "logger"))]
 // SAFETY: Called pre-main in test builds only. Does not panic (try_init + ok),
