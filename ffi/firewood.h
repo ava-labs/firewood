@@ -1679,11 +1679,14 @@ typedef struct DatabaseHandleArgs {
    */
   size_t node_cache_memory_limit;
   /**
-   * The size of the free list cache.
+   * The memory limit for the free-list cache in kibibytes.
+   *
+   * Nothing is preallocated; this is an upper bound on the memory the cache
+   * may grow to.
    *
    * Opening returns an error if this is zero.
    */
-  size_t free_list_cache_size;
+  size_t freelist_memory_limit_kb;
   /**
    * The maximum number of revisions to keep.
    *
@@ -1712,6 +1715,15 @@ typedef struct DatabaseHandleArgs {
    * Expensive metrics are disabled by default.
    */
   bool expensive_metrics;
+  /**
+   * Tag used to separate metrics and logs per database.
+   *
+   * This must be a valid UTF-8 string.
+   *
+   * If empty, no tag is applied and this database's metrics are recorded
+   * with the default `db_tag="untagged"` label.
+   */
+  BorrowedBytes db_tag;
   /**
    * The hashing mode to use for the database.
    *

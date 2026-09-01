@@ -1876,6 +1876,7 @@ dependencies = [
  "firewood",
  "firewood-metrics",
  "firewood-replay",
+ "log",
  "metrics",
  "metrics-exporter-prometheus",
  "parking_lot",
@@ -1936,6 +1937,7 @@ dependencies = [
 name = "firewood-metrics"
 version = "0.7.0"
 dependencies = [
+ "log",
  "metrics",
 ]
 
