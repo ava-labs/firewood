@@ -88,11 +88,7 @@ where
 /// The passed in `children_iter` should be an iterator over the indices into
 /// the children array in the desired order (e.g. ascending or descending).
 macro_rules! descend {
-    (
-        $self:expr,
-        $node:expr,
-        $children_iter:expr
-    ) => {
+    ($self:expr, $node:expr, $children_iter:expr) => {
         if let Some((pc, state)) =
             $children_iter.find_map(|pc| $node.child_state(pc).map(|state| (pc, state)))
         {
