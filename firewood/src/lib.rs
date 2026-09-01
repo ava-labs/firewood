@@ -101,7 +101,6 @@
 //! - Since the root is guaranteed to be new, the new root will reference all of the new revision.
 //!
 //! A commit involves allocating space for the nmodes and writing them as well as the freelist to disk.
-//!
 // Instead of using a `compile_error!`, cause clippy to hard fail if the target is not 64-bit. This
 // is a workaround for the fact that the `clippy::cast_possible_truncation` lint does not delineate
 // between 64-bit and non-64-bit targets with respect to `usize -> u64` casts and vice versa which

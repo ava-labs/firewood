@@ -969,19 +969,16 @@ mod tests {
         // m2 has: key2=new_value, key4=value4
         // Expected: Delete key1, Put key2=new_value, Delete key3, Put key4=value4
 
-        let m1 = populate_merkle(
-            create_test_merkle(),
-            &[
-                (b"key1", b"value1"), // [6b, 65, 79, 31]
-                (b"key2", b"old_value"),
-                (b"key3", b"value3"),
-            ],
-        );
+        let m1 = populate_merkle(create_test_merkle(), &[
+            (b"key1", b"value1"), // [6b, 65, 79, 31]
+            (b"key2", b"old_value"),
+            (b"key3", b"value3"),
+        ]);
 
-        let m2 = populate_merkle(
-            create_test_merkle(),
-            &[(b"key2", b"new_value"), (b"key4", b"value4")],
-        );
+        let m2 = populate_merkle(create_test_merkle(), &[
+            (b"key2", b"new_value"),
+            (b"key4", b"value4"),
+        ]);
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
 
@@ -1010,20 +1007,18 @@ mod tests {
         // m2: b, c, d, f
         // Expected: Delete a, Put b, Put d, Delete e, Put f
 
-        let m1 = populate_merkle(
-            create_test_merkle(),
-            &[(b"a", b"value_a"), (b"c", b"value_c"), (b"e", b"value_e")],
-        );
+        let m1 = populate_merkle(create_test_merkle(), &[
+            (b"a", b"value_a"),
+            (b"c", b"value_c"),
+            (b"e", b"value_e"),
+        ]);
 
-        let m2 = populate_merkle(
-            create_test_merkle(),
-            &[
-                (b"b", b"value_b"),
-                (b"c", b"value_c"),
-                (b"d", b"value_d"),
-                (b"f", b"value_f"),
-            ],
-        );
+        let m2 = populate_merkle(create_test_merkle(), &[
+            (b"b", b"value_b"),
+            (b"c", b"value_c"),
+            (b"d", b"value_d"),
+            (b"f", b"value_f"),
+        ]);
 
         // First case: No start key
         let diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
@@ -1113,13 +1108,10 @@ mod tests {
 
         // Tree1: Create children under "prefix" but no value at "prefix" itself
         // This creates a branch node at "prefix" with value=None
-        let m1 = populate_merkle(
-            create_test_merkle(),
-            &[
-                (b"prefix/a".as_slice(), b"value_a".as_slice()),
-                (b"prefix/b".as_slice(), b"value_b".as_slice()),
-            ],
-        );
+        let m1 = populate_merkle(create_test_merkle(), &[
+            (b"prefix/a".as_slice(), b"value_a".as_slice()),
+            (b"prefix/b".as_slice(), b"value_b".as_slice()),
+        ]);
 
         // Tree2: Create just a single value at "prefix/a"
         // Value depends on same_value parameter
@@ -1137,7 +1129,7 @@ mod tests {
             (m1.nodestore(), m2.nodestore(), "m1->m2")
         };
 
-        //let diff_stream = DiffMerkleKeyValueStreams::new(tree_left, tree_right, Key::default());
+        // let diff_stream = DiffMerkleKeyValueStreams::new(tree_left, tree_right, Key::default());
         let diff_stream = DiffMerkleNodeStream::new(tree_left, tree_right, Key::default()).unwrap();
         let results: Vec<_> = diff_stream.collect::<Result<Vec<_>, _>>().unwrap();
 
@@ -1176,24 +1168,18 @@ mod tests {
         // This test verifies the bug fix: ensure that after finding different children
         // at the same position in a branch, the algorithm continues to process remaining children
         let m1 = create_test_merkle();
-        let m1 = populate_merkle(
-            m1,
-            &[
-                (b"branch_a/file", b"shared_value"),    // This will be identical
-                (b"branch_b/file", b"value1"),          // This will be changed
-                (b"branch_c/file", b"left_only_value"), // This will be deleted
-            ],
-        );
+        let m1 = populate_merkle(m1, &[
+            (b"branch_a/file", b"shared_value"),    // This will be identical
+            (b"branch_b/file", b"value1"),          // This will be changed
+            (b"branch_c/file", b"left_only_value"), // This will be deleted
+        ]);
 
         let m2 = create_test_merkle();
-        let m2 = populate_merkle(
-            m2,
-            &[
-                (b"branch_a/file", b"shared_value"),     // Identical to tree1
-                (b"branch_b/file", b"value1_modified"),  // Different value
-                (b"branch_d/file", b"right_only_value"), // This will be added
-            ],
-        );
+        let m2 = populate_merkle(m2, &[
+            (b"branch_a/file", b"shared_value"),     // Identical to tree1
+            (b"branch_b/file", b"value1_modified"),  // Different value
+            (b"branch_d/file", b"right_only_value"), // This will be added
+        ]);
 
         let diff_stream =
             DiffMerkleNodeStream::new(m1.nodestore(), m2.nodestore(), Key::default()).unwrap();
@@ -1354,19 +1340,16 @@ mod tests {
         // which can trigger different state transitions
 
         // Tree1: Has a branch structure at "path"
-        let m1 = populate_merkle(
-            create_test_merkle(),
-            &[
-                (b"path/file1".as_slice(), b"value1".as_slice()),
-                (b"path/file2".as_slice(), b"value2".as_slice()),
-            ],
-        );
+        let m1 = populate_merkle(create_test_merkle(), &[
+            (b"path/file1".as_slice(), b"value1".as_slice()),
+            (b"path/file2".as_slice(), b"value2".as_slice()),
+        ]);
 
         // Tree2: Has a leaf at "path"
-        let m2 = populate_merkle(
-            create_test_merkle(),
-            &[(b"path".as_slice(), b"leaf_value".as_slice())],
-        );
+        let m2 = populate_merkle(create_test_merkle(), &[(
+            b"path".as_slice(),
+            b"leaf_value".as_slice(),
+        )]);
 
         let diff_stream =
             DiffMerkleNodeStream::new(m1.nodestore(), m2.nodestore(), Key::default()).unwrap();
@@ -1389,23 +1372,17 @@ mod tests {
 
     #[test]
     fn test_diff_with_start_key() {
-        let m1 = populate_merkle(
-            create_test_merkle(),
-            &[
-                (b"aaa", b"value1"),
-                (b"bbb", b"value2"),
-                (b"ccc", b"value3"),
-            ],
-        );
+        let m1 = populate_merkle(create_test_merkle(), &[
+            (b"aaa", b"value1"),
+            (b"bbb", b"value2"),
+            (b"ccc", b"value3"),
+        ]);
 
-        let m2 = populate_merkle(
-            create_test_merkle(),
-            &[
-                (b"aaa", b"value2"),   // Same
-                (b"bbb", b"modified"), // Modified
-                (b"ddd", b"value4"),   // Added
-            ],
-        );
+        let m2 = populate_merkle(create_test_merkle(), &[
+            (b"aaa", b"value2"),   // Same
+            (b"bbb", b"modified"), // Modified
+            (b"ddd", b"value4"),   // Added
+        ]);
 
         // Start from key "bbb" - should skip "aaa"
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::from(b"bbb".as_slice())).unwrap();

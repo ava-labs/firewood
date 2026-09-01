@@ -890,7 +890,6 @@ impl ImmutableProposal {
 /// 2. Apply batch operations to the mutable reconstruction via `Merkle` insert/remove.
 /// 3. Convert to [`Reconstructed`] via [`From`]. The resulting view supports reads and lazy hashing.
 /// 4. Chain further reconstructions: convert back to [`Mutable<Recon>`] via [`From`] and repeat.
-///
 #[derive(Debug)]
 pub struct NodeStore<T, S, H> {
     /// This is one of [Committed], [`ImmutableProposal`], [`Mutable<Propose>`], [`Mutable<Recon>`], or [`Reconstructed`].
@@ -1629,10 +1628,10 @@ mod tests {
         let r1: NodeStore<Arc<ImmutableProposal>, _, DefaultHashMode> = r1.try_into().unwrap();
         {
             let parent = r1.kind.parent.lock();
-            assert!(matches!(
-                *parent,
-                NodeStoreParent::Committed { hash: None, .. }
-            ));
+            assert!(matches!(*parent, NodeStoreParent::Committed {
+                hash: None,
+                ..
+            }));
         }
 
         // create an empty r2, check that it's parent is the proposed version r1

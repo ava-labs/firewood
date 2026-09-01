@@ -1019,14 +1019,11 @@ mod tests {
             AreaIndex::MIN
         );
         let (next, next_parent) = free_list_iter.next_with_metadata().unwrap();
-        assert_eq!(
-            next.unwrap(),
-            FreeAreaWithMetadata {
-                addr: free_list1_area1,
-                area_index: AREA_INDEX1,
-                free_list_id: AREA_INDEX1,
-            },
-        );
+        assert_eq!(next.unwrap(), FreeAreaWithMetadata {
+            addr: free_list1_area1,
+            area_index: AREA_INDEX1,
+            free_list_id: AREA_INDEX1,
+        },);
         assert_eq!(next_parent, FreeListParent::FreeListHead(AREA_INDEX1));
         // `next_with_metadata` moves the iterator to the first free list that is not empty
         assert_eq!(
@@ -1040,14 +1037,11 @@ mod tests {
             AREA_INDEX1_PLUS_1
         );
         let (next, next_parent) = free_list_iter.next_with_metadata().unwrap();
-        assert_eq!(
-            next.unwrap(),
-            FreeAreaWithMetadata {
-                addr: free_list2_area1,
-                area_index: AREA_INDEX2,
-                free_list_id: AREA_INDEX2,
-            },
-        );
+        assert_eq!(next.unwrap(), FreeAreaWithMetadata {
+            addr: free_list2_area1,
+            area_index: AREA_INDEX2,
+            free_list_id: AREA_INDEX2,
+        },);
         assert_eq!(next_parent, FreeListParent::FreeListHead(AREA_INDEX2));
         // `next_with_metadata` moves the iterator to the first free list that is not empty
         assert_eq!(

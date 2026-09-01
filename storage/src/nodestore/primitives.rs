@@ -252,7 +252,6 @@ impl LinearAddress {
     ///
     /// Returns `None` if the result overflows a u64
     /// Some(LinearAddress) otherwise
-    ///
     #[inline]
     #[must_use]
     pub const fn advance(self, n: u64) -> Option<Self> {

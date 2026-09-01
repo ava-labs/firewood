@@ -381,10 +381,10 @@ mod test_range_set {
         let mut range_set = RangeSet::new();
         range_set.insert_range(0..10);
         range_set.insert_range(20..30);
-        assert_eq!(
-            range_set.into_iter().collect::<Vec<_>>(),
-            vec![0..10, 20..30]
-        );
+        assert_eq!(range_set.into_iter().collect::<Vec<_>>(), vec![
+            0..10,
+            20..30
+        ]);
     }
 
     #[test]
@@ -431,10 +431,11 @@ mod test_range_set {
         assert!(range_set.insert_disjoint_range(0..10).is_ok());
         assert!(range_set.insert_disjoint_range(20..30).is_ok());
         assert!(range_set.insert_disjoint_range(12..18).is_ok());
-        assert_eq!(
-            range_set.into_iter().collect::<Vec<_>>(),
-            vec![0..10, 12..18, 20..30]
-        );
+        assert_eq!(range_set.into_iter().collect::<Vec<_>>(), vec![
+            0..10,
+            12..18,
+            20..30
+        ]);
 
         // insert consecutive ranges
         let mut range_set = RangeSet::new();
@@ -451,10 +452,10 @@ mod test_range_set {
             range_set.insert_disjoint_range(5..25),
             Err(intersections) if intersections == vec![5..10, 20..25]
         ));
-        assert_eq!(
-            range_set.into_iter().collect::<Vec<_>>(),
-            vec![0..10, 20..30]
-        );
+        assert_eq!(range_set.into_iter().collect::<Vec<_>>(), vec![
+            0..10,
+            20..30
+        ]);
 
         // insert with completely overlapping range
         let mut range_set = RangeSet::new();
@@ -465,10 +466,11 @@ mod test_range_set {
             range_set.insert_disjoint_range(5..45),
             Err(intersections) if intersections == vec![5..10, 20..30, 40..45]
         ));
-        assert_eq!(
-            range_set.into_iter().collect::<Vec<_>>(),
-            vec![0..10, 20..30, 40..50]
-        );
+        assert_eq!(range_set.into_iter().collect::<Vec<_>>(), vec![
+            0..10,
+            20..30,
+            40..50
+        ]);
     }
 
     #[test]
@@ -721,14 +723,11 @@ mod test_linear_address_range_set {
             .unwrap();
 
         let complement = visited.complement().into_iter().collect::<Vec<_>>();
-        assert_eq!(
-            complement,
-            vec![
-                db_begin..start1_addr,
-                end1_addr..start2_addr,
-                end2_addr..db_end,
-            ]
-        );
+        assert_eq!(complement, vec![
+            db_begin..start1_addr,
+            end1_addr..start2_addr,
+            end2_addr..db_end,
+        ]);
     }
 
     #[test]

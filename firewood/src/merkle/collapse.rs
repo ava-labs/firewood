@@ -540,15 +540,10 @@ mod tests {
         let child = setup(&mut merkle);
         let pc = PathComponent::try_new(nibble).unwrap();
         let result = merkle
-            .child_in_range(
-                &child,
-                acc_prefix,
-                pc,
-                CollapseRange {
-                    start: start_nib,
-                    end: end_nib,
-                },
-            )
+            .child_in_range(&child, acc_prefix, pc, CollapseRange {
+                start: start_nib,
+                end: end_nib,
+            })
             .unwrap();
         assert_eq!(
             result, expected,
@@ -645,24 +640,16 @@ mod tests {
         let pc = |n| PathComponent::try_new(n).unwrap();
         // Range helpers: `nir` takes a bounded end, `nir_open` an unbounded one.
         let nir = |acc: &[u8], n: PathComponent, s: &[u8], e: &[u8]| {
-            nibble_in_range(
-                acc,
-                n,
-                CollapseRange {
-                    start: s,
-                    end: Some(e),
-                },
-            )
+            nibble_in_range(acc, n, CollapseRange {
+                start: s,
+                end: Some(e),
+            })
         };
         let nir_open = |acc: &[u8], n: PathComponent, s: &[u8]| {
-            nibble_in_range(
-                acc,
-                n,
-                CollapseRange {
-                    start: s,
-                    end: None,
-                },
-            )
+            nibble_in_range(acc, n, CollapseRange {
+                start: s,
+                end: None,
+            })
         };
 
         // inside range

@@ -499,10 +499,9 @@ mod tests {
         let wrong_length = account_rlp_with_code_hash(1, &[0x01], &[0x33; 31]);
         let wrong_length_err = account_code_hash(&wrong_length).unwrap_err();
         assert!(
-            matches!(
-                wrong_length_err,
-                ProofError::InvalidAccountCodeHashLength { len: 31 }
-            ),
+            matches!(wrong_length_err, ProofError::InvalidAccountCodeHashLength {
+                len: 31
+            }),
             "expected account code hash length error, got {wrong_length_err:?}"
         );
     }
