@@ -190,11 +190,13 @@ where
 // ── Change proof verification ──────────────────────────────────────────────
 
 /// Verification context captured after structural validation of a change proof.
-/// Stored so that downstream logic (root hash verification, `find_next_key`) can
-/// reference the original verification parameters without re-validating.
+/// Stored so that downstream logic (root hash verification,
+/// [`find_next_key_after_change_proof`]) can reference the original
+/// verification parameters without re-validating.
 ///
-/// Constructible only by [`verify_change_proof_structure`]; fields are private
-/// so a context cannot be forged or altered after verification.
+/// Outside of test builds, constructible only by
+/// [`verify_change_proof_structure`]; fields are private so a context cannot be
+/// forged or altered after verification.
 #[derive(Debug)]
 pub struct ChangeProofVerificationContext {
     end_root: HashKey,

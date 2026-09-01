@@ -487,8 +487,8 @@ fn compute_outside_children<'a>(
 /// recomputed, and fails the root-hash check. Returns the union of the left
 /// and right boundary masks keyed by node path.
 ///
-/// `range` must be the nibble expansion of `verification`'s `start_key` and
-/// `right_edge_key`.
+/// `range` must be the nibble expansion of `verification.start_key()` and
+/// `verification.right_edge_key()`.
 fn change_outside_children<S: ReadableStorage, H: HashMode>(
     proof: &FrozenChangeProof,
     verification: &ChangeProofVerificationContext,
@@ -1319,9 +1319,9 @@ fn verify_range_proof_root_hash<P: ProofCollection<Node = ProofNode>, H: HashMod
 /// # Ordering
 ///
 /// `verification` must come from `verify_change_proof_structure` for this same
-/// `proof`. Its `start_key` and `right_edge_key` define the proven range used by
-/// the collapse and reconciliation steps, so a hand-built context — or one
-/// produced for a different proof — makes those steps judge the wrong range.
+/// `proof`. Its `start_key()` and `right_edge_key()` define the proven range
+/// used by the collapse and reconciliation steps, so a hand-built context — or
+/// one produced for a different proof — makes those steps judge the wrong range.
 ///
 /// Marking a boundary terminal's on-path child outside takes that child's hash
 /// from the proof, which is safe only if the proof has no hash there. This
