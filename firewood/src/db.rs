@@ -14,27 +14,54 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 
-use firewood_metrics::{firewood_counter, firewood_gauge, firewood_histogram};
+use firewood_metrics::firewood_counter;
+use firewood_metrics::firewood_gauge;
+use firewood_metrics::firewood_histogram;
+use firewood_storage::CargoVersion;
+use firewood_storage::CheckOpt;
+use firewood_storage::CheckerReport;
+use firewood_storage::Committed;
+use firewood_storage::CommittedParentHash;
 #[cfg(test)]
 use firewood_storage::DefaultHashMode;
-use firewood_storage::{
-    CargoVersion, CheckOpt, CheckerReport, Committed, CommittedParentHash, EthHash, FileBacked,
-    FileIoError, GitDescribe, HashMode, HashedNodeReader, ImmutableProposal, MerkleDbHash, Mutable,
-    NodeHashAlgorithm, NodeStore, Parentable, Propose, ReadableStorage, Recon, Reconstructed,
-    TrieReader,
-};
+use firewood_storage::EthHash;
+use firewood_storage::FileBacked;
+use firewood_storage::FileIoError;
+use firewood_storage::GitDescribe;
+use firewood_storage::HashMode;
+use firewood_storage::HashedNodeReader;
+use firewood_storage::ImmutableProposal;
+use firewood_storage::MerkleDbHash;
+use firewood_storage::Mutable;
+use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::NodeStore;
+use firewood_storage::Parentable;
+use firewood_storage::Propose;
+use firewood_storage::ReadableStorage;
+use firewood_storage::Recon;
+use firewood_storage::Reconstructed;
+use firewood_storage::TrieReader;
 use thiserror::Error;
 use typed_builder::TypedBuilder;
 
+use crate::api;
+use crate::api::ArcDynDbView;
 pub use crate::api::BatchOp;
-use crate::api::{
-    self, ArcDynDbView, FrozenChangeProof, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter,
-    KeyType, KeyValuePair,
-};
+use crate::api::FrozenChangeProof;
+use crate::api::FrozenProof;
+use crate::api::FrozenRangeProof;
+use crate::api::HashKey;
+use crate::api::IntoBatchIter;
+use crate::api::KeyType;
+use crate::api::KeyValuePair;
 use crate::iter::MerkleKeyValueIter;
-use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
+use crate::manager::ConfigManager;
+use crate::manager::RevisionManager;
+use crate::manager::RevisionManagerConfig;
+use crate::merkle::Merkle;
+use crate::merkle::Value;
 use crate::merkle::changes::DiffMerkleNodeStream;
-use crate::merkle::{Merkle, Value, verify_change_proof_root_hash};
+use crate::merkle::verify_change_proof_root_hash;
 use crate::verify_change_proof_structure;
 
 #[derive(Error, Debug)]
@@ -953,19 +980,34 @@ mod test {
     use core::iter::Take;
     use std::collections::HashMap;
     use std::iter::Peekable;
-    use std::num::{NonZeroU64, NonZeroUsize};
-    use std::ops::{Deref, DerefMut};
+    use std::num::NonZeroU64;
+    use std::num::NonZeroUsize;
+    use std::ops::Deref;
+    use std::ops::DerefMut;
     use std::path::Path;
 
-    use firewood_storage::{
-        CheckOpt, CheckerError, DefaultHashMode, HashMode, LinearAddress, MaybePersistedNode,
-        NodeHashAlgorithm, TrieHash,
-    };
+    use firewood_storage::CheckOpt;
+    use firewood_storage::CheckerError;
+    use firewood_storage::DefaultHashMode;
+    use firewood_storage::HashMode;
+    use firewood_storage::LinearAddress;
+    use firewood_storage::MaybePersistedNode;
+    use firewood_storage::NodeHashAlgorithm;
+    use firewood_storage::TrieHash;
     use nonzero_ext::nonzero;
 
-    use super::{BatchOp, DbConfig, open};
-    use crate::api::{self, Db as _, DbView, HashKeyExt, Proposal as _, Reconstructible};
-    use crate::db::{Db, Proposal, UseParallel};
+    use super::BatchOp;
+    use super::DbConfig;
+    use super::open;
+    use crate::api;
+    use crate::api::Db as _;
+    use crate::api::DbView;
+    use crate::api::HashKeyExt;
+    use crate::api::Proposal as _;
+    use crate::api::Reconstructible;
+    use crate::db::Db;
+    use crate::db::Proposal;
+    use crate::db::UseParallel;
     use crate::manager::RevisionManagerConfig;
 
     /// A chunk of an iterator, provided by [`IterExt::chunk_fold`] to the folding

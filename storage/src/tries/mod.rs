@@ -4,9 +4,16 @@
 mod iter;
 mod kvp;
 
-pub use self::iter::{IterAscending, IterDescending, TrieEdgeIter, TrieValueIter};
-pub use self::kvp::{DuplicateKeyError, HashedKeyValueTrieRoot, KeyValueTrieRoot};
-use crate::{HashType, IntoSplitPath, PathComponent};
+pub use self::iter::IterAscending;
+pub use self::iter::IterDescending;
+pub use self::iter::TrieEdgeIter;
+pub use self::iter::TrieValueIter;
+pub use self::kvp::DuplicateKeyError;
+pub use self::kvp::HashedKeyValueTrieRoot;
+pub use self::kvp::KeyValueTrieRoot;
+use crate::HashType;
+use crate::IntoSplitPath;
+use crate::PathComponent;
 
 /// The state of an edge from a parent node to a child node in a trie.
 #[derive(Debug, PartialEq, Eq, Hash)]

@@ -1,16 +1,21 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::{fmt::Debug, num::NonZeroUsize};
+use std::fmt::Debug;
+use std::num::NonZeroUsize;
 
-use firewood_storage::{DefaultHashMode, HashMode, NodeHashAlgorithm};
+use firewood_storage::DefaultHashMode;
+use firewood_storage::HashMode;
+use firewood_storage::NodeHashAlgorithm;
 
-use crate::{
-    Proof, ProofCollection, ProofError,
-    api::{self, FrozenChangeProof, HashKey},
-    db::BatchOp,
-    proofs::ProofEdge,
-};
+use crate::Proof;
+use crate::ProofCollection;
+use crate::ProofError;
+use crate::api;
+use crate::api::FrozenChangeProof;
+use crate::api::HashKey;
+use crate::db::BatchOp;
+use crate::proofs::ProofEdge;
 
 /// A change proof can demonstrate that by applying the provided array of `BatchOp`s to a Merkle
 /// trie with given start root hash, the resulting trie will have the given end root hash. It
@@ -561,7 +566,8 @@ pub fn verify_change_proof_structure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::merkle::{Key, Value};
+    use crate::merkle::Key;
+    use crate::merkle::Value;
 
     #[test]
     fn test_change_proof_iterator() {

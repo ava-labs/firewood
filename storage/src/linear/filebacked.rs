@@ -19,20 +19,31 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use std::fs::{File, OpenOptions};
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::Read;
 use std::num::NonZero;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 
-use firewood_metrics::{GaugeExt, firewood_counter, firewood_gauge, firewood_histogram};
+use firewood_metrics::GaugeExt;
+use firewood_metrics::firewood_counter;
+use firewood_metrics::firewood_gauge;
+use firewood_metrics::firewood_histogram;
 use lru::LruCache as EntryLruCache;
 use lru_mem::LruCache as MemLruCache;
 use parking_lot::Mutex;
 
-use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
+use super::FileIoError;
+use super::OffsetReader;
+use super::ReadableStorage;
+use super::WritableStorage;
+use crate::CacheReadStrategy;
+use crate::CachedNode;
+use crate::LinearAddress;
+use crate::MaybePersistedNode;
+use crate::SharedNode;
 use crate::linear::ReadableNodeMode;
-use crate::{CacheReadStrategy, CachedNode, LinearAddress, MaybePersistedNode, SharedNode};
 
 /// A [`ReadableStorage`] and [`WritableStorage`] backed by a single on-disk file.
 ///
@@ -420,7 +431,8 @@ mod test {
     use tempfile::NamedTempFile;
 
     use super::*;
-    use crate::{DefaultHashMode, HashMode};
+    use crate::DefaultHashMode;
+    use crate::HashMode;
 
     #[test]
     fn freelist_entries_from_memory_limit() {

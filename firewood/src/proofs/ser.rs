@@ -7,22 +7,26 @@
 //! It provides efficient encoding of proof nodes, child bitmaps, and range proofs
 //! for transmission or persistent storage.
 
-use firewood_storage::{
-    EthHash, MerkleDbHash, NodeHashAlgorithm, PathBuf, PathComponentSliceExt, ValueDigest,
-};
+use firewood_storage::EthHash;
+use firewood_storage::MerkleDbHash;
+use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::PathBuf;
+use firewood_storage::PathComponentSliceExt;
+use firewood_storage::ValueDigest;
 use integer_encoding::VarInt;
 
-use super::{
-    header::Header,
-    types::{ProofNode, ProofType},
-};
+use super::header::Header;
+use super::types::ProofNode;
+use super::types::ProofType;
+use crate::api::FrozenChangeProof;
+use crate::api::FrozenRangeProof;
+use crate::db::BatchOp;
+use crate::merkle::Key;
+use crate::merkle::Value;
 use crate::merkle::childmask::ChildMask;
-use crate::{
-    api::{FrozenChangeProof, FrozenRangeProof},
-    db::BatchOp,
-    merkle::{Key, Value},
-    proofs::magic::{BATCH_DELETE, BATCH_DELETE_RANGE, BATCH_PUT},
-};
+use crate::proofs::magic::BATCH_DELETE;
+use crate::proofs::magic::BATCH_DELETE_RANGE;
+use crate::proofs::magic::BATCH_PUT;
 
 impl FrozenRangeProof {
     /// Serializes this proof into the provided byte vector.

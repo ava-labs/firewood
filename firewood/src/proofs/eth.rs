@@ -26,15 +26,26 @@
 //! collapses encoded bytes into a hash, this module keeps the bytes so a
 //! verifier can walk them.
 
-use std::io::{Error, ErrorKind};
+use std::io::Error;
+use std::io::ErrorKind;
 
+use firewood_storage::BranchNode;
+use firewood_storage::Children;
+use firewood_storage::HashType;
+use firewood_storage::PathComponent;
+use firewood_storage::RlpError;
+use firewood_storage::RlpItem;
+use firewood_storage::RlpList;
+use firewood_storage::ValueDigest;
+use firewood_storage::encode_list;
 use firewood_storage::eth_encoding::nibbles_to_eth_compact;
-use firewood_storage::{
-    BranchNode, Children, HashType, PathComponent, RlpError, RlpItem, RlpList, ValueDigest,
-    encode_list, fix_account_storage_root_value, parse_be_uint, parse_fixed,
-};
-use sha3::{Digest, Keccak256};
-use smallvec::{SmallVec, smallvec};
+use firewood_storage::fix_account_storage_root_value;
+use firewood_storage::parse_be_uint;
+use firewood_storage::parse_fixed;
+use sha3::Digest;
+use sha3::Keccak256;
+use smallvec::SmallVec;
+use smallvec::smallvec;
 
 use crate::api;
 use crate::proofs::types::ProofNode;
@@ -281,7 +292,11 @@ fn proof_child_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
 
 #[cfg(test)]
 mod tests {
-    use firewood_storage::{DenseChildren, PathBuf, RlpList, TrieHash, TriePathFromUnpackedBytes};
+    use firewood_storage::DenseChildren;
+    use firewood_storage::PathBuf;
+    use firewood_storage::RlpList;
+    use firewood_storage::TrieHash;
+    use firewood_storage::TriePathFromUnpackedBytes;
 
     use super::*;
 

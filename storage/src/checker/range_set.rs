@@ -4,12 +4,15 @@
 #![warn(clippy::pedantic)]
 
 use std::collections::BTreeMap;
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
+use std::fmt::Display;
 use std::ops::Range;
 
+use crate::CheckerError;
+use crate::LinearAddress;
+use crate::StoredAreaParent;
 use crate::iter::write_limited_with_sep;
 use crate::nodestore::NodeStoreHeader;
-use crate::{CheckerError, LinearAddress, StoredAreaParent};
 
 const MAX_AREAS_TO_DISPLAY: usize = 10;
 
@@ -595,7 +598,10 @@ mod test_linear_address_range_set {
     use test_case::test_case;
 
     use super::*;
-    use crate::{FreeListParent, PathComponent, TrieNodeParent, area_index};
+    use crate::FreeListParent;
+    use crate::PathComponent;
+    use crate::TrieNodeParent;
+    use crate::area_index;
 
     const TEST_PARENT: StoredAreaParent = StoredAreaParent::TrieNode(TrieNodeParent::Root);
 

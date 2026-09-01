@@ -4,11 +4,15 @@
 use firewood::api;
 use firewood_metrics::MetricsContext;
 
+use crate::BorrowedBytes;
+use crate::BorrowedBytes2D;
+use crate::EthProofResult;
+use crate::Maybe;
+use crate::OwnedBytes;
+use crate::OwnedSlice;
+use crate::VoidResult;
 use crate::reconstructed::ReconstructedHandle;
 use crate::revision::RevisionHandle;
-use crate::{
-    BorrowedBytes, BorrowedBytes2D, EthProofResult, Maybe, OwnedBytes, OwnedSlice, VoidResult,
-};
 
 /// An owned, C-friendly `eth_getProof` result.
 ///

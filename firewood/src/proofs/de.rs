@@ -9,21 +9,31 @@
 
 use std::num::NonZeroUsize;
 
-use firewood_storage::{HashType, PathBuf, TrieHash, TriePathFromUnpackedBytes, ValueDigest};
+use firewood_storage::HashType;
+use firewood_storage::PathBuf;
+use firewood_storage::TrieHash;
+use firewood_storage::TriePathFromUnpackedBytes;
+use firewood_storage::ValueDigest;
 use integer_encoding::VarInt;
 
-use super::{
-    header::InvalidHeader,
-    reader::{ProofReader, ReadError, ReadItem, V0Reader, Version0},
-    types::{Proof, ProofNode, ProofType},
-};
+use super::header::InvalidHeader;
+use super::reader::ProofReader;
+use super::reader::ReadError;
+use super::reader::ReadItem;
+use super::reader::V0Reader;
+use super::reader::Version0;
+use super::types::Proof;
+use super::types::ProofNode;
+use super::types::ProofType;
+use crate::api::FrozenChangeProof;
+use crate::api::FrozenRangeProof;
+use crate::db::BatchOp;
+use crate::merkle::Key;
+use crate::merkle::Value;
 use crate::merkle::childmask::ChildMask;
-use crate::{
-    api::{FrozenChangeProof, FrozenRangeProof},
-    db::BatchOp,
-    merkle::{Key, Value},
-    proofs::magic::{BATCH_DELETE, BATCH_DELETE_RANGE, BATCH_PUT},
-};
+use crate::proofs::magic::BATCH_DELETE;
+use crate::proofs::magic::BATCH_DELETE_RANGE;
+use crate::proofs::magic::BATCH_PUT;
 
 impl FrozenRangeProof {
     /// Parses a `FrozenRangeProof` from the given byte slice.

@@ -9,23 +9,46 @@ mod owned;
 pub mod rendered_metrics;
 pub(crate) mod results;
 
-pub use self::borrowed::{BorrowedBatchOps, BorrowedBytes, BorrowedBytes2D, BorrowedSlice};
+pub use self::borrowed::BorrowedBatchOps;
+pub use self::borrowed::BorrowedBytes;
+pub use self::borrowed::BorrowedBytes2D;
+pub use self::borrowed::BorrowedSlice;
 use self::display_hex::DisplayHex;
 pub use self::hash_key::HashKey;
-pub use self::kvp::{BatchOp, OwnedKeyValueBatch, OwnedKeyValuePair};
-pub use self::owned::{OwnedBytes, OwnedSlice};
-pub use self::rendered_metrics::{
-    OwnedBucket, OwnedBucketSpan, OwnedClassicHistogram, OwnedLabelPair, OwnedMetric,
-    OwnedMetricFamily, OwnedMetricValue, OwnedNativeHistogram, OwnedQuantile, OwnedRenderedMetrics,
-    OwnedSummary,
-};
-pub(crate) use self::results::{CResult, NullHandleResult};
-pub use self::results::{
-    ChangeProofResult, CodeIteratorResult, EthProofResult, HandleResult, HashResult,
-    IteratorResult, KeyValueBatchResult, KeyValueResult, NextKeyRangeResult, ProposalResult,
-    RangeProofResult, ReconstructedResult, RenderedMetricsResult, RevisionResult, ValueResult,
-    VoidResult,
-};
+pub use self::kvp::BatchOp;
+pub use self::kvp::OwnedKeyValueBatch;
+pub use self::kvp::OwnedKeyValuePair;
+pub use self::owned::OwnedBytes;
+pub use self::owned::OwnedSlice;
+pub use self::rendered_metrics::OwnedBucket;
+pub use self::rendered_metrics::OwnedBucketSpan;
+pub use self::rendered_metrics::OwnedClassicHistogram;
+pub use self::rendered_metrics::OwnedLabelPair;
+pub use self::rendered_metrics::OwnedMetric;
+pub use self::rendered_metrics::OwnedMetricFamily;
+pub use self::rendered_metrics::OwnedMetricValue;
+pub use self::rendered_metrics::OwnedNativeHistogram;
+pub use self::rendered_metrics::OwnedQuantile;
+pub use self::rendered_metrics::OwnedRenderedMetrics;
+pub use self::rendered_metrics::OwnedSummary;
+pub(crate) use self::results::CResult;
+pub use self::results::ChangeProofResult;
+pub use self::results::CodeIteratorResult;
+pub use self::results::EthProofResult;
+pub use self::results::HandleResult;
+pub use self::results::HashResult;
+pub use self::results::IteratorResult;
+pub use self::results::KeyValueBatchResult;
+pub use self::results::KeyValueResult;
+pub use self::results::NextKeyRangeResult;
+pub(crate) use self::results::NullHandleResult;
+pub use self::results::ProposalResult;
+pub use self::results::RangeProofResult;
+pub use self::results::ReconstructedResult;
+pub use self::results::RenderedMetricsResult;
+pub use self::results::RevisionResult;
+pub use self::results::ValueResult;
+pub use self::results::VoidResult;
 
 /// Maybe is a C-compatible optional type using a tagged union pattern.
 ///

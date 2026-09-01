@@ -14,16 +14,23 @@
 //! themselves. This matches go-ethereum's behavior and keeps a single
 //! error type on the public API.
 
-use firewood_storage::{
-    EthHash, HashMode, PackedPathRef, PathComponent, TriePathFromPackedBytes, ValueDigest,
-};
-use firewood_storage::{RlpList, TrieHash};
+use firewood_storage::EthHash;
+use firewood_storage::HashMode;
+use firewood_storage::PackedPathRef;
+use firewood_storage::PathComponent;
+use firewood_storage::RlpList;
+use firewood_storage::TrieHash;
+use firewood_storage::TriePathFromPackedBytes;
+use firewood_storage::ValueDigest;
 
-use crate::api::{DbView, Error, HashKey};
+use crate::api::DbView;
+use crate::api::Error;
+use crate::api::HashKey;
 use crate::proofs::ProofError;
-use crate::proofs::eth::{
-    ACCOUNT_DEPTH_NIBBLES, AccountFields, account_storage_root_rlp, proof_node_to_mpt_rlp,
-};
+use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
+use crate::proofs::eth::AccountFields;
+use crate::proofs::eth::account_storage_root_rlp;
+use crate::proofs::eth::proof_node_to_mpt_rlp;
 use crate::proofs::types::ProofNode;
 
 /// Nibble depth at which a node represents a storage slot leaf
@@ -417,9 +424,12 @@ fn nibbles_match_packed(nibbles: &[PathComponent], packed: &[u8]) -> bool {
 mod merkledb_gate_tests {
     use std::sync::Arc;
 
-    use firewood_storage::{
-        Committed, DeletedNodeTracking, MemStore, MerkleDbHash, NodeHashAlgorithm, NodeStore,
-    };
+    use firewood_storage::Committed;
+    use firewood_storage::DeletedNodeTracking;
+    use firewood_storage::MemStore;
+    use firewood_storage::MerkleDbHash;
+    use firewood_storage::NodeHashAlgorithm;
+    use firewood_storage::NodeStore;
 
     use super::*;
 
@@ -442,8 +452,13 @@ mod merkledb_gate_tests {
 #[cfg(all(test, feature = "ethhash"))]
 #[expect(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
-    use firewood_storage::{NULL_RLP, NibblesIterator, RlpItem, RlpList, encode_list};
-    use sha3::{Digest, Keccak256};
+    use firewood_storage::NULL_RLP;
+    use firewood_storage::NibblesIterator;
+    use firewood_storage::RlpItem;
+    use firewood_storage::RlpList;
+    use firewood_storage::encode_list;
+    use sha3::Digest;
+    use sha3::Keccak256;
 
     use super::*;
     use crate::merkle::tests::init_merkle;

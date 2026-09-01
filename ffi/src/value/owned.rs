@@ -1,7 +1,8 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::{fmt, ptr::NonNull};
+use std::fmt;
+use std::ptr::NonNull;
 
 /// A type alias for a rust-owned byte slice.
 pub type OwnedBytes = OwnedSlice<u8>;

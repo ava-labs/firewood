@@ -13,37 +13,72 @@ pub mod parallel;
 pub(crate) mod reconcile;
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::io::Error;
 use std::iter::once;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use firewood_metrics::{HistogramExt, firewood_counter, firewood_histogram};
+use firewood_metrics::HistogramExt;
+use firewood_metrics::firewood_counter;
+use firewood_metrics::firewood_histogram;
+use firewood_storage::BranchNode;
+use firewood_storage::Child;
+use firewood_storage::Children;
+use firewood_storage::DeletedNodeTracking;
+use firewood_storage::EthHash;
+use firewood_storage::FileIoError;
+use firewood_storage::HashMode;
+use firewood_storage::HashType;
+use firewood_storage::HashableShunt;
+use firewood_storage::HashedNodeReader;
+use firewood_storage::ImmutableProposal;
+use firewood_storage::LeafNode;
+use firewood_storage::MaybePersistedNode;
 use firewood_storage::MemStore;
-use firewood_storage::{
-    BranchNode, Child, Children, DeletedNodeTracking, EthHash, FileIoError, HashMode, HashType,
-    HashableShunt, HashedNodeReader, ImmutableProposal, LeafNode, MaybePersistedNode, MerkleDbHash,
-    Mutable, MutableKind, NibblesIterator, Node, NodeHashAlgorithm, NodeStore, Path, PathBuf,
-    PathComponent, Propose, ReadableStorage, SharedNode, TrieHash, TrieReader, U4, ValueDigest,
-};
-use firewood_storage::{
-    hash_node_as_storage_trie_root_for_node, hash_node_as_storage_trie_root_parts,
-};
+use firewood_storage::MerkleDbHash;
+use firewood_storage::Mutable;
+use firewood_storage::MutableKind;
+use firewood_storage::NibblesIterator;
+use firewood_storage::Node;
+use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::NodeStore;
+use firewood_storage::Path;
+use firewood_storage::PathBuf;
+use firewood_storage::PathComponent;
+use firewood_storage::Propose;
+use firewood_storage::ReadableStorage;
+use firewood_storage::SharedNode;
+use firewood_storage::TrieHash;
+use firewood_storage::TrieReader;
+use firewood_storage::U4;
+use firewood_storage::ValueDigest;
+use firewood_storage::hash_node_as_storage_trie_root_for_node;
+use firewood_storage::hash_node_as_storage_trie_root_parts;
 
-use crate::api::{
-    self, BatchIter, FrozenChangeProof, FrozenProof, FrozenRangeProof, HashKey, KeyType,
-    KeyValuePair, ValueType,
-};
-use crate::iter::{MerkleKeyValueIter, PathIterator};
+use crate::ChangeProofVerificationContext;
+use crate::Proof;
+use crate::ProofCollection;
+use crate::ProofError;
+use crate::ProofNode;
+use crate::RangeProof;
+use crate::api;
+use crate::api::BatchIter;
+use crate::api::FrozenChangeProof;
+use crate::api::FrozenProof;
+use crate::api::FrozenRangeProof;
+use crate::api::HashKey;
+use crate::api::KeyType;
+use crate::api::KeyValuePair;
+use crate::api::ValueType;
+use crate::iter::MerkleKeyValueIter;
+use crate::iter::PathIterator;
 use crate::merkle::changes::DiffMerkleNodeStream;
 use crate::proofs::ProofEdge;
 use crate::proofs::change::ChangeProof;
 use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
-use crate::{
-    ChangeProofVerificationContext, Proof, ProofCollection, ProofError, ProofNode, RangeProof,
-};
 
 /// Keys are boxed u8 slices
 pub type Key = Box<[u8]>;
@@ -52,7 +87,8 @@ pub type Key = Box<[u8]>;
 pub type Value = Box<[u8]>;
 
 use childmask::ChildMask;
-use collapse::{BoundaryChildSource, CollapseRange};
+use collapse::BoundaryChildSource;
+use collapse::CollapseRange;
 
 macro_rules! write_attributes {
     ($writer:ident, $node:expr, $value:expr, $algorithm:expr) => {

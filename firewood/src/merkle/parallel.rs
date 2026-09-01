@@ -3,19 +3,35 @@
 
 use std::iter::once;
 use std::sync::mpsc;
-use std::sync::mpsc::{Receiver, SendError, Sender};
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::SendError;
+use std::sync::mpsc::Sender;
 
-use firewood_metrics::{current_metrics_context, set_metrics_context};
+use firewood_metrics::current_metrics_context;
+use firewood_metrics::set_metrics_context;
+use firewood_storage::BranchNode;
+use firewood_storage::Child;
+use firewood_storage::Children;
+use firewood_storage::FileBacked;
+use firewood_storage::FileIoError;
+use firewood_storage::HashMode;
+use firewood_storage::LeafNode;
+use firewood_storage::MaybePersistedNode;
+use firewood_storage::Mutable;
+use firewood_storage::NibblesIterator;
+use firewood_storage::Node;
+use firewood_storage::NodeStore;
+use firewood_storage::Path;
+use firewood_storage::PathComponent;
+use firewood_storage::Propose;
 use firewood_storage::logger::error;
-use firewood_storage::{
-    BranchNode, Child, Children, FileBacked, FileIoError, HashMode, LeafNode, MaybePersistedNode,
-    Mutable, NibblesIterator, Node, NodeStore, Path, PathComponent, Propose,
-};
 use rayon::ThreadPool;
 
 use crate::api::IntoBatchIter;
 use crate::db::BatchOp;
-use crate::merkle::{Key, Merkle, Value};
+use crate::merkle::Key;
+use crate::merkle::Merkle;
+use crate::merkle::Value;
 
 #[derive(Debug)]
 struct WorkerSender(mpsc::Sender<BatchOp<Key, Value>>);

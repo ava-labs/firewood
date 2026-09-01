@@ -24,15 +24,21 @@
 //! - Uses C-compatible representation for cross-language access
 
 use std::fs::File;
-use std::io::{Error, ErrorKind, Read};
+use std::io::Error;
+use std::io::ErrorKind;
+use std::io::Read;
 use std::path::Path;
 
-use bytemuck_derive::{Pod, Zeroable};
+use bytemuck_derive::Pod;
+use bytemuck_derive::Zeroable;
 
 use super::alloc::FreeLists;
-use super::primitives::{AREA_SIZES_HASH, LinearAddress};
-use crate::logger::{debug, trace};
-use crate::{NodeHashAlgorithm, TrieHash};
+use super::primitives::AREA_SIZES_HASH;
+use super::primitives::LinearAddress;
+use crate::NodeHashAlgorithm;
+use crate::TrieHash;
+use crate::logger::debug;
+use crate::logger::trace;
 
 /// A tuple indicating the address and hash of a node (the root node).
 pub type RootNodeInfo = (LinearAddress, TrieHash);
@@ -631,7 +637,8 @@ mod tests {
     use test_case::test_case;
 
     use super::*;
-    use crate::{DefaultHashMode, HashMode};
+    use crate::DefaultHashMode;
+    use crate::HashMode;
 
     #[test]
     fn test_version_new_is_valid() {

@@ -15,18 +15,29 @@
 )]
 
 use std::fmt::Debug;
-use std::io::{Error, Read, Write};
+use std::io::Error;
+use std::io::Read;
+use std::io::Write;
 
 use bitfield::bitfield;
-pub use branch::{BranchNode, Child};
-pub use children::{Children, ChildrenSlots, DenseChildren};
+pub use branch::BranchNode;
+pub use branch::Child;
+pub use children::Children;
+pub use children::ChildrenSlots;
+pub use children::DenseChildren;
 use enum_as_inner::EnumAsInner;
-use integer_encoding::{VarInt, VarIntReader as _};
+use integer_encoding::VarInt;
+use integer_encoding::VarIntReader as _;
 pub use leaf::LeafNode;
 
+use crate::HashMode;
+use crate::LinearAddress;
+use crate::Path;
+use crate::PathBuf;
+use crate::PathComponent;
+use crate::SharedNode;
 use crate::node::branch::ReadSerializable;
 use crate::nodestore::AreaIndex;
-use crate::{HashMode, LinearAddress, Path, PathBuf, PathComponent, SharedNode};
 
 pub mod branch;
 pub mod children;
@@ -545,8 +556,15 @@ mod snapshot_tests;
 mod test {
     use test_case::test_case;
 
-    use crate::node::{BranchNode, LeafNode, Node};
-    use crate::{Child, Children, DefaultHashMode, LinearAddress, NibblesIterator, Path};
+    use crate::Child;
+    use crate::Children;
+    use crate::DefaultHashMode;
+    use crate::LinearAddress;
+    use crate::NibblesIterator;
+    use crate::Path;
+    use crate::node::BranchNode;
+    use crate::node::LeafNode;
+    use crate::node::Node;
 
     #[test_case(
         Node::Leaf(LeafNode {

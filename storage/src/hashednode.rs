@@ -3,10 +3,17 @@
 
 use smallvec::SmallVec;
 
-use crate::{
-    Children, DefaultHashMode, HashMode, HashType, HashableShunt, IntoSplitPath, Node, Path,
-    PathComponent, SplitPath, TrieHash,
-};
+use crate::Children;
+use crate::DefaultHashMode;
+use crate::HashMode;
+use crate::HashType;
+use crate::HashableShunt;
+use crate::IntoSplitPath;
+use crate::Node;
+use crate::Path;
+use crate::PathComponent;
+use crate::SplitPath;
+use crate::TrieHash;
 
 impl<'a, P: SplitPath> HashableShunt<'a, P, &'a [PathComponent]> {
     /// Creates a new [`HashableShunt`] from the given `node` at the given `prefix`.
@@ -99,7 +106,8 @@ impl<T: AsRef<[u8]>> ValueDigest<T> {
                 got_value.as_ref() == expected.as_ref()
             }
             Self::Hash(got_hash) => {
-                use sha2::{Digest, Sha256};
+                use sha2::Digest;
+                use sha2::Sha256;
                 // This proof proves that `key` maps to a value
                 // whose hash is `got_hash`. `HashType` implements
                 // `PartialEq<TrieHash>`, so compare without re-wrapping.
@@ -138,7 +146,8 @@ impl<T: AsRef<[u8]>> ValueDigest<T> {
     pub fn make_hash<H: HashMode>(&self) -> ValueDigest<&[u8]> {
         match self.as_ref() {
             ValueDigest::Value(v) if v.len() >= 32 && !H::ALGORITHM.is_ethereum() => {
-                use sha2::{Digest, Sha256};
+                use sha2::Digest;
+                use sha2::Sha256;
                 ValueDigest::Hash(HashType::from(TrieHash::from(Sha256::digest(v))))
             }
 

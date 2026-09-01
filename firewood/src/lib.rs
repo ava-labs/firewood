@@ -158,17 +158,34 @@ pub mod proofs;
 pub mod eth_proof;
 
 // Re-export commonly used proof types at the crate root for ergonomic access
+pub use eth_proof::EthProof;
+pub use eth_proof::EthStorageProof;
 pub use eth_proof::account_code_hash;
-pub use eth_proof::{EthProof, EthStorageProof, eth_get_proof};
+pub use eth_proof::eth_get_proof;
 // Re-export the proc macro from firewood-macros
 pub use firewood_macros::metrics;
-pub use merkle::{Key, Value, verify_change_proof_root_hash, verify_range_proof};
-pub use proofs::{
-    ChangeProof, ChangeProofVerificationContext, EmptyProofCollection, InvalidHeader, KeyRange,
-    Proof, ProofCollection, ProofEdge, ProofError, ProofNode, ProofType, RangeProof,
-    RangeProofVerificationContext, ReadError, find_next_key_after_change_proof,
-    find_next_key_after_range_proof, verify_change_proof_structure, verify_range_proof_structure,
-};
+pub use merkle::Key;
+pub use merkle::Value;
+pub use merkle::verify_change_proof_root_hash;
+pub use merkle::verify_range_proof;
+pub use proofs::ChangeProof;
+pub use proofs::ChangeProofVerificationContext;
+pub use proofs::EmptyProofCollection;
+pub use proofs::InvalidHeader;
+pub use proofs::KeyRange;
+pub use proofs::Proof;
+pub use proofs::ProofCollection;
+pub use proofs::ProofEdge;
+pub use proofs::ProofError;
+pub use proofs::ProofNode;
+pub use proofs::ProofType;
+pub use proofs::RangeProof;
+pub use proofs::RangeProofVerificationContext;
+pub use proofs::ReadError;
+pub use proofs::find_next_key_after_change_proof;
+pub use proofs::find_next_key_after_range_proof;
+pub use proofs::verify_change_proof_structure;
+pub use proofs::verify_range_proof_structure;
 
 // Persistence worker module
 mod persist_worker;

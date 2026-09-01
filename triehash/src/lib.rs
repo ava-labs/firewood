@@ -284,7 +284,9 @@ mod tests {
     use hex_literal::hex;
     use keccak_hasher::KeccakHasher;
 
-    use super::{hex_prefix_encode, shared_prefix_len, trie_root};
+    use super::hex_prefix_encode;
+    use super::shared_prefix_len;
+    use super::trie_root;
 
     #[test]
     fn test_hex_prefix_encode() {
