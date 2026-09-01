@@ -16,6 +16,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: full
+  # Build on stable, not the nightly rust-toolchain.toml pin; the
+  # `toolchain: stable` input alone does not do that. See AGENTS.md,
+  # "Toolchain Selection".
+  RUSTUP_TOOLCHAIN: stable
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
