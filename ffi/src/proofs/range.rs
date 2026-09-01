@@ -256,12 +256,14 @@ impl<'db> RangeProofContext<'db> {
     /// The returned key range represents `(finalKey, endKey]` where `finalKey`
     /// is the last key known to be fully synchronized within the requested
     /// range. `finalKey` is exclusive, meaning it has already been processed.
-    /// `endKey` is inclusive if provided during proof creation.
+    /// `endKey` is inclusive if provided when verifying the proof, i.e. the
+    /// `end_key` of [`VerifyRangeProofArgs`], which need not match the
+    /// `end_key` the proof was created with.
     ///
-    /// Because the proof includes hash information about the state of the
-    /// database outside of the range of key-value pairs included in the proof,
-    /// we are able to inspect the database and provide a more accurate value
-    /// for `finalKey` than simply the last key in the set of key-value pairs.
+    /// The proof carries hash information about the state outside the range of
+    /// key-value pairs it includes, so `finalKey` could in principle be
+    /// tightened beyond the last key in those pairs. That is not yet
+    /// implemented (tracked in #352); today `finalKey` is simply that last key.
     fn find_next_key(&mut self) -> Result<Option<KeyRange>, api::Error> {
         let verification = self
             .verification

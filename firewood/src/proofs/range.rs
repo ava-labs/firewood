@@ -71,8 +71,9 @@ use super::types::{Proof, ProofCollection};
 pub type KeyRange = (Box<[u8]>, Option<Box<[u8]>>);
 
 /// Verification context captured after structural validation of a range proof.
-/// Stored so that downstream logic (root hash verification, `find_next_key`)
-/// can reference the original verification parameters without re-validating.
+/// Stored so that downstream logic (root hash verification,
+/// [`find_next_key_after_range_proof`]) can reference the original
+/// verification parameters without re-validating.
 ///
 /// Constructible only by [`verify_range_proof_structure`]; fields are private
 /// so a context cannot be forged or altered after verification.
@@ -111,9 +112,11 @@ impl RangeProofVerificationContext {
         self.max_length
     }
 
-    /// The actual right edge of the **proven** range, inclusive. Equals
-    /// `end_key` when the responder covered the whole request, and a smaller
-    /// key when the reply was truncated. `None` means unbounded above.
+    /// The actual right edge of the **proven** range, inclusive — see
+    /// [`ProvenRange::end`]. Equals `end_key` when the responder covered the
+    /// whole request, and a smaller key when the reply was truncated. `None`
+    /// means unbounded above. Callers applying the proof must bound the write
+    /// to this key, not to `end_key`.
     ///
     /// Mirrors [`ChangeProofVerificationContext::right_edge_key`].
     ///
