@@ -23,14 +23,25 @@ guidelines for contributing to firewood.
 
 ## Testing
 
-After submitting a PR, we'll run all the tests and verify your code meets our submission guidelines. To ensure it's more likely to pass these checks, you should run the following commands locally:
+After submitting a PR, we'll run all the tests and verify your code meets our submission guidelines. To make that more likely to pass, run the light local gate:
 
-    cargo fmt
-    cargo nextest run
-    cargo clippy
-    cargo doc --no-deps
+    ./scripts/run-just.sh prepush-lite
+
+That covers formatting, TODO annotations, Markdown, documentation, and clippy plus tests for a single feature profile. Run the full matrix when a change touches the FFI, workspace dependencies, or code behind a feature that profile does not enable:
+
+    ./scripts/run-just.sh prepush
+
+GitHub Actions remains authoritative either way: it also runs checks that have no local recipe, including the license-header check, the examples job, and the Linux-only differential fuzzing.
 
 Resolve any warnings or errors before making your PR.
+
+Prefer that over invoking Cargo directly, because two toolchains are in play.
+`rust-toolchain.toml` pins a nightly that formatting, clippy, and miri use;
+everything that builds or runs code uses stable. The `just` recipes select the
+right one per command, so a bare `cargo nextest run` in this repository tests
+against a channel CI never tests against. To format, use:
+
+    ./scripts/run-just.sh fmt
 
 Also, if you update any versions of packages, notably the MSRV (Minimum Supported Rust Version), you ought to update the nix ffi flake lock file to pin compatible versions of nix packages as well:
 
