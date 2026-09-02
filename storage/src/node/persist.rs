@@ -273,7 +273,7 @@ mod test {
     fn test_maybe_persisted_node() -> Result<(), FileIoError> {
         let mem_store = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM).into();
         let store: NodeStore<Committed, MemStore, DefaultHashMode> =
-            NodeStore::new_empty_committed(mem_store, DeletedNodeTracking::Enabled);
+            NodeStore::new_empty_committed(mem_store, DeletedNodeTracking::Disabled);
         let node = SharedNode::new(Node::Leaf(LeafNode {
             partial_path: Path::new(),
             value: vec![0].into(),
@@ -305,7 +305,7 @@ mod test {
     fn test_clone_shares_underlying_shared_node() -> Result<(), FileIoError> {
         let mem_store = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM).into();
         let store: NodeStore<Committed, MemStore, DefaultHashMode> =
-            NodeStore::new_empty_committed(mem_store, DeletedNodeTracking::Enabled);
+            NodeStore::new_empty_committed(mem_store, DeletedNodeTracking::Disabled);
         let node = SharedNode::new(Node::Leaf(LeafNode {
             partial_path: Path::new(),
             value: vec![42].into(),

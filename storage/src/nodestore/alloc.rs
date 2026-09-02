@@ -788,7 +788,7 @@ mod tests {
         let mut rng = crate::SeededRng::from_env_or_random();
         let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
         let nodestore =
-            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Disabled);
 
         let area_index = rng.random_range(0..AreaIndex::NUM_AREA_SIZES as u8);
         let area_index_type = AreaIndex::try_from(area_index).unwrap();
@@ -842,7 +842,7 @@ mod tests {
         let rng = crate::SeededRng::from_env_or_random();
         let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
         let nodestore =
-            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Disabled);
 
         let mut free_lists = FreeLists::default();
         let mut offset = NodeStoreHeader::SIZE;
@@ -969,7 +969,7 @@ mod tests {
 
         let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
         let nodestore =
-            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Disabled);
 
         let mut free_lists = FreeLists::default();
         let mut offset = NodeStoreHeader::SIZE;
@@ -1077,7 +1077,7 @@ mod tests {
 
         let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
         let nodestore =
-            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Disabled);
 
         // write a free area
         let free_index = area_index!(3);
