@@ -3,7 +3,7 @@
 
 #![expect(
     clippy::default_trait_access,
-    reason = "Found 3 occurrences after enabling the lint."
+    reason = "Default::default() reads better than naming the type where the type is fixed by the field it initializes."
 )]
 
 use nonzero_ext::nonzero;
@@ -36,7 +36,7 @@ use firewood_storage::{
 pub(crate) const DB_FILE_NAME: &str = "firewood.db";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, TypedBuilder)]
-/// Revision manager configuratoin
+/// Revision manager configuration
 pub struct RevisionManagerConfig {
     /// The number of committed revisions to keep in memory.
     ///
@@ -73,7 +73,8 @@ pub struct RevisionManagerConfig {
 
 #[derive(Clone, Debug, TypedBuilder)]
 #[non_exhaustive]
-/// Configuration manager that contains both truncate and revision manager config
+/// Configuration for opening or creating a database, including revision-manager
+/// tuning.
 pub struct ConfigManager {
     /// The directory where the database files will be stored (required).
     pub root_dir: PathBuf,
@@ -150,7 +151,7 @@ pub(crate) enum RevisionManagerError {
     #[error("Revision for {provided:?} has no address")]
     RevisionWithoutAddress { provided: HashKey },
     #[error(
-        "The proposal cannot be committed since it is not a direct child of the most recent commit. Proposal parent: {provided:?}, current root: {expected:?}"
+        "The proposal cannot be committed since it is not a direct child of the most recent commit. Proposal root: {provided:?}, current root: {expected:?}"
     )]
     NotLatest {
         provided: Option<HashKey>,
@@ -258,7 +259,8 @@ impl<H: HashMode> RevisionManager<H> {
             persist_worker,
         };
 
-        // On startup, we always write the latest revision to RootStore
+        // If RootStore is enabled and the current revision has a root hash, seed
+        // RootStore with it on startup.
         if let Some(root_hash) = manager.current_revision().root_hash() {
             let root_address = manager.current_revision().root_address().ok_or(
                 RevisionManagerError::RevisionWithoutAddress {
@@ -285,14 +287,16 @@ impl<H: HashMode> RevisionManager<H> {
     ///    further progress.
     /// 2. Commit check.
     ///    The proposal's parent must be the last committed revision, otherwise the commit fails.
-    ///    It only contains the address of the nodes that are deleted, which should be very small.
+    ///    Converting the proposal into a committed revision only records the
+    ///    addresses of the nodes it deleted, which should be very small.
     /// 3. Revision reaping.
     ///    If more than the maximum number of revisions are kept in memory, the
     ///    oldest revision is removed from memory and sent to the `PersistWorker`
-    ///    for reaping.
+    ///    for reaping. A revision that something else still holds cannot be
+    ///    reaped, so the queue can stay above the maximum until that handle is
+    ///    released.
     /// 4. Signal to the `PersistWorker` to persist this revision.
-    /// 5. Set last committed revision.
-    ///    Set last committed revision in memory.
+    /// 5. Set the last committed revision in memory.
     /// 6. Proposal Cleanup.
     ///    Any other proposals that have this proposal as a parent should be reparented to the committed version.
     ///
@@ -341,9 +345,11 @@ impl<H: HashMode> RevisionManager<H> {
     /// Validate and commit a proposal under the caller's write guard.
     ///
     /// Checks that the proposal's parent matches the latest revision, reaps
-    /// old revisions that exceed `max_revisions`, signals the persist worker,
-    /// and inserts the new committed revision into the queue. The caller must
-    /// hold the write lock on committed revisions and pass the locked queue in.
+    /// old revisions that exceed `max_revisions` — as far as it can; see that
+    /// field's documentation for why the cap is best-effort — signals the
+    /// persist worker, and inserts the new committed revision into the queue.
+    /// The caller must hold the write lock on committed revisions and pass the
+    /// locked queue in.
     ///
     /// Returns the [`CommittedId`] of the revision the proposal now lives in:
     /// either the freshly-inserted revision for a regular commit, or the
@@ -652,7 +658,7 @@ impl<H: HashMode> RevisionManager<H> {
     ///
     /// # Panics
     ///
-    /// Panics if the it cannot create a thread pool.
+    /// Panics if it cannot create a thread pool.
     pub fn threadpool(&self) -> &ThreadPool {
         // Note that OnceLock currently doesn't support get_or_try_init (it is available in a
         // nightly release). The get_or_init should be replaced with get_or_try_init once it
@@ -695,7 +701,8 @@ impl<H: HashMode> RevisionManager<H> {
         }
     }
 
-    /// Serial batch application shared by [`apply_batch`][Self::apply_batch].
+    /// Serial batch application, shared by [`apply_batch`][Self::apply_batch]
+    /// and [`apply_batch_recon`][Self::apply_batch_recon].
     fn apply_batch_serial<K: MutableKind, BH: HashMode>(
         mutable_nodestore: NodeStore<Mutable<K>, FileBacked, BH>,
         batch: impl IntoBatchIter,

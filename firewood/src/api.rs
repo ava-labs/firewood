@@ -106,7 +106,7 @@ pub enum Error {
 
     /// Incorrect root hash for commit
     #[error(
-        "The proposal cannot be committed since it is not a direct child of the most recent commit. Proposal parent: {provided:?}, current root: {expected:?}"
+        "The proposal cannot be committed since it is not a direct child of the most recent commit. Proposal root: {provided:?}, current root: {expected:?}"
     )]
     ParentNotLatest {
         /// the provided root hash
