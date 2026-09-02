@@ -4,6 +4,7 @@
 package ffi
 
 import (
+	"bytes"
 	"encoding/hex"
 	"runtime"
 	"sync"
@@ -314,23 +315,60 @@ func TestRangeProofFindNextKey(t *testing.T) {
 	// Verify the proof
 	r.NoError(db.VerifyRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated))
 
-	// Now FindNextKey should work
+	// The proof was taken from db's own state, so merging it over the proven
+	// range is a no-op and the proposal keeps `root`. That equality is the
+	// FFI's "already caught up" short-circuit, so there is nothing left to
+	// fetch — before commit here and after commit below. A NotNil here means
+	// the apply path deleted outside the proven range and moved the root.
+	// TestRangeProofFindNextKeyDivergentReceiver covers a receiver that is
+	// genuinely behind.
+	nextRange, err := proof.FindNextKey()
+	r.NoError(err)
+	r.Nil(nextRange)
+
+	_, err = db.VerifyAndCommitRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated)
+	r.NoError(err)
+
+	nextRange, err = proof.FindNextKey()
+	r.NoError(err)
+	r.Nil(nextRange)
+}
+
+// TestRangeProofFindNextKeyDivergentReceiver applies a truncated proof to an
+// empty target: a receiver genuinely behind the proof's root must report more
+// to fetch.
+func TestRangeProofFindNextKeyDivergentReceiver(t *testing.T) {
+	r := require.New(t)
+
+	dbSource := newTestDatabase(t)
+	dbTarget := newTestDatabase(t)
+
+	keys, vals, batch := kvForTest(100)
+	sourceRoot, err := dbSource.Update(batch)
+	r.NoError(err)
+
+	// dbTarget starts empty, so it is materially behind sourceRoot.
+	proof := newVerifiedRangeProof(t, dbSource, sourceRoot, nothing(), nothing(), rangeProofLenTruncated)
+
+	_, err = dbTarget.VerifyAndCommitRangeProof(proof, nothing(), nothing(), sourceRoot, rangeProofLenTruncated)
+	r.NoError(err)
+
+	// The proven prefix is written. Against an empty target this says nothing
+	// about where the bound falls — only the sibling tests named in
+	// TestRangeProofTruncatedDeletesStaleKeyWithinProvenEdge do.
+	for i := range rangeProofLenTruncated {
+		got, err := dbTarget.Get(keys[i])
+		r.NoError(err, "Get key %d", i)
+		r.Equal(vals[i], got, "key %d from the proven prefix was not applied", i)
+	}
+
+	// The truncated proof only proved a prefix, and dbTarget started with
+	// none of the data, so there is genuinely more to fetch.
 	nextRange, err := proof.FindNextKey()
 	r.NoError(err)
 	r.NotNil(nextRange)
 	startKey := nextRange.StartKey()
 	r.NotEmpty(startKey)
-	startKey = append([]byte{}, startKey...) // copy to new slice to avoid use-after-free
-	r.NoError(nextRange.Free())
-
-	_, err = db.VerifyAndCommitRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated)
-	r.NoError(err)
-
-	// FindNextKey should still work after commit
-	nextRange, err = proof.FindNextKey()
-	r.NoError(err)
-	r.NotNil(nextRange)
-	r.Equal(nextRange.StartKey(), startKey)
 	r.NoError(nextRange.Free())
 }
 
@@ -1169,4 +1207,82 @@ func TestChangeProofMarshalWorksAfterVerify(t *testing.T) {
 	marshalledAfter, err := changeProof.MarshalBinary()
 	r.NoError(err)
 	r.Equal(marshalledBefore, marshalledAfter)
+}
+
+// A truncated range proof proves only a prefix of the requested range, so
+// applying it must leave local keys past the proven edge alone: no proof covers
+// them.
+func TestRangeProofTruncatedDoesNotDeleteBeyondProvenEdge(t *testing.T) {
+	r := require.New(t)
+
+	dbSource := newTestDatabase(t)
+	dbTarget := newTestDatabase(t)
+
+	keys, vals, batch := kvForTest(50)
+
+	sourceRoot, err := dbSource.Update(batch)
+	r.NoError(err)
+
+	// Seed the target with identical data, so it holds keys past the edge a
+	// truncated reply will prove. Nothing here should be deleted.
+	_, err = dbTarget.Update(batch)
+	r.NoError(err)
+
+	// Request the whole keyspace but cap the reply, forcing truncation.
+	proof := newVerifiedRangeProof(t, dbSource, sourceRoot, nothing(), nothing(), rangeProofLenTruncated)
+
+	_, err = dbTarget.VerifyAndCommitRangeProof(proof, nothing(), nothing(), sourceRoot, rangeProofLenTruncated)
+	r.NoError(err)
+
+	// Source and target held the same data and the proof covered a prefix of
+	// it, so every original key must survive.
+	for i, key := range keys {
+		got, err := dbTarget.Get(key)
+		r.NoError(err, "Get key %d", i)
+		r.Equal(vals[i], got, "key %d was deleted or altered by a proof that never covered it", i)
+	}
+}
+
+// Within the proven prefix, a range proof proves that only the key-values it
+// carries exist, so anything else there must be deleted. This is the mirror of
+// TestRangeProofTruncatedDoesNotDeleteBeyondProvenEdge, which guards a bound
+// looser than the proof justifies; a bound tighter than it justifies stops the
+// merge's trie scan short and strands the synthetic stale key below.
+//
+// Only a stale local key can observe the bound: it gates the trie-side scan
+// alone, so against an empty target (as in
+// TestRangeProofFindNextKeyDivergentReceiver) every key-value is applied
+// whatever the bound is.
+func TestRangeProofTruncatedDeletesStaleKeyWithinProvenEdge(t *testing.T) {
+	r := require.New(t)
+
+	dbSource := newTestDatabase(t)
+	dbTarget := newTestDatabase(t)
+
+	keys, _, batch := kvForTest(50)
+
+	sourceRoot, err := dbSource.Update(batch)
+	r.NoError(err)
+
+	_, err = dbTarget.Update(batch)
+	r.NoError(err)
+
+	// A key present only in dbTarget, and absent from the proof's key-values,
+	// so a correctly-bounded merge must delete it. The assertions pin it inside
+	// the proven range rather than assuming it.
+	staleKey := append(append([]byte{}, keys[0]...), 0)
+	r.Negative(bytes.Compare(keys[0], staleKey), "synthetic key must sort after keys[0]")
+	r.Negative(bytes.Compare(staleKey, keys[rangeProofLenTruncated-1]),
+		"synthetic key must sort inside the proven range")
+	_, err = dbTarget.Update([]BatchOp{Put(staleKey, []byte("stale"))})
+	r.NoError(err)
+
+	proof := newVerifiedRangeProof(t, dbSource, sourceRoot, nothing(), nothing(), rangeProofLenTruncated)
+
+	_, err = dbTarget.VerifyAndCommitRangeProof(proof, nothing(), nothing(), sourceRoot, rangeProofLenTruncated)
+	r.NoError(err)
+
+	got, err := dbTarget.Get(staleKey)
+	r.NoError(err)
+	r.Nil(got, "stale key inside the proven range should have been deleted")
 }

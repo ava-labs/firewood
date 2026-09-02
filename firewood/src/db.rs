@@ -410,8 +410,19 @@ impl<H: HashMode> Db<H> {
     /// the range that are not present in the provided key-values will be deleted,
     /// any duplicate keys will be overwritten, and any new keys will be inserted.
     ///
+    /// Because that deletion is unconditional, `last_key` must be a bound the
+    /// caller can justify. When the key-values come from a verified range
+    /// proof, that is the proof's proven right edge ([`ProvenRange::end`]) and
+    /// not the bound the caller requested: a truncated reply proves less than
+    /// was asked for, and merging to the requested bound erases every local key
+    /// in the span the proof never covered. Cover the remainder by iterating
+    /// [`find_next_key_after_range_proof`] — each reply can truncate again.
+    ///
     /// Invariant: `key_values` must be sorted by key in ascending order; however,
     /// because debug assertions are disabled, this is not checked.
+    ///
+    /// [`ProvenRange::end`]: crate::ProvenRange::end
+    /// [`find_next_key_after_range_proof`]: crate::find_next_key_after_range_proof
     pub fn merge_key_value_range(
         &self,
         first_key: Option<impl KeyType>,
@@ -432,6 +443,8 @@ impl<H: HashMode> Db<H> {
     /// the provided key-values from the iterator. I.e., any existing keys within
     /// the range that are not present in the provided key-values will be deleted,
     /// any duplicate keys will be overwritten, and any new keys will be inserted.
+    ///
+    /// See [`Db::merge_key_value_range`] for the obligation `last_key` carries.
     ///
     /// Invariant: `key_values` must be sorted by key in ascending order; however,
     /// because debug assertions are disabled, this is not checked.

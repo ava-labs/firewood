@@ -43,6 +43,7 @@ fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         DefaultHashMode::ALGORITHM,
         proof,
     )
+    .map(drop)
 }
 
 // Returns n random key-value pairs.
