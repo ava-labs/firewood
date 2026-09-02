@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788333133346,
+  "lastUpdate": 1788333783074,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -10151,6 +10151,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 94.93255894373925,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "AminR443",
+            "username": "AminR443",
+            "email": "amin.rezaei@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "3277aab462827391f1ce92fa46d63f602ecb23a7",
+          "message": "feat(logging): tag log lines with per-database db_tag (#2216)\n\n## Why this should be merged\nWhen multiple Firewood databases run in the same process, their log\nlines are indistinguishable. Building on the per-database\n`MetricsContext` (from the #2215 this stacks on), this attaches the same\n`db_tag` to every log record emitted by the storage layer, so logs can\nbe attributed to a specific database instance.\n\n## How this works\n`firewood-metrics` gains an optional logger feature and a\n`firewood_log!` macro family (`firewood_error!`, ...,\n`firewood_trace!`). Each macro reads the current `db_tag` from the\nthread-local `MetricsContext` and emits it as a log key-value (`kv`\nfeature) on the record.\n\n## How this was tested\nUT.\n\n## Breaking Changes\n\n- [ ] firewood\n- [ ] firewood-storage\n- [ ] firewood-ffi (C api)\n- [ ] firewood-go (Go api)\n- [ ] fwdctl",
+          "timestamp": "2026-08-31T01:54:57Z",
+          "url": "https://github.com/ava-labs/firewood/commit/3277aab462827391f1ce92fa46d63f602ecb23a7"
+        },
+        "date": 1788333781866,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 156.08084798473232,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6406.935975244183,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 77.78577677434791,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6277.236413263241,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 49.65343198995968,
             "unit": "block_accept_ms/ggas"
           }
         ]
