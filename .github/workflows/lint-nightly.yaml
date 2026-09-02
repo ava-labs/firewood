@@ -2,7 +2,8 @@ name: lint-nightly
 on:
   schedule:
     # Mondays 06:00 UTC — surfaces new/changed nightly clippy lints out of band,
-    # decoupled from PR gating (which runs pinned nightly-2026-07-05).
+    # decoupled from PR gating (which runs the nightly pinned by
+    # rust-toolchain.toml).
     - cron: "0 6 * * 1"
   workflow_dispatch:
 jobs:
@@ -24,6 +25,9 @@ jobs:
       - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
         with:
           tool: just@1.46.0
+      # The floating nightly, not the one rust-toolchain.toml pins. The
+      # `clippy-nightly` command names it as `cargo +nightly`, which outranks
+      # that file.
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
         with:
           toolchain: nightly

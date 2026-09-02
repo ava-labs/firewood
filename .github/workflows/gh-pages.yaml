@@ -28,6 +28,11 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # rust-toolchain.toml pins a nightly for `cargo fmt` and clippy, and it
+  # outranks rustup's default -- so the stable toolchain the step below installs
+  # would be installed but not selected. RUSTUP_TOOLCHAIN selects it, which is
+  # what `cargo doc` here needs.
+  RUSTUP_TOOLCHAIN: stable
 
 jobs:
   build:

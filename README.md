@@ -117,6 +117,13 @@ In order to build firewood, the following dependencies must be installed:
 - `cargo` See [installation instructions](https://doc.rust-lang.org/cargo/getting-started/installation.html).
 - `make` See [download instructions](https://www.gnu.org/software/make/#download) or run `sudo apt install build-essential` on Linux.
 
+Firewood is built and tested on the stable Rust channel. The
+`rust-toolchain.toml` at the repository root pins a nightly, but only for
+formatting and linting; under `rustup`, that toolchain installs itself the
+first time you run a Cargo command here. Use the `just` recipes described in
+[CONTRIBUTING.md](CONTRIBUTING.md) rather than bare Cargo commands, since they
+select the right channel for each task.
+
 More detailed build instructions, including some scripts,
 can be found in the [benchmark setup scripts](benchmark/setup-scripts).
 
@@ -175,8 +182,10 @@ Firewood comes with a CLI tool called `fwdctl` that enables one to create and in
 ## Test
 
 ```sh
-cargo nextest --release
+./scripts/run-just.sh test
 ```
+
+This runs every portable test profile on stable, the channel CI tests against.
 
 ## License
 

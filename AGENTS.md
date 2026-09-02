@@ -152,7 +152,7 @@ just prepush-lite
 
 That runs `ci-format`, `ci-check-todos`, clippy and tests for the single
 `debug-ethhash-logger` profile, `ci-lint-markdown`, and `ci-docs`. Note that
-`ci-format` only *checks* formatting — run `cargo fmt` yourself to apply it.
+`ci-format` only *checks* formatting — run `just fmt` to apply it.
 
 The full local matrix is available when a change warrants it — in particular
 when it touches the FFI, workspace dependencies, or code gated behind a feature
@@ -186,6 +186,44 @@ profile names instead of duplicating Cargo feature and profile arguments. When
 changing a CI Rust matrix, update the shared script and both callers as needed.
 
 All tests must pass, and there should be no clippy warnings.
+
+### Toolchain Selection
+
+Two channels are in play, and which one a command gets is decided for you:
+
+| Task | Channel |
+| --- | --- |
+| `cargo fmt`, clippy, miri | the nightly pinned by `rust-toolchain.toml` |
+| everything that builds or runs code | stable |
+| the weekly `lint-nightly` workflow | the floating nightly |
+
+`rust-toolchain.toml` is the only file holding the pinned date, and it is what
+a bare `cargo fmt` or `cargo clippy` resolves to. Pinning means a new toolchain
+release cannot break the `-D warnings` gate out of band; `lint-nightly.yaml`
+runs the floating nightly on a schedule so new lints still surface, just not
+inside an unrelated pull request.
+
+Everything else is held to stable by `RUSTUP_TOOLCHAIN`, which outranks the
+toolchain file. It is set in three places, each covering commands the others do
+not reach: `scripts/run-rust-ci.sh` for its build and test commands, the
+`justfile` for the recipes that call Cargo directly, and an `env:` block in each
+workflow — workflow-level where every job needs stable, per-job in `ci.yaml`,
+which is the only workflow with jobs that want the pin.
+
+Two consequences worth knowing:
+
+- A `toolchain:` input to `dtolnay/rust-toolchain` no longer decides anything by
+  itself. That action sets rustup's *default*, which `rust-toolchain.toml`
+  outranks. A job that must run stable says so with `RUSTUP_TOOLCHAIN`.
+- Building on both channels roughly doubles the size of `target/`, because
+  Cargo hashes the compiler version into each unit. It does not cause rebuilds:
+  alternating between `just test` and a rust-analyzer check leaves both sets of
+  artifacts intact.
+
+The Nix flake is outside all of this. `ffi/flake.nix` names
+`rust-bin.stable.latest` and provides no rustup, so it neither reads nor needs
+`rust-toolchain.toml`. Running `cargo fmt` inside `nix develop` therefore uses
+that flake's stable rustfmt and produces different output than `just fmt`.
 
 ### Toolchain Floor for `--all-features`
 
