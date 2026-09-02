@@ -26,7 +26,7 @@ pub struct CreateRangeProofArgs<'a> {
     /// The start key must be less than the end key if both are provided.
     pub start_key: Maybe<BorrowedBytes<'a>>,
     /// The end key of the range to prove. If `None`, the range ends at the end
-    /// of the keyspace or until `max_length` items have been been included in
+    /// of the keyspace or until `max_length` items have been included in
     /// the proof.
     ///
     /// If provided, end key is inclusive if not truncated. Otherwise, the end
@@ -58,8 +58,9 @@ pub struct VerifyRangeProofArgs<'a, 'db> {
     /// The upper bound of the key range that the proof is expected to cover. If
     /// `None`, the proof is expected to cover to the end of the keyspace.
     ///
-    /// This is ignored if the proof is truncated and does not cover the full,
-    /// in which case the upper bound key is the final key in the key-value pairs.
+    /// This is a ceiling, not an assertion: a proof carrying a key above this
+    /// bound is invalid, but a truncated proof may prove less and anchor at
+    /// its own right edge instead.
     pub end_key: Maybe<BorrowedBytes<'a>>,
     /// The maximum number of key/value pairs that the proof is expected to cover.
     /// If the proof contains more items than this, it is considered invalid. If
@@ -67,7 +68,7 @@ pub struct VerifyRangeProofArgs<'a, 'db> {
     pub max_length: u32,
 }
 
-/// FFI context for for a parsed or generated range proof.
+/// FFI context for a parsed or generated range proof.
 #[derive(Debug)]
 pub struct RangeProofContext<'db> {
     proof: FrozenRangeProof,
@@ -144,6 +145,21 @@ impl<'db> RangeProofContext<'db> {
         Ok(())
     }
 
+    /// Returns the inclusive upper bound of the range the proof actually
+    /// proves, which may be narrower than the requested `end_key`. `None`
+    /// means proven to the end of the keyspace.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless [`Self::verify`] has succeeded first.
+    fn proven_end(&self) -> Option<&[u8]> {
+        self.verification
+            .as_ref()
+            .expect("verify() populates the verification context on success")
+            .right_edge_key
+            .as_deref()
+    }
+
     /// Verify the range proof and prepare a proposal against the given database
     /// without committing it.
     ///
@@ -169,7 +185,8 @@ impl<'db> RangeProofContext<'db> {
             return Ok(());
         }
 
-        let proposal = db.merge_key_value_range(start_key, end_key, self.proof.key_values())?;
+        let proven_end = self.proven_end();
+        let proposal = db.merge_key_value_range(start_key, proven_end, self.proof.key_values())?;
         self.proposal_state = Some(ProposalState::Proposed(proposal.handle));
 
         Ok(())
@@ -182,7 +199,7 @@ impl<'db> RangeProofContext<'db> {
     /// prepared, it is committed instead of preparing a new one.
     ///
     /// However, if the prepared proposal is no longer valid (e.g., the
-    /// database has changed since it was prepared), the proposal is discared
+    /// database has changed since it was prepared), the proposal is discarded
     /// and a just-in-time proposal is created and committed.
     ///
     /// After committing or if the proof has already been committed, the
@@ -207,7 +224,8 @@ impl<'db> RangeProofContext<'db> {
             Some(ProposalState::Proposed(proposal)) => proposal,
             None => {
                 allow_rebase = false;
-                db.merge_key_value_range(start_key, end_key, self.proof.key_values())?
+                let proven_end = self.proven_end();
+                db.merge_key_value_range(start_key, proven_end, self.proof.key_values())?
                     .handle
             }
         };
@@ -217,8 +235,9 @@ impl<'db> RangeProofContext<'db> {
             && allow_rebase
         {
             // proposal is stale, try rebasing and committing again
+            let proven_end = self.proven_end();
             let proposal_handle = db
-                .merge_key_value_range(start_key, end_key, self.proof.key_values())?
+                .merge_key_value_range(start_key, proven_end, self.proof.key_values())?
                 .handle;
             proposal_handle.commit_proposal()
         } else {
@@ -235,7 +254,7 @@ impl<'db> RangeProofContext<'db> {
     /// Returns the next key range that should be fetched after processing this
     /// range proof, or [`None`] if there are no more keys to fetch.
     ///
-    /// The returned key range represents `(finalKey, endKey]` where finalKey is
+    /// The returned key range represents `(finalKey, endKey]` where `finalKey`
     /// is the last key known to be fully synchronized within the requested
     /// range. `finalKey` is exclusive, meaning it has already been processed.
     /// `endKey` is inclusive if provided during proof creation.
@@ -535,7 +554,7 @@ pub extern "C" fn fwd_range_proof_code_hash_iter<'a>(
 ///
 /// - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
 /// - [`ValueResult::Some`] containing the serialized bytes if successful.
-/// - [`ValueResult::Err`] if the caller provided a null pointer.
+/// - [`ValueResult::Err`] containing an error message if serialization panicked.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_range_proof_to_bytes(proof: Option<&RangeProofContext>) -> ValueResult {
     crate::invoke_with_handle(proof, |ctx| {

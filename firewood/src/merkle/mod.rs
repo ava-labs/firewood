@@ -242,6 +242,51 @@ impl RightBoundary<'_> {
     }
 }
 
+/// The inclusive key range a verified range proof actually proves, returned by
+/// [`verify_range_proof`]. `None` on either side means unbounded.
+///
+/// `start` is always the caller's requested lower bound. `end` is the bound the
+/// end proof anchors at, which is **narrower** than the requested one when the
+/// responder truncated its reply. Callers that replace state from a proof must
+/// bound the write to this range — see
+/// [`Db::merge_key_value_range`](crate::db::Db::merge_key_value_range).
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[must_use]
+pub struct ProvenRange {
+    /// The proven inclusive lower bound. `None` means unbounded below.
+    pub start: Option<Box<[u8]>>,
+    /// The proven inclusive upper bound. `None` means unbounded above.
+    pub end: Option<Box<[u8]>>,
+}
+
+/// Reduce a [`RightBoundary`] to the inclusive upper bound the proof proves.
+///
+/// `InRange(b)` proves `[start, b]`, so `b` is the answer directly, and
+/// `InRange(None)` is unbounded. `OutOfRange(k)` proves `[start, k)` — `k`
+/// itself sits outside — so the inclusive answer is the caller's requested
+/// bound when it sorts below `k` (the whole request is covered), and
+/// otherwise `last_kv`, the largest key the proof positively reports.
+///
+/// That `OutOfRange` fallback is deliberately conservative. The span
+/// `(last_kv, k)` is genuinely proven empty, but expressing it as an
+/// *inclusive* bound needs the byte-string predecessor of `k`, which has no
+/// short representation. Under-reporting costs at most one extra round trip.
+/// Over-reporting would authorise unproven deletions.
+fn proven_right_edge(
+    boundary: &RightBoundary<'_>,
+    last_kv: Option<&[u8]>,
+    requested_end: Option<&[u8]>,
+) -> Option<Box<[u8]>> {
+    match boundary {
+        RightBoundary::InRange(bound) => bound.map(Box::from),
+        RightBoundary::OutOfRange(k) => match requested_end {
+            Some(end) if end < k.as_ref() => Some(Box::from(end)),
+            _ => last_kv.map(Box::from),
+        },
+    }
+}
+
 impl EdgeBoundary<'_> {
     fn boundary_key(&self) -> Option<&[u8]> {
         match self {
@@ -838,11 +883,9 @@ fn reject_odd_nibble_value_digests(proof_nodes: &[ProofNode]) -> Result<(), Proo
 /// strictly narrower than what the caller requested — the dropped-trailing-
 /// key scenario (`test_dropped_trailing_key_accepted_as_partial_coverage`)
 /// is the canonical case, since the attacker shrunk it on purpose. This is
-/// a *valid* outcome, not a verification error. The caller is expected to
-/// compare `key_values.last()` against their requested `last_key`; if the
-/// proven range is narrower, they re-request `(last_kv, last_key]`. No data
-/// is hidden — at most one extra round trip is induced, and the attacker
-/// gains nothing.
+/// a *valid* outcome, not a verification error: [`verify_range_proof`]
+/// reports the narrower bound via [`ProvenRange`]. No data is hidden — at
+/// most one extra round trip is induced, and the attacker gains nothing.
 ///
 /// # Why we still take `fallback_last`
 ///
@@ -930,21 +973,14 @@ fn right_edge<'a>(
 /// 5. **Root hash comparison**: Verify the reconstructed trie's root hash matches the
 ///    expected hash
 ///
-/// # Partial coverage
+/// # Returns
 ///
-/// A successful return does **not** guarantee that the proof covered the
-/// caller's full requested range `[first_key, last_key]`. The proof
-/// generator may have truncated the response (e.g. hit a max-length limit),
-/// in which case the proven range is `[first_key, key_values.last()]` with
-/// `key_values.last() < last_key`. This is a valid outcome of verification,
-/// not an error.
-///
-/// Callers who need the full requested range must compare
-/// `proof.key_values().last()` against their requested `last_key` after a
-/// successful verification. If the proven right edge is short, re-request
-/// `(key_values.last(), last_key]` and verify that next slice. Iterating
-/// this loop is the canonical way to assemble full-range coverage from
-/// truncated proofs.
+/// The [`ProvenRange`] the proof establishes. Success does **not** mean the
+/// proof covered the requested `[first_key, last_key]`: a generator that
+/// truncated its response (e.g. hit a max-length limit) yields a `ProvenRange`
+/// whose `end` is narrower than `last_key`. That is a valid outcome of
+/// verification, not an error, and the returned range is what the caller may
+/// act on.
 ///
 /// # Node Hashing Algorithm
 ///
@@ -966,7 +1002,7 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     root_hash: &TrieHash,
     algorithm: NodeHashAlgorithm,
     proof: &RangeProof<impl KeyType, impl ValueType, H>,
-) -> Result<(), api::Error> {
+) -> Result<ProvenRange, api::Error> {
     // Reject a proof whose self-describing mode disagrees with the caller's
     // expectation before hashing it with that expected algorithm.
     if proof.hash_mode() != algorithm {
@@ -1110,6 +1146,13 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         key_values,
     )?;
 
+    // Build the proven range before `right_boundary` is moved into the
+    // root-hash check below.
+    let proven = ProvenRange {
+        start: first_key_bytes.map(Box::from),
+        end: proven_right_edge(&right_boundary, last_kv_bytes, last_key_bytes),
+    };
+
     match algorithm {
         NodeHashAlgorithm::Ethereum => verify_range_proof_root_hash::<H, EthHash>(
             &all_proof_nodes,
@@ -1127,7 +1170,9 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
             right_boundary,
             root_hash,
         ),
-    }
+    }?;
+
+    Ok(proven)
 }
 
 /// Verifies that proof nodes with values within the range are included in `key_values`.

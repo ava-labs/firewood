@@ -74,16 +74,28 @@ pub type KeyRange = (Box<[u8]>, Option<Box<[u8]>>);
 /// Stored so that downstream logic (root hash verification, `find_next_key`)
 /// can reference the original verification parameters without re-validating.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct RangeProofVerificationContext {
     /// The expected root hash of the trie.
     pub root: HashKey,
     /// The lower bound of the verified key range, if any.
     pub start_key: Option<Box<[u8]>>,
-    /// The upper bound of the verified key range, if any.
+    /// The upper bound the caller **requested**, if any.
     pub end_key: Option<Box<[u8]>>,
     /// The maximum number of key/value pairs the proof was permitted to
     /// contain. `None` means no limit.
     pub max_length: Option<NonZeroUsize>,
+    /// The inclusive right edge of the **proven** range — [`ProvenRange::end`]
+    /// as returned by verification. Equals `end_key` when the responder covered
+    /// the whole request, a smaller key when the reply was truncated, and
+    /// `None` when unbounded above. Callers applying the proof must bound the
+    /// write to this key, not to `end_key`.
+    ///
+    /// Mirrors [`ChangeProofVerificationContext::right_edge_key`].
+    ///
+    /// [`ProvenRange::end`]: crate::ProvenRange::end
+    /// [`ChangeProofVerificationContext::right_edge_key`]: crate::ChangeProofVerificationContext::right_edge_key
+    pub right_edge_key: Option<Box<[u8]>>,
 }
 
 /// Verify structural properties of a range proof and produce a
@@ -121,13 +133,14 @@ pub fn verify_range_proof_structure(
         ));
     }
 
-    verify_range_proof(start_key, end_key, &root, algorithm, proof)?;
+    let proven = verify_range_proof(start_key, end_key, &root, algorithm, proof)?;
 
     Ok(RangeProofVerificationContext {
         root,
         start_key: start_key.map(Box::from),
         end_key: end_key.map(Box::from),
         max_length,
+        right_edge_key: proven.end,
     })
 }
 
@@ -192,8 +205,9 @@ pub struct RangeProof<K, V, H> {
     /// The hash algorithm this proof was constructed or parsed with. For proofs
     /// built in this binary it is the compile default; for proofs parsed via
     /// [`FrozenRangeProof::from_slice`](crate::api::FrozenRangeProof::from_slice)
-    /// it is resolved from the self-describing header byte.
-    /// [`ProofError::HashModeMismatch`]).
+    /// it is resolved from the self-describing header byte. A mismatch against
+    /// the algorithm a verifier expects is rejected with
+    /// [`ProofError::HashModeMismatch`].
     hash_mode: NodeHashAlgorithm,
 }
 

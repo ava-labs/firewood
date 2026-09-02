@@ -3,7 +3,7 @@
 
 use crate::api::OptionalHashKeyExt;
 use crate::merkle::Merkle;
-use firewood_storage::{Committed, DefaultHashMode, DeletedNodeTracking, MemStore, NodeStore};
+use firewood_storage::{Committed, DeletedNodeTracking, MemStore, NodeStore};
 
 use super::*;
 use ethereum_types::H256;
@@ -11,6 +11,16 @@ use hash_db::Hasher;
 use plain_hasher::PlainHasher;
 use sha3::{Digest, Keccak256};
 use test_case::test_case;
+
+fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
+    first_key: Option<impl KeyType>,
+    last_key: Option<impl KeyType>,
+    root_hash: &TrieHash,
+    proof: &RangeProof<impl KeyType, impl ValueType, H>,
+) -> Result<(), Error> {
+    crate::merkle::verify_range_proof(first_key, last_key, root_hash, EthHash::ALGORITHM, proof)
+        .map(drop)
+}
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KeccakHasher;
@@ -240,7 +250,6 @@ fn assert_range_proof_roundtrips(
     range_proof: &crate::api::FrozenRangeProof,
 ) {
     verify_range_proof(first, last, root_hash, range_proof).unwrap();
-
     let mut serialized = Vec::new();
     range_proof.write_to_vec(&mut serialized);
     let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
@@ -603,8 +612,8 @@ fn zero_storage_root_in_rlp(value: &[u8], replacement: &[u8; 32]) -> Vec<u8> {
 /// root hash, but stale zeros in the stored account values.
 ///
 /// Then generate a range proof and verify it still passes. The proof-time fix
-/// in `ProofNode::from()` should detect the zeros and recompute the correct
-/// storageRoot from the node's children.
+/// in `ProofNode::from_path_item` should detect the zeros and recompute the
+/// correct storageRoot from the node's children.
 #[test]
 fn test_range_proof_fixes_legacy_zeroed_storage_root() {
     use crate::RangeProof;
