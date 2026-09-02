@@ -35,7 +35,7 @@ fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     last_key: Option<impl KeyType>,
     root_hash: &TrieHash,
     proof: &RangeProof<impl KeyType, impl ValueType, H>,
-) -> Result<ProvenRange, Error> {
+) -> Result<(), Error> {
     crate::merkle::verify_range_proof(
         first_key,
         last_key,
@@ -43,6 +43,7 @@ fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         DefaultHashMode::ALGORITHM,
         proof,
     )
+    .map(drop)
 }
 
 // Returns n random key-value pairs.

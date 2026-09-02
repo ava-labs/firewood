@@ -3,7 +3,7 @@
 
 use crate::api::OptionalHashKeyExt;
 use crate::merkle::Merkle;
-use firewood_storage::{Committed, DefaultHashMode, DeletedNodeTracking, MemStore, NodeStore};
+use firewood_storage::{Committed, DeletedNodeTracking, MemStore, NodeStore};
 
 use super::*;
 use ethereum_types::H256;
@@ -11,6 +11,16 @@ use hash_db::Hasher;
 use plain_hasher::PlainHasher;
 use sha3::{Digest, Keccak256};
 use test_case::test_case;
+
+fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
+    first_key: Option<impl KeyType>,
+    last_key: Option<impl KeyType>,
+    root_hash: &TrieHash,
+    proof: &RangeProof<impl KeyType, impl ValueType, H>,
+) -> Result<(), Error> {
+    crate::merkle::verify_range_proof(first_key, last_key, root_hash, EthHash::ALGORITHM, proof)
+        .map(drop)
+}
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KeccakHasher;
@@ -239,12 +249,11 @@ fn assert_range_proof_roundtrips(
     root_hash: &TrieHash,
     range_proof: &crate::api::FrozenRangeProof,
 ) {
-    let _ = verify_range_proof(first, last, root_hash, range_proof).unwrap();
-
+    verify_range_proof(first, last, root_hash, range_proof).unwrap();
     let mut serialized = Vec::new();
     range_proof.write_to_vec(&mut serialized);
     let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
-    let _ = verify_range_proof(first, last, root_hash, &deserialized).unwrap();
+    verify_range_proof(first, last, root_hash, &deserialized).unwrap();
 }
 
 /// The pieces a fold test needs from [`build_account_trie`].
@@ -495,7 +504,7 @@ fn test_range_proof_accounts_have_computed_storage_root() {
         .unwrap();
 
     // The range proof must verify against the committed root hash.
-    let _ = verify_range_proof(
+    verify_range_proof(
         Some(left_key.as_ref()),
         Some(right_key.as_ref()),
         &root_hash,
@@ -659,7 +668,7 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
         .collect();
 
     let range_proof = RangeProof::new(start_proof, end_proof, key_values);
-    let _ = verify_range_proof(
+    verify_range_proof(
         Some(left_key.as_ref()),
         Some(right_key.as_ref()),
         &root_hash,
@@ -719,7 +728,7 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
         .range_proof(Some(left_key.as_ref()), Some(right_key.as_ref()), None)
         .unwrap();
 
-    let _ = verify_range_proof(
+    verify_range_proof(
         Some(left_key.as_ref()),
         Some(right_key.as_ref()),
         &root_hash,
