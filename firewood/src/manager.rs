@@ -8,6 +8,7 @@
 
 use nonzero_ext::nonzero;
 use parking_lot::{Mutex, RwLock};
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::num::{NonZero, NonZeroU64};
@@ -108,6 +109,10 @@ pub(crate) struct RevisionManager<H> {
     /// If `root_store` is `None`, the oldest revision's nodes are added to the
     /// free list for space reuse. Otherwise, the oldest revision
     /// is preserved on disk for historical queries.
+    ///
+    /// This is a best-effort cap, not a hard one: a revision with an
+    /// outstanding handle cannot be reaped, and reaping is ordered, so the
+    /// queue stays over the limit until that handle is released.
     max_revisions: usize,
 
     /// FIFO queue of committed revisions kept in memory. The queue always
@@ -381,13 +386,30 @@ impl<H: HashMode> RevisionManager<H> {
         while revisions.len() >= self.max_revisions {
             let oldest = revisions.pop_front().expect("must be present");
             let oldest_hash = oldest.root_hash().or_else(H::default_root_hash);
-            if let Some(ref hash) = oldest_hash {
+
+            // Drop the index entry before `Arc::try_unwrap`: `by_hash` holds a
+            // clone of the revision, so the unwrap cannot succeed while the
+            // entry is present.
+            //
+            // Only drop the entry that actually points at *this* revision. Two
+            // committed revisions can share a root hash (an A -> B -> A round
+            // trip), in which case the newer one owns the index entry and the
+            // older one — reaped first, since the queue is FIFO — must leave it
+            // alone. Removing by hash alone would evict the live newer
+            // revision.
+            let was_indexed = oldest_hash.as_ref().is_some_and(|hash| {
                 // BLOCKING: write lock on `by_hash` while already holding the
                 // revisions write lock. Nested locking order must remain
                 // consistent (always acquire revisions before `by_hash`) to
                 // avoid deadlocks.
-                self.by_hash.write().remove(hash);
-            }
+                match self.by_hash.write().entry(hash.clone()) {
+                    Entry::Occupied(entry) if Arc::ptr_eq(entry.get(), &oldest) => {
+                        entry.remove();
+                        true
+                    }
+                    _ => false,
+                }
+            });
 
             // The warning in the docs for `Arc::try_unwrap` does not apply here
             // because `original` is retained and not immediately dropped.
@@ -398,6 +420,15 @@ impl<H: HashMode> RevisionManager<H> {
                     .map_err(RevisionManagerError::PersistError)?,
                 Err(original) => {
                     warn!("Oldest revision could not be reaped; still referenced");
+                    // An outstanding handle (a caller's revision, or the
+                    // persist worker) keeps the oldest revision alive, so it
+                    // goes back to the front of the queue and the queue stays
+                    // over `max_revisions` until a later commit can reap it.
+                    // It is still live, so it must stay findable by hash:
+                    // restore the entry removed above.
+                    if was_indexed && let Some(hash) = oldest_hash {
+                        self.by_hash.write().insert(hash, original.clone());
+                    }
                     revisions.push_front(original);
                     break;
                 }
