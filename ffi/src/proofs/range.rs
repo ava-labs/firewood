@@ -116,10 +116,10 @@ impl<'db> RangeProofContext<'db> {
         max_length: Option<NonZeroUsize>,
     ) -> Result<(), api::Error> {
         if let Some(ref ctx) = self.verification {
-            if ctx.root == root
-                && ctx.start_key.as_deref() == start_key
-                && ctx.end_key.as_deref() == end_key
-                && ctx.max_length == max_length
+            if *ctx.root() == root
+                && ctx.start_key() == start_key
+                && ctx.end_key() == end_key
+                && ctx.max_length() == max_length
             {
                 // already verified with the same context
                 return Ok(());
@@ -156,8 +156,7 @@ impl<'db> RangeProofContext<'db> {
         self.verification
             .as_ref()
             .expect("verify() populates the verification context on success")
-            .right_edge_key
-            .as_deref()
+            .right_edge_key()
     }
 
     /// Verify the range proof and prepare a proposal against the given database
@@ -257,12 +256,14 @@ impl<'db> RangeProofContext<'db> {
     /// The returned key range represents `(finalKey, endKey]` where `finalKey`
     /// is the last key known to be fully synchronized within the requested
     /// range. `finalKey` is exclusive, meaning it has already been processed.
-    /// `endKey` is inclusive if provided during proof creation.
+    /// `endKey` is inclusive if provided when verifying the proof, i.e. the
+    /// `end_key` of [`VerifyRangeProofArgs`], which need not match the
+    /// `end_key` the proof was created with.
     ///
-    /// Because the proof includes hash information about the state of the
-    /// database outside of the range of key-value pairs included in the proof,
-    /// we are able to inspect the database and provide a more accurate value
-    /// for `finalKey` than simply the last key in the set of key-value pairs.
+    /// The proof carries hash information about the state outside the range of
+    /// key-value pairs it includes, so `finalKey` could in principle be
+    /// tightened beyond the last key in those pairs. That is not yet
+    /// implemented (tracked in #352); today `finalKey` is simply that last key.
     fn find_next_key(&mut self) -> Result<Option<KeyRange>, api::Error> {
         let verification = self
             .verification
@@ -277,7 +278,7 @@ impl<'db> RangeProofContext<'db> {
             Some(ProposalState::Proposed(ref proposal)) => Ok(proposal.root_hash()),
             None => Err(api::Error::ProofError(ProofError::Unverified)),
         }?;
-        if root_hash.as_ref() == Some(&verification.root) {
+        if root_hash.as_ref() == Some(verification.root()) {
             return Ok(None);
         }
 

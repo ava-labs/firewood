@@ -808,7 +808,7 @@ fn check_truncated_change_proof(
     .unwrap_or_else(|e| {
         panic!("honest truncated proof must verify structurally ({locator}, limit={limit}): {e}")
     });
-    let right_edge = ctx.right_edge_key.clone();
+    let right_edge = ctx.right_edge_key();
     let parent = db.revision(start_root.clone()).unwrap();
     let proposal = db
         .apply_change_proof_to_parent(&proof, &*parent)
@@ -819,7 +819,7 @@ fn check_truncated_change_proof(
 
     // Every op must lie at or below the proven right edge. Narrowing must never
     // claim a smaller range than the operations the proof carries.
-    if let Some(edge) = right_edge.as_deref() {
+    if let Some(edge) = right_edge {
         for op in proof.batch_ops() {
             assert!(
                 op.key().as_ref() <= edge,

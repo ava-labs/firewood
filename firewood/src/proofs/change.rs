@@ -190,16 +190,40 @@ where
 // ── Change proof verification ──────────────────────────────────────────────
 
 /// Verification context captured after structural validation of a change proof.
-/// Stored so that downstream logic (root hash verification, `find_next_key`) can
-/// reference the original verification parameters without re-validating.
+/// Stored so that downstream logic (root hash verification,
+/// [`find_next_key_after_change_proof`]) can reference the original
+/// verification parameters without re-validating.
+///
+/// Outside of test builds, constructible only by
+/// [`verify_change_proof_structure`]; fields are private so a context cannot be
+/// forged or altered after verification.
 #[derive(Debug)]
 pub struct ChangeProofVerificationContext {
+    end_root: HashKey,
+    start_key: Option<Box<[u8]>>,
+    end_key: Option<Box<[u8]>>,
+    right_edge_key: Option<Box<[u8]>>,
+}
+
+impl ChangeProofVerificationContext {
     /// The expected root hash of the ending revision.
-    pub end_root: HashKey,
+    #[must_use]
+    pub const fn end_root(&self) -> &HashKey {
+        &self.end_root
+    }
+
     /// The lower bound of the verified key range, if any.
-    pub start_key: Option<Box<[u8]>>,
+    #[must_use]
+    pub fn start_key(&self) -> Option<&[u8]> {
+        self.start_key.as_deref()
+    }
+
     /// The upper bound of the verified key range, if any.
-    pub end_key: Option<Box<[u8]>>,
+    #[must_use]
+    pub fn end_key(&self) -> Option<&[u8]> {
+        self.end_key.as_deref()
+    }
+
     /// The right edge of the range the proof proves: the key the end proof is
     /// anchored at, as the verifier determines it. This is `end_key` when the
     /// proof covers the requested range, and the last key in `batch_ops` when the
@@ -213,7 +237,29 @@ pub struct ChangeProofVerificationContext {
     /// this proof must resume strictly above the last operation's key, because
     /// both bounds of a request are inclusive —
     /// [`find_next_key_after_change_proof`] computes that resume point.
-    pub right_edge_key: Option<Box<[u8]>>,
+    #[must_use]
+    pub fn right_edge_key(&self) -> Option<&[u8]> {
+        self.right_edge_key.as_deref()
+    }
+
+    /// Test-only escape hatch that builds a context without running
+    /// [`verify_change_proof_structure`]. Some attack tests craft proofs
+    /// that are deliberately rejected by structural validation and need to
+    /// exercise `verify_change_proof_root_hash` directly against them.
+    #[cfg(test)]
+    pub(crate) const fn for_test(
+        end_root: HashKey,
+        start_key: Option<Box<[u8]>>,
+        end_key: Option<Box<[u8]>>,
+        right_edge_key: Option<Box<[u8]>>,
+    ) -> Self {
+        Self {
+            end_root,
+            start_key,
+            end_key,
+            right_edge_key,
+        }
+    }
 }
 
 type FrozenBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;

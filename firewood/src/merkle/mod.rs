@@ -488,18 +488,16 @@ fn compute_outside_children<'a>(
 /// recomputed, and fails the root-hash check. Returns the union of the left
 /// and right boundary masks keyed by node path.
 ///
-/// `range` must be the nibble expansion of `verification`'s `start_key` and
-/// `right_edge_key`.
+/// `range` must be the nibble expansion of `verification.start_key()` and
+/// `verification.right_edge_key()`.
 fn change_outside_children<S: ReadableStorage, H: HashMode>(
     proof: &FrozenChangeProof,
     verification: &ChangeProofVerificationContext,
     proving_merkle: &Merkle<NodeStore<Mutable<Propose>, S, H>>,
     range: CollapseRange<'_>,
 ) -> Result<HashMap<PathBuf, ChildMask>, api::Error> {
-    let start_boundary = EdgeBoundary::Left(verification.start_key.as_deref());
-    let end_boundary = EdgeBoundary::Right(RightBoundary::InRange(
-        verification.right_edge_key.as_deref(),
-    ));
+    let start_boundary = EdgeBoundary::Left(verification.start_key());
+    let end_boundary = EdgeBoundary::Right(RightBoundary::InRange(verification.right_edge_key()));
     let start_proof = proof.start_proof();
     let end_proof = proof.end_proof();
 
@@ -1360,9 +1358,9 @@ fn verify_range_proof_root_hash<P: ProofCollection<Node = ProofNode>, H: HashMod
 /// # Ordering
 ///
 /// `verification` must come from `verify_change_proof_structure` for this same
-/// `proof`. Its `start_key` and `right_edge_key` define the proven range used by
-/// the collapse and reconciliation steps, so a hand-built context — or one
-/// produced for a different proof — makes those steps judge the wrong range.
+/// `proof`. Its `start_key()` and `right_edge_key()` define the proven range
+/// used by the collapse and reconciliation steps, so a hand-built context — or
+/// one produced for a different proof — makes those steps judge the wrong range.
 ///
 /// Marking a boundary terminal's on-path child outside takes that child's hash
 /// from the proof, which is safe only if the proof has no hash there. This
@@ -1382,7 +1380,7 @@ pub fn verify_change_proof_root_hash<H: HashMode>(
     // end_root. Also covers the degenerate case of an empty diff.
     if start_nodes.is_empty() && end_nodes.is_empty() {
         let computed = api::DbView::root_hash(proposal).unwrap_or_else(HashKey::empty);
-        if computed != verification.end_root {
+        if computed != *verification.end_root() {
             return Err(api::Error::ProofError(ProofError::EndRootMismatch));
         }
         return Ok(());
@@ -1416,16 +1414,14 @@ pub fn verify_change_proof_root_hash<H: HashMode>(
     // A divergent terminal that overshoots to the nearest existing key after
     // start_key is in range, and a value mismatch there is a real error.
     let start_key_nibbles: Vec<u8> = verification
-        .start_key
-        .as_deref()
+        .start_key()
         .map(|k| NibblesIterator::new(k).collect())
         .unwrap_or_default();
     // `None` is an unbounded right edge (+∞). Keeping it distinct from an empty
     // slice matters: an empty slice sorts as the minimum key, which would mark
     // every key out of range at the upper bound.
     let end_key_nibbles: Option<Vec<u8>> = verification
-        .right_edge_key
-        .as_deref()
+        .right_edge_key()
         .map(|k| NibblesIterator::new(k).collect());
 
     let range = CollapseRange {
@@ -1537,7 +1533,7 @@ pub fn verify_change_proof_root_hash<H: HashMode>(
         proving_merkle.nodestore(),
     )?;
 
-    if computed != verification.end_root {
+    if computed != *verification.end_root() {
         return Err(api::Error::ProofError(ProofError::EndRootMismatch));
     }
 
