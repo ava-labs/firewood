@@ -69,33 +69,26 @@ impl FrozenRangeProof {
 
 /// Maximum length, in bytes, of a key accepted from a serialized proof.
 ///
-/// Trie depth cannot exceed a key's nibble count, and the walks that rebuild a
-/// trie during proof verification are bounded by trie depth. A peer's keys
-/// therefore decide how deep verification goes, so an unbounded key length lets a
-/// peer choose unbounded work. This bound is sixteen times the deepest key the
-/// `ethhash` format defines, which is a 32-byte account hash followed by a
-/// 32-byte slot hash.
+/// Proof verification rebuilds a trie from the peer's keys and walks it once per
+/// level. A trie is at most as deep as its longest key has nibbles, so without
+/// this bound the peer decides how deep those walks go. The bound is sixteen
+/// times the deepest key the `ethhash` format defines: a 32-byte account hash
+/// followed by a 32-byte storage slot hash. It is a constant rather than a
+/// setting so that every reader enforces the same limit.
 pub(crate) const MAX_KEY_BYTES: usize = 1024;
 
-/// [`MAX_KEY_BYTES`] expressed in nibbles, for proof-node paths, which arrive
-/// unpacked.
+/// [`MAX_KEY_BYTES`] in nibbles, for proof-node keys.
+///
+/// A proof node's key is a prefix of some key below it, so this is the most a
+/// proof-node key may hold, not a length every one must have.
 pub(crate) const MAX_KEY_NIBBLES: usize = MAX_KEY_BYTES * 2;
 
-/// The `expected` strings for the two bound rejections. `ReadError::InvalidItem`
-/// stores a static string, so these cannot be formatted from the constants at the
-/// rejection sites. The assertions pin them to the constants instead, so moving a
-/// bound without updating its message fails the build.
-const MAX_KEY_BYTES_EXPECTED: &str = "at most 1024 bytes";
-const MAX_KEY_NIBBLES_EXPECTED: &str = "at most 2048 nibbles";
-const _: () = assert!(MAX_KEY_BYTES == 1024, "MAX_KEY_BYTES_EXPECTED is stale");
-const _: () = assert!(MAX_KEY_NIBBLES == 2048, "MAX_KEY_NIBBLES_EXPECTED is stale");
-
-/// Rejects a packed key longer than [`MAX_KEY_BYTES`].
+/// Rejects a key longer than [`MAX_KEY_BYTES`] bytes.
 fn check_key_bytes(reader: &V0Reader<'_>, key: &[u8]) -> Result<(), ReadError> {
     if key.len() > MAX_KEY_BYTES {
         return Err(reader.invalid_item(
             "key length",
-            MAX_KEY_BYTES_EXPECTED,
+            "at most 1024 bytes",
             format!("{} bytes", key.len()),
         ));
     }
@@ -266,6 +259,15 @@ impl Version0 for ProofNode {
 impl Version0 for PathBuf {
     fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
         let bytes = reader.read_item::<&[u8]>()?;
+        // Each wire byte holds one nibble, so the byte count is the path length.
+        // Checking it first keeps an oversized path from being built at all.
+        if bytes.len() > MAX_KEY_NIBBLES {
+            return Err(reader.invalid_item(
+                "path length",
+                "at most 2048 nibbles",
+                format!("{} nibbles", bytes.len()),
+            ));
+        }
         let path: PathBuf =
             TriePathFromUnpackedBytes::path_from_unpacked_bytes(bytes).map_err(|_| {
                 reader.invalid_item(
@@ -274,13 +276,6 @@ impl Version0 for PathBuf {
                     format!("invalid nibbles: {}", hex::encode(bytes)),
                 )
             })?;
-        if path.len() > MAX_KEY_NIBBLES {
-            return Err(reader.invalid_item(
-                "path length",
-                MAX_KEY_NIBBLES_EXPECTED,
-                format!("{} nibbles", path.len()),
-            ));
-        }
         Ok(path)
     }
 }
