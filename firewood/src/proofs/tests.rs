@@ -1337,20 +1337,40 @@ fn test_value_digest_hash_read_arm_is_unconditional() {
     assert!(eth_reader.remainder().is_empty(), "all bytes consumed");
 }
 
-/// Builds a change proof carrying one `Put` whose key is `key_len` bytes.
-fn change_proof_with_key_len(key_len: usize) -> Vec<u8> {
+type BoxedOp = BatchOp<Box<[u8]>, Box<[u8]>>;
+
+fn put(key: Box<[u8]>) -> BoxedOp {
+    BatchOp::Put {
+        key,
+        value: Box::from(b"v".as_slice()),
+    }
+}
+
+fn delete(key: Box<[u8]>) -> BoxedOp {
+    BatchOp::Delete { key }
+}
+
+fn delete_range(prefix: Box<[u8]>) -> BoxedOp {
+    BatchOp::DeleteRange { prefix }
+}
+
+/// Serializes a change proof carrying one operation, built by `op` from a key of
+/// `key_len` zero bytes.
+fn change_proof_with_key_len(op: fn(Box<[u8]>) -> BoxedOp, key_len: usize) -> Vec<u8> {
     let proof = FrozenChangeProof::with_hash_mode(
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
-        Box::new([BatchOp::Put {
-            key: vec![0u8; key_len].into_boxed_slice(),
-            value: Box::from(b"v".as_slice()),
-        }]),
+        Box::new([op(vec![0u8; key_len].into_boxed_slice())]),
         DefaultHashMode::ALGORITHM,
     );
     let mut serialized = Vec::new();
     proof.write_to_vec(&mut serialized);
     serialized
+}
+
+/// The `expected` text a key-length rejection carries.
+fn key_bound_message() -> String {
+    format!("at most {MAX_KEY_BYTES} bytes")
 }
 
 /// Asserts a bound test's deserialization outcome: accepted, or rejected with an
@@ -1375,19 +1395,21 @@ fn assert_bound_outcome<T: std::fmt::Debug>(
     }
 }
 
-/// A key at the bound deserializes. One byte over is rejected.
-///
-/// Trie depth cannot exceed a key's nibble count, so this bound is what keeps
-/// peer-supplied keys from deciding how deep verification walks.
-#[test_case(MAX_KEY_BYTES, true ; "at the bound")]
-#[test_case(MAX_KEY_BYTES + 1, false ; "one byte over")]
-fn test_batch_op_key_length_bound(key_len: usize, accepted: bool) {
-    let data = change_proof_with_key_len(key_len);
+/// Every batch operation's key is bounded. A key at the bound deserializes and
+/// one byte over is rejected.
+#[test_case(put, MAX_KEY_BYTES, true ; "put at the bound")]
+#[test_case(put, MAX_KEY_BYTES + 1, false ; "put one byte over")]
+#[test_case(delete, MAX_KEY_BYTES, true ; "delete at the bound")]
+#[test_case(delete, MAX_KEY_BYTES + 1, false ; "delete one byte over")]
+#[test_case(delete_range, MAX_KEY_BYTES, true ; "delete range at the bound")]
+#[test_case(delete_range, MAX_KEY_BYTES + 1, false ; "delete range one byte over")]
+fn test_batch_op_key_length_bound(op: fn(Box<[u8]>) -> BoxedOp, key_len: usize, accepted: bool) {
+    let data = change_proof_with_key_len(op, key_len);
     assert_bound_outcome(
         FrozenChangeProof::from_slice(&data),
         accepted,
         "key length",
-        &format!("at most {MAX_KEY_BYTES} bytes"),
+        &key_bound_message(),
     );
 }
 
@@ -1410,7 +1432,7 @@ fn test_range_proof_key_length_bound(key_len: usize, accepted: bool) {
         FrozenRangeProof::from_slice(&data),
         accepted,
         "key length",
-        &format!("at most {MAX_KEY_BYTES} bytes"),
+        &key_bound_message(),
     );
 }
 
