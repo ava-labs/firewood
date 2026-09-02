@@ -79,6 +79,9 @@ impl FrozenRangeProof {
     /// indicating the number of items in the sequence.
     ///
     /// Variable-length integers are encoded using unsigned LEB128.
+    ///
+    /// Readers reject a key longer than 1024 bytes and a proof-node key longer
+    /// than 2048 nibbles (`MAX_KEY_BYTES` and `MAX_KEY_NIBBLES` in `de.rs`).
     pub fn write_to_vec(&self, out: &mut Vec<u8>) {
         // The proof's hash mode determines the child-hash wire layout and the
         // value-digest hashing rule; use its self-describing mode rather than
