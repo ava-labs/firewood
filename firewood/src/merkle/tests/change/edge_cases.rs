@@ -1261,30 +1261,29 @@ fn test_an_unrelated_end_proof_does_not_narrow() {
     }
 }
 
-/// A proof whose forged operations would drive verification thousands of levels
-/// deep is rejected at deserialization, before any trie is rebuilt.
+/// Over-long keys are rejected while a proof is being read, before any trie is
+/// rebuilt. The forged operations sit behind valid start and end proofs, so the
+/// reader reaches them and the rejection is the key-length check rather than an
+/// earlier failure.
 #[test]
 fn test_deep_forged_ops_rejected_at_deserialization() {
-    let (source, _dir_s) = setup_db![(b"\x05", b"init")];
-    let (root1, root2) = setup_2nd_commit!(source, [(b"\x10", b"v0")]);
-    let honest = source.change_proof(root1, root2, None, None, None).unwrap();
+    let (db, _dir) = setup_db![(b"\x05", b"init")];
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x10", b"v0")]);
+    let honest = db.change_proof(root1, root2, None, None, None).unwrap();
 
-    // 3000 keys forming a prefix chain whose longest keys are far past the bound.
-    // The rest of the proof is the honest one, so the rejection is attributable
-    // to the key-length bound alone.
-    let mut keys: Vec<Vec<u8>> = prefix_chain_keys(3000, 0x01);
-    keys.sort();
-    let mut ops: Vec<BatchOp<Key, Value>> = keys
-        .iter()
-        .map(|k| BatchOp::Put {
-            key: k.clone().into_boxed_slice(),
+    // A chain of 3000 keys, the longest far past the bound, added to the honest
+    // proof's own operations.
+    let mut ops: Vec<BatchOp<Key, Value>> = prefix_chain_keys(3000, 0x01)
+        .into_iter()
+        .map(|key| BatchOp::Put {
+            key: key.into_boxed_slice(),
             value: Box::from(b"v".as_slice()),
         })
         .collect();
-    ops.extend(honest.batch_ops().iter().cloned());
+    ops.extend_from_slice(honest.batch_ops());
     let forged: FrozenChangeProof = crate::ChangeProof::new(
-        crate::Proof::new(honest.start_proof().as_ref().to_vec().into_boxed_slice()),
-        crate::Proof::new(honest.end_proof().as_ref().to_vec().into_boxed_slice()),
+        honest.start_proof().clone(),
+        honest.end_proof().clone(),
         ops.into_boxed_slice(),
     );
 
@@ -1292,10 +1291,15 @@ fn test_deep_forged_ops_rejected_at_deserialization() {
     forged.write_to_vec(&mut bytes);
     let err = FrozenChangeProof::from_slice(&bytes)
         .expect_err("a proof carrying over-long keys must not deserialize");
-    let rendered = format!("{err:?}");
     assert!(
-        rendered.contains("key length"),
-        "expected the key-length bound to reject it, got {rendered}"
+        matches!(
+            err,
+            crate::ReadError::InvalidItem {
+                item: "key length",
+                ..
+            }
+        ),
+        "expected the key-length bound to reject it, got {err:?}"
     );
 }
 
