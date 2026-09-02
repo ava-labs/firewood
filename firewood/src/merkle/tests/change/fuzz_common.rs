@@ -70,7 +70,7 @@ pub(in crate::merkle::tests) fn maybe_serialize_round_trip_change(
 ) -> FrozenChangeProof {
     if rng.random_range(0..10_u32) == 0 {
         let mut buf = Vec::new();
-        proof.write_to_vec(&mut buf);
+        proof.write_to_vec(&mut buf).expect("serialize proof");
         FrozenChangeProof::from_slice(&buf).expect("round-trip deserialization should succeed")
     } else {
         proof
@@ -84,7 +84,7 @@ pub(in crate::merkle::tests) fn maybe_serialize_round_trip_range(
 ) -> FrozenRangeProof {
     if rng.random_range(0..10_u32) == 0 {
         let mut buf = Vec::new();
-        proof.write_to_vec(&mut buf);
+        proof.write_to_vec(&mut buf).expect("serialize proof");
         FrozenRangeProof::from_slice(&buf).expect("round-trip deserialization should succeed")
     } else {
         proof

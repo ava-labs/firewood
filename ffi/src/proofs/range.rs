@@ -558,10 +558,12 @@ pub extern "C" fn fwd_range_proof_code_hash_iter<'a>(
 /// - [`ValueResult::Err`] containing an error message if serialization panicked.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_range_proof_to_bytes(proof: Option<&RangeProofContext>) -> ValueResult {
-    crate::invoke_with_handle(proof, |ctx| {
+    crate::invoke_with_handle(proof, |ctx| -> Result<Option<Box<[u8]>>, api::Error> {
         let mut vec = Vec::new();
-        ctx.proof.write_to_vec(&mut vec);
-        vec
+        ctx.proof
+            .write_to_vec(&mut vec)
+            .map_err(api::Error::ProofError)?;
+        Ok(Some(vec.into_boxed_slice()))
     })
 }
 

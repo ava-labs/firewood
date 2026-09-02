@@ -13,8 +13,9 @@ use firewood_storage::{
 use integer_encoding::VarInt;
 
 use super::{
+    frame::MAX_DECOMPRESSED_LEN,
     header::Header,
-    types::{ProofNode, ProofType},
+    types::{ProofError, ProofNode, ProofType},
 };
 use crate::merkle::childmask::ChildMask;
 use crate::{
@@ -36,6 +37,11 @@ impl FrozenRangeProof {
         reason = "Header and ProofType are not exported"
     )]
     /// - A 32-byte [`Header`] with the proof type set to [`ProofType::Range`].
+    /// - A single zstd frame compressing the canonical body (see
+    ///   `proofs::frame` for the framing, bounds, and canonicality rules).
+    ///
+    /// The canonical body, once decompressed, is:
+    ///
     /// - The start proof, serialized as a _sequence_ of [`ProofNode`]s
     /// - The end proof, serialized as a _sequence_ of [`ProofNode`]s
     /// - The key-value pairs, serialized as a _sequence_ of `(key, value)` tuples.
@@ -79,7 +85,25 @@ impl FrozenRangeProof {
     /// indicating the number of items in the sequence.
     ///
     /// Variable-length integers are encoded using unsigned LEB128.
-    pub fn write_to_vec(&self, out: &mut Vec<u8>) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProofError::BodyTooLarge`] with `out` untouched if the
+    /// serialized body exceeds the size cap, or [`ProofError::Compression`]
+    /// if the compression fails where `out` will hold a header-only write.
+    pub fn write_to_vec(&self, out: &mut Vec<u8>) -> Result<(), ProofError> {
+        let mut body = Vec::new();
+        self.write_body_to_vec(&mut body);
+        check_body_len(body.len())?;
+        let header = Header::from((ProofType::Range, self.hash_mode()));
+        out.extend_from_slice(bytemuck::bytes_of(&header));
+        super::frame::write_compressed_body(&body, out)
+    }
+
+    /// Serializes this proof's canonical (uncompressed) body: the bytes
+    /// [`FrozenRangeProof::write_to_vec`] compresses after the header, and
+    /// the sequence to hash or compare for a proof's canonical identity.
+    pub fn write_body_to_vec(&self, out: &mut Vec<u8>) {
         // The proof's hash mode determines the child-hash wire layout and the
         // value-digest hashing rule; use its self-describing mode rather than
         // the compile default.
@@ -87,20 +111,51 @@ impl FrozenRangeProof {
             out,
             mode: self.hash_mode(),
         };
-        Header::from((ProofType::Range, w.mode)).write_item(&mut w);
         self.write_item(&mut w);
     }
 }
 
 impl FrozenChangeProof {
-    pub fn write_to_vec(&self, out: &mut Vec<u8>) {
+    /// Serializes this proof into the provided byte vector.
+    ///
+    /// The format matches [`FrozenRangeProof::write_to_vec`] with the proof
+    /// type set to change, and the canonical body carries the batch
+    /// operations in place of the key-value pairs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProofError::BodyTooLarge`] with `out` untouched if the
+    /// serialized body exceeds the size cap, or [`ProofError::Compression`]
+    /// if the compression fails where `out` will hold a header-only write.
+    pub fn write_to_vec(&self, out: &mut Vec<u8>) -> Result<(), ProofError> {
+        let mut body = Vec::new();
+        self.write_body_to_vec(&mut body);
+        check_body_len(body.len())?;
+        let header = Header::from((ProofType::Change, self.hash_mode()));
+        out.extend_from_slice(bytemuck::bytes_of(&header));
+        super::frame::write_compressed_body(&body, out)
+    }
+
+    /// Serializes this proof's canonical (uncompressed) body. See
+    /// [`FrozenRangeProof::write_body_to_vec`].
+    pub fn write_body_to_vec(&self, out: &mut Vec<u8>) {
         let mut w = ProofWriter {
             out,
             mode: self.hash_mode(),
         };
-        Header::from((ProofType::Change, w.mode)).write_item(&mut w);
         self.write_item(&mut w);
     }
+}
+
+/// Rejects a canonical body larger than the cap decoders enforce.
+const fn check_body_len(len: usize) -> Result<(), ProofError> {
+    if len > MAX_DECOMPRESSED_LEN {
+        return Err(ProofError::BodyTooLarge {
+            len,
+            limit: MAX_DECOMPRESSED_LEN,
+        });
+    }
+    Ok(())
 }
 
 /// Mirrors `ProofReader`: carries the output buffer and the hash mode the proof
@@ -240,12 +295,6 @@ impl<T: AsRef<[u8]>> WriteItem for ValueDigest<T> {
                 h.write_item(w);
             }
         }
-    }
-}
-
-impl WriteItem for Header {
-    fn write_item(&self, w: &mut ProofWriter<'_>) {
-        w.out.extend_from_slice(bytemuck::bytes_of(self));
     }
 }
 
