@@ -4,15 +4,17 @@ set -euo pipefail
 
 # Lists Firewood design docs by their last git-commit date, oldest (stalest) first.
 #
-# Motivation: freshness for a design doc comes from git history, never from a
-# hand-maintained date written inside the document. The design-doc frontmatter
-# schema deliberately has no date field, so a date in a doc would only drift out
-# of sync with reality. This report is the working embodiment of that convention:
-# it reads git alone — never a document's frontmatter or body — and surfaces the
-# designs whose last commit is oldest, making an `active` design that has drifted
-# from the code easy to spot.
+# Motivation: a design's filename prefix records the date it was *proposed* — assigned
+# once, when the file is created, and never updated. Freshness is a different question,
+# and its answer comes from git history, never from a hand-maintained date written
+# inside the document. The design-doc frontmatter schema deliberately has no date
+# field, so a date in a doc body would only drift out of sync with reality. This report
+# is the working embodiment of that convention: it reads git alone — never the filename
+# prefix, never a document's frontmatter or body — and surfaces the designs whose last
+# commit is oldest, making an `active` design that has drifted from the code easy to
+# spot.
 #
-# Scope: only the numbered design docs, docs/src/designs/NNNN-*.md. The section
+# Scope: only the dated design docs, docs/src/designs/YYYY-MM-DD-*.md. The section
 # index (README.md) and the template (template.md) are not designs and are skipped.
 #
 # Ordering: oldest last-commit first, so the stalest designs sit at the top. A
@@ -28,10 +30,10 @@ usage() {
     cat <<'EOF'
 Usage: scripts/design-doc-age.sh [-h|--help]
 
-Lists docs/src/designs/NNNN-*.md by last git-commit date, oldest first, so the
-stalest designs appear at the top. Freshness is read from git history only, never
-from a date inside a document. Designs with no commit yet sort last as
-"(uncommitted)".
+Lists docs/src/designs/YYYY-MM-DD-*.md by last git-commit date, oldest first, so
+the stalest designs appear at the top. Freshness is read from git history only,
+never from the filename's proposal date or a date inside a document. Designs with
+no commit yet sort last as "(uncommitted)".
 
 Exit status: 0 on success.
 EOF
@@ -69,7 +71,7 @@ uncommitted_key=9999999999
 # in Unix seconds; the display date is the same commit's date as YYYY-MM-DD.
 rows=()
 shopt -s nullglob
-for doc in "$designs_dir"/[0-9][0-9][0-9][0-9]-*.md; do
+for doc in "$designs_dir"/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.md; do
     # -1: the most recent commit touching this path. %ct is the committer date in
     # Unix seconds (the sort key); %cd with --date=short is YYYY-MM-DD (display).
     # A path with no commit yet yields empty output (git log exits 0).
