@@ -2153,7 +2153,9 @@ fn test_range_proof_with_hashed_value() {
     // Serialize and deserialize to convert large values to Hash digests,
     // simulating a proof received from a peer over the network.
     let mut serialized = Vec::new();
-    proof.write_to_vec(&mut serialized);
+    proof
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
     let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
 
     // Confirm the start proof node carries a Hash digest after round-trip.
@@ -2205,7 +2207,9 @@ fn test_empty_range_proof_with_hashed_value() {
 
     // Serialize/deserialize to convert Value to Hash
     let mut serialized = Vec::new();
-    proof.write_to_vec(&mut serialized);
+    proof
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
     let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
 
     // This must pass — the Hash proof node is out of range.
@@ -2255,7 +2259,9 @@ fn test_multi_level_range_proof_with_hashed_values() {
 
     // Serialize/deserialize to convert large values to Hash digests
     let mut serialized = Vec::new();
-    proof.write_to_vec(&mut serialized);
+    proof
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
     let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
 
     // Confirm all proof nodes with values carry Hash, not Value (all values >= 32 bytes).

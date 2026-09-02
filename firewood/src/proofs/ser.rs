@@ -13,8 +13,9 @@ use firewood_storage::{
 use integer_encoding::VarInt;
 
 use super::{
+    frame::MAX_DECOMPRESSED_LEN,
     header::Header,
-    types::{ProofNode, ProofType},
+    types::{ProofError, ProofNode, ProofType},
 };
 use crate::merkle::childmask::ChildMask;
 use crate::{
@@ -84,12 +85,20 @@ impl FrozenRangeProof {
     /// indicating the number of items in the sequence.
     ///
     /// Variable-length integers are encoded using unsigned LEB128.
-    pub fn write_to_vec(&self, out: &mut Vec<u8>) {
-        let header = Header::from((ProofType::Range, self.hash_mode()));
-        out.extend_from_slice(bytemuck::bytes_of(&header));
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProofError::BodyTooLarge`] — with `out` untouched — if the
+    /// serialized body exceeds the size cap; a peer would reject the wire,
+    /// so the producer must learn here instead.
+    pub fn write_to_vec(&self, out: &mut Vec<u8>) -> Result<(), ProofError> {
         let mut body = Vec::new();
         self.write_body_to_vec(&mut body);
+        check_body_len(body.len())?;
+        let header = Header::from((ProofType::Range, self.hash_mode()));
+        out.extend_from_slice(bytemuck::bytes_of(&header));
         super::frame::write_compressed_body(&body, out);
+        Ok(())
     }
 
     /// Serializes this proof's canonical (uncompressed) body: the bytes
@@ -113,12 +122,20 @@ impl FrozenChangeProof {
     /// The format matches [`FrozenRangeProof::write_to_vec`] with the proof
     /// type set to change, and the canonical body carries the batch
     /// operations in place of the key-value pairs.
-    pub fn write_to_vec(&self, out: &mut Vec<u8>) {
-        let header = Header::from((ProofType::Change, self.hash_mode()));
-        out.extend_from_slice(bytemuck::bytes_of(&header));
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProofError::BodyTooLarge`] — with `out` untouched — if the
+    /// serialized body exceeds the size cap.
+    /// See [`FrozenRangeProof::write_to_vec`].
+    pub fn write_to_vec(&self, out: &mut Vec<u8>) -> Result<(), ProofError> {
         let mut body = Vec::new();
         self.write_body_to_vec(&mut body);
+        check_body_len(body.len())?;
+        let header = Header::from((ProofType::Change, self.hash_mode()));
+        out.extend_from_slice(bytemuck::bytes_of(&header));
         super::frame::write_compressed_body(&body, out);
+        Ok(())
     }
 
     /// Serializes this proof's canonical (uncompressed) body. See
@@ -130,6 +147,17 @@ impl FrozenChangeProof {
         };
         self.write_item(&mut w);
     }
+}
+
+/// Rejects a canonical body larger than the cap decoders enforce.
+const fn check_body_len(len: usize) -> Result<(), ProofError> {
+    if len > MAX_DECOMPRESSED_LEN {
+        return Err(ProofError::BodyTooLarge {
+            len,
+            limit: MAX_DECOMPRESSED_LEN,
+        });
+    }
+    Ok(())
 }
 
 /// Mirrors `ProofReader`: carries the output buffer and the hash mode the proof

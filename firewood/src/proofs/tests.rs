@@ -110,11 +110,13 @@ fn create_valid_change_proof(hash_mode: NodeHashAlgorithm) -> (FrozenChangeProof
 fn test_range_proof_roundtrip() {
     let (proof, _) = create_valid_range_proof();
     let mut wire = Vec::new();
-    proof.write_to_vec(&mut wire);
+    proof.write_to_vec(&mut wire).expect("serialize proof");
     let parsed = FrozenRangeProof::from_slice(&wire).expect("roundtrip should succeed");
     assert_eq!(proof, parsed);
     let mut re_serialized = Vec::new();
-    parsed.write_to_vec(&mut re_serialized);
+    parsed
+        .write_to_vec(&mut re_serialized)
+        .expect("serialize proof");
     assert_eq!(wire, re_serialized, "re-serialization must be idempotent");
 }
 
@@ -123,12 +125,14 @@ fn test_range_proof_roundtrip() {
 fn test_change_proof_roundtrip(hash_mode: NodeHashAlgorithm) {
     let (proof, _) = create_valid_change_proof(hash_mode);
     let mut wire = Vec::new();
-    proof.write_to_vec(&mut wire);
+    proof.write_to_vec(&mut wire).expect("serialize proof");
     let parsed = FrozenChangeProof::from_slice(&wire).expect("roundtrip should succeed");
     assert_eq!(proof, parsed);
     assert_eq!(parsed.hash_mode(), hash_mode);
     let mut re_serialized = Vec::new();
-    parsed.write_to_vec(&mut re_serialized);
+    parsed
+        .write_to_vec(&mut re_serialized)
+        .expect("serialize proof");
     assert_eq!(wire, re_serialized, "re-serialization must be idempotent");
 }
 
@@ -156,7 +160,9 @@ fn test_mode_dependent_proof_node_roundtrip(hash_mode: NodeHashAlgorithm) {
         hash_mode,
     );
     let mut serialized = Vec::new();
-    range.write_to_vec(&mut serialized);
+    range
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
 
     let parsed = FrozenRangeProof::from_slice(&serialized)
         .expect("range proof should parse in its recorded mode");
@@ -172,7 +178,9 @@ fn test_mode_dependent_proof_node_roundtrip(hash_mode: NodeHashAlgorithm) {
     );
 
     let mut reserialized = Vec::new();
-    parsed.write_to_vec(&mut reserialized);
+    parsed
+        .write_to_vec(&mut reserialized)
+        .expect("serialize proof");
     assert_eq!(reserialized, serialized);
 }
 
@@ -233,13 +241,6 @@ fn test_invalid_header(
     32, // expected len
     31; // found len
     "header one byte short"
-)]
-#[test_case(
-    |_, data| data.truncate(32),
-    "array length",
-    1, // expected len
-    0; // found len
-    "no varint after header"
 )]
 
 fn test_incomplete_item(
@@ -470,13 +471,6 @@ fn test_change_proof_invalid_header(
     31; // found len
     "header one byte short"
 )]
-#[test_case(
-    |data| data.truncate(32),
-    "array length",
-    1, // expected len
-    0; // found len
-    "no varint after header"
-)]
 fn test_change_proof_incomplete_item(
     mutator: impl FnOnce(&mut Vec<u8>),
     item: &'static str,
@@ -674,11 +668,15 @@ fn test_change_proof_batch_op_variant(op: BatchOp<Box<[u8]>, Box<[u8]>>) {
         Box::new([op]),
     );
     let mut serialized = Vec::new();
-    proof.write_to_vec(&mut serialized);
+    proof
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
     let parsed =
         FrozenChangeProof::from_slice(&serialized).expect("deserialization should succeed");
     let mut re_serialized = Vec::new();
-    parsed.write_to_vec(&mut re_serialized);
+    parsed
+        .write_to_vec(&mut re_serialized)
+        .expect("serialize proof");
     assert_eq!(serialized, re_serialized, "round-trip bytes must match");
 }
 
@@ -926,7 +924,9 @@ fn generate_random_range_proof(rng: &SeededRng) -> (FrozenRangeProof, Vec<u8>) {
 
     let proof = FrozenRangeProof::new(Proof::new(start_nodes), Proof::new(end_nodes), key_values);
     let mut serialized = Vec::new();
-    proof.write_to_vec(&mut serialized);
+    proof
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
     (proof, serialized)
 }
 
@@ -956,7 +956,9 @@ fn generate_random_change_proof(rng: &SeededRng) -> (FrozenChangeProof, Vec<u8>)
 
     let proof = FrozenChangeProof::new(Proof::new(start_nodes), Proof::new(end_nodes), batch_ops);
     let mut serialized = Vec::new();
-    proof.write_to_vec(&mut serialized);
+    proof
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
     (proof, serialized)
 }
 
@@ -970,7 +972,7 @@ fn test_slow_range_proof_roundtrip_fuzz() {
 
         let parsed = FrozenRangeProof::from_slice(&bytes).expect("generated proof should be valid");
         let mut re_bytes = Vec::new();
-        parsed.write_to_vec(&mut re_bytes);
+        parsed.write_to_vec(&mut re_bytes).expect("serialize proof");
         assert_eq!(bytes, re_bytes, "re-serialized bytes must match original");
     }
 }
@@ -986,7 +988,7 @@ fn test_slow_change_proof_roundtrip_fuzz() {
         let parsed =
             FrozenChangeProof::from_slice(&bytes).expect("generated proof should be valid");
         let mut re_bytes = Vec::new();
-        parsed.write_to_vec(&mut re_bytes);
+        parsed.write_to_vec(&mut re_bytes).expect("serialize proof");
         assert_eq!(bytes, re_bytes, "re-serialized bytes must match original");
     }
 }
@@ -1023,11 +1025,13 @@ fn test_slow_malformed_proof_fuzz() {
                 debug!("iteration {i}: corruption produced valid proof (checking stability)");
                 // Verify idempotency: serialize(parsed) should be stable across two round-trips.
                 let mut re_bytes = Vec::new();
-                parsed.write_to_vec(&mut re_bytes);
+                parsed.write_to_vec(&mut re_bytes).expect("serialize proof");
                 let re_parsed = FrozenRangeProof::from_slice(&re_bytes)
                     .expect("re-serialized proof should parse cleanly");
                 let mut re_re_bytes = Vec::new();
-                re_parsed.write_to_vec(&mut re_re_bytes);
+                re_parsed
+                    .write_to_vec(&mut re_re_bytes)
+                    .expect("serialize proof");
                 assert_eq!(
                     re_bytes, re_re_bytes,
                     "re-serialized proof must be idempotent"
@@ -1248,14 +1252,14 @@ mod box_array_deserialization_tests {
 fn range_wire() -> Vec<u8> {
     let (proof, _) = create_valid_range_proof();
     let mut wire = Vec::new();
-    proof.write_to_vec(&mut wire);
+    proof.write_to_vec(&mut wire).expect("serialize proof");
     wire
 }
 
 fn change_wire() -> Vec<u8> {
     let (proof, _) = create_valid_change_proof(DefaultHashMode::ALGORITHM);
     let mut wire = Vec::new();
-    proof.write_to_vec(&mut wire);
+    proof.write_to_vec(&mut wire).expect("serialize proof");
     wire
 }
 
@@ -1278,7 +1282,7 @@ fn test_frame_wire_is_compressed_and_versioned() {
     let mut canonical_body = Vec::new();
     proof.write_body_to_vec(&mut canonical_body);
     let mut wire = Vec::new();
-    proof.write_to_vec(&mut wire);
+    proof.write_to_vec(&mut wire).expect("serialize proof");
 
     assert_eq!(&wire[..8], magic::PROOF_HEADER);
     assert_eq!(wire[8], 0, "compressed wire keeps version byte 0");
@@ -1347,6 +1351,57 @@ fn test_frame_rejects_malformed_wire(mutate: fn(&mut Vec<u8>)) {
     let err = FrozenChangeProof::from_slice(&wire).expect_err("change wire must be rejected");
     assert!(
         matches!(err, ReadError::InvalidItem { item, .. } if item == "compressed body frame"),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn test_write_to_vec_rejects_over_cap_body() {
+    // Five 1 MiB values
+    let kvs: Box<[_]> = (0u8..5)
+        .map(|i| {
+            (
+                Box::from([i].as_slice()),
+                vec![i; 1024 * 1024].into_boxed_slice(),
+            )
+        })
+        .collect();
+    let proof = FrozenRangeProof::new(
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        kvs,
+    );
+    let mut out = Vec::new();
+    let err = proof
+        .write_to_vec(&mut out)
+        .expect_err("over-cap body must fail to serialize");
+    assert!(
+        matches!(
+            err,
+            ProofError::BodyTooLarge {
+                limit: MAX_DECOMPRESSED_LEN,
+                ..
+            }
+        ),
+        "got {err:?}"
+    );
+    assert!(out.is_empty(), "a failed serialization must not write");
+}
+
+/// Frames declaring a zero content size are rejected at the frame layer
+#[test_case(|wire| crate::proofs::frame::write_compressed_body(&[], wire) ; "empty body frame")]
+#[test_case(|wire: &mut Vec<u8>| {
+    // zstd skippable frame (magic 0x184D2A50, little-endian, 4-byte payload)
+    wire.extend_from_slice(&[0x50, 0x2A, 0x4D, 0x18]);
+    wire.extend_from_slice(&4u32.to_le_bytes());
+    wire.extend_from_slice(&[0xAB; 4]);
+} ; "lone skippable frame")]
+fn test_frame_rejects_zero_content_size(append_frame: fn(&mut Vec<u8>)) {
+    let mut wire = raw_header(ProofType::Range);
+    append_frame(&mut wire);
+    let err = FrozenRangeProof::from_slice(&wire).expect_err("zero content size");
+    assert!(
+        matches!(err, ReadError::InvalidItem { item, .. } if item == "frame content size"),
         "got {err:?}"
     );
 }
@@ -1501,7 +1556,7 @@ fn test_slow_malformed_wire_fuzz() {
             Ok(parsed) => {
                 debug!("iteration {i}: corruption produced valid proof (checking stability)");
                 let mut re_bytes = Vec::new();
-                parsed.write_to_vec(&mut re_bytes);
+                parsed.write_to_vec(&mut re_bytes).expect("serialize proof");
                 let re_parsed = FrozenRangeProof::from_slice(&re_bytes)
                     .expect("re-serialized proof should parse cleanly");
                 assert_eq!(parsed, re_parsed, "roundtrip must preserve the proof");

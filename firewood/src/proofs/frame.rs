@@ -12,11 +12,17 @@ use zstd::zstd_safe;
 
 use super::reader::ReadError;
 
-/// Hard cap on a decoded proof body.
+/// Hard cap on a decoded proof body, enforced by the decoder before
+/// allocating and by the serializer before emitting. 4MiB bounds what one
+/// message can force us to allocate while leaving room for real
+/// state-sync proofs (target 2MiB). Changing it needs coordination:
+/// every decoder must accept a value before any producer emits it.
 pub(super) const MAX_DECOMPRESSED_LEN: usize = 4 * 1024 * 1024; // 4 MiB
 
-/// Upper bound on the ratio between the uncompressed body length and the
-/// compressed frame length.
+/// Cap on the uncompressed/compressed length ratio, bounding zstd-bomb
+/// amplification to 128× the bytes a peer actually sent. Honest hash-heavy
+/// bodies compress ~2–3×. Same coordination caveat as
+/// [`MAX_DECOMPRESSED_LEN`].
 pub(super) const MAX_COMPRESSION_RATIO: usize = 128;
 
 /// Enforces the pre-allocation bounds (see [`decompress_body`]) and returns
@@ -24,7 +30,8 @@ pub(super) const MAX_COMPRESSION_RATIO: usize = 128;
 ///
 /// Exactly one zstd frame must span all of `frame`: the raw decompressor
 /// accepts concatenated frames and silently skips skippable ones, which
-/// would otherwise be an attacker-controlled padding channel.
+/// would otherwise be an attacker-controlled padding channel. A lone
+/// skippable frame is rejected by the non-zero content-size check.
 fn validate_frame(frame: &[u8], frame_offset: usize) -> Result<usize, ReadError> {
     let frame_size =
         zstd_safe::find_frame_compressed_size(frame).map_err(|code| ReadError::InvalidItem {
@@ -53,12 +60,12 @@ fn validate_frame(frame: &[u8], frame_offset: usize) -> Result<usize, ReadError>
 
     let decoded_len = usize::try_from(content_size)
         .ok()
-        .filter(|&n| n <= MAX_DECOMPRESSED_LEN)
+        .filter(|&n| n != 0 && n <= MAX_DECOMPRESSED_LEN)
         .ok_or_else(|| ReadError::InvalidItem {
             item: "frame content size",
             offset: frame_offset,
-            expected: "content size within the maximum",
-            found: format!("{content_size} > {MAX_DECOMPRESSED_LEN}"),
+            expected: "a non-zero content size within the maximum",
+            found: format!("{content_size} not in 1..={MAX_DECOMPRESSED_LEN}"),
         })?;
 
     // Bound the allocation by bytes the peer actually sent (anti-bomb).

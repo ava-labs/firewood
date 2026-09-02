@@ -767,7 +767,9 @@ fn test_change_proof_with_hashed_out_of_range_value() {
 
     // Serialize/deserialize to convert large values to Hash.
     let mut serialized = Vec::new();
-    proof.write_to_vec(&mut serialized);
+    proof
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
     let deserialized = crate::api::FrozenChangeProof::from_slice(&serialized).unwrap();
 
     let ctx =

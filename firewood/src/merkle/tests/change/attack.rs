@@ -1041,7 +1041,7 @@ fn test_crafted_dropped_hashed_put_behind_left_exclusion_rejected() {
 
     // Serialize so 0x1234's boundary node carries a Hash digest (value >= 32 bytes).
     let mut buf = Vec::new();
-    valid.write_to_vec(&mut buf);
+    valid.write_to_vec(&mut buf).expect("serialize proof");
     let valid = crate::api::FrozenChangeProof::from_slice(&buf).unwrap();
 
     // Tamper: drop the in-range Put of 0x1234, keeping the 0x90 change.
@@ -1095,7 +1095,7 @@ fn test_crafted_dropped_hashed_put_behind_right_exclusion_rejected() {
 
     // Serialize so 0x1234's boundary node carries a Hash digest (value >= 32 bytes).
     let mut buf = Vec::new();
-    valid.write_to_vec(&mut buf);
+    valid.write_to_vec(&mut buf).expect("serialize proof");
     let valid = crate::api::FrozenChangeProof::from_slice(&buf).unwrap();
 
     // Tamper: drop the in-range Put of 0x1234, keeping the 0x10 change.

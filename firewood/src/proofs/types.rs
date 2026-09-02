@@ -157,6 +157,16 @@ pub enum ProofError {
     #[error("error deserializing a proof: {0}")]
     Deserialization(super::ReadError),
 
+    /// The serialized proof body exceeds the size cap
+    /// (see `proofs::frame::MAX_DECOMPRESSED_LEN`).
+    #[error("serialized proof body is {len} bytes, exceeding the {limit}-byte limit")]
+    BodyTooLarge {
+        /// Length of the canonical (uncompressed) proof body.
+        len: usize,
+        /// The wire-format cap on a decoded proof body.
+        limit: usize,
+    },
+
     /// Empty range
     #[error("empty range")]
     EmptyRange,

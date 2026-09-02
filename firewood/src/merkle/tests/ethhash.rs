@@ -242,7 +242,9 @@ fn assert_range_proof_roundtrips(
     verify_range_proof(first, last, root_hash, range_proof).unwrap();
 
     let mut serialized = Vec::new();
-    range_proof.write_to_vec(&mut serialized);
+    range_proof
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
     let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
     verify_range_proof(first, last, root_hash, &deserialized).unwrap();
 }
