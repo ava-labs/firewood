@@ -241,6 +241,22 @@ impl<'a> NibblesIterator<'a> {
             tail: Self::BYTES_PER_NIBBLE * data.len(),
         }
     }
+
+    /// Returns the next nibble without consuming it.
+    #[must_use]
+    pub fn peek(&self) -> Option<u8> {
+        if self.is_empty() {
+            return None;
+        }
+        let result = if self.head.is_multiple_of(2) {
+            #[expect(clippy::indexing_slicing)]
+            NIBBLES[(self.data[self.head / 2] >> 4) as usize]
+        } else {
+            #[expect(clippy::indexing_slicing)]
+            NIBBLES[(self.data[self.head / 2] & 0xf) as usize]
+        };
+        Some(result)
+    }
 }
 
 impl DoubleEndedIterator for NibblesIterator<'_> {

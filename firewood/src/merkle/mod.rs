@@ -1928,31 +1928,30 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
         key: NibblesIterator<'_>,
         value: Value,
     ) -> Result<(), FileIoError> {
-        let key = Path::from_nibbles_iterator(key);
         let root = self.nodestore.root_mut();
         let Some(root_node) = std::mem::take(root) else {
             // The trie is empty. Create a new leaf node with `value` and set
             // it as the root.
             let root_node = Node::Leaf(LeafNode {
-                partial_path: key,
+                partial_path: Path::from_nibbles_iterator(key),
                 value,
             });
             *root = root_node.into();
             return Ok(());
         };
 
-        let root_node = self.insert_helper(root_node, key.as_ref(), value)?;
+        let root_node = self.insert_helper(root_node, key, value)?;
         *self.nodestore.root_mut() = root_node.into();
         Ok(())
     }
 
     /// Map `key` to `value` into the subtrie rooted at `node`.
-    /// Each element of `key` is 1 nibble.
+    /// `key` is provided as a `NibblesIterator`.
     /// Returns the new root of the subtrie.
     fn insert_helper(
         &mut self,
         mut node: Node,
-        key: &[u8],
+        mut key: NibblesIterator<'_>,
         value: Value,
     ) -> Result<Node, FileIoError> {
         // 4 possibilities for the position of the `key` relative to `node`:
@@ -1960,26 +1959,32 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
         // 2. The key is above the node (i.e. its ancestor)
         // 3. The key is below the node (i.e. its descendant)
         // 4. Neither is an ancestor of the other
-        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
+        let node_path = node.partial_path().as_ref();
+        let mut shared_len: usize = 0;
+        for n in node_path.iter().copied() {
+            if key.peek() != Some(n) {
+                break;
+            }
+            key.next();
+            shared_len = shared_len.saturating_add(1);
+        }
+        let unique_node = node_path.get(shared_len..).expect("in bounds");
 
-        let unique_key = path_overlap.unique_a;
-        let unique_node = path_overlap.unique_b;
+        let key_exhausted = key.peek().is_none();
+        let node_exhausted = unique_node.is_empty();
 
-        match (
-            unique_key
-                .split_first()
-                .map(|(index, path)| (*index, path.into())),
-            unique_node
-                .split_first()
-                .map(|(index, path)| (*index, path.into())),
-        ) {
-            (None, None) => {
+        match (key_exhausted, node_exhausted) {
+            (true, true) => {
                 // 1. The node is at `key`
                 node.update_value(value);
                 firewood_counter!(INSERT, "operation" => "update").increment(1);
                 Ok(node)
             }
-            (None, Some((child_index, partial_path))) => {
+            (true, false) => {
+                let (child_index, partial_path) = unique_node
+                    .split_first()
+                    .map(|(index, path)| (*index, path))
+                    .expect("unique_node is non-empty");
                 let child_index = PathComponent::try_new(child_index).expect("valid component");
                 // 2. The key is above the node (i.e. its ancestor)
                 // Make a new branch node and insert the current node as a child.
@@ -1989,19 +1994,20 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 //                        |
                 //                       node
                 let mut branch = BranchNode {
-                    partial_path: path_overlap.shared.into(),
+                    partial_path: Path::from(node_path.get(..shared_len).expect("in bounds")),
                     value: Some(value),
                     children: Children::new(),
                 };
 
                 // Shorten the node's partial path since it has a new parent.
-                node.update_partial_path(partial_path);
+                node.update_partial_path(partial_path.into());
                 branch.children[child_index] = Some(Child::Node(node));
                 firewood_counter!(INSERT, "operation" => "above").increment(1);
 
                 Ok(Node::Branch(Box::new(branch)))
             }
-            (Some((child_index, partial_path)), None) => {
+            (false, true) => {
+                let child_index = key.next().expect("key is not exhausted");
                 let child_index = PathComponent::try_new(child_index).expect("valid component");
                 // 3. The key is below the node (i.e. its descendant)
                 //    ...                         ...
@@ -2016,14 +2022,14 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                             // Create a new leaf and put it here.
                             let new_leaf = Node::Leaf(LeafNode {
                                 value,
-                                partial_path,
+                                partial_path: Path::from_nibbles_iterator(key),
                             });
                             branch.children[child_index] = Some(Child::Node(new_leaf));
                             firewood_counter!(INSERT, "operation" => "below").increment(1);
                             return Ok(node);
                         };
                         let child = self.read_for_update(child)?;
-                        let child = self.insert_helper(child, partial_path.as_ref(), value)?;
+                        let child = self.insert_helper(child, key, value)?;
                         branch.children[child_index] = Some(Child::Node(child));
                         Ok(node)
                     }
@@ -2037,7 +2043,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
 
                         let new_leaf = Node::Leaf(LeafNode {
                             value,
-                            partial_path,
+                            partial_path: Path::from_nibbles_iterator(key),
                         });
 
                         branch.children[child_index] = Some(Child::Node(new_leaf));
@@ -2047,9 +2053,14 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                     }
                 }
             }
-            (Some((key_index, key_partial_path)), Some((node_index, node_partial_path))) => {
-                let key_index = PathComponent::try_new(key_index).expect("valid component");
+            (false, false) => {
+                let (node_index, node_partial_path) = unique_node
+                    .split_first()
+                    .map(|(index, path)| (*index, path))
+                    .expect("unique_node is non-empty");
                 let node_index = PathComponent::try_new(node_index).expect("valid component");
+                let key_index = key.next().expect("key is not exhausted");
+                let key_index = PathComponent::try_new(key_index).expect("valid component");
                 // 4. Neither is an ancestor of the other
                 //    ...                         ...
                 //     |                           |
@@ -2058,17 +2069,17 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 //                               node   key
                 // Make a branch node that has both the current node and a new leaf node as children.
                 let mut branch = BranchNode {
-                    partial_path: path_overlap.shared.into(),
+                    partial_path: Path::from(node_path.get(..shared_len).expect("in bounds")),
                     value: None,
                     children: Children::new(),
                 };
 
-                node.update_partial_path(node_partial_path);
+                node.update_partial_path(node_partial_path.into());
                 branch.children[node_index] = Some(Child::Node(node));
 
                 let new_leaf = Node::Leaf(LeafNode {
                     value,
-                    partial_path: key_partial_path,
+                    partial_path: Path::from_nibbles_iterator(key),
                 });
                 branch.children[key_index] = Some(Child::Node(new_leaf));
 
@@ -2240,7 +2251,6 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
         &mut self,
         key: NibblesIterator<'_>,
     ) -> Result<Option<Value>, FileIoError> {
-        let key = Path::from_nibbles_iterator(key);
         let root = self.nodestore.root_mut();
         let Some(root_node) = std::mem::take(root) else {
             // The trie is empty. There is nothing to remove.
@@ -2248,7 +2258,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
             return Ok(None);
         };
 
-        let (root_node, removed_value) = self.remove_helper(root_node, &key)?;
+        let (root_node, removed_value) = self.remove_helper(root_node, key)?;
         *self.nodestore.root_mut() = root_node;
         if removed_value.is_some() {
             firewood_counter!(REMOVE, "prefix" => "false", "result" => "success").increment(1);
@@ -2259,34 +2269,38 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
     }
 
     /// Removes the value associated with the given `key` from the subtrie rooted at `node`.
+    /// `key` is provided as a `NibblesIterator`.
     /// Returns the new root of the subtrie and the value that was removed, if any.
-    /// Each element of `key` is 1 nibble.
     fn remove_helper(
         &mut self,
         node: Node,
-        key: &[u8],
+        mut key: NibblesIterator<'_>,
     ) -> Result<(Option<Node>, Option<Value>), FileIoError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
         // 2. The key is above the node (i.e. its ancestor)
         // 3. The key is below the node (i.e. its descendant)
         // 4. Neither is an ancestor of the other
-        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
+        let node_path = node.partial_path().as_ref();
+        let mut shared_len: usize = 0;
+        for n in node_path.iter().copied() {
+            if key.peek() != Some(n) {
+                break;
+            }
+            key.next();
+            shared_len = shared_len.saturating_add(1);
+        }
+        let unique_node = node_path.get(shared_len..).expect("in bounds");
 
-        let unique_key = path_overlap.unique_a;
-        let unique_node = path_overlap.unique_b;
+        let key_exhausted = key.peek().is_none();
+        let node_exhausted = unique_node.is_empty();
 
-        match (
-            unique_key
-                .split_first()
-                .map(|(index, path)| (*index, Path::from(path))),
-            unique_node.split_first(),
-        ) {
-            (_, Some(_)) => {
+        match (key_exhausted, node_exhausted) {
+            (_, false) => {
                 // Case (2) or (4)
                 Ok((Some(node), None))
             }
-            (None, None) => {
+            (true, true) => {
                 // 1. The node is at `key`
                 match node {
                     Node::Branch(mut branch) => {
@@ -2300,7 +2314,8 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                     Node::Leaf(leaf) => Ok((None, Some(leaf.value))),
                 }
             }
-            (Some((child_index, child_partial_path)), None) => {
+            (false, true) => {
+                let child_index = key.next().expect("key is not exhausted");
                 let child_index = PathComponent::try_new(child_index).expect("valid component");
                 // 3. The key is below the node (i.e. its descendant)
                 match node {
@@ -2313,8 +2328,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                         };
                         let child = self.read_for_update(child)?;
 
-                        let (child, removed_value) =
-                            self.remove_helper(child, child_partial_path.as_ref())?;
+                        let (child, removed_value) = self.remove_helper(child, key)?;
 
                         branch.children[child_index] = child.map(Child::Node);
 
@@ -2337,7 +2351,6 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
         &mut self,
         prefix: NibblesIterator<'_>,
     ) -> Result<usize, FileIoError> {
-        let prefix = Path::from_nibbles_iterator(prefix);
         let root = self.nodestore.root_mut();
         let Some(root_node) = std::mem::take(root) else {
             // The trie is empty. There is nothing to remove.
@@ -2346,7 +2359,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
         };
 
         let mut deleted = 0;
-        let root_node = self.remove_prefix_helper(root_node, &prefix, &mut deleted)?;
+        let root_node = self.remove_prefix_helper(root_node, prefix, &mut deleted)?;
         firewood_counter!(REMOVE, "prefix" => "true", "result" => "success")
             .increment(deleted as u64);
         *self.nodestore.root_mut() = root_node;
@@ -2356,7 +2369,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
     fn remove_prefix_helper(
         &mut self,
         node: Node,
-        key: &[u8],
+        mut key: NibblesIterator<'_>,
         deleted: &mut usize,
     ) -> Result<Option<Node>, FileIoError> {
         // 4 possibilities for the position of the `key` relative to `node`:
@@ -2364,18 +2377,21 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
         // 2. The key is above the node (i.e. its ancestor), so the parent needs to be restructured (TODO(rkuris)).
         // 3. The key is below the node (i.e. its descendant), so continue traversing the trie.
         // 4. Neither is an ancestor of the other, in which case there's no work to do.
-        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
+        let node_path = node.partial_path().as_ref();
+        let mut shared_len: usize = 0;
+        for n in node_path.iter().copied() {
+            if key.peek() != Some(n) {
+                break;
+            }
+            key.next();
+            shared_len = shared_len.saturating_add(1);
+        }
+        let unique_node = node_path.get(shared_len..).expect("in bounds");
 
-        let unique_key = path_overlap.unique_a;
-        let unique_node = path_overlap.unique_b;
+        let key_exhausted = key.peek().is_none();
 
-        match (
-            unique_key
-                .split_first()
-                .map(|(index, path)| (*index, Path::from(path))),
-            unique_node.split_first(),
-        ) {
-            (None, _) => {
+        match (key_exhausted, unique_node.is_empty()) {
+            (true, _) => {
                 // 1. The node is at `key`, or we're just above it
                 // so we can start deleting below here
                 match node {
@@ -2393,11 +2409,12 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 }
                 Ok(None)
             }
-            (_, Some(_)) => {
+            (_, false) => {
                 // Case (2) or (4)
                 Ok(Some(node))
             }
-            (Some((child_index, child_partial_path)), None) => {
+            (false, true) => {
+                let child_index = key.next().expect("key is not exhausted");
                 let child_index = PathComponent::try_new(child_index).expect("valid component");
                 // 3. The key is below the node (i.e. its descendant)
                 match node {
@@ -2408,8 +2425,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                         };
                         let child = self.read_for_update(child)?;
 
-                        let child =
-                            self.remove_prefix_helper(child, child_partial_path.as_ref(), deleted)?;
+                        let child = self.remove_prefix_helper(child, key, deleted)?;
 
                         branch.children[child_index] = child.map(Child::Node);
 
