@@ -46,11 +46,10 @@ fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     )
 }
 
-/// Keys forming a prefix chain: key i is i zero bytes followed by `tail`, so each
-/// key shares one more byte with its predecessor than the last and the trie is a
-/// chain rather than a bush. With `count` at the key-length bound, the longest key
-/// sits exactly at that bound and the chain is 2 nibbles deep per key.
-pub(crate) fn prefix_chain_keys(count: usize, tail: u8) -> Vec<Vec<u8>> {
+/// Keys forming a prefix chain: key `i` is `i` zero bytes followed by `tail`.
+/// Consecutive keys share all but their last byte, so each key adds one byte
+/// (two nibbles) of trie depth, and the longest key is `count` bytes.
+fn prefix_chain_keys(count: usize, tail: u8) -> Vec<Vec<u8>> {
     (0..count)
         .map(|i| {
             let mut key = vec![0x00u8; i];
@@ -64,11 +63,10 @@ pub(crate) fn prefix_chain_keys(count: usize, tail: u8) -> Vec<Vec<u8>> {
 fn generate_random_kvs(rng: &firewood_storage::SeededRng, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
     let mut kvs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for _ in 0..n {
-        // Keys stay inside the proof key-length bound so generated data can
-        // round-trip through proof serialization. Half the bound leaves room
-        // without making the generated keys uniformly long. Values are not
-        // bounded, since the bound applies only to keys.
-        let key_len = rng.random_range(1..=MAX_KEY_BYTES / 2);
+        // Keys stay within the proof key-length bound, so a proof built over
+        // this data can always be serialized and read back. Values have no
+        // bound.
+        let key_len = rng.random_range(1..=MAX_KEY_BYTES);
         let key: Vec<u8> = (0..key_len).map(|_| rng.random()).collect();
 
         let val_len = rng.random_range(1..=4096);
