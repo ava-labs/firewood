@@ -713,13 +713,10 @@ fn test_collapse_root_hides_spurious_key() {
     assert_eq!(valid_proof.batch_ops().len(), 1);
 
     let mut ops: OwnedBatchOps = valid_proof.batch_ops().to_vec();
-    ops.insert(
-        0,
-        BatchOp::Put {
-            key: b"\x10".to_vec().into_boxed_slice(),
-            value: b"evil".to_vec().into_boxed_slice(),
-        },
-    );
+    ops.insert(0, BatchOp::Put {
+        key: b"\x10".to_vec().into_boxed_slice(),
+        value: b"evil".to_vec().into_boxed_slice(),
+    });
 
     let attack_proof = crate::ChangeProof::new(
         crate::Proof::new(valid_proof.start_proof().as_ref().into()),
@@ -1027,13 +1024,10 @@ fn test_crafted_dropped_hashed_put_behind_left_exclusion_rejected() {
     // start: 0x90 only. end: add NEW key 0x1234 (large value) AND change 0x90
     // (a second in-range op so the batch isn't empty after dropping 0x1234).
     let (source, target, root1_target, _ds, _dt) = setup_source_target![(b"\x90", b"anchor")];
-    let (root1_source, root2) = setup_2nd_commit!(
-        source,
-        [
-            (b"\x12\x34" as &[u8], big.as_slice()),
-            (b"\x90", b"changed")
-        ]
-    );
+    let (root1_source, root2) = setup_2nd_commit!(source, [
+        (b"\x12\x34" as &[u8], big.as_slice()),
+        (b"\x90", b"changed")
+    ]);
 
     let valid = source
         .change_proof(root1_source, root2.clone(), Some(b"\x12\x30"), None, None)
@@ -1081,13 +1075,10 @@ fn test_crafted_dropped_hashed_put_behind_left_exclusion_rejected() {
 fn test_crafted_dropped_hashed_put_behind_right_exclusion_rejected() {
     let big = [0xabu8; 40]; // >= 32 bytes => Hash after serialization
     let (source, target, root1_target, _ds, _dt) = setup_source_target![(b"\x10", b"anchor")];
-    let (root1_source, root2) = setup_2nd_commit!(
-        source,
-        [
-            (b"\x10" as &[u8], b"changed" as &[u8]),
-            (b"\x12\x34", big.as_slice())
-        ]
-    );
+    let (root1_source, root2) = setup_2nd_commit!(source, [
+        (b"\x10" as &[u8], b"changed" as &[u8]),
+        (b"\x12\x34", big.as_slice())
+    ]);
 
     let valid = source
         .change_proof(root1_source, root2.clone(), None, Some(b"\x12\x38"), None)

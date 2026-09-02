@@ -90,10 +90,11 @@ fn test_end_proof_inclusion_with_children_below() {
     let (source, target, root1_target, _ds, _dt) =
         setup_source_target![(b"\xab", b"v0"), (b"\xab\xcd", b"v1"), (b"\xf0", b"v2")];
 
-    let (root1_source, root2) = setup_2nd_commit!(
-        source,
-        [(b"\xab", b"c0"), (b"\xab\xcd", b"c1"), (b"\xf0", b"c2")]
-    );
+    let (root1_source, root2) = setup_2nd_commit!(source, [
+        (b"\xab", b"c0"),
+        (b"\xab\xcd", b"c1"),
+        (b"\xf0", b"c2")
+    ]);
 
     // Limited to 1 — last_op_key \xab is a prefix with children below.
     let proof = source
@@ -194,13 +195,10 @@ fn test_start_proof_exclusion_for_deleted_key() {
     let root1_target = target.root_hash().unwrap();
 
     source
-        .propose(vec![
-            BatchOp::Delete { key: b"\x10" },
-            BatchOp::Put {
-                key: b"\x30",
-                value: b"changed",
-            },
-        ])
+        .propose(vec![BatchOp::Delete { key: b"\x10" }, BatchOp::Put {
+            key: b"\x30",
+            value: b"changed",
+        }])
         .unwrap()
         .commit()
         .unwrap();
@@ -622,13 +620,10 @@ fn test_out_of_range_root_compression() {
     ];
     let root1 = db.root_hash().unwrap();
 
-    db.propose(vec![
-        BatchOp::Delete { key: b"\x01" },
-        BatchOp::Put {
-            key: b"\x10",
-            value: b"beta2",
-        },
-    ])
+    db.propose(vec![BatchOp::Delete { key: b"\x01" }, BatchOp::Put {
+        key: b"\x10",
+        value: b"beta2",
+    }])
     .unwrap()
     .commit()
     .unwrap();
@@ -873,10 +868,9 @@ fn test_truncation_classification_under_a_prefix_key(
             },
         ]
     } else {
-        vec![
-            BatchOp::Delete { key: &b"\x10"[..] },
-            BatchOp::Delete { key: &b"\x20"[..] },
-        ]
+        vec![BatchOp::Delete { key: &b"\x10"[..] }, BatchOp::Delete {
+            key: &b"\x20"[..],
+        }]
     };
     db.propose(ops).unwrap().commit().unwrap();
     let root2 = db.root_hash().unwrap();

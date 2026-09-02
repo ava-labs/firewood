@@ -972,27 +972,22 @@ fn test_get_branch_from_nibbles_mut() {
     merkle.insert(b"\xac", Box::from([2])).unwrap();
 
     // Branch exists at [a] — has children at b and c
-    let branch = TestMerkle::get_branch_from_nibbles_mut(
-        merkle.nodestore.root_mut(),
-        &[PathComponent::try_new(0xa).unwrap()],
-    );
+    let branch = TestMerkle::get_branch_from_nibbles_mut(merkle.nodestore.root_mut(), &[
+        PathComponent::try_new(0xa).unwrap(),
+    ]);
     assert!(branch.is_some());
 
     // Nothing at [f]
-    let missing = TestMerkle::get_branch_from_nibbles_mut(
-        merkle.nodestore.root_mut(),
-        &[PathComponent::try_new(0xf).unwrap()],
-    );
+    let missing = TestMerkle::get_branch_from_nibbles_mut(merkle.nodestore.root_mut(), &[
+        PathComponent::try_new(0xf).unwrap(),
+    ]);
     assert!(missing.is_none());
 
     // [a, b] is a leaf, not a branch
-    let leaf = TestMerkle::get_branch_from_nibbles_mut(
-        merkle.nodestore.root_mut(),
-        &[
-            PathComponent::try_new(0xa).unwrap(),
-            PathComponent::try_new(0xb).unwrap(),
-        ],
-    );
+    let leaf = TestMerkle::get_branch_from_nibbles_mut(merkle.nodestore.root_mut(), &[
+        PathComponent::try_new(0xa).unwrap(),
+        PathComponent::try_new(0xb).unwrap(),
+    ]);
     assert!(leaf.is_none());
 }
 

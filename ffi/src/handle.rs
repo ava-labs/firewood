@@ -155,7 +155,6 @@ impl DatabaseHandleArgs<'_> {
 /// A handle to the database, returned by `fwd_open_db`.
 ///
 /// These handles are passed to the other FFI functions.
-///
 #[derive(Debug)]
 pub struct DatabaseHandle {
     /// The database, erased to the runtime-selected hash mode.

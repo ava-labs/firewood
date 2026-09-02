@@ -40,7 +40,6 @@ typedef struct CodeIteratorHandle CodeIteratorHandle;
  * A handle to the database, returned by `fwd_open_db`.
  *
  * These handles are passed to the other FFI functions.
- *
  */
 typedef struct DatabaseHandle DatabaseHandle;
 
@@ -2313,7 +2312,6 @@ struct VoidResult fwd_free_eth_proof(struct EthProofOwned *proof);
  *
  * The caller must ensure that the `iterator` is not null and that it points to
  * a valid [`IteratorHandle`] previously returned by a function from this library.
- *
  */
 struct VoidResult fwd_free_iterator(struct IteratorHandle *iterator);
 
@@ -2661,7 +2659,6 @@ struct RevisionResult fwd_get_revision(const struct DatabaseHandle *db, struct H
  * * ensure that `handle` is a valid pointer to a [`IteratorHandle`].
  * * call [`fwd_free_owned_kv_pair`] on returned [`OwnedKeyValuePair`]
  *   to free the memory associated with the returned value.
- *
  */
 struct KeyValueResult fwd_iter_next(struct IteratorHandle *handle);
 
@@ -2691,7 +2688,6 @@ struct KeyValueResult fwd_iter_next(struct IteratorHandle *handle);
  * The caller must:
  * * ensure that `handle` is a valid pointer to a [`IteratorHandle`].
  * * call [`fwd_free_owned_key_value_batch`] on the returned batch to free any allocated memory.
- *
  */
 struct KeyValueBatchResult fwd_iter_next_n(struct IteratorHandle *handle, size_t n);
 
@@ -2716,7 +2712,6 @@ struct KeyValueBatchResult fwd_iter_next_n(struct IteratorHandle *handle, size_t
  * * ensure that `handle` is a valid pointer to a [`ProposalHandle`]
  * * ensure that `key` is a valid for [`BorrowedBytes`]
  * * call [`fwd_free_iterator`] to free the memory associated with the iterator.
- *
  */
 struct IteratorResult fwd_iter_on_proposal(const struct ProposalHandle *handle, BorrowedBytes key);
 
@@ -2765,7 +2760,6 @@ struct IteratorResult fwd_iter_on_reconstructed(const struct ReconstructedHandle
  * * ensure that `revision` is a valid pointer to a [`RevisionHandle`]
  * * ensure that `key` is a valid [`BorrowedBytes`]
  * * call [`fwd_free_iterator`] to free the memory associated with the iterator.
- *
  */
 struct IteratorResult fwd_iter_on_revision(const struct RevisionHandle *revision,
                                            BorrowedBytes key);

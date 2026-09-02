@@ -262,7 +262,8 @@ fn get_iterator_intial_state<T: TrieReader>(
                     node = match child {
                         None => return Ok(NodeIterState::Iterating { iter_stack }),
                         Some(Child::AddressWithHash(addr, _)) => merkle.read_node(*addr)?,
-                        Some(Child::Node(node)) => (*node).clone().into(), // TODO(rkuris) can we avoid cloning this?
+                        // TODO(rkuris) can we avoid cloning this?
+                        Some(Child::Node(node)) => (*node).clone().into(),
                         Some(Child::MaybePersisted(maybe_persisted, _)) => {
                             // For MaybePersisted, we need to get the node
                             maybe_persisted.as_shared_node(merkle)?
@@ -750,10 +751,9 @@ mod tests {
             Some(Err(e)) => panic!("{e:?}"),
             None => panic!("unexpected end of iterator"),
         };
-        assert_eq!(
-            *node.key_nibbles,
-            path![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x0F]
-        );
+        assert_eq!(*node.key_nibbles, path![
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x0F
+        ]);
         assert_eq!(node.next_nibble, None);
         assert_eq!(
             node.node.as_leaf().unwrap().value,
@@ -947,18 +947,16 @@ mod tests {
 
         let (key, node) = iter.next().unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
-        assert_eq!(
-            node.as_leaf().unwrap().clone().value.to_vec(),
-            vec![0x00, 0xD0, 0xD0]
-        );
+        assert_eq!(node.as_leaf().unwrap().clone().value.to_vec(), vec![
+            0x00, 0xD0, 0xD0
+        ]);
 
         // Covers case of leaf with no partial path
         let (key, node) = iter.next().unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xFF].into_boxed_slice());
-        assert_eq!(
-            node.as_leaf().unwrap().clone().value.to_vec(),
-            vec![0x00, 0xFF]
-        );
+        assert_eq!(node.as_leaf().unwrap().clone().value.to_vec(), vec![
+            0x00, 0xFF
+        ]);
 
         assert_iterator_is_exhausted(iter);
     }
@@ -974,18 +972,16 @@ mod tests {
 
         let (key, node) = iter.next().unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
-        assert_eq!(
-            node.as_leaf().unwrap().clone().value.to_vec(),
-            vec![0x00, 0xD0, 0xD0]
-        );
+        assert_eq!(node.as_leaf().unwrap().clone().value.to_vec(), vec![
+            0x00, 0xD0, 0xD0
+        ]);
 
         // Covers case of leaf with no partial path
         let (key, node) = iter.next().unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xFF].into_boxed_slice());
-        assert_eq!(
-            node.as_leaf().unwrap().clone().value.to_vec(),
-            vec![0x00, 0xFF]
-        );
+        assert_eq!(node.as_leaf().unwrap().clone().value.to_vec(), vec![
+            0x00, 0xFF
+        ]);
 
         assert_iterator_is_exhausted(iter);
     }
@@ -1187,11 +1183,11 @@ mod tests {
 
         assert!(first_key < intermediate);
 
-        let key_values = [
-            vec![first_key],
-            vec![intermediate, intermediate],
-            vec![intermediate, intermediate, intermediate],
-        ];
+        let key_values = [vec![first_key], vec![intermediate, intermediate], vec![
+            intermediate,
+            intermediate,
+            intermediate,
+        ]];
         assert!(key_values[0] < key_values[1]);
         assert!(key_values[1] < key_values[2]);
 
