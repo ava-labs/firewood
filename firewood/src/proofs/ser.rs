@@ -88,17 +88,16 @@ impl FrozenRangeProof {
     ///
     /// # Errors
     ///
-    /// Returns [`ProofError::BodyTooLarge`] — with `out` untouched — if the
-    /// serialized body exceeds the size cap; a peer would reject the wire,
-    /// so the producer must learn here instead.
+    /// Returns [`ProofError::BodyTooLarge`] with `out` untouched if the
+    /// serialized body exceeds the size cap, or [`ProofError::Compression`]
+    /// if the compression fails where `out` will hold a header-only write.
     pub fn write_to_vec(&self, out: &mut Vec<u8>) -> Result<(), ProofError> {
         let mut body = Vec::new();
         self.write_body_to_vec(&mut body);
         check_body_len(body.len())?;
         let header = Header::from((ProofType::Range, self.hash_mode()));
         out.extend_from_slice(bytemuck::bytes_of(&header));
-        super::frame::write_compressed_body(&body, out);
-        Ok(())
+        super::frame::write_compressed_body(&body, out)
     }
 
     /// Serializes this proof's canonical (uncompressed) body: the bytes
@@ -125,17 +124,16 @@ impl FrozenChangeProof {
     ///
     /// # Errors
     ///
-    /// Returns [`ProofError::BodyTooLarge`] — with `out` untouched — if the
-    /// serialized body exceeds the size cap.
-    /// See [`FrozenRangeProof::write_to_vec`].
+    /// Returns [`ProofError::BodyTooLarge`] with `out` untouched if the
+    /// serialized body exceeds the size cap, or [`ProofError::Compression`]
+    /// if the compression fails where `out` will hold a header-only write.
     pub fn write_to_vec(&self, out: &mut Vec<u8>) -> Result<(), ProofError> {
         let mut body = Vec::new();
         self.write_body_to_vec(&mut body);
         check_body_len(body.len())?;
         let header = Header::from((ProofType::Change, self.hash_mode()));
         out.extend_from_slice(bytemuck::bytes_of(&header));
-        super::frame::write_compressed_body(&body, out);
-        Ok(())
+        super::frame::write_compressed_body(&body, out)
     }
 
     /// Serializes this proof's canonical (uncompressed) body. See

@@ -39,7 +39,7 @@ fn compress_and_parse_range(data: &[u8]) -> Result<FrozenRangeProof, ReadError> 
     match data.split_at_checked(HEADER_LEN) {
         Some((header, body)) => {
             let mut wire = header.to_vec();
-            super::frame::write_compressed_body(body, &mut wire);
+            super::frame::write_compressed_body(body, &mut wire).expect("compress body");
             FrozenRangeProof::from_slice(&wire)
         }
         None => FrozenRangeProof::from_slice(data),
@@ -51,7 +51,7 @@ fn compress_and_parse_change(data: &[u8]) -> Result<FrozenChangeProof, ReadError
     match data.split_at_checked(HEADER_LEN) {
         Some((header, body)) => {
             let mut wire = header.to_vec();
-            super::frame::write_compressed_body(body, &mut wire);
+            super::frame::write_compressed_body(body, &mut wire).expect("compress body");
             FrozenChangeProof::from_slice(&wire)
         }
         None => FrozenChangeProof::from_slice(data),
@@ -1307,7 +1307,7 @@ fn test_frame_rejects_over_cap_content_size() {
     // decoder must reject it before allocating.
     let body = vec![0u8; MAX_DECOMPRESSED_LEN + 1];
     let mut wire = raw_header(ProofType::Range);
-    super::frame::write_compressed_body(&body, &mut wire);
+    super::frame::write_compressed_body(&body, &mut wire).expect("compress body");
     let err = FrozenRangeProof::from_slice(&wire).expect_err("over-cap content size");
     assert!(
         matches!(
@@ -1389,7 +1389,9 @@ fn test_write_to_vec_rejects_over_cap_body() {
 }
 
 /// Frames declaring a zero content size are rejected at the frame layer
-#[test_case(|wire| crate::proofs::frame::write_compressed_body(&[], wire) ; "empty body frame")]
+#[test_case(|wire: &mut Vec<u8>| {
+    crate::proofs::frame::write_compressed_body(&[], wire).expect("compress body");
+} ; "empty body frame")]
 #[test_case(|wire: &mut Vec<u8>| {
     // zstd skippable frame (magic 0x184D2A50, little-endian, 4-byte payload)
     wire.extend_from_slice(&[0x50, 0x2A, 0x4D, 0x18]);
@@ -1448,7 +1450,7 @@ fn test_frame_rejects_excessive_compression_ratio() {
     // allocating the 4 MiB.
     let body = vec![0u8; 4 * 1024 * 1024];
     let mut wire = raw_header(ProofType::Range);
-    super::frame::write_compressed_body(&body, &mut wire);
+    super::frame::write_compressed_body(&body, &mut wire).expect("compress body");
     let err = FrozenRangeProof::from_slice(&wire).expect_err("compression bomb");
     assert!(
         matches!(
@@ -1473,7 +1475,7 @@ fn test_frame_accepts_max_decompressed_len_exactly() {
     let body = block.repeat(cap / block.len());
     assert_eq!(body.len(), cap);
     let mut frame = Vec::new();
-    super::frame::write_compressed_body(&body, &mut frame);
+    super::frame::write_compressed_body(&body, &mut frame).expect("compress body");
     let decoded = super::frame::decompress_body(&frame, 0)
         .expect("body exactly at MAX_DECOMPRESSED_LEN must decode");
     assert_eq!(decoded, body);

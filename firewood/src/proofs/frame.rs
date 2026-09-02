@@ -11,6 +11,7 @@
 use zstd::zstd_safe;
 
 use super::reader::ReadError;
+use super::types::ProofError;
 
 /// Hard cap on a decoded proof body, enforced by the decoder before
 /// allocating and by the serializer before emitting. 4MiB bounds what one
@@ -107,8 +108,14 @@ pub(super) fn decompress_body(frame: &[u8], frame_offset: usize) -> Result<Vec<u
 
 /// Appends the single zstd frame compressing `body` (the canonical
 /// serialized body that follows the header on the wire).
-pub(super) fn write_compressed_body(body: &[u8], out: &mut Vec<u8>) {
+///
+/// # Errors
+///
+/// Returns [`ProofError::Compression`] if the compression fails (resource
+/// exhaustion; zstd cannot otherwise fail on in-memory input).
+pub(super) fn write_compressed_body(body: &[u8], out: &mut Vec<u8>) -> Result<(), ProofError> {
     let compressed = zstd::bulk::compress(body, zstd::DEFAULT_COMPRESSION_LEVEL)
-        .expect("zstd compressor allocation failed");
+        .map_err(ProofError::Compression)?;
     out.extend_from_slice(&compressed);
+    Ok(())
 }

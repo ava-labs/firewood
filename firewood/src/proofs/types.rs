@@ -167,6 +167,11 @@ pub enum ProofError {
         limit: usize,
     },
 
+    /// zstd failed to compress the proof body (allocation failure; zstd
+    /// cannot otherwise fail on in-memory input).
+    #[error("zstd compression failed: {0}")]
+    Compression(std::io::Error),
+
     /// Empty range
     #[error("empty range")]
     EmptyRange,
