@@ -18,11 +18,13 @@ on:
       - ffi/**/*.go
   # allow manual trigger because we cannot "retry" a deploy step
   workflow_dispatch:
-  # Rebuild pages after either benchmark workflow completes, on any branch:
-  # data separation is by directory (bench/ vs dev/bench/{branch}/), so
-  # feature-branch runs cannot clobber the official history.
+  # Rebuild pages after the benchmark umbrella completes, on any branch: data
+  # separation is by directory (bench/ vs dev/bench/{branch}/), so
+  # feature-branch runs cannot clobber the official history. The suites it
+  # calls publish nothing, and a reusable workflow raises no workflow_run of
+  # its own, so this one entry covers every benchmark publication.
   workflow_run:
-    workflows: ["C-Chain Reexecution Performance Tracking", "firewood-benchmarks"]
+    workflows: ["firewood-benchmarks"]
     types: [completed]
 
 env:
@@ -102,9 +104,9 @@ jobs:
         # `-C` changes the process cwd so relative paths resolve from inside ffi.
         run: doc2go -C ffi -home github.com/ava-labs/firewood/ffi -out "$(pwd)/site/ffi" ./...
       # Benchmark history lives on the benchmark-data branch (append-only storage).
-      # track-performance.yml and benchmarks.yaml populate it via
-      # github-action-benchmark, both writing to the same directory so the
-      # C-Chain and Rust charts share one page:
+      # benchmarks.yaml populates it via github-action-benchmark, writing both
+      # suites to the same directory so the C-Chain and Rust charts share one
+      # page:
       #   bench/              - official history (main only)
       #   dev/bench/{branch}/ - experimental feature-branch history
       # Scope the extract to those paths so it cannot clobber the book's index.html
