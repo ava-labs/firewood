@@ -1969,7 +1969,6 @@ dependencies = [
  "bumpalo",
  "bytemuck",
  "bytemuck_derive",
- "cfg-if",
  "criterion",
  "derive-where",
  "enum-as-inner",

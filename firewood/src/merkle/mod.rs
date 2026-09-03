@@ -557,8 +557,8 @@ fn change_outside_children<S: ReadableStorage, H: HashMode>(
 /// needs, so the child is read back through `storage` and re-derived.
 /// Out-of-range children get their hash from the corresponding proof node.
 ///
-/// Hashes the node as a normal trie node. Under `ethhash`, when this node
-/// is the single storage child of an account at depth 64, the parent
+/// Hashes the node as a normal trie node. Under the Ethereum hash mode, when
+/// this node is the single storage child of an account at depth 64, the parent
 /// instead invokes `compute_root_hash_as_storage_trie_root` to apply the
 /// storage-trie-root fold.
 fn compute_root_hash_with_proofs<H: HashMode, R: NodeReader>(
@@ -635,7 +635,7 @@ fn compute_root_hash_as_storage_trie_root<H: HashMode, R: NodeReader>(
 /// Hashable parts of a branch node assembled by `build_branch_parts`. The
 /// caller applies the final hash via either `HashableShunt::new` (normal)
 /// or `hash_node_as_storage_trie_root_parts` (the single-storage-child
-/// fold used at depth-64 account boundaries under `ethhash`).
+/// fold used at depth-64 account boundaries under the Ethereum hash mode).
 struct BranchParts<'b> {
     partial_path: &'b [PathComponent],
     value_digest: Option<ValueDigest<&'b [u8]>>,
@@ -766,8 +766,8 @@ fn build_branch_parts<'b, H: HashMode, R: NodeReader>(
 /// An "effective" child is either an in-range branch child or an
 /// out-of-range child carried by the proof node — together they reflect
 /// the true on-disk shape. Proof verification only; live hashing has its
-/// own detection in `hash_helper_inner`. Without `ethhash` there is no
-/// account-branch fold, so this always returns `None`.
+/// own detection in `hash_helper_inner`. When `algorithm` is not the Ethereum
+/// hash mode there is no account-branch fold, so this always returns `None`.
 fn single_effective_account_child(
     full_key: &[PathComponent],
     branch: &BranchNode,

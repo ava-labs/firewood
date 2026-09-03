@@ -16,7 +16,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use fastrace_opentelemetry::OpenTelemetryReporter;
 use firewood::logger::trace;
 use firewood::open;
-use firewood_storage::{DefaultHashMode, FREE_LIST_CACHE_ENTRY_SIZE, HashMode};
+use firewood_storage::{FREE_LIST_CACHE_ENTRY_SIZE, NodeHashAlgorithm};
 use log::LevelFilter;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
@@ -243,8 +243,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         .cache_read_strategy(args.global_opts.cache_read_strategy.clone().into())
         .max_revisions(args.global_opts.revisions)
         .build();
+    // The benchmark suite exercises Ethereum-mode (C-Chain) databases.
+    let node_hash_algorithm = NodeHashAlgorithm::Ethereum;
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+        .node_hash_algorithm(node_hash_algorithm)
         .truncate(matches!(args.test_name, TestName::Create))
         .manager(mgrcfg)
         .build();

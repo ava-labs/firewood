@@ -6,7 +6,6 @@ use firewood::api;
 use firewood::db::{BatchOp, DbConfig};
 use firewood::manager::RevisionManagerConfig;
 use firewood::open;
-use firewood_storage::{DefaultHashMode, HashMode};
 use rand::{RngExt, distr::Alphanumeric};
 use std::iter::repeat_with;
 use std::num::NonZeroU64;
@@ -37,7 +36,9 @@ fn bench_deferred_persistence<const N: usize, const COMMIT_COUNT: u64>(criterion
                 |batch_ops| {
                     let tmpdir = tempfile::tempdir().unwrap();
                     let dbcfg = DbConfig::builder()
-                        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+                        .node_hash_algorithm(
+                            <firewood_storage::EthHash as firewood_storage::HashMode>::ALGORITHM,
+                        )
                         .manager(
                             RevisionManagerConfig::builder()
                                 .max_revisions(max_revisions)

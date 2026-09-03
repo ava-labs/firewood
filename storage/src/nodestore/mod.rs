@@ -104,8 +104,8 @@ use crate::hashednode::hash_node;
 use crate::node::Node;
 use crate::node::persist::MaybePersistedNode;
 use crate::{
-    CacheReadStrategy, Child, DefaultHashMode, FileIoError, HashMode, HashType, Path,
-    ReadableStorage, SharedNode, TrieHash,
+    CacheReadStrategy, Child, EthHash, FileIoError, HashMode, HashType, Path, ReadableStorage,
+    SharedNode, TrieHash,
 };
 
 use super::linear::WritableStorage;
@@ -641,12 +641,14 @@ pub trait NodeReader {
     /// database was created with.
     ///
     /// Proof emission (child-hash wire layout, value-digest rule, and the
-    /// account storage-root fix) is governed by the source DB's runtime mode,
-    /// not the build's compile-time default. The default returns
-    /// [`DefaultHashMode::ALGORITHM`]; [`NodeStore`] overrides it with the value
-    /// from the storage header.
+    /// account storage-root fix) is governed by the source DB's runtime mode.
+    /// [`NodeStore`] overrides this with the value read from the storage header;
+    /// the default is only reached by readers that carry no header.
     fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
-        DefaultHashMode::ALGORITHM
+        // EthHash: fallback for header-less readers; every real `NodeStore`
+        // reader overrides this from its persisted header. Ethereum is the
+        // shipping/C-Chain mode.
+        <EthHash as HashMode>::ALGORITHM
     }
 }
 
@@ -906,9 +908,8 @@ pub struct NodeStore<T, S, H> {
     /// never be consumed (e.g. archival mode, where old nodes are preserved on
     /// disk for historical queries), so proposals skip building it entirely.
     deleted_node_tracking: DeletedNodeTracking,
-    /// The node-hashing scheme ([`HashMode`]). Currently zero-sized: `H` is
-    /// fixed to the compile-selected mode ([`DefaultHashMode`]) while it is
-    /// threaded through the stack, ahead of per-database runtime selection.
+    /// The node-hashing scheme ([`HashMode`]). Zero-sized; `H` is threaded
+    /// through the stack and selected per database at runtime (#1088).
     _hash_mode: PhantomData<H>,
 }
 

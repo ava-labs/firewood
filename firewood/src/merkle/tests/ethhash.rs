@@ -669,7 +669,10 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values);
+    // Preserve the Ethereum mode in this hand-built proof, matching proofs
+    // constructed from a live trie.
+    let range_proof =
+        RangeProof::with_hash_mode(start_proof, end_proof, key_values, EthHash::ALGORITHM);
     verify_range_proof(
         Some(left_key.as_ref()),
         Some(right_key.as_ref()),

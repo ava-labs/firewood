@@ -44,7 +44,7 @@ mod u4;
 /// Logger module for handling logging functionality
 pub mod logger;
 
-/// Ethereum MPT path encoding primitives shared by the ethhash hasher and the
+/// Ethereum MPT path encoding primitives shared by the Ethereum hasher and the
 /// `eth_getProof`-compatible proof emitter.
 pub mod eth_encoding;
 
@@ -59,9 +59,9 @@ pub mod macros;
 pub mod registry;
 // re-export these so callers don't need to know where they are
 pub use checker::{CheckOpt, CheckerReport, DBStats, FreeListsStats, TrieStats};
-pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
+pub use hashednode::{Hashable, ValueDigest, hash_node, hash_preimage};
 pub use hashedshunt::HashableShunt;
-pub use hashmode::{DefaultHashMode, EthHash, HashMode, MerkleDbHash};
+pub use hashmode::{EthHash, HashMode, MerkleDbHash};
 pub use hashtype::HashType;
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
@@ -381,8 +381,8 @@ pub enum CheckerError {
         "The node {key:#x} at {address:#x} (parent: {parent:#x}) has a value but its path is not 32 or 64 bytes long"
     )]
     /// A value is found corresponding to an invalid key.
-    /// With ethhash, keys must be 32 or 64 bytes long.
-    /// Without ethhash, keys cannot contain half-bytes (i.e., odd number of nibbles).
+    /// Under Ethereum hashing, keys must be 32 or 64 bytes long.
+    /// Under MerkleDB hashing, keys cannot contain half-bytes (i.e., odd number of nibbles).
     InvalidKey {
         /// The key found, or equivalently the path of the node that stores the value
         key: Path,
@@ -491,6 +491,8 @@ pub fn format_node_value<W: std::io::Write + ?Sized>(
 #[cfg(test)]
 mod format_node_value_tests {
     use super::*;
+    // ZSTs the `#[hash_mode]` wrappers instantiate the generic helpers with.
+    use crate::EthHash;
 
     fn fmt<H: crate::HashMode>(value: &[u8]) -> String {
         let mut buf = Vec::new();
