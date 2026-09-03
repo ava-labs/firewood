@@ -12,14 +12,16 @@ usage() {
 Usage:
   scripts/run-rust-ci.sh help
   scripts/run-rust-ci.sh <command> <profile>
-  scripts/run-rust-ci.sh bench <profile> <bench-target>
+  scripts/run-rust-ci.sh bench <profile> <bench-target> [harness-arg...]
 
 Commands:
   help               Show this usage information
   check              Run cargo check with the CI profile
   build              Run cargo build with the CI profile
   build-benches      Build every workspace bench target with the CI profile
-  bench              Run one bench target by name with the CI profile
+  bench              Run one bench target by name with the CI profile; trailing
+                     arguments are passed to the Criterion harness (e.g.
+                     --output-format bencher)
   clippy             Run the pinned PR clippy toolchain with the CI profile
   clippy-nightly     Run the latest nightly clippy toolchain with the CI profile
   test               Run cargo-nextest with the CI profile
@@ -55,7 +57,7 @@ command=$1
 profile=$2
 shift 2
 
-# Only `bench` takes a trailing argument. Rejecting them elsewhere turns a typo
+# Only `bench` takes trailing arguments. Rejecting them elsewhere turns a typo
 # in a workflow or Just recipe into a failure instead of a silently ignored
 # argument.
 if [[ $command != bench && $# -ne 0 ]]; then
@@ -110,11 +112,13 @@ case "$command" in
         cargo build --frozen ${cargo_args[@]+"${cargo_args[@]}"} --workspace --benches
         ;;
     bench)
-        if [[ $# -ne 1 ]]; then
-            echo "error: 'bench' requires exactly one bench target name" >&2
+        if [[ $# -lt 1 ]]; then
+            echo "error: 'bench' requires a bench target name" >&2
             usage >&2
             exit 2
         fi
+        bench_target=$1
+        shift
         # `--workspace`, not `-p <package>`. Cargo resolves dependency features
         # from the package selection, so narrowing to one package resolves a
         # different feature set than `build-benches` does and recompiles behind
@@ -128,7 +132,7 @@ case "$command" in
         # across the workspace; scripts/list-bench-targets.sh asserts that.
         # Unlike the plural `--benches`, singular `--bench` fails loudly when a
         # target's required-features are not enabled instead of skipping it.
-        cargo bench --frozen ${cargo_args[@]+"${cargo_args[@]}"} --workspace --bench "$1" -- --noplot
+        cargo bench --frozen ${cargo_args[@]+"${cargo_args[@]}"} --workspace --bench "$bench_target" -- --noplot ${@+"$@"}
         ;;
     clippy)
         cargo +nightly-2026-07-05 clippy --locked ${cargo_args[@]+"${cargo_args[@]}"} --workspace --all-targets -- -D warnings

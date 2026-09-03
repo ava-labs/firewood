@@ -20,12 +20,14 @@ For how the benchmark works, what S3 data exists, and how to create snapshots, s
 
 ## How It Works
 
-`just bench-cchain` triggers Firewood's `track-performance.yml`, which
+`just bench-cchain` triggers Firewood's `bench-cchain.yaml`, which
 dispatches the benchmark workflow in AvalancheGo. AvalancheGo builds Firewood
 at `FIREWOOD_REF` using the Polyrepo toolchain — `ffi/flake.nix` is a hard
 dependency for this build. After the benchmark completes, AvalancheGo uploads
-results as a workflow artifact. Firewood's workflow downloads them and publishes
-to GitHub Pages, keeping all measurements scoped to the Firewood repository – [view benchmark trends](https://ava-labs.github.io/firewood/bench/).
+results as a workflow artifact. Firewood's workflow downloads them and uploads
+them as its own artifact, keeping all measurements scoped to the Firewood
+repository. Scheduled runs go one step further and publish them to GitHub Pages
+– [view benchmark trends](https://ava-labs.github.io/firewood/bench/).
 
 ```mermaid
 sequenceDiagram
@@ -121,8 +123,7 @@ Look for the `releaseName` key to find valid runner labels.
 `just bench-cchain` monitors the run via `gh run watch`, which has a hard
 **6-hour polling limit**. When it exits, the benchmark may still be running in
 AvalancheGo. If your test takes >6h (e.g. `firewood-33m-40m`), `just bench-cchain`
-will lose track of the run before it finishes and results won't publish to
-GitHub Pages.
+will lose track of the run before it finishes.
 
 | Test duration | Use |
 | --- | --- |
@@ -134,10 +135,21 @@ For long tests, trigger directly:
 
 ## Scheduled Runs
 
-| Schedule | Test | ~Duration |
+`benchmarks.yaml` runs weekdays at 05:00 UTC and is the only workflow that
+publishes to the dashboard. It calls both benchmark suites as reusable
+workflows, then publishes their results in a single job:
+
+| Suite | Workflow | Runs |
 | --- | --- | --- |
-| Weekdays 05:00 UTC | `firewood-40m-41m` (blocks 40M–41M) | <2h |
-| Weekdays 05:05 UTC | `firewood-33m-33m500k` (blocks 33M–33.5M) | <2h |
+| C-Chain reexecution | `bench-cchain.yaml` | one leg per block range: `firewood-40m-41m` (40M–41M) and `firewood-33m-33m500k` (33M–33.5M), <2h each |
+| Rust microbenchmarks | `bench-rust.yaml` | every Criterion bench target in the workspace |
+
+Either suite can be dispatched on its own — `bench-cchain.yaml` for a one-off
+reexecution over a custom block range (this is what `just bench-cchain` does),
+`bench-rust.yaml` for all bench targets or just those matching a regex. A
+standalone dispatch leaves its results as a workflow artifact and does not
+touch the dashboard. To publish, dispatch `benchmarks.yaml` and pick the suite
+with its `suites` input.
 
 ## Finding S3 Data
 
@@ -189,9 +201,13 @@ Results are published to GitHub Pages via
 Firewood team. It serves two purposes:
 
 - **Rust docs** — built from `main` on every push via `cargo doc`
-- **Benchmark history** — triggered after `track-performance.yml` completes;
-  merges the `benchmark-data` branch into the pages deployment so docs and
-  benchmark trends are served from a single GitHub Pages site
+- **Benchmark history** — triggered after `benchmarks.yaml` completes; merges
+  the `benchmark-data` branch into the pages deployment so docs and benchmark
+  trends are served from a single GitHub Pages site
+
+Both suites publish to the same page: one data directory, with the Rust
+Criterion results as a separate **Rust Microbenchmarks** chart section below the
+C-Chain charts.
 
 Links:
 
@@ -215,15 +231,16 @@ Links:
    When it exits, the benchmark may still be running. Check the AvalancheGo
    run URL printed at trigger time before concluding failure.
 
-5. **Results location = triggering branch, not benchmarked code.**
-   `github.ref` controls storage, `FIREWOOD_REF` controls what runs:
+5. **Results location = triggering branch, not benchmarked code.** Applies to
+   `benchmarks.yaml`, the only workflow that stores results: `github.ref`
+   controls storage, `FIREWOOD_REF` controls what runs:
    - `main` → `bench/` (official history — blocked in justfile, scheduled only)
    - feature branch → `dev/bench/{branch}/`
 
 6. **Block/state pairing is your responsibility in custom mode.** No
    validation — wrong pairs silently produce bad results.
 
-7. **Do not remove `ffi/flake.nix`.** The `track-performance` workflow depends
+7. **Do not remove `ffi/flake.nix`.** The `bench-cchain` workflow depends
    on it via the Polyrepo toolchain. It is not dead code.
 
 ## References
