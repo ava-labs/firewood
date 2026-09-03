@@ -71,19 +71,61 @@ use super::types::{Proof, ProofCollection};
 pub type KeyRange = (Box<[u8]>, Option<Box<[u8]>>);
 
 /// Verification context captured after structural validation of a range proof.
-/// Stored so that downstream logic (root hash verification, `find_next_key`)
-/// can reference the original verification parameters without re-validating.
+/// Stored so that downstream logic (root hash verification,
+/// [`find_next_key_after_range_proof`]) can reference the original
+/// verification parameters without re-validating.
+///
+/// Constructible only by [`verify_range_proof_structure`]; fields are private
+/// so a context cannot be forged or altered after verification.
 #[derive(Debug)]
 pub struct RangeProofVerificationContext {
+    root: HashKey,
+    start_key: Option<Box<[u8]>>,
+    end_key: Option<Box<[u8]>>,
+    max_length: Option<NonZeroUsize>,
+    right_edge_key: Option<Box<[u8]>>,
+}
+
+impl RangeProofVerificationContext {
     /// The expected root hash of the trie.
-    pub root: HashKey,
+    #[must_use]
+    pub const fn root(&self) -> &HashKey {
+        &self.root
+    }
+
     /// The lower bound of the verified key range, if any.
-    pub start_key: Option<Box<[u8]>>,
-    /// The upper bound of the verified key range, if any.
-    pub end_key: Option<Box<[u8]>>,
+    #[must_use]
+    pub fn start_key(&self) -> Option<&[u8]> {
+        self.start_key.as_deref()
+    }
+
+    /// The upper bound the caller **requested**, if any.
+    #[must_use]
+    pub fn end_key(&self) -> Option<&[u8]> {
+        self.end_key.as_deref()
+    }
+
     /// The maximum number of key/value pairs the proof was permitted to
     /// contain. `None` means no limit.
-    pub max_length: Option<NonZeroUsize>,
+    #[must_use]
+    pub const fn max_length(&self) -> Option<NonZeroUsize> {
+        self.max_length
+    }
+
+    /// The actual right edge of the **proven** range, inclusive — see
+    /// [`ProvenRange::end`]. Equals `end_key` when the responder covered the
+    /// whole request, and a smaller key when the reply was truncated. `None`
+    /// means unbounded above. Callers applying the proof must bound the write
+    /// to this key, not to `end_key`.
+    ///
+    /// Mirrors [`ChangeProofVerificationContext::right_edge_key`].
+    ///
+    /// [`ProvenRange::end`]: crate::ProvenRange::end
+    /// [`ChangeProofVerificationContext::right_edge_key`]: crate::ChangeProofVerificationContext::right_edge_key
+    #[must_use]
+    pub fn right_edge_key(&self) -> Option<&[u8]> {
+        self.right_edge_key.as_deref()
+    }
 }
 
 /// Verify structural properties of a range proof and produce a
@@ -121,13 +163,14 @@ pub fn verify_range_proof_structure(
         ));
     }
 
-    verify_range_proof(start_key, end_key, &root, algorithm, proof)?;
+    let proven = verify_range_proof(start_key, end_key, &root, algorithm, proof)?;
 
     Ok(RangeProofVerificationContext {
         root,
         start_key: start_key.map(Box::from),
         end_key: end_key.map(Box::from),
         max_length,
+        right_edge_key: proven.end,
     })
 }
 
@@ -192,8 +235,9 @@ pub struct RangeProof<K, V, H> {
     /// The hash algorithm this proof was constructed or parsed with. For proofs
     /// built in this binary it is the compile default; for proofs parsed via
     /// [`FrozenRangeProof::from_slice`](crate::api::FrozenRangeProof::from_slice)
-    /// it is resolved from the self-describing header byte.
-    /// [`ProofError::HashModeMismatch`]).
+    /// it is resolved from the self-describing header byte. A mismatch against
+    /// the algorithm a verifier expects is rejected with
+    /// [`ProofError::HashModeMismatch`].
     hash_mode: NodeHashAlgorithm,
 }
 

@@ -304,7 +304,6 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	if conf.freeListMemoryLimitKB < 1 {
 		return nil, fmt.Errorf("free list memory limit in KB must be >= 1, got %d", conf.freeListMemoryLimitKB)
 	}
-
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
