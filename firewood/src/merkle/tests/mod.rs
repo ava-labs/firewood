@@ -44,19 +44,7 @@ fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         DefaultHashMode::ALGORITHM,
         proof,
     )
-}
-
-/// Keys forming a prefix chain: key `i` is `i` zero bytes followed by `tail`.
-/// Consecutive keys share all but their last byte, so each key adds one byte
-/// (two nibbles) of trie depth, and the longest key is `count` bytes.
-fn prefix_chain_keys(count: usize, tail: u8) -> Vec<Vec<u8>> {
-    (0..count)
-        .map(|i| {
-            let mut key = vec![0x00u8; i];
-            key.push(tail);
-            key
-        })
-        .collect()
+    .map(drop)
 }
 
 // Returns n random key-value pairs.
