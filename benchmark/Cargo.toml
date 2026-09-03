@@ -36,7 +36,7 @@ rand_distr.workspace = true
 sha2.workspace = true
 # Regular dependencies
 fastrace-opentelemetry = { version = "0.18.1" }
-metrics-exporter-prometheus = { workspace = true, optional = true, features = ["http-listener"] }
+metrics-exporter-prometheus = { version = "0.18.3", optional = true, default-features = false, features = ["http-listener"] }
 # These crates are also dependencies of `fastrace-opentelemetry` (pinned to
 # 0.18.0 above), and we must resolve to the same opentelemetry version it
 # requires — currently 0.32. Don't pin an exact version like "=0.32.0": drifting
