@@ -19,6 +19,7 @@ use std::fmt::Write;
 
 use super::*;
 use crate::api::Error;
+use crate::proofs::de::MAX_KEY_BYTES;
 use crate::{ProofError, ProofNode};
 use firewood_storage::{
     Committed, DefaultHashMode, DeletedNodeTracking, DenseChildren, HashMode, MemStore, Mutable,
@@ -50,7 +51,10 @@ fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
 fn generate_random_kvs(rng: &firewood_storage::SeededRng, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
     let mut kvs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for _ in 0..n {
-        let key_len = rng.random_range(1..=4096);
+        // Keys stay within the proof key-length bound, so a proof built over
+        // this data can always be serialized and read back. Values have no
+        // bound.
+        let key_len = rng.random_range(1..=MAX_KEY_BYTES);
         let key: Vec<u8> = (0..key_len).map(|_| rng.random()).collect();
 
         let val_len = rng.random_range(1..=4096);
