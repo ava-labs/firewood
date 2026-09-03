@@ -769,7 +769,9 @@ fn test_change_proof_with_hashed_out_of_range_value() {
 
     // Serialize/deserialize to convert large values to Hash.
     let mut serialized = Vec::new();
-    proof.write_to_vec(&mut serialized);
+    proof
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
     let deserialized = crate::api::FrozenChangeProof::from_slice(&serialized).unwrap();
 
     let ctx =
@@ -839,7 +841,7 @@ fn test_truncation_narrows_to_the_last_op(
         "fixture must end in the expected op kind"
     );
     assert_eq!(
-        ctx.right_edge_key.as_deref(),
+        ctx.right_edge_key(),
         Some(expected_edge),
         "the range must narrow to the last operation's key"
     );
@@ -889,7 +891,7 @@ fn test_truncation_classification_under_a_prefix_key(
         .unwrap();
     let ctx = verify_change_proof_structure(&proof, root2, None, Some(b"\x20"), limit).unwrap();
 
-    assert_eq!(ctx.right_edge_key.as_deref(), expected_edge);
+    assert_eq!(ctx.right_edge_key(), expected_edge);
 }
 
 /// A proof covering its whole requested range keeps its full proven range when the
@@ -939,8 +941,8 @@ fn test_prefix_bound_does_not_narrow_a_complete_proof() {
 
     let ctx = verify_change_proof_structure(&proof, root2, None, Some(b"\x10\x20"), None).unwrap();
     assert_eq!(
-        ctx.right_edge_key.as_deref(),
-        ctx.end_key.as_deref(),
+        ctx.right_edge_key(),
+        ctx.end_key(),
         "a complete proof keeps the range it was asked for"
     );
 
@@ -982,13 +984,13 @@ fn test_a_terminal_at_the_last_operation_narrows_the_range() {
 
     let ctx = verify_change_proof_structure(&proof, root2, None, Some(b"\xff"), None).unwrap();
     assert_eq!(
-        ctx.right_edge_key.as_deref(),
+        ctx.right_edge_key(),
         Some(&b"\x10"[..]),
         "the terminal-valued node narrows the range to the last op's key"
     );
     assert_ne!(
-        ctx.right_edge_key.as_deref(),
-        ctx.end_key.as_deref(),
+        ctx.right_edge_key(),
+        ctx.end_key(),
         "the narrowed edge sits below the requested bound"
     );
     verify_and_check(&target, &proof, &ctx, root1).unwrap();
@@ -1127,13 +1129,13 @@ fn test_stopping_short_on_a_delete_is_accepted_over_the_narrowed_range() {
     )
     .unwrap();
     assert_eq!(
-        ctx.right_edge_key.as_deref(),
+        ctx.right_edge_key(),
         Some(&b"\x20"[..]),
         "the proven range narrows to the trailing removal's key"
     );
     assert_ne!(
-        ctx.right_edge_key.as_deref(),
-        ctx.end_key.as_deref(),
+        ctx.right_edge_key(),
+        ctx.end_key(),
         "the narrowed edge sits below the requested bound"
     );
     verify_and_check(&f.target, &f.proof, &ctx, f.start_root).unwrap();
@@ -1157,7 +1159,7 @@ fn test_stopping_short_below_a_surviving_key_is_accepted() {
     )
     .unwrap();
     assert_eq!(
-        ctx.right_edge_key.as_deref(),
+        ctx.right_edge_key(),
         Some(&b"\x20"[..]),
         "the proven range narrows to the trailing removal's key"
     );
@@ -1251,7 +1253,7 @@ fn test_an_unrelated_end_proof_does_not_narrow() {
         // and the proof must still be rejected.
         Ok(ctx) => {
             assert_eq!(
-                ctx.right_edge_key.as_deref(),
+                ctx.right_edge_key(),
                 Some(&b"\xff"[..]),
                 "an end proof that cannot be anchored at the last operation keeps the wide range"
             );
@@ -1259,6 +1261,64 @@ fn test_an_unrelated_end_proof_does_not_narrow() {
                 .expect_err("a spliced end proof must not be accepted");
         }
     }
+}
+
+/// Applying the same change proof twice must succeed both times.
+///
+/// A `Delete` asserts its key is absent from `end_root`, not that it was present
+/// beforehand, so re-applying a proof to a trie that already reflects it is a
+/// no-op rather than a contradiction.
+///
+/// This is not an artificial case. `Db::verify_change_proof` always builds its
+/// proposal from the database's current revision. A client that re-receives a
+/// proof it has already applied therefore builds the proposal from `end_root`
+/// rather than `start_root`, and it must still hash to `end_root`.
+#[test]
+fn test_same_change_proof_applied_twice_succeeds() {
+    let (source, target, root1, _ds, _dt) = setup_source_target![
+        (b"\x10", b"v0"),
+        (b"\x20", b"v1"),
+        (b"\x30", b"v2"),
+        (b"\x40", b"v3")
+    ];
+
+    let end_batch: Vec<BatchOp<&[u8], &[u8]>> = vec![
+        BatchOp::Put {
+            key: b"\x20",
+            value: b"changed",
+        },
+        BatchOp::Delete { key: b"\x30" },
+        BatchOp::Put {
+            key: b"\x50",
+            value: b"added",
+        },
+    ];
+    source.propose(end_batch).unwrap().commit().unwrap();
+    let root2 = source.root_hash().unwrap();
+
+    let proof = source
+        .change_proof(root1.clone(), root2.clone(), None, None, None)
+        .unwrap();
+
+    // First application: start_root -> end_root, then commit so the target moves.
+    let ctx = verify_change_proof_structure(&proof, root2.clone(), None, None, None).unwrap();
+    let parent = target.revision(root1).unwrap();
+    let proposal = target
+        .apply_change_proof_to_parent(&proof, &*parent)
+        .unwrap();
+    verify_change_proof_root_hash(&proof, &ctx, &proposal).expect("first application must verify");
+    drop(parent);
+    proposal.commit().unwrap();
+    assert_eq!(
+        target.root_hash().unwrap(),
+        root2,
+        "target should now be at end_root"
+    );
+
+    // Second application of the same proof, now from end_root.
+    let ctx2 = verify_change_proof_structure(&proof, root2.clone(), None, None, None).unwrap();
+    verify_and_check(&target, &proof, &ctx2, root2)
+        .expect("re-applying the same proof must verify");
 }
 
 /// Over-long keys are rejected while a proof is being read, before any trie is
@@ -1271,12 +1331,15 @@ fn test_deep_forged_ops_rejected_at_deserialization() {
     let (root1, root2) = setup_2nd_commit!(db, [(b"\x10", b"v0")]);
     let honest = db.change_proof(root1, root2, None, None, None).unwrap();
 
-    // A chain of 3000 keys, the longest far past the bound, added to the honest
-    // proof's own operations.
-    let mut ops: Vec<BatchOp<Key, Value>> = prefix_chain_keys(3000, 0x01)
-        .into_iter()
-        .map(|key| BatchOp::Put {
-            key: key.into_boxed_slice(),
+    // Keys of every length from 1 to 1500 bytes, the longest far past the
+    // bound, added to the honest proof's own operations. The bytes come from a
+    // seeded RNG: the proof body is compressed on the wire and the reader caps
+    // the compression ratio, so repetitive keys would be rejected as a frame
+    // before the reader ever reached a key.
+    let rng = firewood_storage::SeededRng::from_option(Some(1234));
+    let mut ops: Vec<BatchOp<Key, Value>> = (1..=1500usize)
+        .map(|len| BatchOp::Put {
+            key: (0..len).map(|_| rng.random::<u8>()).collect(),
             value: Box::from(b"v".as_slice()),
         })
         .collect();
@@ -1288,7 +1351,7 @@ fn test_deep_forged_ops_rejected_at_deserialization() {
     );
 
     let mut bytes = Vec::new();
-    forged.write_to_vec(&mut bytes);
+    forged.write_to_vec(&mut bytes).expect("serialize proof");
     let err = FrozenChangeProof::from_slice(&bytes)
         .expect_err("a proof carrying over-long keys must not deserialize");
     assert!(

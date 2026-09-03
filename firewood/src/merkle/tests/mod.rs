@@ -44,6 +44,7 @@ fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         DefaultHashMode::ALGORITHM,
         proof,
     )
+    .map(drop)
 }
 
 /// Runs `f` on a thread with the stack size production threads get, and joins it.
