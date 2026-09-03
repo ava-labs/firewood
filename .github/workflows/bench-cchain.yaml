@@ -1,14 +1,12 @@
-# The C-Chain reexecution benchmark suite: one of the two components of
-# benchmarks.yaml, and independently dispatchable for a one-off reexecution
-# over a custom block range.
-#
-# This workflow triggers AvalancheGo's benchmark and produces the resulting
-# JSON as an artifact. Publishing to the dashboard is benchmarks.yaml's
-# `publish` job, which is the single writer of data.js on the benchmark-data
-# branch.
+# Triggers AvalancheGo's C-Chain reexecution benchmark and uploads the results
+# as an artifact. One of the two suites benchmarks.yaml composes, and
+# dispatchable on its own for a one-off reexecution; publishing to GitHub Pages
+# is benchmarks.yaml's job, the single writer of the benchmark-data branch.
 name: bench-cchain
 
 on:
+  # Scheduled runs come through benchmarks.yaml. Only what it varies per leg is
+  # an input here; a custom block range is a manual dispatch.
   workflow_call:
     inputs:
       label:
@@ -16,24 +14,12 @@ on:
         required: true
         type: string
       test:
-        description: 'Predefined test (leave empty to use the custom parameters below)'
-        default: ''
+        description: 'Predefined test'
+        required: true
         type: string
       config:
         description: 'Config (e.g., firewood, hashdb)'
         default: 'firewood'
-        type: string
-      start-block:
-        default: ''
-        type: string
-      end-block:
-        default: ''
-        type: string
-      block-dir-src:
-        default: ''
-        type: string
-      current-state-dir-src:
-        default: ''
         type: string
       runner:
         description: 'Runner to use in AvalancheGo'
@@ -43,22 +29,6 @@ on:
         description: 'Timeout in minutes'
         default: ''
         type: string
-      firewood:
-        description: 'Firewood commit/branch/tag to test (leave empty to use the commit that triggered the workflow)'
-        default: ''
-        type: string
-      avalanchego:
-        description: 'AvalancheGo commit/branch/tag to test against'
-        default: 'master'
-        type: string
-      libevm:
-        description: 'libevm commit/branch/tag to test (leave empty to use AvalancheGo version of libevm)'
-        default: ''
-        type: string
-    outputs:
-      artifact-pattern:
-        description: Artifact name pattern holding this suite's benchmark output.
-        value: cchain-output-*
     secrets:
       FIREWOOD_AVALANCHEGO_GITHUB_TOKEN:
         description: Token permitted to dispatch AvalancheGo's benchmark workflow.
