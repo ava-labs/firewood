@@ -57,13 +57,14 @@ struct CloneFrame<'a> {
     pending: Option<PathComponent>,
 }
 
-/// Inline capacity for the frame stacks of the iterative trie walks.
+/// Inline capacity of a walk's frame stack, chosen so a realistic trie is
+/// walked without allocating.
 ///
-/// Past the root, only branches take frames, so a stack's depth follows the
-/// trie's branch depth, around seven at a million uniformly distributed keys.
-/// This capacity covers that without allocating, while staying small enough
-/// that the inline buffer is not itself a per-call cost. Deeper tries spill to
-/// the heap, which is the point: depth then costs memory rather than stack.
+/// A frame is pushed for each branch on the path down from the root, so the
+/// stack is as deep as the trie's branch depth. That depth is about seven for
+/// a million uniformly distributed keys, so eight frames hold a whole walk.
+/// Deeper tries spill the frames to the heap, so depth can never overflow the
+/// call stack.
 pub(crate) const FRAME_STACK_INLINE_CAPACITY: usize = 8;
 
 impl<'a> CloneFrame<'a> {
