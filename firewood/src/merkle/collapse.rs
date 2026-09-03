@@ -9,7 +9,7 @@ use firewood_storage::{
 
 use crate::{
     ProofError, api,
-    merkle::{Merkle, get_helper},
+    merkle::{Merkle, ParentFrames, SharedNode, get_helper, unwind_parents},
 };
 
 /// The proven range, in nibbles.
@@ -67,8 +67,8 @@ pub(crate) enum BoundaryChildSource {
 /// This is a fast, nibble-level check used by [`Merkle::child_in_range`] as
 /// a first pass. It may return `true` for straddling nibbles — positions
 /// where the boundary passes through the subtree — even if no actual keys
-/// in the subtree are in range. `child_in_range` recurses into the subtree
-/// to resolve those cases.
+/// in the subtree are in range. `child_in_range` searches the subtree to
+/// resolve those cases.
 fn nibble_in_range(acc_prefix: &[u8], nibble: PathComponent, range: CollapseRange<'_>) -> bool {
     let CollapseRange { start, end } = range;
     let depth = acc_prefix.len();
@@ -218,66 +218,78 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
     ///
     /// Must be called after `reconcile_branch_proof_node` to ensure that
     /// each proof node exists as a branch in the proving trie.
-    ///                                                                                                                                                                                                                                           
-    /// # Parameters                                                                                                                                                                                                                              
-    /// - `node`: Current node in the proving trie being traversed.                                                                                                                                                                               
-    /// - `key`: Remaining path to the parent proof node, shortened at each
-    ///   recursive level as partial paths and child nibbles are consumed.                                                                                                                                                                        
+    ///
+    /// The descent is a loop rather than recursion. `key` comes from a peer's
+    /// proof-node key during change-proof verification, so it decides how deep this
+    /// walk goes and recursing per level would be a stack-exhaustion sink.
+    ///
+    /// # Parameters
+    /// - `node`: Current node in the proving trie being traversed.
+    /// - `key`: Remaining path to the parent proof node, shortened at each level
+    ///   as partial paths and child nibbles are consumed.
     /// - `suffix`: Path from the parent proof node to the child proof node,
-    ///   passed through unchanged to `collapse_descend`.                                                                                                                                                                                         
+    ///   passed through unchanged to `collapse_descend`.
     /// - `parent_prefix`: Nibble path from root to the parent proof node,
-    ///   used by `collapse_strip` for in-range child detection.                                                                                                                                                                                  
+    ///   used by `collapse_strip` for in-range child detection.
     /// - `range`: Optional proven range boundaries for detecting tampered
     ///   `batch_ops`.
     fn collapse_navigate(
         &mut self,
         mut node: Node,
-        key: &[PathComponent],
+        mut key: &[PathComponent],
         suffix: &[PathComponent],
         parent_prefix: &[u8],
         range: Option<CollapseRange<'_>>,
     ) -> Result<Node, api::Error> {
-        // get a reference to the partial path for ease of reading
-        let pp = &node.partial_path().0;
+        // Each frame is a branch the walk descended through and the nibble it left
+        // by, so the child can be put back on the way out.
+        let mut parents: ParentFrames = ParentFrames::new();
 
-        // find the point where the key differs from the partial path
-        // unwrap_or handles the case where they are subsets of each other
-        let diverge = key
-            .iter()
-            .zip(pp.iter())
-            .position(|(pc, nibble)| pc.as_u8() != *nibble)
-            .unwrap_or(key.len().min(pp.len()));
+        let current = loop {
+            // get a reference to the partial path for ease of reading
+            let pp = &node.partial_path().0;
 
-        if diverge != pp.len() {
-            // partial_path not fully consumed — key diverges or is a prefix
-            // of partial_path. Either way, from-node isn't reachable here.
-            return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
-        }
+            // find the point where the key differs from the partial path
+            // unwrap_or handles the case where they are subsets of each other
+            let diverge = key
+                .iter()
+                .zip(pp.iter())
+                .position(|(pc, nibble)| pc.as_u8() != *nibble)
+                .unwrap_or(key.len().min(pp.len()));
 
-        // `diverge == pp.len()` here, so this is the part of `key` beyond the
-        // consumed partial path. An empty remainder means an exact match.
-        let Some((&child_component, deeper)) = key.get(diverge..).and_then(|r| r.split_first())
-        else {
-            // Exact match — arrived at the parent proof node.
-            return self.collapse_descend(node, suffix, parent_prefix, range);
+            if diverge != pp.len() {
+                // partial_path not fully consumed, so the key diverges or is a
+                // prefix of partial_path. Either way, from-node isn't reachable
+                // here.
+                return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
+            }
+
+            // `diverge == pp.len()` here, so this is the part of `key` beyond the
+            // consumed partial path. An empty remainder means an exact match.
+            let Some((&child_component, deeper)) = key.get(diverge..).and_then(|r| r.split_first())
+            else {
+                // Exact match, so the walk arrived at the parent proof node.
+                break self.collapse_descend(node, suffix, parent_prefix, range)?;
+            };
+
+            // key extends past partial_path, so descend into the child.
+            let Node::Branch(mut branch) = node else {
+                return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
+            };
+
+            // Temporarily take ownership of the child so we can resolve it to a
+            // mutable Node, descend, and put the (possibly modified) node back.
+            let Some(child) = branch.children.take(child_component) else {
+                return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
+            };
+
+            let child_node = self.read_for_update(child)?;
+            parents.push((branch, child_component));
+            node = child_node;
+            key = deeper;
         };
 
-        // key extends past partial_path — descend into child.
-        let Some(branch) = node.as_branch_mut() else {
-            return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
-        };
-
-        // Temporarily take ownership of the child so we can resolve it to a
-        // mutable Node, recurse, and put the (possibly modified) node back.
-        let Some(child) = branch.children.take(child_component) else {
-            return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
-        };
-
-        let child_node = self.read_for_update(child)?;
-        let child_node =
-            self.collapse_navigate(child_node, deeper, suffix, parent_prefix, range)?;
-        branch.children[child_component] = Some(Child::Node(child_node));
-        Ok(node)
+        Ok(unwind_parents(parents, current))
     }
 
     /// Descend from the parent proof node into its on-path child, then
@@ -324,8 +336,13 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
     ///
     /// Reads the child node, computes its full nibble prefix, and checks
     /// whether the key is in range. For leaves this is a direct comparison.
-    /// For branches, recurses into children whose nibble passes
+    /// For branches, descends into children whose nibble passes
     /// [`nibble_in_range`] to resolve straddling positions.
+    ///
+    /// The search is a worklist rather than recursion. It answers a single
+    /// question about a whole subtree, so visit order does not matter, and subtree
+    /// depth follows key length, which is attacker-controlled during change-proof
+    /// verification. Recursing per level would be a stack-exhaustion sink.
     fn child_in_range(
         &self,
         child: &Child,
@@ -333,28 +350,41 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
         nibble: PathComponent,
         range: CollapseRange<'_>,
     ) -> Result<bool, api::Error> {
-        if !nibble_in_range(acc_prefix, nibble, range) {
-            return Ok(false);
+        // Each entry is a resolved node paired with its own full nibble prefix.
+        // Children are resolved when pushed rather than when popped, so a read
+        // error surfaces at the point the child is reached.
+        let mut work: Vec<(SharedNode, Box<[u8]>)> = Vec::new();
+        if nibble_in_range(acc_prefix, nibble, range) {
+            let node = child.as_shared_node(&self.nodestore)?;
+            let pfx = build_child_prefix(acc_prefix, nibble.0.as_u8(), &node);
+            work.push((node, pfx));
         }
 
-        let child_node = child.as_shared_node(&self.nodestore)?;
-        let pfx = build_child_prefix(acc_prefix, nibble.0.as_u8(), &child_node);
-        let key_in_range = range.contains(pfx.as_ref());
+        while let Some((node, pfx)) = work.pop() {
+            let key_in_range = range.contains(pfx.as_ref());
 
-        let Some(branch) = child_node.as_branch() else {
-            return Ok(key_in_range);
-        };
-
-        if key_in_range && branch.value.is_some() {
-            return Ok(true);
-        }
-
-        for (child_nibble, child_slot) in &branch.children {
-            let Some(inner_child) = child_slot else {
+            let Some(branch) = node.as_branch() else {
+                // A leaf is in range exactly when its own key is.
+                if key_in_range {
+                    return Ok(true);
+                }
                 continue;
             };
-            if self.child_in_range(inner_child, &pfx, child_nibble, range)? {
+
+            if key_in_range && branch.value.is_some() {
                 return Ok(true);
+            }
+
+            for (child_nibble, child_slot) in &branch.children {
+                let Some(inner_child) = child_slot else {
+                    continue;
+                };
+                if !nibble_in_range(&pfx, child_nibble, range) {
+                    continue;
+                }
+                let inner_node = inner_child.as_shared_node(&self.nodestore)?;
+                let inner_pfx = build_child_prefix(&pfx, child_nibble.0.as_u8(), &inner_node);
+                work.push((inner_node, inner_pfx));
             }
         }
         Ok(false)
@@ -408,7 +438,7 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
         }
     }
 
-    /// Strip non-on-path children from an intermediate branch and recurse.
+    /// Strip non-on-path children from each intermediate branch along `path`.
     /// Flattens single-child branches to match `end_root`'s path-compressed
     /// structure.
     ///
@@ -417,69 +447,104 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
     /// `end_root` has no branch at this position. Non-on-path children
     /// containing only out-of-range keys are stripped normally (accounted
     /// for by proof hashes).
+    ///
+    /// The descent is a loop rather than recursion. `path` comes from a peer's
+    /// proof-node key during change-proof verification, so it decides how deep
+    /// this walk goes and recursing per level would be a stack-exhaustion sink.
+    /// Frames record the branch and the nibble the walk left it by, and
+    /// [`Self::flatten_collapsed`] runs the per-level flatten on the way back up.
     fn collapse_strip(
         &mut self,
         mut node: Node,
-        path: &[PathComponent],
+        mut path: &[PathComponent],
         acc_prefix: &[u8],
         range: Option<CollapseRange<'_>>,
     ) -> Result<Node, api::Error> {
-        let Some((&on_path, remaining)) = path.split_first() else {
+        let mut parents: ParentFrames = ParentFrames::new();
+        // The caller's prefix is borrowed for the first level. Only a descent needs
+        // an owned buffer, so a shallow strip allocates nothing here.
+        let mut owned_prefix: Option<Box<[u8]>> = None;
+
+        let mut current = loop {
+            let acc_prefix: &[u8] = owned_prefix.as_deref().unwrap_or(acc_prefix);
+
+            let Some((&on_path, remaining)) = path.split_first() else {
+                break node;
+            };
+
+            let Node::Branch(mut branch) = node else {
+                // Path is non-empty but node is not a branch, so the walk cannot
+                // descend further.
+                return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
+            };
+
+            for (nibble, slot) in &mut branch.children {
+                if nibble == on_path {
+                    continue;
+                }
+
+                if let Some(range) = range
+                    && let Some(child) = slot.as_ref()
+                    && self.child_in_range(child, acc_prefix, nibble, range)?
+                {
+                    return Err(api::Error::ProofError(ProofError::EndRootMismatch));
+                }
+
+                *slot = None;
+            }
+
+            // Clear the value only when this node's key is out of the proven range.
+            // The hash step prefers a present value over the proof's digest, so a
+            // retained out-of-range value would be hashed instead of the one the
+            // proof supplies for the end trie. Clearing lets the proof supply it.
+            // An in-range value belongs to an in-range key and must be kept so it
+            // is validated against the batch. Dropping it lets a forged or omitted
+            // in-range op whose key is a prefix of the boundary slip through.
+            let out_of_range = range.is_none_or(|range| !range.contains(acc_prefix));
+            if out_of_range {
+                branch.value = None;
+            }
+
+            // Descend into the on-path child.
+            let Some(child) = branch.children.take(on_path) else {
+                // No child pointer exists on path to child proof node.
+                return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
+            };
+
+            let child_node = self.read_for_update(child)?;
+            let deeper = consume_partial_path(remaining, &child_node)?;
+
+            if deeper.is_empty() {
+                // Nothing below to strip, so reattach and flatten this level here
+                // rather than taking a frame for it.
+                branch.children[on_path] = Some(Child::Node(child_node));
+                break self.flatten_collapsed(Node::Branch(branch))?;
+            }
+
+            let child_prefix = build_child_prefix(acc_prefix, on_path.0.as_u8(), &child_node);
+            parents.push((branch, on_path));
+            node = child_node;
+            path = deeper;
+            owned_prefix = Some(child_prefix);
+        };
+
+        while let Some((mut parent, on_path)) = parents.pop() {
+            parent.children[on_path] = Some(Child::Node(current));
+            current = self.flatten_collapsed(Node::Branch(parent))?;
+        }
+        Ok(current)
+    }
+
+    /// Flattens a branch whose on-path child slot has just been rewritten.
+    ///
+    /// A valued node is never flattened. When it has a single child, merging into
+    /// that child would drop the value and hide a forged or omitted in-range op
+    /// whose key sits here, so the value must survive to be validated against the
+    /// batch. Checked before `take_only_child`, which removes the child.
+    fn flatten_collapsed(&mut self, mut node: Node) -> Result<Node, api::Error> {
+        let Some(branch) = node.as_branch_mut() else {
             return Ok(node);
         };
-
-        let Some(branch) = node.as_branch_mut() else {
-            // Path is non-empty but node is not a branch — cannot descend further.
-            return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
-        };
-
-        for (nibble, slot) in &mut branch.children {
-            if nibble == on_path {
-                continue;
-            }
-
-            if let Some(range) = range
-                && let Some(child) = slot.as_ref()
-                && self.child_in_range(child, acc_prefix, nibble, range)?
-            {
-                return Err(api::Error::ProofError(ProofError::EndRootMismatch));
-            }
-
-            *slot = None;
-        }
-
-        // Clear the value only when this node's key is out of the proven range.
-        // The hash step prefers a present value over the proof's digest, so a
-        // retained out-of-range value would be hashed instead of the one the
-        // proof supplies for the end trie. Clearing lets the proof supply it.
-        // An in-range value belongs to an in-range key and must be kept so it
-        // is validated against the batch. Dropping it lets a forged or omitted
-        // in-range op whose key is a prefix of the boundary slip through.
-        let out_of_range = range.is_none_or(|range| !range.contains(acc_prefix));
-        if out_of_range {
-            branch.value = None;
-        }
-
-        // Recurse into the on-path child.
-        let Some(child) = branch.children.take(on_path) else {
-            // No child pointer exists on path to child proof node.
-            return Err(api::Error::ProofError(ProofError::ProofNodeUnreachable));
-        };
-
-        let mut child_node = self.read_for_update(child)?;
-        let deeper = consume_partial_path(remaining, &child_node)?;
-        if !deeper.is_empty() {
-            let child_prefix = build_child_prefix(acc_prefix, on_path.0.as_u8(), &child_node);
-            child_node = self.collapse_strip(child_node, deeper, &child_prefix, range)?;
-        }
-
-        branch.children[on_path] = Some(Child::Node(child_node));
-
-        // A valued node is never flattened. When it has a single child,
-        // merging into that child would drop the value and hide a forged or
-        // omitted in-range op whose key sits here, so the value must survive to
-        // be validated against the batch. Checked before take_only_child, which
-        // removes the child.
         if branch.value.is_some() {
             return Ok(node);
         }
@@ -740,7 +805,7 @@ mod tests {
     }
 
     #[test]
-    fn test_collapse_navigate_recurse() {
+    fn test_collapse_navigate_deep_key() {
         let pc = |n: u8| PathComponent::try_new(n).unwrap();
         let mut merkle = create_test_merkle();
 
@@ -760,8 +825,9 @@ mod tests {
 
         // Navigates down nibble 1 because the key parameter is [pc(1)].
         // Unlike exact_match, the key is consumed by child descent rather
-        // than partial path matching — the branch under nibble 1 has no
-        // partial path. Recurse with empty key → exact match at that branch.
+        // than partial path matching, since the branch under nibble 1 has no
+        // partial path. The walk descends with an empty key remaining, which
+        // is an exact match at that branch.
         // From the suffix, the child proof is at \x10\x21. `parent_prefix`
         // is the nibble path from root to the parent proof node, passed to
         // `collapse_strip`. In this case, `collapse_strip` will strip \x10\x23.
