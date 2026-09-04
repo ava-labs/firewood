@@ -352,6 +352,7 @@ impl NodeStoreHeader {
     /// a node hash algorithm mismatch.
     pub fn read_from_storage<S: crate::linear::ReadableStorage>(
         storage: &S,
+        expected_node_hash_algorithm: NodeHashAlgorithm,
     ) -> Result<Self, crate::FileIoError> {
         let mut this = bytemuck::zeroed::<Self>();
         storage
@@ -360,7 +361,7 @@ impl NodeStoreHeader {
             .map_err(|e| {
                 storage.file_io_error(e, 0, Some("NodeStoreHeader::read_from_storage".to_owned()))
             })?;
-        this.validate(storage.node_hash_algorithm()).map_err(|e| {
+        this.validate(expected_node_hash_algorithm).map_err(|e| {
             storage.file_io_error(e, 0, Some("NodeStoreHeader::validate".to_owned()))
         })?;
 
@@ -430,8 +431,7 @@ impl NodeStoreHeader {
     ///   database will produce incorrect results from mis-interpreted byte order.
     /// - Area size hash matches the expected hash for the current build. This
     ///   prevents corrupting the allocation structures by changing area sizes.
-    /// - Node hash algorithm flag matches the expected algorithm for this
-    ///   storage.
+    /// - Node hash algorithm flag matches the expected algorithm.
     ///
     /// # Errors
     ///
@@ -446,7 +446,7 @@ impl NodeStoreHeader {
         trace!("Checking area size hash...");
         self.validate_area_size_hash()?;
 
-        trace!("Checking if node hash algorithm flag matches storage...");
+        trace!("Checking if node hash algorithm flag matches the expected algorithm...");
         self.validate_node_hash_algorithm(expected_node_hash_algorithm)?;
 
         if self.version.has_extended_header_fields() {
@@ -629,7 +629,7 @@ const fn const_copy(src: &[u8], dst: &mut [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DefaultHashMode, HashMode};
+    use crate::{DefaultHashMode, HashMode, MemStore};
     use test_case::test_case;
 
     #[test]
@@ -675,6 +675,17 @@ mod tests {
         let header = NodeStoreHeader::new(NodeHashAlgorithm::MerkleDB);
 
         let error = header.validate(NodeHashAlgorithm::Ethereum).unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn read_from_storage_rejects_mismatched_node_hash_algorithm() {
+        let header = NodeStoreHeader::new(NodeHashAlgorithm::MerkleDB);
+        let storage = MemStore::new(bytemuck::bytes_of(&header).to_vec());
+
+        let error =
+            NodeStoreHeader::read_from_storage(&storage, NodeHashAlgorithm::Ethereum).unwrap_err();
 
         assert_eq!(error.kind(), ErrorKind::Unsupported);
     }

@@ -7,9 +7,7 @@
 //! It provides efficient encoding of proof nodes, child bitmaps, and range proofs
 //! for transmission or persistent storage.
 
-use firewood_storage::{
-    EthHash, MerkleDbHash, NodeHashAlgorithm, PathBuf, PathComponentSliceExt, ValueDigest,
-};
+use firewood_storage::{NodeHashAlgorithm, PathBuf, PathComponentSliceExt, ValueDigest};
 use integer_encoding::VarInt;
 
 use super::{
@@ -279,10 +277,7 @@ impl<T: AsRef<[u8]>> WriteItem for ValueDigest<T> {
     fn write_item(&self, w: &mut ProofWriter<'_>) {
         // The value-digest hashing rule (cap large values under MerkleDB,
         // identity under Ethereum) is selected by the writer's runtime mode.
-        let hashed = match w.node_hash_algorithm() {
-            NodeHashAlgorithm::Ethereum => self.make_hash::<EthHash>(),
-            NodeHashAlgorithm::MerkleDB => self.make_hash::<MerkleDbHash>(),
-        };
+        let hashed = self.make_hash(w.node_hash_algorithm());
         match hashed {
             ValueDigest::Value(v) => {
                 w.out.push(0);

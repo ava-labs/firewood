@@ -62,7 +62,6 @@ fn run_with_hash_mode<H: HashMode>(opts: &Options) -> Result<(), api::Error> {
         false,
         false,                         // don't create if missing
         CacheReadStrategy::WritesOnly, // we scan the database once - no need to cache anything
-        H::ALGORITHM,
     )?;
     let storage = Arc::new(fb);
 
@@ -79,7 +78,7 @@ fn run_with_hash_mode<H: HashMode>(opts: &Options) -> Result<(), api::Error> {
         progress_bar: Some(progress_bar),
     };
 
-    let mut header = NodeStoreHeader::read_from_storage(storage.as_ref())?;
+    let mut header = NodeStoreHeader::read_from_storage(storage.as_ref(), H::ALGORITHM)?;
     // The checker never builds proposals, so this value is currently unused.
     // Match how the database is normally run by checking if the RootStore directory exists.
     let deleted_node_tracking = if opts.database.dbpath.join("root_store").is_dir() {

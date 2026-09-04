@@ -193,10 +193,10 @@ impl<H: HashMode> RootStore<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CacheReadStrategy;
     use crate::DefaultHashMode;
     use crate::linear::filebacked::FileBacked;
     use crate::nodestore::NodeStore;
-    use crate::{CacheReadStrategy, HashMode};
     use std::num::NonZero;
     use std::sync::Arc;
 
@@ -213,7 +213,6 @@ mod tests {
                 false,
                 true,
                 CacheReadStrategy::WritesOnly,
-                DefaultHashMode::ALGORITHM,
             )
             .unwrap(),
         );
@@ -254,7 +253,6 @@ mod tests {
                 false,
                 true,
                 CacheReadStrategy::WritesOnly,
-                DefaultHashMode::ALGORITHM,
             )
             .unwrap(),
         );

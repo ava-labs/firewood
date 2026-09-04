@@ -190,7 +190,6 @@ impl<H: HashMode> RevisionManager<H> {
             config.truncate,
             config.create,
             config.manager.cache_read_strategy,
-            H::ALGORITHM,
         )?;
 
         // Acquire an advisory lock on the database file to prevent multiple processes
@@ -198,7 +197,7 @@ impl<H: HashMode> RevisionManager<H> {
         fb.lock()?;
 
         let storage = Arc::new(fb);
-        let header = match NodeStoreHeader::read_from_storage(storage.as_ref()) {
+        let header = match NodeStoreHeader::read_from_storage(storage.as_ref(), H::ALGORITHM) {
             Ok(header) => header,
             Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
                 // Empty file - create a new header for a fresh database
