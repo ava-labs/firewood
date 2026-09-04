@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788506017449,
+  "lastUpdate": 1788506036900,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -10339,6 +10339,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 45.92481025774492,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "AminR443",
+            "username": "AminR443",
+            "email": "amin.rezaei@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "016f9dde84973d17f41b4398b3cd23ba8f54e359",
+          "message": "feat(proofs)!: add zstd compression for proof body (#2181)\n\n## Why this should be merged\n\nAdds zstd compression to the proof wire format. Measured on C-Chain\nmainnet replays, compressed proofs at the production state-sync message\nsize are 46–57% smaller, roughly halving sync bandwidth, for ~3.3 ms/MiB\ncompress and ~0.5 ms/MiB decompress.\n\n## How this works\n\nThe wire becomes a 32-byte uncompressed header followed by a single zstd\nframe compressing the proof body. zstd output isn't bit-stable across\nversions, so the decompressed body is the canonical form (new\n`write_body_to_vec`). The decoder enforces all bounds before allocating:\nexactly one frame spanning the remainder, a mandatory frame header\ncontent size capped at 4 MiB and at 128× the frame length (bomb\ndefense). The encoder will error if proof is larger than the cap\nspecified since no consumer will be able to consume it.\n\nCloses #1869.\n\n## How this was tested\n\nUnit tests cover roundtrips, wire shape, and the rejection taxonomy\n(trailing/skippable/concatenated frames, corruption, truncation, missing\ncontent size, over-cap, compression bomb), plus a golden vector pinning\ndecode-side compatibility across zstd upgrades and two fuzz tests\n(canonical body and wire corruption). Full CI matrix passes locally.\n\n## Breaking Changes\n\n- [x] firewood\n- [ ] firewood-storage\n- [x] firewood-ffi (C api)\n- [x] firewood-go (Go api)\n- [ ] fwdctl\n\nWire format changes incompatibly under version 0, deliberate hard\ncutover, since v0 had zero users.",
+          "timestamp": "2026-09-02T20:01:49Z",
+          "url": "https://github.com/ava-labs/firewood/commit/016f9dde84973d17f41b4398b3cd23ba8f54e359"
+        },
+        "date": 1788506036037,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 157.71068729503287,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6340.724380518855,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 127.04711581085031,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6112.286729954609,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 97.02664024009881,
             "unit": "block_accept_ms/ggas"
           }
         ]
