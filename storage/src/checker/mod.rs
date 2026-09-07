@@ -304,10 +304,7 @@ where
                 }]
             })?;
 
-        // TODO(galadd): will send a PR after  this to add proper unpadded handling here
-        // not included in this so that code changes won't be too large
-        // For now, all existing databases are padded
-        let area_index = area_meta.area_index.expect("padded node expected");
+        let area_index = area_meta.area_index;
         let area_size = area_meta.total_size;
 
         let (node, node_bytes) = self
@@ -672,20 +669,14 @@ where
         // First attempt to read the valid stored areas from the leaked range
         loop {
             let area_meta = match self.read_leaked_area(current_addr) {
-                Ok(area_index_and_size) => area_index_and_size,
+                Ok(area_meta) => area_meta,
                 Err(e) => {
                     warn!("Error reading stored area at {current_addr}: {e}");
                     break;
                 }
             };
 
-            // TODO(galadd): will send a PR after  this to add proper unpadded handling here
-            // not included in this so that code changes won't be too large
-            // For now, all existing databases are padded
-            let Some(area_index) = area_meta.area_index else {
-                warn!("Unpadded node in leaked range at {current_addr}, cannot add to free list");
-                break;
-            };
+            let area_index = area_meta.area_index;
             let area_size = area_meta.total_size;
 
             let next_addr = current_addr
@@ -761,12 +752,12 @@ mod test {
     use super::*;
     use crate::DeletedNodeTracking;
     use crate::linear::memory::MemStore;
+    use crate::nodestore::NodeStoreHeader;
     use crate::nodestore::alloc::FreeLists;
     use crate::nodestore::alloc::test_utils::{
         test_write_free_area, test_write_header, test_write_new_node, test_write_zeroed_area,
     };
     use crate::nodestore::primitives::area_size_iter;
-    use crate::nodestore::{AreaMetadata, NodeStoreHeader};
     use crate::{
         BranchNode, Child, Children, FreeListParent, ImmutableProposal, LeafNode, NodeStore, Path,
         PathComponent, area_index, hash_node,
@@ -1375,19 +1366,5 @@ mod test {
 
         assert_eq!(leaked_areas_offsets, expected_offsets);
         assert_eq!(leaked_area_size_indices, expected_indices);
-    }
-
-    #[test]
-    fn test_area_metadata() {
-        let idx = area_index!(5); // 256 bytes
-        let padded = AreaMetadata::padded(idx);
-        assert_eq!(padded.area_index, Some(idx));
-        assert_eq!(padded.total_size, 256);
-        assert!(!padded.is_unpadded);
-
-        let unpadded = AreaMetadata::unpadded(150);
-        assert_eq!(unpadded.area_index, None);
-        assert_eq!(unpadded.total_size, 150);
-        assert!(unpadded.is_unpadded);
     }
 }

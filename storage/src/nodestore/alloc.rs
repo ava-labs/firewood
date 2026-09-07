@@ -254,7 +254,6 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
     }
 
     /// Returns [`AreaMetadata`] for the stored area at `addr`.
-    /// `index` is the index of `area_size` in the array of valid block sizes.
     ///
     /// # Errors
     ///
@@ -358,9 +357,7 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
         debug_assert!(addr.is_aligned());
 
         let area_meta = self.area_index_and_size(addr)?;
-        let area_size_index = area_meta
-            .area_index
-            .expect("delete_node should only be called on padded nodes");
+        let area_size_index = area_meta.area_index;
         trace!("Deleting node at {addr:?} of size {area_size_index}");
         firewood_counter!(DELETE_NODE, "index" => index_name(area_size_index)).increment(1);
         firewood_counter!(SPACE_FREED, "index" => index_name(area_size_index))

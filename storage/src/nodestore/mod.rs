@@ -53,9 +53,7 @@ use crate::arc_swap_triomphe::TriompheArc;
 use crate::linear::{OffsetReader, ReadableNodeMode};
 use crate::logger::{debug, trace};
 use crate::node::branch::ReadSerializable as _;
-use crate::nodestore::primitives::{SENTINEL_UNPADDED, varint_encoded_size};
 use firewood_metrics::{firewood_counter, firewood_histogram};
-use integer_encoding::VarIntReader;
 use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::io::{Error, ErrorKind};
@@ -1326,48 +1324,23 @@ impl<T: HashedNodeReader> HashedNodeReader for &T {
 }
 
 /// Metadata about a stored area on disk.
-///
-/// Disambiguates between padded nodes (with a valid [`AreaIndex`]),
-/// unpadded nodes (archive mode, with [`SENTINEL_UNPADDED`] prefix),
-/// and free areas
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AreaMetadata {
-    /// The area size index, if this is a padded node or free area.
-    /// `None` for unpadded archive-mode nodes.
-    pub area_index: Option<AreaIndex>,
-    /// The total size of this area on disk, including any prefix bytes.
+    pub area_index: AreaIndex,
     pub total_size: u64,
-    /// Whether the node is unpadded.
-    pub is_unpadded: bool,
 }
 
 impl AreaMetadata {
-    /// Create metadata for a padded area (normal mode node or free area).
+    /// Create metadata for an area
     #[must_use]
-    pub const fn padded(index: AreaIndex) -> Self {
+    pub const fn new(area_index: AreaIndex) -> Self {
         Self {
-            area_index: Some(index),
-            total_size: index.size(),
-            is_unpadded: false,
-        }
-    }
-
-    /// Create metadata for an unpadded area (archive mode node).
-    #[must_use]
-    pub const fn unpadded(total_size: u64) -> Self {
-        Self {
-            area_index: None,
-            total_size,
-            is_unpadded: true,
+            area_index,
+            total_size: area_index.size(),
         }
     }
 }
 
-/// Reads area metadata from the first byte(s) at `addr`.
-///
-/// Handles both padded and unpadded formats:
-/// - First byte 0-22: padded, size from `AREA_SIZES[index]`
-/// - First byte 0xFF: unpadded, size from following varint + prefix
+/// Reads area metadata at `addr`.
 ///
 /// # Errors
 ///
@@ -1378,42 +1351,22 @@ pub(crate) fn area_index_and_size<S: ReadableStorage>(
 ) -> Result<AreaMetadata, FileIoError> {
     let mut stream = storage.stream_from(addr.get())?;
 
-    let first_byte = stream.read_byte().map_err(|e| {
+    let index = AreaIndex::new(stream.read_byte().map_err(|e| {
         storage.file_io_error(
             Error::new(ErrorKind::InvalidData, e),
             addr.get(),
             Some("area_index_and_size".to_owned()),
         )
+    })?)
+    .ok_or_else(|| {
+        storage.file_io_error(
+            Error::new(ErrorKind::InvalidData, "invalid area index"),
+            addr.get(),
+            Some("area_index_and_size".to_owned()),
+        )
     })?;
 
-    if first_byte == SENTINEL_UNPADDED {
-        // Unpadded node: read varint length
-        let node_len = stream.read_varint::<u64>().map_err(|e| {
-            storage.file_io_error(
-                Error::new(ErrorKind::InvalidData, e),
-                addr.get(),
-                Some("area_index_and_size: unpadded length".to_owned()),
-            )
-        })?;
-
-        #[expect(clippy::arithmetic_side_effects)]
-        let prefix_len = 1_u64 + varint_encoded_size(node_len) as u64;
-
-        #[expect(clippy::arithmetic_side_effects)]
-        let total_size = prefix_len + node_len;
-
-        Ok(AreaMetadata::unpadded(total_size))
-    } else {
-        // Padded node or free area
-        let index = AreaIndex::new(first_byte).ok_or_else(|| {
-            storage.file_io_error(
-                Error::new(ErrorKind::InvalidData, "invalid area index byte"),
-                addr.get(),
-                Some("area_index_and_size".to_owned()),
-            )
-        })?;
-        Ok(AreaMetadata::padded(index))
-    }
+    Ok(AreaMetadata::new(index))
 }
 
 impl<T, S: ReadableStorage> NodeStore<T, S> {
@@ -1449,104 +1402,37 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
         Ok(node)
     }
 
-    /// Reads a node from disk, returning the node and its total on-disk size.
-    ///
-    /// Handles both padded and unpadded formats:
-    /// - Padded: `[AreaIndex][node_data][padding]`
-    /// - Unpadded: `[0xFF][varint length][node_data]`
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if the node cannot be read.
     pub(crate) fn read_node_with_num_bytes_from_disk(
         &self,
         addr: LinearAddress,
     ) -> Result<(SharedNode, u64), FileIoError> {
-        let mut stream = self.storage.stream_from(addr.get())?;
+        debug_assert!(addr.is_aligned());
 
-        let first_byte = stream.read_byte().map_err(|e| {
-            self.storage.file_io_error(
-                Error::new(ErrorKind::InvalidData, e),
-                addr.get(),
-                Some("read_node_with_num_bytes_from_disk".to_owned()),
-            )
-        })?;
+        // saturating because there is no way we can be reading at u64::MAX
+        // and this will fail very soon afterwards
+        let actual_addr = addr.get().saturating_add(1); // skip the length byte
 
-        if first_byte == SENTINEL_UNPADDED {
-            // Unpadded format: [0xFF][varint length][node_data]
-            let node_len = stream.read_varint::<usize>().map_err(|e| {
-                self.storage.file_io_error(
-                    Error::new(ErrorKind::InvalidData, e),
-                    addr.get(),
-                    Some("read_node_with_num_bytes_from_disk: unpadded length".to_owned()),
-                )
-            })?;
+        let _span = fastrace::local::LocalSpan::enter_with_local_parent("read_and_deserialize");
 
-            #[expect(clippy::arithmetic_side_effects)]
-            let prefix_len = 1 + varint_encoded_size(node_len as u64);
-            let offset_before = stream.offset();
-
-            let _span = fastrace::local::LocalSpan::enter_with_local_parent("read_and_deserialize");
-            let node: SharedNode = Node::from_reader(&mut stream)
-                .map_err(|e| {
-                    self.storage.file_io_error(
-                        e,
-                        addr.get(),
-                        Some("read_node_with_num_bytes_from_disk".to_owned()),
-                    )
-                })?
-                .into();
-
-            let bytes_read = stream.offset().checked_sub(offset_before).ok_or_else(|| {
+        let mut area_stream = self.storage.stream_from(actual_addr)?;
+        let offset_before = area_stream.offset();
+        let node: SharedNode = Node::from_reader(&mut area_stream)
+            .map_err(|e| {
+                self.storage
+                    .file_io_error(e, actual_addr, Some("read_node_from_disk".to_owned()))
+            })?
+            .into();
+        let length = area_stream
+            .offset()
+            .checked_sub(offset_before)
+            .ok_or_else(|| {
                 self.storage.file_io_error(
                     Error::other("Reader offset went backwards"),
-                    addr.get(),
+                    actual_addr,
                     Some("read_node_with_num_bytes_from_disk".to_owned()),
                 )
             })?;
-
-            if bytes_read != node_len as u64 {
-                return Err(self.storage.file_io_error(
-                    Error::new(ErrorKind::InvalidData, format!("Unpadded node length mismatch: header says {node_len}, read {bytes_read}")), addr.get(), Some("read_node_with_num_bytes_from_disk".to_owned())));
-            }
-
-            let total_size = prefix_len
-                .checked_add(node_len)
-                .expect("encoded node size overflow");
-
-            Ok((node, total_size as u64))
-        } else {
-            // Padded format: [AreaIndex][node_data][padding]
-            let _area_index = AreaIndex::new(first_byte).ok_or_else(|| {
-                self.storage.file_io_error(
-                    Error::new(ErrorKind::InvalidData, "invalid area index byte"),
-                    addr.get(),
-                    Some("read_node_with_num_bytes".to_owned()),
-                )
-            })?;
-
-            let _span = fastrace::local::LocalSpan::enter_with_local_parent("read_and_deserialize");
-            let offset_before = stream.offset();
-            let node: SharedNode = Node::from_reader(&mut stream)
-                .map_err(|e| {
-                    self.storage.file_io_error(
-                        e,
-                        addr.get(),
-                        Some("read_node_with_num_bytes_from".to_owned()),
-                    )
-                })?
-                .into();
-
-            let node_bytes = stream.offset().checked_sub(offset_before).ok_or_else(|| {
-                self.storage.file_io_error(
-                    Error::other("Reader offset went backwards"),
-                    addr.get(),
-                    Some("read_node_with_num_bytes_from_disk".to_owned()),
-                )
-            })?;
-
-            Ok((node, node_bytes.saturating_add(1)))
-        }
+        Ok((node, length.saturating_add(1))) // add 1 for the area size index byte
     }
 
     /// Returns [`AreaMetadata`] for the stored area at `addr`.
@@ -1615,14 +1501,9 @@ impl<T, S: ReadableStorage> NodeStore<T, S>
 where
     NodeStore<T, S>: NodeReader,
 {
-    /// Find the area metadata for the stored area at the given address.
-    ///
-    /// Tries to interpret the area as a free area first, then as a node.
-    /// Returns [`AreaMetadata`] describing the area's format and size.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if the area cannot be read
+    // Find the area metadata for the stored area at the given address.
+    //
+    // TODO(#2050): there should be a way to read stored area directly instead of try reading as a free area then as a node
     pub(crate) fn read_leaked_area(
         &self,
         address: LinearAddress,
