@@ -380,7 +380,9 @@ fn range_proof_serialization_roundtrip() {
 
 fn roundtrip_range_proof(proof: &FrozenRangeProof) -> FrozenRangeProof {
     let mut serialized = Vec::new();
-    proof.write_to_vec(&mut serialized);
+    proof
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
     let deserialized = FrozenRangeProof::from_slice(&serialized).unwrap();
     assert_eq!(proof, &deserialized);
     deserialized

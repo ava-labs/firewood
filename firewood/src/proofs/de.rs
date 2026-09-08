@@ -8,7 +8,7 @@
 //! validation of the format.
 
 use super::{
-    header::InvalidHeader,
+    header::{Header, InvalidHeader},
     reader::{ProofReader, ReadError, ReadItem, V0Reader, Version0},
     types::{Proof, ProofNode, ProofType},
 };
@@ -24,15 +24,16 @@ use integer_encoding::VarInt;
 use std::num::NonZeroUsize;
 
 impl FrozenRangeProof {
-    /// Parses a `FrozenRangeProof` from the given byte slice.
+    /// Parses a `FrozenRangeProof` from the given byte slice, enforcing the
+    /// proof-decode size limits (see `proofs::frame`).
     ///
     /// Currently only V0 proofs are supported. See [`FrozenRangeProof::write_to_vec`]
     /// for the serialization format.
     ///
     /// # Errors
     ///
-    /// Returns a [`ReadError`] if the data is invalid. See the enum variants for
-    /// the possible reasons.
+    /// Returns a [`ReadError`] if the data is invalid or exceeds a limit. See
+    /// the enum variants for the possible reasons.
     pub fn from_slice(data: &[u8]) -> Result<Self, ReadError> {
         let mut reader = ProofReader::new(data);
 
@@ -43,22 +44,23 @@ impl FrozenRangeProof {
 
         match header.version {
             0 => {
-                // Body reads dispatch on the proof's own self-describing mode
-                // so this binary reads either wire format.
+                // Decompress the framed body, then dispatch body reads on the
+                // proof's own self-describing mode so this binary reads either
+                // wire format.
+                let body = super::frame::decompress_body(reader.remainder(), size_of::<Header>())?;
                 let mut reader = V0Reader::new(
-                    reader.into_body(validated_header.node_hash_algorithm),
+                    ProofReader::new(&body).into_body(validated_header.node_hash_algorithm),
                     header,
                 );
                 let this = reader.read_v0_item()?;
-                if reader.remainder().is_empty() {
-                    Ok(this)
-                } else {
-                    Err(reader.invalid_item(
+                if !reader.remainder().is_empty() {
+                    return Err(reader.invalid_item(
                         "trailing bytes",
                         "no data after the proof",
                         format!("{} bytes", reader.remainder().len()),
-                    ))
+                    ));
                 }
+                Ok(this)
             }
             found => Err(ReadError::InvalidHeader(
                 InvalidHeader::UnsupportedVersion { found },
@@ -90,15 +92,16 @@ impl<T: Version0> Version0 for Box<[T]> {
 }
 
 impl FrozenChangeProof {
-    /// Parses a `FrozenChangeProof` from the given byte slice.
+    /// Parses a `FrozenChangeProof` from the given byte slice, enforcing the
+    /// proof-decode size limits (see `proofs::frame`).
     ///
     /// Currently only V0 proofs are supported. See [`FrozenChangeProof::write_to_vec`]
     /// for the serialization format.
     ///
     /// # Errors
     ///
-    /// Returns a [`ReadError`] if the data is invalid. See the enum variants for
-    /// the possible reasons.
+    /// Returns a [`ReadError`] if the data is invalid or exceeds a limit. See
+    /// the enum variants for the possible reasons.
     pub fn from_slice(data: &[u8]) -> Result<Self, ReadError> {
         let mut reader = ProofReader::new(data);
 
@@ -115,22 +118,22 @@ impl FrozenChangeProof {
             ));
         }
 
-        // Body reads dispatch on the proof's own self-describing mode so this
-        // binary reads either wire format.
+        // Decompress the framed body, then dispatch body reads on the proof's
+        // own self-describing mode so this binary reads either wire format.
+        let body = super::frame::decompress_body(reader.remainder(), size_of::<Header>())?;
         let mut reader = V0Reader::new(
-            reader.into_body(validated_header.node_hash_algorithm),
+            ProofReader::new(&body).into_body(validated_header.node_hash_algorithm),
             header,
         );
         let this = reader.read_v0_item()?;
-        if reader.remainder().is_empty() {
-            Ok(this)
-        } else {
-            Err(reader.invalid_item(
+        if !reader.remainder().is_empty() {
+            return Err(reader.invalid_item(
                 "trailing bytes",
                 "no data after the proof",
                 format!("{} bytes", reader.remainder().len()),
-            ))
+            ));
         }
+        Ok(this)
     }
 }
 

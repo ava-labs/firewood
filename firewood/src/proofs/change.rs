@@ -18,6 +18,7 @@ use crate::{
 /// - A start proof: proves that the smallest key does/doesn't exist
 /// - An end proof: proves that the largest key does/doesn't exist
 /// - The actual `BatchOp`s that specify the difference between the start and end tries.
+#[derive(PartialEq)]
 pub struct ChangeProof<K: AsRef<[u8]> + Debug, V: AsRef<[u8]> + Debug, H> {
     start_proof: Proof<H>,
     end_proof: Proof<H>,
