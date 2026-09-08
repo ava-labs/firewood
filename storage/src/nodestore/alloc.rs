@@ -782,13 +782,13 @@ mod tests {
         assert_eq!(result, expected, "Failed to parse FreeArea from {reader:?}");
     }
 
-    #[test]
+    #[test_case(DeletedNodeTracking::Enabled; "enabled")]
+    #[test_case(DeletedNodeTracking::Disabled; "disabled")]
     // Create a random free list and test that `FreeListIterator` is able to traverse all the free areas
-    fn free_list_iterator() {
+    fn free_list_iterator(deleted_node_tracking: DeletedNodeTracking) {
         let mut rng = crate::SeededRng::from_env_or_random();
         let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
-        let nodestore =
-            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Disabled);
+        let nodestore = NodeStore::new_empty_committed(memstore.into(), deleted_node_tracking);
 
         let area_index = rng.random_range(0..AreaIndex::NUM_AREA_SIZES as u8);
         let area_index_type = AreaIndex::try_from(area_index).unwrap();
@@ -837,12 +837,12 @@ mod tests {
     }
 
     // Create two free lists and check that `free_list_iter_with_metadata` correctly returns the free areas and their parents
-    #[test]
-    fn free_list_iter_with_metadata() {
+    #[test_case(DeletedNodeTracking::Enabled; "enabled")]
+    #[test_case(DeletedNodeTracking::Disabled; "disabled")]
+    fn free_list_iter_with_metadata(deleted_node_tracking: DeletedNodeTracking) {
         let rng = crate::SeededRng::from_env_or_random();
         let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
-        let nodestore =
-            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Disabled);
+        let nodestore = NodeStore::new_empty_committed(memstore.into(), deleted_node_tracking);
 
         let mut free_lists = FreeLists::default();
         let mut offset = NodeStoreHeader::SIZE;
@@ -957,9 +957,10 @@ mod tests {
         }
     }
 
-    #[test]
+    #[test_case(DeletedNodeTracking::Enabled; "enabled")]
+    #[test_case(DeletedNodeTracking::Disabled; "disabled")]
     #[expect(clippy::arithmetic_side_effects)]
-    fn free_lists_iter_skip_to_next_free_list() {
+    fn free_lists_iter_skip_to_next_free_list(deleted_node_tracking: DeletedNodeTracking) {
         use test_utils::{test_write_free_area, test_write_header};
 
         const AREA_INDEX1: AreaIndex = area_index!(3);
@@ -968,8 +969,7 @@ mod tests {
         const AREA_INDEX2_PLUS_1: AreaIndex = area_index!(6);
 
         let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
-        let nodestore =
-            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Disabled);
+        let nodestore = NodeStore::new_empty_committed(memstore.into(), deleted_node_tracking);
 
         let mut free_lists = FreeLists::default();
         let mut offset = NodeStoreHeader::SIZE;
@@ -1069,15 +1069,15 @@ mod tests {
         assert!(free_list_iter.next_with_metadata().is_none());
     }
 
-    #[test]
-    fn test_read_stored_area_info() {
+    #[test_case(DeletedNodeTracking::Enabled; "enabled")]
+    #[test_case(DeletedNodeTracking::Disabled; "disabled")]
+    fn test_read_stored_area_info(deleted_node_tracking: DeletedNodeTracking) {
         use crate::Path;
         use crate::node::{LeafNode, Node};
         use test_utils::{test_write_free_area, test_write_new_node};
 
         let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
-        let nodestore =
-            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Disabled);
+        let nodestore = NodeStore::new_empty_committed(memstore.into(), deleted_node_tracking);
 
         // write a free area
         let free_index = area_index!(3);

@@ -261,6 +261,7 @@ enum MaybePersisted {
 #[cfg(test)]
 mod test {
     use nonzero_ext::nonzero;
+    use test_case::test_case;
 
     use crate::{
         Committed, DefaultHashMode, DeletedNodeTracking, HashMode, LeafNode, MemStore, Node,
@@ -269,11 +270,14 @@ mod test {
 
     use super::*;
 
-    #[test]
-    fn test_maybe_persisted_node() -> Result<(), FileIoError> {
+    #[test_case(DeletedNodeTracking::Enabled; "enabled")]
+    #[test_case(DeletedNodeTracking::Disabled; "disabled")]
+    fn test_maybe_persisted_node(
+        deleted_node_tracking: DeletedNodeTracking,
+    ) -> Result<(), FileIoError> {
         let mem_store = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM).into();
         let store: NodeStore<Committed, MemStore, DefaultHashMode> =
-            NodeStore::new_empty_committed(mem_store, DeletedNodeTracking::Disabled);
+            NodeStore::new_empty_committed(mem_store, deleted_node_tracking);
         let node = SharedNode::new(Node::Leaf(LeafNode {
             partial_path: Path::new(),
             value: vec![0].into(),
@@ -301,11 +305,14 @@ mod test {
         assert_eq!(Some(addr), Option::from(&maybe_persisted_node));
     }
 
-    #[test]
-    fn test_clone_shares_underlying_shared_node() -> Result<(), FileIoError> {
+    #[test_case(DeletedNodeTracking::Enabled; "enabled")]
+    #[test_case(DeletedNodeTracking::Disabled; "disabled")]
+    fn test_clone_shares_underlying_shared_node(
+        deleted_node_tracking: DeletedNodeTracking,
+    ) -> Result<(), FileIoError> {
         let mem_store = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM).into();
         let store: NodeStore<Committed, MemStore, DefaultHashMode> =
-            NodeStore::new_empty_committed(mem_store, DeletedNodeTracking::Disabled);
+            NodeStore::new_empty_committed(mem_store, deleted_node_tracking);
         let node = SharedNode::new(Node::Leaf(LeafNode {
             partial_path: Path::new(),
             value: vec![42].into(),

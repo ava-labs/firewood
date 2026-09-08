@@ -740,6 +740,7 @@ mod test {
         LeafNode, NodeStore, Path, PathComponent, area_index, hash_node,
     };
     use std::sync::Arc;
+    use test_case::test_case;
 
     #[derive(Debug)]
     struct TestTrie {
@@ -971,13 +972,13 @@ mod test {
 
     use std::collections::HashMap;
 
-    #[test]
+    #[test_case(DeletedNodeTracking::Enabled; "enabled")]
+    #[test_case(DeletedNodeTracking::Disabled; "disabled")]
     // This test creates a simple trie and checks that the checker traverses it correctly.
     // We use primitive calls here to do a low-level check.
-    fn checker_traverse_correct_trie() {
+    fn checker_traverse_correct_trie(deleted_node_tracking: DeletedNodeTracking) {
         let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
-        let nodestore =
-            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
+        let nodestore = NodeStore::new_empty_committed(memstore.into(), deleted_node_tracking);
 
         let test_trie = gen_test_trie(&nodestore);
         // let (_, high_watermark, (root_addr, root_hash)) = gen_test_trie(&mut nodestore);
@@ -997,12 +998,12 @@ mod test {
         assert_eq!(errors, vec![]);
     }
 
-    #[test]
+    #[test_case(DeletedNodeTracking::Enabled; "enabled")]
+    #[test_case(DeletedNodeTracking::Disabled; "disabled")]
     // This test permutes the simple trie with a wrong hash and checks that the checker detects it.
-    fn checker_traverse_trie_with_wrong_hash() {
+    fn checker_traverse_trie_with_wrong_hash(deleted_node_tracking: DeletedNodeTracking) {
         let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
-        let nodestore =
-            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
+        let nodestore = NodeStore::new_empty_committed(memstore.into(), deleted_node_tracking);
 
         let mut test_trie = gen_test_trie(&nodestore);
         let root_addr = test_trie.root_address;
@@ -1071,13 +1072,13 @@ mod test {
         assert_eq!(errors, vec![expected_error]);
     }
 
-    #[test]
-    fn traverse_correct_freelist() {
+    #[test_case(DeletedNodeTracking::Enabled; "enabled")]
+    #[test_case(DeletedNodeTracking::Disabled; "disabled")]
+    fn traverse_correct_freelist(deleted_node_tracking: DeletedNodeTracking) {
         let rng = crate::SeededRng::from_env_or_random();
 
         let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
-        let nodestore =
-            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
+        let nodestore = NodeStore::new_empty_committed(memstore.into(), deleted_node_tracking);
 
         // write free areas
         let mut high_watermark = NodeStoreHeader::SIZE;
@@ -1120,11 +1121,13 @@ mod test {
         assert_eq!(actual_free_lists_stats, expected_free_lists_stats);
     }
 
-    #[test]
-    fn traverse_freelist_should_skip_offspring_of_incorrect_areas() {
+    #[test_case(DeletedNodeTracking::Enabled; "enabled")]
+    #[test_case(DeletedNodeTracking::Disabled; "disabled")]
+    fn traverse_freelist_should_skip_offspring_of_incorrect_areas(
+        deleted_node_tracking: DeletedNodeTracking,
+    ) {
         let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
-        let nodestore =
-            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
+        let nodestore = NodeStore::new_empty_committed(memstore.into(), deleted_node_tracking);
         let TestFreelist {
             high_watermark,
             free_ranges,
@@ -1142,11 +1145,11 @@ mod test {
         assert_eq!(free_list_errors, errors);
     }
 
-    #[test]
-    fn fix_freelist_with_overlap() {
+    #[test_case(DeletedNodeTracking::Enabled; "enabled")]
+    #[test_case(DeletedNodeTracking::Disabled; "disabled")]
+    fn fix_freelist_with_overlap(deleted_node_tracking: DeletedNodeTracking) {
         let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
-        let nodestore =
-            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
+        let nodestore = NodeStore::new_empty_committed(memstore.into(), deleted_node_tracking);
         let TestFreelist {
             high_watermark,
             free_ranges: _,
@@ -1181,17 +1184,17 @@ mod test {
         assert_eq!(free_list_errors, vec![]);
     }
 
-    #[test]
+    #[test_case(DeletedNodeTracking::Enabled; "enabled")]
+    #[test_case(DeletedNodeTracking::Disabled; "disabled")]
     // This test creates a linear set of free areas and free them.
     // When traversing it should break consecutive areas.
-    fn split_correct_range_into_leaked_areas() {
+    fn split_correct_range_into_leaked_areas(deleted_node_tracking: DeletedNodeTracking) {
         use rand::seq::IteratorRandom;
 
         let mut rng = crate::SeededRng::from_env_or_random();
 
         let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
-        let nodestore =
-            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
+        let nodestore = NodeStore::new_empty_committed(memstore.into(), deleted_node_tracking);
 
         let num_areas = 10;
 
@@ -1242,14 +1245,14 @@ mod test {
         assert_eq!(leaked_areas, expected_free_areas);
     }
 
-    #[test]
+    #[test_case(DeletedNodeTracking::Enabled; "enabled")]
+    #[test_case(DeletedNodeTracking::Disabled; "disabled")]
     // This test creates a linear set of free areas and free them.
     // When traversing it should break consecutive areas.
     #[expect(clippy::arithmetic_side_effects)]
-    fn split_range_of_zeros_into_leaked_areas() {
+    fn split_range_of_zeros_into_leaked_areas(deleted_node_tracking: DeletedNodeTracking) {
         let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
-        let nodestore =
-            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
+        let nodestore = NodeStore::new_empty_committed(memstore.into(), deleted_node_tracking);
 
         let expected_leaked_area_indices = vec![
             area_index!(8),
@@ -1295,13 +1298,13 @@ mod test {
         assert_eq!(leaked_area_size_indices, expected_leaked_area_indices);
     }
 
-    #[test]
+    #[test_case(DeletedNodeTracking::Enabled; "enabled")]
+    #[test_case(DeletedNodeTracking::Disabled; "disabled")]
     // With both valid and invalid areas in the range, return the valid areas until reaching one invalid area, then use heuristics to split the rest of the range.
     #[expect(clippy::arithmetic_side_effects)]
-    fn split_range_into_leaked_areas_test() {
+    fn split_range_into_leaked_areas_test(deleted_node_tracking: DeletedNodeTracking) {
         let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
-        let nodestore =
-            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
+        let nodestore = NodeStore::new_empty_committed(memstore.into(), deleted_node_tracking);
 
         // write two free areas
         let mut high_watermark = NodeStoreHeader::SIZE;
