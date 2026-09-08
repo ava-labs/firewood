@@ -7,6 +7,8 @@ package ffi
 // #include "firewood.h"
 // #cgo noescape fwd_db_range_proof
 // #cgo nocallback fwd_db_range_proof
+// #cgo noescape fwd_range_proof_from_bytes
+// #cgo nocallback fwd_range_proof_from_bytes
 // #cgo noescape fwd_range_proof_verify
 // #cgo nocallback fwd_range_proof_verify
 // #cgo noescape fwd_db_verify_range_proof
@@ -23,12 +25,12 @@ package ffi
 // #cgo nocallback fwd_code_hash_iter_free
 // #cgo noescape fwd_range_proof_to_bytes
 // #cgo nocallback fwd_range_proof_to_bytes
-// #cgo noescape fwd_range_proof_from_bytes
-// #cgo nocallback fwd_range_proof_from_bytes
 // #cgo noescape fwd_free_range_proof
 // #cgo nocallback fwd_free_range_proof
 // #cgo noescape fwd_db_change_proof
 // #cgo nocallback fwd_db_change_proof
+// #cgo noescape fwd_change_proof_from_bytes
+// #cgo nocallback fwd_change_proof_from_bytes
 // #cgo noescape fwd_db_verify_change_proof
 // #cgo nocallback fwd_db_verify_change_proof
 // #cgo noescape fwd_db_verify_and_commit_change_proof
@@ -39,8 +41,6 @@ package ffi
 // #cgo nocallback fwd_change_proof_code_hash_iter
 // #cgo noescape fwd_change_proof_to_bytes
 // #cgo nocallback fwd_change_proof_to_bytes
-// #cgo noescape fwd_change_proof_from_bytes
-// #cgo nocallback fwd_change_proof_from_bytes
 // #cgo noescape fwd_free_change_proof
 // #cgo nocallback fwd_free_change_proof
 import "C"
@@ -113,9 +113,10 @@ type ChangeProof struct {
 	handle *C.ChangeProofContext
 }
 
-// NextKeyRange represents a range of keys to fetch from the database. The start
-// key is inclusive while the end key is exclusive. If the end key is Nothing,
-// the range is unbounded in that direction.
+// NextKeyRange represents a range of keys to fetch from the database,
+// `(startKey, endKey]`: the start key is exclusive because it has already been
+// synchronized, and the end key is inclusive. If the end key is Nothing, the
+// range is unbounded in that direction.
 type NextKeyRange struct {
 	startKey *ownedBytes
 	endKey   Maybe[*ownedBytes]
@@ -169,6 +170,14 @@ func (db *Database) RangeProof(
 	return getRangeProofFromRangeProofResult(C.fwd_db_range_proof(db.handle, args))
 }
 
+func rangeProofFromBytes(data []byte) (*RangeProof, error) {
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	return getRangeProofFromRangeProofResult(
+		C.fwd_range_proof_from_bytes(newBorrowedBytes(data, &pinner)))
+}
+
 // Verify verifies the provided range [proof] proves the values in the range
 // [startKey, endKey] are included in the tree with the given [rootHash]. If the
 // proof is valid, nil is returned; otherwise an error describing why the proof is
@@ -200,6 +209,13 @@ func (p *RangeProof) Verify(
 // the proof is valid, a proposal containing the changes is prepared. The
 // call to [*Database.VerifyAndCommitRangeProof] will skip verification and commit the
 // prepared proposal.
+//
+// The proposal replaces state across the range the proof proves: any existing
+// key in that range that the proof does not carry is deleted. The range runs
+// from [startKey] to the proof's right edge, which is [endKey] when the
+// responder covered the whole request and a smaller key when it truncated.
+// Keys past that edge are left as they are; [*RangeProof.FindNextKey] reports
+// where to resume.
 //
 // Because this method prepares a proposal, the database must be kept alive
 // until the proof is committed or freed.
@@ -250,6 +266,9 @@ func (db *Database) VerifyRangeProof(
 // [rootHash]. If the proof is valid, it is committed to the database and the
 // new root hash is returned. The resulting root hash may not equal the
 // provided root hash if the proof was truncated due to [maxLength].
+//
+// The commit replaces state across the proven range on the same terms as
+// [*Database.VerifyRangeProof].
 func (db *Database) VerifyAndCommitRangeProof(
 	proof *RangeProof,
 	startKey, endKey Maybe[[]byte],
@@ -385,12 +404,8 @@ func (p *RangeProof) UnmarshalBinary(data []byte) error {
 		return err
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
 	start := time.Now()
-	handle, err := getRangeProofFromRangeProofResult(
-		C.fwd_range_proof_from_bytes(newBorrowedBytes(data, &pinner)))
+	handle, err := rangeProofFromBytes(data)
 	proofUnmarshalDuration.WithLabelValues("range").Observe(time.Since(start).Seconds())
 
 	if err == nil {
@@ -466,6 +481,14 @@ func (db *Database) ChangeProof(
 
 	proof.setFreeFinalizer()
 	return proof, nil
+}
+
+func changeProofFromBytes(data []byte) (*ChangeProof, error) {
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	return getChangeProofFromChangeProofResult(
+		C.fwd_change_proof_from_bytes(newBorrowedBytes(data, &pinner)))
 }
 
 // VerifyChangeProof verifies the change proof and creates a standard Proposal.
@@ -587,12 +610,8 @@ func (p *ChangeProof) UnmarshalBinary(data []byte) error {
 		return err
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
 	start := time.Now()
-	handle, err := getChangeProofFromChangeProofResult(
-		C.fwd_change_proof_from_bytes(newBorrowedBytes(data, &pinner)))
+	handle, err := changeProofFromBytes(data)
 	proofUnmarshalDuration.WithLabelValues("change").Observe(time.Since(start).Seconds())
 
 	if err == nil {
@@ -640,17 +659,18 @@ func (p *ChangeProof) setFreeFinalizer() {
 	runtime.SetFinalizer(p, (*ChangeProof).Free)
 }
 
-// StartKey returns the inclusive start key of this key range.
+// StartKey returns the exclusive start key of this key range: it has already
+// been synchronized, so the next request begins strictly after it.
 func (r *NextKeyRange) StartKey() []byte {
 	return r.startKey.CopiedBytes()
 }
 
-// HasEndKey returns true if this key range has an exclusive end key.
+// HasEndKey returns true if this key range has an inclusive end key.
 func (r *NextKeyRange) HasEndKey() bool {
 	return r.endKey != nil && r.endKey.HasValue()
 }
 
-// EndKey returns the exclusive end key of this key range if it exists or nil if
+// EndKey returns the inclusive end key of this key range if it exists or nil if
 // it does not.
 func (r *NextKeyRange) EndKey() []byte {
 	if r.HasEndKey() {

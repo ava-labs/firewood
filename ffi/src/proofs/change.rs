@@ -269,7 +269,9 @@ fn serialize_change_proof(
 ) -> Result<Option<Box<[u8]>>, api::Error> {
     let proof = proof.ok_or(api::Error::ProofError(ProofError::ProofIsNone))?;
     let mut vec = Vec::new();
-    proof.write_to_vec(&mut vec);
+    proof
+        .write_to_vec(&mut vec)
+        .map_err(api::Error::ProofError)?;
     Ok(Some(vec.into_boxed_slice()))
 }
 
