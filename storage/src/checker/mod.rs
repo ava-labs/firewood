@@ -723,6 +723,10 @@ fn update_progress_bar(progress_bar: Option<&ProgressBar>, range_set: &LinearAdd
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "test-only offsets with small values"
+)]
 mod test {
     use nonzero_ext::nonzero;
 
@@ -763,7 +767,6 @@ mod test {
     ///     Root -->|"nibble 0"| Branch
     ///     Branch -->|"nibble 1"| Leaf
     /// ```
-    #[expect(clippy::arithmetic_side_effects)]
     fn gen_test_trie(nodestore: &NodeStore<Committed, MemStore, DefaultHashMode>) -> TestTrie {
         let mut high_watermark = NodeStoreHeader::SIZE;
         let mut total_branch_bytes_written = 0;
@@ -867,7 +870,6 @@ mod test {
     // ----------------------------------------------------------------------------------------------------------------------------------------------------
     //                                                             ^ free_list1_area1 and free_list1_area2 overlap by 16 bytes      ^ 1 byte
     //              ^ 16 empty bytes to ensure that free_list1_area1, free_list1_area2, and free_list2_area1 are page-aligned                ^ missaligned
-    #[expect(clippy::arithmetic_side_effects)]
     fn gen_test_freelist_with_errors(
         nodestore: &NodeStore<Committed, MemStore, DefaultHashMode>,
     ) -> TestFreelist {
@@ -1249,7 +1251,6 @@ mod test {
     #[test_case(DeletedNodeTracking::Disabled; "disabled")]
     // This test creates a linear set of free areas and free them.
     // When traversing it should break consecutive areas.
-    #[expect(clippy::arithmetic_side_effects)]
     fn split_range_of_zeros_into_leaked_areas(deleted_node_tracking: DeletedNodeTracking) {
         let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
         let nodestore = NodeStore::new_empty_committed(memstore.into(), deleted_node_tracking);
@@ -1301,7 +1302,6 @@ mod test {
     #[test_case(DeletedNodeTracking::Enabled; "enabled")]
     #[test_case(DeletedNodeTracking::Disabled; "disabled")]
     // With both valid and invalid areas in the range, return the valid areas until reaching one invalid area, then use heuristics to split the rest of the range.
-    #[expect(clippy::arithmetic_side_effects)]
     fn split_range_into_leaked_areas_test(deleted_node_tracking: DeletedNodeTracking) {
         let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
         let nodestore = NodeStore::new_empty_committed(memstore.into(), deleted_node_tracking);

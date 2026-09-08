@@ -756,6 +756,10 @@ pub mod test_utils {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "test-only offsets with small values"
+)]
 mod tests {
     use super::*;
     use crate::area_index;
@@ -959,7 +963,6 @@ mod tests {
 
     #[test_case(DeletedNodeTracking::Enabled; "enabled")]
     #[test_case(DeletedNodeTracking::Disabled; "disabled")]
-    #[expect(clippy::arithmetic_side_effects)]
     fn free_lists_iter_skip_to_next_free_list(deleted_node_tracking: DeletedNodeTracking) {
         use test_utils::{test_write_free_area, test_write_header};
 
