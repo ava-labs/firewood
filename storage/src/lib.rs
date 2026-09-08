@@ -295,6 +295,19 @@ pub enum CheckerError {
         computed_hash: HashType,
     },
 
+    /// An occupied child of a node does not have a hash.
+    #[error(
+        "Node at address {address:#x} (parent: {parent:#x}) has unhashed child at index {index:?}"
+    )]
+    UnhashedChild {
+        /// The address of the node.
+        address: LinearAddress,
+        /// The index of the unhashed child.
+        index: PathComponent,
+        /// The parent of the node.
+        parent: TrieNodeParent,
+    },
+
     /// The address is out of bounds
     #[error(
         "stored area at {start:#x} with size {size} (parent: {parent:#x}) is out of bounds ({bounds:#x?})"
@@ -415,6 +428,7 @@ impl CheckerError {
             | CheckerError::AreaMisaligned { parent, .. }
             | CheckerError::IO { parent, .. } => Some(*parent),
             CheckerError::HashMismatch { parent, .. }
+            | CheckerError::UnhashedChild { parent, .. }
             | CheckerError::NodeLargerThanArea { parent, .. }
             | CheckerError::InvalidKey { parent, .. } => Some(StoredAreaParent::TrieNode(*parent)),
             CheckerError::FreelistAreaSizeMismatch { parent, .. } => {

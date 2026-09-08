@@ -137,11 +137,8 @@ impl<S: ReadableStorage, H: HashMode> NodeStore<Committed, S, H> {
     ///
     /// # Errors
     ///
-    /// Returns a [`FileIoError`] if the root node cannot be read from storage.
-    ///
-    /// # Panics
-    ///
-    /// Panics if a node read from storage contains an unhashed child.
+    /// Returns a [`FileIoError`] if the root node cannot be read from storage
+    /// or contains an unhashed child.
     pub fn open(
         header: &NodeStoreHeader,
         storage: Arc<S>,
@@ -164,15 +161,14 @@ impl<S: ReadableStorage, H: HashMode> NodeStore<Committed, S, H> {
                 HashType::from(hash)
             } else {
                 debug!("No root hash in header; computing from disk");
-                nodestore
-                    .read_node_from_disk(root_address, ReadableNodeMode::Open)
-                    .map(|n| {
-                        hash_node::<H>(
-                            HashedNode::try_from(n.as_ref())
-                                .expect("nodes read from storage never have unhashed children"),
-                            &Path(SmallVec::default()),
-                        )
-                    })?
+                let node = nodestore.read_node_from_disk(root_address, ReadableNodeMode::Open)?;
+                let node = HashedNode::try_from(node.as_ref()).map_err(|error| {
+                    FileIoError::from_generic_no_file(
+                        error,
+                        "root node read from storage has an unhashed child",
+                    )
+                })?;
+                hash_node::<H>(node, &Path(SmallVec::default()))
             };
 
             nodestore.kind.root = Some(Child::AddressWithHash(root_address, root_hash));
@@ -241,12 +237,14 @@ impl<S: ReadableStorage, H: HashMode> NodeStore<Committed, S, H> {
 
         let node = nodestore.read_node(root_address)?;
 
-        if hash_node::<H>(
-            HashedNode::try_from(node.as_ref())
-                .expect("nodes read from storage never have unhashed children"),
-            &Path::new(),
-        ) == root_hash
-        {
+        let node = HashedNode::try_from(node.as_ref()).map_err(|error| {
+            FileIoError::from_generic_no_file(
+                error,
+                "root node read from storage has an unhashed child",
+            )
+        })?;
+
+        if hash_node::<H>(node, &Path::new()) == root_hash {
             nodestore.kind.root = Some(Child::AddressWithHash(root_address, root_hash));
             Ok(nodestore)
         } else {

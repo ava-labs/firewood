@@ -323,12 +323,17 @@ where
 
         // compute the hash of the node and check it against the stored hash
         if hash_check {
-            let hash = Self::compute_node_ethhash(
-                HashedNode::try_from(node.as_ref())
-                    .expect("nodes read from storage never have unhashed children"),
-                &path_prefix,
-                has_peers,
-            );
+            let node = match HashedNode::try_from(node.as_ref()) {
+                Ok(node) => node,
+                Err(error) => {
+                    return Err(vec![CheckerError::UnhashedChild {
+                        address: subtrie_root_address,
+                        index: error.index,
+                        parent,
+                    }]);
+                }
+            };
+            let hash = Self::compute_node_ethhash(node, &path_prefix, has_peers);
             if hash != subtrie_root_hash {
                 return Err(vec![CheckerError::HashMismatch {
                     path: current_path_prefix,

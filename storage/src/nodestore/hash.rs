@@ -135,7 +135,7 @@ where
     ) -> Result<(MaybePersistedNode, HashType), FileIoError> {
         // If this is a branch, find all unhashed children and recursively hash them.
         trace!("hashing {node:?} at {path_prefix:?}");
-        if let Node::Branch(ref mut b) = node {
+        let child_hashes = if let Node::Branch(ref mut b) = node {
             // special case code for ethereum hashes at the account level
             // Both lengths are usize counts of nibbles in a trie path, so their
             // sum cannot overflow on any platform firewood targets.
@@ -152,6 +152,9 @@ where
                 // we were left with one hashed node that must be rehashed
                 if let [(child_idx, (child_node, child_hash))] = &mut hashed[..] {
                     let shared = child_node.as_shared_node(&self)?;
+                    let hashed_node = HashedNode::try_from(shared.as_ref()).map_err(|error| {
+                        FileIoError::from_generic_no_file(error, "rehashing account storage child")
+                    })?;
                     let hash = {
                         let mut path_guard = PathGuard::new(&mut path_prefix);
                         path_guard.0.extend(b.partial_path.0.iter().copied());
@@ -159,25 +162,21 @@ where
                             hash_node_as_storage_trie_root_for_node::<H>(
                                 path_guard.as_components(),
                                 *child_idx,
-                                HashedNode::try_from(shared.as_ref()).expect(
-                                    "nodes reached via as_shared_node are persisted or already hashed",
-                                ),
+                                hashed_node,
                             )
                         } else {
                             path_guard.0.push(child_idx.as_u8());
-                            hash_node::<H>(
-                                HashedNode::try_from(shared.as_ref()).expect(
-                                    "nodes reached via as_shared_node are persisted or already hashed",
-                                ),
-                                &path_guard,
-                            )
+                            hash_node::<H>(hashed_node, &path_guard)
                         }
                     };
                     **child_hash = hash;
                 }
                 // handle the single-child case for an account special below
-                if hashed.is_empty() && unhashed.len() == 1 {
-                    Some(*unhashed.last().expect("only one"))
+                if hashed.is_empty() {
+                    match unhashed.as_slice() {
+                        [only_child] => Some(*only_child),
+                        _ => None,
+                    }
                 } else {
                     None
                 }
@@ -194,35 +193,42 @@ where
             // 5. 1 hashed, >0 unhashed <-- rehash case
             // 6. everything already hashed
 
+            let mut child_hashes = Children::new();
             for (nibble, child) in &mut b.children {
-                // If this is empty or already hashed, we're done
-                // Empty matches None, and non-Node types match Some(None) here, so we want
-                // Some(Some(node))
-                let Some(child_node) = child.as_mut().and_then(|child| child.as_mut_node()) else {
-                    continue;
-                };
-
-                // remove the child from the children array, we will replace it with a hashed variant
-                let child_node = std::mem::take(child_node);
-
-                // Hash this child and update
-                let (child_node, child_hash) = {
-                    // we extend and truncate path_prefix to reduce memory allocations]
-                    let mut child_path_prefix = PathGuard::new(&mut path_prefix);
-                    child_path_prefix.0.extend(b.partial_path.0.iter().copied());
-                    // Under the Ethereum scheme, when an account branch has a
-                    // single unhashed child we don't push the nibble (it is
-                    // folded into the storage-trie-root hash instead).
-                    if !(H::ALGORITHM.is_ethereum() && make_fake_root.is_some()) {
-                        child_path_prefix.0.push(nibble.as_u8());
+                let hash = match child {
+                    None => continue,
+                    Some(Child::AddressWithHash(_, hash) | Child::MaybePersisted(_, hash)) => {
+                        hash.clone()
                     }
-                    self.hash_helper_inner(child_node, child_path_prefix, make_fake_root)?
-                };
+                    Some(Child::Node(child_node)) => {
+                        // remove the child from the children array, we will replace it with a hashed variant
+                        let child_node = std::mem::take(child_node);
 
-                *child = Some(Child::MaybePersisted(child_node, child_hash));
-                trace!("child now {child:?}");
+                        // Hash this child and update
+                        let (child_node, child_hash) = {
+                            // we extend and truncate path_prefix to reduce memory allocations]
+                            let mut child_path_prefix = PathGuard::new(&mut path_prefix);
+                            child_path_prefix.0.extend(b.partial_path.0.iter().copied());
+                            // Under the Ethereum scheme, when an account branch has a
+                            // single unhashed child we don't push the nibble (it is
+                            // folded into the storage-trie-root hash instead).
+                            if !(H::ALGORITHM.is_ethereum() && make_fake_root.is_some()) {
+                                child_path_prefix.0.push(nibble.as_u8());
+                            }
+                            self.hash_helper_inner(child_node, child_path_prefix, make_fake_root)?
+                        };
+
+                        *child = Some(Child::MaybePersisted(child_node, child_hash.clone()));
+                        trace!("child now {child:?}");
+                        child_hash
+                    }
+                };
+                child_hashes[nibble] = Some(hash);
             }
-        }
+            child_hashes
+        } else {
+            Children::new()
+        };
 
         // For account-depth nodes (branch or leaf), persist the computed
         // storageRoot into the node's RLP-encoded value. Ethereum scheme only.
@@ -232,8 +238,10 @@ where
 
         // At this point, we either have a leaf or a branch with all children hashed.
         // if the encoded child hash <32 bytes then we use that RLP
-        let hashed_node = HashedNode::try_from(&node)
-            .expect("the loop above replaced every Child::Node with Child::MaybePersisted");
+        let hashed_node = match (&node, child_hashes) {
+            (Node::Branch(node), child_hashes) => HashedNode::Branch { node, child_hashes },
+            (Node::Leaf(node), _) => HashedNode::from(node),
+        };
         let hash = match fake_root_extra_nibble {
             Some(nibble) if H::ALGORITHM.is_ethereum() => {
                 hash_node_as_storage_trie_root_for_node::<H>(
@@ -273,22 +281,29 @@ where
 
 /// Convenience wrapper around [`hash_node_as_storage_trie_root_parts`] that
 /// extracts that function's parts — the partial path, value digest, and child
-/// hashes — from a [`Node`] directly: a branch contributes its value and its
+/// hashes — from a [`HashedNode`]: a branch contributes its value and its
 /// children's hashes, a leaf contributes its value and no children.
 pub fn hash_node_as_storage_trie_root_for_node<H: HashMode>(
     account_full_prefix: &[PathComponent],
     branch_nibble: PathComponent,
     node: HashedNode<'_>,
 ) -> HashType {
-    let (node, child_hashes) = node.into_parts();
-    let (value_digest, children) = match node {
-        Node::Branch(b) => (b.value.as_deref().map(ValueDigest::Value), child_hashes),
-        Node::Leaf(l) => (Some(ValueDigest::Value(l.value.as_ref())), child_hashes),
+    let (partial_path, value_digest, children) = match node {
+        HashedNode::Branch { node, child_hashes } => (
+            node.partial_path.as_components(),
+            node.value.as_deref().map(ValueDigest::Value),
+            child_hashes,
+        ),
+        HashedNode::Leaf(node) => (
+            node.partial_path.as_components(),
+            Some(ValueDigest::Value(node.value.as_ref())),
+            Children::new(),
+        ),
     };
     hash_node_as_storage_trie_root_parts::<H, _, _>(
         account_full_prefix,
         branch_nibble,
-        node.partial_path().as_components(),
+        partial_path,
         value_digest,
         children,
     )
