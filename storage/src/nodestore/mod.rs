@@ -1737,14 +1737,14 @@ mod tests {
             assert!(root.is_none());
 
             let mut children = Children::new();
-            children[PathComponent::ALL[0x0]] = Some(Child::Node(Node::Leaf(LeafNode {
+            children[PathComponent::ALL[0x0]] = Some(Child::Node(Box::new(Node::Leaf(LeafNode {
                 partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"123")),
                 value: b"\x00123".to_vec().into_boxed_slice(),
-            })));
-            children[PathComponent::ALL[0xF]] = Some(Child::Node(Node::Leaf(LeafNode {
+            }))));
+            children[PathComponent::ALL[0xF]] = Some(Child::Node(Box::new(Node::Leaf(LeafNode {
                 partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"abc")),
                 value: b"\x0Fabc".to_vec().into_boxed_slice(),
-            })));
+            }))));
             let branch1 = Node::Branch(Box::new(BranchNode {
                 partial_path: Path::new(),
                 value: None,
@@ -1752,14 +1752,14 @@ mod tests {
             }));
 
             let mut children = Children::new();
-            children[PathComponent::ALL[0x0]] = Some(Child::Node(Node::Leaf(LeafNode {
+            children[PathComponent::ALL[0x0]] = Some(Child::Node(Box::new(Node::Leaf(LeafNode {
                 partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"123")),
                 value: b"\xF0123".to_vec().into_boxed_slice(),
-            })));
-            children[PathComponent::ALL[0xF]] = Some(Child::Node(Node::Leaf(LeafNode {
+            }))));
+            children[PathComponent::ALL[0xF]] = Some(Child::Node(Box::new(Node::Leaf(LeafNode {
                 partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"abc")),
                 value: b"\xFFabc".to_vec().into_boxed_slice(),
-            })));
+            }))));
             let branch2 = Node::Branch(Box::new(BranchNode {
                 partial_path: Path::new(),
                 value: None,
@@ -1767,8 +1767,8 @@ mod tests {
             }));
 
             let mut children = Children::new();
-            children[PathComponent::ALL[0x0]] = Some(Child::Node(branch1));
-            children[PathComponent::ALL[0xF]] = Some(Child::Node(branch2));
+            children[PathComponent::ALL[0x0]] = Some(Child::Node(Box::new(branch1)));
+            children[PathComponent::ALL[0xF]] = Some(Child::Node(Box::new(branch2)));
 
             *root = Some(Node::Branch(Box::new(BranchNode {
                 partial_path: Path::new(),
@@ -1964,14 +1964,14 @@ mod tests {
         let mut recon = NodeStore::new_empty_recon(Arc::clone(&storage));
 
         let mut children = Children::new();
-        children[PathComponent::ALL[0x0]] = Some(Child::Node(Node::Leaf(LeafNode {
+        children[PathComponent::ALL[0x0]] = Some(Child::Node(Box::new(Node::Leaf(LeafNode {
             partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"abc")),
             value: b"v0".to_vec().into_boxed_slice(),
-        })));
-        children[PathComponent::ALL[0xF]] = Some(Child::Node(Node::Leaf(LeafNode {
+        }))));
+        children[PathComponent::ALL[0xF]] = Some(Child::Node(Box::new(Node::Leaf(LeafNode {
             partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"xyz")),
             value: b"vf".to_vec().into_boxed_slice(),
-        })));
+        }))));
         recon.root_mut().replace(Node::Branch(Box::new(BranchNode {
             partial_path: Path::new(),
             value: None,

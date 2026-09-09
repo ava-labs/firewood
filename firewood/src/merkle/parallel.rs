@@ -143,9 +143,11 @@ impl ParallelMerkle {
                 // Return the child as the new root. Update its partial path to include the index value.
                 let mut child = match child {
                     Child::Node(child_node) => std::mem::take(child_node),
-                    Child::AddressWithHash(addr, _) => nodestore.read_for_update((*addr).into())?,
+                    Child::AddressWithHash(addr, _) => {
+                        Box::new(nodestore.read_for_update((*addr).into())?)
+                    }
                     Child::MaybePersisted(maybe_persisted, _) => {
-                        nodestore.read_for_update(maybe_persisted.clone())?
+                        Box::new(nodestore.read_for_update(maybe_persisted.clone())?)
                     }
                 };
 
@@ -157,7 +159,7 @@ impl ParallelMerkle {
                     once(child_index.as_u8()).chain(child.partial_path().iter().copied()),
                 );
                 child.update_partial_path(partial_path);
-                Ok(Some(child))
+                Ok(Some(*child))
             }
         }
     }
@@ -239,7 +241,7 @@ impl ParallelMerkle {
             .take()
             .map(|child| -> Result<_, FileIoError> {
                 match child {
-                    Child::Node(node) => Ok(node),
+                    Child::Node(node) => Ok(*node),
                     Child::AddressWithHash(address, _) => {
                         // Track deletion of the removed child from the root (if it was persisted).
                         Ok(proposal.read_for_update(address.into())?)
