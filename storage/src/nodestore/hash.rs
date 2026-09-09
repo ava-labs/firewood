@@ -101,14 +101,8 @@ impl HashFrame {
 /// What one step of the walk decided for the top frame.
 enum HashStep {
     /// A child still needs hashing. It has been taken out of its slot and the
-    /// path has been extended to it. `fold` is the fold argument the child is
-    /// hashed with: the parent's `make_fake_root`, which becomes the child's
-    /// `fake_root_extra_nibble`.
-    Descend {
-        nibble: PathComponent,
-        child: Node,
-        fold: Option<PathComponent>,
-    },
+    /// path has been extended to it.
+    Descend { nibble: PathComponent, child: Node },
     /// Every child is hashed, so the node itself can be.
     Finish,
 }
@@ -219,12 +213,11 @@ where
                     }
                     carried = Some(hashed);
                 }
-                HashStep::Descend {
-                    nibble,
-                    child,
-                    fold,
-                } => {
+                HashStep::Descend { nibble, child } => {
                     trace!("hashing {child:?} at {path:?}");
+                    // The child is hashed with this node's fold slot as its
+                    // `fake_root_extra_nibble`.
+                    let fold = frame.make_fake_root;
                     let child_prefix_len = path.0.len();
                     if matches!(child, Node::Leaf(_)) {
                         // A leaf has no children to wait on, so it is hashed here
@@ -280,11 +273,7 @@ where
                 if !(H::ALGORITHM.is_ethereum() && frame.make_fake_root.is_some()) {
                     path.0.push(nibble.as_u8());
                 }
-                return Ok(HashStep::Descend {
-                    nibble,
-                    child,
-                    fold: frame.make_fake_root,
-                });
+                return Ok(HashStep::Descend { nibble, child });
             }
         }
         Ok(HashStep::Finish)
