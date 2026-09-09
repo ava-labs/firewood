@@ -785,7 +785,7 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
 - [x] `scripts/design-doc-age.sh` (run via `just design-age`) lists each design by last
       git-commit date, oldest-first, from git history alone — never a filename's date
       prefix and never an in-doc date.
-- [ ] Sections with seed content (`concepts/`, `integration/`, `operations/`,
+- [x] Sections with seed content (`concepts/`, `integration/`, `operations/`,
       `reference/`) have authored landing pages and linked `SUMMARY.md` entries.
       Not-yet-written sub-pages are omitted from `SUMMARY.md` (added when their content
       lands) rather than shipped as empty `.md` files; no sub-page draft chapters ship
