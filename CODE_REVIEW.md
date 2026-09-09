@@ -16,9 +16,17 @@ providing inline feedback — in addition to general best practices.
   for the rare expression where every rewrite hurts clarity. Test-only arithmetic already
   runs under the dev-profile overflow canary, so a reasoned `#[expect]` there is
   acceptable. See **Lint Suppression Policy** below.
-- **`unwrap()`**: Hard reject outside `#[cfg(test)]` modules. Also reject
-  `#[allow(clippy::unwrap_used)]` and `#[expect(clippy::unwrap_used)]` outside test
-  modules.
+- **`unwrap()`**: Hard reject in production code, along with
+  `#[allow(clippy::unwrap_used)]` and `#[expect(clippy::unwrap_used)]` there. Judge test
+  context by location, not by `cfg(test)` alone: unit-test modules and integration tests
+  under `tests/` are exempt, and so are Criterion benches under `benches/`, which are
+  `harness = false` binaries that never compile with `cfg(test)` set.
+- **`expect()`**: The sanctioned alternative to `unwrap` (see
+  [Style Guide](./CONTRIBUTING.md#style-guide--coding-conventions)), and clippy does not
+  enforce `expect_used`, so review is the only gate. The message must state the invariant
+  that makes the panic unreachable — why reaching it would be a bug — rather than name the
+  operation that failed. Reject `.expect("valid")` and `.expect("should not fail")`. Where
+  the caller can act on the failure, returning a `Result` beats any message.
 - **Lint suppression**: No local `#[allow(...)]` / `#![allow(...)]`. Use a reasoned
   `#[expect(...)]` (or `#[cfg_attr(<cfg>, expect(...))]` for feature-gated lints),
   scoped as tightly as possible. See **Lint Suppression Policy** below for the full rules
@@ -60,7 +68,9 @@ Every suppression must be deliberate, minimally scoped, and self-documenting.
   inside a `mod`, or `#[expect]` on a `mod`) carries a higher bar and **must not** sit on a
   module that has non-test submodules — push it down. Exceptions: a module whose only
   submodule is a `#[cfg(test)] mod tests` (or an all-test subtree) may keep a module-level
-  suppression; and `ffi/src/lib.rs` keeps a single crate-root
+  suppression; benchmark and integration-test crate roots (`benches/*.rs`, `tests/*.rs`)
+  are test code and may carry a crate-root suppression, subject to the same bar on the
+  `reason`; and `ffi/src/lib.rs` keeps a single crate-root
   `#![expect(unsafe_code, ...)]` as a documented FFI-boundary carve-out.
 
 ### `unsafe_code` exemption
@@ -91,7 +101,11 @@ For lints we leave suppressible:
 
 - **Comments and messages**: Every comment, log message, and error string must be
   accurate, useful, and free of tautologies. Log and error messages must be unique enough
-  to locate their source quickly.
+  to locate their source quickly. Challenge text that reads as generated rather than
+  written — padded, hedged, repeated at every call site, or narrating the change that
+  introduced it. See
+  [Comments and documentation](./CONTRIBUTING.md#comments-and-documentation) and
+  [User-facing strings](./CONTRIBUTING.md#user-facing-strings) for the authoring rules.
 - **Atomic operations**: Verify correct memory ordering (`Ordering`) for every load,
   store, and read-modify-write operation.
 - **Locks**: Check for potential deadlocks, excessively long critical sections, and
