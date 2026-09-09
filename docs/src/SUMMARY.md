@@ -9,7 +9,7 @@
 
 # Concepts
 
-- [Concepts & Architecture]()
+- [Concepts & Architecture](concepts/README.md)
 
 # Design Documents
 
