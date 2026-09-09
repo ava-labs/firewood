@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788851659849,
+  "lastUpdate": 1788937871460,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -10574,6 +10574,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 53.89717997809781,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Joachim Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "a0d9869d579764cd6e7cc5d9b5ec716941aac5ff",
+          "message": "docs: require comments to earn their line, and fix stale references (#2240)\n\n## Why this should be merged\n\nComments here increasingly read as generated rather than written —\npadded, repeated at every call site, and narrating the change that\nintroduced them (\"now uses\", \"fixed to handle\") instead of describing\nthe code as it stands. That last habit is the expensive one: the\nnarration is already stale by the time the next reader arrives, and\nnothing flags it. No linter can catch any of this, so review is the only\ngate — which means both the authoring rules and the reviewer's mandate\nto enforce them have to be written down.\n\nReading the three governance docs closely enough to amend them surfaced\na second problem: several of their references no longer resolve. Those\ncorrections ride along rather than waiting for a separate pass.\n\n## How this works\n\nThe authoring rules live in `CONTRIBUTING.md`. The reviewer-facing half\nextends `CODE_REVIEW.md`'s existing **Comments and messages** bullet\ninstead of adding a parallel one, so the checklist does not accumulate\nthe duplication the new rules prohibit.\n\nThe `AGENTS.md` note is deliberately redundant with `CONTRIBUTING.md`\nrather than a bare link. Agents act on that notes list directly and\nfrequently without following links, so the failure modes are named where\nthey will actually be seen. This is the one place the new \"say it once\nand cross-reference\" rule is knowingly broken, and the trade is\nintentional.\n\n## How this was tested\n\n`just ci-lint-markdown` is clean.\n\n## Breaking Changes\n\nNone. Documentation change only.",
+          "timestamp": "2026-09-08T18:45:01Z",
+          "url": "https://github.com/ava-labs/firewood/commit/a0d9869d579764cd6e7cc5d9b5ec716941aac5ff"
+        },
+        "date": 1788937870627,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 165.8065915592098,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6031.1233141952525,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 115.27699002399784,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5828.194552599505,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 84.30992522309411,
             "unit": "block_accept_ms/ggas"
           }
         ]
