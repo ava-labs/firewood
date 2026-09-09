@@ -422,12 +422,15 @@ impl<H: HashMode> RevisionManager<H> {
         // The `view()` method relies on this ordering - it checks `proposals` first,
         // then `by_hash`, ensuring the revision is always findable during the transition.
         revisions.push_back(committed.clone());
-        if let Some(hash) = committed.root_hash().or_else(H::default_root_hash) {
+        let root = committed.root_hash();
+        if let Some(hash) = root.clone().or_else(H::default_root_hash) {
             // BLOCKING: write lock on `by_hash` (still inside the revisions
             // write lock). Same nested ordering as the reap path above; must
             // not be inverted.
             self.by_hash.write().insert(hash, committed);
         }
+
+        crate::membership::on_commit(root.as_ref());
 
         Ok(new_id)
     }

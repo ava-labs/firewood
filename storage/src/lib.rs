@@ -41,6 +41,10 @@ mod trie_hash;
 mod tries;
 mod u4;
 
+/// Mutable, persistent membership filter for the read path.
+#[cfg(feature = "filter")]
+pub mod filter;
+
 /// Logger module for handling logging functionality
 pub mod logger;
 

@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use firewood::api;
 
+#[cfg(feature = "filter")]
+pub mod build_filter;
 pub mod check;
 pub mod create;
 pub mod delete;
@@ -96,6 +98,9 @@ enum Commands {
     Check(check::Options),
     /// Replay recorded operations from a log file
     Replay(replay::Options),
+    #[cfg(feature = "filter")]
+    /// Build a membership-filter checkpoint from the latest revision
+    BuildFilter(build_filter::Options),
     #[cfg(feature = "launch")]
     /// Launch AWS instance for benchmarking
     Launch(launch::Options),
@@ -119,6 +124,8 @@ fn main() -> Result<(), api::Error> {
         Commands::Graph(opts) => graph::run(opts),
         Commands::Check(opts) => check::run(opts),
         Commands::Replay(opts) => replay::run(opts),
+        #[cfg(feature = "filter")]
+        Commands::BuildFilter(opts) => build_filter::run(opts),
         #[cfg(feature = "launch")]
         Commands::Launch(opts) => launch::run(opts),
     }

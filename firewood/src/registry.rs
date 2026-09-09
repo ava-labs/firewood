@@ -32,6 +32,8 @@ firewood_metrics::define_metrics! {
         PROPOSAL_COMMITS_TRIVIAL = "firewood_proposal_commits_trivial_total",
         /// Number of root store persist operations
         PERSIST_ROOT_STORE     = "firewood_persist_root_store_total",
+        /// Membership-filter verdicts and maintenance events, labeled by `verdict`
+        FILTER                 = "firewood_membership_filter_total",
     },
     gauges: {
         /// Build information; constant 1 with `version` and `git_describe` labels
@@ -48,6 +50,10 @@ firewood_metrics::define_metrics! {
         PERMITS_AVAILABLE      = "firewood_persist_permits_available",
         /// Maximum number of persist permits
         MAX_PERMITS            = "firewood_persist_permits_limit",
+        /// Membership-filter fill ratio (fraction of nonzero counters)
+        FILTER_FILL            = "firewood_membership_filter_fill_ratio",
+        /// Membership-filter counters pinned at their maximum
+        FILTER_SATURATED       = "firewood_membership_filter_saturated_counters",
     },
     histograms: {
         /// End-to-end proposal creation duration including batch apply and hashing
