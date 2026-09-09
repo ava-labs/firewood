@@ -615,7 +615,8 @@ struct HashFrame<'b> {
     /// `ethhash`. Descending into that child folds it as a storage-trie root.
     single_storage_child: Option<PathComponent>,
     child_hashes: Children<Option<HashType>>,
-    cursor: u8,
+    /// The next child slot to examine.
+    cursor: usize,
     pending: Option<PathComponent>,
 }
 
@@ -676,7 +677,7 @@ fn hash_node_with_proofs<'b, H: HashMode, R: NodeReader>(
     // A plain Vec, unlike the live hashing walk's inline-capacity frame stack.
     // This walk runs only during proof verification, where one allocation per
     // call does not matter.
-    let mut stack = vec![new_hash_frame::<H>(
+    let mut frames = vec![new_hash_frame::<H>(
         branch,
         path_prefix,
         hash_as,
@@ -686,7 +687,9 @@ fn hash_node_with_proofs<'b, H: HashMode, R: NodeReader>(
     let mut carried: Option<HashType> = None;
 
     loop {
-        let frame = stack.last_mut().expect("the stack is never empty here");
+        let frame = frames
+            .last_mut()
+            .expect("proof hash walk: no frame to resume");
 
         // Install the hash produced by the child frame that just finished.
         if let Some(slot) = frame.pending.take() {
@@ -703,12 +706,9 @@ fn hash_node_with_proofs<'b, H: HashMode, R: NodeReader>(
             H::ALGORITHM.is_ethereum() && frame.full_key.len() == ACCOUNT_DEPTH_NIBBLES;
         let mut descend_into: Option<(PathComponent, &'b Node)> = None;
 
-        while frame.cursor < BranchNode::MAX_CHILDREN as u8 {
-            let nibble = PathComponent(U4::new_masked(frame.cursor));
-            debug_assert!(
-                frame.cursor < BranchNode::MAX_CHILDREN as u8,
-                "the loop guard keeps the increment from wrapping"
-            );
+        while let Some(&nibble) = PathComponent::ALL.get(frame.cursor) {
+            // `get` returned `Some`, so the cursor is below the slot count and
+            // the increment cannot wrap.
             frame.cursor = frame.cursor.wrapping_add(1);
 
             let Some(child) = branch.children[nibble].as_ref() else {
@@ -751,9 +751,9 @@ fn hash_node_with_proofs<'b, H: HashMode, R: NodeReader>(
 
         let Some((nibble, child_node)) = descend_into else {
             // Every child is accounted for, so this frame can be hashed.
-            let frame = stack.pop().expect("the stack is never empty here");
+            let frame = frames.pop().expect("proof hash walk: no frame to finish");
             let hash = finish_hash_frame::<H>(frame);
-            if stack.is_empty() {
+            if frames.is_empty() {
                 return Ok(hash);
             }
             carried = Some(hash);
@@ -782,7 +782,7 @@ fn hash_node_with_proofs<'b, H: HashMode, R: NodeReader>(
                     proof_nodes,
                     outside_children,
                 );
-                stack.push(child_frame);
+                frames.push(child_frame);
             }
         }
     }
