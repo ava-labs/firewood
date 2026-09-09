@@ -21,26 +21,28 @@ use smallvec::SmallVec;
 
 use super::NodeReader;
 
-/// Hashes a finished frame and wraps its node for the parent's child slot.
-/// `path` must already be truncated to the node's own prefix.
-fn finish_hash_frame<H: HashMode>(
-    mut frame: HashFrame,
+/// Hashes a node whose children are all hashed and wraps it as a
+/// `MaybePersistedNode`. `fake_root_extra_nibble` is the fold argument the node
+/// is hashed with. `path` must already be truncated to the node's own prefix.
+fn hash_finished_node<H: HashMode>(
+    mut node: Node,
+    fake_root_extra_nibble: Option<PathComponent>,
     path: &Path,
 ) -> (MaybePersistedNode, HashType) {
     // For account-depth nodes (branch or leaf), persist the computed storageRoot
     // into the node's RLP-encoded value. Ethereum scheme only.
     if H::ALGORITHM.is_ethereum() {
-        update_account_storage_root(&mut frame.node, path);
+        update_account_storage_root(&mut node, path);
     }
 
-    let hash = match frame.fake_root_extra_nibble {
+    let hash = match fake_root_extra_nibble {
         Some(nibble) if H::ALGORITHM.is_ethereum() => {
-            hash_node_as_storage_trie_root_for_node::<H>(path.as_components(), nibble, &frame.node)
+            hash_node_as_storage_trie_root_for_node::<H>(path.as_components(), nibble, &node)
         }
-        _ => hash_node::<H>(&frame.node, path),
+        _ => hash_node::<H>(&node, path),
     };
 
-    (SharedNode::new(frame.node).into(), hash)
+    (SharedNode::new(node).into(), hash)
 }
 
 /// One node part-way through hashing.
@@ -51,8 +53,7 @@ struct HashFrame {
     /// The length of the shared path buffer at this node's own prefix. The
     /// buffer is truncated back to it before the node is hashed.
     prefix_len: usize,
-    /// Whether `prepare_account_branch` has run for this frame. It runs once, on
-    /// the frame's first visit, before any child is descended into.
+    /// Whether `prepare_account_branch` has run for this frame.
     prepared: bool,
     /// The next child slot to examine.
     cursor: usize,
@@ -84,6 +85,21 @@ impl HashFrame {
             fake_root_extra_nibble,
         }
     }
+}
+
+/// What one step of the walk decided for the top frame.
+enum HashStep {
+    /// A child still needs hashing. It has been taken out of its slot and the
+    /// path has been extended to it. `fold` is the fold argument the child is
+    /// hashed with: the parent's `make_fake_root`, which becomes the child's
+    /// `fake_root_extra_nibble`.
+    Descend {
+        nibble: PathComponent,
+        child: Node,
+        fold: Option<PathComponent>,
+    },
+    /// Every child is hashed, so the node itself can be.
+    Finish,
 }
 
 /// Classified children for ethereum hash processing
@@ -127,15 +143,22 @@ where
         )
     }
 
-    /// Hashes the given `node` and the subtree rooted at it. The `root_path` should be empty
-    /// if this is called from the root, or it should include the partial path if this is called
-    /// on a subtrie. Returns the hashed node and its hash.
+    /// Hashes the given `node` and the subtree rooted at it. `path` is the prefix
+    /// of `node`: empty when `node` is the trie root, otherwise the nibbles that
+    /// lead to it. Returns the hashed node and its hash.
     ///
     /// The walk is iterative because trie depth follows key length, and a peer
-    /// controls key length during proof verification. Frames live in a growable
-    /// stack, so depth costs heap memory rather than call-stack depth. One path
-    /// buffer is shared by every frame. It is extended on descent and truncated
-    /// back to a frame's own prefix before that frame is hashed.
+    /// controls key length during proof verification. Frames live in a stack with
+    /// inline room for a realistic trie that spills to the heap beyond it, so
+    /// depth never costs call-stack space. One path buffer is shared by every
+    /// frame. It is extended on descent and truncated back to a frame's own
+    /// prefix before that frame is hashed.
+    ///
+    /// This function owns the frame stack and the path buffer. `hash_step` does
+    /// one node's worth of work on the top frame and reports whether to descend
+    /// into a child or finish the node. On a descent this function pushes the
+    /// child's frame, or hashes a leaf child in place. On a finish it pops the
+    /// frame and installs the node's hash in the parent's slot.
     ///
     /// # Errors
     ///
@@ -143,25 +166,27 @@ where
     ///
     /// # Panics
     ///
-    /// Panics if the frame stack is empty while the walk is still running, which
-    /// cannot happen: a frame is only popped when it is finished, and the walk
-    /// returns as soon as popping empties the stack.
+    /// Panics only if an invariant of the walk breaks: the frame stack is empty
+    /// while the walk is still running, or the top frame is waiting on a child
+    /// whose hash has not been produced. Neither can happen. A frame is only
+    /// popped when it is finished, the walk returns as soon as popping empties
+    /// the stack, and a child frame is pushed only after its parent has recorded
+    /// the slot that waits on it.
     pub fn hash_helper(
         &self,
         node: Node,
         mut path: Path,
     ) -> Result<(MaybePersistedNode, HashType), FileIoError> {
-        let prefix_len = path.0.len();
         let mut frames: SmallVec<[HashFrame; FRAME_STACK_INLINE_CAPACITY]> = SmallVec::new();
         trace!("hashing {node:?} at {path:?}");
-        frames.push(HashFrame::new(node, prefix_len, None));
+        frames.push(HashFrame::new(node, path.0.len(), None));
         let mut carried: Option<(MaybePersistedNode, HashType)> = None;
 
         loop {
             let frame = frames.last_mut().expect("hash walk: no frame to resume");
 
-            // Install the hash produced by the child frame that just finished, and
-            // restore the path to this node's own prefix.
+            // A child frame just finished. Install its hash and restore the path
+            // to this node's own prefix.
             if let Some(slot) = frame.pending.take() {
                 let (child_node, child_hash) =
                     carried.take().expect("a finished frame yields a hash");
@@ -172,84 +197,97 @@ where
                 path.0.truncate(frame.prefix_len);
             }
 
-            if !frame.prepared {
-                frame.prepared = true;
-                self.prepare_account_branch(frame, &mut path)?;
-            }
-
-            // Find the next child that still needs hashing.
-            let mut descend: Option<(PathComponent, Node)> = None;
-            if let Node::Branch(ref mut b) = frame.node {
-                while let Some(&nibble) = PathComponent::ALL.get(frame.cursor) {
-                    // `get` returned `Some`, so the cursor is below the slot count
-                    // and the increment cannot wrap.
-                    frame.cursor = frame.cursor.wrapping_add(1);
-                    // Only an unhashed child, `Some(Child::Node(_))`, descends.
-                    // Empty and already-hashed slots are skipped.
-                    let Some(child_node) = b.children[nibble].as_mut().and_then(Child::as_mut_node)
-                    else {
-                        continue;
-                    };
-                    // Take the child out. A hashed variant replaces it on the way back.
-                    descend = Some((nibble, std::mem::take(child_node)));
-                    break;
+            match self.hash_step(frame, &mut path)? {
+                HashStep::Finish => {
+                    let frame = frames.pop().expect("hash walk: no frame to finish");
+                    path.0.truncate(frame.prefix_len);
+                    let hashed =
+                        hash_finished_node::<H>(frame.node, frame.fake_root_extra_nibble, &path);
+                    if frames.is_empty() {
+                        return Ok(hashed);
+                    }
+                    carried = Some(hashed);
+                }
+                HashStep::Descend {
+                    nibble,
+                    child,
+                    fold,
+                } => {
+                    trace!("hashing {child:?} at {path:?}");
+                    let child_prefix_len = path.0.len();
+                    if matches!(child, Node::Leaf(_)) {
+                        // A leaf has no children to wait on, so it is hashed here
+                        // rather than given a frame. Leaves dominate a realistic
+                        // trie, so this keeps most nodes off the stack entirely.
+                        let (hashed, hash) = hash_finished_node::<H>(child, fold, &path);
+                        path.0.truncate(frame.prefix_len);
+                        if let Node::Branch(ref mut b) = frame.node {
+                            b.children[nibble] = Some(Child::MaybePersisted(hashed, hash));
+                            trace!("child now {:?}", b.children[nibble]);
+                        }
+                    } else {
+                        frame.pending = Some(nibble);
+                        frames.push(HashFrame::new(child, child_prefix_len, fold));
+                    }
                 }
             }
-
-            let Some((nibble, child_node)) = descend else {
-                // Every child is hashed, so this node can be hashed.
-                let frame = frames.pop().expect("hash walk: no frame to finish");
-                path.0.truncate(frame.prefix_len);
-                let hashed = finish_hash_frame::<H>(frame, &path);
-                if frames.is_empty() {
-                    return Ok(hashed);
-                }
-                carried = Some(hashed);
-                continue;
-            };
-
-            // Extend the path to the child. A folded child's slot nibble is not
-            // pushed. `finish_hash_frame` prepends it to the child's partial path
-            // instead, through `fake_root_extra_nibble`.
-            if let Node::Branch(ref b) = frame.node {
-                path.0.extend(b.partial_path.0.iter().copied());
-            }
-            let inherited = frame.make_fake_root;
-            if !(H::ALGORITHM.is_ethereum() && inherited.is_some()) {
-                path.0.push(nibble.as_u8());
-            }
-
-            let child_prefix_len = path.0.len();
-
-            // A leaf has no children to wait on, so it is hashed here rather than
-            // costing a frame. Leaves dominate a realistic trie, so this keeps most
-            // nodes off the stack entirely.
-            if matches!(child_node, Node::Leaf(_)) {
-                trace!("hashing {child_node:?} at {path:?}");
-                let leaf = HashFrame::new(child_node, child_prefix_len, inherited);
-                let (hashed, hash) = finish_hash_frame::<H>(leaf, &path);
-                path.0.truncate(frame.prefix_len);
-                if let Node::Branch(ref mut b) = frame.node {
-                    b.children[nibble] = Some(Child::MaybePersisted(hashed, hash));
-                    trace!("child now {:?}", b.children[nibble]);
-                }
-                continue;
-            }
-
-            frame.pending = Some(nibble);
-            trace!("hashing {child_node:?} at {path:?}");
-            frames.push(HashFrame::new(child_node, child_prefix_len, inherited));
         }
     }
 
+    /// One node's worth of the walk, on the top frame.
+    ///
+    /// Prepares the node, then looks for the next child that still needs
+    /// hashing. If there is one, it is taken out of its slot, the
+    /// path is extended to it, and the step reports where to descend. If there is
+    /// none, every child is hashed and the node itself can be.
+    ///
+    /// # Errors
+    ///
+    /// Can return a `FileIoError` if preparing an account branch has to read a
+    /// child that it cannot.
+    fn hash_step(&self, frame: &mut HashFrame, path: &mut Path) -> Result<HashStep, FileIoError> {
+        if !frame.prepared {
+            frame.prepared = true;
+            self.prepare_account_branch(frame, path)?;
+        }
+        if let Node::Branch(ref mut b) = frame.node {
+            while let Some(&nibble) = PathComponent::ALL.get(frame.cursor) {
+                // `get` returned `Some`, so the cursor is below the slot count and
+                // the increment cannot wrap.
+                frame.cursor = frame.cursor.wrapping_add(1);
+                // Only an unhashed child, `Some(Child::Node(_))`, descends. Empty
+                // and already-hashed slots are skipped.
+                let Some(child) = b.children[nibble].as_mut().and_then(Child::as_mut_node) else {
+                    continue;
+                };
+                // Take the child out. A hashed variant replaces it on the way back.
+                let child = std::mem::take(child);
+                // Extend the path to the child. A folded child's slot nibble is
+                // not pushed. `hash_finished_node` prepends it to the child's
+                // partial path instead, through `fake_root_extra_nibble`.
+                path.0.extend(b.partial_path.0.iter().copied());
+                if !(H::ALGORITHM.is_ethereum() && frame.make_fake_root.is_some()) {
+                    path.0.push(nibble.as_u8());
+                }
+                return Ok(HashStep::Descend {
+                    nibble,
+                    child,
+                    fold: frame.make_fake_root,
+                });
+            }
+        }
+        Ok(HashStep::Finish)
+    }
+
     /// Runs once per branch frame, before any child is descended into. At an
-    /// account branch it rehashes a lone already-hashed child and records a lone
-    /// unhashed child for the fold.
+    /// account branch it rehashes the child when exactly one child is already
+    /// hashed, and records the account's only child for the fold when that child
+    /// is unhashed.
     ///
     /// An account branch left with a single already-hashed child must have that
     /// child rehashed, because whether it folds as the account's storage-trie root
-    /// depends on how many children the account has. A lone unhashed child is
-    /// recorded so the walk folds it when it descends.
+    /// depends on how many children the account has. An only child that is still
+    /// unhashed is recorded so the walk folds it when it descends.
     ///
     /// Does nothing unless the scheme is Ethereum, which is the only scheme with an
     /// account-branch fold.
