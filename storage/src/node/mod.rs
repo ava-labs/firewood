@@ -62,10 +62,11 @@ struct CloneFrame<'a> {
 ///
 /// A frame is pushed for each branch on the path down from the root, so the
 /// stack is as deep as the trie's branch depth. That depth is about seven for
-/// a million uniformly distributed keys, so eight frames hold a whole walk.
+/// a million uniformly distributed keys. Under `ethhash` a storage write also
+/// descends the storage trie below the account, so sixteen frames cover both.
 /// Deeper tries spill the frames to the heap, so depth can never overflow the
 /// call stack.
-pub(crate) const FRAME_STACK_INLINE_CAPACITY: usize = 8;
+pub(crate) const FRAME_STACK_INLINE_CAPACITY: usize = 16;
 
 impl<'a> CloneFrame<'a> {
     /// Copies everything about `src` that does not recurse, and records which of
