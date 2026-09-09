@@ -4,8 +4,8 @@
 
 # Guides
 
-- [Getting Started]()
-  - [Development Environment]()
+- [Getting Started](getting-started/README.md)
+  - [Development Environment](getting-started/dev-environment.md)
 
 # Concepts
 
