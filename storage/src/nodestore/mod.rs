@@ -1581,6 +1581,7 @@ mod tests {
     use nonzero_ext::nonzero;
     use primitives::area_size_iter;
     use std::error::Error;
+    use test_case::test_case;
 
     #[test]
     fn area_sizes_aligned() {
@@ -1617,12 +1618,13 @@ mod tests {
         assert!(AreaIndex::from_size(AreaIndex::MAX_AREA_SIZE + 1).is_err());
     }
 
-    #[test]
-    fn test_reparent() {
+    #[test_case(DeletedNodeTracking::Enabled; "enabled")]
+    #[test_case(DeletedNodeTracking::Disabled; "disabled")]
+    fn test_reparent(deleted_node_tracking: DeletedNodeTracking) {
         // create an empty base revision
         let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
         let base: NodeStore<Committed, _, DefaultHashMode> =
-            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
+            NodeStore::new_empty_committed(memstore.into(), deleted_node_tracking);
 
         // create an empty r1, check that it's parent is the empty committed version
         let r1 = NodeStore::new(&base).unwrap();
@@ -1656,12 +1658,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_slow_giant_node() {
+    #[test_case(DeletedNodeTracking::Enabled; "enabled")]
+    #[test_case(DeletedNodeTracking::Disabled; "disabled")]
+    fn test_slow_giant_node(deleted_node_tracking: DeletedNodeTracking) {
         let memstore = Arc::new(MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM));
         let mut header = NodeStoreHeader::new(DefaultHashMode::ALGORITHM);
         let empty_root: NodeStore<Committed, _, DefaultHashMode> =
-            NodeStore::new_empty_committed(Arc::clone(&memstore), DeletedNodeTracking::Enabled);
+            NodeStore::new_empty_committed(Arc::clone(&memstore), deleted_node_tracking);
 
         let mut node_store = NodeStore::new(&empty_root).unwrap();
 
@@ -1712,8 +1715,11 @@ mod tests {
     /// The fix calls `allocate_at` immediately after allocating storage for a node
     /// but before adding it to the batch, ensuring children have addresses when
     /// their parents are serialized.
-    #[test]
-    fn persist_branch_with_children() -> Result<(), Box<dyn Error>> {
+    #[test_case(DeletedNodeTracking::Enabled; "enabled")]
+    #[test_case(DeletedNodeTracking::Disabled; "disabled")]
+    fn persist_branch_with_children(
+        deleted_node_tracking: DeletedNodeTracking,
+    ) -> Result<(), Box<dyn Error>> {
         let tmpdir = tempfile::tempdir()?;
         let dbfile = tmpdir.path().join("nodestore_branch_persist_test.db");
 
@@ -1728,7 +1734,7 @@ mod tests {
         )?);
         let mut header = NodeStoreHeader::new(DefaultHashMode::ALGORITHM);
         let nodestore: NodeStore<Committed, _, DefaultHashMode> =
-            NodeStore::open(&header, storage, DeletedNodeTracking::Enabled)?;
+            NodeStore::open(&header, storage, deleted_node_tracking)?;
 
         let mut proposal = NodeStore::new(&nodestore)?;
 
@@ -1792,8 +1798,9 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn with_root_success() -> Result<(), Box<dyn Error>> {
+    #[test_case(DeletedNodeTracking::Enabled; "enabled")]
+    #[test_case(DeletedNodeTracking::Disabled; "disabled")]
+    fn with_root_success(deleted_node_tracking: DeletedNodeTracking) -> Result<(), Box<dyn Error>> {
         let tmpdir = tempfile::tempdir()?;
         let dbfile = tmpdir.path().join("with_root_test.db");
 
@@ -1808,7 +1815,7 @@ mod tests {
         )?);
         let mut header = NodeStoreHeader::new(DefaultHashMode::ALGORITHM);
         let base: NodeStore<Committed, _, DefaultHashMode> =
-            NodeStore::open(&header, Arc::clone(&storage), DeletedNodeTracking::Enabled)?;
+            NodeStore::open(&header, Arc::clone(&storage), deleted_node_tracking)?;
 
         // Create a proposal with a leaf node and persist it
         let mut proposal = NodeStore::new(&base)?;
@@ -1829,7 +1836,7 @@ mod tests {
             root_hash.clone(),
             root_address,
             storage,
-            DeletedNodeTracking::Enabled,
+            deleted_node_tracking,
         )?;
         assert_eq!(restored.root_hash(), Some(root_hash.into_triehash()));
         assert_eq!(restored.root_address(), Some(root_address));
@@ -1837,8 +1844,11 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn with_root_wrong_hash() -> Result<(), Box<dyn Error>> {
+    #[test_case(DeletedNodeTracking::Enabled; "enabled")]
+    #[test_case(DeletedNodeTracking::Disabled; "disabled")]
+    fn with_root_wrong_hash(
+        deleted_node_tracking: DeletedNodeTracking,
+    ) -> Result<(), Box<dyn Error>> {
         let tmpdir = tempfile::tempdir()?;
         let dbfile = tmpdir.path().join("with_root_bad_hash_test.db");
 
@@ -1853,7 +1863,7 @@ mod tests {
         )?);
         let mut header = NodeStoreHeader::new(DefaultHashMode::ALGORITHM);
         let base: NodeStore<Committed, _, DefaultHashMode> =
-            NodeStore::open(&header, Arc::clone(&storage), DeletedNodeTracking::Enabled)?;
+            NodeStore::open(&header, Arc::clone(&storage), deleted_node_tracking)?;
 
         // Create a proposal with a leaf node and persist it
         let mut proposal = NodeStore::new(&base)?;
@@ -1873,7 +1883,7 @@ mod tests {
             bad_hash,
             root_address,
             storage,
-            DeletedNodeTracking::Enabled,
+            deleted_node_tracking,
         );
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -2009,15 +2019,16 @@ mod tests {
         }
     }
 
-    #[test]
-    fn reconstructed_pins_committed_parent() {
+    #[test_case(DeletedNodeTracking::Enabled; "enabled")]
+    #[test_case(DeletedNodeTracking::Disabled; "disabled")]
+    fn reconstructed_pins_committed_parent(deleted_node_tracking: DeletedNodeTracking) {
         // A Reconstructed must hold a strong Arc to its committed parent so
         // the RevisionManager cannot reap the revision (and free its on-disk
         // nodes) while a derived view is still alive.
         let storage = Arc::new(MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM));
         let committed = Arc::new(NodeStore::new_empty_committed(
             Arc::clone(&storage),
-            DeletedNodeTracking::Enabled,
+            deleted_node_tracking,
         ));
         assert_eq!(Arc::strong_count(&committed), 1);
 
