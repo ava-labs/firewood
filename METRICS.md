@@ -11,8 +11,13 @@ use base-unit suffixes (`_seconds`, `_bytes`). Gauges carry no `_total` suffix.
 ### Rust applications
 
 Metrics are automatically recorded as instrumented code paths execute. Wire up
-any `metrics`-compatible recorder before starting the database. Example using
-the Prometheus exporter:
+any `metrics`-compatible recorder before starting the database. Which recorder
+you want depends on how the metrics leave the process.
+
+To expose a Prometheus scrape endpoint, use `metrics-exporter-prometheus`.
+`install` both registers the global recorder and spawns the exporter, so it
+needs one of the crate's exporter features (`http-listener` or `push-gateway`)
+and creates a Tokio runtime if it is not already called from within one:
 
 ```rust
 use metrics_exporter_prometheus::PrometheusBuilder;
@@ -22,9 +27,33 @@ PrometheusBuilder::new()
     .expect("failed to install Prometheus recorder");
 ```
 
-Pass the `HistogramMetricConfig` values returned by each crate's `registry::register()`
-to `set_buckets_for_metric` / `set_native_histogram_for_metric` so that the exporter
-uses the correct bucket strategy for each histogram.
+To consume metrics as structured Rust values rather than a rendered text
+payload, use `metrics-collector-prometheus`. It installs a recorder and nothing
+else — no exporter, no listener, no runtime — and `CollectorHandle::collect`
+returns a `MetricSnapshot` of typed counters, gauges, summaries, and classic and
+native histograms. This is what `firewood-ffi` uses so that the Go `Gatherer`
+can build `dto.MetricFamily` values without a parse round-trip:
+
+```rust
+use metrics_collector_prometheus::PrometheusCollectorBuilder;
+
+let handle = PrometheusCollectorBuilder::new()
+    .install()
+    .expect("failed to install Prometheus collector");
+
+let snapshot = handle.collect();
+```
+
+Neither recorder drives upkeep on its own. `collect` performs it as a side
+effect, so a process that collects regularly needs nothing further; a process
+that collects rarely should call `CollectorHandle::run_upkeep` on its own
+schedule, or `spawn_upkeep` for a dedicated thread, to keep rolling-summary data
+bounded.
+
+Both builders accept the `HistogramMetricConfig` values returned by each crate's
+`registry::register()`. Pass them to `set_buckets_for_metric` /
+`set_native_histogram_for_metric` so that each histogram uses the correct bucket
+strategy.
 
 ### Go / FFI applications
 
