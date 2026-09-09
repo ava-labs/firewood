@@ -31,6 +31,7 @@ location:
 | --- | --- | --- |
 | [On-disk format and addressing](2024-08-13-on-disk-format-and-addressing.md) | 2024-08-13 | active |
 | [mdBook documentation site](2026-06-17-mdbook-documentation-site.md) | 2026-06-17 | active |
+| [Development container](2026-06-22-devcontainer.md) | 2026-06-22 | active |
 
 ## Designs still to be written
 
