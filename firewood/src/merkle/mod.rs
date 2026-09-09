@@ -800,7 +800,7 @@ fn build_branch_parts<'b, H: HashMode, R: NodeReader>(
 /// An "effective" child is either an in-range branch child or an
 /// out-of-range child carried by the proof node — together they reflect
 /// the true on-disk shape. Proof verification only; live hashing has its
-/// own detection in `hash_helper_inner`. Without `ethhash` there is no
+/// own detection in `prepare_account_branch`. Without `ethhash` there is no
 /// account-branch fold, so this always returns `None`.
 fn single_effective_account_child(
     full_key: &[PathComponent],
