@@ -62,10 +62,11 @@ struct CloneFrame<'a> {
 ///
 /// A frame is pushed for each branch on the path down from the root, so the
 /// stack is as deep as the trie's branch depth. That depth is about seven for
-/// a million uniformly distributed keys, so eight frames hold a whole walk.
+/// a million uniformly distributed keys. Under `ethhash` a storage write also
+/// descends the storage trie below the account, so sixteen frames cover both.
 /// Deeper tries spill the frames to the heap, so depth can never overflow the
 /// call stack.
-pub(crate) const FRAME_STACK_INLINE_CAPACITY: usize = 8;
+pub(crate) const FRAME_STACK_INLINE_CAPACITY: usize = 16;
 
 impl<'a> CloneFrame<'a> {
     /// Copies everything about `src` that does not recurse, and records which of
@@ -111,12 +112,12 @@ impl<'a> CloneFrame<'a> {
 /// enough for that to exhaust the stack, which aborts the process rather than
 /// returning an error. Frames live on the heap instead, so depth costs memory.
 fn clone_branch(root: &BranchNode) -> Box<BranchNode> {
-    let mut stack: SmallVec<[CloneFrame<'_>; FRAME_STACK_INLINE_CAPACITY]> = SmallVec::new();
-    stack.push(CloneFrame::new(root));
+    let mut frames: SmallVec<[CloneFrame<'_>; FRAME_STACK_INLINE_CAPACITY]> = SmallVec::new();
+    frames.push(CloneFrame::new(root));
     let mut carried: Option<Box<BranchNode>> = None;
 
     loop {
-        let frame = stack.last_mut().expect("the stack is never empty here");
+        let frame = frames.last_mut().expect("clone walk: no frame to resume");
 
         // Install the copy produced by the frame that just finished.
         if let Some(slot) = frame.pending.take() {
@@ -126,8 +127,8 @@ fn clone_branch(root: &BranchNode) -> Box<BranchNode> {
 
         if frame.remaining_branches == 0 {
             // Every child is copied, so this frame is done.
-            let frame = stack.pop().expect("the stack is never empty here");
-            if stack.is_empty() {
+            let frame = frames.pop().expect("clone walk: no frame to finish");
+            if frames.is_empty() {
                 return frame.dst;
             }
             carried = Some(frame.dst);
@@ -145,15 +146,15 @@ fn clone_branch(root: &BranchNode) -> Box<BranchNode> {
             u8::try_from(index).expect("a non-zero u16 has at most 15 trailing zeros"),
         ));
 
-        // `src` is borrowed from the original tree, not from `stack`, so reading it
-        // here leaves the stack free to grow below.
+        // `src` is borrowed from the original tree, not from `frames`, so reading it
+        // here leaves the frame stack free to grow below.
         let src: &BranchNode = frame.src;
         frame.pending = Some(nibble);
 
         let Some(Child::Node(Node::Branch(child_src))) = src.children[nibble].as_ref() else {
             unreachable!("remaining_branches only records slots holding a branch")
         };
-        stack.push(CloneFrame::new(child_src));
+        frames.push(CloneFrame::new(child_src));
     }
 }
 
