@@ -736,8 +736,8 @@ mod test {
     };
     use crate::nodestore::primitives::area_size_iter;
     use crate::{
-        BranchNode, Child, Children, DefaultHashMode, FreeListParent, HashMode, ImmutableProposal,
-        LeafNode, NodeStore, Path, PathComponent, area_index, hash_node,
+        BranchNode, Child, Children, DefaultHashMode, FreeListParent, ImmutableProposal, LeafNode,
+        NodeStore, Path, PathComponent, area_index, hash_node,
     };
     use std::sync::Arc;
 
@@ -975,7 +975,7 @@ mod test {
     // This test creates a simple trie and checks that the checker traverses it correctly.
     // We use primitive calls here to do a low-level check.
     fn checker_traverse_correct_trie() {
-        let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
+        let memstore = MemStore::new(Vec::new());
         let nodestore =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
@@ -1000,7 +1000,7 @@ mod test {
     #[test]
     // This test permutes the simple trie with a wrong hash and checks that the checker detects it.
     fn checker_traverse_trie_with_wrong_hash() {
-        let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
+        let memstore = MemStore::new(Vec::new());
         let nodestore =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
@@ -1075,7 +1075,7 @@ mod test {
     fn traverse_correct_freelist() {
         let rng = crate::SeededRng::from_env_or_random();
 
-        let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
+        let memstore = MemStore::new(Vec::new());
         let nodestore =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
@@ -1122,7 +1122,7 @@ mod test {
 
     #[test]
     fn traverse_freelist_should_skip_offspring_of_incorrect_areas() {
-        let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
+        let memstore = MemStore::new(Vec::new());
         let nodestore =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
         let TestFreelist {
@@ -1144,7 +1144,7 @@ mod test {
 
     #[test]
     fn fix_freelist_with_overlap() {
-        let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
+        let memstore = MemStore::new(Vec::new());
         let nodestore =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
         let TestFreelist {
@@ -1189,7 +1189,7 @@ mod test {
 
         let mut rng = crate::SeededRng::from_env_or_random();
 
-        let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
+        let memstore = MemStore::new(Vec::new());
         let nodestore =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
@@ -1247,7 +1247,7 @@ mod test {
     // When traversing it should break consecutive areas.
     #[expect(clippy::arithmetic_side_effects)]
     fn split_range_of_zeros_into_leaked_areas() {
-        let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
+        let memstore = MemStore::new(Vec::new());
         let nodestore =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
@@ -1299,7 +1299,7 @@ mod test {
     // With both valid and invalid areas in the range, return the valid areas until reaching one invalid area, then use heuristics to split the rest of the range.
     #[expect(clippy::arithmetic_side_effects)]
     fn split_range_into_leaked_areas_test() {
-        let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
+        let memstore = MemStore::new(Vec::new());
         let nodestore =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 

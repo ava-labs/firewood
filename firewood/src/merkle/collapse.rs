@@ -503,12 +503,12 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
 
 #[cfg(test)]
 mod tests {
-    use firewood_storage::{DefaultHashMode, DeletedNodeTracking, HashMode, MemStore};
+    use firewood_storage::{DefaultHashMode, DeletedNodeTracking, MemStore};
 
     use super::*;
 
     fn create_test_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>> {
-        let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
+        let memstore = MemStore::new(Vec::new());
         let nodestore =
             NodeStore::new_empty_proposal(memstore.into(), DeletedNodeTracking::Enabled);
         Merkle { nodestore }

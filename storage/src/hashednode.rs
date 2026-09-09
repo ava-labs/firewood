@@ -2,8 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::{
-    Children, DefaultHashMode, HashMode, HashType, HashableShunt, IntoSplitPath, Node, Path,
-    PathComponent, SplitPath, TrieHash,
+    Children, DefaultHashMode, HashMode, HashType, HashableShunt, IntoSplitPath, Node,
+    NodeHashAlgorithm, Path, PathComponent, SplitPath, TrieHash,
 };
 use smallvec::SmallVec;
 
@@ -126,17 +126,17 @@ impl<T: AsRef<[u8]>> ValueDigest<T> {
     }
 
     /// Convert the value to a hash if it is not already a hash, under the
-    /// scheme `H`.
+    /// given `algorithm`.
     ///
     /// Under the MerkleDB scheme, a value of 32 bytes or more is replaced by
     /// its SHA-256 hash; shorter values pass through unchanged. The Ethereum
     /// scheme never hashes values, so this is the identity there.
     ///
-    /// The capping is the MerkleDB scheme's behavior, selected by the scheme
-    /// `H` rather than the compile-time default.
-    pub fn make_hash<H: HashMode>(&self) -> ValueDigest<&[u8]> {
+    /// The capping is the MerkleDB scheme's behavior, selected by `algorithm`
+    /// rather than the compile-time default.
+    pub fn make_hash(&self, algorithm: NodeHashAlgorithm) -> ValueDigest<&[u8]> {
         match self.as_ref() {
-            ValueDigest::Value(v) if v.len() >= 32 && !H::ALGORITHM.is_ethereum() => {
+            ValueDigest::Value(v) if v.len() >= 32 && !algorithm.is_ethereum() => {
                 use sha2::{Digest, Sha256};
                 ValueDigest::Hash(HashType::from(TrieHash::from(Sha256::digest(v))))
             }
