@@ -4,15 +4,15 @@
 //! Size-targeted proof generation: a range/change proof whose compressed
 //! wire size targets the specified byte budget.
 
-#![expect(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "byte/key counts (well below 2^52) are converted to and from f64 \
-              for the compression-ratio estimate, which is re-checked against \
-              the exact serialized length."
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "reachable only through `Merkle`, which the public `Db` API does not expose yet"
+    )
 )]
-#![allow(dead_code)]
+
+use std::num::{NonZeroU32, NonZeroU64};
 
 use firewood_metrics::{HistogramExt, firewood_histogram};
 use firewood_storage::{HashedNodeReader, TrieReader};
@@ -22,17 +22,47 @@ use super::{Key, Merkle, Value};
 use crate::api::{self, FrozenChangeProof, FrozenProof, FrozenRangeProof};
 use crate::db::BatchOp;
 use crate::merkle::changes::DiffMerkleNodeStream;
+use crate::proofs::frame::MAX_DECOMPRESSED_LEN;
 use crate::proofs::{ChangeProof, Proof, RangeProof};
 
-/// Stop growing once the wire reaches this fraction of the budget
-const ACCEPT_FLOOR: f64 = 0.95;
-/// Assumed compressed/uncompressed ratio when the caller gives no hint
-const DEFAULT_COMPRESSION_RATIO: f64 = 0.52;
-/// Ratio hints and measurements are clamped into `RATIO_MIN..=RATIO_MAX`
-const RATIO_MIN: f64 = 0.05;
-const RATIO_MAX: f64 = 2.0;
+/// Cap on the uncompressed payload of one chunk, leaving the rest of the
+/// decoder's body limit for the edge proofs.
+const MAX_PAYLOAD: usize = MAX_DECOMPRESSED_LEN / 2;
 /// Cap on ratio-correction (grow) passes.
 const MAX_GROW: usize = 6;
+
+/// Compression measured on one chunk: the compressed/uncompressed fraction
+/// in fixed point with 16 fractional bits, saturated to `1..=u32::MAX`.
+/// Pass the previous chunk's ratio as the next request's `ratio_hint` so
+/// its first size estimate is already calibrated.
+#[derive(Debug, Clone, Copy)]
+pub struct CompressionRatio(NonZeroU32);
+
+/// Fixed-point scale of [`CompressionRatio`]: the value of a 1:1 ratio.
+const RATIO_ONE: u64 = 1 << 16;
+
+impl Default for CompressionRatio {
+    /// The ratio assumed when the caller gives no hint.
+    fn default() -> Self {
+        Self::measured(52, 100)
+    }
+}
+
+impl CompressionRatio {
+    /// `compressed / uncompressed`; a zero `uncompressed` counts as one.
+    pub(crate) fn measured(compressed: usize, uncompressed: usize) -> Self {
+        let uncompressed = NonZeroU64::new(uncompressed as u64).unwrap_or(NonZeroU64::MIN);
+        let scaled = (compressed as u64).saturating_mul(RATIO_ONE) / uncompressed;
+        let scaled = u32::try_from(scaled).unwrap_or(u32::MAX);
+        Self(NonZeroU32::new(scaled).unwrap_or(NonZeroU32::MIN))
+    }
+
+    /// Uncompressed bytes expected to compress into `compressed` bytes.
+    fn uncompressed_for(self, compressed: usize) -> usize {
+        let estimate = (compressed as u64).saturating_mul(RATIO_ONE) / NonZeroU64::from(self.0);
+        usize::try_from(estimate).unwrap_or(usize::MAX)
+    }
+}
 
 /// A sized proof `P` with its compressed `wire` bytes.
 #[derive(Debug)]
@@ -41,14 +71,14 @@ pub struct SizedProof<P> {
     pub wire: Vec<u8>,
     /// True once paging has reached the end of the keyspace/diff.
     pub natural_end: bool,
-    /// Measured compression ratio of this chunk; pass it as `ratio_hint`
+    /// Measured compression of this chunk; pass it as `ratio_hint`
     /// when requesting the next chunk.
-    pub ratio: f64,
+    pub ratio: CompressionRatio,
 }
 
-fn varint_len(v: u64) -> u64 {
-    let mut buf = [0u8; 10];
-    v.encode_var(&mut buf) as u64
+/// Body bytes of a length-prefixed byte sequence.
+fn seq_len(bytes: &[u8]) -> usize {
+    bytes.len().required_space().saturating_add(bytes.len())
 }
 
 /// One proof flavor for [`stream_sized`]: what an item costs in uncompressed
@@ -58,17 +88,13 @@ trait ChunkBuilder {
     type Proof;
 
     /// Uncompressed body bytes `item` contributes to the payload.
-    fn item_cost(item: &Self::Item) -> u64;
+    fn item_cost(item: &Self::Item) -> usize;
 
     /// The chunk proof (payload plus right edge) for `items`;
     /// `at_natural_end` is true when `items` reached the end of the stream.
     fn build(&self, items: &[Self::Item], at_natural_end: bool) -> Result<Self::Proof, api::Error>;
 
     /// Compressed wire bytes for `proof`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the proof fails to serialize.
     fn wire(proof: &Self::Proof) -> Result<Vec<u8>, api::Error>;
 }
 
@@ -83,26 +109,28 @@ fn stream_sized<B: ChunkBuilder>(
     builder: &B,
     items: impl Iterator<Item = Result<B::Item, api::Error>>,
     budget: usize,
-    ratio_hint: Option<f64>,
+    ratio_hint: Option<CompressionRatio>,
 ) -> Result<SizedProof<B::Proof>, api::Error> {
-    let mut ratio = ratio_hint
-        .filter(|r| r.is_finite())
-        .unwrap_or(DEFAULT_COMPRESSION_RATIO)
-        .clamp(RATIO_MIN, RATIO_MAX);
+    let mut ratio = ratio_hint.unwrap_or_default();
     let mut items = items.peekable();
     let mut kept: Vec<B::Item> = Vec::new();
-    let mut body = 0u64; // summed item_cost of `kept`
+    let mut body = 0usize; // summed item_cost of `kept`
     let mut natural = true;
 
     // estimate edge overhead
     // TODO(AminR443): the 6KiB constant is very rough estimate. use a better estimate/method.
     let mut proof = builder.build(&[], true)?;
     let mut wire = B::wire(&proof)?;
-    let fixed = (wire.len() as u64).saturating_add((wire.len() as u64).max(6 * 1024)); // 6KiB
+    let fixed = wire.len().saturating_add(wire.len().max(6 * 1024)); // 6KiB
+
+    // Accept a wire within 5% of the budget.
+    let accept_floor = budget.saturating_sub(budget / 20);
 
     for _ in 0..=MAX_GROW {
-        // Uncompressed body budget = compressed budget ÷ ratio − overhead.
-        let budget_body = ((budget as f64 / ratio) as u64).saturating_sub(fixed);
+        let budget_body = ratio
+            .uncompressed_for(budget)
+            .saturating_sub(fixed)
+            .min(MAX_PAYLOAD);
         let before = kept.len();
         while let Some(peeked) = items.peek() {
             if let Ok(item) = peeked
@@ -122,18 +150,22 @@ fn stream_sized<B: ChunkBuilder>(
         natural = items.peek().is_none();
         proof = builder.build(&kept, natural)?;
         wire = B::wire(&proof)?;
-        if natural || wire.len() as f64 >= budget as f64 * ACCEPT_FLOOR {
+        if natural || wire.len() >= accept_floor {
             break;
         }
-        ratio = (wire.len() as f64 / body.saturating_add(fixed) as f64).clamp(RATIO_MIN, RATIO_MAX);
+        ratio = CompressionRatio::measured(wire.len(), body.saturating_add(fixed));
     }
 
     // Shrink: drop entries until the wire fits, but never below one so
     // paging progresses.
     while wire.len() > budget && kept.len() > 1 {
-        let per_entry = (wire.len() as f64 / kept.len() as f64).max(1.0);
-        let over = wire.len().saturating_sub(budget) as f64;
-        let drop = ((over / per_entry / 2.0).ceil() as usize).max(1);
+        // Entries whose share of the wire covers the overshoot, halved so a
+        // heavier-than-average tail does not shrink far past the budget.
+        let over = wire.len().saturating_sub(budget);
+        let drop = kept
+            .len()
+            .saturating_mul(over)
+            .div_ceil(wire.len().saturating_mul(2));
         kept.truncate(kept.len().saturating_sub(drop).max(1));
         natural = false;
         proof = builder.build(&kept, natural)?;
@@ -141,12 +173,9 @@ fn stream_sized<B: ChunkBuilder>(
     }
 
     // Report the measured ratio so the caller can seed the next chunk.
-    let body_kept = kept
-        .iter()
-        .fold(0u64, |sum, item| sum.saturating_add(B::item_cost(item)));
-    if body_kept > 0 {
-        ratio = (wire.len() as f64 / body_kept.saturating_add(fixed) as f64)
-            .clamp(RATIO_MIN, RATIO_MAX);
+    if !kept.is_empty() {
+        let body = kept.iter().map(B::item_cost).fold(0, usize::saturating_add);
+        ratio = CompressionRatio::measured(wire.len(), body.saturating_add(fixed));
     }
     Ok(SizedProof {
         proof,
@@ -165,11 +194,8 @@ impl<T: TrieReader> ChunkBuilder for RangeChunkBuilder<'_, T> {
     type Item = (Key, Value);
     type Proof = FrozenRangeProof;
 
-    fn item_cost((key, value): &Self::Item) -> u64 {
-        varint_len(key.len() as u64)
-            .saturating_add(key.len() as u64)
-            .saturating_add(varint_len(value.len() as u64))
-            .saturating_add(value.len() as u64)
+    fn item_cost((key, value): &Self::Item) -> usize {
+        seq_len(key).saturating_add(seq_len(value))
     }
 
     fn build(&self, kvs: &[Self::Item], at_natural_end: bool) -> Result<Self::Proof, api::Error> {
@@ -204,17 +230,12 @@ impl<T: HashedNodeReader> ChunkBuilder for ChangeChunkBuilder<'_, T> {
     type Proof = FrozenChangeProof;
 
     /// 1-byte tag + key, + value for `Put`.
-    fn item_cost(op: &Self::Item) -> u64 {
-        let key = op.key();
-        let mut bytes = 1u64
-            .saturating_add(varint_len(key.len() as u64))
-            .saturating_add(key.len() as u64);
-        if let BatchOp::Put { value, .. } = op {
-            bytes = bytes
-                .saturating_add(varint_len(value.len() as u64))
-                .saturating_add(value.len() as u64);
+    fn item_cost(op: &Self::Item) -> usize {
+        let tag_and_key = seq_len(op.key()).saturating_add(1);
+        match op {
+            BatchOp::Put { value, .. } => tag_and_key.saturating_add(seq_len(value)),
+            _ => tag_and_key,
         }
-        bytes
     }
 
     fn build(&self, ops: &[Self::Item], _at_natural_end: bool) -> Result<Self::Proof, api::Error> {
@@ -250,7 +271,7 @@ impl<T: TrieReader> Merkle<T> {
         &self,
         start_key: Option<&[u8]>,
         budget: usize,
-        ratio_hint: Option<f64>,
+        ratio_hint: Option<CompressionRatio>,
     ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
         let start_proof = match start_key {
             Some(key) => self.prove(key).map_err(api::Error::from)?,
@@ -290,7 +311,7 @@ impl<T: HashedNodeReader> Merkle<T> {
         source_trie: &T,
         start_key: Option<&[u8]>,
         budget: usize,
-        ratio_hint: Option<f64>,
+        ratio_hint: Option<CompressionRatio>,
     ) -> Result<SizedProof<FrozenChangeProof>, api::Error> {
         let start_proof = match start_key {
             Some(key) => self.prove(key).map_err(api::Error::from)?,

@@ -18,7 +18,7 @@ use test_case::test_case;
 use super::init_merkle;
 use crate::api::{self, FrozenRangeProof};
 use crate::db::BatchOp;
-use crate::merkle::sized::SizedProof;
+use crate::merkle::sized::{CompressionRatio, SizedProof};
 use crate::merkle::{Key, Merkle, Value};
 use firewood_storage::TrieReader;
 
@@ -98,7 +98,7 @@ fn page_range_chunks<T: TrieReader>(
 ) -> Vec<SizedProof<FrozenRangeProof>> {
     let mut chunks = Vec::new();
     let mut start: Option<Vec<u8>> = None;
-    let mut hint: Option<f64> = None;
+    let mut hint: Option<CompressionRatio> = None;
     loop {
         let sized = merkle
             .range_proof_sized(start.as_deref(), budget, hint)
@@ -135,12 +135,14 @@ fn assert_covers(chunks: &[SizedProof<FrozenRangeProof>], expected: &[(Vec<u8>, 
 // Fits the budget (lone entry excepted), byte-equal to the plain API.
 #[test_case(512, None; "tiny budget forces a single entry")]
 #[test_case(32 * 1024, None; "default ratio hint")]
-#[test_case(32 * 1024, Some(0.05); "optimistic hint overfills then shrinks")]
-#[test_case(32 * 1024, Some(2.0); "pessimistic hint underfills then grows")]
-#[test_case(32 * 1024, Some(f64::NAN); "NaN hint is sanitized")]
-#[test_case(32 * 1024, Some(0.0); "zero hint is sanitized")]
+#[test_case(32 * 1024, Some(CompressionRatio::measured(5, 100)); "optimistic hint overfills then shrinks")]
+#[test_case(32 * 1024, Some(CompressionRatio::measured(2, 1)); "pessimistic hint underfills then grows")]
+#[test_case(32 * 1024, Some(CompressionRatio::measured(0, 0)); "zero hint is sanitized")]
 #[test_case(4 * 1024 * 1024, None; "budget covering the whole trie")]
-fn test_range_sized_fits_and_matches_plain_api(budget: usize, ratio_hint: Option<f64>) {
+fn test_range_sized_fits_and_matches_plain_api(
+    budget: usize,
+    ratio_hint: Option<CompressionRatio>,
+) {
     let kvs = test_kvs(2000, false);
     let total = sorted_unique(&kvs).len();
     let merkle = init_merkle(kvs.clone());
@@ -156,24 +158,27 @@ fn test_range_sized_fits_and_matches_plain_api(budget: usize, ratio_hint: Option
         sized.wire.len()
     );
     assert_eq!(sized.natural_end, kv_count == total);
-    assert!(sized.ratio.is_finite(), "ratio must be a usable next hint");
 
     let reference = merkle
         .range_proof(None, None, NonZeroUsize::new(kv_count))
         .expect("reference proof");
     let mut ref_wire = Vec::new();
-    reference.write_to_vec(&mut ref_wire).expect("serialize proof");
+    reference
+        .write_to_vec(&mut ref_wire)
+        .expect("serialize proof");
     assert_eq!(ref_wire, sized.wire);
 }
 
 #[test_case(512, None; "tiny budget forces a single op")]
 #[test_case(16 * 1024, None; "default ratio hint")]
-#[test_case(16 * 1024, Some(0.05); "optimistic hint overfills then shrinks")]
-#[test_case(16 * 1024, Some(2.0); "pessimistic hint underfills then grows")]
-#[test_case(16 * 1024, Some(f64::NAN); "NaN hint is sanitized")]
-#[test_case(16 * 1024, Some(0.0); "zero hint is sanitized")]
+#[test_case(16 * 1024, Some(CompressionRatio::measured(5, 100)); "optimistic hint overfills then shrinks")]
+#[test_case(16 * 1024, Some(CompressionRatio::measured(2, 1)); "pessimistic hint underfills then grows")]
+#[test_case(16 * 1024, Some(CompressionRatio::measured(0, 0)); "zero hint is sanitized")]
 #[test_case(4 * 1024 * 1024, None; "budget covering the whole diff")]
-fn test_change_sized_fits_and_matches_plain_api(budget: usize, ratio_hint: Option<f64>) {
+fn test_change_sized_fits_and_matches_plain_api(
+    budget: usize,
+    ratio_hint: Option<CompressionRatio>,
+) {
     let base = test_kvs(1500, false);
     let source = init_merkle(base.clone());
     let target = init_merkle(modified_kvs(&base));
@@ -194,13 +199,14 @@ fn test_change_sized_fits_and_matches_plain_api(budget: usize, ratio_hint: Optio
         sized.wire.len()
     );
     assert_eq!(sized.natural_end, op_count == total);
-    assert!(sized.ratio.is_finite(), "ratio must be a usable next hint");
 
     let reference = target
         .change_proof(None, None, source.nodestore(), NonZeroUsize::new(op_count))
         .expect("reference change proof");
     let mut ref_wire = Vec::new();
-    reference.write_to_vec(&mut ref_wire).expect("serialize proof");
+    reference
+        .write_to_vec(&mut ref_wire)
+        .expect("serialize proof");
     assert_eq!(ref_wire, sized.wire);
 }
 
@@ -243,7 +249,7 @@ fn test_change_sized_paging_covers_diff(budget: usize) {
 
     let mut seen = 0usize;
     let mut start: Option<Vec<u8>> = None;
-    let mut hint: Option<f64> = None;
+    let mut hint: Option<CompressionRatio> = None;
     let mut chunks = 0usize;
     loop {
         let sized = target
@@ -361,7 +367,9 @@ fn test_range_sized_start_past_last_key_yields_empty_natural_end() {
         .range_proof(Some(&start), None, None)
         .expect("plain proof");
     let mut plain_wire = Vec::new();
-    plain.write_to_vec(&mut plain_wire).expect("serialize proof");
+    plain
+        .write_to_vec(&mut plain_wire)
+        .expect("serialize proof");
     assert_eq!(plain_wire, sized.wire);
 }
 
@@ -382,6 +390,8 @@ fn test_change_sized_identical_tries_yield_empty_natural_end() {
         .change_proof(None, None, source.nodestore(), None)
         .expect("plain change proof");
     let mut plain_wire = Vec::new();
-    plain.write_to_vec(&mut plain_wire).expect("serialize proof");
+    plain
+        .write_to_vec(&mut plain_wire)
+        .expect("serialize proof");
     assert_eq!(plain_wire, sized.wire);
 }
