@@ -1,0 +1,5 @@
+error: #[hash_mode] does not accept arguments; use #[test] and select the concrete hash mode explicitly for a single-mode test
+ --> tests/compile_fail/hash_mode_arguments.rs:3:13
+  |
+3 | #[hash_mode(eth)]
+  |             ^^^

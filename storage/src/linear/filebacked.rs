@@ -416,7 +416,7 @@ impl std::ops::DerefMut for UnlockOnDrop {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{DefaultHashMode, HashMode};
+    use crate::{EthHash, HashMode, MerkleDbHash};
     use nonzero_ext::nonzero;
     use std::io::Write;
     use tempfile::NamedTempFile;
@@ -440,8 +440,8 @@ mod test {
         );
     }
 
-    #[test]
-    fn basic_reader_test() {
+    #[firewood_macros::hash_mode]
+    fn basic_reader_test<H: HashMode>() {
         let mut tf = NamedTempFile::new().unwrap();
         let path = tf.path().to_path_buf();
         let output = tf.as_file_mut();
@@ -456,7 +456,7 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            DefaultHashMode::ALGORITHM,
+            H::ALGORITHM,
         )
         .unwrap();
 
@@ -483,8 +483,8 @@ mod test {
         assert_eq!(buf, "world".to_owned());
     }
 
-    #[test]
-    fn big_file() {
+    #[firewood_macros::hash_mode]
+    fn big_file<H: HashMode>() {
         let mut tf = NamedTempFile::new().unwrap();
         let path = tf.path().to_path_buf();
         let output = tf.as_file_mut();
@@ -499,7 +499,7 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            DefaultHashMode::ALGORITHM,
+            H::ALGORITHM,
         )
         .unwrap();
 

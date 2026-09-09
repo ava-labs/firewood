@@ -5,10 +5,12 @@ use crate::{
     api::{Db, DbView, Proposal},
     db::BatchOp,
 };
+use firewood_storage::{EthHash, HashMode, MerkleDbHash};
 
 use super::*;
 use test_case::test_case;
 
+#[firewood_macros::hash_mode]
 #[test_case(
         &[],
         None,
@@ -137,14 +139,14 @@ use test_case::test_case;
         &[(b"a", Some(b"1")), (b"b", None), (b"b2", Some(b"new")), (b"c", Some(b"updated")), (b"d", None), (b"e", Some(b"5"))];
         "boundary precision - a and e should remain unchanged"
     )]
-fn test_merge_key_value_range(
+fn test_merge_key_value_range<H: HashMode>(
     initial_kvs: &[(&[u8], &[u8])],
     first_key: Option<&[u8]>,
     last_key: Option<&[u8]>,
     merge_kvs: &[(&[u8], &[u8])],
     expected_kvs: &[(&[u8], Option<&[u8]>)],
 ) {
-    let db = TestDb::new();
+    let db = TestDb::<H>::new();
 
     if !initial_kvs.is_empty() {
         db.propose(initial_kvs).unwrap().commit().unwrap();
@@ -176,7 +178,7 @@ fn test_merge_key_value_range(
     let merge_root_hash = proposal.root_hash();
 
     // Create a fresh database with the same initial state
-    let db2 = TestDb::new();
+    let db2 = TestDb::<H>::new();
     if !initial_kvs.is_empty() {
         db2.propose(initial_kvs).unwrap().commit().unwrap();
     }

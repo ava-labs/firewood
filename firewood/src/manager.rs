@@ -715,20 +715,17 @@ impl<H: HashMode> RevisionManager<H> {
 
 #[cfg(test)]
 mod tests {
-    use firewood_storage::{DefaultHashMode, RootReader};
+    use firewood_storage::{DefaultHashMode, EthHash, RootReader};
 
     use super::*;
-    #[cfg(feature = "ethhash")]
-    use crate::api::HashKeyExt;
-    use crate::api::OptionalHashKeyExt;
 
-    impl RevisionManager<DefaultHashMode> {
+    impl<H: HashMode> RevisionManager<H> {
         /// Get all proposal hashes available.
         pub fn proposal_hashes(&self) -> Vec<TrieHash> {
             self.proposals
                 .lock()
                 .iter()
-                .filter_map(|p| p.root_hash().or_default_root_hash())
+                .filter_map(|p| p.root_hash().or_else(H::default_root_hash))
                 .collect()
         }
 
@@ -1086,13 +1083,11 @@ mod tests {
     /// `revision()` previously fell through to `RootStore::get` and returned
     /// `RevisionNotFound`. The fix synthesizes an empty committed nodestore
     /// when the caller asks for the default empty-trie hash.
-    #[cfg(feature = "ethhash")]
     #[test]
     fn test_revision_empty_root_after_eviction() {
         use firewood_storage::{LeafNode, NibblesIterator, Node, Path};
 
-        let empty_hash =
-            HashKey::default_root_hash().expect("ethhash exposes a default empty-trie hash");
+        let empty_hash = EthHash::default_root_hash().expect("Ethereum exposes an empty-trie hash");
 
         let db_dir = tempfile::tempdir().unwrap();
         let config = ConfigManager::builder()
@@ -1107,7 +1102,7 @@ mod tests {
             )
             .build();
 
-        let manager = RevisionManager::<DefaultHashMode>::new(config).unwrap();
+        let manager = RevisionManager::<EthHash>::new(config).unwrap();
 
         // Sanity: the fresh manager indexes the empty revision under the
         // default hash.
@@ -1122,7 +1117,7 @@ mod tests {
                 partial_path: Path::from_nibbles_iterator(NibblesIterator::new(&[i])),
                 value: Box::new([i]),
             }));
-            let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _, DefaultHashMode>> =
+            let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _, EthHash>> =
                 Arc::new(proposal.try_into().unwrap());
             manager.add_proposal(proposal.clone());
             manager.commit(proposal).unwrap();

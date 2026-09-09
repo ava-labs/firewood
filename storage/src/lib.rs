@@ -492,40 +492,39 @@ pub fn format_node_value<W: std::io::Write + ?Sized>(
 mod format_node_value_tests {
     use super::*;
 
-    fn fmt(value: &[u8]) -> String {
+    fn fmt<H: crate::HashMode>(value: &[u8]) -> String {
         let mut buf = Vec::new();
-        format_node_value(value, DefaultHashMode::ALGORITHM, &mut buf).unwrap();
+        format_node_value(value, H::ALGORITHM, &mut buf).unwrap();
         String::from_utf8(buf).unwrap()
     }
 
-    #[test]
-    fn alphanumeric_plaintext() {
-        assert_eq!(fmt(b"hello"), " val=hello");
-        assert_eq!(fmt(b"value1"), " val=value1");
+    #[firewood_macros::hash_mode]
+    fn alphanumeric_plaintext<H: crate::HashMode>() {
+        assert_eq!(fmt::<H>(b"hello"), " val=hello");
+        assert_eq!(fmt::<H>(b"value1"), " val=value1");
     }
 
-    #[test]
-    fn long_alphanumeric_truncated() {
-        assert_eq!(fmt(b"longvalue"), " val=longva...");
+    #[firewood_macros::hash_mode]
+    fn long_alphanumeric_truncated<H: crate::HashMode>() {
+        assert_eq!(fmt::<H>(b"longvalue"), " val=longva...");
     }
 
-    #[test]
-    fn non_utf8_as_hex() {
-        assert_eq!(fmt(&[0xff, 0xfe]), " val=fffe");
+    #[firewood_macros::hash_mode]
+    fn non_utf8_as_hex<H: crate::HashMode>() {
+        assert_eq!(fmt::<H>(&[0xff, 0xfe]), " val=fffe");
     }
 
-    #[test]
-    fn long_hex_truncated() {
-        assert_eq!(fmt(&[0xde, 0xad, 0xbe, 0xef]), " val=deadbe...");
+    #[firewood_macros::hash_mode]
+    fn long_hex_truncated<H: crate::HashMode>() {
+        assert_eq!(fmt::<H>(&[0xde, 0xad, 0xbe, 0xef]), " val=deadbe...");
     }
 
-    #[test]
-    fn non_alphanumeric_utf8_as_hex() {
+    #[firewood_macros::hash_mode]
+    fn non_alphanumeric_utf8_as_hex<H: crate::HashMode>() {
         // Space is not alphanumeric, so falls through to hex.
-        assert_eq!(fmt(b"hi there"), " val=686920...");
+        assert_eq!(fmt::<H>(b"hi there"), " val=686920...");
     }
 
-    #[cfg(feature = "ethhash")]
     #[test]
     fn rlp_list_decoded() {
         use ::rlp::RlpStream;
@@ -534,15 +533,14 @@ mod format_node_value_tests {
         rlp.append(&vec![0x01u8]);
         rlp.append(&vec![0x02u8]);
         let encoded = rlp.out();
-        assert_eq!(fmt(&encoded), " rlp=[01,02]");
+        assert_eq!(fmt::<EthHash>(&encoded), " rlp=[01,02]");
     }
 
-    #[cfg(feature = "ethhash")]
     #[test]
     fn empty_rlp_list_falls_through() {
         // 0xc0 is an empty RLP list — as_list returns Ok([]) which we
         // treat as non-RLP since there are no fields to display.
-        let result = fmt(&[0xc0]);
+        let result = fmt::<EthHash>(&[0xc0]);
         assert!(
             result.starts_with(" val="),
             "expected hex fallback, got: {result}"

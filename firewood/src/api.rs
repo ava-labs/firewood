@@ -809,21 +809,20 @@ pub trait DynProposal<'db>: Debug + Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use firewood_storage::{EthHash, MerkleDbHash};
 
     #[test]
-    #[cfg(feature = "ethhash")]
     fn test_ethhash_compat_default_root_hash_equals_empty_rlp_hash() {
         use sha3::Digest as _;
 
         assert_eq!(
-            TrieHash::default_root_hash(),
+            EthHash::default_root_hash(),
             Some(sha3::Keccak256::digest(rlp::NULL_RLP).into()),
         );
     }
 
     #[test]
-    #[cfg(not(feature = "ethhash"))]
     fn test_firewood_default_root_hash_equals_none() {
-        assert_eq!(TrieHash::default_root_hash(), None);
+        assert_eq!(MerkleDbHash::default_root_hash(), None);
     }
 }

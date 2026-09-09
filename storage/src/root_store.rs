@@ -193,15 +193,15 @@ impl<H: HashMode> RootStore<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DefaultHashMode;
+    use crate::CacheReadStrategy;
     use crate::linear::filebacked::FileBacked;
     use crate::nodestore::NodeStore;
-    use crate::{CacheReadStrategy, HashMode};
+    use crate::{EthHash, MerkleDbHash};
     use std::num::NonZero;
     use std::sync::Arc;
 
-    #[test]
-    fn test_cache_hit() {
+    #[firewood_macros::hash_mode]
+    fn test_cache_hit<H: HashMode>() {
         let tmpdir = tempfile::tempdir().unwrap();
 
         let db_path = tmpdir.as_ref().join("testdb");
@@ -213,20 +213,21 @@ mod tests {
                 false,
                 true,
                 CacheReadStrategy::WritesOnly,
-                DefaultHashMode::ALGORITHM,
+                H::ALGORITHM,
             )
             .unwrap(),
         );
 
         let root_store_dir = tmpdir.as_ref().join("root_store");
-        let root_store: RootStore<DefaultHashMode> =
+        let root_store: RootStore<H> =
             RootStore::new(root_store_dir, file_backed.clone(), false).unwrap();
 
         // Create a revision to cache. `RootStore` implies archival mode,
         // where deleted nodes are never tracked.
-        let revision: CommittedRevision<DefaultHashMode> = Arc::new(
-            NodeStore::new_empty_committed(file_backed.clone(), DeletedNodeTracking::Disabled),
-        );
+        let revision: CommittedRevision<H> = Arc::new(NodeStore::new_empty_committed(
+            file_backed.clone(),
+            DeletedNodeTracking::Disabled,
+        ));
 
         let hash = TrieHash::from_bytes([1; 32]);
         root_store
@@ -241,8 +242,8 @@ mod tests {
         assert!(Arc::ptr_eq(&revision, &retrieved_revision));
     }
 
-    #[test]
-    fn test_nonexistent_revision() {
+    #[firewood_macros::hash_mode]
+    fn test_nonexistent_revision<H: HashMode>() {
         let tmpdir = tempfile::tempdir().unwrap();
 
         let db_path = tmpdir.as_ref().join("testdb");
@@ -254,13 +255,13 @@ mod tests {
                 false,
                 true,
                 CacheReadStrategy::WritesOnly,
-                DefaultHashMode::ALGORITHM,
+                H::ALGORITHM,
             )
             .unwrap(),
         );
 
         let root_store_dir = tmpdir.as_ref().join("root_store");
-        let root_store: RootStore<DefaultHashMode> =
+        let root_store: RootStore<H> =
             RootStore::new(root_store_dir, file_backed.clone(), false).unwrap();
 
         // Try to get a hash that doesn't exist in the cache nor in the underlying datastore.
