@@ -6,7 +6,10 @@
 // static shortcut
 
 #[cfg(feature = "logger")]
-pub use log::{debug, error, info, trace, warn};
+pub use firewood_metrics::{
+    firewood_debug as debug, firewood_error as error, firewood_info as info,
+    firewood_trace as trace, firewood_warn as warn,
+};
 
 /// Returns true if the trace log level is enabled
 #[cfg(feature = "logger")]

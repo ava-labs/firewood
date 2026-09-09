@@ -31,6 +31,7 @@ tikv-jemalloc-ctl = { version = "0.7.0", features = ["stats"] }
 metrics-exporter-prometheus.workspace = true
 # Optional dependencies
 env_logger = { workspace = true, optional = true }
+log = { workspace = true, optional = true, features = ["kv"] }
 firewood-replay = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -38,7 +39,7 @@ firewood-replay = { workspace = true, optional = true }
 test-case.workspace = true
 
 [features]
-logger = ["dep:env_logger", "firewood/logger"]
+logger = ["dep:env_logger", "dep:log", "firewood/logger"]
 ethhash = ["firewood/ethhash"]
 io-uring = ["firewood/io-uring"]
 block-replay = ["dep:firewood-replay"]

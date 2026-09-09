@@ -157,6 +157,21 @@ pub enum ProofError {
     #[error("error deserializing a proof: {0}")]
     Deserialization(super::ReadError),
 
+    /// The serialized proof body exceeds the size cap
+    /// (see `proofs::frame::MAX_DECOMPRESSED_LEN`).
+    #[error("serialized proof body is {len} bytes, exceeding the {limit}-byte limit")]
+    BodyTooLarge {
+        /// Length of the canonical (uncompressed) proof body.
+        len: usize,
+        /// The wire-format cap on a decoded proof body.
+        limit: usize,
+    },
+
+    /// zstd failed to compress the proof body (allocation failure; zstd
+    /// cannot otherwise fail on in-memory input).
+    #[error("zstd compression failed: {0}")]
+    Compression(std::io::Error),
+
     /// Empty range
     #[error("empty range")]
     EmptyRange,

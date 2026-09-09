@@ -789,6 +789,174 @@ macro_rules! firewood_histogram {
 #[doc(hidden)]
 pub mod __private {
     pub use ::metrics;
+
+    #[cfg(feature = "logger")]
+    pub use ::log;
+}
+
+/// Logs a message with a `db_tag` key-value sourced from the thread-local
+/// [`MetricsContext`].
+#[cfg(feature = "logger")]
+#[macro_export]
+macro_rules! firewood_log {
+    (target: $target:expr, $lvl:expr, $($arg:tt)+) => {{
+        let level = $lvl;
+        if $crate::__private::log::log_enabled!(target: $target, level) {
+            let db_tag = $crate::current_db_tag_label();
+            $crate::__private::log::log!(
+                target: $target,
+                level,
+                db_tag = db_tag.as_ref();
+                $($arg)+
+            );
+        }
+    }};
+    ($lvl:expr, $($arg:tt)+) => {{
+        let level = $lvl;
+        if $crate::__private::log::log_enabled!(level) {
+            let db_tag = $crate::current_db_tag_label();
+            $crate::__private::log::log!(level, db_tag = db_tag.as_ref(); $($arg)+);
+        }
+    }};
+}
+
+/// No-op logger macro when the `logger` feature is disabled.
+#[cfg(not(feature = "logger"))]
+#[macro_export]
+macro_rules! firewood_log {
+    (target: $target:expr, $lvl:expr, $($arg:tt)+) => {{
+        if false {
+            let _ = &$target;
+            let _ = &$lvl;
+            let _ = ::std::format_args!($($arg)+);
+        }
+    }};
+    ($lvl:expr, $($arg:tt)+) => {{
+        if false {
+            let _ = &$lvl;
+            let _ = ::std::format_args!($($arg)+);
+        }
+    }};
+}
+
+/// Logs a message at the error level, attaching the current `db_tag`.
+#[cfg(feature = "logger")]
+#[macro_export]
+macro_rules! firewood_error {
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::firewood_log!(target: $target, $crate::__private::log::Level::Error, $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::firewood_log!($crate::__private::log::Level::Error, $($arg)+)
+    };
+}
+
+/// No-op error logger macro when the `logger` feature is disabled.
+#[cfg(not(feature = "logger"))]
+#[macro_export]
+macro_rules! firewood_error {
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::firewood_log!(target: $target, (), $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::firewood_log!((), $($arg)+)
+    };
+}
+
+/// Logs a message at the warn level, attaching the current `db_tag`.
+#[cfg(feature = "logger")]
+#[macro_export]
+macro_rules! firewood_warn {
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::firewood_log!(target: $target, $crate::__private::log::Level::Warn, $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::firewood_log!($crate::__private::log::Level::Warn, $($arg)+)
+    };
+}
+
+/// No-op warn logger macro when the `logger` feature is disabled.
+#[cfg(not(feature = "logger"))]
+#[macro_export]
+macro_rules! firewood_warn {
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::firewood_log!(target: $target, (), $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::firewood_log!((), $($arg)+)
+    };
+}
+
+/// Logs a message at the info level, attaching the current `db_tag`.
+#[cfg(feature = "logger")]
+#[macro_export]
+macro_rules! firewood_info {
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::firewood_log!(target: $target, $crate::__private::log::Level::Info, $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::firewood_log!($crate::__private::log::Level::Info, $($arg)+)
+    };
+}
+
+/// No-op info logger macro when the `logger` feature is disabled.
+#[cfg(not(feature = "logger"))]
+#[macro_export]
+macro_rules! firewood_info {
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::firewood_log!(target: $target, (), $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::firewood_log!((), $($arg)+)
+    };
+}
+
+/// Logs a message at the debug level, attaching the current `db_tag`.
+#[cfg(feature = "logger")]
+#[macro_export]
+macro_rules! firewood_debug {
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::firewood_log!(target: $target, $crate::__private::log::Level::Debug, $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::firewood_log!($crate::__private::log::Level::Debug, $($arg)+)
+    };
+}
+
+/// No-op debug logger macro when the `logger` feature is disabled.
+#[cfg(not(feature = "logger"))]
+#[macro_export]
+macro_rules! firewood_debug {
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::firewood_log!(target: $target, (), $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::firewood_log!((), $($arg)+)
+    };
+}
+
+/// Logs a message at the trace level, attaching the current `db_tag`.
+#[cfg(feature = "logger")]
+#[macro_export]
+macro_rules! firewood_trace {
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::firewood_log!(target: $target, $crate::__private::log::Level::Trace, $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::firewood_log!($crate::__private::log::Level::Trace, $($arg)+)
+    };
+}
+
+/// No-op trace logger macro when the `logger` feature is disabled.
+#[cfg(not(feature = "logger"))]
+#[macro_export]
+macro_rules! firewood_trace {
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::firewood_log!(target: $target, (), $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::firewood_log!((), $($arg)+)
+    };
 }
 
 #[cfg(test)]

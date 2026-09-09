@@ -73,7 +73,10 @@ By default, Firewood uses SHA-256 hashing compatible with merkledb. Enable this 
 - Changes hashing from SHA-256 to Keccak-256
 - Understands "account" nodes at specific depths with RLP-encoded values
 - Computes account trie hash as actual root
-- See `firewood/storage/src/hashers/ethhash.rs` for implementation details
+- When an account has exactly one storage child, hashes that child as a
+  standalone storage-trie root, so a child's hash depends on the account's
+  storage-child count
+- See `storage/src/hashers/ethhash.rs` for implementation details
 
 ### `logging`
 

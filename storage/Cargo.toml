@@ -74,7 +74,7 @@ sha2.workspace = true
 io-uring = { version = "0.7.13", optional = true }
 
 [features]
-logger = ["log"]
+logger = ["log", "firewood-metrics/logger"]
 io-uring = ["dep:io-uring"]
 ethhash = []
 test_utils = ["dep:metrics-util", "dep:rand"]

@@ -23,6 +23,16 @@ pub struct LogArgs<'a> {
 }
 
 #[cfg(feature = "logger")]
+fn record_db_tag<'a>(record: &'a log::Record<'a>) -> Option<&'a str> {
+    use log::kv::Key;
+
+    record
+        .key_values()
+        .get(Key::from_str("db_tag"))
+        .and_then(|value| value.to_borrowed_str())
+}
+
+#[cfg(feature = "logger")]
 impl LogArgs<'_> {
     fn path(&self) -> std::io::Result<std::borrow::Cow<'_, std::path::Path>> {
         let path = self.path.as_str().map_err(|err| {
@@ -63,6 +73,7 @@ impl LogArgs<'_> {
     pub fn start_logging(&self) -> std::io::Result<()> {
         use env_logger::Target::Pipe;
         use std::fs::OpenOptions;
+        use std::io::Write;
 
         let log_path = self.path()?;
 
@@ -100,6 +111,29 @@ impl LogArgs<'_> {
 
         env_logger::Builder::new()
             .filter_level(level)
+            .format(move |buffer, record| {
+                // matches env_logger's default format style
+                // TODO(AminR443): adopt slog format like avalanchego
+                // https://github.com/ava-labs/firewood/issues/2227
+                let timestamp = buffer.timestamp_millis();
+                if let Some(db_tag) = record_db_tag(record) {
+                    writeln!(
+                        buffer,
+                        "[{timestamp} {:<5} {} db_tag={db_tag}] {}",
+                        record.level(),
+                        record.target(),
+                        record.args()
+                    )
+                } else {
+                    writeln!(
+                        buffer,
+                        "[{timestamp} {:<5} {}] {}",
+                        record.level(),
+                        record.target(),
+                        record.args()
+                    )
+                }
+            })
             .target(Pipe(Box::new(file)))
             .try_init()
             .map_err(|e| std::io::Error::other(format!("failed to initialize logger: {e}")))?;

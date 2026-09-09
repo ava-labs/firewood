@@ -162,7 +162,7 @@ fn test_range_sized_fits_and_matches_plain_api(budget: usize, ratio_hint: Option
         .range_proof(None, None, NonZeroUsize::new(kv_count))
         .expect("reference proof");
     let mut ref_wire = Vec::new();
-    reference.write_to_vec(&mut ref_wire);
+    reference.write_to_vec(&mut ref_wire).expect("serialize proof");
     assert_eq!(ref_wire, sized.wire);
 }
 
@@ -200,7 +200,7 @@ fn test_change_sized_fits_and_matches_plain_api(budget: usize, ratio_hint: Optio
         .change_proof(None, None, source.nodestore(), NonZeroUsize::new(op_count))
         .expect("reference change proof");
     let mut ref_wire = Vec::new();
-    reference.write_to_vec(&mut ref_wire);
+    reference.write_to_vec(&mut ref_wire).expect("serialize proof");
     assert_eq!(ref_wire, sized.wire);
 }
 
@@ -361,7 +361,7 @@ fn test_range_sized_start_past_last_key_yields_empty_natural_end() {
         .range_proof(Some(&start), None, None)
         .expect("plain proof");
     let mut plain_wire = Vec::new();
-    plain.write_to_vec(&mut plain_wire);
+    plain.write_to_vec(&mut plain_wire).expect("serialize proof");
     assert_eq!(plain_wire, sized.wire);
 }
 
@@ -382,6 +382,6 @@ fn test_change_sized_identical_tries_yield_empty_natural_end() {
         .change_proof(None, None, source.nodestore(), None)
         .expect("plain change proof");
     let mut plain_wire = Vec::new();
-    plain.write_to_vec(&mut plain_wire);
+    plain.write_to_vec(&mut plain_wire).expect("serialize proof");
     assert_eq!(plain_wire, sized.wire);
 }

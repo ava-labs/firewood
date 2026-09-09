@@ -65,7 +65,11 @@ trait ChunkBuilder {
     fn build(&self, items: &[Self::Item], at_natural_end: bool) -> Result<Self::Proof, api::Error>;
 
     /// Compressed wire bytes for `proof`.
-    fn wire(proof: &Self::Proof) -> Vec<u8>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the proof fails to serialize.
+    fn wire(proof: &Self::Proof) -> Result<Vec<u8>, api::Error>;
 }
 
 /// Assembles a proof from a prefix of `items`, sized to approach
@@ -93,7 +97,7 @@ fn stream_sized<B: ChunkBuilder>(
     // estimate edge overhead
     // TODO(AminR443): the 6KiB constant is very rough estimate. use a better estimate/method.
     let mut proof = builder.build(&[], true)?;
-    let mut wire = B::wire(&proof);
+    let mut wire = B::wire(&proof)?;
     let fixed = (wire.len() as u64).saturating_add((wire.len() as u64).max(6 * 1024)); // 6KiB
 
     for _ in 0..=MAX_GROW {
@@ -117,7 +121,7 @@ fn stream_sized<B: ChunkBuilder>(
         }
         natural = items.peek().is_none();
         proof = builder.build(&kept, natural)?;
-        wire = B::wire(&proof);
+        wire = B::wire(&proof)?;
         if natural || wire.len() as f64 >= budget as f64 * ACCEPT_FLOOR {
             break;
         }
@@ -133,7 +137,7 @@ fn stream_sized<B: ChunkBuilder>(
         kept.truncate(kept.len().saturating_sub(drop).max(1));
         natural = false;
         proof = builder.build(&kept, natural)?;
-        wire = B::wire(&proof);
+        wire = B::wire(&proof)?;
     }
 
     // Report the measured ratio so the caller can seed the next chunk.
@@ -183,10 +187,10 @@ impl<T: TrieReader> ChunkBuilder for RangeChunkBuilder<'_, T> {
         ))
     }
 
-    fn wire(proof: &Self::Proof) -> Vec<u8> {
+    fn wire(proof: &Self::Proof) -> Result<Vec<u8>, api::Error> {
         let mut out = Vec::new();
-        proof.write_to_vec(&mut out);
-        out
+        proof.write_to_vec(&mut out)?;
+        Ok(out)
     }
 }
 
@@ -226,10 +230,10 @@ impl<T: HashedNodeReader> ChunkBuilder for ChangeChunkBuilder<'_, T> {
         ))
     }
 
-    fn wire(proof: &Self::Proof) -> Vec<u8> {
+    fn wire(proof: &Self::Proof) -> Result<Vec<u8>, api::Error> {
         let mut out = Vec::new();
-        proof.write_to_vec(&mut out);
-        out
+        proof.write_to_vec(&mut out)?;
+        Ok(out)
     }
 }
 

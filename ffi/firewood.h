@@ -58,7 +58,7 @@ typedef struct IteratorHandle IteratorHandle;
 typedef struct ProposalHandle ProposalHandle;
 
 /**
- * FFI context for for a parsed or generated range proof.
+ * FFI context for a parsed or generated range proof.
  */
 typedef struct RangeProofContext RangeProofContext;
 
@@ -815,7 +815,7 @@ typedef struct CreateRangeProofArgs {
   struct Maybe_BorrowedBytes start_key;
   /**
    * The end key of the range to prove. If `None`, the range ends at the end
-   * of the keyspace or until `max_length` items have been been included in
+   * of the keyspace or until `max_length` items have been included in
    * the proof.
    *
    * If provided, end key is inclusive if not truncated. Otherwise, the end
@@ -857,8 +857,9 @@ typedef struct VerifyRangeProofArgs {
    * The upper bound of the key range that the proof is expected to cover. If
    * `None`, the proof is expected to cover to the end of the keyspace.
    *
-   * This is ignored if the proof is truncated and does not cover the full,
-   * in which case the upper bound key is the final key in the key-value pairs.
+   * This is a ceiling, not an assertion: a proof carrying a key above this
+   * bound is invalid, but a truncated proof may prove less and anchor at
+   * its own right edge instead.
    */
   struct Maybe_BorrowedBytes end_key;
   /**
@@ -2957,7 +2958,7 @@ struct RangeProofResult fwd_range_proof_from_bytes(BorrowedBytes bytes);
  *
  * - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
  * - [`ValueResult::Some`] containing the serialized bytes if successful.
- * - [`ValueResult::Err`] if the caller provided a null pointer.
+ * - [`ValueResult::Err`] containing an error message if serialization panicked.
  */
 struct ValueResult fwd_range_proof_to_bytes(const struct RangeProofContext *proof);
 

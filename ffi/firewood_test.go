@@ -271,6 +271,9 @@ func valForTest(i int) []byte {
 	return []byte("value" + strconv.Itoa(i))
 }
 
+// kvForTest returns num key/value pairs and a batch that writes them. The keys
+// (and their paired values) are sorted lexicographically, so keys[:n] is the
+// trie-order prefix of the whole set for any n.
 func kvForTest(num int) ([][]byte, [][]byte, []BatchOp) {
 	keys := make([][]byte, num)
 	vals := make([][]byte, num)
