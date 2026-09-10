@@ -22,6 +22,7 @@
 # Operations
 
 - [Operations & Benchmarking]()
+- [Membership Filter](operations/membership-filter.md)
 
 # Reference
 
