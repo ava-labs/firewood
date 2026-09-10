@@ -263,15 +263,14 @@ mod test {
     use nonzero_ext::nonzero;
 
     use crate::{
-        Committed, DefaultHashMode, DeletedNodeTracking, HashMode, LeafNode, MemStore, Node,
-        NodeStore, Path,
+        Committed, DefaultHashMode, DeletedNodeTracking, LeafNode, MemStore, Node, NodeStore, Path,
     };
 
     use super::*;
 
     #[test]
     fn test_maybe_persisted_node() -> Result<(), FileIoError> {
-        let mem_store = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM).into();
+        let mem_store = MemStore::new(Vec::new()).into();
         let store: NodeStore<Committed, MemStore, DefaultHashMode> =
             NodeStore::new_empty_committed(mem_store, DeletedNodeTracking::Enabled);
         let node = SharedNode::new(Node::Leaf(LeafNode {
@@ -303,7 +302,7 @@ mod test {
 
     #[test]
     fn test_clone_shares_underlying_shared_node() -> Result<(), FileIoError> {
-        let mem_store = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM).into();
+        let mem_store = MemStore::new(Vec::new()).into();
         let store: NodeStore<Committed, MemStore, DefaultHashMode> =
             NodeStore::new_empty_committed(mem_store, DeletedNodeTracking::Enabled);
         let node = SharedNode::new(Node::Leaf(LeafNode {

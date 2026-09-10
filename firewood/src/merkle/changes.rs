@@ -630,7 +630,7 @@ mod tests {
     }
 
     fn create_test_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>> {
-        let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
+        let memstore = MemStore::new(Vec::new());
         let nodestore =
             NodeStore::new_empty_proposal(Arc::new(memstore), DeletedNodeTracking::Enabled);
         Merkle::from(nodestore)

@@ -663,8 +663,8 @@ mod tests {
     use super::*;
     use crate::merkle::Merkle;
     use firewood_storage::{
-        DefaultHashMode, DeletedNodeTracking, HashMode, ImmutableProposal, MemStore, Mutable,
-        NodeStore, Propose,
+        DefaultHashMode, DeletedNodeTracking, ImmutableProposal, MemStore, Mutable, NodeStore,
+        Propose,
     };
     use std::sync::Arc;
     use test_case::test_case;
@@ -681,7 +681,7 @@ mod tests {
 
     pub(super) fn create_test_merkle()
     -> Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>> {
-        let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
+        let memstore = MemStore::new(Vec::new());
         let memstore = Arc::new(memstore);
         let nodestore = NodeStore::new_empty_proposal(memstore, DeletedNodeTracking::Enabled);
         Merkle::from(nodestore)

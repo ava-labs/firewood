@@ -75,10 +75,6 @@ pub struct FileBacked {
     /// (no reads, branch reads only, or all reads). Writes are always cached
     /// regardless of this setting.
     cache_read_strategy: CacheReadStrategy,
-    /// The node hashing algorithm (MerkleDB or Ethereum) this file was opened
-    /// with. Reported via [`ReadableStorage::node_hash_algorithm`] so callers
-    /// can detect a mismatch between the file and the running build.
-    node_hash_algorithm: crate::NodeHashAlgorithm,
     /// `io_uring` proxy used to submit batched writes to the file
     /// (see [`WritableStorage::write_batch`]). The proxy owns only the
     /// `io_uring` instance, not the descriptor — `fd` is passed by `RawFd` into
@@ -133,7 +129,6 @@ impl FileBacked {
         truncate: bool,
         create: bool,
         cache_read_strategy: CacheReadStrategy,
-        node_hash_algorithm: crate::NodeHashAlgorithm,
     ) -> Result<Self, FileIoError> {
         let fd = OpenOptions::new()
             .read(true)
@@ -163,7 +158,6 @@ impl FileBacked {
             ))),
             cache_read_strategy,
             filename: path,
-            node_hash_algorithm,
             #[cfg(io_uring)]
             ring,
             fd: UnlockOnDrop(fd),
@@ -179,10 +173,6 @@ impl FileBacked {
 }
 
 impl ReadableStorage for FileBacked {
-    fn node_hash_algorithm(&self) -> crate::NodeHashAlgorithm {
-        self.node_hash_algorithm
-    }
-
     fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
         firewood_counter!(READ_NODE, "from" => "file").increment(1);
         firewood_counter!(IO_READ_COUNT).increment(1);
@@ -416,7 +406,6 @@ impl std::ops::DerefMut for UnlockOnDrop {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{DefaultHashMode, HashMode};
     use nonzero_ext::nonzero;
     use std::io::Write;
     use tempfile::NamedTempFile;
@@ -456,7 +445,6 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            DefaultHashMode::ALGORITHM,
         )
         .unwrap();
 
@@ -499,7 +487,6 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            DefaultHashMode::ALGORITHM,
         )
         .unwrap();
 
