@@ -2463,11 +2463,45 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
     /// Removes the value associated with the given `key` from the subtrie rooted at `node`.
     /// Returns the new root of the subtrie and the value that was removed, if any.
     /// Each element of `key` is 1 nibble.
+    ///
+    /// The walk descends to a single child per level, removes there, and reattaches
+    /// while unwinding. `remove_step` performs one level and reports whether to
+    /// descend. Change-proof verification drives the walk with a peer-chosen key.
+    /// See [`insert_helper`] for why it must not recurse.
+    ///
+    /// [`insert_helper`]: Self::insert_helper
     fn remove_helper(
         &mut self,
-        node: Node,
+        mut node: Node,
         key: &[u8],
     ) -> Result<(Option<Node>, Option<Value>), FileIoError> {
+        let mut parents: ParentFrames = ParentFrames::new();
+        let mut owned_key: Option<Path> = None;
+
+        let (target, removed_value) = loop {
+            let key_ref: &[u8] = owned_key.as_deref().unwrap_or(key);
+            match self.remove_step(node, key_ref)? {
+                RemoveStep::Done(target, value) => break (target, value),
+                RemoveStep::Descend {
+                    parent,
+                    index,
+                    child,
+                    next_key,
+                } => {
+                    parents.push((parent, index));
+                    node = child;
+                    owned_key = Some(next_key);
+                }
+            }
+        };
+
+        Ok((self.unwind_and_flatten(parents, target)?, removed_value))
+    }
+
+    /// One level of [`remove_helper`].
+    ///
+    /// [`remove_helper`]: Self::remove_helper
+    fn remove_step(&mut self, node: Node, key: &[u8]) -> Result<RemoveStep, FileIoError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
         // 2. The key is above the node (i.e. its ancestor)
@@ -2486,7 +2520,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
         ) {
             (_, Some(_)) => {
                 // Case (2) or (4)
-                Ok((Some(node), None))
+                Ok(RemoveStep::Done(Some(node), None))
             }
             (None, None) => {
                 // 1. The node is at `key`
@@ -2494,12 +2528,15 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                     Node::Branch(mut branch) => {
                         let Some(removed_value) = branch.value.take() else {
                             // The branch has no value. Return the node as is.
-                            return Ok((Some(Node::Branch(branch)), None));
+                            return Ok(RemoveStep::Done(Some(Node::Branch(branch)), None));
                         };
 
-                        Ok((self.flatten_branch(branch)?, Some(removed_value)))
+                        Ok(RemoveStep::Done(
+                            self.flatten_branch(branch)?,
+                            Some(removed_value),
+                        ))
                     }
-                    Node::Leaf(leaf) => Ok((None, Some(leaf.value))),
+                    Node::Leaf(leaf) => Ok(RemoveStep::Done(None, Some(leaf.value))),
                 }
             }
             (Some((child_index, child_partial_path)), None) => {
@@ -2507,24 +2544,41 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 // 3. The key is below the node (i.e. its descendant)
                 match node {
                     // we found a non-matching leaf node, so the value does not exist
-                    Node::Leaf(_) => Ok((Some(node), None)),
+                    Node::Leaf(_) => Ok(RemoveStep::Done(Some(node), None)),
                     Node::Branch(mut branch) => {
                         let Some(child) = branch.children.take(child_index) else {
                             // child does not exist, so the value does not exist
-                            return Ok((Some(Node::Branch(branch)), None));
+                            return Ok(RemoveStep::Done(Some(Node::Branch(branch)), None));
                         };
                         let child = self.read_for_update(child)?;
 
-                        let (child, removed_value) =
-                            self.remove_helper(child, child_partial_path.as_ref())?;
-
-                        branch.children[child_index] = child.map(Child::Node);
-
-                        Ok((self.flatten_branch(branch)?, removed_value))
+                        Ok(RemoveStep::Descend {
+                            parent: branch,
+                            index: child_index,
+                            child,
+                            next_key: child_partial_path,
+                        })
                     }
                 }
             }
         }
+    }
+
+    /// Reattaches `node` into each parent while unwinding, flattening every branch
+    /// on the way back up.
+    ///
+    /// Shared by the two removal walks: both rewrite one child slot and then
+    /// flatten the branch, which can leave nothing behind, hence the `Option`.
+    fn unwind_and_flatten(
+        &mut self,
+        mut parents: ParentFrames,
+        mut node: Option<Node>,
+    ) -> Result<Option<Node>, FileIoError> {
+        while let Some((mut branch, index)) = parents.pop() {
+            branch.children[index] = node.map(Child::Node);
+            node = self.flatten_branch(branch)?;
+        }
+        Ok(node)
     }
 
     /// Removes any key-value pairs with keys that have the given `prefix`.
@@ -2555,12 +2609,52 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
         Ok(deleted)
     }
 
+    /// Removes every key-value pair under `key` from the subtrie rooted at `node`.
+    ///
+    /// The walk descends to a single child per level, deletes the subtrie there, and
+    /// reattaches while unwinding. `remove_prefix_step` performs one level and
+    /// reports whether to descend. Change-proof verification drives the walk with a
+    /// peer-chosen key. See [`insert_helper`] for why it must not recurse.
+    ///
+    /// [`insert_helper`]: Self::insert_helper
     fn remove_prefix_helper(
+        &mut self,
+        mut node: Node,
+        key: &[u8],
+        deleted: &mut usize,
+    ) -> Result<Option<Node>, FileIoError> {
+        let mut parents: ParentFrames = ParentFrames::new();
+        let mut owned_key: Option<Path> = None;
+
+        let target = loop {
+            let key_ref: &[u8] = owned_key.as_deref().unwrap_or(key);
+            match self.remove_prefix_step(node, key_ref, deleted)? {
+                RemovePrefixStep::Done(target) => break target,
+                RemovePrefixStep::Descend {
+                    parent,
+                    index,
+                    child,
+                    next_key,
+                } => {
+                    parents.push((parent, index));
+                    node = child;
+                    owned_key = Some(next_key);
+                }
+            }
+        };
+
+        self.unwind_and_flatten(parents, target)
+    }
+
+    /// One level of [`remove_prefix_helper`].
+    ///
+    /// [`remove_prefix_helper`]: Self::remove_prefix_helper
+    fn remove_prefix_step(
         &mut self,
         node: Node,
         key: &[u8],
         deleted: &mut usize,
-    ) -> Result<Option<Node>, FileIoError> {
+    ) -> Result<RemovePrefixStep, FileIoError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`, in which case we need to delete this node and all its children.
         // 2. The key is above the node (i.e. its ancestor), so the parent needs to be restructured (TODO(rkuris)).
@@ -2582,10 +2676,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 // so we can start deleting below here
                 match node {
                     Node::Branch(branch) => {
-                        if branch.value.is_some() {
-                            // a KV pair was in the branch itself
-                            *deleted = deleted.saturating_add(1);
-                        }
+                        // delete_children tallies the branch's own value.
                         self.delete_children(branch, deleted)?;
                     }
                     Node::Leaf(_) => {
@@ -2593,56 +2684,66 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                         *deleted = deleted.saturating_add(1);
                     }
                 }
-                Ok(None)
+                Ok(RemovePrefixStep::Done(None))
             }
             (_, Some(_)) => {
                 // Case (2) or (4)
-                Ok(Some(node))
+                Ok(RemovePrefixStep::Done(Some(node)))
             }
             (Some((child_index, child_partial_path)), None) => {
                 let child_index = PathComponent::try_new(child_index).expect("valid component");
                 // 3. The key is below the node (i.e. its descendant)
                 match node {
-                    Node::Leaf(_) => Ok(Some(node)),
+                    Node::Leaf(_) => Ok(RemovePrefixStep::Done(Some(node))),
                     Node::Branch(mut branch) => {
                         let Some(child) = branch.children.take(child_index) else {
-                            return Ok(Some(Node::Branch(branch)));
+                            return Ok(RemovePrefixStep::Done(Some(Node::Branch(branch))));
                         };
                         let child = self.read_for_update(child)?;
 
-                        let child =
-                            self.remove_prefix_helper(child, child_partial_path.as_ref(), deleted)?;
-
-                        branch.children[child_index] = child.map(Child::Node);
-
-                        self.flatten_branch(branch)
+                        Ok(RemovePrefixStep::Descend {
+                            parent: branch,
+                            index: child_index,
+                            child,
+                            next_key: child_partial_path,
+                        })
                     }
                 }
             }
         }
     }
 
-    /// Recursively deletes all children of a branch node.
+    /// Deletes the given branch node and every node under it, tallying each freed
+    /// value into `deleted`.
+    ///
+    /// The walk is a worklist rather than recursion. It only tallies what it
+    /// frees, so visit order does not matter. Change-proof verification drives it
+    /// with a peer-chosen subtree. See [`insert_helper`] for why it must not
+    /// recurse.
+    ///
+    /// [`insert_helper`]: Self::insert_helper
     fn delete_children(
         &mut self,
-        mut branch: Box<BranchNode>,
+        branch: Box<BranchNode>,
         deleted: &mut usize,
     ) -> Result<(), FileIoError> {
-        if branch.value.is_some() {
-            // a KV pair was in the branch itself
-            *deleted = deleted.saturating_add(1);
-        }
-        for (_, child) in &mut branch.children {
-            let Some(child) = child.take() else {
-                continue;
-            };
-            let child = self.read_for_update(child)?;
-            match child {
-                Node::Branch(child_branch) => {
-                    self.delete_children(child_branch, deleted)?;
-                }
-                Node::Leaf(_) => {
-                    *deleted = deleted.saturating_add(1);
+        let mut work: Vec<Box<BranchNode>> = vec![branch];
+
+        while let Some(mut branch) = work.pop() {
+            if branch.value.is_some() {
+                // a KV pair was in the branch itself
+                *deleted = deleted.saturating_add(1);
+            }
+            for (_, child) in &mut branch.children {
+                let Some(child) = child.take() else {
+                    continue;
+                };
+                let child = self.read_for_update(child)?;
+                match child {
+                    Node::Branch(child_branch) => work.push(child_branch),
+                    Node::Leaf(_) => {
+                        *deleted = deleted.saturating_add(1);
+                    }
                 }
             }
         }
@@ -2793,6 +2894,35 @@ enum InsertStep {
         child: Node,
         next_key: Path,
         value: Value,
+    },
+}
+
+/// One level of an iterative removal: either the subtrie this level leaves behind
+/// and the value it removed, or the child to continue into together with the parent
+/// it was taken from.
+///
+/// The node is optional because removing a value can collapse a branch away
+/// entirely.
+enum RemoveStep {
+    Done(Option<Node>, Option<Value>),
+    Descend {
+        parent: Box<BranchNode>,
+        index: PathComponent,
+        child: Node,
+        next_key: Path,
+    },
+}
+
+/// One level of an iterative prefix removal. As [`RemoveStep`], but the count of
+/// removed pairs is accumulated through the caller's `deleted` rather than carried
+/// here.
+enum RemovePrefixStep {
+    Done(Option<Node>),
+    Descend {
+        parent: Box<BranchNode>,
+        index: PathComponent,
+        child: Node,
+        next_key: Path,
     },
 }
 
