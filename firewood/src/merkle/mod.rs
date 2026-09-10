@@ -36,6 +36,7 @@ use firewood_storage::{
 use firewood_storage::{
     hash_node_as_storage_trie_root_for_node, hash_node_as_storage_trie_root_parts,
 };
+use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -66,49 +67,82 @@ macro_rules! write_attributes {
     };
 }
 
-/// Returns the value mapped to by `key` in the subtrie rooted at `node`.
+/// Returns the node at `key` in the subtrie rooted at `node`.
+///
+/// Trie depth follows key length, and the key-length bound admits 2,048 levels,
+/// so the walk loops rather than spending stack per level.
+///
+/// In-memory children are followed by reference. Turning one into an owned
+/// `SharedNode` copies its whole subtree, so doing that at every level would make
+/// a read quadratic in depth. Only a persisted child produces an owned node,
+/// which the borrow then points into, so resolving one ends the inner loop.
 fn get_helper<T: TrieReader>(
     nodestore: &T,
     node: &Node,
     key: &[u8],
 ) -> Result<Option<SharedNode>, FileIoError> {
-    // 4 possibilities for the position of the `key` relative to `node`:
-    // 1. The node is at `key`
-    // 2. The key is above the node (i.e. its ancestor)
-    // 3. The key is below the node (i.e. its descendant)
-    // 4. Neither is an ancestor of the other
-    let path_overlap = PrefixOverlap::from(key, node.partial_path());
-    let unique_key = path_overlap.unique_a;
-    let unique_node = path_overlap.unique_b;
+    let mut resolved: Option<SharedNode> = None;
+    let mut key = key;
 
-    match (
-        unique_key.split_first().map(|(index, path)| (*index, path)),
-        unique_node.split_first(),
-    ) {
-        (_, Some(_)) => {
-            // Case (2) or (4)
-            Ok(None)
-        }
-        (None, None) => Ok(Some(node.clone().into())), // 1. The node is at `key`
-        (Some((child_index, remaining_key)), None) => {
-            let child_index = PathComponent::try_new(child_index).expect("index is in bounds");
+    loop {
+        let mut current: &Node = resolved.as_deref().unwrap_or(node);
+
+        let next: SharedNode = loop {
+            // 4 possibilities for the position of the `key` relative to `current`:
+            // 1. The node is at `key`
+            // 2. The key is above the node (i.e. its ancestor)
             // 3. The key is below the node (i.e. its descendant)
-            match node {
-                Node::Leaf(_) => Ok(None),
-                Node::Branch(node) => match node.children[child_index].as_ref() {
-                    None => Ok(None),
-                    Some(Child::Node(child)) => get_helper(nodestore, child, remaining_key),
-                    Some(Child::AddressWithHash(addr, _)) => {
-                        let child = nodestore.read_node(*addr)?;
-                        get_helper(nodestore, &child, remaining_key)
-                    }
-                    Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                        let child = maybe_persisted.as_shared_node(nodestore)?;
-                        get_helper(nodestore, &child, remaining_key)
-                    }
-                },
+            // 4. Neither is an ancestor of the other
+            //
+            // The split index is taken rather than `PrefixOverlap`'s slices,
+            // because that unifies the lifetimes of both its arguments, which
+            // would tie the remaining key to `current` and so to `resolved`.
+            // Re-slicing `key` keeps the remainder borrowed from the caller's key
+            // alone, which is what lets `resolved` be replaced.
+            let partial_path = current.partial_path();
+            let split_index = key
+                .iter()
+                .zip(partial_path.iter())
+                .position(|(k, p)| *k != *p)
+                .unwrap_or(key.len().min(partial_path.len()));
+
+            if split_index != partial_path.len() {
+                // Part of the partial path is unconsumed, so the key diverges from
+                // it or stops inside it. Case (2) or (4).
+                return Ok(None);
             }
-        }
+
+            let unique_key = key
+                .get(split_index..)
+                .expect("split index is at most the key length");
+
+            let Some((&child_index, remaining_key)) = unique_key.split_first() else {
+                // 1. The node is at `key`
+                return Ok(Some(current.clone().into()));
+            };
+            let child_index = PathComponent::try_new(child_index).expect("valid component");
+
+            // 3. The key is below the node (i.e. its descendant)
+            let Node::Branch(branch) = current else {
+                return Ok(None);
+            };
+            match branch.children[child_index].as_ref() {
+                None => return Ok(None),
+                Some(Child::Node(child)) => {
+                    current = child;
+                    key = remaining_key;
+                }
+                Some(Child::AddressWithHash(addr, _)) => {
+                    key = remaining_key;
+                    break nodestore.read_node(*addr)?;
+                }
+                Some(Child::MaybePersisted(maybe_persisted, _)) => {
+                    key = remaining_key;
+                    break maybe_persisted.as_shared_node(nodestore)?;
+                }
+            }
+        };
+        resolved = Some(next);
     }
 }
 
@@ -2034,12 +2068,54 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
     /// Map `key` to `value` into the subtrie rooted at `node`.
     /// Each element of `key` is 1 nibble.
     /// Returns the new root of the subtrie.
+    ///
+    /// The walk descends to a single child per level, transforms it, and reattaches
+    /// it while unwinding. `insert_step` performs one level and reports whether to
+    /// descend, so the path is held on the heap rather than the call stack. Trie
+    /// depth is attacker-controlled through key length during proof verification,
+    /// so recursion here would be a stack-exhaustion sink.
     fn insert_helper(
         &mut self,
         mut node: Node,
         key: &[u8],
-        value: Value,
+        mut value: Value,
     ) -> Result<Node, FileIoError> {
+        let mut parents: ParentFrames = ParentFrames::new();
+        // The caller's key is borrowed for the first level. Only a descent needs an
+        // owned buffer, so a shallow insert allocates nothing here.
+        let mut owned_key: Option<Path> = None;
+
+        let result = loop {
+            let key_ref: &[u8] = owned_key.as_deref().unwrap_or(key);
+            match self.insert_step(node, key_ref, value)? {
+                InsertStep::Done(done) => break done,
+                InsertStep::Descend {
+                    parent,
+                    index,
+                    child,
+                    next_key,
+                    value: carried,
+                } => {
+                    parents.push((parent, index));
+                    node = child;
+                    owned_key = Some(next_key);
+                    value = carried;
+                }
+            }
+        };
+
+        Ok(unwind_parents(parents, result))
+    }
+
+    /// One level of [`insert_helper`].
+    ///
+    /// [`insert_helper`]: Self::insert_helper
+    fn insert_step(
+        &mut self,
+        mut node: Node,
+        key: &[u8],
+        value: Value,
+    ) -> Result<InsertStep, FileIoError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
         // 2. The key is above the node (i.e. its ancestor)
@@ -2062,7 +2138,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 // 1. The node is at `key`
                 node.update_value(value);
                 firewood_counter!(INSERT, "operation" => "update").increment(1);
-                Ok(node)
+                Ok(InsertStep::Done(node))
             }
             (None, Some((child_index, partial_path))) => {
                 let child_index = PathComponent::try_new(child_index).expect("valid component");
@@ -2084,7 +2160,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 branch.children[child_index] = Some(Child::Node(node));
                 firewood_counter!(INSERT, "operation" => "above").increment(1);
 
-                Ok(Node::Branch(Box::new(branch)))
+                Ok(InsertStep::Done(Node::Branch(Box::new(branch))))
             }
             (Some((child_index, partial_path)), None) => {
                 let child_index = PathComponent::try_new(child_index).expect("valid component");
@@ -2095,7 +2171,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 //     |                           |
                 //    ... (key may be below)       ... (key is below)
                 match node {
-                    Node::Branch(ref mut branch) => {
+                    Node::Branch(mut branch) => {
                         let Some(child) = branch.children.take(child_index) else {
                             // There is no child at this index.
                             // Create a new leaf and put it here.
@@ -2105,12 +2181,16 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                             });
                             branch.children[child_index] = Some(Child::Node(new_leaf));
                             firewood_counter!(INSERT, "operation" => "below").increment(1);
-                            return Ok(node);
+                            return Ok(InsertStep::Done(Node::Branch(branch)));
                         };
                         let child = self.read_for_update(child)?;
-                        let child = self.insert_helper(child, partial_path.as_ref(), value)?;
-                        branch.children[child_index] = Some(Child::Node(child));
-                        Ok(node)
+                        Ok(InsertStep::Descend {
+                            parent: branch,
+                            index: child_index,
+                            child,
+                            next_key: partial_path,
+                            value,
+                        })
                     }
                     Node::Leaf(leaf) => {
                         // Turn this node into a branch node and put a new leaf as a child.
@@ -2128,7 +2208,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                         branch.children[child_index] = Some(Child::Node(new_leaf));
 
                         firewood_counter!(INSERT, "operation" => "split").increment(1);
-                        Ok(Node::Branch(Box::new(branch)))
+                        Ok(InsertStep::Done(Node::Branch(Box::new(branch))))
                     }
                 }
             }
@@ -2158,14 +2238,48 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 branch.children[key_index] = Some(Child::Node(new_leaf));
 
                 firewood_counter!(INSERT, "operation" => "split").increment(1);
-                Ok(Node::Branch(Box::new(branch)))
+                Ok(InsertStep::Done(Node::Branch(Box::new(branch))))
             }
         }
     }
 
     /// Ensures a branch exists at `key` in the subtrie rooted at `node`.
     /// Each element of `key` is 1 nibble.
+    ///
+    /// See [`insert_helper`] for why this walk must not recurse.
+    ///
+    /// [`insert_helper`]: Self::insert_helper
     fn insert_branch_helper(&mut self, mut node: Node, key: &[u8]) -> Result<Node, FileIoError> {
+        let mut parents: ParentFrames = ParentFrames::new();
+        let mut owned_key: Option<Path> = None;
+
+        let result = loop {
+            let key_ref: &[u8] = owned_key.as_deref().unwrap_or(key);
+            match self.insert_branch_step(node, key_ref)? {
+                InsertBranchStep::Done(done) => break done,
+                InsertBranchStep::Descend {
+                    parent,
+                    index,
+                    child,
+                    next_key,
+                } => {
+                    parents.push((parent, index));
+                    node = child;
+                    owned_key = Some(next_key);
+                }
+            }
+        };
+        Ok(unwind_parents(parents, result))
+    }
+
+    /// One level of [`insert_branch_helper`].
+    ///
+    /// [`insert_branch_helper`]: Self::insert_branch_helper
+    fn insert_branch_step(
+        &mut self,
+        mut node: Node,
+        key: &[u8],
+    ) -> Result<InsertBranchStep, FileIoError> {
         let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
 
         let unique_key = path_overlap.unique_a;
@@ -2180,14 +2294,14 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 .map(|(index, path)| (*index, path.into())),
         ) {
             (None, None) => match node {
-                Node::Branch(_) => Ok(node),
+                Node::Branch(_) => Ok(InsertBranchStep::Done(node)),
                 Node::Leaf(leaf) => {
                     let branch = BranchNode {
                         partial_path: leaf.partial_path,
                         value: Some(leaf.value),
                         children: Children::new(),
                     };
-                    Ok(Node::Branch(Box::new(branch)))
+                    Ok(InsertBranchStep::Done(Node::Branch(Box::new(branch))))
                 }
             },
             (None, Some((child_index, partial_path))) => {
@@ -2202,13 +2316,13 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 node.update_partial_path(partial_path);
                 branch.children[child_index] = Some(Child::Node(node));
 
-                Ok(Node::Branch(Box::new(branch)))
+                Ok(InsertBranchStep::Done(Node::Branch(Box::new(branch))))
             }
             (Some((child_index, partial_path)), None) => {
                 let child_index = PathComponent::try_new(child_index).expect("valid component");
 
                 match node {
-                    Node::Branch(ref mut branch) => {
+                    Node::Branch(mut branch) => {
                         let Some(child) = branch.children.take(child_index) else {
                             let new_branch = Node::Branch(Box::new(BranchNode {
                                 partial_path,
@@ -2216,13 +2330,16 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                                 children: Children::new(),
                             }));
                             branch.children[child_index] = Some(Child::Node(new_branch));
-                            return Ok(node);
+                            return Ok(InsertBranchStep::Done(Node::Branch(branch)));
                         };
 
                         let child = self.read_for_update(child)?;
-                        let child = self.insert_branch_helper(child, partial_path.as_ref())?;
-                        branch.children[child_index] = Some(Child::Node(child));
-                        Ok(node)
+                        Ok(InsertBranchStep::Descend {
+                            parent: branch,
+                            index: child_index,
+                            child,
+                            next_key: partial_path,
+                        })
                     }
                     Node::Leaf(leaf) => {
                         let mut branch = BranchNode {
@@ -2238,7 +2355,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                         }));
                         branch.children[child_index] = Some(Child::Node(new_branch));
 
-                        Ok(Node::Branch(Box::new(branch)))
+                        Ok(InsertBranchStep::Done(Node::Branch(Box::new(branch))))
                     }
                 }
             }
@@ -2262,7 +2379,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 }));
                 branch.children[key_index] = Some(Child::Node(new_branch));
 
-                Ok(Node::Branch(Box::new(branch)))
+                Ok(InsertBranchStep::Done(Node::Branch(Box::new(branch))))
             }
         }
     }
@@ -2635,6 +2752,48 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
         *self.nodestore.root_mut() = root_node.into();
         Ok(())
     }
+}
+
+/// Parent frames for the walks that descend to one child per level. Inline
+/// capacity covers realistic trie depths, so a walk allocates nothing for its
+/// frames. See `FRAME_STACK_INLINE_CAPACITY` in the storage crate for the sizing
+/// rationale.
+type ParentFrames = SmallVec<[(Box<BranchNode>, PathComponent); 8]>;
+
+/// Reattaches each transformed child to the parent it was taken from, innermost
+/// first. Shared by the two insert walks, which descend without flattening on
+/// the way back.
+fn unwind_parents(mut parents: ParentFrames, mut node: Node) -> Node {
+    while let Some((mut parent, index)) = parents.pop() {
+        parent.children[index] = Some(Child::Node(node));
+        node = Node::Branch(parent);
+    }
+    node
+}
+
+/// One level of an iterative branch insert: either the finished node, or the child
+/// to continue into together with the parent it was taken from.
+enum InsertBranchStep {
+    Done(Node),
+    Descend {
+        parent: Box<BranchNode>,
+        index: PathComponent,
+        child: Node,
+        next_key: Path,
+    },
+}
+
+/// One level of an iterative insert: either the finished node, or the child to
+/// continue into together with the parent it was taken from.
+enum InsertStep {
+    Done(Node),
+    Descend {
+        parent: Box<BranchNode>,
+        index: PathComponent,
+        child: Node,
+        next_key: Path,
+        value: Value,
+    },
 }
 
 /// The [`PrefixOverlap`] type represents the _shared_ and _unique_ parts of two potentially overlapping slices.
