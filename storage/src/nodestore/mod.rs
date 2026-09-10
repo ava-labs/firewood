@@ -1952,6 +1952,54 @@ mod tests {
         assert_eq!(reconstructed.root_hash(), None);
     }
 
+    /// A chain deeper than any key the proof bound admits is hashed on a stack
+    /// far smaller than a thread's default, so the walk cannot be spending stack
+    /// per level.
+    ///
+    /// `hash_helper` is called directly because `root_hash` clones the root
+    /// first, and a derived clone recurses once per level. The result is
+    /// forgotten rather than dropped for the same reason: the derived drop glue
+    /// recurses, and would overflow the small stack on its own.
+    #[test]
+    fn hash_helper_survives_a_deep_chain_on_a_small_stack() {
+        const DEPTH: usize = 4096;
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let storage = Arc::new(MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM));
+                let recon = NodeStore::new_empty_recon(Arc::clone(&storage));
+                let reconstructed: NodeStore<
+                    Reconstructed<_, DefaultHashMode>,
+                    _,
+                    DefaultHashMode,
+                > = recon.into();
+
+                // A value longer than a hash, so no node in the chain is short
+                // enough to be inlined under the Ethereum scheme.
+                let mut node = Node::Leaf(LeafNode {
+                    partial_path: Path::new(),
+                    value: vec![0xAB; 64].into_boxed_slice(),
+                });
+                for _ in 0..DEPTH {
+                    let mut children = Children::new();
+                    children[PathComponent::ALL[0]] = Some(Child::Node(node));
+                    node = Node::Branch(Box::new(BranchNode {
+                        partial_path: Path::new(),
+                        value: None,
+                        children,
+                    }));
+                }
+
+                let hashed = reconstructed
+                    .hash_helper(node, Path::new())
+                    .expect("hashing a deep chain must succeed");
+                std::mem::forget(hashed);
+            })
+            .expect("spawning the guard thread must succeed")
+            .join()
+            .expect("a deep chain must not exhaust the stack");
+    }
+
     #[test]
     fn reconstructed_root_hash_rewrites_root_children() {
         // After root_hash() runs, the swapped-in root must have no Child::Node
