@@ -11,6 +11,7 @@ use firewood_storage::{
 
 use super::frame::MAX_DECOMPRESSED_LEN;
 use super::{
+    de::{MAX_KEY_BYTES, MAX_KEY_NIBBLES},
     header::{Header, InvalidHeader},
     magic,
     reader::{ProofReader, ReadError},
@@ -1722,4 +1723,133 @@ fn test_value_digest_hash_read_arm_is_unconditional() {
         ValueDigest::Value(_) => panic!("expected ValueDigest::Hash"),
     }
     assert!(eth_reader.remainder().is_empty(), "all bytes consumed");
+}
+
+type BoxedOp = BatchOp<Box<[u8]>, Box<[u8]>>;
+
+fn put(key: Box<[u8]>) -> BoxedOp {
+    BatchOp::Put {
+        key,
+        value: Box::from(b"v".as_slice()),
+    }
+}
+
+fn delete(key: Box<[u8]>) -> BoxedOp {
+    BatchOp::Delete { key }
+}
+
+fn delete_range(prefix: Box<[u8]>) -> BoxedOp {
+    BatchOp::DeleteRange { prefix }
+}
+
+/// Serializes a change proof carrying one operation, built by `op` from a key of
+/// `key_len` zero bytes.
+fn change_proof_with_key_len(op: fn(Box<[u8]>) -> BoxedOp, key_len: usize) -> Vec<u8> {
+    let proof = FrozenChangeProof::with_hash_mode(
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Box::new([op(vec![0u8; key_len].into_boxed_slice())]),
+        DefaultHashMode::ALGORITHM,
+    );
+    let mut serialized = Vec::new();
+    proof
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
+    serialized
+}
+
+/// The `expected` text a key-length rejection carries.
+fn key_bound_message() -> String {
+    format!("at most {MAX_KEY_BYTES} bytes")
+}
+
+/// Asserts a bound test's deserialization outcome: accepted, or rejected with an
+/// `InvalidItem` naming the bounded item. Matching on the item keeps an unrelated
+/// deserialization failure from passing as the rejection.
+fn assert_bound_outcome<T: std::fmt::Debug>(
+    result: Result<T, ReadError>,
+    accepted: bool,
+    item_name: &str,
+    expected_msg: &str,
+) {
+    if accepted {
+        assert!(result.is_ok(), "expected acceptance, got {result:?}");
+        return;
+    }
+    match result {
+        Err(ReadError::InvalidItem { item, expected, .. }) => {
+            assert_eq!(item, item_name);
+            assert_eq!(expected, expected_msg);
+        }
+        other => panic!("expected InvalidItem for {item_name}, got {other:?}"),
+    }
+}
+
+/// Every batch operation's key is bounded. A key at the bound deserializes and
+/// one byte over is rejected.
+#[test_case(put, MAX_KEY_BYTES, true ; "put at the bound")]
+#[test_case(put, MAX_KEY_BYTES + 1, false ; "put one byte over")]
+#[test_case(delete, MAX_KEY_BYTES, true ; "delete at the bound")]
+#[test_case(delete, MAX_KEY_BYTES + 1, false ; "delete one byte over")]
+#[test_case(delete_range, MAX_KEY_BYTES, true ; "delete range at the bound")]
+#[test_case(delete_range, MAX_KEY_BYTES + 1, false ; "delete range one byte over")]
+fn test_batch_op_key_length_bound(op: fn(Box<[u8]>) -> BoxedOp, key_len: usize, accepted: bool) {
+    let data = change_proof_with_key_len(op, key_len);
+    assert_bound_outcome(
+        FrozenChangeProof::from_slice(&data),
+        accepted,
+        "key length",
+        &key_bound_message(),
+    );
+}
+
+/// The same bound applies to a range proof's key-value pairs.
+#[test_case(MAX_KEY_BYTES, true ; "at the bound")]
+#[test_case(MAX_KEY_BYTES + 1, false ; "one byte over")]
+fn test_range_proof_key_length_bound(key_len: usize, accepted: bool) {
+    let proof = FrozenRangeProof::with_hash_mode(
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Box::new([(
+            vec![0u8; key_len].into_boxed_slice(),
+            Box::from(b"v".as_slice()),
+        )]),
+        DefaultHashMode::ALGORITHM,
+    );
+    let mut data = Vec::new();
+    proof.write_to_vec(&mut data).expect("serialize proof");
+    assert_bound_outcome(
+        FrozenRangeProof::from_slice(&data),
+        accepted,
+        "key length",
+        &key_bound_message(),
+    );
+}
+
+/// A proof node's path is nibbles, so it is bounded in nibbles rather than bytes.
+#[test_case(MAX_KEY_NIBBLES, true ; "at the bound")]
+#[test_case(MAX_KEY_NIBBLES + 1, false ; "one nibble over")]
+fn test_proof_node_path_length_bound(nibbles: usize, accepted: bool) {
+    let node = ProofNode {
+        key: (0..nibbles)
+            .map(|_| PathComponent::try_new(0).expect("0 is a valid nibble"))
+            .collect(),
+        partial_len: 0,
+        value_digest: None,
+        child_hashes: DenseChildren::new(),
+    };
+    let proof = FrozenRangeProof::with_hash_mode(
+        Proof::new(Box::<[ProofNode]>::from([node])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Box::new([]),
+        DefaultHashMode::ALGORITHM,
+    );
+    let mut data = Vec::new();
+    proof.write_to_vec(&mut data).expect("serialize proof");
+    assert_bound_outcome(
+        FrozenRangeProof::from_slice(&data),
+        accepted,
+        "path length",
+        &format!("at most {MAX_KEY_NIBBLES} nibbles"),
+    );
 }

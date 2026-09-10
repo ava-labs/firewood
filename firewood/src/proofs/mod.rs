@@ -53,6 +53,9 @@
 //! Change proofs additionally serialize their `batch_ops` as a sequence of tagged
 //! Put/Delete operations after the boundary proof nodes. See `ser.rs` for details.
 //!
+//! Readers reject keys longer than 1024 bytes and proof-node keys longer than
+//! 2048 nibbles. See `MAX_KEY_BYTES` in `de.rs`.
+//!
 //! The serialization format is versioned to allow for future evolution while maintaining
 //! backward compatibility with proof verification.
 //!
