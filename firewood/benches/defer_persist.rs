@@ -12,16 +12,18 @@ use std::iter::repeat_with;
 use std::num::NonZeroU64;
 
 #[expect(clippy::unwrap_used)]
-fn bench_deferred_persistence<const N: usize, const COMMIT_COUNT: u64>(criterion: &mut Criterion) {
+fn bench_deferred_persistence<const N: usize, const MAX_PERSISTENCE_GAP: u64>(
+    criterion: &mut Criterion,
+) {
     const KEY_LEN: usize = 4;
     let rng = &firewood_storage::SeededRng::from_option(Some(1234));
-    let commit_count = NonZeroU64::new(COMMIT_COUNT).unwrap();
-    let max_revisions = commit_count.get().wrapping_add(1) as usize;
+    let max_persistence_gap = NonZeroU64::new(MAX_PERSISTENCE_GAP).unwrap();
+    let max_revisions = max_persistence_gap.get().wrapping_add(1) as usize;
 
     criterion
         .benchmark_group("deferred_persistence")
         .sample_size(20)
-        .bench_function(format!("commit_count_{COMMIT_COUNT}"), |b| {
+        .bench_function(format!("max_persistence_gap_{MAX_PERSISTENCE_GAP}"), |b| {
             b.iter_batched(
                 || {
                     let batch_ops: Vec<_> =
@@ -41,7 +43,7 @@ fn bench_deferred_persistence<const N: usize, const COMMIT_COUNT: u64>(criterion
                         .manager(
                             RevisionManagerConfig::builder()
                                 .max_revisions(max_revisions)
-                                .deferred_persistence_commit_count(commit_count)
+                                .max_persistence_gap(max_persistence_gap)
                                 .build(),
                         )
                         .build();
@@ -60,8 +62,8 @@ fn bench_deferred_persistence<const N: usize, const COMMIT_COUNT: u64>(criterion
         });
 }
 
-// Commit count values span powers of 10 (1, 10, 100, 1_000) to show the
-// performance curve from persisting every commit to persisting just once.
+// Persistence gap limits span powers of 10 (1, 10, 100, 1_000) to measure
+// throughput as more revisions may accumulate before persistence completes.
 criterion_group! {
     name = benches;
     config = Criterion::default();

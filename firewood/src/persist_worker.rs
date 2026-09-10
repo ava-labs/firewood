@@ -4,8 +4,8 @@
 //! Deferred persistence for committed revisions.
 //!
 //! This module decouples commit operations from disk I/O by offloading persistence
-//! to a background thread. Commits return immediately after updating in-memory state,
-//! while disk writes happen asynchronously.
+//! to a background thread. Commits may wait for capacity before updating in-memory
+//! state; disk writes happen asynchronously.
 //!
 //! [`PersistWorker`] is the main entry point. It spawns a background thread and provides
 //! methods to send revisions for persistence, with built-in backpressure to limit
@@ -13,25 +13,27 @@
 //!
 //! # Permit model
 //!
-//! Backpressure is managed through a fixed pool of **permits**, sized by `commit_count`
+//! Backpressure is managed through a fixed pool of **permits**, sized by `max_persistence_gap`
 //! (the maximum number of unpersisted commits allowed at any time).
 //!
-//! - **Commits consume permits.** Each call to [`PersistWorker::persist`] stores the
+//! - **Commits consume permits.** Each call to [`PersistWorker::submit_revision`] stores the
 //!   latest committed revision and consumes one permit. If no permits remain, the
 //!   caller blocks until the background thread releases some.
 //!
 //! - **Persists release permits.** When the background thread writes a revision to disk,
-//!   all permits consumed since the last persist are released at once, unblocking any
-//!   waiting committers.
+//!   the permits associated with that revision and its predecessors are released,
+//!   unblocking waiting committers. Commits submitted during the write retain their
+//!   permits until a later persistence operation completes.
 //!
 //! - **A threshold triggers persistence.** The background thread wakes when the number
-//!   of available permits drops to `persist_threshold` (equal to `commit_count / 2`,
+//!   of available permits drops to `persist_permits_threshold` (equal to `max_persistence_gap / 2`,
 //!   rounded down). It then persists the most recent revision and releases the consumed
 //!   permits in bulk. Only the latest revision is persisted because persisting a revision
 //!   implicitly includes the effects of all prior revisions.
+//!   It does not preserve each prior revision as a separately queryable state.
 //!
-//! For example, with `commit_count = 10` the pool starts with 10 permits and
-//! `persist_threshold = 5`. After 5 commits the available permits drop to 5,
+//! For example, with `max_persistence_gap = 10` the pool starts with 10 permits and
+//! `persist_permits_threshold = 5`. After 5 commits the available permits drop to 5,
 //! triggering a persist that releases all 5 consumed permits back to the pool.
 //!
 //! See [`PersistWorker`] for a sequence diagram illustrating this flow.
@@ -73,7 +75,7 @@ pub enum PersistError {
 ///
 /// # Sequence diagram
 ///
-/// Below is an example when `commit_count` is set to 10:
+/// Below is an example when `max_persistence_gap` is set to 10:
 ///
 #[cfg_attr(doc, aquamarine::aquamarine)]
 /// ```mermaid
@@ -127,20 +129,22 @@ impl<H: HashMode> PersistWorker<H> {
     /// Returns the worker for sending messages to the background thread.
     #[expect(clippy::large_types_passed_by_value)]
     pub(crate) fn new(
-        commit_count: NonZeroU64,
+        max_persistence_gap: NonZeroU64,
         header: NodeStoreHeader,
         root_store: Option<Arc<RootStore<H>>>,
     ) -> Self {
-        let persist_interval = NonZeroU64::new(commit_count.get().div_ceil(2))
+        let persist_interval = NonZeroU64::new(max_persistence_gap.get().div_ceil(2))
             .expect("a nonzero div_ceil(2) is always positive");
-        let persist_threshold = commit_count.get().wrapping_sub(persist_interval.get());
+        let persist_permits_threshold = max_persistence_gap
+            .get()
+            .wrapping_sub(persist_interval.get());
 
         let shared = Arc::new(SharedState {
             error: OnceLock::new(),
             root_store,
             header: Mutex::new(header),
             persist_on_shutdown: OnceLock::new(),
-            channel: PersistChannel::new(commit_count, persist_threshold),
+            channel: PersistChannel::new(max_persistence_gap, persist_permits_threshold),
         });
 
         let bg_shared = shared.clone();
@@ -167,7 +171,10 @@ impl<H: HashMode> PersistWorker<H> {
     /// ## Panics
     ///
     /// Propagates any panic from the background thread.
-    pub(crate) fn persist(&self, committed: CommittedRevision<H>) -> Result<(), PersistError> {
+    pub(crate) fn submit_revision(
+        &self,
+        committed: CommittedRevision<H>,
+    ) -> Result<(), PersistError> {
         // BLOCKING: `push` will block the calling thread (i.e. the commit path) if all permits
         // are consumed — meaning the background persist thread has fallen behind. This is the
         // primary backpressure mechanism: excessive commit rates are slowed down here until the
@@ -252,7 +259,7 @@ impl<H: HashMode> PersistWorker<H> {
         // BLOCKING: `handle.lock()` acquires the JoinHandle mutex (fast). `handle.join()` then
         // blocks until the background thread exits — which can be an arbitrarily long wait if
         // the thread is mid-persist or mid-reap with slow disk I/O. This is only called from
-        // `persist()` on a channel shutdown or from `close()`, so normal operation is unaffected.
+        // `submit_revision()` on a channel shutdown or from `close()`, so normal operation is unaffected.
         if let Some(handle) = self.handle.lock().take()
             && let Err(payload) = handle.join()
         {
@@ -279,7 +286,7 @@ struct PersistChannel<H> {
 }
 
 impl<H> PersistChannel<H> {
-    fn new(max_permits: NonZeroU64, persist_threshold: u64) -> Self {
+    fn new(max_permits: NonZeroU64, persist_permits_threshold: u64) -> Self {
         // Emit once at construction since `max_permits` is constant.
         firewood_gauge!(MAX_PERMITS).set_integer(max_permits.get());
 
@@ -287,7 +294,7 @@ impl<H> PersistChannel<H> {
             state: Mutex::new(PersistChannelState {
                 permits_available: max_permits.get(),
                 max_permits,
-                persist_threshold,
+                persist_permits_threshold,
                 shutdown: false,
                 pending_reaps: Vec::new(),
                 latest_committed: None,
@@ -331,7 +338,7 @@ impl<H> PersistChannel<H> {
         state.emit_permits();
 
         // BLOCKING: condvar wait. The commit thread parks here when all permits are consumed
-        // (i.e. `deferred_persistence_commit_count` commits have accumulated without a persist).
+        // (i.e. `max_persistence_gap` commits have accumulated without a persist).
         // It wakes when the background persist loop calls `commit_not_full.notify_all()` after
         // releasing permits. Duration is bounded by how fast the background thread can write a
         // revision to disk. Under slow I/O this can stall commits for hundreds of milliseconds.
@@ -348,7 +355,7 @@ impl<H> PersistChannel<H> {
         state.permits_available = state.permits_available.wrapping_sub(1);
 
         // Wake the persister once we reach the threshold.
-        if state.permits_available <= state.persist_threshold {
+        if state.permits_available <= state.persist_permits_threshold {
             self.persist_ready.notify_one();
         }
         Ok(())
@@ -369,7 +376,7 @@ impl<H> PersistChannel<H> {
                     return Err(PersistError::Shutdown);
                 }
                 // Unblock to persist when permits available <= threshold
-                if state.permits_available <= state.persist_threshold
+                if state.permits_available <= state.persist_permits_threshold
                     && state.latest_committed.is_some()
                 {
                     break (
@@ -439,7 +446,7 @@ struct PersistChannelState<H> {
     /// Maximum number of unpersisted commits allowed.
     max_permits: NonZeroU64,
     /// Persist when remaining permits are at or below this threshold.
-    persist_threshold: u64,
+    persist_permits_threshold: u64,
     /// Set to `true` when the channel has been closed.
     shutdown: bool,
     /// Nodestores awaiting reaping by the background thread.
