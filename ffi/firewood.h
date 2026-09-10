@@ -1691,7 +1691,7 @@ typedef struct DatabaseHandleArgs {
   /**
    * The maximum number of revisions to keep.
    *
-   * Must be > `deferred_persistence_commit_count`.
+   * Must be > `max_persistence_gap`.
    */
   size_t revisions;
   /**
@@ -1737,11 +1737,33 @@ typedef struct DatabaseHandleArgs {
    */
   enum NodeHashAlgorithm node_hash_algorithm;
   /**
-   * The maximum number of unpersisted revisions that can exist at a given time.
+   * The maximum number of committed revisions by which the latest persisted
+   * state may lag behind the latest committed state.
    *
-   * Note: `revisions` must be > `deferred_persistence_commit_count`.
+   * Committing makes a revision current, while persistence writes its state
+   * to the database files asynchronously, without a fixed schedule. A commit
+   * can therefore return before its state is persisted, even when this value
+   * is 1, and subsequent commits may wait for persistence to maintain the
+   * configured bound. Only commits that change the current root count toward
+   * this limit; uncommitted proposals do not.
+   *
+   * Set this value to 1 to persist every committed revision before the next
+   * state-changing commit completes. Values greater than 1 allow persistence
+   * to skip intermediate revisions, so not every revision is guaranteed to be
+   * written to disk.
+   *
+   * A successful explicit close persists the latest committed state.
+   *
+   * Examples:
+   *
+   * - With a value of 1, the latest persisted state is either the latest
+   *   committed revision or its parent.
+   * - With a value of 2, it may also be its grandparent: at most two revisions
+   *   back, among three possible states.
+   *
+   * Must be positive and less than `revisions`.
    */
-  uint64_t deferred_persistence_commit_count;
+  uint64_t max_persistence_gap;
 } DatabaseHandleArgs;
 
 /**

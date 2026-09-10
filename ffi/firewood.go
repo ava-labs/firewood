@@ -139,7 +139,7 @@ type config struct {
 	// revisions is the maximum number of historical revisions to keep in memory.
 	// If rootStoreDir is set, then any revisions removed from memory will still be kept on disk.
 	// Otherwise, any revisions removed from memory will no longer be kept on disk.
-	// Must be >= 2 and > deferredPersistenceCommitCount.
+	// Must be >= 2 and > maxPersistenceGap.
 	revisions uint
 	// readCacheStrategy is the caching strategy used for the node cache.
 	readCacheStrategy CacheStrategy
@@ -149,19 +149,17 @@ type config struct {
 	expensiveMetricsEnabled bool
 	// metricsTag separates metrics and logs by database handle.
 	metricsTag string
-	// deferredPersistenceCommitCount determines the maximum number of unpersisted
-	// revisions that can exist at a given time.
-	// Note: revisions must be > deferredPersistenceCommitCount
-	deferredPersistenceCommitCount uint64
+	// maxPersistenceGap is configured by WithMaxPersistenceGap.
+	maxPersistenceGap uint64
 }
 
 func defaultConfig() *config {
 	return &config{
-		nodeCacheSizeInBytes:           128_000_000,
-		freeListMemoryLimitKB:          4096,
-		revisions:                      100,
-		readCacheStrategy:              OnlyCacheWrites,
-		deferredPersistenceCommitCount: 1,
+		nodeCacheSizeInBytes:  128_000_000,
+		freeListMemoryLimitKB: 4096,
+		revisions:             100,
+		readCacheStrategy:     OnlyCacheWrites,
+		maxPersistenceGap:     1,
 	}
 }
 
@@ -199,7 +197,7 @@ func WithFreeListMemoryLimitKB(memoryLimitKB uint) Option {
 // WithRevisions sets the maximum number of historical revisions to keep in memory.
 // If RootStoreDir is set, then any revisions removed from memory will still be kept on disk.
 // Otherwise, any revisions removed from memory will no longer be kept on disk.
-// Must be >= 2 and > WithDeferredPersistenceCommitCount.
+// Must be >= 2 and > WithMaxPersistenceGap.
 // Default: 100
 func WithRevisions(revisions uint) Option {
 	return func(c *config) {
@@ -242,13 +240,34 @@ func WithMetricsTag(tag string) Option {
 	}
 }
 
-// WithDeferredPersistenceCommitCount sets the maximum number of unpersisted revisions
-// that can exist at a time. Note: `commitCount` must be greater than 0 and WithRevisions
-// must be greater than `commitCount`.
-// Default: 1
-func WithDeferredPersistenceCommitCount(commitCount uint64) Option {
+// WithMaxPersistenceGap sets the maximum number of committed revisions by which
+// the latest persisted state may lag behind the latest committed state.
+//
+// Committing makes a revision current, while persistence writes its state
+// to the database files asynchronously, without a fixed schedule. A commit
+// can therefore return before its state is persisted, even when this value
+// is 1, and subsequent commits may wait for persistence to maintain the
+// configured bound. Only commits that change the current root count toward
+// this limit; uncommitted proposals do not.
+//
+// Set this value to 1 to persist every committed revision before the next
+// state-changing commit completes. Values greater than 1 allow persistence
+// to skip intermediate revisions, so not every revision is guaranteed to be
+// written to disk.
+//
+// A successful [Database.Close] persists the latest committed state.
+//
+// Examples:
+//
+//   - With a value of 1, the latest persisted state is either the latest committed
+//     revision or its parent.
+//   - With a value of 2, it may also be its grandparent: at most two revisions
+//     back, among three possible states.
+//
+// Defaults to 1. Must be positive and less than the value set by [WithRevisions].
+func WithMaxPersistenceGap(maxPersistenceGap uint64) Option {
 	return func(c *config) {
-		c.deferredPersistenceCommitCount = commitCount
+		c.maxPersistenceGap = maxPersistenceGap
 	}
 }
 
@@ -308,17 +327,17 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	defer pinner.Unpin()
 
 	args := C.struct_DatabaseHandleArgs{
-		dir:                               newBorrowedBytes([]byte(dbDir), &pinner),
-		node_cache_memory_limit:           C.size_t(conf.nodeCacheSizeInBytes),
-		freelist_memory_limit_kb:          C.size_t(conf.freeListMemoryLimitKB),
-		revisions:                         C.size_t(conf.revisions),
-		strategy:                          C.uint8_t(conf.readCacheStrategy),
-		truncate:                          C.bool(conf.truncate),
-		root_store:                        C.bool(conf.rootStore),
-		expensive_metrics:                 C.bool(conf.expensiveMetricsEnabled),
-		node_hash_algorithm:               C.enum_NodeHashAlgorithm(nodeHashAlgorithm),
-		db_tag:                            newBorrowedBytes([]byte(conf.metricsTag), &pinner),
-		deferred_persistence_commit_count: C.uint64_t(conf.deferredPersistenceCommitCount),
+		dir:                      newBorrowedBytes([]byte(dbDir), &pinner),
+		node_cache_memory_limit:  C.size_t(conf.nodeCacheSizeInBytes),
+		freelist_memory_limit_kb: C.size_t(conf.freeListMemoryLimitKB),
+		revisions:                C.size_t(conf.revisions),
+		strategy:                 C.uint8_t(conf.readCacheStrategy),
+		truncate:                 C.bool(conf.truncate),
+		root_store:               C.bool(conf.rootStore),
+		expensive_metrics:        C.bool(conf.expensiveMetricsEnabled),
+		node_hash_algorithm:      C.enum_NodeHashAlgorithm(nodeHashAlgorithm),
+		db_tag:                   newBorrowedBytes([]byte(conf.metricsTag), &pinner),
+		max_persistence_gap:      C.uint64_t(conf.maxPersistenceGap),
 	}
 
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))

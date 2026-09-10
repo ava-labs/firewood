@@ -39,7 +39,7 @@ pub(crate) const DB_FILE_NAME: &str = "firewood.db";
 pub struct RevisionManagerConfig {
     /// The number of committed revisions to keep in memory.
     ///
-    /// Must be > `deferred_persistence_commit_count`.
+    /// Must be > `max_persistence_gap`.
     #[builder(default = 128)]
     max_revisions: usize,
 
@@ -63,11 +63,33 @@ pub struct RevisionManagerConfig {
     #[builder(default = CacheReadStrategy::WritesOnly)]
     cache_read_strategy: CacheReadStrategy,
 
-    /// The maximum number of unpersisted revisions that can exist at a given time.
+    /// The maximum number of committed revisions by which the latest persisted
+    /// state may lag behind the latest committed state.
     ///
-    /// Must be < `max_revisions`.
+    /// Committing makes a revision current, while persistence writes its state
+    /// to the database files asynchronously, without a fixed schedule. A commit
+    /// can therefore return before its state is persisted, even when this value
+    /// is 1, and subsequent commits may wait for persistence to maintain the
+    /// configured bound. Only commits that change the current root count toward
+    /// this limit; uncommitted proposals do not.
+    ///
+    /// Set this value to 1 to persist every committed revision before the next
+    /// state-changing commit completes. Values greater than 1 allow persistence
+    /// to skip intermediate revisions, so not every revision is guaranteed to be
+    /// written to disk.
+    ///
+    /// A successful explicit database close persists the latest committed state.
+    ///
+    /// Examples:
+    ///
+    /// - With a value of 1, the latest persisted state is either the latest
+    ///   committed revision or its parent.
+    /// - With a value of 2, it may also be its grandparent: at most two revisions
+    ///   back, among three possible states.
+    ///
+    /// Defaults to 1. Must be positive and less than `max_revisions`.
     #[builder(default = nonzero!(1u64))]
-    deferred_persistence_commit_count: NonZeroU64,
+    max_persistence_gap: NonZeroU64,
 }
 
 #[derive(Clone, Debug, TypedBuilder)]
@@ -160,21 +182,21 @@ pub(crate) enum RevisionManagerError {
     #[error("A deferred persistence error occurred: {0}")]
     PersistError(#[source] PersistError),
     #[error(
-        "max_revisions ({max_revisions}) must be > deferred_persistence_commit_count ({commit_count})"
+        "max_revisions ({max_revisions}) must be > max_persistence_gap ({max_persistence_gap})"
     )]
     InsufficientRevisions {
         max_revisions: usize,
-        commit_count: u64,
+        max_persistence_gap: u64,
     },
 }
 
 impl<H: HashMode> RevisionManager<H> {
     pub fn new(config: ConfigManager) -> Result<Self, RevisionManagerError> {
-        let commit_count = config.manager.deferred_persistence_commit_count.get();
-        if (config.manager.max_revisions as u64) <= commit_count {
+        let max_persistence_gap = config.manager.max_persistence_gap.get();
+        if (config.manager.max_revisions as u64) <= max_persistence_gap {
             return Err(RevisionManagerError::InsufficientRevisions {
                 max_revisions: config.manager.max_revisions,
-                commit_count,
+                max_persistence_gap,
             });
         }
 
@@ -237,7 +259,7 @@ impl<H: HashMode> RevisionManager<H> {
         }
 
         let persist_worker = PersistWorker::new(
-            config.manager.deferred_persistence_commit_count,
+            config.manager.max_persistence_gap,
             header,
             root_store.clone(),
         );
@@ -411,7 +433,7 @@ impl<H: HashMode> RevisionManager<H> {
         let committed: CommittedRevision<H> = committed.into();
         let __submit_start = ::std::time::Instant::now();
         self.persist_worker
-            .persist(committed.clone())
+            .submit_revision(committed.clone())
             .map_err(RevisionManagerError::PersistError)?;
         firewood_histogram!(cheap: PERSIST_SUBMIT_DURATION_SECONDS)
             .record(__submit_start.elapsed().as_secs_f64());
@@ -1031,16 +1053,16 @@ mod tests {
     #[test]
     fn test_revision_count() {
         let db_dir = tempfile::tempdir().unwrap();
-        let commit_count = nonzero!(10u64);
+        let max_persistence_gap = nonzero!(10u64);
 
-        // `max_revisions` < `commit_count`
+        // `max_revisions` < `max_persistence_gap`
         let config = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
             .create(true)
             .manager(
                 RevisionManagerConfig::builder()
                     .max_revisions(5)
-                    .deferred_persistence_commit_count(commit_count)
+                    .max_persistence_gap(max_persistence_gap)
                     .build(),
             )
             .build();
@@ -1048,13 +1070,13 @@ mod tests {
         let result = RevisionManager::<DefaultHashMode>::new(config);
         assert!(result.is_err());
 
-        // `max_revisions` == `commit_count`
+        // `max_revisions` == `max_persistence_gap`
         let config = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
             .manager(
                 RevisionManagerConfig::builder()
-                    .max_revisions(commit_count.get() as usize)
-                    .deferred_persistence_commit_count(commit_count)
+                    .max_revisions(max_persistence_gap.get() as usize)
+                    .max_persistence_gap(max_persistence_gap)
                     .build(),
             )
             .build();
@@ -1062,14 +1084,14 @@ mod tests {
         let result = RevisionManager::<DefaultHashMode>::new(config);
         assert!(result.is_err());
 
-        // `max_revisions` > `commit_count`
-        let max_revisions = commit_count.get().wrapping_add(1) as usize;
+        // `max_revisions` > `max_persistence_gap`
+        let max_revisions = max_persistence_gap.get().wrapping_add(1) as usize;
         let config = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
             .manager(
                 RevisionManagerConfig::builder()
                     .max_revisions(max_revisions)
-                    .deferred_persistence_commit_count(commit_count)
+                    .max_persistence_gap(max_persistence_gap)
                     .build(),
             )
             .build();
@@ -1099,7 +1121,7 @@ mod tests {
             .create(true)
             .manager(
                 // Smallest legal queue: max_revisions must exceed
-                // deferred_persistence_commit_count (default 1). Two slots is
+                // max_persistence_gap (default 1). Two slots is
                 // enough for the initial empty revision to be reaped after a
                 // pair of non-empty commits.
                 RevisionManagerConfig::builder().max_revisions(2).build(),
