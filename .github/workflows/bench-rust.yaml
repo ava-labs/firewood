@@ -1,0 +1,209 @@
+# The Rust/Criterion benchmark suite: one of the two components of
+# benchmarks.yaml, and independently dispatchable for iterating on a bench
+# target without waiting on the C-Chain reexecution runs.
+#
+# This workflow only produces artifacts. Publishing to the dashboard is
+# benchmarks.yaml's `publish` job, which is the single writer of data.js on the
+# benchmark-data branch.
+name: bench-rust
+
+on:
+  workflow_call:
+    inputs:
+      bench-filter:
+        description: >-
+          Optional regex matched against bench target names. Leave blank to run
+          every bench target.
+        required: false
+        type: string
+    outputs:
+      artifact-pattern:
+        description: Artifact name pattern holding this suite's bencher output.
+        value: bench-output-*
+  workflow_dispatch:
+    inputs:
+      bench-filter:
+        description: >-
+          Optional regex matched against bench target names (e.g. `proofs`, or
+          `^(rlp|triehash)$`). Leave blank to run every bench target. A filter
+          that matches nothing fails the run.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
+  # One value serving two purposes: the profile name understood by
+  # scripts/run-rust-ci.sh, and the Swatinem/rust-cache shared-key, so the
+  # warming job and the matrix legs cannot drift apart.
+  PROFILE_KEY: maxperf-ethhash-logger-test_utils
+
+jobs:
+  # Derives the bench matrix from cargo metadata rather than a hand-maintained
+  # list, so adding a `[[bench]]` target needs no change here.
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
+        with:
+          tool: just@1.46.0
+      # The script runs `cargo metadata`, so it needs a toolchain. It does not
+      # need rust-cache or `cargo fetch`: `--no-deps` reads only the workspace
+      # manifests, resolving nothing and touching neither registry nor network.
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
+        with:
+          toolchain: stable
+      - name: List bench targets
+        id: list
+        env:
+          BENCH_FILTER: ${{ inputs.bench-filter || '' }}
+        run: |
+          matrix="$(./scripts/run-just.sh ci-bench-matrix "$BENCH_FILTER")"
+          jq . <<<"$matrix"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  # Sole writer of the shared cache, and deliberately not a dependency of the
+  # matrix. rust-cache's SAVE_TARGETS is {lib, proc-macro}, so bench binaries
+  # and target/criterion are pruned before the tarball is written and each leg
+  # relinks its own binary no matter what this job does; gating on it would add
+  # its full build to the critical path to hand the legs nothing but the
+  # dependency rlibs they already restore from the cache. Running it alongside
+  # the matrix keeps the legs on a warm cache from the previous run while this
+  # one refreshes it for the next.
+  #
+  # Skipped on a filtered dispatch: `--workspace --benches` would build every
+  # target to support a subset, and a filtered run has no cache obligation.
+  build:
+    if: ${{ !inputs.bench-filter }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
+        with:
+          tool: just@1.46.0
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: ${{ env.PROFILE_KEY }}
+          cache-all-crates: true
+          cache-workspace-crates: true
+      - name: Cargo Fetch (run `cargo generate-lockfile` if this fails)
+        run: cargo fetch --locked --verbose
+      - name: Build benches
+        run: ./scripts/run-just.sh ci-rust build-benches "$PROFILE_KEY"
+
+  bench:
+    name: bench (${{ matrix.package }} / ${{ matrix.bench }})
+    needs: discover
+    strategy:
+      # do not cancel concurrent jobs if one fails for exhaustive failure reasons
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
+        with:
+          tool: just@1.46.0
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          save-if: "false"
+          shared-key: ${{ env.PROFILE_KEY }}
+      - name: Cargo Fetch (run `cargo generate-lockfile` if this fails)
+        run: cargo fetch --locked --verbose
+      # `--output-format bencher` is the format the `cargo` tool of
+      # github-action-benchmark parses; Criterion's default output is not
+      # machine-readable. The publish job concatenates these per-leg files.
+      - name: Benchmark
+        env:
+          BENCH: ${{ matrix.bench }}
+        run: |
+          set -o pipefail
+          ./scripts/run-just.sh ci-rust-bench "$PROFILE_KEY" "$BENCH" --output-format bencher \
+            | tee "bench-output-${BENCH}.txt"
+      # Consumed by the caller's publish job; see the header comment.
+      - name: Upload bencher output
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-output-${{ matrix.package }}-${{ matrix.bench }}
+          path: bench-output-${{ matrix.bench }}.txt
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v7
+        with:
+          # Artifacts are immutable since upload-artifact v4, so reusing one
+          # name across matrix legs fails the run. One name per leg.
+          name: benchmark-results-${{ matrix.package }}-${{ matrix.bench }}
+          path: target/criterion
+          if-no-files-found: error
+          retention-days: 30
+
+  # Recombines the per-leg artifacts so `benchmark-results` remains a single
+  # download, as it was when the benches ran in one job.
+  merge-results:
+    needs: bench
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge benchmark results
+        uses: actions/upload-artifact/merge@v7
+        with:
+          name: benchmark-results
+          pattern: benchmark-results-*
+          # Criterion writes report/index.html for every run; a flat merge would
+          # resolve those collisions as last-writer-wins.
+          separate-directories: true
+          delete-merged: true
+          retention-days: 30
+
+  # A matrix with zero legs reports `skipped`, not `failure`, so aggregate the
+  # results explicitly rather than trusting the individual job statuses. Also
+  # gives the caller a single job to gate its publish on. `build` is the only
+  # job allowed to be skipped, because a filtered dispatch deliberately skips
+  # it; a skipped `bench` still fails the run.
+  bench-rust-required:
+    if: ${{ always() }}
+    needs:
+      - discover
+      - build
+      - bench
+      - merge-results
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail unless all required jobs succeeded
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          failed_jobs="$(
+            jq -r '
+              to_entries[]
+              | select(
+                  if .key == "build"
+                  then .value.result | IN("success", "skipped") | not
+                  else .value.result != "success"
+                  end
+                )
+              | .key
+            ' <<<"$NEEDS_JSON"
+          )"
+
+          if [[ -n "$failed_jobs" ]]; then
+            echo "Required jobs failed:"
+            printf '%s\n' "$failed_jobs"
+            exit 1
+          fi
