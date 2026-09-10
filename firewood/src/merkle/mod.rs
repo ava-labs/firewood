@@ -2518,6 +2518,8 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
         Self::get_branch_from_nibbles_mut_helper(node, key)
     }
 
+    /// Recursive, unlike the write walks. Each frame is a few pointers wide, and
+    /// the change-proof depth guard drives this walk at the key-length bound.
     fn get_branch_from_nibbles_mut_helper<'a>(
         node: &'a mut Node,
         key: &[PathComponent],
@@ -2980,8 +2982,8 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
 type ParentFrames = SmallVec<[(Box<BranchNode>, PathComponent); 8]>;
 
 /// Reattaches each transformed child to the parent it was taken from, innermost
-/// first. Shared by the two insert walks, which descend without flattening on
-/// the way back.
+/// first. Shared by the walks that descend without flattening on the way back:
+/// the two insert walks and the collapse navigation.
 fn unwind_parents(mut parents: ParentFrames, mut node: Node) -> Node {
     while let Some((mut parent, index)) = parents.pop() {
         parent.children[index] = Some(Child::Node(node));
