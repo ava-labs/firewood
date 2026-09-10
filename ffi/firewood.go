@@ -255,14 +255,9 @@ func WithMetricsTag(tag string) Option {
 // to skip intermediate revisions, so not every revision is guaranteed to be
 // written to disk.
 //
-// A successful [Database.Close] persists the latest committed state.
-//
-// Examples:
-//
-//   - With a value of 1, the latest persisted state is either the latest committed
-//     revision or its parent.
-//   - With a value of 2, it may also be its grandparent: at most two revisions
-//     back, among three possible states.
+// A successful [Database.Close] persists the latest committed state. If the
+// process exits without a successful Close, the recovered state is at most
+// maxPersistenceGap commits behind the latest committed revision.
 //
 // Defaults to 1. Must be positive and less than the value set by [WithRevisions].
 func WithMaxPersistenceGap(maxPersistenceGap uint64) Option {

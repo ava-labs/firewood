@@ -128,14 +128,10 @@ pub struct DatabaseHandleArgs<'a> {
     /// to skip intermediate revisions, so not every revision is guaranteed to be
     /// written to disk.
     ///
-    /// A successful explicit close persists the latest committed state.
-    ///
-    /// Examples:
-    ///
-    /// - With a value of 1, the latest persisted state is either the latest
-    ///   committed revision or its parent.
-    /// - With a value of 2, it may also be its grandparent: at most two revisions
-    ///   back, among three possible states.
+    /// A successful explicit close persists the latest committed state. If the
+    /// process exits without a successful close, the recovered state is at
+    /// most `max_persistence_gap` commits behind the latest committed
+    /// revision.
     ///
     /// Must be positive and less than `revisions`.
     pub max_persistence_gap: u64,
