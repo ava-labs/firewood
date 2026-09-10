@@ -4,14 +4,6 @@
 //! Size-targeted proof generation: a range/change proof whose compressed
 //! wire size targets the specified byte budget.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "reachable only through `Merkle`, which the public `Db` API does not expose yet"
-    )
-)]
-
 use std::num::{NonZeroU32, NonZeroU64};
 
 use firewood_metrics::{HistogramExt, firewood_histogram};
@@ -29,44 +21,60 @@ use crate::proofs::{ChangeProof, Proof, RangeProof};
 /// decoder's body limit for the edge proofs.
 const MAX_PAYLOAD: usize = MAX_DECOMPRESSED_LEN / 2;
 /// Cap on ratio-correction (grow) passes.
-const MAX_GROW: usize = 6;
+const MAX_RATIO_CORRECTION_PASSES: usize = 6;
+/// Stop growing once the wire reaches this percentage of the budget.
+const SUFFICIENT_FILL_PERCENT: usize = 95;
 
-/// Compression measured on one chunk: the compressed/uncompressed fraction
-/// in fixed point with 16 fractional bits, saturated to `1..=u32::MAX`.
-/// Pass the previous chunk's ratio as the next request's `ratio_hint` so
-/// its first size estimate is already calibrated.
-#[derive(Debug, Clone, Copy)]
-pub struct CompressionRatio(NonZeroU32);
-
-/// Fixed-point scale of [`CompressionRatio`]: the value of a 1:1 ratio.
-const RATIO_ONE: u64 = 1 << 16;
-
-impl Default for CompressionRatio {
-    /// The ratio assumed when the caller gives no hint.
-    fn default() -> Self {
-        Self::measured(52, 100)
-    }
-}
+/// Compressed/uncompressed size fraction of a proof body, in fixed point
+/// with [`Self::SCALE`] meaning 1:1. Pass the previous chunk's ratio as the
+/// next request's `ratio_hint` so its first size estimate is calibrated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct CompressionRatio(NonZeroU32);
 
 impl CompressionRatio {
-    /// `compressed / uncompressed`; a zero `uncompressed` counts as one.
+    /// Fixed-point scale: the representation of a 1:1 ratio.
+    const SCALE: u32 = 1 << 16;
+    /// Assumed before anything is measured; roughly 2:1.
+    pub(crate) const INITIAL_ESTIMATE: Self = Self::from_scaled(Self::SCALE * 52 / 100);
+    /// Measurements are clamped into `MIN_EXPECTED..=MAX_EXPECTED`, keeping
+    /// a pathological chunk from skewing the next estimate.
+    const MIN_EXPECTED: Self = Self::from_scaled(Self::SCALE / 20);
+    const MAX_EXPECTED: Self = Self::from_scaled(Self::SCALE * 2);
+
+    /// Zero is stored as the smallest representable ratio.
+    const fn from_scaled(scaled: u32) -> Self {
+        Self(match NonZeroU32::new(scaled) {
+            Some(scaled) => scaled,
+            None => NonZeroU32::MIN,
+        })
+    }
+
+    /// `compressed / uncompressed`, clamped into the expected range.
     pub(crate) fn measured(compressed: usize, uncompressed: usize) -> Self {
         let uncompressed = NonZeroU64::new(uncompressed as u64).unwrap_or(NonZeroU64::MIN);
-        let scaled = (compressed as u64).saturating_mul(RATIO_ONE) / uncompressed;
-        let scaled = u32::try_from(scaled).unwrap_or(u32::MAX);
-        Self(NonZeroU32::new(scaled).unwrap_or(NonZeroU32::MIN))
+        let scaled = (compressed as u64).saturating_mul(u64::from(Self::SCALE)) / uncompressed;
+        Self::from_scaled(u32::try_from(scaled).unwrap_or(u32::MAX))
+            .clamp(Self::MIN_EXPECTED, Self::MAX_EXPECTED)
     }
 
     /// Uncompressed bytes expected to compress into `compressed` bytes.
     fn uncompressed_for(self, compressed: usize) -> usize {
-        let estimate = (compressed as u64).saturating_mul(RATIO_ONE) / NonZeroU64::from(self.0);
+        let estimate =
+            (compressed as u64).saturating_mul(u64::from(Self::SCALE)) / NonZeroU64::from(self.0);
         usize::try_from(estimate).unwrap_or(usize::MAX)
     }
 }
 
 /// A sized proof `P` with its compressed `wire` bytes.
 #[derive(Debug)]
-pub struct SizedProof<P> {
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "no in-crate caller until the `Db` API exposes sized proofs"
+    )
+)]
+pub(crate) struct SizedProof<P> {
     pub proof: P,
     pub wire: Vec<u8>,
     /// True once paging has reached the end of the keyspace/diff.
@@ -111,7 +119,7 @@ fn stream_sized<B: ChunkBuilder>(
     budget: usize,
     ratio_hint: Option<CompressionRatio>,
 ) -> Result<SizedProof<B::Proof>, api::Error> {
-    let mut ratio = ratio_hint.unwrap_or_default();
+    let mut ratio = ratio_hint.unwrap_or(CompressionRatio::INITIAL_ESTIMATE);
     let mut items = items.peekable();
     let mut kept: Vec<B::Item> = Vec::new();
     let mut body = 0usize; // summed item_cost of `kept`
@@ -123,10 +131,9 @@ fn stream_sized<B: ChunkBuilder>(
     let mut wire = B::wire(&proof)?;
     let fixed = wire.len().saturating_add(wire.len().max(6 * 1024)); // 6KiB
 
-    // Accept a wire within 5% of the budget.
-    let accept_floor = budget.saturating_sub(budget / 20);
+    let sufficient_fill = budget.saturating_mul(SUFFICIENT_FILL_PERCENT) / 100;
 
-    for _ in 0..=MAX_GROW {
+    for _ in 0..=MAX_RATIO_CORRECTION_PASSES {
         let budget_body = ratio
             .uncompressed_for(budget)
             .saturating_sub(fixed)
@@ -150,7 +157,7 @@ fn stream_sized<B: ChunkBuilder>(
         natural = items.peek().is_none();
         proof = builder.build(&kept, natural)?;
         wire = B::wire(&proof)?;
-        if natural || wire.len() >= accept_floor {
+        if natural || wire.len() >= sufficient_fill {
             break;
         }
         ratio = CompressionRatio::measured(wire.len(), body.saturating_add(fixed));
@@ -267,7 +274,14 @@ impl<T: TrieReader> Merkle<T> {
     /// * [`api::Error::RangeProofOnEmptyTrie`] - if the trie is empty and
     ///   `start_key` is `None`, matching [`Merkle::range_proof`].
     /// * Any error from proof generation ([`Merkle::prove`]) or iteration.
-    pub fn range_proof_sized(
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no in-crate caller until the `Db` API exposes sized proofs"
+        )
+    )]
+    pub(crate) fn range_proof_sized(
         &self,
         start_key: Option<&[u8]>,
         budget: usize,
@@ -306,7 +320,14 @@ impl<T: HashedNodeReader> Merkle<T> {
     /// # Errors
     ///
     /// Any error from proof generation or diff iteration.
-    pub fn change_proof_sized(
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no in-crate caller until the `Db` API exposes sized proofs"
+        )
+    )]
+    pub(crate) fn change_proof_sized(
         &self,
         source_trie: &T,
         start_key: Option<&[u8]>,
