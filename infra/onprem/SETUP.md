@@ -82,6 +82,29 @@ Accounts are local and not synchronized with the company's authorization fabric 
 machines and a small team, manual accounts cost less than that process.
 Revisit if either number grows.
 
+#### Who has an account
+
+A snapshot, not a register. Accounts live on the machines; this list records
+what we believe is there and will drift as people join and leave. The machines
+are the truth:
+
+```bash
+getent group firewood
+```
+
+- `ron.kuris`
+- `juan.leon`
+- `amin.rezaei`
+- `austin.larson`
+- `brandon.leblanc`
+- `rodrigo.villar`
+- `bernard`
+- `felipe.madero`
+
+The same accounts should exist on both machines. Update this list when running
+[Add a user](#add-a-user) or [Remove a user](#remove-a-user), and correct it
+whenever the command above disagrees.
+
 ### Access plumbing
 
 In a zero-trust environment we rely on Cloudflare's zero trust infrastucture for access, vie these three Cloudflare tunnels:
@@ -95,6 +118,10 @@ In a zero-trust environment we rely on Cloudflare's zero trust infrastucture for
 The first two tunnels are meant for regular use.  The third is for tasks that require access to the consoles, e.g, for updating the firmware or the operating system.  Both hosts trust Cloudflare's SSH certificate authority. Cloudflare mints a
 short-lived certificate per connection and the host verifies it against that
 CA, so no per-user keys exist on the machines.
+
+The `~/.ssh/config` stanza people need in order to reach the machines through
+these tunnels is in [README.md](README.md#ssh), with the rest of the
+user-facing access instructions.
 
 The tunnels themselves, the DNS records, and the certificate authority are
 managed by the security team; we have no access to that configuration. So a
