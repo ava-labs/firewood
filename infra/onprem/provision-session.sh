@@ -1,7 +1,7 @@
 #!/bin/bash
 # Provisions a session container image. Runs as root inside a freshly
 # launched Ubuntu 26.04 system container; the result is baked into an image
-# with `incus publish`. See ADMINISTRATION.md.
+# with `lxc publish`. See ADMINISTRATION.md.
 #
 # The toolchains mirror .devcontainer/features/firewood-tools/install.sh so
 # that a session and a devcontainer offer the same tools. Neither pins
@@ -9,10 +9,12 @@
 # build time. That is why the built image, not this script, is the artifact of
 # record.
 #
-# The image is user-agnostic. The session runs as the base image's own
-# `ubuntu` account at uid 1000, and the host maps the session owner's uid onto
-# it, so a single image serves everyone. Creating a second uid-1000 account
-# would simply fail: the cloud image already uses that uid.
+# The image carries no session account. fw-session creates one per instance
+# matching the host user's name, uid and gid, so a single image serves
+# everyone and `~` inside the session is the same path as on the host, where
+# their home directory is mounted from. Baking in a fixed account would mean
+# depending on a particular uid being free, and would leave `~` pointing
+# somewhere other than the mounted home.
 set -o errexit
 set -o nounset
 set -o pipefail
@@ -67,9 +69,6 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# The account the session runs as. Present in the base image at uid 1000.
-DEV_USER=ubuntu
-DEV_UID=1000
 export RUSTUP_HOME=/usr/local/rustup
 export CARGO_HOME=/usr/local/cargo
 export GOROOT=/usr/local/go
@@ -140,31 +139,6 @@ apt-get install -y --no-install-recommends \
     xz-utils
 rm -rf /var/lib/apt/lists/*
 
-step "Session user"
-
-# uid 1000 is what the host idmap targets. The base image normally ships this
-# account already; create it only if some other base is used, and fail loudly
-# if uid 1000 belongs to somebody else, since the idmap depends on it.
-if id -u "$DEV_USER" > /dev/null 2>&1; then
-    existing_uid="$(id -u "$DEV_USER")"
-    if [ "$existing_uid" != "$DEV_UID" ]; then
-        echo "Error: $DEV_USER has uid $existing_uid, expected $DEV_UID" >&2
-        exit 1
-    fi
-    echo "Using the base image's '$DEV_USER' account (uid $DEV_UID)"
-elif owner="$(getent passwd "$DEV_UID" | cut -d: -f1)" && [ -n "$owner" ]; then
-    echo "Error: uid $DEV_UID already belongs to '$owner', not $DEV_USER" >&2
-    exit 1
-else
-    useradd --create-home --shell /bin/bash --uid "$DEV_UID" "$DEV_USER"
-fi
-
-# Passwordless sudo: the instance is ephemeral and rebuilt from this image, so
-# there is nothing to protect.
-
-echo "$DEV_USER ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$DEV_USER"
-chmod 0440 "/etc/sudoers.d/$DEV_USER"
-
 step "Rust"
 
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
@@ -208,35 +182,38 @@ step "Shell environment"
 # System-wide, so it applies however the session is entered.
 #
 # Source code lives in the home directory, which comes from the host's SATA
-# system disk. Build artefacts and the compiler cache are hot and large, so
-# they are redirected to the NVMe array instead. Both survive the instance,
-# which is discarded.
+# system disk. Build artefacts and caches are hot and large, so they are
+# redirected to the NVMe array instead. Both survive the instance, which is
+# discarded.
+#
+# The baked toolchains stay root-owned and read-only. Anything a user installs
+# goes to their own directory instead, so no part of this image needs to be
+# writable by a session account that does not exist yet at build time.
 cat > /etc/profile.d/firewood-session.sh <<'PROFILE'
 export RUSTUP_HOME=/usr/local/rustup
 export CARGO_HOME=/usr/local/cargo
 export GOROOT=/usr/local/go
-export GOPATH=/go
-export PATH="$CARGO_HOME/bin:$GOROOT/bin:$GOPATH/bin:$PATH"
+export PATH="$CARGO_HOME/bin:$GOROOT/bin:/go/bin:$PATH"
 
 # ~/firewood points at this user's directory on the NVMe array.
 if [ -d "$HOME/firewood" ]; then
     export CARGO_TARGET_DIR="$HOME/firewood/target"
+    export CARGO_INSTALL_ROOT="$HOME/firewood/cargo"
     export SCCACHE_DIR="$HOME/firewood/.sccache"
     export RUSTC_WRAPPER="$CARGO_HOME/bin/sccache"
+    export GOPATH="$HOME/firewood/go"
     export GOCACHE="$HOME/firewood/.gocache"
+    export PATH="$CARGO_INSTALL_ROOT/bin:$GOPATH/bin:$PATH"
 fi
 PROFILE
 chmod 0644 /etc/profile.d/firewood-session.sh
 
-# Writable by the session user: cargo installs into CARGO_HOME at runtime.
-chown -R "$DEV_USER:$DEV_USER" "$CARGO_HOME" "$GOPATH"
-
 step "Cleanup"
 
-# Drop build-time caches so the published image stays small.
-rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git" /root/.cache
-mkdir -p "$CARGO_HOME/registry" "$CARGO_HOME/git"
-chown -R "$DEV_USER:$DEV_USER" "$CARGO_HOME"
+# Drop build-time caches so the published image stays small. CARGO_HOME stays
+# root-owned and read-only; users build into CARGO_TARGET_DIR and install into
+# CARGO_INSTALL_ROOT, both under their own data directory.
+rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git" /root/.cache /go/pkg
 
 step "Verification"
 

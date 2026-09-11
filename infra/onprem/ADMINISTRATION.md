@@ -112,9 +112,17 @@ Shape:
 - The script is applied to a base image, which is then baked with
   `lxc publish`. Baking keeps session startup at seconds rather than
   reinstalling toolchains per login.
-- The image is user-agnostic: the session runs as the base image's own
-  `ubuntu` account at uid 1000, and the host maps the session owner onto it
-  with `raw.idmap`, so a single image serves everyone.
+- The image carries no session account. `fw-session` creates one per instance
+  matching the host user's name, uid and gid, so one image serves everyone.
+  A fixed account baked into the image would mean depending on a particular
+  uid being free, and would leave `~` inside the session pointing somewhere
+  other than the home directory mounted from the host. Because the uid
+  matches, the daemon's own idmap applies unchanged and no `raw.idmap`
+  override is needed.
+- The baked toolchains stay root-owned and read-only. `CARGO_TARGET_DIR`,
+  `CARGO_INSTALL_ROOT`, `GOPATH` and the caches all point into the user's data
+  directory, so nothing in the image needs to be writable by an account that
+  does not exist when it is built.
 - Confined projects get their own image store by default, so a project must be
   set `features.images false` to see the image published in the default
   project. Without that, each user needs a private copy of a multi-gigabyte
