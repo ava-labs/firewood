@@ -14,6 +14,9 @@ Firewood has two categories of benchmarks:
 | Rust criterion | Iterating on a specific operation locally; enforces pure-Rust API in CI | Local or CI (`benchmarks.yaml`) |
 | Synthetic workloads | Testing Firewood API patterns without AvalancheGo | Local |
 
+Benchmarks that need bare metal rather than CI or EC2 can run on the on-prem
+servers; see [`infra/onprem/`](../infra/onprem/README.md).
+
 ## Details
 
 ### C-Chain re-execution — GitHub Actions
