@@ -163,11 +163,13 @@ if command -v lxc > /dev/null 2>&1; then
         fi
 
         # Permit disk devices, but only with sources under this user's own
-        # directory. `allow` with an empty paths list would permit any host
-        # path, which is host root by another route.
+        # home and data directories, which is what fw-session mounts. `allow`
+        # with an empty paths list would permit any host path, which is host
+        # root by another route.
+        user_home="$(getent passwd "$USERNAME" | cut -d: -f6)"
         run lxc project set "$PROJECT" restricted.devices.disk allow
         run lxc project set "$PROJECT" restricted.devices.disk.paths \
-            "$MOUNT_POINT/$USERNAME"
+            "${user_home},${MOUNT_POINT}/${USERNAME}"
 
         if [ "$DRY_RUN" -eq 0 ]; then
             echo ""
