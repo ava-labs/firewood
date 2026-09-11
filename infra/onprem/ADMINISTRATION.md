@@ -312,6 +312,21 @@ lxc file push infra/onprem/provision-session.sh build-tmp/root/
 lxc exec build-tmp -- bash /root/provision-session.sh
 ```
 
+If downloads crawl, the apt mirror is the usual cause rather than the link.
+Compare candidates from the host and pass the winner with `--apt-mirror`:
+
+```bash
+for m in archive.ubuntu.com us.archive.ubuntu.com azure.archive.ubuntu.com \
+         mirrors.kernel.org; do
+  printf '%-28s ' "$m"
+  curl -o /dev/null -w '%{speed_download} B/s\n' -s --max-time 20 \
+    "http://$m/ubuntu/dists/resolute/main/binary-amd64/Packages.gz" || echo fail
+done
+```
+
+`us.archive.ubuntu.com` has been observed serving under 5 kB/s while the host
+link ran at 87 MB/s, so measure rather than assume.
+
 That last command prints `rustup show`, `go version`, `sccache --version` and
 `just --version` when it succeeds. Check them before publishing, since a
 half-provisioned image is worse than none. Then:

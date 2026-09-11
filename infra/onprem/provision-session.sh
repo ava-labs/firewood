@@ -16,6 +16,39 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+APT_MIRROR=""
+
+show_usage() {
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Provisions a session container image. Run inside the container."
+    echo ""
+    echo "Options:"
+    echo "  --apt-mirror HOST        Replace the image's apt mirror, e.g."
+    echo "                           azure.archive.ubuntu.com. The default"
+    echo "                           mirror is sometimes throttled to a few kB/s;"
+    echo "                           compare candidates before choosing."
+    echo "  --help                   Show this help message"
+}
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --apt-mirror)
+            APT_MIRROR="$2"
+            shift 2
+            ;;
+        --help)
+            show_usage
+            exit 0
+            ;;
+        *)
+            echo "Error: Unknown option $1" >&2
+            show_usage
+            exit 1
+            ;;
+    esac
+done
+
 if [ "$EUID" -ne 0 ]; then
     echo "This script must be run as root, inside the container" >&2
     exit 1
@@ -38,6 +71,16 @@ step() {
 }
 
 step "Base packages"
+
+if [ -n "$APT_MIRROR" ]; then
+    # Ubuntu 24.04 and later keep sources in deb822 format under
+    # /etc/apt/sources.list.d/, with the older sources.list as a fallback.
+    echo "Switching apt mirror to $APT_MIRROR"
+    sed -i -E "s|https?://[a-z0-9.-]*archive\.ubuntu\.com|http://${APT_MIRROR}|g" \
+        /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list 2>/dev/null || true
+    grep -hoE 'https?://[a-z0-9./-]+' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null |
+        sort -u | head -3
+fi
 
 apt-get update
 apt-get install -y --no-install-recommends \
