@@ -6,7 +6,7 @@
 # unallocated, so home gets its own volume out of that.
 #
 # Source code lives in home, on the SATA system disk. Build artefacts and
-# databases belong on the NVMe array instead; see ADMINISTRATION.md.
+# databases belong on the NVMe array instead; see SETUP.md.
 #
 # The existing /home content is copied, not moved. The originals stay in place,
 # hidden underneath the new mount, until someone reclaims the space

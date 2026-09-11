@@ -8,7 +8,7 @@ C-Chain re-execution from genesis. They are not reserved for that. Any work
 that needs real hardware, large disks, or long runtimes is a fair use.
 
 For how the machines are built and maintained, see
-[ADMINISTRATION.md](ADMINISTRATION.md).
+[SETUP.md](SETUP.md).
 
 ## Hardware
 

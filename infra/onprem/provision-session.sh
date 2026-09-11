@@ -1,7 +1,7 @@
 #!/bin/bash
 # Provisions a session container image. Runs as root inside a freshly
 # launched Ubuntu 26.04 system container; the result is baked into an image
-# with `lxc publish`. See ADMINISTRATION.md.
+# with `lxc publish`. See SETUP.md.
 #
 # The toolchains mirror .devcontainer/features/firewood-tools/install.sh so
 # that a session and a devcontainer offer the same tools. Neither pins

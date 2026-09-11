@@ -16,7 +16,7 @@ These on-prem machines are configured with these goals in mind:
 - Cheap and easy reset of environment -- feel free to change things and bring it back to a known state with one command.
 - Minimal cost of administration and networking
 - Maximum security -- zero trust access.
-  
+
 ### Storage
 
 [`setup-nvme.sh`](setup-nvme.sh) (run only once per machine) stripes every empty NVMe device into one LVM
@@ -50,7 +50,7 @@ inodes and saves roughly 116 GB of inode tables against the ext4 default, an ins
 
 Revisit if a
 measurement shows inode-table overhead affecting Firewood's large-file
-throughput. 
+throughput.
 
 ### Where files live
 
@@ -76,7 +76,7 @@ The environment variables are set by default for each user.
 ### Accounts
 
 Local accounts are created for each user on each machine and added to the `firewood`
-group, which grants write access to `/mnt/nvme`.  This has to be done on each machine separately because, in a zero-trust environment, and without erecting excessive infrastructure complexity, the machines cannot communicate directly. 
+group, which grants write access to `/mnt/nvme`.  This has to be done on each machine separately because, in a zero-trust environment, and without erecting excessive infrastructure complexity, the machines cannot communicate directly.
 
 Accounts are local and not synchronized with the company's authorization fabric (Okta) to minimize adminstration burden, failure modes, and involvement from the security team. With two
 machines and a small team, manual accounts cost less than that process.
@@ -103,7 +103,7 @@ CA, and cannot be brought back onto the network without it. Everything else
 here is reproducible from this repository.
 
 The PiKVM's port numbering is inverted relative to the DNS names: port 1 is
-`linus`, port 2 is `snoopy`. Correcting this requires physical access to the IDF; we will do it as convenient.  
+`linus`, port 2 is `snoopy`. Correcting this requires physical access to the IDF; we will do it as convenient.
 
 Besides each user name for each member of the team, we have these users:
 
@@ -160,7 +160,7 @@ sessions would only be used for development, if at all.
 - Confinement is what makes root inside a session safe. A confined user can
   attach disk devices only with sources under the prefixes in
   `restricted.devices.disk.paths` (part of the LXD configuration), set by `add-user.sh` (our script) to their home and data
-  directories. 
+  directories.
 - [`provision-session.sh`](provision-session.sh) (our script, executed only occassionally to build an image) installs the toolchains,
   matching `.devcontainer/features/firewood-tools/install.sh`. Neither pins
   apt, rustup or cargo-binstall versions, so the two drift. `.devcontainer/` cannot be reused
@@ -216,7 +216,7 @@ done
 The hosts carry Nix 2.34.3 and nothing else. No language toolchains are
 installed on them.
 
-Toolchains are in the repeatable session image. 
+Toolchains are in the repeatable session image.
 
 `nix develop` against `ffi/flake.nix` provides pinned toolchains on the host
 for work that should not run in a session.
@@ -413,6 +413,22 @@ used.
 When a new per-user setup step appears, add it to `add-user.sh` so one script
 stays the complete answer.
 
+### Remove a user
+
+[`remove-user.sh`](remove-user.sh) removes the account, their session, their
+LXD project and their per-user bridge. Run it on each machine.
+
+```bash
+sudo bash infra/onprem/remove-user.sh --dry-run <username>
+sudo bash infra/onprem/remove-user.sh <username>
+```
+
+Their files are kept by default: the home directory and
+`/mnt/nvme/<username>` are left in place, owned by a uid with no account.
+Someone leaving often has work others still need, and deleting terabytes of it
+is not reversible. `--purge` removes those too, and the default path prints
+what to run once you know what is in them.
+
 ### Record installed packages
 
 On each machine, then paste each host's output into its section of
@@ -434,9 +450,6 @@ Diff the two to confirm the machines still agree.
   machine. The `dir` storage driver offers none.
 - **Benchmark repeatability might need host-level resets** — `drop_caches`,
   `fstrim`.
-- **No offboarding.** Removing someone leaves their LXD project, their
-  `lxdbr-<uid>` bridge, their instance and their data directory behind.
 - **C-Chain state has no agreed location.** At 1 Gbps a full fetch takes hours,
   so a shared read-only copy under `/mnt/nvme` is worth considering.
 - **Reservation is advisory.** Nothing records or enforces who holds a machine.
-

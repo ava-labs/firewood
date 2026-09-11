@@ -27,9 +27,9 @@ generated sections below are the raw record.
 | `fio` | apt | throughput check in `setup-nvme.sh` |
 | `nix-bin` | apt | pinned toolchains without installing them on the host |
 | `lxd` | snap | session containers |
-| `prometheus` | snap | unconfirmed; see [Unexplained](#unexplained) |
-| `aws-cli` | snap | unconfirmed; see [Unexplained](#unexplained) |
-| `hwctl` | snap | unconfirmed; see [Unexplained](#unexplained) |
+| `prometheus` | snap | unconfirmed, see below |
+| `aws-cli` | snap | unconfirmed, see below |
+| `hwctl` | snap | unconfirmed, see below |
 
 Everything else in the inventory below is part of a vanilla Ubuntu 26.04
 server install, or a dependency of one of the above.

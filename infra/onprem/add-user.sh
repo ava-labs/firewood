@@ -3,7 +3,7 @@
 # they need.
 #
 # Accounts are created by hand on each machine rather than through Okta; see
-# ADMINISTRATION.md for why. This script is the one place that knows the full
+# SETUP.md for why. This script is the one place that knows the full
 # list of steps, so adding a step here covers everyone added from then on.
 #
 # Run it once per machine for each person.
@@ -137,7 +137,7 @@ fi
 # formatting disks as a side effect.
 if ! findmnt --noheadings --mountpoint "$MOUNT_POINT" > /dev/null 2>&1; then
     echo "Error: $MOUNT_POINT is not mounted." >&2
-    echo "Run setup-nvme.sh first; see ADMINISTRATION.md." >&2
+    echo "Run setup-nvme.sh first; see SETUP.md." >&2
     exit 1
 fi
 
