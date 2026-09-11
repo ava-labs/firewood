@@ -313,9 +313,12 @@ lxc exec build-tmp -- bash /root/provision-session.sh
 ```
 
 The script defaults to `azure.archive.ubuntu.com` and measures it before
-installing anything, warning if it is under 1 MB/s. Most Ubuntu mirrors have
-measured in the hundreds of bytes per second from these machines while the
-host link ran at 87 MB/s, which is why the default is not the usual one.
+installing anything, warning if it is under 1 MB/s and continuing regardless.
+Most Ubuntu mirrors measured in the hundreds of bytes per second from these
+machines while the host link ran at 87 MB/s, which is why the default is not
+the usual one. That is probably a symptom of resolute being newly released
+rather than a lasting property of those mirrors, so treat the default as a
+starting point and re-measure if provisioning drags.
 
 If the warning fires, compare candidates from the host and pass the winner
 with `--apt-mirror`:

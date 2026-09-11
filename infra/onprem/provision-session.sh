@@ -16,9 +16,12 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-# Most Ubuntu mirrors have measured in the hundreds of bytes per second from
-# these machines, while the host link runs at ~87 MB/s. Azure's has been the
-# reliable one, so it is the default; override when it stops being.
+# Most Ubuntu mirrors measured in the hundreds of bytes per second from these
+# machines while the host link ran at ~87 MB/s. Azure's was the exception, so
+# it is the default. That is a starting point rather than a verdict: the
+# likeliest explanation is that resolute was newly released and the other
+# mirrors were still syncing or overloaded, in which case this default stops
+# being the right one. The script measures whatever it is told to use.
 APT_MIRROR=azure.archive.ubuntu.com
 # Below this, the script warns that the mirror is the problem rather than
 # letting a multi-hour stall look like a broken machine.
@@ -102,8 +105,11 @@ if [ -n "$APT_MIRROR" ]; then
     if awk -v s="$speed" -v t="$SLOW_MIRROR_THRESHOLD" 'BEGIN { exit !(s < t) }'; then
         cat <<HINT
 
-Warning: $APT_MIRROR is slow. Compare candidates from the host, then rerun
-with --apt-mirror:
+Warning: $APT_MIRROR is measuring slow. Provisioning will continue, but
+expect hours rather than minutes.
+
+To use a different mirror, interrupt this, compare candidates from the host,
+and rerun with --apt-mirror:
 
   for m in archive.ubuntu.com azure.archive.ubuntu.com mirrors.kernel.org; do
     printf '%-28s ' "\$m"
