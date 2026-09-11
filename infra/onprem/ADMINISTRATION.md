@@ -133,6 +133,19 @@ The cost is that a long-lived instance drifts from the image, so `fw-session`
 reports when a newer image exists and benchmark-grade work is worth starting
 from `fw-session recreate`.
 
+Why containers at all: a cheap, predictable reset to a known state. The
+alternative considered was no containers — `nix develop` against
+`ffi/flake.nix` for toolchains, `tmux` on the host for persistence — which
+gives nearly the same daily workflow for a fraction of the machinery. It was
+rejected because it offers no reset, and because nothing then stops the host
+drifting as people install things; on a benchmark rig that drift is what
+quietly invalidates results. Isolation between users is a side effect, not the
+motivation: this is a trusted team.
+
+This stands provisionally until I/O inside a session is measured against bare
+metal (see below). If they differ materially, benchmarks belong on the host and
+sessions are for development only, which would be a smaller system than this.
+
 - LXD system containers, one per user. `lxc launch --vm` is available for work
   needing its own kernel, at the cost of I/O fidelity. LXD rather than Incus
   because it was already installed; the two manage the same kernel primitives
@@ -273,10 +286,12 @@ df -hT /mnt/nvme && sudo lvs firewood
 
 ### Move /home onto its own volume
 
-Once per machine, with nobody logged in. The script refuses to run otherwise,
-since copying home while someone is writing to it loses their work.
+Once per machine, with nobody else logged in. The script refuses to run
+otherwise, since copying home while someone is writing to it loses their work.
+Run it from outside `/home`, which is not where you land on login:
 
 ```bash
+cd /
 sudo bash infra/onprem/setup-home.sh --dry-run
 sudo bash infra/onprem/setup-home.sh
 sudo reboot
