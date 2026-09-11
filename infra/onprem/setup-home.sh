@@ -99,22 +99,28 @@ if ! vgs --noheadings -o vg_name 2>/dev/null | tr -d ' ' | grep -qx "$VG_NAME"; 
     exit 1
 fi
 
-# Copying home while someone is logged in risks losing whatever they write
-# during the copy. Refuse rather than race.
-LOGGED_IN="$(who | awk '{print $1}' | sort -u | grep -v '^root$' | tr '\n' ' ')"
+# Copying home while someone is writing to it loses their work. Refuse if
+# anyone else is logged in, but not for the operator running this: they are
+# necessarily logged in themselves, and requiring a root console login would
+# mean a trip to the PiKVM for a routine change.
+OPERATOR="${SUDO_USER:-root}"
+LOGGED_IN="$(who | awk '{print $1}' | sort -u |
+    grep -vx -e root -e "$OPERATOR" | tr '\n' ' ' || true)"
 if [ -n "$LOGGED_IN" ]; then
     echo "Error: these users are logged in: ${LOGGED_IN% }" >&2
     echo "Run this with the machine quiet." >&2
     exit 1
 fi
 
-if [ "$DRY_RUN" -eq 0 ] && command -v fuser > /dev/null 2>&1; then
-    if fuser -m "$MOUNT_POINT" > /dev/null 2>&1; then
-        echo "Error: processes are using $MOUNT_POINT:" >&2
-        fuser -vm "$MOUNT_POINT" >&2 || true
+# The operator's own shell is tolerated, so their home is copied while they
+# are in it. rsync runs again immediately before the swap to pick up anything
+# that changed, and the working directory should be outside $MOUNT_POINT.
+case "$PWD" in
+    "$MOUNT_POINT"/*)
+        echo "Error: run this from outside $MOUNT_POINT (try 'cd /')" >&2
         exit 1
-    fi
-fi
+        ;;
+esac
 
 CURRENT_SIZE="$(du -sh "$MOUNT_POINT" 2>/dev/null | cut -f1)"
 echo ""
@@ -144,13 +150,20 @@ run rsync -aHAX --info=progress2 "$MOUNT_POINT/" "$STAGING/"
 if [ "$DRY_RUN" -eq 0 ]; then
     echo ""
     echo "Comparing the copy against the original..."
-    if ! diff -rq "$MOUNT_POINT" "$STAGING" > /tmp/home-copy-diff 2>&1; then
+    # mkfs creates lost+found on the new volume; the old /home is a plain
+    # directory and has none, so comparing without excluding it always differs.
+    if ! diff -rq --exclude=lost+found "$MOUNT_POINT" "$STAGING" \
+        > /tmp/home-copy-diff 2>&1; then
         echo "Error: copy differs from the original. Nothing has been swapped." >&2
         echo "See /tmp/home-copy-diff. The new volume is mounted at $STAGING." >&2
         exit 1
     fi
     echo "Copy verified."
 fi
+
+# Catch anything written during the copy, including by the operator's own
+# shell. Cheap: rsync only transfers the delta.
+run rsync -aHAX --delete "$MOUNT_POINT/" "$STAGING/"
 
 run umount "$STAGING"
 run rmdir "$STAGING"

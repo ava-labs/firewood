@@ -80,12 +80,15 @@ routine work.
 ## Where to put your data
 
 `/` lives on the SATA system disk. Working data belongs on the NVMe array
-mounted at `/mnt/nvme`.
+mounted at `/mnt/nvme`. The link is 1 Gbps, so fetching C-Chain state takes
+hours: keep a local copy rather than re-syncing per run.
 
 Your own directory there is `/mnt/nvme/$USER/firewood`, linked from your home
-directory as `~/firewood`. Both are created when your account is set up. If
-`~/firewood` is missing, ask an administrator rather than creating it by hand,
-so the ownership and group are right.
+directory as `~/firewood`. Both are created when your account is set up; if
+`~/firewood` is missing, ask an administrator.
+
+`/mnt/nvme` is a stripe across four drives with no redundancy, and there are
+no backups. Anything you cannot regenerate belongs in git or off the machine.
 
 ## Working in a session
 
@@ -93,9 +96,8 @@ Logging in over SSH puts you inside your own container, created on first use
 from a shared image with the toolchains already installed. You have root
 inside it; you have no privilege on the host.
 
-It persists until you remove it. A dropped connection, a closed laptop or a
-reboot of your own machine all leave it running, and logging back in returns
-you to it. Several terminals can be attached at once.
+It persists until you remove it, so logging back in returns you to it, and
+several terminals can be attached at once.
 
 ```bash
 fw-session            # enter your session, creating it if needed
@@ -104,12 +106,10 @@ fw-session destroy    # remove it; your files are untouched
 fw-session recreate   # rebuild from the current image
 ```
 
-Your dotfiles are your own. Nothing here writes to `~/.bashrc` or anything
-else in your home directory, and sessions do not depend on it, so edit freely.
-Because home is mounted into the session, the same files apply inside and out.
-The one way to inconvenience yourself is replacing `PATH` outright rather than
-appending to it, which hides the session's toolchain; fixing the line fixes
-the session.
+Your dotfiles are your own. Nothing here writes to your home directory and
+sessions do not depend on it, so edit freely; because home is mounted, the
+same files apply inside and out. Prepend to `PATH` rather than replacing it,
+or you will hide the session's toolchain.
 
 Typing `exit` inside a session returns you to a plain host shell rather than
 logging you out. That is where `fw-session destroy` is run. You can also do it
@@ -132,12 +132,12 @@ tmux attach -t bench
 
 What survives what:
 
-| | Survives disconnect | Survives `destroy` |
-| --- | --- | --- |
-| Files in `~` and `/mnt/nvme/$USER` | yes | yes |
-| The container and anything installed in it | yes | no |
-| Foreground processes | no | no |
-| Processes under `tmux` | yes | no |
+| | Disconnect | Host reboot | `destroy` |
+| --- | --- | --- | --- |
+| Files in `~` and `/mnt/nvme/$USER` | yes | yes | yes |
+| The container and anything installed in it | yes | yes | no |
+| Foreground processes | no | no | no |
+| Processes under `tmux` | yes | no | no |
 
 Sessions drift from the image as people install things, so anything
 benchmark-grade is worth starting with `fw-session recreate`. `fw-session`
@@ -149,9 +149,3 @@ Reservation is advisory and voluntary. Tell the team before starting long or
 performance-sensitive work, and check whether someone else has claimed the
 machine first. If both are busy, wait rather than sharing: concurrent work
 distorts anyone's measurements. Nothing enforces this.
-
-## Constraints to plan around
-
-- The link is 1 Gbps. Fetching C-Chain state over the network takes hours.
-  Keep a local copy and reuse it instead of re-syncing per run.
-- Server installs, no GUI.

@@ -107,7 +107,17 @@ if id -u "$USERNAME" > /dev/null 2>&1; then
 else
     # Password login stays disabled: authentication is handled by Cloudflare
     # short-lived certificates before the connection reaches this machine.
-    run adduser --disabled-password --gecos "$FULL_NAME" "$USERNAME"
+    #
+    # adduser enforces NAME_REGEX from /etc/adduser.conf, which excludes dots,
+    # and these accounts are firstname.lastname. The flag for allowing them was
+    # renamed, so try both.
+    if ! run adduser --disabled-password --gecos "$FULL_NAME" "$USERNAME"; then
+        if ! run adduser --allow-bad-names --disabled-password \
+            --gecos "$FULL_NAME" "$USERNAME"; then
+            run adduser --force-badname --disabled-password \
+                --gecos "$FULL_NAME" "$USERNAME"
+        fi
+    fi
 fi
 
 if [ "$GRANT_SUDO" -eq 1 ]; then
@@ -120,6 +130,16 @@ if [ "$GRANT_SUDO" -eq 1 ]; then
 fi
 
 # --- Storage ---------------------------------------------------------------
+
+# The array must already exist. setup-nvme.sh is called below only for its
+# per-user work, but it is also capable of creating the array, and --yes would
+# suppress the confirmation for that. Refusing here keeps account creation from
+# formatting disks as a side effect.
+if ! findmnt --noheadings --mountpoint "$MOUNT_POINT" > /dev/null 2>&1; then
+    echo "Error: $MOUNT_POINT is not mounted." >&2
+    echo "Run setup-nvme.sh first; see ADMINISTRATION.md." >&2
+    exit 1
+fi
 
 # setup-nvme.sh owns the group membership, the per-user directory under the
 # NVMe mount, and the ~/firewood link. It skips the storage work on a machine

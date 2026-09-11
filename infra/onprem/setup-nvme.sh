@@ -212,6 +212,11 @@ wipe_device() {
 
     while read -r md; do
         [ -n "$md" ] || continue
+        if ! command -v mdadm > /dev/null 2>&1; then
+            echo "Error: $dev belongs to $md but mdadm is not installed." >&2
+            echo "Install it and rerun, rather than clearing devices by halves." >&2
+            exit 1
+        fi
         echo "Stopping $md (assembled from $dev)"
         run mdadm --stop "$md"
     done < <(device_md_arrays "$dev")
@@ -413,8 +418,16 @@ for user in ${ADD_USERS+"${ADD_USERS[@]}"}; do
         continue
     fi
     run usermod -aG "$GROUP_NAME" "$user"
-    run mkdir -p "$MOUNT_POINT/$user/firewood"
-    run chown -R "$user:$user" "$MOUNT_POINT/$user"
+
+    # Only chown on creation. A recursive chown over an existing directory
+    # would cross terabytes of chain state and undo the group inheritance the
+    # setgid bit above provides.
+    if [ -d "$MOUNT_POINT/$user" ]; then
+        run mkdir -p "$MOUNT_POINT/$user/firewood"
+    else
+        run mkdir -p "$MOUNT_POINT/$user/firewood"
+        run chown -R "$user:$user" "$MOUNT_POINT/$user"
+    fi
 
     # Link it from their home directory, so the fast disk is reachable as
     # ~/firewood without anyone having to remember the mount point.

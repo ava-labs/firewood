@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # Attaches interactive SSH logins to the user's session container.
 #
 # Installed as /etc/profile.d/fw-session.sh by add-user.sh. Sourced, not
@@ -20,9 +21,15 @@ __fw_session_attach() {
 
     command -v fw-session > /dev/null 2>&1 || return 0
 
-    # Accounts without a data directory are not session users. This is how
-    # shared administrative accounts keep a plain host shell.
+    # Accounts without a data directory are not session users.
     [ -d "/mnt/nvme/$(id -un)" ] || return 0
+
+    # Administrators get a host shell: every runbook operates on the host, and
+    # running one inside a session would configure the container instead. They
+    # start a session with `fw-session` when they want one.
+    if id -nG 2>/dev/null | tr ' ' '\n' | grep -qx sudo; then
+        return 0
+    fi
 
     fw-session || echo "Session unavailable; you are on the host." >&2
 

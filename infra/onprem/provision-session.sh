@@ -146,7 +146,9 @@ PACKAGES=(
     curl
     git
     jq
+    less
     libssl-dev
+    openssh-client
     pkgconf
     protobuf-compiler
     shellcheck

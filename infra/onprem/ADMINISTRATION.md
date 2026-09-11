@@ -36,36 +36,23 @@ partitions, a mount, or an existing LVM physical volume, and is idempotent.
 
 #### Inode ratio
 
-`bytes-per-inode` fixes the inode count for the life of the filesystem, so
-this is worth getting right once.
+`bytes-per-inode` fixes the inode count for the life of the filesystem.
 
-The EC2 script uses 2 MB per inode. The reasoning is sound as far as it goes:
-each inode costs 256 bytes whether used or not, so on a 7.3 TB volume the
-ext4 default of 16 KB per inode preallocates around 460 M inodes costing about
-117 GB, while 2 MB per inode yields 3.6 M inodes costing under 1 GB. Fewer
-inodes also leave more contiguous space per block group, which marginally
-suits Firewood storing its trie in one very large file.
-
-**Assumption, recorded as such:** that figure is treated here as over-tuning
-for EC2 that was never revisited, rather than a measured optimum. Nothing
-found so far demonstrates the space saving or the locality effect mattering to
-Firewood.
+The EC2 script uses 2 MB per inode, which on a 7.3 TB volume yields 3.6 M
+inodes and saves roughly 116 GB of inode tables against the ext4 default.
+**Assumption, recorded as such:** that is treated here as over-tuning for EC2
+that was never revisited, not a measured optimum. Nothing observed so far
+shows the saving mattering to Firewood.
 
 Against it: these filesystems also hold container images and Rust target
-directories, each running to hundreds of thousands of small files. A 931 GB
-volume formatted at 2 MB per inode exhausted its 477 k inodes while unpacking
-a single session image, at 60% of its capacity in bytes.
+directories, hundreds of thousands of small files each. A 931 GB volume at
+2 MB per inode exhausted its 477 k inodes while unpacking one session image,
+at 60% of capacity in bytes.
 
-The decision is 65536, which gives roughly 114 M inodes on 7.3 TB for about
-29 GB, or 0.4% of the volume. The choice is not 2 MB against 16 KB: at 64 KB
-the space argument costs around 1% and the locality effect is well under a
-percent, against a filesystem that can actually hold what is put on it.
-
-Revisit if a measurement ever shows inode-table overhead affecting Firewood's
-large-file throughput. The consequence of being wrong in this direction is
-1% of a volume; in the other it is a filesystem that fails at 60% full.
-
-Status: not yet run to completion on either machine.
+So 65536: about 114 M inodes on 7.3 TB, costing 29 GB, or 0.4%. Revisit if a
+measurement shows inode-table overhead affecting Firewood's large-file
+throughput. Being wrong this way costs 1% of a volume; the other way gives a
+filesystem that fails at 60% full.
 
 ### Where files live
 
@@ -111,6 +98,12 @@ Both hosts trust Cloudflare's SSH certificate authority. Cloudflare mints a
 short-lived certificate per connection and the host verifies it against that
 CA, so no per-user keys exist on the machines.
 
+The tunnels themselves, the DNS records, and the certificate authority are
+managed by the security team; we have no access to that configuration. So a
+machine rebuilt from scratch needs a request to them for the tunnel and the
+CA, and cannot be brought back onto the network without it. Everything else
+here is reproducible from this repository.
+
 The PiKVM's port numbering is inverted relative to the DNS names: port 1 is
 `linus`, port 2 is `snoopy`. Correcting it needs either physical access to
 re-cable or a Cloudflare DNS change. Both are slow, so it stands as is and is
@@ -129,88 +122,87 @@ machines against each other after any change.
 
 ### Session images
 
-Not implemented. The intent is that each session runs inside an instance that
-starts from a known state and is discarded when the session ends.
+Logging in over SSH attaches to a persistent per-user container. It is created
+on first use from a shared image and removed only when its owner runs
+`fw-session destroy`.
 
-Shape:
+That persistence replaced an earlier design in which the container was
+discarded on logout. The reason for the change: a dropped connection would
+otherwise kill a multi-hour run, which on a 1 Gbps link is a realistic loss.
+The cost is that a long-lived instance drifts from the image, so `fw-session`
+reports when a newer image exists and benchmark-grade work is worth starting
+from `fw-session recreate`.
 
-- LXD system containers, one ephemeral instance per session. Reserve
-  `lxc launch --vm` for work that needs its own kernel, since a VM costs I/O
-  fidelity. LXD is used because it is already installed; Incus is packaged in
-  universe, but the two manage the same kernel primitives and should not share
-  a host. `lxd-to-incus` exists if that changes.
-- [`provision-session.sh`](provision-session.sh) installs the tools, mirroring
-  the list in `.devcontainer/features/firewood-tools/install.sh` so a session
-  and a devcontainer offer the same thing. `.devcontainer/` cannot be reused
+- LXD system containers, one per user. `lxc launch --vm` is available for work
+  needing its own kernel, at the cost of I/O fidelity. LXD rather than Incus
+  because it was already installed; the two manage the same kernel primitives
+  and should not share a host.
+- LXD's multi-user daemon gives each member of the `firewood` group a confined
+  project of their own, created on first use and named `user-<uid>`. Members of
+  the `lxd` group would instead get full administrative access, which is
+  equivalent to root on the host; nobody should be in that group.
+- Confinement is what makes root inside a session safe. A confined user can
+  attach disk devices only with sources under the prefixes in
+  `restricted.devices.disk.paths`, set by `add-user.sh` to their home and data
+  directories. Verified on `snoopy`: attaching `/etc`, `/`, `/mnt/nvme` and
+  `/home` are all refused, and so is a symlink to `/` placed inside an allowed
+  directory, which LXD rejects as resolving "outside of restricted parent
+  source path". That canonicalisation is the load-bearing property.
+- [`provision-session.sh`](provision-session.sh) installs the toolchains,
+  matching `.devcontainer/features/firewood-tools/install.sh`. Neither pins
+  apt, rustup or cargo-binstall versions, so the two drift; the built image,
+  not the script, is the artifact of record. `.devcontainer/` cannot be reused
   directly: it is an OCI image assembled from devcontainer features, while a
-  system container boots systemd and behaves like a machine. Neither pins
-  versions, so the two will drift; a check that compares them is part of the
-  work.
-- The script is applied to a base image, which is then baked with
-  `lxc publish`. Baking keeps session startup at seconds rather than
-  reinstalling toolchains per login.
+  system container boots systemd.
 - The image carries no session account. `fw-session` creates one per instance
-  matching the host user's name, uid and gid, so one image serves everyone.
-  A fixed account baked into the image would mean depending on a particular
-  uid being free, and would leave `~` inside the session pointing somewhere
-  other than the home directory mounted from the host. Because the uid
-  matches, the daemon's own idmap applies unchanged and no `raw.idmap`
-  override is needed.
-- The baked toolchains stay root-owned and read-only. `CARGO_TARGET_DIR`,
-  `CARGO_INSTALL_ROOT`, `GOPATH` and the caches all point into the user's data
-  directory, so nothing in the image needs to be writable by an account that
-  does not exist when it is built.
-- Confined projects get their own image store by default, so a project must be
-  set `features.images false` to see the image published in the default
-  project. Without that, each user needs a private copy of a multi-gigabyte
-  image and build-once-copy-once stops meaning anything.
-- Build the image once and copy it to the other machine. Running the same
-  provisioning script on both hosts does not produce the same image: package
-  managers fetch whatever is current at build time. The source is
-  reproducible as a process, not as an artifact. The built image is the
-  artifact of record, aliased by date, with the previous one kept for
-  rollback.
-- Attach the user's host directory `/mnt/nvme/<user>` as a disk device. The
-  instance is disposable; the data is not. A multi-hour state fetch must not
-  die with the session.
-- Enter the session through `ForceCommand` in `sshd_config` under a
-  `Match Group` block, excluding an admin group so the host stays directly
-  reachable.
+  matching the host user's name, uid and gid, so `~` inside the session is the
+  same path as outside, where their home is mounted from. The baked toolchains
+  stay root-owned; `CARGO_TARGET_DIR`, `CARGO_INSTALL_ROOT`, `GOPATH` and the
+  caches point into the user's data directory.
+- Build the image once and copy it to the other machine. The same script run
+  twice does not produce the same image, and the hosts cannot reach each other,
+  so transfer is `lxc image export`/`import` through a workstation.
+- Entry is `/etc/profile.d/fw-session.sh`, installed by `add-user.sh`. It skips
+  console logins, accounts with no data directory, and members of the `sudo`
+  group, so administrators keep a host shell: the runbooks below all operate on
+  the host, and running one inside a session would configure the container.
 
-A published image goes into LXD's own image store, addressed by fingerprint
-with an alias attached for convenience, rather than being a file anyone
-manages. It lands in two places: the image records under
-`/var/snap/lxd/common/lxd/images` on the SATA root disk, and, once an instance
-uses it, an unpacked volume in the `nvme` pool on the array. Instance
-filesystems are therefore on the fast disk and only the archives are not. The
-root filesystem is 98 GB, so delete superseded images rather than letting them
-accumulate.
+Still unverified:
 
-The store is per host, which is why the image has to be exported and imported
-rather than published twice. An exported tarball is also the only copy that
-survives an LXD reinstall.
+- Whether `io_uring` works in an unprivileged container. Firewood sets
+  `cfg(io_uring)` on Linux (`storage/build.rs`), so a session may exercise a
+  different I/O path than production without anyone noticing.
+- Whether a benchmark inside a session matches one on bare metal. This is the
+  criterion the exercise exists to serve and nothing has measured it. A `fio`
+  run and a short re-execution, host against session, would settle it.
 
-Problems to solve first:
+Containers do not reset page cache, CPU thermal and turbo state, or the NVMe
+drives' SLC cache and wear. Sessions give a repeatable software environment,
+not a repeatable machine; benchmark repeatability also needs host-level resets.
 
-- Unprivileged instances shift UIDs. A bind-mounted host directory appears as
-  `nobody:nogroup` inside unless idmapped mounts or a `raw.idmap` entry is
-  configured.
-- Docker's default seccomp profile blocks the `io_uring` syscalls. Firewood
-  sets `cfg(io_uring)` on Linux (`storage/build.rs`), so whichever runtime is
-  chosen must be verified to permit them.
-- Neither containers nor VMs reset page cache, CPU thermal and turbo state, or
-  the NVMe drives' SLC cache and wear. Repeatable sessions give a repeatable
-  software environment, not a repeatable machine. Benchmark repeatability also
-  needs host-level resets: `drop_caches`, `fstrim`, and a pinned CPU governor.
-- The two hosts cannot reach each other. They sit behind separate Cloudflare
-  tunnels with no path between them, so image transfer goes through a
-  workstation with `lxc image export` and `import`. `lxc image copy` is
-  not available.
+Striping all four NVMe devices into one volume group means a VM session cannot
+be given a dedicated disk and would use a disk image on the shared filesystem.
+Accepted: containers are the default and VMs the exception.
 
-Striping all four NVMe devices into one volume group means a future VM session
-cannot be given a dedicated disk and would use a disk image on the shared
-filesystem instead. Accepted, on the basis that containers are the default and
-VMs the exception.
+### Apt mirrors
+
+The session image build defaults to `azure.archive.ubuntu.com`, not the usual
+mirror. Most mirrors measured in the hundreds of bytes per second from these
+machines while the host link ran at 87 MB/s, probably because resolute was
+newly released and they were still syncing. Treat the default as a starting
+point: `provision-session.sh` measures whatever it is given and warns under
+1 MB/s. Only apt is covered; `rustup`, `go.dev` and GitHub releases are
+separate, so a stall in the `Rust` or `Cargo tools` step is something else.
+
+To compare candidates from a host:
+
+```bash
+for m in archive.ubuntu.com azure.archive.ubuntu.com mirrors.kernel.org; do
+  printf '%-28s ' "$m"
+  curl -o /dev/null -w '%{speed_download} B/s\n' -s --max-time 20 \
+    "http://$m/ubuntu/dists/resolute/main/binary-amd64/Packages.gz" || echo fail
+done
+```
 
 ### Toolchains
 
@@ -222,8 +214,8 @@ what makes sessions non-repeatable: each person ends up with whatever they
 installed, and the hosts drift from the image and from each other. A bare host
 has nothing to drift.
 
-Until the session image exists, `nix develop` against `ffi/flake.nix` provides
-pinned toolchains without installing anything on the host.
+`nix develop` against `ffi/flake.nix` provides pinned toolchains on the host
+for work that should not run in a session.
 
 ## Runbooks
 
@@ -279,16 +271,105 @@ sudo reboot
 df -hT /mnt/nvme && sudo lvs firewood
 ```
 
-### Record installed packages
+### Move /home onto its own volume
 
-On each machine, then paste each host's output into its section of
-[PACKAGES.md](PACKAGES.md):
+Once per machine, with nobody logged in. The script refuses to run otherwise,
+since copying home while someone is writing to it loses their work.
 
 ```bash
-bash infra/onprem/inventory-packages.sh
+sudo bash infra/onprem/setup-home.sh --dry-run
+sudo bash infra/onprem/setup-home.sh
+sudo reboot
+df -hT /home
 ```
 
-Diff the two to confirm the machines still agree.
+It copies rather than moves: the old contents stay on the root filesystem,
+hidden under the new mount, until you reclaim that space deliberately.
+
+### Initialise LXD
+
+Once per machine. LXD ships installed but uninitialised, and without a preseed
+its storage pool lands on the SATA root disk.
+
+Confirm the array is mounted first. If it is not, `lxd init` creates
+`/mnt/nvme/lxd` as an ordinary directory on the root disk and everything works
+while sitting on the wrong device:
+
+```bash
+df -hT /mnt/nvme && sudo lvs firewood
+```
+
+Then:
+
+```bash
+sudo mkdir -p /mnt/nvme/lxd
+sudo lxd init --preseed < infra/onprem/lxd-init.yaml
+lxc storage list          # expect pool 'default', source /mnt/nvme/lxd
+```
+
+Then hand the `firewood` group confined access. This is a snap option, not LXD
+configuration, so the preseed cannot set it, and without it no confined
+projects exist and nobody can run `lxc` at all:
+
+```bash
+sudo snap set lxd daemon.user.group=firewood
+snap get lxd daemon.user.group      # expect: firewood
+```
+
+Do this before adding users. Nobody should be in the `lxd` group, which grants
+full administrative access to LXD and is equivalent to root on the host.
+
+### Build a session image and push it to both machines
+
+Runs on one machine; the image is copied to the other.
+
+Every command here uses `sudo`. Once `daemon.user.group` is set, a bare `lxc`
+from an administrator's account operates in their own confined project, which
+has `features.images false` and cannot hold images. The image has to live in
+the default project, which is what confined projects share from.
+
+Build on `snoopy`:
+
+```bash
+TAG=firewood-session-$(date +%Y%m%d)
+sudo lxc launch ubuntu:26.04 build-tmp
+sudo lxc file push infra/onprem/provision-session.sh build-tmp/root/
+sudo lxc exec build-tmp -- bash /root/provision-session.sh
+```
+
+It reports mirror throughput first. If that warns, or the run drags, pass a
+different mirror with `--apt-mirror` and see
+[Apt mirrors](#apt-mirrors); `--keep-apt-mirror` uses the image's own sources.
+
+Provisioning ends by printing `rustup show`, `go version`, `sccache --version`
+and `just --version`. Check those before publishing: a half-provisioned image
+is worse than none.
+
+```bash
+sudo lxc stop build-tmp
+sudo lxc publish build-tmp --alias "$TAG"
+sudo lxc delete build-tmp
+sudo lxc image alias delete firewood-session || true
+sudo lxc image alias create firewood-session \
+    "$(sudo lxc image info "$TAG" | awk '/Fingerprint/ {print $2}')"
+sudo lxc image export "$TAG" "/tmp/$TAG"
+echo "$TAG"           # note this; the other machine needs it
+```
+
+Then carry the tarball to `linus`, which cannot reach `snoopy` directly:
+
+```bash
+# on your workstation
+scp snoopy:/tmp/<tag>.tar.gz .
+scp <tag>.tar.gz linus:/tmp/
+
+# on linus, with TAG set to the same value
+sudo lxc image import "/tmp/$TAG.tar.gz" --alias "$TAG"
+sudo lxc image alias create firewood-session \
+    "$(sudo lxc image info "$TAG" | awk '/Fingerprint/ {print $2}')"
+```
+
+Keep the previous image for rollback.
 
 ### Add a user
 
@@ -332,127 +413,39 @@ used.
 When a new per-user setup step appears, add it to `add-user.sh` so one script
 stays the complete answer.
 
-### Move /home onto its own volume
+### Record installed packages
 
-Once per machine, with nobody logged in. The script refuses to run otherwise,
-since copying home while someone is writing to it loses their work.
-
-```bash
-sudo bash infra/onprem/setup-home.sh --dry-run
-sudo bash infra/onprem/setup-home.sh
-sudo reboot
-df -hT /home
-```
-
-It copies rather than moves: the old contents stay on the root filesystem,
-hidden under the new mount, until you reclaim that space deliberately.
-
-### Initialise LXD
-
-Once per machine. LXD ships installed but uninitialised, and without a preseed
-its storage pool lands on the SATA root disk.
-
-Confirm the array is mounted first. If it is not, `lxd init` creates
-`/mnt/nvme/lxd` as an ordinary directory on the root disk and everything works
-while sitting on the wrong device:
+On each machine, then paste each host's output into its section of
+[PACKAGES.md](PACKAGES.md):
 
 ```bash
-df -hT /mnt/nvme && sudo lvs firewood
+bash infra/onprem/inventory-packages.sh
 ```
 
-Then:
-
-```bash
-sudo mkdir -p /mnt/nvme/lxd
-sudo lxd init --preseed < infra/onprem/lxd-init.yaml
-lxc storage list          # expect pool 'nvme' with source /mnt/nvme/lxd
-```
-
-### Build a session image and push it to both machines
-
-Runs on one machine; the image is copied to the other. Untested so far: the
-steps below have not been run end to end.
-
-Build on `snoopy`:
-
-```bash
-TAG=firewood-session-$(date +%Y%m%d)
-lxc launch ubuntu:26.04 build-tmp
-lxc file push infra/onprem/provision-session.sh build-tmp/root/
-lxc exec build-tmp -- bash /root/provision-session.sh
-```
-
-The script defaults to `azure.archive.ubuntu.com` and measures it before
-installing anything, warning if it is under 1 MB/s and continuing regardless.
-Most Ubuntu mirrors measured in the hundreds of bytes per second from these
-machines while the host link ran at 87 MB/s, which is why the default is not
-the usual one. That is probably a symptom of resolute being newly released
-rather than a lasting property of those mirrors, so treat the default as a
-starting point and re-measure if provisioning drags.
-
-If the warning fires, compare candidates from the host and pass the winner
-with `--apt-mirror`:
-
-```bash
-for m in archive.ubuntu.com us.archive.ubuntu.com azure.archive.ubuntu.com \
-         mirrors.kernel.org; do
-  printf '%-28s ' "$m"
-  curl -o /dev/null -w '%{speed_download} B/s\n' -s --max-time 20 \
-    "http://$m/ubuntu/dists/resolute/main/binary-amd64/Packages.gz" || echo fail
-done
-```
-
-`--keep-apt-mirror` leaves the image's own sources alone.
-
-Only apt is covered. `rustup`, `go.dev` and GitHub releases are separate
-sources, so a stall under the `Rust` or `Cargo tools` step is something else.
-
-That last command prints `rustup show`, `go version`, `sccache --version` and
-`just --version` when it succeeds. Check them before publishing, since a
-half-provisioned image is worse than none. Then:
-
-```bash
-lxc stop build-tmp
-lxc publish build-tmp --alias "$TAG"
-lxc delete build-tmp
-```
-
-Point the stable alias at it:
-
-```bash
-lxc image alias delete firewood-session || true
-lxc image alias create firewood-session "$(lxc image info "$TAG" | awk '/Fingerprint/ {print $2}')"
-```
-
-Copy to `linus`. The hosts cannot reach each other, so the image goes through
-your workstation:
-
-```bash
-# on snoopy
-lxc image export "$TAG" "/tmp/$TAG"
-
-# on your workstation
-scp snoopy:/tmp/$TAG.tar.gz .
-scp $TAG.tar.gz linus:/tmp/
-
-# on linus
-lxc image import "/tmp/$TAG.tar.gz" --alias "$TAG"
-```
-
-Repeat the alias step on `linus`. Keep the previous image for rollback.
+Diff the two to confirm the machines still agree.
 
 ## Open items
 
-- Session images, per [Session images](#session-images) above.
-- Run `setup-nvme.sh` on both machines.
-- Observability. Not set up, and needed.
-  `benchmark/setup-scripts/install-grafana.sh` is the EC2 precedent: Grafana on
-  port 3000, coreth metrics on 6060. Decide whether to run it per host or
-  centrally.
-- C-Chain state has no agreed location; each user currently decides. At 1 Gbps
-  a full fetch takes hours, so a shared read-only copy under `/mnt/nvme` is
-  worth considering.
-- Reservation is advisory. No mechanism enforces or records who holds a
-  machine.
-- PACKAGES.md has no inventory yet. Run `inventory-packages.sh` on both
-  machines and fill it in.
+- **No backup, and `/mnt/nvme` has no redundancy.** It is a four-way stripe:
+  one drive failing loses every user's data and the LXD pool with it. `/home`
+  is a single volume on a single SSD. Either accept that explicitly in the
+  README or arrange something.
+- **No quotas.** One user filling `/mnt/nvme` stops every session on the
+  machine. The `dir` storage driver offers none.
+- **Benchmark repeatability needs host-level resets** — `drop_caches`,
+  `fstrim`, a pinned CPU governor — which nothing provides and no runbook
+  mentions. For machines whose purpose is measurement this matters more than
+  the session work.
+- **No offboarding.** Removing someone leaves their LXD project, their
+  `lxdbr-<uid>` bridge, their instance and their data directory behind.
+- **Observability.** Not configured. A `prometheus` snap is installed without a
+  recorded reason; see [PACKAGES.md](PACKAGES.md).
+- **Unattended reboots and livepatch.** `canonical-livepatch` is installed, and
+  a kernel changing underneath a benchmark is an invisible variable. No session
+  survives a host reboot. Worth a deliberate decision.
+- **C-Chain state has no agreed location.** At 1 Gbps a full fetch takes hours,
+  so a shared read-only copy under `/mnt/nvme` is worth considering.
+- **Reservation is advisory.** Nothing records or enforces who holds a machine.
+- **`linus` has not been set up.** Its inventory is missing from
+  [PACKAGES.md](PACKAGES.md), and MicroK8s is installed there and not on
+  `snoopy`.

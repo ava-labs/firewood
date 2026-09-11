@@ -21,13 +21,14 @@ SESSION_USER="$(id -un)"
 SESSION_UID="$(id -u)"
 SESSION_GID="$(id -g)"
 SESSION_GROUP="$(id -gn)"
-SESSION_HOME="$(getent passwd "$SESSION_USER" 2>/dev/null | cut -d: -f6)"
+SESSION_HOME="$(getent passwd "$SESSION_USER" 2>/dev/null | cut -d: -f6 || true)"
 SESSION_HOME="${SESSION_HOME:-$HOME}"
 
 IMAGE_ALIAS=firewood-session
 INSTANCE="session-${SESSION_USER}"
 DATA_DIR="/mnt/nvme/${SESSION_USER}"
 READY_TIMEOUT=60
+ASSUME_YES=0
 
 show_usage() {
     echo "Usage: $(basename "$0") [COMMAND]"
@@ -38,6 +39,8 @@ show_usage() {
     echo "  destroy    Delete the instance. Your files are untouched."
     echo "  recreate   Destroy and rebuild from the current image"
     echo ""
+    echo "  --yes      Do not prompt before destroying a running session"
+    echo ""
     echo "Your home directory and $DATA_DIR are mounted from the host, so"
     echo "nothing in them is lost when the instance goes away."
 }
@@ -46,8 +49,10 @@ instance_exists() {
     lxc info "$INSTANCE" > /dev/null 2>&1
 }
 
+# lxc list matches its argument as a pattern, so a dot in the instance name is
+# a wildcard and a shorter name is a prefix of a longer one. Ask lxc info.
 instance_state() {
-    lxc list "$INSTANCE" --format csv -c s 2>/dev/null | head -1
+    lxc info "$INSTANCE" 2>/dev/null | awk '/^Status:/ { print toupper($2) }'
 }
 
 # The fingerprint the instance was created from, and the one the alias points
@@ -168,7 +173,20 @@ warn_if_stale() {
 
 cmd_attach() {
     if ! instance_exists; then
-        create_instance
+        # The login hook makes simultaneous first logins ordinary: two panes,
+        # or a reconnect racing the original. Without a lock the loser's
+        # cleanup deletes the winner's instance.
+        exec 9> "/tmp/fw-session-${SESSION_USER}.lock"
+        flock 9
+        if ! instance_exists; then
+            create_instance
+        fi
+        flock -u 9
+    fi
+
+    if ! instance_exists; then
+        echo "Error: $INSTANCE does not exist" >&2
+        exit 1
     elif [ "$(instance_state)" != "RUNNING" ]; then
         echo "Starting $INSTANCE..."
         lxc start "$INSTANCE"
@@ -208,11 +226,43 @@ cmd_destroy() {
         echo "No session to destroy."
         return
     fi
+
+    # The point of a persistent session is that long runs survive. Deleting one
+    # that is running should not be a single mistyped word.
+    if [ "$ASSUME_YES" -eq 0 ] && [ "$(instance_state)" = "RUNNING" ]; then
+        echo "$INSTANCE is running. Anything inside it, including tmux"
+        echo "sessions and benchmarks, will be killed."
+        echo ""
+        read -r -p "Type 'yes' to destroy it: " reply
+        if [ "$reply" != "yes" ]; then
+            echo "Left alone."
+            return
+        fi
+    fi
+
     lxc delete --force "$INSTANCE"
     echo "Destroyed $INSTANCE. Your home directory and $DATA_DIR are untouched."
 }
 
-case "${1:-attach}" in
+COMMAND=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --yes)
+            ASSUME_YES=1
+            ;;
+        *)
+            if [ -n "$COMMAND" ]; then
+                echo "Error: unexpected argument '$1'" >&2
+                show_usage
+                exit 1
+            fi
+            COMMAND="$1"
+            ;;
+    esac
+    shift
+done
+
+case "${COMMAND:-attach}" in
     attach)
         cmd_attach
         ;;
