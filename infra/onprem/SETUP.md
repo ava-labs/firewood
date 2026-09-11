@@ -381,7 +381,7 @@ sudo lxc delete build-tmp
 sudo lxc image alias delete firewood-session || true
 sudo lxc image alias create firewood-session \
     "$(sudo lxc image info "$TAG" | awk '/Fingerprint/ {print $2}')"
-sudo lxc image export "$TAG" "/tmp/$TAG"
+sudo lxc image export "$TAG" ~/"$TAG"    # not /tmp: cleared on reboot
 echo "$TAG"           # note this; the other machine needs it
 ```
 
@@ -389,11 +389,11 @@ Then carry the tarball to the other machines (e.g, `linus`):
 
 ```bash
 # on your workstation
-scp 'snoopy:/tmp/firewood-session-*.tar.gz' .
-scp firewood-session-*.tar.gz linus:/tmp/
+scp 'snoopy:firewood-session-*.tar.gz' .
+scp firewood-session-*.tar.gz linus:
 
 # on linus: the tag is the tarball's name, so nothing has to be carried over
-TARBALL="$(ls -t /tmp/firewood-session-*.tar.gz | head -1)"
+TARBALL="$(ls -t ~/firewood-session-*.tar.gz | head -1)"
 TAG="$(basename "$TARBALL" .tar.gz)"
 sudo lxc image import "$TARBALL" --alias "$TAG"
 sudo lxc image alias create firewood-session \
@@ -403,9 +403,11 @@ sudo lxc image list
 
 Keep the previous image for rollback.
 
-If you lose the tag, it is recoverable: `sudo lxc image list` on the machine
-that built it shows the dated alias, and the exported tarball is named after
-it.
+If you lose the tag, it is recoverable: `sudo lxc image alias list` on the
+machine that built it shows every alias, including the dated one. Use that
+rather than `lxc image list`, whose ALIAS column truncates to "(1 more)". The
+exported tarball is also named after the tag, and is the only copy that
+survives an LXD reinstall.
 
 ### Add a user
 
