@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789024501104,
+  "lastUpdate": 1789110658606,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -10762,6 +10762,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[33000001,33500000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 48.31594550278857,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "rodrigo",
+            "username": "RodrigoVillar",
+            "email": "77309055+RodrigoVillar@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "47392dc3271a62ef3e7965cc5c7aaf02c37354a8",
+          "message": "refactor(storage): make storage backends hash-agnostic (#2249)\n\n## Why this should be merged\n\nWhile working on the `ethhash` stack, I noticed that\n`ReadableStorage::node_hash_algorithm()` was only used when reading a\n`NodeStoreHeader`, to verify that the persisted hash algorithm matched\nthe expected one. This required `MemStore` and `FileBacked` to store a\nhash algorithm that was otherwise unrelated to their responsibility of\nreading and writing bytes.\n\nPassing the expected algorithm directly from the typed `NodeStore<H>` to\nheader validation removes that unnecessary coupling and keeps the\nstorage backends hash-agnostic.\n\nThe PR also updates `ValueDigest::make_hash()` to accept a\n`NodeHashAlgorithm` directly. Proof serialization already selects its\nhash mode at runtime, so this avoids matching that runtime value only to\ndispatch back to\na generic hash-mode implementation.\n\n## How this works\n\n```text\n# Before\n\nNodeStoreHeader::read_from_storage\n  └── ReadableStorage::node_hash_algorithm()\n        └── algorithm stored by MemStore / FileBacked\n\nProofWriter::node_hash_algorithm()\n  └── match NodeHashAlgorithm\n        ├── ValueDigest::make_hash::<EthHash>()\n        └── ValueDigest::make_hash::<MerkleDbHash>()\n\n# After\n\nNodeStore<H>\n  └── passes H::ALGORITHM directly to header validation\n\nReadableStorage\n  └── reads and writes bytes only\n\nProofWriter::node_hash_algorithm()\n  └── ValueDigest::make_hash(NodeHashAlgorithm)\n```\n\n`MemStore`, `FileBacked`, and `ReadableStorage` no longer carry a node\nhash algorithm solely for header validation. Instead, typed node stores\npass `H::ALGORITHM` directly when reading the header, with coverage\nensuring mismatches are rejected. The change also lets\n`ValueDigest::make_hash()` accept the runtime-selected algorithm\ndirectly and updates affected callers, tests, examples, and benchmarks.\n\n## How this was tested\n\nCI.\n\n## Breaking Changes\n\n- [ ] firewood\n- [ ] firewood-storage\n- [ ] firewood-ffi (C api)\n- [ ] firewood-go (Go api)\n- [ ] fwdctl",
+          "timestamp": "2026-09-09T22:37:34Z",
+          "url": "https://github.com/ava-labs/firewood/commit/47392dc3271a62ef3e7965cc5c7aaf02c37354a8"
+        },
+        "date": 1789110657181,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 162.44231142562262,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6156.03158576003,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 119.09509556384643,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5946.5549055150595,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 86.86940143779765,
             "unit": "block_accept_ms/ggas"
           }
         ]
