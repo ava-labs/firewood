@@ -122,8 +122,10 @@ HINT
     fi
 fi
 
-# clang, cmake, protobuf-compiler and shellcheck live in universe, which the
-# container image does not necessarily enable.
+# Several of the packages below live in universe. The Ubuntu container image
+# enables it already, but another base image might not; note that a mirror can
+# also list universe in Components while carrying no index for it, which
+# presents as those packages simply not existing.
 for component in universe multiverse; do
     if ! grep -qE "^Components:.*\b${component}\b" \
         /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null; then
@@ -152,23 +154,19 @@ PACKAGES=(
     xz-utils
 )
 
-# Report every unavailable package at once, named, rather than leaving five
-# raw apt errors to interpret.
-missing=()
-for pkg in "${PACKAGES[@]}"; do
-    if ! apt-cache policy "$pkg" 2>/dev/null | grep -q 'Candidate: [^(]'; then
-        missing+=("$pkg")
-    fi
-done
-if [ "${#missing[@]}" -gt 0 ]; then
+# Let apt resolve the whole list first, so an unavailable package is reported
+# by name, with apt's own diagnosis, before anything is installed. Package
+# names move between Ubuntu releases and this will happen again.
+if ! dry_run_output="$(apt-get install --dry-run -qq "${PACKAGES[@]}" 2>&1)"; then
     echo "" >&2
-    echo "Error: no installation candidate for: ${missing[*]}" >&2
+    echo "Error: apt cannot install the requested package list." >&2
+    echo "" >&2
+    echo "$dry_run_output" >&2
     echo "" >&2
     echo "Enabled components:" >&2
     grep -h '^Components:' /etc/apt/sources.list.d/ubuntu.sources >&2 || true
     echo "" >&2
-    echo "Package names change between Ubuntu releases. Check with" >&2
-    echo "'apt-cache search' inside the container before editing this list." >&2
+    echo "Check names with 'apt-cache search' inside the container." >&2
     exit 1
 fi
 
