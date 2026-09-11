@@ -87,8 +87,54 @@ directory as `~/firewood`. Both are created when your account is set up. If
 `~/firewood` is missing, ask an administrator rather than creating it by hand,
 so the ownership and group are right.
 
-The NVMe array is not configured yet on either machine. See
-[ADMINISTRATION.md](ADMINISTRATION.md).
+## Working in a session
+
+Logging in over SSH puts you inside your own container, created on first use
+from a shared image with the toolchains already installed. You have root
+inside it; you have no privilege on the host.
+
+It persists until you remove it. A dropped connection, a closed laptop or a
+reboot of your own machine all leave it running, and logging back in returns
+you to it. Several terminals can be attached at once.
+
+```bash
+fw-session            # enter your session, creating it if needed
+fw-session status     # is it running, and is the image current
+fw-session destroy    # remove it; your files are untouched
+fw-session recreate   # rebuild from the current image
+```
+
+Typing `exit` inside a session returns you to a plain host shell rather than
+logging you out. That is where `fw-session destroy` is run. You can also do it
+without entering the session at all, since non-interactive commands bypass the
+login hook:
+
+```bash
+ssh snoopy fw-session status
+```
+
+**Long runs need `tmux`.** The container survives a disconnect, but your shell
+does not: anything running in the foreground dies with the connection. Start
+benchmarks inside `tmux` so they keep going.
+
+```bash
+tmux new -s bench
+# ... start the run, then detach with ctrl-b d
+tmux attach -t bench
+```
+
+What survives what:
+
+| | Survives disconnect | Survives `destroy` |
+| --- | --- | --- |
+| Files in `~` and `/mnt/nvme/$USER` | yes | yes |
+| The container and anything installed in it | yes | no |
+| Foreground processes | no | no |
+| Processes under `tmux` | yes | no |
+
+Sessions drift from the image as people install things, so anything
+benchmark-grade is worth starting with `fw-session recreate`. `fw-session`
+says when a newer image has been published, but nothing is enforced.
 
 ## Reserving a machine
 

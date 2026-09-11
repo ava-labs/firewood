@@ -148,6 +148,19 @@ else
     echo "Warning: $FW_SESSION_SRC not found, skipping fw-session install" >&2
 fi
 
+# Attaches interactive SSH logins to a session. Installed alongside
+# fw-session so the two never disagree about whether sessions are in use.
+PROFILE_SRC="$SCRIPT_DIR/profile-fw-session.sh"
+PROFILE_DST=/etc/profile.d/fw-session.sh
+if [ -f "$PROFILE_SRC" ]; then
+    if ! cmp -s "$PROFILE_SRC" "$PROFILE_DST"; then
+        echo "Installing $PROFILE_DST"
+        run install -m 0644 "$PROFILE_SRC" "$PROFILE_DST"
+    fi
+else
+    echo "Warning: $PROFILE_SRC not found, skipping login hook" >&2
+fi
+
 # --- LXD project -----------------------------------------------------------
 
 # LXD's multi-user daemon creates a confined project the first time a member of

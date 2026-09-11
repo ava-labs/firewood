@@ -151,6 +151,7 @@ PACKAGES=(
     protobuf-compiler
     shellcheck
     sudo
+    tmux
     xz-utils
 )
 
