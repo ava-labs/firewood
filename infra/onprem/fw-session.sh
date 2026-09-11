@@ -14,9 +14,19 @@ set -o pipefail
 # So the ERR trap in create_instance fires for failures inside the function.
 set -o errtrace
 
+# Derived from the process, not the environment: $USER survives `su` without a
+# login shell and `sudo` without -i, which silently builds a session for the
+# wrong account.
+SESSION_USER="$(id -un)"
+SESSION_UID="$(id -u)"
+SESSION_GID="$(id -g)"
+SESSION_GROUP="$(id -gn)"
+SESSION_HOME="$(getent passwd "$SESSION_USER" 2>/dev/null | cut -d: -f6)"
+SESSION_HOME="${SESSION_HOME:-$HOME}"
+
 IMAGE_ALIAS=firewood-session
-INSTANCE="session-${USER}"
-DATA_DIR="/mnt/nvme/${USER}"
+INSTANCE="session-${SESSION_USER}"
+DATA_DIR="/mnt/nvme/${SESSION_USER}"
 READY_TIMEOUT=60
 
 show_usage() {
@@ -76,13 +86,13 @@ create_instance() {
         echo "Error: $DATA_DIR does not exist." >&2
         echo "" >&2
         echo "Sessions need a data directory on the NVMe array. Ask an" >&2
-        echo "administrator to run add-user.sh for '$USER'. Note that shared" >&2
+        echo "administrator to run add-user.sh for '$SESSION_USER'. Note that shared" >&2
         echo "administrative accounts are not set up for sessions: run this as" >&2
         echo "your own account." >&2
         exit 1
     fi
-    if [ ! -d "$HOME" ]; then
-        echo "Error: \$HOME ($HOME) does not exist" >&2
+    if [ ! -d "$SESSION_HOME" ]; then
+        echo "Error: home directory ($SESSION_HOME) does not exist" >&2
         exit 1
     fi
 
@@ -104,22 +114,22 @@ create_instance() {
     # ~ inside the session is the same path as outside it. The data directory
     # holds databases and build output.
     lxc config device add "$INSTANCE" home disk \
-        source="$HOME" path="$HOME" > /dev/null
+        source="$SESSION_HOME" path="$SESSION_HOME" > /dev/null
     lxc config device add "$INSTANCE" data disk \
         source="$DATA_DIR" path="$DATA_DIR" > /dev/null
 
     # The image carries no session account: create one matching this user, so
     # files written inside land owned by them outside.
-    lxc exec "$INSTANCE" -- groupadd --gid "$(id -g)" --force "$(id -gn)"
+    lxc exec "$INSTANCE" -- groupadd --gid "$SESSION_GID" --force "$SESSION_GROUP"
 
     # useradd rejects names containing a dot unless --badname is given, and
     # several of these accounts are firstname.lastname.
     if ! lxc exec "$INSTANCE" -- useradd \
-        --uid "$(id -u)" --gid "$(id -g)" --home-dir "$HOME" \
-        --no-create-home --shell /bin/bash "$USER" 2>/dev/null; then
+        --uid "$SESSION_UID" --gid "$SESSION_GID" --home-dir "$SESSION_HOME" \
+        --no-create-home --shell /bin/bash "$SESSION_USER" 2>/dev/null; then
         lxc exec "$INSTANCE" -- useradd --badname \
-            --uid "$(id -u)" --gid "$(id -g)" --home-dir "$HOME" \
-            --no-create-home --shell /bin/bash "$USER"
+            --uid "$SESSION_UID" --gid "$SESSION_GID" --home-dir "$SESSION_HOME" \
+            --no-create-home --shell /bin/bash "$SESSION_USER"
     fi
 
     # Pushed as a file rather than written through `lxc exec`: /dev/stdin does
@@ -128,16 +138,16 @@ create_instance() {
     # --uid/--gid are required: push otherwise preserves the local file's
     # ownership, and sudo refuses to read a sudoers file it does not own.
     sudoers="$(mktemp)"
-    printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$USER" > "$sudoers"
-    lxc file push "$sudoers" "${INSTANCE}/etc/sudoers.d/${USER}" \
+    printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$SESSION_USER" > "$sudoers"
+    lxc file push "$sudoers" "${INSTANCE}/etc/sudoers.d/${SESSION_USER}" \
         --uid 0 --gid 0 --mode 0440
     rm -f "$sudoers"
 
     # sudo fails closed on a bad sudoers file, so check now rather than
     # leaving it to be discovered later.
-    if ! lxc exec "$INSTANCE" -- su - "$USER" -c 'sudo -n true' > /dev/null 2>&1; then
+    if ! lxc exec "$INSTANCE" -- su - "$SESSION_USER" -c 'sudo -n true' > /dev/null 2>&1; then
         echo "Warning: sudo is not working inside $INSTANCE" >&2
-        lxc exec "$INSTANCE" -- ls -l "/etc/sudoers.d/$USER" >&2 || true
+        lxc exec "$INSTANCE" -- ls -l "/etc/sudoers.d/$SESSION_USER" >&2 || true
     fi
 
     trap - ERR
@@ -168,7 +178,7 @@ cmd_attach() {
     warn_if_stale
 
     # Multiple terminals can attach to the same instance; exec simply joins it.
-    exec lxc exec "$INSTANCE" -- su - "$USER"
+    exec lxc exec "$INSTANCE" -- su - "$SESSION_USER"
 }
 
 cmd_status() {

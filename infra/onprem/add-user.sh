@@ -131,6 +131,23 @@ run bash "$SCRIPT_DIR/setup-nvme.sh" \
     --no-validate \
     --yes
 
+# --- Session tool ----------------------------------------------------------
+
+# Installed rather than run from a checkout: a script under one person's home
+# directory is not readable by other accounts, and every user would otherwise
+# need their own clone kept up to date. Refreshed on every run, so this is not
+# a separate step anyone can forget.
+FW_SESSION_SRC="$SCRIPT_DIR/fw-session.sh"
+FW_SESSION_DST=/usr/local/bin/fw-session
+if [ -f "$FW_SESSION_SRC" ]; then
+    if ! cmp -s "$FW_SESSION_SRC" "$FW_SESSION_DST"; then
+        echo "Installing $FW_SESSION_DST"
+        run install -m 0755 "$FW_SESSION_SRC" "$FW_SESSION_DST"
+    fi
+else
+    echo "Warning: $FW_SESSION_SRC not found, skipping fw-session install" >&2
+fi
+
 # --- LXD project -----------------------------------------------------------
 
 # LXD's multi-user daemon creates a confined project the first time a member of
@@ -218,7 +235,8 @@ fi
 # per-user metrics scrape configuration.
 
 echo ""
-echo "Done. '$USERNAME' can now reach this machine over SSH, and their group"
-echo "membership takes effect at their next login."
+echo "Done. '$USERNAME' can now reach this machine over SSH, start a session"
+echo "with 'fw-session', and their group membership takes effect at their next"
+echo "login."
 echo ""
 echo "Repeat this on the other machine: accounts are per-host."

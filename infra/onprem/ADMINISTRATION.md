@@ -304,6 +304,12 @@ It creates the account, joins it to the `firewood` group, creates
 membership takes effect at their next login. `--sudo` adds them to the sudo
 group; `--dry-run` shows the steps without running them.
 
+It also installs `fw-session` to `/usr/local/bin`, refreshing it whenever the
+repository copy differs, so that is not a step anyone has to remember. Users
+start sessions with `fw-session` and need no checkout of this repository; a
+script under one person's home directory is not readable by other accounts
+anyway.
+
 It then sets up their confined LXD project. The project is created by LXD's
 multi-user daemon the first time that user runs any `lxc` command, so the
 script triggers that itself rather than waiting for their first login, and
