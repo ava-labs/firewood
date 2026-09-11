@@ -11,6 +11,8 @@
 set -o errexit
 set -o nounset
 set -o pipefail
+# So the ERR trap in create_instance fires for failures inside the function.
+set -o errtrace
 
 IMAGE_ALIAS=firewood-session
 INSTANCE="session-${USER}"
@@ -71,6 +73,12 @@ create_instance() {
     echo "Creating $INSTANCE..."
     lxc launch "$IMAGE_ALIAS" "$INSTANCE"
 
+    # A half-configured instance is worse than none: the next attach would
+    # join it and find no account, no mounts, or no sudo. Remove it instead,
+    # so the next attempt starts clean.
+    trap 'echo "Creation failed; removing $INSTANCE" >&2
+          lxc delete --force "$INSTANCE" > /dev/null 2>&1 || true' ERR
+
     # Sessions are restarted by their owner on login, not by the host at boot.
     lxc config set "$INSTANCE" boot.autostart false
 
@@ -87,16 +95,25 @@ create_instance() {
     # The image carries no session account: create one matching this user, so
     # files written inside land owned by them outside.
     lxc exec "$INSTANCE" -- groupadd --gid "$(id -g)" --force "$(id -gn)"
-    lxc exec "$INSTANCE" -- useradd \
-        --uid "$(id -u)" \
-        --gid "$(id -g)" \
-        --home-dir "$HOME" \
-        --no-create-home \
-        --shell /bin/bash \
-        "$USER"
-    lxc exec "$INSTANCE" -- install -m 0440 /dev/stdin \
-        "/etc/sudoers.d/$USER" <<< "$USER ALL=(ALL) NOPASSWD:ALL"
 
+    # useradd rejects names containing a dot unless --badname is given, and
+    # several of these accounts are firstname.lastname.
+    if ! lxc exec "$INSTANCE" -- useradd \
+        --uid "$(id -u)" --gid "$(id -g)" --home-dir "$HOME" \
+        --no-create-home --shell /bin/bash "$USER" 2>/dev/null; then
+        lxc exec "$INSTANCE" -- useradd --badname \
+            --uid "$(id -u)" --gid "$(id -g)" --home-dir "$HOME" \
+            --no-create-home --shell /bin/bash "$USER"
+    fi
+
+    # Pushed as a file rather than written through `lxc exec`: /dev/stdin does
+    # not resolve to the forwarded pipe inside the instance.
+    sudoers="$(mktemp)"
+    printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$USER" > "$sudoers"
+    lxc file push "$sudoers" "${INSTANCE}/etc/sudoers.d/${USER}" --mode 0440
+    rm -f "$sudoers"
+
+    trap - ERR
     echo "Created. It will persist until '$(basename "$0") destroy'."
 }
 

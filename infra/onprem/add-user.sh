@@ -171,9 +171,36 @@ if command -v lxc > /dev/null 2>&1; then
         run lxc project set "$PROJECT" restricted.devices.disk.paths \
             "${user_home},${MOUNT_POINT}/${USERNAME}"
 
+        # The daemon puts a root disk and a nic in the project's own default
+        # profile when it creates it. Repair them if they are missing: without
+        # a root device, launching anything fails with "No root device could
+        # be found", which does not point anywhere useful.
+        if ! lxc profile device list default --project "$PROJECT" 2>/dev/null |
+            grep -qx root; then
+            echo "Restoring the root disk device in '$PROJECT'"
+            run lxc profile device add default root disk path=/ pool=default \
+                --project "$PROJECT"
+        fi
+
+        if ! lxc profile device list default --project "$PROJECT" 2>/dev/null |
+            grep -qx eth0; then
+            # The daemon makes a per-user bridge and names it in
+            # restricted.networks.access.
+            net="$(lxc project get "$PROJECT" restricted.networks.access 2>/dev/null |
+                tr -d ' ')"
+            if [ -n "$net" ]; then
+                echo "Restoring the network device in '$PROJECT'"
+                run lxc profile device add default eth0 nic \
+                    network="$net" name=eth0 --project "$PROJECT"
+            else
+                echo "Warning: no nic in '$PROJECT' and no network to attach" >&2
+            fi
+        fi
+
         if [ "$DRY_RUN" -eq 0 ]; then
             echo ""
             lxc project show "$PROJECT" | grep -E 'features.images|restricted.devices.disk'
+            lxc profile device list default --project "$PROJECT" | sed 's/^/Device: /'
         fi
     else
         echo "Warning: project '$PROJECT' was not created. Check that" >&2
