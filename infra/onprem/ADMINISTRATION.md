@@ -77,17 +77,23 @@ starts from a known state and is discarded when the session ends.
 
 Shape:
 
-- Incus system containers, one ephemeral instance per session. Reserve
-  `incus launch --vm` for work that needs its own kernel, since a VM costs I/O
-  fidelity.
-- The instance definition mirrors the toolchain versions `.devcontainer/`
-  pins. `.devcontainer/` itself cannot be reused directly: it is an OCI image
-  assembled from devcontainer features, while a system container boots systemd
-  and behaves like a machine. Two places pinning toolchain versions will
-  drift, so a check that compares them is part of the work.
-- Provisioning source lives in this directory and is applied to a base image,
-  which is then baked with `incus publish`. Baking keeps session startup at
-  seconds rather than reinstalling toolchains per login.
+- LXD system containers, one ephemeral instance per session. Reserve
+  `lxc launch --vm` for work that needs its own kernel, since a VM costs I/O
+  fidelity. LXD is used because it is already installed; Incus is packaged in
+  universe, but the two manage the same kernel primitives and should not share
+  a host. `lxd-to-incus` exists if that changes.
+- [`provision-session.sh`](provision-session.sh) installs the tools, mirroring
+  the list in `.devcontainer/features/firewood-tools/install.sh` so a session
+  and a devcontainer offer the same thing. `.devcontainer/` cannot be reused
+  directly: it is an OCI image assembled from devcontainer features, while a
+  system container boots systemd and behaves like a machine. Neither pins
+  versions, so the two will drift; a check that compares them is part of the
+  work.
+- The script is applied to a base image, which is then baked with
+  `lxc publish`. Baking keeps session startup at seconds rather than
+  reinstalling toolchains per login.
+- The image is user-agnostic: it carries one `dev` account at uid 1000 and the
+  host maps the session owner onto it, so a single image serves everyone.
 - Build the image once and copy it to the other machine. Running the same
   provisioning script on both hosts does not produce the same image: package
   managers fetch whatever is current at build time. The source is
@@ -115,7 +121,7 @@ Problems to solve first:
   needs host-level resets: `drop_caches`, `fstrim`, and a pinned CPU governor.
 - The two hosts cannot reach each other. They sit behind separate Cloudflare
   tunnels with no path between them, so image transfer goes through a
-  workstation with `incus image export` and `import`. `incus image copy` is
+  workstation with `lxc image export` and `import`. `lxc image copy` is
   not available.
 
 Striping all four NVMe devices into one volume group means a future VM session
@@ -211,6 +217,18 @@ used.
 When a new per-user setup step appears, add it to `add-user.sh` so one script
 stays the complete answer.
 
+### Initialise LXD
+
+Once per machine, after `/mnt/nvme` is mounted. LXD ships installed but
+uninitialised, and without a preseed its storage pool lands on the SATA root
+disk.
+
+```bash
+sudo mkdir -p /mnt/nvme/lxd
+sudo lxd init --preseed < infra/onprem/lxd-init.yaml
+lxc storage list          # expect pool 'nvme' with source /mnt/nvme/lxd
+```
+
 ### Build a session image and push it to both machines
 
 Not yet implemented; the provisioning script does not exist. Recorded so the
@@ -220,19 +238,19 @@ Build on `snoopy`:
 
 ```bash
 TAG=firewood-session-$(date +%Y%m%d)
-incus launch images:ubuntu/26.04 build-tmp
-incus file push infra/onprem/provision-session.sh build-tmp/root/
-incus exec build-tmp -- bash /root/provision-session.sh
-incus stop build-tmp
-incus publish build-tmp --alias "$TAG"
-incus delete build-tmp
+lxc launch ubuntu:26.04 build-tmp
+lxc file push infra/onprem/provision-session.sh build-tmp/root/
+lxc exec build-tmp -- bash /root/provision-session.sh
+lxc stop build-tmp
+lxc publish build-tmp --alias "$TAG"
+lxc delete build-tmp
 ```
 
 Point the stable alias at it:
 
 ```bash
-incus image alias delete firewood-session || true
-incus image alias create firewood-session "$(incus image info "$TAG" | awk '/Fingerprint/ {print $2}')"
+lxc image alias delete firewood-session || true
+lxc image alias create firewood-session "$(lxc image info "$TAG" | awk '/Fingerprint/ {print $2}')"
 ```
 
 Copy to `linus`. The hosts cannot reach each other, so the image goes through
@@ -240,14 +258,14 @@ your workstation:
 
 ```bash
 # on snoopy
-incus image export "$TAG" "/tmp/$TAG"
+lxc image export "$TAG" "/tmp/$TAG"
 
 # on your workstation
 scp snoopy:/tmp/$TAG.tar.gz .
 scp $TAG.tar.gz linus:/tmp/
 
 # on linus
-incus image import "/tmp/$TAG.tar.gz" --alias "$TAG"
+lxc image import "/tmp/$TAG.tar.gz" --alias "$TAG"
 ```
 
 Repeat the alias step on `linus`. Keep the previous image for rollback.

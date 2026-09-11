@@ -1,0 +1,39 @@
+# LXD initialisation for the on-prem servers.
+#
+# Apply with:
+#   sudo lxd init --preseed < infra/onprem/lxd-init.yaml
+#
+# Storage lives on the NVMe array, not the SATA root disk, so /mnt/nvme must
+# be mounted first. The `dir` driver keeps instance storage on the existing
+# ext4 filesystem: setup-nvme.sh allocates the whole volume group to one
+# striped logical volume, leaving no extents for LXD's LVM driver.
+#
+# The bridge exists so provisioning can reach the network. Session data lives
+# on a host directory attached per instance, not in the instance itself.
+config: {}
+
+networks:
+  - name: lxdbr0
+    type: bridge
+    config:
+      ipv4.address: auto
+      ipv4.nat: "true"
+      ipv6.address: none
+
+storage_pools:
+  - name: nvme
+    driver: dir
+    config:
+      source: /mnt/nvme/lxd
+
+profiles:
+  - name: default
+    devices:
+      root:
+        path: /
+        pool: nvme
+        type: disk
+      eth0:
+        name: eth0
+        network: lxdbr0
+        type: nic
