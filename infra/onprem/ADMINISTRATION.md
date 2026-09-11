@@ -107,6 +107,19 @@ Shape:
   `Match Group` block, excluding an admin group so the host stays directly
   reachable.
 
+A published image goes into LXD's own image store, addressed by fingerprint
+with an alias attached for convenience, rather than being a file anyone
+manages. It lands in two places: the image records under
+`/var/snap/lxd/common/lxd/images` on the SATA root disk, and, once an instance
+uses it, an unpacked volume in the `nvme` pool on the array. Instance
+filesystems are therefore on the fast disk and only the archives are not. The
+root filesystem is 98 GB, so delete superseded images rather than letting them
+accumulate.
+
+The store is per host, which is why the image has to be exported and imported
+rather than published twice. An exported tarball is also the only copy that
+survives an LXD reinstall.
+
 Problems to solve first:
 
 - Unprivileged instances shift UIDs. A bind-mounted host directory appears as
@@ -146,6 +159,17 @@ pinned toolchains without installing anything on the host.
 
 Command sequences only. See [Design](#design) for why any of it is shaped this
 way.
+
+Bringing up a machine from scratch, in order. Each step verifies before the
+next depends on it:
+
+1. [Configure the NVMe array](#configure-the-nvme-array)
+2. [Initialise LXD](#initialise-lxd) onto that array
+3. [Build a session image](#build-a-session-image-and-push-it-to-both-machines)
+4. [Add a user](#add-a-user) for each team member
+
+Steps 1 and 2 are per machine. Step 3 runs on one machine and the image is
+copied to the other. Step 4 is per machine, per person.
 
 ### Configure the NVMe array
 
@@ -219,9 +243,18 @@ stays the complete answer.
 
 ### Initialise LXD
 
-Once per machine, after `/mnt/nvme` is mounted. LXD ships installed but
-uninitialised, and without a preseed its storage pool lands on the SATA root
-disk.
+Once per machine. LXD ships installed but uninitialised, and without a preseed
+its storage pool lands on the SATA root disk.
+
+Confirm the array is mounted first. If it is not, `lxd init` creates
+`/mnt/nvme/lxd` as an ordinary directory on the root disk and everything works
+while sitting on the wrong device:
+
+```bash
+df -hT /mnt/nvme && sudo lvs firewood
+```
+
+Then:
 
 ```bash
 sudo mkdir -p /mnt/nvme/lxd
@@ -231,8 +264,8 @@ lxc storage list          # expect pool 'nvme' with source /mnt/nvme/lxd
 
 ### Build a session image and push it to both machines
 
-Not yet implemented; the provisioning script does not exist. Recorded so the
-shape is agreed before it is written.
+Runs on one machine; the image is copied to the other. Untested so far: the
+steps below have not been run end to end.
 
 Build on `snoopy`:
 
@@ -241,6 +274,13 @@ TAG=firewood-session-$(date +%Y%m%d)
 lxc launch ubuntu:26.04 build-tmp
 lxc file push infra/onprem/provision-session.sh build-tmp/root/
 lxc exec build-tmp -- bash /root/provision-session.sh
+```
+
+That last command prints `rustup show`, `go version`, `sccache --version` and
+`just --version` when it succeeds. Check them before publishing, since a
+half-provisioned image is worse than none. Then:
+
+```bash
 lxc stop build-tmp
 lxc publish build-tmp --alias "$TAG"
 lxc delete build-tmp
