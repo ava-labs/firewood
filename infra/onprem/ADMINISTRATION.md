@@ -70,19 +70,6 @@ accident and show up later as unexplained differences.
 26.04 server install. Update it whenever something is added, and diff the two
 machines against each other after any change.
 
-### Toolchains
-
-The hosts carry Nix 2.34.3 and nothing else. No language toolchains are
-installed on them.
-
-Toolchains belong in the session image. Host-installed toolchains are what
-makes sessions non-repeatable: each person ends up with whatever they
-installed, and the hosts drift from the image and from each other. A bare host
-has nothing to drift.
-
-Until the session image exists, `nix develop` against `ffi/flake.nix` provides
-pinned toolchains without installing anything on the host.
-
 ### Session images
 
 Not implemented. The intent is that each session runs inside an instance that
@@ -135,6 +122,19 @@ Striping all four NVMe devices into one volume group means a future VM session
 cannot be given a dedicated disk and would use a disk image on the shared
 filesystem instead. Accepted, on the basis that containers are the default and
 VMs the exception.
+
+### Toolchains
+
+The hosts carry Nix 2.34.3 and nothing else. No language toolchains are
+installed on them.
+
+Toolchains belong in the session image above. Host-installed toolchains are
+what makes sessions non-repeatable: each person ends up with whatever they
+installed, and the hosts drift from the image and from each other. A bare host
+has nothing to drift.
+
+Until the session image exists, `nix develop` against `ffi/flake.nix` provides
+pinned toolchains without installing anything on the host.
 
 ## Runbooks
 
@@ -191,17 +191,25 @@ Diff the two to confirm the machines still agree.
 
 ### Add a user
 
-On each machine:
+[`add-user.sh`](add-user.sh) does everything a new account needs. Run it on
+each machine; accounts are per host.
 
 ```bash
-sudo adduser <username>
-sudo bash infra/onprem/setup-nvme.sh --add-user <username>
+sudo bash infra/onprem/add-user.sh --full-name "Real Name" <username>
 ```
 
-The second command adds them to the `firewood` group, creates
-`/mnt/nvme/<username>/firewood`, and links it as `~/firewood`. It is safe to
-run against a machine that is already set up: it skips the storage work and
-the throughput check. Group membership takes effect at their next login.
+It creates the account, joins it to the `firewood` group, creates
+`/mnt/nvme/<username>/firewood`, and links it as `~/firewood`. Group
+membership takes effect at their next login. `--sudo` adds them to the sudo
+group; `--dry-run` shows the steps without running them.
+
+Password login stays disabled, since Cloudflare authenticates before the
+connection reaches the machine. An account that needs `sudo` therefore also
+needs a password or a `NOPASSWD` rule, and the script says so when `--sudo` is
+used.
+
+When a new per-user setup step appears, add it to `add-user.sh` so one script
+stays the complete answer.
 
 ### Build a session image and push it to both machines
 
