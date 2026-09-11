@@ -101,6 +101,4 @@ distorts anyone's measurements. Nothing enforces this.
 
 - The link is 1 Gbps. Fetching C-Chain state over the network takes hours.
   Keep a local copy and reuse it instead of re-syncing per run.
-- The installed Rust is 1.93.1, below the workspace MSRV of 1.94.0 (and 1.94.1
-  for `--all-features`). Install a newer toolchain before building Firewood.
 - Server installs, no GUI.
