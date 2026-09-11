@@ -108,10 +108,21 @@ create_instance() {
 
     # Pushed as a file rather than written through `lxc exec`: /dev/stdin does
     # not resolve to the forwarded pipe inside the instance.
+    #
+    # --uid/--gid are required: push otherwise preserves the local file's
+    # ownership, and sudo refuses to read a sudoers file it does not own.
     sudoers="$(mktemp)"
     printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$USER" > "$sudoers"
-    lxc file push "$sudoers" "${INSTANCE}/etc/sudoers.d/${USER}" --mode 0440
+    lxc file push "$sudoers" "${INSTANCE}/etc/sudoers.d/${USER}" \
+        --uid 0 --gid 0 --mode 0440
     rm -f "$sudoers"
+
+    # sudo fails closed on a bad sudoers file, so check now rather than
+    # leaving it to be discovered later.
+    if ! lxc exec "$INSTANCE" -- su - "$USER" -c 'sudo -n true' > /dev/null 2>&1; then
+        echo "Warning: sudo is not working inside $INSTANCE" >&2
+        lxc exec "$INSTANCE" -- ls -l "/etc/sudoers.d/$USER" >&2 || true
+    fi
 
     trap - ERR
     echo "Created. It will persist until '$(basename "$0") destroy'."
