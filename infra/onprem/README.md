@@ -104,6 +104,13 @@ fw-session destroy    # remove it; your files are untouched
 fw-session recreate   # rebuild from the current image
 ```
 
+Your dotfiles are your own. Nothing here writes to `~/.bashrc` or anything
+else in your home directory, and sessions do not depend on it, so edit freely.
+Because home is mounted into the session, the same files apply inside and out.
+The one way to inconvenience yourself is replacing `PATH` outright rather than
+appending to it, which hides the session's toolchain; fixing the line fixes
+the session.
+
 Typing `exit` inside a session returns you to a plain host shell rather than
 logging you out. That is where `fw-session destroy` is run. You can also do it
 without entering the session at all, since non-interactive commands bypass the

@@ -243,6 +243,21 @@ fi
 PROFILE
 chmod 0644 /etc/profile.d/firewood-session.sh
 
+# /etc/profile.d is read by login shells only, and Ubuntu's default .bashrc
+# does not source it. /etc/bash.bashrc covers interactive non-login shells, so
+# a plain `bash` inside a session gets the same toolchain either way. Users
+# keep their own .bashrc: home is mounted from the host, so their dotfiles are
+# the same inside the session as outside it.
+if ! grep -q firewood-session /etc/bash.bashrc 2>/dev/null; then
+    cat >> /etc/bash.bashrc <<'BASHRC'
+
+# Firewood session environment (see /etc/profile.d/firewood-session.sh)
+if [ -r /etc/profile.d/firewood-session.sh ]; then
+    . /etc/profile.d/firewood-session.sh
+fi
+BASHRC
+fi
+
 step "Cleanup"
 
 # Drop build-time caches so the published image stays small. CARGO_HOME stays
