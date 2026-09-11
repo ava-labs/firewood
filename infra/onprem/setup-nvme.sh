@@ -203,6 +203,16 @@ wipe_device() {
         run mdadm --zero-superblock "$dev" || true
     fi
     run wipefs -a "$dev"
+
+    # Zero the head of the device and force the kernel to re-read it. Without
+    # this the old partition table stays cached and pvcreate refuses the device
+    # as "partitioned", even though wipefs has already cleared the signatures.
+    run dd if=/dev/zero of="$dev" bs=1M count=10 oflag=direct status=none
+    if command -v partprobe > /dev/null 2>&1; then
+        run partprobe "$dev" || true
+    else
+        run blockdev --rereadpt "$dev" || true
+    fi
 }
 
 # Already set up? Then there is nothing to do.
@@ -301,6 +311,10 @@ if [ "$SKIP_STORAGE" -eq 0 ]; then
         wipe_device "$dev"
     done
 
+    if [ "${#TO_WIPE[@]}" -gt 0 ]; then
+        run udevadm settle
+    fi
+
     if [ "${#TO_WIPE[@]}" -gt 0 ] && [ "$DRY_RUN" -eq 0 ]; then
         if grep -qi '^ARRAY' /etc/mdadm/mdadm.conf 2>/dev/null; then
             echo ""
@@ -369,6 +383,18 @@ for user in ${ADD_USERS+"${ADD_USERS[@]}"}; do
     run usermod -aG "$GROUP_NAME" "$user"
     run mkdir -p "$MOUNT_POINT/$user/firewood"
     run chown -R "$user:$user" "$MOUNT_POINT/$user"
+
+    # Link it from their home directory, so the fast disk is reachable as
+    # ~/firewood without anyone having to remember the mount point.
+    user_home="$(getent passwd "$user" | cut -d: -f6)"
+    if [ -z "$user_home" ] || [ ! -d "$user_home" ]; then
+        echo "Warning: no home directory for '$user', skipping ~/firewood link" >&2
+    elif [ -e "$user_home/firewood" ] || [ -L "$user_home/firewood" ]; then
+        echo "$user_home/firewood already exists, leaving it alone"
+    else
+        run ln -s "$MOUNT_POINT/$user/firewood" "$user_home/firewood"
+        run chown -h "$user:$user" "$user_home/firewood"
+    fi
 done
 
 # Confirm the geometry is what was asked for before anyone trusts a benchmark
@@ -382,7 +408,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
     df -hT "$MOUNT_POINT"
 fi
 
-if [ "$VALIDATE" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; then
+if [ "$VALIDATE" -eq 1 ] && [ "$DRY_RUN" -eq 0 ] && [ "$SKIP_STORAGE" -eq 0 ]; then
     if ! dpkg -s fio > /dev/null 2>&1; then
         apt-get install -y fio
     fi
@@ -404,9 +430,18 @@ if [ "$VALIDATE" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; then
 fi
 
 echo ""
-echo "Done. Each team member should run this once, as themselves:"
+if [ "${#ADD_USERS[@]}" -gt 0 ]; then
+    echo "Done. Users passed with --add-user are set up; their data directory"
+    echo "and ~/firewood link already exist."
+else
+    echo "Done."
+fi
 echo ""
-echo "  mkdir -p $MOUNT_POINT/\$USER/firewood"
-echo "  ln -s $MOUNT_POINT/\$USER/firewood ~/firewood"
+echo "Anyone not added with --add-user needs a directory and link, which an"
+echo "administrator can create at any time:"
 echo ""
-echo "Then reboot and confirm $MOUNT_POINT comes back before relying on it."
+echo "  $0 --add-user <username>"
+echo ""
+if [ "$SKIP_STORAGE" -eq 0 ]; then
+    echo "Reboot and confirm $MOUNT_POINT comes back before relying on it."
+fi

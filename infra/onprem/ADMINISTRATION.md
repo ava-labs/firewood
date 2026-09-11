@@ -195,10 +195,13 @@ On each machine:
 
 ```bash
 sudo adduser <username>
-sudo usermod -aG firewood <username>
+sudo bash infra/onprem/setup-nvme.sh --add-user <username>
 ```
 
-Group membership takes effect at their next login.
+The second command adds them to the `firewood` group, creates
+`/mnt/nvme/<username>/firewood`, and links it as `~/firewood`. It is safe to
+run against a machine that is already set up: it skips the storage work and
+the throughput check. Group membership takes effect at their next login.
 
 ### Build a session image and push it to both machines
 

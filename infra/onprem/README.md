@@ -80,12 +80,12 @@ routine work.
 ## Where to put your data
 
 `/` lives on the SATA system disk. Working data belongs on the NVMe array
-mounted at `/mnt/nvme`, under your own directory:
+mounted at `/mnt/nvme`.
 
-```bash
-mkdir -p /mnt/nvme/$USER/firewood
-ln -s /mnt/nvme/$USER/firewood ~/firewood
-```
+Your own directory there is `/mnt/nvme/$USER/firewood`, linked from your home
+directory as `~/firewood`. Both are created when your account is set up. If
+`~/firewood` is missing, ask an administrator rather than creating it by hand,
+so the ownership and group are right.
 
 The NVMe array is not configured yet on either machine. See
 [ADMINISTRATION.md](ADMINISTRATION.md).
