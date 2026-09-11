@@ -112,8 +112,13 @@ Shape:
 - The script is applied to a base image, which is then baked with
   `lxc publish`. Baking keeps session startup at seconds rather than
   reinstalling toolchains per login.
-- The image is user-agnostic: it carries one `dev` account at uid 1000 and the
-  host maps the session owner onto it, so a single image serves everyone.
+- The image is user-agnostic: the session runs as the base image's own
+  `ubuntu` account at uid 1000, and the host maps the session owner onto it
+  with `raw.idmap`, so a single image serves everyone.
+- Confined projects get their own image store by default, so a project must be
+  set `features.images false` to see the image published in the default
+  project. Without that, each user needs a private copy of a multi-gigabyte
+  image and build-once-copy-once stops meaning anything.
 - Build the image once and copy it to the other machine. Running the same
   provisioning script on both hosts does not produce the same image: package
   managers fetch whatever is current at build time. The source is
@@ -253,6 +258,20 @@ It creates the account, joins it to the `firewood` group, creates
 `/mnt/nvme/<username>/firewood`, and links it as `~/firewood`. Group
 membership takes effect at their next login. `--sudo` adds them to the sudo
 group; `--dry-run` shows the steps without running them.
+
+It then sets up their confined LXD project. The project is created by LXD's
+multi-user daemon the first time that user runs any `lxc` command, so the
+script triggers that itself rather than waiting for their first login, and
+then sets three things on it:
+
+| Setting | Why |
+| --- | --- |
+| `features.images false` | see the session image published in the default project, instead of needing a private copy |
+| `restricted.devices.disk allow` | permit disk devices at all |
+| `restricted.devices.disk.paths` | confine those sources to the user's own directory |
+
+The third is not optional. `allow` with an empty paths list permits any host
+path, which is host root by another route.
 
 Password login stays disabled, since Cloudflare authenticates before the
 connection reaches the machine. An account that needs `sudo` therefore also

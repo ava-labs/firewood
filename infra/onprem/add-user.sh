@@ -131,6 +131,57 @@ run bash "$SCRIPT_DIR/setup-nvme.sh" \
     --no-validate \
     --yes
 
+# --- LXD project -----------------------------------------------------------
+
+# LXD's multi-user daemon creates a confined project the first time a member of
+# the group runs any lxc command, naming it after their uid. Rather than wait
+# for the user's first login, trigger it here as them, then configure it.
+if command -v lxc > /dev/null 2>&1; then
+    USER_UID="$(id -u "$USERNAME")"
+    PROJECT="user-${USER_UID}"
+
+    run sudo -u "$USERNAME" -- lxc project list > /dev/null 2>&1 || true
+
+    if lxc project list --format csv 2>/dev/null | cut -d, -f1 | grep -qx "$PROJECT"; then
+        # Confined projects get their own image store by default, which would
+        # mean a private copy of the multi-gigabyte session image per user.
+        # Share the default project's images instead.
+        #
+        # This has to happen before the user caches any image of their own:
+        # LXD refuses to disable the feature on a project that already holds
+        # images. Triggering project creation with `lxc project list` above
+        # rather than by launching anything keeps the project empty here.
+        if ! run lxc project set "$PROJECT" features.images false; then
+            echo "" >&2
+            echo "Could not share images into '$PROJECT'. If it already holds" >&2
+            echo "cached images, remove them and retry:" >&2
+            echo "" >&2
+            echo "  lxc image list --project $PROJECT --format csv -c f |" >&2
+            echo "    xargs -r -n1 lxc image delete --project $PROJECT" >&2
+            echo "  lxc project set $PROJECT features.images false" >&2
+            echo "" >&2
+        fi
+
+        # Permit disk devices, but only with sources under this user's own
+        # directory. `allow` with an empty paths list would permit any host
+        # path, which is host root by another route.
+        run lxc project set "$PROJECT" restricted.devices.disk allow
+        run lxc project set "$PROJECT" restricted.devices.disk.paths \
+            "$MOUNT_POINT/$USERNAME"
+
+        if [ "$DRY_RUN" -eq 0 ]; then
+            echo ""
+            lxc project show "$PROJECT" | grep -E 'features.images|restricted.devices.disk'
+        fi
+    else
+        echo "Warning: project '$PROJECT' was not created. Check that" >&2
+        echo "'snap get lxd daemon.user.group' names a group '$USERNAME' is in," >&2
+        echo "then rerun this script." >&2
+    fi
+else
+    echo "Warning: lxc not found, skipping LXD project setup" >&2
+fi
+
 # --- Further steps ---------------------------------------------------------
 
 # Add anything else a new account needs here, so that one script remains the

@@ -9,9 +9,10 @@
 # build time. That is why the built image, not this script, is the artifact of
 # record.
 #
-# The image is user-agnostic. It carries one `dev` account at uid 1000, and
-# the host maps the session owner's uid onto it, so a single image serves
-# everyone.
+# The image is user-agnostic. The session runs as the base image's own
+# `ubuntu` account at uid 1000, and the host maps the session owner's uid onto
+# it, so a single image serves everyone. Creating a second uid-1000 account
+# would simply fail: the cloud image already uses that uid.
 set -o errexit
 set -o nounset
 set -o pipefail
@@ -66,7 +67,8 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-DEV_USER=dev
+# The account the session runs as. Present in the base image at uid 1000.
+DEV_USER=ubuntu
 DEV_UID=1000
 export RUSTUP_HOME=/usr/local/rustup
 export CARGO_HOME=/usr/local/cargo
@@ -140,11 +142,26 @@ rm -rf /var/lib/apt/lists/*
 
 step "Session user"
 
-# uid 1000 is what the host idmap targets. Passwordless sudo: the instance is
-# ephemeral and rebuilt from this image, so there is nothing to protect.
-if ! id -u "$DEV_USER" > /dev/null 2>&1; then
+# uid 1000 is what the host idmap targets. The base image normally ships this
+# account already; create it only if some other base is used, and fail loudly
+# if uid 1000 belongs to somebody else, since the idmap depends on it.
+if id -u "$DEV_USER" > /dev/null 2>&1; then
+    existing_uid="$(id -u "$DEV_USER")"
+    if [ "$existing_uid" != "$DEV_UID" ]; then
+        echo "Error: $DEV_USER has uid $existing_uid, expected $DEV_UID" >&2
+        exit 1
+    fi
+    echo "Using the base image's '$DEV_USER' account (uid $DEV_UID)"
+elif owner="$(getent passwd "$DEV_UID" | cut -d: -f1)" && [ -n "$owner" ]; then
+    echo "Error: uid $DEV_UID already belongs to '$owner', not $DEV_USER" >&2
+    exit 1
+else
     useradd --create-home --shell /bin/bash --uid "$DEV_UID" "$DEV_USER"
 fi
+
+# Passwordless sudo: the instance is ephemeral and rebuilt from this image, so
+# there is nothing to protect.
+
 echo "$DEV_USER ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$DEV_USER"
 chmod 0440 "/etc/sudoers.d/$DEV_USER"
 
