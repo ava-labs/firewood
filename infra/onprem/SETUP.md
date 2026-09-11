@@ -303,10 +303,30 @@ df -hT /mnt/nvme && sudo lvs firewood
 
 Then:
 
+The preseed only applies to an uninitialised LXD. Check first, because it will
+not rename an existing pool and the failure is quiet:
+
+```bash
+lxc storage list          # expect no pools at all
+```
+
 ```bash
 sudo mkdir -p /mnt/nvme/lxd
 sudo lxd init --preseed < infra/onprem/lxd-init.yaml
 lxc storage list          # expect pool 'default', source /mnt/nvme/lxd
+```
+
+If a pool already exists under another name, it has to be replaced: the
+multi-user daemon writes `pool: default` into every project it creates, so any
+other name breaks every confined user. Nothing here is precious at this stage,
+but check `lxc list --all-projects` first:
+
+```bash
+lxc image list --format csv -c f | xargs -r -n1 lxc image delete
+lxc profile device remove default root
+lxc storage delete <old-name>
+lxc storage create default dir source=/mnt/nvme/lxd
+lxc profile device add default root disk path=/ pool=default
 ```
 
 Then hand the `firewood` group confined access. This is a snap option, not LXD
