@@ -106,8 +106,11 @@ go clean -cache -testcache -modcache -fuzzcache
 
 step "Shell environment"
 
-# System-wide, so it applies however the session is entered. sccache's cache
-# points into the user's persistent data directory rather than the container,
+# System-wide, so it applies however the session is entered.
+#
+# Source code lives in the home directory, which comes from the host's SATA
+# system disk. Build artefacts and the compiler cache are hot and large, so
+# they are redirected to the NVMe array instead. Both survive the instance,
 # which is discarded.
 cat > /etc/profile.d/firewood-session.sh <<'PROFILE'
 export RUSTUP_HOME=/usr/local/rustup
@@ -116,9 +119,12 @@ export GOROOT=/usr/local/go
 export GOPATH=/go
 export PATH="$CARGO_HOME/bin:$GOROOT/bin:$GOPATH/bin:$PATH"
 
+# ~/firewood points at this user's directory on the NVMe array.
 if [ -d "$HOME/firewood" ]; then
+    export CARGO_TARGET_DIR="$HOME/firewood/target"
     export SCCACHE_DIR="$HOME/firewood/.sccache"
     export RUSTC_WRAPPER="$CARGO_HOME/bin/sccache"
+    export GOCACHE="$HOME/firewood/.gocache"
 fi
 PROFILE
 chmod 0644 /etc/profile.d/firewood-session.sh

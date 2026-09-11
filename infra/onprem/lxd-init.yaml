@@ -8,8 +8,14 @@
 # ext4 filesystem: setup-nvme.sh allocates the whole volume group to one
 # striped logical volume, leaving no extents for LXD's LVM driver.
 #
-# The bridge exists so provisioning can reach the network. Session data lives
-# on a host directory attached per instance, not in the instance itself.
+# The pool is called `default` deliberately. LXD's multi-user daemon writes a
+# root device pointing at a pool of that name into every project it creates
+# for a confined user; any other name makes each of those projects fail with
+# "Storage pool not found" until an admin patches it by hand.
+#
+# The bridge here serves the default project. Confined user projects get their
+# own bridge, `lxdbr-<uid>`, created by the daemon. Session data lives on a
+# host directory attached per instance, not in the instance itself.
 config: {}
 
 networks:
@@ -21,7 +27,7 @@ networks:
       ipv6.address: none
 
 storage_pools:
-  - name: nvme
+  - name: default
     driver: dir
     config:
       source: /mnt/nvme/lxd
@@ -31,7 +37,7 @@ profiles:
     devices:
       root:
         path: /
-        pool: nvme
+        pool: default
         type: disk
       eth0:
         name: eth0

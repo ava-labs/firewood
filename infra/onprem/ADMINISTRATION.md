@@ -30,6 +30,26 @@ partitions, a mount, or an existing LVM physical volume, and is idempotent.
 
 Status: not yet run on either machine.
 
+### Where files live
+
+| Path | Device | Holds |
+| --- | --- | --- |
+| `/` | SATA system disk, 98 GB | the OS |
+| `/home` | own volume on the root volume group | source checkouts, dotfiles |
+| `/mnt/nvme/<user>` | striped NVMe array | databases, chain state, build artefacts, caches |
+
+Home directories get their own logical volume via
+[`setup-home.sh`](setup-home.sh). Otherwise they share the 98 GB root
+filesystem, which a couple of Rust target directories can fill; the root
+volume group has terabytes unallocated.
+
+Source code lives in home because that keeps it out of the instance, which is
+disposable, and because source files are not what the NVMe array is for.
+`target/`, the sccache directory and the Go build cache are hot and large, so
+the session environment redirects them to `/mnt/nvme/<user>` through
+`CARGO_TARGET_DIR`, `SCCACHE_DIR` and `GOCACHE`. People work in `~/src/...`
+and the I/O-heavy parts land on the fast disk without anyone arranging it.
+
 ### Accounts
 
 Local accounts are created by hand on each machine and added to the `firewood`
@@ -164,12 +184,13 @@ Bringing up a machine from scratch, in order. Each step verifies before the
 next depends on it:
 
 1. [Configure the NVMe array](#configure-the-nvme-array)
-2. [Initialise LXD](#initialise-lxd) onto that array
-3. [Build a session image](#build-a-session-image-and-push-it-to-both-machines)
-4. [Add a user](#add-a-user) for each team member
+2. [Move /home onto its own volume](#move-home-onto-its-own-volume)
+3. [Initialise LXD](#initialise-lxd) onto that array
+4. [Build a session image](#build-a-session-image-and-push-it-to-both-machines)
+5. [Add a user](#add-a-user) for each team member
 
-Steps 1 and 2 are per machine. Step 3 runs on one machine and the image is
-copied to the other. Step 4 is per machine, per person.
+Steps 1 to 3 are per machine. Step 4 runs on one machine and the image is
+copied to the other. Step 5 is per machine, per person.
 
 ### Configure the NVMe array
 
@@ -240,6 +261,21 @@ used.
 
 When a new per-user setup step appears, add it to `add-user.sh` so one script
 stays the complete answer.
+
+### Move /home onto its own volume
+
+Once per machine, with nobody logged in. The script refuses to run otherwise,
+since copying home while someone is writing to it loses their work.
+
+```bash
+sudo bash infra/onprem/setup-home.sh --dry-run
+sudo bash infra/onprem/setup-home.sh
+sudo reboot
+df -hT /home
+```
+
+It copies rather than moves: the old contents stay on the root filesystem,
+hidden under the new mount, until you reclaim that space deliberately.
 
 ### Initialise LXD
 
