@@ -288,12 +288,17 @@ df -hT /mnt/nvme && sudo lvs firewood
 
 Once per machine, with nobody else logged in. The script refuses to run
 otherwise, since copying home while someone is writing to it loses their work.
-Run it from outside `/home`, which is not where you land on login:
+
+Two wrinkles, both because this step replaces the filesystem the checkout is
+probably on. Run it from outside `/home`, which is not where you land on
+login; and run a copy of the script from `/tmp`, since bash reads a script as
+it executes and the original is about to be masked by the new mount:
 
 ```bash
+install -m 0755 infra/onprem/setup-home.sh /tmp/setup-home.sh
 cd /
-sudo bash infra/onprem/setup-home.sh --dry-run
-sudo bash infra/onprem/setup-home.sh
+sudo bash /tmp/setup-home.sh --dry-run
+sudo bash /tmp/setup-home.sh
 sudo reboot
 df -hT /home
 ```
