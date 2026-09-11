@@ -24,11 +24,48 @@ partitions, a mount, or an existing LVM physical volume, and is idempotent.
 - The fstab entry uses `UUID=` and `nofail`. Without `nofail` a failed mount
   drops Ubuntu to an emergency console, which costs a trip to the IDF; with it,
   the machine still boots and is reachable over SSH.
-- `bytes-per-inode` is 2097152, matching
-  `benchmark/setup-scripts/build-environment.sh`, which provisions the EC2
-  equivalent. That figure suits LevelDB's many small files.
+- `bytes-per-inode` is 65536, deliberately **not** the 2097152 that
+  `benchmark/setup-scripts/build-environment.sh` uses for the EC2 equivalent.
+  See [Inode ratio](#inode-ratio).
+- The script refuses to proceed when any NVMe device is unusable, rather than
+  striping across the remainder. Snoopy ran for a while on one of four devices
+  because three still held an old mdadm array and the script skipped them with
+  only a note. A machine quietly using a quarter of its array produces
+  benchmark numbers that mean nothing. `--allow-partial` overrides this when
+  the shortfall is intentional.
 
-Status: not yet run on either machine.
+#### Inode ratio
+
+`bytes-per-inode` fixes the inode count for the life of the filesystem, so
+this is worth getting right once.
+
+The EC2 script uses 2 MB per inode. The reasoning is sound as far as it goes:
+each inode costs 256 bytes whether used or not, so on a 7.3 TB volume the
+ext4 default of 16 KB per inode preallocates around 460 M inodes costing about
+117 GB, while 2 MB per inode yields 3.6 M inodes costing under 1 GB. Fewer
+inodes also leave more contiguous space per block group, which marginally
+suits Firewood storing its trie in one very large file.
+
+**Assumption, recorded as such:** that figure is treated here as over-tuning
+for EC2 that was never revisited, rather than a measured optimum. Nothing
+found so far demonstrates the space saving or the locality effect mattering to
+Firewood.
+
+Against it: these filesystems also hold container images and Rust target
+directories, each running to hundreds of thousands of small files. A 931 GB
+volume formatted at 2 MB per inode exhausted its 477 k inodes while unpacking
+a single session image, at 60% of its capacity in bytes.
+
+The decision is 65536, which gives roughly 114 M inodes on 7.3 TB for about
+29 GB, or 0.4% of the volume. The choice is not 2 MB against 16 KB: at 64 KB
+the space argument costs around 1% and the locality effect is well under a
+percent, against a filesystem that can actually hold what is put on it.
+
+Revisit if a measurement ever shows inode-table overhead affecting Firewood's
+large-file throughput. The consequence of being wrong in this direction is
+1% of a volume; in the other it is a filesystem that fails at 60% full.
+
+Status: not yet run to completion on either machine.
 
 ### Where files live
 

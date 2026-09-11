@@ -21,14 +21,25 @@ set -o pipefail
 VG_NAME=firewood
 LV_NAME=nvme
 MOUNT_POINT=/mnt/nvme
-# Default bytes-per-inode for ext4 filesystem (2MB). This suits workloads that
-# create many small files, such as LevelDB under AvalancheGo. Raise it if you
-# know your workload does not need that many inodes, to trade them for usable
-# space.
-BYTES_PER_INODE=2097152
+# Bytes per inode. This fixes the inode count for the life of the filesystem.
+#
+# build-environment.sh uses 2097152 (2MB) for the EC2 equivalent. That is
+# assumed to be over-tuning that was never revisited: it suits a volume holding
+# a handful of enormous database files, and on a 7.3TB volume it reclaims about
+# 116GB of inode tables versus the ext4 default. But it yields only ~3.6M
+# inodes, and a filesystem here also holds container images and Rust target
+# directories, each of which runs to hundreds of thousands of small files. A
+# 931GB volume formatted that way ran out of inodes at 60% capacity while
+# unpacking one container image.
+#
+# 65536 is the compromise: ~114M inodes on 7.3TB, costing about 29GB, or 0.4%.
+# The metadata-locality argument for a high value is real but sub-percent at
+# this ratio.
+BYTES_PER_INODE=65536
 STRIPE_SIZE=64k
 GROUP_NAME=firewood
 WIPE=0
+ALLOW_PARTIAL=0
 VALIDATE=1
 VALIDATE_SIZE=4G
 ASSUME_YES=0
@@ -44,7 +55,9 @@ show_usage() {
     echo "  --vg-name NAME           Volume group name (default: firewood)"
     echo "  --lv-name NAME           Logical volume name (default: nvme)"
     echo "  --mount PATH             Mount point (default: /mnt/nvme)"
-    echo "  --bytes-per-inode BYTES  ext4 bytes-per-inode (default: 2097152)"
+    echo "  --bytes-per-inode BYTES  ext4 bytes-per-inode (default: 65536)"
+    echo "  --allow-partial          Proceed even when some NVMe devices are"
+    echo "                           unusable, striping across only the rest"
     echo "  --stripe-size SIZE       LVM stripe size (default: 64k)"
     echo "  --group NAME             Group granted write access (default: firewood)"
     echo "  --wipe                   Clear existing RAID superblocks, filesystems"
@@ -89,6 +102,10 @@ while [[ $# -gt 0 ]]; do
         --add-user)
             ADD_USERS+=("$2")
             shift 2
+            ;;
+        --allow-partial)
+            ALLOW_PARTIAL=1
+            shift
             ;;
         --wipe)
             WIPE=1
@@ -275,9 +292,24 @@ if [ "$SKIP_STORAGE" -eq 0 ]; then
         exit 1
     fi
 
+    if [ "${#UNUSABLE[@]}" -gt 0 ] && [ "$ALLOW_PARTIAL" -eq 0 ]; then
+        echo "" >&2
+        echo "Error: ${#UNUSABLE[@]} of ${#ALL_NVME[@]} NVMe device(s) are unusable," >&2
+        echo "so striping would cover only ${#DEVICES[@]} of them." >&2
+        echo "" >&2
+        echo "Refusing by default: a machine quietly using a fraction of its" >&2
+        echo "array produces benchmark numbers that mean nothing, and the" >&2
+        echo "shortfall is easy to miss months later." >&2
+        echo "" >&2
+        echo "Inspect the devices above. If their contents are disposable," >&2
+        echo "rerun with --wipe. To stripe across the usable ones deliberately," >&2
+        echo "rerun with --allow-partial." >&2
+        exit 1
+    fi
+
     if [ "${#UNUSABLE[@]}" -gt 0 ]; then
         echo ""
-        echo "Note: ${#UNUSABLE[@]} device(s) left alone; continuing with ${#DEVICES[@]}."
+        echo "Proceeding with ${#DEVICES[@]} of ${#ALL_NVME[@]} devices (--allow-partial)."
     fi
 
     echo ""
