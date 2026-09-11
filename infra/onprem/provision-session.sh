@@ -122,21 +122,57 @@ HINT
     fi
 fi
 
+# clang, cmake, protobuf-compiler and shellcheck live in universe, which the
+# container image does not necessarily enable.
+for component in universe multiverse; do
+    if ! grep -qE "^Components:.*\b${component}\b" \
+        /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null; then
+        echo "Enabling $component"
+        sed -i -E "s/^(Components:.*)$/\1 ${component}/" \
+            /etc/apt/sources.list.d/ubuntu.sources
+    fi
+done
+
 apt-get update
-apt-get install -y --no-install-recommends \
-    build-essential \
-    ca-certificates \
-    clang \
-    cmake \
-    curl \
-    git \
-    jq \
-    libssl-dev \
-    pkg-config \
-    protobuf-compiler \
-    shellcheck \
-    sudo \
+
+# pkg-config is transitional in 24.04 and later; pkgconf is the real package.
+PACKAGES=(
+    build-essential
+    ca-certificates
+    clang
+    cmake
+    curl
+    git
+    jq
+    libssl-dev
+    pkgconf
+    protobuf-compiler
+    shellcheck
+    sudo
     xz-utils
+)
+
+# Report every unavailable package at once, named, rather than leaving five
+# raw apt errors to interpret.
+missing=()
+for pkg in "${PACKAGES[@]}"; do
+    if ! apt-cache policy "$pkg" 2>/dev/null | grep -q 'Candidate: [^(]'; then
+        missing+=("$pkg")
+    fi
+done
+if [ "${#missing[@]}" -gt 0 ]; then
+    echo "" >&2
+    echo "Error: no installation candidate for: ${missing[*]}" >&2
+    echo "" >&2
+    echo "Enabled components:" >&2
+    grep -h '^Components:' /etc/apt/sources.list.d/ubuntu.sources >&2 || true
+    echo "" >&2
+    echo "Package names change between Ubuntu releases. Check with" >&2
+    echo "'apt-cache search' inside the container before editing this list." >&2
+    exit 1
+fi
+
+apt-get install -y --no-install-recommends "${PACKAGES[@]}"
 rm -rf /var/lib/apt/lists/*
 
 step "Rust"
