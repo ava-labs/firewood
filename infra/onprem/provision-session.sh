@@ -16,7 +16,13 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-APT_MIRROR=""
+# Most Ubuntu mirrors have measured in the hundreds of bytes per second from
+# these machines, while the host link runs at ~87 MB/s. Azure's has been the
+# reliable one, so it is the default; override when it stops being.
+APT_MIRROR=azure.archive.ubuntu.com
+# Below this, the script warns that the mirror is the problem rather than
+# letting a multi-hour stall look like a broken machine.
+SLOW_MIRROR_THRESHOLD=1000000
 
 show_usage() {
     echo "Usage: $0 [OPTIONS]"
@@ -24,10 +30,9 @@ show_usage() {
     echo "Provisions a session container image. Run inside the container."
     echo ""
     echo "Options:"
-    echo "  --apt-mirror HOST        Replace the image's apt mirror, e.g."
-    echo "                           azure.archive.ubuntu.com. The default"
-    echo "                           mirror is sometimes throttled to a few kB/s;"
-    echo "                           compare candidates before choosing."
+    echo "  --apt-mirror HOST        Apt mirror to use"
+    echo "                           (default: azure.archive.ubuntu.com)"
+    echo "  --keep-apt-mirror        Leave the image's own mirror in place"
     echo "  --help                   Show this help message"
 }
 
@@ -36,6 +41,10 @@ while [[ $# -gt 0 ]]; do
         --apt-mirror)
             APT_MIRROR="$2"
             shift 2
+            ;;
+        --keep-apt-mirror)
+            APT_MIRROR=""
+            shift
             ;;
         --help)
             show_usage
@@ -80,6 +89,30 @@ if [ -n "$APT_MIRROR" ]; then
         /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list 2>/dev/null || true
     grep -hoE 'https?://[a-z0-9./-]+' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null |
         sort -u | head -3
+
+    # A slow mirror is the difference between minutes and hours here, and it
+    # presents as the machine being broken. Say so up front.
+    # shellcheck source=/dev/null
+    codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+    speed="$(curl -o /dev/null -w '%{speed_download}' -s --max-time 30 \
+        "http://${APT_MIRROR}/ubuntu/dists/${codename}/main/binary-amd64/Packages.gz" \
+        2>/dev/null || echo 0)"
+    printf 'Mirror throughput: %.0f B/s\n' "$speed"
+
+    if awk -v s="$speed" -v t="$SLOW_MIRROR_THRESHOLD" 'BEGIN { exit !(s < t) }'; then
+        cat <<HINT
+
+Warning: $APT_MIRROR is slow. Compare candidates from the host, then rerun
+with --apt-mirror:
+
+  for m in archive.ubuntu.com azure.archive.ubuntu.com mirrors.kernel.org; do
+    printf '%-28s ' "\$m"
+    curl -o /dev/null -s --max-time 20 -w '%{speed_download} B/s\n' \\
+      "http://\$m/ubuntu/dists/${codename}/main/binary-amd64/Packages.gz"
+  done
+
+HINT
+    fi
 fi
 
 apt-get update

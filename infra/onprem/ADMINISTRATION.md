@@ -312,8 +312,13 @@ lxc file push infra/onprem/provision-session.sh build-tmp/root/
 lxc exec build-tmp -- bash /root/provision-session.sh
 ```
 
-If downloads crawl, the apt mirror is the usual cause rather than the link.
-Compare candidates from the host and pass the winner with `--apt-mirror`:
+The script defaults to `azure.archive.ubuntu.com` and measures it before
+installing anything, warning if it is under 1 MB/s. Most Ubuntu mirrors have
+measured in the hundreds of bytes per second from these machines while the
+host link ran at 87 MB/s, which is why the default is not the usual one.
+
+If the warning fires, compare candidates from the host and pass the winner
+with `--apt-mirror`:
 
 ```bash
 for m in archive.ubuntu.com us.archive.ubuntu.com azure.archive.ubuntu.com \
@@ -324,8 +329,10 @@ for m in archive.ubuntu.com us.archive.ubuntu.com azure.archive.ubuntu.com \
 done
 ```
 
-`us.archive.ubuntu.com` has been observed serving under 5 kB/s while the host
-link ran at 87 MB/s, so measure rather than assume.
+`--keep-apt-mirror` leaves the image's own sources alone.
+
+Only apt is covered. `rustup`, `go.dev` and GitHub releases are separate
+sources, so a stall under the `Rust` or `Cargo tools` step is something else.
 
 That last command prints `rustup show`, `go version`, `sccache --version` and
 `just --version` when it succeeds. Check them before publishing, since a
