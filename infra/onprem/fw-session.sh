@@ -70,6 +70,22 @@ create_instance() {
         exit 1
     fi
 
+    # Both are mounted into the instance, so check them here rather than
+    # letting LXD refuse the device with a less obvious message.
+    if [ ! -d "$DATA_DIR" ]; then
+        echo "Error: $DATA_DIR does not exist." >&2
+        echo "" >&2
+        echo "Sessions need a data directory on the NVMe array. Ask an" >&2
+        echo "administrator to run add-user.sh for '$USER'. Note that shared" >&2
+        echo "administrative accounts are not set up for sessions: run this as" >&2
+        echo "your own account." >&2
+        exit 1
+    fi
+    if [ ! -d "$HOME" ]; then
+        echo "Error: \$HOME ($HOME) does not exist" >&2
+        exit 1
+    fi
+
     echo "Creating $INSTANCE..."
     lxc launch "$IMAGE_ALIAS" "$INSTANCE"
 
