@@ -223,6 +223,13 @@ for work that should not run in a session.
 
 ## Runbooks
 
+Every `lxc` command here needs `sudo`. Administrators are not in the `lxd`
+group — membership there is equivalent to root on the host — so without it
+they cannot reach the daemon at all, and once `daemon.user.group` is set a
+bare `lxc` operates in their own confined project instead.
+
+Run these on the host. If you are in a session, `exit` first.
+
 Bringing up a machine from scratch, in order. Each step verifies before the
 next depends on it:
 
@@ -307,26 +314,26 @@ The preseed only applies to an uninitialised LXD. Check first, because it will
 not rename an existing pool and the failure is quiet:
 
 ```bash
-lxc storage list          # expect no pools at all
+sudo lxc storage list     # expect no pools at all
 ```
 
 ```bash
 sudo mkdir -p /mnt/nvme/lxd
 sudo lxd init --preseed < infra/onprem/lxd-init.yaml
-lxc storage list          # expect pool 'default', source /mnt/nvme/lxd
+sudo lxc storage list     # expect pool 'default', source /mnt/nvme/lxd
 ```
 
 If a pool already exists under another name, it has to be replaced: the
 multi-user daemon writes `pool: default` into every project it creates, so any
 other name breaks every confined user. Nothing here is precious at this stage,
-but check `lxc list --all-projects` first:
+but check `sudo lxc list --all-projects` first:
 
 ```bash
-lxc image list --format csv -c f | xargs -r -n1 lxc image delete
-lxc profile device remove default root
-lxc storage delete <old-name>
-lxc storage create default dir source=/mnt/nvme/lxd
-lxc profile device add default root disk path=/ pool=default
+sudo lxc image list --format csv -c f | xargs -r -n1 sudo lxc image delete
+sudo lxc profile device remove default root
+sudo lxc storage delete <old-name>
+sudo lxc storage create default dir source=/mnt/nvme/lxd
+sudo lxc profile device add default root disk path=/ pool=default
 ```
 
 Then hand the `firewood` group confined access. This is a snap option, not LXD
@@ -335,7 +342,7 @@ projects exist and nobody can run `lxc` at all:
 
 ```bash
 sudo snap set lxd daemon.user.group=firewood
-snap get lxd daemon.user.group      # expect: firewood
+sudo snap get lxd daemon.user.group      # expect: firewood
 ```
 
 Do this before adding users. Nobody should be in the `lxd` group, which grants
@@ -382,16 +389,23 @@ Then carry the tarball to the other machines (e.g, `linus`):
 
 ```bash
 # on your workstation
-scp snoopy:/tmp/<tag>.tar.gz .
-scp <tag>.tar.gz linus:/tmp/
+scp 'snoopy:/tmp/firewood-session-*.tar.gz' .
+scp firewood-session-*.tar.gz linus:/tmp/
 
-# on linus, with TAG set to the same value
-sudo lxc image import "/tmp/$TAG.tar.gz" --alias "$TAG"
+# on linus: the tag is the tarball's name, so nothing has to be carried over
+TARBALL="$(ls -t /tmp/firewood-session-*.tar.gz | head -1)"
+TAG="$(basename "$TARBALL" .tar.gz)"
+sudo lxc image import "$TARBALL" --alias "$TAG"
 sudo lxc image alias create firewood-session \
     "$(sudo lxc image info "$TAG" | awk '/Fingerprint/ {print $2}')"
+sudo lxc image list
 ```
 
 Keep the previous image for rollback.
+
+If you lose the tag, it is recoverable: `sudo lxc image list` on the machine
+that built it shows the dated alias, and the exported tarball is named after
+it.
 
 ### Add a user
 
