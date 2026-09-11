@@ -75,6 +75,27 @@ of 1.94.0. `--all-features` needs 1.94.1, because the AWS SDK crates behind
 `fwdctl`'s `launch` feature require it. Firewood does not build until this is
 raised.
 
+Toolchains belong in the session image, not on the host. Host-installed
+toolchains are what makes sessions non-repeatable: each person ends up with
+whatever they installed, and the hosts drift from the image and from each
+other. The end state is a bare host.
+
+The order matters. Removing the host toolchains before the session image works
+leaves the machines unable to build anything, so:
+
+1. Build the session image and confirm a session works end to end, including
+   the UID-shifting and `io_uring` problems listed above.
+2. Then remove Rust and Go from the hosts.
+
+Until then the hosts need a usable toolchain. `nix develop` against
+`ffi/flake.nix` gives pinned versions with no host install and is closer to the
+intended end state than a per-user `rustup`, which is throwaway work.
+
+Identify how Rust was installed before removing it. A distro package comes out
+with `apt remove`; a tarball install has its own
+`/usr/local/lib/rustlib/uninstall.sh`. Using the wrong one leaves a partial
+toolchain shadowing the real one in `PATH`.
+
 ### Session images
 
 Not implemented. The intent is that each session runs inside an instance that
@@ -204,7 +225,9 @@ Repeat the alias step on `linus`. Keep the previous image for rollback.
 ## Open items
 
 - Session images, per [Session images](#session-images) above.
-- Raise Rust to at least 1.94.1 on both machines.
+- Rust is below the workspace MSRV, so nothing builds on either machine.
+  `nix develop` is the interim answer; removing the host toolchains
+  altogether waits on the session image.
 - Run `setup-nvme.sh` on both machines.
 - Observability. Not set up, and needed.
   `benchmark/setup-scripts/install-grafana.sh` is the EC2 precedent: Grafana on
