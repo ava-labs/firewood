@@ -66,6 +66,10 @@ add more divergence: keep the package and snap sets the same on both. Watch
 for extras pulled in by the Ubuntu installer, which are easy to select by
 accident and show up later as unexplained differences.
 
+[PACKAGES.md](PACKAGES.md) records what is installed beyond a vanilla Ubuntu
+26.04 server install. Update it whenever something is added, and diff the two
+machines against each other after any change.
+
 ### Toolchains
 
 Both machines carry Go 1.26.0 and Nix 2.34.3.
@@ -167,8 +171,19 @@ sudo bash infra/onprem/setup-nvme.sh
 
 ```bash
 sudo reboot
-df -hT /mnt/nvme && sudo lvs bench
+df -hT /mnt/nvme && sudo lvs firewood
 ```
+
+### Record installed packages
+
+On each machine, then paste each host's output into its section of
+[PACKAGES.md](PACKAGES.md):
+
+```bash
+bash infra/onprem/inventory-packages.sh
+```
+
+Diff the two to confirm the machines still agree.
 
 ### Add a user
 
@@ -238,3 +253,5 @@ Repeat the alias step on `linus`. Keep the previous image for rollback.
   worth considering.
 - Reservation is advisory. No mechanism enforces or records who holds a
   machine.
+- PACKAGES.md has no inventory yet. Run `inventory-packages.sh` on both
+  machines and fill it in.

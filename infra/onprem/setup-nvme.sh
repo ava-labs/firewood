@@ -18,7 +18,7 @@ set -o nounset
 set -o pipefail
 
 # Defaults
-VG_NAME=bench
+VG_NAME=firewood
 LV_NAME=nvme
 MOUNT_POINT=/mnt/nvme
 # Default bytes-per-inode for ext4 filesystem (2MB). This suits workloads that
@@ -40,7 +40,7 @@ show_usage() {
     echo "Stripes all empty NVMe devices into one LVM volume and mounts it."
     echo ""
     echo "Options:"
-    echo "  --vg-name NAME           Volume group name (default: bench)"
+    echo "  --vg-name NAME           Volume group name (default: firewood)"
     echo "  --lv-name NAME           Logical volume name (default: nvme)"
     echo "  --mount PATH             Mount point (default: /mnt/nvme)"
     echo "  --bytes-per-inode BYTES  ext4 bytes-per-inode (default: 2097152)"
