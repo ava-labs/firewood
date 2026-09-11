@@ -28,6 +28,7 @@ MOUNT_POINT=/mnt/nvme
 BYTES_PER_INODE=2097152
 STRIPE_SIZE=64k
 GROUP_NAME=firewood
+WIPE=0
 VALIDATE=1
 VALIDATE_SIZE=4G
 ASSUME_YES=0
@@ -46,6 +47,10 @@ show_usage() {
     echo "  --bytes-per-inode BYTES  ext4 bytes-per-inode (default: 2097152)"
     echo "  --stripe-size SIZE       LVM stripe size (default: 64k)"
     echo "  --group NAME             Group granted write access (default: firewood)"
+    echo "  --wipe                   Clear existing RAID superblocks, filesystems"
+    echo "                           and partition tables from otherwise unused"
+    echo "                           NVMe devices. Never touches a mounted device"
+    echo "                           or one belonging to a volume group."
     echo "  --add-user NAME          Add NAME to the group and create their"
     echo "                           directory; may be repeated"
     echo "  --no-validate            Skip the post-setup fio throughput check"
@@ -84,6 +89,10 @@ while [[ $# -gt 0 ]]; do
         --add-user)
             ADD_USERS+=("$2")
             shift 2
+            ;;
+        --wipe)
+            WIPE=1
+            shift
             ;;
         --no-validate)
             VALIDATE=0
@@ -129,24 +138,71 @@ run() {
     fi
 }
 
+# Describes why a device cannot be consumed, or prints nothing if it is free.
 # A device is safe to consume only if it holds no filesystem, is not mounted,
 # has no partitions, and is not already an LVM physical volume.
-device_is_empty() {
+device_blocker() {
+    local dev="$1" mounts fstypes vg
+
+    mounts="$(lsblk -no MOUNTPOINT "$dev" | grep -v '^[[:space:]]*$' | tr '\n' ' ')"
+    if [ -n "$mounts" ]; then
+        echo "mounted at ${mounts% }"
+        return
+    fi
+
+    if pvs --noheadings -o pv_name 2>/dev/null | tr -d ' ' | grep -qx "$dev"; then
+        vg="$(pvs --noheadings -o vg_name "$dev" 2>/dev/null | tr -d ' ')"
+        echo "LVM physical volume in volume group '${vg:-none}'"
+        return
+    fi
+
+    fstypes="$(lsblk -no FSTYPE "$dev" | grep -v '^[[:space:]]*$' | sort -u | tr '\n' ' ')"
+    if [ -n "$fstypes" ]; then
+        echo "holds ${fstypes% }"
+        return
+    fi
+
+    if [ "$(lsblk -no NAME "$dev" | wc -l)" -gt 1 ]; then
+        echo "has partitions"
+        return
+    fi
+}
+
+# --wipe clears leftover signatures, but never touches a mounted device or one
+# belonging to a volume group. Those need a human to decide what they are.
+device_is_wipeable() {
     local dev="$1"
 
-    if [ -n "$(lsblk -no FSTYPE "$dev" | tr -d '[:space:]')" ]; then
-        return 1
-    fi
     if [ -n "$(lsblk -no MOUNTPOINT "$dev" | tr -d '[:space:]')" ]; then
-        return 1
-    fi
-    if [ "$(lsblk -no NAME "$dev" | wc -l)" -gt 1 ]; then
         return 1
     fi
     if pvs --noheadings -o pv_name 2>/dev/null | tr -d ' ' | grep -qx "$dev"; then
         return 1
     fi
     return 0
+}
+
+# Lists any md arrays assembled from a device, one per line.
+device_md_arrays() {
+    lsblk -nro NAME,TYPE "$1" | awk '$2 ~ /^raid/ { print "/dev/" $1 }' | sort -u
+}
+
+# Stops any md array on the device, clears its RAID superblock, then removes
+# every other signature. Skipping --zero-superblock would let the array
+# reassemble on the next boot and take the disks back from LVM.
+wipe_device() {
+    local dev="$1" md
+
+    while read -r md; do
+        [ -n "$md" ] || continue
+        echo "Stopping $md (assembled from $dev)"
+        run mdadm --stop "$md"
+    done < <(device_md_arrays "$dev")
+
+    if command -v mdadm > /dev/null 2>&1; then
+        run mdadm --zero-superblock "$dev" || true
+    fi
+    run wipefs -a "$dev"
 }
 
 # Already set up? Then there is nothing to do.
@@ -177,17 +233,41 @@ if [ "$SKIP_STORAGE" -eq 0 ]; then
     fi
 
     DEVICES=()
+    TO_WIPE=()
+    UNUSABLE=()
     for dev in "${ALL_NVME[@]}"; do
-        if device_is_empty "$dev"; then
+        blocker="$(device_blocker "$dev")"
+        if [ -z "$blocker" ]; then
+            DEVICES+=("$dev")
+        elif [ "$WIPE" -eq 1 ] && device_is_wipeable "$dev"; then
+            echo "$dev: $blocker (will be wiped)"
+            TO_WIPE+=("$dev")
             DEVICES+=("$dev")
         else
-            echo "Skipping $dev: in use (filesystem, partitions, mount, or LVM PV)"
+            echo "$dev: $blocker"
+            UNUSABLE+=("$dev")
         fi
     done
 
     if [ "${#DEVICES[@]}" -eq 0 ]; then
-        echo "Error: found ${#ALL_NVME[@]} NVMe device(s), none of them empty" >&2
+        echo "" >&2
+        echo "Error: found ${#ALL_NVME[@]} NVMe device(s), none of them usable." >&2
+        if [ "$WIPE" -eq 0 ]; then
+            echo "" >&2
+            echo "Inspect them before deciding anything is disposable:" >&2
+            echo "  lsblk -f ${ALL_NVME[*]}" >&2
+            echo "  sudo wipefs -n ${ALL_NVME[0]}" >&2
+            echo "" >&2
+            echo "If the contents are genuinely disposable, rerun with --wipe." >&2
+            echo "Devices that are mounted or part of a volume group are never" >&2
+            echo "wiped automatically." >&2
+        fi
         exit 1
+    fi
+
+    if [ "${#UNUSABLE[@]}" -gt 0 ]; then
+        echo ""
+        echo "Note: ${#UNUSABLE[@]} device(s) left alone; continuing with ${#DEVICES[@]}."
     fi
 
     echo ""
@@ -197,6 +277,16 @@ if [ "$SKIP_STORAGE" -eq 0 ]; then
     done
     echo ""
     echo "ALL DATA ON THESE DEVICES WILL BE DESTROYED."
+    if [ "${#TO_WIPE[@]}" -gt 0 ]; then
+        echo ""
+        echo "${#TO_WIPE[@]} of them hold existing data that --wipe will clear:"
+        for dev in "${TO_WIPE[@]}"; do
+            echo "  $dev  $(device_blocker "$dev")"
+        done
+        while read -r md; do
+            [ -n "$md" ] && echo "  $md will be stopped"
+        done < <(for dev in "${TO_WIPE[@]}"; do device_md_arrays "$dev"; done | sort -u)
+    fi
     echo ""
 
     if [ "$ASSUME_YES" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
@@ -204,6 +294,20 @@ if [ "$SKIP_STORAGE" -eq 0 ]; then
         if [ "$reply" != "yes" ]; then
             echo "Aborted."
             exit 1
+        fi
+    fi
+
+    for dev in ${TO_WIPE+"${TO_WIPE[@]}"}; do
+        wipe_device "$dev"
+    done
+
+    if [ "${#TO_WIPE[@]}" -gt 0 ] && [ "$DRY_RUN" -eq 0 ]; then
+        if grep -qi '^ARRAY' /etc/mdadm/mdadm.conf 2>/dev/null; then
+            echo ""
+            echo "Warning: /etc/mdadm/mdadm.conf still names an array. Remove the"
+            echo "stale entry and run 'update-initramfs -u', or it may reassemble"
+            echo "on the next boot."
+            echo ""
         fi
     fi
 

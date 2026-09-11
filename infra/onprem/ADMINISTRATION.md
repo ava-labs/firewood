@@ -150,6 +150,27 @@ sudo bash infra/onprem/setup-nvme.sh --dry-run   # check the device list
 sudo bash infra/onprem/setup-nvme.sh
 ```
 
+If a device is already in use the script names what is on it and stops. The
+NVMe devices shipped carrying an mdadm array with an ext3 filesystem, so this
+is the expected first result. Inspect before deciding it is disposable:
+
+```bash
+lsblk -f /dev/nvme0n1 /dev/nvme1n1 /dev/nvme2n1 /dev/nvme3n1
+sudo mdadm --detail /dev/md127          # if an array is present
+```
+
+Then rerun with `--wipe`, which stops any array, zeroes its RAID superblock,
+and clears remaining signatures:
+
+```bash
+sudo bash infra/onprem/setup-nvme.sh --wipe
+```
+
+`--wipe` refuses any device that is mounted or belongs to a volume group.
+Zeroing the RAID superblock is the part that matters: without it the array
+reassembles on the next boot and takes the disks back from LVM. The script
+also warns if `/etc/mdadm/mdadm.conf` still names an array.
+
 `--help` lists the options. Reboot afterwards and confirm the mount returns:
 
 ```bash
