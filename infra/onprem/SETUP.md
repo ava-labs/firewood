@@ -544,6 +544,13 @@ The project must already be restricted: LXD ignores `restricted.*` keys when
 `restricted` is false. The disk path list is not optional. `allow` with an
 empty paths list permits any host path, which is host root by another route.
 
+Before it finishes, the script validates the confinement boundary it depends
+on: the user must not be in the `lxd` group, the LXD snap's
+`daemon.user.group` must be the shared team group, the confined project must
+have the expected restrictions and disk path allow-list, low-level container
+configuration must not be allowed, and the user must see only their own LXD
+project.
+
 Password login stays disabled, since Cloudflare authenticates before the
 connection reaches the machine. An account that needs `sudo` therefore also
 needs a password or a `NOPASSWD` rule, and the script says so when `--sudo` is

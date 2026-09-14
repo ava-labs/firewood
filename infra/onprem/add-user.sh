@@ -100,6 +100,76 @@ run() {
     fi
 }
 
+fail() {
+    echo "Error: $*" >&2
+    exit 1
+}
+
+lxc_project_get() {
+    lxc project get "$PROJECT" "$1" 2>/dev/null || true
+}
+
+assert_lxc_project_value() {
+    local key="$1" expected="$2" actual
+
+    actual="$(lxc_project_get "$key")"
+    if [ "$actual" != "$expected" ]; then
+        fail "LXD project '$PROJECT' has $key='${actual:-<unset>}', expected '$expected'"
+    fi
+}
+
+assert_lxc_project_not_value() {
+    local key="$1" forbidden="$2" actual
+
+    actual="$(lxc_project_get "$key")"
+    if [ "$actual" = "$forbidden" ]; then
+        fail "LXD project '$PROJECT' has forbidden $key='$forbidden'"
+    fi
+}
+
+validate_lxd_confinement() {
+    local expected_paths visible_projects daemon_user_group
+
+    echo "Validating LXD confinement for '$USERNAME'..."
+
+    if id -nG "$USERNAME" | tr ' ' '\n' | grep -qx lxd; then
+        fail "'$USERNAME' is in the lxd group, which grants full host-level LXD access"
+    fi
+
+    daemon_user_group="$(snap get lxd daemon.user.group 2>/dev/null || true)"
+    if [ "$daemon_user_group" != "$GROUP_NAME" ]; then
+        fail "snap lxd daemon.user.group is '${daemon_user_group:-<unset>}', expected '$GROUP_NAME'"
+    fi
+
+    if ! id -nG "$USERNAME" | tr ' ' '\n' | grep -qx "$GROUP_NAME"; then
+        fail "'$USERNAME' is not in the '$GROUP_NAME' group"
+    fi
+
+    expected_paths="${user_home}/,${user_data_dir}/"
+    assert_lxc_project_value restricted true
+    assert_lxc_project_value features.images false
+    assert_lxc_project_value restricted.devices.disk allow
+    assert_lxc_project_value restricted.devices.disk.paths "$expected_paths"
+    assert_lxc_project_not_value restricted.containers.lowlevel allow
+    assert_lxc_project_not_value restricted.containers.privilege allow
+
+    if ! lxc profile device list default --project "$PROJECT" 2>/dev/null |
+        grep -qx root; then
+        fail "LXD project '$PROJECT' default profile has no root disk device"
+    fi
+
+    if ! lxc profile device list default --project "$PROJECT" 2>/dev/null |
+        grep -qx eth0; then
+        fail "LXD project '$PROJECT' default profile has no eth0 network device"
+    fi
+
+    visible_projects="$(sudo -u "$USERNAME" -- lxc project list --format csv 2>/dev/null |
+        cut -d, -f1 | sort | tr '\n' ' ')"
+    if [ "${visible_projects% }" != "$PROJECT" ]; then
+        fail "'$USERNAME' can see LXD projects '${visible_projects% }', expected only '$PROJECT'"
+    fi
+}
+
 # --- Account ---------------------------------------------------------------
 
 if id -u "$USERNAME" > /dev/null 2>&1; then
@@ -262,6 +332,7 @@ if command -v lxc > /dev/null 2>&1; then
             lxc project show "$PROJECT" |
                 grep -E 'features.images|restricted:|restricted.devices.disk'
             lxc profile device list default --project "$PROJECT" | sed 's/^/Device: /'
+            validate_lxd_confinement
         fi
     else
         echo "Warning: project '$PROJECT' was not created. Check that" >&2
