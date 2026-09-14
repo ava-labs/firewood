@@ -120,7 +120,8 @@ fn get_helper<T: TrieReader>(
                 // 1. The node is at `key`
                 return Ok(Some(current.clone().into()));
             };
-            let child_index = PathComponent::try_new(child_index).expect("valid component");
+            let child_index = PathComponent::try_new(child_index)
+                .expect("key holds nibbles, which are below sixteen");
 
             // 3. The key is below the node (i.e. its descendant)
             let Node::Branch(branch) = current else {
@@ -689,11 +690,13 @@ fn hash_node_with_proofs<'b, H: HashMode, R: NodeReader>(
     loop {
         let frame = frames
             .last_mut()
-            .expect("proof hash walk: no frame to resume");
+            .expect("proof hash walk: the stack empties only when the walk returns");
 
         // Install the hash produced by the child frame that just finished.
         if let Some(slot) = frame.pending.take() {
-            let hash = carried.take().expect("a finished frame yields a hash");
+            let hash = carried.take().expect(
+                "proof hash walk: a pending slot's child frame has finished and carried its hash",
+            );
             frame.child_hashes[slot] = Some(hash);
             frame.child_prefix.pop();
         }
@@ -751,7 +754,9 @@ fn hash_node_with_proofs<'b, H: HashMode, R: NodeReader>(
 
         let Some((nibble, child_node)) = descend_into else {
             // Every child is accounted for, so this frame can be hashed.
-            let frame = frames.pop().expect("proof hash walk: no frame to finish");
+            let frame = frames
+                .pop()
+                .expect("proof hash walk: the frame just examined is still on the stack");
             let hash = finish_hash_frame::<H>(frame);
             if frames.is_empty() {
                 return Ok(hash);
@@ -1394,7 +1399,7 @@ fn verify_range_proof_root_hash<P: ProofCollection<Node = ProofNode>, H: HashMod
     root_hash: &TrieHash,
 ) -> Result<(), api::Error> {
     // Build in-memory merkle from key-value pairs
-    let memstore = MemStore::new(Vec::new(), H::ALGORITHM);
+    let memstore = MemStore::new(Vec::new());
     let nodestore = NodeStore::new_empty_proposal(memstore.into(), DeletedNodeTracking::Enabled);
     let mut proving_merkle: Merkle<NodeStore<Mutable<Propose>, MemStore, H>> =
         Merkle::from(nodestore);

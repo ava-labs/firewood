@@ -17,20 +17,30 @@ guidelines for contributing to firewood.
 
 ## Quick Links
 
-* [Setting up docker](README.docker.md)
+* [Setting up the devcontainer](.devcontainer/)
 * [Auto-generated documentation](https://ava-labs.github.io/firewood/rustdoc/firewood/)
 * [Issue tracker](https://github.com/ava-labs/firewood/issues)
 
 ## Testing
 
-After submitting a PR, we'll run all the tests and verify your code meets our submission guidelines. To ensure it's more likely to pass these checks, you should run the following commands locally:
+After submitting a PR, we'll run all the tests and verify your code meets our submission guidelines. To ensure it's more likely to pass these checks, run the same recipes CI runs:
 
     cargo fmt
-    cargo nextest run
-    cargo clippy
-    cargo doc --no-deps
+    just prepush-lite
 
-Resolve any warnings or errors before making your PR.
+`cargo fmt` applies formatting; the recipes only check it. `prepush-lite` checks
+formatting and TODOs, runs clippy and the tests for one feature profile, and
+lints the Markdown and the documentation build.
+
+CI is authoritative for the full matrix, and a change that touches the FFI,
+workspace dependencies, or a feature that profile does not enable warrants the
+whole thing before you push:
+
+    just prepush
+
+Use `./scripts/run-just.sh <recipe>` in place of `just` if you do not have `just`
+installed; the wrapper falls back to Nix and otherwise prints installation
+instructions. Resolve any warnings or errors before making your PR.
 
 Also, if you update any versions of packages, notably the MSRV (Minimum Supported Rust Version), you ought to update the nix ffi flake lock file to pin compatible versions of nix packages as well:
 
@@ -156,6 +166,69 @@ the GitHub UI.
 We generally follow the same rules that `cargo fmt` and `cargo clippy` will report as warnings, with a few notable exceptions as documented in the associated Cargo.toml file.
 
 By default, we prohibit bare `unwrap` calls and index dereferencing, as there are usually better ways to write this code. In the case where you can't, please use `expect` with a message explaining why it would be a bug, which we currently allow. For more information on our motivation, please read this great article on unwrap: [Using unwrap() in Rust is Okay](https://blog.burntsushi.net/unwrap) by [Andrew Gallant](https://blog.burntsushi.net).
+
+### Comments and documentation
+
+A comment competes with the code for the reader's attention and must win on
+information. Write what the code cannot say for itself — the invariant, the
+reason for the ordering, the failure the guard prevents, the layout of the bytes
+on disk. This comment loses, and deleting it improves the file:
+
+    // Increment the count.
+    self.count += 1;
+
+This one wins, because nothing in the surrounding code states it:
+
+    // Publish the free-list head only after the node is durable. A crash
+    // between the two leaks the space; the reverse order can hand out an
+    // address that still holds a live node.
+
+Be deliberate about what each comment carries:
+
+* **Self-contained and context free.** The reader is a stranger years from now
+  who did not see the review, does not know the issue number, and has no diff in
+  front of them. Describe the code as it stands, not as it changed: avoid "now",
+  "no longer", "previously", "this fix", and pointers to a review conversation.
+  History belongs in the commit message and the PR description.
+* **Said once.** State each piece of context in the place that owns it and refer
+  to that place from everywhere else — an intra-doc link in Rust
+  (`` [`NodeStore::flush_to`] ``), a doc link in Go (`[Revision.EthGetProof]`), or a
+  plain path (`see storage/src/nodestore/persist.rs`) where neither is available. Copies
+  drift, and a stale copy misleads more than a reference ever could.
+  [Documenting wrappers, shims, and FFI adapters](#documenting-wrappers-shims-and-ffi-adapters)
+  applies this rule to delegating functions.
+* **Consistent in voice.** Prefer the present tense or the imperative mood
+  ("returns the root hash", "hold the lock across the flush"). Use the
+  terminology defined in [AGENTS.md](./AGENTS.md#important-terminology) —
+  revision, view, proposal, commit, batch — rather than a synonym coined on the
+  spot, and do not alternate between "we", "you", and "the caller" within a
+  file.
+* **Free of filler.** No throat-clearing ("Note that", "It is important to note
+  that", "Basically"), no hype ("blazing fast", "robust", "cleanly handles"), no
+  prose restatement of the signature, and no doc section that exists only to be
+  present.
+
+### User-facing strings
+
+Error messages, log lines, and CLI help are part of the interface. Hold them to
+the same bar as the API:
+
+* Name what failed and what the operator can do about it. "failed to open
+  database" is a category; "failed to open database at {path}: {source}" is a
+  starting point for a fix.
+* Keep capitalization, punctuation, and terminology consistent across messages,
+  following the convention of the surface rather than inventing one: Rust error
+  strings are lowercase and unpunctuated because they are composed into a larger
+  chain, while CLI help is sentence case.
+* Make each message distinct enough that searching the source for it lands on a
+  single site.
+* Do not apologize, and do not suggest retrying unless a retry can succeed.
+
+Reviewers should challenge comments and strings that read as generated rather
+than written — padded, hedged, repeated at every call site, or narrating the
+change that introduced them. "This comment does not earn its line" and "say this
+once here and link to it from the other two places" are legitimate review
+feedback. See [`CODE_REVIEW.md`](./CODE_REVIEW.md) for the full review checklist.
 
 ### Documenting wrappers, shims, and FFI adapters
 

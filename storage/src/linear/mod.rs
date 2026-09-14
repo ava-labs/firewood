@@ -151,9 +151,6 @@ impl ReadableNodeMode {
 
 /// Trait for readable storage.
 pub trait ReadableStorage: Debug + Sync + Send {
-    /// The node hash algorithm used by this storage.
-    fn node_hash_algorithm(&self) -> crate::NodeHashAlgorithm;
-
     /// Stream data from the specified address.
     ///
     /// # Arguments

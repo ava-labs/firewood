@@ -117,17 +117,23 @@ fn clone_branch(root: &BranchNode) -> Box<BranchNode> {
     let mut carried: Option<Box<BranchNode>> = None;
 
     loop {
-        let frame = frames.last_mut().expect("clone walk: no frame to resume");
+        let frame = frames
+            .last_mut()
+            .expect("clone walk: the stack empties only when the walk returns");
 
         // Install the copy produced by the frame that just finished.
         if let Some(slot) = frame.pending.take() {
-            let child = carried.take().expect("a finished frame yields a branch");
+            let child = carried.take().expect(
+                "clone walk: a pending slot's child frame has finished and carried its copy",
+            );
             frame.dst.children[slot] = Some(Child::Node(Node::Branch(child)));
         }
 
         if frame.remaining_branches == 0 {
             // Every child is copied, so this frame is done.
-            let frame = frames.pop().expect("clone walk: no frame to finish");
+            let frame = frames
+                .pop()
+                .expect("clone walk: the frame just examined is still on the stack");
             if frames.is_empty() {
                 return frame.dst;
             }
