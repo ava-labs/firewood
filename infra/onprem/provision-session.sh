@@ -191,12 +191,16 @@ PACKAGES=(
     jq
     less
     libssl-dev
+    # Superseded by iproute2, which the base image carries. Kept because the
+    # benchmark hosts have it and scripts written there use ifconfig/netstat.
+    net-tools
     openssh-client
     pkgconf
     protobuf-compiler
     shellcheck
     sudo
     tmux
+    unzip
     xz-utils
 )
 
