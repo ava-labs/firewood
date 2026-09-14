@@ -110,6 +110,10 @@ Docker volumes so they persist across container rebuilds.
 
 See [`.devcontainer/`](.devcontainer/) for the full configuration.
 
+**On-prem servers** (Ava Labs internal) — two shared Linux machines with large
+NVMe arrays, for work that needs real hardware or long runtimes. See
+[`infra/onprem/`](infra/onprem/README.md).
+
 ## Build
 
 In order to build firewood, the following dependencies must be installed:
