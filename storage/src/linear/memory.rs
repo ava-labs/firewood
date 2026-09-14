@@ -11,7 +11,6 @@
 )]
 
 use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
-use crate::NodeHashAlgorithm;
 use firewood_metrics::firewood_counter;
 use parking_lot::Mutex;
 use std::io::Cursor;
@@ -20,16 +19,14 @@ use std::io::Cursor;
 /// An in-memory impelementation of [`WritableStorage`] and [`ReadableStorage`]
 pub struct MemStore {
     bytes: Mutex<Vec<u8>>,
-    node_hash_algorithm: NodeHashAlgorithm,
 }
 
 impl MemStore {
     /// Create a new, empty [`MemStore`]
     #[must_use]
-    pub const fn new(bytes: Vec<u8>, node_hash_algorithm: NodeHashAlgorithm) -> Self {
+    pub const fn new(bytes: Vec<u8>) -> Self {
         Self {
             bytes: Mutex::new(bytes),
-            node_hash_algorithm,
         }
     }
 }
@@ -51,10 +48,6 @@ impl WritableStorage for MemStore {
 }
 
 impl ReadableStorage for MemStore {
-    fn node_hash_algorithm(&self) -> crate::NodeHashAlgorithm {
-        self.node_hash_algorithm
-    }
-
     fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
         firewood_counter!(READ_NODE, "from" => "memory").increment(1);
         let bytes = self
@@ -88,7 +81,7 @@ mod test {
     #[test_case(&[(0,&[1, 2, 3]),(2,&[4])],(0,&[1,2,4]); "overwrite end of store")]
     #[test_case(&[(0,&[1, 2, 3]),(2,&[4,5])],(0,&[1,2,4,5]); "overwrite/extend end of store")]
     fn test_in_mem_write_linear_store(writes: &[(u64, &[u8])], expected: (u64, &[u8])) {
-        let store = MemStore::new(Vec::new(), NodeHashAlgorithm::MerkleDB);
+        let store = MemStore::new(Vec::new());
         assert_eq!(store.size().unwrap(), 0);
 
         for write in writes {

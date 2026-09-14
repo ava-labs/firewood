@@ -330,7 +330,7 @@ mod tests {
     fn create_test_store_with_root(
         root: Node,
     ) -> NodeStore<Mutable<Propose>, MemStore, DefaultHashMode> {
-        let mem_store = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM).into();
+        let mem_store = MemStore::new(Vec::new()).into();
         let mut store = NodeStore::new_empty_proposal(mem_store, DeletedNodeTracking::Enabled);
         store.root_mut().replace(root);
         store
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn test_empty_nodestore() {
-        let mem_store = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM).into();
+        let mem_store = MemStore::new(Vec::new()).into();
         let store: NodeStore<Mutable<Propose>, _, DefaultHashMode> =
             NodeStore::new_empty_proposal(mem_store, DeletedNodeTracking::Enabled);
         let mut iter = UnPersistedNodeIterator::new(&store);
@@ -532,7 +532,7 @@ mod tests {
     #[test]
     fn test_into_committed_with_generic_storage() {
         // Create a base committed store with MemStore
-        let mem_store = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
+        let mem_store = MemStore::new(Vec::new());
         let mut header = NodeStoreHeader::new(DefaultHashMode::ALGORITHM);
         let base_committed: NodeStore<Committed, _, DefaultHashMode> =
             NodeStore::new_empty_committed(mem_store.into(), DeletedNodeTracking::Enabled);

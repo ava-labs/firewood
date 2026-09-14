@@ -418,15 +418,13 @@ mod merkledb_gate_tests {
     use std::sync::Arc;
 
     use super::*;
-    use firewood_storage::{
-        Committed, DeletedNodeTracking, MemStore, MerkleDbHash, NodeHashAlgorithm, NodeStore,
-    };
+    use firewood_storage::{Committed, DeletedNodeTracking, MemStore, MerkleDbHash, NodeStore};
 
     /// A MerkleDB view must refuse to emit eth proofs. This test runs in both
     /// feature configurations.
     #[test]
     fn eth_get_proof_rejected_in_merkledb_mode() {
-        let storage = Arc::new(MemStore::new(Vec::new(), NodeHashAlgorithm::MerkleDB));
+        let storage = Arc::new(MemStore::new(Vec::new()));
         let nodestore: NodeStore<Committed, _, MerkleDbHash> =
             NodeStore::new_empty_committed(storage, DeletedNodeTracking::Enabled);
         let err = eth_get_proof(&nodestore, &[0u8; 32], &[])
