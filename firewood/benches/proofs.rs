@@ -25,7 +25,7 @@ use rand::{RngExt, distr::Alphanumeric};
 fn bench_proofs(criterion: &mut Criterion) {
     // Fixture: 1000 random 32-byte keys, 1-byte values, hashed and frozen.
     let rng = &SeededRng::from_option(Some(1234));
-    let store = Arc::new(MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM));
+    let store = Arc::new(MemStore::new(Vec::new()));
     let nodestore: NodeStore<_, _, DefaultHashMode> =
         NodeStore::new_empty_proposal(store, DeletedNodeTracking::Enabled);
     let mut merkle = Merkle::from(nodestore);
