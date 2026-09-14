@@ -9,7 +9,7 @@
 use crate::hashednode::hash_node;
 use crate::linear::FileIoError;
 use crate::logger::trace;
-use crate::node::{BranchNode, Node};
+use crate::node::{BranchNode, FRAME_STACK_INLINE_CAPACITY, Node};
 use crate::rlp::{EMPTY_TRIE_ROOT, RlpItem, encode_list, replace_list_field};
 use crate::{
     Child, Children, HashMode, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage,
@@ -44,17 +44,6 @@ fn hash_finished_node<H: HashMode>(
 
     (SharedNode::new(node).into(), hash)
 }
-
-/// Inline capacity of the hashing walk's frame stack, chosen so a realistic
-/// trie is walked without allocating.
-///
-/// A frame is pushed for each branch on the path down from the root, so the
-/// stack is as deep as the trie's branch depth. That depth is about seven for
-/// a million uniformly distributed keys. Under `ethhash` a storage write also
-/// descends the storage trie below the account, so sixteen frames cover both.
-/// Deeper tries spill the frames to the heap, so depth can never overflow the
-/// call stack.
-const FRAME_STACK_INLINE_CAPACITY: usize = 16;
 
 /// One node part-way through hashing.
 struct HashFrame {
