@@ -46,8 +46,8 @@ as well as carefully managing the free list during the creation and expiration o
 - `Commit` - Makes a proposal's state the latest committed state. Success does
   not guarantee that the state has been persisted.
 - `Persist` - Writes committed state to the database files.
-- `Maximum persistence gap` - The maximum number of committed revisions to go
-  back from the latest committed state to reach the last persisted state.
+- `Maximum persistence gap` - The maximum number of committed revisions that
+  can be ahead of the last persisted revision.
 - `Revision` - A historical point-in-time state/version of the trie. This
   represents the entire trie, including all `Key`/`Value`s at that point
   in time, and all `Node`s.

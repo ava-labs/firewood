@@ -113,7 +113,7 @@ pub struct DatabaseHandleArgs<'a> {
     /// databases regardless of the database's runtime hash mode.
     pub node_hash_algorithm: NodeHashAlgorithm,
 
-    /// The maximum persistence gap configured for this database.
+    /// The maximum number of committed revisions that can be ahead of the last persisted revision.
     ///
     /// Must be positive and less than `revisions`.
     pub max_persistence_gap: u64,

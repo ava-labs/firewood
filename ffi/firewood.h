@@ -1737,7 +1737,7 @@ typedef struct DatabaseHandleArgs {
    */
   enum NodeHashAlgorithm node_hash_algorithm;
   /**
-   * The maximum persistence gap configured for this database.
+   * The maximum number of committed revisions that can be ahead of the last persisted revision.
    *
    * Must be positive and less than `revisions`.
    */

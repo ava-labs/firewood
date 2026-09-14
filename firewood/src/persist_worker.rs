@@ -30,7 +30,6 @@
 //!   rounded down). It then persists the most recent revision and releases the consumed
 //!   permits in bulk. Only the latest revision is persisted because persisting a revision
 //!   implicitly includes the effects of all prior revisions.
-//!   It does not preserve each prior revision as a separately queryable state.
 //!
 //! For example, with `max_persistence_gap = 10` the pool starts with 10 permits and
 //! `persist_permits_threshold = 5`. After 5 commits the available permits drop to 5,
