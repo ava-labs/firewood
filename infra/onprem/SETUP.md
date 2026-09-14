@@ -204,12 +204,13 @@ cache state are host concerns.
   `restricted.devices.disk.paths`, set by `add-user.sh` to their home and data
   directories.
 - [`provision-session.sh`](provision-session.sh) builds the session image and
-  installs the toolchains,
-  matching `.devcontainer/features/firewood-tools/install.sh`. Rust, Go,
-  cargo-binstall, Cargo tools and Go tools are pinned there so image rebuilds
-  do not silently change the developer environment. `.devcontainer/` cannot be
-  reused directly: it is an OCI image assembled from devcontainer features,
-  while a system container boots `systemd`.
+  installs the toolchains from
+  [`../toolchains/firewood-toolchain.sh`](../toolchains/firewood-toolchain.sh).
+  Rust, Go, cargo-binstall, Cargo tools and Go tools are pinned there so image
+  rebuilds and benchmark hosts do not silently change the developer
+  environment. `.devcontainer/` cannot be reused directly: it is an OCI image
+  assembled from devcontainer features, while a system container boots
+  `systemd`.
 - The image is shared by all accounts/sessions. `fw-session` configures each
   session to match the user's name, uid and gid, so `~` inside the session is
   the same path as outside on the bare machine, where their home is mounted.
@@ -422,8 +423,10 @@ Build on one machine (for example, `snoopy`):
 ```bash
 TAG=firewood-session-$(date +%Y%m%d)
 sudo lxc launch ubuntu:26.04 build-tmp
-sudo lxc file push infra/onprem/provision-session.sh build-tmp/root/
-sudo lxc exec build-tmp -- bash /root/provision-session.sh
+sudo lxc exec build-tmp -- mkdir -p /root/infra/onprem /root/infra/toolchains
+sudo lxc file push infra/onprem/provision-session.sh build-tmp/root/infra/onprem/
+sudo lxc file push infra/toolchains/firewood-toolchain.sh build-tmp/root/infra/toolchains/
+sudo lxc exec build-tmp -- bash /root/infra/onprem/provision-session.sh
 ```
 
 It reports mirror throughput first. If that warns, or the run drags, pass a
@@ -472,31 +475,32 @@ survives an LXD reinstall.
 
 #### Updating pinned session tools
 
-All tool versions for the session image live in one place: the pinned session
-toolchain manifest near the top of
-[`provision-session.sh`](provision-session.sh). Find it with:
+All shared tool versions for the session image and benchmark setup live in one
+place: [`../toolchains/firewood-toolchain.sh`](../toolchains/firewood-toolchain.sh).
+Find the values with:
 
 ```bash
-rg -n "Pinned session toolchain manifest" infra/onprem/provision-session.sh
+rg -n "FIREWOOD_(RUST|GO|CARGO)" infra/toolchains/firewood-toolchain.sh
 ```
 
-Do not split those values into a second file unless the image build runbook is
-changed at the same time. The current build flow pushes only
-`provision-session.sh` into the temporary container, so keeping the manifest in
-that script makes the runbook harder to run halfway.
+The image build runbook pushes both the provisioner and the manifest into the
+temporary container. If another script starts consuming these pins, keep that
+script's copy/source step in the same change as the manifest update.
 
 When updating pins:
 
-1. Choose exact versions, not moving channels: `RUST_VERSION`,
-   dated `RUST_NIGHTLY`, `GO_VERSION`, `CARGO_BINSTALL_VERSION`, each
-   `crate@version` in `CARGO_TOOLS`, and each `module@version` in `GO_TOOLS`.
+1. Choose exact versions, not moving channels: `FIREWOOD_RUST_VERSION`,
+   dated `FIREWOOD_RUST_NIGHTLY`, `FIREWOOD_GO_VERSION`,
+   `FIREWOOD_CARGO_BINSTALL_VERSION`, each `crate@version` in
+   `FIREWOOD_CARGO_TOOLS`, and each `module@version` in `FIREWOOD_GO_TOOLS`.
 2. Update checksums for the downloaded binaries:
-   - `RUSTUP_SHA256` comes from the `rustup-init.sha256` file under:
+   - `FIREWOOD_RUSTUP_X86_64_LINUX_GNU_SHA256` comes from the
+     `rustup-init.sha256` file under:
      `https://static.rust-lang.org/rustup/archive/<version>/x86_64-unknown-linux-gnu/`
-   - `GO_LINUX_AMD64_SHA256` comes from <https://go.dev/dl/>.
-   - `CARGO_BINSTALL_X86_64_LINUX_MUSL_SHA256` comes from the
-     `cargo-binstall-x86_64-unknown-linux-musl.tgz` asset digest in the
-     matching GitHub release.
+   - `FIREWOOD_GO_LINUX_AMD64_SHA256` comes from <https://go.dev/dl/>.
+   - `FIREWOOD_CARGO_BINSTALL_X86_64_LINUX_MUSL_SHA256` comes from
+     the `cargo-binstall-x86_64-unknown-linux-musl.tgz` asset digest
+     in the matching GitHub release.
 3. Build a disposable image with the normal commands above and read the final
    verification output.
 4. Before publishing, smoke-test the tools that matter for Firewood:
