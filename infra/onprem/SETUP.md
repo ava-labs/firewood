@@ -487,11 +487,13 @@ then sets three things on it:
 | Setting | Why |
 | --- | --- |
 | `features.images false` | see the session image published in the default project, instead of needing a private copy |
+| `restricted true` | confirm LXD is enforcing the `restricted.*` settings |
 | `restricted.devices.disk allow` | permit disk devices at all |
 | `restricted.devices.disk.paths` | confine those sources to the user's own directory |
 
-The third is not optional. `allow` with an empty paths list permits any host
-path, which is host root by another route.
+The project must already be restricted: LXD ignores `restricted.*` keys when
+`restricted` is false. The disk path list is not optional. `allow` with an
+empty paths list permits any host path, which is host root by another route.
 
 Password login stays disabled, since Cloudflare authenticates before the
 connection reaches the machine. An account that needs `sudo` therefore also

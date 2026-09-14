@@ -212,14 +212,24 @@ if command -v lxc > /dev/null 2>&1; then
             echo "" >&2
         fi
 
+        # Confined projects must have the top-level `restricted` key enabled:
+        # LXD ignores the restricted.* keys below without it.
+        if [ "$(lxc project get "$PROJECT" restricted 2>/dev/null)" != "true" ]; then
+            echo "Error: LXD project '$PROJECT' is not restricted." >&2
+            echo "Expected the multi-user daemon to create a confined project;" >&2
+            echo "refusing to configure disk access on an unrestricted project." >&2
+            exit 1
+        fi
+
         # Permit disk devices, but only with sources under this user's own
         # home and data directories, which is what fw-session mounts. `allow`
         # with an empty paths list would permit any host path, which is host
         # root by another route.
-        user_home="$(getent passwd "$USERNAME" | cut -d: -f6)"
+        user_home="$(readlink -f "$(getent passwd "$USERNAME" | cut -d: -f6)")"
+        user_data_dir="$(readlink -f "${MOUNT_POINT}/${USERNAME}")"
         run lxc project set "$PROJECT" restricted.devices.disk allow
         run lxc project set "$PROJECT" restricted.devices.disk.paths \
-            "${user_home},${MOUNT_POINT}/${USERNAME}"
+            "${user_home}/,${user_data_dir}/"
 
         # The daemon puts a root disk and a nic in the project's own default
         # profile when it creates it. Repair them if they are missing: without
@@ -249,7 +259,8 @@ if command -v lxc > /dev/null 2>&1; then
 
         if [ "$DRY_RUN" -eq 0 ]; then
             echo ""
-            lxc project show "$PROJECT" | grep -E 'features.images|restricted.devices.disk'
+            lxc project show "$PROJECT" |
+                grep -E 'features.images|restricted:|restricted.devices.disk'
             lxc profile device list default --project "$PROJECT" | sed 's/^/Device: /'
         fi
     else
