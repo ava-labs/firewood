@@ -63,20 +63,12 @@ pub struct RevisionManagerConfig {
     #[builder(default = CacheReadStrategy::WritesOnly)]
     cache_read_strategy: CacheReadStrategy,
 
-    /// The maximum number of committed revisions by which the latest persisted
-    /// state may lag behind the latest committed state.
+    /// The maximum number of committed revisions that can be ahead of the last persisted
+    /// revision. A commit that would exceed this distance blocks until persistence advances the
+    /// checkpoint.
     ///
-    /// Committing makes a revision current, while persistence writes its state
-    /// to the database files asynchronously, without a fixed schedule. A commit
-    /// can therefore return before its state is persisted, even when this value
-    /// is 1, and subsequent commits may wait for persistence to maintain the
-    /// configured bound. Only commits that change the current root count toward
-    /// this limit; uncommitted proposals do not.
-    ///
-    /// Set this value to 1 to persist every committed revision before the next
-    /// state-changing commit completes. Values greater than 1 allow persistence
-    /// to skip intermediate revisions, so not every revision is guaranteed to be
-    /// written to disk.
+    /// Consequently, a persisted revision is guaranteed to be found by looking back at most
+    /// `max_persistence_gap` revisions from any committed revision.
     ///
     /// Defaults to 1. Must be positive and less than `max_revisions`.
     #[builder(default = nonzero!(1u64))]
