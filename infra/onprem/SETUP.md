@@ -123,6 +123,31 @@ The `~/.ssh/config` stanza people need in order to reach the machines through
 these tunnels is in [README.md](README.md#ssh), with the rest of the
 user-facing access instructions.
 
+#### Interim: public keys instead of certificates
+
+The certificate authority is not configured yet, so nobody can log in on a
+Cloudflare certificate. Until it is, accounts use ordinary SSH public keys.
+This needs no sshd change — only the CA does — so the interim state is just
+keys in `authorized_keys` and nothing to undo beyond deleting them.
+
+Users cannot install their own key, having no way in yet, so an administrator
+places it. Ask them for the **public** half, on each machine:
+
+```bash
+sudo bash infra/onprem/add-ssh-key.sh <username> id_ed25519.pub
+```
+
+It refuses anything that is not a public key, and says so loudly if handed a
+private one.
+
+When the CA arrives: configure it, confirm a certificate login works, then
+remove the keys, since leaving them means two ways in and only one of them
+gets revoked when someone leaves.
+
+```bash
+sudo rm /home/<username>/.ssh/authorized_keys
+```
+
 The tunnels themselves, the DNS records, and the certificate authority are
 managed by the security team; we have no access to that configuration. So a
 machine rebuilt from scratch needs a request to them for the tunnel and the
@@ -515,4 +540,7 @@ Diff the two to confirm the machines still agree.
   `fstrim`.
 - **C-Chain state has no agreed location.** At 1 Gbps a full fetch takes hours,
   so a shared read-only copy under `/mnt/nvme` is worth considering.
+- **Logins use public keys, not certificates.** Interim, pending the security
+  team configuring the Cloudflare CA. Remove the keys once it works; see
+  [Interim: public keys instead of certificates](#interim-public-keys-instead-of-certificates).
 - **Reservation is advisory.** Nothing records or enforces who holds a machine.

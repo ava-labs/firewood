@@ -50,10 +50,14 @@ Host snoopy linus
 Use an absolute path in `ProxyCommand` if `cloudflared` is not on your `PATH`
 (`/opt/homebrew/bin/cloudflared` on Apple silicon). Then `ssh snoopy`.
 
-Authentication uses Cloudflare short-lived certificates. Cloudflare
-authenticates you, issues a transient certificate, and the host verifies it
-against Cloudflare's certificate authority. There is no second login on the
-host and no SSH key to install or rotate.
+**For now, send an administrator your public key** (`~/.ssh/id_ed25519.pub`,
+or generate one with `ssh-keygen -t ed25519`) and they will install it. Never
+send the private half.
+
+That is temporary. The intended arrangement is Cloudflare short-lived
+certificates: Cloudflare authenticates you, issues a transient certificate,
+and the host verifies it against Cloudflare's certificate authority, with no
+key to install or rotate. The certificate authority is still being set up.
 
 ### Console
 
