@@ -41,6 +41,10 @@ pub enum ConfigError {
     MalformedTemplate(String),
 }
 
+const DEFAULT_BENCHMARK_GROUPS: &str = "users, adm, sudo";
+const DEFAULT_BENCHMARK_SHELL: &str = "/usr/bin/bash";
+const DEFAULT_BENCHMARK_SUDO: &str = "ALL=(ALL) NOPASSWD:ALL";
+
 /// Root configuration structure.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
@@ -111,6 +115,44 @@ pub struct UserDefinition {
     pub lock_passwd: bool,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct UserManifest {
+    pub users: Vec<SharedUserDefinition>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SharedUserDefinition {
+    pub local_user: String,
+    #[serde(default)]
+    pub benchmark_user: Option<String>,
+    #[serde(default)]
+    pub full_name: String,
+    #[serde(default = "default_benchmark_groups")]
+    pub benchmark_groups: String,
+    #[serde(default = "default_benchmark_shell")]
+    pub benchmark_shell: String,
+    #[serde(default = "default_benchmark_sudo")]
+    pub benchmark_sudo: String,
+    #[serde(default = "default_true")]
+    pub lock_passwd: bool,
+    #[serde(default)]
+    pub ssh_authorized_keys: Vec<String>,
+}
+
+impl SharedUserDefinition {
+    fn benchmark_definition(&self) -> Option<UserDefinition> {
+        Some(UserDefinition {
+            name: self.benchmark_user.clone()?,
+            groups: self.benchmark_groups.clone(),
+            shell: self.benchmark_shell.clone(),
+            sudo: self.benchmark_sudo.clone(),
+            ssh_authorized_keys: self.ssh_authorized_keys.clone(),
+            lock_passwd: self.lock_passwd,
+        })
+    }
+}
+
 /// A fully resolved stage ready for processing.
 #[derive(Debug, Clone)]
 pub struct ResolvedStage {
@@ -137,6 +179,7 @@ pub struct TemplateContext {
 }
 
 const DEFAULT_CONFIG: &str = include_str!("../../../benchmark/launch/launch-stages.yaml");
+const DEFAULT_USERS: &str = include_str!("../../../infra/users/firewood-users.yaml");
 
 impl StageConfig {
     /// # Errors
@@ -151,9 +194,20 @@ impl StageConfig {
             serde_yaml::from_str(&content).map_err(ConfigError::from)?
         } else {
             log::debug!("Using embedded default stage config");
-            serde_yaml::from_str(DEFAULT_CONFIG).map_err(ConfigError::from)?
+            Self::embedded_default()?
         };
         config.validate()?;
+        Ok(config)
+    }
+
+    pub fn embedded_default() -> Result<Self, ConfigError> {
+        let mut config: Self = serde_yaml::from_str(DEFAULT_CONFIG).map_err(ConfigError::from)?;
+        let users: UserManifest = serde_yaml::from_str(DEFAULT_USERS).map_err(ConfigError::from)?;
+        config.users = users
+            .users
+            .iter()
+            .filter_map(SharedUserDefinition::benchmark_definition)
+            .collect();
         Ok(config)
     }
 
@@ -365,14 +419,29 @@ fn user_config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|p| p.join("fwdctl").join("launch-stages.yaml"))
 }
 
+fn default_benchmark_groups() -> String {
+    DEFAULT_BENCHMARK_GROUPS.to_owned()
+}
+
+fn default_benchmark_shell() -> String {
+    DEFAULT_BENCHMARK_SHELL.to_owned()
+}
+
+fn default_benchmark_sudo() -> String {
+    DEFAULT_BENCHMARK_SUDO.to_owned()
+}
+
+const fn default_true() -> bool {
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn embedded_config_parses() {
-        let config: StageConfig =
-            serde_yaml::from_str(DEFAULT_CONFIG).expect("embedded config should parse");
+        let config = StageConfig::embedded_default().expect("embedded config should parse");
         config
             .validate()
             .expect("embedded config should include required scenario");
@@ -387,6 +456,14 @@ mod tests {
         assert!(
             !config.stages.is_empty(),
             "should contain shared stage definitions"
+        );
+        assert_eq!(
+            config.users.first().expect("expected benchmark users").name,
+            "rkuris"
+        );
+        assert!(
+            config.users.iter().all(|user| user.name != "felipe.madero"),
+            "on-prem-only users should not be rendered into benchmark cloud-init"
         );
     }
 

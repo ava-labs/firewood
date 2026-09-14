@@ -49,7 +49,7 @@ impl CloudInitContext {
             Ok(c) => c,
             Err(e) => {
                 log::warn!("Failed to load stage config: {e}, using embedded default");
-                serde_yaml::from_str(include_str!("../../../benchmark/launch/launch-stages.yaml"))?
+                StageConfig::embedded_default()?
             }
         };
         let end_block = opts.end_block().to_string();

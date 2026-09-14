@@ -76,8 +76,9 @@ if either number grows.
 
 #### Who has an account
 
-This is a snapshot, not the source of truth. The machines are the source of
-truth:
+[`../users/firewood-users.yaml`](../users/firewood-users.yaml) is the shared
+desired user list for benchmark hosts and on-prem accounts. The machines are
+still the operational source of truth:
 
 ```bash
 getent group firewood
@@ -92,8 +93,8 @@ getent group firewood
 - `bernard`
 - `felipe.madero`
 
-The same accounts should exist on both machines. Update this list when adding
-or removing users.
+The same accounts should exist on both machines. Update the shared manifest
+when adding or removing users, then run `add-users.sh` on each machine.
 
 ### Access plumbing
 
@@ -130,9 +131,9 @@ It refuses anything that is not a public key, and says so loudly if handed a
 private one.
 
 Most of the team already has a key recorded in
-`benchmark/launch/launch-stages.yaml` for the benchmark hosts, so there is
-nothing to ask them for. That file names people as the benchmark hosts do, not
-as these machines do, so give both names:
+[`../users/firewood-users.yaml`](../users/firewood-users.yaml), so there is
+nothing to ask them for. That file records both benchmark and on-prem account
+names, so `--launch-user` still accepts the benchmark name:
 
 ```bash
 sudo bash infra/onprem/add-ssh-key.sh --launch-user rkuris ron.kuris
@@ -570,6 +571,18 @@ used.
 
 When a new per-user setup step appears, add it to `add-user.sh` so one script
 stays the complete answer.
+
+To reconcile every account in the shared manifest on a machine:
+
+```bash
+sudo bash infra/onprem/add-users.sh --dry-run
+sudo bash infra/onprem/add-users.sh
+```
+
+This calls `add-user.sh` once per `local_user` in
+[`../users/firewood-users.yaml`](../users/firewood-users.yaml), then installs
+each listed interim SSH public key. Use `--no-ssh-keys` once Cloudflare
+certificate authentication is the only access path.
 
 ### Remove a user
 
