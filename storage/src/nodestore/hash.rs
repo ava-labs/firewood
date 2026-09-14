@@ -188,13 +188,16 @@ where
         let mut carried: Option<(MaybePersistedNode, HashType)> = None;
 
         loop {
-            let frame = frames.last_mut().expect("hash walk: no frame to resume");
+            let frame = frames
+                .last_mut()
+                .expect("hash walk: the stack empties only when the walk returns");
 
             // A child frame just finished. Install its hash and restore the path
             // to this node's own prefix.
             if let Some(slot) = frame.pending.take() {
-                let (child_node, child_hash) =
-                    carried.take().expect("a finished frame yields a hash");
+                let (child_node, child_hash) = carried.take().expect(
+                    "hash walk: a pending slot's child frame has finished and carried its hash",
+                );
                 if let Node::Branch(ref mut b) = frame.node {
                     b.children[slot] = Some(Child::MaybePersisted(child_node, child_hash));
                     trace!("child now {:?}", b.children[slot]);
@@ -204,7 +207,9 @@ where
 
             match self.hash_step(frame, &mut path)? {
                 HashStep::Finish => {
-                    let frame = frames.pop().expect("hash walk: no frame to finish");
+                    let frame = frames
+                        .pop()
+                        .expect("hash walk: the frame just examined is still on the stack");
                     path.0.truncate(frame.prefix_len);
                     let hashed =
                         hash_finished_node::<H>(frame.node, frame.fake_root_extra_nibble, &path);
@@ -329,7 +334,11 @@ where
             **child_hash = hash;
         }
         frame.make_fake_root = if hashed.is_empty() && unhashed.len() == 1 {
-            Some(*unhashed.last().expect("only one"))
+            Some(
+                *unhashed
+                    .last()
+                    .expect("unhashed.len() == 1 is checked above"),
+            )
         } else {
             None
         };
