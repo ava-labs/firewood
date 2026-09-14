@@ -139,7 +139,7 @@ It is worth noting that the hash stored as a value inside the account root RLP i
 During hash calculations, we know the hash of the children,
 and use that directly to modify the value in-place
 when hashing the node.
-See [replace\_hash](firewood/storage/src/hashers/ethhash.rs) for more details.
+See [replace\_hash](storage/src/hashers/ethhash.rs) for more details.
 
 ## Run
 

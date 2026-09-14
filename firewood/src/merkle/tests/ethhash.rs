@@ -703,7 +703,7 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
     storage.write(0, b"firewood-v1\0\0\0\0\0").unwrap();
 
     // Re-read the header from the clobbered storage so the version matches.
-    let header = NodeStoreHeader::read_from_storage(&*storage).unwrap();
+    let header = NodeStoreHeader::read_from_storage(&*storage, DefaultHashMode::ALGORITHM).unwrap();
 
     // Re-open from the clobbered MemStore so all reads come from disk.
     let reopened: NodeStore<Committed, _, DefaultHashMode> =

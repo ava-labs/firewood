@@ -117,10 +117,7 @@ where
     K: AsRef<[u8]>,
     V: AsRef<[u8]>,
 {
-    let memstore = Arc::new(MemStore::new(
-        Vec::with_capacity(64 * 1024),
-        DefaultHashMode::ALGORITHM,
-    ));
+    let memstore = Arc::new(MemStore::new(Vec::with_capacity(64 * 1024)));
     let mut header = NodeStoreHeader::new(DefaultHashMode::ALGORITHM);
     let base = Merkle::from(NodeStore::new_empty_committed(
         memstore.clone(),
@@ -251,7 +248,7 @@ fn insert_one() {
 }
 
 fn create_in_memory_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>> {
-    let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
+    let memstore = MemStore::new(Vec::new());
 
     let nodestore = NodeStore::new_empty_proposal(memstore.into(), DeletedNodeTracking::Enabled);
 
@@ -1052,10 +1049,7 @@ fn test_max_bounded_depth_in_memory_ops_survive_default_stack() {
             keys.push(key);
         }
 
-        let memstore = Arc::new(MemStore::new(
-            Vec::with_capacity(64 * 1024),
-            DefaultHashMode::ALGORITHM,
-        ));
+        let memstore = Arc::new(MemStore::new(Vec::with_capacity(64 * 1024)));
         let base: Merkle<NodeStore<Committed, MemStore, DefaultHashMode>> = Merkle::from(
             NodeStore::new_empty_committed(memstore, DeletedNodeTracking::Enabled),
         );
