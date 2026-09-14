@@ -48,7 +48,7 @@ as well as carefully managing the free list during the creation and expiration o
 - `Persist` - Writes committed state to the database files.
 - `Maximum persistence gap` - The maximum number of committed revisions that
   can be ahead of the last persisted revision.
-- `Revision` - A historical point-in-time state/version of the trie. This
+- `Revision` - A point-in-time state/version of the trie. This
   represents the entire trie, including all `Key`/`Value`s at that point
   in time, and all `Node`s.
 - `View` - A read-only interface into a `Revision`, `Proposal`, or
@@ -78,13 +78,13 @@ as well as carefully managing the free list during the creation and expiration o
 - `Proposal` - A proposal consists of a base `Root Hash` and a `Batch`, but is not
   yet committed to the trie. In Firewood's most recent API, a `Proposal` is required
   to `Commit`.
-- `Reconstructed` - A reconstructed state consists of a base historical state and a
+- `Reconstructed` - A reconstructed state consists of a `Reconstructible` base state and a
   `Batch` applied in-memory.
   - It is read-only.
   - It cannot be committed.
   - It differs from a `Proposal` because reconstructed states are not tracked as
     uncommitted branches and do not participate in proposal-parent branching.
-- `Reconstructible` - Either a `Historical` or `Reconstructed` state, which supports
+- `Reconstructible` - Either a `Committed` or `Reconstructed` state, which supports
   building new `Reconstructed` states by applying a `Batch`.
 
 ## Metrics

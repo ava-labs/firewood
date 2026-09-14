@@ -458,7 +458,7 @@ func (db *Database) LatestRevision() (*Revision, error) {
 	return db.Revision(root)
 }
 
-// Revision returns a historical revision of the database.
+// Revision returns a revision of the database.
 // If the provided root does not exist (or is the [EmptyRoot]), it returns an
 // error. The [Revision] must be released with [Revision.Drop] before closing
 // the database.
