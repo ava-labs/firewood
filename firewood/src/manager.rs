@@ -78,11 +78,6 @@ pub struct RevisionManagerConfig {
     /// to skip intermediate revisions, so not every revision is guaranteed to be
     /// written to disk.
     ///
-    /// A successful explicit database close persists the latest committed
-    /// state. If the process exits without a successful close, the recovered
-    /// state is at most `max_persistence_gap` commits behind the latest
-    /// committed revision.
-    ///
     /// Defaults to 1. Must be positive and less than `max_revisions`.
     #[builder(default = nonzero!(1u64))]
     max_persistence_gap: NonZeroU64,

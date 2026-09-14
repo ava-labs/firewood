@@ -1737,25 +1737,7 @@ typedef struct DatabaseHandleArgs {
    */
   enum NodeHashAlgorithm node_hash_algorithm;
   /**
-   * The maximum number of committed revisions by which the latest persisted
-   * state may lag behind the latest committed state.
-   *
-   * Committing makes a revision current, while persistence writes its state
-   * to the database files asynchronously, without a fixed schedule. A commit
-   * can therefore return before its state is persisted, even when this value
-   * is 1, and subsequent commits may wait for persistence to maintain the
-   * configured bound. Only commits that change the current root count toward
-   * this limit; uncommitted proposals do not.
-   *
-   * Set this value to 1 to persist every committed revision before the next
-   * state-changing commit completes. Values greater than 1 allow persistence
-   * to skip intermediate revisions, so not every revision is guaranteed to be
-   * written to disk.
-   *
-   * A successful explicit close persists the latest committed state. If the
-   * process exits without a successful close, the recovered state is at
-   * most `max_persistence_gap` commits behind the latest committed
-   * revision.
+   * The maximum persistence gap configured for this database.
    *
    * Must be positive and less than `revisions`.
    */
