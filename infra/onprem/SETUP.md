@@ -568,6 +568,9 @@ Someone leaving often has work others still need, and deleting terabytes of it
 is not reversible. `--purge` removes those too, and the default path prints
 what to run once you know what is in them.
 
+`--purge` refuses to delete the data directory unless the configured NVMe path
+is mounted and the data directory resolves under it.
+
 ### Record installed packages
 
 On each machine, then paste each host's output into its section of

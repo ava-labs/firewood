@@ -93,6 +93,44 @@ run() {
     fi
 }
 
+validate_purge_paths() {
+    local mount_real data_real
+
+    if ! findmnt --noheadings --mountpoint "$MOUNT_POINT" > /dev/null 2>&1; then
+        echo "Error: $MOUNT_POINT is not a mount point." >&2
+        echo "Refusing --purge rather than deleting from the wrong filesystem." >&2
+        exit 1
+    fi
+
+    if ! mount_real="$(readlink -f "$MOUNT_POINT")"; then
+        echo "Error: cannot resolve mount point '$MOUNT_POINT'." >&2
+        exit 1
+    fi
+    if [ -z "$mount_real" ] || [ "$mount_real" = "/" ]; then
+        echo "Error: refusing to treat '$MOUNT_POINT' as a purge boundary." >&2
+        exit 1
+    fi
+
+    if [ -e "$DATA_DIR" ] || [ -L "$DATA_DIR" ]; then
+        if ! data_real="$(readlink -f "$DATA_DIR")"; then
+            echo "Error: cannot resolve data directory '$DATA_DIR'." >&2
+            echo "Refusing --purge." >&2
+            exit 1
+        fi
+        case "$data_real" in
+            "$mount_real"/*)
+                ;;
+            *)
+                echo "Error: $DATA_DIR resolves outside $MOUNT_POINT:" >&2
+                echo "  mount: $mount_real" >&2
+                echo "  data:  ${data_real:-unresolved}" >&2
+                echo "Refusing --purge." >&2
+                exit 1
+                ;;
+        esac
+    fi
+}
+
 # Captured before the account goes: the LXD project is named after the uid.
 USER_UID="$(id -u "$USERNAME")"
 USER_HOME="$(getent passwd "$USERNAME" | cut -d: -f6)"
@@ -103,6 +141,10 @@ DATA_DIR="$MOUNT_POINT/$USERNAME"
 if who | awk '{print $1}' | grep -qx "$USERNAME"; then
     echo "Error: '$USERNAME' is logged in. Ask them to log out first." >&2
     exit 1
+fi
+
+if [ "$PURGE" -eq 1 ]; then
+    validate_purge_paths
 fi
 
 echo ""
