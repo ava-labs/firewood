@@ -61,10 +61,9 @@ key to install or rotate. The certificate authority is still being set up.
 
 ### Console
 
-<https://ethchallenge3.avax-dev.network> reaches the PiKVM: console video,
-power control, and virtual media for reinstalling an OS.
+<https://ethchallenge3.avax-dev.network> reaches the PiKVM: console video and virtual media for reinstalling an OS.
 
-The KVM port numbering is the reverse of the DNS numbering:
+The KVM port numbering is the reverse of the DNS numbering until soemone goes in and flips the connections:
 
 | KVM port | Machine | DNS |
 | --- | --- | --- |
@@ -75,7 +74,7 @@ Confirm which machine is on screen before power-cycling anything.
 
 ## Accounts
 
-Every team member has their own account on each machine, created by hand. Ask
+Every team member has their own account on each machine.  These are created artisanally, they are not synchronized to Okta or anything of the sort. Ask
 an administrator for one.
 
 The shared `firewood` account exists for machine management. Do not use it for
@@ -126,7 +125,7 @@ ssh snoopy fw-session status
 
 **Long runs need `tmux`.** The container survives a disconnect, but your shell
 does not: anything running in the foreground dies with the connection. Start
-benchmarks inside `tmux` so they keep going.
+benchmarks inside `tmux`, or in the background, so they keep going.
 
 ```bash
 tmux new -s bench
