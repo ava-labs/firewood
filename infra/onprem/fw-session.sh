@@ -280,7 +280,7 @@ case "${COMMAND:-attach}" in
         show_usage
         ;;
     *)
-        echo "Error: unknown command '$1'" >&2
+        echo "Error: unknown command '$COMMAND'" >&2
         show_usage
         exit 1
         ;;

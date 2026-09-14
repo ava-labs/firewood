@@ -449,6 +449,7 @@ scp firewood-session-*.tar.gz linus:
 TARBALL="$(ls -t ~/firewood-session-*.tar.gz | head -1)"
 TAG="$(basename "$TARBALL" .tar.gz)"
 sudo lxc image import "$TARBALL" --alias "$TAG"
+sudo lxc image alias delete firewood-session || true
 sudo lxc image alias create firewood-session \
     "$(sudo lxc image info "$TAG" | awk '/Fingerprint/ {print $2}')"
 sudo lxc image list
