@@ -120,7 +120,8 @@ fn get_helper<T: TrieReader>(
                 // 1. The node is at `key`
                 return Ok(Some(current.clone().into()));
             };
-            let child_index = PathComponent::try_new(child_index).expect("valid component");
+            let child_index = PathComponent::try_new(child_index)
+                .expect("key holds nibbles, which are below sixteen");
 
             // 3. The key is below the node (i.e. its descendant)
             let Node::Branch(branch) = current else {
