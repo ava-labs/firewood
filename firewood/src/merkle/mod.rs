@@ -120,7 +120,8 @@ fn get_helper<T: TrieReader>(
                 // 1. The node is at `key`
                 return Ok(Some(current.clone().into()));
             };
-            let child_index = PathComponent::try_new(child_index).expect("valid component");
+            let child_index = PathComponent::try_new(child_index)
+                .expect("key holds nibbles, which are below sixteen");
 
             // 3. The key is below the node (i.e. its descendant)
             let Node::Branch(branch) = current else {
@@ -1394,7 +1395,7 @@ fn verify_range_proof_root_hash<P: ProofCollection<Node = ProofNode>, H: HashMod
     root_hash: &TrieHash,
 ) -> Result<(), api::Error> {
     // Build in-memory merkle from key-value pairs
-    let memstore = MemStore::new(Vec::new(), H::ALGORITHM);
+    let memstore = MemStore::new(Vec::new());
     let nodestore = NodeStore::new_empty_proposal(memstore.into(), DeletedNodeTracking::Enabled);
     let mut proving_merkle: Merkle<NodeStore<Mutable<Propose>, MemStore, H>> =
         Merkle::from(nodestore);

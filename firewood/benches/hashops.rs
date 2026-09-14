@@ -70,7 +70,7 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
         .bench_function("insert", |b| {
             b.iter_batched(
                 || {
-                    let store = Arc::new(MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM));
+                    let store = Arc::new(MemStore::new(Vec::new()));
                     let nodestore: NodeStore<_, _, DefaultHashMode> =
                         NodeStore::new_empty_proposal(store, DeletedNodeTracking::Enabled);
                     let merkle = Merkle::from(nodestore);

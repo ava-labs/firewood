@@ -215,7 +215,7 @@ impl<S: ReadableStorage, H: HashMode> NodeStore<Committed, S, H> {
     ) -> Result<Self, FileIoError> {
         // Read the on-disk version so account-storage-root recomputation at
         // proof time happens iff the persisted data predates the hfix.
-        let header = NodeStoreHeader::read_from_storage(&*storage)?;
+        let header = NodeStoreHeader::read_from_storage(&*storage, H::ALGORITHM)?;
         // first construct a nodestore without a root
         let mut nodestore = NodeStore {
             kind: Committed {
@@ -652,8 +652,8 @@ pub trait NodeReader {
     /// Proof emission (child-hash wire layout, value-digest rule, and the
     /// account storage-root fix) is governed by the source DB's runtime mode,
     /// not the build's compile-time default. The default returns
-    /// [`DefaultHashMode::ALGORITHM`]; [`NodeStore`] overrides it with the value
-    /// from the storage header.
+    /// [`DefaultHashMode::ALGORITHM`]; [`NodeStore`] overrides it with the
+    /// algorithm selected by its [`HashMode`] type.
     fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
         DefaultHashMode::ALGORITHM
     }
@@ -1249,7 +1249,7 @@ impl<T, S: ReadableStorage, H: HashMode> NodeReader for NodeStore<Mutable<T>, S,
     }
 
     fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
-        self.storage.node_hash_algorithm()
+        H::ALGORITHM
     }
 }
 
@@ -1263,7 +1263,7 @@ impl<S: ReadableStorage, H: HashMode> NodeReader for NodeStore<Reconstructed<S, 
     }
 
     fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
-        self.storage.node_hash_algorithm()
+        H::ALGORITHM
     }
 }
 
@@ -1277,7 +1277,7 @@ impl<T: Parentable, S: ReadableStorage, H: HashMode> NodeReader for NodeStore<T,
     }
 
     fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
-        self.storage.node_hash_algorithm()
+        H::ALGORITHM
     }
 }
 
@@ -1629,7 +1629,7 @@ mod tests {
     #[test]
     fn test_reparent() {
         // create an empty base revision
-        let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
+        let memstore = MemStore::new(Vec::new());
         let base: NodeStore<Committed, _, DefaultHashMode> =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
@@ -1667,7 +1667,7 @@ mod tests {
 
     #[test]
     fn test_slow_giant_node() {
-        let memstore = Arc::new(MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM));
+        let memstore = Arc::new(MemStore::new(Vec::new()));
         let mut header = NodeStoreHeader::new(DefaultHashMode::ALGORITHM);
         let empty_root: NodeStore<Committed, _, DefaultHashMode> =
             NodeStore::new_empty_committed(Arc::clone(&memstore), DeletedNodeTracking::Enabled);
@@ -1733,7 +1733,6 @@ mod tests {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            DefaultHashMode::ALGORITHM,
         )?);
         let mut header = NodeStoreHeader::new(DefaultHashMode::ALGORITHM);
         let nodestore: NodeStore<Committed, _, DefaultHashMode> =
@@ -1813,7 +1812,6 @@ mod tests {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            DefaultHashMode::ALGORITHM,
         )?);
         let mut header = NodeStoreHeader::new(DefaultHashMode::ALGORITHM);
         let base: NodeStore<Committed, _, DefaultHashMode> =
@@ -1858,7 +1856,6 @@ mod tests {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            DefaultHashMode::ALGORITHM,
         )?);
         let mut header = NodeStoreHeader::new(DefaultHashMode::ALGORITHM);
         let base: NodeStore<Committed, _, DefaultHashMode> =
@@ -1898,7 +1895,7 @@ mod tests {
 
     #[test]
     fn reconstructed_root_address_is_none() {
-        let storage = Arc::new(MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM));
+        let storage = Arc::new(MemStore::new(Vec::new()));
         let mut recon = NodeStore::new_empty_recon(Arc::clone(&storage));
 
         recon.root_mut().replace(Node::Leaf(LeafNode {
@@ -1914,7 +1911,7 @@ mod tests {
 
     #[test]
     fn reconstructed_conversion_defers_hashing() {
-        let storage = Arc::new(MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM));
+        let storage = Arc::new(MemStore::new(Vec::new()));
         let mut recon = NodeStore::new_empty_recon(Arc::clone(&storage));
 
         recon.root_mut().replace(Node::Leaf(LeafNode {
@@ -1931,7 +1928,7 @@ mod tests {
 
     #[test]
     fn reconstructed_root_hash_is_memoized() {
-        let storage = Arc::new(MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM));
+        let storage = Arc::new(MemStore::new(Vec::new()));
         let mut recon = NodeStore::new_empty_recon(Arc::clone(&storage));
 
         recon.root_mut().replace(Node::Leaf(LeafNode {
@@ -1955,7 +1952,7 @@ mod tests {
 
     #[test]
     fn reconstructed_empty_root_hash_is_none() {
-        let storage = Arc::new(MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM));
+        let storage = Arc::new(MemStore::new(Vec::new()));
         let recon = NodeStore::new_empty_recon(Arc::clone(&storage));
 
         let reconstructed: NodeStore<Reconstructed<_, DefaultHashMode>, _, DefaultHashMode> =
@@ -1978,7 +1975,7 @@ mod tests {
         std::thread::Builder::new()
             .stack_size(256 * 1024)
             .spawn(|| {
-                let storage = Arc::new(MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM));
+                let storage = Arc::new(MemStore::new(Vec::new()));
                 let recon = NodeStore::new_empty_recon(Arc::clone(&storage));
                 let reconstructed: NodeStore<
                     Reconstructed<_, DefaultHashMode>,
@@ -2017,7 +2014,7 @@ mod tests {
         // After root_hash() runs, the swapped-in root must have no Child::Node
         // children — they should all be Child::MaybePersisted. hash_helper works
         // bottom-up, so if no Child::Node remains at the root, none remains below.
-        let storage = Arc::new(MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM));
+        let storage = Arc::new(MemStore::new(Vec::new()));
         let mut recon = NodeStore::new_empty_recon(Arc::clone(&storage));
 
         let mut children = Children::new();
@@ -2071,7 +2068,7 @@ mod tests {
         // A Reconstructed must hold a strong Arc to its committed parent so
         // the RevisionManager cannot reap the revision (and free its on-disk
         // nodes) while a derived view is still alive.
-        let storage = Arc::new(MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM));
+        let storage = Arc::new(MemStore::new(Vec::new()));
         let committed = Arc::new(NodeStore::new_empty_committed(
             Arc::clone(&storage),
             DeletedNodeTracking::Enabled,

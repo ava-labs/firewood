@@ -41,6 +41,8 @@ firewood/             # Core library and main database implementation
 └── benches/          # Benchmarks
 
 firewood-macros/      # Procedural macros for the project
+metrics/              # Shared metrics utilities
+replay/               # Replay log types and engine for database operations
 storage/              # Storage layer implementation
 triehash/             # Trie hashing functionality
 ffi/                  # Foreign Function Interface (FFI) binding for Golang
@@ -78,9 +80,10 @@ By default, Firewood uses SHA-256 hashing compatible with merkledb. Enable this 
   storage-child count
 - See `storage/src/hashers/ethhash.rs` for implementation details
 
-### `logging`
+### `logger`
 
-Enable for runtime logging. Set `RUST_LOG` environment variable accordingly (uses `env_logger`).
+Enable for runtime logging. Set the `RUST_LOG` environment variable accordingly
+(uses `env_logger`).
 
 ## Common Development Tasks
 
@@ -90,17 +93,21 @@ Building and using the FFI library is a multi-step process. To generate the
 Firewood Rust FFI bindings:
 
 ```bash
-cd ffi/src                                              # Go to Rust binding directory
+cd ffi                                                  # Go to the FFI crate root
 cargo clean                                             # Remove any existing bindings
 cargo build --profile maxperf --features ethhash,logger # Generate bindings
 ```
 
-To then have Golang utilize these new bindings:
+To then have Golang utilize these new bindings, from that same directory:
 
 ```bash
-cd ..                   # Go to ffi directory
 go tool cgo firewood.go # Generate cgo wrappers
 ```
+
+`go tool cgo` refreshes only the wrappers the Go linter reads. The `go:generate`
+directives in `ffi/firewood.go` additionally update the cgo pragmas and
+`LDFLAGS`, and CI checks that they leave the tree unchanged. Run
+`just ci-check-go-generate` when link flags or pragmas drift.
 
 Any tagged enums added to the FFI api where the union body contains a pointer must be defined as `#[repr(C, usize)]` so that the enum tag forces the C struct to have pointer alignment.
 
@@ -274,7 +281,9 @@ brew install markdownlint-cli2
 
 Key dependencies are centrally managed in workspace `Cargo.toml`:
 
-- `firewood`, `firewood-macros`, `firewood-storage`, `firewood-ffi`, `firewood-triehash` (workspace members)
+- Workspace members: `firewood`, `firewood-storage`, `firewood-triehash`,
+  `firewood-macros`, `firewood-metrics`, `firewood-ffi`, `firewood-fwdctl`,
+  `firewood-benchmark`, `firewood-replay`
 - Common deps: `clap`, `thiserror`, `smallvec`, `sha2`, `log`, etc.
 - Test deps: `criterion`, `tempfile`, `rand`, etc.
 
@@ -311,7 +320,19 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
    `./scripts/run-just.sh prepush-lite`; run `./scripts/run-just.sh ci-docs` to
    invoke it separately.
 
-7. **Workspace Awareness**: This is a multi-crate workspace. Changes may affect multiple crates. Check `Cargo.toml` for workspace structure.
+7. **Comments Must Earn Their Line**: A comment competes with the code for the
+   reader's attention and must win on information. Generated comments fail in
+   recognizable ways — restating the line below, repeating the same explanation
+   at every call site, and narrating the change that produced them ("now uses",
+   "previously this would", "fixed to handle"). Write comments that stand alone
+   for a reader years from now who has no diff and no review thread: present
+   tense or imperative, consistent terminology, no filler or hype, each piece of
+   context stated once and cross-referenced from everywhere else. The same bar
+   applies to user-facing strings — error messages, log lines, and CLI help. See
+   [Comments and documentation](./CONTRIBUTING.md#comments-and-documentation)
+   and [User-facing strings](./CONTRIBUTING.md#user-facing-strings).
+
+8. **Workspace Awareness**: This is a multi-crate workspace. Changes may affect multiple crates. Check `Cargo.toml` for workspace structure.
 
 ## Code Review Guidelines
 
