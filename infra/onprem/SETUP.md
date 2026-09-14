@@ -3,25 +3,26 @@
 How `snoopy` and `linus` are built and maintained. For day-to-day use, see
 [README.md](README.md).
 
-This document is in two halves. [Design](#design) explains how things are set
-up and why, for anyone who needs to understand what they are dealing with.
-[Runbooks](#runbooks) is the command sequences on their own, for when you
-already understand and just need the steps.
+This document has two parts. [Design](#design) explains the choices.
+[Runbooks](#runbooks) gives the command sequences.
 
 ## Design
 
 These on-prem machines are configured with these goals in mind:
 
-- Predictable performance for benchmarking.  Minimize sharing and virtual layers between the code and the hardware.
-- Cheap and easy reset of environment -- feel free to change things and bring it back to a known state with one command.
+- Predictable benchmark performance. Minimize sharing and virtual layers
+  between the code and the hardware.
+- Cheap environment reset. Change things freely, then return to a known state
+  with one command.
 - Minimal cost of administration and networking
 - Maximum security -- zero trust access.
 
 ### Storage
 
-[`setup-nvme.sh`](setup-nvme.sh) (run only once per machine) stripes every empty NVMe device into one LVM
-volume group, formats it ext4, mounts it at `/mnt/nvme`, and makes it writable
-by the `firewood` group. It refuses any device holding a filesystem,
+[`setup-nvme.sh`](setup-nvme.sh) runs once per machine. It stripes every empty
+NVMe device into one LVM volume group, formats it ext4, mounts it at
+`/mnt/nvme`, and makes it writable by the `firewood` group. It refuses any
+device holding a filesystem,
 partitions, a mount, or an existing LVM physical volume, and is idempotent.
 
 - LVM striping rather than mdadm. LVM is already in use for the root volume,
@@ -45,12 +46,13 @@ partitions, a mount, or an existing LVM physical volume, and is idempotent.
 
 `bytes-per-inode` fixes the inode count for the life of the filesystem.
 
-The EC2 script uses 2 MB per inode, which on a 7.3 TB volume yields 3.6 M
-inodes and saves roughly 116 GB of inode tables against the ext4 default, an insignificant savings of about 1% which would come at the cost of not being able to hold the tens of thousands of small files that we generate when building into Rust target directories.
+The EC2 script uses 2 MB per inode. On a 7.3 TB volume, that yields 3.6 M
+inodes and saves roughly 116 GB of inode tables against the ext4 default. That
+is about 1% of the volume, at the cost of too few inodes for Rust target
+directories and container images.
 
-Revisit if a
-measurement shows inode-table overhead affecting Firewood's large-file
-throughput.
+Revisit this only if measurements show inode-table overhead affecting
+Firewood's large-file throughput.
 
 ### Where files live
 
@@ -58,12 +60,13 @@ throughput.
 | --- | --- | --- |
 | `/` | SATA system disk, 98 GB | the OS |
 | `/home` | own volume on the root volume group | source checkouts, dotfiles |
-| `/mnt/nvme/<user>` | striped NVMe array | databases, chain state, build artefacts, caches |
+| `/mnt/nvme/<user>` | striped NVMe array | databases, chain state, build artifacts, caches |
 
 Home directories get their own logical volume via
-[`setup-home.sh`](setup-home.sh) (run only once per machine).  Otherwise they would share the 98 GB root
-filesystem, which a couple of Rust target directories can fill; the root
-volume group has terabytes unallocated, and expansion of home space is trivial when/if needed.
+[`setup-home.sh`](setup-home.sh), run once per machine. Otherwise they would
+share the 98 GB root filesystem, which a couple of Rust target directories can
+fill. The root volume group has terabytes unallocated, so home can be expanded
+later.
 
 Source code lives in home because it does not need performance.
 `target/`, the sccache directory and the Go build cache are hot and large, so
@@ -75,12 +78,14 @@ The environment variables are set by default for each user.
 
 ### Accounts
 
-Local accounts are created for each user on each machine and added to the `firewood`
-group, which grants write access to `/mnt/nvme`.  This has to be done on each machine separately because, in a zero-trust environment, and without erecting excessive infrastructure complexity, the machines cannot communicate directly.
+Local accounts are created on each machine and added to the `firewood` group,
+which grants write access to `/mnt/nvme`. This is per-machine because the
+hosts do not communicate directly, and adding central account infrastructure is
+not worth the current complexity.
 
-Accounts are local and not synchronized with the company's authorization fabric (Okta) to minimize adminstration burden, failure modes, and involvement from the security team. With two
-machines and a small team, manual accounts cost less than that process.
-Revisit if either number grows.
+Accounts are local and not synchronized with Okta. With two machines and a
+small team, manual accounts cost less than the extra infrastructure. Revisit
+if either number grows.
 
 #### Who has an account
 
@@ -107,7 +112,7 @@ whenever the command above disagrees.
 
 ### Access plumbing
 
-In a zero-trust environment we rely on Cloudflare's zero trust infrastucture for access, vie these three Cloudflare tunnels:
+Access relies on these Cloudflare tunnels:
 
 | Hostname | Forwards to |
 | --- | --- |
@@ -115,9 +120,10 @@ In a zero-trust environment we rely on Cloudflare's zero trust infrastucture for
 | `ethchallenge2.avax-dev.network` | `linus` sshd |
 | `ethchallenge3.avax-dev.network` | PiKVM, `https://localhost` |
 
-The first two tunnels are meant for regular use.  The third is for tasks that require access to the consoles, e.g, for updating the firmware or the operating system.  Both hosts trust Cloudflare's SSH certificate authority. Cloudflare mints a
-short-lived certificate per connection and the host verifies it against that
-CA, so no per-user keys exist on the machines.
+The first two tunnels are for regular use. The third is for console tasks such
+as firmware or OS updates. Both hosts trust Cloudflare's SSH certificate
+authority. Cloudflare mints a short-lived certificate per connection and the
+host verifies it against that CA, so no per-user keys exist on the machines.
 
 The `~/.ssh/config` stanza people need in order to reach the machines through
 these tunnels is in [README.md](README.md#ssh), with the rest of the
@@ -155,7 +161,8 @@ CA, and cannot be brought back onto the network without it. Everything else
 here is reproducible from this repository.
 
 The PiKVM's port numbering is inverted relative to the DNS names: port 1 is
-`linus`, port 2 is `snoopy`. Correcting this requires physical access to the IDF; we will do it as convenient.
+`linus`, port 2 is `snoopy`. Correcting this requires physical access to the
+IDF; do it when convenient.
 
 Besides each user name for each member of the team, we have these users:
 
@@ -163,9 +170,9 @@ Besides each user name for each member of the team, we have these users:
 | --- | --- | --- |
 | firewood | snoopy, linus | `sudo` user on hosts |
 | root | PiKVM | Management of Linux on switch |
-| admin | PiKVM | Management of web UI credentias on switch |
+| admin | PiKVM | Management of web UI credentials on switch |
 
-The passwords for this users are on `1password`.  Ask someone who knows.
+The passwords for these users are in 1Password. Ask someone who knows.
 
 ### Keeping the machines alike
 
@@ -180,27 +187,28 @@ machines against each other after any change.
 
 ### Session images
 
-Logging in over SSH attaches to a persistent per-user container. These containers cum sessions are managed by the `fw-session` utility.  A session is created (or joined) upon user login, from a shared pre-built image, and removed only when its owner runs
-`fw-session destroy`.
+Logging in over SSH attaches to a persistent per-user container managed by
+`fw-session`. A session is created or joined on login from a shared image, and
+removed only when its owner runs `fw-session destroy`.
 
 That persistence replaced an earlier design in which the container was
 discarded on logout. The reason for the change: a dropped connection would
-otherwise kill a multi-hour run.
-The cost is that a long-lived instance drifts from the image, which we mitigate by having the command `fw-session`
-report when a newer image exists and work is worth starting
-from `fw-session recreate`.
+otherwise kill a multi-hour run. The cost is that a long-lived instance drifts
+from the image. `fw-session` reports when a newer image exists, so benchmark
+work can start from `fw-session recreate`.
 
 Why containers: a cheap, predictable reset to a known state. The
 alternative considered was no containers — `nix develop` against
 `ffi/flake.nix` for toolchains, `tmux` on the host for persistence — which
 gives nearly the same daily workflow for a fraction of the machinery. It was
 rejected because it offers no reset, and because nothing then stops the host
-drifting as people install things; adding unnecessary variables that might affect performance measurements over time. Isolation between users is a side effect, not the
-motivation: this is a trusted team.
+drifting as people install things, which adds noise to performance
+measurements. Isolation between users is a side effect, not the motivation:
+this is a trusted team.
 
 This stands provisionally until I/O inside a session is measured against bare
-metal (see below). If they differed materially, benchmarks would belong on the host and
-sessions would only be used for development, if at all.
+metal (see below). If they differ materially, benchmarks belong on the host and
+sessions are only for development, if at all.
 
 - LXD system containers, one per user. `lxc launch --vm` is available for work
   needing its own kernel, at the cost of I/O fidelity. LXD rather than Incus
@@ -211,48 +219,60 @@ sessions would only be used for development, if at all.
   equivalent to root on the host.
 - Confinement is what makes root inside a session safe. A confined user can
   attach disk devices only with sources under the prefixes in
-  `restricted.devices.disk.paths` (part of the LXD configuration), set by `add-user.sh` (our script) to their home and data
+  `restricted.devices.disk.paths`, set by `add-user.sh` to their home and data
   directories.
-- [`provision-session.sh`](provision-session.sh) (our script, executed only occassionally to build an image) installs the toolchains,
+- [`provision-session.sh`](provision-session.sh) builds the session image and
+  installs the toolchains,
   matching `.devcontainer/features/firewood-tools/install.sh`. Rust, Go,
   cargo-binstall, Cargo tools and Go tools are pinned there so image rebuilds
-  do not silently change the developer environment. `.devcontainer/` cannot be reused
-  directly: it is an OCI image assembled from devcontainer features, while a
-  system container boots `systemd`.
-- The image is shared by all accounts/sessions.  `fw-session` configures each session to match the user's name, uid and gid, so `~` inside the session is the
-  same path as outside on the bare machine, where their home is mounted from. The baked toolchains
-  stay root-owned; `CARGO_TARGET_DIR`, `CARGO_INSTALL_ROOT`, `GOPATH` and the
-  caches point into the user's data directory.
-- Build the image once (using `provision-session.sh`) and copy it to the other machine. The same script run
+  do not silently change the developer environment. `.devcontainer/` cannot be
+  reused directly: it is an OCI image assembled from devcontainer features,
+  while a system container boots `systemd`.
+- The image is shared by all accounts/sessions. `fw-session` configures each
+  session to match the user's name, uid and gid, so `~` inside the session is
+  the same path as outside on the bare machine, where their home is mounted.
+  The baked toolchains stay root-owned; `CARGO_TARGET_DIR`,
+  `CARGO_INSTALL_ROOT`, `GOPATH` and the caches point into the user's data
+  directory.
+- Build the image once and copy it to the other machine. The same script run
   twice does not produce the same image, and the hosts cannot reach each other,
-  so transfer is `lxc image export`/`import` through an external location reachable from both.
-- Entry into the session upon login is through `/etc/profile.d/fw-session.sh`, installed by `add-user.sh`. It is bypassed by console logins, accounts with no data directory, and members of the `sudo`
-  group, so administrators login into a host shell: the runbooks below all operate on
-  the host, and running one inside a session would configure the container.
+  so transfer is `lxc image export`/`import` through an external location.
+- `/etc/profile.d/fw-session.sh`, installed by `add-user.sh`, enters the
+  session on SSH login. Console logins, accounts with no data directory, and
+  members of `sudo` bypass it. Administrators get a host shell because the
+  runbooks below operate on the host; running one inside a session would
+  configure the container.
 
 Still unverified:
 
 - Whether `io_uring` works in an unprivileged container. Firewood sets
   `cfg(io_uring)` on Linux (`storage/build.rs`), so a session may exercise a
-  different I/O path than production without anyone noticing.  These are _system_ containers and all evidence suggests they do support `io_uring` but we have not yet verified.  Revisit and edit this item when we do.
+  different I/O path than production without anyone noticing. These are
+  _system_ containers and all evidence suggests they do support `io_uring`,
+  but we have not verified it. Revisit this item when we do.
 - Whether a benchmark inside a session matches one on bare metal. This is the
   criterion the exercise exists to serve and nothing has measured it. A `fio`
   run and a short re-execution, host against session, would settle it.
 
 Containers do not reset page cache, CPU thermal and turbo state, or the NVMe
 drives' SLC cache and wear. Sessions give a repeatable software environment,
-not a repeatable machine; true benchmark repeatability also needs host-level resets.
+not a repeatable machine; true benchmark repeatability also needs host-level
+resets.
 
-Striping all four NVMe devices into one volume group means a hypothetical VM session would not have a dedicated partition and would be limited to a disk image on the shared filesystem.
+Striping all four NVMe devices into one volume group means a hypothetical VM
+session would use a disk image on the shared filesystem, not a dedicated
+partition.
 Accepted: containers are the default and VMs the exception.
 
 ### Apt mirrors
 
 The session image build defaults to `azure.archive.ubuntu.com`, not the usual
-mirror, only because at the time we configured it the standard mirrors offered ridiculuously poor bandwidth in the order of hundreds of _bytes_ per second. Treat the default as a starting
-point: `provision-session.sh` measures whatever it is given and warns under
+mirror, only because the standard mirrors were extremely slow when this was
+configured. Treat the default as a starting point: `provision-session.sh`
+measures whatever it is given and warns under
 1 MB/s. Only apt is covered; `rustup`, `go.dev` and GitHub releases are
-separate, so a stall in the `Rust`, `Go` or `Cargo tools` step requires a different adjustment.
+separate, so a stall in the `Rust`, `Go` or `Cargo tools` step requires a
+different adjustment.
 
 To compare candidates from a host:
 
@@ -286,7 +306,8 @@ Run these on the host. If you are in a session, `exit` first.
 Bringing up a machine from scratch, in order. Each step verifies before the
 next depends on it:
 
-1. Install OS through the KVM switch (not covered here).  Pay attention to what packages we rely upon, e.g, `lxc`. `PACKAGES.md` may be useful in this.
+1. Install OS through the KVM switch (not covered here). Include the packages
+   this setup assumes, especially `lxc`. `PACKAGES.md` may help.
 2. [Configure the NVMe array](#configure-the-nvme-array)
 3. [Move /home onto its own volume](#move-home-onto-its-own-volume)
 4. [Initialise LXD](#initialise-lxd) onto the NVMe array
@@ -305,7 +326,8 @@ sudo bash infra/onprem/setup-nvme.sh --dry-run   # check the device list
 sudo bash infra/onprem/setup-nvme.sh
 ```
 
-If a device is already in use the script names what is on it and stops. Inspect before deciding whether it is disposable:
+If a device is already in use, the script names what is on it and stops.
+Inspect before deciding whether it is disposable:
 
 ```bash
 lsblk -f /dev/nvme0n1 /dev/nvme1n1 /dev/nvme2n1 /dev/nvme3n1
@@ -330,11 +352,17 @@ df -hT /mnt/nvme && sudo lvs firewood
 
 ### Move /home onto its own volume
 
-If you installed the OS with `/home` on a separate partition, congratulations, you can skip this step.  Otherwise, you run through this once per machine, with nobody else logged in. The script refuses to run
-otherwise, since copying home while someone is writing to it risks inconsistent state.
+If you installed the OS with `/home` on a separate partition, skip this step.
+Otherwise, run it once per machine, with nobody else logged in. The script
+refuses to run otherwise, since copying home while someone is writing to it
+risks inconsistent state.
 
-Two wrinkles, because this step probably replaces the filesystem this git repository is checked out to: 1) Run it from outside `/home`; and 2) run a copy of the script from `/tmp`, since bash reads a script as
-it executes and the original is about to be masked by the new mount:
+Two wrinkles, because this step probably replaces the filesystem holding this
+checkout:
+
+1. Run it from outside `/home`.
+2. Run a copy from `/tmp`, since bash reads a script as it executes and the
+   original is about to be masked by the new mount.
 
 ```bash
 install -m 0755 infra/onprem/setup-home.sh /tmp/setup-home.sh
@@ -410,7 +438,7 @@ from an administrator's account operates in their own confined project, which
 has `features.images false` and cannot hold images. The image has to live in
 the default project, which is what confined projects share from.
 
-Build on one machine (e.g, `snoopy`):
+Build on one machine (for example, `snoopy`):
 
 ```bash
 TAG=firewood-session-$(date +%Y%m%d)
@@ -438,7 +466,7 @@ sudo lxc image export "$TAG" ~/"$TAG"    # not /tmp: cleared on reboot
 echo "$TAG"           # note this; the other machine needs it
 ```
 
-Then carry the tarball to the other machines (e.g, `linus`):
+Then carry the tarball to the other machines (for example, `linus`):
 
 ```bash
 # on your workstation
@@ -484,8 +512,8 @@ When updating pins:
    dated `RUST_NIGHTLY`, `GO_VERSION`, `CARGO_BINSTALL_VERSION`, each
    `crate@version` in `CARGO_TOOLS`, and each `module@version` in `GO_TOOLS`.
 2. Update checksums for the downloaded binaries:
-   - `RUSTUP_SHA256` comes from
-     `https://static.rust-lang.org/rustup/archive/<version>/x86_64-unknown-linux-gnu/rustup-init.sha256`.
+   - `RUSTUP_SHA256` comes from the `rustup-init.sha256` file under:
+     `https://static.rust-lang.org/rustup/archive/<version>/x86_64-unknown-linux-gnu/`
    - `GO_LINUX_AMD64_SHA256` comes from <https://go.dev/dl/>.
    - `CARGO_BINSTALL_X86_64_LINUX_MUSL_SHA256` comes from the
      `cargo-binstall-x86_64-unknown-linux-musl.tgz` asset digest in the
@@ -536,7 +564,7 @@ then sets three things on it:
 
 | Setting | Why |
 | --- | --- |
-| `features.images false` | see the session image published in the default project, instead of needing a private copy |
+| `features.images false` | use the default project's session image |
 | `restricted true` | confirm LXD is enforcing the `restricted.*` settings |
 | `restricted.devices.disk allow` | permit disk devices at all |
 | `restricted.devices.disk.paths` | confine those sources to the user's own directory |
