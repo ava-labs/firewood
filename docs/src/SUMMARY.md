@@ -33,4 +33,6 @@
 
 # Meta
 
-- [About These Docs]()
+- [About These Docs](meta/README.md)
+  - [How these docs work](meta/documentation.md)
+  - [Release process](meta/release.md)
