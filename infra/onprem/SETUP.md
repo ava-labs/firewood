@@ -129,6 +129,17 @@ sudo bash infra/onprem/add-ssh-key.sh <username> id_ed25519.pub
 It refuses anything that is not a public key, and says so loudly if handed a
 private one.
 
+Most of the team already has a key recorded in
+`benchmark/launch/launch-stages.yaml` for the benchmark hosts, so there is
+nothing to ask them for. That file names people as the benchmark hosts do, not
+as these machines do, so give both names:
+
+```bash
+sudo bash infra/onprem/add-ssh-key.sh --launch-user rkuris ron.kuris
+```
+
+Run it with an unknown name to list the ones it knows.
+
 When the CA arrives: configure it, confirm a certificate login works, then
 remove the keys, since leaving them means two ways in and only one of them
 gets revoked when someone leaves.

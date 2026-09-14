@@ -13,9 +13,13 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LAUNCH_STAGES="$SCRIPT_DIR/../../benchmark/launch/launch-stages.yaml"
+
 DRY_RUN=0
 USERNAME=""
 KEY_FILE=""
+LAUNCH_USER=""
 
 show_usage() {
     echo "Usage: $0 [OPTIONS] USERNAME [KEYFILE]"
@@ -24,12 +28,22 @@ show_usage() {
     echo "Reads stdin when KEYFILE is omitted."
     echo ""
     echo "Options:"
+    echo "  --launch-user NAME       Take the key from NAME's entry in"
+    echo "                           benchmark/launch/launch-stages.yaml"
     echo "  --dry-run                Print what would be done, change nothing"
     echo "  --help                   Show this help message"
+    echo ""
+    echo "The benchmark hosts and these machines name the same people"
+    echo "differently, so --launch-user is the name in the YAML and USERNAME is"
+    echo "the local account: --launch-user rkuris ron.kuris"
 }
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --launch-user)
+            LAUNCH_USER="$2"
+            shift 2
+            ;;
         --dry-run)
             DRY_RUN=1
             shift
@@ -73,7 +87,36 @@ if ! id -u "$USERNAME" > /dev/null 2>&1; then
     exit 1
 fi
 
-if [ -n "$KEY_FILE" ]; then
+if [ -n "$LAUNCH_USER" ] && [ -n "$KEY_FILE" ]; then
+    echo "Error: --launch-user and KEYFILE both name a key" >&2
+    exit 1
+fi
+
+if [ -n "$LAUNCH_USER" ]; then
+    if [ ! -f "$LAUNCH_STAGES" ]; then
+        echo "Error: $LAUNCH_STAGES not found" >&2
+        exit 1
+    fi
+    # First ssh_authorized_keys entry under the matching `- name:`.
+    KEY="$(awk -v want="$LAUNCH_USER" '
+        $1 == "-" && $2 == "name:" { current = $3; next }
+        current == want && /ssh_authorized_keys:/ { collecting = 1; next }
+        collecting {
+            if ($1 != "-") exit
+            sub(/^[[:space:]]*-[[:space:]]*/, "")
+            gsub(/^"|"$/, "")
+            print
+            exit
+        }
+    ' "$LAUNCH_STAGES")"
+    if [ -z "$KEY" ]; then
+        echo "Error: no key for '$LAUNCH_USER' in $LAUNCH_STAGES" >&2
+        echo "Known names:" >&2
+        awk '$1 == "-" && $2 == "name:" { print "  " $3 }' "$LAUNCH_STAGES" >&2
+        exit 1
+    fi
+    echo "Using $LAUNCH_USER's key from $(basename "$LAUNCH_STAGES")"
+elif [ -n "$KEY_FILE" ]; then
     KEY="$(cat "$KEY_FILE")"
 else
     echo "Paste the public key, then ctrl-d:" >&2
