@@ -6,10 +6,6 @@ set -euo pipefail
 # matrix. Every profile here is portable to macOS, so GitHub Actions and the
 # local Just aggregators pass the same set. Checks that genuinely require Linux
 # (differential fuzzing) live in the workflows, not here.
-#
-# It is also where the stable/nightly split is enforced. rust-toolchain.toml
-# pins a nightly for formatting and linting; the commands below that build or
-# run code must not inherit it. See the RUSTUP_TOOLCHAIN case below.
 
 usage() {
     cat <<'EOF'
@@ -100,18 +96,11 @@ case "$profile" in
         ;;
 esac
 
-# Commands that compile or run the workspace use stable, not the nightly pinned
-# by rust-toolchain.toml. RUSTUP_TOOLCHAIN outranks that file, so setting it here
-# is enough to opt out.
-#
-# This defaults rather than overrides, so a caller that exports
-# RUSTUP_TOOLCHAIN itself still gets the toolchain it named -- which is what
-# lets these same commands be pointed at a third toolchain, such as the
-# workspace's declared rust-version, without editing this script.
-#
-# `clippy` is absent on purpose: it is one of the commands the pin exists for.
-# `clippy-nightly` names its toolchain inline, which outranks both this variable
-# and the toolchain file.
+# Commands that build or run code use stable rather than the nightly
+# rust-toolchain.toml pin (see AGENTS.md, "Toolchain Selection"). This is a
+# default, not an override: a caller that exports RUSTUP_TOOLCHAIN can point
+# these commands at another toolchain, such as the declared rust-version.
+# `clippy` is excluded because it wants the pin.
 case "$command" in
     check | build | build-benches | bench | test | benchmark-example | insert-example)
         export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-stable}"
@@ -153,9 +142,12 @@ case "$command" in
         cargo bench --frozen ${cargo_args[@]+"${cargo_args[@]}"} --workspace --bench "$1" -- --noplot
         ;;
     clippy)
+        # Toolchain comes from rust-toolchain.toml.
         cargo clippy --locked ${cargo_args[@]+"${cargo_args[@]}"} --workspace --all-targets -- -D warnings
         ;;
     clippy-nightly)
+        # The floating nightly. `+nightly` outranks RUSTUP_TOOLCHAIN and
+        # rust-toolchain.toml alike.
         cargo +nightly clippy --locked ${cargo_args[@]+"${cargo_args[@]}"} --workspace --all-targets -- -D warnings
         ;;
     test)

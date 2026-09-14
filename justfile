@@ -16,15 +16,10 @@ ci-bench-matrix filter="":
 
 # Check Rust formatting as CI does.
 #
-# Formatting is one of the things rust-toolchain.toml pins a nightly for, so
-# unlike the recipes below, this one wants that pin rather than stable. Clearing
-# RUSTUP_TOOLCHAIN rather than leaving it alone means an exported value -- from
-# a shell set up for day-to-day work, or from a parent recipe -- cannot quietly
-# format against a different toolchain than CI checks with. An empty value falls
-# through to the toolchain file; a bogus one would fail loudly.
-#
-# One case remains outside this: `nix develop` supplies its own Rust with no
-# rustup, so it never reads rust-toolchain.toml at all.
+# Formatting wants the nightly rust-toolchain.toml pin, so this clears
+# RUSTUP_TOOLCHAIN rather than inheriting a value exported by the shell or a
+# parent recipe. Recipes that build or run code set it to stable instead. See
+# AGENTS.md, "Toolchain Selection".
 ci-format:
     RUSTUP_TOOLCHAIN= cargo fmt -- --check
 
@@ -37,10 +32,6 @@ ci-check-todos:
     ./scripts/check-todos.sh
 
 # Build Rust documentation with CI's warning policy.
-#
-# RUSTUP_TOOLCHAIN opts out of the nightly pinned by rust-toolchain.toml, which
-# exists for formatting and clippy. Documentation ships to users, so it is built
-# by the same channel that builds the crates.
 ci-docs:
     RUSTUP_TOOLCHAIN=stable RUSTDOCFLAGS="-D warnings" cargo doc --locked --document-private-items --no-deps
 
@@ -79,8 +70,6 @@ ci-machete:
 ci-build-ffi hash_mode:
     #!/usr/bin/env bash
     set -euo pipefail
-    # The Go bindings link against this library, so it is built by the channel
-    # that ships, not the nightly rust-toolchain.toml pins for fmt and clippy.
     export RUSTUP_TOOLCHAIN=stable
     case "{{hash_mode}}" in
         firewood) features=() ;;
@@ -166,9 +155,6 @@ prepush-lite:
 #
 # After running, review the diffs in src/proofs/snapshots/ and commit them
 # alongside the format change.
-#
-# Snapshots record what the shipped build produces, so these run on stable
-# rather than the nightly rust-toolchain.toml pins for fmt and clippy.
 snapshot-proof-nodes:
     RUSTUP_TOOLCHAIN=stable INSTA_UPDATE=always cargo nextest run -p firewood --features logger         -E 'test(~snapshot_tests)'
     RUSTUP_TOOLCHAIN=stable INSTA_UPDATE=always cargo nextest run -p firewood --features ethhash,logger -E 'test(~snapshot_tests)'
@@ -183,9 +169,6 @@ snapshot-proof-nodes:
 #
 # After running, review the diffs in storage/src/node/snapshots/ and commit
 # them alongside the format change.
-#
-# Snapshots record what the shipped build produces, so these run on stable
-# rather than the nightly rust-toolchain.toml pins for fmt and clippy.
 snapshot-nodes:
     RUSTUP_TOOLCHAIN=stable INSTA_UPDATE=always cargo nextest run -p firewood-storage --features logger         -E 'test(~snapshot_tests)'
     RUSTUP_TOOLCHAIN=stable INSTA_UPDATE=always cargo nextest run -p firewood-storage --features ethhash,logger -E 'test(~snapshot_tests)'
@@ -329,8 +312,6 @@ update-ffi-flake: check-nix
 release-step-update-rust-dependencies:
     #!/usr/bin/env bash
     set -euo pipefail
-    # Release preparation resolves and tests against the shipping channel, not
-    # the nightly rust-toolchain.toml pins for fmt and clippy.
     export RUSTUP_TOOLCHAIN=stable
     echo "Checking that cargo-edit is installed and up-to-date..."
     cargo install --locked cargo-edit

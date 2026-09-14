@@ -8,20 +8,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: full
-
-# Toolchain selection, which every job below that runs Rust tooling declares
-# explicitly:
-#
-# `rust-toolchain.toml` pins the nightly that formats and lints the workspace.
-# That file outranks `rustup default`, so the `toolchain:` input of
-# dtolnay/rust-toolchain no longer decides anything on its own -- without
-# `RUSTUP_TOOLCHAIN`, every job here would silently run the pin.
-#
-# So each job that compiles or runs the workspace sets `RUSTUP_TOOLCHAIN:
-# stable`, which does outrank the file. The three jobs the pin exists for --
-# `no-rust-cache-lint`, `rust-lint`, and `miri` -- set no toolchain at all and
-# let `rust-toolchain.toml` supply both the channel and its components, which is
-# what keeps the pinned date in exactly one file.
+  # RUSTUP_TOOLCHAIN is set per job, not here: `no-rust-cache-lint`,
+  # `rust-lint`, and `miri` want the nightly rust-toolchain.toml pin, and every
+  # other job wants stable. See AGENTS.md, "Toolchain Selection".
 
 jobs:
   # Keep this as the only CI status required by main's branch protection.
@@ -113,9 +102,7 @@ jobs:
       - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
         with:
           tool: just@1.46.0
-      # No toolchain is named here. `rust-toolchain.toml` supplies the channel
-      # and the rustfmt component, and `rustup toolchain install` with no
-      # argument installs whatever that file names.
+      # Toolchain and components come from rust-toolchain.toml.
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - name: Check license headers
@@ -150,9 +137,7 @@ jobs:
       - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
         with:
           tool: just@1.46.0
-      # No toolchain is named here. `rust-toolchain.toml` supplies the channel
-      # and the clippy component, which is what keeps the pinned date in one
-      # file. Bumping the pin is a one-line change to that file.
+      # Toolchain and components come from rust-toolchain.toml.
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2 -> v2.9.1
@@ -470,9 +455,7 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v6
-      # No toolchain is named here; `rust-toolchain.toml` supplies the channel.
-      # miri is requested per-job rather than added to that file's component
-      # list, because this is the only job that needs it.
+      # Toolchain comes from rust-toolchain.toml; only this job needs miri.
       - name: Install the pinned toolchain with miri
         run: rustup toolchain install && rustup component add miri
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2

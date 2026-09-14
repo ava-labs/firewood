@@ -196,7 +196,7 @@ All tests must pass, and there should be no clippy warnings.
 
 ### Toolchain Selection
 
-Two channels are in play, and which one a command gets is decided for you:
+Two channels are in play:
 
 | Task | Channel |
 | --- | --- |
@@ -204,33 +204,31 @@ Two channels are in play, and which one a command gets is decided for you:
 | everything that builds or runs code | stable |
 | the weekly `lint-nightly` workflow | the floating nightly |
 
-`rust-toolchain.toml` is the only file holding the pinned date, and it is what
-a bare `cargo fmt` or `cargo clippy` resolves to. Pinning means a new toolchain
-release cannot break the `-D warnings` gate out of band; `lint-nightly.yaml`
-runs the floating nightly on a schedule so new lints still surface, just not
-inside an unrelated pull request.
+`rust-toolchain.toml` is the only file holding the pinned date. A bare
+`cargo fmt` or `cargo clippy` resolves to it, and so does rust-analyzer, so
+editor formatting and diagnostics match CI without configuration. Pinning keeps
+a new toolchain release from breaking the `-D warnings` gate out of band;
+`lint-nightly.yaml` runs the floating nightly weekly so new lints still surface.
 
 Everything else is held to stable by `RUSTUP_TOOLCHAIN`, which outranks the
-toolchain file. It is set in three places, each covering commands the others do
-not reach: `scripts/run-rust-ci.sh` for its build and test commands, the
-`justfile` for the recipes that call Cargo directly, and an `env:` block in each
-workflow — workflow-level where every job needs stable, per-job in `ci.yaml`,
-which is the only workflow with jobs that want the pin.
+toolchain file. It is set in three places:
 
-Two consequences worth knowing:
+- `scripts/run-rust-ci.sh`, for its build and test commands
+- the `justfile`, for recipes that call Cargo directly
+- an `env:` block in each workflow, per job in `ci.yaml` because three of its
+  jobs want the pin
 
-- A `toolchain:` input to `dtolnay/rust-toolchain` no longer decides anything by
-  itself. That action sets rustup's *default*, which `rust-toolchain.toml`
-  outranks. A job that must run stable says so with `RUSTUP_TOOLCHAIN`.
-- Building on both channels roughly doubles the size of `target/`, because
-  Cargo hashes the compiler version into each unit. It does not cause rebuilds:
-  alternating between `just test` and a rust-analyzer check leaves both sets of
-  artifacts intact.
+Two consequences:
 
-The Nix flake is outside all of this. `ffi/flake.nix` names
-`rust-bin.stable.latest` and provides no rustup, so it neither reads nor needs
-`rust-toolchain.toml`. Running `cargo fmt` inside `nix develop` therefore uses
-that flake's stable rustfmt and produces different output than `just fmt`.
+- The `toolchain:` input of `dtolnay/rust-toolchain` sets rustup's default,
+  which `rust-toolchain.toml` outranks. A job that must run stable says so with
+  `RUSTUP_TOOLCHAIN`.
+- `target/` roughly doubles, because Cargo hashes the compiler version into
+  each unit. Nothing rebuilds: stable and nightly artifacts coexist.
+
+`ffi/flake.nix` is outside this scheme. It exists only for avalanchego's ad hoc
+build and is not a supported development environment: it provides stable Rust
+with no rustup, so it never reads `rust-toolchain.toml`.
 
 ### Toolchain Floor for `--all-features`
 

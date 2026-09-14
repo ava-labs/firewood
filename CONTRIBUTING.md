@@ -42,11 +42,10 @@ Use `./scripts/run-just.sh <recipe>` in place of `just` if you do not have `just
 installed; the wrapper falls back to Nix and otherwise prints installation
 instructions. Resolve any warnings or errors before making your PR.
 
-Prefer that over invoking Cargo directly, because two toolchains are in play.
-`rust-toolchain.toml` pins a nightly that formatting, clippy, and miri use;
-everything that builds or runs code uses stable. The `just` recipes select the
-right one per command, so a bare `cargo nextest run` in this repository tests
-against a channel CI never tests against.
+Use the recipes rather than bare Cargo for anything that builds or runs code.
+`rust-toolchain.toml` pins a nightly for `cargo fmt`, clippy, and miri, so a
+bare `cargo nextest run` tests on that nightly while CI tests on stable. See
+[Toolchain Selection](./AGENTS.md#toolchain-selection) in AGENTS.md.
 
 Also, if you update any versions of packages, notably the MSRV (Minimum Supported Rust Version), you ought to update the nix ffi flake lock file to pin compatible versions of nix packages as well:
 
