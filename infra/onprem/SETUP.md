@@ -214,8 +214,9 @@ sessions would only be used for development, if at all.
   `restricted.devices.disk.paths` (part of the LXD configuration), set by `add-user.sh` (our script) to their home and data
   directories.
 - [`provision-session.sh`](provision-session.sh) (our script, executed only occassionally to build an image) installs the toolchains,
-  matching `.devcontainer/features/firewood-tools/install.sh`. Neither pins
-  apt, rustup or cargo-binstall versions, so the two drift. `.devcontainer/` cannot be reused
+  matching `.devcontainer/features/firewood-tools/install.sh`. Rust, Go,
+  cargo-binstall, Cargo tools and Go tools are pinned there so image rebuilds
+  do not silently change the developer environment. `.devcontainer/` cannot be reused
   directly: it is an OCI image assembled from devcontainer features, while a
   system container boots `systemd`.
 - The image is shared by all accounts/sessions.  `fw-session` configures each session to match the user's name, uid and gid, so `~` inside the session is the
@@ -251,7 +252,7 @@ The session image build defaults to `azure.archive.ubuntu.com`, not the usual
 mirror, only because at the time we configured it the standard mirrors offered ridiculuously poor bandwidth in the order of hundreds of _bytes_ per second. Treat the default as a starting
 point: `provision-session.sh` measures whatever it is given and warns under
 1 MB/s. Only apt is covered; `rustup`, `go.dev` and GitHub releases are
-separate, so a stall in the `Rust` or `Cargo tools` step requires a different adjustment.
+separate, so a stall in the `Rust`, `Go` or `Cargo tools` step requires a different adjustment.
 
 To compare candidates from a host:
 

@@ -4,10 +4,8 @@
 # with `lxc publish`. See SETUP.md.
 #
 # The toolchains mirror .devcontainer/features/firewood-tools/install.sh so
-# that a session and a devcontainer offer the same tools. Neither pins
-# versions: `apt`, `rustup` and `cargo binstall` all fetch what is current at
-# build time. That is why the built image, not this script, is the artifact of
-# record.
+# that a session and a devcontainer offer the same tools. Versions are pinned
+# here so rebuilding a session image does not silently change the toolchain.
 #
 # The image carries no session account. fw-session creates one per instance
 # matching the host user's name, uid and gid, so a single image serves
@@ -76,11 +74,54 @@ export GOPATH=/go
 export PATH="$CARGO_HOME/bin:$GOROOT/bin:$GOPATH/bin:$PATH"
 export DEBIAN_FRONTEND=noninteractive
 
+RUSTUP_VERSION=1.29.1
+RUSTUP_SHA256=dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71
+RUST_VERSION=1.94.1
+RUST_NIGHTLY=nightly-2026-09-13
+
 GO_VERSION=1.26.0
+GO_LINUX_AMD64_SHA256=aac1b08a0fb0c4e0a7c1555beb7b59180b05dfc5a3d62e40e9de90cd42f88235
+
+CARGO_BINSTALL_VERSION=1.21.1
+CARGO_BINSTALL_X86_64_LINUX_MUSL_SHA256=630c8f8803a686aa6779497f0f0fb51d49822fb5fc3c514d8ced33b34e338e6e
+
+CARGO_TOOLS=(
+    ast-grep@0.45.3
+    cargo-edit@0.13.13
+    cargo-expand@1.0.126
+    cargo-machete@0.9.2
+    cargo-msrv@0.19.3
+    cargo-nextest@0.9.144
+    git-cliff@2.14.1
+    just@1.58.0
+    ripgrep@15.2.0
+    rustfilt@0.2.1
+    sccache@0.17.0
+)
+
+GO_TOOLS=(
+    github.com/reteps/dockerfmt@v0.5.4
+    mvdan.cc/sh/v3/cmd/shfmt@v3.14.1
+)
 
 step() {
     echo ""
     echo "=== $* ==="
+}
+
+PROVISION_TMP="$(mktemp -d)"
+cleanup() {
+    rm -rf "$PROVISION_TMP"
+}
+trap cleanup EXIT
+
+download_checked() {
+    local url="$1"
+    local sha256="$2"
+    local output="$3"
+
+    curl -fsSL "$url" -o "$output"
+    printf '%s  %s\n' "$sha256" "$output" | sha256sum -c -
 }
 
 step "Base packages"
@@ -178,40 +219,50 @@ rm -rf /var/lib/apt/lists/*
 
 step "Rust"
 
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
-    sh -s -- -y --no-modify-path --profile default
-rustup component add llvm-tools rust-docs
-rustup toolchain install nightly --profile minimal
-rustup component add clippy rustfmt rust-src rust-docs llvm-tools --toolchain nightly
+rustup_init="$PROVISION_TMP/rustup-init"
+download_checked \
+    "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/x86_64-unknown-linux-gnu/rustup-init" \
+    "$RUSTUP_SHA256" \
+    "$rustup_init"
+chmod 0755 "$rustup_init"
+"$rustup_init" -y --no-modify-path --profile default \
+    --default-toolchain "$RUST_VERSION"
+rustup component add llvm-tools rust-docs --toolchain "$RUST_VERSION"
+rustup toolchain install "$RUST_NIGHTLY" --profile minimal
+rustup component add clippy rustfmt rust-src rust-docs llvm-tools \
+    --toolchain "$RUST_NIGHTLY"
 
 step "Go"
 
-curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" |
-    tar -C /usr/local -xz
+go_tarball="$PROVISION_TMP/go${GO_VERSION}.linux-amd64.tar.gz"
+download_checked \
+    "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
+    "$GO_LINUX_AMD64_SHA256" \
+    "$go_tarball"
+rm -rf "$GOROOT"
+tar -C /usr/local -xzf "$go_tarball"
 mkdir -p "$GOPATH"
 
 step "Cargo tools"
 
-curl -L --proto '=https' --tlsv1.2 -sSf \
-    https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+cargo_binstall_tarball="$PROVISION_TMP/cargo-binstall-${CARGO_BINSTALL_VERSION}.tgz"
+download_checked \
+    "https://github.com/cargo-bins/cargo-binstall/releases/download/v${CARGO_BINSTALL_VERSION}/cargo-binstall-x86_64-unknown-linux-musl.tgz" \
+    "$CARGO_BINSTALL_X86_64_LINUX_MUSL_SHA256" \
+    "$cargo_binstall_tarball"
+mkdir -p "$PROVISION_TMP/cargo-binstall" "$CARGO_HOME/bin"
+tar -C "$PROVISION_TMP/cargo-binstall" -xzf "$cargo_binstall_tarball"
+install -m 0755 \
+    "$(find "$PROVISION_TMP/cargo-binstall" -type f -name cargo-binstall -print -quit)" \
+    "$CARGO_HOME/bin/cargo-binstall"
 
-cargo binstall --no-confirm --locked \
-    ast-grep \
-    cargo-edit \
-    cargo-expand \
-    cargo-machete \
-    cargo-msrv \
-    cargo-nextest \
-    git-cliff \
-    just \
-    ripgrep \
-    rustfilt \
-    sccache
+cargo binstall --no-confirm --locked "${CARGO_TOOLS[@]}"
 
 step "Go tools"
 
-go install github.com/reteps/dockerfmt@latest
-go install mvdan.cc/sh/v3/cmd/shfmt@latest
+for tool in "${GO_TOOLS[@]}"; do
+    go install "$tool"
+done
 go clean -cache -testcache -modcache -fuzzcache
 
 step "Shell environment"
