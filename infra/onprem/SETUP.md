@@ -22,8 +22,7 @@ These on-prem machines are configured with these goals in mind:
 [`setup-nvme.sh`](setup-nvme.sh) runs once per machine. It stripes every empty
 NVMe device into one LVM volume group, formats it ext4, mounts it at
 `/mnt/nvme`, and makes it writable by the `firewood` group. It refuses any
-device holding a filesystem,
-partitions, a mount, or an existing LVM physical volume, and is idempotent.
+device holding a filesystem, partition, mount, or LVM physical volume.
 
 - LVM striping rather than mdadm. LVM is already in use for the root volume,
   device-mapper paths survive reboots where `/dev/md0` can reappear as
@@ -34,25 +33,15 @@ partitions, a mount, or an existing LVM physical volume, and is idempotent.
   the machine still boots and is reachable over SSH.
 - `bytes-per-inode` is 65536, deliberately **not** the 2097152 that
   `benchmark/setup-scripts/build-environment.sh` uses for the EC2 equivalent.
-  See [Inode ratio](#inode-ratio).
 - The script refuses to proceed when any NVMe device is unusable, rather than
   striping across the remainder. Snoopy ran for a while on one of four devices
   because three still held an old mdadm array and the script skipped them with
   only a note. A machine quietly using a quarter of its array produces
   benchmark numbers that mean nothing. `--allow-partial` overrides this when
   the shortfall is intentional.
-
-#### Inode ratio
-
-`bytes-per-inode` fixes the inode count for the life of the filesystem.
-
-The EC2 script uses 2 MB per inode. On a 7.3 TB volume, that yields 3.6 M
-inodes and saves roughly 116 GB of inode tables against the ext4 default. That
-is about 1% of the volume, at the cost of too few inodes for Rust target
-directories and container images.
-
-Revisit this only if measurements show inode-table overhead affecting
-Firewood's large-file throughput.
+- `bytes-per-inode` is 65536. The EC2 script uses 2 MB per inode, but that
+  gives too few inodes for Rust target directories and container images. The
+  saved inode-table space is about 1% of a 7.3 TB volume.
 
 ### Where files live
 
@@ -74,8 +63,6 @@ the session environment redirects them to `/mnt/nvme/<user>` through
 `CARGO_TARGET_DIR`, `SCCACHE_DIR` and `GOCACHE`. People work in `~/...`
 and the I/O-heavy parts land on the fast disk without anyone arranging it.
 
-The environment variables are set by default for each user.
-
 ### Accounts
 
 Local accounts are created on each machine and added to the `firewood` group,
@@ -89,9 +76,8 @@ if either number grows.
 
 #### Who has an account
 
-A snapshot, not a register. Accounts live on the machines; this list records
-what we believe is there and will drift as people join and leave. The machines
-are the truth:
+This is a snapshot, not the source of truth. The machines are the source of
+truth:
 
 ```bash
 getent group firewood
@@ -106,9 +92,8 @@ getent group firewood
 - `bernard`
 - `felipe.madero`
 
-The same accounts should exist on both machines. Update this list when running
-[Add a user](#add-a-user) or [Remove a user](#remove-a-user), and correct it
-whenever the command above disagrees.
+The same accounts should exist on both machines. Update this list when adding
+or removing users.
 
 ### Access plumbing
 
@@ -131,10 +116,8 @@ user-facing access instructions.
 
 #### Interim: public keys instead of certificates
 
-The certificate authority is not configured yet, so nobody can log in on a
-Cloudflare certificate. Until it is, accounts use ordinary SSH public keys.
-This needs no sshd change — only the CA does — so the interim state is just
-keys in `authorized_keys` and nothing to undo beyond deleting them.
+The certificate authority is not configured yet. Until it is, accounts use
+ordinary SSH public keys in `authorized_keys`.
 
 Users cannot install their own key, having no way in yet, so an administrator
 places it. Ask them for the **public** half, on each machine:
@@ -155,10 +138,9 @@ sudo rm /home/<username>/.ssh/authorized_keys
 ```
 
 The tunnels themselves, the DNS records, and the certificate authority are
-managed by the security team; we have no access to that configuration. So a
-machine rebuilt from scratch needs a request to them for the tunnel and the
-CA, and cannot be brought back onto the network without it. Everything else
-here is reproducible from this repository.
+managed by the security team. A machine rebuilt from scratch needs a request to
+them for the tunnel and CA. Everything else here is reproducible from this
+repository.
 
 The PiKVM's port numbering is inverted relative to the DNS names: port 1 is
 `linus`, port 2 is `snoopy`. Correcting this requires physical access to the
@@ -174,7 +156,7 @@ Besides each user name for each member of the team, we have these users:
 
 The passwords for these users are in 1Password. Ask someone who knows.
 
-### Keeping the machines alike
+### Package parity
 
 The hardware already differs (CPU bin, NVMe generation). Software should not
 add more divergence: keep the package and snap sets the same on both. Watch
@@ -191,24 +173,13 @@ Logging in over SSH attaches to a persistent per-user container managed by
 `fw-session`. A session is created or joined on login from a shared image, and
 removed only when its owner runs `fw-session destroy`.
 
-That persistence replaced an earlier design in which the container was
-discarded on logout. The reason for the change: a dropped connection would
-otherwise kill a multi-hour run. The cost is that a long-lived instance drifts
-from the image. `fw-session` reports when a newer image exists, so benchmark
-work can start from `fw-session recreate`.
+Sessions persist because a dropped SSH connection must not kill a multi-hour
+run. The tradeoff is image drift. `fw-session` reports when a newer image
+exists, so benchmark work can start from `fw-session recreate`.
 
-Why containers: a cheap, predictable reset to a known state. The
-alternative considered was no containers — `nix develop` against
-`ffi/flake.nix` for toolchains, `tmux` on the host for persistence — which
-gives nearly the same daily workflow for a fraction of the machinery. It was
-rejected because it offers no reset, and because nothing then stops the host
-drifting as people install things, which adds noise to performance
-measurements. Isolation between users is a side effect, not the motivation:
-this is a trusted team.
-
-This stands provisionally until I/O inside a session is measured against bare
-metal (see below). If they differ materially, benchmarks belong on the host and
-sessions are only for development, if at all.
+Containers give cheap reset to a known software environment. They are not meant
+to make the hardware itself repeatable; page cache, thermal state and NVMe
+cache state are host concerns.
 
 - LXD system containers, one per user. `lxc launch --vm` is available for work
   needing its own kernel, at the cost of I/O fidelity. LXD rather than Incus
@@ -217,8 +188,8 @@ sessions are only for development, if at all.
   project of their own, created on first use and named `user-<uid>`. Members of
   the `lxd` group would instead get full administrative access, which is
   equivalent to root on the host.
-- Confinement is what makes root inside a session safe. A confined user can
-  attach disk devices only with sources under the prefixes in
+- Confinement is what makes root inside a session acceptable. A confined user
+  can attach disk devices only with sources under the prefixes in
   `restricted.devices.disk.paths`, set by `add-user.sh` to their home and data
   directories.
 - [`provision-session.sh`](provision-session.sh) builds the session image and
@@ -242,27 +213,6 @@ sessions are only for development, if at all.
   members of `sudo` bypass it. Administrators get a host shell because the
   runbooks below operate on the host; running one inside a session would
   configure the container.
-
-Still unverified:
-
-- Whether `io_uring` works in an unprivileged container. Firewood sets
-  `cfg(io_uring)` on Linux (`storage/build.rs`), so a session may exercise a
-  different I/O path than production without anyone noticing. These are
-  _system_ containers and all evidence suggests they do support `io_uring`,
-  but we have not verified it. Revisit this item when we do.
-- Whether a benchmark inside a session matches one on bare metal. This is the
-  criterion the exercise exists to serve and nothing has measured it. A `fio`
-  run and a short re-execution, host against session, would settle it.
-
-Containers do not reset page cache, CPU thermal and turbo state, or the NVMe
-drives' SLC cache and wear. Sessions give a repeatable software environment,
-not a repeatable machine; true benchmark repeatability also needs host-level
-resets.
-
-Striping all four NVMe devices into one volume group means a hypothetical VM
-session would use a disk image on the shared filesystem, not a dedicated
-partition.
-Accepted: containers are the default and VMs the exception.
 
 ### Apt mirrors
 
@@ -293,6 +243,24 @@ Toolchains are in the repeatable session image.
 
 `nix develop` against `ffi/flake.nix` provides pinned toolchains on the host
 for work that should not run in a session.
+
+### Known gaps
+
+- `/mnt/nvme` has no redundancy or backup. One NVMe failure loses user data and
+  the LXD pool. `/home` is also a single volume on a single SSD.
+- There are no quotas. One user filling `/mnt/nvme` can stop every session on
+  the machine.
+- Benchmark repeatability may need host-level resets such as `drop_caches` and
+  `fstrim`.
+- `io_uring` in sessions is unverified. Firewood enables `cfg(io_uring)` on
+  Linux, so a session could exercise a different I/O path than production.
+- Session I/O has not been compared with bare metal. A `fio` run and a short
+  re-execution on host and session would settle this.
+- C-Chain state has no agreed location. A shared read-only copy under
+  `/mnt/nvme` is worth considering.
+- Logins use public keys until the Cloudflare CA is configured. Remove
+  `authorized_keys` once certificate login works.
+- Reservations are advisory. Nothing records or enforces who holds a machine.
 
 ## Runbooks
 
@@ -617,20 +585,3 @@ bash infra/onprem/inventory-packages.sh
 ```
 
 Diff the two to confirm the machines still agree.
-
-## Open items
-
-- **No backup, and `/mnt/nvme` has no redundancy.** It is a four-way stripe:
-  one drive failing loses every user's data and the LXD pool with it. `/home`
-  is a single volume on a single SSD. Either accept that explicitly in the
-  README or arrange something.
-- **No quotas.** One user filling `/mnt/nvme` stops every session on the
-  machine. The `dir` storage driver offers none.
-- **Benchmark repeatability might need host-level resets** — `drop_caches`,
-  `fstrim`.
-- **C-Chain state has no agreed location.** At 1 Gbps a full fetch takes hours,
-  so a shared read-only copy under `/mnt/nvme` is worth considering.
-- **Logins use public keys, not certificates.** Interim, pending the security
-  team configuring the Cloudflare CA. Remove the keys once it works; see
-  [Interim: public keys instead of certificates](#interim-public-keys-instead-of-certificates).
-- **Reservation is advisory.** Nothing records or enforces who holds a machine.
