@@ -38,7 +38,7 @@ server install, or a dependency of one of the above.
 
 ### snoopy
 
-Ubuntu 26.04, kernel 7.0.0-31-generic. Collected 2026-09-11.
+Ubuntu 26.04, kernel 7.0.0-31-generic. Collected 2026-09-14.
 
 Manually installed apt packages:
 
@@ -48,6 +48,7 @@ cloudflared
 dash
 diffutils
 efibootmgr
+emacs-nox
 findutils
 fio
 grep
@@ -74,9 +75,10 @@ Snaps:
 
 ```text
 aws-cli 2.35.21
+core18 20260901
 core20 20260901
 core22 20260410
-core24 20260410
+core24 20260824
 hwctl 0.11.1
 lxd 5.21.7-1018661
 prometheus 2.37.0
