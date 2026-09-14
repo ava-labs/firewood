@@ -25,7 +25,9 @@ SESSION_HOME="$(getent passwd "$SESSION_USER" 2>/dev/null | cut -d: -f6 || true)
 SESSION_HOME="${SESSION_HOME:-$HOME}"
 
 IMAGE_ALIAS=firewood-session
-INSTANCE="session-${SESSION_USER}"
+# LXD instance names are hostnames: alphanumerics and hyphens only. Most of
+# these accounts are firstname.lastname, so the dot has to go.
+INSTANCE="session-${SESSION_USER//[^a-zA-Z0-9-]/-}"
 DATA_DIR="/mnt/nvme/${SESSION_USER}"
 READY_TIMEOUT=60
 ASSUME_YES=0
@@ -49,8 +51,8 @@ instance_exists() {
     lxc info "$INSTANCE" > /dev/null 2>&1
 }
 
-# lxc list matches its argument as a pattern, so a dot in the instance name is
-# a wildcard and a shorter name is a prefix of a longer one. Ask lxc info.
+# lxc list matches its argument as a pattern, so a shorter name matches a
+# longer one as a prefix. Ask lxc info.
 instance_state() {
     lxc info "$INSTANCE" 2>/dev/null | awk '/^Status:/ { print toupper($2) }'
 }
