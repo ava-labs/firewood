@@ -462,6 +462,54 @@ rather than `lxc image list`, whose ALIAS column truncates to "(1 more)". The
 exported tarball is also named after the tag, and is the only copy that
 survives an LXD reinstall.
 
+#### Updating pinned session tools
+
+All tool versions for the session image live in one place: the pinned session
+toolchain manifest near the top of
+[`provision-session.sh`](provision-session.sh). Find it with:
+
+```bash
+rg -n "Pinned session toolchain manifest" infra/onprem/provision-session.sh
+```
+
+Do not split those values into a second file unless the image build runbook is
+changed at the same time. The current build flow pushes only
+`provision-session.sh` into the temporary container, so keeping the manifest in
+that script makes the runbook harder to run halfway.
+
+When updating pins:
+
+1. Choose exact versions, not moving channels: `RUST_VERSION`,
+   dated `RUST_NIGHTLY`, `GO_VERSION`, `CARGO_BINSTALL_VERSION`, each
+   `crate@version` in `CARGO_TOOLS`, and each `module@version` in `GO_TOOLS`.
+2. Update checksums for the downloaded binaries:
+   - `RUSTUP_SHA256` comes from
+     `https://static.rust-lang.org/rustup/archive/<version>/x86_64-unknown-linux-gnu/rustup-init.sha256`.
+   - `GO_LINUX_AMD64_SHA256` comes from <https://go.dev/dl/>.
+   - `CARGO_BINSTALL_X86_64_LINUX_MUSL_SHA256` comes from the
+     `cargo-binstall-x86_64-unknown-linux-musl.tgz` asset digest in the
+     matching GitHub release.
+3. Build a disposable image with the normal commands above and read the final
+   verification output.
+4. Before publishing, smoke-test the tools that matter for Firewood:
+
+```bash
+sudo lxc exec build-tmp -- bash -lc '
+  . /etc/profile.d/firewood-session.sh
+  rustup show
+  go version
+  cargo nextest --version
+  sccache --version
+  just --version
+  shfmt --version
+  dockerfmt --version
+'
+```
+
+If any install fails because a pinned tool now requires a newer Rust or Go
+version, update the language toolchain first and rerun the build from a fresh
+`build-tmp`.
+
 ### Add a user
 
 [`add-user.sh`](add-user.sh) does everything a new account needs. Run it on

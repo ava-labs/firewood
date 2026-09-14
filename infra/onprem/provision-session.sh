@@ -74,6 +74,8 @@ export GOPATH=/go
 export PATH="$CARGO_HOME/bin:$GOROOT/bin:$GOPATH/bin:$PATH"
 export DEBIAN_FRONTEND=noninteractive
 
+# Pinned session toolchain manifest. Update this block when rebuilding the
+# shared image with newer tools; SETUP.md has the update workflow.
 RUSTUP_VERSION=1.29.1
 RUSTUP_SHA256=dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71
 RUST_VERSION=1.94.1
