@@ -121,29 +121,21 @@ For more information on coding conventions and constraints, please refer to [CON
 
 ## Design Documents
 
-Firewood records designs as living documentation in a single flat directory,
-`docs/src/designs/` (rendered in the mdBook site). Every design is
-`YYYY-MM-DD-<slug>.md`, where the date is the day the design was written; it is
-assigned once and never changes. A design's lifecycle state lives in the `status`
-frontmatter field, not in its location or filename. Follow this workflow when writing
-a design document:
+Firewood records designs as living documentation in `docs/src/designs/`, rendered in
+the mdBook site. Every design is `YYYY-MM-DD-<slug>.md`, dated when it was proposed;
+the filename never changes. Lifecycle state lives in the `status` frontmatter field.
+The convention, frontmatter schema, and promotion checklist are documented in
+`docs/src/designs/README.md`.
 
-- **Propose:** run `just new-design <slug>` to scaffold
-  `docs/src/designs/YYYY-MM-DD-<slug>.md` (with `status: proposed`) from the RFC-style
-  template, fill it in, and open a pull request for review.
-- **Promote:** once the design is implemented, promote it in place — a status flip,
-  not a file move, so its `YYYY-MM-DD-<slug>.md` path stays stable and its date prefix
-  goes on recording when the design was proposed. Following the checklist in
-  `docs/src/designs/README.md`: flip the frontmatter `status` to `active`, drop the
-  proposal-only sections, rewrite future-tense prose into the present tense, add
-  cross-links to the implementing PR(s), and update the index in
-  `docs/src/designs/README.md` and `docs/src/SUMMARY.md`.
-- `active` designs describe what the code does today; keep them up to date as the
-  design changes.
+- **Propose:** run `just new-design <slug>` to scaffold a `status: proposed` design
+  from the template, fill it in, and open a pull request.
+- **Promote:** once implemented, flip `status` to `active` in place and follow the
+  promotion checklist. Do not rename or move the file.
+- **Maintain:** `active` designs describe what the code does today; update them as
+  the design changes. `just design-age` lists designs by last commit date.
 
-Never write a date into a design's frontmatter or body. The filename records when the
-design was proposed; `just design-age` reports how fresh each design is from git
-history. A hand-maintained date inside a document only drifts out of sync.
+Never write a date into a design's frontmatter or body; the filename and git history
+already carry it.
 
 ## Commit and PR Title Convention
 

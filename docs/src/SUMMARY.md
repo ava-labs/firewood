@@ -13,7 +13,7 @@
 
 # Design Documents
 
-- [Designs](designs/README.md)
+- [Design Documents](designs/README.md)
   - [mdBook documentation site](designs/2026-06-17-mdbook-documentation-site.md)
   - [Template](designs/template.md)
 

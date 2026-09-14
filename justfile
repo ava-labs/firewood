@@ -347,21 +347,17 @@ new-design slug:
     set -euo pipefail
     dir="docs/src/designs"
     tmpl="$dir/template.md"
-    # The YYYY-MM-DD prefix records when the design was proposed. It is assigned once,
-    # here, and never changes again — not on promotion, not on later edits. Freshness
-    # is a separate question, answered by git history (`just design-age`).
+    # The date prefix records when the design was proposed and never changes.
     out="$dir/$(date +%F)-{{slug}}.md"
     if [[ -e "$out" ]]; then
-        # Dates are not unique the way sequence numbers were: a second design with the
-        # same slug on the same day would collide. Refuse rather than clobber.
+        # Two designs with the same slug on the same day collide; refuse rather than clobber.
         echo "error: $out already exists" >&2
         exit 1
     fi
     cp "$tmpl" "$out"
     echo "Created $out"
 
-# List design docs by last git-commit date (oldest/stalest first).
-# Freshness comes from git history, never from the filename's proposal date.
+# List design docs by last git-commit date (oldest/stalest first)
 design-age:
     ./scripts/design-doc-age.sh
 

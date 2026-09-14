@@ -11,7 +11,7 @@ set -euo pipefail
 # single-maintainer projects with no prebuilt binary, so they compile from source
 # on every CI run and would block all docs/Go PRs if the crate were yanked or went
 # unmaintained. The transform is a few lines of jq, so the project owns it here.
-# See docs/src/designs/0001-mdbook-documentation-site.md.
+# See docs/src/designs/2026-06-17-mdbook-documentation-site.md.
 #
 # Preprocessor protocol
 # (https://rust-lang.github.io/mdBook/for_developers/preprocessors.html):

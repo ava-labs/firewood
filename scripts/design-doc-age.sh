@@ -2,24 +2,17 @@
 
 set -euo pipefail
 
-# Lists Firewood design docs by their last git-commit date, oldest (stalest) first.
+# Lists Firewood design docs by their last git-commit date, oldest (stalest) first,
+# so an `active` design that has drifted from the code is easy to spot.
 #
-# Motivation: a design's filename prefix records the date it was *proposed* — assigned
-# once, when the file is created, and never updated. Freshness is a different question,
-# and its answer comes from git history, never from a hand-maintained date written
-# inside the document. The design-doc frontmatter schema deliberately has no date
-# field, so a date in a doc body would only drift out of sync with reality. This report
-# is the working embodiment of that convention: it reads git alone — never the filename
-# prefix, never a document's frontmatter or body — and surfaces the designs whose last
-# commit is oldest, making an `active` design that has drifted from the code easy to
-# spot.
+# A design's filename prefix records when it was proposed; how fresh it is comes from
+# git history alone. This script reads neither the filename date nor the document.
 #
 # Scope: only the dated design docs, docs/src/designs/YYYY-MM-DD-*.md. The section
 # index (README.md) and the template (template.md) are not designs and are skipped.
 #
-# Ordering: oldest last-commit first, so the stalest designs sit at the top. A
-# design with no commit yet (staged rename or untracked new file) has no git date
-# and sorts last, labelled "(uncommitted)".
+# Ordering: oldest last-commit first. A design with no commit yet (staged rename or
+# untracked new file) has no git date and sorts last, labelled "(uncommitted)".
 #
 # Output: one row per design on stdout, "<YYYY-MM-DD>  <repo-relative-path>". A
 # one-line legend is written to stderr so stdout stays pure data.
@@ -31,9 +24,8 @@ usage() {
 Usage: scripts/design-doc-age.sh [-h|--help]
 
 Lists docs/src/designs/YYYY-MM-DD-*.md by last git-commit date, oldest first, so
-the stalest designs appear at the top. Freshness is read from git history only,
-never from the filename's proposal date or a date inside a document. Designs with
-no commit yet sort last as "(uncommitted)".
+the stalest designs appear at the top. Designs with no commit yet sort last as
+"(uncommitted)".
 
 Exit status: 0 on success.
 EOF
@@ -89,7 +81,7 @@ if [[ ${#rows[@]} -eq 0 ]]; then
     exit 0
 fi
 
-echo "design docs by last git-commit date (oldest first; freshness from git, not in-doc dates):" >&2
+echo "design docs by last git-commit date (oldest first):" >&2
 
 # Sort ascending by the numeric key (oldest first), ties broken by path for a
 # stable listing, then drop the key and print "<date>  <path>".

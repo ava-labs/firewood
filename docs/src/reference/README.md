@@ -1,9 +1,10 @@
 # Reference
 
-Generated API documentation and dashboards. These are site-absolute paths that
-resolve only on the deployed site; under local `mdbook serve` (or a fork's Pages
-deployment) they 404.
+Generated API documentation and dashboards, published alongside this book:
 
-- [Rust API documentation (rustdoc) ↗](/firewood/rustdoc/)
-- [Go API documentation (godoc) ↗](/firewood/ffi/)
-- [Benchmark dashboards ↗](/firewood/bench/)
+- [Rust API documentation (rustdoc)](https://ava-labs.github.io/firewood/rustdoc/):
+  the `firewood`, `firewood-storage`, and `firewood-ffi` crates.
+- [Go API documentation (godoc)](https://ava-labs.github.io/firewood/ffi/): the Go
+  wrapper around the FFI layer.
+- [Benchmark dashboards](https://ava-labs.github.io/firewood/bench/): performance
+  history for `main`.

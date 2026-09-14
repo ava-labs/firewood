@@ -1,9 +1,9 @@
 ---
-title:
+title: <Title>
 status: proposed
-category:
-authors: []
-tracking-issue:
+category: <subsystem>
+authors: [<github-handle-1>, <github-handle-2>]
+tracking-issue: <owner/repo#N>
 ---
 
 # \<Title\>
@@ -18,7 +18,7 @@ Why this is worth doing; the problem it solves.
 
 ## Guide-level explanation
 
-Explain the design as if teaching it to another contributor.
+Optional. The design explained as if teaching it to another contributor.
 
 ## Detailed design
 
@@ -27,8 +27,8 @@ edge cases.
 
 ## Drawbacks
 
-Reasons this design might not be worth doing. (Proposal-only; drop when promoting to
-`active`.)
+Reasons this design might not be worth doing. Keep this section after promotion: it
+records what was accepted and why.
 
 ## Rationale and alternatives
 
@@ -36,12 +36,12 @@ Why this design over others; what alternatives were considered.
 
 ## Prior art
 
-Comparable designs in other systems, if any.
+Optional. Comparable designs in other systems.
 
 ## Unresolved questions
 
-Open questions to settle during review. (Proposal-only; drop when promoting to
-`active`.)
+Open questions to settle during review. Drop this section when promoting to `active`,
+folding settled answers into the design.
 
 ## Future possibilities
 
