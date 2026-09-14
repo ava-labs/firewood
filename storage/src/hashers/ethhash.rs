@@ -59,8 +59,8 @@
 //!   equivalent Ethereum storage trie is a single leaf at the *root*. To get
 //!   the same hash, we conceptually prepend the child's branch nibble to its
 //!   partial path and re-hash it as if it were a standalone root node. See
-//!   the `children == 1` arm in [`HashMode::write_preimage`] and `hash_helper_inner`'s
-//!   `fake_root_extra_nibble` in `nodestore::hash`.
+//!   the `children == 1` arm in [`HashMode::write_preimage`] and the hashing
+//!   walk's `fake_root_extra_nibble` in `nodestore::hash`.
 //!
 //! ## Where the storage root gets spliced
 //!
