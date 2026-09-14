@@ -758,9 +758,9 @@ pub mod test_utils {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DeletedNodeTracking;
     use crate::area_index;
     use crate::linear::memory::MemStore;
-    use crate::{DefaultHashMode, DeletedNodeTracking, HashMode};
     use rand::seq::IteratorRandom;
     use test_case::test_case;
     use test_utils::{test_write_free_area, test_write_header};
@@ -786,7 +786,7 @@ mod tests {
     // Create a random free list and test that `FreeListIterator` is able to traverse all the free areas
     fn free_list_iterator() {
         let mut rng = crate::SeededRng::from_env_or_random();
-        let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
+        let memstore = MemStore::new(Vec::new());
         let nodestore =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
@@ -840,7 +840,7 @@ mod tests {
     #[test]
     fn free_list_iter_with_metadata() {
         let rng = crate::SeededRng::from_env_or_random();
-        let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
+        let memstore = MemStore::new(Vec::new());
         let nodestore =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
@@ -967,7 +967,7 @@ mod tests {
         const AREA_INDEX2: AreaIndex = area_index!(5);
         const AREA_INDEX2_PLUS_1: AreaIndex = area_index!(6);
 
-        let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
+        let memstore = MemStore::new(Vec::new());
         let nodestore =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
@@ -1075,7 +1075,7 @@ mod tests {
         use crate::node::{LeafNode, Node};
         use test_utils::{test_write_free_area, test_write_new_node};
 
-        let memstore = MemStore::new(Vec::new(), DefaultHashMode::ALGORITHM);
+        let memstore = MemStore::new(Vec::new());
         let nodestore =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
