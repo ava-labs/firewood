@@ -7,8 +7,8 @@ ci-rust command profile:
     ./scripts/run-rust-ci.sh "{{command}}" "{{profile}}"
 
 # Run one bench target by name with the CI profile.
-ci-rust-bench profile target:
-    ./scripts/run-rust-ci.sh bench "{{profile}}" "{{target}}"
+ci-rust-bench profile target *args:
+    ./scripts/run-rust-ci.sh bench "{{profile}}" "{{target}}" {{args}}
 
 # Emit workspace bench targets as a GitHub Actions matrix (optional name regex).
 ci-bench-matrix filter="":
@@ -347,9 +347,10 @@ design-age:
     ./scripts/design-doc-age.sh
 
 # Run a C-Chain reexecution benchmark
-# Triggers Firewood's track-performance.yml which then triggers AvalancheGo.
-# This ensures results appear in Firewood's workflow summary and get published
-# to GitHub Pages for the current branch.
+# Triggers Firewood's bench-cchain.yaml which then triggers AvalancheGo.
+# This ensures results appear in Firewood's workflow summary and are uploaded as
+# an artifact of the run. Only the scheduled benchmarks.yaml publishes to the
+# GitHub Pages dashboard.
 #
 # Note: Changes must be pushed to the remote branch for the workflow to use them.
 #
@@ -449,21 +450,21 @@ bench-cchain:
     # Record time before triggering to find our run (avoid race conditions)
     trigger_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-    $GH workflow run track-performance.yml --ref "$branch" "${args[@]}"
+    $GH workflow run bench-cchain.yaml --ref "$branch" "${args[@]}"
 
     # Poll for workflow registration (runs created after trigger_time)
     echo ""
     echo "Polling for workflow to register..."
     for i in {1..30}; do
         sleep 1
-        run_id=$($GH run list --workflow=track-performance.yml --limit=10 --json databaseId,createdAt \
+        run_id=$($GH run list --workflow=bench-cchain.yaml --limit=10 --json databaseId,createdAt \
             --jq "[.[] | select(.createdAt > \"$trigger_time\")] | .[-1].databaseId // empty")
         [[ -n "$run_id" ]] && break
     done
 
     if [[ -z "$run_id" ]]; then
         echo "error: Could not find workflow run after 30s. The trigger may have failed." >&2
-        echo "       Check: https://github.com/ava-labs/firewood/actions/workflows/track-performance.yml" >&2
+        echo "       Check: https://github.com/ava-labs/firewood/actions/workflows/bench-cchain.yaml" >&2
         exit 1
     fi
 

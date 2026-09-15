@@ -11,7 +11,7 @@ Firewood has two categories of benchmarks:
 | --- | --- | --- |
 | C-Chain re-execution — GitHub Actions | Tracking performance over time, A/B between versions | Managed CI — scheduled, results published to GitHub Pages |
 | C-Chain re-execution — fwdctl launch | Investigating regression, in-depth profiling, tuning | EC2 instance you provision — full root access |
-| Rust criterion | Iterating on a specific operation locally; enforces pure-Rust API in CI | Local or CI (`benchmarks.yaml`) |
+| Rust criterion | Iterating on a specific operation locally; enforces pure-Rust API in CI | Local or CI (`bench-rust.yaml`) |
 | Synthetic workloads | Testing Firewood API patterns without AvalancheGo | Local |
 
 ## Details
@@ -20,12 +20,12 @@ Firewood has two categories of benchmarks:
 
 **When:** tracking performance over time or comparing two versions — runs automatically on a daily schedule and on every trigger, no manual setup needed.
 
-Part of CI — repeatable, versioned, and auditable. Runs on a fixed schedule
-and on demand via
-[`track-performance.yml`](.github/workflows/track-performance.yml). Each run
-is isolated on a dedicated self-hosted runner, keeping variance low enough that
-a meaningful difference reflects code, not infrastructure. Results accumulate
-on GitHub Pages.
+Part of CI — repeatable, versioned, and auditable. Runs on a fixed schedule as
+part of [`benchmarks.yaml`](.github/workflows/benchmarks.yaml), and on demand
+via [`bench-cchain.yaml`](.github/workflows/bench-cchain.yaml). Each run is
+isolated on a dedicated self-hosted runner, keeping variance low enough that a
+meaningful difference reflects code, not infrastructure. Scheduled results
+accumulate on GitHub Pages.
 
 → [Full guide](docs/cchain-reexecution.md)
 
