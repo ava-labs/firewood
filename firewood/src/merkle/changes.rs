@@ -1137,7 +1137,6 @@ mod tests {
             (m1.nodestore(), m2.nodestore(), "m1->m2")
         };
 
-        // let diff_stream = DiffMerkleKeyValueStreams::new(tree_left, tree_right, Key::default());
         let diff_stream = DiffMerkleNodeStream::new(tree_left, tree_right, Key::default()).unwrap();
         let results: Vec<_> = diff_stream.collect::<Result<Vec<_>, _>>().unwrap();
 
