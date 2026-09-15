@@ -57,6 +57,7 @@ tokio = { version = "1.52", features = ["rt-multi-thread", "sync", "time"], opti
 [features]
 ethhash = ["firewood/ethhash", "dep:sha3"]
 logger = ["firewood/logger"]
+filter = ["firewood/filter", "firewood-storage/filter"]
 launch = [
     "dep:aws-config",
     "dep:aws-sdk-ec2",

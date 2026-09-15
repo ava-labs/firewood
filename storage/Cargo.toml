@@ -77,6 +77,7 @@ io-uring = { version = "0.7.13", optional = true }
 logger = ["log", "firewood-metrics/logger"]
 io-uring = ["dep:io-uring"]
 ethhash = []
+filter = []
 test_utils = ["dep:metrics-util", "dep:rand"]
 
 [[bench]]

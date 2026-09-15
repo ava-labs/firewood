@@ -181,6 +181,7 @@ impl ParallelMerkle {
             if let Err(err) = match request {
                 // insert a key-value pair into the subtrie
                 BatchOp::Put { key, value } => {
+                    crate::membership::insert(&key);
                     let mut nibbles_iter = NibblesIterator::new(&key);
                     nibbles_iter.next(); // Skip the first nibble
                     merkle.insert_from_iter(nibbles_iter, value)
@@ -188,7 +189,11 @@ impl ParallelMerkle {
                 BatchOp::Delete { key } => {
                     let mut nibbles_iter = NibblesIterator::new(&key);
                     nibbles_iter.next(); // Skip the first nibble
-                    merkle.remove_from_iter(nibbles_iter).map(|_| ())
+                    merkle.remove_from_iter(nibbles_iter).map(|removed| {
+                        if removed.is_some() {
+                            crate::membership::remove(&key);
+                        }
+                    })
                 }
                 BatchOp::DeleteRange { prefix } => {
                     let mut nibbles_iter = NibblesIterator::new(&prefix);
