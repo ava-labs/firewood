@@ -1,14 +1,15 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::fs::File;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
 use clap::Args;
 use firewood::api::{self, DynDb};
 use firewood::db::{BatchOp, DbConfig};
 use firewood::open;
 use humantime::{format_duration, parse_duration};
-use std::fs::File;
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
 
 use crate::DatabasePath;
 

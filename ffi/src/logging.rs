@@ -71,9 +71,10 @@ impl LogArgs<'_> {
     /// If the log file cannot be created or opened, or if the log level is invalid,
     /// this will return an error.
     pub fn start_logging(&self) -> std::io::Result<()> {
-        use env_logger::Target::Pipe;
         use std::fs::OpenOptions;
         use std::io::Write;
+
+        use env_logger::Target::Pipe;
 
         let log_path = self.path()?;
 

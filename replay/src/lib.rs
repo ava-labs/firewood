@@ -373,13 +373,15 @@ pub fn replay_from_file(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::io::Cursor;
+
     use firewood::db::DbConfig;
     use firewood::manager::RevisionManagerConfig;
     use firewood::open;
     use firewood_storage::NodeHashAlgorithm;
-    use std::io::Cursor;
     use tempfile::tempdir;
+
+    use super::*;
 
     fn create_test_db() -> (tempfile::TempDir, Box<dyn DynDb>) {
         let tmpdir = tempdir().expect("create tempdir");

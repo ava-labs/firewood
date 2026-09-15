@@ -7,10 +7,11 @@
 //! including the `ProofReader` type for sequential reading and traits for
 //! deserializing individual proof components.
 
+use std::num::NonZeroUsize;
+
 use firewood_storage::NodeHashAlgorithm;
 
 use super::header::{Header, InvalidHeader};
-use std::num::NonZeroUsize;
 pub(super) trait ReadItem<'a>: Sized {
     /// Reads an item from the given reader, or terrminates with an error.
     fn read_item(data: &mut ProofReader<'a>) -> Result<Self, ReadError>;
