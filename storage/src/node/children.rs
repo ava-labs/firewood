@@ -1,7 +1,9 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use arity_arrays::{Arity16, FixedArray, PackedArray};
+use arity_arrays::Arity16;
+use arity_arrays::FixedArray;
+use arity_arrays::PackedArray;
 
 use crate::PathComponent;
 

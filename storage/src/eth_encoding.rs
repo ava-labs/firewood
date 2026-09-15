@@ -69,7 +69,8 @@ pub fn nibbles_to_eth_compact<T: TriePath>(nibbles: T, is_leaf: bool) -> SmallVe
 mod test {
     use test_case::test_case;
 
-    use crate::{PathComponent, TriePathFromUnpackedBytes};
+    use crate::PathComponent;
+    use crate::TriePathFromUnpackedBytes;
 
     #[test_case(&[], false, &[0x00])]
     #[test_case(&[], true, &[0x20])]

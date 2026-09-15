@@ -1,7 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use clap::{Args, ValueEnum, value_parser};
+use clap::Args;
+use clap::ValueEnum;
+use clap::value_parser;
 use firewood::api;
 use firewood::db::DbConfig;
 use firewood::open;

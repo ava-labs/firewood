@@ -51,7 +51,8 @@ pub(crate) mod primitives;
 // Re-export types from alloc module
 pub use alloc::NodeAllocator;
 use std::fmt::Debug;
-use std::io::{Error, ErrorKind};
+use std::io::Error;
+use std::io::ErrorKind;
 /// The [`NodeStore`] handles the serialization of nodes and
 /// free space management of nodes in the page store. It lays out the format
 /// of the [`PageStore`]. More specifically, it places a [`FileIdentifyingMagic`]
@@ -84,29 +85,39 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Instant;
 
-use firewood_metrics::{firewood_counter, firewood_histogram};
-pub use hash::{
-    fix_account_storage_root_value, hash_node_as_storage_trie_root_for_node,
-    hash_node_as_storage_trie_root_parts,
-};
-pub use hash_algo::{NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError};
+use firewood_metrics::firewood_counter;
+use firewood_metrics::firewood_histogram;
+pub use hash::fix_account_storage_root_value;
+pub use hash::hash_node_as_storage_trie_root_for_node;
+pub use hash::hash_node_as_storage_trie_root_parts;
+pub use hash_algo::NodeHashAlgorithm;
+pub use hash_algo::NodeHashAlgorithmTryFromIntError;
 // Re-export types from header module
 pub use header::{CargoVersion, GitDescribe, NodeStoreHeader};
-pub use primitives::{AreaIndex, LinearAddress};
+pub use primitives::AreaIndex;
+pub use primitives::LinearAddress;
 use smallvec::SmallVec;
 
 use super::linear::WritableStorage;
+use crate::CacheReadStrategy;
+use crate::Child;
+use crate::DefaultHashMode;
+use crate::FileIoError;
+use crate::HashMode;
+use crate::HashType;
+use crate::Path;
+use crate::ReadableStorage;
+use crate::SharedNode;
+use crate::TrieHash;
 use crate::arc_swap_triomphe::TriompheArc;
 use crate::hashednode::hash_node;
-use crate::linear::{OffsetReader, ReadableNodeMode};
-use crate::logger::{debug, trace};
+use crate::linear::OffsetReader;
+use crate::linear::ReadableNodeMode;
+use crate::logger::debug;
+use crate::logger::trace;
 use crate::node::Node;
 use crate::node::branch::ReadSerializable as _;
 use crate::node::persist::MaybePersistedNode;
-use crate::{
-    CacheReadStrategy, Child, DefaultHashMode, FileIoError, HashMode, HashType, Path,
-    ReadableStorage, SharedNode, TrieHash,
-};
 
 /// Initial size for the bump allocator used in node serialization batches.
 /// Set to the maximum area size to minimize allocations for large nodes.
@@ -712,7 +723,8 @@ impl CommittedId {
     /// a workload we need to handle.
     #[must_use]
     pub fn next() -> Self {
-        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::atomic::AtomicU64;
+        use std::sync::atomic::Ordering;
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let raw = NEXT.fetch_add(1, Ordering::Relaxed);
         Self(NonZeroU64::new(raw).expect("CommittedId counter overflowed u64"))

@@ -58,12 +58,19 @@
 
 use test_case::test_case;
 
+use crate::Child;
+use crate::Children;
+use crate::DefaultHashMode;
+use crate::LinearAddress;
+use crate::NibblesIterator;
+use crate::Path;
+use crate::PathComponent;
+use crate::TrieHash;
+use crate::node::BranchNode;
+use crate::node::LeafNode;
+use crate::node::Node;
 use crate::node::branch::Serializable;
-use crate::node::{BranchNode, LeafNode, Node};
 use crate::nodestore::alloc::FreeArea;
-use crate::{
-    Child, Children, DefaultHashMode, LinearAddress, NibblesIterator, Path, PathComponent, TrieHash,
-};
 
 /// Serializes a [`Serializable`] value into a fresh `Vec<u8>`.
 fn write_to_vec<T: Serializable>(t: &T) -> Vec<u8> {

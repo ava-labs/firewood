@@ -8,11 +8,16 @@
 //! schemes, implemented by the two zero-sized types [`MerkleDbHash`] and
 //! [`EthHash`].
 
-use std::io::{Error, Read};
+use std::io::Error;
+use std::io::Read;
 
-use crate::hashednode::{HasUpdate, Hashable};
+use crate::HashType;
+use crate::NodeHashAlgorithm;
+use crate::Path;
+use crate::TrieHash;
+use crate::hashednode::HasUpdate;
+use crate::hashednode::Hashable;
 use crate::node::ExtendableBytes;
-use crate::{HashType, NodeHashAlgorithm, Path, TrieHash};
 
 /// The node-hashing scheme, implemented by [`MerkleDbHash`] and [`EthHash`].
 ///
@@ -173,7 +178,10 @@ mod tests {
 
     #[test]
     fn cross_mode_leaf_preimage_differs_per_scheme() {
-        use crate::{Children, HashableShunt, Path, ValueDigest};
+        use crate::Children;
+        use crate::HashableShunt;
+        use crate::Path;
+        use crate::ValueDigest;
 
         // A single leaf with a short partial path and value. No children, so
         // the hash does not depend on any mode-specific child-hash encoding;

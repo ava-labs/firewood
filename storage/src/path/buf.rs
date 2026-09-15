@@ -1,7 +1,10 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{ComponentIter, IntoSplitPath, PathComponent, TriePath};
+use crate::ComponentIter;
+use crate::IntoSplitPath;
+use crate::PathComponent;
+use crate::TriePath;
 
 /// An owned buffer of path components.
 pub type PathBuf = smallvec::SmallVec<[PathComponent; 32]>;

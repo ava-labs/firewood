@@ -5,15 +5,27 @@ use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use firewood_storage::{DefaultHashMode, FileIoError, HashMode, NodeHashAlgorithm, TrieHash};
+use firewood_storage::DefaultHashMode;
+use firewood_storage::FileIoError;
+use firewood_storage::HashMode;
+use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::TrieHash;
 
-pub use crate::batch_op::{BatchIter, BatchOp, IntoBatchIter, KeyValuePair, TryIntoBatch};
+use crate::Proof;
+use crate::ProofError;
+use crate::ProofNode;
+use crate::RangeProof;
+pub use crate::batch_op::BatchIter;
+pub use crate::batch_op::BatchOp;
+pub use crate::batch_op::IntoBatchIter;
+pub use crate::batch_op::KeyValuePair;
+pub use crate::batch_op::TryIntoBatch;
 use crate::manager::RevisionManagerError;
+use crate::merkle::Key;
+use crate::merkle::Value;
 use crate::merkle::parallel::CreateProposalError;
-use crate::merkle::{Key, Value};
 use crate::persist_worker::PersistError;
 use crate::proofs::change::ChangeProof;
-use crate::{Proof, ProofError, ProofNode, RangeProof};
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
 /// and can be sent and shared across threads. References with
@@ -216,10 +228,14 @@ impl From<std::convert::Infallible> for Error {
 
 impl From<RevisionManagerError> for Error {
     fn from(err: RevisionManagerError) -> Self {
-        use RevisionManagerError::{
-            FileIoError, IOError, InsufficientRevisions, NotLatest, PersistError, RevisionNotFound,
-            RevisionWithoutAddress, RootStoreError,
-        };
+        use RevisionManagerError::FileIoError;
+        use RevisionManagerError::IOError;
+        use RevisionManagerError::InsufficientRevisions;
+        use RevisionManagerError::NotLatest;
+        use RevisionManagerError::PersistError;
+        use RevisionManagerError::RevisionNotFound;
+        use RevisionManagerError::RevisionWithoutAddress;
+        use RevisionManagerError::RootStoreError;
         match err {
             NotLatest { provided, expected } => Self::ParentNotLatest { provided, expected },
             RevisionNotFound { provided } => Self::RevisionNotFound {

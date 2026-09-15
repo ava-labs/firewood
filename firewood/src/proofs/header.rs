@@ -9,7 +9,8 @@
 
 use firewood_storage::NodeHashAlgorithm;
 
-use super::{magic, types::ProofType};
+use super::magic;
+use super::types::ProofType;
 
 /// A fixed-size header at the beginning of every serialized proof.
 ///
