@@ -5,18 +5,23 @@ use std::cell::RefCell;
 use std::ops::Deref;
 use std::rc::Rc;
 
-use metrics::{Key, Label, with_local_recorder};
-use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+use metrics::Key;
+use metrics::Label;
+use metrics::with_local_recorder;
+use metrics_util::debugging::DebugValue;
+use metrics_util::debugging::DebuggingRecorder;
+use rand::Rng;
+#[expect(
+    clippy::disallowed_types,
+    reason = "we are implementing the alternative"
+)]
+use rand::SeedableRng;
+use rand::TryRng;
 #[expect(
     clippy::disallowed_types,
     reason = "we are implementing the alternative"
 )]
 use rand::rngs::StdRng;
-#[expect(
-    clippy::disallowed_types,
-    reason = "we are implementing the alternative"
-)]
-use rand::{Rng, SeedableRng, TryRng};
 
 #[derive(Debug, Clone)]
 #[must_use]

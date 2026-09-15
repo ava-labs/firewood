@@ -33,17 +33,23 @@ use std::iter::FusedIterator;
 use std::time::Instant;
 
 use bumpalo::Bump;
-use firewood_metrics::{GaugeExt, firewood_gauge, firewood_histogram};
+use firewood_metrics::GaugeExt;
+use firewood_metrics::firewood_gauge;
+use firewood_metrics::firewood_histogram;
 
+use super::Committed;
+use super::NodeStore;
 #[cfg(not(test))]
 use super::RootReader;
 use super::alloc::NodeAllocator;
 use super::header::NodeStoreHeader;
-use super::{Committed, NodeStore};
+use crate::HashMode;
+use crate::MaybePersistedNode;
+use crate::NodeReader;
 #[cfg(test)]
 use crate::RootReader;
+use crate::WritableStorage;
 use crate::linear::FileIoError;
-use crate::{HashMode, MaybePersistedNode, NodeReader, WritableStorage};
 
 impl NodeStoreHeader {
     /// Persist this header to storage.
@@ -308,13 +314,26 @@ mod tests {
     use firewood_macros::hash_mode;
 
     use super::*;
-    use crate::{
-        Child, Children, DeletedNodeTracking, EthHash, HashMode, HashType, ImmutableProposal,
-        LinearAddress, MerkleDbHash, NodeStore, NodeStoreHeader, Path, PathComponent, SharedNode,
-        linear::memory::MemStore,
-        node::{BranchNode, LeafNode, Node},
-        nodestore::{Mutable, Propose},
-    };
+    use crate::Child;
+    use crate::Children;
+    use crate::DeletedNodeTracking;
+    use crate::EthHash;
+    use crate::HashMode;
+    use crate::HashType;
+    use crate::ImmutableProposal;
+    use crate::LinearAddress;
+    use crate::MerkleDbHash;
+    use crate::NodeStore;
+    use crate::NodeStoreHeader;
+    use crate::Path;
+    use crate::PathComponent;
+    use crate::SharedNode;
+    use crate::linear::memory::MemStore;
+    use crate::node::BranchNode;
+    use crate::node::LeafNode;
+    use crate::node::Node;
+    use crate::nodestore::Mutable;
+    use crate::nodestore::Propose;
 
     fn into_committed<H: HashMode>(
         ns: NodeStore<std::sync::Arc<ImmutableProposal>, MemStore, H>,

@@ -1,10 +1,17 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood::api::{self, BoxKeyValueIter, DbView, HashKey, IntoBatchIter, Reconstructible as _};
+use firewood::api;
+use firewood::api::BoxKeyValueIter;
+use firewood::api::DbView;
+use firewood::api::HashKey;
+use firewood::api::IntoBatchIter;
+use firewood::api::Reconstructible as _;
 
+use crate::DatabaseHandle;
+use crate::IteratorHandle;
+use crate::iterator::CreateIteratorResult;
 use crate::metrics::MetricsContextExt;
-use crate::{DatabaseHandle, IteratorHandle, iterator::CreateIteratorResult};
 
 /// An opaque wrapper around a reconstructed view.
 #[derive(Debug)]

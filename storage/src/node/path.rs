@@ -10,13 +10,17 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use std::fmt::{self, Debug, LowerHex};
-use std::iter::{FusedIterator, once};
+use std::fmt;
+use std::fmt::Debug;
+use std::fmt::LowerHex;
+use std::iter::FusedIterator;
+use std::iter::once;
 use std::ops::Add;
 
 use smallvec::SmallVec;
 
-use crate::{PathComponent, TriePathFromUnpackedBytes};
+use crate::PathComponent;
+use crate::TriePathFromUnpackedBytes;
 
 static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 

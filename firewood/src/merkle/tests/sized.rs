@@ -14,24 +14,40 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use firewood_macros::hash_mode;
-use firewood_storage::{
-    Committed, DefaultHashMode, DeletedNodeTracking, EthHash, HashMode, HashedNodeReader, MemStore,
-    MerkleDbHash, NodeHashAlgorithm, NodeStore, SeededRng, TrieReader,
-};
+use firewood_storage::Committed;
+use firewood_storage::DefaultHashMode;
+use firewood_storage::DeletedNodeTracking;
+use firewood_storage::EthHash;
+use firewood_storage::HashMode;
+use firewood_storage::HashedNodeReader;
+use firewood_storage::MemStore;
+use firewood_storage::MerkleDbHash;
+use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::NodeStore;
+use firewood_storage::SeededRng;
+use firewood_storage::TrieReader;
 use test_case::test_case;
 
 use super::init_merkle;
-use crate::api::{self, FrozenChangeProof, FrozenRangeProof};
+use crate::api::FrozenChangeProof;
+use crate::api::FrozenRangeProof;
+use crate::api::{self};
 use crate::db::BatchOp;
-use crate::merkle::sized::{
-    ChunkBuilder, CompressionRatio, MAX_CORRECTION_PASSES, SizedProof, SizingHint,
-    build_sized_chunk,
-};
-use crate::merkle::{Key, Merkle, Value};
-use crate::proofs::{
-    MAX_DECOMPRESSED_LEN, ProofError, ProofType, lex_successor, verify_change_proof_structure,
-    verify_range_proof_structure,
-};
+use crate::merkle::Key;
+use crate::merkle::Merkle;
+use crate::merkle::Value;
+use crate::merkle::sized::ChunkBuilder;
+use crate::merkle::sized::CompressionRatio;
+use crate::merkle::sized::MAX_CORRECTION_PASSES;
+use crate::merkle::sized::SizedProof;
+use crate::merkle::sized::SizingHint;
+use crate::merkle::sized::build_sized_chunk;
+use crate::proofs::MAX_DECOMPRESSED_LEN;
+use crate::proofs::ProofError;
+use crate::proofs::ProofType;
+use crate::proofs::lex_successor;
+use crate::proofs::verify_change_proof_structure;
+use crate::proofs::verify_range_proof_structure;
 
 const SEED: u64 = 0x243F_6A88_85A3_08D3;
 

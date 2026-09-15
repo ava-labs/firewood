@@ -5,16 +5,24 @@ use std::time::Duration;
 
 use aws_config::BehaviorVersion;
 use aws_sdk_ec2::Client as Ec2Client;
-use aws_sdk_ec2::types::{
-    ArchitectureType, BlockDeviceMapping, EbsBlockDevice, Filter, IamInstanceProfileSpecification,
-    InstanceType as Ec2InstanceType, ResourceType, Tag, TagSpecification, VolumeType,
-};
+use aws_sdk_ec2::types::ArchitectureType;
+use aws_sdk_ec2::types::BlockDeviceMapping;
+use aws_sdk_ec2::types::EbsBlockDevice;
+use aws_sdk_ec2::types::Filter;
+use aws_sdk_ec2::types::IamInstanceProfileSpecification;
+use aws_sdk_ec2::types::InstanceType as Ec2InstanceType;
+use aws_sdk_ec2::types::ResourceType;
+use aws_sdk_ec2::types::Tag;
+use aws_sdk_ec2::types::TagSpecification;
+use aws_sdk_ec2::types::VolumeType;
 use aws_sdk_sts::Client as StsClient;
 use log::info;
 use tokio::sync::OnceCell;
-use tokio::time::{sleep, timeout};
+use tokio::time::sleep;
+use tokio::time::timeout;
 
-use super::{DeployOptions, LaunchError};
+use super::DeployOptions;
+use super::LaunchError;
 
 /// Time to wait after launch for the instance to transition to `running`.
 const WAIT_RUNNING_TIMEOUT: Duration = Duration::from_mins(5);

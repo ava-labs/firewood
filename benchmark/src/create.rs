@@ -9,13 +9,16 @@
 use std::error::Error;
 use std::time::Instant;
 
+use fastrace::Span;
+use fastrace::func_path;
 use fastrace::prelude::SpanContext;
-use fastrace::{Span, func_path};
-use firewood::api::{self, DynDb};
+use firewood::api;
+use firewood::api::DynDb;
 use log::info;
 use pretty_duration::pretty_duration;
 
-use crate::{Args, TestRunner};
+use crate::Args;
+use crate::TestRunner;
 
 #[derive(Clone)]
 pub struct Create;

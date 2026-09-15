@@ -11,7 +11,8 @@ use std::num::NonZeroUsize;
 
 use firewood_storage::NodeHashAlgorithm;
 
-use super::header::{Header, InvalidHeader};
+use super::header::Header;
+use super::header::InvalidHeader;
 pub(super) trait ReadItem<'a>: Sized {
     /// Reads an item from the given reader, or terrminates with an error.
     fn read_item(data: &mut ProofReader<'a>) -> Result<Self, ReadError>;

@@ -1,19 +1,20 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::{
-    cmp::Ordering,
-    io::{self, ErrorKind},
-    os::fd::RawFd,
-};
+use std::cmp::Ordering;
+use std::io;
+use std::io::ErrorKind;
+use std::os::fd::RawFd;
 
 use derive_where::derive_where;
 use firewood_metrics::firewood_counter;
 use io_uring::IoUring;
 use parking_lot::Mutex;
 
-pub use self::errors::{BatchError, BatchErrors};
-use crate::logger::{debug, trace};
+pub use self::errors::BatchError;
+pub use self::errors::BatchErrors;
+use crate::logger::debug;
+use crate::logger::trace;
 
 /// The amount of time (in milliseconds) that the io-uring kernel thread
 /// processing the submission queue should spin before idling to sleep.
@@ -687,7 +688,9 @@ fn ignore_poll_error(err: &io::Error) -> bool {
 }
 
 mod errors {
-    use std::{fmt, io, path::PathBuf};
+    use std::fmt;
+    use std::io;
+    use std::path::PathBuf;
 
     use crate::FileIoError;
 
@@ -892,11 +895,10 @@ mod errors {
 /// This is inside its own module to avoid accidentally exposing the inner
 /// `value`.
 mod drop_guard {
-    use std::{
-        fmt::Debug,
-        mem::ManuallyDrop,
-        ops::{Deref, DerefMut},
-    };
+    use std::fmt::Debug;
+    use std::mem::ManuallyDrop;
+    use std::ops::Deref;
+    use std::ops::DerefMut;
 
     pub(super) struct DropGuard<T: Debug, F: FnOnce(&T) -> bool = fn(&T) -> bool> {
         value: ManuallyDrop<T>,

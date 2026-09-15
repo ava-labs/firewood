@@ -491,7 +491,8 @@ mod tests {
 
     #[test]
     fn empty_trie_root_matches() {
-        use sha3::{Digest as _, Keccak256};
+        use sha3::Digest as _;
+        use sha3::Keccak256;
         assert_eq!(&EMPTY_TRIE_ROOT[..], Keccak256::digest(NULL_RLP).as_slice());
     }
 

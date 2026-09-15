@@ -3,19 +3,33 @@
 
 //! Range and change proofs sized to a serialized wire byte budget.
 
-use std::num::{NonZeroU32, NonZeroU128};
+use std::num::NonZeroU32;
+use std::num::NonZeroU128;
 
-use firewood_metrics::{HistogramExt, firewood_histogram};
-use firewood_storage::{HashedNodeReader, NodeHashAlgorithm, TrieReader};
+use firewood_metrics::HistogramExt;
+use firewood_metrics::firewood_histogram;
+use firewood_storage::HashedNodeReader;
+use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::TrieReader;
 use integer_encoding::VarInt;
 
-use super::{Key, Merkle, Value};
-use crate::api::{self, FrozenChangeProof, FrozenProof, FrozenRangeProof};
+use super::Key;
+use super::Merkle;
+use super::Value;
+use crate::api::FrozenChangeProof;
+use crate::api::FrozenProof;
+use crate::api::FrozenRangeProof;
+use crate::api::{self};
 use crate::db::BatchOp;
 use crate::merkle::changes::DiffMerkleNodeStream;
+use crate::proofs::ChangeProof;
+use crate::proofs::MAX_DECOMPRESSED_LEN;
+use crate::proofs::Proof;
+use crate::proofs::ProofError;
+use crate::proofs::ProofType;
+use crate::proofs::RangeProof;
 use crate::proofs::header::Header;
 use crate::proofs::ser::write_framed_body;
-use crate::proofs::{ChangeProof, MAX_DECOMPRESSED_LEN, Proof, ProofError, ProofType, RangeProof};
 
 /// Probes after the first candidate, each growing or shrinking it. One
 /// more may follow to settle on a single item.
