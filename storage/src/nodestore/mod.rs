@@ -1628,10 +1628,10 @@ mod tests {
         let r1: NodeStore<Arc<ImmutableProposal>, _, DefaultHashMode> = r1.try_into().unwrap();
         {
             let parent = r1.kind.parent.lock();
-            assert!(matches!(*parent, NodeStoreParent::Committed {
-                hash: None,
-                ..
-            }));
+            assert!(matches!(
+                *parent,
+                NodeStoreParent::Committed { hash: None, .. }
+            ));
         }
 
         // create an empty r2, check that it's parent is the proposed version r1

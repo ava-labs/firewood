@@ -614,9 +614,12 @@ mod tests {
     fn test_trie_from_slice_duplicate_keys() {
         let slice = [("a", "1"), ("ab", "2"), ("a", "3")];
         let err = KeyValueTrieRoot::<str>::from_slice(&slice).unwrap_err();
-        assert_eq!(err, DuplicateKeyError {
-            path: PathBuf::path_from_packed_bytes(b"a")
-        });
+        assert_eq!(
+            err,
+            DuplicateKeyError {
+                path: PathBuf::path_from_packed_bytes(b"a")
+            }
+        );
     }
 
     #[test]

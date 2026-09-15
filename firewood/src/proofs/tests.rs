@@ -1376,10 +1376,13 @@ fn test_write_to_vec_rejects_over_cap_body() {
         .write_to_vec(&mut out)
         .expect_err("over-cap body must fail to serialize");
     assert!(
-        matches!(err, ProofError::BodyTooLarge {
-            limit: MAX_DECOMPRESSED_LEN,
-            ..
-        }),
+        matches!(
+            err,
+            ProofError::BodyTooLarge {
+                limit: MAX_DECOMPRESSED_LEN,
+                ..
+            }
+        ),
         "got {err:?}"
     );
     assert!(out.is_empty(), "a failed serialization must not write");
