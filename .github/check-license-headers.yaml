@@ -26,6 +26,7 @@
       "**/go.mod",
       "**/cbindgen.toml",
       "**/*.snap",
+      "rust-toolchain.toml",
     ],
     "license": "./.github/license-header.txt"
   },
@@ -51,6 +52,7 @@
       "justfile",
       "scripts/**",
       "**/*.snap",
+      "rust-toolchain.toml",
     ],
   }
 ]
