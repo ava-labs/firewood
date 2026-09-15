@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Firewood Merkle Trie Animation</title>
+<style>
+  body { font-family: sans-serif; background: transparent; color: #333; margin: 0; padding: 16px; box-sizing: border-box; }
+  #fw { max-width: 700px; margin: 0 auto; }
+  .fw-desc { font-size: 13px; color: #666; min-height: 52px; line-height: 1.6; margin-bottom: 10px; }
+  .fw-controls { display: flex; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+  .fw-btn { background: transparent; border: 1px solid #ccc; border-radius: 8px; padding: 6px 16px; font-size: 13px; cursor: pointer; color: #333; }
+  .fw-btn:hover { background: #f5f5f5; }
+  .fw-btn:disabled { opacity: 0.3; cursor: default; }
+  .fw-ind { font-size: 13px; color: #666; margin-left: auto; }
+  .fw-legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 12px; }
+  .fw-li { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #666; }
+  .fw-sw { width: 13px; height: 13px; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="fw">
+  <div class="fw-desc" id="desc">Loading...</div>
+  <canvas id="cv" style="width:100%;display:block"></canvas>
+  <div class="fw-legend">
+    <div class="fw-li"><div class="fw-sw" style="background:#5cb85c;border:1px solid #3a8a3a"></div>Free</div>
+    <div class="fw-li"><div class="fw-sw" style="background:#7b7bc8;border:1px solid #4a4a90"></div>Header</div>
+    <div class="fw-li"><div class="fw-sw" style="background:#4a90d9;border:1px solid #2a6aaa"></div>Root</div>
+    <div class="fw-li"><div class="fw-sw" style="background:#e09820;border:1px solid #a06010"></div>Account</div>
+    <div class="fw-li"><div class="fw-sw" style="background:#a0a0a0;border:1px solid #666"></div>Permanent (ages)</div>
+  </div>
+  <div class="fw-controls">
+    <button class="fw-btn" id="restart">↺ Restart</button>
+    <button class="fw-btn" id="prev">← Prev</button>
+    <button class="fw-btn" id="next">Next →</button>
+    <button class="fw-btn" id="auto">Auto ▶</button>
+    <span class="fw-ind" id="ind">Step 0</span>
+  </div>
+</div>
+
+<script>
+(function(){
+  var cv=document.getElementById('cv');
+  var ctx=cv.getContext('2d');
+  var W=660, H=360;
+  cv.width=W; cv.height=H;
+
+  var BW=52, BH=36, GAP=14, ROW_Y=100;
+  var totalW=10*BW+9*GAP;
+  var SX=(W-totalW)/2;
+
+  function bx(i){return SX+i*(BW+GAP);}
+  function bcx(i){return bx(i)+BW/2;}
+
+  var PURPLE='#7b7bc8', BLUE='#4a90d9';
+
+  function b3Color(si){
+    var t=Math.min(Math.max(si-1,0),4)/4;
+    function lerp(a,b){return Math.round(a+(b-a)*t);}
+    var r=lerp(0xe0,0x90),g=lerp(0x98,0x90),b=lerp(0x20,0x90);
+    var rs=lerp(0xa0,0x60),gs=lerp(0x60,0x60),bs=lerp(0x10,0x60);
+    return {fill:'rgb('+r+','+g+','+b+')',stroke:'rgb('+rs+','+gs+','+bs+')',text:t>0.5?'#eee':'#fff'};
+  }
+
+  var COLORS={
+    free:       {fill:'#5cb85c',stroke:'#3a8a3a',text:'#1a4a1a'},
+    header:     {fill:'#7b7bc8',stroke:'#4a4a90',text:'#fff'},
+    root:       {fill:'#4a90d9',stroke:'#2a6aaa',text:'#fff'},
+    account:    {fill:'#e09820',stroke:'#a06010',text:'#fff'},
+    account_old:{fill:'#c88838',stroke:'#906030',text:'#fff'},
+  };
+
+  var baseSteps=[
+    {
+      desc:'T0 — Initial state: block 0 is the header, blocks 1–9 are all free.',
+      types:['header','free','free','free','free','free','free','free','free','free'],
+      headerTarget:null,roots:[],
+    },
+    {
+      desc:'T1 — Create initial data. B1 = ROOT. B0 → B1 → B2 (L), B3 (M), B4 (R).',
+      types:['header','root','account','b3','account','free','free','free','free','free'],
+      headerTarget:1,
+      roots:[{from:1,arrows:[{to:2,label:'L'},{to:3,label:'M'},{to:4,label:'R'}],old:false}],
+    },
+    {
+      desc:'T2 — Update left account. B5 = new ROOT. B0 → B5 → B6 (L), B3 (M), B4 (R). Old root B1 still holds B2, B3, B4.',
+      types:['header','root','account','b3','account','root','account','free','free','free'],
+      headerTarget:5,
+      roots:[
+        {from:1,arrows:[{to:2,label:'L'},{to:3,label:'M'},{to:4,label:'R'}],old:true},
+        {from:5,arrows:[{to:6,label:'L'},{to:3,label:'M'},{to:4,label:'R'}],old:false},
+      ],
+    },
+    {
+      desc:'T3 — Update right account. B7 = new ROOT. B0 → B7 → B6 (L), B3 (M), B8 (R). B1 freed; B5 still holds B6, B3, B4.',
+      types:['header','free','free','b3','account_old','root','account','root','account','free'],
+      headerTarget:7,
+      roots:[
+        {from:5,arrows:[{to:6,label:'L'},{to:3,label:'M'},{to:4,label:'R'}],old:true},
+        {from:7,arrows:[{to:6,label:'L'},{to:3,label:'M'},{to:8,label:'R'}],old:false},
+      ],
+    },
+    {
+      desc:'T4 — Update left account. B1 = new ROOT. B0 → B1 → B2 (L), B3 (M), B8 (R). B5 freed; B7 still holds B6, B3, B8.',
+      types:['header','root','account','b3','free','free','free','root','account','free'],
+      headerTarget:1,
+      roots:[
+        {from:7,arrows:[{to:6,label:'L'},{to:3,label:'M'},{to:8,label:'R'}],old:true},
+        {from:1,arrows:[{to:2,label:'L'},{to:3,label:'M'},{to:8,label:'R'}],old:false},
+      ],
+    },
+    {
+      desc:'T5 — Update right account. B5 = new ROOT. B0 → B5 → B2 (L), B3 (M), B4 (R). B7 freed; B1 still holds B2, B3, B8.',
+      types:['header','root','account','b3','account','root','free','free','account_old','free'],
+      headerTarget:5,
+      roots:[
+        {from:1,arrows:[{to:2,label:'L'},{to:3,label:'M'},{to:8,label:'R'}],old:true},
+        {from:5,arrows:[{to:2,label:'L'},{to:3,label:'M'},{to:4,label:'R'}],old:false},
+      ],
+    },
+    {
+      desc:'T6 — Update left account. B7 = new ROOT. B0 → B7 → B6 (L), B3 (M), B4 (R). B1 freed; B5 still holds B2, B3, B4.',
+      types:['header','free','account_old','b3','account','root','account','root','free','free'],
+      headerTarget:7,
+      roots:[
+        {from:5,arrows:[{to:2,label:'L'},{to:3,label:'M'},{to:4,label:'R'}],old:true},
+        {from:7,arrows:[{to:6,label:'L'},{to:3,label:'M'},{to:4,label:'R'}],old:false},
+      ],
+    },
+  ];
+
+  function getStep(si){
+    if(si<baseSteps.length) return baseSteps[si];
+    var cycleIdx=((si-3)%4)+3;
+    var cycleNum=Math.floor((si-3)/4)+1;
+    var s=baseSteps[cycleIdx];
+    return {desc:'[Cycle '+cycleNum+'] '+s.desc,types:s.types,headerTarget:s.headerTarget,roots:s.roots};
+  }
+
+  function getColor(typeVal,si){
+    if(typeVal==='b3') return b3Color(si);
+    return COLORS[typeVal]||COLORS.free;
+  }
+  function getLabel(typeVal){
+    if(typeVal==='b3') return 'ACCT';
+    return {free:'',header:'HDR',root:'ROOT',account:'ACCT',account_old:'ACCT'}[typeVal]||'';
+  }
+
+  function drawRR(x,y,w,h,r,fill,stroke){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+    ctx.lineTo(x+w,y+h-r);ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+    ctx.lineTo(x+r,y+h);ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+    ctx.lineTo(x,y+r);ctx.quadraticCurveTo(x,y,x+r,y);
+    ctx.closePath();
+    ctx.fillStyle=fill;ctx.fill();ctx.strokeStyle=stroke;ctx.lineWidth=1;ctx.stroke();
+  }
+
+  function arrowHeadUp(tx,ty,color){
+    ctx.beginPath();ctx.moveTo(tx,ty);ctx.lineTo(tx-5,ty+9);ctx.lineTo(tx+5,ty+9);
+    ctx.closePath();ctx.fillStyle=color;ctx.fill();
+  }
+  function arrowHeadDown(tx,ty,color){
+    ctx.beginPath();ctx.moveTo(tx,ty);ctx.lineTo(tx-5,ty-9);ctx.lineTo(tx+5,ty-9);
+    ctx.closePath();ctx.fillStyle=color;ctx.fill();
+  }
+
+  function drawHeaderArrow(fromIdx,toIdx){
+    var fx=bcx(fromIdx),tx=bcx(toIdx),railY=ROW_Y-22;
+    ctx.strokeStyle=PURPLE;ctx.lineWidth=1.5;
+    ctx.beginPath();
+    ctx.moveTo(fx,ROW_Y);ctx.lineTo(fx,railY);ctx.lineTo(tx,railY);ctx.lineTo(tx,ROW_Y);
+    ctx.stroke();
+    arrowHeadDown(tx,ROW_Y,PURPLE);
+  }
+
+  function drawRootFan(fromIdx,arrows,alpha,depth){
+    ctx.globalAlpha=alpha;
+    var blockLeft=bx(fromIdx);
+    var blockBot=ROW_Y+BH;
+    var originXs=[blockLeft+BW*0.25, blockLeft+BW*0.5, blockLeft+BW*0.75];
+    var baseDepth=depth*80;
+    var railYs=[blockBot+28+baseDepth, blockBot+52+baseDepth, blockBot+76+baseDepth];
+
+    arrows.forEach(function(arr,ai){
+      var ox=originXs[ai], ry=railYs[ai], tcx=bcx(arr.to);
+      ctx.strokeStyle=BLUE; ctx.lineWidth=1.5;
+      ctx.beginPath();
+      ctx.moveTo(ox,blockBot);
+      ctx.lineTo(ox,ry);
+      ctx.lineTo(tcx,ry+20);
+      ctx.lineTo(tcx,ROW_Y+BH+2);
+      ctx.stroke();
+      arrowHeadUp(tcx,ROW_Y+BH,BLUE);
+      ctx.font='10px sans-serif'; ctx.fillStyle=BLUE;
+      ctx.textAlign='center'; ctx.textBaseline='alphabetic';
+      ctx.fillText(arr.label,(ox+tcx)/2,ry+14);
+    });
+    ctx.globalAlpha=1;
+  }
+
+  function render(si){
+    var step=getStep(si);
+    ctx.clearRect(0,0,W,H);
+    step.roots.filter(function(r){return r.old;}).forEach(function(r){drawRootFan(r.from,r.arrows,0.38,1);});
+    step.roots.filter(function(r){return !r.old;}).forEach(function(r){drawRootFan(r.from,r.arrows,1,0);});
+    if(step.headerTarget!==null) drawHeaderArrow(0,step.headerTarget);
+    step.types.forEach(function(typeVal,i){
+      var c=getColor(typeVal,si);
+      var x=bx(i);
+      drawRR(x,ROW_Y,BW,BH,6,c.fill,c.stroke);
+      ctx.font='500 11px sans-serif'; ctx.fillStyle=c.text;
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText('B'+i,x+BW/2,ROW_Y+BH/2);
+      ctx.font='10px sans-serif'; ctx.fillStyle='#888';
+      ctx.textBaseline='alphabetic';
+      ctx.fillText(getLabel(typeVal),x+BW/2,ROW_Y-7);
+    });
+    document.getElementById('desc').textContent=step.desc;
+    document.getElementById('ind').textContent='Step '+si+(si>=3?' (cycle '+Math.floor((si-3)/4+1)+')':'');
+    document.getElementById('prev').disabled=(si===0);
+    document.getElementById('next').disabled=false;
+  }
+
+  var current=0, timer=null;
+
+  function stopAuto(){
+    if(timer){clearInterval(timer);timer=null;document.getElementById('auto').textContent='Auto ▶';}
+  }
+  function startAuto(){
+    if(timer) return;
+    document.getElementById('auto').textContent='Stop ◼';
+    timer=setInterval(function(){current++;render(current);},2200);
+  }
+
+  document.getElementById('restart').addEventListener('click',function(){
+    stopAuto();
+    current=0;render(current);
+  });
+  document.getElementById('prev').addEventListener('click',function(){
+    stopAuto();
+    if(current>0){current--;render(current);}
+  });
+  document.getElementById('next').addEventListener('click',function(){
+    stopAuto();
+    current++;render(current);
+  });
+  document.getElementById('auto').addEventListener('click',function(){
+    if(timer){stopAuto();}else{startAuto();}
+  });
+
+  // Auto-start once on first cursor entry, never again
+  function onFirstEnter(){
+    startAuto();
+    document.getElementById('fw').removeEventListener('mouseenter',onFirstEnter);
+  }
+  document.getElementById('fw').addEventListener('mouseenter',onFirstEnter);
+
+  render(0);
+})();
+</script>
+</body>
+</html>
