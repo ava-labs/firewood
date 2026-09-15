@@ -11,7 +11,10 @@ use std::fs;
 use std::path::Path;
 
 use firewood_macros::hash_mode;
-use firewood_storage::{EthHash, HashMode, MerkleDbHash, NodeHashAlgorithm};
+use firewood_storage::EthHash;
+use firewood_storage::HashMode;
+use firewood_storage::MerkleDbHash;
+use firewood_storage::NodeHashAlgorithm;
 use predicates::prelude::*;
 
 const PRG: &str = "fwdctl";
@@ -663,7 +666,8 @@ fn fwdctl_check_empty_db<H: HashMode>() {
 #[hash_mode]
 #[test]
 fn test_slow_fwdctl_check_db_with_data<H: HashMode>() {
-    use rand::{RngExt, distr::Alphanumeric};
+    use rand::RngExt;
+    use rand::distr::Alphanumeric;
 
     with_tmpdir(|db_path| {
         let rng = firewood_storage::SeededRng::from_env_or_random();

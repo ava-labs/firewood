@@ -2271,7 +2271,9 @@ fn test_multi_level_range_proof_with_hashed_values() {
 fn test_proven_right_edge() {
     use std::borrow::Cow;
 
-    use crate::merkle::{ProvenRange, RightBoundary, proven_right_edge};
+    use crate::merkle::ProvenRange;
+    use crate::merkle::RightBoundary;
+    use crate::merkle::proven_right_edge;
 
     // InRange(Some) — the end proof anchors at a real key, so that key is
     // the inclusive proven bound. This is the truncated-reply shape.

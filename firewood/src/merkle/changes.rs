@@ -1,21 +1,28 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::cmp::Ordering;
 use std::fmt::Debug;
-use std::{cmp::Ordering, iter::once};
+use std::iter::once;
 
 use firewood_metrics::firewood_counter;
-use firewood_storage::{
-    Child, FileIoError, HashedNodeReader, NibblesIterator, Node, NodeReader, Path, SharedNode,
-    TrieHash,
-};
-use lender::{Lender, Lending};
+use firewood_storage::Child;
+use firewood_storage::FileIoError;
+use firewood_storage::HashedNodeReader;
+use firewood_storage::NibblesIterator;
+use firewood_storage::Node;
+use firewood_storage::NodeReader;
+use firewood_storage::Path;
+use firewood_storage::SharedNode;
+use firewood_storage::TrieHash;
+use lender::Lender;
+use lender::Lending;
 
-use crate::{
-    db::BatchOp,
-    iter::key_from_nibble_iter,
-    merkle::{Key, PrefixOverlap, Value},
-};
+use crate::db::BatchOp;
+use crate::iter::key_from_nibble_iter;
+use crate::merkle::Key;
+use crate::merkle::PrefixOverlap;
+use crate::merkle::Value;
 
 /// Enum containing all possible states that we can be in as we iterate through the diff
 /// between two Merkle tries.
@@ -567,27 +574,44 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
     reason = "test helpers use plain `+= 1` counters rather than checked/wrapping arithmetic"
 )]
 mod tests {
-    use std::{collections::HashSet, ops::Deref, path::PathBuf, sync::Arc};
+    use std::collections::HashSet;
+    use std::ops::Deref;
+    use std::path::PathBuf;
+    use std::sync::Arc;
 
-    use firewood_storage::{
-        Committed, DefaultHashMode, DeletedNodeTracking, FileBacked, FileIoError, HashMode,
-        HashedNodeReader, ImmutableProposal, MemStore, Mutable, NodeStore, Propose, SeededRng,
-        TestRecorder, TrieReader,
-    };
+    use firewood_storage::Committed;
+    use firewood_storage::DefaultHashMode;
+    use firewood_storage::DeletedNodeTracking;
+    use firewood_storage::FileBacked;
+    use firewood_storage::FileIoError;
+    use firewood_storage::HashMode;
+    use firewood_storage::HashedNodeReader;
+    use firewood_storage::ImmutableProposal;
+    use firewood_storage::MemStore;
+    use firewood_storage::Mutable;
+    use firewood_storage::NodeStore;
+    use firewood_storage::Propose;
+    use firewood_storage::SeededRng;
+    use firewood_storage::TestRecorder;
+    use firewood_storage::TrieReader;
     use lender::Lender;
     use test_case::test_case;
 
-    use crate::{
-        Proof,
-        api::{Db as _, DbView, Proposal as _},
-        db::{BatchOp, Db, DbConfig},
-        iter::{MerkleKeyValueIter, key_from_nibble_iter},
-        merkle::{
-            Key, Merkle, Value,
-            changes::{DiffMerkleNodeStream, PreOrderIterator},
-        },
-        proofs::change::ChangeProof,
-    };
+    use crate::Proof;
+    use crate::api::Db as _;
+    use crate::api::DbView;
+    use crate::api::Proposal as _;
+    use crate::db::BatchOp;
+    use crate::db::Db;
+    use crate::db::DbConfig;
+    use crate::iter::MerkleKeyValueIter;
+    use crate::iter::key_from_nibble_iter;
+    use crate::merkle::Key;
+    use crate::merkle::Merkle;
+    use crate::merkle::Value;
+    use crate::merkle::changes::DiffMerkleNodeStream;
+    use crate::merkle::changes::PreOrderIterator;
+    use crate::proofs::change::ChangeProof;
 
     type BatchOpVec = Vec<BatchOp<Box<[u8]>, Box<[u8]>>>;
     type ImmutableMemstore = Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>>;

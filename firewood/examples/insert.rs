@@ -11,12 +11,18 @@ use std::ops::RangeInclusive;
 use std::time::Instant;
 
 use clap::Parser;
-use firewood::api::{self, DynDb, KeyType, ValueType};
-use firewood::db::{BatchOp, DbConfig};
+use firewood::api;
+use firewood::api::DynDb;
+use firewood::api::KeyType;
+use firewood::api::ValueType;
+use firewood::db::BatchOp;
+use firewood::db::DbConfig;
 use firewood::manager::RevisionManagerConfig;
 use firewood::open;
-use firewood_storage::{DefaultHashMode, HashMode};
-use rand::{RngExt, distr::Alphanumeric};
+use firewood_storage::DefaultHashMode;
+use firewood_storage::HashMode;
+use rand::RngExt;
+use rand::distr::Alphanumeric;
 
 #[derive(Parser, Debug)]
 struct Args {

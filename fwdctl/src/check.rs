@@ -8,13 +8,23 @@ use std::sync::Arc;
 use askama::Template;
 use clap::Args;
 use firewood::api;
-use firewood_storage::{
-    CacheReadStrategy, CheckOpt, DBStats, DeletedNodeTracking, EthHash, FileBacked, HashMode,
-    MerkleDbHash, NodeHashAlgorithm, NodeStore, NodeStoreHeader,
-};
-use indicatif::{ProgressBar, ProgressFinish, ProgressStyle};
+use firewood_storage::CacheReadStrategy;
+use firewood_storage::CheckOpt;
+use firewood_storage::DBStats;
+use firewood_storage::DeletedNodeTracking;
+use firewood_storage::EthHash;
+use firewood_storage::FileBacked;
+use firewood_storage::HashMode;
+use firewood_storage::MerkleDbHash;
+use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::NodeStore;
+use firewood_storage::NodeStoreHeader;
+use indicatif::ProgressBar;
+use indicatif::ProgressFinish;
+use indicatif::ProgressStyle;
 use nonzero_ext::nonzero;
-use num_format::{Locale, ToFormattedString};
+use num_format::Locale;
+use num_format::ToFormattedString;
 
 use crate::DatabasePath;
 
