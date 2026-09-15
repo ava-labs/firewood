@@ -15,7 +15,8 @@
 //! `build.rs`.
 
 use std::fmt;
-use std::io::{Error, ErrorKind};
+use std::io::Error;
+use std::io::ErrorKind;
 use std::num::NonZeroU64;
 
 // See build.rs for how this is generated
@@ -306,7 +307,8 @@ impl From<NonZeroU64> for LinearAddress {
 
 #[cfg(test)]
 mod tests {
-    use sha2::{Digest, Sha256};
+    use sha2::Digest;
+    use sha2::Sha256;
 
     use super::*;
     use crate::TrieHash;

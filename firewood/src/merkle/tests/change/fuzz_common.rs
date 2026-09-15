@@ -4,13 +4,22 @@
 //! Helpers shared by fuzz tests: proof reconstruction from tampered parts,
 //! the rejected-by-either-check predicate, and serialization round-trips.
 
-use firewood_storage::{DefaultHashMode, NodeHashAlgorithm, SeededRng};
+use firewood_storage::DefaultHashMode;
+use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::SeededRng;
 
 use super::verify_and_check;
-use crate::api::{BatchOp, FrozenChangeProof, FrozenRangeProof, HashKey};
+use crate::ChangeProof;
+use crate::Proof;
+use crate::ProofNode;
+use crate::api::BatchOp;
+use crate::api::FrozenChangeProof;
+use crate::api::FrozenRangeProof;
+use crate::api::HashKey;
 use crate::db::Db;
-use crate::merkle::{Key, Value};
-use crate::{ChangeProof, Proof, ProofNode, verify_change_proof_structure};
+use crate::merkle::Key;
+use crate::merkle::Value;
+use crate::verify_change_proof_structure;
 
 /// Build a `FrozenChangeProof` from mutated parts.
 pub(in crate::merkle::tests) fn build_change_proof(

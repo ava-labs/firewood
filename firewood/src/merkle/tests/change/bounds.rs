@@ -4,7 +4,8 @@
 //! End-to-end change proof verification across boundary configurations:
 //! no edges, left only, right only, and both edges.
 
-use firewood_storage::{DefaultHashMode, HashMode};
+use firewood_storage::DefaultHashMode;
+use firewood_storage::HashMode;
 use test_case::test_case;
 
 use super::*;

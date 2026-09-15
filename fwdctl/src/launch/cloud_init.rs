@@ -8,8 +8,10 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::Serialize;
 use serde_json::json;
 
-use super::stage_config::{StageConfig, TemplateContext};
-use super::{DeployOptions, LaunchError};
+use super::DeployOptions;
+use super::LaunchError;
+use super::stage_config::StageConfig;
+use super::stage_config::TemplateContext;
 
 #[derive(Serialize)]
 struct CloudInitYaml {

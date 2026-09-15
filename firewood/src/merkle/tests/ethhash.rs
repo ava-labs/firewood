@@ -2,10 +2,14 @@
 // See the file LICENSE.md for licensing terms.
 
 use ethereum_types::H256;
-use firewood_storage::{Committed, DeletedNodeTracking, MemStore, NodeStore};
+use firewood_storage::Committed;
+use firewood_storage::DeletedNodeTracking;
+use firewood_storage::MemStore;
+use firewood_storage::NodeStore;
 use hash_db::Hasher;
 use plain_hasher::PlainHasher;
-use sha3::{Digest, Keccak256};
+use sha3::Digest;
+use sha3::Keccak256;
 use test_case::test_case;
 
 use super::*;
@@ -570,7 +574,8 @@ fn clobber_value_in_memstore(
 ) -> usize {
     use std::io::Read;
 
-    use firewood_storage::{ReadableStorage, WritableStorage};
+    use firewood_storage::ReadableStorage;
+    use firewood_storage::WritableStorage;
     assert_eq!(value_bytes.len(), replacement.len());
 
     let mut buf = Vec::new();

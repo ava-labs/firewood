@@ -4,10 +4,10 @@
 use test_case::test_case;
 
 use super::*;
-use crate::{
-    api::{Db, DbView, Proposal},
-    db::BatchOp,
-};
+use crate::api::Db;
+use crate::api::DbView;
+use crate::api::Proposal;
+use crate::db::BatchOp;
 
 #[test_case(
         &[],

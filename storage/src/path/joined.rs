@@ -3,7 +3,8 @@
 
 use std::iter::Chain;
 
-use super::{SplitPath, TriePath};
+use super::SplitPath;
+use super::TriePath;
 
 /// Joins two path segments into a single path, retaining the original segments
 /// without needing to allocate a new contiguous array.

@@ -4,7 +4,8 @@
 use metrics_exporter_prometheus::render;
 
 use super::Maybe;
-use super::owned::{OwnedBytes, OwnedSlice};
+use super::owned::OwnedBytes;
+use super::owned::OwnedSlice;
 
 pub(crate) trait MapIntoCollection<T>: IntoIterator {
     fn map_into<U, I>(self) -> I
