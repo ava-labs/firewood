@@ -22,7 +22,6 @@
 //! - Fixed size for alignment with disk block boundaries
 //! - Zero-padded to full size for consistent layout
 //! - Uses C-compatible representation for cross-language access
-//!
 
 use bytemuck_derive::{Pod, Zeroable};
 use std::fs::File;

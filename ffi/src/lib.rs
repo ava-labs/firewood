@@ -150,7 +150,6 @@ pub extern "C" fn fwd_get_latest(db: Option<&DatabaseHandle>, key: BorrowedBytes
 /// * ensure that `revision` is a valid pointer to a [`RevisionHandle`]
 /// * ensure that `key` is a valid [`BorrowedBytes`]
 /// * call [`fwd_free_iterator`] to free the memory associated with the iterator.
-///
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_iter_on_revision<'view>(
     revision: Option<&'view RevisionHandle<'_>>,
@@ -179,7 +178,6 @@ pub extern "C" fn fwd_iter_on_revision<'view>(
 /// * ensure that `handle` is a valid pointer to a [`ProposalHandle`]
 /// * ensure that `key` is a valid for [`BorrowedBytes`]
 /// * call [`fwd_free_iterator`] to free the memory associated with the iterator.
-///
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_iter_on_proposal<'p>(
     handle: Option<&'p ProposalHandle<'_>>,
@@ -241,7 +239,6 @@ pub extern "C" fn fwd_iter_on_reconstructed<'p>(
 /// * ensure that `handle` is a valid pointer to a [`IteratorHandle`].
 /// * call [`fwd_free_owned_kv_pair`] on returned [`OwnedKeyValuePair`]
 ///   to free the memory associated with the returned value.
-///
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_iter_next(handle: Option<&mut IteratorHandle<'_>>) -> KeyValueResult {
     invoke_with_handle(handle, Iterator::next)
@@ -272,7 +269,6 @@ pub extern "C" fn fwd_iter_next(handle: Option<&mut IteratorHandle<'_>>) -> KeyV
 /// The caller must:
 /// * ensure that `handle` is a valid pointer to a [`IteratorHandle`].
 /// * call [`fwd_free_owned_key_value_batch`] on the returned batch to free any allocated memory.
-///
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_iter_next_n(
     handle: Option<&mut IteratorHandle<'_>>,
@@ -298,7 +294,6 @@ pub extern "C" fn fwd_iter_next_n(
 ///
 /// The caller must ensure that the `iterator` is not null and that it points to
 /// a valid [`IteratorHandle`] previously returned by a function from this library.
-///
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_free_iterator(iterator: Option<Box<IteratorHandle<'_>>>) -> VoidResult {
     invoke_with_handle(iterator, drop)

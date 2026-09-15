@@ -527,6 +527,10 @@ mod tests {
     ///     ethereum: rlp(b"c482206131"),
     /// }
     /// ```
+    // The matchers below mirror the multi-line calling convention documented
+    // above. `format_macro_matchers` collapses them onto one line and drops the
+    // space after the comma, so this one opts out.
+    #[rustfmt::skip]
     macro_rules! expected_hash {
         (
             merkledb16: $hex16:expr,
