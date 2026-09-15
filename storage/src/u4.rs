@@ -8,4 +8,5 @@
 //! [`U4`]'s `TryFrom<u8>` at the conversion sites in
 //! [`PathComponent`](crate::PathComponent) rather than constructed directly.
 
-pub use arity_arrays::index::{TryFromIntError, U4};
+pub use arity_arrays::index::TryFromIntError;
+pub use arity_arrays::index::U4;

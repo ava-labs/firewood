@@ -19,7 +19,10 @@
 //!
 //! A [`NodeStore`] is backed by a [`ReadableStorage`] which is persisted storage.
 
-use std::fmt::{Display, Formatter, LowerHex, Result};
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::fmt::LowerHex;
+use std::fmt::Result;
 use std::ops::Range;
 
 mod arc_swap_triomphe;
@@ -58,47 +61,111 @@ pub mod macros;
 /// Metrics registry for storage layer metrics
 pub mod registry;
 // re-export these so callers don't need to know where they are
-pub use checker::{CheckOpt, CheckerReport, DBStats, FreeListsStats, TrieStats};
-pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
+pub use checker::CheckOpt;
+pub use checker::CheckerReport;
+pub use checker::DBStats;
+pub use checker::FreeListsStats;
+pub use checker::TrieStats;
+pub use hashednode::Hashable;
+pub use hashednode::Preimage;
+pub use hashednode::ValueDigest;
+pub use hashednode::hash_node;
+pub use hashednode::hash_preimage;
 pub use hashedshunt::HashableShunt;
-pub use hashmode::{DefaultHashMode, EthHash, HashMode, MerkleDbHash};
+pub use hashmode::DefaultHashMode;
+pub use hashmode::EthHash;
+pub use hashmode::HashMode;
+pub use hashmode::MerkleDbHash;
 pub use hashtype::HashType;
-pub use linear::filebacked::{FREE_LIST_CACHE_ENTRY_SIZE, FileBacked};
+pub use linear::FileIoError;
+pub use linear::ReadableStorage;
+pub use linear::WritableStorage;
+pub use linear::filebacked::FREE_LIST_CACHE_ENTRY_SIZE;
+pub use linear::filebacked::FileBacked;
 pub use linear::memory::MemStore;
-pub use linear::{FileIoError, ReadableStorage, WritableStorage};
-pub use node::path::{NibblesIterator, Path};
+pub use node::BranchNode;
+pub use node::Child;
+pub use node::Children;
+pub use node::ChildrenSlots;
+pub use node::DenseChildren;
+pub use node::LeafNode;
+pub use node::Node;
+pub use node::PathIterItem;
+pub use node::path::NibblesIterator;
+pub use node::path::Path;
 pub use node::persist::MaybePersistedNode;
-pub use node::{
-    BranchNode, Child, Children, ChildrenSlots, DenseChildren, LeafNode, Node, PathIterItem,
-};
-pub use nodestore::{
-    AreaIndex, CargoVersion, Committed, CommittedId, CommittedParentHash, DeletedNodeTracking,
-    GitDescribe, HashedNodeReader, ImmutableProposal, LinearAddress, Mutable, MutableKind,
-    MutableReconNodeStore, NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError, NodeReader,
-    NodeStore, NodeStoreHeader, Parentable, Propose, Recon, Reconstructed, ReconstructionSource,
-    RootReader, TrieReader, fix_account_storage_root_value,
-    hash_node_as_storage_trie_root_for_node, hash_node_as_storage_trie_root_parts,
-};
-pub use path::{
-    ComponentIter, IntoSplitPath, JoinedPath, PackedBytes, PackedPathComponents, PackedPathRef,
-    PartialPath, PathBuf, PathCommonPrefix, PathComponent, PathComponentSliceExt, PathGuard,
-    SplitPath, TriePath, TriePathAsPackedBytes, TriePathFromPackedBytes, TriePathFromUnpackedBytes,
-};
-pub use rlp::{
-    NULL_RLP, RlpError, RlpItem, RlpList, encode_list, parse_be_uint, parse_fixed,
-    replace_list_field,
-};
+pub use nodestore::AreaIndex;
+pub use nodestore::CargoVersion;
+pub use nodestore::Committed;
+pub use nodestore::CommittedId;
+pub use nodestore::CommittedParentHash;
+pub use nodestore::DeletedNodeTracking;
+pub use nodestore::GitDescribe;
+pub use nodestore::HashedNodeReader;
+pub use nodestore::ImmutableProposal;
+pub use nodestore::LinearAddress;
+pub use nodestore::Mutable;
+pub use nodestore::MutableKind;
+pub use nodestore::MutableReconNodeStore;
+pub use nodestore::NodeHashAlgorithm;
+pub use nodestore::NodeHashAlgorithmTryFromIntError;
+pub use nodestore::NodeReader;
+pub use nodestore::NodeStore;
+pub use nodestore::NodeStoreHeader;
+pub use nodestore::Parentable;
+pub use nodestore::Propose;
+pub use nodestore::Recon;
+pub use nodestore::Reconstructed;
+pub use nodestore::ReconstructionSource;
+pub use nodestore::RootReader;
+pub use nodestore::TrieReader;
+pub use nodestore::fix_account_storage_root_value;
+pub use nodestore::hash_node_as_storage_trie_root_for_node;
+pub use nodestore::hash_node_as_storage_trie_root_parts;
+pub use path::ComponentIter;
+pub use path::IntoSplitPath;
+pub use path::JoinedPath;
+pub use path::PackedBytes;
+pub use path::PackedPathComponents;
+pub use path::PackedPathRef;
+pub use path::PartialPath;
+pub use path::PathBuf;
+pub use path::PathCommonPrefix;
+pub use path::PathComponent;
+pub use path::PathComponentSliceExt;
+pub use path::PathGuard;
+pub use path::SplitPath;
+pub use path::TriePath;
+pub use path::TriePathAsPackedBytes;
+pub use path::TriePathFromPackedBytes;
+pub use path::TriePathFromUnpackedBytes;
+pub use rlp::NULL_RLP;
+pub use rlp::RlpError;
+pub use rlp::RlpItem;
+pub use rlp::RlpList;
+pub use rlp::encode_list;
+pub use rlp::parse_be_uint;
+pub use rlp::parse_fixed;
+pub use rlp::replace_list_field;
 pub use root_store::RootStore;
 #[cfg(any(test, feature = "test_utils"))]
 pub use test_utils::SeededRng;
 #[cfg(any(test, feature = "test_utils"))]
 pub use test_utils::TestRecorder;
-pub use trie_hash::{InvalidTrieHashLength, TrieHash};
-pub use tries::{
-    DuplicateKeyError, HashedKeyValueTrieRoot, HashedTrieNode, IterAscending, IterDescending,
-    KeyValueTrieRoot, TrieEdgeIter, TrieEdgeState, TrieNode, TrieValueIter,
-};
-pub use u4::{TryFromIntError, U4};
+pub use trie_hash::InvalidTrieHashLength;
+pub use trie_hash::TrieHash;
+pub use tries::DuplicateKeyError;
+pub use tries::HashedKeyValueTrieRoot;
+pub use tries::HashedTrieNode;
+pub use tries::IterAscending;
+pub use tries::IterDescending;
+pub use tries::KeyValueTrieRoot;
+pub use tries::TrieEdgeIter;
+pub use tries::TrieEdgeState;
+pub use tries::TrieNode;
+pub use tries::TrieValueIter;
+pub use u4::TryFromIntError;
+pub use u4::U4;
 
 /// A shared node, which is just a triophe Arc of a node
 pub type SharedNode = triomphe::Arc<Node>;
@@ -162,7 +229,8 @@ impl CachedNode {
     /// The `current_size()` and `max_size()` methods are simple field accesses,
     /// so this is very cheap to call frequently.
     pub(crate) fn update_cache_metrics(cache: &lru_mem::LruCache<LinearAddress, Self>) {
-        use firewood_metrics::{GaugeExt, firewood_gauge};
+        use firewood_metrics::GaugeExt;
+        use firewood_metrics::firewood_gauge;
         firewood_gauge!(CACHE_MEMORY_USED).set_integer(cache.current_size());
         firewood_gauge!(CACHE_MEMORY_LIMIT).set_integer(cache.max_size());
     }

@@ -1,7 +1,12 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{HashType, PathBuf, PathComponent, TrieNode, TriePath, tries::TrieEdgeState};
+use crate::HashType;
+use crate::PathBuf;
+use crate::PathComponent;
+use crate::TrieNode;
+use crate::TriePath;
+use crate::tries::TrieEdgeState;
 
 /// A marker type for [`TrieEdgeIter`] that indicates that the iterator traverses
 /// the trie in ascending order.

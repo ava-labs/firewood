@@ -13,11 +13,13 @@
 use std::error::Error;
 use std::time::Instant;
 
-use firewood::api::{self, DynDb};
+use firewood::api;
+use firewood::api::DynDb;
 use firewood::db::BatchOp;
 use log::debug;
 use pretty_duration::pretty_duration;
-use sha2::{Digest, Sha256};
+use sha2::Digest;
+use sha2::Sha256;
 
 use crate::TestRunner;
 

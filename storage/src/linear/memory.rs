@@ -15,7 +15,10 @@ use std::io::Cursor;
 use firewood_metrics::firewood_counter;
 use parking_lot::Mutex;
 
-use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
+use super::FileIoError;
+use super::OffsetReader;
+use super::ReadableStorage;
+use super::WritableStorage;
 
 #[derive(Debug)]
 /// An in-memory impelementation of [`WritableStorage`] and [`ReadableStorage`]
