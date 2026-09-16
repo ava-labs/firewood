@@ -32,6 +32,9 @@ FIREWOOD_CARGO_TOOLS=(
 )
 
 FIREWOOD_GO_TOOLS=(
+	# avalanchego drives its build through a root Taskfile.yml, so anyone
+	# working on the FFI against a local avalanchego needs this.
+	github.com/go-task/task/v3/cmd/task@v3.53.1
 	github.com/reteps/dockerfmt@v0.5.4
 	# Moves C-Chain blocks and state snapshots to and from S3. The benchmark
 	# workflow depends on it; .github/workflows/ci.yaml pins the same version.

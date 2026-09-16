@@ -563,6 +563,7 @@ sudo lxc exec build-tmp -- bash -lc '
   shfmt --version
   dockerfmt --version
   s5cmd version
+  task --version
 '
 ```
 
