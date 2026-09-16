@@ -33,5 +33,8 @@ FIREWOOD_CARGO_TOOLS=(
 
 FIREWOOD_GO_TOOLS=(
 	github.com/reteps/dockerfmt@v0.5.4
+	# Moves C-Chain blocks and state snapshots to and from S3. The benchmark
+	# workflow depends on it; .github/workflows/ci.yaml pins the same version.
+	github.com/peak/s5cmd/v2@v2.3.0
 	mvdan.cc/sh/v3/cmd/shfmt@v3.14.1
 )

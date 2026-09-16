@@ -292,6 +292,12 @@ Toolchains are in the repeatable session image.
 `nix develop` against `ffi/flake.nix` provides pinned toolchains on the host
 for work that should not run in a session.
 
+Inside a session the toolchains are shared and root-owned, so `RUSTUP_HOME` is
+read-only. Building works; adding to it does not, and `rustup component add`
+fails with a permission error. Use `sudo -E` for a one-off, remembering that it
+writes into the shared tree and is lost on `fw-session recreate`. Anything
+needed repeatedly belongs in `firewood-toolchain.sh` and a rebuilt image.
+
 ### Known gaps
 
 - `/mnt/nvme` has no redundancy or backup. One NVMe failure loses user data and
@@ -556,8 +562,12 @@ sudo lxc exec build-tmp -- bash -lc '
   just --version
   shfmt --version
   dockerfmt --version
+  s5cmd version
 '
 ```
+
+`s5cmd version` reports `v0.0.0-dev`: `go install` does not stamp the release
+version. The pin in `firewood-toolchain.sh` is what fixes it.
 
 If any install fails because a pinned tool now requires a newer Rust or Go
 version, update the language toolchain first and rerun the build from a fresh
