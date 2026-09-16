@@ -247,6 +247,8 @@ impl<H: HashMode> RevisionManager<H> {
             root_store.clone(),
         );
 
+        firewood_gauge!(MAX_REVISIONS).set_integer(config.manager.max_revisions);
+
         let manager = Self {
             max_revisions: config.manager.max_revisions,
             in_memory_revisions: RwLock::new(VecDeque::from([nodestore.clone()])),
@@ -407,7 +409,6 @@ impl<H: HashMode> RevisionManager<H> {
                 }
             }
             firewood_gauge!(ACTIVE_REVISIONS).set_integer(revisions.len());
-            firewood_gauge!(MAX_REVISIONS).set_integer(self.max_revisions);
         }
 
         let new_id = committed.committed_id();
