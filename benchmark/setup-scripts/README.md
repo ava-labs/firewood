@@ -17,6 +17,20 @@ sudo bash build-environment.sh --bytes-per-inode 6291456
 ```
 
 ```bash
+bash install-rust.sh
+```
+
+This installs the Rust toolchain pinned by
+`../../infra/toolchains/firewood-toolchain.sh`.
+
+```bash
+sudo bash install-golang.sh
+```
+
+This installs the Go toolchain pinned by
+`../../infra/toolchains/firewood-toolchain.sh`.
+
+```bash
 sudo bash install-grafana.sh
 ```
 
