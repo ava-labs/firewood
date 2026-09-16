@@ -16,7 +16,7 @@
 
 use crate::node::branch::ReadSerializable;
 use crate::nodestore::AreaIndex;
-use crate::{HashMode, LinearAddress, Path, PathBuf, PathComponent, SharedNode, U4};
+use crate::{HashMode, LinearAddress, Path, PathBuf, PathComponent, SharedNode};
 use bitfield::bitfield;
 pub use branch::{BranchNode, Child};
 pub use children::{Children, ChildrenSlots, DenseChildren};
@@ -44,19 +44,6 @@ pub enum Node {
     Leaf(LeafNode),
 }
 
-/// One branch part-way through being cloned.
-///
-/// `remaining_branches` is a bitmask of the child slots holding a branch that
-/// still needs copying, and `pending` is the slot waiting on the child frame
-/// most recently pushed, so a frame can be suspended and resumed. A branch has
-/// at most 16 children, so the mask replaces a per-frame allocation.
-struct CloneFrame<'a> {
-    src: &'a BranchNode,
-    dst: Box<BranchNode>,
-    remaining_branches: u16,
-    pending: Option<PathComponent>,
-}
-
 /// Inline capacity of a walk's frame stack, chosen so a realistic trie is
 /// walked without allocating.
 ///
@@ -68,49 +55,83 @@ struct CloneFrame<'a> {
 /// call stack.
 pub(crate) const FRAME_STACK_INLINE_CAPACITY: usize = 16;
 
+/// One branch part-way through being copied.
+struct CloneFrame<'a> {
+    /// The branch being copied. Borrowed from the source tree for the whole
+    /// walk, so a child reference taken from it outlives this frame.
+    src: &'a BranchNode,
+    /// The copy under construction. Its child slots are filled in as the walk
+    /// reaches them.
+    dst: Box<BranchNode>,
+    /// The next child slot to examine.
+    cursor: usize,
+    /// The slot whose child frame is on the stack above this one. Its copy is
+    /// installed here when that frame finishes.
+    pending: Option<PathComponent>,
+}
+
 impl<'a> CloneFrame<'a> {
-    /// Copies everything about `src` that does not recurse, and records which of
-    /// its slots do.
+    /// Copies the fields of `src` that own no subtree. `clone_step` fills in
+    /// the children.
     fn new(src: &'a BranchNode) -> Self {
-        let mut dst = Box::new(BranchNode {
-            partial_path: src.partial_path.clone(),
-            value: src.value.clone(),
-            children: Children::new(),
-        });
-        let mut remaining_branches: u16 = 0;
-
-        for (nibble, slot) in &src.children {
-            match slot {
-                None => {}
-                // A branch child owns a subtree, so it is the only thing that has
-                // to wait for a frame of its own.
-                Some(Child::Node(Node::Branch(_))) => {
-                    remaining_branches |= 1u16 << nibble.0.as_u8();
-                }
-                // A leaf owns no children, so copying one is flat.
-                Some(Child::Node(Node::Leaf(leaf))) => {
-                    dst.children[nibble] = Some(Child::Node(Node::Leaf(leaf.clone())));
-                }
-                // An address or an already-shared node is a cheap copy.
-                Some(cheap) => dst.children[nibble] = Some(cheap.clone()),
-            }
-        }
-
         Self {
             src,
-            dst,
-            remaining_branches,
+            dst: Box::new(BranchNode {
+                partial_path: src.partial_path.clone(),
+                value: src.value.clone(),
+                children: Children::new(),
+            }),
+            cursor: 0,
             pending: None,
         }
     }
 }
 
+/// What one step of the walk decided for the top frame.
+enum CloneStep<'a> {
+    /// A branch child still needs copying. It owns a subtree, so it gets a
+    /// frame of its own.
+    Descend {
+        nibble: PathComponent,
+        child: &'a BranchNode,
+    },
+    /// Every child is copied, so the branch itself is complete.
+    Finish,
+}
+
+/// One branch's worth of the walk, on the top frame.
+///
+/// Copies each child that owns no subtree into `dst` as it is reached, in slot
+/// order, and stops at the first branch child that still needs copying.
+fn clone_step<'a>(frame: &mut CloneFrame<'a>) -> CloneStep<'a> {
+    while let Some(&nibble) = PathComponent::ALL.get(frame.cursor) {
+        // `get` returned `Some`, so the cursor is below the slot count and the
+        // increment cannot wrap.
+        frame.cursor = frame.cursor.wrapping_add(1);
+        match &frame.src.children[nibble] {
+            None => {}
+            Some(Child::Node(Node::Branch(child))) => {
+                return CloneStep::Descend { nibble, child };
+            }
+            Some(Child::Node(Node::Leaf(leaf))) => {
+                frame.dst.children[nibble] = Some(Child::Node(Node::Leaf(leaf.clone())));
+            }
+            // An address or an already-shared node holds no subtree by value.
+            Some(hashed @ (Child::AddressWithHash(..) | Child::MaybePersisted(..))) => {
+                frame.dst.children[nibble] = Some(hashed.clone());
+            }
+        }
+    }
+    CloneStep::Finish
+}
+
 /// Copies the subtree rooted at `root` without recursing.
 ///
-/// A `Node` owns its children by value, so a derived clone descends once per trie
-/// level. Trie depth follows key length, and proof deserialization admits keys long
-/// enough for that to exhaust the stack, which aborts the process rather than
-/// returning an error. Frames live on the heap instead, so depth costs memory.
+/// This function owns the frame stack, sized by [`FRAME_STACK_INLINE_CAPACITY`].
+/// `clone_step` does one branch's worth of work on the top frame and reports
+/// whether to descend into a child branch or finish. On a descent this function
+/// pushes the child's frame. On a finish it pops the frame and installs the copy
+/// in the parent's slot.
 fn clone_branch(root: &BranchNode) -> Box<BranchNode> {
     let mut frames: SmallVec<[CloneFrame<'_>; FRAME_STACK_INLINE_CAPACITY]> = SmallVec::new();
     frames.push(CloneFrame::new(root));
@@ -121,7 +142,7 @@ fn clone_branch(root: &BranchNode) -> Box<BranchNode> {
             .last_mut()
             .expect("clone walk: the stack empties only when the walk returns");
 
-        // Install the copy produced by the frame that just finished.
+        // A child frame just finished. Install its copy.
         if let Some(slot) = frame.pending.take() {
             let child = carried.take().expect(
                 "clone walk: a pending slot's child frame has finished and carried its copy",
@@ -129,43 +150,27 @@ fn clone_branch(root: &BranchNode) -> Box<BranchNode> {
             frame.dst.children[slot] = Some(Child::Node(Node::Branch(child)));
         }
 
-        if frame.remaining_branches == 0 {
-            // Every child is copied, so this frame is done.
-            let frame = frames
-                .pop()
-                .expect("clone walk: the frame just examined is still on the stack");
-            if frames.is_empty() {
-                return frame.dst;
+        match clone_step(frame) {
+            CloneStep::Finish => {
+                let frame = frames
+                    .pop()
+                    .expect("clone walk: the frame just examined is still on the stack");
+                if frames.is_empty() {
+                    return frame.dst;
+                }
+                carried = Some(frame.dst);
             }
-            carried = Some(frame.dst);
-            continue;
+            CloneStep::Descend { nibble, child } => {
+                frame.pending = Some(nibble);
+                frames.push(CloneFrame::new(child));
+            }
         }
-
-        // Take the lowest outstanding slot, so children are copied in nibble order.
-        let index = frame.remaining_branches.trailing_zeros();
-        debug_assert!(
-            index < 16,
-            "remaining_branches is non-zero and only 16 bits wide"
-        );
-        frame.remaining_branches &= frame.remaining_branches.wrapping_sub(1);
-        let nibble = PathComponent(U4::new_masked(
-            u8::try_from(index).expect("a non-zero u16 has at most 15 trailing zeros"),
-        ));
-
-        // `src` is borrowed from the original tree, not from `frames`, so reading it
-        // here leaves the frame stack free to grow below.
-        let src: &BranchNode = frame.src;
-        frame.pending = Some(nibble);
-
-        let Some(Child::Node(Node::Branch(child_src))) = src.children[nibble].as_ref() else {
-            unreachable!("remaining_branches only records slots holding a branch")
-        };
-        frames.push(CloneFrame::new(child_src));
     }
 }
 
 impl Clone for Node {
-    /// Hand-written because the derived version recurses once per trie level. See
+    /// Hand-written because a derived clone recurses once per trie level, and
+    /// trie depth is peer-controlled during proof verification. See
     /// `clone_branch`.
     fn clone(&self) -> Self {
         match self {
@@ -856,10 +861,12 @@ than 126 bytes as the length would be encoded in multiple bytes.
 #[cfg(test)]
 mod clone_tests {
     use super::*;
-    use crate::{HashType, TrieHash};
+    use crate::{HashType, MaybePersistedNode, TrieHash};
+    use test_case::test_case;
 
-    /// Builds a chain `depth` branches deep, ending in a leaf, and hangs one of
-    /// each cheap child variant off the top so every arm of the copy is covered.
+    /// Builds a chain `depth` branches deep, ending in a leaf. The top branch
+    /// also holds an `AddressWithHash` child and a leaf child. `fan_out` covers
+    /// the child kinds and shapes this spine does not.
     fn chain(depth: usize) -> Node {
         let mut node = Node::Leaf(LeafNode {
             partial_path: Path::from_nibbles_iterator([1u8, 2].into_iter()),
@@ -892,15 +899,58 @@ mod clone_tests {
         node
     }
 
+    fn leaf(pc: PathComponent) -> Node {
+        Node::Leaf(LeafNode {
+            partial_path: Path::new(),
+            value: Box::from([pc.as_u8()].as_slice()),
+        })
+    }
+
+    /// Every slot holds a child, cycling through the four kinds, with a branch in
+    /// every fourth slot including the last. Branch children hold branches of
+    /// their own down to `depth`, so a frame resumes and descends more than once,
+    /// and the last resume finds the cursor already past every slot.
+    fn fan_out(depth: usize) -> Node {
+        Node::Branch(Box::new(BranchNode {
+            partial_path: Path::new(),
+            value: Some(Box::from(b"root".as_slice())),
+            children: Children::from_fn(|pc| match pc.as_u8() % 4 {
+                0 => Some(Child::Node(leaf(pc))),
+                1 => Some(Child::AddressWithHash(
+                    LinearAddress::new(u64::from(pc.as_u8()).saturating_add(64)).unwrap(),
+                    HashType::from(TrieHash::from([pc.as_u8(); 32])),
+                )),
+                2 => Some(Child::MaybePersisted(
+                    MaybePersistedNode::from(SharedNode::new(leaf(pc))),
+                    HashType::from(TrieHash::from([pc.as_u8(); 32])),
+                )),
+                _ if depth == 0 => Some(Child::Node(leaf(pc))),
+                _ => Some(Child::Node(fan_out(depth.saturating_sub(1)))),
+            }),
+        }))
+    }
+
     /// A clone equals its source. `Node` derives `PartialEq`, which compares the
     /// whole subtree, so this is an exact oracle rather than a spot check.
-    #[test]
-    fn test_clone_equals_source() {
-        for depth in [0usize, 1, 2, 7, 40] {
-            let original = chain(depth);
-            let copy = original.clone();
-            assert_eq!(copy, original, "clone diverged at depth {depth}");
-        }
+    #[test_case(0)]
+    #[test_case(1)]
+    #[test_case(2)]
+    #[test_case(7)]
+    #[test_case(40)]
+    fn test_clone_equals_source(depth: usize) {
+        let original = chain(depth);
+        assert_eq!(original.clone(), original);
+    }
+
+    /// The oracle from `test_clone_equals_source`, on a trie where every branch
+    /// above the bottom level has four branch children and every kind of child
+    /// appears.
+    #[test_case(0)]
+    #[test_case(1)]
+    #[test_case(3)]
+    fn test_clone_equals_source_with_fan_out(depth: usize) {
+        let original = fan_out(depth);
+        assert_eq!(original.clone(), original);
     }
 
     /// The copy is independent: mutating it must not touch the source.
@@ -925,11 +975,13 @@ mod clone_tests {
         assert_eq!(
             original,
             chain(5),
-            "the source must be byte-identical to a freshly built chain"
+            "the source must still equal a freshly built chain"
         );
     }
 
-    /// A chain far deeper than a derived clone survives on a default stack.
+    /// A chain far deeper than a derived clone survives on a 2 MiB thread, Rust's
+    /// default for a spawned thread, set explicitly so `RUST_MIN_STACK` cannot
+    /// widen it.
     ///
     /// Neither the copy nor the source is compared or dropped here. `PartialEq` and
     /// the drop glue are still derived, so both recurse per level and would abort
@@ -946,8 +998,6 @@ mod clone_tests {
                 std::mem::forget(original);
             })
             .unwrap();
-        handle
-            .join()
-            .expect("cloning a deep chain must not exhaust the stack");
+        handle.join().expect("the clone thread must not panic");
     }
 }
