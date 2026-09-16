@@ -6,21 +6,37 @@
 //! This module contains all node hashing functionality for the nodestore, including
 //! specialized support for Ethereum-compatible hash processing.
 
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
+use std::ops::DerefMut;
 
-use sha3::{Digest, Keccak256};
+use sha3::Digest;
+use sha3::Keccak256;
 
 use super::NodeReader;
+use crate::Child;
+use crate::Children;
+use crate::HashMode;
+use crate::HashType;
+use crate::HashableShunt;
+use crate::JoinedPath;
+use crate::MaybePersistedNode;
+use crate::NodeStore;
+use crate::Path;
+use crate::PathComponent;
+use crate::ReadableStorage;
+use crate::SharedNode;
+use crate::SplitPath;
+use crate::TrieHash;
+use crate::ValueDigest;
 use crate::hashednode::hash_node;
 use crate::linear::FileIoError;
 use crate::logger::trace;
-use crate::node::{BranchNode, Node};
-use crate::rlp::{EMPTY_TRIE_ROOT, RlpItem, encode_list, replace_list_field};
-use crate::{
-    Child, Children, HashMode, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage,
-    SharedNode, TrieHash,
-};
-use crate::{HashableShunt, JoinedPath, PathComponent, SplitPath, ValueDigest};
+use crate::node::BranchNode;
+use crate::node::Node;
+use crate::rlp::EMPTY_TRIE_ROOT;
+use crate::rlp::RlpItem;
+use crate::rlp::encode_list;
+use crate::rlp::replace_list_field;
 
 /// Wrapper around a path that makes sure we truncate what gets extended to the path after it goes out of scope
 /// This allows the same memory space to be reused for different path prefixes

@@ -4,9 +4,13 @@
 //! Proc macros for Firewood metrics
 
 use proc_macro::TokenStream;
-use quote::{format_ident, quote};
-use syn::parse::{Parse, ParseStream};
-use syn::{ItemFn, ReturnType, parse_macro_input};
+use quote::format_ident;
+use quote::quote;
+use syn::ItemFn;
+use syn::ReturnType;
+use syn::parse::Parse;
+use syn::parse::ParseStream;
+use syn::parse_macro_input;
 
 /// Arguments for the `#[metrics]` attribute: a single identifier naming a counter constant in
 /// `crate::registry`. The corresponding histogram constant must also exist in `crate::registry`
@@ -178,7 +182,8 @@ mod tests {
     #[test]
     fn test_generated_code_structure() {
         // Test that the proc macro generates the expected code structure
-        use syn::{ItemFn, parse_quote};
+        use syn::ItemFn;
+        use syn::parse_quote;
 
         let input: ItemFn = parse_quote! {
             fn test_function() -> Result<(), &'static str> {

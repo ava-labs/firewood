@@ -1,19 +1,17 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::{
-    fmt::{Display, Formatter},
-    io::Read,
-};
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::io::Read;
 
 use sha2::Digest as _;
 use sha3::Keccak256;
 use smallvec::SmallVec;
 
-use crate::{
-    TrieHash,
-    node::{ExtendableBytes, branch::Serializable},
-};
+use crate::TrieHash;
+use crate::node::ExtendableBytes;
+use crate::node::branch::Serializable;
 
 /// The type of a hash. For ethereum compatible hashes, this might be a RLP encoded
 /// value if it's small enough to fit in less than 32 bytes. For merkledb compatible

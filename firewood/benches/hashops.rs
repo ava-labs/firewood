@@ -9,15 +9,24 @@ use std::os::raw::c_int;
 use std::path::Path;
 use std::sync::Arc;
 
+use criterion::BatchSize;
+use criterion::Criterion;
+use criterion::criterion_group;
+use criterion::criterion_main;
 use criterion::profiler::Profiler;
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use firewood::Merkle;
 use firewood::api;
-use firewood::db::{BatchOp, DbConfig};
+use firewood::db::BatchOp;
+use firewood::db::DbConfig;
 use firewood::open;
-use firewood_storage::{DefaultHashMode, DeletedNodeTracking, HashMode, MemStore, NodeStore};
+use firewood_storage::DefaultHashMode;
+use firewood_storage::DeletedNodeTracking;
+use firewood_storage::HashMode;
+use firewood_storage::MemStore;
+use firewood_storage::NodeStore;
 use pprof::ProfilerGuard;
-use rand::{RngExt, distr::Alphanumeric};
+use rand::RngExt;
+use rand::distr::Alphanumeric;
 use tempfile::TempDir;
 
 // To enable flamegraph output

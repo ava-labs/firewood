@@ -8,8 +8,11 @@ pub mod stage_config;
 
 use std::collections::HashMap;
 
-use clap::{Args, Subcommand, ValueEnum};
-use log::{debug, info};
+use clap::Args;
+use clap::Subcommand;
+use clap::ValueEnum;
+use log::debug;
+use log::info;
 use thiserror::Error;
 
 type FwdError = firewood::api::Error;

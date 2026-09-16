@@ -4,7 +4,9 @@
 use clap::Args;
 use firewood::api;
 #[cfg(feature = "ethhash")]
-use sha3::{Digest, Keccak256};
+use sha3::Digest;
+#[cfg(feature = "ethhash")]
+use sha3::Keccak256;
 
 #[derive(Debug, Args)]
 pub struct KeyArgument {

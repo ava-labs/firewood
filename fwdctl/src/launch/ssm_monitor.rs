@@ -1,11 +1,14 @@
 // Copyright (C) 2026, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use std::time::Instant;
 
 use aws_sdk_ssm::Client as SsmClient;
 use aws_sdk_ssm::error::ProvideErrorMetadata;
-use aws_sdk_ssm::types::{InstanceInformationFilter, InstanceInformationFilterKey, PingStatus};
+use aws_sdk_ssm::types::InstanceInformationFilter;
+use aws_sdk_ssm::types::InstanceInformationFilterKey;
+use aws_sdk_ssm::types::PingStatus;
 use log::info;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;

@@ -3,16 +3,26 @@
 
 use std::num::NonZeroUsize;
 
-use firewood::{
-    KeyRange, ProofError, RangeProofVerificationContext,
-    api::{self, DbView, FrozenRangeProof, HashKey},
-};
-use firewood_metrics::{MetricsContext, firewood_counter};
+use firewood::KeyRange;
+use firewood::ProofError;
+use firewood::RangeProofVerificationContext;
+use firewood::api;
+use firewood::api::DbView;
+use firewood::api::FrozenRangeProof;
+use firewood::api::HashKey;
+use firewood_metrics::MetricsContext;
+use firewood_metrics::firewood_counter;
 
-use crate::{
-    BorrowedBytes, CodeIteratorHandle, CodeIteratorResult, DatabaseHandle, HashResult, Maybe,
-    NextKeyRangeResult, RangeProofResult, ValueResult, VoidResult,
-};
+use crate::BorrowedBytes;
+use crate::CodeIteratorHandle;
+use crate::CodeIteratorResult;
+use crate::DatabaseHandle;
+use crate::HashResult;
+use crate::Maybe;
+use crate::NextKeyRangeResult;
+use crate::RangeProofResult;
+use crate::ValueResult;
+use crate::VoidResult;
 
 /// Arguments for creating a range proof.
 #[derive(Debug)]
