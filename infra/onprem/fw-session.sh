@@ -28,6 +28,9 @@ IMAGE_ALIAS=firewood-session
 # LXD instance names are hostnames: alphanumerics and hyphens only. Most of
 # these accounts are firstname.lastname, so the dot has to go.
 INSTANCE="session-${SESSION_USER//[^a-zA-Z0-9-]/-}"
+# See the push in create_instance: sudo ignores a sudoers file whose name
+# contains a '.'.
+SUDOERS_FILE="${SESSION_USER//[^a-zA-Z0-9_-]/_}"
 DATA_DIR="/mnt/nvme/${SESSION_USER}"
 READY_TIMEOUT=60
 ASSUME_YES=0
@@ -144,17 +147,23 @@ create_instance() {
     #
     # --uid/--gid are required: push otherwise preserves the local file's
     # ownership, and sudo refuses to read a sudoers file it does not own.
+    #
+    # The file name is not the account name: sudoers(5) says @includedir skips
+    # names containing a '.', so a rule for firstname.lastname would be read by
+    # visudo and ignored by sudo. The rule inside still names the account.
     sudoers="$(mktemp)"
     printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$SESSION_USER" > "$sudoers"
-    lxc file push "$sudoers" "${INSTANCE}/etc/sudoers.d/${SESSION_USER}" \
+    lxc file push "$sudoers" "${INSTANCE}/etc/sudoers.d/${SUDOERS_FILE}" \
         --uid 0 --gid 0 --mode 0440
     rm -f "$sudoers"
 
-    # sudo fails closed on a bad sudoers file, so check now rather than
-    # leaving it to be discovered later.
+    # Sessions install packages, so a session without sudo is not usable. sudo
+    # fails closed and silently here, so prove it works before handing the
+    # instance over; the ERR trap removes it rather than leaving it broken.
     if ! lxc exec "$INSTANCE" -- su - "$SESSION_USER" -c 'sudo -n true' > /dev/null 2>&1; then
-        echo "Warning: sudo is not working inside $INSTANCE" >&2
-        lxc exec "$INSTANCE" -- ls -l "/etc/sudoers.d/$SESSION_USER" >&2 || true
+        echo "Error: sudo is not working inside $INSTANCE" >&2
+        lxc exec "$INSTANCE" -- ls -l /etc/sudoers.d/ >&2 || true
+        false
     fi
 
     trap - ERR
@@ -166,9 +175,13 @@ warn_if_stale() {
     was="$(instance_image)"
     now="$(current_image)"
     if [ -n "$was" ] && [ -n "$now" ] && [ "$was" != "$now" ]; then
+        # Printed on the host, immediately before attaching. Say where the
+        # command has to be run: by the time this is read, the reader is inside
+        # the session, where there is no fw-session.
         echo "Note: a newer session image has been published."
-        echo "Run '$(basename "$0") recreate' to pick it up, once you are at a"
-        echo "point where losing this instance is fine."
+        echo "To pick it up, leave the session with 'exit' and run"
+        echo "'$(basename "$0") recreate' on the host, once you are at a point"
+        echo "where losing this instance is fine."
         echo ""
     fi
 }

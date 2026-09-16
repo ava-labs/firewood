@@ -253,27 +253,47 @@ step "Shell environment"
 # redirected to the NVMe array instead. Both survive the instance, which is
 # discarded.
 #
-# The baked toolchains stay root-owned and read-only. Anything a user installs
+# The baked toolchains stay root-owned and read-only. Anything a user writes
 # goes to their own directory instead, so no part of this image needs to be
 # writable by a session account that does not exist yet at build time.
+#
+# CARGO_HOME is a user directory for that reason: cargo writes its registry
+# index and git checkouts there on the first build that resolves a dependency,
+# so pointing it at the image's tree fails with EACCES. Only the binaries in
+# /usr/local/cargo/bin are shared, and PATH is what shares them.
 cat >/etc/profile.d/firewood-session.sh <<'PROFILE'
 export RUSTUP_HOME=/usr/local/rustup
-export CARGO_HOME=/usr/local/cargo
 export GOROOT=/usr/local/go
-export PATH="$CARGO_HOME/bin:$GOROOT/bin:/go/bin:$PATH"
+export PATH="/usr/local/cargo/bin:$GOROOT/bin:/go/bin:$PATH"
 
-# ~/firewood points at this user's directory on the NVMe array.
+# ~/firewood points at this user's directory on the NVMe array. Without it the
+# caches still have to land somewhere writable, just not somewhere fast.
 if [ -d "$HOME/firewood" ]; then
+    export CARGO_HOME="$HOME/firewood/.cargo"
     export CARGO_TARGET_DIR="$HOME/firewood/target"
     export CARGO_INSTALL_ROOT="$HOME/firewood/cargo"
     export SCCACHE_DIR="$HOME/firewood/.sccache"
-    export RUSTC_WRAPPER="$CARGO_HOME/bin/sccache"
+    export RUSTC_WRAPPER=/usr/local/cargo/bin/sccache
     export GOPATH="$HOME/firewood/go"
     export GOCACHE="$HOME/firewood/.gocache"
     export PATH="$CARGO_INSTALL_ROOT/bin:$GOPATH/bin:$PATH"
+else
+    export CARGO_HOME="$HOME/.cargo"
 fi
 PROFILE
 chmod 0644 /etc/profile.d/firewood-session.sh
+
+# fw-session is a host tool: it drives LXD, which a session cannot reach. Users
+# read its messages inside the session, though, so leave something there that
+# says where to run it rather than "command not found".
+cat >/usr/local/bin/fw-session <<'STUB'
+#!/bin/sh
+echo "fw-session manages sessions from the host, not from inside one." >&2
+echo "" >&2
+echo "Leave this session with 'exit', then run 'fw-session${*:+ $*}' there." >&2
+exit 1
+STUB
+chmod 0755 /usr/local/bin/fw-session
 
 # /etc/profile.d is read by login shells only, and Ubuntu's default .bashrc
 # does not source it. /etc/bash.bashrc covers interactive non-login shells, so
@@ -292,9 +312,9 @@ fi
 
 step "Cleanup"
 
-# Drop build-time caches so the published image stays small. CARGO_HOME stays
-# root-owned and read-only; users build into CARGO_TARGET_DIR and install into
-# CARGO_INSTALL_ROOT, both under their own data directory.
+# Drop build-time caches so the published image stays small. /usr/local/cargo
+# stays root-owned and read-only; users get their own CARGO_HOME,
+# CARGO_TARGET_DIR and CARGO_INSTALL_ROOT under their data directory.
 rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git" /root/.cache /go/pkg
 
 step "Verification"

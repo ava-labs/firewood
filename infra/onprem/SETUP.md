@@ -58,10 +58,11 @@ fill. The root volume group has terabytes unallocated, so home can be expanded
 later.
 
 Source code lives in home because it does not need performance.
-`target/`, the sccache directory and the Go build cache are hot and large, so
-the session environment redirects them to `/mnt/nvme/<user>` through
-`CARGO_TARGET_DIR`, `SCCACHE_DIR` and `GOCACHE`. People work in `~/...`
-and the I/O-heavy parts land on the fast disk without anyone arranging it.
+`target/`, the cargo registry, the sccache directory and the Go build cache are
+hot and large, so the session environment redirects them to `/mnt/nvme/<user>`
+through `CARGO_TARGET_DIR`, `CARGO_HOME`, `SCCACHE_DIR` and `GOCACHE`. People
+work in `~/...` and the I/O-heavy parts land on the fast disk without anyone
+arranging it.
 
 ### Accounts
 
@@ -214,9 +215,10 @@ cache state are host concerns.
 - The image is shared by all accounts/sessions. `fw-session` configures each
   session to match the user's name, uid and gid, so `~` inside the session is
   the same path as outside on the bare machine, where their home is mounted.
-  The baked toolchains stay root-owned; `CARGO_TARGET_DIR`,
-  `CARGO_INSTALL_ROOT`, `GOPATH` and the caches point into the user's data
-  directory.
+  The baked toolchains stay root-owned and are shared through `PATH` alone;
+  `CARGO_HOME`, `CARGO_TARGET_DIR`, `CARGO_INSTALL_ROOT`, `GOPATH` and the
+  caches point into the user's data directory, because cargo writes its
+  registry and git checkouts into `CARGO_HOME` on the first build.
 - Build the image once and copy it to the other machine. The same script run
   twice does not produce the same image, and the hosts cannot reach each other,
   so transfer is `lxc image export`/`import` through an external location.
