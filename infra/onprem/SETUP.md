@@ -207,8 +207,7 @@ Divergences as of 2026-09-16:
 
 - s5cmd and `task` are pinned in `firewood-toolchain.sh` for sessions, while the
   launch path takes whatever s5cmd is newest at launch and `task` from a snap.
-  Pinning the launch path to those versions is the smallest useful first step
-  and is worth doing on its own.
+  Pinning the launch path to those versions is the smallest useful first step.
 - The session image carries `clang`, `cmake`, `pkgconf`, `libssl-dev`,
   `shellcheck`, `tmux` and `xz-utils`, and every entry in
   `FIREWOOD_CARGO_TOOLS`. The benchmark hosts build the FFI without them, so
@@ -219,10 +218,9 @@ Divergences as of 2026-09-16:
   discarded by `fw-session recreate`.
 - `make` is in the launch list and already in `build-essential`.
 
-So "benchmark list plus additions" needs the shared definition to separate what
-every environment needs from what only a provisioned EC2 host needs. A single
-list that sessions extend would pull EC2-only packages into the image, and a
-session cannot use several of them.
+So "benchmark list plus additions" needs the shared definition to separate the
+common set from the host-only one; a single list that sessions extend pulls
+EC2-only packages into the image.
 
 ### Session images
 
@@ -310,16 +308,14 @@ E: Unable to locate package protobuf-compiler
 E: Unable to locate package shellcheck
 ```
 
-That reads as wrong package names rather than a clobbered file, and it is
-intermittent, because it is a race. It has now been diagnosed twice. The script
-waits for `cloud-init status --wait` and then reads its own edits back, failing
-with the sources file in the output rather than letting apt report names. If a
-build stops there, cloud-init or something like it rewrote the file; wait for
-it and rerun rather than re-editing by hand.
+That reads as wrong package names rather than a clobbered file, and being a
+race, it is intermittent. The script waits for `cloud-init status --wait` and
+reads its own edits back, so a clobbered file fails with the sources file in
+the output instead of apt reporting names. If a build stops there, wait for
+cloud-init and rerun rather than re-editing by hand.
 
-Recent Ubuntu container images already enable `universe`, in which case the
-script's edit is a no-op and there is nothing to lose. Confirm before
-provisioning:
+Recent Ubuntu container images enable `universe` already, which makes the edit
+a no-op. Confirm before provisioning:
 
 ```bash
 sudo lxc exec build-tmp -- cloud-init status --wait
@@ -338,10 +334,9 @@ Toolchains are in the repeatable session image.
 for work that should not run in a session.
 
 Inside a session the toolchains are shared and root-owned, so `RUSTUP_HOME` is
-read-only. Building works; adding to it does not, and `rustup component add`
-fails with a permission error. Use `sudo -E` for a one-off, remembering that it
-writes into the shared tree and is lost on `fw-session recreate`. Anything
-needed repeatedly belongs in `firewood-toolchain.sh` and a rebuilt image.
+read-only: building works, `rustup component add` does not. `sudo -E` covers a
+one-off, but writes into the shared tree and is lost on `fw-session recreate`.
+Anything needed repeatedly belongs in `firewood-toolchain.sh`.
 
 ### Known gaps
 
@@ -363,15 +358,11 @@ needed repeatedly belongs in `firewood-toolchain.sh` and a rebuilt image.
 - Package lists are duplicated between the benchmark hosts and the session
   image, and drift. See [Sharing package lists with the benchmark
   hosts](#sharing-package-lists-with-the-benchmark-hosts).
-- Nothing tracks image size, and Go tools dominate it. `task` and s5cmd are
-  roughly 70 MB and 20 MB of the published image between them. That matters
-  mainly because the image moves between the machines by hand, through
-  `lxc image export` and an external location, rather than over a link they
-  share. The cheap wins are already taken: provisioning runs
-  `go clean -cache -testcache -modcache -fuzzcache` and removes `/go/pkg`, so
-  what remains is binaries. If it becomes a problem, build the Go tools with
-  `-ldflags=-s -w` to drop symbols and DWARF, or drop tools nobody uses rather
-  than carrying them for completeness. Measure before trading away a tool.
+- Nothing tracks image size, and the Go tools dominate it: `task` and s5cmd are
+  roughly 70 MB and 20 MB. It matters because the image moves between the
+  machines by hand. Provisioning already strips the build and module caches, so
+  what is left is binaries; the options are `-ldflags=-s -w` or dropping tools
+  nobody uses.
 
 ## Runbooks
 
