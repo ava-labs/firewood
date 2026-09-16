@@ -26,6 +26,9 @@ APT_MIRROR=azure.archive.ubuntu.com
 # Below this, the script warns that the mirror is the problem rather than
 # letting a multi-hour stall look like a broken machine.
 SLOW_MIRROR_THRESHOLD=1000000
+# Ubuntu 24.04 and later keep sources in deb822 format here, with the older
+# sources.list as a fallback.
+SOURCES_FILE=/etc/apt/sources.list.d/ubuntu.sources
 
 show_usage() {
 	echo "Usage: $0 [OPTIONS]"
@@ -101,14 +104,39 @@ download_checked() {
 
 step "Base packages"
 
+# cloud-init generates the sources file and rewrites it when its config-apt
+# stage runs, discarding anything edited into it beforehand. Losing the mirror
+# is merely slow; losing the universe component surfaces much later as apt
+# being unable to find clang, cmake, protobuf-compiler and shellcheck, which
+# reads as wrong package names rather than a clobbered file.
+if command -v cloud-init > /dev/null 2>&1; then
+	echo "Waiting for cloud-init to settle"
+	if ! cloud-init status --wait > /dev/null 2>&1; then
+		echo "Warning: cloud-init did not finish cleanly:" >&2
+		cloud-init status --long 2>&1 | sed 's/^/  /' >&2
+		echo "Continuing; the sources checks below decide whether it matters." >&2
+	fi
+fi
+
+if [ ! -f "$SOURCES_FILE" ]; then
+	echo "Error: $SOURCES_FILE does not exist." >&2
+	echo "This script expects a deb822 sources file to edit and verify." >&2
+	exit 1
+fi
+
 if [ -n "$APT_MIRROR" ]; then
-	# Ubuntu 24.04 and later keep sources in deb822 format under
-	# /etc/apt/sources.list.d/, with the older sources.list as a fallback.
 	echo "Switching apt mirror to $APT_MIRROR"
 	sed -i -E "s|https?://[a-z0-9.-]*archive\.ubuntu\.com|http://${APT_MIRROR}|g" \
-		/etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list 2>/dev/null || true
-	grep -hoE 'https?://[a-z0-9./-]+' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null |
+		"$SOURCES_FILE" /etc/apt/sources.list 2>/dev/null || true
+	grep -hoE 'https?://[a-z0-9./-]+' "$SOURCES_FILE" 2>/dev/null |
 		sort -u | head -3
+
+	if ! grep -q "^URIs:.*${APT_MIRROR}" "$SOURCES_FILE"; then
+		echo "" >&2
+		echo "Error: the mirror rewrite did not survive in $SOURCES_FILE." >&2
+		echo "Something else owns this file; see the cloud-init note above." >&2
+		exit 1
+	fi
 
 	# A slow mirror is the difference between minutes and hours here, and it
 	# presents as the machine being broken. Say so up front.
@@ -143,11 +171,17 @@ fi
 # also list universe in Components while carrying no index for it, which
 # presents as those packages simply not existing.
 for component in universe multiverse; do
-	if ! grep -qE "^Components:.*\b${component}\b" \
-		/etc/apt/sources.list.d/ubuntu.sources 2>/dev/null; then
+	if ! grep -qE "^Components:.*\b${component}\b" "$SOURCES_FILE"; then
 		echo "Enabling $component"
-		sed -i -E "s/^(Components:.*)$/\1 ${component}/" \
-			/etc/apt/sources.list.d/ubuntu.sources
+		sed -i -E "s/^(Components:.*)$/\1 ${component}/" "$SOURCES_FILE"
+	fi
+
+	if ! grep -qE "^Components:.*\b${component}\b" "$SOURCES_FILE"; then
+		echo "" >&2
+		echo "Error: $component is still not enabled in $SOURCES_FILE." >&2
+		echo "" >&2
+		cat "$SOURCES_FILE" >&2
+		exit 1
 	fi
 done
 
@@ -186,10 +220,11 @@ if ! dry_run_output="$(apt-get install --dry-run -qq "${PACKAGES[@]}" 2>&1)"; th
 	echo "" >&2
 	echo "$dry_run_output" >&2
 	echo "" >&2
-	echo "Enabled components:" >&2
-	grep -h '^Components:' /etc/apt/sources.list.d/ubuntu.sources >&2 || true
+	echo "$SOURCES_FILE:" >&2
+	sed 's/^/  /' "$SOURCES_FILE" >&2
 	echo "" >&2
-	echo "Check names with 'apt-cache search' inside the container." >&2
+	echo "A missing component here explains a whole group of names at once." >&2
+	echo "Otherwise check names with 'apt-cache search' inside the container." >&2
 	exit 1
 fi
 
