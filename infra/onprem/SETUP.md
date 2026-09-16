@@ -179,6 +179,51 @@ accident and show up later as unexplained differences.
 26.04 server install. Update it whenever something is added, and diff the two
 machines against each other after any change.
 
+### Sharing package lists with the benchmark hosts
+
+Not done yet. The goal is that the session image derives its packages and tools
+from the benchmark definition and adds to them, instead of keeping a second
+copy that drifts.
+
+Rust and Go are already single-sourced.
+[`firewood-toolchain.sh`](../toolchains/firewood-toolchain.sh) pins the
+toolchains, `FIREWOOD_CARGO_TOOLS` and `FIREWOOD_GO_TOOLS`, and is sourced by
+`benchmark/setup-scripts/install-rust.sh`,
+`benchmark/setup-scripts/install-golang.sh` and
+[`provision-session.sh`](provision-session.sh). What still drifts is apt
+packages, and how a few tools are installed.
+
+The benchmark path installs from five places:
+
+| Where | What |
+| --- | --- |
+| `launch-stages.yaml`, `packages:` | cloud-init apt list |
+| `benchmark/setup-scripts/build-environment.sh` | apt, plus `mdadm` and `zfsutils-linux` |
+| `benchmark/setup-scripts/install-grafana.sh` | `grafana`, `prometheus` |
+| `launch-stages.yaml`, snaps | `amazon-ssm-agent`, `task` |
+| `launch-stages.yaml`, `install-s5cmd` | newest s5cmd `.deb`, resolved through the GitHub API |
+
+Divergences as of 2026-09-16:
+
+- s5cmd and `task` are pinned in `firewood-toolchain.sh` for sessions, while the
+  launch path takes whatever s5cmd is newest at launch and `task` from a snap.
+  Pinning the launch path to those versions is the smallest useful first step
+  and is worth doing on its own.
+- The session image carries `clang`, `cmake`, `pkgconf`, `libssl-dev`,
+  `shellcheck`, `tmux` and `xz-utils`, and every entry in
+  `FIREWOOD_CARGO_TOOLS`. The benchmark hosts build the FFI without them, so
+  the shared set has to be settled on evidence rather than by taking the union.
+- `mdadm`, `zfsutils-linux`, `amazon-ssm-agent`, `grafana` and `prometheus`
+  are EC2 or host concerns. On-prem, [`setup-nvme.sh`](setup-nvme.sh) owns
+  disks and the observability stack belongs on the host, not in a container
+  discarded by `fw-session recreate`.
+- `make` is in the launch list and already in `build-essential`.
+
+So "benchmark list plus additions" needs the shared definition to separate what
+every environment needs from what only a provisioned EC2 host needs. A single
+list that sessions extend would pull EC2-only packages into the image, and a
+session cannot use several of them.
+
 ### Session images
 
 Logging in over SSH attaches to a persistent per-user container managed by
@@ -315,6 +360,18 @@ needed repeatedly belongs in `firewood-toolchain.sh` and a rebuilt image.
 - Logins use public keys until the Cloudflare CA is configured. Remove
   `authorized_keys` once certificate login works.
 - Reservations are advisory. Nothing records or enforces who holds a machine.
+- Package lists are duplicated between the benchmark hosts and the session
+  image, and drift. See [Sharing package lists with the benchmark
+  hosts](#sharing-package-lists-with-the-benchmark-hosts).
+- Nothing tracks image size, and Go tools dominate it. `task` and s5cmd are
+  roughly 70 MB and 20 MB of the published image between them. That matters
+  mainly because the image moves between the machines by hand, through
+  `lxc image export` and an external location, rather than over a link they
+  share. The cheap wins are already taken: provisioning runs
+  `go clean -cache -testcache -modcache -fuzzcache` and removes `/go/pkg`, so
+  what remains is binaries. If it becomes a problem, build the Go tools with
+  `-ldflags=-s -w` to drop symbols and DWARF, or drop tools nobody uses rather
+  than carrying them for completeness. Measure before trading away a tool.
 
 ## Runbooks
 
