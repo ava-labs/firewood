@@ -14,17 +14,19 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use crate::node::branch::ReadSerializable;
-use crate::nodestore::AreaIndex;
-use crate::{HashMode, LinearAddress, Path, PathBuf, PathComponent, SharedNode};
+use std::fmt::Debug;
+use std::io::{Error, Read, Write};
+
 use bitfield::bitfield;
 pub use branch::{BranchNode, Child};
 pub use children::{Children, ChildrenSlots, DenseChildren};
 use enum_as_inner::EnumAsInner;
 use integer_encoding::{VarInt, VarIntReader as _};
 pub use leaf::LeafNode;
-use std::fmt::Debug;
-use std::io::{Error, Read, Write};
+
+use crate::node::branch::ReadSerializable;
+use crate::nodestore::AreaIndex;
+use crate::{HashMode, LinearAddress, Path, PathBuf, PathComponent, SharedNode};
 
 pub mod branch;
 pub mod children;
@@ -541,9 +543,10 @@ mod snapshot_tests;
 
 #[cfg(test)]
 mod test {
+    use test_case::test_case;
+
     use crate::node::{BranchNode, LeafNode, Node};
     use crate::{Child, Children, DefaultHashMode, LinearAddress, NibblesIterator, Path};
-    use test_case::test_case;
 
     #[test_case(
         Node::Leaf(LeafNode {
@@ -599,8 +602,9 @@ than 126 bytes as the length would be encoded in multiple bytes.
         node: Node,
         #[cfg_attr(feature = "ethhash", expect(unused_variables))] expected_length: usize,
     ) {
-        use crate::node::Node;
         use std::io::Cursor;
+
+        use crate::node::Node;
 
         let mut serialized = Vec::new();
         let _area_index = node

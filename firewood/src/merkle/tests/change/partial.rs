@@ -10,8 +10,9 @@
 //! the limit actually truncates, the end proof validates against the last
 //! returned key rather than the requested `end_key`.
 
-use super::*;
 use test_case::test_case;
+
+use super::*;
 
 /// Verify that partial proofs return the expected number of batch ops
 /// and pass both structural and root hash verification, across

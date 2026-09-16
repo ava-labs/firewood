@@ -29,24 +29,21 @@
 //! - Metrics are collected for flush operation timing
 //! - Memory-efficient serialization with pre-allocated buffers
 
-use bumpalo::Bump;
 use std::iter::FusedIterator;
-
-use crate::linear::FileIoError;
-use firewood_metrics::{GaugeExt, firewood_gauge, firewood_histogram};
 use std::time::Instant;
 
-use crate::{HashMode, MaybePersistedNode, NodeReader, WritableStorage};
-
-#[cfg(test)]
-use crate::RootReader;
-
-use super::alloc::NodeAllocator;
-use super::header::NodeStoreHeader;
-use super::{Committed, NodeStore};
+use bumpalo::Bump;
+use firewood_metrics::{GaugeExt, firewood_gauge, firewood_histogram};
 
 #[cfg(not(test))]
 use super::RootReader;
+use super::alloc::NodeAllocator;
+use super::header::NodeStoreHeader;
+use super::{Committed, NodeStore};
+#[cfg(test)]
+use crate::RootReader;
+use crate::linear::FileIoError;
+use crate::{HashMode, MaybePersistedNode, NodeReader, WritableStorage};
 
 impl NodeStoreHeader {
     /// Persist this header to storage.
@@ -306,6 +303,8 @@ impl<S: WritableStorage, H: HashMode> NodeStore<Committed, S, H> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::{
         Child, Children, DefaultHashMode, DeletedNodeTracking, HashMode, HashType,
@@ -315,7 +314,6 @@ mod tests {
         node::{BranchNode, LeafNode, Node},
         nodestore::{Mutable, Propose},
     };
-    use std::sync::Arc;
 
     fn into_committed(
         ns: NodeStore<std::sync::Arc<ImmutableProposal>, MemStore, DefaultHashMode>,

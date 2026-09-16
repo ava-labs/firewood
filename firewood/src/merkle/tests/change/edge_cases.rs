@@ -3,12 +3,13 @@
 
 //! Edge cases: odd depths, divergence, exclusion, deletion, children.
 
-use super::*;
 use std::num::NonZeroUsize;
+
+use firewood_storage::{DefaultHashMode, HashMode};
 use tempfile::TempDir;
 use test_case::test_case;
 
-use firewood_storage::{DefaultHashMode, HashMode};
+use super::*;
 
 #[test]
 fn test_empty_batch_ops_with_nonempty_proofs() {

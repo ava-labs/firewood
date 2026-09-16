@@ -17,14 +17,15 @@ mod triehash;
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use super::*;
-use crate::api::Error;
-use crate::{ProofError, ProofNode};
 use firewood_storage::{
     Committed, DefaultHashMode, DeletedNodeTracking, DenseChildren, HashMode, MemStore, Mutable,
     NodeStore, NodeStoreHeader, PathComponent, Propose, RootReader, TrieHash, ValueDigest,
 };
 use test_case::test_case;
+
+use super::*;
+use crate::api::Error;
+use crate::{ProofError, ProofNode};
 
 /// Test wrapper around [`crate::merkle::verify_range_proof`] that supplies the
 /// compile-default hash mode as the expected `algorithm` (the mode every proof

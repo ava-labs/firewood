@@ -9,10 +9,12 @@
 //! (which is itself always compiled) can call them without pulling in the
 //! `ethhash` feature gate.
 
-use crate::TriePath;
+use std::iter::once;
+
 use bitfield::bitfield;
 use smallvec::SmallVec;
-use std::iter::once;
+
+use crate::TriePath;
 
 /// Hex-prefix encoding of a nibble path (Ethereum Yellow Paper, appendix C).
 ///
