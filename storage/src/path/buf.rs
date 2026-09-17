@@ -37,48 +37,6 @@ impl PartialPath<'_> {
             PartialPath::Owned(buf) => buf.as_slice(),
         }
     }
-
-    /// Converts this partial path into an owned path buffer.
-    ///
-    /// If the path is already owned, this is a no-op.
-    /// If the path is borrowed, this allocates a new buffer and copies the
-    /// components into it.
-    #[inline]
-    #[must_use]
-    pub fn into_owned(self) -> PathBuf {
-        match self {
-            PartialPath::Borrowed(slice) => slice.into(),
-            PartialPath::Owned(buf) => buf,
-        }
-    }
-
-    /// Returns true if this partial path is a borrowed slice.
-    #[inline]
-    #[must_use]
-    pub const fn is_borrowed(&self) -> bool {
-        matches!(self, PartialPath::Borrowed(_))
-    }
-
-    /// Returns true if this partial path is an owned buffer.
-    #[inline]
-    #[must_use]
-    pub const fn is_owned(&self) -> bool {
-        matches!(self, PartialPath::Owned(_))
-    }
-
-    /// Acquires a mutable reference to the owned path buffer, converting
-    /// the path to an owned buffer if it is currently a borrowed slice.
-    pub fn to_mut(&mut self) -> &mut PathBuf {
-        if let Self::Borrowed(buf) = self {
-            *self = Self::Owned((*buf).into());
-        }
-
-        if let Self::Owned(buf) = self {
-            buf
-        } else {
-            unreachable!()
-        }
-    }
 }
 
 impl std::ops::Deref for PartialPath<'_> {
