@@ -119,6 +119,24 @@ The `fwdctl` tool provides command-line operations on databases. See `fwdctl/REA
 
 For more information on coding conventions and constraints, please refer to [CONTRIBUTING.md](./CONTRIBUTING.md)
 
+## Design Documents
+
+Firewood records designs as living documentation in `docs/src/designs/`, rendered in
+the mdBook site. Every design is `YYYY-MM-DD-<slug>.md`, dated when it was proposed;
+the filename never changes. Lifecycle state lives in the `status` frontmatter field.
+The convention, frontmatter schema, and promotion checklist are documented in
+`docs/src/designs/README.md`.
+
+- **Propose:** run `just new-design <slug>` to scaffold a `status: proposed` design
+  from the template, fill it in, and open a pull request.
+- **Promote:** once implemented, flip `status` to `active` in place and follow the
+  promotion checklist. Do not rename or move the file.
+- **Maintain:** `active` designs describe what the code does today; update them as
+  the design changes. `just design-age` lists designs by last commit date.
+
+Never write a date into a design's frontmatter or body; the filename and git history
+already carry it.
+
 ## Commit and PR Title Convention
 
 Commit messages and PR titles **must** follow the
