@@ -24,6 +24,8 @@ To use
 * `fwdctl dump`: Dump the contents of the key/value store.
 * `fwdctl import`: Import key/value pairs into an existing database.
 * `fwdctl replay`: Replay recorded operations against an existing database.
+* `fwdctl build-filter` (requires `--features filter`): Build a membership-filter
+  checkpoint from the latest revision; see `docs/src/operations/membership-filter.md`.
 * `fwdctl launch` (requires `--features launch`): Launch and manage AWS benchmark runs.
 
 ## Key input modes

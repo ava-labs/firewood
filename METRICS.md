@@ -100,6 +100,14 @@ The FFI layer sets the context on each inbound call based on caller configuratio
 | `firewood_node_removes_total`            | counter | `prefix`, `result` | Remove operations; `prefix=true\|false`, `result=success\|nonexistent`       |
 | `firewood_change_proof_iterations_total` | counter | —                  | Iterator `next()` calls during change-proof generation                       |
 
+#### Membership filter (`filter` feature, enabled by `FIREWOOD_FILTER_PATH`)
+
+| Metric                                         | Type    | Labels    | Description                                                                                                      |
+| ---------------------------------------------- | ------- | --------- | ---------------------------------------------------------------------------------------------------------------- |
+| `firewood_membership_filter_total`             | counter | `verdict` | Read verdicts (`maybe`, `absent`, `false_negative` in verify mode) and maintenance (`insert`, `remove`, `checkpoint_ok`, `checkpoint_fail`) |
+| `firewood_membership_filter_fill_ratio`        | gauge   | —         | Fraction of nonzero filter counters, sampled at each checkpoint                                                  |
+| `firewood_membership_filter_saturated_counters` | gauge   | —         | Counters pinned at their maximum, sampled at each checkpoint                                                     |
+
 #### Persist worker
 
 | Metric                                         | Type      | Labels    | Description                                                                                 |
