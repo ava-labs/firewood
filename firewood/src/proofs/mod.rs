@@ -316,7 +316,7 @@
 pub(crate) mod change;
 pub(super) mod de;
 pub(crate) mod eth;
-pub(super) mod frame;
+pub(crate) mod frame;
 pub(crate) mod header;
 pub(crate) mod range;
 pub(crate) mod reader;
