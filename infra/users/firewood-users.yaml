@@ -1,0 +1,66 @@
+users:
+  - local_user: ron.kuris
+    benchmark_user: rkuris
+    full_name: Ron Kuris
+    benchmark_groups: "users, adm, sudo"
+    benchmark_shell: /usr/bin/bash
+    benchmark_sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL2RVmfpoKYi0tJd2DhQEp8tB3m2PSuaYxIfnLwqt03u cardno:23_537_110 ron"
+  - local_user: austin.larson
+    benchmark_user: austin
+    full_name: Austin Larson
+    benchmark_groups: "users, adm, sudo"
+    benchmark_shell: /usr/bin/bash
+    benchmark_sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICoGgX8nCin3FPc1V3YYN1M9g039wMbzZSAXZJCqzBt3 cardno:31_786_961 austin"
+  - local_user: aaron
+    benchmark_user: aaron
+    full_name: Aaron
+    benchmark_groups: "users, adm, sudo"
+    benchmark_shell: /usr/bin/bash
+    benchmark_sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMj2j6ySwsFx7Y6FW2UXlkjCZfFDQKHWh0GTBjkK9ruV cardno:19_236_959 aaron"
+  - local_user: brandon.leblanc
+    benchmark_user: brandon
+    full_name: Brandon LeBlanc
+    benchmark_groups: "users, adm, sudo"
+    benchmark_shell: /usr/bin/bash
+    benchmark_sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHWuCq/y50S0yFPJQEAifeeN4n6EL3IlUuYbAdk2w2kL cardno:33_731_913 brandon"
+  - local_user: amin.rezaei
+    benchmark_user: amin
+    full_name: Amin Rezaei
+    benchmark_groups: "users, adm, sudo"
+    benchmark_shell: /usr/bin/bash
+    benchmark_sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE8iR1X8/ELrzjczZvCkrTGCEoN6/dtlP01QFGuUpYxV cardno:33_317_839 amin"
+  - local_user: bernard
+    benchmark_user: bernard
+    full_name: Bernard
+    benchmark_groups: "users, adm, sudo"
+    benchmark_shell: /usr/bin/bash
+    benchmark_sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE/1C8JVL0g6qqMw1p0TwJMqJqERxYTX+7PnP+gXP4km cardno:19_155_748 bernard"
+  - local_user: rodrigo.villar
+    benchmark_user: rodrigo
+    full_name: Rodrigo Villar
+    benchmark_groups: "users, adm, sudo"
+    benchmark_shell: /usr/bin/bash
+    benchmark_sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDT0/IE2kLNpvaELug1zppQGY03z3fe2zOTjyS655Sgq cardno:28_650_437 rodrigo"
+  - local_user: felipe.madero
+    full_name: Felipe Madero

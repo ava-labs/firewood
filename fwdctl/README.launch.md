@@ -206,6 +206,7 @@ Useful optional controls:
 By default, `fwdctl launch` uses the embedded stage config from:
 
 - `benchmark/launch/launch-stages.yaml`
+- `infra/users/firewood-users.yaml`
 
 You can override this at runtime (without rebuilding) by creating:
 
