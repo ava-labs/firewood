@@ -26,6 +26,9 @@ APT_MIRROR=azure.archive.ubuntu.com
 # Below this, the script warns that the mirror is the problem rather than
 # letting a multi-hour stall look like a broken machine.
 SLOW_MIRROR_THRESHOLD=1000000
+# Ubuntu 24.04 and later keep sources in deb822 format here, with the older
+# sources.list as a fallback.
+SOURCES_FILE=/etc/apt/sources.list.d/ubuntu.sources
 
 show_usage() {
 	echo "Usage: $0 [OPTIONS]"
@@ -101,14 +104,39 @@ download_checked() {
 
 step "Base packages"
 
+# cloud-init generates the sources file and rewrites it when its config-apt
+# stage runs, discarding anything edited into it beforehand. Losing the mirror
+# is merely slow; losing the universe component surfaces much later as apt
+# being unable to find clang, cmake, protobuf-compiler and shellcheck, which
+# reads as wrong package names rather than a clobbered file.
+if command -v cloud-init > /dev/null 2>&1; then
+	echo "Waiting for cloud-init to settle"
+	if ! cloud-init status --wait > /dev/null 2>&1; then
+		echo "Warning: cloud-init did not finish cleanly:" >&2
+		cloud-init status --long 2>&1 | sed 's/^/  /' >&2
+		echo "Continuing; the sources checks below decide whether it matters." >&2
+	fi
+fi
+
+if [ ! -f "$SOURCES_FILE" ]; then
+	echo "Error: $SOURCES_FILE does not exist." >&2
+	echo "This script expects a deb822 sources file to edit and verify." >&2
+	exit 1
+fi
+
 if [ -n "$APT_MIRROR" ]; then
-	# Ubuntu 24.04 and later keep sources in deb822 format under
-	# /etc/apt/sources.list.d/, with the older sources.list as a fallback.
 	echo "Switching apt mirror to $APT_MIRROR"
 	sed -i -E "s|https?://[a-z0-9.-]*archive\.ubuntu\.com|http://${APT_MIRROR}|g" \
-		/etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list 2>/dev/null || true
-	grep -hoE 'https?://[a-z0-9./-]+' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null |
+		"$SOURCES_FILE" /etc/apt/sources.list 2>/dev/null || true
+	grep -hoE 'https?://[a-z0-9./-]+' "$SOURCES_FILE" 2>/dev/null |
 		sort -u | head -3
+
+	if ! grep -q "^URIs:.*${APT_MIRROR}" "$SOURCES_FILE"; then
+		echo "" >&2
+		echo "Error: the mirror rewrite did not survive in $SOURCES_FILE." >&2
+		echo "Something else owns this file; see the cloud-init note above." >&2
+		exit 1
+	fi
 
 	# A slow mirror is the difference between minutes and hours here, and it
 	# presents as the machine being broken. Say so up front.
@@ -143,11 +171,17 @@ fi
 # also list universe in Components while carrying no index for it, which
 # presents as those packages simply not existing.
 for component in universe multiverse; do
-	if ! grep -qE "^Components:.*\b${component}\b" \
-		/etc/apt/sources.list.d/ubuntu.sources 2>/dev/null; then
+	if ! grep -qE "^Components:.*\b${component}\b" "$SOURCES_FILE"; then
 		echo "Enabling $component"
-		sed -i -E "s/^(Components:.*)$/\1 ${component}/" \
-			/etc/apt/sources.list.d/ubuntu.sources
+		sed -i -E "s/^(Components:.*)$/\1 ${component}/" "$SOURCES_FILE"
+	fi
+
+	if ! grep -qE "^Components:.*\b${component}\b" "$SOURCES_FILE"; then
+		echo "" >&2
+		echo "Error: $component is still not enabled in $SOURCES_FILE." >&2
+		echo "" >&2
+		cat "$SOURCES_FILE" >&2
+		exit 1
 	fi
 done
 
@@ -186,10 +220,11 @@ if ! dry_run_output="$(apt-get install --dry-run -qq "${PACKAGES[@]}" 2>&1)"; th
 	echo "" >&2
 	echo "$dry_run_output" >&2
 	echo "" >&2
-	echo "Enabled components:" >&2
-	grep -h '^Components:' /etc/apt/sources.list.d/ubuntu.sources >&2 || true
+	echo "$SOURCES_FILE:" >&2
+	sed 's/^/  /' "$SOURCES_FILE" >&2
 	echo "" >&2
-	echo "Check names with 'apt-cache search' inside the container." >&2
+	echo "A missing component here explains a whole group of names at once." >&2
+	echo "Otherwise check names with 'apt-cache search' inside the container." >&2
 	exit 1
 fi
 
@@ -253,27 +288,47 @@ step "Shell environment"
 # redirected to the NVMe array instead. Both survive the instance, which is
 # discarded.
 #
-# The baked toolchains stay root-owned and read-only. Anything a user installs
+# The baked toolchains stay root-owned and read-only. Anything a user writes
 # goes to their own directory instead, so no part of this image needs to be
 # writable by a session account that does not exist yet at build time.
+#
+# CARGO_HOME is a user directory for that reason: cargo writes its registry
+# index and git checkouts there on the first build that resolves a dependency,
+# so pointing it at the image's tree fails with EACCES. Only the binaries in
+# /usr/local/cargo/bin are shared, and PATH is what shares them.
 cat >/etc/profile.d/firewood-session.sh <<'PROFILE'
 export RUSTUP_HOME=/usr/local/rustup
-export CARGO_HOME=/usr/local/cargo
 export GOROOT=/usr/local/go
-export PATH="$CARGO_HOME/bin:$GOROOT/bin:/go/bin:$PATH"
+export PATH="/usr/local/cargo/bin:$GOROOT/bin:/go/bin:$PATH"
 
-# ~/firewood points at this user's directory on the NVMe array.
+# ~/firewood points at this user's directory on the NVMe array. Without it the
+# caches still have to land somewhere writable, just not somewhere fast.
 if [ -d "$HOME/firewood" ]; then
+    export CARGO_HOME="$HOME/firewood/.cargo"
     export CARGO_TARGET_DIR="$HOME/firewood/target"
     export CARGO_INSTALL_ROOT="$HOME/firewood/cargo"
     export SCCACHE_DIR="$HOME/firewood/.sccache"
-    export RUSTC_WRAPPER="$CARGO_HOME/bin/sccache"
+    export RUSTC_WRAPPER=/usr/local/cargo/bin/sccache
     export GOPATH="$HOME/firewood/go"
     export GOCACHE="$HOME/firewood/.gocache"
     export PATH="$CARGO_INSTALL_ROOT/bin:$GOPATH/bin:$PATH"
+else
+    export CARGO_HOME="$HOME/.cargo"
 fi
 PROFILE
 chmod 0644 /etc/profile.d/firewood-session.sh
+
+# fw-session is a host tool: it drives LXD, which a session cannot reach. Users
+# read its messages inside the session, though, so leave something there that
+# says where to run it rather than "command not found".
+cat >/usr/local/bin/fw-session <<'STUB'
+#!/bin/sh
+echo "fw-session manages sessions from the host, not from inside one." >&2
+echo "" >&2
+echo "Leave this session with 'exit', then run 'fw-session${*:+ $*}' there." >&2
+exit 1
+STUB
+chmod 0755 /usr/local/bin/fw-session
 
 # /etc/profile.d is read by login shells only, and Ubuntu's default .bashrc
 # does not source it. /etc/bash.bashrc covers interactive non-login shells, so
@@ -292,9 +347,9 @@ fi
 
 step "Cleanup"
 
-# Drop build-time caches so the published image stays small. CARGO_HOME stays
-# root-owned and read-only; users build into CARGO_TARGET_DIR and install into
-# CARGO_INSTALL_ROOT, both under their own data directory.
+# Drop build-time caches so the published image stays small. /usr/local/cargo
+# stays root-owned and read-only; users get their own CARGO_HOME,
+# CARGO_TARGET_DIR and CARGO_INSTALL_ROOT under their data directory.
 rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git" /root/.cache /go/pkg
 
 step "Verification"
