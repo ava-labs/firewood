@@ -121,6 +121,16 @@ pub struct UserManifest {
     pub users: Vec<SharedUserDefinition>,
 }
 
+/// Shared package lists. `session` is consumed by the on-prem session image
+/// rather than here; see `infra/packages/firewood-packages.yaml`.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PackageManifest {
+    pub common: Vec<String>,
+    pub session: Vec<String>,
+    pub host: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SharedUserDefinition {
     pub local_user: String,
@@ -180,6 +190,7 @@ pub struct TemplateContext {
 
 const DEFAULT_CONFIG: &str = include_str!("../../../benchmark/launch/launch-stages.yaml");
 const DEFAULT_USERS: &str = include_str!("../../../infra/users/firewood-users.yaml");
+const DEFAULT_PACKAGES: &str = include_str!("../../../infra/packages/firewood-packages.yaml");
 
 impl StageConfig {
     /// # Errors
@@ -200,6 +211,12 @@ impl StageConfig {
         Ok(config)
     }
 
+    /// Builds the config from the files embedded at compile time, merging in
+    /// the shared user and package manifests.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] if any embedded manifest fails to parse.
     pub fn embedded_default() -> Result<Self, ConfigError> {
         let mut config: Self = serde_yaml::from_str(DEFAULT_CONFIG).map_err(ConfigError::from)?;
         let users: UserManifest = serde_yaml::from_str(DEFAULT_USERS).map_err(ConfigError::from)?;
@@ -208,6 +225,9 @@ impl StageConfig {
             .iter()
             .filter_map(SharedUserDefinition::benchmark_definition)
             .collect();
+        let packages: PackageManifest =
+            serde_yaml::from_str(DEFAULT_PACKAGES).map_err(ConfigError::from)?;
+        config.packages = packages.common.into_iter().chain(packages.host).collect();
         Ok(config)
     }
 
@@ -464,6 +484,18 @@ mod tests {
         assert!(
             config.users.iter().all(|user| user.name != "felipe.madero"),
             "on-prem-only users should not be rendered into benchmark cloud-init"
+        );
+        assert!(
+            config.packages.iter().any(|pkg| pkg == "build-essential"),
+            "benchmark packages should include the shared common list"
+        );
+        assert!(
+            config.packages.iter().any(|pkg| pkg == "mdadm"),
+            "benchmark packages should include the host-only list"
+        );
+        assert!(
+            config.packages.iter().all(|pkg| pkg != "tmux"),
+            "session-only packages should not be rendered into benchmark cloud-init"
         );
     }
 

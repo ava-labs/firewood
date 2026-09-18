@@ -1,0 +1,45 @@
+# Packages for provisioned Firewood environments.
+#
+# Read by fwdctl (fwdctl/src/launch/stage_config.rs), which merges common and
+# host into the benchmark host's cloud-init package list, and by
+# infra/onprem/provision-session.sh, which installs common and session into the
+# on-prem session image.
+#
+# common is what both environments already installed, not the union of their
+# lists. The benchmark hosts build the FFI without clang, cmake, pkgconf or
+# libssl-dev, so moving one of those into common is a decision per package,
+# backed by evidence that the host needs it.
+
+common:
+  - build-essential
+  - curl
+  - git
+  - jq
+  # Superseded by iproute2, which both base images carry. Kept because scripts
+  # written on the benchmark hosts use ifconfig and netstat.
+  - net-tools
+  - protobuf-compiler
+  - unzip
+
+# Installed on top of common in the on-prem session image.
+session:
+  - ca-certificates
+  - clang
+  - cmake
+  - less
+  - libssl-dev
+  - openssh-client
+  # pkg-config is transitional in 24.04 and later; pkgconf is the real package.
+  - pkgconf
+  - shellcheck
+  - sudo
+  - tmux
+  - xz-utils
+
+# Installed on top of common on provisioned benchmark hosts.
+host:
+  # The Grafana apt repository is https.
+  - apt-transport-https
+  # Used by the RAID and ext4 setup in benchmark/setup-scripts/build-environment.sh.
+  - mdadm
+  - zfsutils-linux
