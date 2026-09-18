@@ -1,17 +1,8 @@
 # Launch Stages Configuration
 #
-# Benchmark users come from infra/users/firewood-users.yaml.
+# Benchmark users come from infra/users/firewood-users.yaml, and packages from
+# infra/packages/firewood-packages.yaml. fwdctl merges both into this config.
 
-packages:
-  - git
-  - build-essential
-  - curl
-  - jq
-  - protobuf-compiler
-  - make
-  - apt-transport-https
-  - net-tools
-  - unzip
 variables:
   nvme_base: "/mnt/nvme"
   firewood_repo: "https://github.com/ava-labs/firewood.git"

@@ -1,5 +1,6 @@
 #!/bin/bash
-# This script sets up the build environment, including installing the firewood build dependencies.
+# This script sets up the build environment: NVMe RAID, filesystem and symlinks.
+# Package installation is driven by infra/packages/firewood-packages.yaml.
 set -o errexit
 
 if [ "$EUID" -ne 0 ]; then
@@ -39,18 +40,10 @@ done
 
 apt upgrade -y
 
-# install the build dependency packages
-pkgs=(git protobuf-compiler build-essential apt-transport-https net-tools zfsutils-linux mdadm)
-install_pkgs=()
-for pkg in "${pkgs[@]}"; do
-  if ! dpkg -s "$pkg" > /dev/null 2>&1; then
-    install_pkgs+=("$pkg")
-  fi
-done
-if [ "${#install_pkgs[@]}" -gt 0 ]; then
-  apt-get install -y "${install_pkgs[@]}"
-fi
-  
+# Packages come from infra/packages/firewood-packages.yaml, which fwdctl merges
+# into the cloud-init package list, so they are installed before this runs.
+# mdadm and zfsutils-linux, used below, are in that manifest's host list.
+
 # If there are NVMe devices, set up RAID if multiple, or use single device
 mapfile -t NVME_DEVS < <(realpath /dev/disk/by-id/nvme-Amazon_EC2_NVMe_Instance_Storage_* 2>/dev/null | sort | uniq)
 if [ "${#NVME_DEVS[@]}" -gt 0 ]; then

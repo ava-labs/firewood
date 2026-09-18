@@ -82,6 +82,18 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=infra/toolchains/firewood-toolchain.sh
 . "$SCRIPT_DIR/../toolchains/firewood-toolchain.sh"
 
+# Package list shared with the benchmark hosts. SETUP.md lists the files to
+# push into the build container; all three have to be there.
+PACKAGE_MANIFEST="$SCRIPT_DIR/../packages/firewood-packages.yaml"
+READ_LIST="$SCRIPT_DIR/../read-list.py"
+for required in "$PACKAGE_MANIFEST" "$READ_LIST"; do
+	if [ ! -f "$required" ]; then
+		echo "Error: $required not found." >&2
+		echo "Push it into the container alongside this script; see SETUP.md." >&2
+		exit 1
+	fi
+done
+
 step() {
 	echo ""
 	echo "=== $* ==="
@@ -187,29 +199,21 @@ done
 
 apt-get update
 
-# pkg-config is transitional in 24.04 and later; pkgconf is the real package.
-PACKAGES=(
-	build-essential
-	ca-certificates
-	clang
-	cmake
-	curl
-	git
-	jq
-	less
-	libssl-dev
-	# Superseded by iproute2, which the base image carries. Kept because the
-	# benchmark hosts have it and scripts written there use ifconfig/netstat.
-	net-tools
-	openssh-client
-	pkgconf
-	protobuf-compiler
-	shellcheck
-	sudo
-	tmux
-	unzip
-	xz-utils
-)
+# The reader needs a YAML parser. Ubuntu's cloud images ship one with
+# cloud-init, but install it explicitly rather than relying on that.
+apt-get install -y --no-install-recommends python3-yaml
+
+# Sessions get the shared list plus the interactive tools only they need.
+# Each list is checked on its own: a failing reader writes nothing to stdout,
+# and errexit does not see the exit status of a process substitution, so an
+# empty array is the only signal that the read went wrong.
+mapfile -t common_packages < <(python3 "$READ_LIST" "$PACKAGE_MANIFEST" common)
+mapfile -t session_packages < <(python3 "$READ_LIST" "$PACKAGE_MANIFEST" session)
+if [ "${#common_packages[@]}" -eq 0 ] || [ "${#session_packages[@]}" -eq 0 ]; then
+	echo "Error: read no packages from $PACKAGE_MANIFEST" >&2
+	exit 1
+fi
+PACKAGES=("${common_packages[@]}" "${session_packages[@]}")
 
 # Let apt resolve the whole list first, so an unavailable package is reported
 # by name, with apt's own diagnosis, before anything is installed. Package

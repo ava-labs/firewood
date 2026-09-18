@@ -180,48 +180,35 @@ accident and show up later as unexplained differences.
 26.04 server install. Update it whenever something is added, and diff the two
 machines against each other after any change.
 
-### Sharing package lists with the benchmark hosts
+### Shared package lists
 
-Not done yet. The goal is that the session image derives its packages and tools
-from the benchmark definition and adds to them, instead of keeping a second
-copy that drifts.
+Packages for both provisioned environments live in
+[`firewood-packages.yaml`](../packages/firewood-packages.yaml), beside the user
+manifest. Three lists: `common`, plus `session` and `host` for what only one
+environment needs.
 
-Rust and Go are already single-sourced.
-[`firewood-toolchain.sh`](../toolchains/firewood-toolchain.sh) pins the
-toolchains, `FIREWOOD_CARGO_TOOLS` and `FIREWOOD_GO_TOOLS`, and is sourced by
-`benchmark/setup-scripts/install-rust.sh`,
-`benchmark/setup-scripts/install-golang.sh` and
-[`provision-session.sh`](provision-session.sh). What still drifts is apt
-packages, and how a few tools are installed.
+| Consumer | Installs | How it reads the manifest |
+| --- | --- | --- |
+| Benchmark hosts | `common` + `host` | `fwdctl` merges them into the cloud-init package list, as it does users |
+| Session image | `common` + `session` | [`provision-session.sh`](provision-session.sh) via [`read-list.py`](../read-list.py) |
 
-The benchmark path installs from five places:
+`read-list.py` uses PyYAML rather than matching lines with awk or sed. A YAML
+file parsed by approximation is a file that behaves differently depending on who
+reads it. Ubuntu's cloud images ship PyYAML with cloud-init, and
+`provision-session.sh` installs `python3-yaml` anyway so it does not depend on
+that.
 
-| Where | What |
-| --- | --- |
-| `launch-stages.yaml`, `packages:` | cloud-init apt list |
-| `benchmark/setup-scripts/build-environment.sh` | apt, plus `mdadm` and `zfsutils-linux` |
-| `benchmark/setup-scripts/install-grafana.sh` | `grafana`, `prometheus` |
-| `launch-stages.yaml`, snaps | `amazon-ssm-agent`, `task` |
-| `launch-stages.yaml`, `install-s5cmd` | newest s5cmd `.deb`, resolved through the GitHub API |
+`common` is what both environments already installed, not the union of their
+lists. The benchmark hosts build the FFI without `clang`, `cmake`, `pkgconf` or
+`libssl-dev`, so promoting one of those needs evidence that the host wants it,
+not the observation that the other environment has it. Sessions are therefore a
+superset of `common`, not of everything the benchmark hosts install: `mdadm` and
+`zfsutils-linux` are there for disks a container does not own.
 
-Divergences as of 2026-09-16:
-
-- s5cmd and `task` are pinned in `firewood-toolchain.sh` for sessions, while the
-  launch path takes whatever s5cmd is newest at launch and `task` from a snap.
-  Pinning the launch path to those versions is the smallest useful first step.
-- The session image carries `clang`, `cmake`, `pkgconf`, `libssl-dev`,
-  `shellcheck`, `tmux` and `xz-utils`, and every entry in
-  `FIREWOOD_CARGO_TOOLS`. The benchmark hosts build the FFI without them, so
-  the shared set has to be settled on evidence rather than by taking the union.
-- `mdadm`, `zfsutils-linux`, `amazon-ssm-agent`, `grafana` and `prometheus`
-  are EC2 or host concerns. On-prem, [`setup-nvme.sh`](setup-nvme.sh) owns
-  disks and the observability stack belongs on the host, not in a container
-  discarded by `fw-session recreate`.
-- `make` is in the launch list and already in `build-essential`.
-
-So "benchmark list plus additions" needs the shared definition to separate the
-common set from the host-only one; a single list that sessions extend pulls
-EC2-only packages into the image.
+Rust, Go and the cargo and Go tools come from
+[`firewood-toolchain.sh`](../toolchains/firewood-toolchain.sh), which the same
+two environments already share. Between them, the only thing still declared per
+environment is the disk setup.
 
 ### Session images
 
@@ -356,9 +343,6 @@ Anything needed repeatedly belongs in `firewood-toolchain.sh`.
 - Logins use public keys until the Cloudflare CA is configured. Remove
   `authorized_keys` once certificate login works.
 - Reservations are advisory. Nothing records or enforces who holds a machine.
-- Package lists are duplicated between the benchmark hosts and the session
-  image, and drift. See [Sharing package lists with the benchmark
-  hosts](#sharing-package-lists-with-the-benchmark-hosts).
 - Nothing tracks image size, and the Go tools dominate it: `task` and s5cmd are
   roughly 70 MB and 20 MB. It matters because the image moves between the
   machines by hand. Provisioning already strips the build and module caches, so
@@ -515,9 +499,12 @@ Build on one machine (for example, `snoopy`):
 TAG=firewood-session-$(date +%Y%m%d)
 sudo lxc launch ubuntu:26.04 build-tmp
 sudo lxc exec build-tmp -- cloud-init status --wait
-sudo lxc exec build-tmp -- mkdir -p /root/infra/onprem /root/infra/toolchains
+sudo lxc exec build-tmp -- mkdir -p \
+    /root/infra/onprem /root/infra/toolchains /root/infra/packages
 sudo lxc file push infra/onprem/provision-session.sh build-tmp/root/infra/onprem/
 sudo lxc file push infra/toolchains/firewood-toolchain.sh build-tmp/root/infra/toolchains/
+sudo lxc file push infra/packages/firewood-packages.yaml build-tmp/root/infra/packages/
+sudo lxc file push infra/read-list.py build-tmp/root/infra/
 sudo lxc exec build-tmp -- bash /root/infra/onprem/provision-session.sh
 ```
 
