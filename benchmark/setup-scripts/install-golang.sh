@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=infra/toolchains/firewood-toolchain.sh
+. "$SCRIPT_DIR/../../infra/toolchains/firewood-toolchain.sh"
+
 INSTALL_DIR="/usr/local/go"
 
 # Check write permission
@@ -14,16 +18,6 @@ else
         echo "Error: Cannot create $INSTALL_DIR. $(dirname "$INSTALL_DIR") is not writable." >&2
         exit 1
     fi
-fi
-
-# Detect latest Go version
-LATEST_VERSION=$(curl -s https://go.dev/dl/?mode=json | \
-    grep -oE '"version": ?"go[0-9]+\.[0-9]+(\.[0-9]+)?"' | \
-    head -n1 | cut -d\" -f4)
-
-if [ -z "$LATEST_VERSION" ]; then
-    echo "Error: Could not detect latest Go version." >&2
-    exit 1
 fi
 
 # Detect platform
@@ -45,8 +39,12 @@ case "$UNAME_OS" in
 esac
 
 # Build tarball name and URL
-TARBALL="${LATEST_VERSION}.${OS}-${ARCH}.tar.gz"
+TARBALL="go${FIREWOOD_GO_VERSION}.${OS}-${ARCH}.tar.gz"
 URL="https://go.dev/dl/${TARBALL}"
+
+# The toolchain manifest pins a checksum per platform it has been verified on.
+SHA_VAR="FIREWOOD_GO_$(printf '%s_%s' "$OS" "$ARCH" | tr '[:lower:]' '[:upper:]')_SHA256"
+EXPECTED_SHA256="${!SHA_VAR:-}"
 
 # Validate URL
 echo "Checking URL: $URL"
@@ -60,6 +58,16 @@ TMP_DIR=$(mktemp -d)
 cd "$TMP_DIR"
 echo "Downloading $TARBALL..."
 curl -fLO "$URL"
+
+if [ -n "$EXPECTED_SHA256" ]; then
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s  %s\n' "$EXPECTED_SHA256" "$TARBALL" | sha256sum -c -
+    else
+        printf '%s  %s\n' "$EXPECTED_SHA256" "$TARBALL" | shasum -a 256 -c -
+    fi
+else
+    echo "Warning: no checksum pinned for ${OS}/${ARCH}; skipping verification." >&2
+fi
 
 # Validate archive format
 if ! file "$TARBALL" | grep -q 'gzip compressed data'; then
@@ -75,7 +83,6 @@ tar -C "$(dirname "$INSTALL_DIR")" -xzf "$TARBALL"
 
 rm -rf "$TMP_DIR"
 
-echo "✅ Go $LATEST_VERSION installed to $INSTALL_DIR"
+echo "✅ Go $FIREWOOD_GO_VERSION installed to $INSTALL_DIR"
 echo "➕ Add to PATH if needed:"
 echo "   export PATH=\$PATH:/usr/local/go/bin"
-

@@ -44,3 +44,17 @@ jobs:
             exit 1
           fi
           echo "All Go versions match: ${{ steps.go_versions.outputs.GO_VERSION_FFI }}"
+
+      - name: Check provisioning manifest matches go.mod
+        run: |
+          . ./infra/toolchains/firewood-toolchain.sh
+          EXPECTED="${{ steps.go_versions.outputs.GO_VERSION_FFI }}"
+          if [ "$FIREWOOD_GO_VERSION" != "$EXPECTED" ]; then
+            echo "Provisioned hosts would run a different Go than CI tests with:"
+            echo "infra/toolchains/firewood-toolchain.sh: $FIREWOOD_GO_VERSION"
+            echo "ffi/go.mod: $EXPECTED"
+            echo "Update FIREWOOD_GO_VERSION and FIREWOOD_GO_LINUX_AMD64_SHA256"
+            echo "(sha256 from https://go.dev/dl/?mode=json&include=all)."
+            exit 1
+          fi
+          echo "Toolchain manifest matches ffi/go.mod: $FIREWOOD_GO_VERSION"
