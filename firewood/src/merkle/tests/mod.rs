@@ -47,6 +47,38 @@ fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     .map(drop)
 }
 
+/// Runs `f` on a thread with the stack size production threads get, and joins it.
+///
+/// `std::thread`'s default stack is 2 MiB on every Tier-1 platform and firewood
+/// sets `stack_size` nowhere, so this is the size Rust-spawned threads get.
+/// Verification entered through the FFI runs on a thread whose stack the Go
+/// runtime sizes, which this does not cover.
+///
+/// The depth guards run on this because a stack overflow aborts the process
+/// rather than panicking, so a regression fails as a killed test rather than an
+/// assertion.
+fn spawn_on_default_stack(f: impl FnOnce() + Send + 'static) {
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(f)
+        .expect("spawning the guard thread must succeed")
+        .join()
+        .expect("the guard thread must not panic");
+}
+
+/// Keys forming a prefix chain: key `i` is `i` zero bytes followed by `tail`.
+/// Consecutive keys share all but their last byte, so each key adds one byte
+/// (two nibbles) of trie depth, and the longest key is `count` bytes.
+fn prefix_chain_keys(count: usize, tail: u8) -> Vec<Vec<u8>> {
+    (0..count)
+        .map(|i| {
+            let mut key = vec![0x00u8; i];
+            key.push(tail);
+            key
+        })
+        .collect()
+}
+
 // Returns n random key-value pairs.
 fn generate_random_kvs(rng: &firewood_storage::SeededRng, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
     let mut kvs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
@@ -996,6 +1028,111 @@ fn test_get_branch_from_nibbles_mut() {
         ],
     );
     assert!(leaf.is_none());
+}
+
+/// Reading and removing on an in-memory trie as deep as the key-length bound
+/// allows survives a default stack.
+///
+/// The committed-trie guards resolve every node they touch from storage, where a
+/// node's children are addresses, so each node is shallow. A mutable trie owns
+/// its nodes by value instead. A get walks that owned chain and clones the node
+/// it finds, and the shallowest key's node owns everything below it, so that
+/// clone spans the whole trie. A removal walks the same chain and reattaches it
+/// on the way back, and removing by prefix deletes the chain as a subtree. Each
+/// of those is driven as deep as the keys go, so this builds the deepest trie
+/// the bound admits and runs all of them on the stack size production threads
+/// get.
+#[test]
+fn test_max_bounded_depth_in_memory_ops_survive_default_stack() {
+    spawn_on_default_stack(|| {
+        // The spine branches at every nibble, the deepest structure the bound
+        // admits. For every prefix of i zero bytes there are three keys: the
+        // prefix extended by another zero byte (the spine itself, so every spine
+        // branch carries a value), the prefix plus 0x10 (diverging at the byte's
+        // first nibble), and the prefix plus 0x01 (diverging at its second
+        // nibble). The longest key sits at the bound, putting the spine at twice
+        // that many node levels.
+        let mut keys: Vec<Vec<u8>> = Vec::with_capacity(MAX_KEY_BYTES * 3);
+        for i in 0..MAX_KEY_BYTES {
+            let mut key = vec![0x00u8; i + 1];
+            keys.push(key.clone());
+            *key.last_mut().expect("key is non-empty") = 0x10;
+            keys.push(key.clone());
+            *key.last_mut().expect("key is non-empty") = 0x01;
+            keys.push(key);
+        }
+
+        let memstore = Arc::new(MemStore::new(Vec::with_capacity(64 * 1024)));
+        let base: Merkle<NodeStore<Committed, MemStore, DefaultHashMode>> = Merkle::from(
+            NodeStore::new_empty_committed(memstore, DeletedNodeTracking::Enabled),
+        );
+        let mut merkle = base.fork().unwrap();
+        for key in &keys {
+            merkle.insert(key, Box::from(b"v".as_slice())).unwrap();
+        }
+
+        let shallowest: &[u8] = &[0x00];
+        let deepest = vec![0x00u8; MAX_KEY_BYTES];
+
+        // The node at the shallowest key owns the rest of the spine, so the
+        // clone that produces this get's result spans every level.
+        assert!(merkle.get_value(shallowest).unwrap().is_some());
+
+        // The deepest key drives the walk itself the full length of the spine.
+        assert!(merkle.get_value(&deepest).unwrap().is_some());
+
+        // Removing the deepest key walks to the tip and reattaches the spine
+        // on the way back.
+        assert!(merkle.remove(&deepest).unwrap().is_some());
+
+        // Removing by prefix walks to the shallowest key and deletes the whole
+        // subtree hanging under it.
+        merkle.remove_prefix(shallowest).unwrap();
+        assert!(merkle.get_value(shallowest).unwrap().is_none());
+        assert!(merkle.get_value(&deepest).unwrap().is_none());
+
+        // The two keys that do not start with a zero byte remain.
+        assert!(merkle.get_value(&[0x01]).unwrap().is_some());
+        assert!(merkle.get_value(&[0x10]).unwrap().is_some());
+    });
+}
+
+/// Reads and removals on an in-memory trie twice as deep as the key-length
+/// bound admits survive a 256 KiB thread. Nothing caps the keys a local caller
+/// writes, so this shows the walks do not depend on the bound.
+#[test]
+fn test_in_memory_ops_far_beyond_the_bound_survive_a_small_stack() {
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let depth = MAX_KEY_BYTES * 2;
+            let mut keys: Vec<Vec<u8>> = Vec::with_capacity(depth * 2);
+            for i in 0..depth {
+                let mut key = vec![0x00u8; i + 1];
+                keys.push(key.clone());
+                *key.last_mut().expect("key is non-empty") = 0x10;
+                keys.push(key);
+            }
+
+            let memstore = Arc::new(MemStore::new(Vec::with_capacity(64 * 1024)));
+            let base: Merkle<NodeStore<Committed, MemStore, DefaultHashMode>> = Merkle::from(
+                NodeStore::new_empty_committed(memstore, DeletedNodeTracking::Enabled),
+            );
+            let mut merkle = base.fork().unwrap();
+            for key in &keys {
+                merkle.insert(key, Box::from(b"v".as_slice())).unwrap();
+            }
+            let deepest = vec![0x00u8; depth];
+            assert!(merkle.get_value(&[0x00]).unwrap().is_some());
+            assert!(merkle.get_value(&deepest).unwrap().is_some());
+            assert!(merkle.remove(&deepest).unwrap().is_some());
+            merkle.remove_prefix(&[0x00]).unwrap();
+            assert!(merkle.get_value(&[0x00]).unwrap().is_none());
+            assert!(merkle.get_value(&[0x10]).unwrap().is_some());
+        })
+        .expect("spawning the guard thread must succeed")
+        .join()
+        .expect("the guard thread must not panic");
 }
 
 /// `CollapseRange::contains` decides which boundary proof nodes the reconcile

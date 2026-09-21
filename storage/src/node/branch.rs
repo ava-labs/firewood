@@ -299,3 +299,28 @@ impl From<&LeafNode> for BranchNode {
         }
     }
 }
+
+impl Drop for BranchNode {
+    /// Drops the children through `ensure_stack`, so freeing a
+    /// deep trie re-enters it at every level instead of recursing on the call
+    /// stack.
+    fn drop(&mut self) {
+        // Only a child that can own a node recurses: a branch held in place, or
+        // a hashed child that may still hold its node in memory. A branch whose
+        // children are all leaves or addresses, which is most of them, drops in
+        // place.
+        let may_recurse = self.children.iter().any(|(_, child)| {
+            matches!(
+                child,
+                Some(Child::Node(Node::Branch(_)) | Child::MaybePersisted(..))
+            )
+        });
+        if may_recurse {
+            crate::stack::ensure_stack(|| {
+                for (_, child) in &mut self.children {
+                    child.take();
+                }
+            });
+        }
+    }
+}
