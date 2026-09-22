@@ -37,10 +37,10 @@ thiserror.workspace = true
 # Regular dependencies
 arity-arrays = { version = "0.2.0", default-features = false, features = ["16"] }
 typed-builder = "0.23.2"
-zstd = { version = "0.13.3", default-features = false }
+zstd = { version = "0.14.0", default-features = false }
 rayon = "1.12.0"
 parking_lot.workspace = true
-lender = "0.7.0"
+lender = "0.8.0"
 nonzero_ext = "0.3.0"
 sha3 = "0.12.0"
 smallvec.workspace = true
@@ -69,7 +69,7 @@ rand.workspace = true
 tempfile.workspace = true
 test-case.workspace = true
 # Regular dependencies
-ctor = "1.0.8"
+ctor = "1.0.13"
 hash-db = "0.16.0"
 plain_hasher = "0.2.3"
 rlp = "0.6.1"

@@ -69,25 +69,25 @@ firewood-triehash = { path = "triehash", version = "0.0.16" }
 
 # common dependencies
 aquamarine = "0.6.0"
-bytemuck = { version = "1.25.0", features = ["const_zeroed"] }
-bytemuck_derive = "1.10.2"
-clap = { version = "4.6.1", features = ["derive"] }
+bytemuck = { version = "1.25.2", features = ["const_zeroed"] }
+bytemuck_derive = "1.12.1"
+clap = { version = "4.6.7", features = ["derive"] }
 env_logger = "0.11.11"
-fastrace = "0.7.18"
+fastrace = "0.7.19"
 hex = "0.4.3"
 integer-encoding = "4.1.0"
-log = "0.4.33"
-metrics = "0.24.3"
-metrics-util = "0.20.1"
+log = "0.4.34"
+metrics = "0.24.6"
+metrics-util = "0.20.4"
 metrics-collector-prometheus = "0.1.0"
 nonzero_ext = "0.3.0"
 parking_lot = "0.12.5"
 rand_distr = "0.6.0"
 sha2 = "0.11.0"
 sha3 = "0.12.0"
-smallvec = { version = "1.15.2", features = ["write", "union", "const_new"] }
+smallvec = { version = "1.16.1", features = ["write", "union", "const_new"] }
 test-case = "3.3.1"
-thiserror = "2.0.18"
+thiserror = "2.0.20"
 
 # common dev dependencies
 criterion = "0.8.2"
@@ -95,5 +95,5 @@ ethereum-types = "0.16.0"
 hex-literal = "1.1.0"
 pprof = "0.15.0"
 insta = "1.48.0"
-rand = "0.10.2"
+rand = "0.10.3"
 tempfile = "3.27.0"
