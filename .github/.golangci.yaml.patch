@@ -1,5 +1,5 @@
---- .github/.golangci.yaml	2026-04-13 13:37:17
-+++ ffi/.golangci.yaml	2026-04-13 13:37:17
+--- .github/.golangci.yaml	2026-09-22 11:07:53
++++ ffi/.golangci.yaml	2026-05-12 13:59:44
 @@ -40,7 +40,7 @@
          - standard
          - default
@@ -41,7 +41,7 @@
      - nolintlint
      - perfsprint
      - prealloc
-@@ -92,59 +93,35 @@
+@@ -92,66 +93,35 @@
      - usestdlibvars
      - whitespace
    settings:
@@ -81,6 +81,13 @@
          - pattern: ^sort\.(Slice|Strings)$(# the slices package should be used instead)?
        # Exclude godoc examples from forbidigo checks.
        exclude-godoc-examples: false
+-    goconst:
+-      # goconst counts occurrences in _test.go files, but combines them with
+-      # the default 3 occurrences in production files, causing a lint error
+-      # even though goconst is ignored for all test files by the regex in the
+-      # exclusion rules.
+-      # TODO(JonathanOppenheimer): Remove this exclusion.
+-      ignore-tests: true
 -    gosec:
 -      excludes:
 -        - G107 # Url provided to HTTP request as taint input https://securego.io/docs/rules/g107
@@ -109,7 +116,7 @@
          # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#early-return
          - name: early-return
            disabled: false
-@@ -197,25 +174,12 @@
+@@ -204,25 +174,12 @@
          # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#unused-parameter
          - name: unused-parameter
            disabled: false
@@ -135,7 +142,7 @@
      tagalign:
        align: true
        sort: true
-@@ -234,13 +198,13 @@
+@@ -241,13 +198,13 @@
          - go-require
          - float-compare
      usetesting:
@@ -155,3 +162,11 @@
      unused:
        # Mark all struct fields that have been written to as used.
        # Default: true
+@@ -273,7 +230,5 @@
+       # 4. Exclude any file suffixed with _test.go.
+       - path: "(^tests/)|(^(.*/)*test_[^/]*\\.go$)|(.*test/.*)|(.*_test\\.go$)"
+         linters:
+-          # TODO(JonathanOppenheimer): Remove these exclusion.
+-          - goconst
+           - gosec
+           - prealloc
