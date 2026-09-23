@@ -26,7 +26,7 @@ To do this, a new root is always created for each revision that can reference ei
 When creating a revision,
 a list of nodes that are no longer needed are computed and saved to disk in a future-delete log (FDL) as well as kept in memory.
 When a revision expires, the nodes that were deleted when it was created are returned to the free space.
-Firewood also supports archival mode via `RootStore`, which retains all historical revisions and allows lookup of any past state by its root hash.
+Firewood also supports archival mode via `RootStore`, which retains persisted historical revisions for lookup by root hash.
 
 Hashes are not used to determine where a node is stored on disk in the database file.
 Instead space for nodes may be allocated from the end of the file,
@@ -43,7 +43,12 @@ as well as carefully managing the free list during the creation and expiration o
 
 ## Terminology
 
-- `Revision` - A historical point-in-time state/version of the trie. This
+- `Commit` - Makes a proposal's state the latest committed state. Success does
+  not guarantee that the state has been persisted.
+- `Persist` - Writes committed state to the database files.
+- `Maximum persistence gap` - The maximum number of committed revisions that
+  can be ahead of the last persisted revision.
+- `Revision` - A point-in-time state/version of the trie. This
   represents the entire trie, including all `Key`/`Value`s at that point
   in time, and all `Node`s.
 - `View` - A read-only interface into a `Revision`, `Proposal`, or
@@ -73,16 +78,14 @@ as well as carefully managing the free list during the creation and expiration o
 - `Proposal` - A proposal consists of a base `Root Hash` and a `Batch`, but is not
   yet committed to the trie. In Firewood's most recent API, a `Proposal` is required
   to `Commit`.
-- `Reconstructed` - A reconstructed state consists of a base historical state and a
+- `Reconstructed` - A reconstructed state consists of a `Reconstructible` base state and a
   `Batch` applied in-memory.
   - It is read-only.
   - It cannot be committed.
   - It differs from a `Proposal` because reconstructed states are not tracked as
     uncommitted branches and do not participate in proposal-parent branching.
-- `Reconstructible` - Either a `Historical` or `Reconstructed` state, which supports
+- `Reconstructible` - Either a `Committed` or `Reconstructed` state, which supports
   building new `Reconstructed` states by applying a `Batch`.
-- `Commit` - The operation of applying one or more `Proposal`s to the most recent
-  `Revision`.
 
 ## Metrics
 

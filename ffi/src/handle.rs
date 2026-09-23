@@ -73,7 +73,7 @@ pub struct DatabaseHandleArgs<'a> {
 
     /// The maximum number of revisions to keep.
     ///
-    /// Must be > `deferred_persistence_commit_count`.
+    /// Must be > `max_persistence_gap`.
     pub revisions: usize,
 
     /// The cache read strategy to use.
@@ -113,10 +113,10 @@ pub struct DatabaseHandleArgs<'a> {
     /// databases regardless of the database's runtime hash mode.
     pub node_hash_algorithm: NodeHashAlgorithm,
 
-    /// The maximum number of unpersisted revisions that can exist at a given time.
+    /// The maximum number of committed revisions that can be ahead of the last persisted revision.
     ///
-    /// Note: `revisions` must be > `deferred_persistence_commit_count`.
-    pub deferred_persistence_commit_count: u64,
+    /// Must be positive and less than `revisions`.
+    pub max_persistence_gap: u64,
 }
 
 impl DatabaseHandleArgs<'_> {
@@ -129,8 +129,8 @@ impl DatabaseHandleArgs<'_> {
         };
         let freelist_memory_limit_kb = NonZeroUsize::new(self.freelist_memory_limit_kb)
             .ok_or_else(|| invalid_data("freelist memory limit should be non-zero"))?;
-        let commit_count = NonZeroU64::new(self.deferred_persistence_commit_count)
-            .ok_or(api::Error::ZeroCommitCount)?;
+        let max_persistence_gap =
+            NonZeroU64::new(self.max_persistence_gap).ok_or(api::Error::ZeroMaxPersistenceGap)?;
 
         let memory_limit = NonZeroUsize::new(self.node_cache_memory_limit);
 
@@ -139,7 +139,7 @@ impl DatabaseHandleArgs<'_> {
                 .max_revisions(self.revisions)
                 .cache_read_strategy(cache_read_strategy)
                 .freelist_memory_limit_kb(freelist_memory_limit_kb)
-                .deferred_persistence_commit_count(commit_count);
+                .max_persistence_gap(max_persistence_gap);
 
             if let Some(memory_limit) = memory_limit {
                 builder.node_cache_memory_limit(memory_limit).build()
