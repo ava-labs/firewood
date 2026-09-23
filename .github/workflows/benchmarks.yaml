@@ -1,15 +1,37 @@
+# The benchmark umbrella: runs both benchmark suites and is the single writer
+# of the dashboard.
+#
+# The suites themselves live in bench-cchain.yaml (C-Chain reexecution, via
+# AvalancheGo) and bench-rust.yaml (Rust/Criterion microbenchmarks). Both are
+# reusable and independently dispatchable, and neither publishes anything —
+# they only produce result artifacts, which the `publish` job below turns into
+# the two chart sections of the benchmark page. Keeping publication in one job
+# is what keeps the suites from racing on data.js on the benchmark-data branch.
+#
+# One cron covers both suites: the C-Chain block ranges that used to need a
+# cron each are matrix legs here.
 name: firewood-benchmarks
 
 on:
-  push:
-    branches: [main]
+  schedule:
+    # Weekdays at 05:00 UTC (00:00 ET)
+    - cron: '0 5 * * 1-5'
   workflow_dispatch:
     inputs:
+      suites:
+        description: 'Which suites to run'
+        type: choice
+        options:
+          - all
+          - cchain
+          - rust
+        default: all
       bench-filter:
         description: >-
-          Optional regex matched against bench target names (e.g. `proofs`, or
-          `^(rlp|triehash)$`). Leave blank to run every bench target. A filter
-          that matches nothing fails the run.
+          Rust suite only: optional regex matched against bench target names
+          (e.g. `proofs`, or `^(rlp|triehash)$`). Leave blank to run every
+          bench target. A filtered run benches a subset, so its results are
+          not published.
         required: false
         type: string
 
@@ -18,167 +40,229 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # Benchmark results are the point of the run, so do not discard a merged
-  # commit's results just because a newer commit arrived.
+  # Benchmark results are the point of the run, so do not discard a run's
+  # results just because a newer one arrived; queue them instead. A manual
+  # dispatch keeps only the newest queued run, since re-dispatching means the
+  # earlier attempt is no longer what you want measured.
   queue: ${{ github.event_name == 'workflow_dispatch' && 'single' || 'max' }}
   cancel-in-progress: false
 
-env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: full
-  # One value serving two purposes: the profile name understood by
-  # scripts/run-rust-ci.sh, and the Swatinem/rust-cache shared-key, so the
-  # warming job and the matrix legs cannot drift apart.
-  PROFILE_KEY: maxperf-ethhash-logger-test_utils
-
 jobs:
-  # Derives the bench matrix from cargo metadata rather than a hand-maintained
-  # list, so adding a `[[bench]]` target needs no change here.
-  discover:
+  configure:
+    # The suites need secrets, and publishing needs a branch, that only the
+    # canonical repo has. Skip on forks.
+    if: github.repository == 'ava-labs/firewood'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     outputs:
-      matrix: ${{ steps.list.outputs.matrix }}
+      cchain: ${{ steps.resolve.outputs.cchain }}
+      rust: ${{ steps.resolve.outputs.rust }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
-        with:
-          tool: just@1.46.0
-      # The script runs `cargo metadata`, so it needs a toolchain. It does not
-      # need rust-cache or `cargo fetch`: `--no-deps` reads only the workspace
-      # manifests, resolving nothing and touching neither registry nor network.
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
-        with:
-          toolchain: stable
-      - name: List bench targets
-        id: list
+      - name: Resolve suites to run
+        id: resolve
         env:
-          BENCH_FILTER: ${{ inputs.bench-filter || '' }}
+          SUITES: ${{ inputs.suites || 'all' }}
         run: |
-          matrix="$(./scripts/run-just.sh ci-bench-matrix "$BENCH_FILTER")"
-          jq . <<<"$matrix"
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          suites="$SUITES"
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            suites=all
+            # TODO(elvis339): Remove this guard once resolved:
+            # https://github.com/actions/runner/issues/4241
+            # GitHub's scheduler can fire a cron from a previous version of the
+            # workflow instead of the current '0 5 * * 1-5'. Checking the day
+            # rather than github.event.schedule covers every stale expression.
+            dow="$(date -u +%u)"  # 1=Mon ... 6=Sat, 7=Sun
+            if [[ "$dow" -ge 6 ]]; then
+              echo "::notice::Weekend (DOW=$dow) skipping"
+              suites=none
+            fi
+          fi
 
-  # Sole writer of the shared cache, and deliberately not a dependency of the
-  # matrix. rust-cache's SAVE_TARGETS is {lib, proc-macro}, so bench binaries
-  # and target/criterion are pruned before the tarball is written and each leg
-  # relinks its own binary no matter what this job does; gating on it would add
-  # its full build to the critical path to hand the legs nothing but the
-  # dependency rlibs they already restore from the cache. Running it alongside
-  # the matrix keeps the legs on a warm cache from the previous run while this
-  # one refreshes it for the next.
-  #
-  # Skipped on a filtered dispatch: `--workspace --benches` would build every
-  # target to support a subset, and a filtered run has no cache obligation.
-  build:
-    if: ${{ !inputs.bench-filter }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
-        with:
-          tool: just@1.46.0
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          shared-key: ${{ env.PROFILE_KEY }}
-          cache-all-crates: true
-          cache-workspace-crates: true
-      - name: Cargo Fetch (run `cargo generate-lockfile` if this fails)
-        run: cargo fetch --locked --verbose
-      - name: Build benches
-        run: ./scripts/run-just.sh ci-rust build-benches "$PROFILE_KEY"
+          case "$suites" in
+            all)    cchain=true;  rust=true  ;;
+            cchain) cchain=true;  rust=false ;;
+            rust)   cchain=false; rust=true  ;;
+            none)   cchain=false; rust=false ;;
+            *)      echo "::error::Unknown suites value: $suites"; exit 1 ;;
+          esac
+          echo "cchain=$cchain" >> "$GITHUB_OUTPUT"
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
 
-  bench:
-    name: bench (${{ matrix.package }} / ${{ matrix.bench }})
-    needs: discover
+  # One leg per block range. The ranges are what the two C-Chain crons used to
+  # select; their metric names embed the range, so the legs remain distinct
+  # series on the dashboard.
+  cchain:
+    needs: configure
+    if: ${{ needs.configure.outputs.cchain == 'true' }}
     strategy:
-      # do not cancel concurrent jobs if one fails for exhaustive failure reasons
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.discover.outputs.matrix) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
-        with:
-          tool: just@1.46.0
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          save-if: "false"
-          shared-key: ${{ env.PROFILE_KEY }}
-      - name: Cargo Fetch (run `cargo generate-lockfile` if this fails)
-        run: cargo fetch --locked --verbose
-      - name: Benchmark
-        env:
-          BENCH: ${{ matrix.bench }}
-        run: ./scripts/run-just.sh ci-rust-bench "$PROFILE_KEY" "$BENCH"
-      - name: Upload benchmark results
-        uses: actions/upload-artifact@v7
-        with:
-          # Artifacts are immutable since upload-artifact v4, so reusing one
-          # name across matrix legs fails the run. One name per leg.
-          name: benchmark-results-${{ matrix.package }}-${{ matrix.bench }}
-          path: target/criterion
-          if-no-files-found: error
-          retention-days: 30
+        include:
+          # 1M blocks: 40M → 41M
+          - label: daily-40m-41m
+            test: firewood-40m-41m
+          # 500k blocks: 33M → 33.5M
+          - label: daily-33m-33m500k
+            test: firewood-33m-33m500k
+    uses: ./.github/workflows/bench-cchain.yaml
+    with:
+      label: ${{ matrix.label }}
+      test: ${{ matrix.test }}
+      config: firewood
+      # avago-runner-i4i-2xlarge-local-ssd is the dedicated Firewood runner with
+      # local SSD. It has 10 replicas and each run is isolated to one replica,
+      # which keeps infrastructure variance low (<1 mGAS/s for parallel runs vs
+      # 19 mGAS/s on shared infra). Do not change this default without
+      # understanding the variance implications.
+      runner: avago-runner-i4i-2xlarge-local-ssd
+      timeout-minutes: '720'
+    secrets: inherit
 
-  # Recombines the per-leg artifacts so `benchmark-results` remains a single
-  # download, as it was when the benches ran in one job.
-  merge-results:
-    needs: bench
-    runs-on: ubuntu-latest
-    steps:
-      - name: Merge benchmark results
-        uses: actions/upload-artifact/merge@v7
-        with:
-          name: benchmark-results
-          pattern: benchmark-results-*
-          # Criterion writes report/index.html for every run; a flat merge would
-          # resolve those collisions as last-writer-wins.
-          separate-directories: true
-          delete-merged: true
-          retention-days: 30
+  rust:
+    needs: configure
+    if: ${{ needs.configure.outputs.rust == 'true' }}
+    uses: ./.github/workflows/bench-rust.yaml
+    with:
+      bench-filter: ${{ inputs.bench-filter || '' }}
 
-  # A matrix with zero legs reports `skipped`, not `failure`, so aggregate the
-  # results explicitly rather than trusting the individual job statuses.
-  # `build` is the one job allowed to be skipped, because a filtered dispatch
-  # deliberately skips it; a skipped `bench` still fails the run.
-  benchmarks-required:
-    if: ${{ always() }}
-    needs:
-      - discover
-      - build
-      - bench
-      - merge-results
+  # The single writer of data.js on the benchmark-data branch.
+  #
+  # Both series go to the same data directory with a distinct `name`:
+  # github-action-benchmark renders one page per data directory and groups the
+  # charts on it by `name`, so sharing the directory puts the two suites on one
+  # benchmark page as their own sections. A nested `bench/rust/` would produce a
+  # second, separate page instead.
+  #
+  # Runs whenever either suite ran, and publishes whatever results exist: a
+  # failed suite — or a failed leg of the C-Chain matrix — never costs the
+  # results of the others.
+  publish:
+    needs: [configure, cchain, rust]
+    if: >-
+      ${{ always() && github.repository == 'ava-labs/firewood' &&
+      (needs.cchain.result != 'skipped' || needs.rust.result != 'skipped') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # github-action-benchmark pushes to the benchmark-data branch
+    # Serializes against any other run publishing to the branch. Never set
+    # cancel-in-progress here: a cancelled publish drops that run's results.
+    concurrency:
+      group: benchmark-data-publish
+      cancel-in-progress: false
     steps:
-      - name: Fail unless all required jobs succeeded
-        env:
-          NEEDS_JSON: ${{ toJSON(needs) }}
+      # github-action-benchmark runs git in the workspace to push the
+      # benchmark-data branch, so it needs a checkout even though nothing here
+      # builds Firewood.
+      - name: Checkout Firewood
+        uses: actions/checkout@v6
+
+      # The downloads tolerate a pattern that matches nothing, and the combine
+      # steps report whether there is anything to publish; a suite that failed
+      # before uploading is then simply absent from this run.
+      - name: Download C-Chain output
+        if: ${{ needs.cchain.result != 'skipped' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: cchain-output-*
+          path: cchain-output
+      # One entry per publish, so both block ranges go in as a single file
+      # rather than as two same-day entries.
+      - name: Combine C-Chain output
+        id: combine-cchain
+        if: ${{ needs.cchain.result != 'skipped' }}
         run: |
-          failed_jobs="$(
-            jq -r '
-              to_entries[]
-              | select(
-                  if .key == "build"
-                  then .value.result | IN("success", "skipped") | not
-                  else .value.result != "success"
-                  end
-                )
-              | .key
-            ' <<<"$NEEDS_JSON"
-          )"
-
-          if [[ -n "$failed_jobs" ]]; then
-            echo "Required jobs failed:"
-            printf '%s\n' "$failed_jobs"
-            exit 1
+          shopt -s nullglob
+          files=(cchain-output/*/benchmark-output.json)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "::warning::No C-Chain results to publish"
+            echo "has-results=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          jq -s 'add' "${files[@]}" > cchain-benchmark-output.json
+          echo "has-results=true" >> "$GITHUB_OUTPUT"
+
+      - name: Download Rust bencher output
+        if: ${{ needs.rust.result != 'skipped' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: bench-output-*
+          path: bench-output
+          merge-multiple: true
+      - name: Combine Rust bencher output
+        id: combine-rust
+        if: ${{ needs.rust.result != 'skipped' }}
+        run: |
+          shopt -s nullglob
+          files=(bench-output/*.txt)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "::warning::No Rust results to publish"
+            echo "has-results=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cat "${files[@]}" > rust-bench-output.txt
+          echo "has-results=true" >> "$GITHUB_OUTPUT"
+
+      # github.ref controls where results are stored (not what gets
+      # benchmarked):
+      # - main branch → bench/ (official history)
+      # - feature branches → dev/bench/{branch}/ (experimental, won't pollute trends)
+      - name: Determine results location
+        id: location
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "data-dir=bench" >> "$GITHUB_OUTPUT"
+          else
+            echo "data-dir=dev/bench/$(echo '${{ github.ref_name }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
+          fi
+
+      # First of the two publishes, so that a data directory seeded by this
+      # workflow gets the C-Chain section first on the page.
+      - name: Publish C-Chain results
+        id: publish-cchain
+        if: ${{ steps.combine-cchain.outputs.has-results == 'true' }}
+        # fail-on-alert exits non-zero after pushing, which would skip the Rust
+        # publish below and lose that series for the run. The alert is turned
+        # back into a job failure by the last step.
+        continue-on-error: true
+        uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # @v1.22.1
+        with:
+          name: C-Chain Reexecution with Firewood
+          tool: 'customBiggerIsBetter'
+          output-file-path: cchain-benchmark-output.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          summary-always: true
+          auto-push: true
+          fail-on-alert: true
+          alert-threshold: "150%"
+          comment-on-alert: false
+          gh-pages-branch: benchmark-data
+          benchmark-data-dir-path: ${{ steps.location.outputs.data-dir }}
+
+      # Skipped for a filtered dispatch, which benches a subset and would
+      # otherwise record a partial sweep into the trend history. A failed leg
+      # is a partial sweep too, so the whole suite must have succeeded.
+      - name: Publish Rust results
+        if: >-
+          ${{ steps.combine-rust.outputs.has-results == 'true' &&
+          needs.rust.result == 'success' && !inputs.bench-filter }}
+        uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # @v1.22.1
+        with:
+          name: Rust Microbenchmarks
+          tool: 'cargo'
+          output-file-path: rust-bench-output.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          summary-always: true
+          auto-push: true
+          gh-pages-branch: benchmark-data
+          benchmark-data-dir-path: ${{ steps.location.outputs.data-dir }}
+
+      - name: Summary
+        run: |
+          echo "[View trends](https://ava-labs.github.io/firewood/${{ steps.location.outputs.data-dir }}/)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail on C-Chain regression alert
+        if: ${{ steps.publish-cchain.outcome == 'failure' }}
+        run: |
+          echo "::error::C-Chain results exceeded the alert threshold"
+          exit 1
