@@ -1952,6 +1952,46 @@ mod tests {
         assert_eq!(reconstructed.root_hash(), None);
     }
 
+    /// A chain deeper than any key the proof bound admits is hashed on a stack
+    /// far smaller than a thread's default, so the walk cannot be spending stack
+    /// per level.
+    #[test]
+    fn hash_helper_survives_a_deep_chain_on_a_small_stack() {
+        const DEPTH: usize = 4096;
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let storage = Arc::new(MemStore::new(Vec::new()));
+                let recon = NodeStore::new_empty_recon(Arc::clone(&storage));
+                let reconstructed: NodeStore<
+                    Reconstructed<_, DefaultHashMode>,
+                    _,
+                    DefaultHashMode,
+                > = recon.into();
+
+                let mut node = Node::Leaf(LeafNode {
+                    partial_path: Path::new(),
+                    value: vec![0xAB; 64].into_boxed_slice(),
+                });
+                for _ in 0..DEPTH {
+                    let mut children = Children::new();
+                    children[PathComponent::ALL[0]] = Some(Child::Node(node));
+                    node = Node::Branch(Box::new(BranchNode {
+                        partial_path: Path::new(),
+                        value: None,
+                        children,
+                    }));
+                }
+
+                reconstructed
+                    .hash_helper(node, Path::new())
+                    .expect("hashing a deep chain must succeed");
+            })
+            .expect("spawning the guard thread must succeed")
+            .join()
+            .expect("the guard thread must not panic");
+    }
+
     #[test]
     fn reconstructed_root_hash_rewrites_root_children() {
         // After root_hash() runs, the swapped-in root must have no Child::Node

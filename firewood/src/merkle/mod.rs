@@ -26,6 +26,7 @@ use crate::{
 };
 use firewood_metrics::{HistogramExt, firewood_counter, firewood_histogram};
 use firewood_storage::MemStore;
+use firewood_storage::ensure_stack;
 use firewood_storage::{
     BranchNode, Child, Children, DeletedNodeTracking, EthHash, FileIoError, HashMode, HashType,
     HashableShunt, HashedNodeReader, ImmutableProposal, LeafNode, MaybePersistedNode, MerkleDbHash,
@@ -97,14 +98,16 @@ fn get_helper<T: TrieReader>(
                 Node::Leaf(_) => Ok(None),
                 Node::Branch(node) => match node.children[child_index].as_ref() {
                     None => Ok(None),
-                    Some(Child::Node(child)) => get_helper(nodestore, child, remaining_key),
+                    Some(Child::Node(child)) => {
+                        ensure_stack(|| get_helper(nodestore, child, remaining_key))
+                    }
                     Some(Child::AddressWithHash(addr, _)) => {
                         let child = nodestore.read_node(*addr)?;
-                        get_helper(nodestore, &child, remaining_key)
+                        ensure_stack(|| get_helper(nodestore, &child, remaining_key))
                     }
                     Some(Child::MaybePersisted(maybe_persisted, _)) => {
                         let child = maybe_persisted.as_shared_node(nodestore)?;
-                        get_helper(nodestore, &child, remaining_key)
+                        ensure_stack(|| get_helper(nodestore, &child, remaining_key))
                     }
                 },
             }
@@ -686,22 +689,26 @@ fn build_branch_parts<'b, H: HashMode, R: NodeReader>(
     // is `Some` only under `ethhash` at account depth, so it carries that test.
     let hash_child = |node: &Node, nibble: PathComponent, prefix: &[PathComponent]| {
         if single_storage_child == Some(nibble) {
-            compute_root_hash_as_storage_trie_root::<H, R>(
-                node,
-                &full_key,
-                nibble,
-                proof_nodes,
-                outside_children,
-                storage,
-            )
+            ensure_stack(|| {
+                compute_root_hash_as_storage_trie_root::<H, R>(
+                    node,
+                    &full_key,
+                    nibble,
+                    proof_nodes,
+                    outside_children,
+                    storage,
+                )
+            })
         } else {
-            compute_root_hash_with_proofs::<H, R>(
-                node,
-                prefix,
-                proof_nodes,
-                outside_children,
-                storage,
-            )
+            ensure_stack(|| {
+                compute_root_hash_with_proofs::<H, R>(
+                    node,
+                    prefix,
+                    proof_nodes,
+                    outside_children,
+                    storage,
+                )
+            })
         }
     };
 
@@ -1789,7 +1796,9 @@ impl<T: TrieReader> Merkle<T> {
                     if inserted {
                         writeln!(writer, "  {node} -> {child}[label=\"{childidx:x}\"]")
                             .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
-                        self.dump_node(&child, child_hash, seen, keep_alive, writer)?;
+                        ensure_stack(|| {
+                            self.dump_node(&child, child_hash, seen, keep_alive, writer)
+                        })?;
                     } else {
                         // We have already seen this child, which shouldn't happen.
                         // Indicate this with a red edge.
@@ -2108,7 +2117,9 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                             return Ok(node);
                         };
                         let child = self.read_for_update(child)?;
-                        let child = self.insert_helper(child, partial_path.as_ref(), value)?;
+                        let child = ensure_stack(|| {
+                            self.insert_helper(child, partial_path.as_ref(), value)
+                        })?;
                         branch.children[child_index] = Some(Child::Node(child));
                         Ok(node)
                     }
@@ -2220,7 +2231,9 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                         };
 
                         let child = self.read_for_update(child)?;
-                        let child = self.insert_branch_helper(child, partial_path.as_ref())?;
+                        let child = ensure_stack(|| {
+                            self.insert_branch_helper(child, partial_path.as_ref())
+                        })?;
                         branch.children[child_index] = Some(Child::Node(child));
                         Ok(node)
                     }
@@ -2303,7 +2316,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
         };
         match &mut branch.children[child_nibble] {
             Some(Child::Node(child_node)) => {
-                Self::get_branch_from_nibbles_mut_helper(child_node, deeper)
+                ensure_stack(|| Self::get_branch_from_nibbles_mut_helper(child_node, deeper))
             }
             _ => None,
         }
@@ -2398,8 +2411,9 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                         };
                         let child = self.read_for_update(child)?;
 
-                        let (child, removed_value) =
-                            self.remove_helper(child, child_partial_path.as_ref())?;
+                        let (child, removed_value) = ensure_stack(|| {
+                            self.remove_helper(child, child_partial_path.as_ref())
+                        })?;
 
                         branch.children[child_index] = child.map(Child::Node);
 
@@ -2493,8 +2507,9 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                         };
                         let child = self.read_for_update(child)?;
 
-                        let child =
-                            self.remove_prefix_helper(child, child_partial_path.as_ref(), deleted)?;
+                        let child = ensure_stack(|| {
+                            self.remove_prefix_helper(child, child_partial_path.as_ref(), deleted)
+                        })?;
 
                         branch.children[child_index] = child.map(Child::Node);
 
@@ -2522,7 +2537,7 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
             let child = self.read_for_update(child)?;
             match child {
                 Node::Branch(child_branch) => {
-                    self.delete_children(child_branch, deleted)?;
+                    ensure_stack(|| self.delete_children(child_branch, deleted))?;
                 }
                 Node::Leaf(_) => {
                     *deleted = deleted.saturating_add(1);
@@ -2549,10 +2564,10 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
         let (child_index, child) = loop {
             let Some((child_index, child_slot)) = children_iter.next() else {
                 // The branch has no children. Turn it into a leaf.
-                return match branch_node.value {
+                return match branch_node.value.take() {
                     Some(value) => Ok(Some(Node::Leaf(LeafNode {
                         value,
-                        partial_path: branch_node.partial_path,
+                        partial_path: std::mem::take(&mut branch_node.partial_path),
                     }))),
                     None => Ok(None),
                 };

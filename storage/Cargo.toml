@@ -31,6 +31,7 @@ nonzero_ext.workspace = true
 rand = { workspace = true, optional = true }
 sha2.workspace = true
 smallvec.workspace = true
+stacker.workspace = true
 thiserror.workspace = true
 # Regular dependencies
 bitfield = "0.19.4"

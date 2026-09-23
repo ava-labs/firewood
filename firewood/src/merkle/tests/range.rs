@@ -4,6 +4,7 @@
 use super::verify_range_proof;
 use super::*;
 use crate::RangeProof;
+use crate::proofs::de::MAX_KEY_BYTES;
 use firewood_storage::U4;
 
 type KeyValuePairs = Vec<(Box<[u8]>, Box<[u8]>)>;
@@ -2378,4 +2379,27 @@ fn test_verification_context_reports_truncated_right_edge() {
     // The request was unbounded, but only `[.., 0x10]` is proven.
     assert_eq!(ctx.end_key(), None);
     assert_eq!(ctx.right_edge_key(), Some(b"\x10".as_slice()));
+}
+
+/// A trie as deep as the key-length bound allows survives a default stack.
+///
+/// The key-length bound exists to cap trie depth, because the walks that build
+/// and hash a trie during proof verification run once per level and a peer's
+/// keys decide how many levels there are. The bound is only worth its number if
+/// the deepest key it still admits is one the code survives, so this builds
+/// exactly that trie and proves the whole generate-and-verify round trip
+/// completes.
+#[test]
+fn test_max_bounded_depth_survives_default_stack() {
+    spawn_on_default_stack(|| {
+        let mut items: KeyValuePairs = prefix_chain_keys(MAX_KEY_BYTES, 0x11)
+            .into_iter()
+            .map(|key| (key.into_boxed_slice(), Box::from(b"v".as_slice())))
+            .collect();
+        items.sort_unstable();
+        let merkle = init_merkle(items);
+        let root_hash = merkle.nodestore().root_hash().unwrap();
+        let proof = merkle.range_proof(None, None, None).unwrap();
+        verify_range_proof(None::<&[u8]>, None::<&[u8]>, &root_hash, &proof).unwrap();
+    });
 }

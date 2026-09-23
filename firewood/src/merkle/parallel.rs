@@ -124,7 +124,7 @@ impl ParallelMerkle {
         let first_child = children_iter.next();
         match first_child {
             None => {
-                Ok(branch.value.map(|value| {
+                Ok(branch.value.take().map(|value| {
                     // There is a value for the empty key. Create a leaf with the value and return.
                     Node::Leaf(LeafNode {
                         value,

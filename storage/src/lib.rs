@@ -35,6 +35,8 @@ mod node;
 mod nodestore;
 mod path;
 mod root_store;
+mod stack;
+pub use stack::ensure_stack;
 #[cfg(any(test, feature = "test_utils"))]
 mod test_utils;
 mod trie_hash;
