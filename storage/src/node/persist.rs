@@ -260,18 +260,21 @@ enum MaybePersisted {
 
 #[cfg(test)]
 mod test {
+    use firewood_macros::hash_mode;
     use nonzero_ext::nonzero;
 
     use crate::{
-        Committed, DefaultHashMode, DeletedNodeTracking, LeafNode, MemStore, Node, NodeStore, Path,
+        Committed, DeletedNodeTracking, EthHash, HashMode, LeafNode, MemStore, MerkleDbHash, Node,
+        NodeStore, Path,
     };
 
     use super::*;
 
+    #[hash_mode]
     #[test]
-    fn test_maybe_persisted_node() -> Result<(), FileIoError> {
+    fn test_maybe_persisted_node<H: HashMode>() -> Result<(), FileIoError> {
         let mem_store = MemStore::new(Vec::new()).into();
-        let store: NodeStore<Committed, MemStore, DefaultHashMode> =
+        let store: NodeStore<Committed, MemStore, H> =
             NodeStore::new_empty_committed(mem_store, DeletedNodeTracking::Enabled);
         let node = SharedNode::new(Node::Leaf(LeafNode {
             partial_path: Path::new(),
@@ -300,10 +303,11 @@ mod test {
         assert_eq!(Some(addr), Option::from(&maybe_persisted_node));
     }
 
+    #[hash_mode]
     #[test]
-    fn test_clone_shares_underlying_shared_node() -> Result<(), FileIoError> {
+    fn test_clone_shares_underlying_shared_node<H: HashMode>() -> Result<(), FileIoError> {
         let mem_store = MemStore::new(Vec::new()).into();
-        let store: NodeStore<Committed, MemStore, DefaultHashMode> =
+        let store: NodeStore<Committed, MemStore, H> =
             NodeStore::new_empty_committed(mem_store, DeletedNodeTracking::Enabled);
         let node = SharedNode::new(Node::Leaf(LeafNode {
             partial_path: Path::new(),
