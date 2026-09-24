@@ -491,58 +491,70 @@ pub fn format_node_value<W: std::io::Write + ?Sized>(
 #[cfg(test)]
 mod format_node_value_tests {
     use super::*;
+    use firewood_macros::hash_mode;
 
-    fn fmt(value: &[u8]) -> String {
+    fn fmt(value: &[u8], algorithm: NodeHashAlgorithm) -> String {
         let mut buf = Vec::new();
-        format_node_value(value, DefaultHashMode::ALGORITHM, &mut buf).unwrap();
+        format_node_value(value, algorithm, &mut buf).unwrap();
         String::from_utf8(buf).unwrap()
     }
 
+    #[hash_mode]
     #[test]
-    fn alphanumeric_plaintext() {
-        assert_eq!(fmt(b"hello"), " val=hello");
-        assert_eq!(fmt(b"value1"), " val=value1");
+    fn alphanumeric_plaintext<H: crate::HashMode>() {
+        assert_eq!(fmt(b"hello", H::ALGORITHM), " val=hello");
+        assert_eq!(fmt(b"value1", H::ALGORITHM), " val=value1");
     }
 
+    #[hash_mode]
     #[test]
-    fn long_alphanumeric_truncated() {
-        assert_eq!(fmt(b"longvalue"), " val=longva...");
+    fn long_alphanumeric_truncated<H: crate::HashMode>() {
+        assert_eq!(fmt(b"longvalue", H::ALGORITHM), " val=longva...");
     }
 
+    #[hash_mode]
     #[test]
-    fn non_utf8_as_hex() {
-        assert_eq!(fmt(&[0xff, 0xfe]), " val=fffe");
+    fn non_utf8_as_hex<H: crate::HashMode>() {
+        assert_eq!(fmt(&[0xff, 0xfe], H::ALGORITHM), " val=fffe");
     }
 
+    #[hash_mode]
     #[test]
-    fn long_hex_truncated() {
-        assert_eq!(fmt(&[0xde, 0xad, 0xbe, 0xef]), " val=deadbe...");
+    fn long_hex_truncated<H: crate::HashMode>() {
+        assert_eq!(
+            fmt(&[0xde, 0xad, 0xbe, 0xef], H::ALGORITHM),
+            " val=deadbe..."
+        );
     }
 
+    #[hash_mode]
     #[test]
-    fn non_alphanumeric_utf8_as_hex() {
+    fn non_alphanumeric_utf8_as_hex<H: crate::HashMode>() {
         // Space is not alphanumeric, so falls through to hex.
-        assert_eq!(fmt(b"hi there"), " val=686920...");
+        assert_eq!(fmt(b"hi there", H::ALGORITHM), " val=686920...");
     }
 
-    #[cfg(feature = "ethhash")]
+    /// Uses Ethereum hashing because nonempty RLP lists render as structured
+    /// value fields instead of hexadecimal values.
     #[test]
-    fn rlp_list_decoded() {
+    fn rlp_list_decoded_ethhash() {
         use ::rlp::RlpStream;
+
         // RLP encode [0x01, 0x02] as a 2-item list.
         let mut rlp = RlpStream::new_list(2);
         rlp.append(&vec![0x01u8]);
         rlp.append(&vec![0x02u8]);
         let encoded = rlp.out();
-        assert_eq!(fmt(&encoded), " rlp=[01,02]");
+        assert_eq!(fmt(&encoded, EthHash::ALGORITHM), " rlp=[01,02]");
     }
 
-    #[cfg(feature = "ethhash")]
+    /// Uses Ethereum hashing because an empty RLP list has no fields, so it
+    /// falls back to hexadecimal value formatting.
     #[test]
-    fn empty_rlp_list_falls_through() {
+    fn empty_rlp_list_falls_through_ethhash() {
         // 0xc0 is an empty RLP list — as_list returns Ok([]) which we
         // treat as non-RLP since there are no fields to display.
-        let result = fmt(&[0xc0]);
+        let result = fmt(&[0xc0], EthHash::ALGORITHM);
         assert!(
             result.starts_with(" val="),
             "expected hex fallback, got: {result}"
