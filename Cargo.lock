@@ -1928,9 +1928,11 @@ name = "firewood-macros"
 version = "0.6.0"
 dependencies = [
  "firewood-metrics",
+ "firewood-storage",
  "proc-macro2",
  "quote",
  "syn",
+ "test-case",
  "trybuild",
 ]
 
@@ -1972,6 +1974,7 @@ dependencies = [
  "derive-where",
  "enum-as-inner",
  "fastrace",
+ "firewood-macros",
  "firewood-metrics",
  "fjall",
  "git-version",
