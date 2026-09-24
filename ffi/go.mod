@@ -4,6 +4,8 @@ module github.com/ava-labs/firewood/ffi
 //   - ffi/go.mod (here)
 //   - ffi/tests/eth/go.mod
 //   - ffi/tests/firewood/go.mod
+//   - ffi/tools/external/go.mod
+// Consider updating the nix flake and the golangci-lint version.
 go 1.26.8
 
 require (
