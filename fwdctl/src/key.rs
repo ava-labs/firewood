@@ -3,8 +3,6 @@
 
 use clap::Args;
 use firewood::api;
-
-#[cfg(feature = "ethhash")]
 use sha3::{Digest, Keccak256};
 
 #[derive(Debug, Args)]
@@ -22,12 +20,10 @@ pub struct KeyArgument {
     hex: bool,
 
     /// Hash KEY as a 20-byte hex Ethereum account address
-    #[cfg(feature = "ethhash")]
     #[arg(long, conflicts_with_all = ["hex", "storage"])]
     account: bool,
 
     /// Hash KEY as a 20-byte hex Ethereum account address and SLOT as a 32-byte hex storage key
-    #[cfg(feature = "ethhash")]
     #[arg(long, value_name = "SLOT", conflicts_with_all = ["hex", "account"])]
     storage: Option<String>,
 }
@@ -46,27 +42,23 @@ impl KeyArgument {
                 .map_err(|error| invalid_input(format!("key must be hexadecimal: {error}")));
         }
 
-        #[cfg(feature = "ethhash")]
-        {
-            if self.account {
-                return Ok(keccak256(decode_hex_exact("account", &self.key, 20)?).to_vec());
-            }
+        if self.account {
+            return Ok(keccak256(decode_hex_exact("account", &self.key, 20)?).to_vec());
+        }
 
-            if let Some(storage) = &self.storage {
-                let account_hash = keccak256(decode_hex_exact("account", &self.key, 20)?);
-                let storage_hash = keccak256(decode_hex_exact("storage key", storage, 32)?);
-                let mut key = Vec::with_capacity(64);
-                key.extend_from_slice(&account_hash);
-                key.extend_from_slice(&storage_hash);
-                return Ok(key);
-            }
+        if let Some(storage) = &self.storage {
+            let account_hash = keccak256(decode_hex_exact("account", &self.key, 20)?);
+            let storage_hash = keccak256(decode_hex_exact("storage key", storage, 32)?);
+            let mut key = Vec::with_capacity(64);
+            key.extend_from_slice(&account_hash);
+            key.extend_from_slice(&storage_hash);
+            return Ok(key);
         }
 
         Ok(self.key.as_bytes().to_vec())
     }
 }
 
-#[cfg(feature = "ethhash")]
 fn decode_hex_exact(
     label: &str,
     input: &str,
@@ -93,7 +85,6 @@ fn decode_hex_exact(
     })
 }
 
-#[cfg(feature = "ethhash")]
 fn keccak256(input: impl AsRef<[u8]>) -> [u8; 32] {
     Keccak256::digest(input).into()
 }

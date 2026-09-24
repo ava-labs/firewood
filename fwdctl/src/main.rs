@@ -57,7 +57,7 @@ impl DatabasePath {
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
-#[command(version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_COMMIT_SHA"), ", ", env!("ETHHASH_FEATURE"), ")"))]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_COMMIT_SHA"), ")"))]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
