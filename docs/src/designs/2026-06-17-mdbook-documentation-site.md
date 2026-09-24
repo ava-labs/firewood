@@ -21,19 +21,20 @@ peer-reviewable, RFC-style workflow for proposing designs and promoting them to
 living documentation — a `status` frontmatter flip, not a file move — once
 implemented. Additional sections (Concepts,
 AvalancheGo/EVM Integration, Operations & Benchmarking, Reference, Meta) each ship an
-authored landing page; not-yet-written sub-pages are listed as mdBook draft chapters
-(greyed-out sidebar entries) rather than empty stub files.
+authored landing page; not-yet-written sub-pages are omitted from the sidebar until
+their content lands, rather than shipped as empty stub files.
 
 > [!NOTE]
-> **Bootstrapping note.** This is the first design and is numbered accordingly:
-> `docs/src/designs/0001-mdbook-documentation-site.md`. It is a chicken-and-egg
-> artifact — the flat layout, the frontmatter schema, the single template, and the
-> `new-design`/`design-age` tooling it specifies do not exist until this work lands, so
-> the document that defines the conventions could not originally follow them. As the
-> foundation landed it was retrofitted to its own schema (YAML frontmatter, no in-doc
-> date) and its `status` flipped from `proposed` to `active`; the design of the
-> documentation system itself becomes living documentation in the book's `meta/`
-> section (see below).
+> **Bootstrapping note.** The layout, naming convention, frontmatter schema, template,
+> and tooling this design specifies did not exist when it was written, so it could not
+> originally follow them. When the foundation landed it was retrofitted to its own
+> schema and its `status` flipped to `active`. Its filename carries the date it was
+> first written, not the date of the retrofit, as for every other design.
+>
+> **Rollout.** The site lands one pull request per page. This document describes the
+> complete design; the [Acceptance criteria](#acceptance-criteria) record which parts
+> have landed, and a section whose landing page is still pending appears in the sidebar
+> as a greyed-out draft chapter.
 
 ## Goals
 
@@ -54,15 +55,15 @@ authored landing page; not-yet-written sub-pages are listed as mdBook draft chap
 - Backfilling every existing design. This MVP writes exactly one fully-realized
   active design (on-disk format & addressing) and lists the rest as TODO.
 - Authoring full content for the scaffolded sections beyond an authored landing page;
-  their deeper sub-pages remain draft chapters until written.
+  their deeper sub-pages are omitted from `SUMMARY.md` until written.
 - Changing how benchmark data is collected or stored (`track-performance.yml` and
   the `benchmark-data` branch are unchanged).
 - Custom mdBook theming beyond the preprocessor-provided assets and standard
   `book.toml` options.
 
-## Background — current published-site layout
+## Background: published-site layout before this design
 
-The `gh-pages.yaml` workflow assembles a single GitHub Pages deployment from
+The previous `gh-pages.yaml` workflow assembled a single GitHub Pages deployment from
 multiple sources:
 
 - `cargo doc --document-private-items --no-deps` emits one top-level directory per
@@ -86,7 +87,7 @@ multiple sources:
 - `doc2go` emits Go docs to `/ffi/`.
 - Benchmark history is fetched from the `benchmark-data` branch and merged into the
   output at `/bench/` (official, `main`) and `/dev/bench/{branch}/` (experimental).
-- The `build` job hardcodes `ref: main` on checkout; the `deploy` job is gated to
+- The `build` job hardcoded `ref: main` on checkout; the `deploy` job was gated to
   the canonical repo and non-`pull_request` events.
 
 Because both rustdoc and mdBook want to own the site root (each emits `index.html`
@@ -103,19 +104,21 @@ output into a subdirectory.
 3. **CI strategy:** Extend the existing `gh-pages.yaml` rather than add a competing
    workflow (a separate workflow would race over the single-source Pages artifact).
 4. **Design lifecycle:** A single flat `designs/` directory; lifecycle state lives in
-   the `status` frontmatter field, not in the directory layout. Promotion from
-   `proposed` to `active` is a status flip plus a prose pass (documented checklist in
-   `designs/README.md`), not a file move — so a design keeps its stable `NNNN-slug.md`
-   path and review-thread and cross-doc references never break.
+   the `status` frontmatter field, not in the directory layout. Promotion is a status
+   flip plus a prose pass, never a file move, so a design's `YYYY-MM-DD-slug.md` path
+   is stable for its whole life. See [Design-doc subsystem](#design-doc-subsystem).
 5. **Backfill scope:** One template + one fully-written seed (`on-disk format &
-   addressing`) + a TODO backfill index (in `designs/README.md`) for the rest.
+   addressing`) + a backfill index (a GitHub issue linked from `designs/README.md`)
+   for the rest.
 6. **Extra sections:** Concepts/Architecture, AvalancheGo/EVM Integration, Operations
    & Benchmarking, Reference (generated artifacts), and Meta (self-documenting docs +
    repository-process docs: release, contributing, code review). Sections with real
-   seed content are authored at landing-page depth; sections (and sub-pages) without
-   content yet are listed as mdBook **draft chapters** (link-less `SUMMARY.md` entries,
-   which render as greyed-out/disabled sidebar items) rather than empty stub pages —
-   see "Scaffolding via draft chapters" below.
+   seed content are authored at landing-page depth. Every section ships an authored
+   landing page; not-yet-written *sub-pages* are omitted from `SUMMARY.md` until their
+   content lands, rather than shipped as empty stub pages. mdBook **draft chapters**
+   (link-less `SUMMARY.md` entries that render greyed-out) remain available if the
+   outline should later advertise a "coming soon" page — see "Scaffolding via draft
+   chapters" below.
 7. **Preprocessors and callouts:** Two preprocessors: `mdbook-mermaid` (diagrams) and
    an in-repo frontmatter stripper (`scripts/mdbook-frontmatter-strip.sh`, a small jq
    script that removes each chapter's YAML frontmatter so the schema metadata does not
@@ -135,10 +138,9 @@ output into a subdirectory.
    install commands (`rustup`, `cargo install`, `brew install`, VS Code extensions).
 9. **Frontmatter with no dates:** Design docs carry a small YAML frontmatter schema
    (`title`, `status`, `category`, `authors`, optional `tracking-issue`), stripped from
-   the rendered output by the in-repo frontmatter preprocessor. It deliberately has
-   **no date field**; git commit history is the single source of truth for a design's
-   age, surfaced by the `design-age` tooling. This refuses hand-maintained dates that
-   silently drift from reality.
+   the rendered output by the in-repo frontmatter preprocessor. It has no date field:
+   the proposal date is the filename prefix, and freshness comes from git history via
+   `just design-age`. A hand-maintained date inside a document would only drift.
 10. **In-repo frontmatter stripper (not a published crate):** The stripper is a small
     in-repo jq script (`scripts/mdbook-frontmatter-strip.sh`). The published mdBook
     frontmatter preprocessors are single-maintainer crates with no prebuilt binary, so
@@ -158,7 +160,7 @@ docs/
 ├── mermaid.min.js             # generated at build time; git-ignored
 ├── mermaid-init.js            # generated at build time; git-ignored
 └── src/
-    ├── SUMMARY.md             # table of contents / sidebar (includes external link-outs)
+    ├── SUMMARY.md             # table of contents / sidebar
     ├── assets/                # architecture.svg, relocated from docs/assets/ (see note below)
     ├── introduction.md
     ├── getting-started/
@@ -166,17 +168,17 @@ docs/
     │   └── dev-environment.md # FULLY AUTHORED: macOS / Docker / remote SSH
     ├── concepts/
     │   └── README.md          # authored landing: promoted README terminology + architecture prose
-    ├── designs/                  # FLAT: every design is NNNN-slug.md; status lives in frontmatter
-    │   ├── README.md             # explains the model + how to propose + status-flip promotion checklist + design-age tooling + TODO backfill list
+    ├── designs/                  # FLAT: every design is YYYY-MM-DD-slug.md; status lives in frontmatter
+    │   ├── README.md             # the model, frontmatter schema, how to propose, promotion checklist, backfill issue link
     │   ├── template.md           # single RFC-style template carrying the frontmatter schema
-    │   ├── 0001-mdbook-documentation-site.md      # this design (status: active)
-    │   └── NNNN-on-disk-format-and-addressing.md  # the one FULLY WRITTEN seed (status: active; NNNN assigned by new-design)
+    │   ├── 2024-08-13-on-disk-format-and-addressing.md  # the one FULLY WRITTEN seed (status: active)
+    │   └── 2026-06-17-mdbook-documentation-site.md      # this design (status: active)
     ├── integration/
     │   └── README.md          # authored: Go API (Database/Proposal/Revision) + firewood-go-ethhash publish relationship
     ├── operations/
-    │   └── README.md          # authored landing: fwdctl, benchmarks, dashboards; links benchmark/docs/* + /bench/ (sub-pages are draft chapters until written)
+    │   └── README.md          # authored landing: fwdctl, benchmarks, dashboards; links benchmark/docs/* + /bench/ (sub-pages omitted until written)
     ├── reference/
-    │   └── README.md          # authored landing: link-out hub for GENERATED artifacts: rustdoc ↗, godoc ↗, benchmarks ↗
+    │   └── README.md          # authored landing: link-out hub for GENERATED artifacts: rustdoc, godoc, benchmarks
     └── meta/
         ├── README.md          # authored landing: about this repo & these docs
         ├── documentation.md   # authored: how the docs work (mdbook, preprocessors, build/serve, authoring)
@@ -188,8 +190,9 @@ docs/
 > seed content, linked in `SUMMARY.md`; **thin** = a short real page that mostly links
 > out; **draft chapter** = a `SUMMARY.md` entry written with empty link parentheses
 > (`- [Title]()`), which has **no file** and renders greyed-out (see "Scaffolding via
-> draft chapters"). Every section above ships an authored landing page at MVP; only
-> not-yet-written *sub-pages* are draft chapters.
+> draft chapters"). A section is a draft chapter until its landing page lands; the
+> landing pages arrive one pull request at a time. Not-yet-written *sub-pages* are
+> omitted from `SUMMARY.md` until written.
 
 ### Architecture diagram asset (relocation)
 
@@ -228,31 +231,47 @@ work — old external deep links 404, accepted in exchange for the cleaner root 
 
 ### How the book links to generated docs
 
-`SUMMARY.md` supports raw-URL entries, which render as sidebar items. A
-`reference/` section and sidebar entries link to the deployed paths
-(`/firewood/rustdoc/`, `/firewood/ffi/`, `/firewood/bench/`). These resolve on the
-deployed site; under local `mdbook serve` they point at the live production site.
-The `reference/README.md` page notes this explicitly. `mdbook-linkcheck2` is
-configured with `follow-web-links = false` so these external link-outs do not break
-local/CI builds.
+The generated docs are linked from one page, `reference/README.md`, whose entire
+content is the three link-outs; the Introduction's section list points readers there.
+They are *not* sidebar entries: mdBook resolves every `SUMMARY.md` link as a path under
+`src/`, with no special case for URLs, so a raw-URL entry there fails the build rather
+than rendering as an external sidebar item. Reaching the generated docs therefore costs
+one click through Reference. The alternatives (thin link-out chapters per artifact, or
+custom theme JavaScript that injects sidebar links) were both rejected as more
+machinery than one click is worth.
+
+The link-outs are fully-qualified `https://ava-labs.github.io/firewood/…` URLs rather
+than site-absolute `/firewood/…` paths. Absolute URLs resolve from anywhere, including
+local `mdbook serve` and a fork's Pages deployment, where a site-absolute path would
+404. They are also web links, so `follow-web-links = false` already skips them during
+link checking and no per-path exclude is needed.
 
 ## Design-doc subsystem
 
 ### Model
 
-One flat `designs/` directory. Every design is `NNNN-slug.md` — a zero-padded
-sequence number (for ordering-independent, stable references in review threads)
-followed by a short slug. Sequence numbers only ever increase and are never reused or
-renumbered, so a design's path is a permanent identifier. Lifecycle state lives
-entirely in the `status` frontmatter field:
+One flat `designs/` directory. Every design is `YYYY-MM-DD-slug.md`: the date the
+design was proposed, followed by a short slug. The date is assigned once, when the file
+is created, and never changes, so a design's path is a permanent identifier and a
+stable reference in review threads. Designs written on the same day are distinguished
+by their slugs.
 
-- **`proposed`** — under peer review, not yet built. A proposal typically lands in the
-  repo *before* development so reviewers comment via normal PR review on the document —
-  but this ordering is a recommendation, not a requirement.
-- **`active`** — reflects what the code does today (living documentation).
-- **`draft`** — a work-in-progress not yet ready for review; **`superseded`** —
-  replaced by a newer design, kept for history; **`rejected`** — considered and
-  declined, kept for the record.
+A date prefix is preferred over a monotonic sequence number for two reasons. It needs
+no coordination: two authors proposing designs concurrently pick their filenames
+independently, whereas both would compute the same next sequence number and collide on
+merge. And it is self-describing: a reader scanning the directory sees a design's
+vintage without opening it or consulting git, which matters most for the oldest
+designs, where age is the first thing worth knowing.
+
+Lifecycle state lives entirely in the `status` frontmatter field:
+
+- **`draft`**: a work in progress, not yet ready for review.
+- **`proposed`**: under peer review, not yet built. A proposal typically lands before
+  development so reviewers comment on the document through normal PR review, but this
+  ordering is a recommendation, not a requirement.
+- **`active`**: describes what the code does today (living documentation).
+- **`superseded`**: replaced by a newer design; kept for history.
+- **`rejected`**: considered and declined; kept for the record.
 
 > [!NOTE]
 > **This is a lightweight convention, not a mandatory gate.** The intent is to make
@@ -275,7 +294,7 @@ title: On-Disk Format & Addressing
 status: active
 category: storage
 authors: [demosdemon]
-tracking-issue: ava-labs/firewood#1229   # optional
+tracking-issue: ava-labs/firewood#1234   # optional
 ---
 ```
 
@@ -283,21 +302,18 @@ tracking-issue: ava-labs/firewood#1229   # optional
 | --- | --- | --- |
 | `title` | yes | Human-readable design title. |
 | `status` | yes | `draft`, `proposed`, `active`, `superseded`, or `rejected`. |
-| `category` | yes | A Firewood subsystem: `storage`, `ffi`, `revision-management`, `hashing`, `proposals`, `docs`, or `tooling`. Extend the enum as new subsystems gain designs. |
+| `category` | yes | The Firewood subsystem(s) the design touches: `storage`, `ffi`, `revision-management`, `hashing`, `proposals`, `docs`, or `tooling`. A design spanning several lists them, e.g. `[storage, hashing]`. Extend the enum as new subsystems gain designs. |
 | `authors` | yes | List of GitHub handles. |
 | `tracking-issue` | no | An `owner/repo#N` reference to the issue or PR tracking the work. |
 
-> [!IMPORTANT]
-> The schema carries **no date fields**. A design's age and freshness come from its
-> git history, never from a hand-maintained date that drifts out of sync. `just
-> design-age` (see [Local tooling](#local-tooling)) reports each design's last-commit
-> date; in-doc dates are refused by convention.
+The schema carries no date field, and neither does a design's body (see design
+decision 9).
 
 ### Lifecycle
 
 ```mermaid
 flowchart LR
-    A[Draft PR adds<br/>NNNN-x.md<br/>status: proposed] --> B[Peer review<br/>on the PR]
+    A[Draft PR adds<br/>YYYY-MM-DD-x.md<br/>status: proposed] --> B[Peer review<br/>on the PR]
     B --> C[Merge: proposal<br/>accepted, not built]
     C --> D[Implementation PRs<br/>reference the proposal]
     D --> E[Promotion: flip<br/>status to active]
@@ -307,37 +323,44 @@ flowchart LR
 ### Template
 
 A single `template.md` (RFC-style) carrying the frontmatter schema above and the
-sections: Summary; Motivation; Guide-level explanation; Detailed design; Drawbacks;
-Rationale & alternatives; Prior art; Unresolved questions; Future possibilities.
-Proposal-only sections (Drawbacks, Unresolved questions) are dropped on promotion and
-the surviving prose is rewritten into imperative mood and simple present tense.
+sections: Summary; Motivation; Guide-level explanation (optional); Detailed design;
+Drawbacks; Rationale and alternatives; Prior art (optional); Unresolved questions; Future
+possibilities. Placeholder values in the template are written in angle brackets
+(`<Title>`). Only Unresolved questions is proposal-only: settled answers fold into the
+design on promotion. Drawbacks stays, because the record of what was accepted and why
+is as valuable after implementation as before it.
 
 ### Promotion checklist (documented in `designs/README.md`)
 
-Promotion is a status flip plus a prose pass — no file move, so the `NNNN-slug.md`
-path is stable across a design's whole life:
+Promotion is a status flip plus a prose pass, with no file move:
 
 1. Flip frontmatter `status: proposed` → `active`.
-2. Drop proposal-only sections (Drawbacks, Unresolved questions), folding survivors
-   into the living structure.
-3. Rewrite future-tense prose into present tense — the design now describes reality.
+2. Drop the Unresolved questions section, folding settled answers into the design.
+   Keep Drawbacks.
+3. Rewrite future-tense prose into present tense.
 4. Add cross-links to the implementing PR(s)/commits.
-5. Register the design in the `designs/README.md` index; update `SUMMARY.md`.
+5. Update the design's status in the `designs/README.md` index and `SUMMARY.md`.
 
 ### Seed design — on-disk format & addressing
 
-Filed flat as `NNNN-on-disk-format-and-addressing.md`, its sequence number assigned by
-`new-design` at authoring time. Fully written (`status: active`) from `README.md` prose
+Filed flat as `2024-08-13-on-disk-format-and-addressing.md` — the date prefix is the
+day that design was originally written, well before this documentation site existed.
+Fully written (`status: active`) from `README.md` prose
 plus the `storage/` and `firewood/src/` sources. Covers: disk-offset addressing (root address = disk offset;
 branch nodes point to disk offsets), node allocation from end-of-file vs. free lists,
 free-list size-class management, the future-delete log (FDL), and recoverability
 guarantees (no references to new nodes before flush; careful free-list management
 across revision creation/expiration).
 
-### `designs/README.md` backfill TODO list
+### `designs/README.md` backfill list
 
-Revision management; free lists & FDL; hashing (SHA-256 vs. ethhash/Keccak-256);
-proposals & commits; archival mode (`RootStore`).
+The subsystems still to be documented — revision management; hashing (SHA-256 vs.
+ethhash/Keccak-256); proposals & commits; state sync & reconstruction (folding in
+archival mode / `RootStore`); and the Go FFI layer — are tracked in
+[ava-labs/firewood#2139](https://github.com/ava-labs/firewood/issues/2139), linked
+from `designs/README.md` rather than duplicated inline where the list would drift.
+Free lists & the FDL are already covered by the on-disk-format design and are
+deliberately not on the list.
 
 ## CI/CD changes (`gh-pages.yaml`)
 
@@ -355,10 +378,10 @@ site/                         ← uploaded as the Pages artifact
 └── bench/ , dev/bench/…      ← merged from benchmark-data branch
 ```
 
-### `build` job step changes
+### `build` job steps
 
-1. **Conditional checkout ref (bug fix).** Replace hardcoded `ref: main` with an
-   explicit PR-head-aware expression:
+1. **Checkout ref.** The checkout uses a PR-head-aware expression instead of the
+   hardcoded `ref: main` the previous workflow had:
 
    ```yaml
    ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'main' }}
@@ -370,9 +393,9 @@ site/                         ← uploaded as the Pages artifact
    deliberate: a `workflow_dispatch` triggered against a non-`main` branch still builds
    and deploys `main`'s docs, never the dispatched branch — the published site only ever
    reflects `main`.
-2. **Install the mdBook toolchain.** `mdbook` and `mdbook-mermaid` install via
+2. **mdBook toolchain.** `mdbook` and `mdbook-mermaid` install via
    `taiki-e/install-action` (pinned by commit SHA), each pinned to an explicit version.
-   `mdbook-linkcheck2` is **not** in the `taiki-e/install-action` manifest, so install it
+   `mdbook-linkcheck2` is **not** in the `taiki-e/install-action` manifest, so it installs
    with `cargo binstall --no-confirm mdbook-linkcheck2@<version>` (`cargo-binstall` itself
    comes from `taiki-e/install-action`). `cargo binstall` downloads a prebuilt binary when
    one is published for the runner target and **automatically falls back to
@@ -384,26 +407,29 @@ site/                         ← uploaded as the Pages artifact
    `mdbook-linkcheck2`) are pinned and recorded. Because the mermaid assets are installed
    fresh from the pinned binary at build time (step 3) rather than vendored, there is no
    asset/binary version coupling to track by hand.
-3. **Install preprocessor assets (not committed).** Run `mdbook-mermaid install docs`
-   before building. The JS is generated fresh from the pinned binary on every build and
+3. **Preprocessor assets (not committed).** `mdbook-mermaid install docs` runs before
+   the build. The JS is generated fresh from the pinned binary on every build and
    the output paths are git-ignored, so there is nothing to drift; CI fails if the install
    errors.
-4. **Build the book and stage HTML.** Run `mdbook build docs`. Because `book.toml`
+4. **Book build and staging.** `mdbook build docs` runs. Because `book.toml`
    enables two renderers (`html` + `linkcheck`), mdBook writes HTML to
-   `docs/book/html/` (not `docs/book/`). Create the staging dir and copy:
-   `mkdir -p site && cp -r docs/book/html/. site/`. Then assert the site root exists
-   before continuing: `test -s site/index.html` (fail the build otherwise). Since the
-   hand-written root-redirect step is deleted (step 8) and `deploy` does not run on
-   PRs, this is the only automated guard that the deployed site root resolves.
-5. **Relocate rustdoc:** after `cargo doc`, `mkdir -p site/rustdoc && mv target/doc/*
-   site/rustdoc/`, then write `site/rustdoc/index.html` redirect → `firewood`.
-6. **Go docs:** repoint to `doc2go -C ffi -home github.com/ava-labs/firewood/ffi -out
-   $(pwd)/site/ffi ./...`. Also pin the `doc2go` install (currently
-   `go install go.abhg.dev/doc2go@latest`) to an explicit version for consistency with
-   the newly pinned mdBook tools: `go install go.abhg.dev/doc2go@v0.12.2` (tag `v0.12.2`,
-   commit `cb3c122f7e08194070fd4a8fce4466b2a7d74159`;
+   `docs/book/html/` (not `docs/book/`). The step stages it with
+   `mkdir -p site && cp -r docs/book/html/. site/`, then asserts the site root exists
+   before continuing: `test -s site/index.html` (failing the build otherwise). Since the
+   hand-written root-redirect step is gone (step 9) and `deploy` does not run on PRs,
+   this is the only automated guard that the deployed site root resolves.
+5. **Reserved top-level paths.** The step fails the build if the book output contains
+   `site/rustdoc`, `site/ffi`, `site/bench`, or `site/dev`. Those names belong to the
+   generated artifacts merged in by the following steps, whose `mv`/`tar` would
+   otherwise silently overwrite a book section rendered there.
+6. **Rustdoc relocation:** after `cargo doc`, `mkdir -p site/rustdoc && mv target/doc/*
+   site/rustdoc/`, then `site/rustdoc/index.html` is written as a redirect → `firewood`.
+7. **Go docs:** `doc2go -C ffi -home github.com/ava-labs/firewood/ffi -out
+   $(pwd)/site/ffi ./...`. The `doc2go` install is pinned to an explicit version, for
+   consistency with the pinned mdBook tools: `go install go.abhg.dev/doc2go@v0.12.2`
+   (tag `v0.12.2`, commit `cb3c122f7e08194070fd4a8fce4466b2a7d74159`;
    [`github.com/abhinav/doc2go`](https://github.com/abhinav/doc2go)).
-7. **Benchmark merge (scoped):** `git fetch origin benchmark-data`, then extract each
+8. **Benchmark merge (scoped):** `git fetch origin benchmark-data`, then extract each
    of `bench` and `dev` *only if it exists* in `FETCH_HEAD`:
 
    ```bash
@@ -418,23 +444,24 @@ site/                         ← uploaded as the Pages artifact
    `github-action-benchmark` (`auto-push: true`, `gh-pages-branch: benchmark-data`),
    writing official `main` history to `bench/` and experimental feature-branch history
    to `dev/bench/{branch}/`. Both are directories at the branch root, so `git ls-tree -d`
-   is the correct existence test. Scoping the archive to those two paths — rather than
-   the whole branch root, as the current workflow does with `git archive FETCH_HEAD |
-   tar -x` — prevents the extract from clobbering the mdBook `index.html` or other book
+   is the correct existence test. Scoping the archive to those two paths, rather than
+   the whole branch root as the previous workflow did with `git archive FETCH_HEAD |
+   tar -x`, prevents the extract from clobbering the mdBook `index.html` or other book
    output now that the book, not rustdoc, owns the site root. The per-path existence
    check is required because `git archive FETCH_HEAD bench dev` **errors** (`pathspec
    'dev' did not match`) whenever `dev/` is absent — the branch's state until the first
    experimental feature-branch benchmark runs, since `track-performance.yml` currently
-   publishes only `main` history (`bench/`). Keep the existing outer "branch may not
-   exist on first run" guard wrapping the whole block.
-8. **Delete** the hand-written root-redirect step and the "Copy static assets" step —
-   mdBook emits the root `index.html` and copies `src/assets/` itself.
-9. **Upload artifact** `path: site` (previously `target/doc`).
+   publishes only `main` history (`bench/`). The outer "branch may not exist on first
+   run" guard wraps the whole block.
+9. **Removed steps.** The previous workflow's hand-written root-redirect step and
+   "Copy static assets" step are gone: mdBook emits the root `index.html` and copies
+   `src/assets/` itself.
+10. **Upload artifact** `path: site` (previously `target/doc`).
 
-### Trigger change
+### Triggers
 
-Add `docs/**` and `ffi/**/*.go` to the `pull_request.paths` filter (the workflow-file
-path entry stays). The `deploy` job's existing `github.event_name != 'pull_request'`
+The `pull_request.paths` filter includes `docs/**` and `ffi/**/*.go` alongside the
+workflow file itself. The `deploy` job's existing `github.event_name != 'pull_request'`
 guard keeps PR runs build-only.
 
 `docs/**` validates the book against documentation changes. `ffi/**/*.go` is included
@@ -454,11 +481,11 @@ end-to-end coverage; the build is not split into a book-only fast path.
 ### Link checking
 
 `mdbook-linkcheck2` runs as a backend during `mdbook build`, configured under
-`[output.linkcheck2]` with `follow-web-links = false`. It validates internal book
-links (broken `SUMMARY.md` entries, bad cross-references) without choking on the
-external `/rustdoc/` link-outs that exist only post-deploy. Broken internal links fail
-the PR build. Enabling this second renderer is what moves HTML output to
-`docs/book/html/` (see build step 4).
+`[output.linkcheck2]` with `follow-web-links = false`. It validates internal book links
+(broken `SUMMARY.md` entries, bad cross-references) and skips web links, including the
+`https://ava-labs.github.io/firewood/…` link-outs to generated artifacts that exist only
+post-deploy. Broken internal links fail the PR build. Enabling this second renderer is
+what moves HTML output to `docs/book/html/` (see build step 4).
 
 `mdbook-linkcheck2` is a maintained fork of the original `mdbook-linkcheck`. The
 original (last released 2022) rejects a `book.toml` whose `[rust]` table sets
@@ -470,8 +497,8 @@ the legacy `[output.linkcheck]` table name for backward compatibility.
 
 Because linkcheck runs with `follow-web-links = false`, the `/rustdoc/`, `/ffi/`, and
 `/bench/` link-outs from the `reference/` hub — the things most likely to rot after a
-rustdoc relocation — are never validated by the build. A third job, `smoke`, is added
-to `gh-pages.yaml`:
+rustdoc relocation — are never validated by the build. A third job, `smoke`, in
+`gh-pages.yaml` covers them:
 
 - `needs: [build, deploy]` so it runs only after a successful deploy and can read the
   `build` job's `has_bench` output (below).
@@ -508,7 +535,8 @@ relocation.
   not surface as a stray `<hr>` + heading. It is an in-repo jq script (needs `jq` on
   `PATH`; no binary to install). mdBook runs preprocessor commands from the book root,
   so the `command` path is relative to `docs/`, not the repo root.
-- `[output.linkcheck2]` with `follow-web-links = false`.
+- `[output.linkcheck2]` with `follow-web-links = false`, which checks internal links
+  only and skips the `https://` link-outs to generated artifacts.
 
 ## Local tooling
 
@@ -528,20 +556,13 @@ relocation.
   stripper needs `jq` on `PATH`; mdBook runs both automatically per their `book.toml`
   tables. Neither needs an install step in `book-assets` — mermaid's *assets* do, its
   binary does not, and the stripper is already in the repo.
-- `new-design slug` → scaffolds `docs/src/designs/NNNN-slug.md` from `template.md` (with
-  `status: proposed`). Sequence-number algorithm: glob
-  `docs/src/designs/[0-9][0-9][0-9][0-9]-*.md`, parse the leading 4-digit number from
-  each, take the numeric maximum, add one, and zero-pad to four digits; if no matching
-  files exist, start at `0001`. Gaps left by deleted/superseded files are not backfilled
-  (numbers only ever increase). Two PRs that add a design concurrently compute the same
-  next number and collide on merge; resolve it by renumbering the later design rather
-  than treating it as a defect.
+- `new-design slug` → scaffolds `docs/src/designs/YYYY-MM-DD-slug.md` from `template.md`,
+  dated today. It refuses to overwrite an existing file, which catches the one possible
+  collision: a second design with the same slug on the same day.
 - `design-age` → runs `scripts/design-doc-age.sh`: lists every
-  `docs/src/designs/NNNN-*.md` with its last git-commit date, sorted **oldest-first** so
-  the stalest designs sit at the top and uncommitted (not-yet-committed) designs sort
-  last. It reads git history only — never a doc's frontmatter or body — so it is both
-  the freshness report and the working embodiment of the no-in-doc-dates convention. Use
-  it to spot `active` designs that have drifted from the code.
+  `docs/src/designs/YYYY-MM-DD-*.md` by last git-commit date, oldest first, with
+  uncommitted designs last. Use it to spot `active` designs that have drifted from the
+  code.
 
 Recipes call `mdbook` directly; the dev-environment guide names the required tools
 and links to upstream install docs (and may include concrete install commands).
@@ -566,9 +587,9 @@ and links to upstream install docs (and may include concrete install commands).
 mdBook supports **draft chapters** — `SUMMARY.md` entries written with empty link
 parentheses (`- [Title]()`), which render as greyed-out/disabled items in the sidebar.
 Per the mdBook guide their purpose is "to signal future chapters still to be written."
-This is the idiomatic mdBook mechanism this design uses **instead of** creating empty
-stub `.md` files (hollow pages would be search-indexed and present as real-but-empty
-content). The rule:
+This is the idiomatic mdBook mechanism for signalling future chapters **instead of**
+creating empty stub `.md` files (hollow pages would be search-indexed and present as
+real-but-empty content). The rule:
 
 - A section or sub-page with real seed content gets an authored landing page and a
   *linked* `SUMMARY.md` entry.
@@ -576,8 +597,9 @@ content). The rule:
   it shows in the outline as "coming soon" without creating a hollow page, and is
   promoted to a linked entry when its first real content lands.
 
-Applying that rule to the extra sections (those with seed content are authored now;
-the rest are draft chapters):
+Applying that rule to the extra sections: each is a draft chapter until its authored
+landing page lands, and no sub-page draft chapters ship (unwritten sub-pages are
+omitted from `SUMMARY.md` until their content lands):
 
 - `concepts/` — authored: seeded by promoting the README terminology + architecture-
   diagram prose.
@@ -592,7 +614,7 @@ the rest are draft chapters):
   the new layout. Migrating their content into the book is a follow-up. The landing
   page links to `/bench/` for the live dashboards. **MVP scope:** exactly one file,
   `operations/README.md`; deeper sub-pages (e.g. `fwdctl.md`, `benchmarks.md`) are
-  draft-chapter entries in `SUMMARY.md` (no files) until their content is written.
+  omitted from `SUMMARY.md` until their content is written.
 - `reference/` — authored landing page (`reference/README.md`): a link-out hub for
   *generated* artifacts only (rustdoc ↗, godoc ↗, benchmarks ↗). It is authored (the
   three link-outs are its content), not a draft chapter. Repository-process docs
@@ -628,10 +650,10 @@ in `avalanchego/go.mod` and in the `graft/evm`, `graft/coreth`, and `graft/subne
 `go.mod`s. That published module tracks the `firewood-ffi` crate version: when
 `firewood-ffi` is released, CI builds the static libraries, copies the in-repo `ffi/`
 directory into the `ava-labs/firewood-go-ethhash` repository, and tags it (see
-[`RELEASE.md`](../../../RELEASE.md) and
-[`.github/workflows/attach-static-libs.yaml`](../../../.github/workflows/attach-static-libs.yaml)).
+[`RELEASE.md`](https://github.com/ava-labs/firewood/blob/main/RELEASE.md) and
+[`.github/workflows/attach-static-libs.yaml`](https://github.com/ava-labs/firewood/blob/main/.github/workflows/attach-static-libs.yaml)).
 The section documents how the in-repo `ffi/` crate is built (the `cargo build` →
-`go tool cgo` flow described in [`ffi/README.md`](../../../ffi/README.md)), packaged,
+`go tool cgo` flow described in [`ffi/README.md`](https://github.com/ava-labs/firewood/blob/main/ffi/README.md)), packaged,
 and published, and how a downstream consumer pins and upgrades it. It links to `/ffi/`
 (godoc) for the generated API reference and to `meta/release.md` for the publish/version
 cadence. Without this, the integration story is incomplete: a reader following the
@@ -659,7 +681,7 @@ This section resolves the bootstrapping note from the Summary: once implemented,
 `meta/documentation.md` is the living record of how the documentation system works,
 and this spec is its originating design artifact.
 
-## Best practices applied (from the mdbook catalog review)
+## Best practices applied (from the mdBook catalog review)
 
 Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.code-maven.com/blob/95511782560de7bd1268f2f0af424a13fdd07f80/mdbooks.yaml)
 (~120 mdBooks):
@@ -685,14 +707,14 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
   and `/ffi/` — plus `/bench/` only when the `build` job reports benchmark history
   (`has_bench`) — failing the workflow on any non-success status. The build job
   additionally asserts `site/index.html` exists before upload.
-- **`new-design` recipe:** running it produces a correctly numbered
-  `docs/src/designs/NNNN-slug.md` from `template.md` with `status: proposed`.
+- **`new-design` recipe:** running it produces `docs/src/designs/YYYY-MM-DD-slug.md`
+  from `template.md`, dated today, and fails rather than overwriting an existing file.
 - **Frontmatter stripping:** the in-repo `frontmatter-strip` preprocessor removes each
-  chapter's YAML block; spot-check that `0001`'s frontmatter does not appear in the
-  rendered `docs/book/html/` output (no stray `<hr>` or metadata heading).
-- **`design-age` recipe:** `just design-age` lists every `docs/src/designs/NNNN-*.md`
-  by last git-commit date, oldest-first, with uncommitted docs last — and reads git
-  history only, never a doc's contents.
+  chapter's YAML block; spot-check that this design's own frontmatter does not appear in
+  the rendered `docs/book/html/` output (no stray `<hr>` or metadata heading).
+- **`design-age` recipe:** `just design-age` lists every
+  `docs/src/designs/YYYY-MM-DD-*.md` by last git-commit date, oldest first, with
+  uncommitted docs last.
 - **Existing checks unaffected:** `cargo doc --no-deps`, `cargo fmt`, `cargo clippy`,
   and `cargo nextest` are unchanged; the repository's markdownlint check passes on the
   new Markdown. A book-scoped `docs/.markdownlint.json` disables `MD025` (multiple H1)
@@ -728,43 +750,44 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
       run the macOS and devcontainer command sequences end-to-end on a clean
       environment before merge; the remote-SSH section reuses the same commands and is
       reviewed for accuracy.
-- [ ] `designs/` is a flat directory: every design is `NNNN-slug.md` with lifecycle
-      state in a `status` frontmatter field (no `proposed/`/`active/` folders). It
-      contains a single RFC-style `template.md`, a `README.md` documenting the model +
-      status-flip promotion checklist + backfill TODO, and the fully-written
-      `NNNN-on-disk-format-and-addressing.md` seed (number assigned at authoring time).
-- [ ] Design docs carry the YAML frontmatter schema (`title`, `status`, `category`,
+- [x] `designs/` is a flat directory: every design is `YYYY-MM-DD-slug.md`, dated when
+      the design was proposed, with lifecycle state in a `status` frontmatter field (no
+      `proposed/`/`active/` folders). It contains a single RFC-style `template.md` and a
+      `README.md` documenting the model, the promotion checklist, and a link to the
+      backfill tracking issue.
+- [ ] The fully-written `2024-08-13-on-disk-format-and-addressing.md` seed is in place.
+- [x] Design docs carry the YAML frontmatter schema (`title`, `status`, `category`,
       `authors`, optional `tracking-issue`) with **no date fields**; the in-repo
-      `[preprocessor.frontmatter-strip]` jq script strips it so it does not render.
-      `0001` itself uses
-      the schema (its old `Status:`/`Date:`/`Author:` bullets are gone). *(The
-      foundation PR wires `book.toml` and converts `0001`; `template.md` and the
-      remaining docs land with the content PR.)*
+      `[preprocessor.frontmatter-strip]` jq script strips it so it does not render. This
+      design itself uses the schema (its old `Status:`/`Date:`/`Author:` bullets are
+      gone).
 - [x] `scripts/design-doc-age.sh` (run via `just design-age`) lists each design by last
-      git-commit date, oldest-first, from git history alone — never in-doc dates.
-- [ ] Sections with seed content (`concepts/`, `integration/`, `operations/`,
-      `reference/`) have authored landing pages and linked `SUMMARY.md` entries;
-      sections/sub-pages without content yet are mdBook draft chapters (link-less
-      `SUMMARY.md` entries that render greyed-out), not empty `.md` files. `reference/`
-      links only to generated artifacts (rustdoc/godoc/benchmarks). `integration/`
-      documents the Go wrapper types (`Database`/`Proposal`/`Revision`, mapping to the
-      Rust `Db`/`Proposal`/`DbView`) and the `firewood-go-ethhash` publish relationship
-      that AvalancheGo actually consumes.
+      git-commit date, oldest first.
+- [x] `reference/` has an authored landing page linking only to generated artifacts
+      (rustdoc/godoc/benchmarks).
+- [ ] Sections with seed content (`concepts/`, `integration/`, `operations/`) have
+      authored landing pages and linked `SUMMARY.md` entries. Not-yet-written sub-pages
+      are omitted from `SUMMARY.md` (added when their content lands) rather than shipped
+      as empty `.md` files; no sub-page draft chapters ship. `integration/` documents the
+      Go wrapper types
+      (`Database`/`Proposal`/`Revision`, mapping to the Rust `Db`/`Proposal`/`DbView`)
+      and the `firewood-go-ethhash` publish relationship that AvalancheGo actually
+      consumes.
 - [ ] A `meta/` section exists with an **authored** `documentation.md` (how the docs
       work: tooling, layout, build/serve, authoring, design workflow) and thin
       repository-function pages (`release.md` plus link-out pointers to CONTRIBUTING /
       CODE_REVIEW); the process-doc link-outs are in `meta/`, not `reference/`.
-- [x] `justfile` gains `book-assets`, `book-serve`, and `book-build` (PR 1 — foundation).
-- [ ] `justfile` gains a `new-design` recipe scaffolding
-      `docs/src/designs/NNNN-slug.md` from `template.md` (PR 3 — content).
+- [x] `justfile` gains `book-assets`, `book-serve`, and `book-build`.
+- [x] `justfile` gains a `new-design` recipe scaffolding
+      `docs/src/designs/YYYY-MM-DD-slug.md` from `template.md`.
 - [x] Mermaid assets are installed at build time (not committed): CI and the
       `book-assets` recipe run `mdbook-mermaid install docs`, the generated asset paths
       are git-ignored, and a fresh checkout builds without a manual install step.
 - [x] `architecture.svg` is moved to `docs/src/assets/` and the root `README.md`
       reference is updated accordingly; the book renders the diagram.
-- [ ] `markdownlint-cli2 .` passes.
+- [x] `markdownlint-cli2 .` passes.
 
-## Accepted trade-off
+## Drawbacks
 
 - **Broken external deep links to `/firewood/<crate>`.** Relocating rustdoc to
   `/rustdoc/` breaks existing bookmarks/SEO to `…/firewood/firewood/…`. Mitigated by the
