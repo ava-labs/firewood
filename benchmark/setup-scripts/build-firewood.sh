@@ -7,7 +7,9 @@ if [ "$EUID" -eq 0 ]; then
 fi
 
 # install rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+bash "$SCRIPT_DIR/install-rust.sh"
+# shellcheck source=/dev/null
 . "$HOME/.cargo/env"
 
 # clone the firewood repository
@@ -21,4 +23,3 @@ git clone https://github.com/ava-labs/firewood.git .
 # build the firewood binary
 cargo build --profile maxperf
 popd
-
