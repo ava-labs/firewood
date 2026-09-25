@@ -11,7 +11,7 @@ use firewood_storage::{NodeHashAlgorithm, PathBuf, PathComponentSliceExt, ValueD
 use integer_encoding::VarInt;
 
 use super::{
-    frame::{MAX_COMPRESSION_RATIO, MAX_DECOMPRESSED_LEN},
+    frame::MAX_DECOMPRESSED_LEN,
     header::Header,
     types::{ProofError, ProofNode, ProofType},
 };
@@ -87,9 +87,8 @@ impl FrozenRangeProof {
     /// # Errors
     ///
     /// Returns [`ProofError::BodyTooLarge`] if the serialized body exceeds
-    /// the size cap, [`ProofError::BodyTooCompressible`] if it compresses
-    /// beyond the ratio decoders accept, or [`ProofError::Compression`] if
-    /// the compression fails; `out` is untouched on error.
+    /// the size cap or [`ProofError::Compression`] if the compression
+    /// fails; `out` is untouched on error.
     pub fn write_to_vec(&self, out: &mut Vec<u8>) -> Result<(), ProofError> {
         let mut body = Vec::new();
         self.write_body_to_vec(&mut body);
@@ -138,10 +137,9 @@ impl FrozenChangeProof {
     }
 }
 
-/// Frames a canonical body: the header, then the compressed body. Mirrors
-/// the decoder's limits so a message no peer would accept is reported at
-/// the source instead of emitted: the body must be within the size cap and
-/// must not compress beyond the ratio cap. `out` is untouched on error.
+/// Frames a canonical body: the header, then the compressed body, after
+/// checking the decoder's size cap so a message no peer would accept is
+/// reported at the source instead of emitted. `out` is untouched on error.
 pub(crate) fn write_framed_body(
     body: &[u8],
     kind: ProofType,
@@ -152,9 +150,7 @@ pub(crate) fn write_framed_body(
     let start = out.len();
     let header = Header::from((kind, mode));
     out.extend_from_slice(bytemuck::bytes_of(&header));
-    let frame_start = out.len();
-    let result = super::frame::write_compressed_body(body, out)
-        .and_then(|()| check_frame_ratio(body.len(), out.len().saturating_sub(frame_start)));
+    let result = super::frame::write_compressed_body(body, out);
     if result.is_err() {
         out.truncate(start);
     }
@@ -167,18 +163,6 @@ const fn check_body_len(len: usize) -> Result<(), ProofError> {
         return Err(ProofError::BodyTooLarge {
             len,
             limit: MAX_DECOMPRESSED_LEN,
-        });
-    }
-    Ok(())
-}
-
-/// Rejects a body that compressed beyond the ratio decoders accept.
-const fn check_frame_ratio(body_len: usize, frame_len: usize) -> Result<(), ProofError> {
-    if body_len > frame_len.saturating_mul(MAX_COMPRESSION_RATIO) {
-        return Err(ProofError::BodyTooCompressible {
-            body_len,
-            frame_len,
-            ratio: MAX_COMPRESSION_RATIO,
         });
     }
     Ok(())

@@ -8,6 +8,8 @@
 //!
 //! While the body of the deserialized proof is canonical, compression is not.
 
+use std::io::Write;
+
 use zstd::zstd_safe;
 
 use super::reader::ReadError;
@@ -112,11 +114,36 @@ pub(super) fn decompress_body(frame: &[u8], frame_offset: usize) -> Result<Vec<u
 ///
 /// # Errors
 ///
+/// A body that compresses beyond the decoder's [`MAX_COMPRESSION_RATIO`]
+/// is re-encoded as one frame of small flushed blocks: each block carries
+/// at least a three-byte header, which keeps even a constant body under
+/// the ratio, so every emitted frame is decodable. It is still a single
+/// frame with its content size in the header, exactly what
+/// [`validate_frame`] requires.
+///
 /// Returns [`ProofError::Compression`] if the compression fails (resource
 /// exhaustion; zstd cannot otherwise fail on in-memory input).
 pub(super) fn write_compressed_body(body: &[u8], out: &mut Vec<u8>) -> Result<(), ProofError> {
     let compressed = zstd::bulk::compress(body, zstd::DEFAULT_COMPRESSION_LEVEL)
         .map_err(ProofError::Compression)?;
-    out.extend_from_slice(&compressed);
+    if body.len() <= compressed.len().saturating_mul(MAX_COMPRESSION_RATIO) {
+        out.extend_from_slice(&compressed);
+        return Ok(());
+    }
+    let mut encoder = zstd::stream::write::Encoder::new(out, zstd::DEFAULT_COMPRESSION_LEVEL)
+        .map_err(ProofError::Compression)?;
+    encoder
+        .set_pledged_src_size(Some(body.len() as u64))
+        .map_err(ProofError::Compression)?;
+    let (blocks, remainder) = body.as_chunks::<MAX_COMPRESSION_RATIO>();
+    for block in blocks
+        .iter()
+        .map(<[_; MAX_COMPRESSION_RATIO]>::as_slice)
+        .chain([remainder])
+    {
+        encoder.write_all(block).map_err(ProofError::Compression)?;
+        encoder.flush().map_err(ProofError::Compression)?;
+    }
+    encoder.finish().map_err(ProofError::Compression)?;
     Ok(())
 }
