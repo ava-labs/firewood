@@ -1,0 +1,47 @@
+error: hash_mode takes no arguments
+ --> tests/compile_fail/hash_mode.rs:6:13
+  |
+6 | #[hash_mode(extra)]
+  |             ^^^^^
+
+error: hash_mode requires a synchronous safe free function with exactly one type parameter bounded by HashMode, no where clause, and concrete argument/return types
+  --> tests/compile_fail/hash_mode.rs:11:1
+   |
+11 | async fn asynchronous<H: HashMode>() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: hash_mode requires a synchronous safe free function with exactly one type parameter bounded by HashMode, no where clause, and concrete argument/return types
+  --> tests/compile_fail/hash_mode.rs:15:1
+   |
+15 | fn missing_generic() {}
+   | ^^^^^^^^^^^^^^^^^^^^
+
+error: hash_mode requires a synchronous safe free function with exactly one type parameter bounded by HashMode, no where clause, and concrete argument/return types
+  --> tests/compile_fail/hash_mode.rs:19:1
+   |
+19 | fn dependent_type<H: HashMode>(value: H) {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: hash_mode requires a synchronous safe free function with exactly one type parameter bounded by HashMode, no where clause, and concrete argument/return types
+  --> tests/compile_fail/hash_mode.rs:23:1
+   |
+23 | fn where_clause<H>() where H: HashMode {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: place hash_mode above exactly one test attribute or one or more test_case attributes
+  --> tests/compile_fail/hash_mode.rs:26:1
+   |
+26 | fn missing_test<H: HashMode>() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: unsupported hash_mode attribute; use cfg, lint attributes, test, test_case, should_panic, or ignore
+  --> tests/compile_fail/hash_mode.rs:30:1
+   |
+30 | #[cfg_attr(all(), inline)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: unsupported hash_mode attribute; use cfg, lint attributes, test, test_case, should_panic, or ignore
+  --> tests/compile_fail/hash_mode.rs:35:1
+   |
+35 | #[inline]
+   | ^^^^^^^^^

@@ -1691,7 +1691,7 @@ typedef struct DatabaseHandleArgs {
   /**
    * The maximum number of revisions to keep.
    *
-   * Must be > `deferred_persistence_commit_count`.
+   * Must be > `max_persistence_gap`.
    */
   size_t revisions;
   /**
@@ -1737,11 +1737,11 @@ typedef struct DatabaseHandleArgs {
    */
   enum NodeHashAlgorithm node_hash_algorithm;
   /**
-   * The maximum number of unpersisted revisions that can exist at a given time.
+   * The maximum number of committed revisions that can be ahead of the last persisted revision.
    *
-   * Note: `revisions` must be > `deferred_persistence_commit_count`.
+   * Must be positive and less than `revisions`.
    */
-  uint64_t deferred_persistence_commit_count;
+  uint64_t max_persistence_gap;
 } DatabaseHandleArgs;
 
 /**

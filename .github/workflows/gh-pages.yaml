@@ -62,7 +62,7 @@ jobs:
         run: cargo binstall --no-confirm mdbook-linkcheck2@0.12.2
       - uses: actions/setup-go@v6
         with:
-          go-version: 1.25
+          go-version-file: "ffi/go.mod"
       - name: Install doc2go
         run: go install go.abhg.dev/doc2go@v0.12.2
       - name: Build Rust docs

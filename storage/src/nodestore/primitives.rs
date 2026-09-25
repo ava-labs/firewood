@@ -107,13 +107,6 @@ impl AreaIndex {
         self.0 as usize
     }
 
-    /// Returns the number of different area sizes available.
-    #[inline]
-    #[must_use]
-    pub const fn num_area_sizes() -> usize {
-        Self::NUM_AREA_SIZES
-    }
-
     /// Create an `AreaIndex` from a u8 value without bounds checking.
     #[inline]
     #[must_use]
@@ -233,20 +226,6 @@ impl LinearAddress {
 
     /// The minimum area size available for allocation.
     pub const MIN_AREA_SIZE: u64 = *AREA_SIZES.first().unwrap();
-
-    /// Returns the number of different area sizes available.
-    #[inline]
-    #[must_use]
-    pub const fn num_area_sizes() -> usize {
-        const { AREA_SIZES.len() }
-    }
-
-    /// Returns the inner `NonZeroU64`
-    #[inline]
-    #[must_use]
-    pub const fn into_nonzero(self) -> NonZeroU64 {
-        self.0
-    }
 
     /// Advances a `LinearAddress` by `n` bytes.
     ///
