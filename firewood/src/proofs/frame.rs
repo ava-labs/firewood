@@ -19,7 +19,7 @@ use super::types::ProofError;
 /// state-sync message (target 2MiB). Changing it needs
 /// coordination: every decoder must accept a value before any producer
 /// emits it.
-pub(super) const MAX_DECOMPRESSED_LEN: usize = 6 * 1024 * 1024; // 6 MiB
+pub(crate) const MAX_DECOMPRESSED_LEN: usize = 6 * 1024 * 1024; // 6 MiB
 
 /// Cap on the uncompressed/compressed length ratio, bounding zstd-bomb
 /// amplification to 128× the bytes a peer actually sent. Honest hash-heavy
