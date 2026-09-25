@@ -167,6 +167,20 @@ pub enum ProofError {
         limit: usize,
     },
 
+    /// The proof body compressed beyond the ratio decoders accept (see
+    /// `proofs::frame::MAX_COMPRESSION_RATIO`), so no peer could decode it.
+    #[error(
+        "proof body of {body_len} bytes compressed to {frame_len} bytes, beyond the {ratio}x decoder limit"
+    )]
+    BodyTooCompressible {
+        /// Length of the canonical (uncompressed) proof body.
+        body_len: usize,
+        /// Length of the zstd frame it compressed into.
+        frame_len: usize,
+        /// The wire-format cap on `body_len / frame_len`.
+        ratio: usize,
+    },
+
     /// zstd failed to compress the proof body (allocation failure; zstd
     /// cannot otherwise fail on in-memory input).
     #[error("zstd compression failed: {0}")]
