@@ -1,0 +1,9 @@
+# The nightly that `cargo fmt`, clippy, and miri use. Everything that builds or
+# runs code sets RUSTUP_TOOLCHAIN=stable, which outranks this file. This is the
+# only place the pinned date appears. See AGENTS.md, "Toolchain Selection".
+[toolchain]
+channel = "nightly-2026-07-05"
+profile = "minimal"
+# rust-src is for rust-analyzer, which follows this file and so lints with the
+# same toolchain CI does.
+components = ["clippy", "rustfmt", "rust-src"]
