@@ -95,8 +95,7 @@ pub(super) struct SizingHint {
 pub(super) struct SizedProof<P> {
     /// The selected prefix and its boundary proofs.
     pub(super) proof: P,
-    /// Exactly the bytes produced by serializing `proof`; never longer than
-    /// the requested budget.
+    /// The bytes produced by serializing `proof`.
     pub(super) wire: Vec<u8>,
     /// True once paging has reached the end of the keyspace/diff.
     pub(super) natural_end: bool,
@@ -210,30 +209,28 @@ impl<T: HashedNodeReader> Merkle<T> {
     }
 }
 
-/// Selects a prefix of `items` whose serialized wire approaches `budget`
-/// without exceeding it.
+/// Selects a prefix of `items` whose serialized wire size gets close to
+/// `budget` without exceeding it.
 ///
-/// Compression makes a candidate's wire size unknowable until it is
-/// serialized, so sizing estimates, then corrects:
+/// Compression means we can't know the wire size until we serialize, so
+/// we estimate, measure, and adjust:
 ///
-/// 1. Estimate how many body bytes compress into the target, 99% of the
-///    budget, using the hint's ratio (or a default) and reserving the
-///    hint's edge-proof bytes (or a default). Admit items until their
-///    summed cost reaches the estimate.
-/// 2. Build and serialize the candidate. Its measured ratio and edge bytes
-///    replace the estimates for the next pass, and travel to the next
-///    chunk as its hint.
-/// 3. Stop if the wire reached 97% of the budget, the items ran out, or
-///    the decoder's body limit leaves no room to admit more.
-/// 4. Under 97%: grow by the corrected estimate and go to 2.
-/// 5. Over the budget, or over the body limit: convert the excess into
-///    body bytes, drop tail items until their costs cover it, and go to 2.
-///    A shrunk candidate that fits is final.
+/// 1. Estimate the body bytes that fit in 99% of the budget using the
+///    hinted compression ratio and edge-proof size, or their defaults.
+///    Add items until their total cost reaches that estimate.
+/// 2. Build and serialize the candidate. Use its measured ratio and edge
+///    bytes for the next pass and as the hint for the next chunk.
+/// 3. Stop if the wire size reaches 97% of the budget, we run out of
+///    items, or the decoder's body limit leaves no room for another item.
+/// 4. If the wire size is under 97%, grow using the updated estimate.
+/// 5. If the wire size or body exceeds its limit, estimate the excess in
+///    body bytes and drop tail items until their costs cover it. A shrunk
+///    candidate that fits is final.
 ///
-/// [`MAX_CORRECTION_PASSES`] bounds the passes; if every one overshot, a
-/// single item is tried last. A single item, or the edge proofs alone, over
-/// the budget is [`api::Error::ProofOverBudget`]: the budget is the message
-/// limit peers enforce, so an oversized chunk would never be accepted.
+/// [`MAX_CORRECTION_PASSES`] limits the number of attempts. If every pass
+/// overshoots, try a single item. If that item, or the edge proofs alone,
+/// exceeds the budget, return [`api::Error::ProofOverBudget`]: peers would
+/// reject a chunk larger than the message limit.
 fn build_sized_chunk<B: ChunkBuilder>(
     builder: &B,
     items: impl Iterator<Item = Result<B::Item, api::Error>>,
@@ -330,7 +327,7 @@ fn build_sized_chunk<B: ChunkBuilder>(
             (candidate, terminal)
         }
     };
-    firewood_histogram!(SIZED_PROOF_PROBES, "kind" => B::KIND_LABEL).record_integer(probes);
+    firewood_histogram!(SIZED_PROOF_PROBES, "kind" => B::KIND.name()).record_integer(probes);
     Ok(SizedProof {
         proof,
         hint: SizingHint {
@@ -350,8 +347,7 @@ fn build_sized_chunk<B: ChunkBuilder>(
 trait ChunkBuilder {
     type Item;
     type Proof;
-    /// The `kind` label of this flavor's metrics.
-    const KIND_LABEL: &'static str;
+    const KIND: ProofType;
 
     /// Body bytes `item` contributes to the payload.
     fn item_cost(item: &Self::Item) -> usize;
@@ -376,7 +372,7 @@ struct RangeChunkBuilder<'a, T> {
 impl<T: TrieReader> ChunkBuilder for RangeChunkBuilder<'_, T> {
     type Item = (Key, Value);
     type Proof = FrozenRangeProof;
-    const KIND_LABEL: &'static str = "range";
+    const KIND: ProofType = ProofType::Range;
 
     fn item_cost((key, value): &Self::Item) -> usize {
         encoded_sequence_len(key).saturating_add(encoded_sequence_len(value))
@@ -406,7 +402,7 @@ impl<T: TrieReader> ChunkBuilder for RangeChunkBuilder<'_, T> {
         body.clear();
         proof.write_body_to_vec(body);
         wire.clear();
-        write_framed_body(body, ProofType::Range, proof.hash_mode(), wire)
+        write_framed_body(body, Self::KIND, proof.hash_mode(), wire)
     }
 }
 
@@ -418,7 +414,7 @@ struct ChangeChunkBuilder<'a, T> {
 impl<T: HashedNodeReader> ChunkBuilder for ChangeChunkBuilder<'_, T> {
     type Item = BatchOp<Key, Value>;
     type Proof = FrozenChangeProof;
-    const KIND_LABEL: &'static str = "change";
+    const KIND: ProofType = ProofType::Change;
 
     /// One tag byte and the key, plus the value of a `Put`.
     fn item_cost(op: &Self::Item) -> usize {
@@ -453,7 +449,7 @@ impl<T: HashedNodeReader> ChunkBuilder for ChangeChunkBuilder<'_, T> {
         body.clear();
         proof.write_body_to_vec(body);
         wire.clear();
-        write_framed_body(body, ProofType::Change, proof.hash_mode(), wire)
+        write_framed_body(body, Self::KIND, proof.hash_mode(), wire)
     }
 }
 

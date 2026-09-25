@@ -445,9 +445,6 @@ fn test_sized_account_with_storage_children() {
     verify_change_chunk(&target, &source, Some(&[]), &change);
 }
 
-// ---------------------------------------------------------------------------
-// helpers
-
 fn hint(compressed: usize, uncompressed: usize) -> SizingHint {
     SizingHint {
         ratio: CompressionRatio::measured(compressed, uncompressed),
