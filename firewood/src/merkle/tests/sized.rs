@@ -10,8 +10,13 @@
 
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
-use firewood_storage::{HashedNodeReader, SeededRng, TrieReader};
+use firewood_macros::hash_mode;
+use firewood_storage::{
+    Committed, DeletedNodeTracking, EthHash, HashMode, HashedNodeReader, MemStore, MerkleDbHash,
+    NodeStore, SeededRng, TrieReader,
+};
 use test_case::test_case;
 
 use super::init_merkle;
@@ -374,48 +379,39 @@ fn test_sized_length_prefix_boundaries() {
     }
 }
 
-/// Both hash modes, with a committed source and an immutable proposal as
-/// the target.
+/// A committed source and an immutable proposal as the target.
+#[hash_mode]
 #[test]
-fn test_sized_hash_modes_and_immutable_proposal_target() {
-    use firewood_storage::{
-        Committed, DeletedNodeTracking, EthHash, HashMode, MemStore, MerkleDbHash, NodeStore,
-    };
-    use std::sync::Arc;
+fn test_sized_immutable_proposal_target<H: HashMode>() {
+    let store: NodeStore<Committed, MemStore, H> = NodeStore::new_empty_committed(
+        Arc::new(MemStore::new(Vec::new())),
+        DeletedNodeTracking::Enabled,
+    );
+    let base = Merkle::from(store);
+    let mut proposal = base.fork().unwrap();
+    proposal.insert(b"key", b"value".as_slice().into()).unwrap();
+    let target = proposal.hash();
 
-    fn check<H: HashMode>() {
-        let store: NodeStore<Committed, MemStore, H> = NodeStore::new_empty_committed(
-            Arc::new(MemStore::new(Vec::new())),
-            DeletedNodeTracking::Enabled,
-        );
-        let base = Merkle::from(store);
-        let mut proposal = base.fork().unwrap();
-        proposal.insert(b"key", b"value".as_slice().into()).unwrap();
-        let target = proposal.hash();
+    let range = target.range_proof_sized(None, 1_024, None).unwrap();
+    assert_eq!(range.proof.hash_mode(), H::ALGORITHM);
+    verify_range_chunk(&target, None, &range);
 
-        let range = target.range_proof_sized(None, 1_024, None).unwrap();
-        assert_eq!(range.proof.hash_mode(), H::ALGORITHM);
-        verify_range_chunk(&target, None, &range);
-
-        // The source is a committed store, the target an immutable proposal,
-        // so only the decoded structure can be verified here.
-        let change = target
-            .change_proof_sized(base.nodestore(), None, 1_024, None)
-            .unwrap();
-        let decoded = FrozenChangeProof::from_slice(&change.wire).unwrap();
-        assert_eq!(decoded.hash_mode(), H::ALGORITHM);
-        verify_change_proof_structure(
-            &decoded,
-            target.nodestore().root_hash().unwrap(),
-            None,
-            None,
-            H::ALGORITHM,
-            None,
-        )
+    // The source is a committed store, the target an immutable proposal,
+    // so only the decoded structure can be verified here.
+    let change = target
+        .change_proof_sized(base.nodestore(), None, 1_024, None)
         .unwrap();
-    }
-    check::<MerkleDbHash>();
-    check::<EthHash>();
+    let decoded = FrozenChangeProof::from_slice(&change.wire).unwrap();
+    assert_eq!(decoded.hash_mode(), H::ALGORITHM);
+    verify_change_proof_structure(
+        &decoded,
+        target.nodestore().root_hash().unwrap(),
+        None,
+        None,
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
 }
 
 #[cfg(feature = "ethhash")]
