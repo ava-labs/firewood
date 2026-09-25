@@ -65,6 +65,12 @@ impl CompressionRatio {
         Self::from_lengths(compressed, uncompressed).clamp(Self::MIN_EXPECTED, Self::MAX_EXPECTED)
     }
 
+    /// The raw fixed-point value, for test reporting.
+    #[cfg(test)]
+    pub(super) const fn scaled(self) -> u32 {
+        self.0.get()
+    }
+
     fn uncompressed_for(self, compressed: usize) -> usize {
         let estimate = (compressed as u128).saturating_mul(u128::from(Self::SCALE))
             / NonZeroU128::from(self.0);

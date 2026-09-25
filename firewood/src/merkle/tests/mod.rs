@@ -12,6 +12,7 @@ mod proof;
 mod range;
 mod reconcile;
 mod sized;
+mod sized_replay;
 #[cfg(not(feature = "ethhash"))]
 mod triehash;
 
