@@ -1,10 +1,9 @@
 // Copyright (C) 2026, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-//! Size-targeted proof generation: a range/change proof whose compressed
-//! wire size targets the specified byte budget.
+//! Range and change proofs sized to a serialized wire byte budget.
 
-use std::num::{NonZeroU32, NonZeroU64};
+use std::num::{NonZeroU32, NonZeroU128};
 
 use firewood_metrics::{HistogramExt, firewood_histogram};
 use firewood_storage::{HashedNodeReader, TrieReader};
@@ -14,202 +13,380 @@ use super::{Key, Merkle, Value};
 use crate::api::{self, FrozenChangeProof, FrozenProof, FrozenRangeProof};
 use crate::db::BatchOp;
 use crate::merkle::changes::DiffMerkleNodeStream;
-use crate::proofs::frame::MAX_DECOMPRESSED_LEN;
-use crate::proofs::{ChangeProof, Proof, RangeProof};
+use crate::proofs::header::Header;
+use crate::proofs::ser::write_framed_body;
+use crate::proofs::{ChangeProof, MAX_DECOMPRESSED_LEN, Proof, ProofError, ProofType, RangeProof};
 
-/// Cap on the uncompressed payload of one chunk, leaving the rest of the
-/// decoder's body limit for the edge proofs.
-const MAX_PAYLOAD: usize = MAX_DECOMPRESSED_LEN / 2;
-/// Cap on ratio-correction (grow) passes.
-const MAX_RATIO_CORRECTION_PASSES: usize = 6;
-/// Stop growing once the wire reaches this percentage of the budget.
-const SUFFICIENT_FILL_PERCENT: usize = 95;
+/// Probes after the first candidate, each growing or shrinking it. One
+/// more may follow to settle on a single item.
+const MAX_CORRECTION_PASSES: usize = 8;
+/// Wire size a grow pass aims for and a shrink pass cuts back to, as a
+/// share of the budget. Aiming inside the acceptance window rather than at
+/// the budget keeps ordinary compression variance from forcing another
+/// probe.
+const TARGET_FILL_PERCENT: usize = 99;
+/// Growth stops once the wire reaches this share of the budget.
+const SUFFICIENT_FILL_PERCENT: usize = 97;
+/// Body bytes assumed for the edge proofs and length prefixes until a hint
+/// or probe measures them. C-Chain edges run 9-15 KiB.
+const DEFAULT_EDGE_BYTES: usize = 16 * 1024;
+/// Extra body bytes cut when a body exceeds the decoder's limit, so the
+/// rebuilt chunk lands under it despite a different right edge.
+const BODY_LIMIT_MARGIN: usize = 16 * 1024;
 
-/// Compressed/uncompressed size fraction of a proof body, in fixed point
-/// with [`Self::SCALE`] meaning 1:1. Pass the previous chunk's ratio as the
-/// next request's `ratio_hint` so its first size estimate is calibrated.
+/// Compressed/uncompressed body size fraction in fixed point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct CompressionRatio(NonZeroU32);
+pub(super) struct CompressionRatio(NonZeroU32);
 
 impl CompressionRatio {
-    /// Fixed-point scale: the representation of a 1:1 ratio.
     const SCALE: u32 = 1 << 16;
-    /// Assumed before anything is measured; roughly 2:1.
-    pub(crate) const INITIAL_ESTIMATE: Self = Self::from_scaled(Self::SCALE * 52 / 100);
-    /// Measurements are clamped into `MIN_EXPECTED..=MAX_EXPECTED`, keeping
-    /// a pathological chunk from skewing the next estimate.
+    /// An initial compressed/uncompressed estimate of 0.52.
+    const INITIAL_ESTIMATE: Self = Self::from_scaled(Self::SCALE * 52 / 100);
+    // Limit cross-page predictions to 20x compression or 2x expansion so one
+    // unusual page cannot dominate the next. In-page measurements are unclamped.
     const MIN_EXPECTED: Self = Self::from_scaled(Self::SCALE / 20);
     const MAX_EXPECTED: Self = Self::from_scaled(Self::SCALE * 2);
 
-    /// Zero is stored as the smallest representable ratio.
     const fn from_scaled(scaled: u32) -> Self {
         Self(match NonZeroU32::new(scaled) {
-            Some(scaled) => scaled,
+            Some(value) => value,
             None => NonZeroU32::MIN,
         })
     }
 
-    /// `compressed / uncompressed`, clamped into the expected range.
-    pub(crate) fn measured(compressed: usize, uncompressed: usize) -> Self {
-        let uncompressed = NonZeroU64::new(uncompressed as u64).unwrap_or(NonZeroU64::MIN);
-        let scaled = (compressed as u64).saturating_mul(u64::from(Self::SCALE)) / uncompressed;
+    fn from_lengths(compressed: usize, uncompressed: usize) -> Self {
+        let uncompressed = NonZeroU128::new(uncompressed as u128).unwrap_or(NonZeroU128::MIN);
+        let scaled = (compressed as u128).saturating_mul(u128::from(Self::SCALE)) / uncompressed;
         Self::from_scaled(u32::try_from(scaled).unwrap_or(u32::MAX))
-            .clamp(Self::MIN_EXPECTED, Self::MAX_EXPECTED)
     }
 
-    /// Uncompressed bytes expected to compress into `compressed` bytes.
+    /// A measured body ratio, clamped for use as the next page's hint.
+    pub(super) fn measured(compressed: usize, uncompressed: usize) -> Self {
+        Self::from_lengths(compressed, uncompressed).clamp(Self::MIN_EXPECTED, Self::MAX_EXPECTED)
+    }
+
     fn uncompressed_for(self, compressed: usize) -> usize {
-        let estimate =
-            (compressed as u64).saturating_mul(u64::from(Self::SCALE)) / NonZeroU64::from(self.0);
+        let estimate = (compressed as u128).saturating_mul(u128::from(Self::SCALE))
+            / NonZeroU128::from(self.0);
         usize::try_from(estimate).unwrap_or(usize::MAX)
     }
 }
 
-/// A sized proof `P` with its compressed `wire` bytes.
-#[derive(Debug)]
+/// What a chunk measured about its data, calibrating the next request's
+/// first candidate: pass a chunk's [`SizedProof::hint`] when requesting the
+/// chunk that follows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct SizingHint {
+    /// Compressed/uncompressed ratio of the body.
+    pub(super) ratio: CompressionRatio,
+    /// Body bytes the edge proofs and length prefixes took; `None` assumes
+    /// [`DEFAULT_EDGE_BYTES`] until the first probe measures them.
+    pub(super) edges: Option<usize>,
+}
+
+/// A budget-targeted proof and its serialized wire representation.
 #[cfg_attr(
     not(test),
     expect(
         dead_code,
-        reason = "no in-crate caller until the `Db` API exposes sized proofs"
+        reason = "no in-crate caller until the Db API exposes sized proofs"
     )
 )]
-pub(crate) struct SizedProof<P> {
-    pub proof: P,
-    pub wire: Vec<u8>,
+pub(super) struct SizedProof<P> {
+    /// The selected prefix and its boundary proofs.
+    pub(super) proof: P,
+    /// Exactly the bytes produced by serializing `proof`; never longer than
+    /// the requested budget.
+    pub(super) wire: Vec<u8>,
     /// True once paging has reached the end of the keyspace/diff.
-    pub natural_end: bool,
-    /// Measured compression of this chunk; pass it as `ratio_hint`
-    /// when requesting the next chunk.
-    pub ratio: CompressionRatio,
+    pub(super) natural_end: bool,
+    /// What this chunk measured, for the next request's `hint`.
+    pub(super) hint: SizingHint,
 }
 
-/// Body bytes of a length-prefixed byte sequence.
-fn seq_len(bytes: &[u8]) -> usize {
-    bytes.len().required_space().saturating_add(bytes.len())
+impl<T: TrieReader> Merkle<T> {
+    /// Generates a range proof from the inclusive lower bound whose wire
+    /// approaches, and never exceeds, `budget` bytes. Resume strictly above
+    /// the last emitted key and pass the returned [`SizedProof::hint`] as the
+    /// next request's `hint`.
+    ///
+    /// # Errors
+    ///
+    /// * [`api::Error::RangeProofOnEmptyTrie`] - if the trie is empty and
+    ///   `start_key` is `None`, matching [`Merkle::range_proof`].
+    /// * [`api::Error::ProofOverBudget`] - one entry, or the edge proofs
+    ///   alone, serialize past `budget`.
+    /// * A bounded request on an empty trie returns [`ProofError::Empty`].
+    /// * Proof generation, iteration, body-size, or compression errors.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no in-crate caller until the `Db` API exposes sized proofs"
+        )
+    )]
+    pub(super) fn range_proof_sized(
+        &self,
+        start_key: Option<&[u8]>,
+        budget: usize,
+        hint: Option<SizingHint>,
+    ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
+        if start_key.is_none() && self.root().is_none() {
+            return Err(api::Error::RangeProofOnEmptyTrie);
+        }
+        let start_proof = match start_key {
+            Some(key) => self.prove(key)?,
+            None => Proof::default(),
+        };
+        let items = self
+            .key_value_iter_from_key(start_key.unwrap_or_default())
+            .map(|r| r.map_err(api::Error::from));
+
+        let sized = build_sized_chunk(
+            &RangeChunkBuilder {
+                merkle: self,
+                start_proof,
+            },
+            items,
+            budget,
+            hint,
+        )?;
+        firewood_histogram!(PROOF_KEYS, "kind" => "range_sized")
+            .record_integer(sized.proof.key_values().len());
+        Ok(sized)
+    }
 }
 
-/// One proof flavor for [`stream_sized`]: what an item costs in uncompressed
-/// body bytes, how to assemble a chunk proof, and how to serialize it.
-trait ChunkBuilder {
-    type Item;
-    type Proof;
+impl<T: HashedNodeReader> Merkle<T> {
+    /// Generates a change proof from the inclusive lower bound whose wire
+    /// approaches, and never exceeds, `budget` bytes. Resume strictly above
+    /// the last emitted key and pass the returned [`SizedProof::hint`] as the
+    /// next request's `hint`.
+    ///
+    /// # Errors
+    ///
+    /// * [`api::Error::ProofOverBudget`] - one operation, or the edge proofs
+    ///   alone, serialize past `budget`.
+    /// * [`ProofError::Empty`] - this trie is empty, as in
+    ///   [`Self::change_proof`].
+    /// * Proof generation, diff iteration, body-size, or compression errors.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no in-crate caller until the `Db` API exposes sized proofs"
+        )
+    )]
+    pub(super) fn change_proof_sized(
+        &self,
+        source_trie: &impl HashedNodeReader,
+        start_key: Option<&[u8]>,
+        budget: usize,
+        hint: Option<SizingHint>,
+    ) -> Result<SizedProof<FrozenChangeProof>, api::Error> {
+        let start_proof = match start_key {
+            Some(key) => self.prove(key)?,
+            None => Proof::default(),
+        };
+        let items = DiffMerkleNodeStream::new(
+            source_trie,
+            self.nodestore(),
+            start_key.unwrap_or_default().into(),
+        )?
+        .map(|r| r.map_err(api::Error::from));
 
-    /// Uncompressed body bytes `item` contributes to the payload.
-    fn item_cost(item: &Self::Item) -> usize;
-
-    /// The chunk proof (payload plus right edge) for `items`;
-    /// `at_natural_end` is true when `items` reached the end of the stream.
-    fn build(&self, items: &[Self::Item], at_natural_end: bool) -> Result<Self::Proof, api::Error>;
-
-    /// Compressed wire bytes for `proof`.
-    fn wire(proof: &Self::Proof) -> Result<Vec<u8>, api::Error>;
+        let sized = build_sized_chunk(
+            &ChangeChunkBuilder {
+                merkle: self,
+                start_proof,
+            },
+            items,
+            budget,
+            hint,
+        )?;
+        firewood_histogram!(PROOF_KEYS, "kind" => "change_sized")
+            .record_integer(sized.proof.batch_ops().len());
+        Ok(sized)
+    }
 }
 
-/// Assembles a proof from a prefix of `items`, sized to approach
-/// `budget` compressed wire bytes without exceeding it unless a single
-/// item alone does.
+/// Selects a prefix of `items` whose serialized wire approaches `budget`
+/// without exceeding it.
 ///
-/// The proof is grown/shrunk by estimate, and is decided by real
-/// serialized length. The output is near-budget, not the exact
-/// largest fitting prefix.
-fn stream_sized<B: ChunkBuilder>(
+/// Compression makes a candidate's wire size unknowable until it is
+/// serialized, so sizing estimates, then corrects:
+///
+/// 1. Estimate how many body bytes compress into the target, 99% of the
+///    budget, using the hint's ratio (or a default) and reserving the
+///    hint's edge-proof bytes (or a default). Admit items until their
+///    summed cost reaches the estimate.
+/// 2. Build and serialize the candidate. Its measured ratio and edge bytes
+///    replace the estimates for the next pass, and travel to the next
+///    chunk as its hint.
+/// 3. Stop if the wire reached 97% of the budget, the items ran out, or
+///    the decoder's body limit leaves no room to admit more.
+/// 4. Under 97%: grow by the corrected estimate and go to 2.
+/// 5. Over the budget, or over the body limit: convert the excess into
+///    body bytes, drop tail items until their costs cover it, and go to 2.
+///    A shrunk candidate that fits is final.
+///
+/// [`MAX_CORRECTION_PASSES`] bounds the passes; if every one overshot, a
+/// single item is tried last. A single item, or the edge proofs alone, over
+/// the budget is [`api::Error::ProofOverBudget`]: the budget is the message
+/// limit peers enforce, so an oversized chunk would never be accepted.
+fn build_sized_chunk<B: ChunkBuilder>(
     builder: &B,
     items: impl Iterator<Item = Result<B::Item, api::Error>>,
     budget: usize,
-    ratio_hint: Option<CompressionRatio>,
+    hint: Option<SizingHint>,
 ) -> Result<SizedProof<B::Proof>, api::Error> {
-    let mut ratio = ratio_hint.unwrap_or(CompressionRatio::INITIAL_ESTIMATE);
+    let target = percent_of(budget, TARGET_FILL_PERCENT);
+    let sufficient_fill = percent_of(budget, SUFFICIENT_FILL_PERCENT);
+
     let mut items = items.peekable();
     let mut kept: Vec<B::Item> = Vec::new();
-    let mut body = 0usize; // summed item_cost of `kept`
-    let mut natural = true;
+    // `costs[n]` is the summed item cost of `kept[..n]`.
+    let mut costs = vec![0usize];
+    let mut body = Vec::new();
+    let mut wire = Vec::new();
+    let mut ratio = hint.map_or(CompressionRatio::INITIAL_ESTIMATE, |h| h.ratio);
+    let mut edges = hint.and_then(|h| h.edges).unwrap_or(DEFAULT_EDGE_BYTES);
+    let mut count = 0usize;
+    let mut proof = None;
+    let mut natural_end = false;
+    // Body bytes the last probe overshot by; `None` grows instead.
+    let mut excess: Option<usize> = None;
+    let mut probes = 0usize;
 
-    // estimate edge overhead
-    // TODO(AminR443): the 6KiB constant is very rough estimate. use a better estimate/method.
-    let mut proof = builder.build(&[], true)?;
-    let mut wire = B::wire(&proof)?;
-    let fixed = wire.len().saturating_add(wire.len().max(6 * 1024)); // 6KiB
-
-    let sufficient_fill = budget.saturating_mul(SUFFICIENT_FILL_PERCENT) / 100;
-
-    for _ in 0..=MAX_RATIO_CORRECTION_PASSES {
-        let budget_body = ratio
-            .uncompressed_for(budget)
-            .saturating_sub(fixed)
-            .min(MAX_PAYLOAD);
-        let before = kept.len();
-        while let Some(peeked) = items.peek() {
-            if let Ok(item) = peeked
-                && !kept.is_empty()
-                && body.saturating_add(B::item_cost(item)) > budget_body
-            {
+    for pass in 0..=MAX_CORRECTION_PASSES {
+        let shrinking = excess.is_some();
+        count = if let Some(excess) = excess.take() {
+            shrunk_count(&costs, count, excess)
+        } else {
+            let allowance = ratio
+                .uncompressed_for(target.saturating_sub(size_of::<Header>()))
+                .min(MAX_DECOMPRESSED_LEN)
+                .saturating_sub(edges);
+            let end = grow_prefix::<B>(&mut items, &mut kept, &mut costs, allowance)?;
+            if kept.len() == count && pass > 0 {
+                // The estimate admits nothing more: the last probe stands.
                 break;
             }
-            let Some(item) = items.next() else { break };
-            let item = item?;
-            body = body.saturating_add(B::item_cost(&item));
-            kept.push(item);
+            natural_end = end;
+            kept.len()
+        };
+        let terminal = natural_end && count == kept.len();
+        probes = probes.saturating_add(1);
+        let candidate = builder.build(kept.get(..count).unwrap_or_default(), terminal)?;
+        match builder.serialize(&candidate, &mut body, &mut wire) {
+            Ok(()) => {}
+            Err(ProofError::BodyTooLarge { len, .. }) if count > 1 => {
+                // The body is exact: cut the excess plus a margin.
+                excess = Some(
+                    len.saturating_sub(MAX_DECOMPRESSED_LEN)
+                        .saturating_add(BODY_LIMIT_MARGIN),
+                );
+                continue;
+            }
+            Err(err) => return Err(err.into()),
         }
-        if kept.len() == before {
+        ratio = CompressionRatio::from_lengths(
+            wire.len().saturating_sub(size_of::<Header>()),
+            body.len(),
+        );
+        edges = edge_bytes(body.len(), &costs, count);
+        proof = Some((candidate, terminal));
+        if wire.len() > budget {
+            if count <= 1 {
+                return Err(api::Error::ProofOverBudget {
+                    wire: wire.len(),
+                    budget,
+                });
+            }
+            excess = Some(ratio.uncompressed_for(wire.len().saturating_sub(target)));
+            continue;
+        }
+        if shrinking || terminal || wire.len() >= sufficient_fill {
             break;
         }
-        natural = items.peek().is_none();
-        proof = builder.build(&kept, natural)?;
-        wire = B::wire(&proof)?;
-        if natural || wire.len() >= sufficient_fill {
-            break;
+    }
+
+    let (proof, terminal) = match proof {
+        Some(fitting) if excess.is_none() => fitting,
+        _ => {
+            // Passes exhausted while overshooting: the smallest chunk must fit.
+            count = kept.len().min(1);
+            let terminal = natural_end && count == kept.len();
+            probes = probes.saturating_add(1);
+            let candidate = builder.build(kept.get(..count).unwrap_or_default(), terminal)?;
+            builder.serialize(&candidate, &mut body, &mut wire)?;
+            if wire.len() > budget {
+                return Err(api::Error::ProofOverBudget {
+                    wire: wire.len(),
+                    budget,
+                });
+            }
+            edges = edge_bytes(body.len(), &costs, count);
+            (candidate, terminal)
         }
-        ratio = CompressionRatio::measured(wire.len(), body.saturating_add(fixed));
-    }
-
-    // Shrink: drop entries until the wire fits, but never below one so
-    // paging progresses.
-    while wire.len() > budget && kept.len() > 1 {
-        // Entries whose share of the wire covers the overshoot, halved so a
-        // heavier-than-average tail does not shrink far past the budget.
-        let over = wire.len().saturating_sub(budget);
-        let drop = kept
-            .len()
-            .saturating_mul(over)
-            .div_ceil(wire.len().saturating_mul(2));
-        kept.truncate(kept.len().saturating_sub(drop).max(1));
-        natural = false;
-        proof = builder.build(&kept, natural)?;
-        wire = B::wire(&proof)?;
-    }
-
-    // Report the measured ratio so the caller can seed the next chunk.
-    if !kept.is_empty() {
-        let body = kept.iter().map(B::item_cost).fold(0, usize::saturating_add);
-        ratio = CompressionRatio::measured(wire.len(), body.saturating_add(fixed));
-    }
+    };
+    firewood_histogram!(SIZED_PROOF_PROBES, "kind" => B::KIND_LABEL).record_integer(probes);
     Ok(SizedProof {
         proof,
+        hint: SizingHint {
+            ratio: CompressionRatio::measured(
+                wire.len().saturating_sub(size_of::<Header>()),
+                body.len(),
+            ),
+            edges: Some(edges),
+        },
         wire,
-        natural_end: natural,
-        ratio,
+        natural_end: terminal,
     })
+}
+
+/// One proof flavor: what an item costs in body bytes, how a candidate
+/// chunk is assembled, and how it is serialized.
+trait ChunkBuilder {
+    type Item;
+    type Proof;
+    /// The `kind` label of this flavor's metrics.
+    const KIND_LABEL: &'static str;
+
+    /// Body bytes `item` contributes to the payload.
+    fn item_cost(item: &Self::Item) -> usize;
+    /// The chunk proof for `items`; `natural_end` is true when `items`
+    /// reached the end of the stream.
+    fn build(&self, items: &[Self::Item], natural_end: bool) -> Result<Self::Proof, api::Error>;
+    /// Serializes `proof`: its canonical body into `body` and its framed
+    /// wire into `wire`, both cleared first.
+    fn serialize(
+        &self,
+        proof: &Self::Proof,
+        body: &mut Vec<u8>,
+        wire: &mut Vec<u8>,
+    ) -> Result<(), ProofError>;
 }
 
 struct RangeChunkBuilder<'a, T> {
     merkle: &'a Merkle<T>,
-    start_proof: &'a FrozenProof,
+    start_proof: FrozenProof,
 }
 
 impl<T: TrieReader> ChunkBuilder for RangeChunkBuilder<'_, T> {
     type Item = (Key, Value);
     type Proof = FrozenRangeProof;
+    const KIND_LABEL: &'static str = "range";
 
     fn item_cost((key, value): &Self::Item) -> usize {
-        seq_len(key).saturating_add(seq_len(value))
+        encoded_sequence_len(key).saturating_add(encoded_sequence_len(value))
     }
 
-    fn build(&self, kvs: &[Self::Item], at_natural_end: bool) -> Result<Self::Proof, api::Error> {
+    /// At the natural end the right edge stays open, as
+    /// [`Merkle::range_proof`] leaves it when its limit is not hit.
+    fn build(&self, kvs: &[Self::Item], natural_end: bool) -> Result<Self::Proof, api::Error> {
         let end = match kvs.last() {
-            Some((last, _)) if !at_natural_end => {
-                self.merkle.prove(last).map_err(api::Error::from)?
-            }
+            Some((last, _)) if !natural_end => self.merkle.prove(last)?,
             _ => Proof::default(),
         };
         Ok(RangeProof::with_hash_mode(
@@ -220,34 +397,43 @@ impl<T: TrieReader> ChunkBuilder for RangeChunkBuilder<'_, T> {
         ))
     }
 
-    fn wire(proof: &Self::Proof) -> Result<Vec<u8>, api::Error> {
-        let mut out = Vec::new();
-        proof.write_to_vec(&mut out)?;
-        Ok(out)
+    fn serialize(
+        &self,
+        proof: &Self::Proof,
+        body: &mut Vec<u8>,
+        wire: &mut Vec<u8>,
+    ) -> Result<(), ProofError> {
+        body.clear();
+        proof.write_body_to_vec(body);
+        wire.clear();
+        write_framed_body(body, ProofType::Range, proof.hash_mode(), wire)
     }
 }
 
 struct ChangeChunkBuilder<'a, T> {
     merkle: &'a Merkle<T>,
-    start_proof: &'a FrozenProof,
+    start_proof: FrozenProof,
 }
 
 impl<T: HashedNodeReader> ChunkBuilder for ChangeChunkBuilder<'_, T> {
     type Item = BatchOp<Key, Value>;
     type Proof = FrozenChangeProof;
+    const KIND_LABEL: &'static str = "change";
 
-    /// 1-byte tag + key, + value for `Put`.
+    /// One tag byte and the key, plus the value of a `Put`.
     fn item_cost(op: &Self::Item) -> usize {
-        let tag_and_key = seq_len(op.key()).saturating_add(1);
+        let tag_and_key = encoded_sequence_len(op.key()).saturating_add(1);
         match op {
-            BatchOp::Put { value, .. } => tag_and_key.saturating_add(seq_len(value)),
-            _ => tag_and_key,
+            BatchOp::Put { value, .. } => tag_and_key.saturating_add(encoded_sequence_len(value)),
+            BatchOp::Delete { .. } | BatchOp::DeleteRange { .. } => tag_and_key,
         }
     }
 
-    fn build(&self, ops: &[Self::Item], _at_natural_end: bool) -> Result<Self::Proof, api::Error> {
+    /// The right edge is always the last operation's key, as
+    /// [`Merkle::change_proof`] proves it when no end key is requested.
+    fn build(&self, ops: &[Self::Item], _natural_end: bool) -> Result<Self::Proof, api::Error> {
         let end = match ops.last() {
-            Some(op) => self.merkle.prove(op.key()).map_err(api::Error::from)?,
+            Some(op) => self.merkle.prove(op.key())?,
             None => Proof::default(),
         };
         Ok(ChangeProof::with_hash_mode(
@@ -258,105 +444,80 @@ impl<T: HashedNodeReader> ChunkBuilder for ChangeChunkBuilder<'_, T> {
         ))
     }
 
-    fn wire(proof: &Self::Proof) -> Result<Vec<u8>, api::Error> {
-        let mut out = Vec::new();
-        proof.write_to_vec(&mut out)?;
-        Ok(out)
+    fn serialize(
+        &self,
+        proof: &Self::Proof,
+        body: &mut Vec<u8>,
+        wire: &mut Vec<u8>,
+    ) -> Result<(), ProofError> {
+        body.clear();
+        proof.write_body_to_vec(body);
+        wire.clear();
+        write_framed_body(body, ProofType::Change, proof.hash_mode(), wire)
     }
 }
 
-impl<T: TrieReader> Merkle<T> {
-    /// Generates a range proof sized to target `budget` compressed
-    /// wire bytes without exceeding it.
-    ///
-    /// # Errors
-    ///
-    /// * [`api::Error::RangeProofOnEmptyTrie`] - if the trie is empty and
-    ///   `start_key` is `None`, matching [`Merkle::range_proof`].
-    /// * Any error from proof generation ([`Merkle::prove`]) or iteration.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no in-crate caller until the `Db` API exposes sized proofs"
-        )
-    )]
-    pub(crate) fn range_proof_sized(
-        &self,
-        start_key: Option<&[u8]>,
-        budget: usize,
-        ratio_hint: Option<CompressionRatio>,
-    ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
-        let start_proof = match start_key {
-            Some(key) => self.prove(key).map_err(api::Error::from)?,
-            None => Proof::default(),
+/// Admits items while their summed cost stays within `allowance`, always
+/// admitting one when `kept` is empty so paging progresses. Returns whether
+/// the stream is then exhausted.
+fn grow_prefix<B: ChunkBuilder>(
+    items: &mut std::iter::Peekable<impl Iterator<Item = Result<B::Item, api::Error>>>,
+    kept: &mut Vec<B::Item>,
+    costs: &mut Vec<usize>,
+    allowance: usize,
+) -> Result<bool, api::Error> {
+    while let Some(peeked) = items.peek() {
+        let cost = if let Ok(item) = peeked {
+            B::item_cost(item)
+        } else {
+            items.next().transpose()?;
+            continue;
         };
-        let items = self
-            .key_value_iter_from_key(start_key.unwrap_or_default())
-            .map(|r| r.map_err(api::Error::from));
-
-        let sized = stream_sized(
-            &RangeChunkBuilder {
-                merkle: self,
-                start_proof: &start_proof,
-            },
-            items,
-            budget,
-            ratio_hint,
-        )?;
-        if start_key.is_none() && sized.proof.key_values().is_empty() {
-            return Err(api::Error::RangeProofOnEmptyTrie);
+        let next_cost = costs
+            .last()
+            .copied()
+            .unwrap_or_default()
+            .saturating_add(cost);
+        let payload_len = next_cost.saturating_add(kept.len().saturating_add(1).required_space());
+        if !kept.is_empty() && (payload_len > MAX_DECOMPRESSED_LEN || payload_len > allowance) {
+            break;
         }
-        firewood_histogram!(PROOF_KEYS, "kind" => "range")
-            .record_integer(sized.proof.key_values().len());
-        Ok(sized)
+        if let Some(item) = items.next().transpose()? {
+            kept.push(item);
+            costs.push(next_cost);
+        }
     }
+    Ok(items.peek().is_none())
 }
 
-impl<T: HashedNodeReader> Merkle<T> {
-    /// Generates a change proof sized to target `budget` compressed
-    /// wire bytes without exceeding it.
-    ///
-    /// # Errors
-    ///
-    /// Any error from proof generation or diff iteration.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no in-crate caller until the `Db` API exposes sized proofs"
-        )
-    )]
-    pub(crate) fn change_proof_sized(
-        &self,
-        source_trie: &T,
-        start_key: Option<&[u8]>,
-        budget: usize,
-        ratio_hint: Option<CompressionRatio>,
-    ) -> Result<SizedProof<FrozenChangeProof>, api::Error> {
-        let start_proof = match start_key {
-            Some(key) => self.prove(key).map_err(api::Error::from)?,
-            None => Proof::default(),
-        };
-        let items = DiffMerkleNodeStream::new(
-            source_trie,
-            self.nodestore(),
-            start_key.unwrap_or_default().into(),
-        )
-        .map_err(api::Error::from)?
-        .map(|r| r.map_err(api::Error::from));
-
-        let sized = stream_sized(
-            &ChangeChunkBuilder {
-                merkle: self,
-                start_proof: &start_proof,
-            },
-            items,
-            budget,
-            ratio_hint,
-        )?;
-        firewood_histogram!(PROOF_KEYS, "kind" => "change")
-            .record_integer(sized.proof.batch_ops().len());
-        Ok(sized)
+/// The prefix length below `count` whose dropped items cover `excess` body
+/// bytes, walking real item costs off the tail; at least one item is
+/// dropped and one is kept.
+fn shrunk_count(costs: &[usize], count: usize, excess: usize) -> usize {
+    let total = costs.get(count).copied().unwrap_or_default();
+    let mut kept = count.saturating_sub(1);
+    while kept > 1 && total.saturating_sub(costs.get(kept).copied().unwrap_or_default()) < excess {
+        kept = kept.saturating_sub(1);
     }
+    kept.max(1)
+}
+
+/// Body bytes of a probe beyond its items and their count prefix: the edge
+/// proofs and length prefixes.
+fn edge_bytes(body_len: usize, costs: &[usize], count: usize) -> usize {
+    body_len.saturating_sub(
+        costs
+            .get(count)
+            .copied()
+            .unwrap_or_default()
+            .saturating_add(count.required_space()),
+    )
+}
+
+fn encoded_sequence_len(bytes: &[u8]) -> usize {
+    bytes.len().required_space().saturating_add(bytes.len())
+}
+
+fn percent_of(bytes: usize, percent: usize) -> usize {
+    usize::try_from((bytes as u128).saturating_mul(percent as u128) / 100).unwrap_or(usize::MAX)
 }

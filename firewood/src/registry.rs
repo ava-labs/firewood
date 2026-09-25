@@ -68,6 +68,8 @@ firewood_metrics::define_metrics! {
         PERSIST_SUBMIT_DURATION_SECONDS = "firewood_persist_submit_duration_seconds" native(2.0, 160, 1e-9),
         /// Number of key/value pairs contained in a generated proof, by proof kind
         PROOF_KEYS = "firewood_proof_keys" buckets([0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0, 2048.0, 4096.0, 8192.0, 16_384.0, 32_768.0, 65_536.0, 131_072.0]),
+        /// Candidates built and serialized to size one proof chunk to a wire budget, by proof kind
+        SIZED_PROOF_PROBES = "firewood_sized_proof_probes" buckets([1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0]),
     },
 }
 
