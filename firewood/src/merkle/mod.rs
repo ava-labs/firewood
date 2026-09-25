@@ -1730,10 +1730,16 @@ impl<T: TrieReader> Merkle<T> {
     }
 
     pub(crate) fn get_value(&self, key: &[u8]) -> Result<Option<Value>, FileIoError> {
-        let Some(node) = self.get_node(key)? else {
+        // In skip mode a "definitely absent" verdict saves the walk; in verify
+        // mode the walk runs anyway and a hit the filter called absent is counted.
+        if crate::membership::definitely_absent(key) {
             return Ok(None);
-        };
-        Ok(node.value().map(|v| v.to_vec().into_boxed_slice()))
+        }
+        let value = self
+            .get_node(key)?
+            .and_then(|node| node.value().map(|v| v.to_vec().into_boxed_slice()));
+        crate::membership::audit_false_negative(key, value.is_some());
+        Ok(value)
     }
 
     pub(crate) fn get_node(&self, key: &[u8]) -> Result<Option<SharedNode>, FileIoError> {
@@ -2004,6 +2010,9 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
     /// Each element of key is 2 nibbles.
     #[cfg_attr(feature = "test_utils", expect(clippy::missing_errors_doc))]
     pub fn insert(&mut self, key: &[u8], value: Value) -> Result<(), FileIoError> {
+        // Re-inserting a present key only re-touches counters that are already
+        // set, so every put may be recorded without checking for presence.
+        crate::membership::insert(key);
         self.insert_from_iter(NibblesIterator::new(key), value)
     }
 
@@ -2314,7 +2323,13 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
     /// Otherwise returns `None`.
     /// Each element of `key` is 2 nibbles.
     pub(crate) fn remove(&mut self, key: &[u8]) -> Result<Option<Value>, FileIoError> {
-        self.remove_from_iter(NibblesIterator::new(key))
+        let removed = self.remove_from_iter(NibblesIterator::new(key))?;
+        // Only a genuine removal of a present key may decrement the filter
+        // (matched-remove contract).
+        if removed.is_some() {
+            crate::membership::remove(key);
+        }
+        Ok(removed)
     }
 
     /// Removes the value associated with the given `key` where `key` is a `NibblesIterator`
