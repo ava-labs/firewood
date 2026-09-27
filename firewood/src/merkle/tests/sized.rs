@@ -8,6 +8,7 @@
     reason = "test-only index and size arithmetic on small, bounded values"
 )]
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -22,10 +23,13 @@ use test_case::test_case;
 use super::init_merkle;
 use crate::api::{self, FrozenChangeProof, FrozenRangeProof};
 use crate::db::BatchOp;
-use crate::merkle::sized::{CompressionRatio, SizedProof, SizingHint};
+use crate::merkle::sized::{
+    ChunkBuilder, CompressionRatio, MAX_CORRECTION_PASSES, SizedProof, SizingHint,
+    build_sized_chunk,
+};
 use crate::merkle::{Key, Merkle, Value};
 use crate::proofs::{
-    MAX_DECOMPRESSED_LEN, ProofError, lex_successor, verify_change_proof_structure,
+    MAX_DECOMPRESSED_LEN, ProofError, ProofType, lex_successor, verify_change_proof_structure,
     verify_range_proof_structure,
 };
 
@@ -441,6 +445,66 @@ fn test_sized_account_with_storage_children() {
     verify_change_chunk(&target, &source, Some(&[]), &change);
 }
 
+/// When every correction pass overshoots, the loop stops at the bound and
+/// returns the last candidate that fit rather than probing on.
+#[test]
+fn test_sized_passes_are_bounded_and_the_last_fit_is_kept() {
+    // One item fits comfortably; anything larger is just over budget, so
+    // each shrink drops a few items and overshoots again.
+    let probes = Cell::new(0);
+    let builder = ScriptedBuilder {
+        wire_for: |count| if count <= 1 { 500 } else { 1001 },
+        probes: &probes,
+    };
+
+    let chunk = build_sized_chunk(&builder, (0..100_000u32).map(Ok), 1000, None).unwrap();
+
+    assert_eq!(probes.get(), MAX_CORRECTION_PASSES + 1);
+    assert_eq!(chunk.proof, 1, "the one candidate that fit");
+    assert_eq!(chunk.wire.len(), 500);
+    assert!(!chunk.natural_end);
+}
+
+/// With no fitting candidate at all, a single item is tried once more, and
+/// if even that is over the budget the request fails.
+#[test]
+fn test_sized_falls_back_to_a_single_item_after_exhausted_passes() {
+    // A hint that admits many items up front, so the first probe overshoots too.
+    let hint = Some(SizingHint {
+        ratio: CompressionRatio::measured(1, 2),
+        edges: Some(0),
+    });
+
+    let probes = Cell::new(0);
+    let builder = ScriptedBuilder {
+        wire_for: |count| if count <= 1 { 500 } else { 1001 },
+        probes: &probes,
+    };
+    let chunk = build_sized_chunk(&builder, (0..100_000u32).map(Ok), 1000, hint).unwrap();
+    assert_eq!(probes.get(), MAX_CORRECTION_PASSES + 2);
+    assert_eq!(chunk.proof, 1);
+
+    let probes = Cell::new(0);
+    let builder = ScriptedBuilder {
+        wire_for: |_| 1001,
+        probes: &probes,
+    };
+    let Err(err) = build_sized_chunk(&builder, (0..100_000u32).map(Ok), 1000, hint) else {
+        panic!("no candidate fits the budget");
+    };
+    assert_eq!(probes.get(), MAX_CORRECTION_PASSES + 2);
+    assert!(
+        matches!(
+            err,
+            api::Error::ProofOverBudget {
+                wire: 1001,
+                budget: 1000
+            }
+        ),
+        "{err:?}"
+    );
+}
+
 fn hint(compressed: usize, uncompressed: usize) -> SizingHint {
     SizingHint {
         ratio: CompressionRatio::measured(compressed, uncompressed),
@@ -661,4 +725,41 @@ fn verify_change_chunk<T: HashedNodeReader>(
     let mut expected = Vec::new();
     plain.write_to_vec(&mut expected).unwrap();
     assert_eq!(chunk.wire, expected);
+}
+
+/// A chunk builder whose probes serialize to a scripted wire size per item
+/// count, so the sizing loop's bound and fallback can be tested exactly.
+/// Items cost one body byte each and the proof is the item count.
+struct ScriptedBuilder<'a, F: Fn(usize) -> usize> {
+    wire_for: F,
+    probes: &'a Cell<usize>,
+}
+
+impl<F: Fn(usize) -> usize> ChunkBuilder for ScriptedBuilder<'_, F> {
+    type Item = u32;
+    type Proof = usize;
+    const KIND: ProofType = ProofType::Range;
+
+    fn item_cost(_: &Self::Item) -> usize {
+        1
+    }
+
+    fn build(&self, items: &[Self::Item], _: bool) -> Result<Self::Proof, api::Error> {
+        Ok(items.len())
+    }
+
+    fn serialize(
+        &self,
+        count: &Self::Proof,
+        body: &mut Vec<u8>,
+        wire: &mut Vec<u8>,
+    ) -> Result<(), ProofError> {
+        self.probes.set(self.probes.get() + 1);
+        let len = (self.wire_for)(*count);
+        wire.clear();
+        wire.resize(len, 0);
+        body.clear();
+        body.resize(len * 2, 0);
+        Ok(())
+    }
 }

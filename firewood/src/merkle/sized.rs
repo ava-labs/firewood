@@ -19,7 +19,7 @@ use crate::proofs::{ChangeProof, MAX_DECOMPRESSED_LEN, Proof, ProofError, ProofT
 
 /// Probes after the first candidate, each growing or shrinking it. One
 /// more may follow to settle on a single item.
-const MAX_CORRECTION_PASSES: usize = 8;
+pub(super) const MAX_CORRECTION_PASSES: usize = 8;
 /// Wire size a grow pass aims for and a shrink pass cuts back to, as a
 /// share of the budget. Aiming inside the acceptance window rather than at
 /// the budget keeps ordinary compression variance from forcing another
@@ -42,9 +42,12 @@ impl CompressionRatio {
     const SCALE: u32 = 1 << 16;
     /// An initial compressed/uncompressed estimate of 0.52.
     const INITIAL_ESTIMATE: Self = Self::from_scaled(Self::SCALE * 52 / 100);
-    // Limit cross-page predictions to 20x compression or 2x expansion so one
-    // unusual page cannot dominate the next. In-page measurements are unclamped.
-    const MIN_EXPECTED: Self = Self::from_scaled(Self::SCALE / 20);
+    // Limit cross-page predictions to 64x compression or 2x expansion so one
+    // unusual page cannot dominate the next. Constant-valued regions encode
+    // as flushed-block frames near 40x, under the decoder's 128x cap, so the
+    // floor must leave them room or every such chunk starts a probe short.
+    // In-page measurements are unclamped.
+    const MIN_EXPECTED: Self = Self::from_scaled(Self::SCALE / 64);
     const MAX_EXPECTED: Self = Self::from_scaled(Self::SCALE * 2);
 
     const fn from_scaled(scaled: u32) -> Self {
@@ -150,7 +153,7 @@ impl<T: TrieReader> Merkle<T> {
             budget,
             hint,
         )?;
-        firewood_histogram!(PROOF_KEYS, "kind" => "range_sized")
+        firewood_histogram!(PROOF_KEYS, "kind" => ProofType::Range.name())
             .record_integer(sized.proof.key_values().len());
         Ok(sized)
     }
@@ -203,7 +206,7 @@ impl<T: HashedNodeReader> Merkle<T> {
             budget,
             hint,
         )?;
-        firewood_histogram!(PROOF_KEYS, "kind" => "change_sized")
+        firewood_histogram!(PROOF_KEYS, "kind" => ProofType::Change.name())
             .record_integer(sized.proof.batch_ops().len());
         Ok(sized)
     }
@@ -227,11 +230,12 @@ impl<T: HashedNodeReader> Merkle<T> {
 ///    body bytes and drop tail items until their costs cover it. A shrunk
 ///    candidate that fits is final.
 ///
-/// [`MAX_CORRECTION_PASSES`] limits the number of attempts. If every pass
-/// overshoots, try a single item. If that item, or the edge proofs alone,
-/// exceeds the budget, return [`api::Error::ProofOverBudget`]: peers would
-/// reject a chunk larger than the message limit.
-fn build_sized_chunk<B: ChunkBuilder>(
+/// [`MAX_CORRECTION_PASSES`] limits the number of attempts. When they run
+/// out, return the last candidate that fit; if none did, try a single item.
+/// If that item, or the edge proofs alone, exceeds the budget, return
+/// [`api::Error::ProofOverBudget`]: peers would reject a chunk larger than
+/// the message limit.
+pub(super) fn build_sized_chunk<B: ChunkBuilder>(
     builder: &B,
     items: impl Iterator<Item = Result<B::Item, api::Error>>,
     budget: usize,
@@ -249,7 +253,9 @@ fn build_sized_chunk<B: ChunkBuilder>(
     let mut ratio = hint.map_or(CompressionRatio::INITIAL_ESTIMATE, |h| h.ratio);
     let mut edges = hint.and_then(|h| h.edges).unwrap_or(DEFAULT_EDGE_BYTES);
     let mut count = 0usize;
-    let mut proof = None;
+    // The last candidate that fit the budget; what the loop returns even if
+    // later passes overshoot.
+    let mut fit: Option<Fit<B::Proof>> = None;
     let mut natural_end = false;
     // Body bytes the last probe overshot by; `None` grows instead.
     let mut excess: Option<usize> = None;
@@ -292,7 +298,6 @@ fn build_sized_chunk<B: ChunkBuilder>(
             body.len(),
         );
         edges = edge_bytes(body.len(), &costs, count);
-        proof = Some((candidate, terminal));
         if wire.len() > budget {
             if count <= 1 {
                 return Err(api::Error::ProofOverBudget {
@@ -303,48 +308,83 @@ fn build_sized_chunk<B: ChunkBuilder>(
             excess = Some(ratio.uncompressed_for(wire.len().saturating_sub(target)));
             continue;
         }
-        if shrinking || terminal || wire.len() >= sufficient_fill {
+        let wire_len = wire.len();
+        fit = Some(Fit {
+            proof: candidate,
+            wire: std::mem::take(&mut wire),
+            body_len: body.len(),
+            edges,
+            terminal,
+        });
+        if shrinking || terminal || wire_len >= sufficient_fill {
             break;
         }
     }
 
-    let (proof, terminal) = match proof {
-        Some(fitting) if excess.is_none() => fitting,
-        _ => {
-            // Passes exhausted while overshooting: the smallest chunk must fit.
-            count = kept.len().min(1);
-            let terminal = natural_end && count == kept.len();
-            probes = probes.saturating_add(1);
-            let candidate = builder.build(kept.get(..count).unwrap_or_default(), terminal)?;
-            builder.serialize(&candidate, &mut body, &mut wire)?;
-            if wire.len() > budget {
-                return Err(api::Error::ProofOverBudget {
-                    wire: wire.len(),
-                    budget,
-                });
-            }
-            edges = edge_bytes(body.len(), &costs, count);
-            (candidate, terminal)
-        }
+    let fit = if let Some(fit) = fit {
+        fit
+    } else {
+        // Every pass overshot: the smallest chunk must fit.
+        probes = probes.saturating_add(1);
+        single_item_fit(builder, &kept, &costs, natural_end, budget, body)?
     };
     firewood_histogram!(SIZED_PROOF_PROBES, "kind" => B::KIND.name()).record_integer(probes);
     Ok(SizedProof {
-        proof,
+        proof: fit.proof,
         hint: SizingHint {
             ratio: CompressionRatio::measured(
-                wire.len().saturating_sub(size_of::<Header>()),
-                body.len(),
+                fit.wire.len().saturating_sub(size_of::<Header>()),
+                fit.body_len,
             ),
-            edges: Some(edges),
+            edges: Some(fit.edges),
         },
+        wire: fit.wire,
+        natural_end: fit.terminal,
+    })
+}
+
+/// A candidate that fit the budget, with what its probe measured.
+struct Fit<P> {
+    proof: P,
+    wire: Vec<u8>,
+    body_len: usize,
+    edges: usize,
+    terminal: bool,
+}
+
+/// The chunk of the first item of `kept` (or of no item), which must fit
+/// `budget` or the request fails.
+fn single_item_fit<B: ChunkBuilder>(
+    builder: &B,
+    kept: &[B::Item],
+    costs: &[usize],
+    natural_end: bool,
+    budget: usize,
+    mut body: Vec<u8>,
+) -> Result<Fit<B::Proof>, api::Error> {
+    let count = kept.len().min(1);
+    let terminal = natural_end && count == kept.len();
+    let candidate = builder.build(kept.get(..count).unwrap_or_default(), terminal)?;
+    let mut wire = Vec::new();
+    builder.serialize(&candidate, &mut body, &mut wire)?;
+    if wire.len() > budget {
+        return Err(api::Error::ProofOverBudget {
+            wire: wire.len(),
+            budget,
+        });
+    }
+    Ok(Fit {
+        proof: candidate,
         wire,
-        natural_end: terminal,
+        body_len: body.len(),
+        edges: edge_bytes(body.len(), costs, count),
+        terminal,
     })
 }
 
 /// One proof flavor: what an item costs in body bytes, how a candidate
 /// chunk is assembled, and how it is serialized.
-trait ChunkBuilder {
+pub(super) trait ChunkBuilder {
     type Item;
     type Proof;
     const KIND: ProofType;
