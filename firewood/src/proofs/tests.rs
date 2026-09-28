@@ -9,7 +9,7 @@ use firewood_storage::{
     SeededRng, TrieHash, ValueDigest, logger::debug,
 };
 
-use super::frame::MAX_DECOMPRESSED_LEN;
+use super::frame::{MAX_COMPRESSION_RATIO, MAX_DECOMPRESSED_LEN};
 use super::{
     header::{Header, InvalidHeader},
     magic,
