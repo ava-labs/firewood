@@ -11,12 +11,13 @@ use firewood_storage::{
 
 use super::frame::MAX_DECOMPRESSED_LEN;
 use super::{
-    de::{MAX_KEY_BYTES, MAX_KEY_NIBBLES},
+    de::MAX_KEY_NIBBLES,
     header::{Header, InvalidHeader},
     magic,
     reader::{ProofReader, ReadError},
     types::{Proof, ProofError, ProofNode, ProofType},
 };
+use crate::api::MAX_KEY_BYTES;
 use crate::api::{FrozenChangeProof, FrozenRangeProof};
 use crate::db::BatchOp;
 

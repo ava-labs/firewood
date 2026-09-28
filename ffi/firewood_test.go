@@ -2112,3 +2112,21 @@ func parseKVFromDumpFormat(dumpstr string) ([][]byte, [][]byte, error) {
 	}
 	return keys, values, nil
 }
+
+// TestUpdateEnforcesKeyLengthLimit checks that a key at the limit is applied
+// and a key one byte over is refused with the limit in the message.
+func TestUpdateEnforcesKeyLengthLimit(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	atLimit := make([]byte, 1024)
+	_, err := db.Update([]BatchOp{Put(atLimit, []byte("v"))})
+	r.NoError(err)
+	got, err := db.Get(atLimit)
+	r.NoError(err)
+	r.Equal([]byte("v"), got)
+
+	oneOver := make([]byte, 1025)
+	_, err = db.Update([]BatchOp{Put(oneOver, []byte("v"))})
+	r.ErrorContains(err, "key of 1025 bytes exceeds the supported maximum of 1024 bytes")
+}
