@@ -315,10 +315,9 @@ impl DatabaseHandle {
         root: HashKey,
         start_key: Option<&[u8]>,
         budget: usize,
-        ratio_hint: Option<f64>,
+        hint: Option<firewood::SizingHint>,
     ) -> Result<firewood::SizedProof<api::FrozenRangeProof>, api::Error> {
-        self.db
-            .range_proof_sized(root, start_key, budget, ratio_hint)
+        self.db.range_proof_sized(root, start_key, budget, hint)
     }
 
     /// Create a size-targeted change proof.
@@ -330,10 +329,10 @@ impl DatabaseHandle {
         end_hash: HashKey,
         start_key: Option<&[u8]>,
         budget: usize,
-        ratio_hint: Option<f64>,
+        hint: Option<firewood::SizingHint>,
     ) -> Result<firewood::SizedProof<api::FrozenChangeProof>, api::Error> {
         self.db
-            .change_proof_sized(start_hash, end_hash, start_key, budget, ratio_hint)
+            .change_proof_sized(start_hash, end_hash, start_key, budget, hint)
     }
 
     /// Verify a change proof and create a proposal from it.

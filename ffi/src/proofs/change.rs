@@ -12,7 +12,7 @@ use firewood::{
 use crate::{
     BorrowedBytes, ChangeProofResult, CodeIteratorHandle, CodeIteratorResult, DatabaseHandle,
     HashKey, HashResult, KeyRange, Maybe, NextKeyRangeResult, OwnedBytes, SizedChangeProofResult,
-    ValueResult, VoidResult,
+    SizingHint, ValueResult, VoidResult,
 };
 
 /// Arguments for creating a change proof.
@@ -157,18 +157,16 @@ pub struct CreateSizedChangeProofArgs<'a> {
     /// The start key. If `None`, the proof starts at the beginning of the
     /// keyspace.
     pub start_key: Maybe<BorrowedBytes<'a>>,
-    /// The compressed wire byte budget the serialized proof should fit.
+    /// The wire byte budget the serialized proof must fit.
     pub budget: u64,
-    /// Compression-ratio hint: pass the previous chunk's measured ratio, or
-    /// a value `<= 0` for no hint.
-    pub ratio_hint: f64,
+    /// The previous chunk's measured hint, or the zero value for none.
+    pub hint: SizingHint,
 }
 
-/// Generate a change proof between two roots from `start_key`, sized to
-/// approach `budget` compressed wire bytes without exceeding it — unless a
-/// single op alone does. The serialized wire bytes are returned alongside
-/// the proof handle: they were already computed during sizing, so send them
-/// rather than re-marshaling.
+/// Generate a change proof between two roots from `start_key` whose
+/// serialized size approaches `budget` bytes and never exceeds it. The
+/// serialized wire bytes are returned alongside the proof handle: they were
+/// already computed during sizing, so send them rather than re-marshaling.
 ///
 /// # Arguments
 ///
@@ -181,7 +179,8 @@ pub struct CreateSizedChangeProofArgs<'a> {
 /// - [`SizedChangeProofResult::StartRevisionNotFound`] if the start root was not found.
 /// - [`SizedChangeProofResult::EndRevisionNotFound`] if the end root was not found. If
 ///   both roots are missing, only the end root is reported.
-/// - [`SizedChangeProofResult::Ok`] containing the proof, its wire bytes, and sizing outputs.
+/// - [`SizedChangeProofResult::OverBudget`] if one operation, or the edge proofs alone, do not fit.
+/// - [`SizedChangeProofResult::Ok`] containing the proof, its wire bytes, and the next hint.
 /// - [`SizedChangeProofResult::Err`] containing an error message.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_db_change_proof_sized(
@@ -197,7 +196,7 @@ pub extern "C" fn fwd_db_change_proof_sized(
                 .map(BorrowedBytes::as_slice)
                 .into_option(),
             usize::try_from(args.budget).unwrap_or(usize::MAX),
-            (args.ratio_hint > 0.0).then_some(args.ratio_hint),
+            args.hint.into_option(),
         )
     })
 }

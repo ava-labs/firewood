@@ -733,6 +733,23 @@ typedef struct CreateChangeProofArgs {
 } CreateChangeProofArgs;
 
 /**
+ * What a sized proof measured about its chunk, calibrating the next
+ * request: pass a result's `hint` as the next request's `hint`. A zero
+ * `ratio` means no hint (the first chunk); a zero `edges` means unknown.
+ */
+typedef struct SizingHint {
+  /**
+   * Compressed/uncompressed body ratio in fixed point, where
+   * `1 << 16` is 1:1.
+   */
+  uint32_t ratio;
+  /**
+   * Body bytes the edge proofs took.
+   */
+  uint64_t edges;
+} SizingHint;
+
+/**
  * A size-targeted change proof: the proof handle plus its serialized wire
  * bytes and sizing outputs.
  */
@@ -755,10 +772,10 @@ typedef struct SizedChangeProof {
    */
   bool natural_end;
   /**
-   * Measured compression ratio of this chunk; pass it as the ratio hint
-   * when requesting the next chunk.
+   * What this chunk measured; pass it as the hint when requesting the
+   * next chunk.
    */
-  double ratio;
+  struct SizingHint hint;
 } SizedChangeProof;
 
 /**
@@ -783,6 +800,11 @@ enum SizedChangeProofResult_Tag
    * The provided end root was not found in the database.
    */
   SizedChangeProofResult_EndRevisionNotFound,
+  /**
+   * One operation, or the edge proofs alone, serialize past the budget;
+   * the value is the wire size of that smallest chunk.
+   */
+  SizedChangeProofResult_OverBudget,
   /**
    * The proof was successfully created.
    */
@@ -812,6 +834,9 @@ typedef struct SizedChangeProofResult {
     };
     struct {
       struct HashKey end_revision_not_found;
+    };
+    struct {
+      uint64_t over_budget;
     };
     struct {
       struct SizedChangeProof ok;
@@ -844,14 +869,13 @@ typedef struct CreateSizedChangeProofArgs {
    */
   struct Maybe_BorrowedBytes start_key;
   /**
-   * The compressed wire byte budget the serialized proof should fit.
+   * The wire byte budget the serialized proof must fit.
    */
   uint64_t budget;
   /**
-   * Compression-ratio hint: pass the previous chunk's measured ratio, or
-   * a value `<= 0` for no hint.
+   * The previous chunk's measured hint, or the zero value for none.
    */
-  double ratio_hint;
+  struct SizingHint hint;
 } CreateSizedChangeProofArgs;
 
 /**
@@ -975,10 +999,10 @@ typedef struct SizedRangeProof {
    */
   bool natural_end;
   /**
-   * Measured compression ratio of this chunk; pass it as the ratio hint
-   * when requesting the next chunk.
+   * What this chunk measured; pass it as the hint when requesting the
+   * next chunk.
    */
-  double ratio;
+  struct SizingHint hint;
 } SizedRangeProof;
 
 /**
@@ -1003,6 +1027,11 @@ enum SizedRangeProofResult_Tag
    * A range proof was requested on an empty trie.
    */
   SizedRangeProofResult_EmptyTrie,
+  /**
+   * One entry, or the edge proofs alone, serialize past the budget; the
+   * value is the wire size of that smallest chunk.
+   */
+  SizedRangeProofResult_OverBudget,
   /**
    * The proof was successfully created.
    */
@@ -1031,6 +1060,9 @@ typedef struct SizedRangeProofResult {
       struct HashKey revision_not_found;
     };
     struct {
+      uint64_t over_budget;
+    };
+    struct {
       struct SizedRangeProof ok;
     };
     struct {
@@ -1053,14 +1085,13 @@ typedef struct CreateSizedRangeProofArgs {
    */
   struct Maybe_BorrowedBytes start_key;
   /**
-   * The compressed wire byte budget the serialized proof should fit.
+   * The wire byte budget the serialized proof must fit.
    */
   uint64_t budget;
   /**
-   * Compression-ratio hint: pass the previous chunk's measured ratio, or
-   * a value `<= 0` for no hint.
+   * The previous chunk's measured hint, or the zero value for none.
    */
-  double ratio_hint;
+  struct SizingHint hint;
 } CreateSizedRangeProofArgs;
 
 /**
@@ -2294,11 +2325,10 @@ struct ChangeProofResult fwd_db_change_proof(const struct DatabaseHandle *db,
                                              struct CreateChangeProofArgs args);
 
 /**
- * Generate a change proof between two roots from `start_key`, sized to
- * approach `budget` compressed wire bytes without exceeding it — unless a
- * single op alone does. The serialized wire bytes are returned alongside
- * the proof handle: they were already computed during sizing, so send them
- * rather than re-marshaling.
+ * Generate a change proof between two roots from `start_key` whose
+ * serialized size approaches `budget` bytes and never exceeds it. The
+ * serialized wire bytes are returned alongside the proof handle: they were
+ * already computed during sizing, so send them rather than re-marshaling.
  *
  * # Arguments
  *
@@ -2311,7 +2341,8 @@ struct ChangeProofResult fwd_db_change_proof(const struct DatabaseHandle *db,
  * - [`SizedChangeProofResult::StartRevisionNotFound`] if the start root was not found.
  * - [`SizedChangeProofResult::EndRevisionNotFound`] if the end root was not found. If
  *   both roots are missing, only the end root is reported.
- * - [`SizedChangeProofResult::Ok`] containing the proof, its wire bytes, and sizing outputs.
+ * - [`SizedChangeProofResult::OverBudget`] if one operation, or the edge proofs alone, do not fit.
+ * - [`SizedChangeProofResult::Ok`] containing the proof, its wire bytes, and the next hint.
  * - [`SizedChangeProofResult::Err`] containing an error message.
  */
 struct SizedChangeProofResult fwd_db_change_proof_sized(const struct DatabaseHandle *db,
@@ -2362,11 +2393,10 @@ struct RangeProofResult fwd_db_range_proof(const struct DatabaseHandle *db,
                                            struct CreateRangeProofArgs args);
 
 /**
- * Generate a range proof from `start_key`, sized to approach `budget`
- * compressed wire bytes without exceeding it — unless a single entry alone
- * does. The serialized wire bytes are returned alongside the proof handle:
- * they were already computed during sizing, so send them rather than
- * re-marshaling.
+ * Generate a range proof from `start_key` whose serialized size approaches
+ * `budget` bytes and never exceeds it. The serialized wire bytes are
+ * returned alongside the proof handle: they were already computed during
+ * sizing, so send them rather than re-marshaling.
  *
  * # Arguments
  *
@@ -2378,7 +2408,8 @@ struct RangeProofResult fwd_db_range_proof(const struct DatabaseHandle *db,
  * - [`SizedRangeProofResult::NullHandlePointer`] if the caller provided a null pointer.
  * - [`SizedRangeProofResult::RevisionNotFound`] if the provided root was not found.
  * - [`SizedRangeProofResult::EmptyTrie`] if the trie is empty and no start key was given.
- * - [`SizedRangeProofResult::Ok`] containing the proof, its wire bytes, and sizing outputs.
+ * - [`SizedRangeProofResult::OverBudget`] if one entry, or the edge proofs alone, do not fit.
+ * - [`SizedRangeProofResult::Ok`] containing the proof, its wire bytes, and the next hint.
  * - [`SizedRangeProofResult::Err`] containing an error message.
  */
 struct SizedRangeProofResult fwd_db_range_proof_sized(const struct DatabaseHandle *db,

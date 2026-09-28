@@ -11,7 +11,8 @@ use firewood_metrics::{MetricsContext, firewood_counter};
 
 use crate::{
     BorrowedBytes, CodeIteratorHandle, CodeIteratorResult, DatabaseHandle, HashResult, Maybe,
-    NextKeyRangeResult, RangeProofResult, SizedRangeProofResult, ValueResult, VoidResult,
+    NextKeyRangeResult, RangeProofResult, SizedRangeProofResult, SizingHint, ValueResult,
+    VoidResult,
 };
 
 /// Arguments for creating a range proof.
@@ -329,11 +330,10 @@ pub extern "C" fn fwd_db_range_proof(
     })
 }
 
-/// Generate a range proof from `start_key`, sized to approach `budget`
-/// compressed wire bytes without exceeding it — unless a single entry alone
-/// does. The serialized wire bytes are returned alongside the proof handle:
-/// they were already computed during sizing, so send them rather than
-/// re-marshaling.
+/// Generate a range proof from `start_key` whose serialized size approaches
+/// `budget` bytes and never exceeds it. The serialized wire bytes are
+/// returned alongside the proof handle: they were already computed during
+/// sizing, so send them rather than re-marshaling.
 ///
 /// # Arguments
 ///
@@ -345,7 +345,8 @@ pub extern "C" fn fwd_db_range_proof(
 /// - [`SizedRangeProofResult::NullHandlePointer`] if the caller provided a null pointer.
 /// - [`SizedRangeProofResult::RevisionNotFound`] if the provided root was not found.
 /// - [`SizedRangeProofResult::EmptyTrie`] if the trie is empty and no start key was given.
-/// - [`SizedRangeProofResult::Ok`] containing the proof, its wire bytes, and sizing outputs.
+/// - [`SizedRangeProofResult::OverBudget`] if one entry, or the edge proofs alone, do not fit.
+/// - [`SizedRangeProofResult::Ok`] containing the proof, its wire bytes, and the next hint.
 /// - [`SizedRangeProofResult::Err`] containing an error message.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_db_range_proof_sized(
@@ -362,7 +363,7 @@ pub extern "C" fn fwd_db_range_proof_sized(
                 .map(BorrowedBytes::as_slice)
                 .into_option(),
             usize::try_from(args.budget).unwrap_or(usize::MAX),
-            (args.ratio_hint > 0.0).then_some(args.ratio_hint),
+            args.hint.into_option(),
         )
     })
 }
@@ -376,11 +377,10 @@ pub struct CreateSizedRangeProofArgs<'a> {
     /// The start key. If `None`, the proof starts at the beginning of the
     /// keyspace.
     pub start_key: Maybe<BorrowedBytes<'a>>,
-    /// The compressed wire byte budget the serialized proof should fit.
+    /// The wire byte budget the serialized proof must fit.
     pub budget: u64,
-    /// Compression-ratio hint: pass the previous chunk's measured ratio, or
-    /// a value `<= 0` for no hint.
-    pub ratio_hint: f64,
+    /// The previous chunk's measured hint, or the zero value for none.
+    pub hint: SizingHint,
 }
 
 /// Verify a range proof against the given start and end keys and root hash. The

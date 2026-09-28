@@ -34,12 +34,14 @@ const DEFAULT_EDGE_BYTES: usize = 16 * 1024;
 /// rebuilt chunk lands under it despite a different right edge.
 const BODY_LIMIT_MARGIN: usize = 16 * 1024;
 
-/// Compressed/uncompressed body size fraction in fixed point.
+/// Compressed/uncompressed body size fraction in fixed point, with
+/// [`Self::SCALE`] meaning 1:1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct CompressionRatio(NonZeroU32);
+pub struct CompressionRatio(NonZeroU32);
 
 impl CompressionRatio {
-    const SCALE: u32 = 1 << 16;
+    /// The fixed-point representation of a 1:1 ratio.
+    pub const SCALE: u32 = 1 << 16;
     /// An initial compressed/uncompressed estimate of 0.52.
     const INITIAL_ESTIMATE: Self = Self::from_scaled(Self::SCALE * 52 / 100);
     // Clamp cross-page predictions to 64x compression or 2x expansion so one
@@ -48,7 +50,10 @@ impl CompressionRatio {
     const MIN_EXPECTED: Self = Self::from_scaled(Self::SCALE / 64);
     const MAX_EXPECTED: Self = Self::from_scaled(Self::SCALE * 2);
 
-    const fn from_scaled(scaled: u32) -> Self {
+    /// A ratio from its fixed-point representation; zero rounds up to the
+    /// smallest representable ratio.
+    #[must_use]
+    pub const fn from_scaled(scaled: u32) -> Self {
         Self(match NonZeroU32::new(scaled) {
             Some(value) => value,
             None => NonZeroU32::MIN,
@@ -66,6 +71,12 @@ impl CompressionRatio {
         Self::from_lengths(compressed, uncompressed).clamp(Self::MIN_EXPECTED, Self::MAX_EXPECTED)
     }
 
+    /// The fixed-point representation, with [`Self::SCALE`] meaning 1:1.
+    #[must_use]
+    pub const fn scaled(self) -> u32 {
+        self.0.get()
+    }
+
     fn uncompressed_for(self, compressed: usize) -> usize {
         let estimate = (compressed as u128).saturating_mul(u128::from(Self::SCALE))
             / NonZeroU128::from(self.0);
@@ -77,31 +88,25 @@ impl CompressionRatio {
 /// first candidate: pass a chunk's [`SizedProof::hint`] when requesting the
 /// chunk that follows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct SizingHint {
+pub struct SizingHint {
     /// Compressed/uncompressed ratio of the body.
-    pub(super) ratio: CompressionRatio,
+    pub ratio: CompressionRatio,
     /// Body bytes the edge proofs and length prefixes took; `None` assumes
-    /// [`DEFAULT_EDGE_BYTES`] until the first probe measures them.
-    pub(super) edges: Option<usize>,
+    /// a default until the first probe measures them.
+    pub edges: Option<usize>,
 }
 
 /// A budget-targeted proof and its serialized wire representation.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no in-crate caller until the Db API exposes sized proofs"
-    )
-)]
-pub(super) struct SizedProof<P> {
+#[derive(Debug)]
+pub struct SizedProof<P> {
     /// The selected prefix and its boundary proofs.
-    pub(super) proof: P,
+    pub proof: P,
     /// The bytes produced by serializing `proof`.
-    pub(super) wire: Vec<u8>,
+    pub wire: Vec<u8>,
     /// True once paging has reached the end of the keyspace/diff.
-    pub(super) natural_end: bool,
+    pub natural_end: bool,
     /// What this chunk measured, for the next request's `hint`.
-    pub(super) hint: SizingHint,
+    pub hint: SizingHint,
 }
 
 impl<T: TrieReader> Merkle<T> {
@@ -118,14 +123,7 @@ impl<T: TrieReader> Merkle<T> {
     ///   alone, serialize past `budget`.
     /// * A bounded request on an empty trie returns [`ProofError::Empty`].
     /// * Proof generation, iteration, body-size, or compression errors.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no in-crate caller until the `Db` API exposes sized proofs"
-        )
-    )]
-    pub(super) fn range_proof_sized(
+    pub(crate) fn range_proof_sized(
         &self,
         start_key: Option<&[u8]>,
         budget: usize,
@@ -170,14 +168,7 @@ impl<T: HashedNodeReader> Merkle<T> {
     /// * [`ProofError::Empty`] - this trie is empty, as in
     ///   [`Self::change_proof`].
     /// * Proof generation, diff iteration, body-size, or compression errors.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no in-crate caller until the `Db` API exposes sized proofs"
-        )
-    )]
-    pub(super) fn change_proof_sized(
+    pub(crate) fn change_proof_sized(
         &self,
         source_trie: &impl HashedNodeReader,
         start_key: Option<&[u8]>,
