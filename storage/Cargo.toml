@@ -55,6 +55,7 @@ arity-arrays = { version = "0.2.0", default-features = false, features = ["16"] 
 [dev-dependencies]
 # Workspace dependencies
 criterion = { workspace = true, features = ["html_reports"] }
+firewood-macros.workspace = true
 insta.workspace = true
 metrics-util.workspace = true
 pprof = { workspace = true, features = ["flamegraph"] }

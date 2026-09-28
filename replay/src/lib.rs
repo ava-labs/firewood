@@ -377,18 +377,14 @@ mod tests {
     use firewood::db::DbConfig;
     use firewood::manager::RevisionManagerConfig;
     use firewood::open;
-    use firewood_storage::NodeHashAlgorithm;
+    use firewood_macros::hash_mode;
+    use firewood_storage::{EthHash, HashMode, MerkleDbHash, NodeHashAlgorithm};
     use std::io::Cursor;
     use tempfile::tempdir;
 
-    fn create_test_db() -> (tempfile::TempDir, Box<dyn DynDb>) {
+    fn create_test_db(algorithm: NodeHashAlgorithm) -> (tempfile::TempDir, Box<dyn DynDb>) {
         let tmpdir = tempdir().expect("create tempdir");
         let db_path = tmpdir.path().join("test.db");
-        let algorithm = if cfg!(feature = "ethhash") {
-            NodeHashAlgorithm::Ethereum
-        } else {
-            NodeHashAlgorithm::MerkleDB
-        };
         let cfg = DbConfig::builder()
             .node_hash_algorithm(algorithm)
             .truncate(true)
@@ -407,9 +403,10 @@ mod tests {
         buf
     }
 
+    #[hash_mode]
     #[test]
-    fn replay_batch_inserts_keys() {
-        let (_tmpdir, db) = create_test_db();
+    fn replay_batch_inserts_keys<H: HashMode>() {
+        let (_tmpdir, db) = create_test_db(H::ALGORITHM);
 
         let pairs: Vec<KeyValueOp> = (0u8..5)
             .map(|i| KeyValueOp {
@@ -432,9 +429,10 @@ mod tests {
         }
     }
 
+    #[hash_mode]
     #[test]
-    fn replay_propose_and_commit() {
-        let (_tmpdir, db) = create_test_db();
+    fn replay_propose_and_commit<H: HashMode>() {
+        let (_tmpdir, db) = create_test_db(H::ALGORITHM);
 
         let pairs: Vec<KeyValueOp> = (0u8..3)
             .map(|i| KeyValueOp {
@@ -468,9 +466,10 @@ mod tests {
         }
     }
 
+    #[hash_mode]
     #[test]
-    fn replay_chained_proposals() {
-        let (_tmpdir, db) = create_test_db();
+    fn replay_chained_proposals<H: HashMode>() {
+        let (_tmpdir, db) = create_test_db(H::ALGORITHM);
 
         let ops = vec![
             DbOperation::ProposeOnDB(ProposeOnDB {
@@ -512,9 +511,10 @@ mod tests {
         assert_eq!(*v2, [20]);
     }
 
+    #[hash_mode]
     #[test]
-    fn replay_empty_log_succeeds() {
-        let (_tmpdir, db) = create_test_db();
+    fn replay_empty_log_succeeds<H: HashMode>() {
+        let (_tmpdir, db) = create_test_db(H::ALGORITHM);
         let result = replay_from_reader(Cursor::new(Vec::new()), db.as_ref(), None);
         assert!(result.is_ok());
         assert!(result.expect("ok").is_none());

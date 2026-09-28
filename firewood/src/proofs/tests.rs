@@ -1358,8 +1358,9 @@ fn test_frame_rejects_malformed_wire(mutate: fn(&mut Vec<u8>)) {
 
 #[test]
 fn test_write_to_vec_rejects_over_cap_body() {
-    // Five 1 MiB values
-    let kvs: Box<[_]> = (0u8..5)
+    // One more 1 MiB value than the cap holds
+    let over_cap = u8::try_from(MAX_DECOMPRESSED_LEN / (1024 * 1024) + 1).unwrap();
+    let kvs: Box<[_]> = (0u8..over_cap)
         .map(|i| {
             (
                 Box::from([i].as_slice()),
@@ -1387,6 +1388,28 @@ fn test_write_to_vec_rejects_over_cap_body() {
         "got {err:?}"
     );
     assert!(out.is_empty(), "a failed serialization must not write");
+}
+
+#[test]
+fn test_write_to_vec_keeps_over_compressible_bodies_decodable() {
+    // A constant value bulk-compresses beyond the ratio decoders accept;
+    // the producer re-encodes it in flushed blocks and the decoder's
+    // single-frame, content-size and ratio checks must all still pass.
+    for len in [128, 16 * 1024, MAX_DECOMPRESSED_LEN - 64] {
+        let kvs: Box<[_]> = Box::from([(
+            Box::from([0u8].as_slice()),
+            vec![0u8; len].into_boxed_slice(),
+        )]);
+        let proof = FrozenRangeProof::new(
+            Proof::new(Box::<[ProofNode]>::from([])),
+            Proof::new(Box::<[ProofNode]>::from([])),
+            kvs,
+        );
+        let mut wire = Vec::new();
+        proof.write_to_vec(&mut wire).expect("serialize");
+        let decoded = FrozenRangeProof::from_slice(&wire).expect("decodable frame");
+        assert_eq!(decoded.key_values(), proof.key_values());
+    }
 }
 
 /// Frames declaring a zero content size are rejected at the frame layer
@@ -1448,10 +1471,13 @@ fn test_frame_rejects_excessive_compression_ratio() {
     // A 4 MiB all-zero body compresses to a few hundred bytes: under the
     // length cap and consistent with the frame header's content size, but
     // far over MAX_COMPRESSION_RATIO. The decoder must reject it before
-    // allocating the 4 MiB.
+    // allocating the 4 MiB. The producer no longer emits such a frame (it
+    // re-encodes in flushed blocks), so build the bomb with zstd directly.
     let body = vec![0u8; 4 * 1024 * 1024];
     let mut wire = raw_header(ProofType::Range);
-    super::frame::write_compressed_body(&body, &mut wire).expect("compress body");
+    wire.extend_from_slice(
+        &zstd::bulk::compress(&body, zstd::DEFAULT_COMPRESSION_LEVEL).expect("compress body"),
+    );
     let err = FrozenRangeProof::from_slice(&wire).expect_err("compression bomb");
     assert!(
         matches!(

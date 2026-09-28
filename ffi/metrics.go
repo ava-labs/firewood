@@ -21,7 +21,6 @@ import (
 	"unsafe"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"google.golang.org/protobuf/proto"
 
 	dto "github.com/prometheus/client_model/go"
 )
@@ -128,12 +127,12 @@ func convertMetricFamily(c *C.OwnedMetricFamily) *dto.MetricFamily {
 	name := borrowString(c.name)
 
 	mf := &dto.MetricFamily{
-		Name: proto.String(name),
+		Name: new(name),
 	}
 
 	if c.help.tag == C.Maybe_OwnedBytes_Some_OwnedBytes {
 		help := borrowString(*(*C.OwnedBytes)(unsafe.Pointer(&c.help.anon0)))
-		mf.Help = proto.String(help)
+		mf.Help = new(help)
 	}
 
 	if c.metrics.ptr == nil {
@@ -182,8 +181,8 @@ func convertMetric(c *C.OwnedMetric) *dto.Metric {
 		m.Label = make([]*dto.LabelPair, len(cLabels))
 		for i := range cLabels {
 			m.Label[i] = &dto.LabelPair{
-				Name:  proto.String(borrowString(cLabels[i].label)),
-				Value: proto.String(borrowString(cLabels[i].value)),
+				Name:  new(borrowString(cLabels[i].label)),
+				Value: new(borrowString(cLabels[i].value)),
 			}
 		}
 	}
@@ -191,10 +190,10 @@ func convertMetric(c *C.OwnedMetric) *dto.Metric {
 	switch c.value.tag {
 	case C.OwnedMetricValue_Counter:
 		val := *(*C.uint64_t)(unsafe.Pointer(&c.value.anon0))
-		m.Counter = &dto.Counter{Value: proto.Float64(float64(val))}
+		m.Counter = &dto.Counter{Value: new(float64(val))}
 	case C.OwnedMetricValue_Gauge:
 		val := *(*C.double)(unsafe.Pointer(&c.value.anon0))
-		m.Gauge = &dto.Gauge{Value: proto.Float64(float64(val))}
+		m.Gauge = &dto.Gauge{Value: new(float64(val))}
 	case C.OwnedMetricValue_Summary:
 		s := (*C.OwnedSummary)(unsafe.Pointer(&c.value.anon0))
 		m.Summary = convertSummary(s)
@@ -212,8 +211,8 @@ func convertMetric(c *C.OwnedMetric) *dto.Metric {
 
 func convertSummary(c *C.OwnedSummary) *dto.Summary {
 	s := &dto.Summary{
-		SampleCount: proto.Uint64(uint64(c.sample_count)),
-		SampleSum:   proto.Float64(float64(c.sample_sum)),
+		SampleCount: new(uint64(c.sample_count)),
+		SampleSum:   new(float64(c.sample_sum)),
 	}
 
 	if c.quantiles.ptr != nil {
@@ -221,8 +220,8 @@ func convertSummary(c *C.OwnedSummary) *dto.Summary {
 		s.Quantile = make([]*dto.Quantile, len(cQuantiles))
 		for i := range cQuantiles {
 			s.Quantile[i] = &dto.Quantile{
-				Quantile: proto.Float64(float64(cQuantiles[i].quantile)),
-				Value:    proto.Float64(float64(cQuantiles[i].value)),
+				Quantile: new(float64(cQuantiles[i].quantile)),
+				Value:    new(float64(cQuantiles[i].value)),
 			}
 		}
 	}
@@ -232,8 +231,8 @@ func convertSummary(c *C.OwnedSummary) *dto.Summary {
 
 func convertClassicHistogram(c *C.OwnedClassicHistogram) *dto.Histogram {
 	h := &dto.Histogram{
-		SampleCount: proto.Uint64(uint64(c.sample_count)),
-		SampleSum:   proto.Float64(float64(c.sample_sum)),
+		SampleCount: new(uint64(c.sample_count)),
+		SampleSum:   new(float64(c.sample_sum)),
 	}
 
 	if c.buckets.ptr != nil {
@@ -241,8 +240,8 @@ func convertClassicHistogram(c *C.OwnedClassicHistogram) *dto.Histogram {
 		h.Bucket = make([]*dto.Bucket, len(cBuckets))
 		for i := range cBuckets {
 			h.Bucket[i] = &dto.Bucket{
-				CumulativeCount: proto.Uint64(uint64(cBuckets[i].cumulative_count)),
-				UpperBound:      proto.Float64(float64(cBuckets[i].upper_bound)),
+				CumulativeCount: new(uint64(cBuckets[i].cumulative_count)),
+				UpperBound:      new(float64(cBuckets[i].upper_bound)),
 			}
 		}
 	}
@@ -252,11 +251,11 @@ func convertClassicHistogram(c *C.OwnedClassicHistogram) *dto.Histogram {
 
 func convertNativeHistogram(c *C.OwnedNativeHistogram) *dto.Histogram {
 	h := &dto.Histogram{
-		SampleCount:   proto.Uint64(uint64(c.sample_count)),
-		SampleSum:     proto.Float64(float64(c.sample_sum)),
-		Schema:        proto.Int32(int32(c.schema)),
-		ZeroThreshold: proto.Float64(float64(c.zero_threshold)),
-		ZeroCount:     proto.Uint64(uint64(c.zero_count)),
+		SampleCount:   new(uint64(c.sample_count)),
+		SampleSum:     new(float64(c.sample_sum)),
+		Schema:        new(int32(c.schema)),
+		ZeroThreshold: new(float64(c.zero_threshold)),
+		ZeroCount:     new(uint64(c.zero_count)),
 	}
 
 	if c.positive_spans.ptr != nil {
@@ -264,8 +263,8 @@ func convertNativeHistogram(c *C.OwnedNativeHistogram) *dto.Histogram {
 		h.PositiveSpan = make([]*dto.BucketSpan, len(cSpans))
 		for i := range cSpans {
 			h.PositiveSpan[i] = &dto.BucketSpan{
-				Offset: proto.Int32(int32(cSpans[i].offset)),
-				Length: proto.Uint32(uint32(cSpans[i].length)),
+				Offset: new(int32(cSpans[i].offset)),
+				Length: new(uint32(cSpans[i].length)),
 			}
 		}
 	}
@@ -283,8 +282,8 @@ func convertNativeHistogram(c *C.OwnedNativeHistogram) *dto.Histogram {
 		h.NegativeSpan = make([]*dto.BucketSpan, len(cSpans))
 		for i := range cSpans {
 			h.NegativeSpan[i] = &dto.BucketSpan{
-				Offset: proto.Int32(int32(cSpans[i].offset)),
-				Length: proto.Uint32(uint32(cSpans[i].length)),
+				Offset: new(int32(cSpans[i].offset)),
+				Length: new(uint32(cSpans[i].length)),
 			}
 		}
 	}
