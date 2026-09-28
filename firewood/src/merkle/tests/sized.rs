@@ -189,28 +189,26 @@ fn test_range_sized_heavy_tail_entries_stay_well_filled() {
     assert_well_filled(&chunks, budget);
 }
 
-/// Constant values compress beyond the ratio decoders accept; the
-/// serializer refuses them rather than emitting an undecodable message.
+/// Constant values compress far beyond the decoder's ratio cap; the
+/// serializer's flushed-block encoding keeps such chunks decodable, and the
+/// body limit still bounds them.
 #[test]
-fn test_sized_constant_values_are_refused_as_undecodable() {
+fn test_sized_constant_values_stay_decodable() {
     let kvs: Vec<_> = (0u32..120)
         .map(|i| (i.to_be_bytes().to_vec(), vec![0x42; 64 * 1024]))
         .collect();
     let target = init_merkle(kvs);
     let source = init_merkle(Vec::<(Vec<u8>, Vec<u8>)>::new());
 
-    assert!(matches!(
-        target.range_proof_sized(None, usize::MAX, None),
-        Err(api::Error::ProofError(
-            ProofError::BodyTooCompressible { .. }
-        ))
-    ));
-    assert!(matches!(
-        target.change_proof_sized(source.nodestore(), None, usize::MAX, None),
-        Err(api::Error::ProofError(
-            ProofError::BodyTooCompressible { .. }
-        ))
-    ));
+    let range = target.range_proof_sized(None, usize::MAX, None).unwrap();
+    assert!(!range.natural_end, "the body limit must bound the chunk");
+    verify_range_chunk(&target, None, &range);
+
+    let change = target
+        .change_proof_sized(source.nodestore(), None, usize::MAX, None)
+        .unwrap();
+    assert!(!change.natural_end);
+    verify_change_chunk(&target, &source, None, &change);
 }
 
 /// The budget is a message limit: a chunk that cannot fit it is an error,
