@@ -14,11 +14,12 @@ use super::reader::ReadError;
 use super::types::ProofError;
 
 /// Hard cap on a decoded proof body, enforced by the decoder before
-/// allocating and by the serializer before emitting. 4MiB bounds what one
-/// message can force us to allocate while leaving room for real
-/// state-sync proofs (target 2MiB). Changing it needs coordination:
-/// every decoder must accept a value before any producer emits it.
-pub(super) const MAX_DECOMPRESSED_LEN: usize = 4 * 1024 * 1024; // 4 MiB
+/// allocating and by the serializer before emitting. 6MiB bounds what one
+/// message can force us to allocate while leaving room for a full
+/// state-sync message (target 2MiB). Changing it needs
+/// coordination: every decoder must accept a value before any producer
+/// emits it.
+pub(super) const MAX_DECOMPRESSED_LEN: usize = 6 * 1024 * 1024; // 6 MiB
 
 /// Cap on the uncompressed/compressed length ratio, bounding zstd-bomb
 /// amplification to 128× the bytes a peer actually sent. Honest hash-heavy

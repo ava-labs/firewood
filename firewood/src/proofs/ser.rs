@@ -11,7 +11,7 @@ use firewood_storage::{NodeHashAlgorithm, PathBuf, PathComponentSliceExt, ValueD
 use integer_encoding::VarInt;
 
 use super::{
-    frame::MAX_DECOMPRESSED_LEN,
+    frame::{MAX_COMPRESSION_RATIO, MAX_DECOMPRESSED_LEN},
     header::Header,
     types::{ProofError, ProofNode, ProofType},
 };
@@ -86,16 +86,14 @@ impl FrozenRangeProof {
     ///
     /// # Errors
     ///
-    /// Returns [`ProofError::BodyTooLarge`] with `out` untouched if the
-    /// serialized body exceeds the size cap, or [`ProofError::Compression`]
-    /// if the compression fails where `out` will hold a header-only write.
+    /// Returns [`ProofError::BodyTooLarge`] if the serialized body exceeds
+    /// the size cap, [`ProofError::BodyTooCompressible`] if it compresses
+    /// beyond the ratio decoders accept, or [`ProofError::Compression`] if
+    /// the compression fails; `out` is untouched on error.
     pub fn write_to_vec(&self, out: &mut Vec<u8>) -> Result<(), ProofError> {
         let mut body = Vec::new();
         self.write_body_to_vec(&mut body);
-        check_body_len(body.len())?;
-        let header = Header::from((ProofType::Range, self.hash_mode()));
-        out.extend_from_slice(bytemuck::bytes_of(&header));
-        super::frame::write_compressed_body(&body, out)
+        write_framed_body(&body, ProofType::Range, self.hash_mode(), out)
     }
 
     /// Serializes this proof's canonical (uncompressed) body: the bytes
@@ -122,16 +120,11 @@ impl FrozenChangeProof {
     ///
     /// # Errors
     ///
-    /// Returns [`ProofError::BodyTooLarge`] with `out` untouched if the
-    /// serialized body exceeds the size cap, or [`ProofError::Compression`]
-    /// if the compression fails where `out` will hold a header-only write.
+    /// Errors as [`FrozenRangeProof::write_to_vec`].
     pub fn write_to_vec(&self, out: &mut Vec<u8>) -> Result<(), ProofError> {
         let mut body = Vec::new();
         self.write_body_to_vec(&mut body);
-        check_body_len(body.len())?;
-        let header = Header::from((ProofType::Change, self.hash_mode()));
-        out.extend_from_slice(bytemuck::bytes_of(&header));
-        super::frame::write_compressed_body(&body, out)
+        write_framed_body(&body, ProofType::Change, self.hash_mode(), out)
     }
 
     /// Serializes this proof's canonical (uncompressed) body. See
@@ -145,12 +138,47 @@ impl FrozenChangeProof {
     }
 }
 
+/// Frames a canonical body: the header, then the compressed body. Mirrors
+/// the decoder's limits so a message no peer would accept is reported at
+/// the source instead of emitted: the body must be within the size cap and
+/// must not compress beyond the ratio cap. `out` is untouched on error.
+pub(crate) fn write_framed_body(
+    body: &[u8],
+    kind: ProofType,
+    mode: NodeHashAlgorithm,
+    out: &mut Vec<u8>,
+) -> Result<(), ProofError> {
+    check_body_len(body.len())?;
+    let start = out.len();
+    let header = Header::from((kind, mode));
+    out.extend_from_slice(bytemuck::bytes_of(&header));
+    let frame_start = out.len();
+    let result = super::frame::write_compressed_body(body, out)
+        .and_then(|()| check_frame_ratio(body.len(), out.len().saturating_sub(frame_start)));
+    if result.is_err() {
+        out.truncate(start);
+    }
+    result
+}
+
 /// Rejects a canonical body larger than the cap decoders enforce.
 const fn check_body_len(len: usize) -> Result<(), ProofError> {
     if len > MAX_DECOMPRESSED_LEN {
         return Err(ProofError::BodyTooLarge {
             len,
             limit: MAX_DECOMPRESSED_LEN,
+        });
+    }
+    Ok(())
+}
+
+/// Rejects a body that compressed beyond the ratio decoders accept.
+const fn check_frame_ratio(body_len: usize, frame_len: usize) -> Result<(), ProofError> {
+    if body_len > frame_len.saturating_mul(MAX_COMPRESSION_RATIO) {
+        return Err(ProofError::BodyTooCompressible {
+            body_len,
+            frame_len,
+            ratio: MAX_COMPRESSION_RATIO,
         });
     }
     Ok(())

@@ -9,7 +9,7 @@ use firewood_storage::{
     SeededRng, TrieHash, ValueDigest, logger::debug,
 };
 
-use super::frame::MAX_DECOMPRESSED_LEN;
+use super::frame::{MAX_COMPRESSION_RATIO, MAX_DECOMPRESSED_LEN};
 use super::{
     header::{Header, InvalidHeader},
     magic,
@@ -1357,8 +1357,9 @@ fn test_frame_rejects_malformed_wire(mutate: fn(&mut Vec<u8>)) {
 
 #[test]
 fn test_write_to_vec_rejects_over_cap_body() {
-    // Five 1 MiB values
-    let kvs: Box<[_]> = (0u8..5)
+    // One more 1 MiB value than the cap holds
+    let over_cap = u8::try_from(MAX_DECOMPRESSED_LEN / (1024 * 1024) + 1).unwrap();
+    let kvs: Box<[_]> = (0u8..over_cap)
         .map(|i| {
             (
                 Box::from([i].as_slice()),
@@ -1382,6 +1383,35 @@ fn test_write_to_vec_rejects_over_cap_body() {
                 limit: MAX_DECOMPRESSED_LEN,
                 ..
             }
+        ),
+        "got {err:?}"
+    );
+    assert!(out.is_empty(), "a failed serialization must not write");
+}
+
+#[test]
+fn test_write_to_vec_rejects_over_compressible_body() {
+    // A constant 1 MiB value compresses to a few hundred bytes, beyond the
+    // ratio decoders accept; the producer reports it instead of emitting a
+    // message no peer would decode.
+    let kvs: Box<[_]> = Box::from([(
+        Box::from([0u8].as_slice()),
+        vec![0u8; 1024 * 1024].into_boxed_slice(),
+    )]);
+    let proof = FrozenRangeProof::new(
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        kvs,
+    );
+    let mut out = Vec::new();
+    let err = proof
+        .write_to_vec(&mut out)
+        .expect_err("over-compressible body must fail to serialize");
+    assert!(
+        matches!(
+            err,
+            ProofError::BodyTooCompressible { body_len, frame_len, ratio }
+                if body_len > frame_len * ratio && ratio == MAX_COMPRESSION_RATIO
         ),
         "got {err:?}"
     );
