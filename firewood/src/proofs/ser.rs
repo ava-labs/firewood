@@ -11,7 +11,7 @@ use firewood_storage::{NodeHashAlgorithm, PathBuf, PathComponentSliceExt, ValueD
 use integer_encoding::VarInt;
 
 use super::{
-    frame::{MAX_COMPRESSION_RATIO, MAX_DECOMPRESSED_LEN},
+    frame::MAX_DECOMPRESSED_LEN,
     header::Header,
     types::{ProofError, ProofNode, ProofType},
 };
@@ -163,18 +163,6 @@ const fn check_body_len(len: usize) -> Result<(), ProofError> {
         return Err(ProofError::BodyTooLarge {
             len,
             limit: MAX_DECOMPRESSED_LEN,
-        });
-    }
-    Ok(())
-}
-
-/// Rejects a body that compressed beyond the ratio decoders accept.
-const fn check_frame_ratio(body_len: usize, frame_len: usize) -> Result<(), ProofError> {
-    if body_len > frame_len.saturating_mul(MAX_COMPRESSION_RATIO) {
-        return Err(ProofError::BodyTooCompressible {
-            body_len,
-            frame_len,
-            ratio: MAX_COMPRESSION_RATIO,
         });
     }
     Ok(())
