@@ -112,14 +112,11 @@ pub(super) fn decompress_body(frame: &[u8], frame_offset: usize) -> Result<Vec<u
 /// Appends the single zstd frame compressing `body` (the canonical
 /// serialized body that follows the header on the wire).
 ///
-/// # Errors
+/// A body that would compress beyond [`MAX_COMPRESSION_RATIO`] is written
+/// as one frame of small flushed blocks instead; their headers keep even a
+/// constant body under the ratio, so the frame stays decodable.
 ///
-/// A body that compresses beyond the decoder's [`MAX_COMPRESSION_RATIO`]
-/// is re-encoded as one frame of small flushed blocks: each block carries
-/// at least a three-byte header, which keeps even a constant body under
-/// the ratio, so every emitted frame is decodable. It is still a single
-/// frame with its content size in the header, exactly what
-/// [`validate_frame`] requires.
+/// # Errors
 ///
 /// Returns [`ProofError::Compression`] if the compression fails (resource
 /// exhaustion; zstd cannot otherwise fail on in-memory input).
