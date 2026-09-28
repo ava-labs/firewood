@@ -3,10 +3,48 @@
 
 //! Proc macros for Firewood metrics
 
+mod hash_mode;
+
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::{ItemFn, ReturnType, parse_macro_input};
+
+/// Generates separate `_eth` and `_merkledb` tests from one generic test.
+///
+/// # Usage
+///
+/// Place above `#[test]` or `#[test_case(...)]` and import both concrete modes
+/// (`crate::{EthHash, MerkleDbHash}` inside storage):
+///
+/// ```rust,ignore
+/// use firewood_macros::hash_mode;
+/// use firewood_storage::{EthHash, HashMode, MerkleDbHash};
+///
+/// #[hash_mode]
+/// #[test]
+/// fn empty_root<H: HashMode>() {
+///     let _root = H::default_root_hash();
+/// }
+/// ```
+///
+/// # Requirements
+///
+/// - Use a synchronous, safe, non-const Rust free function with one `H: HashMode`
+///   parameter, no `where` clause, and concrete argument/return types. Arguments
+///   must be simple named bindings; test arguments require `test_case`.
+/// - Reserve the original function name and both generated test names.
+/// - Test attributes apply to both wrappers; lint attributes apply to the generic
+///   body. Put wrapper-specific lint settings on the enclosing module.
+/// - Direct `cfg`, documentation, and lint attributes are supported. Other
+///   attributes, including any `cfg_attr` left unexpanded by Rust, are rejected.
+#[proc_macro_attribute]
+pub fn hash_mode(args: TokenStream, input: TokenStream) -> TokenStream {
+    let function = parse_macro_input!(input as ItemFn);
+    hash_mode::expand(args.into(), function)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
 
 /// Arguments for the `#[metrics]` attribute: a single identifier naming a counter constant in
 /// `crate::registry`. The corresponding histogram constant must also exist in `crate::registry`

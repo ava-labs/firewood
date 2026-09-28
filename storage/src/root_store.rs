@@ -194,14 +194,16 @@ impl<H: HashMode> RootStore<H> {
 mod tests {
     use super::*;
     use crate::CacheReadStrategy;
-    use crate::DefaultHashMode;
     use crate::linear::filebacked::FileBacked;
     use crate::nodestore::NodeStore;
+    use crate::{EthHash, MerkleDbHash};
+    use firewood_macros::hash_mode;
     use std::num::NonZero;
     use std::sync::Arc;
 
+    #[hash_mode]
     #[test]
-    fn test_cache_hit() {
+    fn test_cache_hit<H: HashMode>() {
         let tmpdir = tempfile::tempdir().unwrap();
 
         let db_path = tmpdir.as_ref().join("testdb");
@@ -218,14 +220,15 @@ mod tests {
         );
 
         let root_store_dir = tmpdir.as_ref().join("root_store");
-        let root_store: RootStore<DefaultHashMode> =
+        let root_store: RootStore<H> =
             RootStore::new(root_store_dir, file_backed.clone(), false).unwrap();
 
         // Create a revision to cache. `RootStore` implies archival mode,
         // where deleted nodes are never tracked.
-        let revision: CommittedRevision<DefaultHashMode> = Arc::new(
-            NodeStore::new_empty_committed(file_backed.clone(), DeletedNodeTracking::Disabled),
-        );
+        let revision: CommittedRevision<H> = Arc::new(NodeStore::new_empty_committed(
+            file_backed.clone(),
+            DeletedNodeTracking::Disabled,
+        ));
 
         let hash = TrieHash::from_bytes([1; 32]);
         root_store
@@ -240,8 +243,9 @@ mod tests {
         assert!(Arc::ptr_eq(&revision, &retrieved_revision));
     }
 
+    #[hash_mode]
     #[test]
-    fn test_nonexistent_revision() {
+    fn test_nonexistent_revision<H: HashMode>() {
         let tmpdir = tempfile::tempdir().unwrap();
 
         let db_path = tmpdir.as_ref().join("testdb");
@@ -258,7 +262,7 @@ mod tests {
         );
 
         let root_store_dir = tmpdir.as_ref().join("root_store");
-        let root_store: RootStore<DefaultHashMode> =
+        let root_store: RootStore<H> =
             RootStore::new(root_store_dir, file_backed.clone(), false).unwrap();
 
         // Try to get a hash that doesn't exist in the cache nor in the underlying datastore.

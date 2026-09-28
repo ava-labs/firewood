@@ -308,28 +308,28 @@ impl<S: WritableStorage, H: HashMode> NodeStore<Committed, S, H> {
 mod tests {
     use super::*;
     use crate::{
-        Child, Children, DefaultHashMode, DeletedNodeTracking, HashMode, HashType,
-        ImmutableProposal, LinearAddress, NodeStore, NodeStoreHeader, Path, PathComponent,
-        SharedNode,
+        Child, Children, DeletedNodeTracking, EthHash, HashMode, HashType, ImmutableProposal,
+        LinearAddress, MerkleDbHash, NodeStore, NodeStoreHeader, Path, PathComponent, SharedNode,
         linear::memory::MemStore,
         node::{BranchNode, LeafNode, Node},
         nodestore::{Mutable, Propose},
     };
+    use firewood_macros::hash_mode;
     use std::sync::Arc;
 
-    fn into_committed(
-        ns: NodeStore<std::sync::Arc<ImmutableProposal>, MemStore, DefaultHashMode>,
+    fn into_committed<H: HashMode>(
+        ns: NodeStore<std::sync::Arc<ImmutableProposal>, MemStore, H>,
         header: &mut NodeStoreHeader,
-    ) -> NodeStore<Committed, MemStore, DefaultHashMode> {
+    ) -> NodeStore<Committed, MemStore, H> {
         let ns = ns.as_committed();
         ns.persist(header).unwrap();
         ns
     }
 
     /// Helper to create a test node store with a specific root
-    fn create_test_store_with_root(
+    fn create_test_store_with_root<H: HashMode>(
         root: Node,
-    ) -> NodeStore<Mutable<Propose>, MemStore, DefaultHashMode> {
+    ) -> NodeStore<Mutable<Propose>, MemStore, H> {
         let mem_store = MemStore::new(Vec::new()).into();
         let mut store = NodeStore::new_empty_proposal(mem_store, DeletedNodeTracking::Enabled);
         store.root_mut().replace(root);
@@ -366,20 +366,22 @@ mod tests {
         Node::Branch(Box::new(branch))
     }
 
+    #[hash_mode]
     #[test]
-    fn test_empty_nodestore() {
+    fn test_empty_nodestore<H: HashMode>() {
         let mem_store = MemStore::new(Vec::new()).into();
-        let store: NodeStore<Mutable<Propose>, _, DefaultHashMode> =
+        let store: NodeStore<Mutable<Propose>, _, H> =
             NodeStore::new_empty_proposal(mem_store, DeletedNodeTracking::Enabled);
         let mut iter = UnPersistedNodeIterator::new(&store);
 
         assert!(iter.next().is_none());
     }
 
+    #[hash_mode]
     #[test]
-    fn test_single_leaf_node() {
+    fn test_single_leaf_node<H: HashMode>() {
         let leaf = create_leaf(&[1, 2, 3], &[4, 5, 6]);
-        let store = create_test_store_with_root(leaf.clone());
+        let store = create_test_store_with_root::<H>(leaf.clone());
         let mut iter =
             UnPersistedNodeIterator::new(&store).map(|node| node.as_shared_node(&store).unwrap());
 
@@ -391,15 +393,16 @@ mod tests {
         assert!(iter.next().is_none());
     }
 
+    #[hash_mode]
     #[test]
-    fn test_branch_with_single_child() {
+    fn test_branch_with_single_child<H: HashMode>() {
         let leaf = create_leaf(&[7, 8], &[9, 10]);
         let branch = create_branch(
             &[1, 2],
             Some(&[3, 4]),
             vec![(PathComponent::ALL[5], leaf.clone())],
         );
-        let store = create_test_store_with_root(branch.clone());
+        let store = create_test_store_with_root::<H>(branch.clone());
         let mut iter =
             UnPersistedNodeIterator::new(&store).map(|node| node.as_shared_node(&store).unwrap());
 
@@ -417,8 +420,9 @@ mod tests {
         assert!(iter.next().is_none());
     }
 
+    #[hash_mode]
     #[test]
-    fn test_branch_with_multiple_children() {
+    fn test_branch_with_multiple_children<H: HashMode>() {
         let leaves = [
             create_leaf(&[1], &[10]),
             create_leaf(&[2], &[20]),
@@ -433,7 +437,7 @@ mod tests {
                 (PathComponent::ALL[10], leaves[2].clone()),
             ],
         );
-        let store = create_test_store_with_root(branch.clone());
+        let store = create_test_store_with_root::<H>(branch.clone());
 
         // Collect all nodes
         let nodes: Vec<_> = UnPersistedNodeIterator::new(&store)
@@ -453,8 +457,9 @@ mod tests {
         assert!(children_nodes.iter().any(|n| **n == leaves[2]));
     }
 
+    #[hash_mode]
     #[test]
-    fn test_nested_branches() {
+    fn test_nested_branches<H: HashMode>() {
         let leaves = [
             create_leaf(&[1], &[100]),
             create_leaf(&[2], &[200]),
@@ -505,7 +510,7 @@ mod tests {
         }
         .into();
 
-        let store = create_test_store_with_root(root_branch.clone());
+        let store = create_test_store_with_root::<H>(root_branch.clone());
 
         // Collect all nodes
         let nodes: Vec<_> = UnPersistedNodeIterator::new(&store)
@@ -529,12 +534,13 @@ mod tests {
         assert!(inner_branch_pos < root_pos);
     }
 
+    #[hash_mode]
     #[test]
-    fn test_into_committed_with_generic_storage() {
+    fn test_into_committed_with_generic_storage<H: HashMode>() {
         // Create a base committed store with MemStore
         let mem_store = MemStore::new(Vec::new());
-        let mut header = NodeStoreHeader::new(DefaultHashMode::ALGORITHM);
-        let base_committed: NodeStore<Committed, _, DefaultHashMode> =
+        let mut header = NodeStoreHeader::new(H::ALGORITHM);
+        let base_committed: NodeStore<Committed, _, H> =
             NodeStore::new_empty_committed(mem_store.into(), DeletedNodeTracking::Enabled);
 
         // Create a mutable proposal from the base
@@ -555,7 +561,7 @@ mod tests {
         mutable_store.root_mut().replace(branch.clone());
 
         // Convert to immutable proposal
-        let immutable_store: NodeStore<Arc<ImmutableProposal>, _, DefaultHashMode> =
+        let immutable_store: NodeStore<Arc<ImmutableProposal>, _, H> =
             mutable_store.try_into().unwrap();
 
         // Commit the immutable store

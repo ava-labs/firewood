@@ -20,10 +20,8 @@ serde_with = "3.21"
 thiserror.workspace = true
 
 [dev-dependencies]
+firewood-macros.workspace = true
 tempfile.workspace = true
-
-[features]
-ethhash = ["firewood/ethhash"]
 
 [lints]
 workspace = true
