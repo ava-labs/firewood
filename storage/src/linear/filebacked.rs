@@ -62,18 +62,19 @@ pub struct FileBacked {
     /// [`LinearAddress`] to the address of the next free node in that list
     /// ([`None`] marks the end of the list).
     ///
-    /// This cache is *entry-count bounded* and accelerates node allocation by
-    /// avoiding a disk read to walk the free list. A lookup is destructive: a
-    /// cache hit pops the entry, since allocating from the free list consumes it.
+    /// This cache accelerates node allocation by avoiding a disk read to walk
+    /// the free list. A lookup is destructive: a cache hit pops the entry, since
+    /// allocating from the free list consumes it.
+    ///
+    /// The cache is entry-count bounded, with the bound derived from a memory
+    /// budget (see [`FREE_LIST_CACHE_ENTRY_SIZE`]). Nothing is preallocated: the
+    /// budget is an upper bound that is only reached once that many nodes have
+    /// been freed.
     free_list_cache: Mutex<EntryLruCache<LinearAddress, Option<LinearAddress>>>,
     /// Policy controlling which reads get inserted into [`Self::cache`]
     /// (no reads, branch reads only, or all reads). Writes are always cached
     /// regardless of this setting.
     cache_read_strategy: CacheReadStrategy,
-    /// The node hashing algorithm (MerkleDB or Ethereum) this file was opened
-    /// with. Reported via [`ReadableStorage::node_hash_algorithm`] so callers
-    /// can detect a mismatch between the file and the running build.
-    node_hash_algorithm: crate::NodeHashAlgorithm,
     /// `io_uring` proxy used to submit batched writes to the file
     /// (see [`WritableStorage::write_batch`]). The proxy owns only the
     /// `io_uring` instance, not the descriptor — `fd` is passed by `RawFd` into
@@ -89,6 +90,21 @@ pub struct FileBacked {
     /// The open file handle backing this storage, wrapped so that the advisory
     /// lock taken by [`Self::lock`] is released when the handle is dropped.
     fd: UnlockOnDrop,
+}
+
+/// Approximate heap cost, in bytes, of a single entry in the free-list cache.
+///
+/// Each entry is a boxed LRU node holding the key, the value and the two list
+/// links, plus a hash-map slot holding a pointer to the key and a pointer to
+/// the node.
+pub const FREE_LIST_CACHE_ENTRY_SIZE: usize =
+    size_of::<LinearAddress>() + size_of::<Option<LinearAddress>>() + 4 * size_of::<usize>();
+
+/// Convert a free-list cache memory budget in kibibytes into the entry count
+/// that fits in it, rounded down but never below one entry.
+pub(crate) fn freelist_entries_for_kb(memory_limit_kb: NonZero<usize>) -> NonZero<usize> {
+    let entries = memory_limit_kb.get().saturating_mul(1024) / FREE_LIST_CACHE_ENTRY_SIZE;
+    NonZero::new(entries).unwrap_or(NonZero::<usize>::MIN)
 }
 
 impl FileBacked {
@@ -109,11 +125,10 @@ impl FileBacked {
     pub fn new(
         path: PathBuf,
         node_cache_memory_limit: NonZero<usize>,
-        free_list_cache_size: NonZero<usize>,
+        freelist_memory_limit_kb: NonZero<usize>,
         truncate: bool,
         create: bool,
         cache_read_strategy: CacheReadStrategy,
-        node_hash_algorithm: crate::NodeHashAlgorithm,
     ) -> Result<Self, FileIoError> {
         let fd = OpenOptions::new()
             .read(true)
@@ -138,10 +153,11 @@ impl FileBacked {
 
         Ok(Self {
             cache: Mutex::new(MemLruCache::new(node_cache_memory_limit.get())),
-            free_list_cache: Mutex::new(EntryLruCache::new(free_list_cache_size)),
+            free_list_cache: Mutex::new(EntryLruCache::new(freelist_entries_for_kb(
+                freelist_memory_limit_kb,
+            ))),
             cache_read_strategy,
             filename: path,
-            node_hash_algorithm,
             #[cfg(io_uring)]
             ring,
             fd: UnlockOnDrop(fd),
@@ -157,10 +173,6 @@ impl FileBacked {
 }
 
 impl ReadableStorage for FileBacked {
-    fn node_hash_algorithm(&self) -> crate::NodeHashAlgorithm {
-        self.node_hash_algorithm
-    }
-
     fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
         firewood_counter!(READ_NODE, "from" => "file").increment(1);
         firewood_counter!(IO_READ_COUNT).increment(1);
@@ -183,6 +195,11 @@ impl ReadableStorage for FileBacked {
         let cached = guard.get(&addr).map(|cached_node| cached_node.0.clone());
         firewood_counter!(CACHE_NODE, "mode" => mode.as_str(), "type" => if cached.is_some() { "hit" } else { "miss" }).increment(1);
         cached
+    }
+
+    fn take_cached_node(&self, addr: LinearAddress) -> Option<SharedNode> {
+        let mut guard = self.cache.lock();
+        guard.remove_entry(&addr).map(|(_, cached)| cached.0)
     }
 
     fn free_list_cache(&self, addr: LinearAddress) -> Option<Option<LinearAddress>> {
@@ -388,12 +405,29 @@ impl std::ops::DerefMut for UnlockOnDrop {
 
 #[cfg(test)]
 mod test {
-    use crate::NodeHashAlgorithm;
-
     use super::*;
     use nonzero_ext::nonzero;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn freelist_entries_from_memory_limit() {
+        // one entry per FREE_LIST_CACHE_ENTRY_SIZE bytes of budget
+        assert_eq!(
+            freelist_entries_for_kb(nonzero!(4096usize)).get(),
+            4096 * 1024 / FREE_LIST_CACHE_ENTRY_SIZE
+        );
+        // the smallest budget still holds several entries
+        assert_eq!(
+            freelist_entries_for_kb(nonzero!(1usize)).get(),
+            1024 / FREE_LIST_CACHE_ENTRY_SIZE
+        );
+        // and the entry count never overflows for absurd budgets
+        assert_eq!(
+            freelist_entries_for_kb(NonZero::<usize>::MAX).get(),
+            usize::MAX / FREE_LIST_CACHE_ENTRY_SIZE
+        );
+    }
 
     #[test]
     fn basic_reader_test() {
@@ -411,7 +445,6 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            NodeHashAlgorithm::compile_option(),
         )
         .unwrap();
 
@@ -454,7 +487,6 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
-            NodeHashAlgorithm::compile_option(),
         )
         .unwrap();
 

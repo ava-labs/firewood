@@ -8,36 +8,35 @@
 //!
 //! While the body of the deserialized proof is canonical, compression is not.
 
+use std::io::Write;
+
 use zstd::zstd_safe;
 
 use super::reader::ReadError;
-use crate::db::ProofConfig;
+use super::types::ProofError;
 
-/// Compresses `out[body_start..]` (the canonical body, serialized in place
-/// after the header) into a zstd frame, replacing it. Avoids a separate
-/// body buffer.
-pub(super) fn compress_body_in_place(out: &mut Vec<u8>, body_start: usize) {
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "callers record body_start as out.len() before appending the body"
-    )]
-    let compressed = zstd::bulk::compress(&out[body_start..], zstd::DEFAULT_COMPRESSION_LEVEL)
-        .expect("zstd compressor allocation failed");
-    out.truncate(body_start);
-    out.extend_from_slice(&compressed);
-}
+/// Hard cap on a decoded proof body, enforced by the decoder before
+/// allocating and by the serializer before emitting. 6MiB bounds what one
+/// message can force us to allocate while leaving room for a full
+/// state-sync message (target 2MiB). Changing it needs
+/// coordination: every decoder must accept a value before any producer
+/// emits it.
+pub(crate) const MAX_DECOMPRESSED_LEN: usize = 6 * 1024 * 1024; // 6 MiB
 
-/// Enforces the pre-allocation bounds (see [`decompress_body`]) against
-/// `config` and returns the frame's declared content size.
+/// Cap on the uncompressed/compressed length ratio, bounding zstd-bomb
+/// amplification to 128× the bytes a peer actually sent. Honest hash-heavy
+/// bodies compress ~2–3×. Same coordination caveat as
+/// [`MAX_DECOMPRESSED_LEN`].
+pub(super) const MAX_COMPRESSION_RATIO: usize = 128;
+
+/// Enforces the pre-allocation bounds (see [`decompress_body`]) and returns
+/// the frame's declared content size.
 ///
 /// Exactly one zstd frame must span all of `frame`: the raw decompressor
 /// accepts concatenated frames and silently skips skippable ones, which
-/// would otherwise be an attacker-controlled padding channel.
-fn validate_frame(
-    frame: &[u8],
-    frame_offset: usize,
-    config: &ProofConfig,
-) -> Result<usize, ReadError> {
+/// would otherwise be an attacker-controlled padding channel. A lone
+/// skippable frame is rejected by the non-zero content-size check.
+fn validate_frame(frame: &[u8], frame_offset: usize) -> Result<usize, ReadError> {
     let frame_size =
         zstd_safe::find_frame_compressed_size(frame).map_err(|code| ReadError::InvalidItem {
             item: "compressed body frame",
@@ -65,25 +64,21 @@ fn validate_frame(
 
     let decoded_len = usize::try_from(content_size)
         .ok()
-        .filter(|&n| n <= config.max_decompressed_len)
+        .filter(|&n| n != 0 && n <= MAX_DECOMPRESSED_LEN)
         .ok_or_else(|| ReadError::InvalidItem {
             item: "frame content size",
             offset: frame_offset,
-            expected: "content size within the configured maximum",
-            found: format!("{content_size} > {}", config.max_decompressed_len),
+            expected: "a non-zero content size within the maximum",
+            found: format!("{content_size} not in 1..={MAX_DECOMPRESSED_LEN}"),
         })?;
 
     // Bound the allocation by bytes the peer actually sent (anti-bomb).
-    if decoded_len > frame.len().saturating_mul(config.max_compression_ratio) {
+    if decoded_len > frame.len().saturating_mul(MAX_COMPRESSION_RATIO) {
         return Err(ReadError::InvalidItem {
             item: "frame content size",
             offset: frame_offset,
-            expected: "content size within the configured compression ratio of the frame length",
-            found: format!(
-                "{decoded_len} > {} * {}",
-                frame.len(),
-                config.max_compression_ratio
-            ),
+            expected: "content size within the maximum compression ratio of the frame length",
+            found: format!("{decoded_len} > {} * {MAX_COMPRESSION_RATIO}", frame.len()),
         });
     }
     Ok(decoded_len)
@@ -96,17 +91,13 @@ fn validate_frame(
 ///
 /// - Exactly one zstd frame must span all of `frame`.
 /// - The frame header must declare a content size, capped at
-///   `config.max_decompressed_len` and at `config.max_compression_ratio` ×
-///   the compressed frame length.
+///   [`MAX_DECOMPRESSED_LEN`] and at [`MAX_COMPRESSION_RATIO`] × the
+///   compressed frame length.
 ///
 /// `frame_offset` makes error offsets absolute within the wire message;
 /// body-parser errors are offsets into the decompressed body.
-pub(super) fn decompress_body(
-    frame: &[u8],
-    frame_offset: usize,
-    config: &ProofConfig,
-) -> Result<Vec<u8>, ReadError> {
-    let decoded_len = validate_frame(frame, frame_offset, config)?;
+pub(super) fn decompress_body(frame: &[u8], frame_offset: usize) -> Result<Vec<u8>, ReadError> {
+    let decoded_len = validate_frame(frame, frame_offset)?;
 
     let mut body = vec![0u8; decoded_len];
     zstd::bulk::decompress_to_buffer(frame, &mut body).map_err(|err| ReadError::InvalidItem {
@@ -118,10 +109,37 @@ pub(super) fn decompress_body(
     Ok(body)
 }
 
-/// Appends the zstd frame compressing `body`.
-#[cfg(test)]
-pub(super) fn write_compressed_body(body: &[u8], out: &mut Vec<u8>) {
+/// Appends the single zstd frame compressing `body` (the canonical
+/// serialized body that follows the header on the wire).
+///
+/// A body that would compress beyond [`MAX_COMPRESSION_RATIO`] is written
+/// as one frame of small flushed blocks instead; their headers keep even a
+/// constant body under the ratio, so the frame stays decodable.
+///
+/// # Errors
+///
+/// Returns [`ProofError::Compression`] if the compression fails (resource
+/// exhaustion; zstd cannot otherwise fail on in-memory input).
+pub(super) fn write_compressed_body(body: &[u8], out: &mut Vec<u8>) -> Result<(), ProofError> {
     let compressed = zstd::bulk::compress(body, zstd::DEFAULT_COMPRESSION_LEVEL)
-        .expect("zstd compressor allocation failed");
-    out.extend_from_slice(&compressed);
+        .map_err(ProofError::Compression)?;
+    if body.len() <= compressed.len().saturating_mul(MAX_COMPRESSION_RATIO) {
+        out.extend_from_slice(&compressed);
+        return Ok(());
+    }
+    let mut encoder = zstd::stream::write::Encoder::new(out, zstd::DEFAULT_COMPRESSION_LEVEL)
+        .map_err(ProofError::Compression)?;
+    encoder
+        .set_pledged_src_size(Some(body.len() as u64))
+        .map_err(ProofError::Compression)?;
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "MAX_COMPRESSION_RATIO is a non-zero constant"
+    )]
+    for block in body.chunks(MAX_COMPRESSION_RATIO) {
+        encoder.write_all(block).map_err(ProofError::Compression)?;
+        encoder.flush().map_err(ProofError::Compression)?;
+    }
+    encoder.finish().map_err(ProofError::Compression)?;
+    Ok(())
 }

@@ -59,8 +59,8 @@ fn ranges(trace: &[(String, String)]) -> String {
 /// Returns `Err` if the walk exceeds `max_rounds`, which is how a non-advancing
 /// continuation surfaces.
 fn sync_walk(
-    source: &Db,
-    target: &Db,
+    source: &Db<DefaultHashMode>,
+    target: &Db<DefaultHashMode>,
     start_root: &api::HashKey,
     end_root: &api::HashKey,
     end_key: Option<&[u8]>,
@@ -181,8 +181,8 @@ fn deletes(
 /// Two databases that start in sync, and the roots either side of one batch of
 /// changes applied only to `source`.
 struct Fixture {
-    source: Db,
-    target: Db,
+    source: Db<DefaultHashMode>,
+    target: Db<DefaultHashMode>,
     keys: Vec<Vec<u8>>,
     start_root: api::HashKey,
     end_root: api::HashKey,

@@ -151,9 +151,6 @@ impl ReadableNodeMode {
 
 /// Trait for readable storage.
 pub trait ReadableStorage: Debug + Sync + Send {
-    /// The node hash algorithm used by this storage.
-    fn node_hash_algorithm(&self) -> crate::NodeHashAlgorithm;
-
     /// Stream data from the specified address.
     ///
     /// # Arguments
@@ -189,6 +186,11 @@ pub trait ReadableStorage: Debug + Sync + Send {
 
     /// Cache a node for future reads
     fn cache_node(&self, _addr: LinearAddress, _node: SharedNode) {}
+
+    /// Remove a node from the cache and return it, if it was present.
+    fn take_cached_node(&self, _addr: LinearAddress) -> Option<SharedNode> {
+        None
+    }
 
     /// Return the filename of the underlying storage
     fn filename(&self) -> Option<PathBuf> {

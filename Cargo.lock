@@ -1877,6 +1877,7 @@ dependencies = [
  "firewood",
  "firewood-metrics",
  "firewood-replay",
+ "log",
  "metrics",
  "metrics-exporter-prometheus",
  "parking_lot",
@@ -1927,9 +1928,11 @@ name = "firewood-macros"
 version = "0.6.0"
 dependencies = [
  "firewood-metrics",
+ "firewood-storage",
  "proc-macro2",
  "quote",
  "syn",
+ "test-case",
  "trybuild",
 ]
 
@@ -1937,6 +1940,7 @@ dependencies = [
 name = "firewood-metrics"
 version = "0.7.0"
 dependencies = [
+ "log",
  "metrics",
 ]
 
@@ -1945,6 +1949,7 @@ name = "firewood-replay"
 version = "0.7.0"
 dependencies = [
  "firewood",
+ "firewood-macros",
  "firewood-metrics",
  "firewood-storage",
  "rmp-serde",
@@ -1966,11 +1971,11 @@ dependencies = [
  "bumpalo",
  "bytemuck",
  "bytemuck_derive",
- "cfg-if",
  "criterion",
  "derive-where",
  "enum-as-inner",
  "fastrace",
+ "firewood-macros",
  "firewood-metrics",
  "fjall",
  "git-version",

@@ -58,7 +58,7 @@ typedef struct IteratorHandle IteratorHandle;
 typedef struct ProposalHandle ProposalHandle;
 
 /**
- * FFI context for for a parsed or generated range proof.
+ * FFI context for a parsed or generated range proof.
  */
 typedef struct RangeProofContext RangeProofContext;
 
@@ -937,7 +937,7 @@ typedef struct CreateRangeProofArgs {
   struct Maybe_BorrowedBytes start_key;
   /**
    * The end key of the range to prove. If `None`, the range ends at the end
-   * of the keyspace or until `max_length` items have been been included in
+   * of the keyspace or until `max_length` items have been included in
    * the proof.
    *
    * If provided, end key is inclusive if not truncated. Otherwise, the end
@@ -1090,8 +1090,9 @@ typedef struct VerifyRangeProofArgs {
    * The upper bound of the key range that the proof is expected to cover. If
    * `None`, the proof is expected to cover to the end of the keyspace.
    *
-   * This is ignored if the proof is truncated and does not cover the full,
-   * in which case the upper bound key is the final key in the key-value pairs.
+   * This is a ceiling, not an assertion: a proof carrying a key above this
+   * bound is invalid, but a truncated proof may prove less and anchor at
+   * its own right edge instead.
    */
   struct Maybe_BorrowedBytes end_key;
   /**
@@ -1912,15 +1913,18 @@ typedef struct DatabaseHandleArgs {
    */
   size_t node_cache_memory_limit;
   /**
-   * The size of the free list cache.
+   * The memory limit for the free-list cache in kibibytes.
+   *
+   * Nothing is preallocated; this is an upper bound on the memory the cache
+   * may grow to.
    *
    * Opening returns an error if this is zero.
    */
-  size_t free_list_cache_size;
+  size_t freelist_memory_limit_kb;
   /**
    * The maximum number of revisions to keep.
    *
-   * Must be > `deferred_persistence_commit_count`.
+   * Must be > `max_persistence_gap`.
    */
   size_t revisions;
   /**
@@ -1946,29 +1950,31 @@ typedef struct DatabaseHandleArgs {
    */
   bool expensive_metrics;
   /**
+   * Tag used to separate metrics and logs per database.
+   *
+   * This must be a valid UTF-8 string.
+   *
+   * If empty, no tag is applied and this database's metrics are recorded
+   * with the default `db_tag="untagged"` label.
+   */
+  BorrowedBytes db_tag;
+  /**
    * The hashing mode to use for the database.
    *
-   * This must match the compile-time feature:
-   * - [`NodeHashAlgorithm::Ethereum`] if the `ethhash` feature is enabled
-   * - [`NodeHashAlgorithm::MerkleDB`] if the `ethhash` feature is disabled
-   *
-   * Opening returns an error if this does not match the compile-time feature.
+   * This is the per-database node-hashing scheme, selected at runtime. For
+   * an existing database it must match the scheme persisted in the file
+   * header (a mismatch is an error); for a fresh database it is the scheme
+   * to create with. A single binary can open both
+   * [`NodeHashAlgorithm::Ethereum`] and [`NodeHashAlgorithm::MerkleDB`]
+   * databases regardless of the database's runtime hash mode.
    */
   enum NodeHashAlgorithm node_hash_algorithm;
   /**
-   * The maximum number of unpersisted revisions that can exist at a given time.
+   * The maximum number of committed revisions that can be ahead of the last persisted revision.
    *
-   * Note: `revisions` must be > `deferred_persistence_commit_count`.
+   * Must be positive and less than `revisions`.
    */
-  uint64_t deferred_persistence_commit_count;
-  /**
-   * The hard cap on a decoded proof body. `0` uses the default.
-   */
-  size_t proof_max_decompressed_len;
-  /**
-   * The max ratio of uncompressed body to compressed frame length. `0` uses the default.
-   */
-  size_t proof_max_compression_ratio;
+  uint64_t max_persistence_gap;
 } DatabaseHandleArgs;
 
 /**
@@ -2091,8 +2097,7 @@ struct NextKeyRangeResult fwd_change_proof_find_next_key(const struct ChangeProo
  *   [`fwd_db_verify_and_commit_change_proof`] to verify the proof.
  * - [`ChangeProofResult::Err`] containing an error message if the proof could not be parsed.
  */
-struct ChangeProofResult fwd_change_proof_from_bytes(const struct DatabaseHandle *db,
-                                                     BorrowedBytes bytes);
+struct ChangeProofResult fwd_change_proof_from_bytes(BorrowedBytes bytes);
 
 /**
  * Serialize a `ChangeProof` to bytes.
@@ -3218,8 +3223,7 @@ struct NextKeyRangeResult fwd_range_proof_find_next_key(struct RangeProofContext
  *   well-formed. The verify method must be called to ensure the proof is cryptographically valid.
  * - [`RangeProofResult::Err`] containing an error message if the proof could not be parsed.
  */
-struct RangeProofResult fwd_range_proof_from_bytes(const struct DatabaseHandle *db,
-                                                   BorrowedBytes bytes);
+struct RangeProofResult fwd_range_proof_from_bytes(BorrowedBytes bytes);
 
 /**
  * Serialize a `RangeProof` to bytes.
@@ -3234,7 +3238,7 @@ struct RangeProofResult fwd_range_proof_from_bytes(const struct DatabaseHandle *
  *
  * - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
  * - [`ValueResult::Some`] containing the serialized bytes if successful.
- * - [`ValueResult::Err`] if the caller provided a null pointer.
+ * - [`ValueResult::Err`] containing an error message if serialization panicked.
  */
 struct ValueResult fwd_range_proof_to_bytes(const struct RangeProofContext *proof);
 

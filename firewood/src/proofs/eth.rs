@@ -71,11 +71,10 @@ pub fn proof_node_to_mpt_rlp(node: &ProofNode) -> SmallVec<[Box<[u8]>; 2]> {
     // is just to satisfy clippy::indexing_slicing.
     let key: &[PathComponent] = node.key.as_ref();
     let partial_path = key.get(node.partial_len..).unwrap_or(&[]);
-    // The account-node concept only exists in ethhash mode. Without that
-    // feature, depth-64 nodes are plain MPT nodes and no special handling
-    // fires.
-    let is_account = firewood_storage::NodeHashAlgorithm::compile_option().is_ethereum()
-        && key.len() == ACCOUNT_DEPTH_NIBBLES;
+    // This emitter produces Ethereum MPT RLP and is only reached from
+    // `eth_get_proof`, which has already rejected non-ethereum databases at
+    // runtime. A node at account depth is therefore always an account node.
+    let is_account = key.len() == ACCOUNT_DEPTH_NIBBLES;
     let value_bytes = node.value_digest.as_ref().and_then(ValueDigest::value);
 
     if node.child_hashes.count() == 0 {

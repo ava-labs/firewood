@@ -4,8 +4,8 @@
 //! Deferred persistence for committed revisions.
 //!
 //! This module decouples commit operations from disk I/O by offloading persistence
-//! to a background thread. Commits return immediately after updating in-memory state,
-//! while disk writes happen asynchronously.
+//! to a background thread. Commits may wait for capacity before updating in-memory
+//! state; disk writes happen asynchronously.
 //!
 //! [`PersistWorker`] is the main entry point. It spawns a background thread and provides
 //! methods to send revisions for persistence, with built-in backpressure to limit
@@ -13,25 +13,26 @@
 //!
 //! # Permit model
 //!
-//! Backpressure is managed through a fixed pool of **permits**, sized by `commit_count`
+//! Backpressure is managed through a fixed pool of **permits**, sized by `max_persistence_gap`
 //! (the maximum number of unpersisted commits allowed at any time).
 //!
-//! - **Commits consume permits.** Each call to [`PersistWorker::persist`] stores the
+//! - **Commits consume permits.** Each call to [`PersistWorker::submit_revision`] stores the
 //!   latest committed revision and consumes one permit. If no permits remain, the
 //!   caller blocks until the background thread releases some.
 //!
 //! - **Persists release permits.** When the background thread writes a revision to disk,
-//!   all permits consumed since the last persist are released at once, unblocking any
-//!   waiting committers.
+//!   the permits associated with that revision and its predecessors are released,
+//!   unblocking waiting committers. Commits submitted during the write retain their
+//!   permits until a later persistence operation completes.
 //!
 //! - **A threshold triggers persistence.** The background thread wakes when the number
-//!   of available permits drops to `persist_threshold` (equal to `commit_count / 2`,
+//!   of available permits drops to `persist_permits_threshold` (equal to `max_persistence_gap / 2`,
 //!   rounded down). It then persists the most recent revision and releases the consumed
 //!   permits in bulk. Only the latest revision is persisted because persisting a revision
 //!   implicitly includes the effects of all prior revisions.
 //!
-//! For example, with `commit_count = 10` the pool starts with 10 permits and
-//! `persist_threshold = 5`. After 5 commits the available permits drop to 5,
+//! For example, with `max_persistence_gap = 10` the pool starts with 10 permits and
+//! `persist_permits_threshold = 5`. After 5 commits the available permits drop to 5,
 //! triggering a persist that releases all 5 consumed permits back to the pool.
 //!
 //! See [`PersistWorker`] for a sequence diagram illustrating this flow.
@@ -48,7 +49,7 @@ use firewood_metrics::{
     set_metrics_context,
 };
 use firewood_storage::{
-    Committed, FileBacked, FileIoError, HashedNodeReader, LinearAddress, NodeStore,
+    Committed, FileBacked, FileIoError, HashMode, HashedNodeReader, LinearAddress, NodeStore,
     NodeStoreHeader, TrieHash,
 };
 use parking_lot::{Condvar, Mutex, MutexGuard};
@@ -73,7 +74,7 @@ pub enum PersistError {
 ///
 /// # Sequence diagram
 ///
-/// Below is an example when `commit_count` is set to 10:
+/// Below is an example when `max_persistence_gap` is set to 10:
 ///
 #[cfg_attr(doc, aquamarine::aquamarine)]
 /// ```mermaid
@@ -113,34 +114,36 @@ pub enum PersistError {
 ///     Note right of Disk: Latest committed revision is persisted
 /// ```
 #[derive(Debug)]
-pub(crate) struct PersistWorker {
+pub(crate) struct PersistWorker<H> {
     /// The background thread responsible for persisting commits async.
     handle: Mutex<Option<JoinHandle<Result<(), PersistError>>>>,
 
     /// Shared state with background thread.
-    shared: Arc<SharedState>,
+    shared: Arc<SharedState<H>>,
 }
 
-impl PersistWorker {
+impl<H: HashMode> PersistWorker<H> {
     /// Creates a new `PersistWorker` and starts the background thread.
     ///
     /// Returns the worker for sending messages to the background thread.
-    #[allow(clippy::large_types_passed_by_value)]
+    #[expect(clippy::large_types_passed_by_value)]
     pub(crate) fn new(
-        commit_count: NonZeroU64,
+        max_persistence_gap: NonZeroU64,
         header: NodeStoreHeader,
-        root_store: Option<Arc<RootStore>>,
+        root_store: Option<Arc<RootStore<H>>>,
     ) -> Self {
-        let persist_interval = NonZeroU64::new(commit_count.get().div_ceil(2))
+        let persist_interval = NonZeroU64::new(max_persistence_gap.get().div_ceil(2))
             .expect("a nonzero div_ceil(2) is always positive");
-        let persist_threshold = commit_count.get().wrapping_sub(persist_interval.get());
+        let persist_permits_threshold = max_persistence_gap
+            .get()
+            .wrapping_sub(persist_interval.get());
 
         let shared = Arc::new(SharedState {
             error: OnceLock::new(),
             root_store,
             header: Mutex::new(header),
             persist_on_shutdown: OnceLock::new(),
-            channel: PersistChannel::new(commit_count, persist_threshold),
+            channel: PersistChannel::new(max_persistence_gap, persist_permits_threshold),
         });
 
         let bg_shared = shared.clone();
@@ -167,7 +170,10 @@ impl PersistWorker {
     /// ## Panics
     ///
     /// Propagates any panic from the background thread.
-    pub(crate) fn persist(&self, committed: CommittedRevision) -> Result<(), PersistError> {
+    pub(crate) fn submit_revision(
+        &self,
+        committed: CommittedRevision<H>,
+    ) -> Result<(), PersistError> {
         // BLOCKING: `push` will block the calling thread (i.e. the commit path) if all permits
         // are consumed — meaning the background persist thread has fallen behind. This is the
         // primary backpressure mechanism: excessive commit rates are slowed down here until the
@@ -193,7 +199,7 @@ impl PersistWorker {
     /// Propagates any panic from the background thread.
     pub(crate) fn reap(
         &self,
-        nodestore: NodeStore<Committed, FileBacked>,
+        nodestore: NodeStore<Committed, FileBacked, H>,
     ) -> Result<(), PersistError> {
         if self.shared.root_store.is_none() && self.shared.channel.reap(nodestore).is_err() {
             self.join_handle();
@@ -228,7 +234,7 @@ impl PersistWorker {
     /// Propagates any panic from the background thread.
     pub(crate) fn close(
         self,
-        latest_committed_revision: CommittedRevision,
+        latest_committed_revision: CommittedRevision<H>,
     ) -> Result<(), PersistError> {
         self.shared
             .persist_on_shutdown
@@ -252,7 +258,7 @@ impl PersistWorker {
         // BLOCKING: `handle.lock()` acquires the JoinHandle mutex (fast). `handle.join()` then
         // blocks until the background thread exits — which can be an arbitrarily long wait if
         // the thread is mid-persist or mid-reap with slow disk I/O. This is only called from
-        // `persist()` on a channel shutdown or from `close()`, so normal operation is unaffected.
+        // `submit_revision()` on a channel shutdown or from `close()`, so normal operation is unaffected.
         if let Some(handle) = self.handle.lock().take()
             && let Err(payload) = handle.join()
         {
@@ -270,16 +276,16 @@ impl PersistWorker {
 /// Abstraction for coordinating between the main thread and the background
 /// persistence thread.
 #[derive(Debug)]
-struct PersistChannel {
-    state: Mutex<PersistChannelState>,
+struct PersistChannel<H> {
+    state: Mutex<PersistChannelState<H>>,
     /// Condition variable to wake blocked committers when space is available.
     commit_not_full: Condvar,
     /// Condition variable to wake the persister when persistence is needed.
     persist_ready: Condvar,
 }
 
-impl PersistChannel {
-    fn new(max_permits: NonZeroU64, persist_threshold: u64) -> Self {
+impl<H> PersistChannel<H> {
+    fn new(max_permits: NonZeroU64, persist_permits_threshold: u64) -> Self {
         // Emit once at construction since `max_permits` is constant.
         firewood_gauge!(MAX_PERMITS).set_integer(max_permits.get());
 
@@ -287,7 +293,7 @@ impl PersistChannel {
             state: Mutex::new(PersistChannelState {
                 permits_available: max_permits.get(),
                 max_permits,
-                persist_threshold,
+                persist_permits_threshold,
                 shutdown: false,
                 pending_reaps: Vec::new(),
                 latest_committed: None,
@@ -309,7 +315,7 @@ impl PersistChannel {
     /// ## Errors
     ///
     /// Returns an error if the channel has been shut down.
-    fn reap(&self, nodestore: NodeStore<Committed, FileBacked>) -> Result<(), PersistError> {
+    fn reap(&self, nodestore: NodeStore<Committed, FileBacked, H>) -> Result<(), PersistError> {
         let mut state = self.state.lock();
         if state.shutdown {
             return Err(PersistError::Shutdown);
@@ -326,12 +332,12 @@ impl PersistChannel {
     /// ## Errors
     ///
     /// Returns an error if the channel has been shut down.
-    fn push(&self, revision: CommittedRevision) -> Result<(), PersistError> {
+    fn push(&self, revision: CommittedRevision<H>) -> Result<(), PersistError> {
         let mut state = self.state.lock();
         state.emit_permits();
 
         // BLOCKING: condvar wait. The commit thread parks here when all permits are consumed
-        // (i.e. `deferred_persistence_commit_count` commits have accumulated without a persist).
+        // (i.e. `max_persistence_gap` commits have accumulated without a persist).
         // It wakes when the background persist loop calls `commit_not_full.notify_all()` after
         // releasing permits. Duration is bounded by how fast the background thread can write a
         // revision to disk. Under slow I/O this can stall commits for hundreds of milliseconds.
@@ -348,7 +354,7 @@ impl PersistChannel {
         state.permits_available = state.permits_available.wrapping_sub(1);
 
         // Wake the persister once we reach the threshold.
-        if state.permits_available <= state.persist_threshold {
+        if state.permits_available <= state.persist_permits_threshold {
             self.persist_ready.notify_one();
         }
         Ok(())
@@ -360,7 +366,7 @@ impl PersistChannel {
     /// ## Errors
     ///
     /// Returns an error if the channel has been shut down.
-    fn pop(&self) -> Result<PersistDataGuard<'_>, PersistError> {
+    fn pop(&self) -> Result<PersistDataGuard<'_, H>, PersistError> {
         let (permits_to_release, pending_reaps, latest_committed) = {
             let mut state = self.state.lock();
             loop {
@@ -369,7 +375,7 @@ impl PersistChannel {
                     return Err(PersistError::Shutdown);
                 }
                 // Unblock to persist when permits available <= threshold
-                if state.permits_available <= state.persist_threshold
+                if state.permits_available <= state.persist_permits_threshold
                     && state.latest_committed.is_some()
                 {
                     break (
@@ -413,7 +419,7 @@ impl PersistChannel {
     }
 
     #[cfg(test)]
-    #[allow(clippy::arithmetic_side_effects)]
+    #[expect(clippy::arithmetic_side_effects)]
     fn wait_all_released(&self) {
         use firewood_storage::logger::warn;
         use std::time::Duration;
@@ -433,22 +439,22 @@ impl PersistChannel {
 }
 
 #[derive(Debug)]
-struct PersistChannelState {
+struct PersistChannelState<H> {
     /// Number of permits currently available for new commits.
     permits_available: u64,
     /// Maximum number of unpersisted commits allowed.
     max_permits: NonZeroU64,
     /// Persist when remaining permits are at or below this threshold.
-    persist_threshold: u64,
+    persist_permits_threshold: u64,
     /// Set to `true` when the channel has been closed.
     shutdown: bool,
     /// Nodestores awaiting reaping by the background thread.
-    pending_reaps: Vec<NodeStore<Committed, FileBacked>>,
+    pending_reaps: Vec<NodeStore<Committed, FileBacked, H>>,
     /// The most recent committed revision, replaced on each push.
-    latest_committed: Option<CommittedRevision>,
+    latest_committed: Option<CommittedRevision<H>>,
 }
 
-impl PersistChannelState {
+impl<H> PersistChannelState<H> {
     /// Emits the current permit gauge.
     fn emit_permits(&self) {
         firewood_gauge!(PERMITS_AVAILABLE).set_integer(self.permits_available);
@@ -462,19 +468,19 @@ impl PersistChannelState {
 /// blocked committers via [`commit_not_full`](PersistChannel::commit_not_full),
 /// ensuring backpressure is released even if the persist loop exits early due
 /// to an error.
-struct PersistDataGuard<'a> {
-    channel: &'a PersistChannel,
+struct PersistDataGuard<'a, H> {
+    channel: &'a PersistChannel<H>,
     /// Number of permits consumed by commits since the last persist cycle.
     /// Released back to the channel on drop.
     permits_to_release: u64,
     /// Expired node stores whose deleted nodes should be returned to free lists.
-    pending_reaps: Vec<NodeStore<Committed, FileBacked>>,
+    pending_reaps: Vec<NodeStore<Committed, FileBacked, H>>,
     /// The latest committed revision to persist, if the threshold was reached.
     /// `None` when this cycle was triggered solely by pending reaps.
-    latest_committed: Option<CommittedRevision>,
+    latest_committed: Option<CommittedRevision<H>>,
 }
 
-impl Drop for PersistDataGuard<'_> {
+impl<H> Drop for PersistDataGuard<'_, H> {
     /// Releases permits back to the channel on drop of the guard.
     fn drop(&mut self) {
         if self.permits_to_release == 0 {
@@ -493,28 +499,28 @@ impl Drop for PersistDataGuard<'_> {
 
 /// Shared state between `PersistWorker` and `PersistLoop`.
 #[derive(Debug)]
-struct SharedState {
+struct SharedState<H> {
     /// Shared error state that can be checked without joining the thread.
     error: OnceLock<PersistError>,
     /// Persisted metadata for the database.
     /// Updated on persists or when revisions are reaped.
     header: Mutex<NodeStoreHeader>,
     /// Optional persistent store for historical root addresses.
-    root_store: Option<Arc<RootStore>>,
+    root_store: Option<Arc<RootStore<H>>>,
     /// Revision to persist on shutdown if there are outstanding unpersisted
     /// commits.
-    persist_on_shutdown: OnceLock<CommittedRevision>,
+    persist_on_shutdown: OnceLock<CommittedRevision<H>>,
     /// Channel for coordinating persist and reap operations.
-    channel: PersistChannel,
+    channel: PersistChannel<H>,
 }
 
 /// The background persistence loop that runs in a separate thread.
-struct PersistLoop {
+struct PersistLoop<H> {
     /// Shared state for coordination with `PersistWorker`.
-    shared: Arc<SharedState>,
+    shared: Arc<SharedState<H>>,
 }
 
-impl Drop for PersistLoop {
+impl<H> Drop for PersistLoop<H> {
     /// Closes the persist channel so blocked committers are woken up and see the
     /// shutdown state rather than blocking indefinitely.
     fn drop(&mut self) {
@@ -522,7 +528,7 @@ impl Drop for PersistLoop {
     }
 }
 
-impl PersistLoop {
+impl<H: HashMode> PersistLoop<H> {
     /// Runs the persistence loop until shutdown or error.
     ///
     /// If the event loop exits with an error, it is stored in shared state
@@ -566,7 +572,7 @@ impl PersistLoop {
     }
 
     /// Persists the revision to disk.
-    fn persist_to_disk(&self, revision: &CommittedRevision) -> Result<(), PersistError> {
+    fn persist_to_disk(&self, revision: &CommittedRevision<H>) -> Result<(), PersistError> {
         // BLOCKING: mutex lock on the shared `NodeStoreHeader`. Held for the entire duration of
         // the disk flush (serializes all node writes + header write). Any concurrent caller of
         // `RevisionManager::check` will stall until this returns.
@@ -579,7 +585,7 @@ impl PersistLoop {
     }
 
     /// Adds the nodes of this revision to the free lists.
-    fn reap(&self, nodestore: NodeStore<Committed, FileBacked>) -> Result<(), PersistError> {
+    fn reap(&self, nodestore: NodeStore<Committed, FileBacked, H>) -> Result<(), PersistError> {
         // BLOCKING: same header mutex as `persist_to_disk`. Held while writing all freed-node
         // metadata back to the free-list in storage. Contends with any `persist_to_disk` that
         // might be running concurrently (they cannot — both run in the single background thread —
@@ -593,7 +599,10 @@ impl PersistLoop {
     }
 
     /// Saves the revision's root address to `RootStore` if configured.
-    fn maybe_save_to_root_store(&self, revision: &CommittedRevision) -> Result<(), PersistError> {
+    fn maybe_save_to_root_store(
+        &self,
+        revision: &CommittedRevision<H>,
+    ) -> Result<(), PersistError> {
         if let Some(ref store) = self.shared.root_store
             && let (Some(hash), Some(addr)) = (revision.root_hash(), revision.root_address())
         {
@@ -605,8 +614,8 @@ impl PersistLoop {
 }
 
 #[crate::metrics(PERSIST_ROOT_STORE)]
-fn save_to_root_store(
-    store: &RootStore,
+fn save_to_root_store<H: HashMode>(
+    store: &RootStore<H>,
     hash: &TrieHash,
     addr: &LinearAddress,
 ) -> Result<(), PersistError> {
@@ -617,7 +626,7 @@ fn save_to_root_store(
 }
 
 #[cfg(test)]
-impl SharedState {
+impl<H: HashMode> SharedState<H> {
     fn wait_all_released(&self) {
         self.channel.wait_all_released();
     }

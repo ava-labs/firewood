@@ -35,7 +35,7 @@ impl<'db> RevisionHandle<'db> {
 
     /// Creates an iterator on the revision starting from the given key.
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
+    #[expect(clippy::missing_panics_doc)]
     pub fn iter_from(&self, first_key: Option<&[u8]>) -> CreateIteratorResult<'_> {
         let it = self
             .view
@@ -72,6 +72,10 @@ impl DbView for RevisionHandle<'_> {
         = BoxKeyValueIter<'view>
     where
         Self: 'view;
+
+    fn node_hash_algorithm(&self) -> firewood::NodeHashAlgorithm {
+        self.view.node_hash_algorithm()
+    }
 
     fn root_hash(&self) -> Option<HashKey> {
         self.view.root_hash()
@@ -118,6 +122,6 @@ pub struct GetRevisionResult<'db> {
 
 impl crate::MetricsContextExt for RevisionHandle<'_> {
     fn metrics_context(&self) -> Option<MetricsContext> {
-        Some(self.metrics_context)
+        Some(self.metrics_context.clone())
     }
 }

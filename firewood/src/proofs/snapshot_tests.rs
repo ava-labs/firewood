@@ -232,12 +232,12 @@ fn branch_node(
 /// `range` (`proof_type` `0x01`) and `change` (`proof_type` `0x02`) otherwise
 /// share the same magic `fwdproof`, version `0x00`, `branch_factor` `0x10`, and
 /// 20 zero reserved bytes.
-#[test_case("range", ProofType::Range ; "range")]
-#[test_case("change", ProofType::Change ; "change")]
-fn proof_header(name: &str, proof_type: ProofType) {
+#[test_case(ProofType::Range ; "range")]
+#[test_case(ProofType::Change ; "change")]
+fn proof_header(proof_type: ProofType) {
     let header = Header::from((proof_type, DefaultHashMode::ALGORITHM));
     insta::assert_snapshot!(
-        hash_mode_name(name),
+        hash_mode_name(&format!("{proof_type:?}").to_lowercase()),
         hex::encode(bytemuck::bytes_of(&header))
     );
 }

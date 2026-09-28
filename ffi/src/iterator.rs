@@ -71,6 +71,6 @@ pub struct CreateIteratorResult<'db>(pub IteratorHandle<'db>);
 
 impl crate::MetricsContextExt for IteratorHandle<'_> {
     fn metrics_context(&self) -> Option<MetricsContext> {
-        self.metrics_context
+        self.metrics_context.clone()
     }
 }

@@ -4,6 +4,7 @@
 package ffi
 
 import (
+	"bytes"
 	"encoding/hex"
 	"runtime"
 	"sync"
@@ -75,6 +76,19 @@ func newVerifiedRangeProof(
 	return proof
 }
 
+// ethAccountWithCodeHash returns a 32-byte account key, the RLP-encoded account
+// stored under it, and the code hash embedded in that account. Only
+// account-length keys reach the code-hash extractor, so this is the minimal
+// fixture that makes a proof yield exactly one code hash.
+func ethAccountWithCodeHash(t *testing.T) ([32]byte, []byte, Hash) {
+	t.Helper()
+
+	key := [32]byte{0x12, 0x34, 0x56} // account keys must be 32 bytes
+	val, err := hex.DecodeString("f8440164a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
+	require.NoError(t, err)
+	return key, val, stringToHash(t, "044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
+}
+
 // newSerializedRangeProof generates a range proof for the given parameters and
 // returns its serialized bytes.
 func newSerializedRangeProof(
@@ -99,11 +113,10 @@ func newSerializedChangeProof(
 	db *Database,
 	startRoot, endRoot Hash,
 	startKey, endKey maybe,
-	proofLen uint32,
 ) []byte {
 	r := require.New(t)
 
-	proof, err := db.ChangeProof(startRoot, endRoot, startKey, endKey, proofLen)
+	proof, err := db.ChangeProof(startRoot, endRoot, startKey, endKey, changeProofLenUnbounded)
 	r.NoError(err)
 
 	proofBytes, err := proof.MarshalBinary()
@@ -302,23 +315,60 @@ func TestRangeProofFindNextKey(t *testing.T) {
 	// Verify the proof
 	r.NoError(db.VerifyRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated))
 
-	// Now FindNextKey should work
+	// The proof was taken from db's own state, so merging it over the proven
+	// range is a no-op and the proposal keeps `root`. That equality is the
+	// FFI's "already caught up" short-circuit, so there is nothing left to
+	// fetch — before commit here and after commit below. A NotNil here means
+	// the apply path deleted outside the proven range and moved the root.
+	// TestRangeProofFindNextKeyDivergentReceiver covers a receiver that is
+	// genuinely behind.
+	nextRange, err := proof.FindNextKey()
+	r.NoError(err)
+	r.Nil(nextRange)
+
+	_, err = db.VerifyAndCommitRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated)
+	r.NoError(err)
+
+	nextRange, err = proof.FindNextKey()
+	r.NoError(err)
+	r.Nil(nextRange)
+}
+
+// TestRangeProofFindNextKeyDivergentReceiver applies a truncated proof to an
+// empty target: a receiver genuinely behind the proof's root must report more
+// to fetch.
+func TestRangeProofFindNextKeyDivergentReceiver(t *testing.T) {
+	r := require.New(t)
+
+	dbSource := newTestDatabase(t)
+	dbTarget := newTestDatabase(t)
+
+	keys, vals, batch := kvForTest(100)
+	sourceRoot, err := dbSource.Update(batch)
+	r.NoError(err)
+
+	// dbTarget starts empty, so it is materially behind sourceRoot.
+	proof := newVerifiedRangeProof(t, dbSource, sourceRoot, nothing(), nothing(), rangeProofLenTruncated)
+
+	_, err = dbTarget.VerifyAndCommitRangeProof(proof, nothing(), nothing(), sourceRoot, rangeProofLenTruncated)
+	r.NoError(err)
+
+	// The proven prefix is written. Against an empty target this says nothing
+	// about where the bound falls — only the sibling tests named in
+	// TestRangeProofTruncatedDeletesStaleKeyWithinProvenEdge do.
+	for i := range rangeProofLenTruncated {
+		got, err := dbTarget.Get(keys[i])
+		r.NoError(err, "Get key %d", i)
+		r.Equal(vals[i], got, "key %d from the proven prefix was not applied", i)
+	}
+
+	// The truncated proof only proved a prefix, and dbTarget started with
+	// none of the data, so there is genuinely more to fetch.
 	nextRange, err := proof.FindNextKey()
 	r.NoError(err)
 	r.NotNil(nextRange)
 	startKey := nextRange.StartKey()
 	r.NotEmpty(startKey)
-	startKey = append([]byte{}, startKey...) // copy to new slice to avoid use-after-free
-	r.NoError(nextRange.Free())
-
-	_, err = db.VerifyAndCommitRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated)
-	r.NoError(err)
-
-	// FindNextKey should still work after commit
-	nextRange, err = proof.FindNextKey()
-	r.NoError(err)
-	r.NotNil(nextRange)
-	r.Equal(nextRange.StartKey(), startKey)
 	r.NoError(nextRange.Free())
 }
 
@@ -499,31 +549,96 @@ func TestRangeProofVerifyTwiceIdempotent(t *testing.T) {
 	r.NoError(db.Close(oneSecCtx(t)))
 }
 
+// TestCodeIteratorRetainsProof pins the lifetime contract between a code-hash
+// iterator and the proof it borrows. Rust's CodeIteratorHandle<'p> wraps
+// Box<dyn Iterator + 'p> over the proof's key-values, so the iterator must hold
+// a Go reference to that proof; without one the proof is collectible the moment
+// CodeHashes stops mentioning it, and its finalizer frees the data the iterator
+// is still reading.
+//
+// The assertion is the reference itself rather than an observation of the
+// garbage collector. A reachable object is never collected, so proving the
+// reference exists proves the lifetime property outright -- deterministically,
+// with no forced collections, no timing, and no tuned constants. Probing the GC
+// can only ever fail to disprove the property within some arbitrary budget.
+func TestCodeIteratorRetainsProof(t *testing.T) {
+	if selectedHashMode != ethhashKey {
+		t.Skip("code hash iterators are only created for ethereum-mode proofs")
+	}
+
+	tests := []struct {
+		name string
+		// newProof builds a proof over the account fixture and registers its
+		// own cleanup. The concrete pointer is returned as the interface so
+		// the assertion below compares what the iterator actually stored.
+		newProof func(*testing.T, *require.Assertions, *Database) codeHashSource
+	}{
+		{
+			"range",
+			func(t *testing.T, r *require.Assertions, db *Database) codeHashSource {
+				key, val, _ := ethAccountWithCodeHash(t)
+				root, err := db.Update([]BatchOp{Put(key[:], val)})
+				r.NoError(err)
+				return newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenUnbounded)
+			},
+		},
+		{
+			"change",
+			func(t *testing.T, r *require.Assertions, db *Database) codeHashSource {
+				// Baseline insert so the change proof's start root is non-empty.
+				startRoot, err := db.Update([]BatchOp{Put([]byte("baseline"), []byte("v"))})
+				r.NoError(err)
+				key, val, _ := ethAccountWithCodeHash(t)
+				endRoot, err := db.Update([]BatchOp{Put(key[:], val)})
+				r.NoError(err)
+
+				proof, err := db.ChangeProof(startRoot, endRoot, nothing(), nothing(), changeProofLenUnbounded)
+				r.NoError(err)
+				t.Cleanup(func() { r.NoError(proof.Free()) })
+				return proof
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			db := newTestDatabase(t)
+			proof := tt.newProof(t, r, db)
+
+			it, err := proof.codeIterator()
+			r.NoError(err)
+			// Registered after the proof's own cleanup, so it runs first: the
+			// borrow is released before the borrowed-from proof is freed.
+			t.Cleanup(func() { r.NoError(it.Free()) })
+
+			// A nil owner means the Rust borrow is backed by no Go reference
+			// at all, which is the regression this test exists to catch;
+			// check it separately so the failure says so.
+			r.NotNil(it.owner, "%T.codeIterator() must retain the proof it borrows", proof)
+			r.Same(proof, it.owner, "%T.codeIterator() retained the wrong proof", proof)
+		})
+	}
+}
+
 func TestRangeProofCodeHashes(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	// RLP encoded account with code hash
-	key := [32]byte{0x12, 0x34, 0x56} // key must be length 32
-	val, err := hex.DecodeString("f8440164a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
-	r.NoError(err)
-	codeHash := stringToHash(t, "044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
-
+	key, val, codeHash := ethAccountWithCodeHash(t)
 	root, err := db.Update([]BatchOp{Put(key[:], val)})
 	r.NoError(err)
 
 	proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenUnbounded)
 
 	i := 0
-	mode, err := inferHashingMode(t.Context())
-	r.NoError(err)
 	for h, err := range proof.CodeHashes() {
 		i++
-		if mode == ethhashKey {
+		if selectedHashMode == ethhashKey {
 			r.NoError(err, "%T.CodeHashes()", proof)
 			r.Equal(codeHash, h)
 		} else {
-			require.ErrorContains(t, err, "feature not supported in this build: ethhash code hash iterator")
+			require.ErrorContains(t, err, "code hash iteration requires an ethereum-mode proof")
 		}
 	}
 
@@ -541,12 +656,7 @@ func TestChangeProofCodeHashes(t *testing.T) {
 	startRoot, err := db.Update([]BatchOp{Put([]byte("baseline"), []byte("v"))})
 	r.NoError(err)
 
-	// RLP encoded account with code hash — same blob as TestRangeProofCodeHashes.
-	key := [32]byte{0x12, 0x34, 0x56} // key must be length 32
-	val, err := hex.DecodeString("f8440164a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
-	r.NoError(err)
-	codeHash := stringToHash(t, "044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
-
+	key, val, codeHash := ethAccountWithCodeHash(t)
 	endRoot, err := db.Update([]BatchOp{Put(key[:], val)})
 	r.NoError(err)
 
@@ -555,15 +665,13 @@ func TestChangeProofCodeHashes(t *testing.T) {
 	t.Cleanup(func() { r.NoError(proof.Free()) })
 
 	i := 0
-	mode, err := inferHashingMode(t.Context())
-	r.NoError(err)
 	for h, err := range proof.CodeHashes() {
 		i++
-		if mode == ethhashKey {
+		if selectedHashMode == ethhashKey {
 			r.NoError(err, "%T.CodeHashes()", proof)
 			r.Equal(codeHash, h)
 		} else {
-			require.ErrorContains(t, err, "feature not supported in this build: ethhash code hash iterator")
+			require.ErrorContains(t, err, "code hash iteration requires an ethereum-mode proof")
 		}
 	}
 
@@ -653,6 +761,46 @@ func TestRangeProofFinalizerCleanup(t *testing.T) {
 	r.NoError(db.Close(t.Context()), "Database should be closeable after proof is garbage collected")
 }
 
+// TestChangeProofSetFinalizerReset guards against a double-SetFinalizer panic on
+// ChangeProof, mirroring TestRangeProofSetFinalizerReset. Both
+// Database.ChangeProof and UnmarshalBinary register the Free finalizer, and Free
+// does not clear it, so a proof that reaches a finalizer-setting path twice (a
+// from-create proof re-loaded via UnmarshalBinary, or a repeated UnmarshalBinary)
+// fatally panicked with "finalizer already set". Each sequence must leave the
+// proof with exactly one finalizer.
+//
+// (VerifyChangeProof does not set a finalizer, so there is no verify variant, and
+// ChangeProof has no lease, so there is no lease-attach variant.)
+func TestChangeProofSetFinalizerReset(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	_, _, batch := kvForTest(100)
+	startRoot, err := db.Update(batch[:50])
+	r.NoError(err)
+	endRoot, err := db.Update(batch)
+	r.NoError(err)
+	proofBytes := newSerializedChangeProof(t, db, startRoot, endRoot, nothing(), nothing())
+
+	t.Run("create_then_unmarshal", func(t *testing.T) {
+		r := require.New(t)
+		p, err := db.ChangeProof(startRoot, endRoot, nothing(), nothing(), changeProofLenUnbounded)
+		r.NoError(err)
+		r.NoError(p.UnmarshalBinary(proofBytes))
+
+		t.Cleanup(func() { _ = p.Free() })
+	})
+
+	t.Run("unmarshal_then_unmarshal", func(t *testing.T) {
+		r := require.New(t)
+		p := new(ChangeProof)
+		r.NoError(p.UnmarshalBinary(proofBytes))
+		r.NoError(p.UnmarshalBinary(proofBytes))
+
+		t.Cleanup(func() { _ = p.Free() })
+	})
+}
+
 func TestChangeProofEmptyDB(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
@@ -694,7 +842,7 @@ func TestChangeProofDiffersAfterUpdate(t *testing.T) {
 	r.NotEqual(root1, root2)
 
 	// Get a proof
-	proof1 := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing(), changeProofLenUnbounded)
+	proof1 := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing())
 	r.NoError(err)
 
 	// Insert more data
@@ -703,7 +851,7 @@ func TestChangeProofDiffersAfterUpdate(t *testing.T) {
 	r.NotEqual(root2, root3)
 
 	// Get a proof again
-	proof2 := newSerializedChangeProof(t, db, root2, root3, nothing(), nothing(), changeProofLenUnbounded)
+	proof2 := newSerializedChangeProof(t, db, root2, root3, nothing(), nothing())
 	// Ensure the proofs are different
 	r.NotEqual(proof1, proof2)
 }
@@ -721,7 +869,7 @@ func TestRoundTripChangeProofSerialization(t *testing.T) {
 	r.NoError(err)
 
 	// get a proof
-	proofBytes := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing(), changeProofLenUnbounded)
+	proofBytes := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing())
 
 	// Deserialize the proof.
 	proof := new(ChangeProof)
@@ -1061,110 +1209,80 @@ func TestChangeProofMarshalWorksAfterVerify(t *testing.T) {
 	r.Equal(marshalledBefore, marshalledAfter)
 }
 
-// TestRangeProofSizedSyncsWholeKeyspace pages sized range proofs from dbA into
-// dbB like a syncing client: each chunk fits the budget, its wire bytes match
-// the proof's own serialization, and the final committed root matches.
-func TestRangeProofSizedSyncsWholeKeyspace(t *testing.T) {
+// A truncated range proof proves only a prefix of the requested range, so
+// applying it must leave local keys past the proven edge alone: no proof covers
+// them.
+func TestRangeProofTruncatedDoesNotDeleteBeyondProvenEdge(t *testing.T) {
 	r := require.New(t)
-	dbA := newTestDatabase(t)
-	dbB := newTestDatabase(t)
 
-	_, _, batch := kvForTest(3000)
-	root, err := dbA.Update(batch)
+	dbSource := newTestDatabase(t)
+	dbTarget := newTestDatabase(t)
+
+	keys, vals, batch := kvForTest(50)
+
+	sourceRoot, err := dbSource.Update(batch)
 	r.NoError(err)
 
-	const budget = 2048
-	startKey := nothing()
-	ratioHint := 0.0
-	chunks := 0
-	for {
-		sized, err := dbA.RangeProofSized(root, startKey, budget, ratioHint)
-		r.NoError(err)
-		assertProofNotNil(t, sized.Proof)
-		ratioHint = sized.Ratio
-		r.Greater(ratioHint, 0.0)
+	// Seed the target with identical data, so it holds keys past the edge a
+	// truncated reply will prove. Nothing here should be deleted.
+	_, err = dbTarget.Update(batch)
+	r.NoError(err)
 
-		marshaled, err := sized.Proof.MarshalBinary()
-		r.NoError(err)
-		r.Equal(marshaled, sized.Wire, "wire must match the proof serialization")
-		r.LessOrEqual(len(sized.Wire), budget)
+	// Request the whole keyspace but cap the reply, forcing truncation.
+	proof := newVerifiedRangeProof(t, dbSource, sourceRoot, nothing(), nothing(), rangeProofLenTruncated)
 
-		_, err = dbB.VerifyAndCommitRangeProof(sized.Proof, startKey, nothing(), root, rangeProofLenUnbounded)
-		r.NoError(err)
+	_, err = dbTarget.VerifyAndCommitRangeProof(proof, nothing(), nothing(), sourceRoot, rangeProofLenTruncated)
+	r.NoError(err)
 
-		if sized.NaturalEnd {
-			r.NoError(sized.Proof.Free())
-			break
-		}
-		next, err := sized.Proof.FindNextKey()
-		r.NoError(err)
-		r.NotNil(next, "non-final chunk must yield a next key range")
-		startKey = something(next.StartKey())
-		r.NoError(next.Free())
-		r.NoError(sized.Proof.Free())
-
-		chunks++
-		r.Less(chunks, 1000, "runaway paging")
+	// Source and target held the same data and the proof covered a prefix of
+	// it, so every original key must survive.
+	for i, key := range keys {
+		got, err := dbTarget.Get(key)
+		r.NoError(err, "Get key %d", i)
+		r.Equal(vals[i], got, "key %d was deleted or altered by a proof that never covered it", i)
 	}
-	r.Positive(chunks, "budget should force multiple chunks")
-	r.Equal(root, dbB.Root())
 }
 
-// TestChangeProofSizedPagesWholeDiff pages sized change proofs across a diff:
-// each chunk fits the budget, its wire bytes match the proof's own
-// serialization, and paging terminates via NaturalEnd.
-func TestChangeProofSizedPagesWholeDiff(t *testing.T) {
+// Within the proven prefix, a range proof proves that only the key-values it
+// carries exist, so anything else there must be deleted. This is the mirror of
+// TestRangeProofTruncatedDoesNotDeleteBeyondProvenEdge, which guards a bound
+// looser than the proof justifies; a bound tighter than it justifies stops the
+// merge's trie scan short and strands the synthetic stale key below.
+//
+// Only a stale local key can observe the bound: it gates the trie-side scan
+// alone, so against an empty target (as in
+// TestRangeProofFindNextKeyDivergentReceiver) every key-value is applied
+// whatever the bound is.
+func TestRangeProofTruncatedDeletesStaleKeyWithinProvenEdge(t *testing.T) {
 	r := require.New(t)
-	db := newTestDatabase(t)
 
-	_, _, batch := kvForTest(3000)
-	startRoot, err := db.Update(batch[:1500])
-	r.NoError(err)
-	endRoot, err := db.Update(batch[1500:])
-	r.NoError(err)
+	dbSource := newTestDatabase(t)
+	dbTarget := newTestDatabase(t)
 
-	const budget = 2048
-	startKey := nothing()
-	ratioHint := 0.0
-	chunks := 0
-	for {
-		sized, err := db.ChangeProofSized(startRoot, endRoot, startKey, budget, ratioHint)
-		r.NoError(err)
-		r.NotNil(sized.Proof)
-		ratioHint = sized.Ratio
-		r.Greater(ratioHint, 0.0)
+	keys, _, batch := kvForTest(50)
 
-		marshaled, err := sized.Proof.MarshalBinary()
-		r.NoError(err)
-		r.Equal(marshaled, sized.Wire, "wire must match the proof serialization")
-		r.LessOrEqual(len(sized.Wire), budget)
-
-		if sized.NaturalEnd {
-			r.NoError(sized.Proof.Free())
-			break
-		}
-		next, err := sized.Proof.FindNextKey(nothing())
-		r.NoError(err)
-		r.NotNil(next, "non-final chunk must yield a next key range")
-		startKey = something(next.StartKey())
-		r.NoError(next.Free())
-		r.NoError(sized.Proof.Free())
-
-		chunks++
-		r.Less(chunks, 1000, "runaway paging")
-	}
-	r.Positive(chunks, "budget should force multiple chunks")
-}
-
-// TestRangeProofSizedNonExistentRoot mirrors TestRangeProofNonExistentRoot.
-func TestRangeProofSizedNonExistentRoot(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	_, _, batch := kvForTest(10)
-	_, err := db.Update(batch)
+	sourceRoot, err := dbSource.Update(batch)
 	r.NoError(err)
 
-	_, err = db.RangeProofSized(Hash{1}, nothing(), 4096, 0)
-	r.ErrorIs(err, ErrRevisionNotFound)
+	_, err = dbTarget.Update(batch)
+	r.NoError(err)
+
+	// A key present only in dbTarget, and absent from the proof's key-values,
+	// so a correctly-bounded merge must delete it. The assertions pin it inside
+	// the proven range rather than assuming it.
+	staleKey := append(append([]byte{}, keys[0]...), 0)
+	r.Negative(bytes.Compare(keys[0], staleKey), "synthetic key must sort after keys[0]")
+	r.Negative(bytes.Compare(staleKey, keys[rangeProofLenTruncated-1]),
+		"synthetic key must sort inside the proven range")
+	_, err = dbTarget.Update([]BatchOp{Put(staleKey, []byte("stale"))})
+	r.NoError(err)
+
+	proof := newVerifiedRangeProof(t, dbSource, sourceRoot, nothing(), nothing(), rangeProofLenTruncated)
+
+	_, err = dbTarget.VerifyAndCommitRangeProof(proof, nothing(), nothing(), sourceRoot, rangeProofLenTruncated)
+	r.NoError(err)
+
+	got, err := dbTarget.Get(staleKey)
+	r.NoError(err)
+	r.Nil(got, "stale key inside the proven range should have been deleted")
 }

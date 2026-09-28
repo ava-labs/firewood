@@ -18,7 +18,7 @@ use firewood_storage::logger::{trace, warn};
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
 
-use crate::api::{self, ArcDynDbView, HashKey, HashKeyExt, IntoBatchIter, OptionalHashKeyExt};
+use crate::api::{self, ArcDynDbView, HashKey, IntoBatchIter};
 use crate::db::{BatchOp, UseParallel};
 use crate::merkle::Merkle;
 use crate::merkle::parallel::ParallelMerkle;
@@ -28,8 +28,8 @@ pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::RootStore;
 use firewood_storage::{
     BranchNode, CheckOpt, CheckerReport, Committed, CommittedId, DeletedNodeTracking, FileBacked,
-    FileIoError, HashedNodeReader, ImmutableProposal, Mutable, MutableKind, NodeHashAlgorithm,
-    NodeStore, NodeStoreHeader, Propose, Recon, TrieHash,
+    FileIoError, HashMode, HashedNodeReader, ImmutableProposal, Mutable, MutableKind,
+    MutableReconNodeStore, NodeStore, NodeStoreHeader, Propose, TrieHash,
 };
 
 pub(crate) const DB_FILE_NAME: &str = "firewood.db";
@@ -39,7 +39,7 @@ pub(crate) const DB_FILE_NAME: &str = "firewood.db";
 pub struct RevisionManagerConfig {
     /// The number of committed revisions to keep in memory.
     ///
-    /// Must be > `deferred_persistence_commit_count`.
+    /// Must be > `max_persistence_gap`.
     #[builder(default = 128)]
     max_revisions: usize,
 
@@ -49,17 +49,30 @@ pub struct RevisionManagerConfig {
     #[builder(default = nonzero!(192_000_000_usize))]
     node_cache_memory_limit: NonZero<usize>,
 
-    #[builder(default_code = "NonZero::new(1000000).expect(\"non-zero\")")]
-    free_list_cache_size: NonZero<usize>,
+    /// The memory limit for the free-list cache in kibibytes.
+    ///
+    /// The cache maps a freed node's address to the next entry in its free list,
+    /// so allocation can reuse space without reading it from disk. This limit is
+    /// an upper bound converted into an entry count; nothing is preallocated, so
+    /// the memory is only used once that many nodes have been freed.
+    ///
+    /// Defaults to 4MB.
+    #[builder(default = nonzero!(4096_usize))]
+    freelist_memory_limit_kb: NonZero<usize>,
 
     #[builder(default = CacheReadStrategy::WritesOnly)]
     cache_read_strategy: CacheReadStrategy,
 
-    /// The maximum number of unpersisted revisions that can exist at a given time.
+    /// The maximum number of committed revisions that can be ahead of the last persisted
+    /// revision. A commit that would exceed this distance blocks until persistence advances the
+    /// checkpoint.
     ///
-    /// Must be < `max_revisions`.
+    /// Consequently, a persisted revision is guaranteed to be found by looking back at most
+    /// `max_persistence_gap` revisions from any committed revision.
+    ///
+    /// Defaults to 1. Must be positive and less than `max_revisions`.
     #[builder(default = nonzero!(1u64))]
-    deferred_persistence_commit_count: NonZeroU64,
+    max_persistence_gap: NonZeroU64,
 }
 
 #[derive(Clone, Debug, TypedBuilder)]
@@ -68,8 +81,6 @@ pub struct RevisionManagerConfig {
 pub struct ConfigManager {
     /// The directory where the database files will be stored (required).
     pub root_dir: PathBuf,
-    /// The algorithm used for hashing nodes (required).
-    pub node_hash_algorithm: NodeHashAlgorithm,
 
     /// Whether to create the DB if it doesn't exist.
     #[builder(default = true)]
@@ -86,11 +97,16 @@ pub struct ConfigManager {
     pub manager: RevisionManagerConfig,
 }
 
-pub type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
-type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
+pub type CommittedRevision<H> = Arc<NodeStore<Committed, FileBacked, H>>;
+type ProposedRevision<H> = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked, H>>;
 
+/// Manages historical revisions and proposals for a [`crate::db::Db`].
+///
+/// `H` mirrors the owning database's hash-mode type parameter and is threaded
+/// through every managed nodestore (revisions, proposals, and reconstruction
+/// chains).
 #[derive(Debug)]
-pub(crate) struct RevisionManager {
+pub(crate) struct RevisionManager<H> {
     /// Maximum number of revisions to keep in memory.
     ///
     /// When this limit is exceeded, the oldest revision is removed from memory.
@@ -101,17 +117,17 @@ pub(crate) struct RevisionManager {
 
     /// FIFO queue of committed revisions kept in memory. The queue always
     /// contains at least one revision.
-    in_memory_revisions: RwLock<VecDeque<CommittedRevision>>,
+    in_memory_revisions: RwLock<VecDeque<CommittedRevision<H>>>,
 
     /// Hash-based index of committed revisions kept in memory.
     ///
     /// Maps root hash to the corresponding committed revision for O(1) lookup
     /// performance. This allows efficient retrieval of revisions without
     /// scanning through the `in_memory_revisions` queue.
-    by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
+    by_hash: RwLock<HashMap<TrieHash, CommittedRevision<H>>>,
 
     /// Active proposals that have not yet been committed.
-    proposals: Mutex<Vec<ProposedRevision>>,
+    proposals: Mutex<Vec<ProposedRevision<H>>>,
 
     /// Lazily initialized thread pool for parallel operations.
     threadpool: OnceLock<ThreadPool>,
@@ -121,10 +137,10 @@ pub(crate) struct RevisionManager {
     /// When present, enables retrieval of revisions beyond `max_revisions` by
     /// persisting root hash to disk address mappings. This allows historical
     /// queries of arbitrarily old revisions without keeping them in memory.
-    root_store: Option<Arc<RootStore>>,
+    root_store: Option<Arc<RootStore<H>>>,
 
     /// Worker responsible for persisting revisions to disk.
-    persist_worker: PersistWorker,
+    persist_worker: PersistWorker<H>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -149,21 +165,21 @@ pub(crate) enum RevisionManagerError {
     #[error("A deferred persistence error occurred: {0}")]
     PersistError(#[source] PersistError),
     #[error(
-        "max_revisions ({max_revisions}) must be > deferred_persistence_commit_count ({commit_count})"
+        "max_revisions ({max_revisions}) must be > max_persistence_gap ({max_persistence_gap})"
     )]
     InsufficientRevisions {
         max_revisions: usize,
-        commit_count: u64,
+        max_persistence_gap: u64,
     },
 }
 
-impl RevisionManager {
+impl<H: HashMode> RevisionManager<H> {
     pub fn new(config: ConfigManager) -> Result<Self, RevisionManagerError> {
-        let commit_count = config.manager.deferred_persistence_commit_count.get();
-        if (config.manager.max_revisions as u64) <= commit_count {
+        let max_persistence_gap = config.manager.max_persistence_gap.get();
+        if (config.manager.max_revisions as u64) <= max_persistence_gap {
             return Err(RevisionManagerError::InsufficientRevisions {
                 max_revisions: config.manager.max_revisions,
-                commit_count,
+                max_persistence_gap,
             });
         }
 
@@ -175,11 +191,10 @@ impl RevisionManager {
         let fb = FileBacked::new(
             file,
             config.manager.node_cache_memory_limit,
-            config.manager.free_list_cache_size,
+            config.manager.freelist_memory_limit_kb,
             config.truncate,
             config.create,
             config.manager.cache_read_strategy,
-            config.node_hash_algorithm,
         )?;
 
         // Acquire an advisory lock on the database file to prevent multiple processes
@@ -187,11 +202,11 @@ impl RevisionManager {
         fb.lock()?;
 
         let storage = Arc::new(fb);
-        let header = match NodeStoreHeader::read_from_storage(storage.as_ref()) {
+        let header = match NodeStoreHeader::read_from_storage(storage.as_ref(), H::ALGORITHM) {
             Ok(header) => header,
             Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
                 // Empty file - create a new header for a fresh database
-                NodeStoreHeader::new(config.node_hash_algorithm)
+                NodeStoreHeader::new(H::ALGORITHM)
             }
             Err(err) => return Err(err.into()),
         };
@@ -222,15 +237,17 @@ impl RevisionManager {
         }
 
         let mut by_hash = HashMap::new();
-        if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
+        if let Some(hash) = nodestore.root_hash().or_else(H::default_root_hash) {
             by_hash.insert(hash, nodestore.clone());
         }
 
         let persist_worker = PersistWorker::new(
-            config.manager.deferred_persistence_commit_count,
+            config.manager.max_persistence_gap,
             header,
             root_store.clone(),
         );
+
+        firewood_gauge!(MAX_REVISIONS).set_integer(config.manager.max_revisions);
 
         let manager = Self {
             max_revisions: config.manager.max_revisions,
@@ -259,7 +276,9 @@ impl RevisionManager {
 
         Ok(manager)
     }
+}
 
+impl<H: HashMode> RevisionManager<H> {
     /// Commit a proposal
     /// To commit a proposal involves a few steps:
     /// 1. Check if the persist worker has failed.
@@ -282,7 +301,7 @@ impl RevisionManager {
     /// that only one revision can commit at a time.
     #[fastrace::trace(short_name = true)]
     #[crate::metrics(PROPOSAL_COMMITS)]
-    pub fn commit(&self, proposal: ProposedRevision) -> Result<(), RevisionManagerError> {
+    pub fn commit(&self, proposal: ProposedRevision<H>) -> Result<(), RevisionManagerError> {
         // Hold a write lock on `in_memory_revisions` for the duration of the
         // critical section (steps 1-5). This is necessary because:
         // 1. Without the lock, two proposals with the same parent could pass the
@@ -316,7 +335,7 @@ impl RevisionManager {
     /// commit can interleave between the rebase and the commit.
     pub(crate) fn lock_committed_revisions(
         &self,
-    ) -> parking_lot::RwLockWriteGuard<'_, VecDeque<CommittedRevision>> {
+    ) -> parking_lot::RwLockWriteGuard<'_, VecDeque<CommittedRevision<H>>> {
         self.in_memory_revisions.write()
     }
 
@@ -336,8 +355,8 @@ impl RevisionManager {
     /// proposal.
     pub(crate) fn commit_critical_section(
         &self,
-        proposal: &ProposedRevision,
-        revisions: &mut VecDeque<CommittedRevision>,
+        proposal: &ProposedRevision<H>,
+        revisions: &mut VecDeque<CommittedRevision<H>>,
     ) -> Result<CommittedId, RevisionManagerError> {
         // Check if the persist worker has failed.
         self.persist_worker
@@ -367,7 +386,7 @@ impl RevisionManager {
         // TODO(rkuris): Handle the case where we get something off the free list that is not free
         while revisions.len() >= self.max_revisions {
             let oldest = revisions.pop_front().expect("must be present");
-            let oldest_hash = oldest.root_hash().or_default_root_hash();
+            let oldest_hash = oldest.root_hash().or_else(H::default_root_hash);
             if let Some(ref hash) = oldest_hash {
                 // BLOCKING: write lock on `by_hash` while already holding the
                 // revisions write lock. Nested locking order must remain
@@ -390,16 +409,15 @@ impl RevisionManager {
                 }
             }
             firewood_gauge!(ACTIVE_REVISIONS).set_integer(revisions.len());
-            firewood_gauge!(MAX_REVISIONS).set_integer(self.max_revisions);
         }
 
         let new_id = committed.committed_id();
 
         // Signal to the `PersistWorker` to persist this revision.
-        let committed: CommittedRevision = committed.into();
+        let committed: CommittedRevision<H> = committed.into();
         let __submit_start = ::std::time::Instant::now();
         self.persist_worker
-            .persist(committed.clone())
+            .submit_revision(committed.clone())
             .map_err(RevisionManagerError::PersistError)?;
         firewood_histogram!(cheap: PERSIST_SUBMIT_DURATION_SECONDS)
             .record(__submit_start.elapsed().as_secs_f64());
@@ -409,7 +427,7 @@ impl RevisionManager {
         // The `view()` method relies on this ordering - it checks `proposals` first,
         // then `by_hash`, ensuring the revision is always findable during the transition.
         revisions.push_back(committed.clone());
-        if let Some(hash) = committed.root_hash().or_default_root_hash() {
+        if let Some(hash) = committed.root_hash().or_else(H::default_root_hash) {
             // BLOCKING: write lock on `by_hash` (still inside the revisions
             // write lock). Same nested ordering as the reap path above; must
             // not be inverted.
@@ -424,7 +442,7 @@ impl RevisionManager {
     ///
     /// `new_id` is the [`CommittedId`] children of `proposal` should reparent
     /// onto — the value returned by [`Self::commit_critical_section`].
-    pub(crate) fn commit_cleanup(&self, proposal: &ProposedRevision, new_id: CommittedId) {
+    pub(crate) fn commit_cleanup(&self, proposal: &ProposedRevision<H>, new_id: CommittedId) {
         // Free the proposal being committed and any proposals no longer referenced
         // by anyone else, then reparent the survivors that referenced this proposal.
         // Both phases run under a single lock acquisition so the reparented set is
@@ -470,7 +488,7 @@ impl RevisionManager {
 
         if crate::logger::trace_enabled() {
             let committed = proposal.as_committed();
-            let committed: CommittedRevision = committed.into();
+            let committed: CommittedRevision<H> = committed.into();
             let merkle = Merkle::from(committed);
             if let Ok(s) = merkle.dump_to_string() {
                 trace!("{s}");
@@ -503,7 +521,7 @@ impl RevisionManager {
 
     /// Remove a proposal from the tracking list. Retains all proposals
     /// except the one matching `proposal` by `Arc::ptr_eq`.
-    pub fn remove_proposal(&self, proposal: &ProposedRevision) {
+    pub fn remove_proposal(&self, proposal: &ProposedRevision<H>) {
         let len = {
             let mut lock = self.proposals.lock();
             lock.retain(|p| !Arc::ptr_eq(p, proposal));
@@ -512,7 +530,7 @@ impl RevisionManager {
         firewood_gauge!(PROPOSALS_UNCOMMITTED).set_integer(len);
     }
 
-    pub fn add_proposal(&self, proposal: ProposedRevision) {
+    pub fn add_proposal(&self, proposal: ProposedRevision<H>) {
         let len = {
             // BLOCKING: mutex lock on `proposals`. Short critical section (just a push), but
             // contends with view(), commit() cleanup, and the reparent loop.
@@ -530,7 +548,10 @@ impl RevisionManager {
     /// 2. If the caller requested the default empty-trie hash, return an
     ///    empty committed nodestore.
     /// 3. Check `RootStore` (if it exists).
-    pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
+    pub fn revision(
+        &self,
+        root_hash: HashKey,
+    ) -> Result<CommittedRevision<H>, RevisionManagerError> {
         // 1. Check the in-memory revision manager.
         // BLOCKING: read lock on `by_hash`. Concurrent writes (commit reap/insert) will pause
         // until readers release. Low contention in practice since reads are fast, but parking_lot
@@ -544,10 +565,11 @@ impl RevisionManager {
         }
         drop(by_hash);
 
-        // 2. Default empty-trie short-circuit. An empty trie has no on-disk
-        //    root node, so `RootStore` can never produce it; synthesize one
-        //    against the file backing carried by the latest committed revision.
-        if HashKey::default_root_hash().as_ref() == Some(&root_hash) {
+        // 2. Empty-trie short-circuit for this hash mode. An empty trie has no
+        //    on-disk root node, so `RootStore` can never produce it; synthesize
+        //    one against the file backing carried by the latest committed
+        //    revision.
+        if H::default_root_hash().as_ref() == Some(&root_hash) {
             let storage = self.current_revision().storage().clone();
             let deleted_node_tracking = if self.root_store.is_some() {
                 DeletedNodeTracking::Disabled
@@ -587,7 +609,7 @@ impl RevisionManager {
         current_revision.check(&header, opt)
     }
 
-    pub fn current_revision(&self) -> CommittedRevision {
+    pub fn current_revision(&self) -> CommittedRevision<H> {
         // BLOCKING: read lock on `in_memory_revisions`. Called on every propose() and
         // merge_key_value_range(); blocks while a commit() holds the write lock (steps 1-5).
         let __lock_start = ::std::time::Instant::now();
@@ -635,9 +657,9 @@ impl RevisionManager {
     pub fn apply_batch(
         &self,
         use_parallel: &UseParallel,
-        mutable_nodestore: NodeStore<Mutable<Propose>, FileBacked>,
+        mutable_nodestore: NodeStore<Mutable<Propose>, FileBacked, H>,
         batch: impl IntoBatchIter,
-    ) -> Result<NodeStore<Mutable<Propose>, FileBacked>, api::Error> {
+    ) -> Result<NodeStore<Mutable<Propose>, FileBacked, H>, api::Error> {
         let batch = batch.into_iter();
         if Self::should_parallelize(use_parallel, &batch) {
             let mut parallel_merkle = ParallelMerkle::default();
@@ -648,10 +670,10 @@ impl RevisionManager {
     }
 
     /// Serial batch application shared by [`apply_batch`][Self::apply_batch].
-    fn apply_batch_serial<K: MutableKind>(
-        mutable_nodestore: NodeStore<Mutable<K>, FileBacked>,
+    fn apply_batch_serial<K: MutableKind, BH: HashMode>(
+        mutable_nodestore: NodeStore<Mutable<K>, FileBacked, BH>,
         batch: impl IntoBatchIter,
-    ) -> Result<NodeStore<Mutable<K>, FileBacked>, api::Error> {
+    ) -> Result<NodeStore<Mutable<K>, FileBacked, BH>, api::Error> {
         let mut merkle = Merkle::from(mutable_nodestore);
         for res in batch.into_batch_iter::<api::Error>() {
             match res? {
@@ -671,9 +693,9 @@ impl RevisionManager {
 
     /// Serial batch application for reconstruction chains.
     pub(crate) fn apply_batch_recon(
-        mutable_nodestore: NodeStore<Mutable<Recon<FileBacked>>, FileBacked>,
+        mutable_nodestore: MutableReconNodeStore<FileBacked, H>,
         batch: impl IntoBatchIter,
-    ) -> Result<NodeStore<Mutable<Recon<FileBacked>>, FileBacked>, api::Error> {
+    ) -> Result<MutableReconNodeStore<FileBacked, H>, api::Error> {
         Self::apply_batch_serial(mutable_nodestore, batch)
     }
 
@@ -698,11 +720,14 @@ impl RevisionManager {
 
 #[cfg(test)]
 mod tests {
-    use firewood_storage::RootReader;
+    use firewood_storage::{DefaultHashMode, RootReader};
 
     use super::*;
+    #[cfg(feature = "ethhash")]
+    use crate::api::HashKeyExt;
+    use crate::api::OptionalHashKeyExt;
 
-    impl RevisionManager {
+    impl RevisionManager<DefaultHashMode> {
         /// Get all proposal hashes available.
         pub fn proposal_hashes(&self) -> Vec<TrieHash> {
             self.proposals
@@ -741,20 +766,19 @@ mod tests {
 
         let config = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
-            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
             .create(true)
             .truncate(false)
             .build();
 
         // First database instance should open successfully
-        let first_manager = RevisionManager::new(config.clone());
+        let first_manager = RevisionManager::<DefaultHashMode>::new(config.clone());
         assert!(
             first_manager.is_ok(),
             "First database should open successfully"
         );
 
         // Second database instance should fail to open due to file locking
-        let second_manager = RevisionManager::new(config.clone());
+        let second_manager = RevisionManager::<DefaultHashMode>::new(config.clone());
         assert!(
             second_manager.is_err(),
             "Second database should fail to open"
@@ -774,7 +798,7 @@ mod tests {
         drop(first_manager.unwrap());
 
         // Now the second database should open successfully
-        let third_manager = RevisionManager::new(config);
+        let third_manager = RevisionManager::<DefaultHashMode>::new(config);
         assert!(
             third_manager.is_ok(),
             "Database should open after first instance is dropped"
@@ -782,7 +806,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     fn test_slow_concurrent_view_during_commit() {
         use firewood_storage::{
             ImmutableProposal, LeafNode, NibblesIterator, Node, NodeStore, Path,
@@ -800,7 +824,6 @@ mod tests {
 
         let config = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
-            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
             .create(true)
             .manager(
                 RevisionManagerConfig::builder()
@@ -809,7 +832,7 @@ mod tests {
             )
             .build();
 
-        let manager = Arc::new(RevisionManager::new(config).unwrap());
+        let manager = Arc::new(RevisionManager::<DefaultHashMode>::new(config).unwrap());
 
         // Create an initial proposal and commit it to have a non-empty base
         let base_revision = manager.current_revision();
@@ -821,7 +844,7 @@ mod tests {
                 value: b"value".to_vec().into_boxed_slice(),
             }));
         }
-        let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _>> =
+        let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _, DefaultHashMode>> =
             Arc::new(proposal.try_into().unwrap());
         manager.add_proposal(proposal.clone());
         manager.commit(proposal).unwrap();
@@ -909,7 +932,7 @@ mod tests {
                         }));
                     }
 
-                    let immutable: Arc<NodeStore<Arc<ImmutableProposal>, _>> =
+                    let immutable: Arc<NodeStore<Arc<ImmutableProposal>, _, DefaultHashMode>> =
                         Arc::new(match new_proposal.try_into() {
                             Ok(p) => p,
                             Err(e) => {
@@ -974,12 +997,11 @@ mod tests {
         // Create a database with root_store disabled (default)
         let config = ConfigManager::builder()
             .root_dir(db_path.clone())
-            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
             .create(true)
             .root_store(false)
             .build();
 
-        let _manager = RevisionManager::new(config).unwrap();
+        let _manager = RevisionManager::<DefaultHashMode>::new(config).unwrap();
 
         // Verify that the root_store directory does NOT exist
         let root_store_dir = db_path.join("root_store");
@@ -998,12 +1020,11 @@ mod tests {
         // Create a database with root_store enabled
         let config = ConfigManager::builder()
             .root_dir(db_path.clone())
-            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
             .create(true)
             .root_store(true)
             .build();
 
-        let _manager = RevisionManager::new(config).unwrap();
+        let _manager = RevisionManager::<DefaultHashMode>::new(config).unwrap();
 
         // Verify that the root_store directory DOES exist
         let root_store_dir = db_path.join("root_store");
@@ -1016,53 +1037,50 @@ mod tests {
     #[test]
     fn test_revision_count() {
         let db_dir = tempfile::tempdir().unwrap();
-        let commit_count = nonzero!(10u64);
+        let max_persistence_gap = nonzero!(10u64);
 
-        // `max_revisions` < `commit_count`
+        // `max_revisions` < `max_persistence_gap`
         let config = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
-            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
             .create(true)
             .manager(
                 RevisionManagerConfig::builder()
                     .max_revisions(5)
-                    .deferred_persistence_commit_count(commit_count)
+                    .max_persistence_gap(max_persistence_gap)
                     .build(),
             )
             .build();
 
-        let result = RevisionManager::new(config);
+        let result = RevisionManager::<DefaultHashMode>::new(config);
         assert!(result.is_err());
 
-        // `max_revisions` == `commit_count`
+        // `max_revisions` == `max_persistence_gap`
         let config = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
-            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
             .manager(
                 RevisionManagerConfig::builder()
-                    .max_revisions(commit_count.get() as usize)
-                    .deferred_persistence_commit_count(commit_count)
+                    .max_revisions(max_persistence_gap.get() as usize)
+                    .max_persistence_gap(max_persistence_gap)
                     .build(),
             )
             .build();
 
-        let result = RevisionManager::new(config);
+        let result = RevisionManager::<DefaultHashMode>::new(config);
         assert!(result.is_err());
 
-        // `max_revisions` > `commit_count`
-        let max_revisions = commit_count.get().wrapping_add(1) as usize;
+        // `max_revisions` > `max_persistence_gap`
+        let max_revisions = max_persistence_gap.get().wrapping_add(1) as usize;
         let config = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
-            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
             .manager(
                 RevisionManagerConfig::builder()
                     .max_revisions(max_revisions)
-                    .deferred_persistence_commit_count(commit_count)
+                    .max_persistence_gap(max_persistence_gap)
                     .build(),
             )
             .build();
 
-        let result = RevisionManager::new(config);
+        let result = RevisionManager::<DefaultHashMode>::new(config);
         assert!(result.is_ok());
     }
 
@@ -1084,18 +1102,17 @@ mod tests {
         let db_dir = tempfile::tempdir().unwrap();
         let config = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
-            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
             .create(true)
             .manager(
                 // Smallest legal queue: max_revisions must exceed
-                // deferred_persistence_commit_count (default 1). Two slots is
+                // max_persistence_gap (default 1). Two slots is
                 // enough for the initial empty revision to be reaped after a
                 // pair of non-empty commits.
                 RevisionManagerConfig::builder().max_revisions(2).build(),
             )
             .build();
 
-        let manager = RevisionManager::new(config).unwrap();
+        let manager = RevisionManager::<DefaultHashMode>::new(config).unwrap();
 
         // Sanity: the fresh manager indexes the empty revision under the
         // default hash.
@@ -1110,7 +1127,7 @@ mod tests {
                 partial_path: Path::from_nibbles_iterator(NibblesIterator::new(&[i])),
                 value: Box::new([i]),
             }));
-            let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _>> =
+            let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _, DefaultHashMode>> =
                 Arc::new(proposal.try_into().unwrap());
             manager.add_proposal(proposal.clone());
             manager.commit(proposal).unwrap();

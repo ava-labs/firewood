@@ -3,12 +3,13 @@
 name: C-Chain Reexecution Performance Tracking
 
 on:
-  schedule:
-    # These cron expressions are matched exactly in configure-benchmark to set parameters
-    # Weekdays at 05:00 UTC (00:00 ET) - 1M blocks: 40M → 41M
-    - cron: '0 5 * * 1-5'
-    # Weekdays at 05:05 UTC - 500k blocks: 33M -> 33.5M
-    - cron: '5 5 * * 1-5'
+  # TODO(#2270): enable the schedule once notification channels resolved.
+  # schedule:
+  #   # These cron expressions are matched exactly in configure-benchmark to set parameters
+  #   # Weekdays at 05:00 UTC (00:00 ET) - 1M blocks: 40M → 41M
+  #   - cron: '0 5 * * 1-5'
+  #   # Weekdays at 05:05 UTC - 500k blocks: 33M -> 33.5M
+  #   - cron: '5 5 * * 1-5'
   workflow_dispatch:
     inputs:
       firewood:

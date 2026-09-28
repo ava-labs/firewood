@@ -14,6 +14,13 @@ use thiserror::Error;
 /// RLP encoding of an empty byte string (`0x80`).
 pub const NULL_RLP: &[u8] = &[0x80];
 
+/// `keccak256(NULL_RLP)` — the root of an empty trie:
+/// `0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421`
+pub const EMPTY_TRIE_ROOT: [u8; 32] = [
+    0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6, 0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0, 0xf8, 0x6e,
+    0x5b, 0x48, 0xe0, 0x1b, 0x99, 0x6c, 0xad, 0xc0, 0x01, 0x62, 0x2f, 0xb5, 0xe3, 0x63, 0xb4, 0x21,
+];
+
 /// Errors produced while decoding RLP.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RlpError {
@@ -479,6 +486,12 @@ mod tests {
     #[test]
     fn encode_empty_string() {
         assert_eq!(&*encode_bytes(&[]), NULL_RLP);
+    }
+
+    #[test]
+    fn empty_trie_root_matches() {
+        use sha3::{Digest as _, Keccak256};
+        assert_eq!(&EMPTY_TRIE_ROOT[..], Keccak256::digest(NULL_RLP).as_slice());
     }
 
     #[test]

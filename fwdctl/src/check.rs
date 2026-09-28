@@ -9,8 +9,8 @@ use askama::Template;
 use clap::Args;
 use firewood::api;
 use firewood_storage::{
-    CacheReadStrategy, CheckOpt, DBStats, DeletedNodeTracking, FileBacked, NodeStore,
-    NodeStoreHeader,
+    CacheReadStrategy, CheckOpt, DBStats, DeletedNodeTracking, EthHash, FileBacked, HashMode,
+    MerkleDbHash, NodeHashAlgorithm, NodeStore, NodeStoreHeader,
 };
 use indicatif::{ProgressBar, ProgressFinish, ProgressStyle};
 use nonzero_ext::nonzero;
@@ -44,18 +44,24 @@ pub struct Options {
 }
 
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
+    match opts.database.node_hash_algorithm()? {
+        NodeHashAlgorithm::Ethereum => run_with_hash_mode::<EthHash>(opts),
+        NodeHashAlgorithm::MerkleDB => run_with_hash_mode::<MerkleDbHash>(opts),
+    }
+}
+
+fn run_with_hash_mode<H: HashMode>(opts: &Options) -> Result<(), api::Error> {
     let db_path = PathBuf::from(&opts.database.dbpath).join("firewood.db");
     let node_cache_memory_limit = nonzero!(1usize);
-    let free_list_cache_size = nonzero!(1usize);
+    let freelist_memory_limit_kb = nonzero!(1usize);
 
     let fb = FileBacked::new(
         db_path,
         node_cache_memory_limit,
-        free_list_cache_size,
+        freelist_memory_limit_kb,
         false,
         false,                         // don't create if missing
         CacheReadStrategy::WritesOnly, // we scan the database once - no need to cache anything
-        opts.database.node_hash_algorithm.into(),
     )?;
     let storage = Arc::new(fb);
 
@@ -72,7 +78,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
         progress_bar: Some(progress_bar),
     };
 
-    let mut header = NodeStoreHeader::read_from_storage(storage.as_ref())?;
+    let mut header = NodeStoreHeader::read_from_storage(storage.as_ref(), H::ALGORITHM)?;
     // The checker never builds proposals, so this value is currently unused.
     // Match how the database is normally run by checking if the RootStore directory exists.
     let deleted_node_tracking = if opts.database.dbpath.join("root_store").is_dir() {
@@ -80,7 +86,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     } else {
         DeletedNodeTracking::Enabled
     };
-    let nodestore = NodeStore::open(&header, storage, deleted_node_tracking)?;
+    let nodestore: NodeStore<_, _, H> = NodeStore::open(&header, storage, deleted_node_tracking)?;
     let check_report = nodestore.check(&header, check_ops);
 
     println!("Errors ({}): ", check_report.errors.len());

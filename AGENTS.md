@@ -41,6 +41,8 @@ firewood/             # Core library and main database implementation
 └── benches/          # Benchmarks
 
 firewood-macros/      # Procedural macros for the project
+metrics/              # Shared metrics utilities
+replay/               # Replay log types and engine for database operations
 storage/              # Storage layer implementation
 triehash/             # Trie hashing functionality
 ffi/                  # Foreign Function Interface (FFI) binding for Golang
@@ -73,11 +75,15 @@ By default, Firewood uses SHA-256 hashing compatible with merkledb. Enable this 
 - Changes hashing from SHA-256 to Keccak-256
 - Understands "account" nodes at specific depths with RLP-encoded values
 - Computes account trie hash as actual root
-- See `firewood/storage/src/hashers/ethhash.rs` for implementation details
+- When an account has exactly one storage child, hashes that child as a
+  standalone storage-trie root, so a child's hash depends on the account's
+  storage-child count
+- See `storage/src/hashers/ethhash.rs` for implementation details
 
-### `logging`
+### `logger`
 
-Enable for runtime logging. Set `RUST_LOG` environment variable accordingly (uses `env_logger`).
+Enable for runtime logging. Set the `RUST_LOG` environment variable accordingly
+(uses `env_logger`).
 
 ## Common Development Tasks
 
@@ -87,17 +93,21 @@ Building and using the FFI library is a multi-step process. To generate the
 Firewood Rust FFI bindings:
 
 ```bash
-cd ffi/src                                              # Go to Rust binding directory
+cd ffi                                                  # Go to the FFI crate root
 cargo clean                                             # Remove any existing bindings
 cargo build --profile maxperf --features ethhash,logger # Generate bindings
 ```
 
-To then have Golang utilize these new bindings:
+To then have Golang utilize these new bindings, from that same directory:
 
 ```bash
-cd ..                   # Go to ffi directory
 go tool cgo firewood.go # Generate cgo wrappers
 ```
+
+`go tool cgo` refreshes only the wrappers the Go linter reads. The `go:generate`
+directives in `ffi/firewood.go` additionally update the cgo pragmas and
+`LDFLAGS`, and CI checks that they leave the tree unchanged. Run
+`just ci-check-go-generate` when link flags or pragmas drift.
 
 Any tagged enums added to the FFI api where the union body contains a pointer must be defined as `#[repr(C, usize)]` so that the enum tag forces the C struct to have pointer alignment.
 
@@ -140,24 +150,41 @@ of the change.
 
 ## PR Strategy
 
-Before submitting or updating a PR, run the local pre-push checks:
+GitHub Actions is authoritative for the full check matrix. Locally, the default
+gate before submitting or updating a PR is the light one:
+
+```bash
+just prepush-lite
+```
+
+That runs `ci-format`, `ci-check-todos`, clippy and tests for the single
+`debug-ethhash-logger` profile, `ci-lint-markdown`, and `ci-docs`. Note that
+`ci-format` only *checks* formatting — run `cargo fmt` yourself to apply it.
+
+The full local matrix is available when a change warrants it — in particular
+when it touches the FFI, workspace dependencies, or code gated behind a feature
+that `debug-ethhash-logger` does not enable:
 
 ```bash
 just prepush
 ```
 
-This runs `just lint` followed by `just test`. These recipes use the same
-lower-level `ci-*` recipes as GitHub Actions, keeping the local and CI commands
-in sync. Run either phase separately while iterating:
+That is `just lint` followed by `just test`. Run either phase separately while
+iterating:
 
 ```bash
 just lint
 just test
 ```
 
-If `just` is not installed, use `./scripts/run-just.sh prepush`. The wrapper
-uses `just` when available, falls back to Nix when available, and otherwise
-prints installation instructions.
+All of these recipes use the same lower-level `ci-*` recipes as GitHub Actions,
+keeping the local and CI commands in sync. Individual profiles are reachable
+directly — `just ci-rust clippy debug-all-features`, for example — which is
+usually cheaper than a whole phase when you already know what needs checking.
+
+If `just` is not installed, use `./scripts/run-just.sh prepush-lite`. The
+wrapper uses `just` when available, falls back to Nix when available, and
+otherwise prints installation instructions.
 
 The complete set of Rust profile names and Cargo arguments is defined in
 `scripts/run-rust-ci.sh`. Every profile there is portable to macOS, so the Just
@@ -203,10 +230,10 @@ default-profile test commands are useful during development, but do not replace
 
 ### Linux-only Checks
 
-The local `lint`, `test`, and `prepush` recipes are designed to run on macOS.
-They intentionally omit CI checks that require Linux: the differential fuzz jobs,
-which use Linux-specific resource limits and tooling. GitHub Actions remains
-authoritative for those.
+The local `lint`, `test`, `prepush`, and `prepush-lite` recipes are designed to
+run on macOS. They intentionally omit CI checks that require Linux: the
+differential fuzz jobs, which use Linux-specific resource limits and tooling.
+GitHub Actions remains authoritative for those.
 
 `--all-features` is *not* in that category. The `io-uring` feature is accepted on
 every platform but only takes effect on Linux, where `storage/build.rs` sets the
@@ -225,8 +252,8 @@ manually with `just ci-rust benchmark-example <profile>` and
 
 ### Markdown Linter
 
-`just lint` and `just prepush` run the Markdown checks used by CI. To run only
-the repository-wide Markdown check, use:
+`just lint`, `just prepush`, and `just prepush-lite` run the Markdown checks
+used by CI. To run only the repository-wide Markdown check, use:
 
 ```bash
 just ci-lint-markdown
@@ -254,7 +281,9 @@ brew install markdownlint-cli2
 
 Key dependencies are centrally managed in workspace `Cargo.toml`:
 
-- `firewood`, `firewood-macros`, `firewood-storage`, `firewood-ffi`, `firewood-triehash` (workspace members)
+- Workspace members: `firewood`, `firewood-storage`, `firewood-triehash`,
+  `firewood-macros`, `firewood-metrics`, `firewood-ffi`, `firewood-fwdctl`,
+  `firewood-benchmark`, `firewood-replay`
 - Common deps: `clap`, `thiserror`, `smallvec`, `sha2`, `log`, etc.
 - Test deps: `criterion`, `tempfile`, `rand`, etc.
 
@@ -276,7 +305,9 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
    utilized in the `ffi` crate.
 
 2. **Testing**: Any changes should include appropriate tests. Run targeted tests
-   while iterating and `./scripts/run-just.sh prepush` before handoff.
+   while iterating and `./scripts/run-just.sh prepush-lite` before handoff;
+   reach for the full `prepush` only when the change touches the FFI or a
+   feature combination `debug-ethhash-logger` does not cover.
 
 3. **Performance Context**: This is a database designed for blockchain state. Performance matters. Consider allocation patterns and hot paths.
 
@@ -285,10 +316,23 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
 5. **Feature Flags**: Be aware of `ethhash` feature flag when discussing Ethereum compatibility vs. default merkledb compatibility.
 
 6. **Documentation**: Public APIs should be well-documented. The documentation
-   check is included in `./scripts/run-just.sh lint`; run `./scripts/run-just.sh ci-docs` to invoke it
-   separately.
+   check is included in `./scripts/run-just.sh lint` and
+   `./scripts/run-just.sh prepush-lite`; run `./scripts/run-just.sh ci-docs` to
+   invoke it separately.
 
-7. **Workspace Awareness**: This is a multi-crate workspace. Changes may affect multiple crates. Check `Cargo.toml` for workspace structure.
+7. **Comments Must Earn Their Line**: A comment competes with the code for the
+   reader's attention and must win on information. Generated comments fail in
+   recognizable ways — restating the line below, repeating the same explanation
+   at every call site, and narrating the change that produced them ("now uses",
+   "previously this would", "fixed to handle"). Write comments that stand alone
+   for a reader years from now who has no diff and no review thread: present
+   tense or imperative, consistent terminology, no filler or hype, each piece of
+   context stated once and cross-referenced from everywhere else. The same bar
+   applies to user-facing strings — error messages, log lines, and CLI help. See
+   [Comments and documentation](./CONTRIBUTING.md#comments-and-documentation)
+   and [User-facing strings](./CONTRIBUTING.md#user-facing-strings).
+
+8. **Workspace Awareness**: This is a multi-crate workspace. Changes may affect multiple crates. Check `Cargo.toml` for workspace structure.
 
 ## Code Review Guidelines
 

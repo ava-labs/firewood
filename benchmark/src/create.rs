@@ -11,8 +11,7 @@ use std::time::Instant;
 
 use fastrace::prelude::SpanContext;
 use fastrace::{Span, func_path};
-use firewood::api::{Db as _, Proposal as _};
-use firewood::db::Db;
+use firewood::api::{self, DynDb};
 use log::info;
 
 use pretty_duration::pretty_duration;
@@ -23,7 +22,7 @@ use crate::{Args, TestRunner};
 pub struct Create;
 
 impl TestRunner for Create {
-    fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>> {
+    fn run(&self, db: &dyn DynDb, args: &Args) -> Result<(), Box<dyn Error>> {
         let keys = args.global_opts.batch_size;
         let start = Instant::now();
 
@@ -33,7 +32,9 @@ impl TestRunner for Create {
 
             let batch = Self::generate_inserts(key * keys, args.global_opts.batch_size);
 
-            let proposal = db.propose(batch).expect("proposal should succeed");
+            let proposal = db
+                .propose(api::collect_owned_batch(batch)?)
+                .expect("proposal should succeed");
             proposal.commit()?;
         }
         let duration = start.elapsed();

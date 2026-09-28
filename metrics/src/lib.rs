@@ -37,7 +37,8 @@
 //!
 //! For registration, use the [`define_metrics!`] macro in your crate's registry module.
 
-use std::cell::Cell;
+use metrics::SharedString;
+use std::cell::RefCell;
 
 /// Sealed helper for [`GaugeExt`]: integer types that can be stored in a gauge as `f64`.
 ///
@@ -48,13 +49,13 @@ mod gauge_value {
         fn as_f64(self) -> f64;
     }
     impl GaugeValue for u64 {
-        #[allow(clippy::cast_precision_loss)]
+        #[expect(clippy::cast_precision_loss)]
         fn as_f64(self) -> f64 {
             self as f64
         }
     }
     impl GaugeValue for usize {
-        #[allow(clippy::cast_precision_loss)]
+        #[expect(clippy::cast_precision_loss)]
         fn as_f64(self) -> f64 {
             self as f64
         }
@@ -93,7 +94,7 @@ pub trait CounterExt {
 }
 
 impl CounterExt for metrics::Counter {
-    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     fn increment_f64(&self, value: f64) {
         self.increment(value as u64);
     }
@@ -175,9 +176,11 @@ pub fn strip_doc_leading_space(s: &str) -> &str {
 ///
 /// This is set at API boundaries (e.g., FFI entrypoints) and read when deciding
 /// whether to record expensive metrics.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MetricsContext {
     expensive_metrics_enabled: bool,
+    // `SharedString` is optimized for metrics and is cheap to clone (per metric recording).
+    db_tag: Option<SharedString>,
 }
 
 impl MetricsContext {
@@ -186,19 +189,35 @@ impl MetricsContext {
     pub const fn new(expensive_metrics_enabled: bool) -> Self {
         Self {
             expensive_metrics_enabled,
+            db_tag: None,
         }
+    }
+
+    /// Returns a copy of this context with a database tag attached.
+    #[must_use]
+    pub fn with_db_tag(mut self, db_tag: Option<SharedString>) -> Self {
+        self.db_tag = db_tag;
+        self
     }
 
     /// Whether expensive metrics are enabled.
     #[must_use]
-    pub const fn expensive_metrics_enabled(self) -> bool {
+    pub const fn expensive_metrics_enabled(&self) -> bool {
         self.expensive_metrics_enabled
+    }
+
+    /// Returns the database tag attached to this context, if any.
+    #[must_use]
+    pub fn db_tag(&self) -> Option<&str> {
+        self.db_tag.as_deref()
     }
 }
 
 thread_local! {
-    static METRICS_CONTEXT: Cell<Option<MetricsContext>> = const { Cell::new(None) };
+    static METRICS_CONTEXT: RefCell<Option<MetricsContext>> = const { RefCell::new(None) };
 }
+
+const DEFAULT_DB_TAG: SharedString = SharedString::const_str("untagged");
 
 /// A guard that restores the previous thread-local [`MetricsContext`].
 #[derive(Debug)]
@@ -208,21 +227,40 @@ pub struct MetricsContextGuard {
 
 impl Drop for MetricsContextGuard {
     fn drop(&mut self) {
-        METRICS_CONTEXT.set(self.previous);
+        METRICS_CONTEXT.with(|context| {
+            context.replace(self.previous.take());
+        });
     }
 }
 
 /// Sets the thread-local metrics context for the duration of the returned guard.
 #[must_use]
 pub fn set_metrics_context(context: Option<MetricsContext>) -> MetricsContextGuard {
-    let previous = METRICS_CONTEXT.replace(context);
+    let previous = METRICS_CONTEXT.with(|current| current.replace(context));
     MetricsContextGuard { previous }
 }
 
 /// Returns the current thread-local metrics context, if one is set.
 #[must_use]
 pub fn current_metrics_context() -> Option<MetricsContext> {
-    METRICS_CONTEXT.get()
+    METRICS_CONTEXT.with(|current| current.borrow().clone())
+}
+
+/// Returns the current metrics db tag, if one is set for this thread.
+#[must_use]
+pub fn current_db_tag() -> Option<SharedString> {
+    METRICS_CONTEXT.with(|current| {
+        current
+            .borrow()
+            .as_ref()
+            .and_then(|context| context.db_tag.clone())
+    })
+}
+
+/// Returns the current metrics db tag, or a default "untagged" label.
+#[must_use]
+pub fn current_db_tag_label() -> SharedString {
+    current_db_tag().unwrap_or(DEFAULT_DB_TAG)
 }
 
 /// Returns whether expensive metrics are enabled for the current thread.
@@ -230,7 +268,12 @@ pub fn current_metrics_context() -> Option<MetricsContext> {
 /// If no context is set, this returns `false`.
 #[must_use]
 pub fn expensive_metrics_enabled() -> bool {
-    current_metrics_context().is_some_and(MetricsContext::expensive_metrics_enabled)
+    METRICS_CONTEXT.with(|current| {
+        current
+            .borrow()
+            .as_ref()
+            .is_some_and(|context| context.expensive_metrics_enabled)
+    })
 }
 
 /// Defines metric name constants and a `register()` function from a single schema.
@@ -561,24 +604,36 @@ macro_rules! define_metrics {
 macro_rules! firewood_counter {
     (expensive: $name:ident) => {
         if $crate::expensive_metrics_enabled() {
-            $crate::__private::metrics::counter!(crate::registry::$name)
+            let db_tag = $crate::current_db_tag_label();
+            $crate::__private::metrics::counter!(crate::registry::$name, "db_tag" => db_tag)
         } else {
             $crate::__private::metrics::Counter::noop()
         }
     };
     (expensive: $name:ident, $($labels:tt)+) => {
         if $crate::expensive_metrics_enabled() {
-            $crate::__private::metrics::counter!(crate::registry::$name, $($labels)+)
+            let db_tag = $crate::current_db_tag_label();
+            $crate::__private::metrics::counter!(
+                crate::registry::$name,
+                "db_tag" => db_tag,
+                $($labels)+
+            )
         } else {
             $crate::__private::metrics::Counter::noop()
         }
     };
-    ($name:ident) => {
-        $crate::__private::metrics::counter!(crate::registry::$name)
-    };
-    ($name:ident, $($labels:tt)+) => {
-        $crate::__private::metrics::counter!(crate::registry::$name, $($labels)+)
-    };
+    ($name:ident) => {{
+        let db_tag = $crate::current_db_tag_label();
+        $crate::__private::metrics::counter!(crate::registry::$name, "db_tag" => db_tag)
+    }};
+    ($name:ident, $($labels:tt)+) => {{
+        let db_tag = $crate::current_db_tag_label();
+        $crate::__private::metrics::counter!(
+            crate::registry::$name,
+            "db_tag" => db_tag,
+            $($labels)+
+        )
+    }};
 }
 
 /// Returns a gauge handle for advanced operations.
@@ -622,24 +677,36 @@ macro_rules! firewood_counter {
 macro_rules! firewood_gauge {
     (expensive: $name:ident) => {
         if $crate::expensive_metrics_enabled() {
-            $crate::__private::metrics::gauge!(crate::registry::$name)
+            let db_tag = $crate::current_db_tag_label();
+            $crate::__private::metrics::gauge!(crate::registry::$name, "db_tag" => db_tag)
         } else {
             $crate::__private::metrics::Gauge::noop()
         }
     };
     (expensive: $name:ident, $($labels:tt)+) => {
         if $crate::expensive_metrics_enabled() {
-            $crate::__private::metrics::gauge!(crate::registry::$name, $($labels)+)
+            let db_tag = $crate::current_db_tag_label();
+            $crate::__private::metrics::gauge!(
+                crate::registry::$name,
+                "db_tag" => db_tag,
+                $($labels)+
+            )
         } else {
             $crate::__private::metrics::Gauge::noop()
         }
     };
-    ($name:ident) => {
-        $crate::__private::metrics::gauge!(crate::registry::$name)
-    };
-    ($name:ident, $($labels:tt)+) => {
-        $crate::__private::metrics::gauge!(crate::registry::$name, $($labels)+)
-    };
+    ($name:ident) => {{
+        let db_tag = $crate::current_db_tag_label();
+        $crate::__private::metrics::gauge!(crate::registry::$name, "db_tag" => db_tag)
+    }};
+    ($name:ident, $($labels:tt)+) => {{
+        let db_tag = $crate::current_db_tag_label();
+        $crate::__private::metrics::gauge!(
+            crate::registry::$name,
+            "db_tag" => db_tag,
+            $($labels)+
+        )
+    }};
 }
 
 /// Returns a histogram handle for recording a single observation.
@@ -687,29 +754,209 @@ macro_rules! firewood_gauge {
 macro_rules! firewood_histogram {
     ($name:ident) => {
         if $crate::expensive_metrics_enabled() {
-            $crate::__private::metrics::histogram!(crate::registry::$name)
+            let db_tag = $crate::current_db_tag_label();
+            $crate::__private::metrics::histogram!(crate::registry::$name, "db_tag" => db_tag)
         } else {
             $crate::__private::metrics::Histogram::noop()
         }
     };
     ($name:ident, $($labels:tt)+) => {
         if $crate::expensive_metrics_enabled() {
-            $crate::__private::metrics::histogram!(crate::registry::$name, $($labels)+)
+            let db_tag = $crate::current_db_tag_label();
+            $crate::__private::metrics::histogram!(
+                crate::registry::$name,
+                "db_tag" => db_tag,
+                $($labels)+
+            )
         } else {
             $crate::__private::metrics::Histogram::noop()
         }
     };
-    (cheap: $name:ident) => {
-        $crate::__private::metrics::histogram!(crate::registry::$name)
-    };
-    (cheap: $name:ident, $($labels:tt)+) => {
-        $crate::__private::metrics::histogram!(crate::registry::$name, $($labels)+)
-    };
+    (cheap: $name:ident) => {{
+        let db_tag = $crate::current_db_tag_label();
+        $crate::__private::metrics::histogram!(crate::registry::$name, "db_tag" => db_tag)
+    }};
+    (cheap: $name:ident, $($labels:tt)+) => {{
+        let db_tag = $crate::current_db_tag_label();
+        $crate::__private::metrics::histogram!(
+            crate::registry::$name,
+            "db_tag" => db_tag,
+            $($labels)+
+        )
+    }};
 }
 
 #[doc(hidden)]
 pub mod __private {
     pub use ::metrics;
+
+    #[cfg(feature = "logger")]
+    pub use ::log;
+}
+
+/// Logs a message with a `db_tag` key-value sourced from the thread-local
+/// [`MetricsContext`].
+#[cfg(feature = "logger")]
+#[macro_export]
+macro_rules! firewood_log {
+    (target: $target:expr, $lvl:expr, $($arg:tt)+) => {{
+        let level = $lvl;
+        if $crate::__private::log::log_enabled!(target: $target, level) {
+            let db_tag = $crate::current_db_tag_label();
+            $crate::__private::log::log!(
+                target: $target,
+                level,
+                db_tag = db_tag.as_ref();
+                $($arg)+
+            );
+        }
+    }};
+    ($lvl:expr, $($arg:tt)+) => {{
+        let level = $lvl;
+        if $crate::__private::log::log_enabled!(level) {
+            let db_tag = $crate::current_db_tag_label();
+            $crate::__private::log::log!(level, db_tag = db_tag.as_ref(); $($arg)+);
+        }
+    }};
+}
+
+/// No-op logger macro when the `logger` feature is disabled.
+#[cfg(not(feature = "logger"))]
+#[macro_export]
+macro_rules! firewood_log {
+    (target: $target:expr, $lvl:expr, $($arg:tt)+) => {{
+        if false {
+            let _ = &$target;
+            let _ = &$lvl;
+            let _ = ::std::format_args!($($arg)+);
+        }
+    }};
+    ($lvl:expr, $($arg:tt)+) => {{
+        if false {
+            let _ = &$lvl;
+            let _ = ::std::format_args!($($arg)+);
+        }
+    }};
+}
+
+/// Logs a message at the error level, attaching the current `db_tag`.
+#[cfg(feature = "logger")]
+#[macro_export]
+macro_rules! firewood_error {
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::firewood_log!(target: $target, $crate::__private::log::Level::Error, $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::firewood_log!($crate::__private::log::Level::Error, $($arg)+)
+    };
+}
+
+/// No-op error logger macro when the `logger` feature is disabled.
+#[cfg(not(feature = "logger"))]
+#[macro_export]
+macro_rules! firewood_error {
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::firewood_log!(target: $target, (), $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::firewood_log!((), $($arg)+)
+    };
+}
+
+/// Logs a message at the warn level, attaching the current `db_tag`.
+#[cfg(feature = "logger")]
+#[macro_export]
+macro_rules! firewood_warn {
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::firewood_log!(target: $target, $crate::__private::log::Level::Warn, $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::firewood_log!($crate::__private::log::Level::Warn, $($arg)+)
+    };
+}
+
+/// No-op warn logger macro when the `logger` feature is disabled.
+#[cfg(not(feature = "logger"))]
+#[macro_export]
+macro_rules! firewood_warn {
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::firewood_log!(target: $target, (), $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::firewood_log!((), $($arg)+)
+    };
+}
+
+/// Logs a message at the info level, attaching the current `db_tag`.
+#[cfg(feature = "logger")]
+#[macro_export]
+macro_rules! firewood_info {
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::firewood_log!(target: $target, $crate::__private::log::Level::Info, $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::firewood_log!($crate::__private::log::Level::Info, $($arg)+)
+    };
+}
+
+/// No-op info logger macro when the `logger` feature is disabled.
+#[cfg(not(feature = "logger"))]
+#[macro_export]
+macro_rules! firewood_info {
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::firewood_log!(target: $target, (), $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::firewood_log!((), $($arg)+)
+    };
+}
+
+/// Logs a message at the debug level, attaching the current `db_tag`.
+#[cfg(feature = "logger")]
+#[macro_export]
+macro_rules! firewood_debug {
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::firewood_log!(target: $target, $crate::__private::log::Level::Debug, $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::firewood_log!($crate::__private::log::Level::Debug, $($arg)+)
+    };
+}
+
+/// No-op debug logger macro when the `logger` feature is disabled.
+#[cfg(not(feature = "logger"))]
+#[macro_export]
+macro_rules! firewood_debug {
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::firewood_log!(target: $target, (), $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::firewood_log!((), $($arg)+)
+    };
+}
+
+/// Logs a message at the trace level, attaching the current `db_tag`.
+#[cfg(feature = "logger")]
+#[macro_export]
+macro_rules! firewood_trace {
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::firewood_log!(target: $target, $crate::__private::log::Level::Trace, $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::firewood_log!($crate::__private::log::Level::Trace, $($arg)+)
+    };
+}
+
+/// No-op trace logger macro when the `logger` feature is disabled.
+#[cfg(not(feature = "logger"))]
+#[macro_export]
+macro_rules! firewood_trace {
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::firewood_log!(target: $target, (), $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::firewood_log!((), $($arg)+)
+    };
 }
 
 #[cfg(test)]
@@ -738,9 +985,9 @@ mod tests {
             let outer = MetricsContext::new(false);
             let inner = MetricsContext::new(true);
 
-            let guard1 = set_metrics_context(Some(outer));
+            let guard1 = set_metrics_context(Some(outer.clone()));
             {
-                let _guard2 = set_metrics_context(Some(inner));
+                let _guard2 = set_metrics_context(Some(inner.clone()));
                 assert_eq!(current_metrics_context(), Some(inner));
             }
             assert_eq!(current_metrics_context(), Some(outer));
@@ -754,7 +1001,7 @@ mod tests {
     fn spawned_thread_does_not_inherit_context() {
         isolated(|| {
             let ctx = MetricsContext::new(true);
-            let _guard = set_metrics_context(Some(ctx));
+            let _guard = set_metrics_context(Some(ctx.clone()));
             assert_eq!(current_metrics_context(), Some(ctx));
 
             let child_ctx = std::thread::spawn(current_metrics_context).join().unwrap();
@@ -770,7 +1017,7 @@ mod tests {
     fn capture_and_set_propagates_context_to_spawned_thread() {
         isolated(|| {
             let ctx = MetricsContext::new(true);
-            let _guard = set_metrics_context(Some(ctx));
+            let _guard = set_metrics_context(Some(ctx.clone()));
 
             // Capture on the parent thread, just like persist_worker.rs does.
             let captured = current_metrics_context();
@@ -789,12 +1036,30 @@ mod tests {
 
             assert_eq!(
                 child_ctx,
-                Some(ctx),
+                Some(ctx.clone()),
                 "captured context must be available in child thread after set_metrics_context"
             );
 
             // Parent context is unaffected.
             assert_eq!(current_metrics_context(), Some(ctx));
+        });
+    }
+
+    #[test]
+    fn context_exposes_db_tag() {
+        isolated(|| {
+            let context =
+                MetricsContext::new(false).with_db_tag(Some(SharedString::const_str("db-a")));
+            let _guard = set_metrics_context(Some(context));
+
+            assert_eq!(current_db_tag().as_deref(), Some("db-a"));
+        });
+    }
+
+    #[test]
+    fn default_db_tag_label_is_untagged() {
+        isolated(|| {
+            assert_eq!(current_db_tag_label().as_ref(), "untagged");
         });
     }
 }

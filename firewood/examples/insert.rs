@@ -5,16 +5,17 @@
 // insert some random keys using the front-end API.
 
 use clap::Parser;
-use firewood_storage::NodeHashAlgorithm;
 use std::collections::HashMap;
 use std::error::Error;
 use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 use std::time::Instant;
 
-use firewood::api::{Db as _, DbView, KeyType, Proposal as _, ValueType};
-use firewood::db::{BatchOp, Db, DbConfig};
+use firewood::api::{self, DynDb, KeyType, ValueType};
+use firewood::db::{BatchOp, DbConfig};
 use firewood::manager::RevisionManagerConfig;
+use firewood::open;
+use firewood_storage::{DefaultHashMode, HashMode};
 use rand::{RngExt, distr::Alphanumeric};
 
 #[derive(Parser, Debug)]
@@ -59,12 +60,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         .max_revisions(args.revisions)
         .build();
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
         .truncate(args.truncate)
         .manager(mgrcfg)
         .build();
 
-    let db = Db::new("firewood", cfg).expect("db initiation should succeed");
+    let db = open("firewood", cfg).expect("db initiation should succeed");
 
     let keys = args.batch_size;
     let start = Instant::now();
@@ -91,9 +92,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         let verify = get_keys_to_verify(rng, &batch, args.read_verify_percent);
 
         #[expect(clippy::unwrap_used)]
-        let proposal = db.propose(batch.clone()).unwrap();
+        let proposal = db
+            .propose(api::collect_owned_batch(batch.clone())?)
+            .unwrap();
         proposal.commit()?;
-        verify_keys(&db, verify)?;
+        verify_keys(db.as_ref(), verify)?;
     }
 
     let duration = start.elapsed();
@@ -127,10 +130,7 @@ fn get_keys_to_verify<'a, K: KeyType + 'a, V: ValueType + 'a>(
     }
 }
 
-fn verify_keys(
-    db: &impl firewood::api::Db,
-    verify: HashMap<&[u8], &[u8]>,
-) -> Result<(), firewood::api::Error> {
+fn verify_keys(db: &dyn DynDb, verify: HashMap<&[u8], &[u8]>) -> Result<(), firewood::api::Error> {
     if !verify.is_empty() {
         let hash = db.root_hash().expect("root hash should exist");
         let revision = db.revision(hash)?;

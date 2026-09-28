@@ -35,7 +35,7 @@ use std::iter::FusedIterator;
 use std::mem::size_of;
 use std::ops::{Index, IndexMut};
 
-use crate::{FreeListParent, MaybePersistedNode, ReadableStorage, WritableStorage};
+use crate::{FreeListParent, HashMode, MaybePersistedNode, ReadableStorage, WritableStorage};
 
 /// Returns the maximum size needed to encode a `VarInt`.
 const fn var_int_max_size<VI>() -> usize {
@@ -227,6 +227,65 @@ impl FreeArea {
         let free_area = reader.next_value()?;
         Ok((free_area, area_index))
     }
+}
+
+/// Discriminates the contents of a stored area based on its `AreaType` byte.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum AreaKind {
+    /// The area is free (`AreaType` is 0xFF).
+    Free,
+    /// The area contains a serialized node (any other `AreaType` value).
+    Node,
+}
+
+/// Metadata about a stored area, read directly from its header bytes.
+pub(crate) struct StoredAreaInfo {
+    /// The kind of the area, as indicated by its `AreaType` byte.
+    pub(crate) kind: AreaKind,
+    /// The size class of the area.
+    pub(crate) index: AreaIndex,
+    /// The size of the area in bytes.
+    pub(crate) size: u64,
+}
+
+/// Reads the `AreaIndex` and `AreaType` bytes of the stored area at `address`,
+/// returning its [`StoredAreaInfo`]. Free areas are validated by parsing their
+/// next-free-block payload; node areas are only identified by their marker
+/// byte, not deserialized.
+///
+/// Note: legacy free areas written with the old 0x01 marker are reported as
+/// [`AreaKind::Node`] since that marker is ambiguous with a leaf node's first
+/// byte.
+///
+/// # Errors
+///
+/// Returns a [`FileIoError`] if the bytes cannot be read, the area index is
+/// invalid, or a free area's payload is malformed.
+pub(crate) fn read_stored_area_info<S: ReadableStorage>(
+    storage: &S,
+    address: LinearAddress,
+) -> Result<StoredAreaInfo, FileIoError> {
+    let addr = address.get();
+    let stream = storage.stream_from(addr)?;
+    read_stored_area_info_from_reader(stream)
+        .map_err(|e| storage.file_io_error(e, addr, Some("read_stored_area_info".to_owned())))
+}
+
+fn read_stored_area_info_from_reader(mut reader: impl Read) -> std::io::Result<StoredAreaInfo> {
+    let index = AreaIndex::try_from(reader.read_byte()?)?;
+    let kind = match reader.read_byte()? {
+        0xFF => {
+            // validate the free area's payload: the next free block address
+            let _: u64 = reader.read_varint()?;
+            AreaKind::Free
+        }
+        _ => AreaKind::Node,
+    };
+    Ok(StoredAreaInfo {
+        kind,
+        index,
+        size: index.size(),
+    })
 }
 
 // Re-export the NodeStore types we need
@@ -552,7 +611,7 @@ impl<S: ReadableStorage> Iterator for FreeListsIterator<'_, S> {
 }
 
 /// Extension methods for `NodeStore` to provide free list iteration capabilities
-impl<T, S: ReadableStorage> NodeStore<T, S> {
+impl<T, S: ReadableStorage, H: HashMode> NodeStore<T, S, H> {
     /// Returns an iterator over the free lists of size no smaller than the size corresponding to `start_area_index`.
     /// The iterator returns a tuple of the address and the area index of the free area.
     /// Since this is a low-level iterator, we avoid safe conversion to `AreaIndex` for performance.
@@ -568,7 +627,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
 }
 
 // Functionalities use by the checker
-impl<T, S: WritableStorage> NodeStore<T, S> {
+impl<T, S: WritableStorage, H: crate::HashMode> NodeStore<T, S, H> {
     /// Truncates a free list at the given parent location.
     ///
     /// The `free_lists` parameter should be obtained from the `NodeStoreHeader`.
@@ -635,19 +694,19 @@ fn read_bincode_varint_u64_le(reader: &mut impl Read) -> std::io::Result<u64> {
 pub mod test_utils {
     use super::*;
 
-    use crate::NodeHashAlgorithm;
+    use crate::HashMode;
     use crate::node::Node;
     use crate::nodestore::header::RootNodeInfo;
     use crate::nodestore::{Committed, NodeStore, NodeStoreHeader};
 
     // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the size of the area on success.
-    pub fn test_write_new_node<S: WritableStorage>(
-        nodestore: &NodeStore<Committed, S>,
+    pub fn test_write_new_node<H: HashMode, S: WritableStorage>(
+        nodestore: &NodeStore<Committed, S, H>,
         node: &Node,
         offset: u64,
     ) -> (u64, u64) {
         let mut stored_area_bytes = Vec::new();
-        let area_size_index = node.as_bytes(&mut stored_area_bytes).unwrap();
+        let area_size_index = node.as_bytes::<H, _>(&mut stored_area_bytes).unwrap();
         let bytes_written = stored_area_bytes.len() as u64;
         nodestore
             .storage
@@ -657,8 +716,8 @@ pub mod test_utils {
     }
 
     // Helper function to write a free area to the given offset.
-    pub fn test_write_free_area<S: WritableStorage>(
-        nodestore: &NodeStore<Committed, S>,
+    pub fn test_write_free_area<H: HashMode, S: WritableStorage>(
+        nodestore: &NodeStore<Committed, S, H>,
         next_free_block: Option<LinearAddress>,
         area_size_index: AreaIndex,
         offset: u64,
@@ -669,13 +728,13 @@ pub mod test_utils {
     }
 
     // Helper function to write the NodeStoreHeader and return it
-    pub fn test_write_header<S: WritableStorage>(
-        nodestore: &NodeStore<Committed, S>,
+    pub fn test_write_header<H: HashMode, S: WritableStorage>(
+        nodestore: &NodeStore<Committed, S, H>,
         size: u64,
         root_node_info: Option<RootNodeInfo>,
         free_lists: FreeLists,
     ) -> NodeStoreHeader {
-        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let mut header = NodeStoreHeader::new(H::ALGORITHM);
         header.set_size(size);
         header.set_root_location(root_node_info);
         *header.free_lists_mut() = free_lists;
@@ -684,8 +743,8 @@ pub mod test_utils {
     }
 
     // Helper function to write a random stored area to the given offset.
-    pub(crate) fn test_write_zeroed_area<S: WritableStorage>(
-        nodestore: &NodeStore<Committed, S>,
+    pub(crate) fn test_write_zeroed_area<H: HashMode, S: WritableStorage>(
+        nodestore: &NodeStore<Committed, S, H>,
         size: u64,
         offset: u64,
     ) {
@@ -697,9 +756,11 @@ pub mod test_utils {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DeletedNodeTracking;
     use crate::area_index;
     use crate::linear::memory::MemStore;
+    use crate::nodestore::Committed;
+    use crate::{DeletedNodeTracking, EthHash, HashMode, MerkleDbHash};
+    use firewood_macros::hash_mode;
     use rand::seq::IteratorRandom;
     use test_case::test_case;
     use test_utils::{test_write_free_area, test_write_header};
@@ -721,12 +782,14 @@ mod tests {
         assert_eq!(result, expected, "Failed to parse FreeArea from {reader:?}");
     }
 
+    #[hash_mode]
     #[test]
+    #[expect(clippy::arithmetic_side_effects)]
     // Create a random free list and test that `FreeListIterator` is able to traverse all the free areas
-    fn free_list_iterator() {
+    fn free_list_iterator<H: HashMode>() {
         let mut rng = crate::SeededRng::from_env_or_random();
-        let memstore = MemStore::default();
-        let nodestore =
+        let memstore = MemStore::new(Vec::new());
+        let nodestore: NodeStore<Committed, _, H> =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let area_index = rng.random_range(0..AreaIndex::NUM_AREA_SIZES as u8);
@@ -776,11 +839,13 @@ mod tests {
     }
 
     // Create two free lists and check that `free_list_iter_with_metadata` correctly returns the free areas and their parents
+    #[hash_mode]
     #[test]
-    fn free_list_iter_with_metadata() {
+    #[expect(clippy::arithmetic_side_effects)]
+    fn free_list_iter_with_metadata<H: HashMode>() {
         let rng = crate::SeededRng::from_env_or_random();
-        let memstore = MemStore::default();
-        let nodestore =
+        let memstore = MemStore::new(Vec::new());
+        let nodestore: NodeStore<Committed, _, H> =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let mut free_lists = FreeLists::default();
@@ -896,9 +961,10 @@ mod tests {
         }
     }
 
+    #[hash_mode]
     #[test]
     #[expect(clippy::arithmetic_side_effects)]
-    fn free_lists_iter_skip_to_next_free_list() {
+    fn free_lists_iter_skip_to_next_free_list<H: HashMode>() {
         use test_utils::{test_write_free_area, test_write_header};
 
         const AREA_INDEX1: AreaIndex = area_index!(3);
@@ -906,8 +972,8 @@ mod tests {
         const AREA_INDEX2: AreaIndex = area_index!(5);
         const AREA_INDEX2_PLUS_1: AreaIndex = area_index!(6);
 
-        let memstore = MemStore::default();
-        let nodestore =
+        let memstore = MemStore::new(Vec::new());
+        let nodestore: NodeStore<Committed, _, H> =
             NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
 
         let mut free_lists = FreeLists::default();
@@ -1006,6 +1072,49 @@ mod tests {
         // `move_to_next_free_list` will do nothing since we are already at the end
         assert!(free_list_iter.current_free_list.is_none());
         assert!(free_list_iter.next_with_metadata().is_none());
+    }
+
+    #[hash_mode]
+    #[test]
+    fn test_read_stored_area_info<H: HashMode>() {
+        use crate::Path;
+        use crate::node::{LeafNode, Node};
+        use test_utils::{test_write_free_area, test_write_new_node};
+
+        let memstore = MemStore::new(Vec::new());
+        let nodestore: NodeStore<Committed, _, H> =
+            NodeStore::new_empty_committed(memstore.into(), DeletedNodeTracking::Enabled);
+
+        // write a free area
+        let free_index = area_index!(3);
+        let free_addr = NodeStoreHeader::SIZE;
+        test_write_free_area(&nodestore, None, free_index, free_addr);
+
+        let info = read_stored_area_info(
+            nodestore.storage.as_ref(),
+            LinearAddress::new(free_addr).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(info.kind, AreaKind::Free);
+        assert_eq!(info.index, free_index);
+        assert_eq!(info.size, free_index.size());
+
+        // write a node area
+        let node_addr = free_addr.checked_add(free_index.size()).unwrap();
+        let node = Node::Leaf(LeafNode {
+            partial_path: Path::from([0, 1, 2]),
+            value: vec![4, 5, 6, 7].into(),
+        });
+        let (_, node_area_size) = test_write_new_node(&nodestore, &node, node_addr);
+
+        let info = read_stored_area_info(
+            nodestore.storage.as_ref(),
+            LinearAddress::new(node_addr).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(info.kind, AreaKind::Node);
+        assert_eq!(info.index.size(), node_area_size);
+        assert_eq!(info.size, node_area_size);
     }
 
     #[test]

@@ -7,14 +7,13 @@
 //! It provides efficient encoding of proof nodes, child bitmaps, and range proofs
 //! for transmission or persistent storage.
 
-use firewood_storage::{
-    EthHash, MerkleDbHash, NodeHashAlgorithm, PathBuf, PathComponentSliceExt, ValueDigest,
-};
+use firewood_storage::{NodeHashAlgorithm, PathBuf, PathComponentSliceExt, ValueDigest};
 use integer_encoding::VarInt;
 
 use super::{
+    frame::MAX_DECOMPRESSED_LEN,
     header::Header,
-    types::{ProofNode, ProofType},
+    types::{ProofError, ProofNode, ProofType},
 };
 use crate::merkle::childmask::ChildMask;
 use crate::{
@@ -84,14 +83,25 @@ impl FrozenRangeProof {
     /// indicating the number of items in the sequence.
     ///
     /// Variable-length integers are encoded using unsigned LEB128.
-    pub fn write_to_vec(&self, out: &mut Vec<u8>) {
-        write_framed(self, ProofType::Range, self.hash_mode(), out);
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProofError::BodyTooLarge`] if the serialized body exceeds
+    /// the size cap or [`ProofError::Compression`] if the compression
+    /// fails; `out` is untouched on error.
+    pub fn write_to_vec(&self, out: &mut Vec<u8>) -> Result<(), ProofError> {
+        let mut body = Vec::new();
+        self.write_body_to_vec(&mut body);
+        write_framed_body(&body, ProofType::Range, self.hash_mode(), out)
     }
 
     /// Serializes this proof's canonical (uncompressed) body: the bytes
     /// [`FrozenRangeProof::write_to_vec`] compresses after the header, and
     /// the sequence to hash or compare for a proof's canonical identity.
     pub fn write_body_to_vec(&self, out: &mut Vec<u8>) {
+        // The proof's hash mode determines the child-hash wire layout and the
+        // value-digest hashing rule; use its self-describing mode rather than
+        // the compile default.
         let mut w = ProofWriter {
             out,
             mode: self.hash_mode(),
@@ -106,8 +116,14 @@ impl FrozenChangeProof {
     /// The format matches [`FrozenRangeProof::write_to_vec`] with the proof
     /// type set to change, and the canonical body carries the batch
     /// operations in place of the key-value pairs.
-    pub fn write_to_vec(&self, out: &mut Vec<u8>) {
-        write_framed(self, ProofType::Change, self.hash_mode(), out);
+    ///
+    /// # Errors
+    ///
+    /// Errors as [`FrozenRangeProof::write_to_vec`].
+    pub fn write_to_vec(&self, out: &mut Vec<u8>) -> Result<(), ProofError> {
+        let mut body = Vec::new();
+        self.write_body_to_vec(&mut body);
+        write_framed_body(&body, ProofType::Change, self.hash_mode(), out)
     }
 
     /// Serializes this proof's canonical (uncompressed) body. See
@@ -119,6 +135,37 @@ impl FrozenChangeProof {
         };
         self.write_item(&mut w);
     }
+}
+
+/// Frames a canonical body: the header, then the compressed body, after
+/// checking the decoder's size cap so a message no peer would accept is
+/// reported at the source instead of emitted. `out` is untouched on error.
+pub(crate) fn write_framed_body(
+    body: &[u8],
+    kind: ProofType,
+    mode: NodeHashAlgorithm,
+    out: &mut Vec<u8>,
+) -> Result<(), ProofError> {
+    check_body_len(body.len())?;
+    let start = out.len();
+    let header = Header::from((kind, mode));
+    out.extend_from_slice(bytemuck::bytes_of(&header));
+    let result = super::frame::write_compressed_body(body, out);
+    if result.is_err() {
+        out.truncate(start);
+    }
+    result
+}
+
+/// Rejects a canonical body larger than the cap decoders enforce.
+const fn check_body_len(len: usize) -> Result<(), ProofError> {
+    if len > MAX_DECOMPRESSED_LEN {
+        return Err(ProofError::BodyTooLarge {
+            len,
+            limit: MAX_DECOMPRESSED_LEN,
+        });
+    }
+    Ok(())
 }
 
 /// Mirrors `ProofReader`: carries the output buffer and the hash mode the proof
@@ -133,22 +180,6 @@ impl ProofWriter<'_> {
     const fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
         self.mode
     }
-}
-
-/// Writes the mode-stamped header for `proof_type`, serializes `proof`'s
-/// canonical body after it through a [`ProofWriter`] in `mode`, then
-/// compresses the body in place into the wire framing (see `proofs::frame`).
-fn write_framed(
-    proof: &impl WriteItem,
-    proof_type: ProofType,
-    mode: NodeHashAlgorithm,
-    out: &mut Vec<u8>,
-) {
-    let mut w = ProofWriter { out, mode };
-    Header::from((proof_type, mode)).write_item(&mut w);
-    let body_start = w.out.len();
-    proof.write_item(&mut w);
-    super::frame::compress_body_in_place(w.out, body_start);
 }
 
 trait PushVarInt {
@@ -258,10 +289,7 @@ impl<T: AsRef<[u8]>> WriteItem for ValueDigest<T> {
     fn write_item(&self, w: &mut ProofWriter<'_>) {
         // The value-digest hashing rule (cap large values under MerkleDB,
         // identity under Ethereum) is selected by the writer's runtime mode.
-        let hashed = match w.node_hash_algorithm() {
-            NodeHashAlgorithm::Ethereum => self.make_hash::<EthHash>(),
-            NodeHashAlgorithm::MerkleDB => self.make_hash::<MerkleDbHash>(),
-        };
+        let hashed = self.make_hash(w.node_hash_algorithm());
         match hashed {
             ValueDigest::Value(v) => {
                 w.out.push(0);
@@ -274,12 +302,6 @@ impl<T: AsRef<[u8]>> WriteItem for ValueDigest<T> {
                 h.write_item(w);
             }
         }
-    }
-}
-
-impl WriteItem for Header {
-    fn write_item(&self, w: &mut ProofWriter<'_>) {
-        w.out.extend_from_slice(bytemuck::bytes_of(self));
     }
 }
 

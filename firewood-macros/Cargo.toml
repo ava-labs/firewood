@@ -23,6 +23,8 @@ syn = { version = "2.0", features = ["full", "extra-traits"] }
 [dev-dependencies]
 # Workspace dependencies
 firewood-metrics.workspace = true
+firewood-storage.workspace = true
+test-case.workspace = true
 # Regular dependencies
 trybuild = "1.0"
 

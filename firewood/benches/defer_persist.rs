@@ -2,32 +2,35 @@
 // See the file LICENSE.md for licensing terms.
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use firewood::api::{Db as _, Proposal as _};
-use firewood::db::{BatchOp, Db, DbConfig};
+use firewood::api;
+use firewood::db::{BatchOp, DbConfig};
 use firewood::manager::RevisionManagerConfig;
-use firewood_storage::NodeHashAlgorithm;
+use firewood::open;
+use firewood_storage::{DefaultHashMode, HashMode};
 use rand::{RngExt, distr::Alphanumeric};
 use std::iter::repeat_with;
 use std::num::NonZeroU64;
 
 #[expect(clippy::unwrap_used)]
-fn bench_deferred_persistence<const N: usize, const COMMIT_COUNT: u64>(criterion: &mut Criterion) {
+fn bench_deferred_persistence<const N: usize, const MAX_PERSISTENCE_GAP: u64>(
+    criterion: &mut Criterion,
+) {
     const KEY_LEN: usize = 4;
     let rng = &firewood_storage::SeededRng::from_option(Some(1234));
-    let commit_count = NonZeroU64::new(COMMIT_COUNT).unwrap();
-    let max_revisions = commit_count.get().wrapping_add(1) as usize;
+    let max_persistence_gap = NonZeroU64::new(MAX_PERSISTENCE_GAP).unwrap();
+    let max_revisions = max_persistence_gap.get().wrapping_add(1) as usize;
 
     criterion
         .benchmark_group("deferred_persistence")
         .sample_size(20)
-        .bench_function(format!("commit_count_{COMMIT_COUNT}"), |b| {
+        .bench_function(format!("max_persistence_gap_{MAX_PERSISTENCE_GAP}"), |b| {
             b.iter_batched(
                 || {
                     let batch_ops: Vec<_> =
                         repeat_with(|| rng.sample_iter(&Alphanumeric).take(KEY_LEN).collect())
                             .map(|key: Vec<_>| BatchOp::Put {
-                                key,
-                                value: vec![b'v'],
+                                key: key.into_boxed_slice(),
+                                value: vec![b'v'].into_boxed_slice(),
                             })
                             .take(N)
                             .collect();
@@ -36,18 +39,19 @@ fn bench_deferred_persistence<const N: usize, const COMMIT_COUNT: u64>(criterion
                 |batch_ops| {
                     let tmpdir = tempfile::tempdir().unwrap();
                     let dbcfg = DbConfig::builder()
-                        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+                        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
                         .manager(
                             RevisionManagerConfig::builder()
                                 .max_revisions(max_revisions)
-                                .deferred_persistence_commit_count(commit_count)
+                                .max_persistence_gap(max_persistence_gap)
                                 .build(),
                         )
                         .build();
-                    let db = Db::new(tmpdir, dbcfg).unwrap();
+                    let db = open(tmpdir, dbcfg).unwrap();
 
                     for op in batch_ops {
-                        let proposal = db.propose(vec![op]).unwrap();
+                        let batch: api::OwnedBatch = Box::new([op]);
+                        let proposal = db.propose(batch).unwrap();
                         proposal.commit().unwrap();
                     }
 
@@ -58,8 +62,8 @@ fn bench_deferred_persistence<const N: usize, const COMMIT_COUNT: u64>(criterion
         });
 }
 
-// Commit count values span powers of 10 (1, 10, 100, 1_000) to show the
-// performance curve from persisting every commit to persisting just once.
+// Persistence gap limits span powers of 10 (1, 10, 100, 1_000) to measure
+// throughput as more revisions may accumulate before persistence completes.
 criterion_group! {
     name = benches;
     config = Criterion::default();

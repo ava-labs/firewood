@@ -4,10 +4,9 @@
 //! # Ethereum MPT path encoding
 //!
 //! Encoding primitives for the Ethereum Modified Merkle Patricia Trie that are
-//! needed by both the ethhash hasher and the `eth_getProof`-compatible proof
-//! emitter. These helpers are unconditionally compiled so the proof emitter
-//! (which is itself always compiled) can call them without pulling in the
-//! `ethhash` feature gate.
+//! needed by both the Ethereum-mode hasher and the `eth_getProof`-compatible
+//! proof emitter. These helpers are always compiled, since the hash scheme is a
+//! per-database runtime choice rather than a build-time selection.
 
 use crate::TriePath;
 use bitfield::bitfield;

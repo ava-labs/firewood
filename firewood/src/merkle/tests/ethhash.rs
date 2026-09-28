@@ -12,6 +12,16 @@ use plain_hasher::PlainHasher;
 use sha3::{Digest, Keccak256};
 use test_case::test_case;
 
+fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
+    first_key: Option<impl KeyType>,
+    last_key: Option<impl KeyType>,
+    root_hash: &TrieHash,
+    proof: &RangeProof<impl KeyType, impl ValueType, H>,
+) -> Result<(), Error> {
+    crate::merkle::verify_range_proof(first_key, last_key, root_hash, EthHash::ALGORITHM, proof)
+        .map(drop)
+}
+
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KeccakHasher;
 
@@ -240,16 +250,17 @@ fn assert_range_proof_roundtrips(
     range_proof: &crate::api::FrozenRangeProof,
 ) {
     verify_range_proof(first, last, root_hash, range_proof).unwrap();
-
     let mut serialized = Vec::new();
-    range_proof.write_to_vec(&mut serialized);
+    range_proof
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
     let deserialized = crate::api::FrozenRangeProof::from_slice(&serialized).unwrap();
     verify_range_proof(first, last, root_hash, &deserialized).unwrap();
 }
 
 /// The pieces a fold test needs from [`build_account_trie`].
 struct AccountTrie {
-    merkle: Merkle<NodeStore<Committed, MemStore>>,
+    merkle: Merkle<NodeStore<Committed, MemStore, DefaultHashMode>>,
     root_hash: TrieHash,
     account_key: Box<[u8]>,
     storage_keys: Box<[Box<[u8]>]>,
@@ -603,8 +614,8 @@ fn zero_storage_root_in_rlp(value: &[u8], replacement: &[u8; 32]) -> Vec<u8> {
 /// root hash, but stale zeros in the stored account values.
 ///
 /// Then generate a range proof and verify it still passes. The proof-time fix
-/// in `ProofNode::from()` should detect the zeros and recompute the correct
-/// storageRoot from the node's children.
+/// in `ProofNode::from_path_item` should detect the zeros and recompute the
+/// correct storageRoot from the node's children.
 #[test]
 fn test_range_proof_fixes_legacy_zeroed_storage_root() {
     use crate::RangeProof;
@@ -692,11 +703,12 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
     storage.write(0, b"firewood-v1\0\0\0\0\0").unwrap();
 
     // Re-read the header from the clobbered storage so the version matches.
-    let header = NodeStoreHeader::read_from_storage(&*storage).unwrap();
+    let header = NodeStoreHeader::read_from_storage(&*storage, DefaultHashMode::ALGORITHM).unwrap();
 
     // Re-open from the clobbered MemStore so all reads come from disk.
-    let merkle =
-        Merkle::from(NodeStore::open(&header, storage, DeletedNodeTracking::Enabled).unwrap());
+    let reopened: NodeStore<Committed, _, DefaultHashMode> =
+        NodeStore::open(&header, storage, DeletedNodeTracking::Enabled).unwrap();
+    let merkle = Merkle::from(reopened);
 
     // Sanity check: the stored values now contain dummy zeros.
     for (k, _) in &*accounts {

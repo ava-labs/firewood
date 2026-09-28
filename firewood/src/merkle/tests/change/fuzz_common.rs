@@ -9,7 +9,7 @@ use crate::api::{BatchOp, FrozenChangeProof, FrozenRangeProof, HashKey};
 use crate::db::Db;
 use crate::merkle::{Key, Value};
 use crate::{ChangeProof, Proof, ProofNode, verify_change_proof_structure};
-use firewood_storage::{NodeHashAlgorithm, SeededRng};
+use firewood_storage::{DefaultHashMode, NodeHashAlgorithm, SeededRng};
 
 /// Build a `FrozenChangeProof` from mutated parts.
 pub(in crate::merkle::tests) fn build_change_proof(
@@ -40,7 +40,7 @@ pub(in crate::merkle::tests) fn build_range_proof(
 /// Whether a change proof is rejected by the structural check or, failing
 /// that, the root-hash check (its proposal won't match `end_root`).
 pub(in crate::merkle::tests) fn change_proof_rejected(
-    db: &Db,
+    db: &Db<DefaultHashMode>,
     proof: &FrozenChangeProof,
     start_root: &HashKey,
     end_root: &HashKey,
@@ -70,7 +70,7 @@ pub(in crate::merkle::tests) fn maybe_serialize_round_trip_change(
 ) -> FrozenChangeProof {
     if rng.random_range(0..10_u32) == 0 {
         let mut buf = Vec::new();
-        proof.write_to_vec(&mut buf);
+        proof.write_to_vec(&mut buf).expect("serialize proof");
         FrozenChangeProof::from_slice(&buf).expect("round-trip deserialization should succeed")
     } else {
         proof
@@ -84,7 +84,7 @@ pub(in crate::merkle::tests) fn maybe_serialize_round_trip_range(
 ) -> FrozenRangeProof {
     if rng.random_range(0..10_u32) == 0 {
         let mut buf = Vec::new();
-        proof.write_to_vec(&mut buf);
+        proof.write_to_vec(&mut buf).expect("serialize proof");
         FrozenRangeProof::from_slice(&buf).expect("round-trip deserialization should succeed")
     } else {
         proof

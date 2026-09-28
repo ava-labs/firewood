@@ -32,9 +32,15 @@ fn verify_change_proof_structure(
 
 // ── Test infrastructure ────────────────────────────────────────────────────
 
-pub(super) fn new_db() -> (Db, tempfile::TempDir) {
+pub(super) fn new_db() -> (Db<DefaultHashMode>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
-    let db = Db::new(dir.path(), DbConfig::builder().build()).unwrap();
+    let db = Db::<DefaultHashMode>::new_with_hash_mode(
+        dir.path(),
+        DbConfig::builder()
+            .node_hash_algorithm(DefaultHashMode::ALGORITHM)
+            .build(),
+    )
+    .unwrap();
     (db, dir)
 }
 
@@ -102,7 +108,7 @@ macro_rules! setup_source_target {
 /// proving trie is built from the proposal's in-range keys, boundary
 /// proof nodes are reconciled into it, and a hybrid root hash is computed.
 pub(super) fn verify_and_check(
-    db: &Db,
+    db: &Db<DefaultHashMode>,
     proof: &FrozenChangeProof,
     verification: &ChangeProofVerificationContext,
     start_root: api::HashKey,

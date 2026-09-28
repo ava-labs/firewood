@@ -9,6 +9,7 @@ use firewood_storage::{
     SeededRng, TrieHash, ValueDigest, logger::debug,
 };
 
+use super::frame::MAX_DECOMPRESSED_LEN;
 use super::{
     header::{Header, InvalidHeader},
     magic,
@@ -16,20 +17,29 @@ use super::{
     types::{Proof, ProofError, ProofNode, ProofType},
 };
 use crate::api::{FrozenChangeProof, FrozenRangeProof};
-use crate::db::{BatchOp, ProofConfig};
+use crate::db::BatchOp;
 
-/// Builds the 32-byte proof header
+/// Length of the serialized proof header, which the wire stores uncompressed.
+const HEADER_LEN: usize = size_of::<Header>();
+
+/// Builds the serialized proof header
 fn raw_header(proof_type: ProofType) -> Vec<u8> {
     bytemuck::bytes_of(&Header::from((proof_type, DefaultHashMode::ALGORITHM))).to_vec()
 }
 
-/// Compresses the body of uncompressed `header || body` bytes into wire
-/// form, then parses. Inputs shorter than a header parse as-is.
+/// Builds real wire bytes from `data` in uncompressed `header || body` form
+/// (the layout the byte-taxonomy tests mutate at known offsets) by
+/// zstd-compressing the body half, then parses the result.
+///
+/// Data too short to contain a header has no body to compress and is parsed
+/// as-is: the header is stored uncompressed on the wire, so the parser sees
+/// exactly what a truncated wire message would contain. The header-truncation
+/// cases rely on this to reach the parser's short-header error.
 fn compress_and_parse_range(data: &[u8]) -> Result<FrozenRangeProof, ReadError> {
-    match data.split_at_checked(32) {
+    match data.split_at_checked(HEADER_LEN) {
         Some((header, body)) => {
             let mut wire = header.to_vec();
-            super::frame::write_compressed_body(body, &mut wire);
+            super::frame::write_compressed_body(body, &mut wire).expect("compress body");
             FrozenRangeProof::from_slice(&wire)
         }
         None => FrozenRangeProof::from_slice(data),
@@ -38,10 +48,10 @@ fn compress_and_parse_range(data: &[u8]) -> Result<FrozenRangeProof, ReadError> 
 
 /// See [`compress_and_parse_range`].
 fn compress_and_parse_change(data: &[u8]) -> Result<FrozenChangeProof, ReadError> {
-    match data.split_at_checked(32) {
+    match data.split_at_checked(HEADER_LEN) {
         Some((header, body)) => {
             let mut wire = header.to_vec();
-            super::frame::write_compressed_body(body, &mut wire);
+            super::frame::write_compressed_body(body, &mut wire).expect("compress body");
             FrozenChangeProof::from_slice(&wire)
         }
         None => FrozenChangeProof::from_slice(data),
@@ -49,8 +59,14 @@ fn compress_and_parse_change(data: &[u8]) -> Result<FrozenChangeProof, ReadError
 }
 
 /// Returns a valid range proof plus its canonical uncompressed bytes
-/// (`header || body`) for the byte-taxonomy tests. Parse the result with
-/// [`compress_and_parse_range`].
+/// (`header || body`) for the byte-taxonomy tests.
+///
+/// This particular proof (keys `[2]..[8]` over `([k], [k])` for `k in 0..=10`,
+/// capped at 5 key-values) is chosen because the cap makes every wire feature
+/// non-empty at once — a two-node start proof, a two-node end proof, and five
+/// key-values — so a mutation test exists for each section, while the
+/// single-byte keys keep the byte offsets those tests hard-code small and
+/// stable.
 fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
     let merkle = crate::merkle::tests::init_merkle((0u8..=10).map(|k| ([k], [k])));
     let proof = merkle
@@ -61,6 +77,12 @@ fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
     (proof, serialized)
 }
 
+/// Change-proof counterpart of [`create_valid_range_proof`].
+///
+/// The empty start and end proofs pin the batch-op section to fixed offsets
+/// right after the header (see the layout comments where tests mutate it),
+/// and one operation of each kind (`Put`, `Delete`, `DeleteRange`) covers all
+/// three opcodes on the wire.
 fn create_valid_change_proof(hash_mode: NodeHashAlgorithm) -> (FrozenChangeProof, Vec<u8>) {
     let proof = FrozenChangeProof::with_hash_mode(
         Proof::new(Box::<[ProofNode]>::from([])),
@@ -88,11 +110,13 @@ fn create_valid_change_proof(hash_mode: NodeHashAlgorithm) -> (FrozenChangeProof
 fn test_range_proof_roundtrip() {
     let (proof, _) = create_valid_range_proof();
     let mut wire = Vec::new();
-    proof.write_to_vec(&mut wire);
+    proof.write_to_vec(&mut wire).expect("serialize proof");
     let parsed = FrozenRangeProof::from_slice(&wire).expect("roundtrip should succeed");
     assert_eq!(proof, parsed);
     let mut re_serialized = Vec::new();
-    parsed.write_to_vec(&mut re_serialized);
+    parsed
+        .write_to_vec(&mut re_serialized)
+        .expect("serialize proof");
     assert_eq!(wire, re_serialized, "re-serialization must be idempotent");
 }
 
@@ -101,12 +125,14 @@ fn test_range_proof_roundtrip() {
 fn test_change_proof_roundtrip(hash_mode: NodeHashAlgorithm) {
     let (proof, _) = create_valid_change_proof(hash_mode);
     let mut wire = Vec::new();
-    proof.write_to_vec(&mut wire);
+    proof.write_to_vec(&mut wire).expect("serialize proof");
     let parsed = FrozenChangeProof::from_slice(&wire).expect("roundtrip should succeed");
     assert_eq!(proof, parsed);
     assert_eq!(parsed.hash_mode(), hash_mode);
     let mut re_serialized = Vec::new();
-    parsed.write_to_vec(&mut re_serialized);
+    parsed
+        .write_to_vec(&mut re_serialized)
+        .expect("serialize proof");
     assert_eq!(wire, re_serialized, "re-serialization must be idempotent");
 }
 
@@ -134,7 +160,9 @@ fn test_mode_dependent_proof_node_roundtrip(hash_mode: NodeHashAlgorithm) {
         hash_mode,
     );
     let mut serialized = Vec::new();
-    range.write_to_vec(&mut serialized);
+    range
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
 
     let parsed = FrozenRangeProof::from_slice(&serialized)
         .expect("range proof should parse in its recorded mode");
@@ -150,7 +178,9 @@ fn test_mode_dependent_proof_node_roundtrip(hash_mode: NodeHashAlgorithm) {
     );
 
     let mut reserialized = Vec::new();
-    parsed.write_to_vec(&mut reserialized);
+    parsed
+        .write_to_vec(&mut reserialized)
+        .expect("serialize proof");
     assert_eq!(reserialized, serialized);
 }
 
@@ -211,13 +241,6 @@ fn test_invalid_header(
     32, // expected len
     31; // found len
     "header one byte short"
-)]
-#[test_case(
-    |_, data| data.truncate(32),
-    "array length",
-    1, // expected len
-    0; // found len
-    "no varint after header"
 )]
 
 fn test_incomplete_item(
@@ -448,13 +471,6 @@ fn test_change_proof_invalid_header(
     31; // found len
     "header one byte short"
 )]
-#[test_case(
-    |data| data.truncate(32),
-    "array length",
-    1, // expected len
-    0; // found len
-    "no varint after header"
-)]
 fn test_change_proof_incomplete_item(
     mutator: impl FnOnce(&mut Vec<u8>),
     item: &'static str,
@@ -652,11 +668,15 @@ fn test_change_proof_batch_op_variant(op: BatchOp<Box<[u8]>, Box<[u8]>>) {
         Box::new([op]),
     );
     let mut serialized = Vec::new();
-    proof.write_to_vec(&mut serialized);
+    proof
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
     let parsed =
         FrozenChangeProof::from_slice(&serialized).expect("deserialization should succeed");
     let mut re_serialized = Vec::new();
-    parsed.write_to_vec(&mut re_serialized);
+    parsed
+        .write_to_vec(&mut re_serialized)
+        .expect("serialize proof");
     assert_eq!(serialized, re_serialized, "round-trip bytes must match");
 }
 
@@ -904,7 +924,9 @@ fn generate_random_range_proof(rng: &SeededRng) -> (FrozenRangeProof, Vec<u8>) {
 
     let proof = FrozenRangeProof::new(Proof::new(start_nodes), Proof::new(end_nodes), key_values);
     let mut serialized = Vec::new();
-    proof.write_to_vec(&mut serialized);
+    proof
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
     (proof, serialized)
 }
 
@@ -934,7 +956,9 @@ fn generate_random_change_proof(rng: &SeededRng) -> (FrozenChangeProof, Vec<u8>)
 
     let proof = FrozenChangeProof::new(Proof::new(start_nodes), Proof::new(end_nodes), batch_ops);
     let mut serialized = Vec::new();
-    proof.write_to_vec(&mut serialized);
+    proof
+        .write_to_vec(&mut serialized)
+        .expect("serialize proof");
     (proof, serialized)
 }
 
@@ -948,7 +972,7 @@ fn test_slow_range_proof_roundtrip_fuzz() {
 
         let parsed = FrozenRangeProof::from_slice(&bytes).expect("generated proof should be valid");
         let mut re_bytes = Vec::new();
-        parsed.write_to_vec(&mut re_bytes);
+        parsed.write_to_vec(&mut re_bytes).expect("serialize proof");
         assert_eq!(bytes, re_bytes, "re-serialized bytes must match original");
     }
 }
@@ -964,7 +988,7 @@ fn test_slow_change_proof_roundtrip_fuzz() {
         let parsed =
             FrozenChangeProof::from_slice(&bytes).expect("generated proof should be valid");
         let mut re_bytes = Vec::new();
-        parsed.write_to_vec(&mut re_bytes);
+        parsed.write_to_vec(&mut re_bytes).expect("serialize proof");
         assert_eq!(bytes, re_bytes, "re-serialized bytes must match original");
     }
 }
@@ -1001,11 +1025,13 @@ fn test_slow_malformed_proof_fuzz() {
                 debug!("iteration {i}: corruption produced valid proof (checking stability)");
                 // Verify idempotency: serialize(parsed) should be stable across two round-trips.
                 let mut re_bytes = Vec::new();
-                parsed.write_to_vec(&mut re_bytes);
+                parsed.write_to_vec(&mut re_bytes).expect("serialize proof");
                 let re_parsed = FrozenRangeProof::from_slice(&re_bytes)
                     .expect("re-serialized proof should parse cleanly");
                 let mut re_re_bytes = Vec::new();
-                re_parsed.write_to_vec(&mut re_re_bytes);
+                re_parsed
+                    .write_to_vec(&mut re_re_bytes)
+                    .expect("serialize proof");
                 assert_eq!(
                     re_bytes, re_re_bytes,
                     "re-serialized proof must be idempotent"
@@ -1226,14 +1252,14 @@ mod box_array_deserialization_tests {
 fn range_wire() -> Vec<u8> {
     let (proof, _) = create_valid_range_proof();
     let mut wire = Vec::new();
-    proof.write_to_vec(&mut wire);
+    proof.write_to_vec(&mut wire).expect("serialize proof");
     wire
 }
 
 fn change_wire() -> Vec<u8> {
-    let (proof, _) = create_valid_change_proof(NodeHashAlgorithm::MerkleDB);
+    let (proof, _) = create_valid_change_proof(DefaultHashMode::ALGORITHM);
     let mut wire = Vec::new();
-    proof.write_to_vec(&mut wire);
+    proof.write_to_vec(&mut wire).expect("serialize proof");
     wire
 }
 
@@ -1256,7 +1282,7 @@ fn test_frame_wire_is_compressed_and_versioned() {
     let mut canonical_body = Vec::new();
     proof.write_body_to_vec(&mut canonical_body);
     let mut wire = Vec::new();
-    proof.write_to_vec(&mut wire);
+    proof.write_to_vec(&mut wire).expect("serialize proof");
 
     assert_eq!(&wire[..8], magic::PROOF_HEADER);
     assert_eq!(wire[8], 0, "compressed wire keeps version byte 0");
@@ -1279,15 +1305,15 @@ fn test_frame_wire_is_compressed_and_versioned() {
 fn test_frame_rejects_over_cap_content_size() {
     // A frame whose header declares a content size just over the cap: the
     // decoder must reject it before allocating.
-    let body = vec![0u8; ProofConfig::default().max_decompressed_len + 1];
+    let body = vec![0u8; MAX_DECOMPRESSED_LEN + 1];
     let mut wire = raw_header(ProofType::Range);
-    super::frame::write_compressed_body(&body, &mut wire);
+    super::frame::write_compressed_body(&body, &mut wire).expect("compress body");
     let err = FrozenRangeProof::from_slice(&wire).expect_err("over-cap content size");
     assert!(
         matches!(
             err,
             ReadError::InvalidItem { item, expected, .. }
-                if item == "frame content size" && expected.contains("configured maximum")
+                if item == "frame content size" && expected.contains("within the maximum")
         ),
         "got {err:?}"
     );
@@ -1325,6 +1351,82 @@ fn test_frame_rejects_malformed_wire(mutate: fn(&mut Vec<u8>)) {
     let err = FrozenChangeProof::from_slice(&wire).expect_err("change wire must be rejected");
     assert!(
         matches!(err, ReadError::InvalidItem { item, .. } if item == "compressed body frame"),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn test_write_to_vec_rejects_over_cap_body() {
+    // One more 1 MiB value than the cap holds
+    let over_cap = u8::try_from(MAX_DECOMPRESSED_LEN / (1024 * 1024) + 1).unwrap();
+    let kvs: Box<[_]> = (0u8..over_cap)
+        .map(|i| {
+            (
+                Box::from([i].as_slice()),
+                vec![i; 1024 * 1024].into_boxed_slice(),
+            )
+        })
+        .collect();
+    let proof = FrozenRangeProof::new(
+        Proof::new(Box::<[ProofNode]>::from([])),
+        Proof::new(Box::<[ProofNode]>::from([])),
+        kvs,
+    );
+    let mut out = Vec::new();
+    let err = proof
+        .write_to_vec(&mut out)
+        .expect_err("over-cap body must fail to serialize");
+    assert!(
+        matches!(
+            err,
+            ProofError::BodyTooLarge {
+                limit: MAX_DECOMPRESSED_LEN,
+                ..
+            }
+        ),
+        "got {err:?}"
+    );
+    assert!(out.is_empty(), "a failed serialization must not write");
+}
+
+#[test]
+fn test_write_to_vec_keeps_over_compressible_bodies_decodable() {
+    // A constant value bulk-compresses beyond the ratio decoders accept;
+    // the producer re-encodes it in flushed blocks and the decoder's
+    // single-frame, content-size and ratio checks must all still pass.
+    for len in [128, 16 * 1024, MAX_DECOMPRESSED_LEN - 64] {
+        let kvs: Box<[_]> = Box::from([(
+            Box::from([0u8].as_slice()),
+            vec![0u8; len].into_boxed_slice(),
+        )]);
+        let proof = FrozenRangeProof::new(
+            Proof::new(Box::<[ProofNode]>::from([])),
+            Proof::new(Box::<[ProofNode]>::from([])),
+            kvs,
+        );
+        let mut wire = Vec::new();
+        proof.write_to_vec(&mut wire).expect("serialize");
+        let decoded = FrozenRangeProof::from_slice(&wire).expect("decodable frame");
+        assert_eq!(decoded.key_values(), proof.key_values());
+    }
+}
+
+/// Frames declaring a zero content size are rejected at the frame layer
+#[test_case(|wire: &mut Vec<u8>| {
+    crate::proofs::frame::write_compressed_body(&[], wire).expect("compress body");
+} ; "empty body frame")]
+#[test_case(|wire: &mut Vec<u8>| {
+    // zstd skippable frame (magic 0x184D2A50, little-endian, 4-byte payload)
+    wire.extend_from_slice(&[0x50, 0x2A, 0x4D, 0x18]);
+    wire.extend_from_slice(&4u32.to_le_bytes());
+    wire.extend_from_slice(&[0xAB; 4]);
+} ; "lone skippable frame")]
+fn test_frame_rejects_zero_content_size(append_frame: fn(&mut Vec<u8>)) {
+    let mut wire = raw_header(ProofType::Range);
+    append_frame(&mut wire);
+    let err = FrozenRangeProof::from_slice(&wire).expect_err("zero content size");
+    assert!(
+        matches!(err, ReadError::InvalidItem { item, .. } if item == "frame content size"),
         "got {err:?}"
     );
 }
@@ -1368,10 +1470,13 @@ fn test_frame_rejects_excessive_compression_ratio() {
     // A 4 MiB all-zero body compresses to a few hundred bytes: under the
     // length cap and consistent with the frame header's content size, but
     // far over MAX_COMPRESSION_RATIO. The decoder must reject it before
-    // allocating the 4 MiB.
+    // allocating the 4 MiB. The producer no longer emits such a frame (it
+    // re-encodes in flushed blocks), so build the bomb with zstd directly.
     let body = vec![0u8; 4 * 1024 * 1024];
     let mut wire = raw_header(ProofType::Range);
-    super::frame::write_compressed_body(&body, &mut wire);
+    wire.extend_from_slice(
+        &zstd::bulk::compress(&body, zstd::DEFAULT_COMPRESSION_LEVEL).expect("compress body"),
+    );
     let err = FrozenRangeProof::from_slice(&wire).expect_err("compression bomb");
     assert!(
         matches!(
@@ -1386,18 +1491,18 @@ fn test_frame_rejects_excessive_compression_ratio() {
 #[test]
 fn test_frame_accepts_max_decompressed_len_exactly() {
     // A body of exactly MAX_DECOMPRESSED_LEN must pass the length cap
-    // (the bound is inclusive). A random 1 MiB block repeated 32x keeps
-    // the compression ratio ~32x — well above honest proofs (~2.3x) but
+    // (the bound is inclusive). A random 1 MiB block repeated to the cap
+    // keeps the compression ratio ~4x — above honest proofs (~2.3x) but
     // inside MAX_COMPRESSION_RATIO, so this doubles as the accept-side
     // coverage for high-but-legal ratios.
     let rng = SeededRng::from_env_or_random();
-    let cap = ProofConfig::default().max_decompressed_len;
+    let cap = MAX_DECOMPRESSED_LEN;
     let block: Vec<u8> = (0..1024 * 1024).map(|_| rng.random::<u8>()).collect();
     let body = block.repeat(cap / block.len());
     assert_eq!(body.len(), cap);
     let mut frame = Vec::new();
-    super::frame::write_compressed_body(&body, &mut frame);
-    let decoded = super::frame::decompress_body(&frame, 0, &ProofConfig::default())
+    super::frame::write_compressed_body(&body, &mut frame).expect("compress body");
+    let decoded = super::frame::decompress_body(&frame, 0)
         .expect("body exactly at MAX_DECOMPRESSED_LEN must decode");
     assert_eq!(decoded, body);
 }
@@ -1479,7 +1584,7 @@ fn test_slow_malformed_wire_fuzz() {
             Ok(parsed) => {
                 debug!("iteration {i}: corruption produced valid proof (checking stability)");
                 let mut re_bytes = Vec::new();
-                parsed.write_to_vec(&mut re_bytes);
+                parsed.write_to_vec(&mut re_bytes).expect("serialize proof");
                 let re_parsed = FrozenRangeProof::from_slice(&re_bytes)
                     .expect("re-serialized proof should parse cleanly");
                 assert_eq!(parsed, re_parsed, "roundtrip must preserve the proof");

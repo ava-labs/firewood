@@ -6,6 +6,14 @@ default:
 ci-rust command profile:
     ./scripts/run-rust-ci.sh "{{command}}" "{{profile}}"
 
+# Run one bench target by name with the CI profile.
+ci-rust-bench profile target:
+    ./scripts/run-rust-ci.sh bench "{{profile}}" "{{target}}"
+
+# Emit workspace bench targets as a GitHub Actions matrix (optional name regex).
+ci-bench-matrix filter="":
+    ./scripts/list-bench-targets.sh "{{filter}}"
+
 # Check Rust formatting as CI does.
 ci-format:
     cargo fmt -- --check
@@ -116,6 +124,15 @@ test:
 
 # Run every macOS-compatible pre-push check, with linting first.
 prepush: lint test
+
+# `prepush`, minus the four extra Rust profiles, the FFI steps, and ci-machete.
+prepush-lite:
+    ./scripts/run-just.sh ci-format
+    ./scripts/run-just.sh ci-check-todos
+    ./scripts/run-just.sh ci-rust clippy debug-ethhash-logger
+    ./scripts/run-just.sh ci-rust test debug-ethhash-logger
+    ./scripts/run-just.sh ci-lint-markdown
+    ./scripts/run-just.sh ci-docs
 
 # Regenerate proof wire serialization snapshots for both hash modes.
 #

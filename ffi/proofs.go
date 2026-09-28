@@ -7,8 +7,6 @@ package ffi
 // #include "firewood.h"
 // #cgo noescape fwd_db_range_proof
 // #cgo nocallback fwd_db_range_proof
-// #cgo noescape fwd_db_range_proof_sized
-// #cgo nocallback fwd_db_range_proof_sized
 // #cgo noescape fwd_range_proof_from_bytes
 // #cgo nocallback fwd_range_proof_from_bytes
 // #cgo noescape fwd_range_proof_verify
@@ -31,8 +29,6 @@ package ffi
 // #cgo nocallback fwd_free_range_proof
 // #cgo noescape fwd_db_change_proof
 // #cgo nocallback fwd_db_change_proof
-// #cgo noescape fwd_db_change_proof_sized
-// #cgo nocallback fwd_db_change_proof_sized
 // #cgo noescape fwd_change_proof_from_bytes
 // #cgo nocallback fwd_change_proof_from_bytes
 // #cgo noescape fwd_db_verify_change_proof
@@ -117,36 +113,32 @@ type ChangeProof struct {
 	handle *C.ChangeProofContext
 }
 
-// SizedRangeProof is a size-targeted range proof: the proof, its serialized
-// wire bytes (already computed during sizing — send these rather than
-// re-marshaling), whether the proof reached the natural end of the keyspace,
-// and the measured compression ratio to pass as the ratioHint for the next
-// chunk.
-type SizedRangeProof struct {
-	Proof      *RangeProof
-	Wire       []byte
-	NaturalEnd bool
-	Ratio      float64
-}
-
-// SizedChangeProof is a size-targeted change proof; see [SizedRangeProof].
-type SizedChangeProof struct {
-	Proof      *ChangeProof
-	Wire       []byte
-	NaturalEnd bool
-	Ratio      float64
-}
-
-// NextKeyRange represents a range of keys to fetch from the database. The start
-// key is inclusive while the end key is exclusive. If the end key is Nothing,
-// the range is unbounded in that direction.
+// NextKeyRange represents a range of keys to fetch from the database,
+// `(startKey, endKey]`: the start key is exclusive because it has already been
+// synchronized, and the end key is inclusive. If the end key is Nothing, the
+// range is unbounded in that direction.
 type NextKeyRange struct {
 	startKey *ownedBytes
 	endKey   Maybe[*ownedBytes]
 }
 
+// codeHashSource is a proof whose data a code-hash iterator borrows.
+// Implemented by [*RangeProof] and [*ChangeProof].
+type codeHashSource interface {
+	codeIterator() (*codeIterator, error)
+}
+
 type codeIterator struct {
 	handle *C.CodeIteratorHandle
+
+	// owner is the proof whose key-values the Rust iterator borrows. Rust's
+	// CodeIteratorHandle<'p> wraps Box<dyn Iterator + 'p> built from the
+	// proof's key-values, so the proof must stay reachable for the whole
+	// life of the iterator, not just for the call that created it. Holding
+	// it here makes that borrow an ordinary Go reference: an iterator
+	// cannot be live without keeping its proof reachable, so no hand-placed
+	// keepalive spanning the iteration is required.
+	owner codeHashSource
 }
 
 // RangeProof returns a proof that the values in the range [startKey, endKey] are
@@ -178,58 +170,12 @@ func (db *Database) RangeProof(
 	return getRangeProofFromRangeProofResult(C.fwd_db_range_proof(db.handle, args))
 }
 
-// RangeProofSized returns a range proof from [startKey] sized to approach
-// [budget] compressed wire bytes without exceeding it — unless a single
-// entry alone does, so paging always progresses. If NaturalEnd is false,
-// request the next chunk starting after the last key in the proof, passing
-// Ratio as [ratioHint]. Pass ratioHint <= 0 for no hint.
-func (db *Database) RangeProofSized(
-	rootHash Hash,
-	startKey Maybe[[]byte],
-	budget uint64,
-	ratioHint float64,
-) (*SizedRangeProof, error) {
-	db.handleLock.RLock()
-	defer db.handleLock.RUnlock()
-	if db.handle == nil {
-		return nil, errDBClosed
-	}
-
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	args := C.CreateSizedRangeProofArgs{
-		root:       newCHashKey(rootHash),
-		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
-		budget:     C.uint64_t(budget),
-		ratio_hint: C.double(ratioHint),
-	}
-
-	return getSizedRangeProofFromResult(C.fwd_db_range_proof_sized(db.handle, args))
-}
-
-// rangeProofFromBytes is the single cgo call site for
-// C.fwd_range_proof_from_bytes. A nil db uses the default proof size limits.
-func rangeProofFromBytes(db *C.DatabaseHandle, data []byte) (*RangeProof, error) {
+func rangeProofFromBytes(data []byte) (*RangeProof, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
 	return getRangeProofFromRangeProofResult(
-		C.fwd_range_proof_from_bytes(db, newBorrowedBytes(data, &pinner)))
-}
-
-// RangeProofFromBytes deserializes a [RangeProof] from [data], enforcing the
-// database's configured proof size limits. Unlike [RangeProof.UnmarshalBinary]
-// (which uses the default limits), this applies the limits configured on the
-// database.
-func (db *Database) RangeProofFromBytes(data []byte) (*RangeProof, error) {
-	db.handleLock.RLock()
-	defer db.handleLock.RUnlock()
-	if db.handle == nil {
-		return nil, errDBClosed
-	}
-
-	return rangeProofFromBytes(db.handle, data)
+		C.fwd_range_proof_from_bytes(newBorrowedBytes(data, &pinner)))
 }
 
 // Verify verifies the provided range [proof] proves the values in the range
@@ -263,6 +209,13 @@ func (p *RangeProof) Verify(
 // the proof is valid, a proposal containing the changes is prepared. The
 // call to [*Database.VerifyAndCommitRangeProof] will skip verification and commit the
 // prepared proposal.
+//
+// The proposal replaces state across the range the proof proves: any existing
+// key in that range that the proof does not carry is deleted. The range runs
+// from [startKey] to the proof's right edge, which is [endKey] when the
+// responder covered the whole request and a smaller key when it truncated.
+// Keys past that edge are left as they are; [*RangeProof.FindNextKey] reports
+// where to resume.
 //
 // Because this method prepares a proposal, the database must be kept alive
 // until the proof is committed or freed.
@@ -313,6 +266,9 @@ func (db *Database) VerifyRangeProof(
 // [rootHash]. If the proof is valid, it is committed to the database and the
 // new root hash is returned. The resulting root hash may not equal the
 // provided root hash if the proof was truncated due to [maxLength].
+//
+// The commit replaces state across the proven range on the same terms as
+// [*Database.VerifyRangeProof].
 func (db *Database) VerifyAndCommitRangeProof(
 	proof *RangeProof,
 	startKey, endKey Maybe[[]byte],
@@ -371,18 +327,34 @@ func (p *RangeProof) FindNextKey() (*NextKeyRange, error) {
 // Note: this method is only relevant for Ethereum tries.
 // This method can only be called anytime after the proof is created.
 func (p *RangeProof) CodeHashes() iter.Seq2[Hash, error] {
+	return codeHashSeq(p)
+}
+
+// codeIterator creates a code-hash iterator borrowing this proof's key-values.
+// The returned iterator holds p as its owner; see [codeIterator] for why that
+// reference is what keeps the borrow sound.
+func (p *RangeProof) codeIterator() (*codeIterator, error) {
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
+	return newCodeIterator(C.fwd_range_proof_code_hash_iter(p.handle), p)
+}
+
+// codeHashSeq yields the code hashes produced by an iterator borrowed from src.
+// Concurrently calling Free on src during iteration remains unsupported, as
+// elsewhere on both proof types.
+func codeHashSeq(src codeHashSource) iter.Seq2[Hash, error] {
 	return func(yield func(Hash, error) bool) {
-		iter, err := getCodeHashIteratorFromCodeHashIteratorResult(C.fwd_range_proof_code_hash_iter(p.handle))
+		it, err := src.codeIterator()
 		if err != nil {
 			yield(EmptyRoot, err)
 			return
 		}
 		defer func() {
-			if err := iter.Free(); err != nil {
+			if err := it.Free(); err != nil {
 				panic(err)
 			}
 		}()
-		for hash, err := iter.Next(); ; hash, err = iter.Next() {
+		for hash, err := it.Next(); ; hash, err = it.Next() {
 			if err != nil {
 				yield(EmptyRoot, err)
 				return
@@ -401,7 +373,14 @@ func (it *codeIterator) Next() (Hash, error) {
 	return getHashKeyFromHashResult(C.fwd_code_hash_iter_next(it.handle))
 }
 
+// Free releases the Rust iterator, ending its borrow of the owning proof.
 func (it *codeIterator) Free() error {
+	// The borrow ends with the call below, so the owner must remain reachable
+	// until it returns. Because the deferred Free in [codeHashSeq] captures
+	// the iterator, this also keeps the owner reachable for the whole
+	// iteration -- the Go reference, not this call, is what makes the borrow
+	// sound.
+	defer runtime.KeepAlive(it.owner)
 	return getErrorFromVoidResult(C.fwd_code_hash_iter_free(it.handle))
 }
 
@@ -426,7 +405,7 @@ func (p *RangeProof) UnmarshalBinary(data []byte) error {
 	}
 
 	start := time.Now()
-	handle, err := rangeProofFromBytes(nil, data)
+	handle, err := rangeProofFromBytes(data)
 	proofUnmarshalDuration.WithLabelValues("range").Observe(time.Since(start).Seconds())
 
 	if err == nil {
@@ -500,76 +479,16 @@ func (db *Database) ChangeProof(
 		return nil, err
 	}
 
-	runtime.SetFinalizer(proof, (*ChangeProof).Free)
+	proof.setFreeFinalizer()
 	return proof, nil
 }
 
-// ChangeProofSized returns a change proof between [startRoot] and [endRoot]
-// from [startKey], sized to approach [budget] compressed wire bytes without
-// exceeding it — unless a single op alone does, so paging always progresses.
-// If NaturalEnd is false, request the next chunk starting after the last op
-// key in the proof, passing Ratio as [ratioHint]. Pass ratioHint <= 0 for no
-// hint.
-func (db *Database) ChangeProofSized(
-	startRoot, endRoot Hash,
-	startKey Maybe[[]byte],
-	budget uint64,
-	ratioHint float64,
-) (*SizedChangeProof, error) {
-	db.handleLock.RLock()
-	defer db.handleLock.RUnlock()
-	if db.handle == nil {
-		return nil, errDBClosed
-	}
-
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	args := C.CreateSizedChangeProofArgs{
-		start_root: newCHashKey(startRoot),
-		end_root:   newCHashKey(endRoot),
-		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
-		budget:     C.uint64_t(budget),
-		ratio_hint: C.double(ratioHint),
-	}
-
-	sized, err := getSizedChangeProofFromResult(C.fwd_db_change_proof_sized(db.handle, args))
-	if err != nil {
-		return nil, err
-	}
-
-	runtime.SetFinalizer(sized.Proof, (*ChangeProof).Free)
-	return sized, nil
-}
-
-// changeProofFromBytes is the single cgo call site for
-// C.fwd_change_proof_from_bytes. A nil db uses the default proof size limits.
-func changeProofFromBytes(db *C.DatabaseHandle, data []byte) (*ChangeProof, error) {
+func changeProofFromBytes(data []byte) (*ChangeProof, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
 	return getChangeProofFromChangeProofResult(
-		C.fwd_change_proof_from_bytes(db, newBorrowedBytes(data, &pinner)))
-}
-
-// ChangeProofFromBytes deserializes a [ChangeProof] from [data], enforcing the
-// database's configured proof size limits. Unlike
-// [ChangeProof.UnmarshalBinary] (which uses the default limits), this applies
-// the limits configured on the database.
-func (db *Database) ChangeProofFromBytes(data []byte) (*ChangeProof, error) {
-	db.handleLock.RLock()
-	defer db.handleLock.RUnlock()
-	if db.handle == nil {
-		return nil, errDBClosed
-	}
-
-	proof, err := changeProofFromBytes(db.handle, data)
-	if err != nil {
-		return nil, err
-	}
-
-	runtime.SetFinalizer(proof, (*ChangeProof).Free)
-	return proof, nil
+		C.fwd_change_proof_from_bytes(newBorrowedBytes(data, &pinner)))
 }
 
 // VerifyChangeProof verifies the change proof and creates a standard Proposal.
@@ -638,6 +557,10 @@ func (db *Database) VerifyAndCommitChangeProof(
 func (proof *ChangeProof) FindNextKey(endKey Maybe[[]byte]) (*NextKeyRange, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
+	// Keep the proof reachable across the cgo call so its GC finalizer cannot
+	// free the handle mid-call once the receiver is otherwise dead. (ChangeProof
+	// holds no lease, so KeepAlive stands in for RangeProof's read-lock.)
+	defer runtime.KeepAlive(proof)
 
 	return getNextKeyRangeFromNextKeyRangeResult(
 		C.fwd_change_proof_find_next_key(proof.handle, newMaybeBorrowedBytes(endKey, &pinner)),
@@ -654,36 +577,26 @@ func (proof *ChangeProof) FindNextKey(endKey Maybe[[]byte]) (*NextKeyRange, erro
 // (the post-state of accounts touched by the proof) are yielded; Delete and
 // DeleteRange entries are skipped.
 func (p *ChangeProof) CodeHashes() iter.Seq2[Hash, error] {
-	return func(yield func(Hash, error) bool) {
-		iter, err := getCodeHashIteratorFromCodeHashIteratorResult(C.fwd_change_proof_code_hash_iter(p.handle))
-		if err != nil {
-			yield(EmptyRoot, err)
-			return
-		}
-		defer func() {
-			if err := iter.Free(); err != nil {
-				panic(err)
-			}
-		}()
-		for hash, err := iter.Next(); ; hash, err = iter.Next() {
-			if err != nil {
-				yield(EmptyRoot, err)
-				return
-			}
-			if hash == EmptyRoot {
-				return
-			}
-			if !yield(hash, err) {
-				return
-			}
-		}
-	}
+	return codeHashSeq(p)
+}
+
+// codeIterator creates a code-hash iterator borrowing this proof's data. The
+// returned iterator holds p as its owner; see [codeIterator] for why that
+// reference is what keeps the borrow sound.
+//
+// Unlike [*RangeProof.codeIterator] there is no lease to read-lock: a
+// ChangeProof deliberately holds no database reference (see the Free doc
+// comment and https://github.com/ava-labs/firewood/issues/1978).
+func (p *ChangeProof) codeIterator() (*codeIterator, error) {
+	return newCodeIterator(C.fwd_change_proof_code_hash_iter(p.handle), p)
 }
 
 // MarshalBinary returns a serialized representation of this ChangeProof.
 //
 // The format is unspecified and opaque to firewood.
 func (p *ChangeProof) MarshalBinary() ([]byte, error) {
+	defer runtime.KeepAlive(p)
+
 	start := time.Now()
 	result, err := getValueFromValueResult(C.fwd_change_proof_to_bytes(p.handle))
 	proofMarshalDuration.WithLabelValues("change").Observe(time.Since(start).Seconds())
@@ -698,13 +611,13 @@ func (p *ChangeProof) UnmarshalBinary(data []byte) error {
 	}
 
 	start := time.Now()
-	handle, err := changeProofFromBytes(nil, data)
+	handle, err := changeProofFromBytes(data)
 	proofUnmarshalDuration.WithLabelValues("change").Observe(time.Since(start).Seconds())
 
 	if err == nil {
 		p.handle = handle.handle
 		handle.handle = nil
-		runtime.SetFinalizer(p, (*ChangeProof).Free)
+		p.setFreeFinalizer()
 	}
 
 	return err
@@ -735,17 +648,29 @@ func (p *ChangeProof) Free() error {
 	return nil
 }
 
-// StartKey returns the inclusive start key of this key range.
+// setFreeFinalizer registers (*ChangeProof).Free as p's finalizer, replacing any
+// finalizer a previous life of p may already carry. runtime.SetFinalizer fatally
+// panics if a finalizer is already set, and a ChangeProof can legitimately reach
+// a finalizer-setting path more than once (a from-create proof re-loaded via
+// UnmarshalBinary, or a repeated UnmarshalBinary), so clear any existing
+// finalizer first. SetFinalizer(p, nil) is a no-op when none is set.
+func (p *ChangeProof) setFreeFinalizer() {
+	runtime.SetFinalizer(p, nil)
+	runtime.SetFinalizer(p, (*ChangeProof).Free)
+}
+
+// StartKey returns the exclusive start key of this key range: it has already
+// been synchronized, so the next request begins strictly after it.
 func (r *NextKeyRange) StartKey() []byte {
 	return r.startKey.CopiedBytes()
 }
 
-// HasEndKey returns true if this key range has an exclusive end key.
+// HasEndKey returns true if this key range has an inclusive end key.
 func (r *NextKeyRange) HasEndKey() bool {
 	return r.endKey != nil && r.endKey.HasValue()
 }
 
-// EndKey returns the exclusive end key of this key range if it exists or nil if
+// EndKey returns the inclusive end key of this key range if it exists or nil if
 // it does not.
 func (r *NextKeyRange) EndKey() []byte {
 	if r.HasEndKey() {
@@ -800,13 +725,18 @@ func getNextKeyRangeFromNextKeyRangeResult(result C.NextKeyRangeResult) (*NextKe
 	}
 }
 
-func getCodeHashIteratorFromCodeHashIteratorResult(result C.CodeIteratorResult) (*codeIterator, error) {
+// newCodeIterator converts a code-iterator result into a [codeIterator] that
+// borrows owner. The owner is a required argument rather than a field assigned
+// by the caller so that a future refactor which forgets it fails to compile
+// instead of silently reintroducing the use-after-free described on
+// [codeIterator].
+func newCodeIterator(result C.CodeIteratorResult, owner codeHashSource) (*codeIterator, error) {
 	switch result.tag {
 	case C.CodeIteratorResult_NullHandlePointer:
 		return nil, errDBClosed
 	case C.CodeIteratorResult_Ok:
 		ptr := *(**C.CodeIteratorHandle)(unsafe.Pointer(&result.anon0))
-		return &codeIterator{handle: ptr}, nil
+		return &codeIterator{handle: ptr, owner: owner}, nil
 	case C.CodeIteratorResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 		return nil, err
@@ -835,62 +765,6 @@ func getRangeProofFromRangeProofResult(result C.RangeProofResult) (*RangeProof, 
 		return nil, err
 	default:
 		return nil, fmt.Errorf("unknown C.RangeProofResult tag: %d", result.tag)
-	}
-}
-
-func getSizedRangeProofFromResult(result C.SizedRangeProofResult) (*SizedRangeProof, error) {
-	switch result.tag {
-	case C.SizedRangeProofResult_NullHandlePointer:
-		return nil, errDBClosed
-	case C.SizedRangeProofResult_RevisionNotFound:
-		return nil, ErrRevisionNotFound
-	case C.SizedRangeProofResult_EmptyTrie:
-		return nil, errEmptyTrie
-	case C.SizedRangeProofResult_Ok:
-		ok := *(*C.SizedRangeProof)(unsafe.Pointer(&result.anon0))
-		wireOwned := newOwnedBytes(ok.wire)
-		wire := wireOwned.CopiedBytes()
-		if err := wireOwned.Free(); err != nil {
-			return nil, err
-		}
-		return &SizedRangeProof{
-			Proof:      &RangeProof{handle: ok.proof},
-			Wire:       wire,
-			NaturalEnd: bool(ok.natural_end),
-			Ratio:      float64(ok.ratio),
-		}, nil
-	case C.SizedRangeProofResult_Err:
-		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
-	default:
-		return nil, fmt.Errorf("unknown C.SizedRangeProofResult tag: %d", result.tag)
-	}
-}
-
-func getSizedChangeProofFromResult(result C.SizedChangeProofResult) (*SizedChangeProof, error) {
-	switch result.tag {
-	case C.SizedChangeProofResult_NullHandlePointer:
-		return nil, errDBClosed
-	case C.SizedChangeProofResult_StartRevisionNotFound:
-		return nil, ErrStartRevisionNotFound
-	case C.SizedChangeProofResult_EndRevisionNotFound:
-		return nil, ErrEndRevisionNotFound
-	case C.SizedChangeProofResult_Ok:
-		ok := *(*C.SizedChangeProof)(unsafe.Pointer(&result.anon0))
-		wireOwned := newOwnedBytes(ok.wire)
-		wire := wireOwned.CopiedBytes()
-		if err := wireOwned.Free(); err != nil {
-			return nil, err
-		}
-		return &SizedChangeProof{
-			Proof:      &ChangeProof{handle: ok.proof},
-			Wire:       wire,
-			NaturalEnd: bool(ok.natural_end),
-			Ratio:      float64(ok.ratio),
-		}, nil
-	case C.SizedChangeProofResult_Err:
-		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
-	default:
-		return nil, fmt.Errorf("unknown C.SizedChangeProofResult tag: %d", result.tag)
 	}
 }
 

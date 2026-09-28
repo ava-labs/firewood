@@ -118,6 +118,8 @@
 /// Database module for Firewood.
 pub mod db;
 
+pub use db::open;
+
 /// Iterator module, for both node and key-value streams
 pub mod iter;
 
@@ -157,11 +159,9 @@ pub mod proofs;
 pub mod eth_proof;
 
 // Re-export commonly used proof types at the crate root for ergonomic access
-#[cfg(feature = "ethhash")]
 pub use eth_proof::account_code_hash;
 pub use eth_proof::{EthProof, EthStorageProof, eth_get_proof};
-pub use merkle::sized::SizedProof;
-pub use merkle::{Key, Value, verify_change_proof_root_hash, verify_range_proof};
+pub use merkle::{Key, ProvenRange, Value, verify_change_proof_root_hash, verify_range_proof};
 pub use proofs::{
     ChangeProof, ChangeProofVerificationContext, EmptyProofCollection, InvalidHeader, KeyRange,
     Proof, ProofCollection, ProofEdge, ProofError, ProofNode, ProofType, RangeProof,

@@ -13,11 +13,15 @@ pub struct ReconstructedHandle<'db> {
     handle: &'db DatabaseHandle,
 }
 
-impl<'db> DbView for ReconstructedHandle<'db> {
+impl DbView for ReconstructedHandle<'_> {
     type Iter<'view>
-        = <firewood::db::ReconstructedView<'db> as DbView>::Iter<'view>
+        = BoxKeyValueIter<'view>
     where
         Self: 'view;
+
+    fn node_hash_algorithm(&self) -> firewood::NodeHashAlgorithm {
+        self.reconstructed.node_hash_algorithm()
+    }
 
     fn root_hash(&self) -> Option<HashKey> {
         self.reconstructed.root_hash()
@@ -65,14 +69,14 @@ impl<'db> ReconstructedHandle<'db> {
 
     /// Creates an iterator on the reconstructed view starting from the given key.
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
+    #[expect(clippy::missing_panics_doc)]
     pub fn iter_from(&self, first_key: Option<&[u8]>) -> CreateIteratorResult<'_> {
         let it = self
             .iter_option(first_key)
             .expect("infallible; see issue #1329");
         CreateIteratorResult(IteratorHandle::new(
             self.reconstructed.view(),
-            Box::new(it) as BoxKeyValueIter<'_>,
+            it,
             self.metrics_context(),
         ))
     }

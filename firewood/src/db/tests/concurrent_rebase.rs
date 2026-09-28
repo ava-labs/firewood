@@ -38,7 +38,7 @@
 
 use std::thread;
 
-use firewood_storage::{CheckOpt, CheckerError};
+use firewood_storage::{CheckOpt, CheckerError, DefaultHashMode};
 
 use crate::api::{self, Db as _, DbView as _, Proposal as _};
 use crate::db::{BatchOp, DbConfig};
@@ -123,8 +123,9 @@ fn assert_check_clean(db: &TestDb, label: &str, tolerate_unpersisted: bool) {
 /// Verify every disjoint `(t, c, k)` key produced by [`key`]/[`value`] is
 /// present in `db`'s latest revision with the expected value.
 fn assert_disjoint_keys_present(db: &TestDb, label: &str) {
-    let latest_root = <crate::db::Db as crate::api::Db>::root_hash(db).unwrap();
-    let view = <crate::db::Db as crate::api::Db>::revision(db, latest_root).unwrap();
+    let latest_root = <crate::db::Db<DefaultHashMode> as crate::api::Db>::root_hash(db).unwrap();
+    let view =
+        <crate::db::Db<DefaultHashMode> as crate::api::Db>::revision(db, latest_root).unwrap();
     for t in 0..THREADS {
         for c in 0..COMMITS_PER_THREAD {
             for k in 0..KEYS_PER_BATCH {
@@ -164,7 +165,7 @@ fn test_concurrent_commit_with_rebase_no_freelist_corruption() {
     thread::scope(|s| {
         let mut handles = Vec::with_capacity(THREADS);
         for t in 0..THREADS {
-            let db_ref: &crate::db::Db = &db;
+            let db_ref: &crate::db::Db<DefaultHashMode> = &db;
             handles.push(s.spawn(move || {
                 for c in 0..COMMITS_PER_THREAD {
                     // Build the batch once and retry around it. On a slow
@@ -274,7 +275,7 @@ fn test_concurrent_rebase_overlapping_paths() {
     thread::scope(|s| {
         let mut handles = Vec::with_capacity(SHARED_THREADS);
         for t in 0..SHARED_THREADS {
-            let db_ref: &crate::db::Db = &db;
+            let db_ref: &crate::db::Db<DefaultHashMode> = &db;
             let barrier = &barrier;
             handles.push(s.spawn(move || {
                 let mut rng = 0xdead_beefu64.wrapping_add((t as u64).wrapping_mul(0x9e37_79b9));
@@ -335,7 +336,7 @@ fn test_trivial_rebase_succeeds_without_corruption() {
         .unwrap();
 
     p_a.commit().unwrap();
-    let after_a = <crate::db::Db as crate::api::Db>::root_hash(&db).unwrap();
+    let after_a = <crate::db::Db<DefaultHashMode> as crate::api::Db>::root_hash(&db).unwrap();
 
     // p_b's recorded parent is stale; rebase diff applied to current is a
     // no-op. commit_with_rebase must succeed and return the same hash as
@@ -346,7 +347,7 @@ fn test_trivial_rebase_succeeds_without_corruption() {
         .expect("commit produces a hash");
     assert_eq!(returned, after_a);
 
-    let view = <crate::db::Db as crate::api::Db>::revision(&db, after_a).unwrap();
+    let view = <crate::db::Db<DefaultHashMode> as crate::api::Db>::revision(&db, after_a).unwrap();
     assert_eq!(view.val(&key).unwrap().as_deref(), Some(val.as_slice()));
     drop(view);
 
@@ -377,7 +378,7 @@ fn test_round_trip_rejects_stale_parent() {
     .unwrap()
     .commit()
     .unwrap();
-    let c1_hash = <crate::db::Db as crate::api::Db>::root_hash(&db).unwrap();
+    let c1_hash = <crate::db::Db<DefaultHashMode> as crate::api::Db>::root_hash(&db).unwrap();
 
     // P off C1 adds a separate key.
     let key2 = vec![0x43u8; 32];
@@ -403,7 +404,7 @@ fn test_round_trip_rejects_stale_parent() {
     .unwrap()
     .commit()
     .unwrap();
-    let c3_hash = <crate::db::Db as crate::api::Db>::root_hash(&db).unwrap();
+    let c3_hash = <crate::db::Db<DefaultHashMode> as crate::api::Db>::root_hash(&db).unwrap();
     assert_eq!(
         c1_hash, c3_hash,
         "A→B→A should reach the same root hash twice"
@@ -416,8 +417,9 @@ fn test_round_trip_rejects_stale_parent() {
         .commit_with_rebase()
         .expect("commit_with_rebase must succeed via rebase");
 
-    let final_hash = <crate::db::Db as crate::api::Db>::root_hash(&db).unwrap();
-    let view = <crate::db::Db as crate::api::Db>::revision(&db, final_hash).unwrap();
+    let final_hash = <crate::db::Db<DefaultHashMode> as crate::api::Db>::root_hash(&db).unwrap();
+    let view =
+        <crate::db::Db<DefaultHashMode> as crate::api::Db>::revision(&db, final_hash).unwrap();
     assert_eq!(view.val(&key).unwrap().as_deref(), Some(val.as_slice()));
     assert_eq!(view.val(&key2).unwrap().as_deref(), Some(val2.as_slice()));
     drop(view);
@@ -490,8 +492,9 @@ fn test_empty_parent_rebase_after_reap() {
         .expect("empty-parent rebase must succeed after reap");
 
     // Final revision must contain P's key AND every filler key.
-    let final_hash = <crate::db::Db as crate::api::Db>::root_hash(&db).unwrap();
-    let view = <crate::db::Db as crate::api::Db>::revision(&db, final_hash).unwrap();
+    let final_hash = <crate::db::Db<DefaultHashMode> as crate::api::Db>::root_hash(&db).unwrap();
+    let view =
+        <crate::db::Db<DefaultHashMode> as crate::api::Db>::revision(&db, final_hash).unwrap();
     assert_eq!(
         view.val(&p_key).unwrap().as_deref(),
         Some(p_val.as_slice()),

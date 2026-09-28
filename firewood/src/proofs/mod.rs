@@ -316,7 +316,7 @@
 pub(crate) mod change;
 pub(super) mod de;
 pub(crate) mod eth;
-pub(super) mod frame;
+pub(crate) mod frame;
 pub(crate) mod header;
 pub(crate) mod range;
 pub(crate) mod reader;
@@ -332,6 +332,7 @@ pub use self::change::{
     verify_change_proof_structure,
 };
 
+pub(crate) use self::frame::MAX_DECOMPRESSED_LEN;
 pub use self::header::InvalidHeader;
 pub use self::range::{
     KeyRange, RangeProof, RangeProofVerificationContext, find_next_key_after_range_proof,
@@ -349,7 +350,7 @@ pub use self::types::{
 /// [`find_next_key_after_change_proof`] uses it to resume strictly above the last
 /// key a proof covered. Both request bounds are inclusive, so resuming at that key
 /// would cover it again and never advance.
-fn lex_successor(key: &[u8]) -> Box<[u8]> {
+pub(crate) fn lex_successor(key: &[u8]) -> Box<[u8]> {
     [key, &[0]].concat().into_boxed_slice()
 }
 

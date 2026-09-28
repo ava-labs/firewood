@@ -191,16 +191,40 @@ where
 // ── Change proof verification ──────────────────────────────────────────────
 
 /// Verification context captured after structural validation of a change proof.
-/// Stored so that downstream logic (root hash verification, `find_next_key`) can
-/// reference the original verification parameters without re-validating.
+/// Stored so that downstream logic (root hash verification,
+/// [`find_next_key_after_change_proof`]) can reference the original
+/// verification parameters without re-validating.
+///
+/// Outside of test builds, constructible only by
+/// [`verify_change_proof_structure`]; fields are private so a context cannot be
+/// forged or altered after verification.
 #[derive(Debug)]
 pub struct ChangeProofVerificationContext {
+    end_root: HashKey,
+    start_key: Option<Box<[u8]>>,
+    end_key: Option<Box<[u8]>>,
+    right_edge_key: Option<Box<[u8]>>,
+}
+
+impl ChangeProofVerificationContext {
     /// The expected root hash of the ending revision.
-    pub end_root: HashKey,
+    #[must_use]
+    pub const fn end_root(&self) -> &HashKey {
+        &self.end_root
+    }
+
     /// The lower bound of the verified key range, if any.
-    pub start_key: Option<Box<[u8]>>,
+    #[must_use]
+    pub fn start_key(&self) -> Option<&[u8]> {
+        self.start_key.as_deref()
+    }
+
     /// The upper bound of the verified key range, if any.
-    pub end_key: Option<Box<[u8]>>,
+    #[must_use]
+    pub fn end_key(&self) -> Option<&[u8]> {
+        self.end_key.as_deref()
+    }
+
     /// The right edge of the range the proof proves: the key the end proof is
     /// anchored at, as the verifier determines it. This is `end_key` when the
     /// proof covers the requested range, and the last key in `batch_ops` when the
@@ -214,7 +238,29 @@ pub struct ChangeProofVerificationContext {
     /// this proof must resume strictly above the last operation's key, because
     /// both bounds of a request are inclusive —
     /// [`find_next_key_after_change_proof`] computes that resume point.
-    pub right_edge_key: Option<Box<[u8]>>,
+    #[must_use]
+    pub fn right_edge_key(&self) -> Option<&[u8]> {
+        self.right_edge_key.as_deref()
+    }
+
+    /// Test-only escape hatch that builds a context without running
+    /// [`verify_change_proof_structure`]. Some attack tests craft proofs
+    /// that are deliberately rejected by structural validation and need to
+    /// exercise `verify_change_proof_root_hash` directly against them.
+    #[cfg(test)]
+    pub(crate) const fn for_test(
+        end_root: HashKey,
+        start_key: Option<Box<[u8]>>,
+        end_key: Option<Box<[u8]>>,
+        right_edge_key: Option<Box<[u8]>>,
+    ) -> Self {
+        Self {
+            end_root,
+            start_key,
+            end_key,
+            right_edge_key,
+        }
+    }
 }
 
 type FrozenBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
@@ -292,8 +338,9 @@ fn verify_boundary_proof<C: ProofCollection>(
     boundary_op: Option<&FrozenBatchOp>,
     mismatch_error: ProofError,
     edge: ProofEdge,
+    algorithm: NodeHashAlgorithm,
 ) -> Result<(), api::Error> {
-    let result = match proof.value_digest(key, end_root) {
+    let result = match proof.value_digest(key, end_root, algorithm) {
         Ok(result) => result,
         Err(ProofError::Empty) => None,
         // Any `UnexpectedHash` from this boundary `value_digest` walk is by
@@ -347,11 +394,12 @@ fn compute_right_edge_key<'a>(
     end_root: &HashKey,
     last_op_key: Option<&'a [u8]>,
     end_key: Option<&'a [u8]>,
+    algorithm: NodeHashAlgorithm,
 ) -> Option<&'a [u8]> {
     let Some(anchor) = last_op_key else {
         return end_key;
     };
-    match proof.end_proof().value_digest(anchor, end_root) {
+    match proof.end_proof().value_digest(anchor, end_root, algorithm) {
         Ok(Some(_)) => Some(anchor),
         Ok(None) if matches!(proof.batch_ops().last(), Some(BatchOp::Delete { .. })) => {
             Some(anchor)
@@ -387,6 +435,7 @@ fn compute_right_edge_key<'a>(
 ///
 /// On success, returns a [`ChangeProofVerificationContext`] capturing the
 /// verification parameters for use by downstream root hash verification.
+#[expect(clippy::too_many_lines)]
 pub fn verify_change_proof_structure(
     proof: &FrozenChangeProof,
     end_root: HashKey,
@@ -501,6 +550,7 @@ pub fn verify_change_proof_structure(
             boundary_op,
             ProofError::StartProofOperationMismatch,
             ProofEdge::Left,
+            algorithm,
         )?;
     }
 
@@ -526,7 +576,7 @@ pub fn verify_change_proof_structure(
     }
 
     let last_op_key = last_op.map(|op| op.key().as_ref());
-    let right_edge_key = compute_right_edge_key(proof, &end_root, last_op_key, end_key);
+    let right_edge_key = compute_right_edge_key(proof, &end_root, last_op_key, end_key, algorithm);
 
     // Verify the end boundary proof against end_root at right_edge_key, the key
     // the verifier treats as the proof's anchor. When that key is the last batch
@@ -543,6 +593,7 @@ pub fn verify_change_proof_structure(
             end_boundary_op,
             ProofError::EndProofOperationMismatch,
             ProofEdge::Right,
+            algorithm,
         )?;
     }
 
