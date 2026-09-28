@@ -42,11 +42,9 @@ impl CompressionRatio {
     const SCALE: u32 = 1 << 16;
     /// An initial compressed/uncompressed estimate of 0.52.
     const INITIAL_ESTIMATE: Self = Self::from_scaled(Self::SCALE * 52 / 100);
-    // Limit cross-page predictions to 64x compression or 2x expansion so one
-    // unusual page cannot dominate the next. Constant-valued regions encode
-    // as flushed-block frames near 40x, under the decoder's 128x cap, so the
-    // floor must leave them room or every such chunk starts a probe short.
-    // In-page measurements are unclamped.
+    // Clamp cross-page predictions to 64x compression or 2x expansion so one
+    // unusual page cannot dominate the next. Flushed-block frames of constant
+    // values reach ~40x, so the floor must sit above that.
     const MIN_EXPECTED: Self = Self::from_scaled(Self::SCALE / 64);
     const MAX_EXPECTED: Self = Self::from_scaled(Self::SCALE * 2);
 
@@ -153,7 +151,7 @@ impl<T: TrieReader> Merkle<T> {
             budget,
             hint,
         )?;
-        firewood_histogram!(PROOF_KEYS, "kind" => ProofType::Range.name())
+        firewood_histogram!(PROOF_KEYS, "kind" => sized_kind_label(ProofType::Range))
             .record_integer(sized.proof.key_values().len());
         Ok(sized)
     }
@@ -206,7 +204,7 @@ impl<T: HashedNodeReader> Merkle<T> {
             budget,
             hint,
         )?;
-        firewood_histogram!(PROOF_KEYS, "kind" => ProofType::Change.name())
+        firewood_histogram!(PROOF_KEYS, "kind" => sized_kind_label(ProofType::Change))
             .record_integer(sized.proof.batch_ops().len());
         Ok(sized)
     }
@@ -328,7 +326,8 @@ pub(super) fn build_sized_chunk<B: ChunkBuilder>(
         probes = probes.saturating_add(1);
         single_item_fit(builder, &kept, &costs, natural_end, budget, body)?
     };
-    firewood_histogram!(SIZED_PROOF_PROBES, "kind" => B::KIND.name()).record_integer(probes);
+    firewood_histogram!(SIZED_PROOF_PROBES, "kind" => sized_kind_label(B::KIND))
+        .record_integer(probes);
     Ok(SizedProof {
         proof: fit.proof,
         hint: SizingHint {
@@ -341,6 +340,16 @@ pub(super) fn build_sized_chunk<B: ChunkBuilder>(
         wire: fit.wire,
         natural_end: fit.terminal,
     })
+}
+
+/// The `kind` label the sized-proof metrics share, distinct from the plain
+/// proofs' `range` and `change`.
+const fn sized_kind_label(kind: ProofType) -> &'static str {
+    match kind {
+        ProofType::Range => "range_sized",
+        ProofType::Change => "change_sized",
+        ProofType::Single => "single_sized",
+    }
 }
 
 /// A candidate that fit the budget, with what its probe measured.
