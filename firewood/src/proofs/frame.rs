@@ -135,12 +135,11 @@ pub(super) fn write_compressed_body(body: &[u8], out: &mut Vec<u8>) -> Result<()
     encoder
         .set_pledged_src_size(Some(body.len() as u64))
         .map_err(ProofError::Compression)?;
-    let (blocks, remainder) = body.as_chunks::<MAX_COMPRESSION_RATIO>();
-    for block in blocks
-        .iter()
-        .map(<[_; MAX_COMPRESSION_RATIO]>::as_slice)
-        .chain([remainder])
-    {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "MAX_COMPRESSION_RATIO is a non-zero constant"
+    )]
+    for block in body.chunks(MAX_COMPRESSION_RATIO) {
         encoder.write_all(block).map_err(ProofError::Compression)?;
         encoder.flush().map_err(ProofError::Compression)?;
     }
