@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use firewood_macros::hash_mode;
 use firewood_storage::{
-    Committed, DeletedNodeTracking, EthHash, HashMode, HashedNodeReader, MemStore, MerkleDbHash,
-    NodeStore, SeededRng, TrieReader,
+    Committed, DefaultHashMode, DeletedNodeTracking, EthHash, HashMode, HashedNodeReader, MemStore,
+    MerkleDbHash, NodeHashAlgorithm, NodeStore, SeededRng, TrieReader,
 };
 use test_case::test_case;
 
@@ -463,6 +463,25 @@ fn test_sized_passes_are_bounded_and_the_last_fit_is_kept() {
     assert!(!chunk.natural_end);
 }
 
+/// A shrink that would land at or below a candidate that already fit stops
+/// and returns that candidate instead of probing a smaller chunk.
+#[test]
+fn test_sized_shrink_never_undercuts_a_fitting_candidate() {
+    // The first probe (one item) fits under 97%; the grown candidate
+    // overshoots so far that the shrink would cut back to one item.
+    let probes = Cell::new(0);
+    let builder = ScriptedBuilder {
+        wire_for: |count| if count <= 1 { 900 } else { 5000 },
+        probes: &probes,
+    };
+
+    let chunk = build_sized_chunk(&builder, (0..100_000u32).map(Ok), 1000, None).unwrap();
+
+    assert_eq!(probes.get(), 2, "the shrink is not probed");
+    assert_eq!(chunk.proof, 1);
+    assert_eq!(chunk.wire.len(), 900);
+}
+
 /// With no fitting candidate at all, a single item is tried once more, and
 /// if even that is over the budget the request fails.
 #[test]
@@ -744,6 +763,12 @@ impl<F: Fn(usize) -> usize> ChunkBuilder for ScriptedBuilder<'_, F> {
 
     fn build(&self, items: &[Self::Item], _: bool) -> Result<Self::Proof, api::Error> {
         Ok(items.len())
+    }
+
+    fn write_body(_: &Self::Proof, _: &mut Vec<u8>) {}
+
+    fn hash_mode(_: &Self::Proof) -> NodeHashAlgorithm {
+        DefaultHashMode::ALGORITHM
     }
 
     fn serialize(

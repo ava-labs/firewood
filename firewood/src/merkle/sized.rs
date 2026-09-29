@@ -6,7 +6,7 @@
 use std::num::{NonZeroU32, NonZeroU128};
 
 use firewood_metrics::{HistogramExt, firewood_histogram};
-use firewood_storage::{HashedNodeReader, TrieReader};
+use firewood_storage::{HashedNodeReader, NodeHashAlgorithm, TrieReader};
 use integer_encoding::VarInt;
 
 use super::{Key, Merkle, Value};
@@ -228,8 +228,10 @@ impl<T: HashedNodeReader> Merkle<T> {
 ///    body bytes and drop tail items until their costs cover it. A shrunk
 ///    candidate that fits is final.
 ///
-/// [`MAX_CORRECTION_PASSES`] limits the number of attempts. When they run
-/// out, return the last candidate that fit; if none did, try a single item.
+/// [`MAX_CORRECTION_PASSES`] limits the number of attempts. A shrink that
+/// would land at or below a candidate that already fit stops there and
+/// returns it, as does running out of attempts; if nothing fit, try a
+/// single item.
 /// If that item, or the edge proofs alone, exceeds the budget, return
 /// [`api::Error::ProofOverBudget`]: peers would reject a chunk larger than
 /// the message limit.
@@ -251,8 +253,8 @@ pub(super) fn build_sized_chunk<B: ChunkBuilder>(
     let mut ratio = hint.map_or(CompressionRatio::INITIAL_ESTIMATE, |h| h.ratio);
     let mut edges = hint.and_then(|h| h.edges).unwrap_or(DEFAULT_EDGE_BYTES);
     let mut count = 0usize;
-    // The last candidate that fit the budget; what the loop returns even if
-    // later passes overshoot.
+    // The largest candidate that fit the budget: a shrink never lands at or
+    // below its count, so it is what the loop returns once passes overshoot.
     let mut fit: Option<Fit<B::Proof>> = None;
     let mut natural_end = false;
     // Body bytes the last probe overshot by; `None` grows instead.
@@ -262,7 +264,12 @@ pub(super) fn build_sized_chunk<B: ChunkBuilder>(
     for pass in 0..=MAX_CORRECTION_PASSES {
         let shrinking = excess.is_some();
         count = if let Some(excess) = excess.take() {
-            shrunk_count(&costs, count, excess)
+            let shrunk = shrunk_count(&costs, count, excess);
+            if fit.as_ref().is_some_and(|fit| shrunk <= fit.count) {
+                // Shrinking would not beat a candidate that already fit.
+                break;
+            }
+            shrunk
         } else {
             let allowance = ratio
                 .uncompressed_for(target.saturating_sub(size_of::<Header>()))
@@ -309,6 +316,7 @@ pub(super) fn build_sized_chunk<B: ChunkBuilder>(
         let wire_len = wire.len();
         fit = Some(Fit {
             proof: candidate,
+            count,
             wire: std::mem::take(&mut wire),
             body_len: body.len(),
             edges,
@@ -355,6 +363,7 @@ const fn sized_kind_label(kind: ProofType) -> &'static str {
 /// A candidate that fit the budget, with what its probe measured.
 struct Fit<P> {
     proof: P,
+    count: usize,
     wire: Vec<u8>,
     body_len: usize,
     edges: usize,
@@ -384,6 +393,7 @@ fn single_item_fit<B: ChunkBuilder>(
     }
     Ok(Fit {
         proof: candidate,
+        count,
         wire,
         body_len: body.len(),
         edges: edge_bytes(body.len(), costs, count),
@@ -403,6 +413,10 @@ pub(super) trait ChunkBuilder {
     /// The chunk proof for `items`; `natural_end` is true when `items`
     /// reached the end of the stream.
     fn build(&self, items: &[Self::Item], natural_end: bool) -> Result<Self::Proof, api::Error>;
+    /// Writes `proof`'s canonical body.
+    fn write_body(proof: &Self::Proof, out: &mut Vec<u8>);
+    fn hash_mode(proof: &Self::Proof) -> NodeHashAlgorithm;
+
     /// Serializes `proof`: its canonical body into `body` and its framed
     /// wire into `wire`, both cleared first.
     fn serialize(
@@ -410,7 +424,12 @@ pub(super) trait ChunkBuilder {
         proof: &Self::Proof,
         body: &mut Vec<u8>,
         wire: &mut Vec<u8>,
-    ) -> Result<(), ProofError>;
+    ) -> Result<(), ProofError> {
+        body.clear();
+        Self::write_body(proof, body);
+        wire.clear();
+        write_framed_body(body, Self::KIND, Self::hash_mode(proof), wire)
+    }
 }
 
 struct RangeChunkBuilder<'a, T> {
@@ -442,16 +461,12 @@ impl<T: TrieReader> ChunkBuilder for RangeChunkBuilder<'_, T> {
         ))
     }
 
-    fn serialize(
-        &self,
-        proof: &Self::Proof,
-        body: &mut Vec<u8>,
-        wire: &mut Vec<u8>,
-    ) -> Result<(), ProofError> {
-        body.clear();
-        proof.write_body_to_vec(body);
-        wire.clear();
-        write_framed_body(body, Self::KIND, proof.hash_mode(), wire)
+    fn write_body(proof: &Self::Proof, out: &mut Vec<u8>) {
+        proof.write_body_to_vec(out);
+    }
+
+    fn hash_mode(proof: &Self::Proof) -> NodeHashAlgorithm {
+        proof.hash_mode()
     }
 }
 
@@ -489,16 +504,12 @@ impl<T: HashedNodeReader> ChunkBuilder for ChangeChunkBuilder<'_, T> {
         ))
     }
 
-    fn serialize(
-        &self,
-        proof: &Self::Proof,
-        body: &mut Vec<u8>,
-        wire: &mut Vec<u8>,
-    ) -> Result<(), ProofError> {
-        body.clear();
-        proof.write_body_to_vec(body);
-        wire.clear();
-        write_framed_body(body, Self::KIND, proof.hash_mode(), wire)
+    fn write_body(proof: &Self::Proof, out: &mut Vec<u8>) {
+        proof.write_body_to_vec(out);
+    }
+
+    fn hash_mode(proof: &Self::Proof) -> NodeHashAlgorithm {
+        proof.hash_mode()
     }
 }
 
