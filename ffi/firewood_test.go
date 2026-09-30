@@ -1766,6 +1766,8 @@ func TestErrDroppedSentinels(t *testing.T) {
 		ErrDroppedReconstructed,
 		errDroppedProposal,
 		errDroppedIterator,
+		errDroppedRangeProof,
+		errDroppedChangeProof,
 	} {
 		require.ErrorIs(t, err, ErrDropped, "%v must wrap ErrDropped", err)
 	}
@@ -1914,10 +1916,9 @@ func TestReconstructedFreesImplicitly(t *testing.T) {
 	<-done
 }
 
-// TestCloseForceDoesNotDropRangeProof pins the documented limitation that
-// force-close does not auto-drop a verified RangeProof. The proof is counted
-// but not in the drop map, so Close blocks until the proof is freed.
-func TestCloseForceDoesNotDropRangeProof(t *testing.T) {
+// TestCloseForceDropsRangeProof checks that force-close drops a prepared
+// RangeProof, freeing its proposal before the database closes.
+func TestCloseForceDropsRangeProof(t *testing.T) {
 	db := newTestDatabase(t)
 	_, _, batch := kvForTest(50)
 	root, err := db.Update(batch)
@@ -1925,16 +1926,28 @@ func TestCloseForceDoesNotDropRangeProof(t *testing.T) {
 
 	proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
 	require.NoError(t, db.VerifyRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated))
+	require.NoError(t, db.Close(oneSecCtx(t), WithForceCloseHandles()), "db.Close() with force close")
 
-	require.ErrorIs(t,
-		db.Close(oneSecCtx(t), WithForceCloseHandles()),
-		ErrActiveKeepAliveHandles,
-		"force-close must not auto-drop a verified RangeProof",
-	)
+	_, err = proof.Marshal()
+	require.ErrorIs(t, err, errDroppedRangeProof, "force-close must drop the proof")
+}
 
-	// Freeing the proof releases the count and unblocks Close.
-	require.NoError(t, proof.Free())
-	require.NoError(t, db.Close(oneSecCtx(t), WithForceCloseHandles()))
+// TestCloseForceDropsChangeProof checks that force-close drops an outstanding
+// ChangeProof.
+func TestCloseForceDropsChangeProof(t *testing.T) {
+	db := newTestDatabase(t)
+	_, _, batch := kvForTest(100)
+	startRoot, err := db.Update(batch[:50])
+	require.NoError(t, err)
+	endRoot, err := db.Update(batch[50:])
+	require.NoError(t, err)
+
+	proof, err := db.ChangeProof(startRoot, endRoot, nothing(), nothing(), changeProofLenUnbounded)
+	require.NoError(t, err)
+	require.NoError(t, db.Close(oneSecCtx(t), WithForceCloseHandles()), "db.Close() with force close")
+
+	_, err = proof.Marshal()
+	require.ErrorIs(t, err, errDroppedChangeProof, "force-close must drop the proof")
 }
 
 // TestCloseAndForceDropPartialThenRetry exercises the partial-drain path: a

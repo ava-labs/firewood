@@ -80,10 +80,8 @@ var (
 	// supplied context is cancelled before every outstanding handle that
 	// holds a keep-alive lease on the database has been released. That
 	// set includes [Proposal], [Revision], [Reconstructed], [Iterator],
-	// and verified [RangeProof] instances (which retain a lease until
-	// [RangeProof.Free] runs). Pass [WithForceCloseHandles] to drop the
-	// registered handle types automatically; [RangeProof] is not
-	// auto-dropped and must still be released by the caller.
+	// [RangeProof] and [ChangeProof] instances. Pass [WithForceCloseHandles]
+	// to drop them automatically.
 	ErrActiveKeepAliveHandles = errors.New("cannot close database with active keep-alive handles")
 
 	errDBClosed = errors.New("firewood database already closed")
@@ -111,14 +109,10 @@ type Database struct {
 	handleLock sync.RWMutex
 
 	// keepAlives tracks every outstanding [Proposal], [Revision],
-	// [Reconstructed], [Iterator], and verified [RangeProof] — the
-	// types that hold a borrow on the underlying Rust database and
-	// therefore must not outlive it. It carries both the
-	// outstanding-handle count that [Database.Close] waits on and the
-	// registry of drop callbacks that [WithForceCloseHandles] uses to
-	// release the registered subset forcibly. [RangeProof] participates
-	// in the count but is not registered for force-drop (see
-	// VerifyRangeProof for why).
+	// [Reconstructed], [Iterator], [RangeProof], and [ChangeProof] created
+	// from this database. It carries both the outstanding-handle count that
+	// [Database.Close] waits on and the registry of drop callbacks that
+	// [WithForceCloseHandles] uses to release them forcibly.
 	keepAlives *keepAliveRegistry
 
 	// commitLock is used to ensure that methods accessing or modifying the latest
@@ -490,10 +484,9 @@ type closeConfig struct {
 }
 
 // WithForceCloseHandles makes [Database.Close] forcibly drop every outstanding
-// [Proposal], [Revision], [Reconstructed], and [Iterator] before closing the
-// database, instead of waiting for the caller to release them. Verified
-// [RangeProof] handles are not auto-dropped — they must be released via
-// [RangeProof.Free] before Close can complete.
+// [Proposal], [Revision], [Reconstructed], [Iterator], [RangeProof], and
+// [ChangeProof] before closing the database, instead of waiting for the
+// caller to release them.
 //
 // Each handle is dropped once even if its underlying free errors, so a
 // failing free cannot stall the close. Dropping a handle can still wait
@@ -519,19 +512,18 @@ func WithForceCloseHandles() CloseOption {
 //
 // By default Close blocks until all outstanding keep-alive handles are
 // disowned or the [context.Context] is cancelled. That is, until every
-// [Proposal], [Revision], [Reconstructed], [Iterator], and verified
-// [RangeProof] created from this Database is either unreachable or has
-// been explicitly released via [Proposal.Commit], [Proposal.Drop],
-// [Revision.Drop], [Reconstructed.Drop], [Iterator.Drop], or
-// [RangeProof.Free]. Unreachable objects are released by their finalizers
-// before Close returns. If the context expires first,
+// [Proposal], [Revision], [Reconstructed], [Iterator], [RangeProof], and
+// [ChangeProof] created from this Database is either unreachable or has
+// been explicitly released via [Proposal.Commit] or its Drop method.
+// Committing a proof does not release it. Unreachable objects are released
+// by their GC cleanups before Close returns. If the context expires first,
 // [ErrActiveKeepAliveHandles] is returned and [C.fwd_close_db] is not
 // called.
 //
 // Pass [WithForceCloseHandles] to forcibly drop every outstanding handle
 // instead of waiting for the caller to release them. See
 // [WithForceCloseHandles] for details on its semantics, including how ctx
-// cancellation is reported and which handle types are not auto-dropped.
+// cancellation is reported.
 //
 // Safe to call multiple times; subsequent calls after the first are no-ops
 // and return nil.

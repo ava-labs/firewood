@@ -30,7 +30,7 @@ import (
 // These cover operations that happen entirely in Go and are invisible to the Rust recorder.
 var goMetricsRegistry = prometheus.NewRegistry()
 
-// proofMarshalDuration tracks the duration of proof MarshalBinary calls,
+// proofMarshalDuration tracks the duration of proof marshal calls,
 // labeled by proof_type ("range", "change", "verified_change").
 var proofMarshalDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Name:    "firewood_go_proof_marshal_duration_seconds",
@@ -38,7 +38,7 @@ var proofMarshalDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Buckets: []float64{5e-6, 25e-6, 1e-4, 5e-4, 1e-3, 5e-3, 25e-3, 0.1},
 }, []string{"proof_type"})
 
-// proofUnmarshalDuration tracks the duration of proof UnmarshalBinary calls,
+// proofUnmarshalDuration tracks the duration of proof unmarshal calls,
 // labeled by proof_type ("range", "change").
 var proofUnmarshalDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Name:    "firewood_go_proof_unmarshal_duration_seconds",
