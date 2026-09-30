@@ -253,8 +253,7 @@ pub(super) fn build_sized_chunk<B: ChunkBuilder>(
     let mut ratio = hint.map_or(CompressionRatio::INITIAL_ESTIMATE, |h| h.ratio);
     let mut edges = hint.and_then(|h| h.edges).unwrap_or(DEFAULT_EDGE_BYTES);
     let mut count = 0usize;
-    // The largest candidate that fit the budget: a shrink never lands at or
-    // below its count, so it is what the loop returns once passes overshoot.
+    // The largest candidate that fit the budget.
     let mut fit: Option<Fit<B::Proof>> = None;
     let mut natural_end = false;
     // Body bytes the last probe overshot by; `None` grows instead.
