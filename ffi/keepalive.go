@@ -334,17 +334,10 @@ func (l *lease) release(attemptDisown func() error) (err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	// Release on panic too, so a panicking callback cannot strand the
-	// lease and block Close forever.
-	defer func() {
-		if p := recover(); p != nil {
-			l.releaseLocked()
-			panic(p)
-		}
-	}()
-	err = attemptDisown()
-	l.releaseLocked()
-	return err
+	// defer will also run if attemptDisown panics.
+	defer l.releaseLocked()
+
+	return attemptDisown()
 }
 
 // releaseLocked is the single bookkeeping point: decrements the

@@ -31,7 +31,7 @@ import (
 var goMetricsRegistry = prometheus.NewRegistry()
 
 // proofMarshalDuration tracks the duration of proof marshal calls,
-// labeled by proof_type ("range", "change", "verified_change").
+// labeled by proof_type ("range", "change").
 var proofMarshalDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Name:    "firewood_go_proof_marshal_duration_seconds",
 	Help:    "Duration of Go-side proof marshal operations",

@@ -65,8 +65,7 @@ var (
 // included in a trie with a given root hash.
 type RangeProof struct {
 	// handle owns the Rust RangeProofContext and this proof's lease on its
-	// database. A nil handle pointer means the proof has been dropped, and
-	// every method reports errDroppedRangeProof.
+	// database.
 	//
 	// Every method that passes the handle to a C call must hold lease.mu for
 	// the duration of that call. Drop — including the GC cleanup registered
@@ -211,11 +210,7 @@ func (db *Database) VerifyRangeProof(
 		max_length: C.uint32_t(maxLength),
 	}
 
-	if err := getErrorFromVoidResult(C.fwd_db_verify_range_proof(db.handle, args)); err != nil {
-		return err
-	}
-
-	return nil
+	return getErrorFromVoidResult(C.fwd_db_verify_range_proof(db.handle, args))
 }
 
 // VerifyAndCommitRangeProof verifies the provided range [proof] proves the values
@@ -289,12 +284,8 @@ func (p *RangeProof) FindNextKey() (*NextKeyRange, error) {
 // Note: this method is only relevant for Ethereum tries.
 // This method can be called anytime after the proof is created.
 //
-// The iteration holds the proof's read lock until the loop ends, so
-// [RangeProof.Drop], [WithForceCloseHandles], and the methods that take the
-// write lock ([RangeProof.Verify], [RangeProof.FindNextKey],
-// [Database.VerifyRangeProof], and [Database.VerifyAndCommitRangeProof]) on
-// another goroutine wait until the iteration ends. Calling any of them from
-// inside the loop body deadlocks.
+// The iteration holds the proof's read lock until the loop ends, so any other
+// method on the range proof MUST NOT be called during iteration.
 func (p *RangeProof) CodeHashes() iter.Seq2[Hash, error] {
 	return func(yield func(Hash, error) bool) {
 		// The proof handle MUST be held for the lifetime of the iterator.
@@ -510,7 +501,8 @@ func (proof *ChangeProof) FindNextKey(endKey Maybe[[]byte]) (*NextKeyRange, erro
 // (the post-state of accounts touched by the proof) are yielded; Delete and
 // DeleteRange entries are skipped.
 //
-// The iteration holds the proof's read lock until the loop ends.
+// The iteration holds the proof's read lock until the loop ends, so any other
+// method on the change proof MUST NOT be called during iteration.
 func (p *ChangeProof) CodeHashes() iter.Seq2[Hash, error] {
 	return func(yield func(Hash, error) bool) {
 		// See [RangeProof.CodeHashes] for why the read lock spans the loop.
