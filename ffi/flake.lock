@@ -39,33 +39,33 @@
       },
       "locked": {
         "dir": "nix/go",
-        "lastModified": 1780000179,
-        "narHash": "sha256-bwDUHWy4bHO0xmmHPJgYVXIDeP90PQNRYovglGuLybU=",
+        "lastModified": 1790188075,
+        "narHash": "sha256-QPE1hkPSgaR8m2sJ3SRlOSVg6FLCqf8mtZ+O8rKaeSo=",
         "owner": "ava-labs",
         "repo": "avalanchego",
-        "rev": "89ac856f87556f8dd38ed93530d10eb92210da35",
+        "rev": "692cb9d42109ad38b0891af365916aa246d8c34f",
         "type": "github"
       },
       "original": {
         "dir": "nix/go",
         "owner": "ava-labs",
-        "ref": "89ac856f87556f8dd38ed93530d10eb92210da35",
+        "ref": "692cb9d42109ad38b0891af365916aa246d8c34f",
         "repo": "avalanchego",
         "type": "github"
       }
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1765838191,
-        "narHash": "sha256-m5KWt1nOm76ILk/JSCxBM4MfK3rYY7Wq9/TZIIeGnT8=",
+        "lastModified": 1781216227,
+        "narHash": "sha256-9mUW6gNwoN2SWc/l0fW4svPNOulXLl8ijqKyeSOGgJE=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "c6f52ebd45e5925c188d1a20119978aa4ffd5ef6",
+        "rev": "a0374025a863d007d98e3297f6aa46cc3141c2f0",
         "type": "github"
       },
       "original": {
         "owner": "NixOS",
-        "ref": "nixos-25.11",
+        "ref": "nixos-26.05",
         "repo": "nixpkgs",
         "type": "github"
       }
