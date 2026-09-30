@@ -29,7 +29,7 @@ sudo bash install-golang.sh
 This installs the pinned Go toolchain.
 
 Both installers read their pinned versions from
-[`infra/toolchains/firewood-toolchain.sh`](../../infra/toolchains/firewood-toolchain.sh),
+[`infra/toolchain-versions.sh`](../../infra/toolchain-versions.sh),
 which also pins developer tools used by provisioning outside this repository.
 The Go installer verifies its download against a checksum pinned there too.
 Pins with no consumer here are still live — see the comment in that file before

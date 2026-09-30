@@ -2,8 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=infra/toolchains/firewood-toolchain.sh
-. "$SCRIPT_DIR/../../infra/toolchains/firewood-toolchain.sh"
+# shellcheck source=infra/toolchain-versions.sh
+. "$SCRIPT_DIR/../../infra/toolchain-versions.sh"
 
 RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
 CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
@@ -16,13 +16,13 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 
 PROFILE="$HOME/.profile"
 if ! grep -qF "$CARGO_HOME/bin" "$PROFILE" 2>/dev/null; then
-    cat >>"$PROFILE" <<EOF
+    cat >>"$PROFILE" <<-EOF
 
-# Firewood benchmark Rust toolchain
-export RUSTUP_HOME="$RUSTUP_HOME"
-export CARGO_HOME="$CARGO_HOME"
-export PATH="\$CARGO_HOME/bin:\$PATH"
-EOF
+		# Firewood benchmark Rust toolchain
+		export RUSTUP_HOME="$RUSTUP_HOME"
+		export CARGO_HOME="$CARGO_HOME"
+		export PATH="\$CARGO_HOME/bin:\$PATH"
+	EOF
 fi
 
 rustup show

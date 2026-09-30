@@ -2,8 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=infra/toolchains/firewood-toolchain.sh
-. "$SCRIPT_DIR/../../infra/toolchains/firewood-toolchain.sh"
+# shellcheck source=infra/toolchain-versions.sh
+. "$SCRIPT_DIR/../../infra/toolchain-versions.sh"
 
 INSTALL_DIR="/usr/local/go"
 
@@ -61,9 +61,15 @@ curl -fLO "$URL"
 
 if [ -n "$EXPECTED_SHA256" ]; then
     if command -v sha256sum >/dev/null 2>&1; then
-        printf '%s  %s\n' "$EXPECTED_SHA256" "$TARBALL" | sha256sum -c -
+        ACTUAL_SHA256="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
     else
-        printf '%s  %s\n' "$EXPECTED_SHA256" "$TARBALL" | shasum -a 256 -c -
+        ACTUAL_SHA256="$(shasum -a 256 "$TARBALL" | cut -d' ' -f1)"
+    fi
+    if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+        echo "Error: checksum mismatch for $TARBALL" >&2
+        echo "  expected: $EXPECTED_SHA256 ($SHA_VAR)" >&2
+        echo "  actual:   $ACTUAL_SHA256" >&2
+        exit 1
     fi
 else
     echo "Warning: no checksum pinned for ${OS}/${ARCH}; skipping verification." >&2
