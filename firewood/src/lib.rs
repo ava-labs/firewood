@@ -163,10 +163,11 @@ pub use eth_proof::account_code_hash;
 pub use eth_proof::{EthProof, EthStorageProof, eth_get_proof};
 pub use merkle::{Key, ProvenRange, Value, verify_change_proof_root_hash, verify_range_proof};
 pub use proofs::{
-    ChangeProof, ChangeProofVerificationContext, EmptyProofCollection, InvalidHeader, KeyRange,
-    Proof, ProofCollection, ProofEdge, ProofError, ProofNode, ProofType, RangeProof,
-    RangeProofVerificationContext, ReadError, find_next_key_after_change_proof,
-    find_next_key_after_range_proof, verify_change_proof_structure, verify_range_proof_structure,
+    ChangeProof, ChangeProofVerificationContext, DeletePrefixes, EmptyProofCollection,
+    InvalidHeader, KeyRange, KeySpan, Proof, ProofCollection, ProofEdge, ProofError, ProofNode,
+    ProofType, RangeProof, RangeProofVerificationContext, ReadError,
+    find_next_key_after_change_proof, find_next_key_after_range_proof,
+    verify_change_proof_structure, verify_range_proof_structure,
 };
 
 // Re-export the proc macro from firewood-macros

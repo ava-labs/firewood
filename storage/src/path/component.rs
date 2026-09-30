@@ -115,6 +115,17 @@ impl PathComponent {
         // arity's `U4` provides no `join`; compute it directly.
         (self.0.as_u8() << 4) | other.0.as_u8()
     }
+
+    /// Returns the next-larger path component, or `None` when `self` is the
+    /// largest component (`0xF`) and the increment would carry out.
+    ///
+    /// The `None` is the carry signal. A caller scanning a nibble prefix from
+    /// the right uses it to learn that this position is exhausted and the
+    /// carry must propagate to the component before it.
+    #[must_use]
+    pub const fn checked_next(self) -> Option<Self> {
+        Self::try_new(self.as_u8().wrapping_add(1))
+    }
 }
 
 impl std::fmt::Debug for PathComponent {
@@ -507,5 +518,21 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![0x09, 0x0A, 0x0B, 0x0C, 0x0D],
         );
+    }
+
+    #[test]
+    fn checked_next_increments_every_component_but_the_last() {
+        let mut iter = PathComponent::ALL.iter().copied();
+        let mut current = iter.next().expect("ALL is non-empty");
+        for expected in iter {
+            assert_eq!(current.checked_next(), Some(expected));
+            current = expected;
+        }
+    }
+
+    #[test]
+    fn checked_next_of_the_maximum_component_is_none() {
+        let [.., last] = PathComponent::ALL;
+        assert_eq!(last.checked_next(), None);
     }
 }
