@@ -6,7 +6,6 @@ package ffi
 import (
 	"bytes"
 	"encoding/hex"
-	"iter"
 	"runtime"
 	"sync"
 	"testing"
@@ -240,7 +239,7 @@ func TestRoundTripSerialization(t *testing.T) {
 	proofBytes := newSerializedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenUnbounded)
 
 	// Deserialize the proof.
-	proof, err := db.UnmarshalRangeProof(proofBytes)
+	proof, err := UnmarshalRangeProof(proofBytes)
 	r.NoError(err)
 
 	// serialize the proof again
@@ -408,6 +407,12 @@ func TestRangeProofMethodFreeRace(t *testing.T) {
 			},
 		},
 		{
+			name: "VerifyRangeProof",
+			call: func(p *RangeProof) {
+				_ = db.VerifyRangeProof(p, nothing(), nothing(), root, rangeProofLenTruncated)
+			},
+		},
+		{
 			name: "Marshal",
 			call: func(p *RangeProof) { _, _ = p.Marshal() },
 		},
@@ -429,7 +434,7 @@ func TestRangeProofMethodFreeRace(t *testing.T) {
 			// margin while keeping the -race CI run fast.
 			const iterations = 10_000
 			for range iterations {
-				p, err := db.UnmarshalRangeProof(proofBytes)
+				p, err := UnmarshalRangeProof(proofBytes)
 				require.NoError(t, err)
 
 				start := make(chan struct{})
@@ -488,7 +493,7 @@ func TestChangeProofMethodDropRace(t *testing.T) {
 			// See [TestRangeProofMethodFreeRace] for the iteration count.
 			const iterations = 10_000
 			for range iterations {
-				p, err := db.UnmarshalChangeProof(proofBytes)
+				p, err := UnmarshalChangeProof(proofBytes)
 				require.NoError(t, err)
 
 				start := make(chan struct{})
@@ -542,72 +547,41 @@ func TestForceCloseDuringCodeHashIteration(t *testing.T) {
 		t.Skip("code hash iterators are only created for ethereum-mode proofs")
 	}
 
-	type codeHashProof interface {
-		CodeHashes() iter.Seq2[Hash, error]
-		Marshal() ([]byte, error)
-	}
+	r := require.New(t)
+	db := newTestDatabase(t)
 
 	key, val, codeHash := ethAccountWithCodeHash(t)
-	tests := []struct {
-		name     string
-		newProof func(*testing.T, *Database) codeHashProof
-	}{
-		{
-			name: "range",
-			newProof: func(t *testing.T, db *Database) codeHashProof {
-				root, err := db.Update([]BatchOp{Put(key[:], val)})
-				require.NoError(t, err)
-				proof, err := db.RangeProof(root, nothing(), nothing(), rangeProofLenUnbounded)
-				require.NoError(t, err)
-				return proof
-			},
-		},
-		{
-			name: "change",
-			newProof: func(t *testing.T, db *Database) codeHashProof {
-				// Baseline insert so the change proof's start root is non-empty.
-				startRoot, err := db.Update([]BatchOp{Put([]byte("baseline"), []byte("v"))})
-				require.NoError(t, err)
-				endRoot, err := db.Update([]BatchOp{Put(key[:], val)})
-				require.NoError(t, err)
-				proof, err := db.ChangeProof(startRoot, endRoot, nothing(), nothing(), changeProofLenUnbounded)
-				require.NoError(t, err)
-				return proof
-			},
-		},
+	root, err := db.Update([]BatchOp{Put(key[:], val)})
+	r.NoError(err)
+	proof, err := db.RangeProof(root, nothing(), nothing(), rangeProofLenUnbounded)
+	r.NoError(err)
+	// Verifying binds the proof to db, so force-close drops it.
+	r.NoError(db.VerifyRangeProof(proof, nothing(), nothing(), root, rangeProofLenUnbounded))
+
+	ctx := oneSecCtx(t)
+	closeErr := make(chan error, 1)
+	yielded := 0
+	for hash, err := range proof.CodeHashes() {
+		r.NoError(err)
+		r.Equal(codeHash, hash)
+		yielded++
+
+		go func() {
+			closeErr <- db.Close(ctx, WithForceCloseHandles())
+		}()
+		select {
+		case err := <-closeErr:
+			r.FailNowf("force-close returned while an iteration still borrowed the proof", "Close: %v", err)
+		case <-time.After(300 * time.Millisecond):
+		}
 	}
+	r.Equal(1, yielded)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			db := newTestDatabase(t)
-			proof := tt.newProof(t, db)
+	// The iteration has ended, so force-close can drop the proof and finish.
+	r.NoError(<-closeErr)
 
-			ctx := oneSecCtx(t)
-			closeErr := make(chan error, 1)
-			yielded := 0
-			for hash, err := range proof.CodeHashes() {
-				require.NoError(t, err)
-				require.Equal(t, codeHash, hash)
-				yielded++
-
-				go func() {
-					closeErr <- db.Close(ctx, WithForceCloseHandles())
-				}()
-				select {
-				case err := <-closeErr:
-					require.FailNowf(t, "force-close returned while an iteration still borrowed the proof", "Close: %v", err)
-				case <-time.After(300 * time.Millisecond):
-				}
-			}
-			require.Equal(t, 1, yielded)
-
-			// The iteration has ended, so force-close can drop the proof and finish.
-			require.NoError(t, <-closeErr)
-
-			_, err := proof.Marshal()
-			require.ErrorIs(t, err, ErrDropped, "force-close must drop the proof once the iteration ends")
-		})
-	}
+	_, err = proof.Marshal()
+	r.ErrorIs(err, ErrDropped, "force-close must drop the proof once the iteration ends")
 }
 
 func TestRangeProofCodeHashes(t *testing.T) {
@@ -672,12 +646,6 @@ func TestRangeProofBlocksClose(t *testing.T) {
 		makeProof func(t *testing.T, db *Database, root Hash) *RangeProof
 	}{
 		{
-			name: "from_range",
-			makeProof: func(t *testing.T, db *Database, root Hash) *RangeProof {
-				return newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
-			},
-		},
-		{
 			name: "prepared_range",
 			makeProof: func(t *testing.T, db *Database, root Hash) *RangeProof {
 				proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
@@ -686,16 +654,13 @@ func TestRangeProofBlocksClose(t *testing.T) {
 			},
 		},
 		{
-			name: "unmarshaled",
+			name: "prepared_unmarshaled",
 			makeProof: func(t *testing.T, db *Database, root Hash) *RangeProof {
-				proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
-				data, err := proof.Marshal()
+				data := newSerializedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
+				proof, err := UnmarshalRangeProof(data)
 				require.NoError(t, err)
-				require.NoError(t, proof.Drop())
-
-				unmarshaledProof, err := db.UnmarshalRangeProof(data)
-				require.NoError(t, err)
-				return unmarshaledProof
+				require.NoError(t, db.VerifyRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated))
+				return proof
 			},
 		},
 	}
@@ -754,28 +719,11 @@ func TestRangeProofCleanup(t *testing.T) {
 		makeProof func(*testing.T, *Database, Hash) *RangeProof
 	}{
 		{
-			name: "unverified_range",
-			makeProof: func(t *testing.T, db *Database, root Hash) *RangeProof {
-				proof, err := db.RangeProof(root, nothing(), nothing(), rangeProofLenTruncated)
-				require.NoError(t, err)
-				return proof
-			},
-		},
-		{
 			name: "prepared_range",
 			makeProof: func(t *testing.T, db *Database, root Hash) *RangeProof {
 				proof, err := db.RangeProof(root, nothing(), nothing(), rangeProofLenTruncated)
 				require.NoError(t, err)
 				require.NoError(t, db.VerifyRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated))
-				return proof
-			},
-		},
-		{
-			name: "unmarshaled_range",
-			makeProof: func(t *testing.T, db *Database, root Hash) *RangeProof {
-				data := newSerializedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
-				proof, err := db.UnmarshalRangeProof(data)
-				require.NoError(t, err)
 				return proof
 			},
 		},
@@ -810,6 +758,95 @@ func TestRangeProofCleanup(t *testing.T) {
 			require.NoError(t, db.Close(t.Context()), "Database should be closeable after proof is garbage collected")
 		})
 	}
+}
+
+func TestUnboundRangeProofOutlivesDatabase(t *testing.T) {
+	var wrongRoot Hash
+	wrongRoot[0] = 0xff
+
+	tests := []struct {
+		name      string
+		makeProof func(*testing.T, *Database, Hash) *RangeProof
+	}{
+		{
+			name: "from_range",
+			makeProof: func(t *testing.T, db *Database, root Hash) *RangeProof {
+				return newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
+			},
+		},
+		{
+			name: "unmarshaled_range",
+			makeProof: func(t *testing.T, db *Database, root Hash) *RangeProof {
+				data := newSerializedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
+				proof, err := UnmarshalRangeProof(data)
+				require.NoError(t, err)
+				return proof
+			},
+		},
+		{
+			name: "failed_verify",
+			makeProof: func(t *testing.T, db *Database, root Hash) *RangeProof {
+				proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
+				require.ErrorContains(t, db.VerifyRangeProof(proof, nothing(), nothing(), wrongRoot, rangeProofLenTruncated), "proof error")
+				return proof
+			},
+		},
+		{
+			name: "failed_commit",
+			makeProof: func(t *testing.T, db *Database, root Hash) *RangeProof {
+				proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
+				_, err := db.VerifyAndCommitRangeProof(proof, nothing(), nothing(), wrongRoot, rangeProofLenTruncated)
+				require.ErrorContains(t, err, "proof error")
+				return proof
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := newTestDatabase(t)
+			_, _, batch := kvForTest(50)
+			root, err := db.Update(batch)
+			require.NoError(t, err)
+
+			proof := tt.makeProof(t, db, root)
+			require.NoError(t, db.Close(oneSecCtx(t), WithForceCloseHandles()))
+
+			_, err = proof.Marshal()
+			require.NoError(t, err)
+			require.NoError(t, proof.Verify(root, nothing(), nothing(), rangeProofLenTruncated))
+			_, err = proof.FindNextKey()
+			require.ErrorIs(t, err, errNotPrepared)
+			require.NoError(t, proof.Drop())
+		})
+	}
+}
+
+// TestRangeProofLeasesVerifyingDatabase checks that a range proof's lease is
+// on the database that verified it, not the one that created it, and that a
+// bound proof is rejected by every other database.
+func TestRangeProofLeasesVerifyingDatabase(t *testing.T) {
+	r := require.New(t)
+	dbA := newTestDatabase(t)
+	dbB := newTestDatabase(t)
+	dbC := newTestDatabase(t)
+
+	_, _, batch := kvForTest(50)
+	root, err := dbA.Update(batch)
+	r.NoError(err)
+
+	proof := newVerifiedRangeProof(t, dbA, root, nothing(), nothing(), rangeProofLenTruncated)
+	r.NoError(dbB.VerifyRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated))
+
+	r.NoError(dbA.Close(oneSecCtx(t)), "the creating database holds no lease")
+	r.ErrorIs(dbB.Close(oneSecCtx(t)), ErrActiveKeepAliveHandles, "the verifying database holds the lease")
+
+	r.ErrorIs(dbC.VerifyRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated), errBoundToOtherDatabase)
+	_, err = dbC.VerifyAndCommitRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated)
+	r.ErrorIs(err, errBoundToOtherDatabase)
+
+	r.NoError(proof.Drop())
+	r.NoError(dbB.Close(oneSecCtx(t)))
 }
 
 func TestChangeProofEmptyDB(t *testing.T) {
@@ -883,7 +920,7 @@ func TestRoundTripChangeProofSerialization(t *testing.T) {
 	proofBytes := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing())
 
 	// Deserialize the proof.
-	proof, err := db.UnmarshalChangeProof(proofBytes)
+	proof, err := UnmarshalChangeProof(proofBytes)
 	r.NoError(err)
 
 	// serialize the proof again
@@ -1290,15 +1327,15 @@ func TestRangeProofTruncatedDeletesStaleKeyWithinProvenEdge(t *testing.T) {
 	r.Nil(got, "stale key inside the proven range should have been deleted")
 }
 
-// TestChangeProofCleanup verifies that the GC cleanup releases the keep-alive handle
-// when the proof goes out of scope, for every way a proof can take its lease.
-func TestChangeProofCleanup(t *testing.T) {
+// TestUnboundChangeProofOutlivesDatabase checks that a change proof never holds
+// a lease.
+func TestUnboundChangeProofOutlivesDatabase(t *testing.T) {
 	tests := []struct {
 		name      string
 		makeProof func(*testing.T, *Database, Hash, Hash) *ChangeProof
 	}{
 		{
-			name: "unverified_change",
+			name: "from_change",
 			makeProof: func(t *testing.T, db *Database, startRoot, endRoot Hash) *ChangeProof {
 				proof, err := db.ChangeProof(startRoot, endRoot, nothing(), nothing(), changeProofLenUnbounded)
 				require.NoError(t, err)
@@ -1309,7 +1346,7 @@ func TestChangeProofCleanup(t *testing.T) {
 			name: "unmarshaled_change",
 			makeProof: func(t *testing.T, db *Database, startRoot, endRoot Hash) *ChangeProof {
 				data := newSerializedChangeProof(t, db, startRoot, endRoot, nothing(), nothing())
-				proof, err := db.UnmarshalChangeProof(data)
+				proof, err := UnmarshalChangeProof(data)
 				require.NoError(t, err)
 				return proof
 			},
@@ -1325,12 +1362,20 @@ func TestChangeProofCleanup(t *testing.T) {
 				return proof
 			},
 		},
+		{
+			name: "committed_change",
+			makeProof: func(t *testing.T, db *Database, startRoot, endRoot Hash) *ChangeProof {
+				proof, err := db.ChangeProof(startRoot, endRoot, nothing(), nothing(), changeProofLenUnbounded)
+				require.NoError(t, err)
+				_, err = db.VerifyAndCommitChangeProof(proof, endRoot, nothing(), nothing(), changeProofLenUnbounded)
+				require.NoError(t, err)
+				return proof
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
 			db := newTestDatabase(t)
 			_, _, batch := kvForTest(100)
 			startRoot, err := db.Update(batch[:50])
@@ -1339,48 +1384,16 @@ func TestChangeProofCleanup(t *testing.T) {
 			require.NoError(t, err)
 
 			proof := tt.makeProof(t, db, startRoot, endRoot)
+			require.NoError(t, db.Close(oneSecCtx(t), WithForceCloseHandles()))
 
-			require.ErrorIs(t, db.Close(oneSecCtx(t)), ErrActiveKeepAliveHandles)
-
-			runtime.KeepAlive(proof)
-			proof = nil //nolint:ineffassign // necessary to drop the reference for GC
-			runtime.GC()
-
-			require.NoError(t, db.Close(t.Context()), "Database should be closeable after proof is garbage collected")
+			_, err = proof.Marshal()
+			require.NoError(t, err)
+			nkr, err := proof.FindNextKey(nothing())
+			require.NoError(t, err)
+			if nkr != nil {
+				require.NoError(t, nkr.Free())
+			}
+			require.NoError(t, proof.Drop())
 		})
 	}
-}
-
-// TestChangeProofCommitKeepsLease checks that committing a proof does not
-// release its lease: the proof stays usable, and Close waits until it is
-// dropped.
-func TestChangeProofCommitKeepsLease(t *testing.T) {
-	r := require.New(t)
-	dbA := newTestDatabase(t)
-	dbB := newTestDatabase(t)
-
-	_, _, batch := kvForTest(100)
-	rootA, err := dbA.Update(batch[:50])
-	r.NoError(err)
-	_, err = dbB.Update(batch[:50])
-	r.NoError(err)
-	rootAUpdated, err := dbA.Update(batch[50:])
-	r.NoError(err)
-
-	proof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
-	marshalledBeforeCommit, err := proof.Marshal()
-	r.NoError(err)
-
-	_, err = dbB.VerifyAndCommitChangeProof(proof, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
-
-	r.ErrorIs(dbA.Close(oneSecCtx(t)), ErrActiveKeepAliveHandles, "a committed proof must keep its lease")
-
-	marshalledAfterCommit, err := proof.Marshal()
-	r.NoError(err)
-	r.Equal(marshalledBeforeCommit, marshalledAfterCommit)
-
-	r.NoError(proof.Drop())
-	r.NoError(dbA.Close(oneSecCtx(t)))
 }

@@ -48,8 +48,8 @@ type handle[T any] struct {
 	dropped bool
 
 	// lease keeps the parent database alive while this handle is in use.
-	// It is initialized by [lease.attach] after [newHandle] returns, and
-	// released when [Drop] is called.
+	// It is initialized by [lease.attach]or [lease.ensureAttached] and released
+	// when [Drop] is called.
 	lease lease
 
 	free func(T) C.VoidResult
@@ -58,7 +58,8 @@ type handle[T any] struct {
 // newHandle constructs an inactive handle: the C pointer and free
 // function are set, but the lease is not yet attached to any registry.
 // Callers must invoke [lease.attach] before the handle becomes visible,
-// or the registry's count/dropFn invariants will be broken.
+// or the registry's count/dropFn invariants will be broken. Proofs are the
+// exception: they hold no lease until [lease.ensureAttached] binds them.
 func newHandle[T any](ptr T, free func(T) C.VoidResult) *handle[T] {
 	return &handle[T]{
 		ptr:     ptr,
@@ -122,8 +123,8 @@ func (h *handle[T]) Drop() error {
 // ctx cancellation, so a failed-and-retried Close costs nothing.
 type keepAliveRegistry struct {
 	mu sync.Mutex
-	// count is the number of outstanding leases. Bumped by [lease.attach];
-	// decremented by [lease.releaseLocked].
+	// count is the number of outstanding leases. Bumped by [lease.attach]
+	// and [lease.ensureAttached]; decremented by [lease.releaseLocked].
 	count int
 	// waiters are channels closed when count drops to zero. Each call to
 	// [waitDrained] appends one and removes it on ctx cancellation.
@@ -274,8 +275,8 @@ func (r *keepAliveRegistry) closeAndForceDrop(ctx context.Context) error {
 type lease struct {
 	mu sync.RWMutex
 	// registry is the parent database's keep-alive registry. Set by
-	// [lease.attach], cleared in [releaseLocked]; nil indicates the lease
-	// has already been released.
+	// [lease.attach] or [lease.ensureAttached], cleared in
+	// [releaseLocked]; nil indicates the lease has already been released.
 	registry *keepAliveRegistry
 }
 
@@ -320,6 +321,36 @@ func (l *lease) attach(registry *keepAliveRegistry, dropFn func() error) error {
 	return nil
 }
 
+// ensureAttached registers this lease with the registry's outstanding-handle
+// count and drop map, like [lease.attach], for a lease that may already be
+// attached. It exists for [RangeProof], which takes its lease only once
+// [Database.VerifyRangeProof] or [Database.VerifyAndCommitRangeProof]
+// succeeds, and may succeed more than once on the same proof.
+//
+// Re-attaching the same lease to the same registry is a no-op, which keeps
+// the count balanced — one attach, one release. Re-attaching to a
+// *different* registry is a bug the count/registry bookkeeping cannot
+// represent, so it panics; callers check [lease.registry] first.
+//
+// Callers must hold l.mu.Lock and serialize against [Database.Close] (e.g.
+// via db.handleLock.RLock) before invoking this — there is no
+// closed-registry guard here.
+func (l *lease) ensureAttached(registry *keepAliveRegistry, dropFn func() error) {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+
+	if l.registry == registry {
+		// Already attached to this registry — idempotent; do not double-count.
+		return
+	}
+	if l.registry != nil {
+		panic("lease already attached to a different registry")
+	}
+	registry.count++
+	registry.handles[l] = dropFn
+	l.registry = registry
+}
+
 // release runs attemptDisown and releases the lease via [releaseLocked].
 //
 // The release is unconditional — even when attemptDisown errors or
@@ -329,7 +360,7 @@ func (l *lease) attach(registry *keepAliveRegistry, dropFn func() error) error {
 //
 // Safe to call multiple times; subsequent calls after the first continue
 // to invoke attemptDisown but do not double-decrement the count unless
-// [attach] runs again in between.
+// [attach] or [ensureAttached] runs again in between.
 func (l *lease) release(attemptDisown func() error) (err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -348,7 +379,7 @@ func (l *lease) release(attemptDisown func() error) (err error) {
 // Exists for callers like [Reconstructed.Reconstruct] that hold mu.Lock
 // for a wider critical section and would otherwise deadlock through
 // [release]. Idempotent: calls after the first are no-ops until
-// [lease.attach] runs again.
+// [lease.attach] or [lease.ensureAttached] runs again.
 func (l *lease) releaseLocked() {
 	if l.registry == nil {
 		return

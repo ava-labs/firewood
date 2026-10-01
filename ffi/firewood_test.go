@@ -1932,24 +1932,6 @@ func TestCloseForceDropsRangeProof(t *testing.T) {
 	require.ErrorIs(t, err, errDroppedRangeProof, "force-close must drop the proof")
 }
 
-// TestCloseForceDropsChangeProof checks that force-close drops an outstanding
-// ChangeProof.
-func TestCloseForceDropsChangeProof(t *testing.T) {
-	db := newTestDatabase(t)
-	_, _, batch := kvForTest(100)
-	startRoot, err := db.Update(batch[:50])
-	require.NoError(t, err)
-	endRoot, err := db.Update(batch[50:])
-	require.NoError(t, err)
-
-	proof, err := db.ChangeProof(startRoot, endRoot, nothing(), nothing(), changeProofLenUnbounded)
-	require.NoError(t, err)
-	require.NoError(t, db.Close(oneSecCtx(t), WithForceCloseHandles()), "db.Close() with force close")
-
-	_, err = proof.Marshal()
-	require.ErrorIs(t, err, errDroppedChangeProof, "force-close must drop the proof")
-}
-
 // TestCloseAndForceDropPartialThenRetry exercises the partial-drain path: a
 // context that cancels mid-drain leaves the rest registered, and a retry with a
 // fresh context drains them. Driven at the registry level for determinism.

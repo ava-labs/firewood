@@ -55,17 +55,18 @@ import (
 )
 
 var (
-	errNotPrepared        = errors.New("proof not prepared into a proposal or committed")
-	errEmptyTrie          = errors.New("a range proof was requested on an empty trie")
-	errDroppedRangeProof  = fmt.Errorf("range proof %w", ErrDropped)
-	errDroppedChangeProof = fmt.Errorf("change proof %w", ErrDropped)
+	errNotPrepared          = errors.New("proof not prepared into a proposal or committed")
+	errEmptyTrie            = errors.New("a range proof was requested on an empty trie")
+	errDroppedRangeProof    = fmt.Errorf("range proof %w", ErrDropped)
+	errDroppedChangeProof   = fmt.Errorf("change proof %w", ErrDropped)
+	errBoundToOtherDatabase = errors.New("range proof is bound to a different database")
 )
 
 // RangeProof represents a proof that a range of keys and their values are
 // included in a trie with a given root hash.
 type RangeProof struct {
-	// handle owns the Rust RangeProofContext and this proof's lease on its
-	// database.
+	// handle owns the Rust RangeProofContext and, once the proof is verified
+	// or committed on a database, this proof's lease on that database.
 	//
 	// Every method that passes the handle to a C call must hold lease.mu for
 	// the duration of that call. Drop — including the GC cleanup registered
@@ -82,10 +83,11 @@ type RangeProof struct {
 
 // ChangeProof represents a proof of changes between two roots for a range of keys.
 type ChangeProof struct {
-	// handle owns the Rust ChangeProofContext and this proof's lease on its
-	// database, under the same locking rule as [RangeProof]. No change-proof
-	// FFI function takes the context mutably, so every method holds
-	// lease.mu.RLock.
+	// handle owns the Rust ChangeProofContext, under the same locking rule as
+	// [RangeProof]. A change proof never borrows a database, so it never takes
+	// a lease: it never blocks [Database.Close] and is never dropped by
+	// [WithForceCloseHandles]. No change-proof FFI function takes the context
+	// mutably, so every method holds lease.mu.RLock.
 	*handle[*C.ChangeProofContext]
 }
 
@@ -132,7 +134,7 @@ func (db *Database) RangeProof(
 		max_length: C.uint32_t(maxLength),
 	}
 
-	return getRangeProofFromRangeProofResult(C.fwd_db_range_proof(db.handle, args), db.keepAlives)
+	return getRangeProofFromRangeProofResult(C.fwd_db_range_proof(db.handle, args))
 }
 
 // Verify verifies the provided range [proof] proves the values in the range
@@ -178,8 +180,10 @@ func (p *RangeProof) Verify(
 // Keys past that edge are left as they are; [*RangeProof.FindNextKey] reports
 // where to resume.
 //
-// The prepared proposal borrows the database, which the proof's lease keeps
-// open until the proof is dropped.
+// The prepared proposal borrows the database, so a successful call binds the
+// proof to db: db cannot be closed gracefully until the proof is dropped, and
+// other databases reject the proof with an error. A successful
+// [*Database.VerifyAndCommitRangeProof] binds the proof the same way.
 func (db *Database) VerifyRangeProof(
 	proof *RangeProof,
 	startKey, endKey Maybe[[]byte],
@@ -198,6 +202,9 @@ func (db *Database) VerifyRangeProof(
 	if proof.dropped {
 		return errDroppedRangeProof
 	}
+	if proof.lease.registry != nil && proof.lease.registry != db.keepAlives {
+		return errBoundToOtherDatabase
+	}
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
@@ -210,7 +217,11 @@ func (db *Database) VerifyRangeProof(
 		max_length: C.uint32_t(maxLength),
 	}
 
-	return getErrorFromVoidResult(C.fwd_db_verify_range_proof(db.handle, args))
+	if err := getErrorFromVoidResult(C.fwd_db_verify_range_proof(db.handle, args)); err != nil {
+		return err
+	}
+	proof.lease.ensureAttached(db.keepAlives, proof.Drop)
+	return nil
 }
 
 // VerifyAndCommitRangeProof verifies the provided range [proof] proves the values
@@ -239,6 +250,9 @@ func (db *Database) VerifyAndCommitRangeProof(
 	if proof.dropped {
 		return EmptyRoot, errDroppedRangeProof
 	}
+	if proof.lease.registry != nil && proof.lease.registry != db.keepAlives {
+		return EmptyRoot, errBoundToOtherDatabase
+	}
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
@@ -253,7 +267,12 @@ func (db *Database) VerifyAndCommitRangeProof(
 
 	db.commitLock.Lock()
 	defer db.commitLock.Unlock()
-	return getHashKeyFromHashResult(C.fwd_db_verify_and_commit_range_proof(db.handle, args))
+	hash, err := getHashKeyFromHashResult(C.fwd_db_verify_and_commit_range_proof(db.handle, args))
+	if err != nil {
+		return EmptyRoot, err
+	}
+	proof.lease.ensureAttached(db.keepAlives, proof.Drop)
+	return hash, nil
 }
 
 // FindNextKey returns the next key range to fetch for this proof, if any. If the
@@ -353,15 +372,9 @@ func (p *RangeProof) Marshal() ([]byte, error) {
 }
 
 // UnmarshalRangeProof deserializes a RangeProof from [data], which must have
-// been produced by [*RangeProof.Marshal]. The returned proof holds a lease on
-// db, so db cannot be closed gracefully until the proof is dropped.
-func (db *Database) UnmarshalRangeProof(data []byte) (*RangeProof, error) {
-	db.handleLock.RLock()
-	defer db.handleLock.RUnlock()
-	if db.handle == nil {
-		return nil, errDBClosed
-	}
-
+// been produced by [*RangeProof.Marshal]. The returned proof is bound to no
+// database until it is verified.
+func UnmarshalRangeProof(data []byte) (*RangeProof, error) {
 	start := time.Now()
 	defer func() {
 		proofUnmarshalDuration.WithLabelValues("range").Observe(time.Since(start).Seconds())
@@ -369,7 +382,7 @@ func (db *Database) UnmarshalRangeProof(data []byte) (*RangeProof, error) {
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
-	return getRangeProofFromRangeProofResult(C.fwd_range_proof_from_bytes(newBorrowedBytes(data, &pinner)), db.keepAlives)
+	return getRangeProofFromRangeProofResult(C.fwd_range_proof_from_bytes(newBorrowedBytes(data, &pinner)))
 }
 
 // ChangeProof returns a proof that the changes between [startRoot] and
@@ -398,7 +411,7 @@ func (db *Database) ChangeProof(
 		max_length: C.uint32_t(maxLength),
 	}
 
-	return getChangeProofFromChangeProofResult(C.fwd_db_change_proof(db.handle, args), db.keepAlives)
+	return getChangeProofFromChangeProofResult(C.fwd_db_change_proof(db.handle, args))
 }
 
 // VerifyChangeProof verifies the change proof and creates a standard Proposal.
@@ -535,15 +548,8 @@ func (p *ChangeProof) Marshal() ([]byte, error) {
 }
 
 // UnmarshalChangeProof deserializes a ChangeProof from [data], which must have
-// been produced by [*ChangeProof.Marshal]. The returned proof holds a lease on
-// db, so db cannot be closed gracefully until the proof is dropped.
-func (db *Database) UnmarshalChangeProof(data []byte) (*ChangeProof, error) {
-	db.handleLock.RLock()
-	defer db.handleLock.RUnlock()
-	if db.handle == nil {
-		return nil, errDBClosed
-	}
-
+// been produced by [*ChangeProof.Marshal].
+func UnmarshalChangeProof(data []byte) (*ChangeProof, error) {
 	start := time.Now()
 	defer func() {
 		proofUnmarshalDuration.WithLabelValues("change").Observe(time.Since(start).Seconds())
@@ -551,7 +557,7 @@ func (db *Database) UnmarshalChangeProof(data []byte) (*ChangeProof, error) {
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
-	return getChangeProofFromChangeProofResult(C.fwd_change_proof_from_bytes(newBorrowedBytes(data, &pinner)), db.keepAlives)
+	return getChangeProofFromChangeProofResult(C.fwd_change_proof_from_bytes(newBorrowedBytes(data, &pinner)))
 }
 
 // StartKey returns the exclusive start key of this key range: it has already
@@ -635,7 +641,7 @@ func newCodeIterator(result C.CodeIteratorResult) (*codeIterator, error) {
 	}
 }
 
-func getRangeProofFromRangeProofResult(result C.RangeProofResult, registry *keepAliveRegistry) (*RangeProof, error) {
+func getRangeProofFromRangeProofResult(result C.RangeProofResult) (*RangeProof, error) {
 	switch result.tag {
 	case C.RangeProofResult_NullHandlePointer:
 		return nil, errDBClosed
@@ -650,9 +656,6 @@ func getRangeProofFromRangeProofResult(result C.RangeProofResult, registry *keep
 		proof := &RangeProof{
 			handle: newHandle(ptr, func(p *C.RangeProofContext) C.VoidResult { return C.fwd_free_range_proof(p) }),
 		}
-		if err := proof.lease.attach(registry, proof.Drop); err != nil {
-			return nil, err
-		}
 		runtime.AddCleanup(proof, drop[*C.RangeProofContext], proof.handle)
 		return proof, nil
 	case C.RangeProofResult_Err:
@@ -663,7 +666,7 @@ func getRangeProofFromRangeProofResult(result C.RangeProofResult, registry *keep
 	}
 }
 
-func getChangeProofFromChangeProofResult(result C.ChangeProofResult, registry *keepAliveRegistry) (*ChangeProof, error) {
+func getChangeProofFromChangeProofResult(result C.ChangeProofResult) (*ChangeProof, error) {
 	switch result.tag {
 	case C.ChangeProofResult_NullHandlePointer:
 		return nil, errDBClosed
@@ -675,9 +678,6 @@ func getChangeProofFromChangeProofResult(result C.ChangeProofResult, registry *k
 		ptr := *(**C.ChangeProofContext)(unsafe.Pointer(&result.anon0))
 		proof := &ChangeProof{
 			handle: newHandle(ptr, func(p *C.ChangeProofContext) C.VoidResult { return C.fwd_free_change_proof(p) }),
-		}
-		if err := proof.lease.attach(registry, proof.Drop); err != nil {
-			return nil, err
 		}
 		runtime.AddCleanup(proof, drop[*C.ChangeProofContext], proof.handle)
 		return proof, nil
