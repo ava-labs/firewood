@@ -341,8 +341,31 @@ book-serve: book-assets
 book-build: book-assets
     mdbook build docs
 
-# List design docs by last git-commit date (oldest/stalest first).
-# Freshness comes from git history — design docs carry no in-doc dates.
+# Scaffold a new proposed design document from the template
+new-design slug:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # quote() passes the argument as one shell word instead of splicing it into
+    # this script as source text.
+    slug={{quote(slug)}}
+    if [[ ! "$slug" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+        echo "error: slug must be lowercase kebab-case (a-z, 0-9, single hyphens): $slug" >&2
+        exit 1
+    fi
+    dir="docs/src/designs"
+    tmpl="$dir/template.md"
+    # The date prefix records when the design was proposed and never changes.
+    out="$dir/$(date +%F)-$slug.md"
+    if [[ -e "$out" ]]; then
+        # Two designs with the same slug on the same day collide; refuse rather than clobber.
+        echo "error: $out already exists" >&2
+        exit 1
+    fi
+    cp "$tmpl" "$out"
+    echo "Created $out"
+    echo "Next: fill it in, then add a row to $dir/README.md and an entry to docs/src/SUMMARY.md"
+
+# List design docs by last git-commit date (oldest/stalest first)
 design-age:
     ./scripts/design-doc-age.sh
 
