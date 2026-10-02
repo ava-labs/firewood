@@ -826,7 +826,7 @@ fn test_slow_fwdctl_import_csv_malformed() {
 #[test]
 fn test_slow_fwdctl_import_large_random_database() {
     with_tmpdir(|tmp_dir| {
-        //Generate a large random database dump
+        // Generate a large random database dump
         let dump_file1 = tmp_dir.join("bulk1.csv");
         let mut csv_content = String::with_capacity(100_000 * 25);
         for i in 0..100_000 {
@@ -889,7 +889,7 @@ fn test_slow_fwdctl_import_large_random_database() {
             .assert()
             .success();
 
-        //Compare the two exported databases to ensure exact match!
+        // Compare the two exported databases to ensure exact match!
         let contents1 = fs::read_to_string(&dump_file2).expect("Should read dump file 2");
         let contents2 = fs::read_to_string(&dump_file3).expect("Should read dump file 3");
         assert_eq!(contents1, contents2, "The exported databases do not match!");
