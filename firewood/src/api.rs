@@ -159,6 +159,16 @@ pub enum Error {
     #[error("request RangeProof for empty trie")]
     RangeProofOnEmptyTrie,
 
+    /// The smallest possible sized-proof chunk (one entry, or the edge proofs
+    /// alone) serializes past the requested wire budget.
+    #[error("smallest proof chunk is {wire} bytes, over the {budget}-byte budget")]
+    ProofOverBudget {
+        /// Serialized size of the chunk.
+        wire: usize,
+        /// The requested budget.
+        budget: usize,
+    },
+
     /// Request `RangeProof` for empty range
     #[error("the latest revision is empty and has no root hash")]
     LatestIsEmpty,
