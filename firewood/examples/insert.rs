@@ -4,13 +4,13 @@
 // This example isn't an actual benchmark, it's just an example of how to
 // insert some random keys using the front-end API.
 
-use clap::Parser;
 use std::collections::HashMap;
 use std::error::Error;
 use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 use std::time::Instant;
 
+use clap::Parser;
 use firewood::api::{self, DynDb, KeyType, ValueType};
 use firewood::db::{BatchOp, DbConfig};
 use firewood::manager::RevisionManagerConfig;

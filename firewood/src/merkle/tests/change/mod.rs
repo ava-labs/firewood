@@ -1,12 +1,13 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use firewood_storage::{DefaultHashMode, HashMode, PathComponentSliceExt};
+
 use super::*;
 use crate::ChangeProofVerificationContext;
 use crate::api::{self, BatchOp, Db as DbTrait, DbView, FrozenChangeProof, HashKey, Proposal as _};
 use crate::db::{Db, DbConfig};
 use crate::merkle::verify_change_proof_root_hash;
-use firewood_storage::{DefaultHashMode, HashMode, PathComponentSliceExt};
 
 /// Test wrapper around [`crate::verify_change_proof_structure`] that supplies
 /// the compile-default hash mode as the expected `algorithm` (the mode every
