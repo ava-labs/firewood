@@ -177,7 +177,12 @@ pub fn verify_range_proof_structure(
 /// Determine the next key range to fetch after this range proof.
 ///
 /// Returns `None` when the originally-requested range is fully accounted
-/// for; otherwise returns `Some((last_key, end_key))`.
+/// for; otherwise returns `Some((start, end_key))` where `start` is the
+/// smallest key strictly above the last proven key, so that an inclusive
+/// request bound resumes without covering that key again. This is the same
+/// convention as [`find_next_key_after_change_proof`].
+///
+/// [`find_next_key_after_change_proof`]: crate::find_next_key_after_change_proof
 ///
 /// # Errors
 ///
@@ -187,8 +192,8 @@ pub fn find_next_key_after_range_proof(
     proof: &FrozenRangeProof,
     verification: &RangeProofVerificationContext,
 ) -> Result<Option<KeyRange>, api::Error> {
-    // TODO(#352): proper implementation, this naively returns the last key
-    // in the range, which is correct, but not ideal.
+    // TODO(#352): proper implementation, this naively resumes right after
+    // the last key in the range, which is correct, but not ideal.
     let Some((last_key, _)) = proof.key_values().last() else {
         // no key-values in the proof, so we are done
         return Ok(None);
@@ -206,7 +211,10 @@ pub fn find_next_key_after_range_proof(
         return Ok(None);
     }
 
-    Ok(Some((last_key.clone(), verification.end_key.clone())))
+    Ok(Some((
+        super::lex_successor(last_key),
+        verification.end_key.clone(),
+    )))
 }
 
 /// A range proof is a cryptographic proof that demonstrates a contiguous set of key-value pairs

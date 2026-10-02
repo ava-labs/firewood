@@ -9,8 +9,8 @@ use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
     ChangeProofContext, CodeIteratorHandle, CreateIteratorResult, CreateProposalResult,
     EthProofOwned, HashKey, IteratorHandle, KeyRange, NextKeyRange, OwnedBytes, OwnedKeyValueBatch,
-    OwnedKeyValuePair, OwnedRenderedMetrics, ProposalHandle, RangeProofContext,
-    ReconstructedHandle,
+    OwnedKeyValuePair, OwnedRenderedMetrics, OwnedSlice, ProposalHandle, RangeProofContext,
+    ReconstructedHandle, VerifiedChangeProofContext, VerifiedRangeProofContext,
 };
 
 /// The result type returned from an FFI function that returns no value but may
@@ -211,7 +211,7 @@ impl From<Option<Result<HashKey, api::Error>>> for HashResult {
 /// [`fwd_free_range_proof`]: crate::fwd_free_range_proof
 #[derive(Debug)]
 #[repr(C, usize)]
-pub enum RangeProofResult<'db> {
+pub enum RangeProofResult {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
     /// The provided root was not found in the database.
@@ -220,11 +220,12 @@ pub enum RangeProofResult<'db> {
     EmptyTrie,
     /// The proof was successfully created or parsed.
     ///
-    /// If the value was parsed from a serialized proof, this does not imply that
-    /// the proof is valid, only that it is well-formed. The verify method must
-    /// be called to ensure the proof is cryptographically valid.
-    Ok(Box<RangeProofContext<'db>>),
-    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
+    /// A parsed proof is well-formed, not yet valid: pass it to
+    /// [`fwd_db_verify_range_proof`] to check it against a database.
+    ///
+    /// [`fwd_db_verify_range_proof`]: crate::fwd_db_verify_range_proof
+    Ok(Box<RangeProofContext>),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. Its
     /// value is guaranteed to contain only valid UTF-8.
     ///
     /// The caller must call [`fwd_free_owned_bytes`] to free the memory
@@ -234,7 +235,7 @@ pub enum RangeProofResult<'db> {
     Err(OwnedBytes),
 }
 
-impl From<Result<api::FrozenRangeProof, api::Error>> for RangeProofResult<'_> {
+impl From<Result<api::FrozenRangeProof, api::Error>> for RangeProofResult {
     fn from(value: Result<api::FrozenRangeProof, api::Error>) -> Self {
         match value {
             Ok(proof) => RangeProofResult::Ok(Box::new(proof.into())),
@@ -243,6 +244,83 @@ impl From<Result<api::FrozenRangeProof, api::Error>> for RangeProofResult<'_> {
             ),
             Err(api::Error::RangeProofOnEmptyTrie) => RangeProofResult::EmptyTrie,
             Err(err) => RangeProofResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+/// A result type returned from [`fwd_db_verify_range_proof`].
+///
+/// The caller must ensure that [`fwd_free_verified_range_proof`] is called to
+/// free the returned context when it is no longer needed.
+///
+/// [`fwd_db_verify_range_proof`]: crate::fwd_db_verify_range_proof
+/// [`fwd_free_verified_range_proof`]: crate::fwd_free_verified_range_proof
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum VerifiedRangeProofResult<'db> {
+    /// The caller provided a null pointer to the database or the proof.
+    NullHandlePointer,
+    /// The proof was verified and its proposal prepared.
+    Ok(Box<VerifiedRangeProofContext<'db>>),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. Its
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl<'db> From<Result<VerifiedRangeProofContext<'db>, api::Error>>
+    for VerifiedRangeProofResult<'db>
+{
+    fn from(value: Result<VerifiedRangeProofContext<'db>, api::Error>) -> Self {
+        match value {
+            Ok(ctx) => VerifiedRangeProofResult::Ok(Box::new(ctx)),
+            Err(err) => VerifiedRangeProofResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+/// A result type returned from the `next_key_ranges` functions of verified
+/// proofs.
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum NextKeyRangesResult {
+    /// The caller provided a null pointer to the input handle.
+    NullHandlePointer,
+    /// The key ranges still to fetch, sorted ascending by start key. Empty when
+    /// the proof's range is fully accounted for.
+    ///
+    /// The caller must call [`fwd_free_next_key_ranges`] to free this value.
+    ///
+    /// [`fwd_free_next_key_ranges`]: crate::fwd_free_next_key_ranges
+    Ok(OwnedSlice<NextKeyRange>),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. Its
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl From<Result<Vec<KeyRange>, api::Error>> for NextKeyRangesResult {
+    fn from(value: Result<Vec<KeyRange>, api::Error>) -> Self {
+        match value {
+            Ok(ranges) => NextKeyRangesResult::Ok(
+                ranges
+                    .into_iter()
+                    .map(|(start_key, end_key)| NextKeyRange {
+                        start_key: start_key.into(),
+                        end_key: end_key.map(Into::into).into(),
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+            ),
+            Err(err) => NextKeyRangesResult::Err(err.to_string().into_bytes().into()),
         }
     }
 }
@@ -265,9 +343,10 @@ pub enum ChangeProofResult {
     EndRevisionNotFound(HashKey),
     /// The proof was successfully created or parsed.
     ///
-    /// If the value was parsed from a serialized proof, this does not imply that
-    /// the proof is valid, only that it is well-formed. The verify method must
-    /// be called to ensure the proof is cryptographically valid.
+    /// A parsed proof is well-formed, not yet valid: pass it to
+    /// [`fwd_db_verify_change_proof`] to check it against a database.
+    ///
+    /// [`fwd_db_verify_change_proof`]: crate::fwd_db_verify_change_proof
     Ok(Box<ChangeProofContext>),
     /// An error occurred and the message is returned as an [`OwnedBytes`]. If
     /// value is guaranteed to contain only valid UTF-8.
@@ -312,43 +391,6 @@ impl From<Result<firewood::EthProof, api::Error>> for EthProofResult {
             Ok(proof) => EthProofResult::Ok(Box::new(proof.into())),
             Err(api::Error::FeatureNotSupported(_)) => EthProofResult::NotSupported,
             Err(err) => EthProofResult::Err(err.to_string().into_bytes().into()),
-        }
-    }
-}
-
-#[derive(Debug)]
-#[repr(C, usize)]
-pub enum NextKeyRangeResult {
-    /// The caller provided a null pointer to the input handle.
-    NullHandlePointer,
-    /// The proof has not prepared into a proposal nor committed to the database.
-    NotPrepared,
-    /// There are no more keys to fetch.
-    None,
-    /// The next key range to fetch is returned.
-    Some(NextKeyRange),
-    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
-    /// value is guaranteed to contain only valid UTF-8.
-    ///
-    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
-    /// associated with this error.
-    ///
-    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
-    Err(OwnedBytes),
-}
-
-impl From<Result<Option<KeyRange>, api::Error>> for NextKeyRangeResult {
-    fn from(value: Result<Option<KeyRange>, api::Error>) -> Self {
-        match value {
-            Ok(None) => NextKeyRangeResult::None,
-            Ok(Some((start_key, end_key))) => NextKeyRangeResult::Some(NextKeyRange {
-                start_key: start_key.into(),
-                end_key: end_key.map(Into::into).into(),
-            }),
-            Err(api::Error::ProofError(firewood::ProofError::Unverified)) => {
-                NextKeyRangeResult::NotPrepared
-            }
-            Err(err) => NextKeyRangeResult::Err(err.to_string().into_bytes().into()),
         }
     }
 }
@@ -669,6 +711,41 @@ impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult {
     }
 }
 
+/// A result type returned from [`fwd_db_verify_change_proof`].
+///
+/// The caller must ensure that [`fwd_free_verified_change_proof`] is called to
+/// free the returned context when it is no longer needed.
+///
+/// [`fwd_db_verify_change_proof`]: crate::fwd_db_verify_change_proof
+/// [`fwd_free_verified_change_proof`]: crate::fwd_free_verified_change_proof
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum VerifiedChangeProofResult<'db> {
+    /// The caller provided a null pointer to the database or the proof.
+    NullHandlePointer,
+    /// The proof was verified and its proposal prepared.
+    Ok(Box<VerifiedChangeProofContext<'db>>),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. Its
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl<'db> From<Result<VerifiedChangeProofContext<'db>, api::Error>>
+    for VerifiedChangeProofResult<'db>
+{
+    fn from(value: Result<VerifiedChangeProofContext<'db>, api::Error>) -> Self {
+        match value {
+            Ok(ctx) => VerifiedChangeProofResult::Ok(Box::new(ctx)),
+            Err(err) => VerifiedChangeProofResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
 /// Helper trait to handle the different result types returned from FFI functions.
 ///
 /// Once Try trait is stable, we can use that instead of this trait:
@@ -733,10 +810,12 @@ impl_null_handle_result!(
     VoidResult,
     ValueResult,
     HashResult,
-    RangeProofResult<'_>,
+    RangeProofResult,
+    VerifiedRangeProofResult<'_>,
+    NextKeyRangesResult,
     ChangeProofResult,
     EthProofResult,
-    NextKeyRangeResult,
+    VerifiedChangeProofResult<'_>,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
     ReconstructedResult<'_>,
@@ -751,10 +830,12 @@ impl_cresult!(
     ValueResult,
     HashResult,
     HandleResult,
-    RangeProofResult<'_>,
+    RangeProofResult,
+    VerifiedRangeProofResult<'_>,
+    NextKeyRangesResult,
     ChangeProofResult,
     EthProofResult,
-    NextKeyRangeResult,
+    VerifiedChangeProofResult<'_>,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
     ReconstructedResult<'_>,
