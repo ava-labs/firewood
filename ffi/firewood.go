@@ -79,9 +79,9 @@ var (
 	// ErrActiveKeepAliveHandles is returned by [Database.Close] when the
 	// supplied context is cancelled before every outstanding handle that
 	// holds a keep-alive lease on the database has been released. That
-	// set includes [Proposal], [Revision], [Reconstructed], [Iterator],
-	// [RangeProof] and [ChangeProof] instances. Pass [WithForceCloseHandles]
-	// to drop them automatically.
+	// set includes [Proposal], [Revision], [Reconstructed], [Iterator] and
+	// [RangeProof] and instances. Pass [WithForceCloseHandles] to drop
+	// them automatically.
 	ErrActiveKeepAliveHandles = errors.New("cannot close database with active keep-alive handles")
 
 	errDBClosed = errors.New("firewood database already closed")

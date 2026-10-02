@@ -220,8 +220,7 @@ func (db *Database) VerifyRangeProof(
 	if err := getErrorFromVoidResult(C.fwd_db_verify_range_proof(db.handle, args)); err != nil {
 		return err
 	}
-	proof.lease.ensureAttached(db.keepAlives, proof.Drop)
-	return nil
+	return proof.lease.ensureAttached(db.keepAlives, proof.Drop)
 }
 
 // VerifyAndCommitRangeProof verifies the provided range [proof] proves the values
@@ -271,7 +270,9 @@ func (db *Database) VerifyAndCommitRangeProof(
 	if err != nil {
 		return EmptyRoot, err
 	}
-	proof.lease.ensureAttached(db.keepAlives, proof.Drop)
+	if err := proof.lease.ensureAttached(db.keepAlives, proof.Drop); err != nil {
+		return EmptyRoot, err
+	}
 	return hash, nil
 }
 

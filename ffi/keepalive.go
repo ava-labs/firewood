@@ -48,7 +48,7 @@ type handle[T any] struct {
 	dropped bool
 
 	// lease keeps the parent database alive while this handle is in use.
-	// It is initialized by [lease.attach]or [lease.ensureAttached] and released
+	// It is initialized by [lease.attach] or [lease.ensureAttached] and released
 	// when [Drop] is called.
 	lease lease
 
@@ -335,20 +335,32 @@ func (l *lease) attach(registry *keepAliveRegistry, dropFn func() error) error {
 // Callers must hold l.mu.Lock and serialize against [Database.Close] (e.g.
 // via db.handleLock.RLock) before invoking this — there is no
 // closed-registry guard here.
-func (l *lease) ensureAttached(registry *keepAliveRegistry, dropFn func() error) {
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
-
+func (l *lease) ensureAttached(registry *keepAliveRegistry, dropFn func() error) error {
 	if l.registry == registry {
 		// Already attached to this registry — idempotent; do not double-count.
-		return
+		return nil
 	}
 	if l.registry != nil {
 		panic("lease already attached to a different registry")
 	}
+
+	registry.mu.Lock()
+	if registry.closed {
+		registry.mu.Unlock()
+		// Call dropFn outside registry.mu to preserve the lease.mu →
+		// registry.mu lock order (dropFn → handle.Drop → lease.release
+		// takes lease.mu, which would then take registry.mu via
+		// removeAndDecr). No count++ ran, so no decrement is needed.
+		// errors.Join discards nil, so a successful dropFn yields just
+		// errDBClosed.
+		return errors.Join(errDBClosed, dropFn())
+	}
+
 	registry.count++
 	registry.handles[l] = dropFn
 	l.registry = registry
+	registry.mu.Unlock()
+	return nil
 }
 
 // release runs attemptDisown and releases the lease via [releaseLocked].
