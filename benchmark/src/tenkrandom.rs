@@ -12,9 +12,9 @@ use std::time::Instant;
 use firewood::api::{self, DynDb};
 use firewood::db::BatchOp;
 use firewood::logger::debug;
+use sha2::{Digest, Sha256};
 
 use crate::{Args, TestRunner};
-use sha2::{Digest, Sha256};
 
 #[derive(Clone, Default)]
 pub struct TenKRandom;

@@ -6,12 +6,13 @@
     reason = "integration test binary; unwrap failures surface as test failures"
 )]
 
-use firewood_macros::hash_mode;
-use firewood_storage::{EthHash, HashMode, MerkleDbHash, NodeHashAlgorithm};
-use predicates::prelude::*;
 use std::fmt::Write;
 use std::fs;
 use std::path::Path;
+
+use firewood_macros::hash_mode;
+use firewood_storage::{EthHash, HashMode, MerkleDbHash, NodeHashAlgorithm};
+use predicates::prelude::*;
 
 const PRG: &str = "fwdctl";
 const VERSION: &str = env!("CARGO_PKG_VERSION");

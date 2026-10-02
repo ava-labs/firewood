@@ -52,10 +52,10 @@ fn display_hex_bytes(bytes: &[u8], f: &mut fmt::Formatter<'_>) -> fmt::Result {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use firewood::{EthHash, HashMode, api::HashKey};
     use test_case::test_case;
+
+    use super::*;
 
     #[test_case(&[], "", None; "empty slice")]
     #[test_case(&[], "", Some(42); "empty slice with precision")]

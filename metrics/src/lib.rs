@@ -37,8 +37,9 @@
 //!
 //! For registration, use the [`define_metrics!`] macro in your crate's registry module.
 
-use metrics::SharedString;
 use std::cell::RefCell;
+
+use metrics::SharedString;
 
 /// Sealed helper for [`GaugeExt`]: integer types that can be stored in a gauge as `f64`.
 ///
@@ -788,10 +789,9 @@ macro_rules! firewood_histogram {
 
 #[doc(hidden)]
 pub mod __private {
-    pub use ::metrics;
-
     #[cfg(feature = "logger")]
     pub use ::log;
+    pub use ::metrics;
 }
 
 /// Logs a message with a `db_tag` key-value sourced from the thread-local

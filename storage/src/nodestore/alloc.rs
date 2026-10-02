@@ -20,21 +20,21 @@
 //! - **`AreaType`** - 0xFF for free areas, otherwise node type data (1 byte)
 //! - **`NodeData`** - Serialized node content
 
+use std::io::{Error, ErrorKind, Read};
+use std::iter::FusedIterator;
+use std::mem::size_of;
+use std::ops::{Index, IndexMut};
+
+use bytemuck_derive::{Pod, Zeroable};
+use firewood_metrics::{firewood_counter, firewood_gauge};
+use integer_encoding::VarIntReader;
+
 use super::area_index_and_size;
 use super::primitives::{AreaIndex, LinearAddress, index_name};
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::branch::{ReadSerializable, Serializable};
 use crate::nodestore::NodeStoreHeader;
-use firewood_metrics::{firewood_counter, firewood_gauge};
-use integer_encoding::VarIntReader;
-
-use bytemuck_derive::{Pod, Zeroable};
-use std::io::{Error, ErrorKind, Read};
-use std::iter::FusedIterator;
-use std::mem::size_of;
-use std::ops::{Index, IndexMut};
-
 use crate::{FreeListParent, HashMode, MaybePersistedNode, ReadableStorage, WritableStorage};
 
 /// Returns the maximum size needed to encode a `VarInt`.
@@ -693,7 +693,6 @@ fn read_bincode_varint_u64_le(reader: &mut impl Read) -> std::io::Result<u64> {
 #[cfg(test)]
 pub mod test_utils {
     use super::*;
-
     use crate::HashMode;
     use crate::node::Node;
     use crate::nodestore::header::RootNodeInfo;
@@ -755,15 +754,16 @@ pub mod test_utils {
 
 #[cfg(test)]
 mod tests {
+    use firewood_macros::hash_mode;
+    use rand::seq::IteratorRandom;
+    use test_case::test_case;
+    use test_utils::{test_write_free_area, test_write_header};
+
     use super::*;
     use crate::area_index;
     use crate::linear::memory::MemStore;
     use crate::nodestore::Committed;
     use crate::{DeletedNodeTracking, EthHash, HashMode, MerkleDbHash};
-    use firewood_macros::hash_mode;
-    use rand::seq::IteratorRandom;
-    use test_case::test_case;
-    use test_utils::{test_write_free_area, test_write_header};
 
     #[test_case(&[0x01, 0x01, 0x01, 0x2a], Some((area_index!(1), 42)); "old format")]
     // StoredArea::new(12, Area::<Node, _>::Free(FreeArea::new(None)));
@@ -1077,9 +1077,10 @@ mod tests {
     #[hash_mode]
     #[test]
     fn test_read_stored_area_info<H: HashMode>() {
+        use test_utils::{test_write_free_area, test_write_new_node};
+
         use crate::Path;
         use crate::node::{LeafNode, Node};
-        use test_utils::{test_write_free_area, test_write_new_node};
 
         let memstore = MemStore::new(Vec::new());
         let nodestore: NodeStore<Committed, _, H> =

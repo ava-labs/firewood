@@ -472,8 +472,9 @@ const fn minimal_be_len(n: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use test_case::test_case;
+
+    use super::*;
 
     fn encode_bytes(b: &[u8]) -> Box<[u8]> {
         let mut out = Vec::with_capacity(bytes_encoded_len(b));

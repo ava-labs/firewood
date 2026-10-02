@@ -1,18 +1,19 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::manager::RevisionManagerError;
-use crate::merkle::parallel::CreateProposalError;
-use crate::merkle::{Key, Value};
-use crate::persist_worker::PersistError;
-use crate::{Proof, ProofError, ProofNode, RangeProof};
-use firewood_storage::{DefaultHashMode, FileIoError, HashMode, NodeHashAlgorithm, TrieHash};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use firewood_storage::{DefaultHashMode, FileIoError, HashMode, NodeHashAlgorithm, TrieHash};
+
 pub use crate::batch_op::{BatchIter, BatchOp, IntoBatchIter, KeyValuePair, TryIntoBatch};
+use crate::manager::RevisionManagerError;
+use crate::merkle::parallel::CreateProposalError;
+use crate::merkle::{Key, Value};
+use crate::persist_worker::PersistError;
 use crate::proofs::change::ChangeProof;
+use crate::{Proof, ProofError, ProofNode, RangeProof};
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
 /// and can be sent and shared across threads. References with

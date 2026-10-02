@@ -8,13 +8,12 @@ use std::{
 };
 
 use derive_where::derive_where;
+use firewood_metrics::firewood_counter;
 use io_uring::IoUring;
 use parking_lot::Mutex;
 
-use crate::logger::{debug, trace};
-use firewood_metrics::firewood_counter;
-
 pub use self::errors::{BatchError, BatchErrors};
+use crate::logger::{debug, trace};
 
 /// The amount of time (in milliseconds) that the io-uring kernel thread
 /// processing the submission queue should spin before idling to sleep.
