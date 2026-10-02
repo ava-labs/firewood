@@ -11,6 +11,7 @@ mod ethhash_fuzz;
 mod proof;
 mod range;
 mod reconcile;
+mod sized;
 #[cfg(not(feature = "ethhash"))]
 mod triehash;
 
