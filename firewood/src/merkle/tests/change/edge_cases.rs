@@ -9,7 +9,7 @@ use tempfile::TempDir;
 use test_case::test_case;
 
 use crate::api::MAX_KEY_BYTES;
-use crate::merkle::tests::{prefix_chain_keys, spawn_on_default_stack};
+use crate::merkle::tests::{DEFAULT_THREAD_STACK, prefix_chain_keys, spawn_on_stack};
 use firewood_storage::{DefaultHashMode, HashMode};
 
 #[test]
@@ -1376,7 +1376,7 @@ fn test_deep_forged_ops_rejected_at_deserialization() {
 /// the peer chooses, so this drives both to the deepest key the bound admits.
 #[test]
 fn test_max_bounded_depth_change_proof_survives_default_stack() {
-    spawn_on_default_stack(|| {
+    spawn_on_stack(DEFAULT_THREAD_STACK, || {
         let keys = prefix_chain_keys(MAX_KEY_BYTES, 0x11);
 
         let (source, _dir_source) = new_db();

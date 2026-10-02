@@ -810,31 +810,21 @@ mod clone_tests {
     }
 
     /// A clone equals its source. `Node` derives `PartialEq`, which compares the
-    /// whole subtree, so this is an exact oracle rather than a spot check.
-    #[test_case(0)]
-    #[test_case(1)]
-    #[test_case(2)]
-    #[test_case(7)]
-    #[test_case(40)]
-    fn test_clone_equals_source(depth: usize) {
-        let original = chain(depth);
-        assert_eq!(original.clone(), original);
-    }
-
-    /// The oracle from `test_clone_equals_source`, on a trie where every branch
-    /// above the bottom level has four branch children and every kind of child
-    /// appears.
-    #[test_case(0)]
-    #[test_case(1)]
-    #[test_case(3)]
-    fn test_clone_equals_source_with_fan_out(depth: usize) {
-        let original = fan_out(depth);
+    /// whole subtree, so this is an exact oracle rather than a spot check. The
+    /// cases cover each shape a copy can take.
+    #[test_case(chain, 0 ; "a leaf alone")]
+    #[test_case(chain, 1 ; "one branch with leaf and hashed children")]
+    #[test_case(chain, 2 ; "branch within a branch")]
+    #[test_case(fan_out, 0 ; "every Child variant, no branch children")]
+    #[test_case(fan_out, 1 ; "branch children in four slots including the last")]
+    fn clone_equals_source(fixture: fn(usize) -> Node, depth: usize) {
+        let original = fixture(depth);
         assert_eq!(original.clone(), original);
     }
 
     /// The copy is independent: mutating it must not touch the source.
     #[test]
-    fn test_clone_is_deep_not_shared() {
+    fn clone_is_deep_not_shared() {
         let original = chain(5);
         let mut copy = original.clone();
 
@@ -858,50 +848,24 @@ mod clone_tests {
         );
     }
 
-    /// A chain far deeper than a derived clone survives is cloned and dropped on
-    /// a 256 KiB thread. The copy is not compared with its source, because
-    /// `PartialEq` is still derived and recurses once per level.
-    #[test]
-    fn test_clone_survives_deep_chain() {
-        std::thread::Builder::new()
-            .stack_size(256 * 1024)
-            .spawn(|| {
-                let original = chain(4096);
-                let copy = original.clone();
-                drop(copy);
-                drop(original);
-            })
-            .unwrap()
-            .join()
-            .expect("the clone thread must not panic");
+    fn clone_then_drop(node: Node) {
+        let copy = node.clone();
+        drop(copy);
+        drop(node);
     }
 
-    /// Dropping a chain far deeper than the derived drop glue survives on a
-    /// 256 KiB thread. Completing the drop is the assertion, since a stack
-    /// overflow aborts the process.
-    #[test]
-    fn test_drop_survives_deep_chain() {
+    /// A 4,096-level chain is freed, or cloned and then freed, on a 256 KiB
+    /// thread. Completing is the assertion, since a stack overflow aborts the
+    /// process rather than panicking. The copy is not compared with its source,
+    /// because `PartialEq` is derived and recurses once per level.
+    #[test_case(drop ; "dropping the chain")]
+    #[test_case(clone_then_drop ; "cloning the chain, then dropping both")]
+    fn deep_chain_survives_a_small_stack(op: fn(Node)) {
         std::thread::Builder::new()
             .stack_size(256 * 1024)
-            .spawn(|| drop(chain(4096)))
+            .spawn(move || op(chain(4096)))
             .unwrap()
             .join()
-            .expect("the drop thread must not panic");
-    }
-
-    /// Clone and then drop both trees on a 256 KiB thread.
-    #[test]
-    fn test_clone_then_drop_survives_deep_chain() {
-        std::thread::Builder::new()
-            .stack_size(256 * 1024)
-            .spawn(|| {
-                let original = chain(4096);
-                let copy = original.clone();
-                drop(copy);
-                drop(original);
-            })
-            .unwrap()
-            .join()
-            .expect("the clone-and-drop thread must not panic");
+            .expect("the guard thread must not panic");
     }
 }
