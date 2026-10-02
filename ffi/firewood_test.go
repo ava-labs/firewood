@@ -1916,20 +1916,23 @@ func TestReconstructedFreesImplicitly(t *testing.T) {
 	<-done
 }
 
-// TestCloseForceDropsRangeProof checks that force-close drops a prepared
-// RangeProof, freeing its proposal before the database closes.
+// TestCloseForceDropsRangeProof checks that force-close drops a verified
+// RangeProof, freeing its proposal before the database closes, and leaves the
+// leaseless unverified proof alone.
 func TestCloseForceDropsRangeProof(t *testing.T) {
 	db := newTestDatabase(t)
 	_, _, batch := kvForTest(50)
 	root, err := db.Update(batch)
 	require.NoError(t, err)
 
-	proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
-	require.NoError(t, db.VerifyRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated))
-	require.NoError(t, db.Close(oneSecCtx(t), WithForceCloseHandles()), "db.Close() with force close")
+	proof := newRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
+	verified := verifyRangeProof(t, proof, root, nothing(), nothing(), rangeProofLenTruncated)
+	require.NoError(t, db.Close(oneSecCtx(t), WithForceCloseHandles()), "force-close must succeed with a leased verified proof outstanding")
 
+	_, err = verified.NextKeyRanges()
+	require.ErrorIs(t, err, errDroppedRangeProof, "force-close must drop the verified proof")
 	_, err = proof.Marshal()
-	require.ErrorIs(t, err, errDroppedRangeProof, "force-close must drop the proof")
+	require.NoError(t, err, "force-close must not touch the unverified proof")
 }
 
 // TestCloseAndForceDropPartialThenRetry exercises the partial-drain path: a

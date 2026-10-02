@@ -208,6 +208,11 @@ impl DatabaseHandle {
         self.db.root_hash()
     }
 
+    /// The node-hashing scheme this database was opened with.
+    pub(crate) fn node_hash_algorithm(&self) -> firewood::NodeHashAlgorithm {
+        self.db.node_hash_algorithm()
+    }
+
     /// Returns a value from the database for the given key from the latest root hash.
     ///
     /// # Errors

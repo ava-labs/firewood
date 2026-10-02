@@ -7,112 +7,145 @@ package ffi
 // #include "firewood.h"
 // #cgo noescape fwd_db_range_proof
 // #cgo nocallback fwd_db_range_proof
-// #cgo noescape fwd_range_proof_verify
-// #cgo nocallback fwd_range_proof_verify
+// #cgo noescape fwd_db_range_proof_from_bytes
+// #cgo nocallback fwd_db_range_proof_from_bytes
 // #cgo noescape fwd_db_verify_range_proof
 // #cgo nocallback fwd_db_verify_range_proof
-// #cgo noescape fwd_db_verify_and_commit_range_proof
-// #cgo nocallback fwd_db_verify_and_commit_range_proof
-// #cgo noescape fwd_range_proof_find_next_key
-// #cgo nocallback fwd_range_proof_find_next_key
-// #cgo noescape fwd_range_proof_code_hash_iter
-// #cgo nocallback fwd_range_proof_code_hash_iter
+// #cgo noescape fwd_range_proof_to_bytes
+// #cgo nocallback fwd_range_proof_to_bytes
+// #cgo noescape fwd_verified_range_proof_commit
+// #cgo nocallback fwd_verified_range_proof_commit
+// #cgo noescape fwd_verified_range_proof_next_key_ranges
+// #cgo nocallback fwd_verified_range_proof_next_key_ranges
+// #cgo noescape fwd_verified_range_proof_code_hash_iter
+// #cgo nocallback fwd_verified_range_proof_code_hash_iter
+// #cgo noescape fwd_db_change_proof
+// #cgo nocallback fwd_db_change_proof
+// #cgo noescape fwd_db_change_proof_from_bytes
+// #cgo nocallback fwd_db_change_proof_from_bytes
+// #cgo noescape fwd_db_verify_change_proof
+// #cgo nocallback fwd_db_verify_change_proof
+// #cgo noescape fwd_change_proof_to_bytes
+// #cgo nocallback fwd_change_proof_to_bytes
+// #cgo noescape fwd_verified_change_proof_commit
+// #cgo nocallback fwd_verified_change_proof_commit
+// #cgo noescape fwd_verified_change_proof_next_key_ranges
+// #cgo nocallback fwd_verified_change_proof_next_key_ranges
+// #cgo noescape fwd_verified_change_proof_code_hash_iter
+// #cgo nocallback fwd_verified_change_proof_code_hash_iter
 // #cgo noescape fwd_code_hash_iter_next
 // #cgo nocallback fwd_code_hash_iter_next
 // #cgo noescape fwd_code_hash_iter_free
 // #cgo nocallback fwd_code_hash_iter_free
-// #cgo noescape fwd_range_proof_to_bytes
-// #cgo nocallback fwd_range_proof_to_bytes
-// #cgo noescape fwd_range_proof_from_bytes
-// #cgo nocallback fwd_range_proof_from_bytes
-// #cgo noescape fwd_db_change_proof
-// #cgo nocallback fwd_db_change_proof
-// #cgo noescape fwd_db_verify_change_proof
-// #cgo nocallback fwd_db_verify_change_proof
-// #cgo noescape fwd_db_verify_and_commit_change_proof
-// #cgo nocallback fwd_db_verify_and_commit_change_proof
-// #cgo noescape fwd_change_proof_find_next_key
-// #cgo nocallback fwd_change_proof_find_next_key
-// #cgo noescape fwd_change_proof_code_hash_iter
-// #cgo nocallback fwd_change_proof_code_hash_iter
-// #cgo noescape fwd_change_proof_to_bytes
-// #cgo nocallback fwd_change_proof_to_bytes
-// #cgo noescape fwd_change_proof_from_bytes
-// #cgo nocallback fwd_change_proof_from_bytes
+// #cgo noescape fwd_free_next_key_ranges
+// #cgo nocallback fwd_free_next_key_ranges
 // #cgo noescape fwd_free_range_proof
 // #cgo nocallback fwd_free_range_proof
+// #cgo noescape fwd_free_verified_range_proof
+// #cgo nocallback fwd_free_verified_range_proof
 // #cgo noescape fwd_free_change_proof
 // #cgo nocallback fwd_free_change_proof
+// #cgo noescape fwd_free_verified_change_proof
+// #cgo nocallback fwd_free_verified_change_proof
 import "C"
 
 import (
 	"errors"
 	"fmt"
-	"iter"
 	"runtime"
 	"time"
 	"unsafe"
 )
 
 var (
-	errNotPrepared          = errors.New("proof not prepared into a proposal or committed")
-	errEmptyTrie            = errors.New("a range proof was requested on an empty trie")
-	errDroppedRangeProof    = fmt.Errorf("range proof %w", ErrDropped)
-	errDroppedChangeProof   = fmt.Errorf("change proof %w", ErrDropped)
-	errBoundToOtherDatabase = errors.New("range proof is bound to a different database")
+	errEmptyTrie          = errors.New("a range proof was requested on an empty trie")
+	errDroppedRangeProof  = fmt.Errorf("range proof %w", ErrDropped)
+	errDroppedChangeProof = fmt.Errorf("change proof %w", ErrDropped)
 )
 
-// RangeProof represents a proof that a range of keys and their values are
-// included in a trie with a given root hash.
+// RangeProof is a proof that a range of keys and their values are included in
+// a trie with a given root hash, as produced by [Database.RangeProof] or
+// parsed by [Database.UnmarshalRangeProof].
+//
+// A RangeProof is portable: it holds no lease on its database, never blocks
+// [Database.Close], and [RangeProof.Marshal] keeps working after the database
+// is closed. It knows which database it belongs to only so that
+// [RangeProof.Verify] can check it there and produce a [VerifiedRangeProof].
 type RangeProof struct {
-	// handle owns the Rust RangeProofContext and, once the proof is verified
-	// or committed on a database, this proof's lease on that database.
-	//
-	// Every method that passes the handle to a C call must hold lease.mu for
-	// the duration of that call. Drop — including the GC cleanup registered
-	// in [getRangeProofFromRangeProofResult] — invalidates the handle under
-	// lease.mu.Lock, so the lock serializes the call against the free.
-	// Omitting it is a use-after-free of the Rust RangeProofContext (see
-	// https://github.com/ava-labs/firewood/issues/2137). Methods whose Rust
-	// function takes the context as `&mut` (Verify, FindNextKey,
-	// Database.VerifyRangeProof, and Database.VerifyAndCommitRangeProof) hold
-	// lease.mu.Lock, because Rust requires that reference to be exclusive; the
-	// rest hold lease.mu.RLock.
+	// handle owns the Rust RangeProofContext. Its lease is never attached to a
+	// registry; lease.mu only serializes method calls against Drop, which frees
+	// the context (see https://github.com/ava-labs/firewood/issues/2137). No C
+	// function takes the context mutably, so every method holds lease.mu.RLock.
 	*handle[*C.RangeProofContext]
+
+	// db is the database this proof was generated by or parsed for.
+	db *Database
 }
 
-// ChangeProof represents a proof of changes between two roots for a range of keys.
+// VerifiedRangeProof is a [RangeProof] that [RangeProof.Verify] checked against
+// a root hash on one database. It owns the proposal that applies the proof
+// there, so it holds that database's keep-alive lease from construction until
+// [VerifiedRangeProof.Drop]: [Database.Close] waits for it, and
+// [WithForceCloseHandles] drops it.
+type VerifiedRangeProof struct {
+	// handle owns the Rust VerifiedRangeProofContext and the lease. Commit takes
+	// the context mutably and holds lease.mu.Lock; the other methods hold RLock.
+	*handle[*C.VerifiedRangeProofContext]
+
+	// db is the database the proof was verified against and commits to.
+	db *Database
+}
+
+// ChangeProof is a proof of the changes between two roots for a range of keys,
+// as produced by [Database.ChangeProof] or parsed by
+// [Database.UnmarshalChangeProof]. It is portable on the same terms as
+// [RangeProof].
 type ChangeProof struct {
-	// handle owns the Rust ChangeProofContext, under the same locking rule as
-	// [RangeProof]. A change proof never borrows a database, so it never takes
-	// a lease: it never blocks [Database.Close] and is never dropped by
-	// [WithForceCloseHandles]. No change-proof FFI function takes the context
-	// mutably, so every method holds lease.mu.RLock.
+	// handle owns the Rust ChangeProofContext, under the same rules as
+	// [RangeProof].
 	*handle[*C.ChangeProofContext]
+
+	// db is the database this proof was generated by or parsed for.
+	db *Database
 }
 
-// NextKeyRange represents a range of keys to fetch from the database,
-// `(startKey, endKey]`: the start key is exclusive because it has already been
-// synchronized, and the end key is inclusive. If the end key is Nothing, the
-// range is unbounded in that direction.
+// VerifiedChangeProof is a [ChangeProof] that [ChangeProof.Verify] checked
+// against an end root on one database. It holds that database's lease on the
+// same terms as [VerifiedRangeProof].
+type VerifiedChangeProof struct {
+	*handle[*C.VerifiedChangeProofContext]
+
+	db *Database
+}
+
+// NextKeyRange is a range of keys still to fetch, `[StartKey, EndKey]`, both
+// inclusive. StartKey is the smallest key above the last one already
+// synchronized, so passing it as the next request's start key resumes without
+// fetching that key again. If EndKey has no value, the range is unbounded
+// above.
+//
+// The keys are Go-owned copies; a NextKeyRange needs no release.
 type NextKeyRange struct {
-	startKey *ownedBytes
-	endKey   Maybe[*ownedBytes]
+	StartKey []byte
+	EndKey   Maybe[[]byte]
 }
 
 // codeIterator wraps a Rust CodeIteratorHandle<'p>, a Box<dyn Iterator + 'p>
-// over the key-values of the proof it was created from. That proof must stay
-// reachable and must not be freed until [codeIterator.free] returns; each
-// proof type's CodeHashes method guarantees this for the iterator it creates.
+// over the entries of the verified proof it was created from. The proof's
+// read lock is held for the iterator's whole life by the CodeHashes method
+// that drains it.
 type codeIterator struct {
 	handle *C.CodeIteratorHandle
 }
 
-// RangeProof returns a proof that the values in the range [startKey, endKey] are
-// included in the tree with the current root. The proof may be truncated to at
-// most [maxLength] entries, if non-zero. If either [startKey] or [endKey] is
-// Nothing, the range is unbounded in that direction. If [rootHash] is Nothing, the
-// current root of the database is used.
+// RangeProof returns a proof that the values in the range [startKey, endKey]
+// are included in the tree with root [rootHash]. The proof may be truncated to
+// at most [maxLength] entries, if non-zero. If either [startKey] or [endKey]
+// is Nothing, the range is unbounded in that direction.
+//
+// The result is unverified. A producer serializes it with
+// [RangeProof.Marshal]; a consumer parses it with
+// [Database.UnmarshalRangeProof] and checks it with [RangeProof.Verify].
 func (db *Database) RangeProof(
 	rootHash Hash,
 	startKey, endKey Maybe[[]byte],
@@ -134,229 +167,82 @@ func (db *Database) RangeProof(
 		max_length: C.uint32_t(maxLength),
 	}
 
-	return getRangeProofFromRangeProofResult(C.fwd_db_range_proof(db.handle, args))
+	return db.newRangeProof(C.fwd_db_range_proof(db.handle, args))
 }
 
-// Verify verifies the provided range [proof] proves the values in the range
-// [startKey, endKey] are included in the tree with the given [rootHash]. If the
-// proof is valid, nil is returned; otherwise an error describing why the proof is
-// invalid is returned.
-func (p *RangeProof) Verify(
-	rootHash Hash,
-	startKey, endKey Maybe[[]byte],
-	maxLength uint32,
-) error {
-	// Write lock: fwd_range_proof_verify takes the proof mutably.
-	p.lease.mu.Lock()
-	defer p.lease.mu.Unlock()
-	if p.dropped {
-		return errDroppedRangeProof
+// UnmarshalRangeProof parses a proof produced by [RangeProof.Marshal] for use
+// with db. A proof encoded for the other hash mode is rejected here, before
+// any verification.
+func (db *Database) UnmarshalRangeProof(data []byte) (*RangeProof, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return nil, errDBClosed
 	}
+
+	start := time.Now()
+	defer func() {
+		proofUnmarshalDuration.WithLabelValues("range", db.metricsTag).Observe(time.Since(start).Seconds())
+	}()
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
-
-	args := C.VerifyRangeProofArgs{
-		proof:      p.ptr,
-		root:       newCHashKey(rootHash),
-		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
-		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
-		max_length: C.uint32_t(maxLength),
-	}
-
-	return getErrorFromVoidResult(C.fwd_range_proof_verify(args))
+	return db.newRangeProof(C.fwd_db_range_proof_from_bytes(db.handle, newBorrowedBytes(data, &pinner)))
 }
 
-// VerifyRangeProof verifies the provided range [proof] proves the changes
-// between [startRoot] and [endRoot] for keys in the range [startKey, endKey]. If
-// the proof is valid, a proposal containing the changes is prepared. The
-// call to [*Database.VerifyAndCommitRangeProof] will skip verification and commit the
-// prepared proposal.
+// Verify checks that the proof proves the values in the range [startKey,
+// endKey] are included in the tree with root [rootHash], under the hash mode of
+// the database the proof belongs to, and prepares the proposal that applies it
+// to that database's latest revision.
 //
 // The proposal replaces state across the range the proof proves: any existing
 // key in that range that the proof does not carry is deleted. The range runs
 // from [startKey] to the proof's right edge, which is [endKey] when the
 // responder covered the whole request and a smaller key when it truncated.
-// Keys past that edge are left as they are; [*RangeProof.FindNextKey] reports
-// where to resume.
+// Keys past that edge are left alone; [VerifiedRangeProof.NextKeyRanges]
+// reports where to resume.
 //
-// The prepared proposal borrows the database, so a successful call binds the
-// proof to db: db cannot be closed gracefully until the proof is dropped, and
-// other databases reject the proof with an error. A successful
-// [*Database.VerifyAndCommitRangeProof] binds the proof the same way.
-func (db *Database) VerifyRangeProof(
-	proof *RangeProof,
-	startKey, endKey Maybe[[]byte],
+// Verify does not consume the proof: it stays usable for [RangeProof.Marshal]
+// or for another Verify. Each successful call builds its own proposal, so a
+// caller that wants one verified proof keeps the one it was handed rather than
+// calling Verify again. A failed Verify builds nothing.
+//
+// Returns an error once the database is closed, and a dropped-proof error
+// wrapping [ErrDropped] once the proof is dropped.
+func (p *RangeProof) Verify(
 	rootHash Hash,
-	maxLength uint32,
-) error {
-	db.handleLock.RLock()
-	defer db.handleLock.RUnlock()
-	if db.handle == nil {
-		return errDBClosed
-	}
-
-	// Write lock: fwd_db_verify_range_proof takes the proof mutably.
-	proof.lease.mu.Lock()
-	defer proof.lease.mu.Unlock()
-	if proof.dropped {
-		return errDroppedRangeProof
-	}
-	if proof.lease.registry != nil && proof.lease.registry != db.keepAlives {
-		return errBoundToOtherDatabase
-	}
-
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	args := C.VerifyRangeProofArgs{
-		proof:      proof.ptr,
-		root:       newCHashKey(rootHash),
-		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
-		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
-		max_length: C.uint32_t(maxLength),
-	}
-
-	if err := getErrorFromVoidResult(C.fwd_db_verify_range_proof(db.handle, args)); err != nil {
-		return err
-	}
-	return proof.lease.ensureAttached(db.keepAlives, proof.Drop)
-}
-
-// VerifyAndCommitRangeProof verifies the provided range [proof] proves the values
-// in the range [startKey, endKey] are included in the tree with the given
-// [rootHash]. If the proof is valid, it is committed to the database and the
-// new root hash is returned. The resulting root hash may not equal the
-// provided root hash if the proof was truncated due to [maxLength].
-//
-// The commit replaces state across the proven range on the same terms as
-// [*Database.VerifyRangeProof].
-func (db *Database) VerifyAndCommitRangeProof(
-	proof *RangeProof,
 	startKey, endKey Maybe[[]byte],
-	rootHash Hash,
 	maxLength uint32,
-) (Hash, error) {
-	db.handleLock.RLock()
-	defer db.handleLock.RUnlock()
-	if db.handle == nil {
-		return EmptyRoot, errDBClosed
+) (*VerifiedRangeProof, error) {
+	p.db.handleLock.RLock()
+	defer p.db.handleLock.RUnlock()
+	if p.db.handle == nil {
+		return nil, errDBClosed
 	}
 
-	// Write lock: fwd_db_verify_and_commit_range_proof takes the proof mutably.
-	proof.lease.mu.Lock()
-	defer proof.lease.mu.Unlock()
-	if proof.dropped {
-		return EmptyRoot, errDroppedRangeProof
-	}
-	if proof.lease.registry != nil && proof.lease.registry != db.keepAlives {
-		return EmptyRoot, errBoundToOtherDatabase
-	}
-
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	args := C.VerifyRangeProofArgs{
-		proof:      proof.ptr,
-		root:       newCHashKey(rootHash),
-		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
-		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
-		max_length: C.uint32_t(maxLength),
-	}
-
-	db.commitLock.Lock()
-	defer db.commitLock.Unlock()
-	hash, err := getHashKeyFromHashResult(C.fwd_db_verify_and_commit_range_proof(db.handle, args))
-	if err != nil {
-		return EmptyRoot, err
-	}
-	if err := proof.lease.ensureAttached(db.keepAlives, proof.Drop); err != nil {
-		return EmptyRoot, err
-	}
-	return hash, nil
-}
-
-// FindNextKey returns the next key range to fetch for this proof, if any. If the
-// proof has been fully processed, nil is returned. If an error occurs while
-// determining the next key range, that error is returned.
-//
-// FindNextKey can only be called after a successful call to [*Database.VerifyRangeProof] or
-// [*Database.VerifyAndCommitRangeProof].
-//
-// The next key range indicates the next `(startKey, endKey]` range of keys that
-// should be synchronized to complete the requested range. `startKey` is non-
-// inclusive and `endKey`, if present, is inclusive.
-//
-// TODO(#352): the start key will be inclusive in the future; update documentation then.
-func (p *RangeProof) FindNextKey() (*NextKeyRange, error) {
-	// Write lock: fwd_range_proof_find_next_key takes the proof mutably.
-	p.lease.mu.Lock()
-	defer p.lease.mu.Unlock()
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
 	if p.dropped {
 		return nil, errDroppedRangeProof
 	}
-	return getNextKeyRangeFromNextKeyRangeResult(C.fwd_range_proof_find_next_key(p.ptr))
-}
 
-// CodeHashes returns an iterator for the code hashes contained in the account nodes
-// of this proof. This list may contain duplicates and is not guaranteed to be in any particular order.
-//
-// Note: this method is only relevant for Ethereum tries.
-// This method can be called anytime after the proof is created.
-//
-// The iteration holds the proof's read lock until the loop ends, so any other
-// method on the range proof MUST NOT be called during iteration.
-func (p *RangeProof) CodeHashes() iter.Seq2[Hash, error] {
-	return func(yield func(Hash, error) bool) {
-		// The proof handle MUST be held for the lifetime of the iterator.
-		p.lease.mu.RLock()
-		defer p.lease.mu.RUnlock()
-		if p.dropped {
-			yield(EmptyRoot, errDroppedRangeProof)
-			return
-		}
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
 
-		codeHashIter(C.fwd_range_proof_code_hash_iter(p.ptr), yield)
+	args := C.VerifyRangeProofArgs{
+		root:       newCHashKey(rootHash),
+		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
+		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
+		max_length: C.uint32_t(maxLength),
 	}
-}
 
-func codeHashIter(ptr C.CodeIteratorResult, yield func(Hash, error) bool) {
-	it, err := newCodeIterator(ptr)
-	if err != nil {
-		yield(EmptyRoot, err)
-		return
-	}
-	defer func() {
-		if err := it.free(); err != nil {
-			panic(err)
-		}
-	}()
-	for hash, err := it.next(); ; hash, err = it.next() {
-		if err != nil {
-			yield(EmptyRoot, err)
-			return
-		}
-		if hash == EmptyRoot {
-			return
-		}
-		if !yield(hash, err) {
-			return
-		}
-	}
-}
-
-func (it *codeIterator) next() (Hash, error) {
-	return getHashKeyFromHashResult(C.fwd_code_hash_iter_next(it.handle))
-}
-
-// free releases the Rust iterator, ending its borrow of the proof.
-func (it *codeIterator) free() error {
-	return getErrorFromVoidResult(C.fwd_code_hash_iter_free(it.handle))
+	return p.db.newVerifiedRangeProof(C.fwd_db_verify_range_proof(p.db.handle, p.ptr, args))
 }
 
 // Marshal returns a serialized representation of this RangeProof.
 //
-// The format is unspecified and opaque to firewood.
+// The format is unspecified and opaque to firewood. Marshal makes no database
+// call, so it keeps working after the database is closed.
 func (p *RangeProof) Marshal() ([]byte, error) {
 	p.lease.mu.RLock()
 	defer p.lease.mu.RUnlock()
@@ -372,24 +258,69 @@ func (p *RangeProof) Marshal() ([]byte, error) {
 	return getValueFromValueResult(C.fwd_range_proof_to_bytes(p.ptr))
 }
 
-// UnmarshalRangeProof deserializes a RangeProof from [data], which must have
-// been produced by [*RangeProof.Marshal]. The returned proof is bound to no
-// database until it is verified.
-func UnmarshalRangeProof(data []byte) (*RangeProof, error) {
-	start := time.Now()
-	defer func() {
-		proofUnmarshalDuration.WithLabelValues("range").Observe(time.Since(start).Seconds())
-	}()
+// Commit applies the proof to the database and returns the new root hash,
+// which may differ from the verified root when the proof was truncated.
+//
+// A prepared proposal is committed as-is. If the database advanced since
+// Verify, the proposal is rebuilt from the proof and committed. A second
+// Commit returns the same root without touching the database. Commit does not
+// consume the proof, and it does not release the lease; call
+// [VerifiedRangeProof.Drop] for that.
+//
+// Commit locks the latest state of the database, so it blocks against
+// [Database.Update], [Database.Propose], and other commits.
+func (p *VerifiedRangeProof) Commit() (Hash, error) {
+	// Write lock: fwd_verified_range_proof_commit takes the context mutably.
+	p.lease.mu.Lock()
+	defer p.lease.mu.Unlock()
+	if p.dropped {
+		return EmptyRoot, errDroppedRangeProof
+	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-	return getRangeProofFromRangeProofResult(C.fwd_range_proof_from_bytes(newBorrowedBytes(data, &pinner)))
+	p.db.commitLock.Lock()
+	defer p.db.commitLock.Unlock()
+	return getHashKeyFromHashResult(C.fwd_verified_range_proof_commit(p.ptr))
 }
 
-// ChangeProof returns a proof that the changes between [startRoot] and
-// [endRoot] for keys in the range [startKey, endKey]. The proof may be
-// truncated to at most [maxLength] entries, if non-zero. If either [startKey] or
-// [endKey] is Nothing, the range is unbounded in that direction.
+// NextKeyRanges returns the key ranges still to fetch after this proof, sorted
+// ascending by start key. An empty result means the requested range is fully
+// accounted for: the proof covered it, or the database's root already equals
+// the verified root.
+//
+// Each range is `[StartKey, EndKey]`; EndKey is the bound the proof was
+// verified with. The result holds at most one range; ava-labs/firewood#352
+// tracks tightening it beyond the last proven key.
+func (p *VerifiedRangeProof) NextKeyRanges() ([]NextKeyRange, error) {
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
+	if p.dropped {
+		return nil, errDroppedRangeProof
+	}
+	return getNextKeyRangesFromResult(C.fwd_verified_range_proof_next_key_ranges(p.ptr))
+}
+
+// CodeHashes returns the contract code hashes referenced by the account values
+// in this proof, in no particular order and possibly with duplicates.
+//
+// Only Ethereum-mode databases have account values; on a merkledb-mode database
+// this returns an error. The hashes come from a verified proof, so a caller may
+// act on them (for example, fetch the code) without further checks.
+func (p *VerifiedRangeProof) CodeHashes() ([]Hash, error) {
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
+	if p.dropped {
+		return nil, errDroppedRangeProof
+	}
+	return collectCodeHashes(C.fwd_verified_range_proof_code_hash_iter(p.ptr))
+}
+
+// ChangeProof returns a proof of the changes between [startRoot] and [endRoot]
+// for keys in the range [startKey, endKey]. The proof may be truncated to at
+// most [maxLength] entries, if non-zero. If either [startKey] or [endKey] is
+// Nothing, the range is unbounded in that direction.
+//
+// The result is unverified; see [Database.RangeProof] for the producer and
+// consumer flow.
 func (db *Database) ChangeProof(
 	startRoot, endRoot Hash,
 	startKey, endKey Maybe[[]byte],
@@ -412,65 +343,52 @@ func (db *Database) ChangeProof(
 		max_length: C.uint32_t(maxLength),
 	}
 
-	return getChangeProofFromChangeProofResult(C.fwd_db_change_proof(db.handle, args))
+	return db.newChangeProof(C.fwd_db_change_proof(db.handle, args))
 }
 
-// VerifyChangeProof verifies the change proof and creates a standard Proposal.
-// The proof is not consumed — it can still be used for [ChangeProof.FindNextKey] or serialization.
-func (db *Database) VerifyChangeProof(
-	proof *ChangeProof,
-	endRoot Hash,
-	startKey, endKey Maybe[[]byte],
-	maxLength uint32,
-) (*Proposal, error) {
+// UnmarshalChangeProof parses a proof produced by [ChangeProof.Marshal] for use
+// with db. A proof encoded for the other hash mode is rejected here, before
+// any verification.
+func (db *Database) UnmarshalChangeProof(data []byte) (*ChangeProof, error) {
 	db.handleLock.RLock()
 	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
 
-	proof.lease.mu.RLock()
-	defer proof.lease.mu.RUnlock()
-	if proof.dropped {
-		return nil, errDroppedChangeProof
-	}
+	start := time.Now()
+	defer func() {
+		proofUnmarshalDuration.WithLabelValues("change", db.metricsTag).Observe(time.Since(start).Seconds())
+	}()
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
-
-	args := C.CreateChangeProofArgs{
-		end_root:   newCHashKey(endRoot),
-		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
-		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
-		max_length: C.uint32_t(maxLength),
-	}
-
-	return getProposalFromProposalResult(
-		C.fwd_db_verify_change_proof(db.handle, proof.ptr, args),
-		db.keepAlives,
-		&db.commitLock,
-	)
+	return db.newChangeProof(C.fwd_db_change_proof_from_bytes(db.handle, newBorrowedBytes(data, &pinner)))
 }
 
-// VerifyAndCommitChangeProof verifies the change proof and commits it in a
-// single call. The proof is not consumed — it remains available for
-// [ChangeProof.FindNextKey] or serialization afterward.
-func (db *Database) VerifyAndCommitChangeProof(
-	proof *ChangeProof,
+// Verify checks the proof structurally, applies its changes to the latest
+// revision of the database the proof belongs to, and checks that the result
+// matches [endRoot] across [startKey, endKey]. On success the prepared proposal
+// is held by the returned [VerifiedChangeProof].
+//
+// Verify does not consume the proof; see [RangeProof.Verify] for the cost of
+// calling it more than once. Returns an error once the database is closed,
+// and a dropped-proof error wrapping [ErrDropped] once the proof is dropped.
+func (p *ChangeProof) Verify(
 	endRoot Hash,
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
-) (Hash, error) {
-	db.handleLock.RLock()
-	defer db.handleLock.RUnlock()
-	if db.handle == nil {
-		return EmptyRoot, errDBClosed
+) (*VerifiedChangeProof, error) {
+	p.db.handleLock.RLock()
+	defer p.db.handleLock.RUnlock()
+	if p.db.handle == nil {
+		return nil, errDBClosed
 	}
 
-	proof.lease.mu.RLock()
-	defer proof.lease.mu.RUnlock()
-	if proof.dropped {
-		return EmptyRoot, errDroppedChangeProof
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
+	if p.dropped {
+		return nil, errDroppedChangeProof
 	}
 
 	var pinner runtime.Pinner
@@ -483,56 +401,13 @@ func (db *Database) VerifyAndCommitChangeProof(
 		max_length: C.uint32_t(maxLength),
 	}
 
-	db.commitLock.Lock()
-	defer db.commitLock.Unlock()
-	return getHashKeyFromHashResult(C.fwd_db_verify_and_commit_change_proof(db.handle, proof.ptr, args))
-}
-
-// FindNextKey returns the next key range to fetch for a change proof,
-// or nil if there are no more keys to fetch. The proof is not consumed.
-func (proof *ChangeProof) FindNextKey(endKey Maybe[[]byte]) (*NextKeyRange, error) {
-	proof.lease.mu.RLock()
-	defer proof.lease.mu.RUnlock()
-	if proof.dropped {
-		return nil, errDroppedChangeProof
-	}
-
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	return getNextKeyRangeFromNextKeyRangeResult(
-		C.fwd_change_proof_find_next_key(proof.ptr, newMaybeBorrowedBytes(endKey, &pinner)),
-	)
-}
-
-// CodeHashes returns an iterator for the code hashes contained in the account nodes
-// of this proof. This list may contain duplicates and is not guaranteed to be in any particular order.
-//
-// Note: this method is only relevant for Ethereum tries.
-// This method can be called any time after the proof is created — verification
-// is not required, since extraction is purely RLP parsing of the values
-// already present in the proof. Only code hashes referenced by Put entries
-// (the post-state of accounts touched by the proof) are yielded; Delete and
-// DeleteRange entries are skipped.
-//
-// The iteration holds the proof's read lock until the loop ends, so any other
-// method on the change proof MUST NOT be called during iteration.
-func (p *ChangeProof) CodeHashes() iter.Seq2[Hash, error] {
-	return func(yield func(Hash, error) bool) {
-		// See [RangeProof.CodeHashes] for why the read lock spans the loop.
-		p.lease.mu.RLock()
-		defer p.lease.mu.RUnlock()
-		if p.dropped {
-			yield(EmptyRoot, errDroppedChangeProof)
-			return
-		}
-		codeHashIter(C.fwd_change_proof_code_hash_iter(p.ptr), yield)
-	}
+	return p.db.newVerifiedChangeProof(C.fwd_db_verify_change_proof(p.db.handle, p.ptr, args))
 }
 
 // Marshal returns a serialized representation of this ChangeProof.
 //
-// The format is unspecified and opaque to firewood.
+// The format is unspecified and opaque to firewood. Marshal makes no database
+// call, so it keeps working after the database is closed.
 func (p *ChangeProof) Marshal() ([]byte, error) {
 	p.lease.mu.RLock()
 	defer p.lease.mu.RUnlock()
@@ -548,83 +423,88 @@ func (p *ChangeProof) Marshal() ([]byte, error) {
 	return getValueFromValueResult(C.fwd_change_proof_to_bytes(p.ptr))
 }
 
-// UnmarshalChangeProof deserializes a ChangeProof from [data], which must have
-// been produced by [*ChangeProof.Marshal].
-func UnmarshalChangeProof(data []byte) (*ChangeProof, error) {
-	start := time.Now()
-	defer func() {
-		proofUnmarshalDuration.WithLabelValues("change").Observe(time.Since(start).Seconds())
-	}()
-
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-	return getChangeProofFromChangeProofResult(C.fwd_change_proof_from_bytes(newBorrowedBytes(data, &pinner)))
-}
-
-// StartKey returns the exclusive start key of this key range: it has already
-// been synchronized, so the next request begins strictly after it.
-func (r *NextKeyRange) StartKey() []byte {
-	return r.startKey.CopiedBytes()
-}
-
-// HasEndKey returns true if this key range has an inclusive end key.
-func (r *NextKeyRange) HasEndKey() bool {
-	return r.endKey != nil && r.endKey.HasValue()
-}
-
-// EndKey returns the inclusive end key of this key range if it exists or nil if
-// it does not.
-func (r *NextKeyRange) EndKey() []byte {
-	if r.HasEndKey() {
-		return r.endKey.Value().CopiedBytes()
-	}
-	return nil
-}
-
-// Free releases the resources associated with this NextKeyRange.
+// Commit applies the proof to the database and returns the new root hash.
 //
-// It is safe to call Free more than once; subsequent calls after the first
-// will be no-ops.
-func (r *NextKeyRange) Free() error {
-	var err1, err2 error
-
-	err1 = r.startKey.Free()
-	if r.HasEndKey() {
-		err2 = r.endKey.Value().Free()
+// If the database advanced since Verify, Commit verifies the proof again
+// against the current latest revision and commits from there, so the proven
+// range is checked against the verified end root on the state it lands on
+// rather than rebased blindly. A second Commit returns the same root without
+// touching the database. Commit does not consume the proof and does not
+// release the lease; call [VerifiedChangeProof.Drop] for that.
+//
+// Commit locks the latest state of the database on the same terms as
+// [VerifiedRangeProof.Commit].
+func (p *VerifiedChangeProof) Commit() (Hash, error) {
+	// Write lock: fwd_verified_change_proof_commit takes the context mutably.
+	p.lease.mu.Lock()
+	defer p.lease.mu.Unlock()
+	if p.dropped {
+		return EmptyRoot, errDroppedChangeProof
 	}
 
-	return errors.Join(err1, err2)
+	p.db.commitLock.Lock()
+	defer p.db.commitLock.Unlock()
+	return getHashKeyFromHashResult(C.fwd_verified_change_proof_commit(p.ptr))
 }
 
-func newNextKeyRange(cRange C.NextKeyRange) *NextKeyRange {
-	var nextKeyRange NextKeyRange
-
-	nextKeyRange.startKey = newOwnedBytes(cRange.start_key)
-
-	if cRange.end_key.tag == C.Maybe_OwnedBytes_Some_OwnedBytes {
-		nextKeyRange.endKey = newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&cRange.end_key.anon0)))
+// NextKeyRanges returns the key ranges still to fetch after this proof, on the
+// same terms as [VerifiedRangeProof.NextKeyRanges]. It reads only the proof
+// and the end key it was verified with.
+func (p *VerifiedChangeProof) NextKeyRanges() ([]NextKeyRange, error) {
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
+	if p.dropped {
+		return nil, errDroppedChangeProof
 	}
-
-	return &nextKeyRange
+	return getNextKeyRangesFromResult(C.fwd_verified_change_proof_next_key_ranges(p.ptr))
 }
 
-func getNextKeyRangeFromNextKeyRangeResult(result C.NextKeyRangeResult) (*NextKeyRange, error) {
-	switch result.tag {
-	case C.NextKeyRangeResult_NullHandlePointer:
-		return nil, errDBClosed
-	case C.NextKeyRangeResult_NotPrepared:
-		return nil, errNotPrepared
-	case C.NextKeyRangeResult_None:
-		return nil, nil
-	case C.NextKeyRangeResult_Some:
-		nkr := newNextKeyRange(*(*C.NextKeyRange)(unsafe.Pointer(&result.anon0)))
-		runtime.SetFinalizer(nkr, (*NextKeyRange).Free)
-		return nkr, nil
-	case C.NextKeyRangeResult_Err:
-		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
-	default:
-		return nil, fmt.Errorf("unknown C.NextKeyRangeResult tag: %d", result.tag)
+// CodeHashes returns the contract code hashes referenced by the account values
+// this proof puts, on the same terms as [VerifiedRangeProof.CodeHashes].
+// Delete and DeleteRange entries are skipped.
+func (p *VerifiedChangeProof) CodeHashes() ([]Hash, error) {
+	p.lease.mu.RLock()
+	defer p.lease.mu.RUnlock()
+	if p.dropped {
+		return nil, errDroppedChangeProof
 	}
+	return collectCodeHashes(C.fwd_verified_change_proof_code_hash_iter(p.ptr))
+}
+
+// collectCodeHashes drains and frees a Rust code-hash iterator. The caller
+// holds the owning proof's read lock for the duration.
+func collectCodeHashes(result C.CodeIteratorResult) ([]Hash, error) {
+	it, err := newCodeIterator(result)
+	if err != nil {
+		return nil, err
+	}
+
+	var hashes []Hash
+	for {
+		hash, err := it.next()
+		if err != nil {
+			return nil, errors.Join(err, it.free())
+		}
+		// The Rust iterator reports exhaustion as HashResult::None, which
+		// getHashKeyFromHashResult maps to EmptyRoot.
+		if hash == EmptyRoot {
+			break
+		}
+		hashes = append(hashes, hash)
+	}
+	if err := it.free(); err != nil {
+		return nil, err
+	}
+	return hashes, nil
+}
+
+func (it *codeIterator) next() (Hash, error) {
+	return getHashKeyFromHashResult(C.fwd_code_hash_iter_next(it.handle))
+}
+
+// free releases the Rust iterator, ending its borrow of the proof.
+func (it *codeIterator) free() error {
+	return getErrorFromVoidResult(C.fwd_code_hash_iter_free(it.handle))
 }
 
 func newCodeIterator(result C.CodeIteratorResult) (*codeIterator, error) {
@@ -635,14 +515,52 @@ func newCodeIterator(result C.CodeIteratorResult) (*codeIterator, error) {
 		ptr := *(**C.CodeIteratorHandle)(unsafe.Pointer(&result.anon0))
 		return &codeIterator{handle: ptr}, nil
 	case C.CodeIteratorResult_Err:
-		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
-		return nil, err
+		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 	default:
 		return nil, fmt.Errorf("unknown C.CodeIteratorResult tag: %d", result.tag)
 	}
 }
 
-func getRangeProofFromRangeProofResult(result C.RangeProofResult) (*RangeProof, error) {
+// getNextKeyRangesFromResult copies the ranges into Go memory and frees the
+// Rust list, so the returned values outlive every C allocation.
+func getNextKeyRangesFromResult(result C.NextKeyRangesResult) ([]NextKeyRange, error) {
+	switch result.tag {
+	case C.NextKeyRangesResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.NextKeyRangesResult_Ok:
+		owned := *(*C.OwnedSlice_NextKeyRange)(unsafe.Pointer(&result.anon0))
+		ranges := copyNextKeyRanges(owned)
+		if err := getErrorFromVoidResult(C.fwd_free_next_key_ranges(owned)); err != nil {
+			return nil, fmt.Errorf("%w: %w", errFreeingValue, err)
+		}
+		return ranges, nil
+	case C.NextKeyRangesResult_Err:
+		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+	default:
+		return nil, fmt.Errorf("unknown C.NextKeyRangesResult tag: %d", result.tag)
+	}
+}
+
+func copyNextKeyRanges(owned C.OwnedSlice_NextKeyRange) []NextKeyRange {
+	if owned.ptr == nil || owned.len == 0 {
+		return nil
+	}
+	cRanges := unsafe.Slice(owned.ptr, owned.len)
+	ranges := make([]NextKeyRange, len(cRanges))
+	for i := range cRanges {
+		c := &cRanges[i]
+		ranges[i].StartKey = newOwnedBytes(c.start_key).CopiedBytes()
+		if c.end_key.tag == C.Maybe_OwnedBytes_Some_OwnedBytes {
+			endKey := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&c.end_key.anon0)))
+			ranges[i].EndKey = Some(endKey.CopiedBytes())
+		} else {
+			ranges[i].EndKey = Nothing[[]byte]()
+		}
+	}
+	return ranges
+}
+
+func (db *Database) newRangeProof(result C.RangeProofResult) (*RangeProof, error) {
 	switch result.tag {
 	case C.RangeProofResult_NullHandlePointer:
 		return nil, errDBClosed
@@ -656,18 +574,44 @@ func getRangeProofFromRangeProofResult(result C.RangeProofResult) (*RangeProof, 
 		ptr := *(**C.RangeProofContext)(unsafe.Pointer(&result.anon0))
 		proof := &RangeProof{
 			handle: newHandle(ptr, func(p *C.RangeProofContext) C.VoidResult { return C.fwd_free_range_proof(p) }),
+			db:     db,
 		}
 		runtime.AddCleanup(proof, drop[*C.RangeProofContext], proof.handle)
 		return proof, nil
 	case C.RangeProofResult_Err:
-		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
-		return nil, err
+		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 	default:
 		return nil, fmt.Errorf("unknown C.RangeProofResult tag: %d", result.tag)
 	}
 }
 
-func getChangeProofFromChangeProofResult(result C.ChangeProofResult) (*ChangeProof, error) {
+// newVerifiedRangeProof attaches the lease under the caller's
+// db.handleLock.RLock, as [getProposalFromProposalResult] does.
+func (db *Database) newVerifiedRangeProof(result C.VerifiedRangeProofResult) (*VerifiedRangeProof, error) {
+	switch result.tag {
+	case C.VerifiedRangeProofResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.VerifiedRangeProofResult_Ok:
+		ptr := *(**C.VerifiedRangeProofContext)(unsafe.Pointer(&result.anon0))
+		proof := &VerifiedRangeProof{
+			handle: newHandle(ptr, func(p *C.VerifiedRangeProofContext) C.VoidResult {
+				return C.fwd_free_verified_range_proof(p)
+			}),
+			db: db,
+		}
+		if err := proof.lease.attach(db.keepAlives, proof.Drop); err != nil {
+			return nil, err
+		}
+		runtime.AddCleanup(proof, drop[*C.VerifiedRangeProofContext], proof.handle)
+		return proof, nil
+	case C.VerifiedRangeProofResult_Err:
+		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+	default:
+		return nil, fmt.Errorf("unknown C.VerifiedRangeProofResult tag: %d", result.tag)
+	}
+}
+
+func (db *Database) newChangeProof(result C.ChangeProofResult) (*ChangeProof, error) {
 	switch result.tag {
 	case C.ChangeProofResult_NullHandlePointer:
 		return nil, errDBClosed
@@ -679,13 +623,39 @@ func getChangeProofFromChangeProofResult(result C.ChangeProofResult) (*ChangePro
 		ptr := *(**C.ChangeProofContext)(unsafe.Pointer(&result.anon0))
 		proof := &ChangeProof{
 			handle: newHandle(ptr, func(p *C.ChangeProofContext) C.VoidResult { return C.fwd_free_change_proof(p) }),
+			db:     db,
 		}
 		runtime.AddCleanup(proof, drop[*C.ChangeProofContext], proof.handle)
 		return proof, nil
 	case C.ChangeProofResult_Err:
-		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
-		return nil, err
+		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 	default:
 		return nil, fmt.Errorf("unknown C.ChangeProofResult tag: %d", result.tag)
+	}
+}
+
+// newVerifiedChangeProof attaches the lease under the caller's
+// db.handleLock.RLock, as [getProposalFromProposalResult] does.
+func (db *Database) newVerifiedChangeProof(result C.VerifiedChangeProofResult) (*VerifiedChangeProof, error) {
+	switch result.tag {
+	case C.VerifiedChangeProofResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.VerifiedChangeProofResult_Ok:
+		ptr := *(**C.VerifiedChangeProofContext)(unsafe.Pointer(&result.anon0))
+		proof := &VerifiedChangeProof{
+			handle: newHandle(ptr, func(p *C.VerifiedChangeProofContext) C.VoidResult {
+				return C.fwd_free_verified_change_proof(p)
+			}),
+			db: db,
+		}
+		if err := proof.lease.attach(db.keepAlives, proof.Drop); err != nil {
+			return nil, err
+		}
+		runtime.AddCleanup(proof, drop[*C.VerifiedChangeProofContext], proof.handle)
+		return proof, nil
+	case C.VerifiedChangeProofResult_Err:
+		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+	default:
+		return nil, fmt.Errorf("unknown C.VerifiedChangeProofResult tag: %d", result.tag)
 	}
 }

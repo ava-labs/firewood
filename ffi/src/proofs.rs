@@ -4,6 +4,7 @@
 mod change;
 mod code_hash;
 mod eth;
+mod proposal_state;
 mod range;
 
 pub use self::change::*;

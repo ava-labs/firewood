@@ -347,9 +347,10 @@ pub use self::types::{
 /// `0x00` byte appended, since nothing sorts between the two. Total — every byte
 /// string has one, including the empty key.
 ///
-/// [`find_next_key_after_change_proof`] uses it to resume strictly above the last
-/// key a proof covered. Both request bounds are inclusive, so resuming at that key
-/// would cover it again and never advance.
+/// [`find_next_key_after_range_proof`] and [`find_next_key_after_change_proof`]
+/// use it to resume strictly above the last key a proof covered. Both request
+/// bounds are inclusive, so resuming at that key would cover it again and never
+/// advance.
 pub(crate) fn lex_successor(key: &[u8]) -> Box<[u8]> {
     [key, &[0]].concat().into_boxed_slice()
 }
