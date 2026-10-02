@@ -2391,7 +2391,7 @@ fn test_verification_context_reports_truncated_right_edge() {
 /// completes.
 #[test]
 fn test_max_bounded_depth_survives_default_stack() {
-    spawn_on_default_stack(|| {
+    spawn_on_stack(DEFAULT_THREAD_STACK, || {
         let mut items: KeyValuePairs = prefix_chain_keys(MAX_KEY_BYTES, 0x11)
             .into_iter()
             .map(|key| (key.into_boxed_slice(), Box::from(b"v".as_slice())))
