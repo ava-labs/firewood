@@ -3,6 +3,7 @@
 
 use std::cmp::Ordering;
 
+use firewood_storage::ensure_stack;
 use firewood_storage::{
     Child, HashMode, Mutable, Node, NodeStore, Path, PathComponent, Propose, ReadableStorage,
 };
@@ -274,8 +275,9 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
         };
 
         let child_node = self.read_for_update(child)?;
-        let child_node =
-            self.collapse_navigate(child_node, deeper, suffix, parent_prefix, range)?;
+        let child_node = ensure_stack(|| {
+            self.collapse_navigate(child_node, deeper, suffix, parent_prefix, range)
+        })?;
         branch.children[child_component] = Some(Child::Node(child_node));
         Ok(node)
     }
@@ -313,7 +315,8 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
 
         let after_child = consume_partial_path(remaining, &child_node)?;
 
-        child_node = self.collapse_strip(child_node, after_child, &child_prefix, range)?;
+        child_node =
+            ensure_stack(|| self.collapse_strip(child_node, after_child, &child_prefix, range))?;
 
         branch.children[first] = Some(Child::Node(child_node));
         Ok(node)
@@ -353,7 +356,7 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
             let Some(inner_child) = child_slot else {
                 continue;
             };
-            if self.child_in_range(inner_child, &pfx, child_nibble, range)? {
+            if ensure_stack(|| self.child_in_range(inner_child, &pfx, child_nibble, range))? {
                 return Ok(true);
             }
         }
@@ -400,11 +403,13 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
             // and the caller has already rejected a proof carrying a child hash
             // at this nibble — so return the same sound default as above.
             None => Ok(BoundaryChildSource::Recompute),
-            Some(child) => Ok(if self.child_in_range(child, &acc, on_path, range)? {
-                BoundaryChildSource::Recompute
-            } else {
-                BoundaryChildSource::Proof
-            }),
+            Some(child) => Ok(
+                if ensure_stack(|| self.child_in_range(child, &acc, on_path, range))? {
+                    BoundaryChildSource::Recompute
+                } else {
+                    BoundaryChildSource::Proof
+                },
+            ),
         }
     }
 
@@ -440,7 +445,7 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
 
             if let Some(range) = range
                 && let Some(child) = slot.as_ref()
-                && self.child_in_range(child, acc_prefix, nibble, range)?
+                && ensure_stack(|| self.child_in_range(child, acc_prefix, nibble, range))?
             {
                 return Err(api::Error::ProofError(ProofError::EndRootMismatch));
             }
@@ -470,7 +475,8 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
         let deeper = consume_partial_path(remaining, &child_node)?;
         if !deeper.is_empty() {
             let child_prefix = build_child_prefix(acc_prefix, on_path.0.as_u8(), &child_node);
-            child_node = self.collapse_strip(child_node, deeper, &child_prefix, range)?;
+            child_node =
+                ensure_stack(|| self.collapse_strip(child_node, deeper, &child_prefix, range))?;
         }
 
         branch.children[on_path] = Some(Child::Node(child_node));

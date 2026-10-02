@@ -34,7 +34,7 @@ pub mod persist;
 /// A node, either a Branch or Leaf
 
 // TODO(rkuris): explain why Branch is boxed but Leaf is not
-#[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
+#[derive(PartialEq, Eq, Debug, EnumAsInner)]
 #[repr(C)]
 pub enum Node {
     /// This node is a [`BranchNode`]
@@ -720,5 +720,152 @@ than 126 bytes as the length would be encoded in multiple bytes.
             area_index,
             "Area index should be calculated from node size only"
         );
+    }
+}
+
+impl Clone for Node {
+    /// Hand-written so the copy of a deep trie re-enters through
+    /// `ensure_stack` at every level. A derived clone recurses
+    /// once per trie level, and trie depth is peer-controlled during proof
+    /// verification.
+    fn clone(&self) -> Self {
+        match self {
+            // A leaf owns no children, so this cannot recurse.
+            Node::Leaf(leaf) => Node::Leaf(leaf.clone()),
+            Node::Branch(branch) => crate::stack::ensure_stack(|| Node::Branch(branch.clone())),
+        }
+    }
+}
+
+#[cfg(test)]
+mod clone_tests {
+    use super::*;
+    use crate::{HashType, MaybePersistedNode, TrieHash};
+    use test_case::test_case;
+
+    /// Builds a chain `depth` branches deep, ending in a leaf. The top branch
+    /// also holds an `AddressWithHash` child and a leaf child. `fan_out` covers
+    /// the child kinds and shapes this spine does not.
+    fn chain(depth: usize) -> Node {
+        let mut node = Node::Leaf(LeafNode {
+            partial_path: Path::from_nibbles_iterator([1u8, 2].into_iter()),
+            value: Box::from(b"leaf".as_slice()),
+        });
+
+        for level in 0..depth {
+            let mut children = Children::new();
+            children[PathComponent::try_new(0).unwrap()] = Some(Child::Node(node));
+            if level == depth.saturating_sub(1) {
+                // Only at the top, so the chain itself stays a single spine.
+                children[PathComponent::try_new(1).unwrap()] = Some(Child::AddressWithHash(
+                    LinearAddress::new(64).unwrap(),
+                    HashType::from(TrieHash::from([7u8; 32])),
+                ));
+                children[PathComponent::try_new(2).unwrap()] =
+                    Some(Child::Node(Node::Leaf(LeafNode {
+                        partial_path: Path::new(),
+                        value: Box::from(b"sibling".as_slice()),
+                    })));
+            }
+            node = Node::Branch(Box::new(BranchNode {
+                partial_path: Path::from_nibbles_iterator(
+                    [u8::try_from(level % 16).unwrap()].into_iter(),
+                ),
+                value: (level % 3 == 0).then(|| Box::from(b"v".as_slice())),
+                children,
+            }));
+        }
+        node
+    }
+
+    fn leaf(pc: PathComponent) -> Node {
+        Node::Leaf(LeafNode {
+            partial_path: Path::new(),
+            value: Box::from([pc.as_u8()].as_slice()),
+        })
+    }
+
+    /// Every slot holds a child, cycling through the four kinds, with a branch in
+    /// every fourth slot including the last. Branch children hold branches of
+    /// their own down to `depth`, so a branch clone re-enters `Node::clone` for
+    /// several children, the last slot among them.
+    fn fan_out(depth: usize) -> Node {
+        Node::Branch(Box::new(BranchNode {
+            partial_path: Path::new(),
+            value: Some(Box::from(b"root".as_slice())),
+            children: Children::from_fn(|pc| match pc.as_u8() % 4 {
+                0 => Some(Child::Node(leaf(pc))),
+                1 => Some(Child::AddressWithHash(
+                    LinearAddress::new(u64::from(pc.as_u8()).saturating_add(64)).unwrap(),
+                    HashType::from(TrieHash::from([pc.as_u8(); 32])),
+                )),
+                2 => Some(Child::MaybePersisted(
+                    MaybePersistedNode::from(SharedNode::new(leaf(pc))),
+                    HashType::from(TrieHash::from([pc.as_u8(); 32])),
+                )),
+                _ if depth == 0 => Some(Child::Node(leaf(pc))),
+                _ => Some(Child::Node(fan_out(depth.saturating_sub(1)))),
+            }),
+        }))
+    }
+
+    /// A clone equals its source. `Node` derives `PartialEq`, which compares the
+    /// whole subtree, so this is an exact oracle rather than a spot check. The
+    /// cases cover each shape a copy can take.
+    #[test_case(chain, 0 ; "a leaf alone")]
+    #[test_case(chain, 1 ; "one branch with leaf and hashed children")]
+    #[test_case(chain, 2 ; "branch within a branch")]
+    #[test_case(fan_out, 0 ; "every Child variant, no branch children")]
+    #[test_case(fan_out, 1 ; "branch children in four slots including the last")]
+    fn clone_equals_source(fixture: fn(usize) -> Node, depth: usize) {
+        let original = fixture(depth);
+        assert_eq!(original.clone(), original);
+    }
+
+    /// The copy is independent: mutating it must not touch the source.
+    #[test]
+    fn clone_is_deep_not_shared() {
+        let original = chain(5);
+        let mut copy = original.clone();
+
+        // Mutate deep inside the copy, not at its root, so a shallow copy that
+        // shared any subtree would show up here.
+        let mut cursor = copy.as_branch_mut().expect("chain(5) is a branch");
+        for _ in 0..3 {
+            let slot = PathComponent::try_new(0).unwrap();
+            let Some(Child::Node(Node::Branch(next))) = cursor.children[slot].as_mut() else {
+                panic!("the chain descends through slot 0")
+            };
+            cursor = next;
+        }
+        cursor.value = Some(Box::from(b"mutated".as_slice()));
+
+        assert_ne!(copy, original, "the mutation must be visible in the copy");
+        assert_eq!(
+            original,
+            chain(5),
+            "the source must still equal a freshly built chain"
+        );
+    }
+
+    fn clone_then_drop(node: Node) {
+        let copy = node.clone();
+        drop(copy);
+        drop(node);
+    }
+
+    /// A 4,096-level chain is freed, or cloned and then freed, on a 256 KiB
+    /// thread. Completing is the assertion, since a stack overflow aborts the
+    /// process rather than panicking. The copy is not compared with its source,
+    /// because `PartialEq` is derived and recurses once per level.
+    #[test_case(drop ; "dropping the chain")]
+    #[test_case(clone_then_drop ; "cloning the chain, then dropping both")]
+    fn deep_chain_survives_a_small_stack(op: fn(Node)) {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || op(chain(4096)))
+            .unwrap()
+            .join()
+            .expect("the guard thread must not panic");
     }
 }

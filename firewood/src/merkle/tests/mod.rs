@@ -48,6 +48,38 @@ fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     .map(drop)
 }
 
+/// The stack `std::thread` gives a spawned thread on every Tier-1 platform.
+/// Firewood sets `stack_size` nowhere, so its own threads get this size. Threads
+/// the Go runtime creates for the FFI are sized by Go instead.
+const DEFAULT_THREAD_STACK: usize = 2 * 1024 * 1024;
+
+/// Runs `f` on a thread with a `stack_bytes` stack and joins it.
+///
+/// The depth guards run on an explicit stack size so the result does not depend
+/// on the harness. A stack overflow aborts the process rather than panicking, so
+/// a regression fails as a killed test rather than an assertion.
+fn spawn_on_stack(stack_bytes: usize, f: impl FnOnce() + Send + 'static) {
+    std::thread::Builder::new()
+        .stack_size(stack_bytes)
+        .spawn(f)
+        .expect("spawning the guard thread must succeed")
+        .join()
+        .expect("the guard thread must not panic");
+}
+
+/// Keys forming a prefix chain: key `i` is `i` zero bytes followed by `tail`.
+/// Consecutive keys share all but their last byte, so each key adds one byte
+/// (two nibbles) of trie depth, and the longest key is `count` bytes.
+fn prefix_chain_keys(count: usize, tail: u8) -> Vec<Vec<u8>> {
+    (0..count)
+        .map(|i| {
+            let mut key = vec![0x00u8; i];
+            key.push(tail);
+            key
+        })
+        .collect()
+}
+
 // Returns n random key-value pairs.
 fn generate_random_kvs(rng: &firewood_storage::SeededRng, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
     let mut kvs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
@@ -997,6 +1029,47 @@ fn test_get_branch_from_nibbles_mut() {
         ],
     );
     assert!(leaf.is_none());
+}
+
+/// Reads and removals on an in-memory trie whose keys are twice the key-length
+/// bound survive a 256 KiB thread. The trie branches once per key byte, so it is
+/// as deep as the bound admits.
+///
+/// A committed trie resolves every node it touches from storage, where a node's
+/// children are addresses, so each node is shallow. A mutable trie owns its
+/// nodes by value instead. A get walks that owned chain and clones the node it
+/// finds, and the shallowest key's node owns everything below it, so that clone
+/// spans the whole trie. A removal walks the chain and reattaches it on the way
+/// back. `Merkle::insert` applies no key-length bound, so this drives those
+/// walks past the bound the proof decoder enforces.
+#[test]
+fn test_in_memory_ops_far_beyond_the_bound_survive_a_small_stack() {
+    spawn_on_stack(256 * 1024, || {
+        let depth = MAX_KEY_BYTES * 2;
+        let mut keys: Vec<Vec<u8>> = Vec::with_capacity(depth * 2);
+        for i in 0..depth {
+            let mut key = vec![0x00u8; i + 1];
+            keys.push(key.clone());
+            *key.last_mut().expect("key is non-empty") = 0x10;
+            keys.push(key);
+        }
+
+        let memstore = Arc::new(MemStore::new(Vec::with_capacity(64 * 1024)));
+        let base: Merkle<NodeStore<Committed, MemStore, DefaultHashMode>> = Merkle::from(
+            NodeStore::new_empty_committed(memstore, DeletedNodeTracking::Enabled),
+        );
+        let mut merkle = base.fork().unwrap();
+        for key in &keys {
+            merkle.insert(key, Box::from(b"v".as_slice())).unwrap();
+        }
+        let deepest = vec![0x00u8; depth];
+        assert!(merkle.get_value(&[0x00]).unwrap().is_some());
+        assert!(merkle.get_value(&deepest).unwrap().is_some());
+        assert!(merkle.remove(&deepest).unwrap().is_some());
+        merkle.remove_prefix(&[0x00]).unwrap();
+        assert!(merkle.get_value(&[0x00]).unwrap().is_none());
+        assert!(merkle.get_value(&[0x10]).unwrap().is_some());
+    });
 }
 
 /// `CollapseRange::contains` decides which boundary proof nodes the reconcile
