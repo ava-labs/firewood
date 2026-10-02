@@ -8,8 +8,8 @@ use std::num::NonZeroUsize;
 use tempfile::TempDir;
 use test_case::test_case;
 
+use crate::api::MAX_KEY_BYTES;
 use crate::merkle::tests::{DEFAULT_THREAD_STACK, prefix_chain_keys, spawn_on_stack};
-use crate::proofs::de::MAX_KEY_BYTES;
 use firewood_storage::{DefaultHashMode, HashMode};
 
 #[test]

@@ -4,7 +4,7 @@
 use super::verify_range_proof;
 use super::*;
 use crate::RangeProof;
-use crate::proofs::de::MAX_KEY_BYTES;
+use crate::api::MAX_KEY_BYTES;
 use firewood_storage::U4;
 
 type KeyValuePairs = Vec<(Box<[u8]>, Box<[u8]>)>;

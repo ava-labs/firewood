@@ -316,7 +316,8 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
    on the call stack. Wrap each recursive call in
    `firewood_storage::ensure_stack` (see `storage/src/stack.rs`) and add a depth
    guard on a small thread stack, as
-   `hash_helper_survives_a_deep_chain_on_a_small_stack` does.
+   `hash_helper_survives_a_deep_chain_on_a_small_stack` does. Key length itself
+   is bounded by `firewood::api::MAX_KEY_BYTES` on both writes and decoded proofs.
 
 5. **Beta Status**: The API may change. Don't assume stability guarantees.
 
