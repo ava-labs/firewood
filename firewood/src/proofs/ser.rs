@@ -86,16 +86,13 @@ impl FrozenRangeProof {
     ///
     /// # Errors
     ///
-    /// Returns [`ProofError::BodyTooLarge`] with `out` untouched if the
-    /// serialized body exceeds the size cap, or [`ProofError::Compression`]
-    /// if the compression fails where `out` will hold a header-only write.
+    /// Returns [`ProofError::BodyTooLarge`] if the serialized body exceeds
+    /// the size cap or [`ProofError::Compression`] if the compression
+    /// fails; `out` is untouched on error.
     pub fn write_to_vec(&self, out: &mut Vec<u8>) -> Result<(), ProofError> {
         let mut body = Vec::new();
         self.write_body_to_vec(&mut body);
-        check_body_len(body.len())?;
-        let header = Header::from((ProofType::Range, self.hash_mode()));
-        out.extend_from_slice(bytemuck::bytes_of(&header));
-        super::frame::write_compressed_body(&body, out)
+        write_framed_body(&body, ProofType::Range, self.hash_mode(), out)
     }
 
     /// Serializes this proof's canonical (uncompressed) body: the bytes
@@ -122,16 +119,11 @@ impl FrozenChangeProof {
     ///
     /// # Errors
     ///
-    /// Returns [`ProofError::BodyTooLarge`] with `out` untouched if the
-    /// serialized body exceeds the size cap, or [`ProofError::Compression`]
-    /// if the compression fails where `out` will hold a header-only write.
+    /// Errors as [`FrozenRangeProof::write_to_vec`].
     pub fn write_to_vec(&self, out: &mut Vec<u8>) -> Result<(), ProofError> {
         let mut body = Vec::new();
         self.write_body_to_vec(&mut body);
-        check_body_len(body.len())?;
-        let header = Header::from((ProofType::Change, self.hash_mode()));
-        out.extend_from_slice(bytemuck::bytes_of(&header));
-        super::frame::write_compressed_body(&body, out)
+        write_framed_body(&body, ProofType::Change, self.hash_mode(), out)
     }
 
     /// Serializes this proof's canonical (uncompressed) body. See
@@ -143,6 +135,26 @@ impl FrozenChangeProof {
         };
         self.write_item(&mut w);
     }
+}
+
+/// Frames a canonical body: the header, then the compressed body, after
+/// checking the decoder's size cap so a message no peer would accept is
+/// reported at the source instead of emitted. `out` is untouched on error.
+pub(crate) fn write_framed_body(
+    body: &[u8],
+    kind: ProofType,
+    mode: NodeHashAlgorithm,
+    out: &mut Vec<u8>,
+) -> Result<(), ProofError> {
+    check_body_len(body.len())?;
+    let start = out.len();
+    let header = Header::from((kind, mode));
+    out.extend_from_slice(bytemuck::bytes_of(&header));
+    let result = super::frame::write_compressed_body(body, out);
+    if result.is_err() {
+        out.truncate(start);
+    }
+    result
 }
 
 /// Rejects a canonical body larger than the cap decoders enforce.

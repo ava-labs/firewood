@@ -1949,6 +1949,7 @@ name = "firewood-replay"
 version = "0.7.0"
 dependencies = [
  "firewood",
+ "firewood-macros",
  "firewood-metrics",
  "firewood-storage",
  "rmp-serde",
