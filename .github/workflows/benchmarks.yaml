@@ -30,6 +30,9 @@ env:
   # scripts/run-rust-ci.sh, and the Swatinem/rust-cache shared-key, so the
   # warming job and the matrix legs cannot drift apart.
   PROFILE_KEY: maxperf-ethhash-logger-test_utils
+  # Build on stable, not the nightly rust-toolchain.toml pin; see AGENTS.md,
+  # "Toolchain Selection".
+  RUSTUP_TOOLCHAIN: stable
 
 jobs:
   # Derives the bench matrix from cargo metadata rather than a hand-maintained

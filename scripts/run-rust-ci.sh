@@ -20,7 +20,7 @@ Commands:
   build              Run cargo build with the CI profile
   build-benches      Build every workspace bench target with the CI profile
   bench              Run one bench target by name with the CI profile
-  clippy             Run the pinned PR clippy toolchain with the CI profile
+  clippy             Run clippy on the pinned toolchain with the CI profile
   clippy-nightly     Run the latest nightly clippy toolchain with the CI profile
   test               Run cargo-nextest with the CI profile
   benchmark-example  Run the benchmark example exercised by CI
@@ -96,6 +96,17 @@ case "$profile" in
         ;;
 esac
 
+# Commands that build or run code use stable rather than the nightly
+# rust-toolchain.toml pin (see AGENTS.md, "Toolchain Selection"). This is a
+# default, not an override: a caller that exports RUSTUP_TOOLCHAIN can point
+# these commands at another toolchain, such as the declared rust-version.
+# `clippy` is excluded because it wants the pin.
+case "$command" in
+    check | build | build-benches | bench | test | benchmark-example | insert-example)
+        export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-stable}"
+        ;;
+esac
+
 # Expanding an empty array with "${arr[@]}" is an unbound-variable error
 # under `set -u` on bash < 4.4 (macOS ships 3.2), so expansion sites use
 # ${arr[@]+"${arr[@]}"} instead.
@@ -131,9 +142,12 @@ case "$command" in
         cargo bench --frozen ${cargo_args[@]+"${cargo_args[@]}"} --workspace --bench "$1" -- --noplot
         ;;
     clippy)
-        cargo +nightly-2026-07-05 clippy --locked ${cargo_args[@]+"${cargo_args[@]}"} --workspace --all-targets -- -D warnings
+        # Toolchain comes from rust-toolchain.toml.
+        cargo clippy --locked ${cargo_args[@]+"${cargo_args[@]}"} --workspace --all-targets -- -D warnings
         ;;
     clippy-nightly)
+        # The floating nightly. `+nightly` outranks RUSTUP_TOOLCHAIN and
+        # rust-toolchain.toml alike.
         cargo +nightly clippy --locked ${cargo_args[@]+"${cargo_args[@]}"} --workspace --all-targets -- -D warnings
         ;;
     test)
