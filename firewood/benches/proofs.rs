@@ -12,14 +12,20 @@ use std::iter::repeat_with;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::Criterion;
+use criterion::criterion_group;
+use criterion::criterion_main;
 use firewood::Merkle;
 use firewood::api::DbView as _;
 use firewood::verify_range_proof_structure;
-use firewood_storage::{
-    DefaultHashMode, DeletedNodeTracking, HashMode, MemStore, NodeStore, SeededRng,
-};
-use rand::{RngExt, distr::Alphanumeric};
+use firewood_storage::DefaultHashMode;
+use firewood_storage::DeletedNodeTracking;
+use firewood_storage::HashMode;
+use firewood_storage::MemStore;
+use firewood_storage::NodeStore;
+use firewood_storage::SeededRng;
+use rand::RngExt;
+use rand::distr::Alphanumeric;
 
 #[expect(clippy::unwrap_used, clippy::indexing_slicing)]
 fn bench_proofs(criterion: &mut Criterion) {

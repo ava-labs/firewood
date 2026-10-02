@@ -3,7 +3,8 @@
 
 use smallvec::SmallVec;
 
-use super::{PathComponent, TriePath};
+use super::PathComponent;
+use super::TriePath;
 
 /// A trie path that can be (cheaply) split into two sub-paths.
 ///

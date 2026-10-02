@@ -7,11 +7,19 @@ mod joined;
 mod packed;
 mod split;
 
-pub use self::buf::{PartialPath, PathBuf, PathGuard};
-pub use self::component::{ComponentIter, PathComponent, PathComponentSliceExt};
+pub use self::buf::PartialPath;
+pub use self::buf::PathBuf;
+pub use self::buf::PathGuard;
+pub use self::component::ComponentIter;
+pub use self::component::PathComponent;
+pub use self::component::PathComponentSliceExt;
 pub use self::joined::JoinedPath;
-pub use self::packed::{PackedBytes, PackedPathComponents, PackedPathRef};
-pub use self::split::{IntoSplitPath, PathCommonPrefix, SplitPath};
+pub use self::packed::PackedBytes;
+pub use self::packed::PackedPathComponents;
+pub use self::packed::PackedPathRef;
+pub use self::split::IntoSplitPath;
+pub use self::split::PathCommonPrefix;
+pub use self::split::SplitPath;
 
 /// A trie path of components with different underlying representations.
 ///

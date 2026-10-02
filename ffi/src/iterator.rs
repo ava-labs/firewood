@@ -4,8 +4,11 @@
 use std::fmt;
 use std::iter::FusedIterator;
 
-use firewood::api::{self, ArcDynDbView, BoxKeyValueIter};
-use firewood::{Key, Value};
+use firewood::Key;
+use firewood::Value;
+use firewood::api;
+use firewood::api::ArcDynDbView;
+use firewood::api::BoxKeyValueIter;
 use firewood_metrics::MetricsContext;
 
 type KeyValueItem = (Key, Value);
