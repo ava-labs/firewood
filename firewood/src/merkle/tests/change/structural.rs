@@ -11,8 +11,9 @@
 //! - `StartProofOperationMismatch` — attack.rs (adversarial boundary injection)
 //! - `EndProofOperationMismatch` — attack.rs (adversarial boundary injection)
 
-use super::*;
 use test_case::test_case;
+
+use super::*;
 
 #[test]
 fn test_inverted_range_rejected() {

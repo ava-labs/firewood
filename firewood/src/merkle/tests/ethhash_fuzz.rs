@@ -24,6 +24,11 @@
 use std::collections::{BTreeMap, HashSet};
 use std::time::{Duration, Instant};
 
+use firewood_storage::{
+    DefaultHashMode, HashMode, NodeHashAlgorithm, SeededRng, replace_list_field,
+};
+use rand::seq::SliceRandom;
+
 use super::change::fuzz_common::{
     build_change_proof, build_range_proof, change_proof_rejected,
     maybe_serialize_round_trip_change, maybe_serialize_round_trip_range,
@@ -35,10 +40,6 @@ use crate::api::{
 use crate::db::{Db, DbConfig};
 use crate::merkle::{Key, Value, verify_change_proof_root_hash, verify_range_proof};
 use crate::verify_change_proof_structure;
-use firewood_storage::{
-    DefaultHashMode, HashMode, NodeHashAlgorithm, SeededRng, replace_list_field,
-};
-use rand::seq::SliceRandom;
 
 /// An account's key paired with its sorted, distinct storage-slot bytes (byte
 /// 32 of its 64-byte storage keys). The generator only emits slot bytes of the
