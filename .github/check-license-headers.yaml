@@ -50,6 +50,7 @@
       "**/tests/compile_*/**",
       "justfile",
       "scripts/**",
+      "infra/**",
       "**/*.snap",
     ],
   }
