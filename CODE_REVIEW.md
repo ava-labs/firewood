@@ -138,6 +138,9 @@ When any unsafe Rust or Go code is present, or when a change crosses the FFI bou
   that `runtime.AddCleanup` can reclaim the wrapper when the user drops their last
   reference. See `ffi/keepalive.go` for the lock-ordering invariants and the
   closed-registry contract.
+- A Go handle whose Rust context borrows nothing from the `Database` (`RangeProof`
+  and `ChangeProof`) must not attach a lease. Its `lease.mu` only serializes its
+  methods against `Drop`, and it takes `db.handleLock` only around a database call.
 
 ## Labeling
 
