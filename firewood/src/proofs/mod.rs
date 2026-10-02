@@ -137,7 +137,7 @@
 //!   ^        ^       ^          ^ ^           ^       ^         ^
 //!   |        |       |          | |           |       |         |
 //!  0x00      |  first_proof_key | |    last_proof_key |       0xff..
-//!            |       ^          | |           ^       |     
+//!            |       ^          | |           ^       |
 //!         requested_start_key   | |        requested_end_key
 //!       (2 possible locations)  | |        (2 possible locations)
 //!                               | |
@@ -334,7 +334,6 @@ pub use self::change::{
     ChangeProof, ChangeProofVerificationContext, find_next_key_after_change_proof,
     verify_change_proof_structure,
 };
-
 pub(crate) use self::frame::MAX_DECOMPRESSED_LEN;
 pub use self::header::InvalidHeader;
 pub use self::range::{

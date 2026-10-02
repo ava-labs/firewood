@@ -1,5 +1,6 @@
 # https://rust-lang.github.io/rustfmt/
 
+group_imports = "StdExternalCrate"
 normalize_comments = true
 normalize_doc_attributes = true
 format_macro_matchers = true

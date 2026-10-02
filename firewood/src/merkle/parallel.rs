@@ -1,9 +1,10 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::api::IntoBatchIter;
-use crate::db::BatchOp;
-use crate::merkle::{Key, Merkle, Value};
+use std::iter::once;
+use std::sync::mpsc;
+use std::sync::mpsc::{Receiver, SendError, Sender};
+
 use firewood_metrics::{current_metrics_context, set_metrics_context};
 use firewood_storage::logger::error;
 use firewood_storage::{
@@ -11,9 +12,10 @@ use firewood_storage::{
     Mutable, NibblesIterator, Node, NodeStore, Path, PathComponent, Propose,
 };
 use rayon::ThreadPool;
-use std::iter::once;
-use std::sync::mpsc;
-use std::sync::mpsc::{Receiver, SendError, Sender};
+
+use crate::api::IntoBatchIter;
+use crate::db::BatchOp;
+use crate::merkle::{Key, Merkle, Value};
 
 #[derive(Debug)]
 struct WorkerSender(mpsc::Sender<BatchOp<Key, Value>>);
