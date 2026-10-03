@@ -8,11 +8,11 @@ use crate::rendered_metrics::MapIntoCollection;
 use crate::{OwnedRenderedMetrics, jemalloc_metrics};
 use firewood_metrics::{HistogramConfig, HistogramMetricConfig};
 use firewood_metrics::{MetricsContext, firewood_histogram};
-use metrics_exporter_prometheus::{
-    Matcher, NativeHistogramConfig, PrometheusBuilder, PrometheusHandle,
+use metrics_collector_prometheus::{
+    CollectorHandle, Matcher, NativeHistogramConfig, PrometheusCollectorBuilder,
 };
 
-static RECORDER: OnceLock<PrometheusHandle> = OnceLock::new();
+static RECORDER: OnceLock<CollectorHandle> = OnceLock::new();
 
 /// Trait for types that carry a [`MetricsContext`].
 ///
@@ -54,8 +54,8 @@ pub fn setup_metrics() -> Result<(), Box<dyn Error>> {
 
     let builder = histogram_configs
         .iter()
-        .try_fold(PrometheusBuilder::new(), apply_histogram_config)?;
-    let handle = builder.install_recorder()?;
+        .try_fold(PrometheusCollectorBuilder::new(), apply_histogram_config)?;
+    let handle = builder.install()?;
 
     RECORDER
         .set(handle)
@@ -65,9 +65,9 @@ pub fn setup_metrics() -> Result<(), Box<dyn Error>> {
 }
 
 fn apply_histogram_config(
-    builder: PrometheusBuilder,
+    builder: PrometheusCollectorBuilder,
     config: &HistogramMetricConfig,
-) -> Result<PrometheusBuilder, Box<dyn Error>> {
+) -> Result<PrometheusCollectorBuilder, Box<dyn Error>> {
     let matcher = Matcher::Full(config.name.to_owned());
     Ok(match config.config {
         HistogramConfig::Buckets(ref buckets) => {
@@ -97,7 +97,7 @@ pub fn gather_rendered_metrics() -> Result<OwnedRenderedMetrics, String> {
     let recorder = RECORDER.get().ok_or("recorder not initialized")?;
     jemalloc_metrics::refresh();
     let start = std::time::Instant::now();
-    let result = recorder.render_snapshot_and_descriptions().map_into();
+    let result = recorder.collect().map_into();
     let elapsed = start.elapsed();
     firewood_histogram!(cheap: GATHER_DURATION_SECONDS).record(elapsed.as_secs_f64());
     Ok(result)

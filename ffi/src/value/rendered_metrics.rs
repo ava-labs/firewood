@@ -1,7 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use metrics_exporter_prometheus::render;
+use metrics_collector_prometheus::snapshot as render;
 
 use super::Maybe;
 use super::owned::{OwnedBytes, OwnedSlice};
