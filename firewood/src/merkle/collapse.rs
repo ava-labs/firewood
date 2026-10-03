@@ -276,7 +276,7 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
         let child_node = self.read_for_update(child)?;
         let child_node =
             self.collapse_navigate(child_node, deeper, suffix, parent_prefix, range)?;
-        branch.children[child_component] = Some(Child::Node(child_node));
+        branch.children[child_component] = Some(Child::Node(Box::new(child_node)));
         Ok(node)
     }
 
@@ -315,7 +315,7 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
 
         child_node = self.collapse_strip(child_node, after_child, &child_prefix, range)?;
 
-        branch.children[first] = Some(Child::Node(child_node));
+        branch.children[first] = Some(Child::Node(Box::new(child_node)));
         Ok(node)
     }
 
@@ -473,7 +473,7 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
             child_node = self.collapse_strip(child_node, deeper, &child_prefix, range)?;
         }
 
-        branch.children[on_path] = Some(Child::Node(child_node));
+        branch.children[on_path] = Some(Child::Node(Box::new(child_node)));
 
         // A valued node is never flattened. When it has a single child,
         // merging into that child would drop the value and hide a forged or
