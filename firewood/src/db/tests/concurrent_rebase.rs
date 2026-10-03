@@ -35,6 +35,18 @@
 //!   enough other commits have reaped the initial empty revision out of
 //!   the manager's queue. The empty-parent diff must use a synthetic empty
 //!   view rather than `revisions_guard.front()` (which is no longer empty).
+//!
+//! - `test_rebase_onto_hash_equal_live_parent`: an A -> B -> A sequence
+//!   leaves two committed revisions sharing a root hash. Reaping the older
+//!   one must not evict the newer one from the manager's hash index, or a
+//!   proposal pinned to the newer one fails to find its parent to diff
+//!   against and `commit_with_rebase` reports `RevisionNotFound` for a
+//!   revision that is still in memory.
+//!
+//! - `test_rebase_after_failed_reap_of_parent`: an outstanding revision
+//!   handle makes the reap of a proposal's parent fail, so the parent goes
+//!   back onto the front of the queue. It is still live, so it must still
+//!   be findable by hash and the rebase must succeed.
 
 use std::thread;
 
@@ -512,4 +524,184 @@ fn test_empty_parent_rebase_after_reap() {
     // Reopen forces persist before check() to avoid `UnpersistedRoot` races.
     let db = db.reopen();
     assert_check_clean(&db, "post-empty-parent-rebase", false);
+}
+
+/// A -> B -> A leaves two committed revisions with the same root hash. The
+/// manager's hash index can only hold one entry per hash, and the newer
+/// revision owns it. Reaping the older revision must leave that entry alone.
+/// Reaping by hash without checking which revision currently owns the entry
+/// would unindex the newer revision while it is still in the queue; a
+/// proposal pinned to it would then fail to find its parent to diff against,
+/// and `commit_with_rebase` would report `RevisionNotFound` for a revision
+/// that is still in memory.
+#[test]
+fn test_rebase_onto_hash_equal_live_parent() {
+    // Sized so the round-trip pair is still in the queue when the older of
+    // the two is reaped: the queue holds [empty, C1, C2, C3] at capacity,
+    // and the two fillers below reap `empty` and then `C1`.
+    const TIGHT_MAX_REVISIONS: usize = 4;
+
+    let db = TestDb::new_with_config(
+        DbConfig::builder()
+            .manager(
+                RevisionManagerConfig::builder()
+                    .max_revisions(TIGHT_MAX_REVISIONS)
+                    .build(),
+            )
+            .build(),
+    );
+
+    let key = vec![0x42u8; 32];
+    let val_a = vec![0xaa, 0xbb];
+    let val_b = vec![0xcc, 0xdd];
+
+    // C1: K=A.
+    db.propose(vec![BatchOp::Put {
+        key: key.clone(),
+        value: val_a.clone(),
+    }])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let hash_c1 = <crate::db::Db<DefaultHashMode> as crate::api::Db>::root_hash(&db).unwrap();
+
+    // C2: K=B.
+    db.propose(vec![BatchOp::Put {
+        key: key.clone(),
+        value: val_b,
+    }])
+    .unwrap()
+    .commit()
+    .unwrap();
+
+    // C3: K=A again — same root hash as C1, different `CommittedId`.
+    db.propose(vec![BatchOp::Put {
+        key: key.clone(),
+        value: val_a.clone(),
+    }])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let hash_c3 = <crate::db::Db<DefaultHashMode> as crate::api::Db>::root_hash(&db).unwrap();
+    assert_eq!(
+        hash_c1, hash_c3,
+        "A -> B -> A must reproduce C1's root hash"
+    );
+
+    // P is pinned to C3, which is current at this point.
+    let key2 = vec![0x43u8; 32];
+    let val2 = vec![0xee, 0xff];
+    let proposal = db
+        .propose(vec![BatchOp::Put {
+            key: key2.clone(),
+            value: val2.clone(),
+        }])
+        .unwrap();
+
+    // These commits move C3 off the back of the queue and reap `empty` and
+    // C1. C3 stays in the queue, so P's parent is stale but still resident.
+    for i in 0..2u8 {
+        let mut filler = vec![0u8; 32];
+        filler[0] = 0x80; // distinct first nibble from `key`/`key2`
+        filler[31] = i;
+        db.propose(vec![BatchOp::Put {
+            key: filler,
+            value: vec![i; 4],
+        }])
+        .unwrap()
+        .commit()
+        .unwrap();
+    }
+
+    proposal
+        .commit_with_rebase()
+        .expect("rebase onto a live, hash-equal parent must succeed");
+
+    let final_hash = <crate::db::Db<DefaultHashMode> as crate::api::Db>::root_hash(&db).unwrap();
+    let view =
+        <crate::db::Db<DefaultHashMode> as crate::api::Db>::revision(&db, final_hash).unwrap();
+    assert_eq!(view.val(&key).unwrap().as_deref(), Some(val_a.as_slice()));
+    assert_eq!(view.val(&key2).unwrap().as_deref(), Some(val2.as_slice()));
+    drop(view);
+
+    let db = db.reopen();
+    assert_check_clean(&db, "post-hash-equal-parent-rebase", false);
+}
+
+/// A revision with an outstanding handle cannot be reaped, so it goes back
+/// onto the front of the queue and stays live. Its hash-index entry has to go
+/// back with it: the entry is dropped as part of the reap attempt, before the
+/// outcome is known, so without restoring it the resident revision would be
+/// left unindexed and `commit_with_rebase` unable to diff against it.
+#[test]
+fn test_rebase_after_failed_reap_of_parent() {
+    // C1 is the only prior commit, so the queue holds [empty, C1] before the
+    // fillers run. The four fillers below take it to capacity, reap `empty`,
+    // and then attempt C1, which is pinned by `parent_handle`.
+    const TIGHT_MAX_REVISIONS: usize = 4;
+
+    let db = TestDb::new_with_config(
+        DbConfig::builder()
+            .manager(
+                RevisionManagerConfig::builder()
+                    .max_revisions(TIGHT_MAX_REVISIONS)
+                    .build(),
+            )
+            .build(),
+    );
+
+    // C1 becomes P's parent.
+    let key = vec![0x42u8; 32];
+    let val = vec![0xaa, 0xbb];
+    db.propose(vec![BatchOp::Put {
+        key: key.clone(),
+        value: val.clone(),
+    }])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let hash_c1 = <crate::db::Db<DefaultHashMode> as crate::api::Db>::root_hash(&db).unwrap();
+
+    let key2 = vec![0x43u8; 32];
+    let val2 = vec![0xee, 0xff];
+    let proposal = db
+        .propose(vec![BatchOp::Put {
+            key: key2.clone(),
+            value: val2.clone(),
+        }])
+        .unwrap();
+
+    // Hold a handle on C1 so its reap cannot take ownership of the revision.
+    let parent_handle =
+        <crate::db::Db<DefaultHashMode> as crate::api::Db>::revision(&db, hash_c1).unwrap();
+
+    // C1 reaches the front of the queue during these commits, fails to reap,
+    // and is pushed back — still resident, and still P's parent.
+    for i in 0..4u8 {
+        let mut filler = vec![0u8; 32];
+        filler[0] = 0x80; // distinct first nibble from `key`/`key2`
+        filler[31] = i;
+        db.propose(vec![BatchOp::Put {
+            key: filler,
+            value: vec![i; 4],
+        }])
+        .unwrap()
+        .commit()
+        .unwrap();
+    }
+
+    proposal
+        .commit_with_rebase()
+        .expect("rebase onto a parent that failed to reap must succeed");
+    drop(parent_handle);
+
+    let final_hash = <crate::db::Db<DefaultHashMode> as crate::api::Db>::root_hash(&db).unwrap();
+    let view =
+        <crate::db::Db<DefaultHashMode> as crate::api::Db>::revision(&db, final_hash).unwrap();
+    assert_eq!(view.val(&key).unwrap().as_deref(), Some(val.as_slice()));
+    assert_eq!(view.val(&key2).unwrap().as_deref(), Some(val2.as_slice()));
+    drop(view);
+
+    let db = db.reopen();
+    assert_check_clean(&db, "post-failed-reap-rebase", false);
 }
