@@ -48,9 +48,9 @@ fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     .map(drop)
 }
 
-/// The stack `std::thread` gives a spawned thread on every Tier-1 platform.
-/// Firewood sets `stack_size` nowhere, so its own threads get this size. Threads
-/// the Go runtime creates for the FFI are sized by Go instead.
+/// The stack size `std::thread` gives a spawned thread when none is requested:
+/// 2 MiB on our supported platforms. Firewood's own threads run with this
+/// size. Threads the Go runtime creates for the FFI are sized by Go instead.
 const DEFAULT_THREAD_STACK: usize = 2 * 1024 * 1024;
 
 /// Runs `f` on a thread with a `stack_bytes` stack and joins it.
