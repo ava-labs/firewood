@@ -150,6 +150,13 @@ pub enum ProofError {
     #[error("account value is not an RLP list with a storage root field")]
     MalformedAccountValue,
 
+    /// A node holds a zero-length value, which the Ethereum scheme hashes the
+    /// same as no value.
+    #[error(
+        "proof node carries an empty value, which the Ethereum hash scheme encodes as no value"
+    )]
+    EmptyValue,
+
     /// Child index is out of bounds
     #[error("child index is out of bounds")]
     ChildIndexOutOfBounds,
@@ -567,6 +574,8 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
     /// - [`ProofError::MalformedAccountValue`] — under the Ethereum scheme, a
     ///   node at account depth has children but holds a value that is not an
     ///   RLP list with a storage-root field.
+    /// - [`ProofError::EmptyValue`] — under the Ethereum scheme, a node holds a
+    ///   zero-length value, which hashes the same as no value.
     /// - [`ProofError::ValueAtOddNibbleLength`] — a node whose key has an odd
     ///   number of nibbles carries a value digest, which is structurally invalid.
     /// - [`ProofError::UnexpectedValueDigest`] — a node carries a hashed value
@@ -680,6 +689,16 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
                 && matches!(node.value_digest(), Some(ValueDigest::Hash(_)))
             {
                 return Err(ProofError::UnexpectedValueDigest);
+            }
+
+            // Under the Ethereum scheme an empty value encodes exactly as no value,
+            // so a proof of an empty value could be restated as a proof of
+            // absence. Empty values are not stored under that scheme.
+            if H::ALGORITHM.is_ethereum()
+                && let Some(ValueDigest::Value(value)) = node.value_digest()
+                && value.is_empty()
+            {
+                return Err(ProofError::EmptyValue);
             }
 
             // Under the Ethereum scheme a value at account depth is the account's
@@ -994,13 +1013,33 @@ mod tests {
     use super::*;
     use firewood_storage::DefaultHashMode;
 
-    /// F4 (#2205): absent value and present zero-length value hash identically.
+    /// An absent value and a present zero-length value hash identically, so the
+    /// verifier rejects a node that carries an empty value.
     #[cfg(feature = "ethhash")]
     #[test]
-    fn scan_f4_empty_vs_absent_value() {
+    fn empty_value_is_rejected() {
         let absent = make_node(&[1, 2], 0, None, DenseChildren::new());
         let empty = make_node(&[1, 2], 0, Some(b""), DenseChildren::new());
         assert_eq!(absent.to_hash(), empty.to_hash());
+
+        let root_hash: TrieHash = absent.to_hash().into_triehash();
+        let key = [0x12u8];
+        assert!(matches!(
+            Proof::new(vec![absent]).value_digest(
+                key.as_slice(),
+                &root_hash,
+                NodeHashAlgorithm::Ethereum
+            ),
+            Ok(None)
+        ));
+        assert!(matches!(
+            Proof::new(vec![empty]).value_digest(
+                key.as_slice(),
+                &root_hash,
+                NodeHashAlgorithm::Ethereum
+            ),
+            Err(ProofError::EmptyValue)
+        ));
     }
 
     /// A later node moved two nibbles deeper, with its partial path and so its

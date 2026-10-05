@@ -40,6 +40,7 @@ pub enum CreateProposalError {
     FileIoError(FileIoError),
     SendError,
     InvalidConversionToPathComponent,
+    EmptyValue,
 }
 
 impl From<FileIoError> for CreateProposalError {
@@ -378,8 +379,10 @@ impl ParallelMerkle {
     ///
     /// Returns a `CreateProposalError::FileIoError` if it encounters an error fetching nodes
     /// from storage, a `CreateProposalError::SendError` if it is unable to send messages to
-    /// the workers, and a `CreateProposalError::InvalidConversionToPathComponent` if it is
-    /// unable to convert a u8 index into a path component.
+    /// the workers, a `CreateProposalError::InvalidConversionToPathComponent` if it is
+    /// unable to convert a u8 index into a path component, and a
+    /// `CreateProposalError::EmptyValue` if a `Put` carries an empty value under the
+    /// Ethereum hash scheme.
     pub fn apply<H: HashMode>(
         &mut self,
         mut mutable_nodestore: NodeStore<Mutable<Propose>, FileBacked, H>,
@@ -397,6 +400,12 @@ impl ParallelMerkle {
         // responsible for the sub-trie corresponding to the operation's first nibble.
         for res in batch.into_batch_iter::<CreateProposalError>() {
             let op = res?;
+            if H::ALGORITHM.is_ethereum()
+                && let BatchOp::Put { value, .. } = &op
+                && value.as_ref().is_empty()
+            {
+                return Err(CreateProposalError::EmptyValue);
+            }
             // Get the first nibble of the key to determine which worker to send the request to.
             //
             // Need to handle an empty key. Since the partial_path of the root must be empty, an

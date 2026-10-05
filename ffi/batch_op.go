@@ -12,7 +12,8 @@ import "C"
 // BatchOp uses an explicit tagged representation so that the intent of each
 // operation is unambiguous. In particular, a [Put] with an empty (zero-length)
 // value stores an empty value — it does NOT delete the key. Use [Delete] or
-// [PrefixDelete] to remove keys.
+// [PrefixDelete] to remove keys. Under Ethereum node hashing an empty value is
+// rejected, because that scheme hashes an empty value the same as no value.
 type BatchOp struct {
 	tag   C.BatchOp_Tag
 	key   []byte // key for Put/Delete, prefix for DeleteRange
@@ -20,7 +21,8 @@ type BatchOp struct {
 }
 
 // Put creates a BatchOp that inserts or updates a key with a value.
-// The value may be empty (zero-length) to store an empty value.
+// The value may be empty (zero-length) to store an empty value, except under
+// Ethereum node hashing, which rejects it.
 func Put(key, value []byte) BatchOp {
 	return BatchOp{
 		tag:   C.BatchOp_Put,

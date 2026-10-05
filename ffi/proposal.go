@@ -112,8 +112,8 @@ func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 // committed. Additionally, it must be committed or released before the [Database] is closed.
 //
 // Use [Put], [Delete], and [PrefixDelete] to create batch operations. A [Put]
-// with an empty value stores an empty value; use [Delete] or [PrefixDelete] to
-// remove keys.
+// with an empty value stores an empty value, except under Ethereum node hashing,
+// which rejects it. Use [Delete] or [PrefixDelete] to remove keys.
 func (p *Proposal) Propose(batch []BatchOp) (*Proposal, error) {
 	p.lease.mu.RLock()
 	defer p.lease.mu.RUnlock()
