@@ -34,11 +34,13 @@ providing inline feedback — in addition to general best practices.
 - **Error propagation (`?`)**: Ensure propagated errors carry enough context to diagnose
   the failure at the call site. Reject silently discarded errors and uses where the error
   should be handled locally rather than propagated upward.
-- **Nibble range bounds**: A nibble-path lower bound uses the empty slice for
+- **Nibble range bounds**: An inclusive nibble-path lower bound uses the empty slice for
   "unbounded" — the empty slice already sorts as the minimum key. An upper bound must be
   `Option<&[u8]>` with `None` for unbounded (+∞); reusing the empty slice there judges
-  every key out of range. When either bound is threaded through new code, check every
-  comparison site. See `merkle::collapse::CollapseRange` and
+  every key out of range. An *exclusive* lower bound is the one case that needs
+  `Option` too, because `Some(&[])` excludes the empty key and `None` admits it (see
+  `proofs::holes::open_interval`). When either bound is threaded through new code, check
+  every comparison site. See `merkle::collapse::CollapseRange` and
   `proofs::holes::KeySpan::as_key_range`.
 
 ## Lint Suppression Policy

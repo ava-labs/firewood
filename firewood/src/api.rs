@@ -147,6 +147,15 @@ pub enum Error {
     #[error("Internal error")]
     InternalError(Box<dyn std::error::Error + Send + Sync>),
 
+    /// A view could not supply the hash of a subtree because the probed
+    /// position runs through, or lands on a node that holds, a child kept in
+    /// memory without a hash.
+    #[error("view cannot supply a subtree hash: {reason}")]
+    UnhashedView {
+        /// Where on the probed path the unhashed child was met.
+        reason: &'static str,
+    },
+
     /// Cannot rebase a proposal whose parent is not a committed revision
     #[error("cannot rebase: proposal parent is not committed")]
     ParentNotCommitted,

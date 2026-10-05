@@ -335,7 +335,7 @@ pub use self::change::{
 
 pub(crate) use self::frame::MAX_DECOMPRESSED_LEN;
 pub use self::header::InvalidHeader;
-pub use self::holes::{DeletePrefixes, KeySpan};
+pub use self::holes::{DeletePrefixes, Hole, KeySpan};
 pub use self::range::{
     KeyRange, RangeProof, RangeProofVerificationContext, VerifiedRangeProof,
     find_next_key_after_range_proof, verify_range_proof_structure,

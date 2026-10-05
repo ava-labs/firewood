@@ -6,11 +6,13 @@
 //! A [`KeySpan`] names a contiguous span of the key space by its nibble
 //! prefix — the shape a trie's sealed sibling stubs commit to. Spans convert
 //! to byte-key ranges ([`KeySpan::as_key_range`]) and to the byte prefixes a
-//! [`BatchOp::DeleteRange`] accepts ([`KeySpan::delete_prefixes`]).
+//! [`BatchOp::DeleteRange`] accepts ([`KeySpan::delete_prefixes`]). A
+//! [`Hole`] labels a span or a single key with the remedy that brings the
+//! local trie into agreement with the target there.
 //!
 //! [`BatchOp::DeleteRange`]: crate::api::BatchOp::DeleteRange
 
-use firewood_storage::{Children, PathBuf, TriePathAsPackedBytes, prefix_successor};
+use firewood_storage::{Children, PathBuf, PathComponent, TriePathAsPackedBytes, prefix_successor};
 
 /// A contiguous span of key space: all keys carrying a nibble prefix.
 ///
@@ -25,13 +27,6 @@ pub struct KeySpan {
 
 impl KeySpan {
     /// Creates a span from its nibble prefix.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no production caller yet; the hole-detection walk lands in a later change"
-        )
-    )]
     pub(crate) const fn new(prefix: PathBuf) -> Self {
         Self { prefix }
     }
@@ -103,6 +98,176 @@ pub enum DeletePrefixes {
     /// The nibble prefix is odd-length: one byte prefix per completing nibble,
     /// each completion being even-length and therefore packable.
     PerNibble(Children<Box<[u8]>>),
+}
+
+/// One classified span or point of the key space outside a proven range.
+///
+/// Post-merge hole detection compares the sealed sibling hashes a verified
+/// boundary proof carries against the local trie and labels every part of
+/// the key space the proof did not cover. Each variant names the remedy that
+/// brings the local trie into agreement with the target there. A consumer
+/// must apply every remedy it is handed or its local state diverges, which is
+/// why this enum is closed: adding a label is a breaking change for every
+/// correct consumer, and a wildcard arm would turn that break into a silent
+/// root-hash mismatch.
+///
+/// Spans never overlap except where both carry a deletion or agreement label,
+/// so the order in which remedies are applied does not matter: deleting a span twice
+/// is idempotent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Hole {
+    /// The target holds keys under this span and the local trie holds none.
+    /// Remedy: fetch the span, with a range proof.
+    Missing(KeySpan),
+    /// Both tries hold keys under this span and their contents differ.
+    /// Remedy: fetch the span.
+    Stale(KeySpan),
+    /// The target provably holds no keys under this span and the local trie
+    /// holds some. Remedy: delete the span locally through
+    /// [`KeySpan::delete_prefixes`]; the absence is authenticated, so nothing
+    /// is fetched. The span may extend past the range the proof was applied
+    /// to: the target is empty over its whole extent, so deleting all of it
+    /// cannot remove a key the proof wrote.
+    Surplus(KeySpan),
+    /// The local subtree hash under this span equals the target's sealed
+    /// sibling hash, which verifies the local content equal to the target's
+    /// with the strength of a range proof over the span. Remedy: record the
+    /// span as synchronized at this root and do not fetch it again.
+    Synced(KeySpan),
+    /// An exact key whose target value is in hand from a verified proof node.
+    /// Remedy: write the value locally; nothing is fetched.
+    PointFix {
+        /// The key.
+        key: Box<[u8]>,
+        /// The target's value for the key.
+        value: Box<[u8]>,
+    },
+    /// An exact key whose target value differs from the local one but is
+    /// known only by digest: under the MerkleDB hashing scheme, a value of 32
+    /// bytes or more appears in a proof as its hash. Remedy: fetch the key.
+    PointStale {
+        /// The key.
+        key: Box<[u8]>,
+    },
+    /// An exact key the target provably lacks and the local trie holds.
+    /// Remedy: delete the key locally.
+    PointSurplus {
+        /// The key.
+        key: Box<[u8]>,
+    },
+}
+
+/// The key space strictly between two nibble paths, decomposed into the
+/// pieces a hole-detection walk labels: nibble-prefix spans plus the byte
+/// keys that are proper prefixes of the upper bound.
+///
+/// A proper prefix of a key sorts before it but lies under no span that
+/// excludes it, so those keys are reported separately as points. Only
+/// even-length prefixes are keys, since keys are byte strings.
+#[derive(Debug, Default, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "no production caller yet; the hole-detection walk lands in a later change"
+    )
+)]
+pub(crate) struct OpenInterval {
+    /// Pairwise incomparable: no span's prefix is a prefix of another's.
+    pub(crate) spans: Vec<KeySpan>,
+    /// Byte keys inside the interval that no span covers.
+    pub(crate) points: Vec<Box<[u8]>>,
+}
+
+/// Decomposes the open interval `(lower_exclusive, upper_exclusive)` of the
+/// key space into spans and points whose union is exactly that interval.
+///
+/// With no lower bound the interval is everything below `upper_exclusive`,
+/// the shape an empty start proof leaves below the requested start key. With
+/// both bounds it is the gap between a proven right edge and the first
+/// target key above it. An empty interval — `lower_exclusive` at or above
+/// `upper_exclusive` — yields nothing.
+///
+/// The decomposition follows the two bounds' nibble paths: at the first
+/// offset where they disagree, the nibbles strictly between them; above the
+/// lower bound, at each deeper offset, the nibbles above its own; below the
+/// upper bound, at each deeper offset, the nibbles below its own; and every
+/// nibble extending the lower bound itself, since those keys all sort above
+/// it. Each piece is a span. The upper bound's proper prefixes deeper than
+/// the divergence are the points.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "no production caller yet; the hole-detection walk lands in a later change"
+    )
+)]
+pub(crate) fn open_interval(
+    lower_exclusive: Option<&[PathComponent]>,
+    upper_exclusive: &[PathComponent],
+) -> OpenInterval {
+    let mut interval = OpenInterval::default();
+    let mut span = |prefix: &[PathComponent], depth: usize, last: PathComponent| {
+        let mut path: PathBuf = prefix.iter().take(depth).copied().collect();
+        path.push(last);
+        interval.spans.push(KeySpan::new(path));
+    };
+
+    // `spans_from`: the offset from which the upper bound's own path is
+    // walked. `points_from`: the offset from which its proper prefixes lie
+    // strictly above the lower bound.
+    let (spans_from, points_from) = match lower_exclusive {
+        None => (0, 0),
+        Some(lower) => {
+            let common = lower
+                .iter()
+                .zip(upper_exclusive)
+                .take_while(|(a, b)| a == b)
+                .count();
+            // `common` never exceeds the shorter bound's length, so stepping
+            // past it cannot overflow.
+            debug_assert!(common <= lower.len().min(upper_exclusive.len()));
+            let next = common.wrapping_add(1);
+            match (lower.get(common), upper_exclusive.get(common)) {
+                // The lower bound is a proper prefix of the upper bound: every
+                // key between them extends the lower bound and sorts below the
+                // upper, which the upper-bound walk from `common` covers. The
+                // prefix at `common` is the lower bound itself, not a point.
+                (None, Some(_)) => (common, next),
+                // The bounds diverge with the lower one smaller.
+                (Some(&low), Some(&high)) if low < high => {
+                    for n in PathComponent::ALL
+                        .into_iter()
+                        .filter(|n| *n > low && *n < high)
+                    {
+                        span(upper_exclusive, common, n);
+                    }
+                    for (offset, &own) in lower.iter().enumerate().skip(next) {
+                        for n in PathComponent::ALL.into_iter().filter(|n| *n > own) {
+                            span(lower, offset, n);
+                        }
+                    }
+                    for n in PathComponent::ALL {
+                        span(lower, lower.len(), n);
+                    }
+                    (next, next)
+                }
+                // Equal bounds, or the lower bound at or above the upper one.
+                _ => return interval,
+            }
+        }
+    };
+
+    for (offset, &own) in upper_exclusive.iter().enumerate().skip(spans_from) {
+        if offset >= points_from && offset.is_multiple_of(2) {
+            let prefix: PathBuf = upper_exclusive.iter().take(offset).copied().collect();
+            interval.points.push(prefix.as_packed_bytes().collect());
+        }
+        for n in PathComponent::ALL.into_iter().filter(|n| *n < own) {
+            span(upper_exclusive, offset, n);
+        }
+    }
+    interval
 }
 
 impl IntoIterator for DeletePrefixes {
@@ -215,17 +380,8 @@ mod tests {
         let (lower, upper) = span.as_key_range();
         let prefixes: Vec<Box<[u8]>> = span.delete_prefixes().into_iter().collect();
 
-        let mut keys: Vec<Vec<u8>> = vec![Vec::new()];
-        keys.extend((0u8..=u8::MAX).map(|b| vec![b]));
-        keys.extend((0u16..=u16::MAX).map(|k| k.to_be_bytes().to_vec()));
-        keys.extend((0u16..=u16::MAX).step_by(16).map(|k| {
-            let mut key = k.to_be_bytes().to_vec();
-            key.push(0x5A);
-            key
-        }));
-
         let mut in_range_count = 0usize;
-        for key in keys {
+        for key in key_universe() {
             let in_range =
                 key.as_slice() >= &*lower && upper.as_deref().is_none_or(|u| key.as_slice() < u);
             let covered = prefixes.iter().any(|p| key.starts_with(p));
@@ -268,5 +424,140 @@ mod tests {
         assert_prefixes_match_range(&span(&[0xF]));
         assert_prefixes_match_range(&span(&[0xA, 0xF, 0xF]));
         assert_prefixes_match_range(&span(&[0x0]));
+    }
+
+    fn components(nibbles: &[u8]) -> Vec<PathComponent> {
+        nibbles
+            .iter()
+            .map(|&n| PathComponent::try_new(n).expect("test nibble in range"))
+            .collect()
+    }
+
+    fn key_nibbles(key: &[u8]) -> Vec<PathComponent> {
+        key.iter()
+            .flat_map(|&b| [b >> 4, b & 0xF])
+            .map(|n| PathComponent::try_new(n).expect("a nibble is in range"))
+            .collect()
+    }
+
+    /// The same key universe `assert_prefixes_match_range` uses.
+    fn key_universe() -> Vec<Vec<u8>> {
+        let mut keys: Vec<Vec<u8>> = vec![Vec::new()];
+        keys.extend((0u8..=u8::MAX).map(|b| vec![b]));
+        keys.extend((0u16..=u16::MAX).map(|k| k.to_be_bytes().to_vec()));
+        keys.extend((0u16..=u16::MAX).step_by(16).map(|k| {
+            let mut key = k.to_be_bytes().to_vec();
+            key.push(0x5A);
+            key
+        }));
+        keys
+    }
+
+    /// Every key strictly between the bounds lies in exactly one span or is
+    /// exactly one point, no key outside the bounds is covered, and the spans
+    /// are pairwise incomparable. `expect_keys` says whether the universe is
+    /// expected to hold any key inside the interval, so an empty interval can
+    /// be asserted deliberately rather than passing vacuously.
+    fn assert_open_interval_partitions(lower: Option<&[u8]>, upper: &[u8], expect_keys: bool) {
+        let lower = lower.map(components);
+        let upper = components(upper);
+        let interval = open_interval(lower.as_deref(), &upper);
+
+        let spans: Vec<Vec<PathComponent>> = interval
+            .spans
+            .iter()
+            .map(|s| s.prefix.iter().copied().collect())
+            .collect();
+        for (i, a) in spans.iter().enumerate() {
+            for (j, b) in spans.iter().enumerate() {
+                assert!(
+                    i == j || !a.starts_with(b),
+                    "span {a:?} lies under span {b:?}"
+                );
+            }
+        }
+
+        let strictly_inside = |path: &[PathComponent]| {
+            lower.as_ref().is_none_or(|lo| path > lo.as_slice()) && path < upper.as_slice()
+        };
+        // Points are checked directly as well as through the universe, so a
+        // spurious point longer than any universe key cannot slip through.
+        for point in &interval.points {
+            assert!(
+                strictly_inside(&key_nibbles(point)),
+                "point {point:02x?} lies outside the bounds"
+            );
+        }
+
+        let mut inside_count = 0usize;
+        for key in key_universe() {
+            let path = key_nibbles(&key);
+            let inside = strictly_inside(&path);
+            let span_hits = spans.iter().filter(|s| path.starts_with(s)).count();
+            let point_hits = interval.points.iter().filter(|p| ***p == *key).count();
+            assert_eq!(
+                usize::from(inside),
+                span_hits.saturating_add(point_hits),
+                "key {key:02x?}: inside={inside} spans={span_hits} points={point_hits}"
+            );
+            if inside {
+                inside_count = inside_count.saturating_add(1);
+            }
+        }
+        assert_eq!(
+            expect_keys,
+            inside_count > 0,
+            "the key universe holds {inside_count} keys inside the interval"
+        );
+    }
+
+    #[test]
+    fn open_interval_below_an_anchor_covers_everything_under_it() {
+        // The empty-start-proof shape: everything below the requested start key,
+        // including the empty key and the anchor's own even-length prefixes.
+        assert_open_interval_partitions(None, &[0xA, 0x7, 0x1, 0x1], true);
+        assert_open_interval_partitions(None, &[0x0, 0x0], true);
+        assert_open_interval_partitions(None, &[0xF, 0xF, 0xF, 0xF], true);
+    }
+
+    #[test]
+    fn open_interval_between_two_keys() {
+        // The proven-right-edge gap: local 0x26 lies between a proven edge of
+        // 0x25 and a target key of 0x28 and must land in exactly one span.
+        assert_open_interval_partitions(Some(&[0x2, 0x5]), &[0x2, 0x8], true);
+        // Divergence deep inside shared structure.
+        assert_open_interval_partitions(Some(&[0xA, 0x7, 0x1, 0x1]), &[0xA, 0x7, 0x7, 0x7], true);
+        // Carry across a byte boundary.
+        assert_open_interval_partitions(Some(&[0xA, 0xF, 0xF, 0xF]), &[0xB, 0x0, 0x0, 0x0], true);
+        // Adjacent keys: only the lower key's extensions lie between them.
+        assert_open_interval_partitions(Some(&[0xA, 0x7]), &[0xA, 0x8], true);
+    }
+
+    #[test]
+    fn open_interval_above_a_prefix_of_the_upper_bound() {
+        // The lower bound is a proper prefix of the upper bound, so the lower
+        // bound itself is excluded while the upper bound's proper prefixes
+        // deeper than it are points.
+        assert_open_interval_partitions(Some(&[0xA, 0x7]), &[0xA, 0x7, 0x7, 0x7], true);
+        // The empty key as lower bound: everything below the upper bound
+        // except the empty key.
+        assert_open_interval_partitions(Some(&[]), &[0xB, 0x0], true);
+    }
+
+    #[test]
+    fn open_interval_is_empty_for_equal_or_inverted_bounds() {
+        assert_open_interval_partitions(None, &[], false);
+        assert_open_interval_partitions(Some(&[0xA, 0x7]), &[0xA, 0x7], false);
+        assert_open_interval_partitions(Some(&[0xA, 0x8]), &[0xA, 0x7], false);
+        assert_open_interval_partitions(Some(&[0xA, 0x7, 0x1]), &[0xA, 0x7], false);
+        assert_eq!(open_interval(None, &[]), OpenInterval::default());
+    }
+
+    #[test]
+    fn open_interval_reports_the_empty_key_as_a_point() {
+        let interval = open_interval(None, &components(&[0xA, 0x7]));
+        assert_eq!(interval.points, vec![Box::<[u8]>::from([])]);
+        let interval = open_interval(Some(&[]), &components(&[0xA, 0x7]));
+        assert!(interval.points.is_empty());
     }
 }
