@@ -8,6 +8,7 @@ pub(crate) mod changes;
 pub(crate) mod childmask;
 pub(crate) mod collapse;
 pub(crate) mod descend;
+pub(crate) mod holes;
 mod merge;
 /// Parallel merkle
 pub mod parallel;
@@ -275,7 +276,7 @@ pub struct ProvenRange {
 /// *inclusive* bound needs the byte-string predecessor of `k`, which has no
 /// short representation. Under-reporting costs at most one extra round trip.
 /// Over-reporting would authorise unproven deletions.
-fn proven_right_edge(
+pub(crate) fn proven_right_edge(
     boundary: &RightBoundary<'_>,
     last_kv: Option<&[u8]>,
     requested_end: Option<&[u8]>,
@@ -921,7 +922,7 @@ fn reject_odd_nibble_value_digests(proof_nodes: &[ProofNode]) -> Result<(), Proo
 /// construction, present in `key_values`, so there is no off-path single-node
 /// subtree past `first_kv` that could synthesize incorrectly during hash
 /// reconstruction.
-fn right_edge<'a>(
+pub(crate) fn right_edge<'a>(
     end_proof: &[ProofNode],
     last_kv: Option<&'a [u8]>,
     fallback_last: Option<&'a [u8]>,

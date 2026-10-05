@@ -17,7 +17,9 @@ use crate::api::{
 use crate::iter::MerkleKeyValueIter;
 use crate::merkle::changes::DiffMerkleNodeStream;
 use crate::merkle::{Merkle, Value, verify_change_proof_root_hash};
-use crate::proofs::{ChangeProofVerificationContext, ProofError, VerifiedChangeProof};
+use crate::proofs::{
+    ChangeProofVerificationContext, Hole, ProofError, VerifiedChangeProof, VerifiedRangeProof,
+};
 use crate::verify_change_proof_structure;
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
@@ -705,6 +707,140 @@ impl ReconstructedView<'_> {
     #[must_use]
     pub fn view(&self) -> ArcDynDbView {
         Arc::clone(&self.nodestore) as ArcDynDbView
+    }
+
+    /// Classify the key space outside a verified range proof against this
+    /// view. See [`CommittedView::find_holes_after_range_proof`] for the
+    /// contract; a reconstructed view is what a sync client holds between
+    /// commits, and its lazily hashed root is forced before probing.
+    ///
+    /// # Errors
+    ///
+    /// As [`CommittedView::find_holes_after_range_proof`].
+    pub fn find_holes_after_range_proof(
+        &self,
+        verified: &VerifiedRangeProof,
+    ) -> Result<Vec<Hole>, api::Error> {
+        self.nodestore.find_holes_after_range_proof(verified)
+    }
+
+    /// Classify the key space outside a verified change proof against this
+    /// view. See [`CommittedView::find_holes_after_change_proof`].
+    ///
+    /// # Errors
+    ///
+    /// As [`CommittedView::find_holes_after_range_proof`].
+    pub fn find_holes_after_change_proof(
+        &self,
+        verified: &VerifiedChangeProof,
+    ) -> Result<Vec<Hole>, api::Error> {
+        self.nodestore.find_holes_after_change_proof(verified)
+    }
+}
+
+impl CommittedView {
+    /// Classify the key space outside the range a verified range proof was
+    /// applied over, against this revision, and return the labels sorted by
+    /// their lowest key.
+    ///
+    /// The applied range is `[start_key, right_edge_key]` from the proof's
+    /// verification context — the range [`Db::merge_key_value_range`]
+    /// requires a caller to have written, bounded by [`ProvenRange`] rather
+    /// than by the requested end. Every key below `start_key` or above
+    /// `right_edge_key` is covered by exactly one returned span, is a
+    /// returned point, or is a silent agreement: a span under which neither
+    /// trie holds a key, or a probed key both tries hold with the same
+    /// value. Which remedy each label calls for is documented on [`Hole`].
+    ///
+    /// Call this against the revision the proof was merged into. The labels
+    /// authorise remedies against that revision only; applying them to a
+    /// proposal rooted on a later revision voids the authorisation.
+    /// [`KeySpan::as_key_range`]'s upper bound is exclusive and must not be
+    /// passed as `merge_key_value_range`'s inclusive `last_key`; deletions go
+    /// through [`KeySpan::delete_prefixes`].
+    ///
+    /// [`Hole::Surplus`] spans may extend into or past the applied range:
+    /// the target is proven empty over their whole extent, so deleting all of
+    /// it cannot remove a key the merge wrote. Two returned labels overlap
+    /// only when both are deletions, so remedies may be applied in any order.
+    ///
+    /// The local trie is assumed canonical. A non-canonical trie — one whose
+    /// node hashes do not match its content, as a store assembled from
+    /// externally supplied nodes can be — produces `Stale` labels on correct
+    /// data, and a sync loop driven by them fetches the same span forever.
+    /// Nothing here detects that; only convergence does.
+    ///
+    /// # Errors
+    ///
+    /// [`ProofError::HashModeMismatch`] when the proof was parsed under a
+    /// hash mode other than this database's; [`api::Error::UnhashedView`]
+    /// when a probe reaches a child held in memory without a hash or an
+    /// addressed root that does not read; I/O errors from node reads; and
+    /// [`api::Error::InternalError`] when the walk's own invariants fail.
+    ///
+    /// [`ProvenRange`]: crate::ProvenRange
+    /// [`KeySpan::as_key_range`]: crate::proofs::KeySpan::as_key_range
+    /// [`KeySpan::delete_prefixes`]: crate::proofs::KeySpan::delete_prefixes
+    /// [`ProofError::HashModeMismatch`]: crate::proofs::ProofError::HashModeMismatch
+    pub fn find_holes_after_range_proof(
+        &self,
+        verified: &VerifiedRangeProof,
+    ) -> Result<Vec<Hole>, api::Error> {
+        self.nodestore.find_holes_after_range_proof(verified)
+    }
+
+    /// Classify the key space outside the range a verified change proof was
+    /// applied over, against this revision. The contract is that of
+    /// [`Self::find_holes_after_range_proof`], with the applied range
+    /// `[start_key, right_edge_key]` taken from the change proof's
+    /// verification context.
+    ///
+    /// An empty start proof with a start key emits nothing below the start
+    /// key. Change-proof verification hashes the proposal's own content
+    /// wherever a boundary proof supplies no sibling hash, so a root match
+    /// there neither proves that content equal to the target's nor absent
+    /// from it; no label is justified.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::find_holes_after_range_proof`].
+    pub fn find_holes_after_change_proof(
+        &self,
+        verified: &VerifiedChangeProof,
+    ) -> Result<Vec<Hole>, api::Error> {
+        self.nodestore.find_holes_after_change_proof(verified)
+    }
+}
+
+impl<H: HashMode> api::DynHoleFinder for NodeStore<Committed, FileBacked, H> {
+    fn find_holes_after_range_proof(
+        &self,
+        verified: &VerifiedRangeProof,
+    ) -> Result<Vec<Hole>, api::Error> {
+        crate::merkle::holes::find_holes_after_range_proof::<H, _>(verified, self)
+    }
+
+    fn find_holes_after_change_proof(
+        &self,
+        verified: &VerifiedChangeProof,
+    ) -> Result<Vec<Hole>, api::Error> {
+        crate::merkle::holes::find_holes_after_change_proof::<H, _>(verified, self)
+    }
+}
+
+impl<H: HashMode> api::DynHoleFinder for NodeStore<Reconstructed<FileBacked, H>, FileBacked, H> {
+    fn find_holes_after_range_proof(
+        &self,
+        verified: &VerifiedRangeProof,
+    ) -> Result<Vec<Hole>, api::Error> {
+        crate::merkle::holes::find_holes_after_range_proof::<H, _>(verified, self)
+    }
+
+    fn find_holes_after_change_proof(
+        &self,
+        verified: &VerifiedChangeProof,
+    ) -> Result<Vec<Hole>, api::Error> {
+        crate::merkle::holes::find_holes_after_change_proof::<H, _>(verified, self)
     }
 }
 

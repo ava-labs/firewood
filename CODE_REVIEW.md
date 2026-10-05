@@ -42,6 +42,10 @@ providing inline feedback — in addition to general best practices.
   `proofs::holes::open_interval`). When either bound is threaded through new code, check
   every comparison site. See `merkle::collapse::CollapseRange` and
   `proofs::holes::KeySpan::as_key_range`.
+- **Proof node structure**: A consumer of a verified proof takes trie structure from
+  `ProofNode::key`, which the node hash commits to in both modes. `partial_len` (and
+  `partial_path()`) is authenticated only under the Ethereum mode; under MerkleDB a
+  tampered split still verifies. See `merkle::holes::Walk::boundary`.
 
 ## Lint Suppression Policy
 

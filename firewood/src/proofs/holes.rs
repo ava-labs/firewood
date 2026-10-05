@@ -31,6 +31,16 @@ impl KeySpan {
         Self { prefix }
     }
 
+    /// The nibble prefix naming this span.
+    pub(crate) fn prefix(&self) -> &[PathComponent] {
+        &self.prefix
+    }
+
+    /// The nibble prefix naming this span, by value.
+    pub(crate) fn into_prefix(self) -> PathBuf {
+        self.prefix
+    }
+
     /// Half-open byte-key range `[lower, upper)` covering exactly the keys
     /// carrying this span's nibble prefix.
     ///
@@ -111,9 +121,8 @@ pub enum DeletePrefixes {
 /// correct consumer, and a wildcard arm would turn that break into a silent
 /// root-hash mismatch.
 ///
-/// Spans never overlap except where both carry a deletion or agreement label,
-/// so the order in which remedies are applied does not matter: deleting a span twice
-/// is idempotent.
+/// Two labels overlap only when both are deletions, so the order in which
+/// remedies are applied does not matter: deleting a span twice is idempotent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Hole {
     /// The target holds keys under this span and the local trie holds none.
@@ -165,13 +174,6 @@ pub enum Hole {
 /// excludes it, so those keys are reported separately as points. Only
 /// even-length prefixes are keys, since keys are byte strings.
 #[derive(Debug, Default, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no production caller yet; the hole-detection walk lands in a later change"
-    )
-)]
 pub(crate) struct OpenInterval {
     /// Pairwise incomparable: no span's prefix is a prefix of another's.
     pub(crate) spans: Vec<KeySpan>,
@@ -195,13 +197,6 @@ pub(crate) struct OpenInterval {
 /// nibble extending the lower bound itself, since those keys all sort above
 /// it. Each piece is a span. The upper bound's proper prefixes deeper than
 /// the divergence are the points.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no production caller yet; the hole-detection walk lands in a later change"
-    )
-)]
 pub(crate) fn open_interval(
     lower_exclusive: Option<&[PathComponent]>,
     upper_exclusive: &[PathComponent],
