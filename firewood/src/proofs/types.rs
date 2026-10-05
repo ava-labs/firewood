@@ -52,7 +52,7 @@ use firewood_storage::hash_node_as_storage_trie_root_parts;
 use firewood_storage::{
     Children, DenseChildren, EthHash, FileIoError, HashMode, HashType, Hashable, IntoSplitPath,
     MerkleDbHash, NibblesIterator, NodeHashAlgorithm, Path, PathBuf, PathComponent, PathIterItem,
-    Preimage, RlpError, SplitPath, TrieHash, TriePath, ValueDigest, check_inline_node,
+    Preimage, RlpError, RlpList, SplitPath, TrieHash, TriePath, ValueDigest, check_inline_node,
 };
 use thiserror::Error;
 
@@ -144,6 +144,11 @@ pub enum ProofError {
     /// An inline child is not exactly one RLP list shorter than 32 bytes.
     #[error("inline child is not one RLP list of 1 to 31 bytes")]
     MalformedInlineChild,
+
+    /// A node at account depth has children but holds a value that is not an
+    /// RLP list with a storage-root field, so its hash commits to no children.
+    #[error("account value is not an RLP list with a storage root field")]
+    MalformedAccountValue,
 
     /// Child index is out of bounds
     #[error("child index is out of bounds")]
@@ -559,6 +564,9 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
     ///   somewhere it does not.
     /// - [`ProofError::MalformedInlineChild`] — under the Ethereum scheme, an
     ///   inline child is not exactly one RLP list shorter than 32 bytes.
+    /// - [`ProofError::MalformedAccountValue`] — under the Ethereum scheme, a
+    ///   node at account depth has children but holds a value that is not an
+    ///   RLP list with a storage-root field.
     /// - [`ProofError::ValueAtOddNibbleLength`] — a node whose key has an odd
     ///   number of nibbles carries a value digest, which is structurally invalid.
     /// - [`ProofError::UnexpectedValueDigest`] — a node carries a hashed value
@@ -672,6 +680,23 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
                 && matches!(node.value_digest(), Some(ValueDigest::Hash(_)))
             {
                 return Err(ProofError::UnexpectedValueDigest);
+            }
+
+            // Under the Ethereum scheme a value at account depth is the account's
+            // RLP list, and the storage root the hasher splices into its third
+            // field is the only place the hash commits to the node's children. A
+            // value the splice cannot handle is hashed as raw bytes, so two nodes
+            // with different children would hash the same. Without children the
+            // hash still commits to the path and value, so such a node is allowed.
+            if H::ALGORITHM.is_ethereum()
+                && node.full_path().len() == ACCOUNT_DEPTH_NIBBLES
+                && node.children().count() > 0
+                && let Some(ValueDigest::Value(account)) = node.value_digest()
+                && RlpList::parse(account)
+                    .and_then(|fields| fields.nth_bytes(2))
+                    .is_err()
+            {
+                return Err(ProofError::MalformedAccountValue);
             }
 
             // Under the Ethereum scheme an inline child is exactly one RLP list
@@ -1151,13 +1176,14 @@ mod tests {
         ));
     }
 
-    /// F3 (#2205): at account depth with an empty partial path and a value the
-    /// account splice rejects, the preimage is the raw value alone.
+    /// At account depth, a value the storage-root splice cannot handle is hashed
+    /// as raw bytes, so two nodes with different children hash the same. The
+    /// verifier rejects the value.
     #[cfg(feature = "ethhash")]
     #[test]
-    fn scan_f3_account_value_is_whole_preimage() {
+    fn malformed_account_value_is_rejected() {
         use firewood_storage::U4;
-        let t: &[u8] = b"\x83abc";
+        let not_an_account: &[u8] = b"\x83abc";
         let key64: Vec<u8> = vec![1u8; 64];
         let mk = |a: u8, b: u8| {
             let mut c = DenseChildren::new();
@@ -1165,9 +1191,20 @@ mod tests {
             c.insert(U4::new_masked(b), HashType::from([b; 32]));
             c
         };
-        let x = make_node(&key64, 64, Some(t), mk(1, 2));
-        let y = make_node(&key64, 64, Some(t), mk(7, 9));
+        let x = make_node(&key64, 0, Some(not_an_account), mk(1, 2));
+        let y = make_node(&key64, 0, Some(not_an_account), mk(7, 9));
         assert_eq!(x.to_hash(), y.to_hash());
+
+        let root_hash: TrieHash = x.to_hash().into_triehash();
+        let proof = Proof::new(vec![x]);
+        assert!(matches!(
+            proof.value_digest(
+                [1u8; 32].as_slice(),
+                &root_hash,
+                NodeHashAlgorithm::Ethereum
+            ),
+            Err(ProofError::MalformedAccountValue)
+        ));
     }
 
     /// Build a `ProofNode` at the given nibble path with the given children and value.
