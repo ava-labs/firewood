@@ -551,6 +551,33 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
         )
     }
 
+    /// Checks the shape of every node in the proof without walking to a key:
+    /// the parent prefix each node declares, the parity rule for values, and
+    /// under the Ethereum scheme the value, account, and inline-child rules.
+    /// [`Self::value_digest`] applies the same checks node by node during its
+    /// walk. This method covers a proof the verifier anchors by hash
+    /// reconstruction instead of by that walk.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error [`Self::value_digest`] would return for the first node
+    /// whose shape is wrong.
+    pub(crate) fn check_node_shapes(&self, algorithm: NodeHashAlgorithm) -> Result<(), ProofError> {
+        match algorithm {
+            NodeHashAlgorithm::Ethereum => self.check_node_shapes_in_mode::<EthHash>(),
+            NodeHashAlgorithm::MerkleDB => self.check_node_shapes_in_mode::<MerkleDbHash>(),
+        }
+    }
+
+    fn check_node_shapes_in_mode<H: HashMode>(&self) -> Result<(), ProofError> {
+        let mut prev_full_path_len = None;
+        for node in self.0.as_ref() {
+            check_node_shape::<H, _>(node, &node.children(), prev_full_path_len)?;
+            prev_full_path_len = Some(node.full_path().len());
+        }
+        Ok(())
+    }
+
     /// Verify this proof against `root_hash` for the given `key` and return the
     /// value digest at that key.
     ///
@@ -651,86 +678,9 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
                 });
             }
 
-            // Assert that the node's parent prefix is the one its position in the
-            // proof implies. The first node is the trie root, so it has no parent
-            // and its whole key is its partial path. Every later node hangs off
-            // the previous one by the single nibble the descent takes, so its
-            // parent prefix is the previous key plus that nibble.
-            //
-            // The parent prefix length arrives as its own wire field, and the node
-            // hash covers the partial path but not the parent prefix. Without this
-            // check a node can claim a fabricated position while keeping its
-            // partial path, and therefore its hash, unchanged. The declared key
-            // decides inclusion and exclusion below, so a relabelled node would
-            // answer for a key it never stood at.
-            let parent_prefix_len = node
-                .full_path()
-                .len()
-                .checked_sub(node.partial_path().len())
-                .ok_or(ProofError::UnexpectedParentPrefixLength)?;
-            let position_matches = match prev_full_path_len {
-                None => parent_prefix_len == 0,
-                Some(prev) => parent_prefix_len.checked_sub(1) == Some(prev),
-            };
-            if !position_matches {
-                return Err(ProofError::UnexpectedParentPrefixLength);
-            }
+            let children = node.children();
+            check_node_shape::<H, _>(node, &children, prev_full_path_len)?;
             prev_full_path_len = Some(node.full_path().len());
-
-            // Assert that only nodes whose keys are an even number of nibbles
-            // have a `value_digest`.
-            if !node.full_path().len().is_multiple_of(2) && node.value_digest().is_some() {
-                return Err(ProofError::ValueAtOddNibbleLength);
-            }
-
-            // Reject a hashed value digest under the Ethereum scheme, which
-            // only ever emits literal values.
-            if H::ALGORITHM.is_ethereum()
-                && matches!(node.value_digest(), Some(ValueDigest::Hash(_)))
-            {
-                return Err(ProofError::UnexpectedValueDigest);
-            }
-
-            // Under the Ethereum scheme an empty value encodes exactly as no value,
-            // so a proof of an empty value could be restated as a proof of
-            // absence. Empty values are not stored under that scheme.
-            if H::ALGORITHM.is_ethereum()
-                && let Some(ValueDigest::Value(value)) = node.value_digest()
-                && value.is_empty()
-            {
-                return Err(ProofError::EmptyValue);
-            }
-
-            // Under the Ethereum scheme a value at account depth is the account's
-            // RLP list, and the storage root the hasher splices into its third
-            // field is the only place the hash commits to the node's children. A
-            // value the splice cannot handle is hashed as raw bytes, so two nodes
-            // with different children would hash the same. Without children the
-            // hash still commits to the path and value, so such a node is allowed.
-            if H::ALGORITHM.is_ethereum()
-                && node.full_path().len() == ACCOUNT_DEPTH_NIBBLES
-                && node.children().count() > 0
-                && let Some(ValueDigest::Value(account)) = node.value_digest()
-                && RlpList::parse(account)
-                    .and_then(|fields| fields.nth_bytes(2))
-                    .is_err()
-            {
-                return Err(ProofError::MalformedAccountValue);
-            }
-
-            // Under the Ethereum scheme an inline child is exactly one RLP list
-            // shorter than 32 bytes. Anything else lets a peer re-partition a
-            // branch's payload into different children with the same hash.
-            if H::ALGORITHM.is_ethereum() {
-                let children = node.children();
-                for (_, child) in &children {
-                    if let Some(HashType::Rlp(inline)) = child
-                        && check_inline_node(inline).is_err()
-                    {
-                        return Err(ProofError::MalformedInlineChild);
-                    }
-                }
-            }
 
             if let Some(next_node) = iter.peek() {
                 // Assert that every non-terminal node's key is a prefix of
@@ -745,7 +695,6 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
                     return Err(ProofError::ShouldBePrefixOfNextKey);
                 }
 
-                let children = node.children();
                 expected_hash = children[key_nibble]
                     .as_ref()
                     .ok_or(ProofError::NodeNotInTrie)?
@@ -895,6 +844,94 @@ impl<V: ProofCollection + IntoIterator<Item = V::Node>> IntoIterator for Proof<V
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
     }
+}
+
+/// Checks one node's shape against what its position in the proof and the hash
+/// scheme require. `children` is the node's own child table, passed in so a
+/// caller that needs it afterwards builds it once. `prev_full_path_len` is the
+/// full-path length of the previous node, or `None` at the first node.
+///
+/// Under the Ethereum scheme the node hash covers the partial path, the value,
+/// and the child slots, and nothing else. It does not cover the parent prefix
+/// length, whether an inline child is a well-formed list, the shape of an
+/// account value, or the difference between an empty value and no value, so
+/// each of those is checked here. The position and parity checks apply under
+/// both schemes.
+fn check_node_shape<H: HashMode, N: Hashable>(
+    node: &N,
+    children: &Children<Option<HashType>>,
+    prev_full_path_len: Option<usize>,
+) -> Result<(), ProofError> {
+    // The first node is the trie root, so it has no parent and its whole key is
+    // its partial path. Every later node hangs off the previous one by the
+    // single nibble the descent takes, so its parent prefix is the previous key
+    // plus that nibble. Without this check a node can claim a fabricated
+    // position while keeping its partial path, and therefore its hash,
+    // unchanged, and the declared key decides inclusion and exclusion.
+    let parent_prefix_len = node
+        .full_path()
+        .len()
+        .checked_sub(node.partial_path().len())
+        .ok_or(ProofError::UnexpectedParentPrefixLength)?;
+    let position_matches = match prev_full_path_len {
+        None => parent_prefix_len == 0,
+        Some(prev) => parent_prefix_len.checked_sub(1) == Some(prev),
+    };
+    if !position_matches {
+        return Err(ProofError::UnexpectedParentPrefixLength);
+    }
+
+    // Only nodes whose keys are an even number of nibbles may hold a value.
+    if !node.full_path().len().is_multiple_of(2) && node.value_digest().is_some() {
+        return Err(ProofError::ValueAtOddNibbleLength);
+    }
+
+    if !H::ALGORITHM.is_ethereum() {
+        return Ok(());
+    }
+
+    // The Ethereum scheme only ever emits literal values.
+    if matches!(node.value_digest(), Some(ValueDigest::Hash(_))) {
+        return Err(ProofError::UnexpectedValueDigest);
+    }
+
+    // An empty value encodes exactly as no value, so a proof of an empty value
+    // could be restated as a proof of absence. Empty values are not stored
+    // under this scheme.
+    if let Some(ValueDigest::Value(value)) = node.value_digest()
+        && value.is_empty()
+    {
+        return Err(ProofError::EmptyValue);
+    }
+
+    // A value at account depth is the account's RLP list, and the storage root
+    // the hasher splices into its third field is the only place the hash
+    // commits to the node's children. A value the splice cannot handle is
+    // hashed as raw bytes, so two nodes with different children would hash the
+    // same. Without children the hash still commits to the path and value, so
+    // such a node is allowed.
+    if node.full_path().len() == ACCOUNT_DEPTH_NIBBLES
+        && children.count() > 0
+        && let Some(ValueDigest::Value(account)) = node.value_digest()
+        && RlpList::parse(account)
+            .and_then(|fields| fields.nth_bytes(2))
+            .is_err()
+    {
+        return Err(ProofError::MalformedAccountValue);
+    }
+
+    // An inline child is exactly one RLP list shorter than 32 bytes. Anything
+    // else lets a peer re-partition a branch's payload into different children
+    // with the same hash.
+    for (_, child) in children {
+        if let Some(HashType::Rlp(inline)) = child
+            && check_inline_node(inline).is_err()
+        {
+            return Err(ProofError::MalformedInlineChild);
+        }
+    }
+
+    Ok(())
 }
 
 /// A trait representing a collection of proof nodes.
