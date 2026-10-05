@@ -137,6 +137,10 @@ pub enum ProofError {
     #[error("each proof node key should be a prefix of the next key")]
     ShouldBePrefixOfNextKey,
 
+    /// A node's parent prefix is not the one its position in the proof implies.
+    #[error("node's parent prefix length does not match its position in the proof")]
+    UnexpectedParentPrefixLength,
+
     /// Child index is out of bounds
     #[error("child index is out of bounds")]
     ChildIndexOutOfBounds,
@@ -546,6 +550,9 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
     /// - [`ProofError::Empty`] — the proof contains no nodes.
     /// - [`ProofError::UnexpectedHash`] — a node's hash does not match the
     ///   expected hash from its parent (or `root_hash` for the first node).
+    /// - [`ProofError::UnexpectedParentPrefixLength`] — a node's parent prefix is
+    ///   not the one its position in the proof implies, so it claims to sit
+    ///   somewhere it does not.
     /// - [`ProofError::ValueAtOddNibbleLength`] — a node whose key has an odd
     ///   number of nibbles carries a value digest, which is structurally invalid.
     /// - [`ProofError::UnexpectedValueDigest`] — a node carries a hashed value
@@ -596,6 +603,10 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
         // of a depth-64 account branch.
         let mut hash_as_storage_root = false;
 
+        // Full path length of the previous node, or `None` at the first node.
+        // It gives the parent prefix each node must declare.
+        let mut prev_full_path_len: Option<usize> = None;
+
         let mut iter = self.0.as_ref().iter().peekable();
         while let Some(node) = iter.next() {
             let computed = if H::ALGORITHM.is_ethereum() && hash_as_storage_root {
@@ -616,6 +627,32 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
                     actual: actual_hash,
                 });
             }
+
+            // Assert that the node's parent prefix is the one its position in the
+            // proof implies. The first node is the trie root, so it has no parent
+            // and its whole key is its partial path. Every later node hangs off
+            // the previous one by the single nibble the descent takes, so its
+            // parent prefix is the previous key plus that nibble.
+            //
+            // The parent prefix length arrives as its own wire field, and the node
+            // hash covers the partial path but not the parent prefix. Without this
+            // check a node can claim a fabricated position while keeping its
+            // partial path, and therefore its hash, unchanged. The declared key
+            // decides inclusion and exclusion below, so a relabelled node would
+            // answer for a key it never stood at.
+            let parent_prefix_len = node
+                .full_path()
+                .len()
+                .checked_sub(node.partial_path().len())
+                .ok_or(ProofError::UnexpectedParentPrefixLength)?;
+            let position_matches = match prev_full_path_len {
+                None => parent_prefix_len == 0,
+                Some(prev) => parent_prefix_len.checked_sub(1) == Some(prev),
+            };
+            if !position_matches {
+                return Err(ProofError::UnexpectedParentPrefixLength);
+            }
+            prev_full_path_len = Some(node.full_path().len());
 
             // Assert that only nodes whose keys are an even number of nibbles
             // have a `value_digest`.
@@ -911,6 +948,204 @@ impl ProofType {
 mod tests {
     use super::*;
     use firewood_storage::DefaultHashMode;
+
+    /// F4 (#2205): absent value and present zero-length value hash identically.
+    #[cfg(feature = "ethhash")]
+    #[test]
+    fn scan_f4_empty_vs_absent_value() {
+        let absent = make_node(&[1, 2], 0, None, DenseChildren::new());
+        let empty = make_node(&[1, 2], 0, Some(b""), DenseChildren::new());
+        assert_eq!(absent.to_hash(), empty.to_hash());
+    }
+
+    /// A later node moved two nibbles deeper, with its partial path and so its
+    /// hash unchanged, still hangs off the same nibble of its parent, so the
+    /// prefix-of-next-key check does not notice. The verifier rejects the node
+    /// because its parent prefix is not the previous key plus one nibble.
+    #[cfg(feature = "ethhash")]
+    #[test]
+    fn relabelled_later_node_is_rejected() {
+        use firewood_storage::U4;
+        let value = [0x55u8; 40];
+        let honest_leaf = make_node(&[3, 0], 1, Some(&value), DenseChildren::new());
+        let forged_leaf = make_node(&[3, 0xa, 0xb, 0], 3, Some(&value), DenseChildren::new());
+        assert_eq!(honest_leaf.to_hash(), forged_leaf.to_hash());
+
+        let mut children = DenseChildren::new();
+        children.insert(U4::new_masked(3), honest_leaf.to_hash());
+        let root = make_node(&[], 0, None, children);
+        let root_hash: TrieHash = root.to_hash().into_triehash();
+
+        let honest = Proof::new(vec![root.clone(), honest_leaf]);
+        let forged = Proof::new(vec![root, forged_leaf]);
+        assert!(matches!(
+            honest.value_digest([0x30u8].as_slice(), &root_hash, NodeHashAlgorithm::Ethereum),
+            Ok(Some(ValueDigest::Value(v))) if v == value.as_slice()
+        ));
+        assert!(matches!(
+            forged.value_digest([0x30u8].as_slice(), &root_hash, NodeHashAlgorithm::Ethereum),
+            Err(ProofError::UnexpectedParentPrefixLength)
+        ));
+    }
+
+    /// Relabelling a node's declared position leaves its hash unchanged, so a
+    /// diverging first nibble would read as an exclusion proof. The verifier
+    /// rejects the node because its parent prefix does not match its position.
+    #[cfg(feature = "ethhash")]
+    #[test]
+    fn relabelled_node_position_is_rejected() {
+        use firewood_storage::U4;
+        let mk = || {
+            let mut c = DenseChildren::new();
+            c.insert(U4::new_masked(3), HashType::from([0xABu8; 32]));
+            c
+        };
+        let honest = make_node(&[], 0, None, mk());
+        let forged = make_node(&[0xa, 0xb], 2, None, mk());
+        assert_eq!(honest.to_hash(), forged.to_hash());
+
+        let root_hash: TrieHash = honest.to_hash().into_triehash();
+        let hp = Proof::new(vec![honest]);
+        let fp = Proof::new(vec![forged]);
+        assert!(matches!(
+            hp.value_digest([0x30u8].as_slice(), &root_hash, NodeHashAlgorithm::Ethereum),
+            Err(ProofError::ExclusionProofMissingChild)
+        ));
+        assert!(matches!(
+            fp.value_digest([0x30u8].as_slice(), &root_hash, NodeHashAlgorithm::Ethereum),
+            Err(ProofError::UnexpectedParentPrefixLength)
+        ));
+    }
+
+    /// F1 (#2205): zero-length inline children contribute nothing to the
+    /// preimage, so the payload can be re-partitioned to hide a present child.
+    #[cfg(feature = "ethhash")]
+    #[test]
+    fn scan_f1_zero_length_inline_child() {
+        use firewood_storage::U4;
+        let (h1, h2) = ([0xAAu8; 32], [0xBBu8; 32]);
+        let mut honest_ch = DenseChildren::new();
+        honest_ch.insert(U4::new_masked(3), HashType::from(h1));
+        honest_ch.insert(U4::new_masked(5), HashType::from(h2));
+        let honest = make_node(&[], 0, None, honest_ch);
+
+        let mut payload: Vec<u8> = Vec::new();
+        for i in 0..16u8 {
+            match i {
+                3 => {
+                    payload.push(0xa0);
+                    payload.extend_from_slice(&h1);
+                }
+                5 => {
+                    payload.push(0xa0);
+                    payload.extend_from_slice(&h2);
+                }
+                _ => payload.push(0x80),
+            }
+        }
+        payload.push(0x80);
+        assert_eq!(payload.len(), 81);
+
+        let mut forged_ch = DenseChildren::new();
+        for i in 0..16u8 {
+            if i == 3 {
+                continue;
+            }
+            let inline: smallvec::SmallVec<[u8; 32]> = if i == 4 {
+                payload[1..80].iter().copied().collect()
+            } else {
+                smallvec::SmallVec::new()
+            };
+            forged_ch.insert(U4::new_masked(i), HashType::Rlp(inline));
+        }
+        let forged = make_node(&[], 0, None, forged_ch);
+        assert_eq!(honest.to_hash(), forged.to_hash());
+
+        let root_hash: TrieHash = honest.to_hash().into_triehash();
+        let fp = Proof::new(vec![forged]);
+        assert!(matches!(
+            fp.value_digest([0x30u8].as_slice(), &root_hash, NodeHashAlgorithm::Ethereum),
+            Ok(None)
+        ));
+    }
+
+    /// F1 variant (#2205): a length bound of 1..=31 on inline children is not
+    /// enough. The honest payload is re-partitioned into raw items of 1 to 31
+    /// bytes, with the hidden child declared absent at a position where the
+    /// honest stream has a 0x80 byte, so the hash is unchanged.
+    #[cfg(feature = "ethhash")]
+    #[test]
+    fn scan_f1b_bounded_raw_items_still_hide_a_child() {
+        use firewood_storage::U4;
+        let (h1, h2) = ([0xAAu8; 32], [0xBBu8; 32]);
+        let mut honest_ch = DenseChildren::new();
+        honest_ch.insert(U4::new_masked(3), HashType::from(h1));
+        honest_ch.insert(U4::new_masked(5), HashType::from(h2));
+        let honest = make_node(&[], 0, None, honest_ch);
+
+        // Honest child stream: 80 80 80 | a0 h1 | 80 | a0 h2 | 80 x10, then the value 80.
+        let mut stream: Vec<u8> = vec![0x80, 0x80, 0x80, 0xa0];
+        stream.extend_from_slice(&h1);
+        stream.push(0x80);
+        stream.push(0xa0);
+        stream.extend_from_slice(&h2);
+        stream.extend(std::iter::repeat_n(0x80, 10));
+        assert_eq!(stream.len(), 80);
+
+        // Items 0..2 cover bytes 0..36 as 1 + 4 + 31; item 3 is absent and lands on
+        // the honest 0x80 at byte 36; items 4 and 5 split the a0 h2 run as 31 + 2;
+        // the remaining ten children are one 0x80 each.
+        let raw = |r: std::ops::Range<usize>| HashType::Rlp(stream[r].iter().copied().collect());
+        let mut forged_ch = DenseChildren::new();
+        forged_ch.insert(U4::new_masked(0), raw(0..1));
+        forged_ch.insert(U4::new_masked(1), raw(1..5));
+        forged_ch.insert(U4::new_masked(2), raw(5..36));
+        // slot 3: declared absent, emits 0x80 = stream[36]
+        forged_ch.insert(U4::new_masked(4), raw(37..68));
+        forged_ch.insert(U4::new_masked(5), raw(68..70));
+        for i in 6..16u8 {
+            forged_ch.insert(
+                U4::new_masked(i),
+                raw(70 + usize::from(i) - 6..71 + usize::from(i) - 6),
+            );
+        }
+        let forged = make_node(&[], 0, None, forged_ch);
+        for (_, child) in &forged.child_hashes {
+            if let Some(HashType::Rlp(r)) = child {
+                assert!(
+                    (1..=31).contains(&r.len()),
+                    "every raw item is within 1..=31"
+                );
+            }
+        }
+        assert_eq!(honest.to_hash(), forged.to_hash());
+
+        let root_hash: TrieHash = honest.to_hash().into_triehash();
+        let fp = Proof::new(vec![forged]);
+        assert!(matches!(
+            fp.value_digest([0x30u8].as_slice(), &root_hash, NodeHashAlgorithm::Ethereum),
+            Ok(None)
+        ));
+    }
+
+    /// F3 (#2205): at account depth with an empty partial path and a value the
+    /// account splice rejects, the preimage is the raw value alone.
+    #[cfg(feature = "ethhash")]
+    #[test]
+    fn scan_f3_account_value_is_whole_preimage() {
+        use firewood_storage::U4;
+        let t: &[u8] = b"\x83abc";
+        let key64: Vec<u8> = vec![1u8; 64];
+        let mk = |a: u8, b: u8| {
+            let mut c = DenseChildren::new();
+            c.insert(U4::new_masked(a), HashType::from([a; 32]));
+            c.insert(U4::new_masked(b), HashType::from([b; 32]));
+            c
+        };
+        let x = make_node(&key64, 64, Some(t), mk(1, 2));
+        let y = make_node(&key64, 64, Some(t), mk(7, 9));
+        assert_eq!(x.to_hash(), y.to_hash());
+    }
 
     /// Build a `ProofNode` at the given nibble path with the given children and value.
     fn make_node(
