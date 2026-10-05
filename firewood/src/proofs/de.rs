@@ -19,7 +19,9 @@ use crate::{
     merkle::{Key, Value},
     proofs::magic::{BATCH_DELETE, BATCH_DELETE_RANGE, BATCH_PUT},
 };
-use firewood_storage::{HashType, PathBuf, TrieHash, TriePathFromUnpackedBytes, ValueDigest};
+use firewood_storage::{
+    HashType, PathBuf, TrieHash, TriePathFromUnpackedBytes, ValueDigest, check_inline_node,
+};
 use integer_encoding::VarInt;
 use std::num::NonZeroUsize;
 
@@ -358,7 +360,13 @@ impl<'a> ReadItem<'a> for HashType {
                 .map_err(|err| err.set_item("hash type discriminant"))?
             {
                 0 => Ok(HashType::Hash(reader.read_item()?)),
-                1 => Ok(HashType::Rlp(reader.read_item::<&[u8]>()?.into())),
+                1 => {
+                    let inline = reader.read_item::<&[u8]>()?;
+                    check_inline_node(inline).map_err(|err| {
+                        reader.invalid_item("inline child", "one RLP list of 1 to 31 bytes", err)
+                    })?;
+                    Ok(HashType::Rlp(inline.into()))
+                }
                 found => {
                     Err(reader.invalid_item("hash type discriminant", "0 (hash) or 1 (rlp)", found))
                 }

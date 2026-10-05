@@ -52,7 +52,7 @@ use firewood_storage::hash_node_as_storage_trie_root_parts;
 use firewood_storage::{
     Children, DenseChildren, EthHash, FileIoError, HashMode, HashType, Hashable, IntoSplitPath,
     MerkleDbHash, NibblesIterator, NodeHashAlgorithm, Path, PathBuf, PathComponent, PathIterItem,
-    Preimage, RlpError, SplitPath, TrieHash, TriePath, ValueDigest,
+    Preimage, RlpError, SplitPath, TrieHash, TriePath, ValueDigest, check_inline_node,
 };
 use thiserror::Error;
 
@@ -140,6 +140,10 @@ pub enum ProofError {
     /// A node's parent prefix is not the one its position in the proof implies.
     #[error("node's parent prefix length does not match its position in the proof")]
     UnexpectedParentPrefixLength,
+
+    /// An inline child is not exactly one RLP list shorter than 32 bytes.
+    #[error("inline child is not one RLP list of 1 to 31 bytes")]
+    MalformedInlineChild,
 
     /// Child index is out of bounds
     #[error("child index is out of bounds")]
@@ -553,6 +557,8 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
     /// - [`ProofError::UnexpectedParentPrefixLength`] — a node's parent prefix is
     ///   not the one its position in the proof implies, so it claims to sit
     ///   somewhere it does not.
+    /// - [`ProofError::MalformedInlineChild`] — under the Ethereum scheme, an
+    ///   inline child is not exactly one RLP list shorter than 32 bytes.
     /// - [`ProofError::ValueAtOddNibbleLength`] — a node whose key has an odd
     ///   number of nibbles carries a value digest, which is structurally invalid.
     /// - [`ProofError::UnexpectedValueDigest`] — a node carries a hashed value
@@ -666,6 +672,20 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
                 && matches!(node.value_digest(), Some(ValueDigest::Hash(_)))
             {
                 return Err(ProofError::UnexpectedValueDigest);
+            }
+
+            // Under the Ethereum scheme an inline child is exactly one RLP list
+            // shorter than 32 bytes. Anything else lets a peer re-partition a
+            // branch's payload into different children with the same hash.
+            if H::ALGORITHM.is_ethereum() {
+                let children = node.children();
+                for (_, child) in &children {
+                    if let Some(HashType::Rlp(inline)) = child
+                        && check_inline_node(inline).is_err()
+                    {
+                        return Err(ProofError::MalformedInlineChild);
+                    }
+                }
             }
 
             if let Some(next_node) = iter.peek() {
@@ -1017,11 +1037,12 @@ mod tests {
         ));
     }
 
-    /// F1 (#2205): zero-length inline children contribute nothing to the
-    /// preimage, so the payload can be re-partitioned to hide a present child.
+    /// Zero-length inline children contribute nothing to the preimage, so the
+    /// payload can be re-partitioned to hide a present child with the hash
+    /// unchanged. The verifier rejects the malformed children.
     #[cfg(feature = "ethhash")]
     #[test]
-    fn scan_f1_zero_length_inline_child() {
+    fn zero_length_inline_children_are_rejected() {
         use firewood_storage::U4;
         let (h1, h2) = ([0xAAu8; 32], [0xBBu8; 32]);
         let mut honest_ch = DenseChildren::new();
@@ -1065,17 +1086,19 @@ mod tests {
         let fp = Proof::new(vec![forged]);
         assert!(matches!(
             fp.value_digest([0x30u8].as_slice(), &root_hash, NodeHashAlgorithm::Ethereum),
-            Ok(None)
+            Err(ProofError::MalformedInlineChild)
         ));
     }
 
-    /// F1 variant (#2205): a length bound of 1..=31 on inline children is not
-    /// enough. The honest payload is re-partitioned into raw items of 1 to 31
-    /// bytes, with the hidden child declared absent at a position where the
-    /// honest stream has a 0x80 byte, so the hash is unchanged.
+    /// A length bound alone would not be enough. The honest payload is
+    /// re-partitioned into raw items of 1 to 31 bytes, with the hidden child
+    /// declared absent at a position where the honest stream has a 0x80 byte,
+    /// so the hash is unchanged.
+    /// Every raw item here is within 1 to 31 bytes, yet none is a complete RLP
+    /// list, so the verifier rejects them.
     #[cfg(feature = "ethhash")]
     #[test]
-    fn scan_f1b_bounded_raw_items_still_hide_a_child() {
+    fn repartitioned_inline_children_are_rejected() {
         use firewood_storage::U4;
         let (h1, h2) = ([0xAAu8; 32], [0xBBu8; 32]);
         let mut honest_ch = DenseChildren::new();
@@ -1092,9 +1115,9 @@ mod tests {
         stream.extend(std::iter::repeat_n(0x80, 10));
         assert_eq!(stream.len(), 80);
 
-        // Items 0..2 cover bytes 0..36 as 1 + 4 + 31; item 3 is absent and lands on
-        // the honest 0x80 at byte 36; items 4 and 5 split the a0 h2 run as 31 + 2;
-        // the remaining ten children are one 0x80 each.
+        // Items 0..2 cover bytes 0..36 as 1 + 4 + 31. Item 3 is absent and lands on
+        // the honest 0x80 at byte 36. Items 4 and 5 split the a0 h2 run as 31 + 2.
+        // The remaining ten children are one 0x80 each.
         let raw = |r: std::ops::Range<usize>| HashType::Rlp(stream[r].iter().copied().collect());
         let mut forged_ch = DenseChildren::new();
         forged_ch.insert(U4::new_masked(0), raw(0..1));
@@ -1124,7 +1147,7 @@ mod tests {
         let fp = Proof::new(vec![forged]);
         assert!(matches!(
             fp.value_digest([0x30u8].as_slice(), &root_hash, NodeHashAlgorithm::Ethereum),
-            Ok(None)
+            Err(ProofError::MalformedInlineChild)
         ));
     }
 

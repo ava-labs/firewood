@@ -92,8 +92,8 @@ pub use linear::filebacked::{FREE_LIST_CACHE_ENTRY_SIZE, FileBacked};
 pub use linear::memory::MemStore;
 pub use node::persist::MaybePersistedNode;
 pub use rlp::{
-    NULL_RLP, RlpError, RlpItem, RlpList, encode_list, parse_be_uint, parse_fixed,
-    replace_list_field,
+    NULL_RLP, RlpError, RlpItem, RlpList, check_inline_node, encode_list, parse_be_uint,
+    parse_fixed, replace_list_field,
 };
 pub use root_store::RootStore;
 #[cfg(any(test, feature = "test_utils"))]

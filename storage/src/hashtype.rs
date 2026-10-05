@@ -150,10 +150,13 @@ impl Serializable for HashType {
             return Ok(HashType::Hash(TrieHash::from(bytes)));
         };
 
-        let Some(bytes_mut) = bytes.get_mut(..len.get() as usize) else {
+        let Some(bytes_mut) = bytes
+            .get_mut(..len.get() as usize)
+            .filter(|inline| inline.len() < 32)
+        else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("invalid RLP length; expected strictly less than 32, got {len}"),
+                format!("invalid RLP length; expected at most 31, got {len}"),
             ));
         };
 
@@ -231,5 +234,27 @@ impl Display for HashType {
                 write!(f, "{:.*}", width, hex::encode(r))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The inline form holds at most 31 bytes. Thirty-two bytes is a hash,
+    /// which has its own encoding.
+    #[test]
+    fn from_reader_accepts_31_inline_bytes_and_rejects_32() {
+        let encoded: Vec<u8> = std::iter::once(31)
+            .chain(std::iter::repeat_n(0xab, 31))
+            .collect();
+        let decoded = HashType::from_reader(encoded.as_slice()).unwrap();
+        assert!(matches!(decoded, HashType::Rlp(inline) if inline.len() == 31));
+
+        let encoded: Vec<u8> = std::iter::once(32)
+            .chain(std::iter::repeat_n(0xab, 32))
+            .collect();
+        let err = HashType::from_reader(encoded.as_slice()).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 }

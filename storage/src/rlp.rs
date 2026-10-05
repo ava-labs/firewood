@@ -62,6 +62,31 @@ pub enum RlpError {
         /// Expected exact length.
         expected: usize,
     },
+    /// An item presented as an inline child encodes to 32 bytes or more, so it
+    /// would have been referenced by its hash instead.
+    #[error("inline RLP item is {0} bytes, at most 31 can be inlined")]
+    NotInlined(usize),
+}
+
+/// Checks that `bytes` are an inline child as the Ethereum scheme defines one:
+/// exactly one RLP list whose encoding is shorter than 32 bytes.
+///
+/// A node whose encoding reaches 32 bytes is referenced by its hash, so a longer
+/// item cannot be an inlined child. Requiring a complete list matters because
+/// RLP is a prefix code: a sequence of complete items has one parse, so a branch
+/// payload cannot be re-partitioned into different children with the same
+/// bytes, and an absent slot cannot be presented as a present child encoded as
+/// the empty string.
+///
+/// # Errors
+///
+/// Returns [`RlpError::NotInlined`] if the encoding is 32 bytes or longer, and
+/// the error from [`RlpList::parse`] if it is not exactly one RLP list.
+pub fn check_inline_node(bytes: &[u8]) -> Result<(), RlpError> {
+    if bytes.len() >= 32 {
+        return Err(RlpError::NotInlined(bytes.len()));
+    }
+    RlpList::parse(bytes).map(|_| ())
 }
 
 /// One child of a list passed to [`encode_list`].
@@ -768,5 +793,26 @@ mod tests {
         let bytes = upstream_encode(case);
         let list = RlpList::parse(&bytes).unwrap();
         assert_eq!(list.fields().unwrap(), case.to_vec());
+    }
+
+    /// An inline child is exactly one RLP list shorter than 32 bytes.
+    #[test]
+    fn check_inline_node_accepts_exactly_one_short_list() {
+        // A list with the given header byte followed by `items` one-byte items.
+        let list = |header: u8, items: usize| -> Vec<u8> {
+            std::iter::once(header)
+                .chain(std::iter::repeat_n(0x01, items))
+                .collect()
+        };
+        assert!(check_inline_node(&list(0xc0, 0)).is_ok(), "empty list");
+        assert!(check_inline_node(&list(0xde, 30)).is_ok(), "31-byte list");
+        assert!(matches!(
+            check_inline_node(&list(0xdf, 31)),
+            Err(RlpError::NotInlined(32))
+        ));
+        assert!(check_inline_node(&[]).is_err(), "no bytes");
+        assert!(check_inline_node(&[0x80]).is_err(), "a string, not a list");
+        assert!(check_inline_node(&[0xc0, 0xc0]).is_err(), "two lists");
+        assert!(check_inline_node(&[0xc1]).is_err(), "truncated list");
     }
 }
