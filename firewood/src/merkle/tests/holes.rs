@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use firewood_macros::hash_mode;
 use firewood_storage::{
-    Committed, EthHash, HashMode, HashedNodeReader, MemStore, MerkleDbHash, NodeReader as _,
-    NodeStore, PathComponent, TriePathFromPackedBytes, replace_list_field,
+    Committed, EthHash, HashMode, HashType, HashedNodeReader, MemStore, MerkleDbHash,
+    NodeReader as _, NodeStore, PathComponent, TriePathFromPackedBytes, replace_list_field,
 };
 
 use super::accounts::{
@@ -28,6 +28,7 @@ use super::init_merkle_in;
 use crate::api::{self, BatchOp, Db as _, DbView as _, HashKey, Proposal as _};
 use crate::db::{Db, DbConfig};
 use crate::merkle::Merkle;
+use crate::merkle::descend::subtree_hash;
 use crate::merkle::holes::{
     find_holes_after_change_proof, find_holes_after_range_proof, merge_labels,
 };
@@ -405,6 +406,18 @@ fn mid_edge_adjustment<H: HashMode>() {
     assert!(spans(&holes).contains(&("Synced", vec![0xA, 0x7, 0x1])));
     assert!(!spans(&holes).iter().any(|(label, _)| *label == "Stale"));
     assert_matches_truth::<H>(&target, &local, &applied_range(&verified), &holes);
+
+    // The adjustment has teeth only where the partial path is part of the
+    // preimage. MerkleDB hashes the full path, so the re-encoded hash equals
+    // the stored one; the Ethereum mode hashes the partial path, so it must
+    // differ from the stored hash of the whole leaf while matching the stub.
+    let stored = HashedNodeReader::root_hash(l.nodestore()).map(HashType::from);
+    let probed = subtree_hash::<H, _>(l.nodestore(), &components(&[0xA, 0x7, 0x1])).unwrap();
+    if H::ALGORITHM.is_ethereum() {
+        assert_ne!(probed, stored);
+    } else {
+        assert_eq!(probed, stored);
+    }
 }
 
 #[hash_mode]
@@ -1198,4 +1211,178 @@ fn malformed_account_value_is_compared_as_is() {
         "{holes:?}"
     );
     assert_matches_truth::<EthHash>(&target, &local, &applied_range(&verified), &holes);
+}
+
+// The lone-storage-child fold. Live hashing stores an account's single
+// storage child folded as a standalone storage-trie root, so a child's stored
+// hash depends on its sibling count; the walk re-hashes the local child under
+// the target's convention when the counts straddle one.
+
+/// Account A holding the given storage slots, each valued by its slot byte.
+fn account_with_slots(slots: &[u8]) -> Map {
+    let mut m = Map::new();
+    m.insert(ACCOUNT_A.to_vec(), account(1, 0xAA));
+    for &slot in slots {
+        m.insert(
+            account_storage_key(&ACCOUNT_A, slot).into_vec(),
+            rlp_encode_storage(&[slot; 32]),
+        );
+    }
+    m
+}
+
+/// Apply every label's remedy to `local` the way a caller would: delete the
+/// keys under deletion labels, write the carried value for a point fix, and
+/// replace everything a fetch label covers with the target's content. Only
+/// the complement of the applied range is modelled; the key-value pairs the
+/// proof itself carried are not written.
+fn apply_remedies(target: &Map, local: &Map, holes: &[Hole]) -> Map {
+    let mut out = local.clone();
+    for hole in holes {
+        match hole {
+            Hole::Surplus(_) | Hole::PointSurplus { .. } => {
+                out.retain(|k, _| !covers(hole, k));
+            }
+            Hole::Missing(_) | Hole::Stale(_) | Hole::PointStale { .. } => {
+                out.retain(|k, _| !covers(hole, k));
+                for (k, v) in target.iter().filter(|(k, _)| covers(hole, k)) {
+                    out.insert(k.clone(), v.clone());
+                }
+            }
+            Hole::PointFix { key, value } => {
+                out.insert(key.to_vec(), value.to_vec());
+            }
+            Hole::Synced(_) => {}
+        }
+    }
+    out
+}
+
+/// Walk `local` against a proof from `target` over `[start, end]`, check the
+/// labels, then apply them and assert the second walk finds only agreement.
+fn assert_converges(
+    target: &Map,
+    local: &Map,
+    start: Option<&[u8]>,
+    end: Option<&[u8]>,
+) -> Vec<Hole> {
+    let (t, l) = (trie::<EthHash>(target), trie::<EthHash>(local));
+    let (verified, holes) = range_holes(&t, &l, start, end, None);
+    assert_matches_truth::<EthHash>(target, local, &applied_range(&verified), &holes);
+
+    let repaired = apply_remedies(target, local, &holes);
+    let r = trie::<EthHash>(&repaired);
+    let (verified, again) = range_holes(&t, &r, start, end, None);
+    assert!(
+        !again.is_empty(),
+        "the second walk still labels the complement"
+    );
+    assert!(
+        again.iter().all(|h| matches!(h, Hole::Synced(_))),
+        "after remedies: {again:?}"
+    );
+    assert_matches_truth::<EthHash>(target, &repaired, &applied_range(&verified), &again);
+    holes
+}
+
+#[test]
+fn fold_target_one_child_local_two() {
+    // The target stores slot 1 folded, the local trie stores it unfolded
+    // beside a surplus slot 2. Identical content under slot 1 is Synced, not
+    // Stale; slot 2 is the only remedy.
+    let target = account_with_slots(&[0x10]);
+    let local = account_with_slots(&[0x10, 0x20]);
+    let holes = assert_converges(&target, &local, Some(&ACCOUNT_A), Some(&ACCOUNT_A));
+
+    let labels = spans(&holes);
+    assert!(
+        labels
+            .iter()
+            .any(|(l, p)| *l == "Synced" && p.ends_with(&[0x1])),
+        "{holes:?}"
+    );
+    assert!(
+        labels
+            .iter()
+            .any(|(l, p)| *l == "Surplus" && p.ends_with(&[0x2])),
+        "{holes:?}"
+    );
+    assert!(!labels.iter().any(|(l, _)| *l == "Stale"), "{holes:?}");
+}
+
+#[test]
+fn fold_target_two_children_local_one() {
+    // The reverse: the local trie stores its single slot folded while the
+    // target stores both slots unfolded. Slot 1 is Synced and slot 2 Missing.
+    let target = account_with_slots(&[0x10, 0x20]);
+    let local = account_with_slots(&[0x10]);
+    let holes = assert_converges(&target, &local, Some(&ACCOUNT_A), Some(&ACCOUNT_A));
+
+    let labels = spans(&holes);
+    assert!(
+        labels
+            .iter()
+            .any(|(l, p)| *l == "Synced" && p.ends_with(&[0x1])),
+        "{holes:?}"
+    );
+    assert!(
+        labels
+            .iter()
+            .any(|(l, p)| *l == "Missing" && p.ends_with(&[0x2])),
+        "{holes:?}"
+    );
+    assert!(!labels.iter().any(|(l, _)| *l == "Stale"), "{holes:?}");
+}
+
+#[test]
+fn fold_sibling_through_storage_boundary() {
+    // The boundary runs through slot 1 of a two-slot target account; the
+    // local account holds only slot 2, folded. The sibling comparison at
+    // slot 2 crosses the fold and still reads Synced.
+    let target = account_with_slots(&[0x10, 0x20]);
+    let local = account_with_slots(&[0x20]);
+    let slot_one = account_storage_key(&ACCOUNT_A, 0x10);
+    let holes = assert_converges(&target, &local, Some(&slot_one), Some(&slot_one));
+
+    let labels = spans(&holes);
+    assert!(
+        labels
+            .iter()
+            .any(|(l, p)| *l == "Synced" && p.ends_with(&[0x2])),
+        "{holes:?}"
+    );
+    assert!(!labels.iter().any(|(l, _)| *l == "Stale"), "{holes:?}");
+}
+
+#[test]
+fn fold_sibling_below_the_boundary() {
+    // The same crossing on the Below side: the boundary runs through slot 2
+    // of a two-slot target account and the local account holds only slot 1,
+    // folded. The start proof's sibling comparison at slot 1 re-hashes under
+    // the target's convention and reads Synced.
+    let target = account_with_slots(&[0x10, 0x20]);
+    let local = account_with_slots(&[0x10]);
+    let slot_two = account_storage_key(&ACCOUNT_A, 0x20);
+    let holes = assert_converges(&target, &local, Some(&slot_two), Some(&slot_two));
+
+    let labels = spans(&holes);
+    assert!(
+        labels
+            .iter()
+            .any(|(l, p)| *l == "Synced" && p.ends_with(&[0x1])),
+        "{holes:?}"
+    );
+    assert!(!labels.iter().any(|(l, _)| *l == "Stale"), "{holes:?}");
+}
+
+#[test]
+fn fold_same_count_needs_no_normalization() {
+    // One slot on both sides: both stored hashes are folded and compare
+    // directly. Pins that the normalization stays out of the way.
+    let target = account_with_slots(&[0x10]);
+    let holes = assert_converges(&target, &target, Some(&ACCOUNT_A), Some(&ACCOUNT_A));
+    assert!(
+        holes.iter().all(|h| matches!(h, Hole::Synced(_))),
+        "{holes:?}"
+    );
 }
