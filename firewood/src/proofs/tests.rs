@@ -589,6 +589,24 @@ fn make_proof_node(
     }
 }
 
+/// Under the Ethereum scheme an inline child on the wire must be one RLP list
+/// of 1 to 31 bytes. A zero-length child is refused by the decoder, before any
+/// hashing, so the forged branch payloads it enables never form a proof.
+#[cfg(feature = "ethhash")]
+#[test]
+fn zero_length_inline_child_fails_to_decode() {
+    let mut node = make_proof_node(&[], 0, None, &[3]);
+    node.child_hashes.insert(
+        PathComponent::try_new(4).unwrap().0,
+        HashType::Rlp(smallvec::SmallVec::new()),
+    );
+    let (_, serialized) = make_range_proof_from_single_node(node);
+    match compress_and_parse_range(&serialized) {
+        Err(ReadError::InvalidItem { item, .. }) => assert_eq!(item, "inline child"),
+        other => panic!("expected an inline child rejection, got {other:?}"),
+    }
+}
+
 /// Wraps a single `ProofNode` in a minimal `FrozenRangeProof` and serializes it.
 /// Returns the proof plus its canonical uncompressed bytes
 /// (`header || body`); parse with [`compress_and_parse_range`].
