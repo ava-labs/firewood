@@ -1,6 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+mod accounts;
 mod change;
 mod collapse;
 mod descend;

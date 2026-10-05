@@ -420,11 +420,11 @@ fn test_sized_immutable_proposal_target<H: HashMode>() {
 #[test]
 fn test_sized_account_with_storage_children() {
     let account = vec![0x42; 32];
-    let value = super::ethhash::rlp_encode_account(1, 100, &[0; 32], &[0x55; 32]);
+    let value = super::accounts::rlp_encode_account(1, 100, &[0; 32], &[0x55; 32]);
     let mut kvs = vec![(account.clone(), value.into_vec())];
     for suffix in [0x11, 0x22] {
         let key = [account.as_slice(), &[suffix; 32]].concat();
-        kvs.push((key, super::ethhash::rlp_encode_storage(&[suffix; 32])));
+        kvs.push((key, super::accounts::rlp_encode_storage(&[suffix; 32])));
     }
     let source = init_merkle(vec![kvs.first().unwrap().clone()]);
     let target = init_merkle(kvs);

@@ -15,7 +15,7 @@
 use super::*;
 use test_case::test_case;
 
-use crate::merkle::tests::ethhash::{empty_code_hash, rlp_encode_account, rlp_encode_storage};
+use crate::merkle::tests::accounts::{empty_code_hash, rlp_encode_account, rlp_encode_storage};
 
 /// The single account every test below builds its storage trie under.
 const ACCOUNT_KEY: [u8; 32] = [0x10u8; 32];
