@@ -165,8 +165,8 @@ pub use merkle::{Key, ProvenRange, Value, verify_change_proof_root_hash, verify_
 pub use proofs::{
     ChangeProof, ChangeProofVerificationContext, DeletePrefixes, EmptyProofCollection,
     InvalidHeader, KeyRange, KeySpan, Proof, ProofCollection, ProofEdge, ProofError, ProofNode,
-    ProofType, RangeProof, RangeProofVerificationContext, ReadError,
-    find_next_key_after_change_proof, find_next_key_after_range_proof,
+    ProofType, RangeProof, RangeProofVerificationContext, ReadError, VerifiedChangeProof,
+    VerifiedRangeProof, find_next_key_after_change_proof, find_next_key_after_range_proof,
     verify_change_proof_structure, verify_range_proof_structure,
 };
 

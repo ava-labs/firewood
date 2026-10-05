@@ -5,7 +5,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use firewood::{
-    KeyRange, ProofError,
+    KeyRange, ProofError, VerifiedChangeProof,
     api::{self, FrozenChangeProof},
 };
 
@@ -97,20 +97,18 @@ impl ChangeProofContext {
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
     ) -> Result<VerifiedChangeProofContext<'db>, api::Error> {
-        let proposal = db.verify_change_proof(
-            &self.proof,
-            end_root.clone(),
+        let verified = VerifiedChangeProof::verify(
+            Arc::clone(&self.proof),
+            end_root,
             start_key,
             end_key,
+            db.node_hash_algorithm(),
             max_length,
         )?;
+        let proposal = db.apply_verified_change_proof(&verified)?;
         Ok(VerifiedChangeProofContext {
             db,
-            proof: Arc::clone(&self.proof),
-            end_root,
-            start_key: start_key.map(Box::from),
-            end_key: end_key.map(Box::from),
-            max_length,
+            verified,
             proposal_state: ProposalState::Proposed(proposal.handle),
         })
     }
@@ -118,45 +116,36 @@ impl ChangeProofContext {
 
 /// FFI context for a change proof verified against one database.
 ///
-/// Owns the proposal that applies the proof and records the constraints it
-/// was verified with, so a commit can rebuild the proposal and
-/// `next_key_ranges` can resume from the verified `end_key`.
+/// Owns the proposal that applies the proof. The proof and the constraints
+/// it was verified with travel together as a [`VerifiedChangeProof`], so a
+/// commit can rebuild the proposal and `next_key_ranges` can resume from the
+/// verified `end_key`.
 #[derive(Debug)]
 pub struct VerifiedChangeProofContext<'db> {
     db: &'db DatabaseHandle,
-    proof: Arc<FrozenChangeProof>,
-    end_root: api::HashKey,
-    start_key: Option<Box<[u8]>>,
-    end_key: Option<Box<[u8]>>,
-    max_length: Option<NonZeroUsize>,
+    verified: VerifiedChangeProof,
     proposal_state: ProposalState<'db>,
 }
 
 impl<'db> VerifiedChangeProofContext<'db> {
-    /// Re-verify against the current latest revision and build a fresh proposal.
+    /// Re-apply the proof to the current latest revision and check the result
+    /// against `end_root` again. The structural pass is not repeated; its
+    /// result does not depend on the revision.
     fn propose(&self) -> Result<crate::ProposalHandle<'db>, api::Error> {
-        Ok(self
-            .db
-            .verify_change_proof(
-                &self.proof,
-                self.end_root.clone(),
-                self.start_key.as_deref(),
-                self.end_key.as_deref(),
-                self.max_length,
-            )?
-            .handle)
+        Ok(self.db.apply_verified_change_proof(&self.verified)?.handle)
     }
 
     /// Commit the proof to the database and return the resulting root hash.
     ///
     /// A prepared proposal is committed as-is. If the database advanced since
-    /// verification (`ParentNotLatest`), the proof is verified again against
-    /// the then-latest revision and the fresh proposal is committed, so the
-    /// proven range is checked against `end_root` on the state it actually
-    /// lands on; the changes are never rebased onto a revision they were not
-    /// verified against. A proposal consumed by a failed commit leaves the
-    /// state `Pending`, and the next call re-verifies. After a successful
-    /// commit the root is cached and returned by every later call.
+    /// verification (`ParentNotLatest`), the proof is applied again to the
+    /// then-latest revision, its root re-checked against `end_root`, and the
+    /// fresh proposal is committed, so the proven range is checked on the
+    /// state it actually lands on; the changes are never rebased onto a
+    /// revision they were not checked against. A proposal consumed by a
+    /// failed commit leaves the state `Pending`, and the next call re-applies.
+    /// After a successful commit the root is cached and returned by every
+    /// later call.
     fn commit(&mut self) -> Result<Option<api::HashKey>, api::Error> {
         let (proposal, allow_rebuild) =
             match std::mem::replace(&mut self.proposal_state, ProposalState::Pending) {
@@ -184,15 +173,17 @@ impl<'db> VerifiedChangeProofContext<'db> {
     /// proof covered the verified range. Reads only the proof structure and the
     /// verified `end_key`.
     fn next_key_ranges(&self) -> Result<Vec<KeyRange>, api::Error> {
-        Ok(
-            firewood::find_next_key_after_change_proof(&self.proof, self.end_key.as_deref())?
-                .into_iter()
-                .collect(),
-        )
+        Ok(firewood::find_next_key_after_change_proof(
+            self.verified.proof(),
+            self.verified.verification().end_key(),
+        )?
+        .into_iter()
+        .collect())
     }
 
     fn code_hash_iter(&self) -> Result<CodeIteratorHandle<'_>, api::Error> {
-        CodeIteratorHandle::from_batch_ops(self.proof.hash_mode(), self.proof.batch_ops())
+        let proof = self.verified.proof();
+        CodeIteratorHandle::from_batch_ops(proof.hash_mode(), proof.batch_ops())
     }
 }
 
@@ -326,9 +317,10 @@ pub extern "C" fn fwd_db_verify_change_proof<'db>(
 
 /// Commit a verified change proof to its database.
 ///
-/// If the database advanced since verification, the proof is verified again
-/// against the latest revision and committed from there, so the proven range
-/// is checked against the verified end root on the state it lands on; a
+/// If the database advanced since verification, the proof is applied again
+/// to the latest revision and its root re-checked against the verified end
+/// root before committing (the structural pass is not repeated), so the
+/// proven range is checked on the state it lands on; a
 /// proposal consumed by a failed commit is rebuilt on the next call; after
 /// success the root is cached and a second call returns it without touching
 /// the database. The context stays usable afterwards.
