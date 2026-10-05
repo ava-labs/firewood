@@ -72,9 +72,14 @@ benchmark/            # Performance benchmarking suite
 
 By default, Firewood uses SHA-256 hashing compatible with merkledb. Enable this feature for Ethereum compatibility:
 
-- Changes hashing from SHA-256 to Keccak-256
+- Selects Keccak-256 hashing (`EthHash`) as the compile-time default. Both
+  hashers are always compiled; a database's mode is chosen when it is opened
 - Understands "account" nodes at specific depths with RLP-encoded values
 - Computes account trie hash as actual root
+- Derives an account value's `storageRoot` field from the storage children at
+  hash time, so the stored bytes may hold a stale field on databases written
+  before `firewood-v1-hfix`; compare account values with that field masked
+  (see `merkle::holes::values_agree`)
 - When an account has exactly one storage child, hashes that child as a
   standalone storage-trie root, so a child's hash depends on the account's
   storage-child count
