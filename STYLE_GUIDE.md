@@ -58,6 +58,12 @@ By default, we prohibit bare `unwrap` calls and index dereferencing, as there ar
   `ProofNode::key`, which the node hash commits to in both modes. `partial_len` (and
   `partial_path()`) is authenticated only under the Ethereum mode; under MerkleDB a
   tampered split still verifies. See `merkle::holes::Walk::boundary`.
+- **Ethereum storage-child fold**: Under the Ethereum mode a stored child hash at depth
+  65 depends on the account's storage-child count (folded as a storage-trie root iff the
+  account has exactly one). Compare depth-65 hashes from two tries directly only when
+  both counts agree; otherwise re-hash the local child under the target's convention
+  (folded via `hash_node_as_storage_trie_root_parts`, unfolded via `HashableShunt`).
+  See `merkle::holes::Walk::straddle`.
 
 ## Lint Suppression Policy
 
