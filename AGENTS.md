@@ -78,6 +78,9 @@ By default, Firewood uses SHA-256 hashing compatible with merkledb. Enable this 
 - When an account has exactly one storage child, hashes that child as a
   standalone storage-trie root, so a child's hash depends on the account's
   storage-child count
+- Rejects a `Put` whose value is empty with `api::Error::EmptyValue`, because
+  the scheme encodes an empty value and no value identically. A key that
+  should hold nothing must be deleted
 - See `storage/src/hashers/ethhash.rs` for implementation details
 
 ### `logger`
