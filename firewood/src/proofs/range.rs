@@ -67,14 +67,15 @@ use crate::proofs::ProofError;
 
 use super::types::{Proof, ProofCollection};
 
-/// `(start_key, end_key)` describing the next key range to fetch after a
-/// range or change proof. Returned by `find_next_key_after_*_proof`.
+/// `(start_key, end_key)` describing a key range still to fetch after a range
+/// or change proof, both bounds inclusive and `None` unbounded above. Produced
+/// by [`fetch_ranges`](crate::proofs::fetch_ranges).
 pub type KeyRange = (Box<[u8]>, Option<Box<[u8]>>);
 
 /// Verification context captured after structural validation of a range proof.
-/// Stored so that downstream logic (root hash verification,
-/// [`find_next_key_after_range_proof`]) can reference the original
-/// verification parameters without re-validating.
+/// Stored so that downstream logic (root hash verification, the post-merge
+/// hole walk) can reference the original verification parameters without
+/// re-validating.
 ///
 /// Constructible only by [`verify_range_proof_structure`]; fields are private
 /// so a context cannot be forged or altered after verification.
@@ -229,49 +230,6 @@ pub fn verify_range_proof_structure(
         max_length,
         right_edge_key: proven.end,
     })
-}
-
-/// Determine the next key range to fetch after this range proof.
-///
-/// Returns `None` when the originally-requested range is fully accounted
-/// for; otherwise returns `Some((start, end_key))` where `start` is the
-/// smallest key strictly above the last proven key, so that an inclusive
-/// request bound resumes without covering that key again. This is the same
-/// convention as [`find_next_key_after_change_proof`].
-///
-/// [`find_next_key_after_change_proof`]: crate::find_next_key_after_change_proof
-///
-/// # Errors
-///
-/// Currently does not return errors; the signature is `Result` for parity
-/// with the change-proof counterpart and to allow future error paths.
-pub fn find_next_key_after_range_proof(
-    proof: &FrozenRangeProof,
-    verification: &RangeProofVerificationContext,
-) -> Result<Option<KeyRange>, api::Error> {
-    // TODO(#352): proper implementation, this naively resumes right after
-    // the last key in the range, which is correct, but not ideal.
-    let Some((last_key, _)) = proof.key_values().last() else {
-        // no key-values in the proof, so we are done
-        return Ok(None);
-    };
-
-    if proof.end_proof().is_empty() {
-        // unbounded, so we are done
-        return Ok(None);
-    }
-
-    if let Some(ref end_key) = verification.end_key
-        && **last_key >= **end_key
-    {
-        // reached or exceeded the end key, so we are done
-        return Ok(None);
-    }
-
-    Ok(Some((
-        super::lex_successor(last_key),
-        verification.end_key.clone(),
-    )))
 }
 
 /// A range proof is a cryptographic proof that demonstrates a contiguous set of key-value pairs
