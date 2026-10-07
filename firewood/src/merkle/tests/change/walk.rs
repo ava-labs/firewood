@@ -4,9 +4,9 @@
 //! Multi-round client sync walks over change proofs.
 //!
 //! A client fetches one range at a time, verifies each proof against its own
-//! database, commits it, and follows the continuation reported by
-//! [`find_next_key_after_change_proof`] until that call reports no more keys.
-//! These tests drive the whole loop and check where it ends up.
+//! database, commits it, and resumes just past the last operation the proof
+//! carried until a proof reports no more keys. These tests drive the whole
+//! loop and check where it ends up.
 //!
 //! Each round verifies against the client's current tip, which is what
 //! [`Db::verify_change_proof`] does, so the client's state advances as the walk
@@ -16,7 +16,7 @@
 //! test as "did not converge" instead of hanging.
 
 use super::*;
-use crate::find_next_key_after_change_proof;
+use crate::proofs::lex_successor;
 use std::num::NonZeroUsize;
 use tempfile::TempDir;
 use test_case::test_case;
@@ -52,9 +52,9 @@ fn ranges(trace: &[(String, String)]) -> String {
 /// to `end_key` and letting the generator truncate at `limit`.
 ///
 /// Each round asks `source` for a change proof over the range the previous round
-/// reported, has `target` verify and commit it, then reads the next range from
-/// `find_next_key_after_change_proof`. Requests name `start_root` because that is
-/// the revision `source` proves from; `target` applies each proof to its own tip.
+/// reported, has `target` verify and commit it, then resumes at
+/// [`next_start`]. Requests name `start_root` because that is the revision
+/// `source` proves from; `target` applies each proof to its own tip.
 ///
 /// Returns `Err` if the walk exceeds `max_rounds`, which is how a non-advancing
 /// continuation surfaces.
@@ -68,7 +68,7 @@ fn sync_walk(
     max_rounds: usize,
 ) -> Result<Walk, String> {
     let mut start_key: Option<Box<[u8]>> = None;
-    let mut end_key: Option<Box<[u8]>> = end_key.map(Box::from);
+    let end_key: Option<Box<[u8]>> = end_key.map(Box::from);
     let mut collected: Vec<WalkOp> = Vec::new();
     let mut trace: Vec<(String, String)> = Vec::new();
     let mut rounds: usize = 0;
@@ -107,9 +107,7 @@ fn sync_walk(
 
         collected.extend(proof.batch_ops().iter().cloned());
 
-        let next = find_next_key_after_change_proof(&proof, end_key.as_deref())
-            .map_err(|e| format!("round {rounds}: find_next_key failed: {e}"))?;
-        match next {
+        match next_start(&proof, end_key.as_deref()) {
             None => {
                 return Ok(Walk {
                     rounds,
@@ -117,16 +115,32 @@ fn sync_walk(
                     trace,
                 });
             }
-            Some((next_start, next_end)) => {
-                assert_eq!(
-                    next_end, end_key,
-                    "the continuation must carry the requested bound forward unchanged"
-                );
-                start_key = Some(next_start);
-                end_key = next_end;
-            }
+            Some(next) => start_key = Some(next),
         }
     }
+}
+
+/// The coarse cursor a client without a local view can follow: the byte
+/// successor of the last operation's key, or `None` when the proof reports
+/// no operations, is unbounded above, or ends exactly at the requested
+/// bound. (A client holding its database learns far more from the
+/// post-merge hole walk; this loop exercises the generator's truncation,
+/// not the walk.)
+fn next_start(proof: &FrozenChangeProof, end_key: Option<&[u8]>) -> Option<Box<[u8]>> {
+    let last = proof.batch_ops().last()?.key();
+    if proof.end_proof().is_empty() {
+        return None;
+    }
+    if let Some(end) = end_key {
+        assert!(
+            **last <= *end,
+            "a change proof never reports a key past the requested bound"
+        );
+        if **last == *end {
+            return None;
+        }
+    }
+    Some(lex_successor(last))
 }
 
 /// The number of rounds a walk needs: one request per batch of changes, plus one

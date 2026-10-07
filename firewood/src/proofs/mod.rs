@@ -329,16 +329,15 @@ mod tests;
 pub(crate) mod types;
 
 pub use self::change::{
-    ChangeProof, ChangeProofVerificationContext, VerifiedChangeProof,
-    find_next_key_after_change_proof, verify_change_proof_structure,
+    ChangeProof, ChangeProofVerificationContext, VerifiedChangeProof, verify_change_proof_structure,
 };
 
 pub(crate) use self::frame::MAX_DECOMPRESSED_LEN;
 pub use self::header::InvalidHeader;
-pub use self::holes::{DeletePrefixes, Hole, KeySpan};
+pub use self::holes::{DeletePrefixes, Hole, KeySpan, OwnedBatchOp, fetch_ranges, remedy_ops};
 pub use self::range::{
     KeyRange, RangeProof, RangeProofVerificationContext, VerifiedRangeProof,
-    find_next_key_after_range_proof, verify_range_proof_structure,
+    verify_range_proof_structure,
 };
 pub use self::reader::ReadError;
 pub use self::types::{
@@ -349,10 +348,8 @@ pub use self::types::{
 /// `0x00` byte appended, since nothing sorts between the two. Total — every byte
 /// string has one, including the empty key.
 ///
-/// [`find_next_key_after_range_proof`] and [`find_next_key_after_change_proof`]
-/// use it to resume strictly above the last key a proof covered. Both request
-/// bounds are inclusive, so resuming at that key would cover it again and never
-/// advance.
+/// [`fetch_ranges`] uses it as the exclusive upper bound of a single-key
+/// label, so that a point and the span starting right after it coalesce.
 pub(crate) fn lex_successor(key: &[u8]) -> Box<[u8]> {
     [key, &[0]].concat().into_boxed_slice()
 }

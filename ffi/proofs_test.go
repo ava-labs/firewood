@@ -403,20 +403,157 @@ func TestRangeProofNextKeyRangesDivergentReceiver(t *testing.T) {
 	}
 
 	// The truncated proof only proved a prefix, and dbTarget started with
-	// none of the data, so there is genuinely more to fetch.
+	// none of the data, so there is genuinely more to fetch: everything the
+	// end proof's sibling hashes commit to above the last proven key, which
+	// the walk reports as sorted, non-overlapping ranges past that key.
 	ranges, err := verified.NextKeyRanges()
 	r.NoError(err)
-	r.Len(ranges, 1)
-	// The start key is inclusive, so it is the smallest key strictly above the
-	// last proven one: that key with a zero byte appended.
+	r.NotEmpty(ranges)
 	lastProven := keys[rangeProofLenTruncated-1]
-	r.Equal(append(bytes.Clone(lastProven), 0x00), ranges[0].StartKey)
-	r.False(ranges[0].EndKey.HasValue(), "the request was unbounded above")
+	assertRangesWellFormed(t, ranges, lastProven)
 
-	// The keys are Go-owned: they survive the proof.
+	// The keys are Go-owned: they survive the proof. Flip a byte to prove
+	// the slice is independent of any Rust memory, then flip it back, since
+	// syncUntilCaughtUp below reuses ranges to continue the walk.
 	r.NoError(verified.Drop())
 	r.NoError(proof.Drop())
 	ranges[0].StartKey[0] ^= 0xFF
+	ranges[0].StartKey[0] ^= 0xFF
+
+	// Following the ranges brings dbTarget to the source's root.
+	syncUntilCaughtUp(t, dbSource, dbTarget, sourceRoot, ranges)
+}
+
+// assertRangesWellFormed checks that ranges are sorted, non-overlapping, and
+// all strictly above lastProven.
+func assertRangesWellFormed(t *testing.T, ranges []NextKeyRange, lastProven []byte) {
+	t.Helper()
+	r := require.New(t)
+	prevEnd := lastProven
+	for i, rg := range ranges {
+		r.Positive(bytes.Compare(rg.StartKey, prevEnd), "range %d starts at or below the previous bound", i)
+		if rg.EndKey.HasValue() {
+			r.Negative(bytes.Compare(rg.StartKey, rg.EndKey.Value()), "range %d is inverted", i)
+			prevEnd = rg.EndKey.Value()
+		} else {
+			r.Equal(len(ranges)-1, i, "an unbounded range must be the last")
+		}
+	}
+}
+
+// syncUntilCaughtUp follows NextKeyRanges the way a sync loop does: fetch the
+// first range from src at root, verify and commit it on dst, read the ranges
+// the committed proof reports, and repeat until nothing remains. Asserts dst
+// ends at root.
+func syncUntilCaughtUp(t *testing.T, src, dst *Database, root Hash, ranges []NextKeyRange) {
+	t.Helper()
+	r := require.New(t)
+	for round := 0; len(ranges) > 0; round++ {
+		r.Less(round, 100, "sync did not converge; remaining %v", ranges)
+		next := ranges[0]
+		end := nothing()
+		if next.EndKey.HasValue() {
+			end = something(next.EndKey.Value())
+		}
+		proof := newRangeProof(t, src, root, something(next.StartKey), end, 0)
+		proof = transferRangeProof(t, proof, dst)
+		verified := verifyRangeProof(t, proof, root, something(next.StartKey), end, 0)
+		_, err := verified.Commit()
+		r.NoError(err)
+		ranges, err = verified.NextKeyRanges()
+		r.NoError(err)
+		r.NoError(verified.Drop())
+		r.NoError(proof.Drop())
+	}
+	r.Equal(root, dst.Root(), "dst did not reach the source root")
+}
+
+// TestRangeProofCommitAppliesRemediesOutsideProvenRange pins the commit
+// contract: a verified proof's commit replaces the proven range and, outside
+// it, deletes content the proof's boundary hashes show the target does not
+// hold, while content that differs and is not in hand is left for
+// NextKeyRanges. The ranges agree before and after the commit, since the
+// merge never touches the key space the walk classifies, and survive an
+// unrelated commit in between.
+func TestRangeProofCommitAppliesRemediesOutsideProvenRange(t *testing.T) {
+	r := require.New(t)
+
+	dbSource := newTestDatabase(t)
+	dbTarget := newTestDatabase(t)
+
+	keys, _, batch := kvForTest(100)
+	sourceRoot, err := dbSource.Update(batch)
+	r.NoError(err)
+
+	// dbTarget holds dbSource's keys plus two defects past the truncated
+	// proof's edge: a key under a prefix dbSource never uses, which the walk
+	// proves absent from dbSource and the commit therefore deletes, and a
+	// wrong value for an existing key, which the walk can only report as a
+	// range to fetch.
+	surplus := []byte("zzz-surplus")
+	stale := keys[90]
+	_, err = dbTarget.Update(batch)
+	r.NoError(err)
+	_, err = dbTarget.Update([]BatchOp{Put(surplus, []byte("gone")), Put(stale, []byte("wrong"))})
+	r.NoError(err)
+
+	proof := newRangeProof(t, dbSource, sourceRoot, nothing(), nothing(), rangeProofLenTruncated)
+	proof = transferRangeProof(t, proof, dbTarget)
+	verified := verifyRangeProof(t, proof, sourceRoot, nothing(), nothing(), rangeProofLenTruncated)
+
+	before, err := verified.NextKeyRanges()
+	r.NoError(err)
+	r.NotEmpty(before)
+	assertRangesWellFormed(t, before, keys[rangeProofLenTruncated-1])
+	r.True(coveredBy(before, stale), "the stale key must lie in a range to fetch: %v", before)
+	r.False(coveredBy(before, surplus), "the surplus key is a local remedy, not a fetch: %v", before)
+
+	_, err = verified.Commit()
+	r.NoError(err)
+
+	got, err := dbTarget.Get(surplus)
+	r.NoError(err)
+	r.Nil(got, "the commit deletes content the target does not hold")
+	got, err = dbTarget.Get(stale)
+	r.NoError(err)
+	r.Equal([]byte("wrong"), got, "a stale value is fetched, not repaired, by the commit")
+
+	after, err := verified.NextKeyRanges()
+	r.NoError(err)
+	r.Equal(before, after, "the ranges describe key space the merge does not touch")
+
+	// An unrelated commit invalidates the cached answer; the walk runs again
+	// against the new revision and finds the same holes plus nothing to
+	// fetch for the new surplus key.
+	_, err = dbTarget.Update([]BatchOp{Put([]byte("zzz-other"), []byte("gone"))})
+	r.NoError(err)
+	again, err := verified.NextKeyRanges()
+	r.NoError(err)
+	r.Equal(before, again)
+
+	r.NoError(verified.Drop())
+	r.NoError(proof.Drop())
+
+	syncUntilCaughtUp(t, dbSource, dbTarget, sourceRoot, again)
+	got, err = dbTarget.Get(stale)
+	r.NoError(err)
+	r.Equal(valForTest(90), got)
+	got, err = dbTarget.Get([]byte("zzz-other"))
+	r.NoError(err)
+	r.Nil(got, "the sync loop's commits delete surplus content as they go")
+}
+
+// coveredBy reports whether key lies in one of ranges.
+func coveredBy(ranges []NextKeyRange, key []byte) bool {
+	for _, rg := range ranges {
+		if bytes.Compare(key, rg.StartKey) < 0 {
+			continue
+		}
+		if !rg.EndKey.HasValue() || bytes.Compare(key, rg.EndKey.Value()) <= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // TestRangeProofMethodFreeRace is a regression test for ava-labs/firewood#2137.
@@ -755,7 +892,10 @@ func TestVerifiedChangeProofCommitAfterDatabaseAdvanced(t *testing.T) {
 
 // TestVerifiedChangeProofCommitAfterUnrelatedAdvance checks the rebuild path
 // for change proofs: a proposal made stale by a commit outside the proven
-// range is verified again against the latest revision and committed.
+// range is verified again against the latest revision and committed. The
+// rebuild re-walks that revision, so the key written in between, which the
+// end proof authenticates as absent from the target, is deleted by the
+// commit and the database lands on the target root.
 func TestVerifiedChangeProofCommitAfterUnrelatedAdvance(t *testing.T) {
 	r := require.New(t)
 	dbA := newTestDatabase(t)
@@ -776,6 +916,7 @@ func TestVerifiedChangeProofCommitAfterUnrelatedAdvance(t *testing.T) {
 	committed, err := verified.Commit()
 	r.NoError(err, "a stale proposal is rebuilt when the proven range is untouched")
 	r.NotEqual(advanced, committed)
+	r.Equal(endRoot, committed, "the commit's remedies bring the database to the target root")
 	r.Equal(committed, dbB.Root())
 	for i := 50; i < 100; i++ {
 		got, err := dbB.Get(keys[i])
@@ -784,8 +925,47 @@ func TestVerifiedChangeProofCommitAfterUnrelatedAdvance(t *testing.T) {
 	}
 	got, err := dbB.Get(unrelated)
 	r.NoError(err)
-	r.Equal([]byte("value"), got, "the key outside the proven range survives the commit")
+	r.Nil(got, "the commit deletes the key the target does not hold")
 	r.NoError(verified.Drop())
+}
+
+// TestRangeProofNextKeyRangesReachOutsideTheRequest pins that the ranges are
+// not confined to the request's bounds: the boundary proofs speak for the
+// whole key space, so holes below the start key and above the end key are
+// reported too, and following them converges.
+func TestRangeProofNextKeyRangesReachOutsideTheRequest(t *testing.T) {
+	r := require.New(t)
+	src := newTestDatabase(t)
+	dst := newTestDatabase(t)
+
+	keys, _, batch := kvForTest(100)
+	root, err := src.Update(batch)
+	r.NoError(err)
+	// dst lacks one key below the request and one above it.
+	partial := make([]BatchOp, 0, len(batch))
+	for i, op := range batch {
+		if i != 5 && i != 70 {
+			partial = append(partial, op)
+		}
+	}
+	_, err = dst.Update(partial)
+	r.NoError(err)
+
+	start, end := something(keys[20]), something(keys[40])
+	proof := newRangeProof(t, src, root, start, end, 0)
+	proof = transferRangeProof(t, proof, dst)
+	verified := verifyRangeProof(t, proof, root, start, end, 0)
+	_, err = verified.Commit()
+	r.NoError(err)
+	ranges, err := verified.NextKeyRanges()
+	r.NoError(err)
+	assertRangesWellFormed(t, ranges, nil)
+	r.True(coveredBy(ranges, keys[5]), "a hole below the request's start key is reported: %v", ranges)
+	r.True(coveredBy(ranges, keys[70]), "a hole above the request's end key is reported: %v", ranges)
+	r.NoError(verified.Drop())
+	r.NoError(proof.Drop())
+
+	syncUntilCaughtUp(t, src, dst, root, ranges)
 }
 
 func TestChangeProofVerifyTwice(t *testing.T) {
@@ -1327,21 +1507,27 @@ func TestChangeProofNextKeyRanges(t *testing.T) {
 	verified, err := proof.Verify(rootAUpdated, nothing(), nothing(), changeProofLenTruncated)
 	r.NoError(err)
 
-	ranges, err := verified.NextKeyRanges()
+	// The truncated proof carried ten of five thousand changes; the rest are
+	// holes the boundary hashes reveal, reported as ranges past the proof's
+	// right edge.
+	before, err := verified.NextKeyRanges()
 	r.NoError(err)
-	r.Len(ranges, 1)
-	startKey := ranges[0].StartKey
-	r.NotEmpty(startKey)
-	r.False(ranges[0].EndKey.HasValue())
+	r.NotEmpty(before)
+	r.NotEmpty(before[0].StartKey)
+	if before[0].EndKey.HasValue() {
+		assertRangesWellFormed(t, before[1:], before[0].EndKey.Value())
+	} else {
+		r.Len(before, 1, "an unbounded range must be the last")
+	}
 
 	_, err = verified.Commit()
 	r.NoError(err)
 
-	// NextKeyRanges reads the proof, not the proposal, so commit changes nothing.
-	ranges, err = verified.NextKeyRanges()
+	// The merge touches only the applied range, so the ranges agree before
+	// and after the commit.
+	after, err := verified.NextKeyRanges()
 	r.NoError(err)
-	r.Len(ranges, 1)
-	r.Equal(startKey, ranges[0].StartKey)
+	r.Equal(before, after)
 	r.NoError(verified.Drop())
 }
 

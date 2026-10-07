@@ -14,7 +14,7 @@ use firewood_storage::{EthHash, HashMode, HashedNodeReader, MerkleDbHash, NodeHa
 use super::init_merkle_in;
 use crate::api::{self, BatchOp, Db as _, DbView as _, Proposal as _};
 use crate::db::{Db, DbConfig};
-use crate::{ProofError, VerifiedChangeProof, VerifiedRangeProof};
+use crate::{Hole, ProofError, VerifiedChangeProof, VerifiedRangeProof};
 
 fn kvs(n: u8) -> Vec<(Vec<u8>, Vec<u8>)> {
     (0..n).map(|i| (vec![i, i ^ 0x5A], vec![i; 4])).collect()
@@ -232,7 +232,13 @@ fn db_applies_verified_change_proof<H: HashMode>() {
     )
     .unwrap();
 
-    let proposal = target.apply_verified_change_proof(&verified).unwrap();
+    // Source and target agree outside the proof's range, so the walk finds
+    // nothing to repair and the proposal is the proof's operations alone.
+    let (proposal, holes) = target.apply_verified_change_proof(&verified).unwrap();
+    assert!(
+        holes.iter().all(|h| matches!(h, Hole::Synced(_))),
+        "{holes:?}"
+    );
     assert_eq!(proposal.root_hash(), Some(root2.clone()));
     proposal.commit().unwrap();
     assert_eq!(target.root_hash().unwrap(), root2);
@@ -240,7 +246,7 @@ fn db_applies_verified_change_proof<H: HashMode>() {
     // Applying the same verified proof again, now on top of the revision it
     // produced, is the path a commit retry takes after the database advanced.
     // The operations are idempotent puts, so the result is the same root.
-    let again = target.apply_verified_change_proof(&verified).unwrap();
+    let (again, _) = target.apply_verified_change_proof(&verified).unwrap();
     assert_eq!(again.root_hash(), Some(root2));
 }
 

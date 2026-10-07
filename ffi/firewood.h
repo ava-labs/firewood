@@ -82,8 +82,8 @@ typedef struct RevisionHandle RevisionHandle;
  *
  * Owns the proposal that applies the proof. The proof and the constraints
  * it was verified with travel together as a [`VerifiedChangeProof`], so a
- * commit can rebuild the proposal and `next_key_ranges` can resume from the
- * verified `end_key`.
+ * commit can rebuild the proposal and `next_key_ranges` can walk the
+ * boundary proofs again.
  */
 typedef struct VerifiedChangeProofContext VerifiedChangeProofContext;
 
@@ -1079,11 +1079,13 @@ typedef struct BorrowedSlice_BorrowedBytes {
 typedef struct BorrowedSlice_BorrowedBytes BorrowedBytes2D;
 
 /**
- * A key range still to fetch after a truncated range or change proof,
- * `[start_key, end_key]`, both inclusive: `start_key` is the smallest key
- * above the last one already synchronized, so passing it as the next
- * request's start bound resumes without covering that key again. An absent
- * `end_key` means the range is unbounded above.
+ * A key range still to fetch after a range or change proof, `[start_key,
+ * end_key]`, both inclusive; the list a proof reports is sorted ascending
+ * with adjacent ranges coalesced. `end_key` covers one key more than
+ * strictly needed — a reply over the range rewrites or deletes that key
+ * exactly as the target holds it — because a span of the key space has no
+ * exact inclusive upper bound. An absent `end_key` means the range is
+ * unbounded above.
  */
 typedef struct NextKeyRange {
   /**
@@ -3201,6 +3203,12 @@ struct CodeIteratorResult fwd_verified_change_proof_code_hash_iter(const struct 
 /**
  * Commit a verified change proof to its database.
  *
+ * The commit applies the proof's operations and, outside the applied range,
+ * the local remedies its boundary hashes justify: content the target does
+ * not hold is deleted and keys whose target value the proof carries are
+ * written. What remains to fetch is what
+ * [`fwd_verified_change_proof_next_key_ranges`] reports afterwards.
+ *
  * If the database advanced since verification, the proof is applied again
  * to the latest revision and its root re-checked against the verified end
  * root before committing (the structural pass is not repeated), so the
@@ -3225,7 +3233,10 @@ struct CodeIteratorResult fwd_verified_change_proof_code_hash_iter(const struct 
 struct HashResult fwd_verified_change_proof_commit(struct VerifiedChangeProofContext *proof);
 
 /**
- * Returns the key ranges still to fetch after this change proof.
+ * Returns the key ranges still to fetch after this change proof, sorted
+ * ascending and coalesced where adjacent, on the same terms as
+ * [`fwd_verified_range_proof_next_key_ranges`](crate::fwd_verified_range_proof_next_key_ranges):
+ * the answer describes the database's latest committed revision.
  *
  * # Returns
  *
@@ -3255,6 +3266,14 @@ struct CodeIteratorResult fwd_verified_range_proof_code_hash_iter(const struct V
 /**
  * Commit a verified range proof to its database.
  *
+ * The commit brings the database into agreement with the proof's target
+ * everywhere the proof speaks: the proven range is replaced by the proof's
+ * key-value pairs, and outside it the content the proof's boundary hashes
+ * show the target does not hold is deleted and keys whose target value the
+ * proof carries are written. What the proof cannot settle — key space whose
+ * target content differs and is not in hand — is what
+ * [`fwd_verified_range_proof_next_key_ranges`] reports afterwards.
+ *
  * A prepared proposal is committed as-is; one made stale by a later commit
  * is rebuilt from the proof; after success the root is cached and a second
  * call returns it without touching the database. The context stays usable
@@ -3277,7 +3296,15 @@ struct CodeIteratorResult fwd_verified_range_proof_code_hash_iter(const struct V
 struct HashResult fwd_verified_range_proof_commit(struct VerifiedRangeProofContext *proof);
 
 /**
- * Returns the key ranges still to fetch after this proof, sorted ascending.
+ * Returns the key ranges still to fetch after this proof, sorted ascending
+ * and coalesced where adjacent. The answer describes the database's latest
+ * committed revision as of the call: the proof's boundary proofs are
+ * compared against it, and every span of key space outside the proven range
+ * whose content the target has and the database lacks or holds differently
+ * becomes a range. The boundary proofs speak for the whole key space, so a
+ * range may lie below the request's start key or above its end key.
+ * Content the database holds that the target does not is not reported
+ * here; committing the proof deletes it.
  *
  * # Returns
  *
