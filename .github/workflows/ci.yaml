@@ -247,7 +247,7 @@ jobs:
             profile-key: debug-no-features
             os: macos-26
           - hash-mode: ethhash
-            profile-key: debug-ethhash-logger
+            profile-key: debug-no-features
     steps:
       - uses: actions/checkout@v6
       - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
@@ -262,7 +262,7 @@ jobs:
           shared-key: ${{ matrix.profile-key }}
       - name: Build Firewood FFI
         working-directory: ffi
-        run: ../scripts/run-just.sh ci-build-ffi ${{ matrix.hash-mode }}
+        run: ../scripts/run-just.sh ci-build-ffi
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -301,9 +301,9 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2 -> v2.9.1
         with:
           save-if: "false"
-          shared-key: "maxperf-ethhash-logger"
+          shared-key: "maxperf-logger"
       - name: Build Firewood FFI
-        run: cargo build --locked -p firewood-ffi --profile maxperf --features ethhash,logger
+        run: cargo build --locked -p firewood-ffi --profile maxperf --features logger
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -341,9 +341,9 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2 -> v2.9.1
         with:
           save-if: "false"
-          shared-key: "debug-ethhash-logger"
-      - name: Build Firewood FFI (with ethhash)
-        run: ./scripts/run-just.sh ci-build-ffi ethhash
+          shared-key: "debug-no-features"
+      - name: Build Firewood FFI
+        run: ./scripts/run-just.sh ci-build-ffi
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -384,7 +384,7 @@ jobs:
           save-if: "false"
           shared-key: "debug-no-features"
       - name: Build Firewood FFI
-        run: ./scripts/run-just.sh ci-build-ffi firewood
+        run: ./scripts/run-just.sh ci-build-ffi
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
