@@ -16,7 +16,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use fastrace_opentelemetry::OpenTelemetryReporter;
 use firewood::logger::trace;
 use firewood::open;
-use firewood_storage::{DefaultHashMode, FREE_LIST_CACHE_ENTRY_SIZE, HashMode};
+use firewood_storage::FREE_LIST_CACHE_ENTRY_SIZE;
 use log::LevelFilter;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
@@ -46,6 +46,14 @@ struct Args {
 
 #[derive(clap::Args, Debug)]
 struct GlobalOpts {
+    #[arg(
+        long,
+        value_enum,
+        required = true,
+        help = "The hash algorithm to use for the database"
+    )]
+    hash_mode: HashModeArg,
+
     #[arg(
         short = 'e',
         long,
@@ -114,6 +122,23 @@ struct GlobalOpts {
     )]
     cache_read_strategy: ArgCacheReadStrategy,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
+enum HashModeArg {
+    #[value(name = "merkle-db")]
+    MerkleDB,
+    #[value(name = "ethereum")]
+    Ethereum,
+}
+
+impl From<HashModeArg> for firewood_storage::NodeHashAlgorithm {
+    fn from(hash_mode: HashModeArg) -> Self {
+        match hash_mode {
+            HashModeArg::MerkleDB => Self::MerkleDB,
+            HashModeArg::Ethereum => Self::Ethereum,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, ValueEnum, Clone)]
 pub enum ArgCacheReadStrategy {
     WritesOnly,
@@ -244,8 +269,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .max_revisions(args.global_opts.revisions)
         .build();
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
-        .truncate(matches!(args.test_name, TestName::Create))
+        .node_hash_algorithm(args.global_opts.hash_mode.into())
+        .truncate(matches!(&args.test_name, TestName::Create))
         .manager(mgrcfg)
         .build();
 
@@ -269,6 +294,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             runner.run(db.as_ref(), &args)?;
         }
     }
+    // Dropping the database without closing can lose committed data.
+    db.close()?;
 
     #[cfg(feature = "prometheus")]
     if args.global_opts.stats_dump {
