@@ -14,17 +14,19 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use crate::node::branch::ReadSerializable;
-use crate::nodestore::AreaIndex;
-use crate::{HashMode, LinearAddress, Path, PathBuf, PathComponent, SharedNode};
+use std::fmt::Debug;
+use std::io::{Error, Read, Write};
+
 use bitfield::bitfield;
 pub use branch::{BranchNode, Child};
 pub use children::{Children, ChildrenSlots, DenseChildren};
 use enum_as_inner::EnumAsInner;
 use integer_encoding::{VarInt, VarIntReader as _};
 pub use leaf::LeafNode;
-use std::fmt::Debug;
-use std::io::{Error, Read, Write};
+
+use crate::node::branch::ReadSerializable;
+use crate::nodestore::AreaIndex;
+use crate::{HashMode, LinearAddress, Path, PathBuf, PathComponent, SharedNode};
 
 pub mod branch;
 pub mod children;
@@ -541,6 +543,9 @@ mod snapshot_tests;
 
 #[cfg(test)]
 mod test {
+    use firewood_macros::hash_mode;
+    use test_case::test_case;
+
     #[cfg(feature = "ethhash")]
     use crate::DefaultHashMode;
     use crate::node::{BranchNode, LeafNode, Node};
@@ -548,8 +553,6 @@ mod test {
         Child, Children, EthHash, HashMode, LinearAddress, MerkleDbHash, NibblesIterator,
         NodeHashAlgorithm, Path,
     };
-    use firewood_macros::hash_mode;
-    use test_case::test_case;
 
     #[hash_mode]
     #[test_case(
@@ -602,8 +605,9 @@ than 126 bytes as the length would be encoded in multiple bytes.
         )})), 1165; "full branch node with obnoxiously long partial path and long value"
     )]
     fn test_serialize_deserialize<H: HashMode>(node: Node, expected_length: usize) {
-        use crate::node::Node;
         use std::io::Cursor;
+
+        use crate::node::Node;
 
         let mut serialized = Vec::new();
         let _area_index = node.as_bytes::<H, _>(&mut serialized).unwrap();

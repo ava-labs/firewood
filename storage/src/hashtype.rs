@@ -1,13 +1,14 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use sha2::Digest as _;
-use sha3::Keccak256;
-use smallvec::SmallVec;
 use std::{
     fmt::{Display, Formatter},
     io::Read,
 };
+
+use sha2::Digest as _;
+use sha3::Keccak256;
+use smallvec::SmallVec;
 
 use crate::{
     TrieHash,

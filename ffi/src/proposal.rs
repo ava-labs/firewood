@@ -1,12 +1,11 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+/// Collect a batch-op iterator into an owned, dyn-boundary-friendly batch.
+pub(crate) use firewood::api::collect_owned_batch;
 use firewood::api::{self, BoxKeyValueIter, DbView, DynProposal, HashKey};
 
 use crate::{IteratorHandle, iterator::CreateIteratorResult, metrics::MetricsContextExt};
-
-/// Collect a batch-op iterator into an owned, dyn-boundary-friendly batch.
-pub(crate) use firewood::api::collect_owned_batch;
 
 /// An opaque wrapper around a Proposal that also retains a reference to the
 /// database handle it was created from.

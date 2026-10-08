@@ -1,8 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use parking_lot::Mutex;
 use std::{fmt::Display, ops::Deref, sync::Arc};
+
+use parking_lot::Mutex;
 
 use crate::{FileIoError, LinearAddress, Node, NodeReader, SharedNode};
 
@@ -263,12 +264,11 @@ mod test {
     use firewood_macros::hash_mode;
     use nonzero_ext::nonzero;
 
+    use super::*;
     use crate::{
         Committed, DeletedNodeTracking, EthHash, HashMode, LeafNode, MemStore, MerkleDbHash, Node,
         NodeStore, Path,
     };
-
-    use super::*;
 
     #[hash_mode]
     #[test]

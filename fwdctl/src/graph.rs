@@ -1,11 +1,12 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::io::{Write, stdout};
+
 use clap::Args;
 use firewood::api;
 use firewood::db::DbConfig;
 use firewood::open;
-use std::io::{Write, stdout};
 
 use crate::DatabasePath;
 

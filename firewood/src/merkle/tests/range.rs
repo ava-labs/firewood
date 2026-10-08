@@ -1,10 +1,11 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use firewood_storage::U4;
+
 use super::verify_range_proof;
 use super::*;
 use crate::RangeProof;
-use firewood_storage::U4;
 
 type KeyValuePairs = Vec<(Box<[u8]>, Box<[u8]>)>;
 
@@ -2268,8 +2269,9 @@ fn test_multi_level_range_proof_with_hashed_values() {
 
 #[test]
 fn test_proven_right_edge() {
-    use crate::merkle::{ProvenRange, RightBoundary, proven_right_edge};
     use std::borrow::Cow;
+
+    use crate::merkle::{ProvenRange, RightBoundary, proven_right_edge};
 
     // InRange(Some) — the end proof anchors at a real key, so that key is
     // the inclusive proven bound. This is the truncated-reply shape.
@@ -2347,8 +2349,9 @@ fn test_proven_right_edge() {
 
 #[test]
 fn test_verification_context_reports_truncated_right_edge() {
-    use crate::verify_range_proof_structure;
     use std::num::NonZeroUsize;
+
+    use crate::verify_range_proof_structure;
 
     let items: &[(&[u8], &[u8])] = &[
         (b"\x05", b"a"),

@@ -103,6 +103,11 @@
 //!   beyond the standard 4, so [`replace_list_field`]
 //!   only touches index 2 and leaves any trailing fields intact.
 
+use std::io::{Error, Read};
+
+use sha3::{Digest, Keccak256};
+use smallvec::SmallVec;
+
 use crate::eth_encoding::nibbles_to_eth_compact;
 use crate::logger::warn;
 use crate::node::ExtendableBytes;
@@ -112,9 +117,6 @@ use crate::{
     BranchNode, EthHash, HashMode, HashType, Hashable, NodeHashAlgorithm, Path, TrieHash, TriePath,
     ValueDigest, hashednode::HasUpdate, logger::trace,
 };
-use sha3::{Digest, Keccak256};
-use smallvec::SmallVec;
-use std::io::{Error, Read};
 
 impl HasUpdate for Keccak256 {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {

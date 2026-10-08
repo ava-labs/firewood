@@ -567,6 +567,16 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
     reason = "test helpers use plain `+= 1` counters rather than checked/wrapping arithmetic"
 )]
 mod tests {
+    use std::{collections::HashSet, ops::Deref, path::PathBuf, sync::Arc};
+
+    use firewood_storage::{
+        Committed, DefaultHashMode, DeletedNodeTracking, FileBacked, FileIoError, HashMode,
+        HashedNodeReader, ImmutableProposal, MemStore, Mutable, NodeStore, Propose, SeededRng,
+        TestRecorder, TrieReader,
+    };
+    use lender::Lender;
+    use test_case::test_case;
+
     use crate::{
         Proof,
         api::{Db as _, DbView, Proposal as _},
@@ -578,15 +588,6 @@ mod tests {
         },
         proofs::change::ChangeProof,
     };
-
-    use firewood_storage::{
-        Committed, DefaultHashMode, DeletedNodeTracking, FileBacked, FileIoError, HashMode,
-        HashedNodeReader, ImmutableProposal, MemStore, Mutable, NodeStore, Propose, SeededRng,
-        TestRecorder, TrieReader,
-    };
-    use lender::Lender;
-    use std::{collections::HashSet, ops::Deref, path::PathBuf, sync::Arc};
-    use test_case::test_case;
 
     type BatchOpVec = Vec<BatchOp<Box<[u8]>, Box<[u8]>>>;
     type ImmutableMemstore = Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>>;

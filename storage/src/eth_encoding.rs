@@ -8,10 +8,12 @@
 //! proof emitter. These helpers are always compiled, since the hash scheme is a
 //! per-database runtime choice rather than a build-time selection.
 
-use crate::TriePath;
+use std::iter::once;
+
 use bitfield::bitfield;
 use smallvec::SmallVec;
-use std::iter::once;
+
+use crate::TriePath;
 
 /// Hex-prefix encoding of a nibble path (Ethereum Yellow Paper, appendix C).
 ///

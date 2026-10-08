@@ -8,10 +8,11 @@
 //! schemes, implemented by the two zero-sized types [`MerkleDbHash`] and
 //! [`EthHash`].
 
+use std::io::{Error, Read};
+
 use crate::hashednode::{HasUpdate, Hashable};
 use crate::node::ExtendableBytes;
 use crate::{HashType, NodeHashAlgorithm, Path, TrieHash};
-use std::io::{Error, Read};
 
 /// The node-hashing scheme, implemented by [`MerkleDbHash`] and [`EthHash`].
 ///

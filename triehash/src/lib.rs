@@ -280,10 +280,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{hex_prefix_encode, shared_prefix_len, trie_root};
     use ethereum_types::H256;
     use hex_literal::hex;
     use keccak_hasher::KeccakHasher;
+
+    use super::{hex_prefix_encode, shared_prefix_len, trie_root};
 
     #[test]
     fn test_hex_prefix_encode() {
