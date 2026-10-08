@@ -15,6 +15,11 @@
 //! the labels' own payloads, replacement content from `M` — and the walk over
 //! the committed result must find only agreement.
 //!
+//! Each run then repeats the exercise through a change proof taken from `M`
+//! with `L` as the source — the proof a syncing client would hold — and,
+//! when the two proofs apply over the same range and anchor at the same
+//! boundary keys, asserts the two walks agree label for label.
+//!
 //! Under the Ethereum mode the generator also plants well-formed accounts
 //! with storage children, so the masked account comparison and the
 //! lone-storage-child fold normalization get random coverage.
@@ -31,21 +36,23 @@ use std::time::{Duration, Instant};
 
 use firewood_macros::hash_mode;
 use firewood_storage::{
-    EthHash, FileIoError, HashMode, HashedNodeReader, LinearAddress, MaybePersistedNode,
-    MerkleDbHash, NodeHashAlgorithm, NodeReader, RootReader, SeededRng, SharedNode, TrieHash,
+    Committed, EthHash, FileBacked, FileIoError, HashMode, HashedNodeReader, LinearAddress,
+    MaybePersistedNode, MerkleDbHash, NodeHashAlgorithm, NodeReader, NodeStore, RootReader,
+    SeededRng, SharedNode, TrieHash,
 };
 
 use super::accounts::{
     account_storage_key, empty_code_hash, rlp_encode_account, rlp_encode_storage,
 };
 use super::holes::{
-    Map, applied_range, assert_matches_truth, covers, in_applied, new_db, remedy_batch, root, trie,
-    values_equal, view_map,
+    Applied, Map, applied_range, assert_matches_truth, covers, in_applied, new_db, remedy_batch,
+    root, trie, values_equal, view_map,
 };
-use crate::api::{BatchOp, Db as _, HashKey, Proposal as _};
+use crate::api::{self, BatchOp, Db as _, HashKey, Proposal as _};
 use crate::db::Db;
-use crate::merkle::holes::find_holes_after_range_proof;
-use crate::{Hole, VerifiedRangeProof};
+use crate::merkle::holes::{find_holes_after_change_proof, find_holes_after_range_proof};
+use crate::merkle::{RightBoundary, right_edge};
+use crate::{Hole, VerifiedChangeProof, VerifiedRangeProof};
 
 /// A view that counts the node reads made through it.
 struct Counting<'a, T> {
@@ -244,6 +251,8 @@ struct Stats {
     time_max: Duration,
     time_total: Duration,
     labels_total: usize,
+    /// Runs where the two walks were required to agree label for label.
+    equivalence_checks: usize,
 }
 
 /// Replace the database's content with `m` in one batch: a `DeleteRange`
@@ -339,34 +348,112 @@ fn assert_synced_spans_equal<H: HashMode>(
     }
 }
 
-/// The post-merge local state: the proof's range has already been applied,
-/// so the target's content is written over `[start_key, right_edge_key]` and
-/// the local keys there are dropped, which is what merging the proof does.
-/// The walk then sees the state a client would hand it. Also returns the
-/// local keys below a start key whose start proof is empty: the walk labels
-/// nothing there (the oracle's `applied_range` reports no lower bound for
-/// such a proof), so those keys must come through unlabelled and untouched.
-fn merged(target: &Map, local: Map, verified: &VerifiedRangeProof) -> (Map, Vec<Vec<u8>>) {
-    let ctx = verified.verification();
-    let range = (
-        ctx.start_key().map(<[u8]>::to_vec),
-        ctx.right_edge_key().map(<[u8]>::to_vec),
-    );
-    let mut local: Map = local
-        .into_iter()
-        .filter(|(k, _)| !in_applied(k, &range))
+/// The local state after a proof over `range` was applied: the target's
+/// content inside the range, the local content outside it. That is what
+/// merging a range proof does, and the state a client hands the walk.
+fn merged(target: &Map, local: &Map, range: &Applied) -> Map {
+    let mut out: Map = local
+        .iter()
+        .filter(|(k, _)| !in_applied(k, range))
+        .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    local.extend(
+    out.extend(
         target
             .iter()
-            .filter(|(k, _)| in_applied(k, &range))
+            .filter(|(k, _)| in_applied(k, range))
             .map(|(k, v)| (k.clone(), v.clone())),
     );
-    let unlabelled_below = match (verified.proof().start_proof().is_empty(), &range.0) {
-        (true, Some(s)) => local.keys().filter(|k| *k < s).cloned().collect(),
-        _ => Vec::new(),
+    out
+}
+
+type LocalRevision<H> = NodeStore<Committed, FileBacked, H>;
+
+/// What one leg walks.
+struct LegInput<'a> {
+    /// The post-merge local state.
+    local: &'a Map,
+    /// The oracle's scope: the range the proof applied over.
+    applied: &'a Applied,
+    /// Local keys the walk must say nothing about and the remedies must
+    /// leave alone: those below a start key whose start proof is empty.
+    unlabelled: &'a [Vec<u8>],
+}
+
+/// One leg of a run: commit the local state, walk it with `walk`, check the
+/// labels against the maps, apply them through the write API, and assert the
+/// walk over the committed result finds only agreement. Returns the first
+/// walk's labels.
+fn leg<H: HashMode>(
+    db: &Db<H>,
+    target: &Map,
+    input: LegInput<'_>,
+    locator: &str,
+    stats: &mut Stats,
+    walk: impl Fn(&Counting<'_, LocalRevision<H>>) -> Result<Vec<Hole>, api::Error>,
+) -> Vec<Hole> {
+    let LegInput {
+        local,
+        applied,
+        unlabelled,
+    } = input;
+    let local_root = reset_to(db, local);
+    let revision = db.revision(local_root).unwrap();
+    let counting = Counting {
+        inner: &*revision,
+        reads: Cell::new(0),
     };
-    (local, unlabelled_below)
+    let began = Instant::now();
+    let holes = walk(&counting).unwrap_or_else(|e| panic!("walk failed ({locator}): {e}"));
+    let elapsed = began.elapsed();
+    stats.walks = stats.walks.saturating_add(1);
+    stats.reads_max = stats.reads_max.max(counting.reads.get());
+    stats.reads_total = stats.reads_total.saturating_add(counting.reads.get());
+    stats.time_max = stats.time_max.max(elapsed);
+    stats.time_total = stats.time_total.saturating_add(elapsed);
+    stats.labels_total = stats.labels_total.saturating_add(holes.len());
+
+    assert_matches_truth::<H>(target, local, applied, &holes);
+    for key in unlabelled {
+        assert!(
+            holes.iter().all(|h| !covers(h, key)),
+            "{key:02x?} below an unauthenticated start is labelled by {holes:?} ({locator})"
+        );
+    }
+    if local == target {
+        assert!(
+            holes.iter().all(|h| matches!(h, Hole::Synced(_))),
+            "fully synced local emitted {holes:?} ({locator})"
+        );
+    }
+    assert_synced_spans_equal::<H>(target, local, &holes, locator);
+
+    // Convergence through the write API.
+    db.propose(remedy_batch(target, &holes))
+        .unwrap()
+        .commit()
+        .unwrap();
+    let repaired = db.revision(db.root_hash().unwrap()).unwrap();
+    let again = walk(&Counting {
+        inner: &*repaired,
+        reads: Cell::new(0),
+    })
+    .unwrap();
+    assert!(
+        again.iter().all(|h| matches!(h, Hole::Synced(_))),
+        "after remedies: {again:?} ({locator})"
+    );
+    // The repaired state is checked against the maps too, so a residual
+    // difference the second walk failed to label still surfaces.
+    let repaired_map = view_map(&*repaired);
+    assert_matches_truth::<H>(target, &repaired_map, applied, &again);
+    for key in unlabelled {
+        assert_eq!(
+            repaired_map.get(key),
+            local.get(key),
+            "{key:02x?} below an unauthenticated start was touched by the remedies ({locator})"
+        );
+    }
+    holes
 }
 
 fn run_one<H: HashMode>(run: usize, seed: u64, db: &Db<H>, stats: &mut Stats) {
@@ -384,11 +471,13 @@ fn run_one<H: HashMode>(run: usize, seed: u64, db: &Db<H>, stats: &mut Stats) {
         generated_start,
         limit,
     } = random_request(&rng, &keys);
+    let empty_start = generated_start.is_none() && start.is_some();
     let locator = format!(
         "{:?}, seed={seed}, run={run}, start={start:02x?}, end={end:02x?}, limit={limit:?}",
         H::ALGORITHM
     );
 
+    // Range-proof leg.
     let t = trie::<H>(&target.map);
     let proof = t
         .range_proof(generated_start.as_deref(), end.as_deref(), limit)
@@ -402,61 +491,97 @@ fn run_one<H: HashMode>(run: usize, seed: u64, db: &Db<H>, stats: &mut Stats) {
         limit,
     )
     .unwrap_or_else(|e| panic!("verify failed ({locator}): {e}"));
-
-    let (local, unlabelled_below) = merged(&target.map, local, &verified);
-    let applied = applied_range(&verified);
-
-    let local_root = reset_to(db, &local);
-    let revision = db.revision(local_root).unwrap();
-    let counting = Counting {
-        inner: &*revision,
-        reads: Cell::new(0),
-    };
-    let began = Instant::now();
-    let holes = find_holes_after_range_proof::<H, _>(&verified, &counting)
-        .unwrap_or_else(|e| panic!("walk failed ({locator}): {e}"));
-    let elapsed = began.elapsed();
-    stats.walks = stats.walks.saturating_add(1);
-    stats.reads_max = stats.reads_max.max(counting.reads.get());
-    stats.reads_total = stats.reads_total.saturating_add(counting.reads.get());
-    stats.time_max = stats.time_max.max(elapsed);
-    stats.time_total = stats.time_total.saturating_add(elapsed);
-    stats.labels_total = stats.labels_total.saturating_add(holes.len());
-
-    assert_matches_truth::<H>(&target.map, &local, &applied, &holes);
-    for key in &unlabelled_below {
-        assert!(
-            holes.iter().all(|h| !covers(h, key)),
-            "{key:02x?} below an unauthenticated start is labelled by {holes:?} ({locator})"
-        );
-    }
-    if local == target.map {
-        assert!(
-            holes.iter().all(|h| matches!(h, Hole::Synced(_))),
-            "fully synced local emitted {holes:?} ({locator})"
-        );
-    }
-    assert_synced_spans_equal::<H>(&target.map, &local, &holes, &locator);
-
-    // Convergence through the write API.
-    db.propose(remedy_batch(&target.map, &holes))
-        .unwrap()
-        .commit()
-        .unwrap();
-    let repaired = db.revision(db.root_hash().unwrap()).unwrap();
-    let again = find_holes_after_range_proof::<H, _>(&verified, &*repaired).unwrap();
-    assert!(
-        again.iter().all(|h| matches!(h, Hole::Synced(_))),
-        "after remedies: {again:?} ({locator})"
+    // The merge writes `[start_key, right_edge_key]` from the verification
+    // context. The oracle's scope is `applied_range`, which drops the lower
+    // bound when the start proof is empty: the walk labels nothing below the
+    // start key then, and the local keys there must survive untouched.
+    let ctx = verified.verification();
+    let merge_range: Applied = (
+        ctx.start_key().map(<[u8]>::to_vec),
+        ctx.right_edge_key().map(<[u8]>::to_vec),
     );
-    let repaired_map = view_map(&*repaired);
-    assert_matches_truth::<H>(&target.map, &repaired_map, &applied, &again);
-    for key in &unlabelled_below {
-        assert_eq!(
-            repaired_map.get(key),
-            local.get(key),
-            "{key:02x?} below an unauthenticated start was touched by the remedies ({locator})"
-        );
+    let applied = applied_range(&verified);
+    let local_range = merged(&target.map, &local, &merge_range);
+    let unlabelled_below: Vec<Vec<u8>> = match (empty_start, &merge_range.0) {
+        (true, Some(s)) => local_range.keys().filter(|k| *k < s).cloned().collect(),
+        _ => Vec::new(),
+    };
+    let range_holes = leg(
+        db,
+        &target.map,
+        LegInput {
+            local: &local_range,
+            applied: &applied,
+            unlabelled: &unlabelled_below,
+        },
+        &locator,
+        stats,
+        |view| find_holes_after_range_proof::<H, _>(&verified, view),
+    );
+
+    // Change-proof leg: the proof a syncing client would hold, from the
+    // target with the client's own state as the source.
+    let source = trie::<H>(&local);
+    let change = t
+        .change_proof(start.as_deref(), end.as_deref(), source.nodestore(), limit)
+        .unwrap();
+    let verified_change = VerifiedChangeProof::verify(
+        Arc::new(change),
+        root(&t),
+        start.as_deref(),
+        end.as_deref(),
+        H::ALGORITHM,
+        limit,
+    )
+    .unwrap_or_else(|e| panic!("change verify failed ({locator}): {e}"));
+    let applied_change: Applied = (
+        start.clone(),
+        verified_change
+            .verification()
+            .right_edge_key()
+            .map(<[u8]>::to_vec),
+    );
+    // Applying a change proof writes only its operations, which here are the
+    // local-to-target diff over the applied range, so `merged` over that
+    // range is the state the proposal produces.
+    let change_holes = leg(
+        db,
+        &target.map,
+        LegInput {
+            local: &merged(&target.map, &local, &applied_change),
+            applied: &applied_change,
+            unlabelled: &[],
+        },
+        &locator,
+        stats,
+        |view| find_holes_after_change_proof::<H, _>(&verified_change, view),
+    );
+
+    // When both proofs apply over the same range and walk the same boundary
+    // keys, the two walks must agree label for label. Two things break that
+    // and are excluded. The applied ranges differ whenever a limit truncates
+    // either proof, and also without one, since a change proof's right edge
+    // narrows to its last operation's key whenever the request has no end
+    // key, or when the end proof resolves that key consistently with the
+    // last operation (`compute_right_edge_key`); the empty-start shape also
+    // lands here, since the range side's applied range then has no lower
+    // bound (it labels nothing below the start key) while the change side
+    // walks a real start proof. The range side takes its out-of-range arm
+    // when the end proof's terminal is a real key past the edge: it
+    // decomposes the open interval up to that key and walks from there,
+    // where the change side walks from the edge itself — the same key space,
+    // partitioned differently.
+    let range_in_range = matches!(
+        right_edge(
+            verified.proof().end_proof().as_ref(),
+            verified.proof().key_values().last().map(|(k, _)| &**k),
+            end.as_deref(),
+        ),
+        RightBoundary::InRange(_)
+    );
+    if applied == applied_change && range_in_range {
+        stats.equivalence_checks = stats.equivalence_checks.saturating_add(1);
+        assert_eq!(change_holes, range_holes, "{locator}");
     }
 }
 
@@ -470,6 +595,7 @@ fn test_slow_holes_differential_fuzz<H: HashMode>() {
         time_max: Duration::ZERO,
         time_total: Duration::ZERO,
         labels_total: 0,
+        equivalence_checks: 0,
     };
     // One database for the whole run, reset per iteration: every `Db` owns a
     // thread pool, and a long soak that opened one per iteration ran the
@@ -506,13 +632,24 @@ fn test_slow_holes_differential_fuzz<H: HashMode>() {
         }
     }
 
+    // A single replayed seed may legitimately never compare the two walks;
+    // every other mode runs enough shapes that zero checks means the
+    // equivalence condition has drifted shut.
+    if std::env::var_os("FIREWOOD_TEST_SEED").is_none() {
+        assert!(
+            stats.equivalence_checks > 0,
+            "no run compared the range and change walks"
+        );
+    }
+
     let walks = u32::try_from(stats.walks.max(1)).unwrap_or(u32::MAX);
     eprintln!(
-        "holes fuzz ({:?}): {} walks, {} labels; node reads per walk max {} mean {}; \
-         walk time max {:?} mean {:?}",
+        "holes fuzz ({:?}): {} walks, {} labels, {} range/change equivalence checks; \
+         node reads per walk max {} mean {}; walk time max {:?} mean {:?}",
         H::ALGORITHM,
         stats.walks,
         stats.labels_total,
+        stats.equivalence_checks,
         stats.reads_max,
         stats.reads_total.checked_div(walks as usize).unwrap_or(0),
         stats.time_max,

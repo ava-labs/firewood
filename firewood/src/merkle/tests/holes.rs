@@ -91,11 +91,15 @@ fn range_holes<H: HashMode>(
     (verified, holes)
 }
 
+/// A key range `[start, end]` with `None` for an absent bound, as the
+/// oracle's [`in_applied`] reads it.
+pub(super) type Applied = (Option<Vec<u8>>, Option<Vec<u8>>);
+
 /// The applied range of a verified range proof, as the walk infers it. A
 /// proof whose start proof is empty labels nothing below its start key, so
 /// no lower bound is reported and the oracle's coverage check applies only
 /// above the right edge.
-pub(super) fn applied_range(verified: &VerifiedRangeProof) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+pub(super) fn applied_range(verified: &VerifiedRangeProof) -> Applied {
     let ctx = verified.verification();
     let start = if verified.proof().start_proof().is_empty() {
         None
@@ -105,7 +109,7 @@ pub(super) fn applied_range(verified: &VerifiedRangeProof) -> (Option<Vec<u8>>, 
     (start, ctx.right_edge_key().map(<[u8]>::to_vec))
 }
 
-pub(super) fn in_applied(key: &[u8], (start, end): &(Option<Vec<u8>>, Option<Vec<u8>>)) -> bool {
+pub(super) fn in_applied(key: &[u8], (start, end): &Applied) -> bool {
     start.as_deref().is_none_or(|s| key >= s) && end.as_deref().is_none_or(|e| key <= e)
 }
 
@@ -164,7 +168,7 @@ fn equal_under<H: HashMode>(t: &Map, l: &Map) -> bool {
 pub(super) fn assert_matches_truth<H: HashMode>(
     target: &Map,
     local: &Map,
-    applied: &(Option<Vec<u8>>, Option<Vec<u8>>),
+    applied: &Applied,
     holes: &[Hole],
 ) {
     for hole in holes {
@@ -1521,4 +1525,117 @@ fn fold_same_count_needs_no_normalization() {
         holes.iter().all(|h| matches!(h, Hole::Synced(_))),
         "{holes:?}"
     );
+}
+
+// Reconstructed views. A sync client holds reconstructed views, which are
+// built node by node and may be shaped in ways a committed trie never is:
+// hashed lazily, or not canonical at all.
+
+/// A reconstructed store whose root is a value-less branch holding `child`
+/// at slot `A` as an unhashed [`Child::Node`] until the root is hashed.
+pub(super) fn recon_with_child_at_a<H: HashMode>(
+    child: firewood_storage::Node,
+) -> NodeStore<firewood_storage::Reconstructed<MemStore, H>, MemStore, H> {
+    use firewood_storage::{BranchNode, Child, Children, Node, Path};
+
+    let storage = Arc::new(MemStore::new(Vec::new()));
+    let mut recon = NodeStore::new_empty_recon(Arc::clone(&storage));
+    let mut children = Children::new();
+    children[PathComponent::ALL[0xA]] = Some(Child::Node(child));
+    recon.root_mut().replace(Node::Branch(Box::new(BranchNode {
+        partial_path: Path::new(),
+        value: None,
+        children,
+    })));
+    recon.into()
+}
+
+pub(super) fn leaf(nibbles: &[u8], value: &[u8]) -> firewood_storage::Node {
+    firewood_storage::Node::Leaf(firewood_storage::LeafNode {
+        partial_path: firewood_storage::Path::from_nibbles_iterator(nibbles.iter().copied()),
+        value: value.to_vec().into_boxed_slice(),
+    })
+}
+
+#[hash_mode]
+#[test]
+fn entry_point_hashes_pending_children<H: HashMode>() {
+    // A reconstructed view handed to the entry point before anything hashed
+    // it. The entry point calls `root_hash()` first, and on a reconstructed
+    // store that hashes every pending child, so the `UnhashedView` arm is
+    // reached from here only if that hashing itself fails: the walk succeeds
+    // and labels the local `0xA1` as Synced, never as Surplus.
+    // (`subtree_hash` reached directly, without the pre-call, does return
+    // the error; see `tests/descend.rs`.)
+    let target = map(&[(&[0xA1], b"v"), (&[0xB0], b"w")]);
+    let t = trie::<H>(&target);
+    let local = recon_with_child_at_a::<H>(leaf(&[0x1], b"v"));
+
+    let proof = t.range_proof(Some(&[0xB0]), Some(&[0xB0]), None).unwrap();
+    let verified = VerifiedRangeProof::verify(
+        Arc::new(proof),
+        root(&t),
+        Some(&[0xB0]),
+        Some(&[0xB0]),
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
+    let holes = find_holes_after_range_proof::<H, _>(&verified, &local).unwrap();
+    assert_eq!(spans(&holes), vec![("Synced", vec![0xA])]);
+}
+
+#[hash_mode]
+#[test]
+fn noncanonical_local_manufactures_stale<H: HashMode>() {
+    // A non-canonical local trie: `0xA1` is stored under two value-less
+    // branches (`[A]` then `[1]`) where a canonical trie has one leaf with
+    // partial path `[1]` under slot `A`. The target's stub for `[A]` is the
+    // canonical leaf hash, so the walk manufactures a Stale span over equal
+    // content. The design accepts that — a non-canonical local side can only
+    // create holes, never hide them — and requires two things: nothing is
+    // ordered deleted that the target holds, and applying the labels onto a
+    // canonical rebuild converges.
+    use firewood_storage::{BranchNode, Child, Children, Node, Path};
+
+    let target = map(&[(&[0xA1], b"v"), (&[0xB0], b"w")]);
+    let t = trie::<H>(&target);
+    let mut inner = Children::new();
+    inner[PathComponent::ALL[0x1]] = Some(Child::Node(leaf(&[], b"v")));
+    let local = recon_with_child_at_a::<H>(Node::Branch(Box::new(BranchNode {
+        partial_path: Path::new(),
+        value: None,
+        children: inner,
+    })));
+    let local_map = map(&[(&[0xA1], b"v")]);
+
+    let proof = t.range_proof(Some(&[0xB0]), Some(&[0xB0]), None).unwrap();
+    let verified = VerifiedRangeProof::verify(
+        Arc::new(proof),
+        root(&t),
+        Some(&[0xB0]),
+        Some(&[0xB0]),
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
+    let holes = find_holes_after_range_proof::<H, _>(&verified, &local).unwrap();
+    assert_eq!(spans(&holes), vec![("Stale", vec![0xA])], "{holes:?}");
+    for key in target.keys() {
+        assert!(
+            !holes.iter().any(|h| is_deletion(h) && covers(h, key)),
+            "{key:02x?} ordered deleted by {holes:?}"
+        );
+    }
+
+    // One round of remedies on a canonical store converges.
+    let (db, _dir) = new_db::<H>();
+    commit(&db, &local_map);
+    db.propose(remedy_batch(&target, &holes))
+        .unwrap()
+        .commit()
+        .unwrap();
+    let repaired = db.revision(db.root_hash().unwrap()).unwrap();
+    let again = find_holes_after_range_proof::<H, _>(&verified, &*repaired).unwrap();
+    assert_eq!(spans(&again), vec![("Synced", vec![0xA])], "{again:?}");
 }

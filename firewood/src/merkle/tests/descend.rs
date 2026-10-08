@@ -12,9 +12,9 @@ use crate::merkle::descend::{ProbeOutcome, descend_to_prefix, subtree_hash};
 use super::{init_merkle_in, init_merkle_with_header_in};
 use firewood_macros::hash_mode;
 use firewood_storage::{
-    BranchNode, Child, Children, Committed, DeletedNodeTracking, EthHash, HashMode, HashType,
-    HashedNodeReader as _, LeafNode, MemStore, MerkleDbHash, NibblesIterator, Node, NodeStore,
-    Path, PathComponent, Reconstructed, RootReader as _,
+    Child, Committed, DeletedNodeTracking, EthHash, HashMode, HashType, HashedNodeReader as _,
+    LeafNode, MemStore, MerkleDbHash, NibblesIterator, Node, NodeStore, Path, PathComponent,
+    Reconstructed, RootReader as _,
 };
 
 fn components(nibbles: &[u8]) -> Vec<PathComponent> {
@@ -250,19 +250,10 @@ fn assert_file_io<T: std::fmt::Debug>(result: Result<T, api::Error>) {
 /// `cfg(any(test, feature = "test_utils"))`, which firewood's dev-dependency
 /// on firewood-storage enables.
 fn unhashed_recon_fixture<H: HashMode>() -> NodeStore<Reconstructed<MemStore, H>, MemStore, H> {
-    let storage = Arc::new(MemStore::new(Vec::new()));
-    let mut recon = NodeStore::new_empty_recon(Arc::clone(&storage));
-    let mut children = Children::new();
-    children[PathComponent::ALL[0xA]] = Some(Child::Node(Node::Leaf(LeafNode {
+    super::holes::recon_with_child_at_a::<H>(Node::Leaf(LeafNode {
         partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"abc")),
         value: b"v0".to_vec().into_boxed_slice(),
-    })));
-    recon.root_mut().replace(Node::Branch(Box::new(BranchNode {
-        partial_path: Path::new(),
-        value: None,
-        children,
-    })));
-    recon.into()
+    }))
 }
 
 /// The fixture's keys plus 0xB155, so that [B] becomes a branch with
