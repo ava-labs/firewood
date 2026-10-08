@@ -129,6 +129,15 @@ pub mod manager;
 /// Merkle module, containing merkle operations
 pub(crate) mod merkle;
 
+/// Membership filter consulted by the read path (no-op without the `filter` feature)
+mod membership;
+
+/// Whether the membership filter is bound to this process's database and
+/// consulted by the read path. It is configured by environment (see
+/// `membership`).
+#[cfg(feature = "filter")]
+pub use membership::membership_filter_enabled;
+
 // Re-export `Merkle` when the `test_utils` feature is enabled so that
 // benchmarks, integration tests, and the FFI can access it without making the
 // entire `merkle` module part of the public API.
