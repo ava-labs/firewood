@@ -25,10 +25,10 @@ guidelines for contributing to firewood.
 
 After submitting a PR, we'll run all the tests and verify your code meets our submission guidelines. To ensure it's more likely to pass these checks, run the same recipes CI runs:
 
-    cargo fmt
+    just fmt
     just prepush-lite
 
-`cargo fmt` applies formatting; the recipes only check it. `prepush-lite` checks
+`just fmt` applies formatting; the recipes only check it. `prepush-lite` checks
 formatting and TODOs, runs clippy and the tests for one feature profile, and
 lints the Markdown and the documentation build.
 
@@ -41,6 +41,11 @@ whole thing before you push:
 Use `./scripts/run-just.sh <recipe>` in place of `just` if you do not have `just`
 installed; the wrapper falls back to Nix and otherwise prints installation
 instructions. Resolve any warnings or errors before making your PR.
+
+Use the recipes rather than bare Cargo for anything that builds or runs code.
+`rust-toolchain.toml` pins a nightly for `cargo fmt`, clippy, and miri, so a
+bare `cargo nextest run` tests on that nightly while CI tests on stable. See
+[Toolchain Selection](./AGENTS.md#toolchain-selection) in AGENTS.md.
 
 Also, if you update any versions of packages, notably the MSRV (Minimum Supported Rust Version), you ought to update the nix ffi flake lock file to pin compatible versions of nix packages as well:
 
