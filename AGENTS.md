@@ -236,9 +236,10 @@ default-profile test commands are useful during development, but do not replace
 ### Linux-only Checks
 
 The local `lint`, `test`, `prepush`, and `prepush-lite` recipes are designed to
-run on macOS. They intentionally omit CI checks that require Linux: the
+run on macOS. They intentionally omit CI checks that require Linux: the Go
 differential fuzz jobs, which use Linux-specific resource limits and tooling.
-GitHub Actions remains authoritative for those.
+GitHub Actions remains authoritative for those. The Rust `test_slow_*`
+differential fuzzes run everywhere through `just test`.
 
 `--all-features` is *not* in that category. The `io-uring` feature is accepted on
 every platform but only takes effect on Linux, where `storage/build.rs` sets the
