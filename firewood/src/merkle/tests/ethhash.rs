@@ -161,7 +161,8 @@ fn test_root_hash_random_deletions() {
         items_ordered.sort_unstable();
         items_ordered.shuffle(&mut &rng);
 
-        let (mut committed_merkle, mut header) = init_merkle_with_header(&items);
+        let (mut committed_merkle, mut header) =
+            init_merkle_with_header_in::<EthHash, _, _, _>(&items);
 
         for (k, v) in items_ordered {
             let mut merkle = committed_merkle.fork().unwrap();
@@ -652,7 +653,7 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
         .map(|(k, v)| (k.clone(), v.clone()))
         .chain(once((storage_key, storage_value)))
         .collect();
-    let (merkle, _header) = init_merkle_with_header(items);
+    let (merkle, _header) = init_merkle_with_header_in::<EthHash, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     // ── Phase 1: generate a correct range proof to learn the real storageRoot values ──

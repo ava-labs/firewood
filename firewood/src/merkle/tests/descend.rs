@@ -6,10 +6,11 @@
 use crate::merkle::Merkle;
 use crate::merkle::descend::{ProbeOutcome, descend_to_prefix};
 
-use super::init_merkle;
+use super::init_merkle_in;
+use firewood_macros::hash_mode;
 use firewood_storage::{
-    Child, Committed, DefaultHashMode as H, HashType, MemStore, Node, NodeStore, PathComponent,
-    RootReader as _,
+    Child, Committed, EthHash, HashMode, HashType, MemStore, MerkleDbHash, Node, NodeStore,
+    PathComponent, RootReader as _,
 };
 
 fn components(nibbles: &[u8]) -> Vec<PathComponent> {
@@ -22,8 +23,8 @@ fn components(nibbles: &[u8]) -> Vec<PathComponent> {
 /// Keys 0xA711, 0xA777, 0xB055: root branch -> child A (branch, partial [7])
 /// -> children 1 and 7 (leaves with partial [1] / [7]); child B (leaf,
 /// partial [0,5,5] — long enough to land probes mid-edge).
-fn fixture() -> Merkle<NodeStore<Committed, MemStore, H>> {
-    init_merkle(vec![
+fn fixture<H: HashMode>() -> Merkle<NodeStore<Committed, MemStore, H>> {
+    init_merkle_in::<H, _, _, _>(vec![
         (vec![0xA7, 0x11], b"one".to_vec()),
         (vec![0xA7, 0x77], b"two".to_vec()),
         (vec![0xB0, 0x55], b"three".to_vec()),
@@ -33,7 +34,10 @@ fn fixture() -> Merkle<NodeStore<Committed, MemStore, H>> {
 /// The hash the fixture's root branch stores for one of its child slots.
 /// Committed stores hold no `Child::Node`, so both hashed variants are
 /// accepted and the unhashed one is a test-fixture bug.
-fn stored_child_hash(merkle: &Merkle<NodeStore<Committed, MemStore, H>>, nibble: u8) -> HashType {
+fn stored_child_hash<H: HashMode>(
+    merkle: &Merkle<NodeStore<Committed, MemStore, H>>,
+    nibble: u8,
+) -> HashType {
     let root = merkle
         .nodestore()
         .root_node()
@@ -51,9 +55,10 @@ fn stored_child_hash(merkle: &Merkle<NodeStore<Committed, MemStore, H>>, nibble:
     }
 }
 
+#[hash_mode]
 #[test]
-fn probe_at_child_edge_returns_stored_hash() {
-    let merkle = fixture();
+fn probe_at_child_edge_returns_stored_hash<H: HashMode>() {
+    let merkle = fixture::<H>();
     let outcome = descend_to_prefix(merkle.nodestore(), &components(&[0xA]))
         .expect("descent reads no disk in this fixture");
     // Assert the payload, not just the variant: a caller forming this
@@ -65,12 +70,13 @@ fn probe_at_child_edge_returns_stored_hash() {
     assert_eq!(hash, stored_child_hash(&merkle, 0xA));
 }
 
+#[hash_mode]
 #[test]
-fn single_key_trie_probes_against_the_root_partial_path() {
+fn single_key_trie_probes_against_the_root_partial_path<H: HashMode>() {
     // With one key the root is a leaf whose partial path is the whole key,
     // so the root itself exercises the mid-path, divergence, and past-a-leaf
     // arms that the multi-key fixture only reaches below the root.
-    let merkle = init_merkle(vec![(vec![0xA7, 0x11], b"one".to_vec())]);
+    let merkle = init_merkle_in::<H, _, _, _>(vec![(vec![0xA7, 0x11], b"one".to_vec())]);
     let probe = |nibbles: &[u8]| {
         descend_to_prefix(merkle.nodestore(), &components(nibbles)).expect("descent succeeds")
     };
@@ -86,9 +92,10 @@ fn single_key_trie_probes_against_the_root_partial_path() {
     ));
 }
 
+#[hash_mode]
 #[test]
-fn probe_at_end_of_partial_path_lands_on_the_node() {
-    let merkle = fixture();
+fn probe_at_end_of_partial_path_lands_on_the_node<H: HashMode>() {
+    let merkle = fixture::<H>();
     let outcome =
         descend_to_prefix(merkle.nodestore(), &components(&[0xA, 0x7])).expect("descent succeeds");
     // Read `node`, not just `consumed`: the assertion below is what pins the
@@ -100,9 +107,10 @@ fn probe_at_end_of_partial_path_lands_on_the_node() {
     assert_eq!(node.partial_path().as_components(), &components(&[0x7])[..]);
 }
 
+#[hash_mode]
 #[test]
-fn probe_mid_edge_lands_on_the_node_with_partial_consumption() {
-    let merkle = fixture();
+fn probe_mid_edge_lands_on_the_node_with_partial_consumption<H: HashMode>() {
+    let merkle = fixture::<H>();
     // The leaf under B has partial path [0,5,5]; probing [B,0] ends inside
     // that edge with two components unconsumed — the genuinely mid-edge
     // case, where a caller must re-encode with the adjusted split. This test
@@ -121,9 +129,10 @@ fn probe_mid_edge_lands_on_the_node_with_partial_consumption() {
     );
 }
 
+#[hash_mode]
 #[test]
-fn probe_diverging_inside_a_compressed_path_is_empty() {
-    let merkle = fixture();
+fn probe_diverging_inside_a_compressed_path_is_empty<H: HashMode>() {
+    let merkle = fixture::<H>();
     // Child A's branch has partial [7]; both probes below diverge inside it,
     // but they pin down different things.
 
@@ -146,39 +155,44 @@ fn probe_diverging_inside_a_compressed_path_is_empty() {
     assert!(matches!(outcome, ProbeOutcome::Empty));
 }
 
+#[hash_mode]
 #[test]
-fn probe_at_an_absent_child_slot_is_empty() {
-    let merkle = fixture();
+fn probe_at_an_absent_child_slot_is_empty<H: HashMode>() {
+    let merkle = fixture::<H>();
     let outcome =
         descend_to_prefix(merkle.nodestore(), &components(&[0xC])).expect("descent succeeds");
     assert!(matches!(outcome, ProbeOutcome::Empty));
 }
 
+#[hash_mode]
 #[test]
-fn probe_past_a_leaf_is_empty() {
-    let merkle = fixture();
+fn probe_past_a_leaf_is_empty<H: HashMode>() {
+    let merkle = fixture::<H>();
     let outcome = descend_to_prefix(merkle.nodestore(), &components(&[0xA, 0x7, 0x1, 0x1, 0x5]))
         .expect("descent succeeds");
     assert!(matches!(outcome, ProbeOutcome::Empty));
 }
 
+#[hash_mode]
 #[test]
-fn probe_with_empty_prefix_lands_on_the_root() {
-    let merkle = fixture();
+fn probe_with_empty_prefix_lands_on_the_root<H: HashMode>() {
+    let merkle = fixture::<H>();
     let outcome = descend_to_prefix(merkle.nodestore(), &[]).expect("descent succeeds");
     assert!(matches!(outcome, ProbeOutcome::AtNode { consumed: 0, .. }));
 }
 
+#[hash_mode]
 #[test]
-fn probe_on_empty_trie_is_empty() {
-    let merkle = init_merkle(Vec::<(Vec<u8>, Vec<u8>)>::new());
+fn probe_on_empty_trie_is_empty<H: HashMode>() {
+    let merkle = init_merkle_in::<H, _, _, _>(Vec::<(Vec<u8>, Vec<u8>)>::new());
     let outcome =
         descend_to_prefix(merkle.nodestore(), &components(&[0xA])).expect("descent succeeds");
     assert!(matches!(outcome, ProbeOutcome::Empty));
 }
 
+#[hash_mode]
 #[test]
-fn probe_through_an_unhashed_child_reports_unhashed() {
+fn probe_through_an_unhashed_child_reports_unhashed<H: HashMode>() {
     // Construction mirrors the swap-back test
     // `reconstructed_root_hash_rewrites_root_children` in
     // storage/src/nodestore/mod.rs: a reconstruction store built via
@@ -189,8 +203,8 @@ fn probe_through_an_unhashed_child_reports_unhashed() {
     // cfg(any(test, feature = "test_utils")), which firewood's dev-dependency
     // on firewood-storage enables.
     use firewood_storage::{
-        BranchNode, Child, Children, DefaultHashMode as H, HashedNodeReader as _, LeafNode,
-        NibblesIterator, Node, Path, Reconstructed,
+        BranchNode, Child, Children, HashedNodeReader as _, LeafNode, NibblesIterator, Node, Path,
+        Reconstructed,
     };
     use std::sync::Arc;
 
