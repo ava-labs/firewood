@@ -15,6 +15,7 @@ mod reconcile;
 mod sized;
 #[cfg(not(feature = "ethhash"))]
 mod triehash;
+mod verified;
 
 use std::collections::HashMap;
 use std::fmt::Write;

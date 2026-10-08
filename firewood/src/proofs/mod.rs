@@ -329,16 +329,16 @@ mod tests;
 pub(crate) mod types;
 
 pub use self::change::{
-    ChangeProof, ChangeProofVerificationContext, find_next_key_after_change_proof,
-    verify_change_proof_structure,
+    ChangeProof, ChangeProofVerificationContext, VerifiedChangeProof,
+    find_next_key_after_change_proof, verify_change_proof_structure,
 };
 
 pub(crate) use self::frame::MAX_DECOMPRESSED_LEN;
 pub use self::header::InvalidHeader;
 pub use self::holes::{DeletePrefixes, KeySpan};
 pub use self::range::{
-    KeyRange, RangeProof, RangeProofVerificationContext, find_next_key_after_range_proof,
-    verify_range_proof_structure,
+    KeyRange, RangeProof, RangeProofVerificationContext, VerifiedRangeProof,
+    find_next_key_after_range_proof, verify_range_proof_structure,
 };
 pub use self::reader::ReadError;
 pub use self::types::{

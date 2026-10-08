@@ -5,6 +5,7 @@ use std::num::{NonZeroU64, NonZeroUsize};
 use std::sync::Arc;
 
 use firewood::{
+    VerifiedChangeProof,
     api::{self, ArcDynDbView, DynDb, FrozenChangeProof, HashKey, IntoBatchIter, KeyType},
     db::{CommittedView, DbConfig},
     manager::RevisionManagerConfig,
@@ -334,6 +335,23 @@ impl DatabaseHandle {
             self.db
                 .verify_change_proof(proof, end_root, start_key, end_key, max_length)
         })
+    }
+
+    /// Apply an already verified change proof to the latest revision and
+    /// check the result against the root it was verified with.
+    ///
+    /// See [`DynDb::apply_verified_change_proof`].
+    ///
+    /// # Errors
+    ///
+    /// A hash-mode mismatch between the proof and this database, or any
+    /// error from applying the proof's operations or from the root hash
+    /// check.
+    pub fn apply_verified_change_proof(
+        &self,
+        verified: &VerifiedChangeProof,
+    ) -> Result<CreateProposalResult<'_>, api::Error> {
+        CreateProposalResult::new(self, || self.db.apply_verified_change_proof(verified))
     }
 
     /// Dumps the Trie structure of the latest revision to a DOT (Graphviz) format string.

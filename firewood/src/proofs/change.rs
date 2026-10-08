@@ -1,7 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::{fmt::Debug, num::NonZeroUsize};
+use std::{fmt::Debug, num::NonZeroUsize, sync::Arc};
 
 use firewood_storage::{DefaultHashMode, HashMode, NodeHashAlgorithm};
 
@@ -203,6 +203,7 @@ pub struct ChangeProofVerificationContext {
     end_root: HashKey,
     start_key: Option<Box<[u8]>>,
     end_key: Option<Box<[u8]>>,
+    max_length: Option<NonZeroUsize>,
     right_edge_key: Option<Box<[u8]>>,
 }
 
@@ -223,6 +224,13 @@ impl ChangeProofVerificationContext {
     #[must_use]
     pub fn end_key(&self) -> Option<&[u8]> {
         self.end_key.as_deref()
+    }
+
+    /// The maximum number of operations the proof was allowed to carry, if
+    /// the caller set one.
+    #[must_use]
+    pub const fn max_length(&self) -> Option<NonZeroUsize> {
+        self.max_length
     }
 
     /// The right edge of the range the proof proves: the key the end proof is
@@ -258,8 +266,69 @@ impl ChangeProofVerificationContext {
             end_root,
             start_key,
             end_key,
+            max_length: None,
             right_edge_key,
         }
+    }
+}
+
+/// A change proof together with the verification context produced from it.
+///
+/// Constructible only by [`VerifiedChangeProof::verify`], which runs
+/// [`verify_change_proof_structure`] on the proof it is given and stores the
+/// two side by side. A context can therefore never be paired with a proof
+/// other than the one it was produced from, which a caller holding the two
+/// as separate values cannot guarantee. Structural verification does not check the
+/// proof's result against `end_root`; that needs a proposal, which
+/// [`Db::apply_verified_change_proof`](crate::db::Db::apply_verified_change_proof)
+/// builds from a value of this type.
+///
+/// The proof is held behind an [`Arc`] so a caller that keeps using the
+/// unverified proof after verification shares the body instead of cloning it.
+/// Not `Clone`: a verified value is a witness; share the body through
+/// [`proof`](Self::proof).
+#[derive(Debug)]
+pub struct VerifiedChangeProof {
+    proof: Arc<FrozenChangeProof>,
+    verification: ChangeProofVerificationContext,
+}
+
+impl VerifiedChangeProof {
+    /// Verify `proof` with [`verify_change_proof_structure`], whose parameters
+    /// this takes unchanged, and pair it with the resulting context. `proof`
+    /// may be owned or already shared.
+    ///
+    /// # Errors
+    ///
+    /// Any error [`verify_change_proof_structure`] returns.
+    pub fn verify(
+        proof: impl Into<Arc<FrozenChangeProof>>,
+        end_root: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        algorithm: NodeHashAlgorithm,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<Self, api::Error> {
+        let proof = proof.into();
+        let verification = verify_change_proof_structure(
+            &proof, end_root, start_key, end_key, algorithm, max_length,
+        )?;
+        Ok(Self {
+            proof,
+            verification,
+        })
+    }
+
+    /// The verified proof.
+    #[must_use]
+    pub const fn proof(&self) -> &Arc<FrozenChangeProof> {
+        &self.proof
+    }
+
+    /// The parameters the proof was verified with and the range it proves.
+    #[must_use]
+    pub const fn verification(&self) -> &ChangeProofVerificationContext {
+        &self.verification
     }
 }
 
@@ -281,12 +350,14 @@ type FrozenBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
 ///
 /// `None` means the requested range holds no further changes, and that is only
 /// true of a proof whose root hash has been verified — by
-/// [`Db::verify_change_proof`] or [`verify_change_proof_root_hash`]. Structural
+/// [`Db::verify_change_proof`], [`Db::apply_verified_change_proof`], or
+/// [`verify_change_proof_root_hash`]. Structural
 /// validation alone accepts a proof with no operations for a range that does have
 /// changes, because every check that would notice is expressed against the
 /// operation list, which an empty list satisfies.
 ///
 /// [`Db::verify_change_proof`]: crate::db::Db::verify_change_proof
+/// [`Db::apply_verified_change_proof`]: crate::db::Db::apply_verified_change_proof
 /// [`verify_change_proof_root_hash`]: crate::merkle::verify_change_proof_root_hash
 ///
 /// # Errors
@@ -601,6 +672,7 @@ pub fn verify_change_proof_structure(
         end_root,
         start_key: start_key.map(Box::from),
         end_key: end_key.map(Box::from),
+        max_length,
         right_edge_key: right_edge_key.map(Box::from),
     })
 }
