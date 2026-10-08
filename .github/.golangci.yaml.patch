@@ -1,5 +1,5 @@
---- .github/.golangci.yaml	2026-09-22 11:07:53
-+++ ffi/.golangci.yaml	2026-05-12 13:59:44
+--- .github/.golangci.yaml	2026-10-08 11:10:57
++++ ffi/.golangci.yaml	2026-10-08 11:10:03
 @@ -40,7 +40,7 @@
          - standard
          - default
@@ -162,7 +162,22 @@
      unused:
        # Mark all struct fields that have been written to as used.
        # Default: true
-@@ -273,7 +230,5 @@
+@@ -266,6 +223,14 @@
+       - legacy
+       - std-error-handling
+     rules:
++      # These compatibility suites were outside the main FFI lint run in their separate modules.
++      - path: "(eth_compatibility_test|merkle_compatibility_test|get_proof_test|proof_test)\\.go$"
++        linters:
++          - forbidigo
++          - gocritic
++          - modernize
++          - unused
++          - usetesting
+       # Exclude some linters from running on test files.
+       # 1. Exclude the top level tests/ directory.
+       # 2. Exclude any file prefixed with test_ in any directory.
+@@ -273,7 +238,5 @@
        # 4. Exclude any file suffixed with _test.go.
        - path: "(^tests/)|(^(.*/)*test_[^/]*\\.go$)|(.*test/.*)|(.*_test\\.go$)"
          linters:

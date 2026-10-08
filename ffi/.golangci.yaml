@@ -223,6 +223,14 @@ linters:
       - legacy
       - std-error-handling
     rules:
+      # These compatibility suites were outside the main FFI lint run in their separate modules.
+      - path: "(eth_compatibility_test|merkle_compatibility_test|get_proof_test|proof_test)\\.go$"
+        linters:
+          - forbidigo
+          - gocritic
+          - modernize
+          - unused
+          - usetesting
       # Exclude some linters from running on test files.
       # 1. Exclude the top level tests/ directory.
       # 2. Exclude any file prefixed with test_ in any directory.

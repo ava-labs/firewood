@@ -1,26 +1,18 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-package firewood
+package ffi
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"math/rand"
-	"path/filepath"
-	"runtime"
 	"slices"
 	"testing"
-	"time"
-
-	"github.com/ava-labs/firewood-go/ffi"
 
 	"github.com/ava-labs/avalanchego/database"
 	"github.com/ava-labs/avalanchego/database/memdb"
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/x/merkledb"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,10 +32,10 @@ const (
 	createProposalOnDB
 	proposalGet
 	commitProposal
-	maxStep
+	merkleMaxStep
 )
 
-var stepMap = map[byte]string{
+var merkleStepMap = map[byte]string{
 	dbGet:                    "dbGet",
 	dbUpdate:                 "dbUpdate",
 	dbBatch:                  "dbBatch",
@@ -54,46 +46,6 @@ var stepMap = map[byte]string{
 	commitProposal:           "commitProposal",
 }
 
-// oneSecCtx returns `tb.Context()` with a 1-second timeout added. Any existing
-// cancellation on `tb.Context()` is removed, which allows this function to be
-// used inside a `tb.Cleanup()`
-func oneSecCtx(tb testing.TB) context.Context {
-	ctx := context.WithoutCancel(tb.Context())
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
-	tb.Cleanup(cancel)
-	return ctx
-}
-
-func newTestFirewoodDatabase(t *testing.T) *ffi.Database {
-	t.Helper()
-	r := require.New(t)
-
-	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, err := newFirewoodDatabase(dbFile)
-	r.NoError(err, "firewood.New()")
-	t.Cleanup(func() {
-		err := db.Close(oneSecCtx(t))
-		if errors.Is(err, ffi.ErrActiveKeepAliveHandles) {
-			// force a GC to clean up dangling handles that are preventing the
-			// database from closing, then try again. Intentionally not looping
-			// since a subsequent attempt is unlikely to succeed if the first
-			// one didn't.
-			runtime.GC()
-			err = db.Close(oneSecCtx(t))
-		}
-		assert.NoError(t, err, "%T.Close()", db)
-	})
-	return db
-}
-
-func newFirewoodDatabase(dbFile string) (*ffi.Database, error) {
-	f, err := ffi.New(dbFile, ffi.MerkleDBNodeHashing)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create new database at filepath %q: %w", dbFile, err)
-	}
-	return f, nil
-}
-
 type tree struct {
 	require *require.Assertions
 	rand    *rand.Rand
@@ -101,7 +53,7 @@ type tree struct {
 	id       int
 	nextID   int
 	merkleDB merkledb.MerkleDB
-	fwdDB    *ffi.Database
+	fwdDB    *Database
 
 	children []*proposal
 
@@ -113,7 +65,7 @@ type proposal struct {
 	parentID   int
 	id         int
 	merkleView merkledb.View
-	fwdView    *ffi.Proposal
+	fwdView    *Proposal
 
 	children []*proposal
 }
@@ -127,7 +79,7 @@ func newTestTree(t *testing.T, rand *rand.Rand) *tree {
 
 	tr := &tree{
 		merkleDB:  merkleDB,
-		fwdDB:     newTestFirewoodDatabase(t),
+		fwdDB:     newTestDatabaseWithHashMode(t, MerkleDBNodeHashing),
 		proposals: make(map[int]*proposal),
 		children:  make([]*proposal, 0),
 		require:   r,
@@ -169,7 +121,7 @@ func (tr *tree) dbUpdate() {
 
 	// Insert the key-value pair into both databases.
 	tr.require.NoError(tr.merkleDB.Put(key, val))
-	_, err := tr.fwdDB.Update([]ffi.BatchOp{ffi.Put(key, val)})
+	_, err := tr.fwdDB.Update([]BatchOp{Put(key, val)})
 	tr.require.NoError(err)
 
 	tr.dropAllProposals()
@@ -221,9 +173,9 @@ func (tr *tree) dbBatch() {
 	}
 	tr.require.NoError(batch.Write())
 
-	fwdBatch := make([]ffi.BatchOp, 0, len(keys))
+	fwdBatch := make([]BatchOp, 0, len(keys))
 	for i := range len(keys) {
-		fwdBatch = append(fwdBatch, ffi.Put(keys[i], vals[i]))
+		fwdBatch = append(fwdBatch, Put(keys[i], vals[i]))
 	}
 	_, err := tr.fwdDB.Update(fwdBatch)
 	tr.require.NoError(err)
@@ -277,9 +229,9 @@ func (tr *tree) createProposalOnProposal() {
 	fwdPr := pr.fwdView
 	merkleView := pr.merkleView
 
-	fwdBatch := make([]ffi.BatchOp, 0, len(keys))
+	fwdBatch := make([]BatchOp, 0, len(keys))
 	for i := range len(keys) {
-		fwdBatch = append(fwdBatch, ffi.Put(keys[i], vals[i]))
+		fwdBatch = append(fwdBatch, Put(keys[i], vals[i]))
 	}
 	fwdChildPr, err := fwdPr.Propose(fwdBatch)
 	tr.require.NoError(err)
@@ -313,9 +265,9 @@ func (tr *tree) createProposalOnProposal() {
 func (tr *tree) createProposalOnDB() {
 	batchSize := tr.rand.Intn(maxBatchSize) + 1 // ensure at least one key-value pair
 	keys, vals := tr.createRandomBatch(batchSize)
-	fwdBatch := make([]ffi.BatchOp, 0, len(keys))
+	fwdBatch := make([]BatchOp, 0, len(keys))
 	for i := range len(keys) {
-		fwdBatch = append(fwdBatch, ffi.Put(keys[i], vals[i]))
+		fwdBatch = append(fwdBatch, Put(keys[i], vals[i]))
 	}
 	fwdPr, err := tr.fwdDB.Propose(fwdBatch)
 	tr.require.NoError(err)
@@ -379,9 +331,9 @@ func fuzzTree(t *testing.T, randSource int64, byteSteps []byte) {
 
 	// TODO(#2045): replace randomly generated values with bytes from the fuzzer
 	for _, step := range byteSteps {
-		step = step % maxStep
+		step = step % merkleMaxStep
 		// Make this two lines so debugger displays the stepStr value
-		stepStr := stepMap[step]
+		stepStr := merkleStepMap[step]
 		t.Log(stepStr)
 		switch step {
 		case dbGet:

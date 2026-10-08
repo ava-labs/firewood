@@ -1,13 +1,12 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-package eth
+package ffi
 
 import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/ava-labs/firewood-go-ethhash/ffi"
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/types"
 	"github.com/ava-labs/libevm/crypto"
@@ -16,21 +15,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var _ ffi.Maybe[[]byte] = nothing{}
-
-type nothing struct{}
-
-func (nothing) HasValue() bool {
-	return false
-}
-
-func (nothing) Value() []byte {
-	return nil
-}
-
 func FuzzRangeProofCreation(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
-		db := newFirewoodDB(t)
+		db := newTestDatabaseWithHashMode(t, EthereumNodeHashing)
 		numAccounts := len(data)
 
 		if numAccounts == 0 {
@@ -39,7 +26,7 @@ func FuzzRangeProofCreation(f *testing.F) {
 
 		keys := make([][]byte, 0, numAccounts)
 		values := make([][]byte, 0, numAccounts)
-		batch := make([]ffi.BatchOp, 0, numAccounts)
+		batch := make([]BatchOp, 0, numAccounts)
 		expected := make(map[common.Hash]int)
 		for i := range numAccounts {
 			addr := common.BytesToAddress(crypto.Keccak256Hash(binary.BigEndian.AppendUint64(nil, uint64(i))).Bytes())
@@ -61,17 +48,17 @@ func FuzzRangeProofCreation(f *testing.F) {
 			require.NoError(t, err)
 			keys = append(keys, accHash.Bytes())
 			values = append(values, accountRLP)
-			batch = append(batch, ffi.Put(keys[i], values[i]))
+			batch = append(batch, Put(keys[i], values[i]))
 		}
 
 		root, err := db.Update(batch)
 		require.NoErrorf(t, err, "%T.Update()", db)
 
-		proof, err := db.RangeProof(root, nothing{}, nothing{}, uint32(numAccounts))
+		proof, err := db.RangeProof(root, nothing(), nothing(), uint32(numAccounts))
 		require.NoErrorf(t, err, "%T.RangeProof()", db)
 		require.NotNil(t, proof)
 
-		err = proof.Verify(root, nothing{}, nothing{}, uint32(numAccounts))
+		err = proof.Verify(root, nothing(), nothing(), uint32(numAccounts))
 		require.NoErrorf(t, err, "%T.Verify()", proof)
 
 		seen := make(map[common.Hash]struct{})
