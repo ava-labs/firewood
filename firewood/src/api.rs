@@ -541,13 +541,34 @@ where
     }
 }
 
+/// A hashed view that can classify the key space outside a verified proof.
+///
+/// This is the erased capability behind
+/// [`CommittedView::find_holes_after_range_proof`](crate::db::CommittedView::find_holes_after_range_proof)
+/// and its siblings: the blanket impls in `db.rs` cover the committed and
+/// reconstructed nodestores of every hash mode and recover the mode for the
+/// generic walk, so no caller names it.
+pub(crate) trait DynHoleFinder: DynDbView {
+    /// Object-safe version of the generic walk over a verified range proof.
+    fn find_holes_after_range_proof(
+        &self,
+        verified: &crate::proofs::VerifiedRangeProof,
+    ) -> Result<Vec<crate::proofs::Hole>, Error>;
+
+    /// Object-safe version of the generic walk over a verified change proof.
+    fn find_holes_after_change_proof(
+        &self,
+        verified: &crate::proofs::VerifiedChangeProof,
+    ) -> Result<Vec<crate::proofs::Hole>, Error>;
+}
+
 /// A shareable committed revision that can start a reconstruction chain.
 ///
 /// This is the erased capability behind
 /// [`CommittedView`](crate::db::CommittedView): the blanket impl in `db.rs`
 /// covers the committed nodestore of every hash mode, so reconstruction works
 /// regardless of the mode the database was opened with.
-pub(crate) trait DynCommittedRevision: DynDbView {
+pub(crate) trait DynCommittedRevision: DynHoleFinder {
     /// Start a reconstruction chain from this committed revision by applying
     /// `batch`, producing an erased reconstructed state.
     fn begin_reconstruction(
@@ -562,7 +583,7 @@ pub(crate) trait DynCommittedRevision: DynDbView {
 /// [`ReconstructedView`](crate::db::ReconstructedView); like
 /// [`DynCommittedRevision`], its blanket impl in `db.rs` covers every hash
 /// mode.
-pub(crate) trait DynReconstructed: DynDbView {
+pub(crate) trait DynReconstructed: DynHoleFinder {
     /// Continue the reconstruction chain by applying `batch` on top of this
     /// state.
     ///
