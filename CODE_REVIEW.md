@@ -46,6 +46,11 @@ providing inline feedback — in addition to general best practices.
   `ProofNode::key`, which the node hash commits to in both modes. `partial_len` (and
   `partial_path()`) is authenticated only under the Ethereum mode; under MerkleDB a
   tampered split still verifies. See `merkle::holes::Walk::boundary`.
+- **Ethereum storage-child fold**: under the Ethereum mode a stored child hash at depth
+  65 depends on the account's storage-child count (folded as a storage-trie root iff the
+  account has exactly one). Compare depth-65 hashes from two tries directly only when
+  both counts agree; otherwise re-hash one side under the other's convention with
+  `hash_node_as_storage_trie_root_parts`. See `merkle::holes::Walk::straddle`.
 
 ## Lint Suppression Policy
 

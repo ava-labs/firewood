@@ -201,32 +201,47 @@ pub(crate) fn subtree_hash<H: HashMode, T: HashedNodeReader>(
         ProbeOutcome::AtNode { node, consumed } => {
             let partial = node.partial_path().as_components();
             let remaining = partial.get(consumed..).unwrap_or_default();
-            let hash = match &*node {
-                Node::Leaf(leaf) => H::to_hash(&HashableShunt::new(
-                    prefix,
-                    remaining,
-                    Some(ValueDigest::Value(&*leaf.value)),
-                    Children::new(),
-                )),
-                Node::Branch(branch) => {
-                    if branch
-                        .children
-                        .iter()
-                        .any(|(_, child)| matches!(child, Some(Child::Node(_))))
-                    {
-                        return Err(api::Error::UnhashedView {
-                            reason: "the node at the probed position has a child held in memory without a hash",
-                        });
-                    }
-                    H::to_hash(&HashableShunt::new(
-                        prefix,
-                        remaining,
-                        branch.value.as_deref().map(ValueDigest::Value),
-                        branch.children_hashes(),
-                    ))
-                }
-            };
-            Ok(Some(hash))
+            let (value_digest, children) = hashable_parts(&node)?;
+            Ok(Some(H::to_hash(&HashableShunt::new(
+                prefix,
+                remaining,
+                value_digest,
+                children,
+            ))))
+        }
+    }
+}
+
+/// A node's value digest and child hashes, as [`HashableShunt`] takes them.
+pub(crate) type HashableParts<'a> = (Option<ValueDigest<&'a [u8]>>, Children<Option<HashType>>);
+
+/// The value digest and child hashes of `node`, as [`HashableShunt`] takes
+/// them: a leaf contributes its value and no children, a branch its value
+/// and its children's stored hashes.
+///
+/// # Errors
+///
+/// [`api::Error::UnhashedView`] when a child slot holds a [`Child::Node`],
+/// which carries no hash. `children_hashes()` would silently report that
+/// slot as absent, and a commitment formed over an absent child is wrong
+/// rather than merely incomplete.
+pub(crate) fn hashable_parts(node: &Node) -> Result<HashableParts<'_>, api::Error> {
+    match node {
+        Node::Leaf(leaf) => Ok((Some(ValueDigest::Value(&*leaf.value)), Children::new())),
+        Node::Branch(branch) => {
+            if branch
+                .children
+                .iter()
+                .any(|(_, child)| matches!(child, Some(Child::Node(_))))
+            {
+                return Err(api::Error::UnhashedView {
+                    reason: "the node has a child held in memory without a hash",
+                });
+            }
+            Ok((
+                branch.value.as_deref().map(ValueDigest::Value),
+                branch.children_hashes(),
+            ))
         }
     }
 }
