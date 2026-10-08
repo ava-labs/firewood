@@ -318,6 +318,7 @@ pub(super) mod de;
 pub(crate) mod eth;
 pub(crate) mod frame;
 pub(crate) mod header;
+pub(crate) mod holes;
 pub(crate) mod range;
 pub(crate) mod reader;
 pub(super) mod ser;
@@ -334,6 +335,7 @@ pub use self::change::{
 
 pub(crate) use self::frame::MAX_DECOMPRESSED_LEN;
 pub use self::header::InvalidHeader;
+pub use self::holes::{DeletePrefixes, KeySpan};
 pub use self::range::{
     KeyRange, RangeProof, RangeProofVerificationContext, find_next_key_after_range_proof,
     verify_range_proof_structure,

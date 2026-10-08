@@ -38,7 +38,8 @@ providing inline feedback — in addition to general best practices.
   "unbounded" — the empty slice already sorts as the minimum key. An upper bound must be
   `Option<&[u8]>` with `None` for unbounded (+∞); reusing the empty slice there judges
   every key out of range. When either bound is threaded through new code, check every
-  comparison site. See `merkle::collapse::CollapseRange`.
+  comparison site. See `merkle::collapse::CollapseRange` and
+  `proofs::holes::KeySpan::as_key_range`.
 
 ## Lint Suppression Policy
 
