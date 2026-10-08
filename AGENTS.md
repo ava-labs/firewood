@@ -119,6 +119,17 @@ The `fwdctl` tool provides command-line operations on databases. See `fwdctl/REA
 
 For more information on coding conventions and constraints, please refer to [CONTRIBUTING.md](./CONTRIBUTING.md)
 
+## Design Documents
+
+Firewood records designs as living documentation in `docs/src/designs/`, rendered in
+the mdBook site. The naming convention, frontmatter schema, and the propose and promote
+workflows are documented in `docs/src/designs/README.md`; scaffold a new design with
+`just new-design <slug>`.
+
+Two constraints apply to every edit: never rename or move a design file, and never
+record a design's own proposal or last-updated date inside the file. The filename and
+git history already carry both.
+
 ## Commit and PR Title Convention
 
 Commit messages and PR titles **must** follow the
