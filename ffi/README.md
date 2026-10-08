@@ -109,7 +109,7 @@ It is possible that your editor does not properly recognize the C bindings, due 
 
 ### Testing
 
-Although the VS Code testing feature does work, there are some quirks in ensuring proper building. The Rust code must be compiled separately, and sometimes the `go test` command continues to use a cached result. Whenever testing after making changes to the Rust/C builds, the cache should be cleared if results don't seem correct. The Go tests select a runtime hashing mode with `TEST_FIREWOOD_HASH_MODE` (`firewood` or `ethhash`); both modes use the same FFI library build.
+Although the VS Code testing feature does work, there are some quirks in ensuring proper building. The Rust code must be compiled separately, and sometimes the `go test` command continues to use a cached result. Whenever testing after making changes to the Rust/C builds, the cache should be cleared if results don't seem correct. Most FFI tests select a runtime hashing mode with `TEST_FIREWOOD_HASH_MODE` (`firewood` or `ethhash`); both modes use the same FFI library build. The MerkleDB and Ethereum compatibility suites are in this module and pin their respective hash modes, so `go test ./...` runs both suites.
 
 To ensure there are no memory leaks, the easiest way is to use your preferred CLI tool (e.g. `valgrind` for Linux, `leaks` for macOS) and compile the tests into a binary. You must not compile a release binary to ensure all memory can be managed. An example flow is given below.
 
