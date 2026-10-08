@@ -24,11 +24,11 @@
 use std::collections::{BTreeMap, HashSet};
 use std::time::{Duration, Instant};
 
+use super::accounts::{account_storage_key, empty_code_hash, rlp_encode_account};
 use super::change::fuzz_common::{
     build_change_proof, build_range_proof, change_proof_rejected,
     maybe_serialize_round_trip_change, maybe_serialize_round_trip_range,
 };
-use super::ethhash::{account_storage_key, empty_code_hash, rlp_encode_account};
 use crate::api::{
     BatchOp, Db as DbTrait, DbView, FrozenChangeProof, FrozenRangeProof, HashKey, Proposal as _,
 };

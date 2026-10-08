@@ -17,10 +17,13 @@ use std::sync::Arc;
 
 use firewood_macros::hash_mode;
 use firewood_storage::{
-    Committed, EthHash, HashMode, HashedNodeReader, MemStore, MerkleDbHash, NodeStore,
-    PathComponent, TriePathFromPackedBytes,
+    Committed, EthHash, HashMode, HashedNodeReader, MemStore, MerkleDbHash, NodeReader as _,
+    NodeStore, PathComponent, TriePathFromPackedBytes, replace_list_field,
 };
 
+use super::accounts::{
+    account_storage_key, empty_code_hash, reopen_as_legacy, rlp_encode_account, rlp_encode_storage,
+};
 use super::init_merkle_in;
 use crate::api::{self, BatchOp, Db as _, DbView as _, HashKey, Proposal as _};
 use crate::db::{Db, DbConfig};
@@ -128,9 +131,36 @@ fn covers(hole: &Hole, key: &[u8]) -> bool {
     }
 }
 
+/// Whether two values for `key` count as equal to the walk: byte equality,
+/// except that under the Ethereum mode an account value (32-byte key) is
+/// compared with its `storageRoot` field masked, since hashing derives that
+/// field and the walk reports storage differences through spans.
+fn values_equal<H: HashMode>(key: &[u8], a: &[u8], b: &[u8]) -> bool {
+    if H::ALGORITHM.is_ethereum()
+        && key.len() == 32
+        && let (Ok(a), Ok(b)) = (
+            replace_list_field(a, 2, &[0; 32]),
+            replace_list_field(b, 2, &[0; 32]),
+        )
+    {
+        return a == b;
+    }
+    // A value that is not well-formed account RLP is compared as-is, as the
+    // walk does.
+    a == b
+}
+
+/// Whether two maps, already restricted to the same key span by the caller,
+/// hold equal content by [`values_equal`].
+fn equal_under<H: HashMode>(t: &Map, l: &Map) -> bool {
+    t.len() == l.len()
+        && t.iter()
+            .all(|(k, v)| l.get(k).is_some_and(|w| values_equal::<H>(k, v, w)))
+}
+
 /// Check every label against the flat maps and check coverage of the
 /// complement of the applied range.
-fn assert_matches_truth(
+fn assert_matches_truth<H: HashMode>(
     target: &Map,
     local: &Map,
     applied: &(Option<Vec<u8>>, Option<Vec<u8>>),
@@ -144,7 +174,7 @@ fn assert_matches_truth(
                 let expected = match (t.is_empty(), l.is_empty()) {
                     (false, true) => "Missing",
                     (true, false) => "Surplus",
-                    (false, false) if t == l => "Synced",
+                    (false, false) if equal_under::<H>(&t, &l) => "Synced",
                     (false, false) => "Stale",
                     (true, true) => "silent",
                 };
@@ -157,14 +187,15 @@ fn assert_matches_truth(
                 assert_eq!(actual, expected, "span {:?}", s.prefix());
             }
             Hole::PointFix { key, value } => {
-                assert_eq!(
-                    target.get(&**key).map(Vec::as_slice),
-                    Some(&**value),
-                    "{key:02x?}"
+                let t = target.get(&**key).expect("the target holds a fixed key");
+                assert!(
+                    values_equal::<H>(key, t, value),
+                    "{key:02x?}: target {t:02x?}, label {value:02x?}"
                 );
-                assert_ne!(
-                    local.get(&**key).map(Vec::as_slice),
-                    Some(&**value),
+                assert!(
+                    !local
+                        .get(&**key)
+                        .is_some_and(|l| values_equal::<H>(key, l, value)),
                     "{key:02x?}"
                 );
             }
@@ -204,7 +235,10 @@ fn assert_matches_truth(
                     .find(|k| k.as_slice() > e)
                     .is_some_and(|k| k.as_slice() == key)
             });
-            let both_equal = target.get(key) == local.get(key) && target.get(key).is_some();
+            let both_equal = match (target.get(key), local.get(key)) {
+                (Some(t), Some(l)) => values_equal::<H>(key, t, l),
+                _ => false,
+            };
             if (prefix_point || successor_point) && both_equal && covering.is_empty() {
                 continue;
             }
@@ -292,7 +326,7 @@ fn missing_hole<H: HashMode>() {
         ]
     );
     assert_eq!(holes.len(), 3);
-    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+    assert_matches_truth::<H>(&target, &local, &applied_range(&verified), &holes);
 }
 
 #[hash_mode]
@@ -308,7 +342,7 @@ fn stale_hole<H: HashMode>() {
     assert!(spans(&holes).contains(&("Stale", vec![0xA, 0x7, 0xF])));
     assert!(spans(&holes).contains(&("Synced", vec![0xA, 0x7, 0x7])));
     assert!(spans(&holes).contains(&("Synced", vec![0xB])));
-    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+    assert_matches_truth::<H>(&target, &local, &applied_range(&verified), &holes);
 }
 
 #[hash_mode]
@@ -322,7 +356,7 @@ fn synced_span_skipped<H: HashMode>() {
 
     assert_eq!(fetch_labels(&holes), 0);
     assert!(holes.iter().all(|h| matches!(h, Hole::Synced(_))));
-    assert_matches_truth(&target, &target, &applied_range(&verified), &holes);
+    assert_matches_truth::<H>(&target, &target, &applied_range(&verified), &holes);
 
     // Re-request one Synced span: the proof over it labels nothing.
     let (_, again) = range_holes(&t, &l, Some(&[0xB0]), Some(&[0xBF]), None);
@@ -348,7 +382,7 @@ fn surplus_hole<H: HashMode>() {
         0,
         "the local trie holds every target key"
     );
-    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+    assert_matches_truth::<H>(&target, &local, &applied_range(&verified), &holes);
 }
 
 #[hash_mode]
@@ -370,7 +404,7 @@ fn mid_edge_adjustment<H: HashMode>() {
 
     assert!(spans(&holes).contains(&("Synced", vec![0xA, 0x7, 0x1])));
     assert!(!spans(&holes).iter().any(|(label, _)| *label == "Stale"));
-    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+    assert_matches_truth::<H>(&target, &local, &applied_range(&verified), &holes);
 }
 
 #[hash_mode]
@@ -389,7 +423,7 @@ fn prefix_value_surplus<H: HashMode>() {
             .iter()
             .any(|h| matches!(h, Hole::PointSurplus { key } if **key == [0xA7]))
     );
-    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+    assert_matches_truth::<H>(&target, &local, &applied_range(&verified), &holes);
 }
 
 #[hash_mode]
@@ -410,7 +444,7 @@ fn path_value_repair<H: HashMode>() {
     assert!(holes.iter().any(
         |h| matches!(h, Hole::PointFix { key, value } if **key == [0xA7] && &**value == b"value")
     ));
-    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+    assert_matches_truth::<H>(&target, &local, &applied_range(&verified), &holes);
 
     local.insert(vec![0xA7], b"wrong".to_vec());
     let l = trie::<H>(&local);
@@ -420,7 +454,7 @@ fn path_value_repair<H: HashMode>() {
             .iter()
             .any(|h| matches!(h, Hole::PointFix { key, .. } if **key == [0xA7]))
     );
-    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+    assert_matches_truth::<H>(&target, &local, &applied_range(&verified), &holes);
 }
 
 #[test]
@@ -470,7 +504,7 @@ fn hashed_path_value_is_point_stale() {
             .any(|h| matches!(h, Hole::PointStale { key } if **key == [0xA7])),
         "{holes:?}"
     );
-    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+    assert_matches_truth::<H>(&target, &local, &applied_range(&verified), &holes);
 }
 
 #[hash_mode]
@@ -488,7 +522,7 @@ fn straddle_terminal_surplus<H: HashMode>() {
     let (t, l) = (trie::<H>(&target), trie::<H>(&local));
     let (verified, holes) = range_holes(&t, &l, None, Some(&[0xA7, 0x4F]), None);
     assert!(spans(&holes).contains(&("Surplus", vec![0xA, 0x7, 0x4])));
-    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+    assert_matches_truth::<H>(&target, &local, &applied_range(&verified), &holes);
 
     // Divergence terminal: the end proof for `0xA800` diverges inside `A`'s
     // partial path `[7]`, so `[A,8]` is proven empty. The applied range ends
@@ -500,7 +534,7 @@ fn straddle_terminal_surplus<H: HashMode>() {
     let l = trie::<H>(&local);
     let (verified, holes) = range_holes(&t, &l, None, Some(&[0xA8, 0x00]), None);
     assert!(spans(&holes).contains(&("Surplus", vec![0xA, 0x8])));
-    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+    assert_matches_truth::<H>(&target, &local, &applied_range(&verified), &holes);
 }
 
 #[hash_mode]
@@ -523,13 +557,13 @@ fn kb_exhausted_mid_edge<H: HashMode>() {
     let (verified, holes) = range_holes(&t, &l, None, Some(&[0xB0]), None);
     assert_eq!(verified.verification().right_edge_key(), Some(&[0xB0][..]));
     assert!(spans(&holes).contains(&("Synced", vec![0xB, 0x0, 0x5])));
-    assert_matches_truth(&target, &target, &applied_range(&verified), &holes);
+    assert_matches_truth::<H>(&target, &target, &applied_range(&verified), &holes);
 
     let local = map(&[(&[0xA7, 0x11], b"one"), (&[0xA7, 0x77], b"two")]);
     let l = trie::<H>(&local);
     let (verified, holes) = range_holes(&t, &l, None, Some(&[0xB0]), None);
     assert!(spans(&holes).contains(&("Missing", vec![0xB, 0x0, 0x5])));
-    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+    assert_matches_truth::<H>(&target, &local, &applied_range(&verified), &holes);
 }
 
 #[hash_mode]
@@ -567,7 +601,7 @@ fn empty_start_proof_emits_nothing_below_start<H: HashMode>() {
         );
     }
     assert!(spans(&holes).contains(&("Synced", vec![0x4])));
-    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+    assert_matches_truth::<H>(&target, &local, &applied_range(&verified), &holes);
 }
 
 #[test]
@@ -626,7 +660,7 @@ fn out_of_range_interval_covered<H: HashMode>() {
             .iter()
             .any(|h| matches!(h, Hole::Surplus(_)) && covers(h, &[0x26]))
     );
-    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+    assert_matches_truth::<H>(&target, &local, &applied_range(&verified), &holes);
 
     // The terminal key itself is probed as a point: a differing local value
     // is repaired from the proof.
@@ -639,7 +673,7 @@ fn out_of_range_interval_covered<H: HashMode>() {
             .iter()
             .any(|h| matches!(h, Hole::PointFix { key, .. } if **key == [0x28]))
     );
-    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+    assert_matches_truth::<H>(&target, &local, &applied_range(&verified), &holes);
 }
 
 #[hash_mode]
@@ -671,7 +705,7 @@ fn holes_partition<H: HashMode>() {
         (Some(&[0x00][..]), Some(&[0xFF][..]), NonZeroUsize::new(9)),
     ] {
         let (verified, holes) = range_holes(&t, &l, start, end, limit);
-        assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+        assert_matches_truth::<H>(&target, &local, &applied_range(&verified), &holes);
     }
 }
 
@@ -953,4 +987,215 @@ fn erased_views_reach_the_walk<H: HashMode>() {
     };
     assert_eq!(from_reconstructed, expected);
     assert!(spans(&from_reconstructed).contains(&("Stale", vec![0xB])));
+}
+
+// Account-shaped fixtures. These run under the Ethereum mode only: depth 64
+// is the account boundary there and has no meaning under MerkleDB.
+
+const ACCOUNT_A: [u8; 32] = [0x11; 32];
+const ACCOUNT_B: [u8; 32] = [0x22; 32];
+
+fn account(nonce: u64, storage_root: u8) -> Vec<u8> {
+    rlp_encode_account(nonce, 1_000, &[storage_root; 32], &empty_code_hash()).into_vec()
+}
+
+/// Account A with storage in slots 1, 2, and 3, and account B with none. The
+/// inserted `storageRoot` placeholders are deliberately wrong: hashing
+/// derives the real field.
+fn account_target() -> Map {
+    let mut m = Map::new();
+    m.insert(ACCOUNT_A.to_vec(), account(1, 0xAA));
+    for slot in [0x10, 0x20, 0x30] {
+        m.insert(
+            account_storage_key(&ACCOUNT_A, slot).into_vec(),
+            rlp_encode_storage(&[slot; 32]),
+        );
+    }
+    m.insert(ACCOUNT_B.to_vec(), account(7, 0xBB));
+    m
+}
+
+/// A range covering exactly A's slot-1 entry, so both boundary keys run
+/// through account A: the Below walk probes A's own key as a point, and the
+/// Above walk compares A's remaining storage slots as spans.
+fn through_account_a<'a>() -> (Option<&'a [u8]>, Option<&'a [u8]>) {
+    static SLOT_ONE: std::sync::LazyLock<Box<[u8]>> =
+        std::sync::LazyLock::new(|| account_storage_key(&ACCOUNT_A, 0x10));
+    (Some(&SLOT_ONE), Some(&SLOT_ONE))
+}
+
+fn point_labels(holes: &[Hole]) -> Vec<&Hole> {
+    holes
+        .iter()
+        .filter(|h| {
+            matches!(
+                h,
+                Hole::PointFix { .. } | Hole::PointStale { .. } | Hole::PointSurplus { .. }
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn account_storage_differs_fields_agree() {
+    // The target's account value and the local one differ only in the
+    // storage root hashing derives, because slot 3 is missing locally. The
+    // point probe at the account key is silent; the span over slot 3 reports
+    // the storage difference.
+    let target = account_target();
+    let mut local = target.clone();
+    let slot_three = account_storage_key(&ACCOUNT_A, 0x30);
+    local.remove(&*slot_three);
+    let (t, l) = (trie::<EthHash>(&target), trie::<EthHash>(&local));
+    let (start, end) = through_account_a();
+    let (verified, holes) = range_holes(&t, &l, start, end, None);
+
+    assert!(point_labels(&holes).is_empty(), "{holes:?}");
+    assert!(
+        holes
+            .iter()
+            .any(|h| matches!(h, Hole::Missing(_)) && covers(h, &slot_three)),
+        "{holes:?}"
+    );
+    assert_matches_truth::<EthHash>(&target, &local, &applied_range(&verified), &holes);
+}
+
+#[test]
+fn account_fields_differ_storage_agrees() {
+    // Same storage on both sides, different nonce: exactly one `PointFix`
+    // carrying the target's account value, and nothing to fetch.
+    let target = account_target();
+    let mut local = target.clone();
+    local.insert(ACCOUNT_A.to_vec(), account(2, 0xCC));
+    let (t, l) = (trie::<EthHash>(&target), trie::<EthHash>(&local));
+    let (start, end) = through_account_a();
+    let (verified, holes) = range_holes(&t, &l, start, end, None);
+
+    // The label carries the target's stored value, whose `storageRoot` is
+    // the one hashing derived, not the inserted placeholder.
+    let points = point_labels(&holes);
+    assert_eq!(points.len(), 1, "{holes:?}");
+    assert!(
+        matches!(
+            points[0],
+            Hole::PointFix { key, value }
+                if **key == ACCOUNT_A && values_equal::<EthHash>(key, value, &account(1, 0xAA))
+        ),
+        "{points:?}"
+    );
+    assert_eq!(fetch_labels(&holes), 0, "{holes:?}");
+    assert_matches_truth::<EthHash>(&target, &local, &applied_range(&verified), &holes);
+}
+
+#[test]
+fn account_fields_and_storage_differ() {
+    // Both differ: the point fix for the account fields and the span for the
+    // storage, each reported once.
+    let target = account_target();
+    let mut local = target.clone();
+    local.insert(ACCOUNT_A.to_vec(), account(2, 0xCC));
+    let slot_three = account_storage_key(&ACCOUNT_A, 0x30);
+    local.insert(slot_three.to_vec(), rlp_encode_storage(&[0xFF; 32]));
+    let (t, l) = (trie::<EthHash>(&target), trie::<EthHash>(&local));
+    let (start, end) = through_account_a();
+    let (verified, holes) = range_holes(&t, &l, start, end, None);
+
+    assert_eq!(point_labels(&holes).len(), 1, "{holes:?}");
+    assert!(
+        matches!(point_labels(&holes)[0], Hole::PointFix { key, .. } if **key == ACCOUNT_A),
+        "{holes:?}"
+    );
+    assert_eq!(fetch_labels(&holes), 1, "{holes:?}");
+    assert!(
+        holes
+            .iter()
+            .any(|h| matches!(h, Hole::Stale(_)) && covers(h, &slot_three)),
+        "{holes:?}"
+    );
+    assert_matches_truth::<EthHash>(&target, &local, &applied_range(&verified), &holes);
+}
+
+#[test]
+fn legacy_header_fully_synced_emits_nothing() {
+    // A pre-hfix local database stores account values with a stale
+    // `storageRoot` while its node hashes are canonical. The walk does not
+    // read the header flag: with `L == M`, boundaries through both accounts
+    // yield only Synced spans and silence.
+    let target = account_target();
+    let (t, l) = (trie::<EthHash>(&target), trie::<EthHash>(&target));
+    let legacy = reopen_as_legacy(&l, &[&ACCOUNT_A, &ACCOUNT_B]);
+    assert!(legacy.must_recompute_storage_hash());
+    assert_eq!(HashedNodeReader::root_hash(&legacy), Some(root(&t)));
+    // Non-vacuous: the stored account value really is stale now.
+    assert_ne!(
+        Merkle::from(&legacy).get_value(&ACCOUNT_A).unwrap(),
+        t.get_value(&ACCOUNT_A).unwrap()
+    );
+
+    let slot_two = account_storage_key(&ACCOUNT_A, 0x20);
+    for (start, end) in [
+        through_account_a(),
+        (Some(&ACCOUNT_B[..]), Some(&ACCOUNT_B[..])),
+        (Some(&slot_two[..]), None),
+        (None, Some(&ACCOUNT_A[..])),
+    ] {
+        let proof = t.range_proof(start, end, None).unwrap();
+        let verified = VerifiedRangeProof::verify(
+            Arc::new(proof),
+            root(&t),
+            start,
+            end,
+            EthHash::ALGORITHM,
+            None,
+        )
+        .unwrap();
+        let holes = find_holes_after_range_proof::<EthHash, _>(&verified, &legacy).unwrap();
+        assert!(
+            holes.iter().all(|h| matches!(h, Hole::Synced(_))),
+            "{start:02x?}..{end:02x?}: {holes:?}"
+        );
+        // The legacy store must walk exactly as the post-hfix store does, so
+        // "all Synced" cannot pass by emitting nothing.
+        let expected =
+            find_holes_after_range_proof::<EthHash, _>(&verified, l.nodestore()).unwrap();
+        assert_eq!(holes, expected, "{start:02x?}..{end:02x?}");
+    }
+    let (start, end) = through_account_a();
+    let proof = t.range_proof(start, end, None).unwrap();
+    let verified =
+        VerifiedRangeProof::verify(proof, root(&t), start, end, EthHash::ALGORITHM, None).unwrap();
+    assert!(
+        !find_holes_after_range_proof::<EthHash, _>(&verified, &legacy)
+            .unwrap()
+            .is_empty(),
+        "a boundary through account A leaves synced storage slots"
+    );
+}
+
+#[test]
+fn malformed_account_value_is_compared_as_is() {
+    // A 32-byte key whose value is not account RLP cannot be masked, so it is
+    // compared byte for byte: equal values are silent and a difference is a
+    // PointFix, the same as any other point.
+    const JUNK: [u8; 32] = [0x33; 32];
+    let slot = account_storage_key(&JUNK, 0x10);
+    let target = map(&[(&JUNK, b"junk"), (&slot, b"slot")]);
+    let t = trie::<EthHash>(&target);
+    let bounds = (Some(&slot[..]), Some(&slot[..]));
+
+    let l = trie::<EthHash>(&target);
+    let (verified, holes) = range_holes(&t, &l, bounds.0, bounds.1, None);
+    assert!(point_labels(&holes).is_empty(), "{holes:?}");
+    assert_matches_truth::<EthHash>(&target, &target, &applied_range(&verified), &holes);
+
+    let mut local = target.clone();
+    local.insert(JUNK.to_vec(), b"other".to_vec());
+    let l = trie::<EthHash>(&local);
+    let (verified, holes) = range_holes(&t, &l, bounds.0, bounds.1, None);
+    assert_eq!(point_labels(&holes).len(), 1, "{holes:?}");
+    assert!(
+        matches!(point_labels(&holes)[0], Hole::PointFix { key, value } if **key == JUNK && &**value == b"junk"),
+        "{holes:?}"
+    );
+    assert_matches_truth::<EthHash>(&target, &local, &applied_range(&verified), &holes);
 }

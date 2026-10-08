@@ -24,8 +24,8 @@ pub(crate) enum ProbeOutcome {
     /// probed prefix.
     Empty,
     /// The probe ends exactly on a child edge: this is the parent's stored
-    /// hash for that child, usable verbatim in either hash mode. Under
-    /// `ethhash`, though, a [`HashType`] may be the `Rlp` variant — an inline
+    /// hash for that child, usable verbatim in either hash mode. Under the
+    /// Ethereum mode, though, a [`HashType`] may be the `Rlp` variant — an inline
     /// RLP encoding rather than a 32-byte hash — so a consumer must compare
     /// `HashType` values and must not assume a `TrieHash`.
     EdgeExact(HashType),
@@ -40,19 +40,11 @@ pub(crate) enum ProbeOutcome {
     /// absent, so a caller forming a commitment must treat a `Child::Node`
     /// slot as an error, never as an absent child.
     ///
-    /// Under `ethhash`, a caller re-encoding the node should also consult
-    /// `must_recompute_storage_hash()` on the nodestore and, if it returns
-    /// `true`, apply the account `storageRoot` repair before using an
-    /// account-depth node's value — otherwise the commitment it computes
-    /// disagrees with the canonical one. [`subtree_hash`] does not yet do so
-    /// and documents the gap. `EdgeExact` is immune to this: it returns the
-    /// parent's already-stored commitment rather than re-deriving one from a
-    /// value.
-    ///
-    /// Note that the repair is driven by the node's child hashes, which is
-    /// what the paragraph above warns may be missing. The two caveats compose
-    /// rather than conflict: an absent child hash is an error in either path,
-    /// never a value to substitute around.
+    /// Under the Ethereum mode an account-depth node's stored value may hold
+    /// a stale `storageRoot`; re-encoding needs no repair for it (see
+    /// [`subtree_hash`]). The child hashes the hasher derives that field
+    /// from are what the paragraph above warns may be missing, and an absent
+    /// one is an error, never a value to substitute around.
     AtNode {
         /// The node covering the probed prefix.
         node: SharedNode,
@@ -160,10 +152,9 @@ pub(crate) fn descend_to_prefix<T: TrieReader>(
     }
 }
 
-/// The hash of the local subtree under `prefix`: the value a sealed sibling
-/// stub at that position would hold if the local trie were the target. It is
-/// the canonical hash except for the account `storageRoot` gap described
-/// below. `Ok(None)` means no local key carries the prefix.
+/// The canonical hash of the local subtree under `prefix`: the value a
+/// sealed sibling stub at that position would hold if the local trie were
+/// the target. `Ok(None)` means no local key carries the prefix.
 ///
 /// Three positions yield a hash. A probe ending exactly on a child edge
 /// returns the parent's stored hash for that child, verbatim. A probe ending
@@ -175,11 +166,12 @@ pub(crate) fn descend_to_prefix<T: TrieReader>(
 /// the result differs from the stored hash and matches what a trie with a
 /// child edge at `prefix` would store.
 ///
-/// The repair of an account value's `storageRoot` that
-/// `must_recompute_storage_hash()` calls for on databases written before
-/// that field was persisted correctly is not applied here, so on such a
-/// database the hash of an account node, and of every node above it, differs
-/// from the canonical one.
+/// No account `storageRoot` repair is needed on the way. Databases written
+/// before `firewood-v1-hfix` store account values with a stale `storageRoot`
+/// field, but the Ethereum hasher derives that field while building the
+/// preimage (from the child hashes, or the empty-trie root when there are
+/// none), so a re-encoded account node hashes canonically on any database
+/// version.
 ///
 /// # Errors
 ///

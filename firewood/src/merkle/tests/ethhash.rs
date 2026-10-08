@@ -5,12 +5,21 @@ use crate::api::OptionalHashKeyExt;
 use crate::merkle::Merkle;
 use firewood_storage::{Committed, DeletedNodeTracking, MemStore, NodeStore};
 
+use super::accounts::{
+    account_storage_key, clobber_value_in_memstore, empty_code_hash, rlp_encode_account,
+    rlp_encode_storage, zero_storage_root_in_rlp,
+};
 use super::*;
 use ethereum_types::H256;
 use hash_db::Hasher;
 use plain_hasher::PlainHasher;
 use sha3::{Digest, Keccak256};
 use test_case::test_case;
+
+/// Keccak256 of RLP-encoded empty string (0x80) — the hash of an empty storage trie.
+fn empty_trie_root() -> [u8; 32] {
+    Keccak256::digest(rlp::NULL_RLP).into()
+}
 
 fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     first_key: Option<impl KeyType>,
@@ -194,52 +203,6 @@ fn test_root_hash_random_deletions() {
 
         println!("i = {i}");
     }
-}
-
-/// Keccak256 of empty bytes — the codeHash for accounts with no contract code.
-pub(super) fn empty_code_hash() -> [u8; 32] {
-    Keccak256::digest([]).into()
-}
-
-/// Keccak256 of RLP-encoded empty string (0x80) — the hash of an empty storage trie.
-fn empty_trie_root() -> [u8; 32] {
-    Keccak256::digest(rlp::NULL_RLP).into()
-}
-
-/// RLP-encode an Ethereum account value: [nonce, balance, storageRoot, codeHash].
-pub(super) fn rlp_encode_account(
-    nonce: u64,
-    balance: u64,
-    storage_root: &[u8; 32],
-    code_hash: &[u8; 32],
-) -> Box<[u8]> {
-    use rlp::RlpStream;
-
-    let mut rlp = RlpStream::new_list(4);
-    rlp.append(&nonce);
-    rlp.append(&balance);
-    rlp.append(&storage_root.as_slice());
-    rlp.append(&code_hash.as_slice());
-    rlp.out().to_vec().into_boxed_slice()
-}
-
-/// RLP-encode a 32-byte storage slot value.
-pub(super) fn rlp_encode_storage(value: &[u8; 32]) -> Vec<u8> {
-    use rlp::RlpStream;
-
-    let mut rlp = RlpStream::new();
-    rlp.append(&value.as_slice());
-    rlp.out().to_vec()
-}
-
-/// Build a storage-slot key: `account_key` plus a 32-byte suffix of
-/// `first_suffix_byte` followed by zeros. At depth 64 the account branch fans
-/// out on the next nibble, so the high nibble of `first_suffix_byte` selects
-/// which child slot this entry occupies.
-pub(super) fn account_storage_key(account_key: &[u8], first_suffix_byte: u8) -> Box<[u8]> {
-    let mut suffix = [0u8; 32];
-    suffix[0] = first_suffix_byte;
-    [account_key, &suffix].concat().into()
 }
 
 /// Verify a range proof against `root_hash`, then round-trip it through
@@ -554,59 +517,6 @@ fn test_range_proof_accounts_have_computed_storage_root() {
             );
         }
     }
-}
-
-/// Find `value_bytes` in the raw [`MemStore`] and overwrite it with `replacement`.
-/// The two slices must be the same length. Returns the number of occurrences
-/// replaced.
-///
-/// This is used to simulate legacy databases that stored zeroed hashes inside
-/// the RLP-encoded account values. We search for the full serialized value
-/// (not just the 32-byte hash) so we won't accidentally corrupt unrelated
-/// node hashes or structural data in the [`MemStore`].
-fn clobber_value_in_memstore(
-    storage: &firewood_storage::MemStore,
-    value_bytes: &[u8],
-    replacement: &[u8],
-) -> usize {
-    use firewood_storage::{ReadableStorage, WritableStorage};
-    use std::io::Read;
-    assert_eq!(value_bytes.len(), replacement.len());
-
-    let mut buf = Vec::new();
-    storage
-        .stream_from(0)
-        .unwrap()
-        .read_to_end(&mut buf)
-        .unwrap();
-
-    let len = value_bytes.len();
-    let mut count = 0;
-    for offset in 0..buf.len().saturating_sub(len.saturating_sub(1)) {
-        #[expect(clippy::arithmetic_side_effects)]
-        if buf.get(offset..offset + len) == Some(value_bytes) {
-            storage.write(offset as u64, replacement).unwrap();
-            count += 1;
-        }
-    }
-    count
-}
-
-/// Given an RLP-encoded account value, return a copy with field 2 (storageRoot)
-/// replaced by the given 32-byte value.
-fn zero_storage_root_in_rlp(value: &[u8], replacement: &[u8; 32]) -> Vec<u8> {
-    let list: Vec<Vec<u8>> = rlp::Rlp::new(value).as_list().unwrap();
-    assert!(list.len() >= 3);
-
-    let mut rlp = rlp::RlpStream::new_list(list.len());
-    for (i, item) in list.iter().enumerate() {
-        if i == 2 {
-            rlp.append(&replacement.as_slice());
-        } else {
-            rlp.append(item);
-        }
-    }
-    rlp.out().to_vec()
 }
 
 /// Simulate a pre-fix database: after committing normally (which computes the

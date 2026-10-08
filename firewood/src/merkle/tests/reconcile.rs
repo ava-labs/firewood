@@ -135,7 +135,7 @@ fn test_reconcile_branch_proof_node_account_storage_root_relaxation(
     proof_balance: u64,
     expect_reconciled: bool,
 ) {
-    use crate::merkle::tests::ethhash::{empty_code_hash, rlp_encode_account};
+    use crate::merkle::tests::accounts::{empty_code_hash, rlp_encode_account};
 
     // 32-byte account key == 64 nibbles == ACCOUNT_DEPTH_NIBBLES.
     let account_key = [0x11u8; 32];
