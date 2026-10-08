@@ -181,9 +181,9 @@ pub mod api;
 /// A batch operation and associated types
 mod batch_op;
 
-pub use firewood_storage::ETH_EMPTY_TRIE_HASH;
 /// Expose the storage logger
 pub use firewood_storage::logger;
+pub use firewood_storage::{EthHash, HashMode};
 
 /// Hashing mode used for trie nodes.
 pub use firewood_storage::NodeHashAlgorithm;

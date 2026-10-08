@@ -42,5 +42,3 @@
 
 pub(crate) mod ethhash;
 pub(crate) mod merkledb;
-
-pub use ethhash::ETH_EMPTY_TRIE_HASH;

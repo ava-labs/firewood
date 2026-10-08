@@ -54,7 +54,7 @@ fn display_hex_bytes(bytes: &[u8], f: &mut fmt::Formatter<'_>) -> fmt::Result {
 mod tests {
     use super::*;
 
-    use firewood::{ETH_EMPTY_TRIE_HASH, api::HashKey};
+    use firewood::{EthHash, HashMode, api::HashKey};
     use test_case::test_case;
 
     #[test_case(&[], "", None; "empty slice")]
@@ -64,8 +64,8 @@ mod tests {
     #[test_case(b"abc", "616263", Some(16); "short slice with long precision")]
     #[test_case(HashKey::empty().as_ref(), "0000000000000000000000000000000000000000000000000000000000000000", None; "empty trie hash")]
     #[test_case(HashKey::empty().as_ref(), "00000000000000000000000000000000... (16 remaining bytes)", Some(16); "empty trie hash with precision")]
-    #[test_case(&ETH_EMPTY_TRIE_HASH, "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421", None; "empty rlp hash")]
-    #[test_case(&ETH_EMPTY_TRIE_HASH, "56e81f171bcc55a6ff8345e692c0f86e... (16 remaining bytes)", Some(16); "empty rlp hash with precision")]
+    #[test_case(<EthHash as HashMode>::default_root_hash().as_deref().expect("Ethereum has an empty trie root hash"), "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421", None; "empty rlp hash")]
+    #[test_case(<EthHash as HashMode>::default_root_hash().as_deref().expect("Ethereum has an empty trie root hash"), "56e81f171bcc55a6ff8345e692c0f86e... (16 remaining bytes)", Some(16); "empty rlp hash with precision")]
     fn test_display_hex(input: &[u8], expected: &str, precision: Option<usize>) {
         let input = DisplayHex(input);
         if let Some(p) = precision {
