@@ -14,6 +14,10 @@
 
 use firewood_storage::{Children, PathBuf, PathComponent, TriePathAsPackedBytes, prefix_successor};
 
+use super::lex_successor;
+use super::range::KeyRange;
+use crate::api::BatchOp;
+
 /// A contiguous span of key space: all keys carrying a nibble prefix.
 ///
 /// Nibble prefixes may be odd-length (a branch child edge adds one nibble to
@@ -279,6 +283,90 @@ impl IntoIterator for DeletePrefixes {
             }
         }
     }
+}
+
+/// The key ranges a sync client still has to fetch after a walk, as inclusive
+/// `[start, end]` pairs sorted ascending and ready to be handed back as range
+/// requests. Built from the fetch labels — [`Hole::Missing`], [`Hole::Stale`],
+/// and [`Hole::PointStale`] — with adjacent labels coalesced into one range,
+/// so a run of holes costs one request.
+///
+/// A range's `end` is the exclusive upper bound of its last label
+/// ([`KeySpan::as_key_range`], or the byte successor of a point), used as an
+/// inclusive bound. That over-covers by exactly one key, the first key of
+/// whatever comes next, and a prefix span has no exact inclusive bound to
+/// offer instead: its largest key is unbounded in length. The extra key is
+/// harmless. A reply over the range carries the target's verified content
+/// for it, so merging rewrites an equal key equal and deletes a key the
+/// target does not hold, which is what the neighbouring label called for
+/// anyway. An `end` of `None` is unbounded above.
+///
+/// Ranges are not confined to the request that produced the proof: the
+/// boundary proofs speak for the whole key space, so a range may lie below
+/// the request's start key or above its end key.
+///
+/// Labels that are not fetch labels are local remedies and do not appear;
+/// applying a verified proof through the database
+/// ([`Db::apply_verified_range_proof`](crate::db::Db::apply_verified_range_proof))
+/// writes them, and [`remedy_ops`] gives them to a caller that walks a view
+/// itself.
+#[must_use]
+pub fn fetch_ranges(holes: &[Hole]) -> Vec<KeyRange> {
+    let mut intervals: Vec<KeyRange> = holes
+        .iter()
+        .filter_map(|hole| match hole {
+            Hole::Missing(span) | Hole::Stale(span) => Some(span.as_key_range()),
+            Hole::PointStale { key } => Some((key.clone(), Some(lex_successor(key)))),
+            Hole::Surplus(_)
+            | Hole::Synced(_)
+            | Hole::PointFix { .. }
+            | Hole::PointSurplus { .. } => None,
+        })
+        .collect();
+    intervals.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut out: Vec<KeyRange> = Vec::with_capacity(intervals.len());
+    for (start, end) in intervals {
+        match out.last_mut() {
+            // Adjacent: the previous range ends exactly where this one starts.
+            Some((_, last_end)) if last_end.as_deref() == Some(&*start) => {
+                *last_end = end;
+            }
+            _ => out.push((start, end)),
+        }
+    }
+    out
+}
+
+/// A write operation with owned key and value, as [`remedy_ops`] builds them.
+pub type OwnedBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
+
+/// The write operations that apply every local remedy among `holes`, in label
+/// order: [`KeySpan::delete_prefixes`] for a [`Hole::Surplus`] span, a delete
+/// for a [`Hole::PointSurplus`], and a put of the carried value for a
+/// [`Hole::PointFix`]. Fetch labels need content the caller does not have
+/// and are left to [`fetch_ranges`]; [`Hole::Synced`] needs nothing.
+#[must_use]
+pub fn remedy_ops(holes: &[Hole]) -> Vec<OwnedBatchOp> {
+    let mut ops = Vec::new();
+    for hole in holes {
+        match hole {
+            Hole::Surplus(span) => {
+                ops.extend(
+                    span.delete_prefixes()
+                        .into_iter()
+                        .map(|prefix| BatchOp::DeleteRange { prefix }),
+                );
+            }
+            Hole::PointSurplus { key } => ops.push(BatchOp::Delete { key: key.clone() }),
+            Hole::PointFix { key, value } => ops.push(BatchOp::Put {
+                key: key.clone(),
+                value: value.clone(),
+            }),
+            Hole::Missing(_) | Hole::Stale(_) | Hole::Synced(_) | Hole::PointStale { .. } => {}
+        }
+    }
+    ops
 }
 
 #[cfg(test)]
@@ -554,5 +642,104 @@ mod tests {
         assert_eq!(interval.points, vec![Box::<[u8]>::from([])]);
         let interval = open_interval(Some(&[]), &components(&[0xA, 0x7]));
         assert!(interval.points.is_empty());
+    }
+
+    fn span_of(nibbles: &[u8]) -> KeySpan {
+        KeySpan::new(
+            nibbles
+                .iter()
+                .map(|&n| PathComponent::try_new(n).expect("nibble"))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn fetch_ranges_coalesces_adjacent_labels() {
+        // `[A,7]` and `[A,8]` are adjacent spans and coalesce into one range
+        // ending at `0xA9`, `[A,8]`'s own exclusive bound. The `PointFix` at
+        // `0xA9` is a remedy label, not a fetch label, so it is dropped
+        // outright regardless of adjacency. `[C]` is unrelated and separate.
+        let holes = vec![
+            Hole::Missing(span_of(&[0xA, 0x7])),
+            Hole::Stale(span_of(&[0xA, 0x8])),
+            Hole::Synced(span_of(&[0xB])),
+            Hole::Missing(span_of(&[0xC])),
+            Hole::PointFix {
+                key: Box::from(&[0xA9][..]),
+                value: Box::from(&b"v"[..]),
+            },
+        ];
+        assert_eq!(
+            fetch_ranges(&holes),
+            vec![
+                (Box::from(&[0xA7][..]), Some(Box::from(&[0xA9][..]))),
+                (Box::from(&[0xC0][..]), Some(Box::from(&[0xD0][..]))),
+            ]
+        );
+    }
+
+    #[test]
+    fn fetch_ranges_joins_points_and_spans() {
+        // A stale point at `0xA7` whose byte successor `0xA700` is the lower
+        // bound of the odd span `[A,7,0]`; then `[A,7,1]` continues it.
+        let holes = vec![
+            Hole::PointStale {
+                key: Box::from(&[0xA7][..]),
+            },
+            Hole::Missing(span_of(&[0xA, 0x7, 0x0])),
+            Hole::Stale(span_of(&[0xA, 0x7, 0x1])),
+        ];
+        assert_eq!(
+            fetch_ranges(&holes),
+            vec![(Box::from(&[0xA7][..]), Some(Box::from(&[0xA7, 0x20][..])))]
+        );
+    }
+
+    #[test]
+    fn fetch_ranges_unbounded_tail_and_sorting() {
+        // Out-of-order input is sorted; an all-`F` span has no end.
+        let holes = vec![
+            Hole::Missing(span_of(&[0xF])),
+            Hole::Missing(span_of(&[0x1])),
+        ];
+        assert_eq!(
+            fetch_ranges(&holes),
+            vec![
+                (Box::from(&[0x10][..]), Some(Box::from(&[0x20][..]))),
+                (Box::from(&[0xF0][..]), None),
+            ]
+        );
+        assert!(fetch_ranges(&[Hole::Synced(span_of(&[0x3]))]).is_empty());
+    }
+
+    #[test]
+    fn remedy_ops_cover_the_local_labels_only() {
+        let holes = vec![
+            Hole::Surplus(span_of(&[0xA, 0x7, 0x1])),
+            Hole::PointSurplus {
+                key: Box::from(&[0xB0][..]),
+            },
+            Hole::PointFix {
+                key: Box::from(&[0xC0][..]),
+                value: Box::from(&b"v"[..]),
+            },
+            Hole::Missing(span_of(&[0xD])),
+            Hole::PointStale {
+                key: Box::from(&[0xE0][..]),
+            },
+            Hole::Synced(span_of(&[0xF])),
+        ];
+        let ops = remedy_ops(&holes);
+        // Sixteen prefixes for the odd span, then the delete and the put.
+        assert_eq!(ops.len(), 18);
+        assert!(
+            ops.iter()
+                .take(16)
+                .all(|op| matches!(op, BatchOp::DeleteRange { prefix } if prefix.len() == 2))
+        );
+        assert!(matches!(&ops[16], BatchOp::Delete { key } if **key == [0xB0][..]));
+        assert!(
+            matches!(&ops[17], BatchOp::Put { key, value } if **key == [0xC0][..] && &**value == b"v")
+        );
     }
 }

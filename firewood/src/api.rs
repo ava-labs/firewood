@@ -742,12 +742,20 @@ pub trait DynDb: Debug + Send + Sync + 'static {
     ) -> Result<Box<dyn DynProposal<'_> + '_>, Error>;
 
     /// Object-safe version of
+    /// [`Db::apply_verified_range_proof`](crate::db::Db::apply_verified_range_proof).
+    #[expect(clippy::missing_errors_doc)]
+    fn apply_verified_range_proof(
+        &self,
+        verified: &crate::proofs::VerifiedRangeProof,
+    ) -> Result<(Box<dyn DynProposal<'_> + '_>, Vec<crate::proofs::Hole>), Error>;
+
+    /// Object-safe version of
     /// [`Db::apply_verified_change_proof`](crate::db::Db::apply_verified_change_proof).
     #[expect(clippy::missing_errors_doc)]
     fn apply_verified_change_proof(
         &self,
         verified: &crate::proofs::VerifiedChangeProof,
-    ) -> Result<Box<dyn DynProposal<'_> + '_>, Error>;
+    ) -> Result<(Box<dyn DynProposal<'_> + '_>, Vec<crate::proofs::Hole>), Error>;
 
     /// Object-safe version of
     /// [`Db::merge_key_value_range`](crate::db::Db::merge_key_value_range),
@@ -786,6 +794,10 @@ pub trait DynDb: Debug + Send + Sync + 'static {
     /// revision.
     #[expect(clippy::missing_errors_doc)]
     fn committed_view(&self, hash: TrieHash) -> Result<Option<crate::db::CommittedView>, Error>;
+
+    /// Object-safe version of
+    /// [`Db::current_committed_view`](crate::db::Db::current_committed_view).
+    fn current_committed_view(&self) -> crate::db::CommittedView;
 
     /// Object-safe version of [`Db::close`](crate::db::Db::close), consuming
     /// the box instead of `self` by value.

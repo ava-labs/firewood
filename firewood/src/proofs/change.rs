@@ -191,9 +191,9 @@ where
 // ── Change proof verification ──────────────────────────────────────────────
 
 /// Verification context captured after structural validation of a change proof.
-/// Stored so that downstream logic (root hash verification,
-/// [`find_next_key_after_change_proof`]) can reference the original
-/// verification parameters without re-validating.
+/// Stored so that downstream logic (root hash verification, the post-merge
+/// hole walk) can reference the original verification parameters without
+/// re-validating.
 ///
 /// Outside of test builds, constructible only by
 /// [`verify_change_proof_structure`]; fields are private so a context cannot be
@@ -242,10 +242,8 @@ impl ChangeProofVerificationContext {
     /// narrower than the range requested.
     ///
     /// The root hash verifier uses this as the right boundary for
-    /// `compute_outside_children` and reconciliation. A caller continuing past
-    /// this proof must resume strictly above the last operation's key, because
-    /// both bounds of a request are inclusive —
-    /// [`find_next_key_after_change_proof`] computes that resume point.
+    /// `compute_outside_children` and reconciliation, and the post-merge hole
+    /// walk as the key its right boundary walk follows.
     #[must_use]
     pub fn right_edge_key(&self) -> Option<&[u8]> {
         self.right_edge_key.as_deref()
@@ -333,67 +331,6 @@ impl VerifiedChangeProof {
 }
 
 type FrozenBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
-
-/// Determine the next key range to fetch after this change proof.
-///
-/// `end_key` must be the upper bound of the request that produced `proof`.
-///
-/// Returns `None` when nothing further remains to fetch; otherwise returns a
-/// continuation whose start is the smallest key strictly above the last key this
-/// proof covered, paired with the same `end_key`.
-///
-/// The continuation starts strictly above the last covered key because both
-/// bounds of a proof request are inclusive. A continuation that started at that
-/// key would cover it again, report the same last key, and never advance.
-///
-/// # Trusting `None`
-///
-/// `None` means the requested range holds no further changes, and that is only
-/// true of a proof whose root hash has been verified — by
-/// [`Db::verify_change_proof`], [`Db::apply_verified_change_proof`], or
-/// [`verify_change_proof_root_hash`]. Structural
-/// validation alone accepts a proof with no operations for a range that does have
-/// changes, because every check that would notice is expressed against the
-/// operation list, which an empty list satisfies.
-///
-/// [`Db::verify_change_proof`]: crate::db::Db::verify_change_proof
-/// [`Db::apply_verified_change_proof`]: crate::db::Db::apply_verified_change_proof
-/// [`verify_change_proof_root_hash`]: crate::merkle::verify_change_proof_root_hash
-///
-/// # Errors
-///
-/// Returns [`ProofError::EndKeyLessThanLastKey`] when `last_op.key` is
-/// strictly greater than `end_key` — this indicates the proof was
-/// generated against a different `end_key` than the one supplied here.
-pub fn find_next_key_after_change_proof(
-    proof: &FrozenChangeProof,
-    end_key: Option<&[u8]>,
-) -> Result<Option<super::range::KeyRange>, api::Error> {
-    let Some(last_op) = proof.batch_ops().last() else {
-        // The proof reports no changes in the requested range, so nothing in
-        // that range remains to fetch. Whether the caller wants keys beyond
-        // `end_key` is its own bookkeeping, not something this proof can say.
-        return Ok(None);
-    };
-
-    if proof.end_proof().is_empty() {
-        return Ok(None);
-    }
-
-    if let Some(end_key) = end_key {
-        if **last_op.key() > *end_key {
-            return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
-        }
-        if **last_op.key() == *end_key {
-            return Ok(None);
-        }
-    }
-
-    Ok(Some((
-        super::lex_successor(last_op.key()),
-        end_key.map(Box::from),
-    )))
-}
 
 /// Verify a boundary proof against `end_root` and optionally check that the
 /// proof's inclusion/exclusion result is consistent with `boundary_op`.
