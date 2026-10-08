@@ -95,7 +95,7 @@ Firewood Rust FFI bindings:
 ```bash
 cd ffi                                                  # Go to the FFI crate root
 cargo clean                                             # Remove any existing bindings
-cargo build --profile maxperf --features ethhash,logger # Generate bindings
+cargo build --profile maxperf --features logger         # Generate bindings
 ```
 
 To then have Golang utilize these new bindings, from that same directory:
