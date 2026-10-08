@@ -119,7 +119,7 @@ use std::io::{Error, Read};
 /// Hash of an empty Ethereum trie: `keccak256(0x80)`.
 ///
 /// Hex: `56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421`.
-pub const ETH_EMPTY_HASH: [u8; 32] = [
+pub const ETH_EMPTY_TRIE_HASH: [u8; 32] = [
     0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6, 0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0, 0xf8, 0x6e,
     0x5b, 0x48, 0xe0, 0x1b, 0x99, 0x6c, 0xad, 0xc0, 0x01, 0x62, 0x2f, 0xb5, 0xe3, 0x63, 0xb4, 0x21,
 ];
@@ -135,7 +135,7 @@ impl HashMode for EthHash {
 
     /// Returns the hash of an empty Ethereum trie: `keccak256(0x80)`.
     fn default_root_hash() -> Option<TrieHash> {
-        Some(ETH_EMPTY_HASH.into())
+        Some(ETH_EMPTY_TRIE_HASH.into())
     }
 
     /// Returns true if the nibble length is 64 (account key) or 128 (storage-slot key).

@@ -61,7 +61,7 @@ pub mod registry;
 pub use checker::{CheckOpt, CheckerReport, DBStats, FreeListsStats, TrieStats};
 pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use hashedshunt::HashableShunt;
-pub use hashers::ETH_EMPTY_HASH;
+pub use hashers::ETH_EMPTY_TRIE_HASH;
 pub use hashmode::{DefaultHashMode, EthHash, HashMode, MerkleDbHash};
 pub use hashtype::HashType;
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
