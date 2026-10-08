@@ -524,6 +524,24 @@ fn remove_prefix_all() {
     assert_eq!(got, 256);
 }
 
+/// The count `remove_prefix` returns includes a value stored at the prefix
+/// itself exactly once, whether the prefix lands on one valued branch or on
+/// nested ones.
+#[test_case(&["ab", "abc", "abd"], "ab", 3 ; "value at the prefix")]
+#[test_case(&["a", "ab", "abc"], "a", 3 ; "nested valued branches")]
+fn remove_prefix_counts_a_value_at_the_prefix_once(keys: &[&str], prefix: &str, expected: usize) {
+    let mut merkle = create_in_memory_merkle();
+    for key in keys {
+        merkle
+            .insert(key.as_bytes(), Box::from(b"value".as_slice()))
+            .unwrap();
+    }
+    assert_eq!(merkle.remove_prefix(prefix.as_bytes()).unwrap(), expected);
+    for key in keys {
+        assert!(merkle.get_value(key.as_bytes()).unwrap().is_none());
+    }
+}
+
 #[test]
 fn remove_prefix_partial() {
     let mut merkle = create_in_memory_merkle();
@@ -1066,7 +1084,9 @@ fn test_in_memory_ops_far_beyond_the_bound_survive_a_small_stack() {
         assert!(merkle.get_value(&[0x00]).unwrap().is_some());
         assert!(merkle.get_value(&deepest).unwrap().is_some());
         assert!(merkle.remove(&deepest).unwrap().is_some());
-        merkle.remove_prefix(&[0x00]).unwrap();
+        // Every key but `[0x10]` starts with a zero byte, and the deepest is
+        // already gone.
+        assert_eq!(merkle.remove_prefix(&[0x00]).unwrap(), keys.len() - 2);
         assert!(merkle.get_value(&[0x00]).unwrap().is_none());
         assert!(merkle.get_value(&[0x10]).unwrap().is_some());
     });
