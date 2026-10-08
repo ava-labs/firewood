@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/ava-labs/firewood-go/ffi"
-	firewood "github.com/ava-labs/firewood-go/ffi"
 
 	"github.com/ava-labs/avalanchego/database"
 	"github.com/ava-labs/avalanchego/database/memdb"
@@ -65,7 +64,7 @@ func oneSecCtx(tb testing.TB) context.Context {
 	return ctx
 }
 
-func newTestFirewoodDatabase(t *testing.T) *firewood.Database {
+func newTestFirewoodDatabase(t *testing.T) *ffi.Database {
 	t.Helper()
 	r := require.New(t)
 
@@ -87,8 +86,8 @@ func newTestFirewoodDatabase(t *testing.T) *firewood.Database {
 	return db
 }
 
-func newFirewoodDatabase(dbFile string) (*firewood.Database, error) {
-	f, err := firewood.New(dbFile, firewood.MerkleDBNodeHashing)
+func newFirewoodDatabase(dbFile string) (*ffi.Database, error) {
+	f, err := ffi.New(dbFile, ffi.MerkleDBNodeHashing)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new database at filepath %q: %w", dbFile, err)
 	}
@@ -102,7 +101,7 @@ type tree struct {
 	id       int
 	nextID   int
 	merkleDB merkledb.MerkleDB
-	fwdDB    *firewood.Database
+	fwdDB    *ffi.Database
 
 	children []*proposal
 
@@ -114,7 +113,7 @@ type proposal struct {
 	parentID   int
 	id         int
 	merkleView merkledb.View
-	fwdView    *firewood.Proposal
+	fwdView    *ffi.Proposal
 
 	children []*proposal
 }
@@ -170,7 +169,7 @@ func (tr *tree) dbUpdate() {
 
 	// Insert the key-value pair into both databases.
 	tr.require.NoError(tr.merkleDB.Put(key, val))
-	_, err := tr.fwdDB.Update([]firewood.BatchOp{firewood.Put(key, val)})
+	_, err := tr.fwdDB.Update([]ffi.BatchOp{ffi.Put(key, val)})
 	tr.require.NoError(err)
 
 	tr.dropAllProposals()
@@ -222,9 +221,9 @@ func (tr *tree) dbBatch() {
 	}
 	tr.require.NoError(batch.Write())
 
-	fwdBatch := make([]firewood.BatchOp, 0, len(keys))
+	fwdBatch := make([]ffi.BatchOp, 0, len(keys))
 	for i := range len(keys) {
-		fwdBatch = append(fwdBatch, firewood.Put(keys[i], vals[i]))
+		fwdBatch = append(fwdBatch, ffi.Put(keys[i], vals[i]))
 	}
 	_, err := tr.fwdDB.Update(fwdBatch)
 	tr.require.NoError(err)
@@ -278,9 +277,9 @@ func (tr *tree) createProposalOnProposal() {
 	fwdPr := pr.fwdView
 	merkleView := pr.merkleView
 
-	fwdBatch := make([]firewood.BatchOp, 0, len(keys))
+	fwdBatch := make([]ffi.BatchOp, 0, len(keys))
 	for i := range len(keys) {
-		fwdBatch = append(fwdBatch, firewood.Put(keys[i], vals[i]))
+		fwdBatch = append(fwdBatch, ffi.Put(keys[i], vals[i]))
 	}
 	fwdChildPr, err := fwdPr.Propose(fwdBatch)
 	tr.require.NoError(err)
@@ -314,9 +313,9 @@ func (tr *tree) createProposalOnProposal() {
 func (tr *tree) createProposalOnDB() {
 	batchSize := tr.rand.Intn(maxBatchSize) + 1 // ensure at least one key-value pair
 	keys, vals := tr.createRandomBatch(batchSize)
-	fwdBatch := make([]firewood.BatchOp, 0, len(keys))
+	fwdBatch := make([]ffi.BatchOp, 0, len(keys))
 	for i := range len(keys) {
-		fwdBatch = append(fwdBatch, firewood.Put(keys[i], vals[i]))
+		fwdBatch = append(fwdBatch, ffi.Put(keys[i], vals[i]))
 	}
 	fwdPr, err := tr.fwdDB.Propose(fwdBatch)
 	tr.require.NoError(err)
