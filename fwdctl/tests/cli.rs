@@ -666,7 +666,8 @@ fn fwdctl_check_empty_db() {
 
 #[test]
 fn test_slow_fwdctl_check_db_with_data() {
-    use rand::{RngExt, distr::Alphanumeric};
+    use rand::RngExt;
+    use rand::distr::Alphanumeric;
 
     for hash_mode in ["merkle-db", "ethereum"] {
         with_tmpdir(|db_path| {

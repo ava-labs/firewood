@@ -4,14 +4,18 @@
 use std::error::Error;
 use std::sync::OnceLock;
 
-use firewood_metrics::{HistogramConfig, HistogramMetricConfig};
-use firewood_metrics::{MetricsContext, firewood_histogram};
-use metrics_exporter_prometheus::{
-    Matcher, NativeHistogramConfig, PrometheusBuilder, PrometheusHandle,
-};
+use firewood_metrics::HistogramConfig;
+use firewood_metrics::HistogramMetricConfig;
+use firewood_metrics::MetricsContext;
+use firewood_metrics::firewood_histogram;
+use metrics_exporter_prometheus::Matcher;
+use metrics_exporter_prometheus::NativeHistogramConfig;
+use metrics_exporter_prometheus::PrometheusBuilder;
+use metrics_exporter_prometheus::PrometheusHandle;
 
+use crate::OwnedRenderedMetrics;
+use crate::jemalloc_metrics;
 use crate::rendered_metrics::MapIntoCollection;
-use crate::{OwnedRenderedMetrics, jemalloc_metrics};
 
 static RECORDER: OnceLock<PrometheusHandle> = OnceLock::new();
 

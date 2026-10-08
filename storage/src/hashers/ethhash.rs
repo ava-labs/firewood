@@ -103,20 +103,33 @@
 //!   beyond the standard 4, so [`replace_list_field`]
 //!   only touches index 2 and leaves any trailing fields intact.
 
-use std::io::{Error, Read};
+use std::io::Error;
+use std::io::Read;
 
-use sha3::{Digest, Keccak256};
+use sha3::Digest;
+use sha3::Keccak256;
 use smallvec::SmallVec;
 
+use crate::BranchNode;
+use crate::EthHash;
+use crate::HashMode;
+use crate::HashType;
+use crate::Hashable;
+use crate::NodeHashAlgorithm;
+use crate::Path;
+use crate::TrieHash;
+use crate::TriePath;
+use crate::ValueDigest;
 use crate::eth_encoding::nibbles_to_eth_compact;
+use crate::hashednode::HasUpdate;
+use crate::logger::trace;
 use crate::logger::warn;
 use crate::node::ExtendableBytes;
 use crate::node::branch::Serializable;
-use crate::rlp::{EMPTY_TRIE_ROOT, RlpItem, encode_list, replace_list_field};
-use crate::{
-    BranchNode, EthHash, HashMode, HashType, Hashable, NodeHashAlgorithm, Path, TrieHash, TriePath,
-    ValueDigest, hashednode::HasUpdate, logger::trace,
-};
+use crate::rlp::EMPTY_TRIE_ROOT;
+use crate::rlp::RlpItem;
+use crate::rlp::encode_list;
+use crate::rlp::replace_list_field;
 
 impl HasUpdate for Keccak256 {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {

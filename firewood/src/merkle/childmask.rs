@@ -1,7 +1,8 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood_storage::{PathComponent, U4};
+use firewood_storage::PathComponent;
+use firewood_storage::U4;
 
 /// Compact u16 bitmap for tracking which of a branch node's 16 children
 /// are present or "outside" the proven range.

@@ -4,15 +4,23 @@
 use std::convert::Into;
 use std::num::NonZeroUsize;
 
-use firewood::{
-    ProofError,
-    api::{self, FrozenChangeProof},
-};
+use firewood::ProofError;
+use firewood::api;
+use firewood::api::FrozenChangeProof;
 
-use crate::{
-    BorrowedBytes, ChangeProofResult, CodeIteratorHandle, CodeIteratorResult, DatabaseHandle,
-    HashKey, HashResult, KeyRange, Maybe, NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult,
-};
+use crate::BorrowedBytes;
+use crate::ChangeProofResult;
+use crate::CodeIteratorHandle;
+use crate::CodeIteratorResult;
+use crate::DatabaseHandle;
+use crate::HashKey;
+use crate::HashResult;
+use crate::KeyRange;
+use crate::Maybe;
+use crate::NextKeyRangeResult;
+use crate::OwnedBytes;
+use crate::ValueResult;
+use crate::VoidResult;
 
 /// Arguments for creating a change proof.
 #[derive(Debug)]
