@@ -27,6 +27,7 @@
       "**/cbindgen.toml",
       "**/*.snap",
       "rust-toolchain.toml",
+      "rustfmt.toml",
     ],
     "license": "./.github/license-header.txt"
   },
@@ -54,6 +55,7 @@
       "infra/**",
       "**/*.snap",
       "rust-toolchain.toml",
+      "rustfmt.toml",
     ],
   }
 ]
