@@ -209,10 +209,10 @@ These histograms are recorded in Go and are independent of the Rust recorder.
 They measure the full round-trip through the CGo boundary including any byte
 copies and pointer conversions.
 
-| Metric                                         | Type      | Labels       | Description                                         |
-| ---------------------------------------------- | --------- | ------------ | --------------------------------------------------- |
-| `firewood_go_proof_marshal_duration_seconds`   | histogram | `proof_type` | `Marshal` duration; `proof_type=range\|change`      |
-| `firewood_go_proof_unmarshal_duration_seconds` | histogram | `proof_type` | `UnmarshalXXX` duration; `proof_type=range\|change` |
+| Metric                                         | Type      | Labels                 | Description                                                                                                             |
+| ---------------------------------------------- | --------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `firewood_go_proof_marshal_duration_seconds`   | histogram | `proof_type`           | `Marshal` duration; `proof_type=range\|change`. No `db_tag`: marshalling makes no database call and works after `Close` |
+| `firewood_go_proof_unmarshal_duration_seconds` | histogram | `proof_type`, `db_tag` | `(*Database).Unmarshal*Proof` duration; `proof_type=range\|change`; `db_tag` is the parsing database's tag              |
 
 Buckets: `5µs, 25µs, 100µs, 500µs, 1ms, 5ms, 25ms, 100ms`
 

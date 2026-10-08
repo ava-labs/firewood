@@ -71,19 +71,20 @@ func FuzzRangeProofCreation(f *testing.F) {
 		require.NoErrorf(t, err, "%T.RangeProof()", db)
 		require.NotNil(t, proof)
 
-		err = proof.Verify(root, nothing{}, nothing{}, uint32(numAccounts))
+		verified, err := proof.Verify(root, nothing{}, nothing{}, uint32(numAccounts))
 		require.NoErrorf(t, err, "%T.Verify()", proof)
 
-		seen := make(map[common.Hash]struct{})
-		for h, err := range proof.CodeHashes() {
-			require.NoErrorf(t, err, "%T.CodeHashes()", proof)
+		hashes, err := verified.CodeHashes()
+		require.NoErrorf(t, err, "%T.CodeHashes()", verified)
 
+		seen := make(map[common.Hash]struct{})
+		for _, h := range hashes {
 			ethHash := common.Hash(h)
 			require.NotEqual(t, types.EmptyCodeHash, ethHash)
 
 			// must be one we expected
 			if _, ok := expected[ethHash]; !ok {
-				t.Fatalf("%T.CodeHashes() returned unexpected code hash %s", proof, ethHash.Hex())
+				t.Fatalf("%T.CodeHashes() returned unexpected code hash %s", verified, ethHash.Hex())
 			}
 
 			seen[ethHash] = struct{}{}
@@ -102,6 +103,7 @@ func FuzzRangeProofCreation(f *testing.F) {
 				}
 			}
 		}
-		require.Len(t, expected, len(seen), "%T.CodeHashes() returned wrong number of unique code hashes", proof)
+		require.Len(t, expected, len(seen), "%T.CodeHashes() returned wrong number of unique code hashes", verified)
+		require.NoError(t, verified.Drop())
 	})
 }

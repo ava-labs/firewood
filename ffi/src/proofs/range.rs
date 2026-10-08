@@ -2,6 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
 use firewood::{
     KeyRange, ProofError, RangeProofVerificationContext,
@@ -9,9 +10,10 @@ use firewood::{
 };
 use firewood_metrics::{MetricsContext, firewood_counter};
 
+use super::proposal_state::ProposalState;
 use crate::{
     BorrowedBytes, CodeIteratorHandle, CodeIteratorResult, DatabaseHandle, HashResult, Maybe,
-    NextKeyRangeResult, RangeProofResult, ValueResult, VoidResult,
+    NextKeyRangesResult, RangeProofResult, ValueResult, VerifiedRangeProofResult, VoidResult,
 };
 
 /// Arguments for creating a range proof.
@@ -23,7 +25,7 @@ pub struct CreateRangeProofArgs<'a> {
     /// The start key of the range to prove. If `None`, the range starts from the
     /// beginning of the keyspace.
     ///
-    /// The start key must be less than the end key if both are provided.
+    /// The start key must not be greater than the end key if both are provided.
     pub start_key: Maybe<BorrowedBytes<'a>>,
     /// The end key of the range to prove. If `None`, the range ends at the end
     /// of the keyspace or until `max_length` items have been included in
@@ -41,11 +43,7 @@ pub struct CreateRangeProofArgs<'a> {
 /// Arguments for verifying a range proof.
 #[derive(Debug)]
 #[repr(C)]
-pub struct VerifyRangeProofArgs<'a, 'db> {
-    /// The range proof to verify. If null, the function will return
-    /// [`VoidResult::NullHandlePointer`]. We need a mutable reference to
-    /// update the validation context.
-    pub proof: Option<&'a mut RangeProofContext<'db>>,
+pub struct VerifyRangeProofArgs<'a> {
     /// The root hash to verify the proof against. This must match the calculated
     /// hash of the root of the proof.
     pub root: crate::HashKey,
@@ -69,220 +67,148 @@ pub struct VerifyRangeProofArgs<'a, 'db> {
 }
 
 /// FFI context for a parsed or generated range proof.
+///
+/// Holds no database reference and borrows nothing, so it is portable:
+/// serialize it with [`fwd_range_proof_to_bytes`] or check it against a
+/// database with [`fwd_db_verify_range_proof`], which produces a
+/// [`VerifiedRangeProofContext`] and leaves this context usable.
 #[derive(Debug)]
-pub struct RangeProofContext<'db> {
-    proof: FrozenRangeProof,
-    verification: Option<RangeProofVerificationContext>,
-    proposal_state: Option<ProposalState<'db>>,
+pub struct RangeProofContext {
+    proof: Arc<FrozenRangeProof>,
 }
 
-#[derive(Debug)]
-enum ProposalState<'db> {
-    Proposed(crate::ProposalHandle<'db>),
-    Committed(Option<HashKey>),
-}
-
-impl From<FrozenRangeProof> for RangeProofContext<'_> {
+impl From<FrozenRangeProof> for RangeProofContext {
     fn from(proof: FrozenRangeProof) -> Self {
         Self {
-            proof,
-            verification: None,
-            proposal_state: None,
+            proof: Arc::new(proof),
         }
     }
 }
 
-impl<'db> RangeProofContext<'db> {
-    /// Verify the range proof against the given constraints.
+impl RangeProofContext {
+    /// Verify the proof against `db`'s hash mode and the given constraints,
+    /// then prepare the proposal that applies it to `db`'s latest revision.
     ///
-    /// If the proof has already been verified with the same constraints, this
-    /// is a no-op.
-    ///
-    /// If the proof has already been verified with different constraints, an
-    /// error is returned.
-    ///
-    /// Otherwise, the proof is verified and the verification context is stored.
-    ///
-    /// This does not require a database handle as it only verifies the proof
-    /// without considering the current database state. Use
-    /// [`RangeProofContext::verify_and_propose`] to prepare a proposal against
-    /// a specific database and [`RangeProofContext::verify_and_commit`] to
-    /// commit the proof to a database.
-    fn verify(
-        &mut self,
+    /// Verification runs under `db`'s hash mode; a proof whose header
+    /// advertises a different mode is rejected with
+    /// [`ProofError::HashModeMismatch`] before any hashing happens. A failed
+    /// verification builds no proposal.
+    fn verify<'db>(
+        &self,
+        db: &'db DatabaseHandle,
         root: HashKey,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
-    ) -> Result<(), api::Error> {
-        if let Some(ref ctx) = self.verification {
-            if *ctx.root() == root
-                && ctx.start_key() == start_key
-                && ctx.end_key() == end_key
-                && ctx.max_length() == max_length
-            {
-                // already verified with the same context
-                return Ok(());
-            }
-
-            return Err(api::Error::ProofError(ProofError::ValueMismatch));
-        }
-
-        debug_assert!(self.verification.is_none());
-
-        // This standalone verify path has no database handle in scope, so
-        // there is no caller-side mode to assert: verify under the proof's own
-        // self-describing mode. A cross-mode forgery is still caught by
-        // hashing because it cannot reproduce `root` under the wrong scheme.
-        self.verification = Some(firewood::verify_range_proof_structure(
+    ) -> Result<VerifiedRangeProofContext<'db>, api::Error> {
+        let verification = firewood::verify_range_proof_structure(
             &self.proof,
             root,
             start_key,
             end_key,
-            self.proof.hash_mode(),
+            db.node_hash_algorithm(),
             max_length,
-        )?);
-        Ok(())
-    }
-
-    /// Returns the inclusive upper bound of the range the proof actually
-    /// proves, which may be narrower than the requested `end_key`. `None`
-    /// means proven to the end of the keyspace.
-    ///
-    /// # Panics
-    ///
-    /// Panics unless [`Self::verify`] has succeeded first.
-    fn proven_end(&self) -> Option<&[u8]> {
-        self.verification
-            .as_ref()
-            .expect("verify() populates the verification context on success")
-            .right_edge_key()
-    }
-
-    /// Verify the range proof and prepare a proposal against the given database
-    /// without committing it.
-    ///
-    /// If the proof has already been verified, the cached validation context
-    /// allows us to skip verifying again.
-    ///
-    /// If a proposal has already been prepared or the previously prepared
-    /// proposal has been committed, this is a no-op.
-    ///
-    /// Returns an error if verification fails or if a database error occurs
-    /// while preparing the proposal.
-    fn verify_and_propose(
-        &mut self,
-        db: &'db crate::DatabaseHandle,
-        root: HashKey,
-        start_key: Option<&[u8]>,
-        end_key: Option<&[u8]>,
-        max_length: Option<NonZeroUsize>,
-    ) -> Result<(), api::Error> {
-        self.verify(root, start_key, end_key, max_length)?;
-
-        if self.proposal_state.is_some() {
-            return Ok(());
-        }
-
-        let proven_end = self.proven_end();
-        let proposal = db.merge_key_value_range(start_key, proven_end, self.proof.key_values())?;
-        self.proposal_state = Some(ProposalState::Proposed(proposal.handle));
-
-        Ok(())
-    }
-
-    /// Verify and commit the range proof to the given database.
-    ///
-    /// If the proof has already been verified, the cached validation context is
-    /// used to skip re-verifying it. Similarly, if a proposal has already been
-    /// prepared, it is committed instead of preparing a new one.
-    ///
-    /// However, if the prepared proposal is no longer valid (e.g., the
-    /// database has changed since it was prepared), the proposal is discarded
-    /// and a just-in-time proposal is created and committed.
-    ///
-    /// After committing or if the proof has already been committed, the
-    /// resulting root hash is returned. This hash may not be equal to the
-    /// target hash if the proof was not of the full range.
-    fn verify_and_commit(
-        &mut self,
-        db: &'db crate::DatabaseHandle,
-        root: HashKey,
-        start_key: Option<&[u8]>,
-        end_key: Option<&[u8]>,
-        max_length: Option<NonZeroUsize>,
-    ) -> Result<Option<HashKey>, api::Error> {
-        self.verify(root, start_key, end_key, max_length)?;
-
-        let mut allow_rebase = true;
-        let proposal_handle = match self.proposal_state.take() {
-            Some(ProposalState::Committed(hash)) => {
-                self.proposal_state = Some(ProposalState::Committed(hash.clone()));
-                return Ok(hash);
-            }
-            Some(ProposalState::Proposed(proposal)) => proposal,
-            None => {
-                allow_rebase = false;
-                let proven_end = self.proven_end();
-                db.merge_key_value_range(start_key, proven_end, self.proof.key_values())?
-                    .handle
-            }
+        )?;
+        let mut verified = VerifiedRangeProofContext {
+            db,
+            proof: Arc::clone(&self.proof),
+            verification,
+            proposal_state: ProposalState::Pending,
         };
+        verified.proposal_state = ProposalState::Proposed(verified.propose()?);
+        Ok(verified)
+    }
+}
 
-        let result = proposal_handle.commit_proposal();
-        let result = if let Err(api::Error::ParentNotLatest { .. }) = result
-            && allow_rebase
-        {
-            // proposal is stale, try rebasing and committing again
-            let proven_end = self.proven_end();
-            let proposal_handle = db
-                .merge_key_value_range(start_key, proven_end, self.proof.key_values())?
-                .handle;
-            proposal_handle.commit_proposal()
-        } else {
-            result
+/// FFI context for a range proof verified against one database.
+///
+/// Owns the proposal that applies the proof, so it borrows the database for
+/// its whole life: the Go wrapper holds a keep-alive lease for it.
+#[derive(Debug)]
+pub struct VerifiedRangeProofContext<'db> {
+    db: &'db DatabaseHandle,
+    proof: Arc<FrozenRangeProof>,
+    verification: RangeProofVerificationContext,
+    proposal_state: ProposalState<'db>,
+}
+
+impl<'db> VerifiedRangeProofContext<'db> {
+    /// Build a fresh proposal applying the proof over the proven range.
+    fn propose(&self) -> Result<crate::ProposalHandle<'db>, api::Error> {
+        Ok(self
+            .db
+            .merge_key_value_range(
+                self.verification.start_key(),
+                self.verification.right_edge_key(),
+                self.proof.key_values(),
+            )?
+            .handle)
+    }
+
+    /// Commit the proof to the database and return the resulting root hash.
+    ///
+    /// A prepared proposal is committed as-is. If the database advanced since
+    /// verification (`ParentNotLatest`), the proposal is rebuilt from the proof
+    /// and committed once more. A proposal consumed by a failed commit leaves
+    /// the state `Pending`, and the next call rebuilds it. After a successful
+    /// commit the root is cached and returned by every later call.
+    ///
+    /// The returned hash may differ from the verification target when the
+    /// proof covered less than the full keyspace.
+    fn commit(&mut self) -> Result<Option<HashKey>, api::Error> {
+        let (proposal, allow_rebuild) =
+            match std::mem::replace(&mut self.proposal_state, ProposalState::Pending) {
+                ProposalState::Committed(hash) => {
+                    self.proposal_state = ProposalState::Committed(hash.clone());
+                    return Ok(hash);
+                }
+                ProposalState::Proposed(proposal) => (proposal, true),
+                ProposalState::Pending => (self.propose()?, false),
+            };
+
+        let result = match proposal.commit_proposal() {
+            Err(api::Error::ParentNotLatest { .. }) if allow_rebuild => {
+                self.propose()?.commit_proposal()
+            }
+            result => result,
         };
 
         let hash = result?;
         firewood_counter!(MERGE_COUNT).increment(1);
-        self.proposal_state = Some(ProposalState::Committed(hash.clone()));
-
+        self.proposal_state = ProposalState::Committed(hash.clone());
         Ok(hash)
     }
 
-    /// Returns the next key range that should be fetched after processing this
-    /// range proof, or [`None`] if there are no more keys to fetch.
+    /// The key ranges still to fetch after applying this proof, sorted
+    /// ascending by start key; empty when nothing remains.
     ///
-    /// The returned key range represents `(finalKey, endKey]` where `finalKey`
-    /// is the last key known to be fully synchronized within the requested
-    /// range. `finalKey` is exclusive, meaning it has already been processed.
-    /// `endKey` is inclusive if provided when verifying the proof, i.e. the
-    /// `end_key` of [`VerifyRangeProofArgs`], which need not match the
-    /// `end_key` the proof was created with.
+    /// Each range is `[start_key, end_key]`: `start_key` is the smallest key
+    /// above the last one known to be synchronized, and `end_key` is the
+    /// inclusive bound the proof was verified with, which need not match the
+    /// bound it was created with.
     ///
-    /// The proof carries hash information about the state outside the range of
-    /// key-value pairs it includes, so `finalKey` could in principle be
-    /// tightened beyond the last key in those pairs. That is not yet
-    /// implemented (tracked in #352); today `finalKey` is simply that last key.
-    fn find_next_key(&mut self) -> Result<Option<KeyRange>, api::Error> {
-        let verification = self
-            .verification
-            .as_ref()
-            .ok_or(api::Error::ProofError(ProofError::Unverified))?;
-
-        // FFI-only optimization: if a proposal has been prepared/committed
-        // and its root already matches the verification target, the receiver
-        // is up-to-date and no further fetching is needed.
-        let root_hash = match self.proposal_state {
-            Some(ProposalState::Committed(ref hash)) => Ok(hash.clone()),
-            Some(ProposalState::Proposed(ref proposal)) => Ok(proposal.root_hash()),
-            None => Err(api::Error::ProofError(ProofError::Unverified)),
-        }?;
-        if root_hash.as_ref() == Some(verification.root()) {
-            return Ok(None);
+    /// When the receiver's root already equals the verification target —
+    /// read from the committed root, the prepared proposal, or the database's
+    /// current root — nothing remains and the list is empty.
+    ///
+    /// The proof carries hashes for the state outside its key-value pairs, so
+    /// the list could be tightened beyond the last key; it holds at most that
+    /// one range (`find_next_key_after_range_proof`, tracked by #352).
+    fn next_key_ranges(&self) -> Result<Vec<KeyRange>, api::Error> {
+        let root_hash: Option<HashKey> = match &self.proposal_state {
+            ProposalState::Committed(hash) => hash.clone(),
+            ProposalState::Proposed(proposal) => proposal.root_hash(),
+            ProposalState::Pending => self.db.current_root_hash(),
+        };
+        if root_hash.as_ref() == Some(self.verification.root()) {
+            return Ok(Vec::new());
         }
 
-        firewood::find_next_key_after_range_proof(&self.proof, verification)
+        Ok(
+            firewood::find_next_key_after_range_proof(&self.proof, &self.verification)?
+                .into_iter()
+                .collect(),
+        )
     }
 
     fn code_hash_iter(&self) -> Result<CodeIteratorHandle<'_>, api::Error> {
@@ -302,6 +228,7 @@ impl<'db> RangeProofContext<'db> {
 /// - [`RangeProofResult::NullHandlePointer`] if the caller provided a null pointer.
 /// - [`RangeProofResult::RevisionNotFound`] if the caller provided a root that was
 ///   not found in the database. The missing root hash is included in the result.
+/// - [`RangeProofResult::EmptyTrie`] if the revision has no root.
 /// - [`RangeProofResult::Ok`] containing a pointer to the `RangeProofContext` if the proof
 ///   was successfully created.
 /// - [`RangeProofResult::Err`] containing an error message if the proof could not be created.
@@ -309,10 +236,7 @@ impl<'db> RangeProofContext<'db> {
 pub extern "C" fn fwd_db_range_proof(
     db: Option<&DatabaseHandle>,
     args: CreateRangeProofArgs,
-) -> RangeProofResult<'static> {
-    // static lifetime is safe because the returned `RangeProofResult` does not
-    // retain a reference to the provided database handle.
-
+) -> RangeProofResult {
     crate::invoke_with_handle(db, |db| {
         let view = db.view(args.root.into())?;
         view.range_proof(
@@ -329,77 +253,75 @@ pub extern "C" fn fwd_db_range_proof(
     })
 }
 
-/// Verify a range proof against the given start and end keys and root hash. The
-/// proof will be updated with the validation context if the proof is valid to
-/// avoid re-verifying it during commit.
+/// Deserialize a range proof from bytes for use with `db`.
+///
+/// The database supplies the hash mode the proof must be encoded with; a
+/// proof whose header advertises another mode is rejected here rather than
+/// at verification.
 ///
 /// # Arguments
 ///
-/// - `args` - The arguments for verifying the range proof.
+/// - `db` - The database the proof will be verified against.
+/// - `bytes` - The bytes to deserialize the proof from.
 ///
 /// # Returns
 ///
-/// - [`VoidResult::NullHandlePointer`] if the caller provided a null pointer to the proof.
-/// - [`VoidResult::Ok`] if the proof was successfully verified.
-/// - [`VoidResult::Err`] containing an error message if the proof could not be verified.
-///
-/// # Thread Safety
-///
-/// It is not safe to call this function concurrently with the same proof context
-/// nor is it safe to call any other function that accesses the same proof context
-/// concurrently. The caller must ensure exclusive access to the proof context
-/// for the duration of the call.
+/// - [`RangeProofResult::NullHandlePointer`] if the caller provided a null database pointer.
+/// - [`RangeProofResult::Ok`] containing a pointer to the `RangeProofContext` if the proof
+///   was successfully parsed. This does not imply that the proof is valid, only that it is
+///   well-formed and uses `db`'s hash mode. Call [`fwd_db_verify_range_proof`] to check it.
+/// - [`RangeProofResult::Err`] containing an error message if the proof could not be parsed
+///   or its hash mode does not match `db`'s.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_range_proof_verify(args: VerifyRangeProofArgs) -> VoidResult {
-    let VerifyRangeProofArgs {
-        proof,
-        root,
-        start_key,
-        end_key,
-        max_length,
-    } = args;
-
-    crate::invoke_with_handle(proof, |ctx| {
-        let start_key = start_key.into_option();
-        let end_key = end_key.into_option();
-        ctx.verify(
-            root.into(),
-            start_key.as_deref(),
-            end_key.as_deref(),
-            NonZeroUsize::new(max_length as usize),
-        )
+pub extern "C" fn fwd_db_range_proof_from_bytes(
+    db: Option<&DatabaseHandle>,
+    bytes: BorrowedBytes<'_>,
+) -> RangeProofResult {
+    crate::invoke_with_handle(db, move |db| {
+        let proof = FrozenRangeProof::from_slice(&bytes)
+            .map_err(|err| api::Error::ProofError(ProofError::Deserialization(err)))?;
+        let expected = db.node_hash_algorithm();
+        if proof.hash_mode() != expected {
+            return Err(api::Error::ProofError(ProofError::HashModeMismatch {
+                expected,
+                found: proof.hash_mode(),
+            }));
+        }
+        Ok(proof)
     })
 }
 
-/// Verify a range proof and prepare a proposal to later commit or drop. If the
-/// proof has already been verified, the cached validation context will be used
-/// to avoid re-verifying the proof.
+/// Verify a range proof against `db` and prepare the proposal that applies it.
+///
+/// The input proof is borrowed, not consumed: it stays usable for
+/// serialization or for verifying again with other constraints.
 ///
 /// # Arguments
 ///
 /// - `db` - The database to verify the proof against.
-/// - `args` - The arguments for verifying the range proof.
+/// - `proof` - The parsed or generated proof.
+/// - `args` - The constraints to verify the proof under.
 ///
 /// # Returns
 ///
-/// - [`VoidResult::NullHandlePointer`] if the caller provided a null pointer to either
-///   the database or the proof.
-/// - [`VoidResult::Ok`] if the proof was successfully verified.
-/// - [`VoidResult::Err`] containing an error message if the proof could not be verified
+/// - [`VerifiedRangeProofResult::NullHandlePointer`] if the caller provided a null pointer
+///   to either the database or the proof.
+/// - [`VerifiedRangeProofResult::Ok`] containing a pointer to the
+///   [`VerifiedRangeProofContext`] if the proof was successfully verified.
+/// - [`VerifiedRangeProofResult::Err`] containing an error message if the proof could not be
+///   verified or the proposal could not be prepared.
 ///
 /// # Thread Safety
 ///
-/// It is not safe to call this function concurrently with the same proof context
-/// nor is it safe to call any other function that accesses the same proof context
-/// concurrently. The caller must ensure exclusive access to the proof context
-/// for the duration of the call.
+/// The proof context is read, not mutated; concurrent calls on the same proof
+/// are safe provided none of them frees it.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_db_verify_range_proof<'db>(
     db: Option<&'db DatabaseHandle>,
-    args: VerifyRangeProofArgs<'_, 'db>,
-) -> VoidResult {
+    proof: Option<&RangeProofContext>,
+    args: VerifyRangeProofArgs<'_>,
+) -> VerifiedRangeProofResult<'db> {
     let VerifyRangeProofArgs {
-        proof,
         root,
         start_key,
         end_key,
@@ -411,7 +333,7 @@ pub extern "C" fn fwd_db_verify_range_proof<'db>(
     crate::invoke_with_handle(handle, |(db, ctx)| {
         let start_key = start_key.into_option();
         let end_key = end_key.into_option();
-        ctx.verify_and_propose(
+        ctx.verify(
             db,
             root.into(),
             start_key.as_deref(),
@@ -421,141 +343,76 @@ pub extern "C" fn fwd_db_verify_range_proof<'db>(
     })
 }
 
-/// Verify and commit a range proof to the database.
+/// Commit a verified range proof to its database.
 ///
-/// If a proposal was previously prepared by a call to [`fwd_db_verify_range_proof`],
-/// it will be committed instead of re-verifying the proof. If the proof has not yet
-/// been verified, it will be verified now. If the prepared proposal is no longer
-/// valid (e.g., the database has changed since it was prepared), a new proposal
-/// will be created and committed.
-///
-/// The proof context will be updated with additional information about the committed
-/// proof to allow for optimized introspection of the committed changes.
-///
-/// # Arguments
-///
-/// - `db` - The database to commit the changes to.
-/// - `args` - The arguments for verifying the range proof.
+/// A prepared proposal is committed as-is; one made stale by a later commit
+/// is rebuilt from the proof; after success the root is cached and a second
+/// call returns it without touching the database. The context stays usable
+/// afterwards for [`fwd_verified_range_proof_next_key_ranges`] and
+/// [`fwd_verified_range_proof_code_hash_iter`].
 ///
 /// # Returns
 ///
-/// - [`HashResult::NullHandlePointer`] if the caller provided a null pointer to either
-///   the database or the proof.
-/// - [`HashResult::None`] if the proof resulted in an empty database (i.e., all keys were deleted).
-/// - [`HashResult::Some`] containing the new root hash if the proof was successfully verified
-/// - [`HashResult::Err`] containing an error message if the proof could not be verified or committed.
+/// - [`HashResult::NullHandlePointer`] if the caller provided a null pointer.
+/// - [`HashResult::None`] if the trie has no root hash (merkledb mode only;
+///   ethhash always returns a root hash, even for an empty trie).
+/// - [`HashResult::Some`] containing the new root hash.
+/// - [`HashResult::Err`] containing an error message if the commit failed.
 ///
 /// # Thread Safety
 ///
-/// It is not safe to call this function concurrently with the same proof context
-/// nor is it safe to call any other function that accesses the same proof context
-/// concurrently. The caller must ensure exclusive access to the proof context
-/// for the duration of the call.
+/// Takes the context mutably: the caller must ensure exclusive access for the
+/// duration of the call.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_db_verify_and_commit_range_proof<'db>(
-    db: Option<&'db DatabaseHandle>,
-    args: VerifyRangeProofArgs<'_, 'db>,
+pub extern "C" fn fwd_verified_range_proof_commit(
+    proof: Option<&mut VerifiedRangeProofContext<'_>>,
 ) -> HashResult {
-    let VerifyRangeProofArgs {
-        proof,
-        root,
-        start_key,
-        end_key,
-        max_length,
-    } = args;
-
-    let handle = db.zip(proof);
-
-    crate::invoke_with_handle(handle, |(db, ctx)| {
-        let start_key = start_key.into_option();
-        let end_key = end_key.into_option();
-        ctx.verify_and_commit(
-            db,
-            root.into(),
-            start_key.as_deref(),
-            end_key.as_deref(),
-            NonZeroUsize::new(max_length as usize),
-        )
-    })
+    crate::invoke_with_handle(proof, VerifiedRangeProofContext::commit)
 }
 
-/// Returns the next key range that should be fetched after processing the
-/// current set of key-value pairs in a range proof that was truncated.
-///
-/// Can be called multiple times to get subsequent disjoint key ranges until
-/// it returns [`NextKeyRangeResult::None`], indicating there are no more keys to
-/// fetch and the proof is complete.
-///
-/// # Arguments
-///
-/// - `proof` - A [`RangeProofContext`] previously returned from the create
-///   methods and has been prepared into a proposal or already committed.
+/// Returns the key ranges still to fetch after this proof, sorted ascending.
 ///
 /// # Returns
 ///
-/// - [`NextKeyRangeResult::NullHandlePointer`] if the caller provided a null pointer.
-/// - [`NextKeyRangeResult::NotPrepared`] if the proof has not been prepared into
-///   a proposal nor committed to the database.
-/// - [`NextKeyRangeResult::None`] if there are no more keys to fetch.
-/// - [`NextKeyRangeResult::Some`] containing the next key range to fetch.
-/// - [`NextKeyRangeResult::Err`] containing an error message if the next key range
-///   could not be determined.
+/// - [`NextKeyRangesResult::NullHandlePointer`] if the caller provided a null pointer.
+/// - [`NextKeyRangesResult::Ok`] containing the ranges; empty when nothing remains. The
+///   caller frees it with [`fwd_free_next_key_ranges`].
+/// - [`NextKeyRangesResult::Err`] containing an error message.
 ///
-/// # Thread Safety
-///
-/// It is not safe to call this function concurrently with the same proof context
-/// nor is it safe to call any other function that accesses the same proof context
-/// concurrently. The caller must ensure exclusive access to the proof context
-/// for the duration of the call.
+/// [`fwd_free_next_key_ranges`]: crate::fwd_free_next_key_ranges
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_range_proof_find_next_key(
-    proof: Option<&mut RangeProofContext>,
-) -> NextKeyRangeResult {
-    crate::invoke_with_handle(proof, RangeProofContext::find_next_key)
+pub extern "C" fn fwd_verified_range_proof_next_key_ranges(
+    proof: Option<&VerifiedRangeProofContext<'_>>,
+) -> NextKeyRangesResult {
+    crate::invoke_with_handle(proof, VerifiedRangeProofContext::next_key_ranges)
 }
 
-/// Returns an iterator over the code hashes contained in the range proof.
-/// The iterator must be freed after use.
-///
-/// Can be called at any time after the proof has been created.
-///
-/// # Arguments
-///
-/// - `proof` - A [`RangeProofContext`] previously returned from the create
-///   method.
+/// Returns an iterator over the code hashes contained in a verified range
+/// proof. The iterator borrows the proof and must be freed with
+/// [`fwd_code_hash_iter_free`] before the proof is.
 ///
 /// # Returns
 ///
 /// - [`CodeIteratorResult::NullHandlePointer`] if the caller provided a null pointer.
 /// - [`CodeIteratorResult::Ok`] containing a pointer to the `CodeIteratorHandle` if successful.
-/// - [`CodeIteratorResult::Err`] containing an error message if the iterator could not be created.
+/// - [`CodeIteratorResult::Err`] containing an error message if the iterator could not be
+///   created, including when the proof is not an Ethereum-mode proof.
 ///
-/// # Thread Safety
-///
-/// It is not safe to call this function concurrently with the same proof context
-/// nor is it safe to call any other function that accesses the same proof context
-/// concurrently. The caller must ensure exclusive access to the proof context
-/// for the duration of the call.
+/// [`fwd_code_hash_iter_free`]: crate::fwd_code_hash_iter_free
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_range_proof_code_hash_iter<'a>(
-    proof: Option<&'a RangeProofContext>,
+pub extern "C" fn fwd_verified_range_proof_code_hash_iter<'a>(
+    proof: Option<&'a VerifiedRangeProofContext<'_>>,
 ) -> CodeIteratorResult<'a> {
-    crate::invoke_with_handle(proof, RangeProofContext::code_hash_iter)
+    crate::invoke_with_handle(proof, VerifiedRangeProofContext::code_hash_iter)
 }
 
-/// Serialize a `RangeProof` to bytes.
-///
-/// # Arguments
-///
-/// - `proof` - A [`RangeProofContext`] previously returned from the create
-///   method. If from a parsed proof, the proof will not be verified before
-///   serialization.
+/// Serialize a range proof to bytes.
 ///
 /// # Returns
 ///
 /// - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
 /// - [`ValueResult::Some`] containing the serialized bytes if successful.
-/// - [`ValueResult::Err`] containing an error message if serialization panicked.
+/// - [`ValueResult::Err`] containing an error message if serialization failed.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_range_proof_to_bytes(proof: Option<&RangeProofContext>) -> ValueResult {
     crate::invoke_with_handle(proof, |ctx| -> Result<Option<Box<[u8]>>, api::Error> {
@@ -567,34 +424,7 @@ pub extern "C" fn fwd_range_proof_to_bytes(proof: Option<&RangeProofContext>) ->
     })
 }
 
-/// Deserialize a `RangeProof` from bytes.
-///
-/// # Arguments
-///
-/// - `bytes` - The bytes to deserialize the proof from.
-///
-/// # Returns
-///
-/// - [`RangeProofResult::NullHandlePointer`] if the caller provided a null or zero-length slice.
-/// - [`RangeProofResult::Ok`] containing a pointer to the `RangeProofContext` if the proof
-///   was successfully parsed. This does not imply that the proof is valid, only that it is
-///   well-formed. The verify method must be called to ensure the proof is cryptographically valid.
-/// - [`RangeProofResult::Err`] containing an error message if the proof could not be parsed.
-#[unsafe(no_mangle)]
-pub extern "C" fn fwd_range_proof_from_bytes(
-    bytes: BorrowedBytes<'_>,
-) -> RangeProofResult<'static> {
-    crate::invoke(move || {
-        FrozenRangeProof::from_slice(&bytes)
-            .map_err(|err| api::Error::ProofError(ProofError::Deserialization(err)))
-    })
-}
-
 /// Frees the memory associated with a `RangeProofContext`.
-///
-/// # Arguments
-///
-/// * `proof` - The `RangeProofContext` to free, previously returned from any Rust function.
 ///
 /// # Returns
 ///
@@ -605,13 +435,33 @@ pub extern "C" fn fwd_free_range_proof(proof: Option<Box<RangeProofContext>>) ->
     crate::invoke_with_handle(proof, drop)
 }
 
-impl crate::MetricsContextExt for RangeProofContext<'_> {
+/// Frees the memory associated with a `VerifiedRangeProofContext`, dropping
+/// its proposal if it was not committed.
+///
+/// # Returns
+///
+/// - [`VoidResult::Ok`] if the memory was successfully freed.
+/// - [`VoidResult::Err`] if the process panics while freeing the memory.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_free_verified_range_proof(
+    proof: Option<Box<VerifiedRangeProofContext<'_>>>,
+) -> VoidResult {
+    crate::invoke_with_handle(proof, drop)
+}
+
+impl crate::MetricsContextExt for RangeProofContext {
     fn metrics_context(&self) -> Option<MetricsContext> {
         None
     }
 }
 
-impl<'a> crate::MetricsContextExt for (&'a DatabaseHandle, &mut RangeProofContext<'a>) {
+impl crate::MetricsContextExt for VerifiedRangeProofContext<'_> {
+    fn metrics_context(&self) -> Option<MetricsContext> {
+        self.db.metrics_context()
+    }
+}
+
+impl crate::MetricsContextExt for (&DatabaseHandle, &RangeProofContext) {
     fn metrics_context(&self) -> Option<MetricsContext> {
         self.0.metrics_context()
     }

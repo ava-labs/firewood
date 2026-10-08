@@ -176,10 +176,6 @@ pub enum ProofError {
     #[error("empty range")]
     EmptyRange,
 
-    /// The proof has not yet been verified.
-    #[error("the proof has not yet been verified")]
-    Unverified,
-
     /// Invalid Ethereum account value format
     #[error("invalid Ethereum account value format: {source}")]
     InvalidAccountValueFormat {
@@ -217,9 +213,6 @@ pub enum ProofError {
     /// Range proof: requested end key is less than the last key in the proof
     #[error("the requested end key is less than the last key in the range proof")]
     RangeProofEndBeforeLastKey,
-
-    #[error("the proof is None as it has been consumed")]
-    ProofIsNone,
 
     // ── Range proof verification variants (from main) ──
     /// Key-value pair is outside the requested range
