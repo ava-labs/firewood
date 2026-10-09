@@ -68,6 +68,8 @@ pub enum PersistError {
     RootStore(#[source] Arc<dyn std::error::Error + Send + Sync>),
     #[error("Persist worker has shut down")]
     Shutdown,
+    #[error("Persist worker panicked")]
+    Panicked,
 }
 
 /// Handle for managing the background persistence thread.
@@ -178,9 +180,10 @@ impl<H: HashMode> PersistWorker<H> {
         // are consumed — meaning the background persist thread has fallen behind. This is the
         // primary backpressure mechanism: excessive commit rates are slowed down here until the
         // persist loop catches up and releases permits via the `commit_not_full` condvar.
-        if self.shared.channel.push(committed).is_err() {
+        if let Err(err) = self.shared.channel.push(committed) {
             self.join_handle();
             self.check_error()?;
+            return Err(err);
         }
 
         Ok(())
@@ -201,9 +204,12 @@ impl<H: HashMode> PersistWorker<H> {
         &self,
         nodestore: NodeStore<Committed, FileBacked, H>,
     ) -> Result<(), PersistError> {
-        if self.shared.root_store.is_none() && self.shared.channel.reap(nodestore).is_err() {
+        if self.shared.root_store.is_none()
+            && let Err(err) = self.shared.channel.reap(nodestore)
+        {
             self.join_handle();
             self.check_error()?;
+            return Err(err);
         }
 
         Ok(())
@@ -523,7 +529,15 @@ struct PersistLoop<H> {
 impl<H> Drop for PersistLoop<H> {
     /// Closes the persist channel so blocked committers are woken up and see the
     /// shutdown state rather than blocking indefinitely.
+    ///
+    /// If the thread is unwinding, latches [`PersistError::Panicked`] first so
+    /// that every later operation fails rather than only the one that joins
+    /// the thread.
     fn drop(&mut self) {
+        if thread::panicking() {
+            // Cannot already be set: `run` only sets it after `event_loop` returns.
+            let _ = self.shared.error.set(PersistError::Panicked);
+        }
         self.shared.channel.close();
     }
 }

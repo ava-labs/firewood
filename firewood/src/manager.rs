@@ -742,6 +742,11 @@ mod tests {
             self.persist_worker.wait_persisted();
         }
 
+        /// Overwrites the in-memory header size used by the persist worker.
+        pub(crate) fn set_header_size(&self, size: u64) {
+            self.persist_worker.locked_header().set_size(size);
+        }
+
         /// Returns true if the root node (if it exists) of this revision is
         /// persisted. Otherwise, returns false.
         ///

@@ -2775,6 +2775,48 @@ mod test {
         );
     }
 
+    #[test]
+    fn test_persist_worker_panic_is_latched() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let mut testdb = TestDb::new();
+        let commit = |db: &Db<DefaultHashMode>, i: usize| {
+            let batch = vec![BatchOp::Put {
+                key: format!("key{i}").into_bytes(),
+                value: format!("value{i}").into_bytes(),
+            }];
+            db.propose(batch)?.commit()
+        };
+
+        // A header size of 0 makes `allocate_from_end` panic on the persist thread.
+        testdb.manager.set_header_size(0);
+        commit(&testdb, 0).unwrap();
+        testdb.wait_persisted();
+
+        // Whichever operation joins the persist thread re-raises its panic; every
+        // operation after the panic must either panic or fail, never succeed.
+        let result = catch_unwind(AssertUnwindSafe(|| commit(&testdb, 1)));
+        assert!(
+            !matches!(result, Ok(Ok(()))),
+            "commit 1 after persist worker panic must not succeed"
+        );
+
+        for i in 2..5 {
+            let result = catch_unwind(AssertUnwindSafe(|| commit(&testdb, i)));
+            assert!(
+                matches!(result, Ok(Err(_))),
+                "commit {i} after persist worker panic must fail"
+            );
+        }
+
+        let db = testdb.db.take().unwrap();
+        let result = catch_unwind(AssertUnwindSafe(|| db.close()));
+        assert!(
+            !matches!(result, Ok(Ok(()))),
+            "close after persist worker panic must not succeed"
+        );
+    }
+
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
     pub(super) struct TestDb {
         db: Option<Db<DefaultHashMode>>,
