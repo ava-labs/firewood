@@ -29,6 +29,7 @@ use super::change::fuzz_common::{
     maybe_serialize_round_trip_change, maybe_serialize_round_trip_range,
 };
 use super::ethhash::{account_storage_key, empty_code_hash, rlp_encode_account};
+use crate::ProofNode;
 use crate::api::{
     BatchOp, Db as DbTrait, DbView, FrozenChangeProof, FrozenRangeProof, HashKey, Proposal as _,
 };
@@ -36,7 +37,7 @@ use crate::db::{Db, DbConfig};
 use crate::merkle::{Key, Value, verify_change_proof_root_hash, verify_range_proof};
 use crate::verify_change_proof_structure;
 use firewood_storage::{
-    DefaultHashMode, HashMode, NodeHashAlgorithm, SeededRng, replace_list_field,
+    DefaultHashMode, HashMode, NodeHashAlgorithm, PathComponent, SeededRng, U4, replace_list_field,
 };
 use rand::seq::SliceRandom;
 
@@ -521,6 +522,60 @@ fn check_valid_change_proof(
     change_proof
 }
 
+/// Keep only the root node of a boundary proof and relabel its declared trie
+/// position, leaving its partial path, and therefore its hash, untouched.
+///
+/// A `ProofNode` carries its parent prefix length as its own wire field, and the
+/// node hash covers the partial path but not the parent prefix. Prepending two
+/// nibbles to `key` while adding two to `partial_len` leaves `key[partial_len..]`
+/// identical, so the node still hashes to the root while claiming to sit
+/// somewhere else. Two nibbles keep the full path's parity, so the mutation is
+/// not deflected by `ValueAtOddNibbleLength`.
+///
+/// Reducing the proof to that one node is what makes the relabel bite.
+/// Prepending to a later node changes the nibble its parent descends by, which
+/// the prefix-of-next-key check notices. Alone, the node is both first and
+/// last, so only the position check constrains it, and without that check a
+/// position diverging from the proven key skips the missing-child guard and
+/// yields a proof of absence for a key that exists.
+fn relabel_terminal_position(nodes: &[ProofNode], rng: &SeededRng) -> Option<Vec<ProofNode>> {
+    let mut root = nodes.first()?.clone();
+    let prefix: Vec<PathComponent> = (0..2)
+        .map(|_| PathComponent(U4::new_masked(rng.random_range(0..16_u8))))
+        .collect();
+    root.key = prefix
+        .iter()
+        .copied()
+        .chain(root.key.iter().copied())
+        .collect();
+    root.partial_len = root.partial_len.saturating_add(2);
+    Some(vec![root])
+}
+
+/// Change-proof wrapper for [`relabel_terminal_position`]. Mutates whichever
+/// boundary proof is non-empty, preferring the end proof.
+fn relabel_a_node(proof: &FrozenChangeProof, rng: &SeededRng) -> Option<FrozenChangeProof> {
+    let start = proof.start_proof().as_ref();
+    let end = proof.end_proof().as_ref();
+    if !end.is_empty() {
+        let mutated = relabel_terminal_position(end, rng)?;
+        Some(build_change_proof(
+            start.to_vec(),
+            mutated,
+            proof.batch_ops().to_vec(),
+        ))
+    } else if !start.is_empty() {
+        let mutated = relabel_terminal_position(start, rng)?;
+        Some(build_change_proof(
+            mutated,
+            end.to_vec(),
+            proof.batch_ops().to_vec(),
+        ))
+    } else {
+        None
+    }
+}
+
 /// Tamper a change proof by flipping one `Put`'s value, so the verifier must
 /// reject it. `None` if the proof has no `Put`.
 ///
@@ -913,6 +968,7 @@ fn test_slow_ethhash_proof_fuzz() {
                 ("forge", forge_a_put_value(&change, &rng)),
                 ("forge_code_hash", forge_a_code_hash(&change, &rng)),
                 ("drop", drop_an_interior_put(&change, &rng)),
+                ("relabel", relabel_a_node(&change, &rng)),
             ] {
                 if let Some(tampered) = tampered {
                     assert!(

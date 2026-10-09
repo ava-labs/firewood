@@ -2379,3 +2379,105 @@ fn test_verification_context_reports_truncated_right_edge() {
     assert_eq!(ctx.end_key(), None);
     assert_eq!(ctx.right_edge_key(), Some(b"\x10".as_slice()));
 }
+
+/// Rebuilds a range proof from its parts so a test can alter one of them.
+fn rebuild_range_proof(
+    start: &[ProofNode],
+    end: Vec<ProofNode>,
+    key_values: KeyValuePairs,
+) -> crate::api::FrozenRangeProof {
+    RangeProof::new(
+        crate::Proof::<Box<[ProofNode]>>::new(start.into()),
+        crate::Proof::<Box<[ProofNode]>>::new(end.into_boxed_slice()),
+        key_values.into_boxed_slice(),
+    )
+}
+
+/// A range proof whose end-proof terminal lies past the last key-value pair is
+/// anchored on the right by hash reconstruction, and the right-edge walk is
+/// skipped. The end proof's nodes must still pass the shape checks. Here the
+/// terminal is moved two nibbles deeper with its partial path unchanged, so
+/// under the Ethereum scheme its hash is unchanged too, and the key it stood at
+/// is dropped from the pairs. Accepting the proof would prove `0x10 0x50` absent
+/// from a range that contains it. The position check runs before any hashing,
+/// so the expected error is the same under both schemes.
+#[test]
+fn test_relabelled_out_of_range_terminal_rejected() {
+    let items: &[(&[u8], &[u8])] = &[(b"\x05", b"a"), (b"\x10\x50", b"z")];
+    let merkle = init_merkle(items.iter().copied());
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let first = Some(b"\x05".as_slice());
+    let last = Some(b"\x10\x60".as_slice());
+    let honest = merkle.range_proof(first, last, None).unwrap();
+
+    let mut end = honest.end_proof().as_ref().to_vec();
+    let terminal = end.last_mut().unwrap();
+    let parent_prefix_len = terminal.partial_len;
+    let mut key: Vec<PathComponent> = terminal.key.iter().copied().collect();
+    key.splice(
+        parent_prefix_len..parent_prefix_len,
+        [
+            PathComponent::try_new(0xa).unwrap(),
+            PathComponent::try_new(0xb).unwrap(),
+        ],
+    );
+    terminal.key = key.into_iter().collect();
+    terminal.partial_len = parent_prefix_len.saturating_add(2);
+    let key_values: KeyValuePairs = honest
+        .key_values()
+        .iter()
+        .filter(|(k, _)| k.as_ref() != b"\x10\x50")
+        .map(|(k, v)| (k.as_ref().into(), v.as_ref().into()))
+        .collect();
+    let forged = rebuild_range_proof(honest.start_proof().as_ref(), end, key_values);
+
+    let result = verify_range_proof(first, last, &root_hash, &forged);
+    assert!(
+        matches!(
+            result,
+            Err(crate::api::Error::ProofError(
+                ProofError::UnexpectedParentPrefixLength
+            ))
+        ),
+        "relabelled out-of-range terminal must be rejected, got: {result:?}"
+    );
+}
+
+/// An end proof whose terminal lies past the last pair, with an empty value
+/// placed on its root branch, which has none. Under the Ethereum scheme an empty
+/// value hashes the same as no value, so only the shape check can refuse it.
+#[test]
+fn test_empty_value_in_out_of_range_end_proof_rejected() {
+    let items: &[(&[u8], &[u8])] = &[(b"\x05", b"a"), (b"\x10\x50", b"z")];
+    let merkle = init_merkle(items.iter().copied());
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let first = Some(b"\x05".as_slice());
+    let last = Some(b"\x10\x30".as_slice());
+    let honest = merkle.range_proof(first, last, None).unwrap();
+
+    let mut end = honest.end_proof().as_ref().to_vec();
+    let root = end.first_mut().unwrap();
+    assert!(root.value_digest.is_none());
+    root.value_digest = Some(ValueDigest::Value(Box::default()));
+    let key_values: KeyValuePairs = honest
+        .key_values()
+        .iter()
+        .map(|(k, v)| (k.as_ref().into(), v.as_ref().into()))
+        .collect();
+    let forged = rebuild_range_proof(honest.start_proof().as_ref(), end, key_values);
+
+    let result = verify_range_proof(first, last, &root_hash, &forged);
+    #[cfg(feature = "ethhash")]
+    assert!(
+        matches!(
+            result,
+            Err(crate::api::Error::ProofError(ProofError::EmptyValue))
+        ),
+        "empty value in the end proof must be rejected, got: {result:?}"
+    );
+    #[cfg(not(feature = "ethhash"))]
+    assert!(
+        result.is_err(),
+        "the value changes the root hash under merkledb, got: {result:?}"
+    );
+}

@@ -676,7 +676,14 @@ impl<H: HashMode> RevisionManager<H> {
     ) -> Result<NodeStore<Mutable<K>, FileBacked, BH>, api::Error> {
         let mut merkle = Merkle::from(mutable_nodestore);
         for res in batch.into_batch_iter::<api::Error>() {
-            match res? {
+            let op = res?;
+            if BH::ALGORITHM.is_ethereum()
+                && let BatchOp::Put { value, .. } = &op
+                && value.as_ref().is_empty()
+            {
+                return Err(api::Error::EmptyValue);
+            }
+            match op {
                 BatchOp::Put { key, value } => {
                     merkle.insert(key.as_ref(), value.as_ref().into())?;
                 }

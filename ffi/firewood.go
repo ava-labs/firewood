@@ -325,8 +325,8 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 // with [Database.Propose], then committing it with [Proposal.Commit].
 //
 // Use [Put], [Delete], and [PrefixDelete] to create batch operations. A [Put]
-// with an empty value stores an empty value; use [Delete] or [PrefixDelete] to
-// remove keys.
+// with an empty value stores an empty value, except under Ethereum node hashing,
+// which rejects it. Use [Delete] or [PrefixDelete] to remove keys.
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
@@ -353,8 +353,8 @@ func (db *Database) Update(batch []BatchOp) (Hash, error) {
 // freeing proposals. All proposals should be freed before closing the database.
 //
 // Use [Put], [Delete], and [PrefixDelete] to create batch operations. A [Put]
-// with an empty value stores an empty value; use [Delete] or [PrefixDelete] to
-// remove keys.
+// with an empty value stores an empty value, except under Ethereum node hashing,
+// which rejects it. Use [Delete] or [PrefixDelete] to remove keys.
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.

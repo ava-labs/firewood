@@ -806,23 +806,6 @@ fn single_effective_account_child(
     only_child
 }
 
-/// Reject any proof node that carries a value digest (either
-/// [`ValueDigest::Value`] or [`ValueDigest::Hash`]) at an odd-length
-/// nibble path. Byte keys are always even-nibble, so a value at an
-/// odd-length path can't correspond to any real key in the trie — this
-/// is the same invariant [`Proof::value_digest`] enforces while walking
-/// a proof. This is a cheap structural sanity check that callers run on
-/// a proof's nodes before any anchoring decision is made — see e.g. the
-/// call before [`right_edge`] in `verify_range_proof`.
-fn reject_odd_nibble_value_digests(proof_nodes: &[ProofNode]) -> Result<(), ProofError> {
-    for node in proof_nodes {
-        if !node.key.len().is_multiple_of(2) && node.value_digest.is_some() {
-            return Err(ProofError::ValueAtOddNibbleLength);
-        }
-    }
-    Ok(())
-}
-
 /// Compute the right edge of the proven range — the boundary key the
 /// end-proof actually anchors at, and whether that boundary is inclusive
 /// in-range or out-of-range relative to the proven range.
@@ -931,8 +914,8 @@ fn right_edge<'a>(
 
     // Terminal anchors at a real byte key only when it carries a value
     // digest. (Callers reject *any* end_proof node whose nibble path is
-    // odd-length but carries a value before reaching here — see
-    // [`reject_odd_nibble_value_digests`] — so we don't re-check parity.)
+    // odd-length but carries a value before reaching here, in
+    // `Proof::check_node_shapes`, so we don't re-check parity.)
     if terminal.value_digest.is_some() {
         let nibs: Vec<u8> = terminal.key.iter().map(|c| c.as_u8()).collect();
         let terminal_full_key: Vec<u8> = Path::from(nibs.as_slice()).bytes_iter().collect();
@@ -1062,12 +1045,15 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         return Err(api::Error::ProofError(ProofError::NoEndProof));
     }
 
-    // Sanity-check end_proof's structural invariants before any anchoring
-    // decision is made. The right-edge `verify_edge` call below is conditional
-    // (skipped when the boundary is exclusive), so without this scan the
-    // end_proof would be unvalidated when `right_edge` reads its terminal
-    // and could feed `right_edge` an odd-nibble value-node.
-    reject_odd_nibble_value_digests(proof.end_proof().as_ref())?;
+    // Check the shape of every end-proof node before any anchoring decision is
+    // made. The right-edge walk below does not always run. It is skipped when
+    // the terminal lies past the last key-value pair, and `verify_edge` walks
+    // nothing when the request has no end key and the proof has no pairs. In
+    // both cases the hash reconstruction that anchors the proof only checks
+    // what the hash covers. Without this pass a node in such an end proof could
+    // declare a position, a value, or children that its hash does not commit
+    // to, and `right_edge` would read its declared key.
+    proof.end_proof().check_node_shapes(algorithm)?;
 
     let left_edge_kv = key_values.first().map(|(k, v)| (k.as_ref(), v.as_ref()));
     let right_edge_kv = key_values.last().map(|(k, v)| (k.as_ref(), v.as_ref()));
