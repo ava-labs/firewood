@@ -59,7 +59,7 @@ impl<T: Read> ReadSerializable for T {}
 pub enum Child {
     /// There is a child at this index, but we haven't hashed it
     /// or allocated space in storage for it yet.
-    Node(Node),
+    Node(Box<Node>),
 
     /// We know the child's persisted address and hash.
     AddressWithHash(LinearAddress, HashType),
