@@ -183,6 +183,7 @@ mod batch_op;
 
 /// Expose the storage logger
 pub use firewood_storage::logger;
+pub use firewood_storage::{EthHash, HashMode};
 
 /// Hashing mode used for trie nodes.
 pub use firewood_storage::NodeHashAlgorithm;

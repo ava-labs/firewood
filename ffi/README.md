@@ -14,8 +14,8 @@ import (
     "github.com/ava-labs/firewood/ffi"
 )
 
-// Open a database with default configuration
-db, err := ffi.New("/path/to/database_dir")
+// Open a database using MerkleDB-compatible hashing.
+db, err := ffi.New("/path/to/database_dir", ffi.MerkleDBNodeHashing)
 if err != nil {
     log.Fatal(err)
 }
@@ -24,12 +24,16 @@ defer cancel()
 defer db.Close(ctx)
 ```
 
+Pass `ffi.EthereumNodeHashing` to use Ethereum-compatible hashing instead.
+The selected algorithm is stored with a new database and must match when an
+existing database is reopened.
+
 ### Configuration Options
 
 Firewood uses the functional options pattern for configuration. You can customize the database by passing option functions:
 
 ```go
-db, err := ffi.New("/path/to/database_dir",
+db, err := ffi.New("/path/to/database_dir", ffi.MerkleDBNodeHashing,
     ffi.WithTruncate(true),                    // Clear the database if it exists
     ffi.WithNodeCacheSizeInBytes(256_000_000), // Set node cache memory limit
     ffi.WithFreeListMemoryLimitKB(8192),       // Set freelist cache memory limit (KiB)
@@ -45,7 +49,7 @@ For detailed information about each configuration option, see the godoc for the 
 
 The Golang FFI layer uses a CGO directive to locate a C-API compatible binary built from Firewood. Firewood supports both seamless local development and a single-step compilation process for Go projects that depend or transitively depend on Firewood.
 
-To do this, [firewood.go](./firewood.go) includes CGO directives to include multiple search paths for the Firewood binary in the local `target/` build directory and `ffi/libs`. For the latter, [attach-static-libs](../.github/workflows/attach-static-libs.yaml) GitHub Action pushes an FFI package for `ethhash` with static libraries attached for the following supported architectures:
+To do this, [firewood.go](./firewood.go) includes CGO directives to include multiple search paths for the Firewood binary in the local `target/` build directory and `ffi/libs`. For the latter, [attach-static-libs](../.github/workflows/attach-static-libs.yaml) GitHub Action pushes an FFI package with runtime-selectable hashing and static libraries for the following supported architectures:
 
 - x86_64-unknown-linux-gnu
 - aarch64-unknown-linux-gnu
@@ -83,21 +87,13 @@ go mod tidy
 
 Firewood pushes the FFI source code and attached static libraries to [firewood-go-ethhash](https://github.com/ava-labs/firewood-go-ethhash) via [attach-static-libs](../.github/workflows/attach-static-libs.yaml).
 
-This enables consumers to utilize it directly without forcing them to compile Firewood locally. Go programs running on supported architectures can utilize `firewood-go-ethhash/ffi` just like any other dependency.
+This enables consumers to utilize it directly without forcing them to compile Firewood locally. Go programs running on supported architectures can utilize `firewood-go-ethhash/ffi` just like any other dependency and select a hashing algorithm per database.
 
 To trigger this build, [attach-static-libs](../.github/workflows/attach-static-libs.yaml) supports triggers for both manual GitHub Actions and tags, so you can create a mirror branch/tag on [firewood-go-ethhash](https://github.com/ava-labs/firewood-go-ethhash) by either trigger a manual GitHub Action and selecting your branch or pushing a tag to Firewood.
 
 ### Hash Mode
 
-Firewood implemented its own optimized merkle trie structure. To support Ethereum Merkle Trie hash compatibility, it also provides a feature flag `ethhash`.
-
-This is an optional feature (disabled by default). To enable it for a local build, compile with:
-
-```sh
-cargo build -p firewood-ffi --features ethhash
-```
-
-To support development in [Coreth](https://github.com/ava-labs/coreth), Firewood pushes static libraries for Ethereum-compatible hashing to [firewood-go-ethhash](https://github.com/ava-labs/firewood-go-ethhash) with `ethhash` enabled by default. To use Firewood's native hashing structure, you must still build the static library separately.
+A single FFI binary supports both MerkleDB-compatible SHA-256 hashing and Ethereum-compatible Keccak-256 hashing. Select the mode for each database with `MerkleDBNodeHashing` or `EthereumNodeHashing`; opening an existing database with a different mode returns an error.
 
 ## Development
 
@@ -113,7 +109,7 @@ It is possible that your editor does not properly recognize the C bindings, due 
 
 ### Testing
 
-Although the VS Code testing feature does work, there are some quirks in ensuring proper building. The Rust code must be compiled separated, and sometimes the `go test` command continues to use a cached result. Whenever testing after making changes to the Rust/C builds, the cache should be cleared if results don't seem correct. The Go testing suite can determine dynamically whether ethhash is enabled or not, so it can be run with either configuration. For each individual testing module, ensure the hashing method you compiled with matches the test.
+Although the VS Code testing feature does work, there are some quirks in ensuring proper building. The Rust code must be compiled separately, and sometimes the `go test` command continues to use a cached result. Whenever testing after making changes to the Rust/C builds, the cache should be cleared if results don't seem correct. The Go tests select a runtime hashing mode with `TEST_FIREWOOD_HASH_MODE` (`firewood` or `ethhash`); both modes use the same FFI library build.
 
 To ensure there are no memory leaks, the easiest way is to use your preferred CLI tool (e.g. `valgrind` for Linux, `leaks` for macOS) and compile the tests into a binary. You must not compile a release binary to ensure all memory can be managed. An example flow is given below.
 
