@@ -209,10 +209,10 @@ These histograms are recorded in Go and are independent of the Rust recorder.
 They measure the full round-trip through the CGo boundary including any byte
 copies and pointer conversions.
 
-| Metric                                         | Type      | Labels       | Description                                                           |
-| ---------------------------------------------- | --------- | ------------ | --------------------------------------------------------------------- |
-| `firewood_go_proof_marshal_duration_seconds`   | histogram | `proof_type` | `MarshalBinary` duration; `proof_type=range\|change\|verified_change` |
-| `firewood_go_proof_unmarshal_duration_seconds` | histogram | `proof_type` | `UnmarshalBinary` duration; `proof_type=range\|change`                |
+| Metric                                         | Type      | Labels       | Description                                         |
+| ---------------------------------------------- | --------- | ------------ | --------------------------------------------------- |
+| `firewood_go_proof_marshal_duration_seconds`   | histogram | `proof_type` | `Marshal` duration; `proof_type=range\|change`      |
+| `firewood_go_proof_unmarshal_duration_seconds` | histogram | `proof_type` | `UnmarshalXXX` duration; `proof_type=range\|change` |
 
 Buckets: `5µs, 25µs, 100µs, 500µs, 1ms, 5ms, 25ms, 100ms`
 

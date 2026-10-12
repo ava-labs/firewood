@@ -48,8 +48,8 @@ type handle[T any] struct {
 	dropped bool
 
 	// lease keeps the parent database alive while this handle is in use.
-	// It is initialized by [lease.attach] after [newHandle] returns, and
-	// released when [Drop] is called.
+	// It is initialized by [lease.attach] or [lease.ensureAttached] and released
+	// when [Drop] is called.
 	lease lease
 
 	free func(T) C.VoidResult
@@ -58,7 +58,8 @@ type handle[T any] struct {
 // newHandle constructs an inactive handle: the C pointer and free
 // function are set, but the lease is not yet attached to any registry.
 // Callers must invoke [lease.attach] before the handle becomes visible,
-// or the registry's count/dropFn invariants will be broken.
+// or the registry's count/dropFn invariants will be broken. Proofs are the
+// exception: they hold no lease until [lease.ensureAttached] binds them.
 func newHandle[T any](ptr T, free func(T) C.VoidResult) *handle[T] {
 	return &handle[T]{
 		ptr:     ptr,
@@ -123,7 +124,7 @@ func (h *handle[T]) Drop() error {
 type keepAliveRegistry struct {
 	mu sync.Mutex
 	// count is the number of outstanding leases. Bumped by [lease.attach]
-	// and [lease.attachUnregistered]; decremented by [lease.releaseLocked].
+	// and [lease.ensureAttached]; decremented by [lease.releaseLocked].
 	count int
 	// waiters are channels closed when count drops to zero. Each call to
 	// [waitDrained] appends one and removes it on ctx cancellation.
@@ -274,7 +275,7 @@ func (r *keepAliveRegistry) closeAndForceDrop(ctx context.Context) error {
 type lease struct {
 	mu sync.RWMutex
 	// registry is the parent database's keep-alive registry. Set by
-	// [lease.attach] or [lease.attachUnregistered], cleared in
+	// [lease.attach] or [lease.ensureAttached], cleared in
 	// [releaseLocked]; nil indicates the lease has already been released.
 	registry *keepAliveRegistry
 }
@@ -320,41 +321,46 @@ func (l *lease) attach(registry *keepAliveRegistry, dropFn func() error) error {
 	return nil
 }
 
-// attachUnregistered increments the registry's outstanding-handle count
-// but does NOT add this lease to the drop map. It exists for
-// [RangeProof], which intentionally stays outside the registry so its
-// runtime.SetFinalizer can collect the proof — a bound Free in the
-// registry map would keep the proof reachable forever. Consequently
-// [WithForceCloseHandles] will not auto-drop a still-referenced
-// RangeProof; graceful [Database.Close] still waits on the count.
+// ensureAttached registers this lease with the registry's outstanding-handle
+// count and drop map, like [lease.attach], for a lease that may already be
+// attached. It exists for [RangeProof], which takes its lease only once
+// [Database.VerifyRangeProof] or [Database.VerifyAndCommitRangeProof]
+// succeeds, and may succeed more than once on the same proof.
 //
-// Re-attaching the same lease to the same registry is a no-op. Unlike a
-// registered handle (see [lease.attach]), which gets a fresh lease per
-// construction, a RangeProof can legitimately reach this path more than once:
-// [Database.VerifyRangeProof] prepares a proposal and may be called repeatedly
-// on the same proof (the Rust side and the finalizer are already idempotent).
-// Making it idempotent keeps the count balanced — one attach, one release —
-// rather than crashing on a redundant prepare. Re-attaching to a *different*
-// registry is still a bug the count/registry bookkeeping cannot represent, so
-// it panics.
+// Re-attaching the same lease to the same registry is a no-op, which keeps
+// the count balanced — one attach, one release. Re-attaching to a
+// *different* registry is a bug the count/registry bookkeeping cannot
+// represent, so it panics; callers check [lease.registry] first.
 //
-// Callers must serialize against [Database.Close] (e.g. via
-// db.handleLock.RLock) before invoking this — there is no closed-registry
-// guard here. The change-proof family is being redesigned, so a
-// handle[T] migration here is deferred.
-func (l *lease) attachUnregistered(registry *keepAliveRegistry) {
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
-
+// Callers must hold l.mu.Lock and serialize against [Database.Close] (e.g.
+// via db.handleLock.RLock) before invoking this — there is no
+// closed-registry guard here.
+func (l *lease) ensureAttached(registry *keepAliveRegistry, dropFn func() error) error {
 	if l.registry == registry {
 		// Already attached to this registry — idempotent; do not double-count.
-		return
+		return nil
 	}
 	if l.registry != nil {
 		panic("lease already attached to a different registry")
 	}
+
+	registry.mu.Lock()
+	if registry.closed {
+		registry.mu.Unlock()
+		// Call dropFn outside registry.mu to preserve the lease.mu →
+		// registry.mu lock order (dropFn → handle.Drop → lease.release
+		// takes lease.mu, which would then take registry.mu via
+		// removeAndDecr). No count++ ran, so no decrement is needed.
+		// errors.Join discards nil, so a successful dropFn yields just
+		// errDBClosed.
+		return errors.Join(errDBClosed, dropFn())
+	}
+
 	registry.count++
+	registry.handles[l] = dropFn
 	l.registry = registry
+	registry.mu.Unlock()
+	return nil
 }
 
 // release runs attemptDisown and releases the lease via [releaseLocked].
@@ -366,22 +372,15 @@ func (l *lease) attachUnregistered(registry *keepAliveRegistry) {
 //
 // Safe to call multiple times; subsequent calls after the first continue
 // to invoke attemptDisown but do not double-decrement the count unless
-// [attach] or [attachUnregistered] runs again in between.
+// [attach] or [ensureAttached] runs again in between.
 func (l *lease) release(attemptDisown func() error) (err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	// Release on panic too, so a panicking callback cannot strand the
-	// lease and block Close forever.
-	defer func() {
-		if p := recover(); p != nil {
-			l.releaseLocked()
-			panic(p)
-		}
-	}()
-	err = attemptDisown()
-	l.releaseLocked()
-	return err
+	// defer will also run if attemptDisown panics.
+	defer l.releaseLocked()
+
+	return attemptDisown()
 }
 
 // releaseLocked is the single bookkeeping point: decrements the
@@ -392,7 +391,7 @@ func (l *lease) release(attemptDisown func() error) (err error) {
 // Exists for callers like [Reconstructed.Reconstruct] that hold mu.Lock
 // for a wider critical section and would otherwise deadlock through
 // [release]. Idempotent: calls after the first are no-ops until
-// [lease.attach] or [lease.attachUnregistered] runs again.
+// [lease.attach] or [lease.ensureAttached] runs again.
 func (l *lease) releaseLocked() {
 	if l.registry == nil {
 		return

@@ -2259,8 +2259,8 @@ struct HashResult fwd_code_hash_iter_next(struct CodeIteratorHandle *iter);
  * # Returns
  *
  * - [`HashResult::NullHandlePointer`] if the provided database handle is null.
- * - [`HashResult::None`] if the trie has no root hash (merkledb mode only;
- *   ethhash always returns a root hash, even for an empty trie).
+ * - [`HashResult::None`] if the trie has no root hash (MerkleDB mode only;
+ *   Ethereum mode always returns a root hash, even for an empty trie).
  * - [`HashResult::Some`] if the commit was successful, containing the new root hash.
  * - [`HashResult::Err`] if an error occurred while committing the batch.
  *
@@ -2282,8 +2282,8 @@ struct HashResult fwd_commit_proposal(struct ProposalHandle *proposal);
  * # Returns
  *
  * - [`HashResult::NullHandlePointer`] if the provided proposal handle is null.
- * - [`HashResult::None`] if the trie has no root hash (merkledb mode only;
- *   ethhash always returns a root hash, even for an empty trie).
+ * - [`HashResult::None`] if the trie has no root hash (MerkleDB mode only;
+ *   Ethereum mode always returns a root hash, even for an empty trie).
  * - [`HashResult::Some`] if the commit was successful, containing the new root hash.
  * - [`HashResult::Err`] if an error occurred while committing or rebasing.
  *
@@ -2427,8 +2427,8 @@ struct SizedRangeProofResult fwd_db_range_proof_sized(const struct DatabaseHandl
  *
  * - [`HashResult::NullHandlePointer`] if the caller provided a null pointer
  *   to either the database or the proof.
- * - [`HashResult::None`] if the trie has no root hash (merkledb mode only;
- *   ethhash always returns a root hash, even for an empty trie).
+ * - [`HashResult::None`] if the trie has no root hash (MerkleDB mode only;
+ *   Ethereum mode always returns a root hash, even for an empty trie).
  * - [`HashResult::Some`] containing the new root hash.
  * - [`HashResult::Err`] if verification or commit failed.
  */

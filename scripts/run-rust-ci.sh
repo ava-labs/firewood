@@ -140,7 +140,7 @@ case "$command" in
         cargo nextest run --locked --profile ci --verbose ${nextest_args[@]+"${nextest_args[@]}"}
         ;;
     benchmark-example)
-        cargo run --locked ${cargo_args[@]+"${cargo_args[@]}"} --bin benchmark -- --number-of-batches 100 --batch-size 1000 create
+        cargo run --locked ${cargo_args[@]+"${cargo_args[@]}"} --bin benchmark -- --hash-mode merkle-db --number-of-batches 100 --batch-size 1000 create
         ;;
     insert-example)
         cargo run --locked ${cargo_args[@]+"${cargo_args[@]}"} --example insert
