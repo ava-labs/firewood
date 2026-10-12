@@ -318,7 +318,7 @@ impl Drop for BranchNode {
         if may_recurse {
             crate::stack::ensure_stack(|| {
                 for (_, child) in &mut self.children {
-                    child.take();
+                    drop(child.take());
                 }
             });
         }

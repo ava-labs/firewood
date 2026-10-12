@@ -1,4 +1,4 @@
-// Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2026, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
 //! Stack headroom for walks whose depth follows key length.
