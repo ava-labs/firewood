@@ -1,13 +1,13 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-package ffi_test
+package tests
 
 import (
 	"encoding/binary"
 	"testing"
 
-	firewood "github.com/ava-labs/firewood/ffi"
+	"github.com/ava-labs/firewood-go/ffi"
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/types"
 	"github.com/ava-labs/libevm/crypto"
@@ -18,7 +18,7 @@ import (
 
 func FuzzRangeProofCreation(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
-		db := newTestDatabaseWithHashMode(t, firewood.EthereumNodeHashing)
+		db := newTestDatabase(t, ffi.EthereumNodeHashing)
 		numAccounts := len(data)
 
 		if numAccounts == 0 {
@@ -27,7 +27,7 @@ func FuzzRangeProofCreation(f *testing.F) {
 
 		keys := make([][]byte, 0, numAccounts)
 		values := make([][]byte, 0, numAccounts)
-		batch := make([]firewood.BatchOp, 0, numAccounts)
+		batch := make([]ffi.BatchOp, 0, numAccounts)
 		expected := make(map[common.Hash]int)
 		for i := range numAccounts {
 			addr := common.BytesToAddress(crypto.Keccak256Hash(binary.BigEndian.AppendUint64(nil, uint64(i))).Bytes())
@@ -49,7 +49,7 @@ func FuzzRangeProofCreation(f *testing.F) {
 			require.NoError(t, err)
 			keys = append(keys, accHash.Bytes())
 			values = append(values, accountRLP)
-			batch = append(batch, firewood.Put(keys[i], values[i]))
+			batch = append(batch, ffi.Put(keys[i], values[i]))
 		}
 
 		root, err := db.Update(batch)

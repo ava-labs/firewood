@@ -1,14 +1,14 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-package ffi_test
+package tests
 
 import (
 	"encoding/binary"
 	"fmt"
 	"testing"
 
-	"github.com/ava-labs/firewood/ffi"
+	"github.com/ava-labs/firewood-go/ffi"
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/rawdb"
 	"github.com/ava-labs/libevm/core/state"
@@ -52,7 +52,7 @@ func buildState(t *testing.T, specs []accountSpec) builtState {
 	t.Helper()
 	r := require.New(t)
 
-	db := newTestDatabaseWithHashMode(t, ffi.EthereumNodeHashing)
+	db := newTestDatabase(t, ffi.EthereumNodeHashing)
 	tdb := state.NewDatabaseWithConfig(rawdb.NewMemoryDatabase(), triedb.HashDefaults)
 	accountTrie, err := tdb.OpenTrie(types.EmptyRootHash)
 	r.NoError(err)

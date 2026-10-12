@@ -1,17 +1,16 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-package ffi_test
+package tests
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"runtime"
 	"testing"
 	"time"
 
-	"github.com/ava-labs/firewood/ffi"
+	"github.com/ava-labs/firewood-go/ffi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,16 +22,14 @@ func oneSecCtx(tb testing.TB) context.Context {
 	return ctx
 }
 
-func newTestDatabaseWithHashMode(tb testing.TB, algorithm ffi.NodeHashAlgorithm) *ffi.Database {
+func newTestDatabase(tb testing.TB, algorithm ffi.NodeHashAlgorithm) *ffi.Database {
 	tb.Helper()
 	r := require.New(tb)
 
 	dbDir := tb.TempDir()
 	db, err := ffi.New(dbDir, algorithm)
-	if err != nil {
-		err = fmt.Errorf("failed to create new database in directory %q: %w", dbDir, err)
-	}
-	r.NoError(err)
+	r.NoErrorf(err, "ffi.New() in path %q", dbDir)
+
 	tb.Cleanup(func() {
 		err := db.Close(oneSecCtx(tb))
 		if errors.Is(err, ffi.ErrActiveKeepAliveHandles) {

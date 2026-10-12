@@ -1,7 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-package ffi_test
+package tests
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	"github.com/ava-labs/avalanchego/database/memdb"
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/x/merkledb"
-	"github.com/ava-labs/firewood/ffi"
+	"github.com/ava-labs/firewood-go/ffi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -80,7 +80,7 @@ func newTestTree(t *testing.T, rand *rand.Rand) *tree {
 
 	tr := &tree{
 		merkleDB:  merkleDB,
-		fwdDB:     newTestDatabaseWithHashMode(t, ffi.MerkleDBNodeHashing),
+		fwdDB:     newTestDatabase(t, ffi.MerkleDBNodeHashing),
 		proposals: make(map[int]*proposal),
 		children:  make([]*proposal, 0),
 		require:   r,

@@ -4,7 +4,7 @@ go 1.26.8
 
 require (
 	github.com/ava-labs/avalanchego v1.13.1
-	github.com/ava-labs/firewood/ffi v0.0.0
+	github.com/ava-labs/firewood-go/ffi v0.0.0
 	github.com/ava-labs/libevm v1.13.14-0.2.0.release
 	github.com/holiman/uint256 v1.3.2
 	github.com/stretchr/testify v1.10.0
@@ -91,4 +91,4 @@ require (
 	rsc.io/tmplfunc v0.0.3 // indirect
 )
 
-replace github.com/ava-labs/firewood/ffi => ..
+replace github.com/ava-labs/firewood-go/ffi => ..

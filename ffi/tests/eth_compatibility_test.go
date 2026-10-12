@@ -1,7 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-package ffi_test
+package tests
 
 import (
 	"encoding/binary"
@@ -9,7 +9,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/ava-labs/firewood/ffi"
+	"github.com/ava-labs/firewood-go/ffi"
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/rawdb"
 	"github.com/ava-labs/libevm/core/state"
@@ -64,7 +64,7 @@ type merkleTriePair struct {
 func newMerkleTriePair(t *testing.T) *merkleTriePair {
 	r := require.New(t)
 
-	db := newTestDatabaseWithHashMode(t, ffi.EthereumNodeHashing)
+	db := newTestDatabase(t, ffi.EthereumNodeHashing)
 	tdb := state.NewDatabaseWithConfig(rawdb.NewMemoryDatabase(), triedb.HashDefaults)
 	ethRoot := types.EmptyRootHash
 	tr, err := tdb.OpenTrie(ethRoot)
