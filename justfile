@@ -57,18 +57,9 @@ ci-check-go-generate:
 ci-machete:
     cargo machete --with-metadata
 
-# Build the Go FFI's Rust library for a hash mode.
-ci-build-ffi hash_mode:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    case "{{hash_mode}}" in
-        firewood) features=() ;;
-        ethhash) features=(--features ethhash,logger) ;;
-        *) echo "error: unknown FFI hash mode '{{hash_mode}}'" >&2; exit 2 ;;
-    esac
-    # ${features[@]+…} guard: empty-array expansion errors under `set -u` on
-    # the stock macOS bash 3.2.
-    cargo build --locked -p firewood-ffi ${features[@]+"${features[@]}"}
+# Build the Go FFI's Rust library; tests select hash mode at runtime.
+ci-build-ffi:
+    cargo build --locked -p firewood-ffi --features logger
 
 # Test the Go FFI against a Rust library built for a hash mode.
 ci-test-ffi hash_mode:
@@ -115,10 +106,9 @@ test:
     ./scripts/run-just.sh ci-rust test debug-ethhash-logger
     ./scripts/run-just.sh ci-rust test debug-all-features
     ./scripts/run-just.sh ci-rust test maxperf-ethhash-logger
-    ./scripts/run-just.sh ci-build-ffi firewood
+    ./scripts/run-just.sh ci-build-ffi
     ./scripts/run-just.sh ci-test-ffi firewood
     ./scripts/run-just.sh ci-test-ffi-compat firewood
-    ./scripts/run-just.sh ci-build-ffi ethhash
     ./scripts/run-just.sh ci-test-ffi ethhash
     ./scripts/run-just.sh ci-test-ffi-compat ethhash
 
@@ -283,7 +273,7 @@ test-ffi-nix-go-bindings: build-ffi-nix
     cd result/ffi
 
     # - cgocheck2 is expensive but provides complete pointer checks
-    # - use hash mode ethhash since the flake builds with `--features ethhash,logger`
+    # - use hash mode ethhash to exercise Ethereum-compatible hashing at runtime
     GOEXPERIMENT=cgocheck2 TEST_FIREWOOD_HASH_MODE=ethhash ${GO} test ./...
 
 # Ensure the FFI flake is up-to-date

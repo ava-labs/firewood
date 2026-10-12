@@ -136,7 +136,7 @@ stages:
   build-firewood-ffi:
     name: "Building firewood FFI"
     variables:
-      features: "ethhash,logger"
+      features: "logger"
     commands:
       - "sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/firewood/ffi --login time cargo build --profile maxperf --features {{ variables.features }} > {{ variables.nvme_base }}/ubuntu/firewood/build.log 2>&1"
   # build avalanchego
@@ -253,7 +253,7 @@ scenarios:
       - configure-go-modules
       - id: build-firewood-ffi
         variables:
-          features: "ethhash,logger,block-replay"
+          features: "logger,block-replay"
       - build-avalanchego
       - install-s5cmd
       - download-blocks
