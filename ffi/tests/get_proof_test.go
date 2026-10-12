@@ -136,11 +136,14 @@ func verifyProof(t *testing.T, root common.Hash, key []byte, nodes [][]byte) []b
 	return value
 }
 
-// ethProver is satisfied by *Revision and *Reconstructed,
-// which expose the same EthGetProof signature.
 type ethProver interface {
 	EthGetProof(accountKey []byte, slotKeys [][]byte) (*ffi.EthAccountProof, error)
 }
+
+var (
+	_ ethProver = (*ffi.Revision)(nil)
+	_ ethProver = (*ffi.Reconstructed)(nil)
+)
 
 // proversAtRoot returns the committed revision and an equivalent reconstructed
 // view, both rooted at built.root. Each view is released via t.Cleanup.
