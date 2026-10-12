@@ -311,16 +311,23 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
 
 3. **Performance Context**: This is a database designed for blockchain state. Performance matters. Consider allocation patterns and hot paths.
 
-4. **Beta Status**: The API may change. Don't assume stability guarantees.
+4. **Depth Follows Key Length**: A peer's keys decide how deep a trie built
+   during proof verification is. Do not add a walk that recurses per trie level
+   on the call stack. Wrap each recursive call in
+   `firewood_storage::ensure_stack` (see `storage/src/stack.rs`) and add a depth
+   guard on a small thread stack, as
+   `hash_helper_survives_a_deep_chain_on_a_small_stack` does.
 
-5. **Feature Flags**: Be aware of `ethhash` feature flag when discussing Ethereum compatibility vs. default merkledb compatibility.
+5. **Beta Status**: The API may change. Don't assume stability guarantees.
 
-6. **Documentation**: Public APIs should be well-documented. The documentation
+6. **Feature Flags**: Be aware of `ethhash` feature flag when discussing Ethereum compatibility vs. default merkledb compatibility.
+
+7. **Documentation**: Public APIs should be well-documented. The documentation
    check is included in `./scripts/run-just.sh lint` and
    `./scripts/run-just.sh prepush-lite`; run `./scripts/run-just.sh ci-docs` to
    invoke it separately.
 
-7. **Comments Must Earn Their Line**: A comment competes with the code for the
+8. **Comments Must Earn Their Line**: A comment competes with the code for the
    reader's attention and must win on information. Generated comments fail in
    recognizable ways — restating the line below, repeating the same explanation
    at every call site, and narrating the change that produced them ("now uses",
@@ -332,7 +339,7 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
    [Comments and documentation](./CONTRIBUTING.md#comments-and-documentation)
    and [User-facing strings](./CONTRIBUTING.md#user-facing-strings).
 
-8. **Workspace Awareness**: This is a multi-crate workspace. Changes may affect multiple crates. Check `Cargo.toml` for workspace structure.
+9. **Workspace Awareness**: This is a multi-crate workspace. Changes may affect multiple crates. Check `Cargo.toml` for workspace structure.
 
 ## Code Review Guidelines
 
