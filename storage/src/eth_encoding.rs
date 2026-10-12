@@ -55,7 +55,7 @@ pub fn nibbles_to_eth_compact<T: TriePath>(nibbles: T, is_leaf: bool) -> SmallVe
         first_byte.set_low_nibble(low_nibble.as_u8());
     } else {
         // as_rchunks can only return 0 or 1 element in the first slice if N is 2
-        debug_assert!(maybe_low_nibble.is_empty());
+        debug_assert_eq!(maybe_low_nibble, []);
     }
 
     // now assemble everything: the first byte, and the nibble pairs compacted back together
