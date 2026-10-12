@@ -57,10 +57,10 @@ impl AreaIndex {
     pub const NUM_AREA_SIZES: usize = AREA_SIZES.len();
 
     /// The minimum area index (0).
-    pub const MIN: AreaIndex = AreaIndex(0);
+    pub const MIN: Self = Self(0);
 
     /// The maximum area index (`NUM_AREA_SIZES - 1`).
-    pub const MAX: AreaIndex = AreaIndex(Self::NUM_AREA_SIZES as u8 - 1);
+    pub const MAX: Self = Self(Self::NUM_AREA_SIZES as u8 - 1);
 
     /// The minimum area size available for allocation.
     pub const MIN_AREA_SIZE: u64 = AREA_SIZES[0];
@@ -73,7 +73,7 @@ impl AreaIndex {
     #[must_use]
     pub const fn new(index: u8) -> Option<Self> {
         if index < Self::NUM_AREA_SIZES as u8 {
-            Some(AreaIndex(index))
+            Some(Self(index))
         } else {
             None
         }
@@ -91,7 +91,7 @@ impl AreaIndex {
         }
 
         let index = AREA_SIZES.partition_point(|&size| size < n);
-        Ok(AreaIndex(index as u8))
+        Ok(Self(index as u8))
     }
 
     /// Get the underlying index as u8.
@@ -113,7 +113,7 @@ impl AreaIndex {
     #[must_use]
     #[cfg(test)]
     pub const fn from_u8_unchecked(index: u8) -> Self {
-        AreaIndex(index)
+        Self(index)
     }
 
     /// Get the size of an area index (used by the checker)
@@ -128,7 +128,7 @@ impl TryFrom<u8> for AreaIndex {
     type Error = Error;
 
     fn try_from(index: u8) -> Result<Self, Self::Error> {
-        AreaIndex::new(index).ok_or_else(|| {
+        Self::new(index).ok_or_else(|| {
             Error::new(
                 ErrorKind::InvalidData,
                 format!("Area index out of bounds: {index}"),
@@ -147,16 +147,12 @@ impl TryFrom<usize> for AreaIndex {
     type Error = Error;
 
     fn try_from(index: usize) -> Result<Self, Self::Error> {
-        index
-            .try_into()
-            .ok()
-            .and_then(AreaIndex::new)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::InvalidData,
-                    format!("Area index out of bounds: {index}"),
-                )
-            })
+        index.try_into().ok().and_then(Self::new).ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("Area index out of bounds: {index}"),
+            )
+        })
     }
 }
 
@@ -203,7 +199,7 @@ impl LinearAddress {
     #[must_use]
     pub const fn new(addr: u64) -> Option<Self> {
         match NonZeroU64::new(addr) {
-            Some(addr) => Some(LinearAddress(addr)),
+            Some(addr) => Some(Self(addr)),
             None => None,
         }
     }
@@ -241,7 +237,7 @@ impl LinearAddress {
 
             // It is impossible to add a non-zero positive number to a u64 and get 0 without
             // overflowing, so we don't check for that here, and panic instead.
-            Some(sum) => Some(LinearAddress(sum)),
+            Some(sum) => Some(Self(sum)),
         }
     }
 
@@ -280,7 +276,7 @@ impl From<LinearAddress> for u64 {
 
 impl From<NonZeroU64> for LinearAddress {
     fn from(addr: NonZeroU64) -> Self {
-        LinearAddress(addr)
+        Self(addr)
     }
 }
 

@@ -165,7 +165,7 @@ impl<T> Merkle<T> {
 
 impl<T> From<T> for Merkle<T> {
     fn from(nodestore: T) -> Self {
-        Merkle { nodestore }
+        Self { nodestore }
     }
 }
 
@@ -1812,7 +1812,7 @@ impl<T: TrieReader> Merkle<T> {
                 write_attributes!(
                     writer,
                     b,
-                    &b.value.clone().unwrap_or(Box::from([])),
+                    &b.value.clone().unwrap_or_else(|| Box::from([])),
                     algorithm
                 );
                 writeln!(writer, "\"]")
@@ -1970,7 +1970,7 @@ impl<T: HashedNodeReader> Merkle<T> {
         let end_proof_key = if hit_limit {
             batch_ops.last().map(|op| &**op.key()).or(end_key)
         } else {
-            end_key.or(batch_ops.last().map(|op| &**op.key()))
+            end_key.or_else(|| batch_ops.last().map(|op| &**op.key()))
         };
         let end_proof = end_proof_key
             .map(|key| self.prove(key))
@@ -2009,7 +2009,7 @@ impl<S: ReadableStorage, H: HashMode> TryFrom<Merkle<NodeStore<Mutable<Propose>,
 {
     type Error = FileIoError;
     fn try_from(m: Merkle<NodeStore<Mutable<Propose>, S, H>>) -> Result<Self, Self::Error> {
-        Ok(Merkle {
+        Ok(Self {
             nodestore: m.nodestore.try_into()?,
         })
     }

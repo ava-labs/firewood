@@ -75,7 +75,7 @@ pub enum DbError {
 
 impl<P, S: ReadableStorage, H: HashMode> api::DbView for NodeStore<P, S, H>
 where
-    NodeStore<P, S, H>: HashedNodeReader,
+    Self: HashedNodeReader,
 {
     type Iter<'view>
         = MerkleKeyValueIter<'view, Self>
@@ -219,7 +219,7 @@ impl<H: HashMode> api::DynDb for Db<H> {
     }
 
     fn view(&self, hash: HashKey) -> Result<ArcDynDbView, api::Error> {
-        Db::view(self, hash)
+        Self::view(self, hash)
     }
 
     fn propose(
@@ -235,7 +235,7 @@ impl<H: HashMode> api::DynDb for Db<H> {
     }
 
     fn dump_to_string(&self) -> Result<String, api::Error> {
-        Db::dump_to_string(self).map_err(api::Error::from)
+        Self::dump_to_string(self).map_err(api::Error::from)
     }
 
     fn change_proof(
@@ -246,7 +246,7 @@ impl<H: HashMode> api::DynDb for Db<H> {
         end_key: Option<&[u8]>,
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenChangeProof, api::Error> {
-        Db::change_proof(self, start_hash, end_hash, start_key, end_key, limit)
+        Self::change_proof(self, start_hash, end_hash, start_key, end_key, limit)
     }
 
     fn verify_change_proof(
@@ -258,7 +258,7 @@ impl<H: HashMode> api::DynDb for Db<H> {
         max_length: Option<NonZeroUsize>,
     ) -> Result<Box<dyn api::DynProposal<'_> + '_>, api::Error> {
         let proposal =
-            Db::verify_change_proof(self, proof, end_root, start_key, end_key, max_length)?;
+            Self::verify_change_proof(self, proof, end_root, start_key, end_key, max_length)?;
         Ok(Box::new(proposal))
     }
 
@@ -268,7 +268,7 @@ impl<H: HashMode> api::DynDb for Db<H> {
         last_key: Option<&[u8]>,
         key_values: api::OwnedKeyValuePairs,
     ) -> Result<Box<dyn api::DynProposal<'_> + '_>, api::Error> {
-        let proposal = Db::merge_key_value_range(self, first_key, last_key, key_values)?;
+        let proposal = Self::merge_key_value_range(self, first_key, last_key, key_values)?;
         Ok(Box::new(proposal))
     }
 
@@ -277,7 +277,7 @@ impl<H: HashMode> api::DynDb for Db<H> {
         parent: &CommittedView,
         batch: api::OwnedBatch,
     ) -> Result<ReconstructedView<'_>, api::Error> {
-        Db::reconstruct_from_view(self, parent, batch)
+        Self::reconstruct_from_view(self, parent, batch)
     }
 
     fn reconstruct_from_reconstructed<'db>(
@@ -285,11 +285,11 @@ impl<H: HashMode> api::DynDb for Db<H> {
         parent: ReconstructedView<'db>,
         batch: api::OwnedBatch,
     ) -> Result<ReconstructedView<'db>, api::Error> {
-        Db::reconstruct_from_reconstructed(self, parent.nodestore, batch)
+        Self::reconstruct_from_reconstructed(self, parent.nodestore, batch)
     }
 
     fn committed_view(&self, hash: HashKey) -> Result<Option<CommittedView>, api::Error> {
-        match Db::committed_view(self, hash) {
+        match Self::committed_view(self, hash) {
             Ok(view) => Ok(Some(view)),
             // `hash` names a proposal, not a committed revision.
             Err(api::Error::RevisionNotFound { .. }) => Ok(None),
@@ -298,7 +298,7 @@ impl<H: HashMode> api::DynDb for Db<H> {
     }
 
     fn close(self: Box<Self>) -> Result<(), api::Error> {
-        Db::close(*self)
+        Self::close(*self)
     }
 }
 
@@ -532,7 +532,7 @@ impl<H: HashMode> Db<H> {
         // advertises a different mode.
         let verification = verify_change_proof_structure(
             proof,
-            end_root.clone(),
+            end_root,
             start_key,
             end_key,
             H::ALGORITHM,
@@ -715,7 +715,7 @@ impl<H: HashMode> api::DynReconstructed for NodeStore<Reconstructed<FileBacked, 
         // path) instead of deep-cloning the subtree on every chain step.
         let mutable: NodeStore<Mutable<Recon<FileBacked, H>>, FileBacked, H> = self.into();
         let mutable = RevisionManager::<H>::apply_batch_recon(mutable, batch)?;
-        let reconstructed: NodeStore<Reconstructed<FileBacked, H>, FileBacked, H> = mutable.into();
+        let reconstructed: Self = mutable.into();
         Ok(Arc::new(reconstructed))
     }
 }
@@ -760,8 +760,8 @@ impl<H: HashMode> api::DbView for Proposal<'_, H> {
     }
 }
 
-impl<'db, H: HashMode> api::Proposal for Proposal<'db, H> {
-    type Proposal = Proposal<'db, H>;
+impl<H: HashMode> api::Proposal for Proposal<'_, H> {
+    type Proposal = Self;
 
     fn propose(&self, batch: impl IntoBatchIter) -> Result<Self::Proposal, api::Error> {
         self.create_proposal(batch)
@@ -971,8 +971,8 @@ impl api::DbView for ReconstructedView<'_> {
 
 // The owning database is reached through the erased [`api::DynDb`] so
 // reconstruction works off a runtime-selected `Db<H>` in any hash mode.
-impl<'a> api::Reconstructible for ReconstructedView<'a> {
-    type Reconstructed = ReconstructedView<'a>;
+impl api::Reconstructible for ReconstructedView<'_> {
+    type Reconstructed = Self;
 
     fn reconstruct(self, batch: impl IntoBatchIter) -> Result<Self::Reconstructed, api::Error>
     where
@@ -2844,7 +2844,7 @@ mod test {
 
     impl TestDb {
         pub fn new() -> Self {
-            TestDb::new_with_config(
+            Self::new_with_config(
                 DbConfig::builder()
                     .node_hash_algorithm(DefaultHashMode::ALGORITHM)
                     .build(),
@@ -2855,7 +2855,7 @@ mod test {
             let tmpdir = tempfile::tempdir().unwrap();
             let db = Db::<DefaultHashMode>::new_with_hash_mode(tmpdir.as_ref(), dbconfig.clone())
                 .unwrap();
-            TestDb {
+            Self {
                 db: Some(db),
                 tmpdir,
                 dbconfig,

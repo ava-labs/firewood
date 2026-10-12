@@ -224,15 +224,15 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
     ///
     /// Must be called after `reconcile_branch_proof_node` to ensure that
     /// each proof node exists as a branch in the proving trie.
-    ///                                                                                                                                                                                                                                           
-    /// # Parameters                                                                                                                                                                                                                              
-    /// - `node`: Current node in the proving trie being traversed.                                                                                                                                                                               
+    ///
+    /// # Parameters
+    /// - `node`: Current node in the proving trie being traversed.
     /// - `key`: Remaining path to the parent proof node, shortened at each
-    ///   recursive level as partial paths and child nibbles are consumed.                                                                                                                                                                        
+    ///   recursive level as partial paths and child nibbles are consumed.
     /// - `suffix`: Path from the parent proof node to the child proof node,
-    ///   passed through unchanged to `collapse_descend`.                                                                                                                                                                                         
+    ///   passed through unchanged to `collapse_descend`.
     /// - `parent_prefix`: Nibble path from root to the parent proof node,
-    ///   used by `collapse_strip` for in-range child detection.                                                                                                                                                                                  
+    ///   used by `collapse_strip` for in-range child detection.
     /// - `range`: Optional proven range boundaries for detecting tampered
     ///   `batch_ops`.
     fn collapse_navigate(
@@ -252,7 +252,7 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
             .iter()
             .zip(pp.iter())
             .position(|(pc, nibble)| pc.as_u8() != *nibble)
-            .unwrap_or(key.len().min(pp.len()));
+            .unwrap_or_else(|| key.len().min(pp.len()));
 
         if diverge != pp.len() {
             // partial_path not fully consumed — key diverges or is a prefix

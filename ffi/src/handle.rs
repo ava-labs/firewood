@@ -40,8 +40,8 @@ pub enum NodeHashAlgorithm {
 impl From<NodeHashAlgorithm> for firewood::NodeHashAlgorithm {
     fn from(alg: NodeHashAlgorithm) -> Self {
         match alg {
-            NodeHashAlgorithm::MerkleDB => firewood::NodeHashAlgorithm::MerkleDB,
-            NodeHashAlgorithm::Ethereum => firewood::NodeHashAlgorithm::Ethereum,
+            NodeHashAlgorithm::MerkleDB => Self::MerkleDB,
+            NodeHashAlgorithm::Ethereum => Self::Ethereum,
         }
     }
 }

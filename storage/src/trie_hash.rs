@@ -39,7 +39,7 @@ impl TrieHash {
     /// ```
     #[must_use]
     pub const fn empty() -> Self {
-        TrieHash([0; TRIE_HASH_LEN])
+        Self([0; TRIE_HASH_LEN])
     }
 }
 
@@ -73,7 +73,7 @@ const TRIE_HASH_LEN: usize = std::mem::size_of::<TrieHash>();
 
 impl From<[u8; TRIE_HASH_LEN]> for TrieHash {
     fn from(value: [u8; TRIE_HASH_LEN]) -> Self {
-        TrieHash(value)
+        Self(value)
     }
 }
 
@@ -96,7 +96,7 @@ impl TryFrom<&[u8]> for TrieHash {
 
 impl From<Array<u8, U32>> for TrieHash {
     fn from(value: Array<u8, U32>) -> Self {
-        TrieHash(value.into())
+        Self(value.into())
     }
 }
 
@@ -126,6 +126,6 @@ impl Serializable for TrieHash {
     {
         let mut buf = [0u8; 32];
         reader.read_exact(&mut buf)?;
-        Ok(TrieHash::from(buf))
+        Ok(Self::from(buf))
     }
 }

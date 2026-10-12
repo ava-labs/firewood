@@ -24,7 +24,7 @@ struct ImportState {
     last_status_time: Instant,
 }
 
-#[derive(Debug, clap::ValueEnum, Clone, PartialEq)]
+#[derive(Debug, clap::ValueEnum, Clone, PartialEq, Eq)]
 pub enum InputFormat {
     Csv,
 }

@@ -270,7 +270,7 @@ impl From<RevisionManagerError> for Error {
 impl From<crate::db::DbError> for Error {
     fn from(value: crate::db::DbError) -> Self {
         match value {
-            crate::db::DbError::FileIo(err) => Error::FileIO(err),
+            crate::db::DbError::FileIo(err) => Self::FileIO(err),
         }
     }
 }
@@ -278,10 +278,10 @@ impl From<crate::db::DbError> for Error {
 impl From<CreateProposalError> for Error {
     fn from(value: CreateProposalError) -> Self {
         match value {
-            CreateProposalError::FileIoError(err) => Error::FileIO(err),
-            CreateProposalError::SendError => Error::SendErrorToWorker,
+            CreateProposalError::FileIoError(err) => Self::FileIO(err),
+            CreateProposalError::SendError => Self::SendErrorToWorker,
             CreateProposalError::InvalidConversionToPathComponent => {
-                Error::InvalidConversionToPathComponent
+                Self::InvalidConversionToPathComponent
             }
         }
     }

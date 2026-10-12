@@ -188,14 +188,14 @@ impl Version0 for BatchOp<Key, Value> {
             .read_item::<u8>()
             .map_err(|err| err.set_item("option discriminant"))?
         {
-            BATCH_PUT => Ok(BatchOp::Put {
+            BATCH_PUT => Ok(Self::Put {
                 key: reader.read_item()?,
                 value: reader.read_item()?,
             }),
-            BATCH_DELETE => Ok(BatchOp::Delete {
+            BATCH_DELETE => Ok(Self::Delete {
                 key: reader.read_item()?,
             }),
-            BATCH_DELETE_RANGE => Ok(BatchOp::DeleteRange {
+            BATCH_DELETE_RANGE => Ok(Self::DeleteRange {
                 prefix: reader.read_item()?,
             }),
             found => Err(reader.invalid_item("option discriminant", "0, 1, or 2", found)),
@@ -227,7 +227,7 @@ impl Version0 for ProofNode {
         }
         let child_hashes = firewood_storage::DenseChildren::from(child_hashes);
 
-        Ok(ProofNode {
+        Ok(Self {
             key,
             partial_len,
             value_digest,
@@ -262,7 +262,7 @@ impl<'a> ReadItem<'a> for usize {
         match u64::decode_var(reader.remainder()) {
             Some((n, size)) => {
                 reader.advance(size);
-                Ok(n as usize)
+                Ok(n as Self)
             }
             None if reader.remainder().is_empty() => Err(reader.incomplete_item("varint", 1)),
             #[expect(clippy::indexing_slicing)]
@@ -287,7 +287,7 @@ impl<'a> ReadItem<'a> for &'a [u8] {
 
 impl<'a> ReadItem<'a> for Box<[u8]> {
     fn read_item(reader: &mut ProofReader<'a>) -> Result<Self, ReadError> {
-        reader.read_item::<&[u8]>().map(Box::from)
+        reader.read_item::<&[u8]>().map(Self::from)
     }
 }
 
@@ -333,8 +333,8 @@ impl<'a> ReadItem<'a> for ValueDigest<&'a [u8]> {
 impl<'a> ReadItem<'a> for ValueDigest<Box<[u8]>> {
     fn read_item(reader: &mut ProofReader<'a>) -> Result<Self, ReadError> {
         reader.read_item::<ValueDigest<&[u8]>>().map(|vd| match vd {
-            ValueDigest::Value(v) => ValueDigest::Value(v.into()),
-            ValueDigest::Hash(h) => ValueDigest::Hash(h),
+            ValueDigest::Value(v) => Self::Value(v.into()),
+            ValueDigest::Hash(h) => Self::Hash(h),
         })
     }
 }
@@ -342,10 +342,10 @@ impl<'a> ReadItem<'a> for ValueDigest<Box<[u8]>> {
 impl<'a> ReadItem<'a> for TrieHash {
     fn read_item(reader: &mut ProofReader<'a>) -> Result<Self, ReadError> {
         reader
-            .read_chunk::<{ size_of::<TrieHash>() }>()
+            .read_chunk::<{ size_of::<Self>() }>()
             .map_err(|err| err.set_item("trie hash"))
             .copied()
-            .map(TrieHash::from)
+            .map(Self::from)
     }
 }
 
@@ -355,7 +355,7 @@ impl<'a> ReadItem<'a> for ChildMask {
             .read_chunk::<2>()
             .map_err(|err| err.set_item("children map"))
             .copied()
-            .map(ChildMask::from_le_bytes)
+            .map(Self::from_le_bytes)
     }
 }
 
@@ -370,15 +370,15 @@ impl<'a> ReadItem<'a> for HashType {
                 .read_item::<u8>()
                 .map_err(|err| err.set_item("hash type discriminant"))?
             {
-                0 => Ok(HashType::Hash(reader.read_item()?)),
-                1 => Ok(HashType::Rlp(reader.read_item::<&[u8]>()?.into())),
+                0 => Ok(Self::Hash(reader.read_item()?)),
+                1 => Ok(Self::Rlp(reader.read_item::<&[u8]>()?.into())),
                 found => {
                     Err(reader.invalid_item("hash type discriminant", "0 (hash) or 1 (rlp)", found))
                 }
             }
         } else {
             // MerkleDB child hashes are a bare 32-byte hash, no discriminant.
-            Ok(HashType::from(reader.read_item::<TrieHash>()?))
+            Ok(Self::from(reader.read_item::<TrieHash>()?))
         }
     }
 }

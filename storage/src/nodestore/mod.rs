@@ -226,7 +226,7 @@ impl<S: ReadableStorage, H: HashMode> NodeStore<Committed, S, H> {
         // proof time happens iff the persisted data predates the hfix.
         let header = NodeStoreHeader::read_from_storage(&*storage, H::ALGORITHM)?;
         // first construct a nodestore without a root
-        let mut nodestore = NodeStore {
+        let mut nodestore = Self {
             kind: Committed {
                 deleted: Box::default(),
                 root: None,
@@ -287,7 +287,7 @@ pub trait Parentable {
 
 impl Parentable for Arc<ImmutableProposal> {
     fn as_nodestore_parent(&self) -> NodeStoreParent {
-        NodeStoreParent::Proposed(Arc::clone(self))
+        NodeStoreParent::Proposed(Self::clone(self))
     }
     fn root_hash(&self) -> Option<TrieHash> {
         self.root
@@ -308,11 +308,7 @@ impl<S, H> NodeStore<Arc<ImmutableProposal>, S, H> {
     ///
     /// `new_id` is the [`CommittedId`] of the new committed revision produced
     /// from `self` (the just-committed proposal).
-    pub fn commit_reparent(
-        &self,
-        other: &NodeStore<Arc<ImmutableProposal>, S, H>,
-        new_id: CommittedId,
-    ) {
+    pub fn commit_reparent(&self, other: &Self, new_id: CommittedId) {
         other.kind.commit_reparent(&self.kind, new_id);
     }
 }
@@ -371,7 +367,7 @@ impl<S: ReadableStorage, H: HashMode> NodeStore<Mutable<Propose>, S, H> {
                 parent: parent.kind.as_nodestore_parent(),
             },
         };
-        Ok(NodeStore {
+        Ok(Self {
             kind,
             storage: parent.storage.clone(),
             must_recompute_storage_hash: parent.must_recompute_storage_hash,
@@ -408,8 +404,8 @@ impl<S: ReadableStorage, H: HashMode> NodeStore<Mutable<Propose>, S, H> {
 
     /// Creates a new [`NodeStore`] from a root node, inheriting the parent from another proposal.
     #[must_use]
-    pub fn from_root(parent: &NodeStore<Mutable<Propose>, S, H>, root: Option<Node>) -> Self {
-        NodeStore {
+    pub fn from_root(parent: &Self, root: Option<Node>) -> Self {
+        Self {
             kind: Mutable {
                 root,
                 inner: Propose {
@@ -482,7 +478,7 @@ impl<S: ReadableStorage, H: HashMode> NodeStore<Mutable<Recon<S, H>>, S, H> {
             None
         };
 
-        Ok(NodeStore {
+        Ok(Self {
             kind: Mutable {
                 root,
                 inner: Recon { parent_anchor },
@@ -497,8 +493,7 @@ impl<S: ReadableStorage, H: HashMode> NodeStore<Mutable<Recon<S, H>>, S, H> {
 
 impl<T: ReconstructionSource<S, H>, S: ReadableStorage, H: HashMode> NodeStore<T, S, H>
 where
-    NodeStore<T, S, H>: TrieReader,
-    Self: Sized,
+    Self: TrieReader,
 {
     /// Create a mutable reconstruction child from a committed or reconstructed parent.
     ///
@@ -532,7 +527,7 @@ impl<S: WritableStorage, H: HashMode> NodeStore<Mutable<Propose>, S, H> {
     /// `deleted_node_tracking` controls whether proposals build the future-delete
     /// log; see [`DeletedNodeTracking`].
     pub fn new_empty_proposal(storage: Arc<S>, deleted_node_tracking: DeletedNodeTracking) -> Self {
-        NodeStore {
+        Self {
             kind: Mutable {
                 root: None,
                 inner: Propose {
@@ -568,7 +563,7 @@ impl<S: ReadableStorage, H: HashMode> NodeStore<Mutable<Recon<S, H>>, S, H> {
             Arc::clone(&storage),
             DeletedNodeTracking::Enabled,
         ));
-        NodeStore {
+        Self {
             kind: Mutable {
                 root: None,
                 inner: Recon { parent_anchor },
@@ -758,11 +753,10 @@ pub enum NodeStoreParent {
 impl PartialEq for NodeStoreParent {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (NodeStoreParent::Proposed(a), NodeStoreParent::Proposed(b)) => Arc::ptr_eq(a, b),
-            (
-                NodeStoreParent::Committed { hash: ah, id: ai },
-                NodeStoreParent::Committed { hash: bh, id: bi },
-            ) => ah == bh && ai == bi,
+            (Self::Proposed(a), Self::Proposed(b)) => Arc::ptr_eq(a, b),
+            (Self::Committed { hash: ah, id: ai }, Self::Committed { hash: bh, id: bi }) => {
+                ah == bh && ai == bi
+            }
             _ => false,
         }
     }
@@ -1061,7 +1055,7 @@ impl<S: ReadableStorage, H: HashMode> From<NodeStore<Reconstructed<S, H>, S, H>>
             .kind
             .root
             .map(|swap| triomphe::Arc::unwrap_or_clone(swap.into_inner().into_inner()));
-        NodeStore {
+        Self {
             kind: Mutable {
                 root,
                 inner: Recon {
@@ -1080,7 +1074,7 @@ impl<S: ReadableStorage, H: HashMode> From<NodeStore<Mutable<Recon<S, H>>, S, H>
     for NodeStore<Reconstructed<S, H>, S, H>
 {
     fn from(val: NodeStore<Mutable<Recon<S, H>>, S, H>) -> Self {
-        NodeStore {
+        Self {
             kind: Reconstructed {
                 root: val
                     .kind
@@ -1123,7 +1117,7 @@ impl<S: ReadableStorage, H: HashMode> From<Arc<NodeStore<Reconstructed<S, H>, S,
 /// [`OnceLock`] hash (cloned if already computed, empty otherwise).
 impl<S, H> Clone for NodeStore<Reconstructed<S, H>, S, H> {
     fn clone(&self) -> Self {
-        NodeStore {
+        Self {
             kind: self.kind.clone(),
             storage: self.storage.clone(),
             must_recompute_storage_hash: self.must_recompute_storage_hash,
@@ -1206,7 +1200,7 @@ impl<S: ReadableStorage, H: HashMode> TryFrom<NodeStore<Mutable<Propose>, S, H>>
             inner: Propose { deleted, parent },
         } = kind;
 
-        let mut nodestore = NodeStore {
+        let mut nodestore = Self {
             kind: Arc::new(ImmutableProposal {
                 deleted: deleted.into(),
                 parent: Arc::new(parking_lot::Mutex::new(parent)),
@@ -1335,7 +1329,7 @@ impl<S: ReadableStorage, H: HashMode> RootReader for NodeStore<Reconstructed<S, 
 
 impl<T, S, H> HashedNodeReader for NodeStore<T, S, H>
 where
-    NodeStore<T, S, H>: TrieReader,
+    Self: TrieReader,
     T: Parentable,
     S: ReadableStorage,
     H: HashMode,
@@ -1353,7 +1347,7 @@ where
 // and the root_hash is computed lazily via OnceLock.
 impl<S: ReadableStorage, H: HashMode> HashedNodeReader for NodeStore<Reconstructed<S, H>, S, H>
 where
-    NodeStore<Reconstructed<S, H>, S, H>: TrieReader,
+    Self: TrieReader,
 {
     fn root_address(&self) -> Option<LinearAddress> {
         // Reconstructed views are read-only overlays and are never persisted.
@@ -1556,7 +1550,7 @@ impl<S: WritableStorage, H: HashMode> NodeStore<Committed, S, H> {
 // Helper functions for the checker
 impl<T, S: ReadableStorage, H: HashMode> NodeStore<T, S, H>
 where
-    NodeStore<T, S, H>: NodeReader,
+    Self: NodeReader,
 {
     // Find the area index and size of the stored area at the given address if the area is valid.
     pub(crate) fn read_leaked_area(

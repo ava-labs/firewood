@@ -104,6 +104,7 @@ pub async fn latest_ubuntu_ami(
             ));
         }
     };
+    #[expect(clippy::literal_string_with_formatting_args)]
     let name_pattern = UBUNTU_NOBLE_AMI_NAME_PATTERN.replace("{arch}", arch);
 
     let response = ec2

@@ -59,17 +59,17 @@ pub enum Node {
 impl lru_mem::HeapSize for Node {
     fn heap_size(&self) -> usize {
         match self {
-            Node::Branch(branch) => {
+            Self::Branch(branch) => {
                 std::mem::size_of::<BranchNode>().wrapping_add(branch.heap_size())
             }
-            Node::Leaf(leaf) => leaf.heap_size(),
+            Self::Leaf(leaf) => leaf.heap_size(),
         }
     }
 }
 
 impl Default for Node {
     fn default() -> Self {
-        Node::Leaf(LeafNode {
+        Self::Leaf(LeafNode {
             partial_path: Path::new(),
             value: Box::default(),
         })
@@ -78,13 +78,13 @@ impl Default for Node {
 
 impl From<BranchNode> for Node {
     fn from(branch: BranchNode) -> Self {
-        Node::Branch(Box::new(branch))
+        Self::Branch(Box::new(branch))
     }
 }
 
 impl From<LeafNode> for Node {
     fn from(leaf: LeafNode) -> Self {
-        Node::Leaf(leaf)
+        Self::Leaf(leaf)
     }
 }
 
@@ -112,7 +112,7 @@ const LEAF_PARTIAL_PATH_LEN_OVERFLOW: u8 = (1 << 7) - 2; // 126 nibbles (-1 for 
 
 impl Default for LeafFirstByte {
     fn default() -> Self {
-        LeafFirstByte(1)
+        Self(1)
     }
 }
 
@@ -151,10 +151,10 @@ impl ExtendableBytes for Vec<u8> {
         self.reserve(reserve);
     }
     fn push(&mut self, value: u8) {
-        Vec::push(self, value);
+        Self::push(self, value);
     }
     fn extend_from_slice(&mut self, other: &[u8]) {
-        Vec::extend_from_slice(self, other);
+        Self::extend_from_slice(self, other);
     }
 }
 
@@ -178,24 +178,24 @@ impl Node {
     #[must_use]
     pub fn partial_path(&self) -> &Path {
         match self {
-            Node::Branch(b) => &b.partial_path,
-            Node::Leaf(l) => &l.partial_path,
+            Self::Branch(b) => &b.partial_path,
+            Self::Leaf(l) => &l.partial_path,
         }
     }
 
     /// Updates the partial path of the node to `partial_path`.
     pub fn update_partial_path(&mut self, partial_path: Path) {
         match self {
-            Node::Branch(b) => b.partial_path = partial_path,
-            Node::Leaf(l) => l.partial_path = partial_path,
+            Self::Branch(b) => b.partial_path = partial_path,
+            Self::Leaf(l) => l.partial_path = partial_path,
         }
     }
 
     /// Updates the value of the node to `value`.
     pub fn update_value(&mut self, value: Box<[u8]>) {
         match self {
-            Node::Branch(b) => b.value = Some(value),
-            Node::Leaf(l) => l.value = value,
+            Self::Branch(b) => b.value = Some(value),
+            Self::Leaf(l) => l.value = value,
         }
     }
 
@@ -204,8 +204,8 @@ impl Node {
     #[must_use]
     pub fn value(&self) -> Option<&[u8]> {
         match self {
-            Node::Branch(b) => b.value.as_deref(),
-            Node::Leaf(l) => Some(&l.value),
+            Self::Branch(b) => b.value.as_deref(),
+            Self::Leaf(l) => Some(&l.value),
         }
     }
 
@@ -256,7 +256,7 @@ impl Node {
         encoded.push(0);
 
         match self {
-            Node::Branch(b) => {
+            Self::Branch(b) => {
                 let child_iter = b.children.iter_present();
                 let childcount = child_iter.clone().count();
 
@@ -310,7 +310,7 @@ impl Node {
                     }
                 }
             }
-            Node::Leaf(l) => {
+            Self::Leaf(l) => {
                 let pp_len = match l.partial_path.len() {
                     // less than 126 nibbles
                     len if len < LEAF_PARTIAL_PATH_LEN_OVERFLOW as usize => len as u8,
@@ -364,7 +364,7 @@ impl Node {
                 )?;
                 let value_len = serialized.read_varint()?;
                 let value = serialized.read_fixed_len(value_len)?;
-                Ok(Node::Leaf(LeafNode {
+                Ok(Self::Leaf(LeafNode {
                     partial_path,
                     value: value.into(),
                 }))
@@ -402,7 +402,7 @@ impl Node {
 
                         *child = Some(Child::AddressWithHash(
                             LinearAddress::new(address)
-                                .ok_or(Error::other("zero address in child"))?,
+                                .ok_or_else(|| Error::other("zero address in child"))?,
                             hash,
                         ));
                     }
@@ -426,13 +426,13 @@ impl Node {
 
                         children[position] = Some(Child::AddressWithHash(
                             LinearAddress::new(address)
-                                .ok_or(Error::other("zero address in child"))?,
+                                .ok_or_else(|| Error::other("zero address in child"))?,
                             hash,
                         ));
                     }
                 }
 
-                Ok(Node::Branch(Box::new(BranchNode {
+                Ok(Self::Branch(Box::new(BranchNode {
                     partial_path,
                     value,
                     children,
@@ -474,7 +474,7 @@ impl Node {
             Ok(branch.into())
         } else {
             Ok(match self {
-                Node::Leaf(leaf) => {
+                Self::Leaf(leaf) => {
                     // Root is a leaf with an empty partial path. Replace it with a branch.
                     BranchNode {
                         partial_path: Path::new(),
@@ -483,7 +483,7 @@ impl Node {
                     }
                     .into()
                 }
-                Node::Branch(branch) => branch,
+                Self::Branch(branch) => branch,
             })
         }
     }

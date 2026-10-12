@@ -288,7 +288,7 @@ impl<T: Clone> From<&DenseChildren<T>> for Children<Option<T>> {
     /// Expands a [`DenseChildren`] back into a full 16-slot [`Children`], cloning
     /// each present value; absent slots become `None`.
     fn from(dense: &DenseChildren<T>) -> Self {
-        Children(FixedArray::from(dense))
+        Self(FixedArray::from(dense))
     }
 }
 

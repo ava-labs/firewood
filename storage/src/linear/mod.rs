@@ -118,8 +118,8 @@ impl std::fmt::Display for FileIoError {
             offset = self.offset,
             filename = self
                 .filename
-                .as_ref()
-                .unwrap_or(&PathBuf::from("[unknown]"))
+                .as_deref()
+                .unwrap_or_else(|| std::path::Path::new("[unknown]"))
                 .display(),
             context = self.context.as_ref().unwrap_or(&String::new())
         )
@@ -145,10 +145,10 @@ pub enum ReadableNodeMode {
 impl ReadableNodeMode {
     pub const fn as_str(&self) -> &'static str {
         match self {
-            ReadableNodeMode::Open => "open",
-            ReadableNodeMode::Read => "read",
-            ReadableNodeMode::ReconRead => "recon-read",
-            ReadableNodeMode::Write => "write",
+            Self::Open => "open",
+            Self::Read => "read",
+            Self::ReconRead => "recon-read",
+            Self::Write => "write",
         }
     }
 }
@@ -285,7 +285,7 @@ pub trait OffsetReader: Read {
 
 impl<T> OffsetReader for Cursor<T>
 where
-    Cursor<T>: Read,
+    Self: Read,
 {
     fn offset(&self) -> u64 {
         self.position()

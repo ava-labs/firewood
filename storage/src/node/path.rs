@@ -106,13 +106,13 @@ impl Path {
     /// Creates a Path from a [Iterator] or other iterator that returns
     /// nibbles
     pub fn from_nibbles_iterator<T: Iterator<Item = u8>>(nibbles_iter: T) -> Self {
-        Path(nibbles_iter.collect())
+        Self(nibbles_iter.collect())
     }
 
     /// Creates an empty Path
     #[must_use]
     pub fn new() -> Self {
-        Path(SmallVec::new())
+        Self(SmallVec::new())
     }
 
     /// Read from an iterator that returns nibbles with a prefix
@@ -159,10 +159,10 @@ pub struct BytesIterator<'a> {
     nibbles_iter: std::slice::Iter<'a, u8>,
 }
 
-impl Add<Path> for Path {
-    type Output = Path;
-    fn add(self, other: Path) -> Self::Output {
-        let mut new = self.clone();
+impl Add<Self> for Path {
+    type Output = Self;
+    fn add(self, other: Self) -> Self::Output {
+        let mut new = self;
         new.extend(other.iter().copied());
         new
     }

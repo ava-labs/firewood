@@ -89,7 +89,7 @@ pub(super) struct ClassifiedChildren<'a> {
 
 impl<T, S: ReadableStorage, H: HashMode> NodeStore<T, S, H>
 where
-    NodeStore<T, S, H>: NodeReader,
+    Self: NodeReader,
 {
     /// Helper function to classify children for ethereum hash processing
     /// We have some special cases based on the number of children

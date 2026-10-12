@@ -136,24 +136,24 @@ impl Version {
     /// After making the version a static string, there is no need to use semver
     /// to parse the valid version strings since there are a finite set of valid
     /// strings.
-    const VALID_V1_VERSIONS: [Version; 17] = [
-        Version::from_static(b"firewood-v1-hfix"),
-        Version::from_static(b"firewood-v1\0\0\0\0\0"),
-        Version::from_static(b"firewood 0.0.18\0"),
-        Version::from_static(b"firewood 0.0.17\0"),
-        Version::from_static(b"firewood 0.0.16\0"),
-        Version::from_static(b"firewood 0.0.15\0"),
-        Version::from_static(b"firewood 0.0.14\0"),
-        Version::from_static(b"firewood 0.0.13\0"),
-        Version::from_static(b"firewood 0.0.12\0"),
-        Version::from_static(b"firewood 0.0.11\0"),
-        Version::from_static(b"firewood 0.0.10\0"),
-        Version::from_static(b"firewood 0.0.9\0\0"),
-        Version::from_static(b"firewood 0.0.8\0\0"),
-        Version::from_static(b"firewood 0.0.7\0\0"),
-        Version::from_static(b"firewood 0.0.6\0\0"),
-        Version::from_static(b"firewood 0.0.5\0\0"),
-        Version::from_static(b"firewood 0.0.4\0\0"),
+    const VALID_V1_VERSIONS: [Self; 17] = [
+        Self::from_static(b"firewood-v1-hfix"),
+        Self::from_static(b"firewood-v1\0\0\0\0\0"),
+        Self::from_static(b"firewood 0.0.18\0"),
+        Self::from_static(b"firewood 0.0.17\0"),
+        Self::from_static(b"firewood 0.0.16\0"),
+        Self::from_static(b"firewood 0.0.15\0"),
+        Self::from_static(b"firewood 0.0.14\0"),
+        Self::from_static(b"firewood 0.0.13\0"),
+        Self::from_static(b"firewood 0.0.12\0"),
+        Self::from_static(b"firewood 0.0.11\0"),
+        Self::from_static(b"firewood 0.0.10\0"),
+        Self::from_static(b"firewood 0.0.9\0\0"),
+        Self::from_static(b"firewood 0.0.8\0\0"),
+        Self::from_static(b"firewood 0.0.7\0\0"),
+        Self::from_static(b"firewood 0.0.6\0\0"),
+        Self::from_static(b"firewood 0.0.5\0\0"),
+        Self::from_static(b"firewood 0.0.4\0\0"),
     ];
 }
 
@@ -543,7 +543,7 @@ impl NodeStoreHeader {
     /// Get the offset of the `free_lists` field for use with `offset_of`!
     #[must_use]
     pub const fn free_lists_offset() -> u64 {
-        std::mem::offset_of!(NodeStoreHeader, free_lists) as u64
+        std::mem::offset_of!(Self, free_lists) as u64
     }
 
     /// Get the cargo version of `firewood-storage` used to create this database,

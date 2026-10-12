@@ -30,7 +30,7 @@ impl<'db> RevisionHandle<'db> {
         historical: Option<CommittedView>,
         metrics_context: MetricsContext,
         handle: &'db DatabaseHandle,
-    ) -> RevisionHandle<'db> {
+    ) -> Self {
         RevisionHandle {
             view,
             historical,

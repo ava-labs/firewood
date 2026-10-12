@@ -43,8 +43,9 @@ missing_const_for_fn = "warn"
 arithmetic_side_effects = "warn"
 undocumented_unsafe_blocks = "deny"
 str_to_string = "warn"
-# lower the priority of pedantic to allow overriding the lints it includes
+# lower the priority of pedantic and nursery to allow overriding the lints it includes
 pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
 # These lints are from pedantic but allowed. They are a bit too pedantic and
 # encourage making backwards incompatible changes.
 needless_pass_by_value = "allow"
@@ -54,6 +55,17 @@ unused_self = "allow"
 # to u64 and vice versa and should be re-enabled if/when clippy has a separate
 # lint for usize vs non-usize truncation.
 cast_possible_truncation = "allow"
+# makes code harder to read for no gain
+option_if_let_else = "allow"
+redundant_pub_crate = "allow"
+single_option_map = "allow"
+# TODO(demosdemon): needs case-by-case eval
+significant_drop_tightening = "allow"
+# TODO(demosdemon): needs a documentation pass
+too_long_first_doc_paragraph = "allow"
+doc_link_code = "allow"
+# TODO(demosdemon): this makes me sad; we need to fix/update TypedBuilder to not trigger this lint
+empty_enums = "allow"
 
 [patch.crates-io]
 metrics = { git = "https://github.com/demosdemon/metrics.git", rev = "b12dd4b4ab096147199520f9cc1b47fbd8186f10" }

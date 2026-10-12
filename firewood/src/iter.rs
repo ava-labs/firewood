@@ -144,7 +144,7 @@ impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
                                             Err(e) => return Some(Err(e)),
                                         }
                                     }
-                                    Child::Node(node) => node.clone().into(),
+                                    Child::Node(node) => node.into(),
                                     Child::MaybePersisted(maybe_persisted, _) => {
                                         // For MaybePersisted, we need to get the node
                                         match maybe_persisted.as_shared_node(self.merkle) {
@@ -630,8 +630,8 @@ impl<I: Iterator<Item = T>, T: KeyValuePair, K: KeyType> FilteredKeyRangeIter<I,
     /// encountered.
     pub fn new(iter: I, last_key: Option<K>) -> Self {
         match last_key {
-            Some(k) => FilteredKeyRangeIter::Filtered { iter, last_key: k },
-            None => FilteredKeyRangeIter::Unfiltered { iter },
+            Some(k) => Self::Filtered { iter, last_key: k },
+            None => Self::Unfiltered { iter },
         }
     }
 }
@@ -641,31 +641,29 @@ impl<I: Iterator<Item = T>, T: KeyValuePair, K: KeyType> Iterator for FilteredKe
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            FilteredKeyRangeIter::Unfiltered { iter } => iter.next().map(T::try_into_tuple),
-            FilteredKeyRangeIter::Filtered { iter, last_key } => {
-                match iter.next().map(T::try_into_tuple) {
-                    Some(Ok((key, value))) if key.as_ref() <= last_key.as_ref() => {
-                        Some(Ok((key, value)))
-                    }
-                    Some(Err(e)) => Some(Err(e)),
-                    _ => {
-                        *self = FilteredKeyRangeIter::Exhausted;
-                        None
-                    }
+            Self::Unfiltered { iter } => iter.next().map(T::try_into_tuple),
+            Self::Filtered { iter, last_key } => match iter.next().map(T::try_into_tuple) {
+                Some(Ok((key, value))) if key.as_ref() <= last_key.as_ref() => {
+                    Some(Ok((key, value)))
                 }
-            }
-            FilteredKeyRangeIter::Exhausted => None,
+                Some(Err(e)) => Some(Err(e)),
+                _ => {
+                    *self = Self::Exhausted;
+                    None
+                }
+            },
+            Self::Exhausted => None,
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         match self {
-            FilteredKeyRangeIter::Unfiltered { iter } => iter.size_hint(),
-            FilteredKeyRangeIter::Filtered { iter, .. } => {
+            Self::Unfiltered { iter } => iter.size_hint(),
+            Self::Filtered { iter, .. } => {
                 let (_, upper) = iter.size_hint();
                 (0, upper)
             }
-            FilteredKeyRangeIter::Exhausted => (0, Some(0)),
+            Self::Exhausted => (0, Some(0)),
         }
     }
 }

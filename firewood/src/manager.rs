@@ -278,7 +278,7 @@ impl<H: HashMode> RevisionManager<H> {
 
         let manager = Self {
             max_revisions: config.manager.max_revisions,
-            in_memory_revisions: RwLock::new(VecDeque::from([nodestore.clone()])),
+            in_memory_revisions: RwLock::new(VecDeque::from([nodestore])),
             by_hash: RwLock::new(by_hash),
             proposals: Mutex::new(Default::default()),
             threadpool: OnceLock::new(),
@@ -1180,7 +1180,7 @@ mod tests {
 
         // Empty hash should still resolve via the default-hash short-circuit.
         let revision = manager
-            .revision(empty_hash.clone())
+            .revision(empty_hash)
             .expect("empty-trie revision must resolve via the default-hash short-circuit");
         assert!(revision.root_address().is_none());
     }

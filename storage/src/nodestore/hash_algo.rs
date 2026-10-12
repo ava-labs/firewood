@@ -26,17 +26,17 @@ impl NodeHashAlgorithm {
     /// account-aware nodes).
     #[must_use]
     pub const fn is_ethereum(self) -> bool {
-        matches!(self, NodeHashAlgorithm::Ethereum)
+        matches!(self, Self::Ethereum)
     }
 
     pub(crate) const fn name(self) -> &'static str {
         match self {
-            NodeHashAlgorithm::MerkleDB => "MerkleDB",
-            NodeHashAlgorithm::Ethereum => "Ethereum",
+            Self::MerkleDB => "MerkleDB",
+            Self::Ethereum => "Ethereum",
         }
     }
 
-    pub(crate) fn validate_open(self, expected: NodeHashAlgorithm) -> std::io::Result<()> {
+    pub(crate) fn validate_open(self, expected: Self) -> std::io::Result<()> {
         if self == expected {
             Ok(())
         } else {
@@ -58,8 +58,8 @@ impl TryFrom<u64> for NodeHashAlgorithm {
 
     fn try_from(value: u64) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(NodeHashAlgorithm::MerkleDB),
-            1 => Ok(NodeHashAlgorithm::Ethereum),
+            0 => Ok(Self::MerkleDB),
+            1 => Ok(Self::Ethereum),
             other => Err(NodeHashAlgorithmTryFromIntError(other)),
         }
     }

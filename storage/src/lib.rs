@@ -178,7 +178,7 @@ pub(crate) struct CachedNode(pub(crate) SharedNode);
 
 impl From<SharedNode> for CachedNode {
     fn from(node: SharedNode) -> Self {
-        CachedNode(node)
+        Self(node)
     }
 }
 
@@ -294,8 +294,8 @@ pub enum FreeListParent {
 impl LowerHex for StoredAreaParent {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
-            StoredAreaParent::TrieNode(trie_parent) => LowerHex::fmt(trie_parent, f),
-            StoredAreaParent::FreeList(free_list_parent) => LowerHex::fmt(free_list_parent, f),
+            Self::TrieNode(trie_parent) => LowerHex::fmt(trie_parent, f),
+            Self::FreeList(free_list_parent) => LowerHex::fmt(free_list_parent, f),
         }
     }
 }
@@ -303,8 +303,8 @@ impl LowerHex for StoredAreaParent {
 impl LowerHex for TrieNodeParent {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
-            TrieNodeParent::Root => f.write_str("Root"),
-            TrieNodeParent::Parent(addr, index) => {
+            Self::Root => f.write_str("Root"),
+            Self::Parent(addr, index) => {
                 f.write_str("TrieNode@")?;
                 LowerHex::fmt(addr, f)?;
                 f.write_fmt(format_args!("[{index}]"))
@@ -316,8 +316,8 @@ impl LowerHex for TrieNodeParent {
 impl LowerHex for FreeListParent {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
-            FreeListParent::FreeListHead(index) => f.write_fmt(format_args!("FreeLists[{index}]")),
-            FreeListParent::PrevFreeArea {
+            Self::FreeListHead(index) => f.write_fmt(format_args!("FreeLists[{index}]")),
+            Self::PrevFreeArea {
                 area_size_idx,
                 parent_addr,
             } => {
@@ -473,17 +473,15 @@ pub enum CheckerError {
 impl CheckerError {
     const fn parent(&self) -> Option<StoredAreaParent> {
         match self {
-            CheckerError::InvalidDBSize { .. }
-            | CheckerError::AreaLeaks(_)
-            | CheckerError::UnpersistedRoot => None,
-            CheckerError::AreaOutOfBounds { parent, .. }
-            | CheckerError::AreaIntersects { parent, .. }
-            | CheckerError::AreaMisaligned { parent, .. }
-            | CheckerError::IO { parent, .. } => Some(*parent),
-            CheckerError::HashMismatch { parent, .. }
-            | CheckerError::NodeLargerThanArea { parent, .. }
-            | CheckerError::InvalidKey { parent, .. } => Some(StoredAreaParent::TrieNode(*parent)),
-            CheckerError::FreelistAreaSizeMismatch { parent, .. } => {
+            Self::InvalidDBSize { .. } | Self::AreaLeaks(_) | Self::UnpersistedRoot => None,
+            Self::AreaOutOfBounds { parent, .. }
+            | Self::AreaIntersects { parent, .. }
+            | Self::AreaMisaligned { parent, .. }
+            | Self::IO { parent, .. } => Some(*parent),
+            Self::HashMismatch { parent, .. }
+            | Self::NodeLargerThanArea { parent, .. }
+            | Self::InvalidKey { parent, .. } => Some(StoredAreaParent::TrieNode(*parent)),
+            Self::FreelistAreaSizeMismatch { parent, .. } => {
                 Some(StoredAreaParent::FreeList(*parent))
             }
         }

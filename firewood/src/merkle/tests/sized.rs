@@ -362,7 +362,7 @@ fn test_change_sized_from_empty_source_covers_target() {
 fn test_sized_bounded_starts_and_prefix_keys() {
     let kvs = [b"".as_slice(), b"a", b"a\0", b"ab", b"abc", b"b", b"z"]
         .map(|key| (key.to_vec(), vec![0x42; 128]));
-    let merkle = init_merkle(kvs.clone());
+    let merkle = init_merkle(kvs);
     let source = init_merkle(Vec::<(Vec<u8>, Vec<u8>)>::new());
 
     for start in [b"".as_slice(), b"a", b"aa", b"ab", b"zz"] {

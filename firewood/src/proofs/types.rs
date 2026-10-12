@@ -87,8 +87,8 @@ pub enum ProofEdge {
 impl std::fmt::Display for ProofEdge {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ProofEdge::Left => f.write_str("left"),
-            ProofEdge::Right => f.write_str("right"),
+            Self::Left => f.write_str("left"),
+            Self::Right => f.write_str("right"),
         }
     }
 }
@@ -783,7 +783,7 @@ where
     pub fn join<O: ProofCollection<Node = T> + IntoIterator<Item = T>>(
         self,
         other: Proof<O>,
-    ) -> Proof<V> {
+    ) -> Self {
         self.into_iter().chain(other).collect()
     }
 }
@@ -791,7 +791,7 @@ where
 impl<V: ProofCollection + FromIterator<V::Node>> FromIterator<V::Node> for Proof<V> {
     #[inline]
     fn from_iter<I: IntoIterator<Item = V::Node>>(iter: I) -> Self {
-        Proof(iter.into_iter().collect())
+        Self(iter.into_iter().collect())
     }
 }
 
@@ -905,9 +905,9 @@ impl ProofType {
     #[must_use]
     pub const fn new(v: u8) -> Option<Self> {
         match v {
-            0 => Some(ProofType::Single),
-            1 => Some(ProofType::Range),
-            2 => Some(ProofType::Change),
+            0 => Some(Self::Single),
+            1 => Some(Self::Range),
+            2 => Some(Self::Change),
             _ => None,
         }
     }
@@ -916,9 +916,9 @@ impl ProofType {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
-            ProofType::Single => "single",
-            ProofType::Range => "range",
-            ProofType::Change => "change",
+            Self::Single => "single",
+            Self::Range => "range",
+            Self::Change => "change",
         }
     }
 }

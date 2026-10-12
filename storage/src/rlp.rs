@@ -413,12 +413,10 @@ fn read_be_usize(bytes: &[u8]) -> usize {
 
 #[inline]
 fn write_bytes(out: &mut Vec<u8>, b: &[u8]) {
-    if b.len() == 1 && b.first().is_some_and(|&v| v < 0x80) {
-        out.extend_from_slice(b);
-    } else {
+    if b.len() != 1 || b.first().is_none_or(|&v| v >= 0x80) {
         write_header(out, b.len(), 0x80);
-        out.extend_from_slice(b);
     }
+    out.extend_from_slice(b);
 }
 
 #[inline]

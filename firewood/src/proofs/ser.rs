@@ -322,11 +322,11 @@ impl WriteItem for firewood_storage::HashType {
         // preserved byte-for-byte.
         if w.node_hash_algorithm().is_ethereum() {
             match self {
-                firewood_storage::HashType::Hash(h) => {
+                Self::Hash(h) => {
                     w.out.push(0);
                     h.write_item(w);
                 }
-                firewood_storage::HashType::Rlp(h) => {
+                Self::Rlp(h) => {
                     w.out.push(1);
                     h.write_item(w);
                 }
@@ -335,8 +335,8 @@ impl WriteItem for firewood_storage::HashType {
             // MerkleDB child hashes are always a bare 32-byte hash, with no
             // discriminant byte.
             match self {
-                firewood_storage::HashType::Hash(h) => h.write_item(w),
-                firewood_storage::HashType::Rlp(_) => {
+                Self::Hash(h) => h.write_item(w),
+                Self::Rlp(_) => {
                     unreachable!("merkledb child hash is never inline RLP")
                 }
             }

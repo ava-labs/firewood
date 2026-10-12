@@ -178,8 +178,8 @@ pub(super) enum EitherKey<L, R> {
 impl<L: KeyType, R: KeyType> EitherKey<L, R> {
     fn as_key(&self) -> &[u8] {
         match self {
-            EitherKey::Left(key) => key.as_ref(),
-            EitherKey::Right(key) => key.as_ref(),
+            Self::Left(key) => key.as_ref(),
+            Self::Right(key) => key.as_ref(),
         }
     }
 }

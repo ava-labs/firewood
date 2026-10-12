@@ -1141,7 +1141,7 @@ mod box_array_deserialization_tests {
 
         fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
             let chunk = reader.read_chunk::<32>()?;
-            Ok(Hash32(*chunk))
+            Ok(Self(*chunk))
         }
     }
 
@@ -1159,7 +1159,7 @@ mod box_array_deserialization_tests {
         fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
             let len = reader.read_item::<usize>()?;
             let slice = reader.read_slice(len)?;
-            Ok(VarLenVec(slice.to_vec()))
+            Ok(Self(slice.to_vec()))
         }
     }
 

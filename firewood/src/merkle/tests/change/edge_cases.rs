@@ -516,7 +516,7 @@ fn test_change_proof_prefix_key_deleted_in_end_root() {
 
     let ctx = verify_change_proof_structure(
         &proof,
-        root2.clone(),
+        root2,
         Some(b"\xab\x00".as_slice()),
         Some(b"\xff".as_slice()),
         None,
@@ -660,8 +660,7 @@ fn test_out_of_range_root_compression() {
         "root should compress to [1] after deletion"
     );
 
-    let ctx =
-        verify_change_proof_structure(&proof, root2.clone(), Some(b"\x10"), None, None).unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10"), None, None).unwrap();
     verify_and_check(&db, &proof, &ctx, root1).unwrap();
 }
 

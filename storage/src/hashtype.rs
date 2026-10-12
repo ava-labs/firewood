@@ -38,8 +38,8 @@ pub enum HashType {
 impl std::fmt::Debug for HashType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            HashType::Hash(h) => write!(f, "Hash({h})"),
-            HashType::Rlp(r) => write!(f, "Rlp({})", hex::encode(r)),
+            Self::Hash(h) => write!(f, "Hash({h})"),
+            Self::Rlp(r) => write!(f, "Rlp({})", hex::encode(r)),
         }
     }
 }
@@ -77,8 +77,8 @@ impl HashType {
 impl PartialEq<TrieHash> for HashType {
     fn eq(&self, other: &TrieHash) -> bool {
         match self {
-            HashType::Hash(h) => h == other,
-            HashType::Rlp(r) => Keccak256::digest(r.as_ref()).as_slice() == other.as_ref(),
+            Self::Hash(h) => h == other,
+            Self::Rlp(r) => Keccak256::digest(r.as_ref()).as_slice() == other.as_ref(),
         }
     }
 }
@@ -96,10 +96,10 @@ impl PartialEq for HashType {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             // if both are hash or rlp, we can skip hashing
-            (HashType::Hash(h1), HashType::Hash(h2)) => h1 == h2,
-            (HashType::Rlp(r1), HashType::Rlp(r2)) => r1 == r2,
+            (Self::Hash(h1), Self::Hash(h2)) => h1 == h2,
+            (Self::Rlp(r1), Self::Rlp(r2)) => r1 == r2,
             // otherwise, one is a hash and the other isn't, so hash the rlp and compare
-            (HashType::Hash(h), HashType::Rlp(r)) | (HashType::Rlp(r), HashType::Hash(h)) => {
+            (Self::Hash(h), Self::Rlp(r)) | (Self::Rlp(r), Self::Hash(h)) => {
                 // avoid copying by comparing the hash directly; copying into a
                 // TrieHash adds a noticeable overhead
                 Keccak256::digest(r).as_slice() == h.as_ref()
@@ -126,11 +126,11 @@ impl std::hash::Hash for HashType {
 impl Serializable for HashType {
     fn write_to<W: ExtendableBytes>(&self, vec: &mut W) {
         match self {
-            HashType::Hash(h) => {
+            Self::Hash(h) => {
                 vec.push(0);
                 vec.extend_from_slice(h.as_ref());
             }
-            HashType::Rlp(r) => {
+            Self::Rlp(r) => {
                 debug_assert!(!r.is_empty());
                 debug_assert!(r.len() < 32);
                 vec.push(r.len() as u8);
@@ -146,7 +146,7 @@ impl Serializable for HashType {
         let Some(len) = std::num::NonZeroU8::new(bytes[0]) else {
             // length is zero, so it's a full trie hash
             reader.read_exact(&mut bytes)?;
-            return Ok(HashType::Hash(TrieHash::from(bytes)));
+            return Ok(Self::Hash(TrieHash::from(bytes)));
         };
 
         let Some(bytes_mut) = bytes.get_mut(..len.get() as usize) else {
@@ -157,7 +157,7 @@ impl Serializable for HashType {
         };
 
         reader.read_exact(bytes_mut)?;
-        Ok(HashType::Rlp(SmallVec::from_buf_and_len(
+        Ok(Self::Rlp(SmallVec::from_buf_and_len(
             bytes,
             len.get() as usize,
         )))
@@ -184,13 +184,13 @@ impl From<&HashType> for TrieHash {
 
 impl From<TrieHash> for HashType {
     fn from(val: TrieHash) -> Self {
-        HashType::Hash(val)
+        Self::Hash(val)
     }
 }
 
 impl From<[u8; 32]> for HashType {
     fn from(value: [u8; 32]) -> Self {
-        HashType::Hash(TrieHash::into(value.into()))
+        Self::Hash(TrieHash::into(value.into()))
     }
 }
 
@@ -205,8 +205,8 @@ impl TryFrom<&[u8]> for HashType {
 impl AsRef<[u8]> for HashType {
     fn as_ref(&self) -> &[u8] {
         match self {
-            HashType::Hash(h) => h.as_ref(),
-            HashType::Rlp(r) => r.as_ref(),
+            Self::Hash(h) => h.as_ref(),
+            Self::Rlp(r) => r.as_ref(),
         }
     }
 }
@@ -215,8 +215,8 @@ impl std::ops::Deref for HashType {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
         match self {
-            HashType::Hash(h) => h.as_slice(),
-            HashType::Rlp(r) => r,
+            Self::Hash(h) => h.as_slice(),
+            Self::Rlp(r) => r,
         }
     }
 }
@@ -224,8 +224,8 @@ impl std::ops::Deref for HashType {
 impl Display for HashType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            HashType::Hash(h) => write!(f, "{h}"),
-            HashType::Rlp(r) => {
+            Self::Hash(h) => write!(f, "{h}"),
+            Self::Rlp(r) => {
                 let width = f.precision().unwrap_or(32);
                 write!(f, "{:.*}", width, hex::encode(r))
             }

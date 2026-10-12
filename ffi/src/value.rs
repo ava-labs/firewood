@@ -66,43 +66,43 @@ pub enum Maybe<T> {
 impl<T> Maybe<T> {
     /// Returns true if the `Maybe` contains a value.
     pub const fn is_some(&self) -> bool {
-        matches!(self, Maybe::Some(_))
+        matches!(self, Self::Some(_))
     }
 
     /// Returns true if the `Maybe` does not contain a value.
     pub const fn is_none(&self) -> bool {
-        matches!(self, Maybe::None)
+        matches!(self, Self::None)
     }
 
     /// Converts from `&Maybe<T>` to `Maybe<&T>`.
     pub const fn as_ref(&self) -> Maybe<&T> {
         match self {
-            Maybe::None => Maybe::None,
-            Maybe::Some(v) => Maybe::Some(v),
+            Self::None => Maybe::None,
+            Self::Some(v) => Maybe::Some(v),
         }
     }
 
     /// Converts from `&mut Maybe<T>` to `Maybe<&mut T>`.
     pub const fn as_mut(&mut self) -> Maybe<&mut T> {
         match self {
-            Maybe::None => Maybe::None,
-            Maybe::Some(v) => Maybe::Some(v),
+            Self::None => Maybe::None,
+            Self::Some(v) => Maybe::Some(v),
         }
     }
 
     /// Maps a `Maybe<T>` to `Maybe<U>` by applying a function to a contained value.
     pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> Maybe<U> {
         match self {
-            Maybe::None => Maybe::None,
-            Maybe::Some(v) => Maybe::Some(f(v)),
+            Self::None => Maybe::None,
+            Self::Some(v) => Maybe::Some(f(v)),
         }
     }
 
     /// Converts from `Maybe<T>` to `Option<T>`.
     pub fn into_option(self) -> Option<T> {
         match self {
-            Maybe::None => None,
-            Maybe::Some(v) => Some(v),
+            Self::None => None,
+            Self::Some(v) => Some(v),
         }
     }
 }
@@ -110,8 +110,8 @@ impl<T> Maybe<T> {
 impl<T> From<Option<T>> for Maybe<T> {
     fn from(opt: Option<T>) -> Self {
         match opt {
-            None => Maybe::None,
-            Some(v) => Maybe::Some(v),
+            None => Self::None,
+            Some(v) => Self::Some(v),
         }
     }
 }

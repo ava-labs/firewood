@@ -23,7 +23,7 @@ use crate::proofs::ProofEdge;
 /// - A start proof: proves that the smallest key does/doesn't exist
 /// - An end proof: proves that the largest key does/doesn't exist
 /// - The actual `BatchOp`s that specify the difference between the start and end tries.
-#[derive(PartialEq)]
+#[derive(PartialEq, Eq)]
 pub struct ChangeProof<K: AsRef<[u8]> + Debug, V: AsRef<[u8]> + Debug, H> {
     start_proof: Proof<H>,
     end_proof: Proof<H>,
@@ -196,6 +196,7 @@ where
 // ── Change proof verification ──────────────────────────────────────────────
 
 /// Verification context captured after structural validation of a change proof.
+///
 /// Stored so that downstream logic (root hash verification,
 /// [`find_next_key_after_change_proof`]) can reference the original
 /// verification parameters without re-validating.

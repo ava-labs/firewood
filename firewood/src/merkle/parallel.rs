@@ -62,13 +62,13 @@ pub enum CreateProposalError {
 
 impl From<FileIoError> for CreateProposalError {
     fn from(err: FileIoError) -> Self {
-        CreateProposalError::FileIoError(err)
+        Self::FileIoError(err)
     }
 }
 
 impl From<SendError<BatchOp<Key, Value>>> for CreateProposalError {
     fn from(_err: SendError<BatchOp<Key, Value>>) -> Self {
-        CreateProposalError::SendError
+        Self::SendError
     }
 }
 
@@ -277,7 +277,7 @@ impl ParallelMerkle {
         let metrics_context = current_metrics_context();
         pool.spawn(move || {
             let _guard = set_metrics_context(metrics_context);
-            if let Err(err) = ParallelMerkle::worker_event_loop(
+            if let Err(err) = Self::worker_event_loop(
                 Merkle::from(worker_nodestore),
                 first_path_component,
                 child_receiver,
@@ -292,7 +292,7 @@ impl ParallelMerkle {
     // Collect responses from the workers, each representing the root of a subtrie and merge them into the
     // root node of the main trie.
     fn merge_children<H: HashMode>(
-        &mut self,
+        &self,
         response_channel: Receiver<Result<Response, FileIoError>>,
         proposal: &mut NodeStore<Mutable<Propose>, FileBacked, H>,
         root_branch: &mut BranchNode,
@@ -335,7 +335,7 @@ impl ParallelMerkle {
         // because it is possible to generate a FileIoError within the closure.
         match worker_option {
             Some(worker) => Ok(worker),
-            None => Ok(worker_option.insert(ParallelMerkle::create_worker(
+            None => Ok(worker_option.insert(Self::create_worker(
                 pool,
                 proposal,
                 root_branch,
@@ -452,7 +452,7 @@ impl ParallelMerkle {
                             // If it's already a FileIoError (from worker creation), propagate directly.
                             match err {
                                 CreateProposalError::SendError => {
-                                    ParallelMerkle::find_fileio_error(&response_receiver)?;
+                                    Self::find_fileio_error(&response_receiver)?;
                                     return Err(err);
                                 }
                                 _ => return Err(err),
@@ -497,7 +497,7 @@ impl ParallelMerkle {
                 // A send error is most likely due to a worker returning to the thread pool
                 // after it encountered a FileIoError. Try to find the FileIoError in the
                 // response channel and return that instead.
-                ParallelMerkle::find_fileio_error(&response_receiver)?;
+                Self::find_fileio_error(&response_receiver)?;
                 return Err(err.into());
             }
         }

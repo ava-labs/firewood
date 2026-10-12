@@ -235,7 +235,7 @@ mod tests {
         // Create a revision to cache. `RootStore` implies archival mode,
         // where deleted nodes are never tracked.
         let revision: CommittedRevision<H> = Arc::new(NodeStore::new_empty_committed(
-            file_backed.clone(),
+            file_backed,
             DeletedNodeTracking::Disabled,
         ));
 
@@ -271,8 +271,7 @@ mod tests {
         );
 
         let root_store_dir = tmpdir.as_ref().join("root_store");
-        let root_store: RootStore<H> =
-            RootStore::new(root_store_dir, file_backed.clone(), false).unwrap();
+        let root_store: RootStore<H> = RootStore::new(root_store_dir, file_backed, false).unwrap();
 
         // Try to get a hash that doesn't exist in the cache nor in the underlying datastore.
         let nonexistent_hash = TrieHash::from_bytes([1; 32]);

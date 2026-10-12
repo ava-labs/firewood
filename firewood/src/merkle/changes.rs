@@ -395,7 +395,7 @@ impl<T: HashedNodeReader> Lender for PreOrderIterator<'_, T> {
 
 impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
     /// Create a pre-order iterator for the trie that starts at `start_key`.
-    fn new(trie: &'a T, start_key: &Key) -> Result<PreOrderIterator<'a, T>, FileIoError> {
+    fn new(trie: &'a T, start_key: &Key) -> Result<Self, FileIoError> {
         // If the root node is not None, then push a `ComparableNodeInfo` for the root onto
         // the traversal stack. It will be used on the first call to `next` or `next_node_info`.
         // Because we already have the root node, we create its `ComparableNodeInfo` directly
@@ -408,7 +408,9 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
             .map(|root| ComparableNodeInfo {
                 path: root.partial_path().clone(),
                 node: root,
-                hash: trie.root_hash().map(|hash| hash.clone().into_triehash()),
+                hash: trie
+                    .root_hash()
+                    .map(firewood_storage::TrieHash::into_triehash),
             })
             .collect();
 
@@ -638,7 +640,7 @@ mod tests {
                 .iter()
                 .collect();
             let db = Db::<DefaultHashMode>::new_with_hash_mode(dbpath, dbconfig).unwrap();
-            TestDb { db }
+            Self { db }
         }
     }
 
@@ -1671,7 +1673,7 @@ mod tests {
             let proposal = NodeStore::new(&committed).unwrap();
             let mut merkle = Merkle::from(proposal);
             let (batch, _) = gen_random_test_batchops(&rng, &committed_keys, 1000, start_val);
-            for op in batch.clone() {
+            for op in batch {
                 match op {
                     BatchOp::Put { key, value } => {
                         let _ = merkle.insert(&key, value);

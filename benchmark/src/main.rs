@@ -143,7 +143,7 @@ impl From<HashModeArg> for firewood_storage::NodeHashAlgorithm {
     }
 }
 
-#[derive(Debug, PartialEq, ValueEnum, Clone)]
+#[derive(Debug, PartialEq, Eq, ValueEnum, Clone)]
 pub enum ArgCacheReadStrategy {
     WritesOnly,
     BranchReads,
@@ -152,18 +152,18 @@ pub enum ArgCacheReadStrategy {
 impl Display for ArgCacheReadStrategy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ArgCacheReadStrategy::WritesOnly => write!(f, "writes-only"),
-            ArgCacheReadStrategy::BranchReads => write!(f, "branch-reads"),
-            ArgCacheReadStrategy::All => write!(f, "all"),
+            Self::WritesOnly => write!(f, "writes-only"),
+            Self::BranchReads => write!(f, "branch-reads"),
+            Self::All => write!(f, "all"),
         }
     }
 }
 impl From<ArgCacheReadStrategy> for CacheReadStrategy {
     fn from(arg: ArgCacheReadStrategy) -> Self {
         match arg {
-            ArgCacheReadStrategy::WritesOnly => CacheReadStrategy::WritesOnly,
-            ArgCacheReadStrategy::BranchReads => CacheReadStrategy::BranchReads,
-            ArgCacheReadStrategy::All => CacheReadStrategy::All,
+            ArgCacheReadStrategy::WritesOnly => Self::WritesOnly,
+            ArgCacheReadStrategy::BranchReads => Self::BranchReads,
+            ArgCacheReadStrategy::All => Self::All,
         }
     }
 }

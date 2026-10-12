@@ -101,7 +101,7 @@ pub struct OwnedKeyValuePair {
 
 impl From<(Box<[u8]>, Box<[u8]>)> for OwnedKeyValuePair {
     fn from(value: (Box<[u8]>, Box<[u8]>)) -> Self {
-        OwnedKeyValuePair {
+        Self {
             key: value.0.into(),
             value: value.1.into(),
         }

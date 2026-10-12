@@ -20,7 +20,7 @@ use crate::DatabasePath;
 
 type KeyFromStream = Option<Result<(Key, Value), FileIoError>>;
 
-#[derive(Debug, clap::ValueEnum, Clone, PartialEq)]
+#[derive(Debug, clap::ValueEnum, Clone, PartialEq, Eq)]
 pub enum OutputFormat {
     Csv,
     Json,
@@ -169,9 +169,9 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     let start_key = opts
         .start_key
         .clone()
-        .or(opts.start_key_hex.clone())
+        .or_else(|| opts.start_key_hex.clone())
         .unwrap_or_default();
-    let stop_key = opts.stop_key.clone().or(opts.stop_key_hex.clone());
+    let stop_key = opts.stop_key.clone().or_else(|| opts.stop_key_hex.clone());
     let mut key_count: u32 = 0;
 
     let mut iter = latest_rev.iter_option(Some(start_key.as_ref()))?;
@@ -265,8 +265,8 @@ struct CsvOutputHandler {
 
 impl OutputHandler for CsvOutputHandler {
     fn handle_record(&mut self, key: &[u8], value: &[u8]) -> Result<(), std::io::Error> {
-        let (key_str, value_str) = key_value_to_string(key, value, self.hex);
-        self.writer.write_record(&[key_str, value_str])?;
+        let record = <[String; 2]>::from(key_value_to_string(key, value, self.hex));
+        self.writer.write_record(record)?;
         Ok(())
     }
 

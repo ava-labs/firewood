@@ -90,7 +90,7 @@ pub struct DBStats {
 }
 
 /// Statistics about the trie
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TrieStats {
     /// The total number of bytes of compressed branch nodes
     pub branch_bytes: u64,
@@ -138,7 +138,7 @@ impl Default for TrieStats {
 }
 
 /// Statistics about the free list
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FreeListsStats {
     /// The distribution of area sizes in the free lists
     pub area_counts: BTreeMap<u64, u64>,
@@ -172,7 +172,7 @@ struct SubTrieMetadata {
 /// [`NodeStore`] checker
 impl<T, S: ReadableStorage, H: HashMode> NodeStore<T, S, H>
 where
-    NodeStore<T, S, H>: HashedNodeReader,
+    Self: HashedNodeReader,
 {
     /// Go through the filebacked storage and check for any inconsistencies. It proceeds in the following steps:
     /// 1. Check the header
@@ -586,14 +586,14 @@ impl<S: WritableStorage, H: HashMode> NodeStore<Committed, S, H> {
         header: &mut NodeStoreHeader,
         check_report: CheckerReport,
     ) -> Result<FixReport, FileIoError> {
-        let mut proposal = NodeStore::<Mutable<Propose>, S, H>::new(self)?;
+        let proposal = NodeStore::<Mutable<Propose>, S, H>::new(self)?;
 
         Ok(proposal.fix(header, check_report))
     }
 }
 
 impl<S: WritableStorage, H: HashMode> NodeStore<Mutable<Propose>, S, H> {
-    fn fix(&mut self, header: &mut NodeStoreHeader, check_report: CheckerReport) -> FixReport {
+    fn fix(&self, header: &mut NodeStoreHeader, check_report: CheckerReport) -> FixReport {
         let mut fixed = Vec::new();
         let mut unfixable = Vec::new();
 
@@ -618,10 +618,8 @@ impl<S: WritableStorage, H: HashMode> NodeStore<Mutable<Propose>, S, H> {
                             let _leaked_areas = self.split_all_leaked_ranges(ranges, None);
                             // TODO(#2048): add _leaked_areas to the free list
                         }
-                        unfixable.push((error, None));
-                    } else {
-                        unfixable.push((error, None));
                     }
+                    unfixable.push((error, None));
                 }
             }
         }
@@ -636,7 +634,7 @@ impl<S: WritableStorage, H: HashMode> NodeStore<Mutable<Propose>, S, H> {
 
 impl<T, S: WritableStorage, H: HashMode> NodeStore<T, S, H>
 where
-    NodeStore<T, S, H>: NodeReader,
+    Self: NodeReader,
 {
     /// Wrapper around `split_into_leaked_areas` that iterates over a collection of ranges.
     fn split_all_leaked_ranges<'a>(
@@ -1189,7 +1187,7 @@ mod test {
         let expected_error_num = errors.len();
 
         // fix the freelist
-        let mut proposal = NodeStore::<Mutable<Propose>, _, H>::new(&nodestore).unwrap();
+        let proposal = NodeStore::<Mutable<Propose>, _, H>::new(&nodestore).unwrap();
         let fix_report = proposal.fix(
             &mut header,
             CheckerReport {

@@ -452,7 +452,7 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
         Ok(())
     }
 
-    pub(crate) fn flush_freelist(&mut self) -> Result<(), FileIoError> {
+    pub(crate) fn flush_freelist(&self) -> Result<(), FileIoError> {
         let free_list_bytes = bytemuck::bytes_of(self.header.free_lists());
         let free_list_offset = NodeStoreHeader::free_lists_offset();
         self.storage.write(free_list_offset, free_list_bytes)?;
@@ -651,7 +651,6 @@ impl<T, S: WritableStorage, H: crate::HashMode> NodeStore<T, S, H> {
         match free_list_parent {
             FreeListParent::FreeListHead(area_size_index) => {
                 free_lists[area_size_index] = None;
-                Ok(())
             }
             FreeListParent::PrevFreeArea {
                 area_size_idx,
@@ -661,9 +660,9 @@ impl<T, S: WritableStorage, H: crate::HashMode> NodeStore<T, S, H> {
                 let mut stored_area_bytes = Vec::new();
                 free_area.as_bytes(area_size_idx, &mut stored_area_bytes);
                 self.storage.write(parent_addr.into(), &stored_area_bytes)?;
-                Ok(())
             }
         }
+        Ok(())
     }
 }
 

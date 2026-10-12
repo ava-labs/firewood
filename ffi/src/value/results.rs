@@ -49,15 +49,15 @@ pub enum VoidResult {
 
 impl From<()> for VoidResult {
     fn from((): ()) -> Self {
-        VoidResult::Ok
+        Self::Ok
     }
 }
 
 impl<E: fmt::Display> From<Result<(), E>> for VoidResult {
     fn from(value: Result<(), E>) -> Self {
         match value {
-            Ok(()) => VoidResult::Ok,
-            Err(err) => VoidResult::Err(err.to_string().into_bytes().into()),
+            Ok(()) => Self::Ok,
+            Err(err) => Self::Err(err.to_string().into_bytes().into()),
         }
     }
 }
@@ -88,8 +88,8 @@ pub enum HandleResult {
 impl<E: fmt::Display> From<Result<crate::DatabaseHandle, E>> for HandleResult {
     fn from(value: Result<crate::DatabaseHandle, E>) -> Self {
         match value {
-            Ok(handle) => HandleResult::Ok(Box::new(handle)),
-            Err(err) => HandleResult::Err(err.to_string().into_bytes().into()),
+            Ok(handle) => Self::Ok(Box::new(handle)),
+            Err(err) => Self::Err(err.to_string().into_bytes().into()),
         }
     }
 }
@@ -124,8 +124,8 @@ pub enum ValueResult {
 impl<E: fmt::Display> From<Result<String, E>> for ValueResult {
     fn from(value: Result<String, E>) -> Self {
         match value {
-            Ok(data) => ValueResult::Some(data.into_bytes().into()),
-            Err(err) => ValueResult::Err(err.to_string().into_bytes().into()),
+            Ok(data) => Self::Some(data.into_bytes().into()),
+            Err(err) => Self::Err(err.to_string().into_bytes().into()),
         }
     }
 }
@@ -133,12 +133,12 @@ impl<E: fmt::Display> From<Result<String, E>> for ValueResult {
 impl From<Result<Option<Box<[u8]>>, api::Error>> for ValueResult {
     fn from(value: Result<Option<Box<[u8]>>, api::Error>) -> Self {
         match value {
-            Ok(None) => ValueResult::None,
-            Err(api::Error::RevisionNotFound { provided }) => ValueResult::RevisionNotFound(
-                HashKey::from(provided.unwrap_or_else(api::HashKey::empty)),
-            ),
-            Ok(Some(data)) => ValueResult::Some(data.into()),
-            Err(err) => ValueResult::Err(err.to_string().into_bytes().into()),
+            Ok(None) => Self::None,
+            Err(api::Error::RevisionNotFound { provided }) => {
+                Self::RevisionNotFound(HashKey::from(provided.unwrap_or_else(api::HashKey::empty)))
+            }
+            Ok(Some(data)) => Self::Some(data.into()),
+            Err(err) => Self::Err(err.to_string().into_bytes().into()),
         }
     }
 }
@@ -157,7 +157,7 @@ impl From<Vec<u8>> for ValueResult {
 
 impl From<Box<[u8]>> for ValueResult {
     fn from(value: Box<[u8]>) -> Self {
-        ValueResult::Some(value.into())
+        Self::Some(value.into())
     }
 }
 
@@ -189,7 +189,7 @@ impl<E: fmt::Display> From<Result<Option<api::HashKey>, E>> for HashResult {
     fn from(value: Result<Option<api::HashKey>, E>) -> Self {
         match value {
             Ok(hash) => hash.into(),
-            Err(err) => HashResult::Err(err.to_string().into_bytes().into()),
+            Err(err) => Self::Err(err.to_string().into_bytes().into()),
         }
     }
 }
@@ -197,8 +197,8 @@ impl<E: fmt::Display> From<Result<Option<api::HashKey>, E>> for HashResult {
 impl From<Option<api::HashKey>> for HashResult {
     fn from(value: Option<api::HashKey>) -> Self {
         match value {
-            Some(hash) => HashResult::Some(hash.into()),
-            None => HashResult::None,
+            Some(hash) => Self::Some(hash.into()),
+            None => Self::None,
         }
     }
 }
@@ -207,10 +207,10 @@ impl From<Option<Result<HashKey, api::Error>>> for HashResult {
     fn from(value: Option<Result<HashKey, api::Error>>) -> Self {
         match value {
             Some(value) => match value {
-                Ok(hash) => HashResult::Some(hash),
-                Err(err) => HashResult::Err(err.to_string().into_bytes().into()),
+                Ok(hash) => Self::Some(hash),
+                Err(err) => Self::Err(err.to_string().into_bytes().into()),
             },
-            None => HashResult::None,
+            None => Self::None,
         }
     }
 }
@@ -322,9 +322,9 @@ pub enum EthProofResult {
 impl From<Result<firewood::EthProof, api::Error>> for EthProofResult {
     fn from(value: Result<firewood::EthProof, api::Error>) -> Self {
         match value {
-            Ok(proof) => EthProofResult::Ok(Box::new(proof.into())),
-            Err(api::Error::FeatureNotSupported(_)) => EthProofResult::NotSupported,
-            Err(err) => EthProofResult::Err(err.to_string().into_bytes().into()),
+            Ok(proof) => Self::Ok(Box::new(proof.into())),
+            Err(api::Error::FeatureNotSupported(_)) => Self::NotSupported,
+            Err(err) => Self::Err(err.to_string().into_bytes().into()),
         }
     }
 }
@@ -353,15 +353,13 @@ pub enum NextKeyRangeResult {
 impl From<Result<Option<KeyRange>, api::Error>> for NextKeyRangeResult {
     fn from(value: Result<Option<KeyRange>, api::Error>) -> Self {
         match value {
-            Ok(None) => NextKeyRangeResult::None,
-            Ok(Some((start_key, end_key))) => NextKeyRangeResult::Some(NextKeyRange {
+            Ok(None) => Self::None,
+            Ok(Some((start_key, end_key))) => Self::Some(NextKeyRange {
                 start_key: start_key.into(),
                 end_key: end_key.map(Into::into).into(),
             }),
-            Err(api::Error::ProofError(firewood::ProofError::Unverified)) => {
-                NextKeyRangeResult::NotPrepared
-            }
-            Err(err) => NextKeyRangeResult::Err(err.to_string().into_bytes().into()),
+            Err(api::Error::ProofError(firewood::ProofError::Unverified)) => Self::NotPrepared,
+            Err(err) => Self::Err(err.to_string().into_bytes().into()),
         }
     }
 }
@@ -483,10 +481,10 @@ impl From<Option<Result<(Key, Value), api::Error>>> for KeyValueResult {
     fn from(value: Option<Result<(Key, Value), api::Error>>) -> Self {
         match value {
             Some(value) => match value {
-                Ok(value) => KeyValueResult::Some(value.into()),
-                Err(err) => KeyValueResult::Err(err.to_string().into_bytes().into()),
+                Ok(value) => Self::Some(value.into()),
+                Err(err) => Self::Err(err.to_string().into_bytes().into()),
             },
-            None => KeyValueResult::None,
+            None => Self::None,
         }
     }
 }
@@ -514,9 +512,9 @@ impl From<Result<Vec<(Key, Value)>, api::Error>> for KeyValueBatchResult {
         match value {
             Ok(pairs) => {
                 let values: Vec<_> = pairs.into_iter().map(Into::into).collect();
-                KeyValueBatchResult::Some(values.into())
+                Self::Some(values.into())
             }
-            Err(err) => KeyValueBatchResult::Err(err.to_string().into_bytes().into()),
+            Err(err) => Self::Err(err.to_string().into_bytes().into()),
         }
     }
 }
@@ -549,8 +547,8 @@ pub enum RenderedMetricsResult {
 impl<E: fmt::Display> From<Result<OwnedRenderedMetrics, E>> for RenderedMetricsResult {
     fn from(value: Result<OwnedRenderedMetrics, E>) -> Self {
         match value {
-            Ok(ok) => RenderedMetricsResult::Ok(ok),
-            Err(err) => RenderedMetricsResult::Err(err.to_string().into_bytes().into()),
+            Ok(ok) => Self::Ok(ok),
+            Err(err) => Self::Err(err.to_string().into_bytes().into()),
         }
     }
 }
@@ -666,18 +664,14 @@ impl<'db, E: fmt::Display> From<Result<ReconstructedHandle<'db>, E>> for Reconst
 impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult {
     fn from(value: Result<api::FrozenChangeProof, api::Error>) -> Self {
         match value {
-            Ok(proof) => ChangeProofResult::Ok(Box::new(proof.into())),
-            Err(api::Error::StartRevisionNotFound { provided }) => {
-                ChangeProofResult::StartRevisionNotFound(HashKey::from(
-                    provided.unwrap_or_else(api::HashKey::empty),
-                ))
-            }
-            Err(api::Error::EndRevisionNotFound { provided }) => {
-                ChangeProofResult::EndRevisionNotFound(HashKey::from(
-                    provided.unwrap_or_else(api::HashKey::empty),
-                ))
-            }
-            Err(err) => ChangeProofResult::Err(err.to_string().into_bytes().into()),
+            Ok(proof) => Self::Ok(Box::new(proof.into())),
+            Err(api::Error::StartRevisionNotFound { provided }) => Self::StartRevisionNotFound(
+                HashKey::from(provided.unwrap_or_else(api::HashKey::empty)),
+            ),
+            Err(api::Error::EndRevisionNotFound { provided }) => Self::EndRevisionNotFound(
+                HashKey::from(provided.unwrap_or_else(api::HashKey::empty)),
+            ),
+            Err(err) => Self::Err(err.to_string().into_bytes().into()),
         }
     }
 }
@@ -709,10 +703,7 @@ pub(crate) trait CResult: Sized {
     fn from_err(err: impl ToString) -> Self;
 
     #[cfg(panic = "unwind")]
-    fn from_panic(panic: Box<dyn std::any::Any + Send>) -> Self
-    where
-        Self: Sized,
-    {
+    fn from_panic(panic: Box<dyn std::any::Any + Send>) -> Self {
         Self::from_err(Panic::from(panic))
     }
 }
@@ -814,11 +805,11 @@ impl From<Box<dyn std::any::Any + Send>> for Panic {
 impl fmt::Display for Panic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Panic::Static(msg) => f.pad(msg),
-            Panic::Formatted(msg) => f.pad(msg),
-            Panic::SendSyncErr(err) => err.fmt(f),
-            Panic::SendErr(err) => err.fmt(f),
-            Panic::Unknown(_) => f.pad("unknown panic type recovered"),
+            Self::Static(msg) => f.pad(msg),
+            Self::Formatted(msg) => f.pad(msg),
+            Self::SendSyncErr(err) => err.fmt(f),
+            Self::SendErr(err) => err.fmt(f),
+            Self::Unknown(_) => f.pad("unknown panic type recovered"),
         }
     }
 }

@@ -75,6 +75,7 @@ use crate::proofs::ProofError;
 pub type KeyRange = (Box<[u8]>, Option<Box<[u8]>>);
 
 /// Verification context captured after structural validation of a range proof.
+///
 /// Stored so that downstream logic (root hash verification,
 /// [`find_next_key_after_range_proof`]) can reference the original
 /// verification parameters without re-validating.
@@ -231,7 +232,7 @@ pub fn find_next_key_after_range_proof(
 /// - State synchronization between nodes
 /// - Light client verification
 /// - Efficient auditing of specific key ranges
-#[derive(PartialEq)]
+#[derive(PartialEq, Eq)]
 pub struct RangeProof<K, V, H> {
     start_proof: Proof<H>,
     end_proof: Proof<H>,

@@ -72,7 +72,7 @@ impl Parse for MetricsArgs {
                  — the description is declared in the registry doc comment",
             ));
         }
-        Ok(MetricsArgs { ident })
+        Ok(Self { ident })
     }
 }
 

@@ -93,6 +93,10 @@ impl<'a, N: NodeReader + RootReader> UnPersistedNodeIterator<'a, N> {
                 .as_branch()
             {
                 // Create an iterator over unpersisted children
+                #[expect(
+                    clippy::needless_collect,
+                    reason = "need to release the borrow of branch before moving it into the iterator"
+                )]
                 let unpersisted_children: Vec<MaybePersistedNode> = branch
                     .children
                     .iter_present()
@@ -571,12 +575,12 @@ mod tests {
             &[0],
             Some(b"branch_value"),
             vec![
-                (PathComponent::ALL[1], leaf1.clone()),
-                (PathComponent::ALL[2], leaf2.clone()),
+                (PathComponent::ALL[1], leaf1),
+                (PathComponent::ALL[2], leaf2),
             ],
         );
 
-        mutable_store.root_mut().replace(branch.clone());
+        mutable_store.root_mut().replace(branch);
 
         // Convert to immutable proposal
         let immutable_store: NodeStore<Arc<ImmutableProposal>, _, H> =

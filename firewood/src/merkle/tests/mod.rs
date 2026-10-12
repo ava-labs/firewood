@@ -110,7 +110,7 @@ where
     let memstore = Arc::new(MemStore::new(Vec::with_capacity(64 * 1024)));
     let mut header = NodeStoreHeader::new(DefaultHashMode::ALGORITHM);
     let base = Merkle::from(NodeStore::new_empty_committed(
-        memstore.clone(),
+        memstore,
         DeletedNodeTracking::Enabled,
     ));
     let mut merkle = base.fork().unwrap();

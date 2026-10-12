@@ -252,9 +252,8 @@ fn test_crafted_spurious_put_at_end_key_boundary() {
         ops.into_boxed_slice(),
     );
 
-    let err =
-        verify_change_proof_structure(&crafted, root2.clone(), Some(b"\x20"), Some(b"\xb0"), None)
-            .expect_err("structural check should reject spurious Put at end_key");
+    let err = verify_change_proof_structure(&crafted, root2, Some(b"\x20"), Some(b"\xb0"), None)
+        .expect_err("structural check should reject spurious Put at end_key");
     assert!(matches!(
         err,
         api::Error::ProofError(crate::ProofError::EndProofOperationMismatch)
@@ -296,9 +295,8 @@ fn test_crafted_spurious_delete_at_end_key_boundary() {
         ops.into_boxed_slice(),
     );
 
-    let err =
-        verify_change_proof_structure(&crafted, root2.clone(), Some(b"\x20"), Some(b"\x90"), None)
-            .expect_err("structural check should reject spurious Delete at end_key");
+    let err = verify_change_proof_structure(&crafted, root2, Some(b"\x20"), Some(b"\x90"), None)
+        .expect_err("structural check should reject spurious Delete at end_key");
     assert!(matches!(
         err,
         api::Error::ProofError(crate::ProofError::EndProofOperationMismatch)

@@ -43,8 +43,8 @@ use crate::SharedNode;
 #[derive(Debug, Clone)]
 pub struct MaybePersistedNode(Arc<Mutex<MaybePersisted>>);
 
-impl PartialEq<MaybePersistedNode> for MaybePersistedNode {
-    fn eq(&self, other: &MaybePersistedNode) -> bool {
+impl PartialEq<Self> for MaybePersistedNode {
+    fn eq(&self, other: &Self) -> bool {
         // if underlying mutex is same, this is necessary to avoid deadlock
         if Arc::ptr_eq(&self.0, &other.0) {
             return true;
@@ -57,18 +57,18 @@ impl Eq for MaybePersistedNode {}
 
 impl From<SharedNode> for MaybePersistedNode {
     fn from(node: SharedNode) -> Self {
-        MaybePersistedNode(Arc::new(Mutex::new(MaybePersisted::Unpersisted(node))))
+        Self(Arc::new(Mutex::new(MaybePersisted::Unpersisted(node))))
     }
 }
 
 impl From<LinearAddress> for MaybePersistedNode {
     fn from(address: LinearAddress) -> Self {
-        MaybePersistedNode(Arc::new(Mutex::new(MaybePersisted::Persisted(address))))
+        Self(Arc::new(Mutex::new(MaybePersisted::Persisted(address))))
     }
 }
 
 impl From<&MaybePersistedNode> for Option<LinearAddress> {
-    fn from(node: &MaybePersistedNode) -> Option<LinearAddress> {
+    fn from(node: &MaybePersistedNode) -> Self {
         match &*node.0.lock() {
             MaybePersisted::Unpersisted(_) => None,
             MaybePersisted::Allocated(address, _) | MaybePersisted::Persisted(address) => {

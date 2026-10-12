@@ -1229,7 +1229,7 @@ fn test_empty_value_range_proof() {
     let mid_index = items.len() / 2;
     let key = increase_key(items[mid_index - 1].0);
     let empty_value: [u8; 20] = [0; 20];
-    items.splice(mid_index..mid_index, [(&key, &empty_value)].iter().copied());
+    items.splice(mid_index..mid_index, [(&key, &empty_value)]);
 
     let start = 1;
     let end = items.len() - 1;
@@ -1275,7 +1275,7 @@ fn test_all_elements_empty_value_range_proof() {
     let mid_index = items.len() / 2;
     let key = increase_key(items[mid_index - 1].0);
     let empty_value: [u8; 20] = [0; 20];
-    items.splice(mid_index..mid_index, [(&key, &empty_value)].iter().copied());
+    items.splice(mid_index..mid_index, [(&key, &empty_value)]);
 
     let start = 0;
     let end = items.len() - 1;

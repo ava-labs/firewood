@@ -18,7 +18,7 @@ fn test_empty_start_trie_single_key_no_bounds() {
     let proof = db
         .change_proof(empty_root, root2.clone(), None, None, None)
         .unwrap();
-    let ctx = verify_change_proof_structure(&proof, root2.clone(), None, None, None).unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, None, None, None).unwrap();
 
     let (target, _dir_target) = setup_db![];
     let empty_root_target = target.root_hash().unwrap();
@@ -43,7 +43,7 @@ fn test_empty_start_trie_bounded_inclusion() {
 
     let proof = db
         .change_proof(
-            empty_root.clone(),
+            empty_root,
             root2.clone(),
             Some(b"\x10"),
             Some(b"\x30"),
@@ -51,8 +51,7 @@ fn test_empty_start_trie_bounded_inclusion() {
         )
         .unwrap();
     let ctx =
-        verify_change_proof_structure(&proof, root2.clone(), Some(b"\x10"), Some(b"\x30"), None)
-            .unwrap();
+        verify_change_proof_structure(&proof, root2, Some(b"\x10"), Some(b"\x30"), None).unwrap();
 
     let (target, _dir_target) = setup_db![];
     let empty_root_target = target.root_hash().unwrap();
@@ -70,7 +69,7 @@ fn test_empty_start_trie_bounded_exclusion() {
 
     let proof = db
         .change_proof(
-            empty_root.clone(),
+            empty_root,
             root2.clone(),
             Some(b"\x05"),
             Some(b"\x30"),
@@ -78,8 +77,7 @@ fn test_empty_start_trie_bounded_exclusion() {
         )
         .unwrap();
     let ctx =
-        verify_change_proof_structure(&proof, root2.clone(), Some(b"\x05"), Some(b"\x30"), None)
-            .unwrap();
+        verify_change_proof_structure(&proof, root2, Some(b"\x05"), Some(b"\x30"), None).unwrap();
 
     let (target, _dir_target) = setup_db![];
     let empty_root_target = target.root_hash().unwrap();
@@ -134,20 +132,15 @@ fn test_empty_start_trie_prefix_keys() {
     // Exercises the divergent child path with an empty start trie.
     let proof = db
         .change_proof(
-            empty_root.clone(),
+            empty_root,
             root2.clone(),
             Some(b"\x10\x50\x00"),
             Some(b"\x20"),
             None,
         )
         .unwrap();
-    let ctx = verify_change_proof_structure(
-        &proof,
-        root2.clone(),
-        Some(b"\x10\x50\x00"),
-        Some(b"\x20"),
-        None,
-    )
-    .unwrap();
+    let ctx =
+        verify_change_proof_structure(&proof, root2, Some(b"\x10\x50\x00"), Some(b"\x20"), None)
+            .unwrap();
     verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
 }

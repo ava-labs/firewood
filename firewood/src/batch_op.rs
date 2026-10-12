@@ -39,9 +39,7 @@ impl<K: KeyType, V: ValueType> BatchOp<K, V> {
     #[must_use]
     pub const fn key(&self) -> &K {
         match self {
-            BatchOp::Put { key, .. }
-            | BatchOp::Delete { key }
-            | BatchOp::DeleteRange { prefix: key } => key,
+            Self::Put { key, .. } | Self::Delete { key } | Self::DeleteRange { prefix: key } => key,
         }
     }
 
@@ -49,7 +47,7 @@ impl<K: KeyType, V: ValueType> BatchOp<K, V> {
     #[must_use]
     pub const fn value(&self) -> Option<&V> {
         match self {
-            BatchOp::Put { value, .. } => Some(value),
+            Self::Put { value, .. } => Some(value),
             _ => None,
         }
     }
@@ -59,9 +57,9 @@ impl<K: KeyType, V: ValueType> BatchOp<K, V> {
     #[must_use]
     pub const fn borrowed(&self) -> BatchOp<&K, &V> {
         match self {
-            BatchOp::Put { key, value } => BatchOp::Put { key, value },
-            BatchOp::Delete { key } => BatchOp::Delete { key },
-            BatchOp::DeleteRange { prefix } => BatchOp::DeleteRange { prefix },
+            Self::Put { key, value } => BatchOp::Put { key, value },
+            Self::Delete { key } => BatchOp::Delete { key },
+            Self::DeleteRange { prefix } => BatchOp::DeleteRange { prefix },
         }
     }
 
@@ -71,12 +69,12 @@ impl<K: KeyType, V: ValueType> BatchOp<K, V> {
     #[must_use]
     pub fn as_ref(&self) -> BatchOp<&[u8], &[u8]> {
         match self {
-            BatchOp::Put { key, value } => BatchOp::Put {
+            Self::Put { key, value } => BatchOp::Put {
                 key: key.as_ref(),
                 value: value.as_ref(),
             },
-            BatchOp::Delete { key } => BatchOp::Delete { key: key.as_ref() },
-            BatchOp::DeleteRange { prefix } => BatchOp::DeleteRange {
+            Self::Delete { key } => BatchOp::Delete { key: key.as_ref() },
+            Self::DeleteRange { prefix } => BatchOp::DeleteRange {
                 prefix: prefix.as_ref(),
             },
         }

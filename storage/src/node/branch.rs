@@ -79,10 +79,10 @@ pub enum Child {
 impl lru_mem::HeapSize for Child {
     fn heap_size(&self) -> usize {
         match self {
-            Child::Node(node) => node.heap_size(),
-            Child::AddressWithHash(_, _) => 0,
+            Self::Node(node) => node.heap_size(),
+            Self::AddressWithHash(_, _) => 0,
             // MaybePersisted contains Arc<Mutex>, we don't count shared data
-            Child::MaybePersisted(_, _) => 0,
+            Self::MaybePersisted(_, _) => 0,
         }
     }
 }
@@ -93,7 +93,7 @@ impl Child {
     #[must_use]
     pub const fn as_mut_node(&mut self) -> Option<&mut Node> {
         match self {
-            Child::Node(node) => Some(node),
+            Self::Node(node) => Some(node),
             _ => None,
         }
     }
@@ -102,9 +102,9 @@ impl Child {
     #[must_use]
     pub fn persisted_address(&self) -> Option<LinearAddress> {
         match self {
-            Child::AddressWithHash(addr, _) => Some(*addr),
-            Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.as_linear_address(),
-            Child::Node(_) => None,
+            Self::AddressWithHash(addr, _) => Some(*addr),
+            Self::MaybePersisted(maybe_persisted, _) => maybe_persisted.as_linear_address(),
+            Self::Node(_) => None,
         }
     }
 
@@ -112,7 +112,7 @@ impl Child {
     /// variant, otherwise None.
     #[must_use]
     pub fn unpersisted(&self) -> Option<&MaybePersistedNode> {
-        if let Child::MaybePersisted(maybe_persisted, _) = self {
+        if let Self::MaybePersisted(maybe_persisted, _) = self {
             maybe_persisted.unpersisted()
         } else {
             None
@@ -123,9 +123,9 @@ impl Child {
     #[must_use]
     pub const fn hash(&self) -> Option<&HashType> {
         match self {
-            Child::AddressWithHash(_, hash) => Some(hash),
-            Child::MaybePersisted(_, hash) => Some(hash),
-            Child::Node(_) => None,
+            Self::AddressWithHash(_, hash) => Some(hash),
+            Self::MaybePersisted(_, hash) => Some(hash),
+            Self::Node(_) => None,
         }
     }
 
@@ -141,11 +141,11 @@ impl Child {
     #[must_use]
     pub fn persist_info(&self) -> Option<(LinearAddress, &HashType)> {
         match self {
-            Child::AddressWithHash(addr, hash) => Some((*addr, hash)),
-            Child::MaybePersisted(maybe_persisted, hash) => {
+            Self::AddressWithHash(addr, hash) => Some((*addr, hash)),
+            Self::MaybePersisted(maybe_persisted, hash) => {
                 maybe_persisted.as_linear_address().map(|addr| (addr, hash))
             }
-            Child::Node(_) => None,
+            Self::Node(_) => None,
         }
     }
 
@@ -156,9 +156,9 @@ impl Child {
     #[must_use]
     pub fn as_maybe_persisted_node(&self) -> MaybePersistedNode {
         match self {
-            Child::Node(node) => MaybePersistedNode::from(SharedNode::from(node.clone())),
-            Child::AddressWithHash(addr, _) => MaybePersistedNode::from(*addr),
-            Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.clone(),
+            Self::Node(node) => MaybePersistedNode::from(SharedNode::from(node.clone())),
+            Self::AddressWithHash(addr, _) => MaybePersistedNode::from(*addr),
+            Self::MaybePersisted(maybe_persisted, _) => maybe_persisted.clone(),
         }
     }
 
@@ -175,9 +175,9 @@ impl Child {
     /// - `Err(FileIoError)` if there was an error reading from storage
     pub fn as_shared_node<S: NodeReader>(&self, storage: &S) -> Result<SharedNode, FileIoError> {
         match self {
-            Child::Node(node) => Ok(node.clone().into()),
-            Child::AddressWithHash(addr, _) => storage.read_node(*addr),
-            Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.as_shared_node(storage),
+            Self::Node(node) => Ok(node.clone().into()),
+            Self::AddressWithHash(addr, _) => storage.read_node(*addr),
+            Self::MaybePersisted(maybe_persisted, _) => maybe_persisted.as_shared_node(storage),
         }
     }
 }
@@ -300,7 +300,7 @@ impl BranchNode {
 
 impl From<&LeafNode> for BranchNode {
     fn from(leaf: &LeafNode) -> Self {
-        BranchNode {
+        Self {
             partial_path: leaf.partial_path.clone(),
             value: Some(Box::from(&leaf.value[..])),
             children: Children::new(),

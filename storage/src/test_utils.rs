@@ -149,17 +149,17 @@ impl rand::TryRng for SeededRng {
 
     #[inline]
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-        Ok(SeededRng::next_u32(self))
+        Ok(Self::next_u32(self))
     }
 
     #[inline]
     fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
-        Ok(SeededRng::next_u64(self))
+        Ok(Self::next_u64(self))
     }
 
     #[inline]
     fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
-        SeededRng::fill_bytes(self, dst);
+        Self::fill_bytes(self, dst);
         Ok(())
     }
 }
