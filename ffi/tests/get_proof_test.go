@@ -1,13 +1,14 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-package ffi
+package ffi_test
 
 import (
 	"encoding/binary"
 	"fmt"
 	"testing"
 
+	"github.com/ava-labs/firewood/ffi"
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/rawdb"
 	"github.com/ava-labs/libevm/core/state"
@@ -37,8 +38,8 @@ type accountSpec struct {
 // builtState is the result of materializing accountSpecs into a firewood
 // database and an equivalent go-ethereum trie.
 type builtState struct {
-	db   *Database
-	root Hash
+	db   *ffi.Database
+	root ffi.Hash
 	// accountRLP maps account hash -> the RLP we stored for that account.
 	accountRLP map[common.Hash][]byte
 }
@@ -51,13 +52,13 @@ func buildState(t *testing.T, specs []accountSpec) builtState {
 	t.Helper()
 	r := require.New(t)
 
-	db := newTestDatabaseWithHashMode(t, EthereumNodeHashing)
+	db := newTestDatabaseWithHashMode(t, ffi.EthereumNodeHashing)
 	tdb := state.NewDatabaseWithConfig(rawdb.NewMemoryDatabase(), triedb.HashDefaults)
 	accountTrie, err := tdb.OpenTrie(types.EmptyRootHash)
 	r.NoError(err)
 
 	merged := trienode.NewMergedNodeSet()
-	var batch []BatchOp
+	var batch []ffi.BatchOp
 	accountRLP := make(map[common.Hash][]byte)
 
 	for _, spec := range specs {
@@ -77,7 +78,7 @@ func buildState(t *testing.T, specs []accountSpec) builtState {
 				fwdKey := append(append([]byte{}, accHash[:]...), slotHash[:]...)
 				encodedVal, err := rlp.EncodeToBytes(s.val[:])
 				r.NoError(err)
-				batch = append(batch, Put(fwdKey, encodedVal))
+				batch = append(batch, ffi.Put(fwdKey, encodedVal))
 			}
 
 			root, set, err := storageTrie.Commit(false)
@@ -99,7 +100,7 @@ func buildState(t *testing.T, specs []accountSpec) builtState {
 		encodedAcc, err := rlp.EncodeToBytes(acc)
 		r.NoError(err)
 		accountRLP[accHash] = encodedAcc
-		batch = append(batch, Put(accHash[:], encodedAcc))
+		batch = append(batch, ffi.Put(accHash[:], encodedAcc))
 	}
 
 	ethRoot, set, err := accountTrie.Commit(true)
@@ -138,7 +139,7 @@ func verifyProof(t *testing.T, root common.Hash, key []byte, nodes [][]byte) []b
 // ethProver is satisfied by *Revision and *Reconstructed,
 // which expose the same EthGetProof signature.
 type ethProver interface {
-	EthGetProof(accountKey []byte, slotKeys [][]byte) (*EthAccountProof, error)
+	EthGetProof(accountKey []byte, slotKeys [][]byte) (*ffi.EthAccountProof, error)
 }
 
 // proversAtRoot returns the committed revision and an equivalent reconstructed

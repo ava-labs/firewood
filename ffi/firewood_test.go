@@ -119,18 +119,9 @@ func oneSecCtx(tb testing.TB) context.Context {
 
 func newTestDatabase(tb testing.TB, opts ...Option) *Database {
 	tb.Helper()
-	return newTestDatabaseWithHashMode(tb, getNodeHashAlgorithm(), opts...)
-}
-
-func newTestDatabaseWithHashMode(tb testing.TB, algorithm NodeHashAlgorithm, opts ...Option) *Database {
-	tb.Helper()
 	r := require.New(tb)
 
-	dbDir := tb.TempDir()
-	db, err := New(dbDir, algorithm, opts...)
-	if err != nil {
-		err = fmt.Errorf("failed to create new database in directory %q: %w", dbDir, err)
-	}
+	db, err := newDatabase(tb.TempDir(), opts...)
 	r.NoError(err)
 	tb.Cleanup(func() {
 		err := db.Close(oneSecCtx(tb))

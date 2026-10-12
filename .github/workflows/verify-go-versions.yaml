@@ -24,18 +24,18 @@ jobs:
         id: go_versions
         run: |
           GO_VERSION_FFI=$(cd ffi && go mod edit -json | jq -r .Go)
-          GO_VERSION_EXTERNAL_TOOLS=$(cd ffi/tools/external && go mod edit -json | jq -r .Go)
+          GO_VERSION_COMPAT_TESTS=$(cd ffi/tests && go mod edit -json | jq -r .Go)
           echo "ffi=$GO_VERSION_FFI"
-          echo "ffi/tools/external=$GO_VERSION_EXTERNAL_TOOLS"
+          echo "ffi/tests=$GO_VERSION_COMPAT_TESTS"
           echo "GO_VERSION_FFI=$GO_VERSION_FFI" >> $GITHUB_OUTPUT
-          echo "GO_VERSION_EXTERNAL_TOOLS=$GO_VERSION_EXTERNAL_TOOLS" >> $GITHUB_OUTPUT
+          echo "GO_VERSION_COMPAT_TESTS=$GO_VERSION_COMPAT_TESTS" >> $GITHUB_OUTPUT
 
       - name: Check Go versions match
         run: |
-          if [ "${{ steps.go_versions.outputs.GO_VERSION_FFI }}" != "${{ steps.go_versions.outputs.GO_VERSION_EXTERNAL_TOOLS }}" ]; then
+          if [ "${{ steps.go_versions.outputs.GO_VERSION_FFI }}" != "${{ steps.go_versions.outputs.GO_VERSION_COMPAT_TESTS }}" ]; then
             echo "Go versions do not match:"
             echo "ffi/go.mod: ${{ steps.go_versions.outputs.GO_VERSION_FFI }}"
-            echo "ffi/tools/external/go.mod: ${{ steps.go_versions.outputs.GO_VERSION_EXTERNAL_TOOLS }}"
+            echo "ffi/tests/go.mod: ${{ steps.go_versions.outputs.GO_VERSION_COMPAT_TESTS }}"
             exit 1
           fi
           echo "All Go versions match: ${{ steps.go_versions.outputs.GO_VERSION_FFI }}"

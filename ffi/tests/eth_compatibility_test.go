@@ -1,7 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-package ffi
+package ffi_test
 
 import (
 	"encoding/binary"
@@ -9,6 +9,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/ava-labs/firewood/ffi"
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/rawdb"
 	"github.com/ava-labs/libevm/core/state"
@@ -22,7 +23,7 @@ import (
 )
 
 const (
-	ethCommit byte = iota
+	commit byte = iota
 	createAccount
 	updateAccount
 	deleteAccount
@@ -33,7 +34,7 @@ const (
 )
 
 var ethStepMap = map[byte]string{
-	ethCommit:     "commit",
+	commit:        "commit",
 	createAccount: "createAccount",
 	updateAccount: "updateAccount",
 	deleteAccount: "deleteAccount",
@@ -43,7 +44,7 @@ var ethStepMap = map[byte]string{
 }
 
 type merkleTriePair struct {
-	fwdDB       *Database
+	fwdDB       *ffi.Database
 	accountTrie state.Trie
 	ethDatabase state.Database
 
@@ -57,13 +58,13 @@ type merkleTriePair struct {
 
 	// pending changes to both firewood and eth database
 	openStorageTries map[common.Address]state.Trie
-	pendingFwdBatch  []BatchOp
+	pendingFwdBatch  []ffi.BatchOp
 }
 
 func newMerkleTriePair(t *testing.T) *merkleTriePair {
 	r := require.New(t)
 
-	db := newTestDatabaseWithHashMode(t, EthereumNodeHashing)
+	db := newTestDatabaseWithHashMode(t, ffi.EthereumNodeHashing)
 	tdb := state.NewDatabaseWithConfig(rawdb.NewMemoryDatabase(), triedb.HashDefaults)
 	ethRoot := types.EmptyRootHash
 	tr, err := tdb.OpenTrie(ethRoot)
@@ -104,7 +105,7 @@ func (tr *merkleTriePair) commit() {
 		accHash := crypto.Keccak256(addr[:])
 		updatedAccountRLP, err := rlp.EncodeToBytes(acc)
 		tr.require.NoError(err)
-		tr.pendingFwdBatch = append(tr.pendingFwdBatch, Put(accHash[:], updatedAccountRLP))
+		tr.pendingFwdBatch = append(tr.pendingFwdBatch, ffi.Put(accHash[:], updatedAccountRLP))
 	}
 
 	updatedRoot, set, err := tr.accountTrie.Commit(true)
@@ -148,7 +149,7 @@ func (tr *merkleTriePair) createAccount() {
 	tr.require.NoError(err)
 	tr.currentAddrs = append(tr.currentAddrs, addr)
 
-	tr.pendingFwdBatch = append(tr.pendingFwdBatch, Put(accHash[:], accountRLP))
+	tr.pendingFwdBatch = append(tr.pendingFwdBatch, ffi.Put(accHash[:], accountRLP))
 }
 
 // selectAccount returns a random account and account hash for the provided index
@@ -173,7 +174,7 @@ func (tr *merkleTriePair) updateAccount(addrIndex int) {
 	err = tr.accountTrie.UpdateAccount(addr, acc)
 	tr.require.NoError(err)
 
-	tr.pendingFwdBatch = append(tr.pendingFwdBatch, Put(accHash[:], accountRLP))
+	tr.pendingFwdBatch = append(tr.pendingFwdBatch, ffi.Put(accHash[:], accountRLP))
 }
 
 // deleteAccount selects a random account and deletes it from both tries and the tracked
@@ -187,7 +188,7 @@ func (tr *merkleTriePair) deleteAccount(accountIndex int) {
 	})
 
 	// an account's storage is under the account hash prefix
-	tr.pendingFwdBatch = append(tr.pendingFwdBatch, PrefixDelete(accHash[:]))
+	tr.pendingFwdBatch = append(tr.pendingFwdBatch, ffi.PrefixDelete(accHash[:]))
 }
 
 // openStorageTrie opens the storage trie for the provided account address.
@@ -236,7 +237,7 @@ func (tr *merkleTriePair) addStorage(accountIndex int) {
 	fwdKey := append(accHash[:], keyHash[:]...)
 	encodedVal, err := rlp.EncodeToBytes(val[:])
 	tr.require.NoError(err)
-	tr.pendingFwdBatch = append(tr.pendingFwdBatch, Put(fwdKey, encodedVal))
+	tr.pendingFwdBatch = append(tr.pendingFwdBatch, ffi.Put(fwdKey, encodedVal))
 
 	tr.currentStorageInputIndices[addr]++
 }
@@ -260,7 +261,7 @@ func (tr *merkleTriePair) updateStorage(accountIndex int, storageIndexInput uint
 	fwdKey := append(accHash[:], storageKeyHash[:]...)
 	updatedValRLP, err := rlp.EncodeToBytes(updatedVal[:])
 	tr.require.NoError(err)
-	tr.pendingFwdBatch = append(tr.pendingFwdBatch, Put(fwdKey, updatedValRLP[:]))
+	tr.pendingFwdBatch = append(tr.pendingFwdBatch, ffi.Put(fwdKey, updatedValRLP[:]))
 }
 
 // deleteStorage selects an account and deletes an existing storage key-value pair
@@ -276,7 +277,7 @@ func (tr *merkleTriePair) deleteStorage(accountIndex int, storageIndexInput uint
 	tr.require.NoError(str.DeleteStorage(addr, storageKey[:]))
 
 	fwdKey := append(accHash[:], storageKeyHash[:]...)
-	tr.pendingFwdBatch = append(tr.pendingFwdBatch, Delete(fwdKey))
+	tr.pendingFwdBatch = append(tr.pendingFwdBatch, ffi.Delete(fwdKey))
 }
 
 func FuzzFirewoodTree(f *testing.F) {
@@ -307,7 +308,7 @@ func FuzzFirewoodTree(f *testing.F) {
 			step = step % ethMaxStep
 			t.Log(ethStepMap[step])
 			switch step {
-			case ethCommit:
+			case commit:
 				tr.commit()
 			case createAccount:
 				tr.createAccount()

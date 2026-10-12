@@ -1,7 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-package ffi
+package ffi_test
 
 import (
 	"context"
@@ -13,6 +13,7 @@ import (
 	"github.com/ava-labs/avalanchego/database/memdb"
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/x/merkledb"
+	"github.com/ava-labs/firewood/ffi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,7 +54,7 @@ type tree struct {
 	id       int
 	nextID   int
 	merkleDB merkledb.MerkleDB
-	fwdDB    *Database
+	fwdDB    *ffi.Database
 
 	children []*proposal
 
@@ -65,7 +66,7 @@ type proposal struct {
 	parentID   int
 	id         int
 	merkleView merkledb.View
-	fwdView    *Proposal
+	fwdView    *ffi.Proposal
 
 	children []*proposal
 }
@@ -79,7 +80,7 @@ func newTestTree(t *testing.T, rand *rand.Rand) *tree {
 
 	tr := &tree{
 		merkleDB:  merkleDB,
-		fwdDB:     newTestDatabaseWithHashMode(t, MerkleDBNodeHashing),
+		fwdDB:     newTestDatabaseWithHashMode(t, ffi.MerkleDBNodeHashing),
 		proposals: make(map[int]*proposal),
 		children:  make([]*proposal, 0),
 		require:   r,
@@ -121,7 +122,7 @@ func (tr *tree) dbUpdate() {
 
 	// Insert the key-value pair into both databases.
 	tr.require.NoError(tr.merkleDB.Put(key, val))
-	_, err := tr.fwdDB.Update([]BatchOp{Put(key, val)})
+	_, err := tr.fwdDB.Update([]ffi.BatchOp{ffi.Put(key, val)})
 	tr.require.NoError(err)
 
 	tr.dropAllProposals()
@@ -173,9 +174,9 @@ func (tr *tree) dbBatch() {
 	}
 	tr.require.NoError(batch.Write())
 
-	fwdBatch := make([]BatchOp, 0, len(keys))
+	fwdBatch := make([]ffi.BatchOp, 0, len(keys))
 	for i := range len(keys) {
-		fwdBatch = append(fwdBatch, Put(keys[i], vals[i]))
+		fwdBatch = append(fwdBatch, ffi.Put(keys[i], vals[i]))
 	}
 	_, err := tr.fwdDB.Update(fwdBatch)
 	tr.require.NoError(err)
@@ -229,9 +230,9 @@ func (tr *tree) createProposalOnProposal() {
 	fwdPr := pr.fwdView
 	merkleView := pr.merkleView
 
-	fwdBatch := make([]BatchOp, 0, len(keys))
+	fwdBatch := make([]ffi.BatchOp, 0, len(keys))
 	for i := range len(keys) {
-		fwdBatch = append(fwdBatch, Put(keys[i], vals[i]))
+		fwdBatch = append(fwdBatch, ffi.Put(keys[i], vals[i]))
 	}
 	fwdChildPr, err := fwdPr.Propose(fwdBatch)
 	tr.require.NoError(err)
@@ -265,9 +266,9 @@ func (tr *tree) createProposalOnProposal() {
 func (tr *tree) createProposalOnDB() {
 	batchSize := tr.rand.Intn(maxBatchSize) + 1 // ensure at least one key-value pair
 	keys, vals := tr.createRandomBatch(batchSize)
-	fwdBatch := make([]BatchOp, 0, len(keys))
+	fwdBatch := make([]ffi.BatchOp, 0, len(keys))
 	for i := range len(keys) {
-		fwdBatch = append(fwdBatch, Put(keys[i], vals[i]))
+		fwdBatch = append(fwdBatch, ffi.Put(keys[i], vals[i]))
 	}
 	fwdPr, err := tr.fwdDB.Propose(fwdBatch)
 	tr.require.NoError(err)

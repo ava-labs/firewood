@@ -72,6 +72,10 @@ ci-test-ffi hash_mode:
     cd ffi
     GOEXPERIMENT=cgocheck2 TEST_FIREWOOD_HASH_MODE="{{hash_mode}}" go test -count=1 -race ./...
 
+# Test both explicit-hash-mode Go compatibility suites against the built FFI.
+ci-test-ffi-compat:
+    cd ffi/tests && go test -count=1 -race ./...
+
 # Run macOS-compatible CI lints.
 lint:
     ./scripts/run-just.sh ci-format
@@ -97,6 +101,7 @@ test:
     ./scripts/run-just.sh ci-build-ffi
     ./scripts/run-just.sh ci-test-ffi firewood
     ./scripts/run-just.sh ci-test-ffi ethhash
+    ./scripts/run-just.sh ci-test-ffi-compat
 
 # Run every macOS-compatible pre-push check, with linting first.
 prepush: lint test
@@ -184,11 +189,11 @@ check-golang-version: check-nix
     GO_VERSION=$(nix develop --command bash -c "go mod edit -json | jq -r '.Go'")
     echo "go version in ffi/go.mod is ${GO_VERSION}"
 
-    EXTERNAL_TOOLS_VERSION=$(nix develop --command bash -c "cd tools/external && go mod edit -json | jq -r '.Go'")
-    echo "go version in ffi/tools/external/go.mod is ${EXTERNAL_TOOLS_VERSION}"
+    COMPAT_TESTS_VERSION=$(nix develop --command bash -c "cd tests && go mod edit -json | jq -r '.Go'")
+    echo "go version in ffi/tests/go.mod is ${COMPAT_TESTS_VERSION}"
 
-    if [[ "${GO_VERSION}" != "${EXTERNAL_TOOLS_VERSION}" ]]; then
-        echo "❌ go version in ffi/tools/external/go.mod should be ${GO_VERSION}"
+    if [[ "${GO_VERSION}" != "${COMPAT_TESTS_VERSION}" ]]; then
+        echo "❌ go version in ffi/tests/go.mod should be ${GO_VERSION}"
         FAILED=1
     fi
 
@@ -225,7 +230,7 @@ setup-go-workspace:
     if [ -f "go.work" ]; then
         rm go.work go.work.sum
     fi
-    go work init ./ffi ./ffi/tools/external
+    go work init ./ffi ./ffi/tests
 
 # Run all checks of ffi built with nix
 test-ffi-nix: test-ffi-nix-go-bindings
