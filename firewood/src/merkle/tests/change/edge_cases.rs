@@ -29,7 +29,7 @@ fn test_empty_batch_ops_with_nonempty_proofs() {
             None,
         )
         .unwrap();
-    assert!(proof.batch_ops().is_empty());
+    assert_eq!(proof.batch_ops(), [] as [BatchOp<Box<[u8]>, Box<[u8]>>; 0]);
     assert!(!proof.start_proof().is_empty());
     assert!(!proof.end_proof().is_empty());
 
@@ -254,7 +254,7 @@ fn test_disjoint_proof() {
             None,
         )
         .unwrap();
-    assert!(proof.batch_ops().is_empty());
+    assert_eq!(proof.batch_ops(), [] as [BatchOp<Box<[u8]>, Box<[u8]>>; 0]);
 
     let verification = verify_change_proof_structure(
         &proof,

@@ -350,7 +350,7 @@ impl Node {
 
     /// Given a reader, return a [Node] from those bytes, deserializing child
     /// hashes under the scheme `H`.
-    pub fn from_reader<H: HashMode>(mut serialized: &mut impl Read) -> Result<Self, Error> {
+    pub fn from_reader<H: HashMode>(serialized: &mut impl Read) -> Result<Self, Error> {
         match serialized.read_byte()? {
             255 => {
                 // this is a freed area
@@ -358,7 +358,7 @@ impl Node {
             }
             first_byte if first_byte & 1 == 1 => {
                 let partial_path = read_path_with_overflow_length(
-                    &mut serialized,
+                    &mut *serialized,
                     first_byte >> 1,
                     LEAF_PARTIAL_PATH_LEN_OVERFLOW,
                 )?;
@@ -376,7 +376,7 @@ impl Node {
                 let childcount = branch_first_byte.number_children() as usize;
 
                 let partial_path = read_path_with_overflow_length(
-                    &mut serialized,
+                    &mut *serialized,
                     branch_first_byte.partial_path_length(),
                     BRANCH_PARTIAL_PATH_LEN_OVERFLOW,
                 )?;
@@ -398,7 +398,7 @@ impl Node {
                         serialized.read_exact(&mut address_buf)?;
                         let address = u64::from_ne_bytes(address_buf);
 
-                        let hash = H::read_child_hash(&mut serialized)?;
+                        let hash = H::read_child_hash(&mut *serialized)?;
 
                         *child = Some(Child::AddressWithHash(
                             LinearAddress::new(address)
@@ -422,7 +422,7 @@ impl Node {
                         serialized.read_exact(&mut address_buf)?;
                         let address = u64::from_ne_bytes(address_buf);
 
-                        let hash = H::read_child_hash(&mut serialized)?;
+                        let hash = H::read_child_hash(&mut *serialized)?;
 
                         children[position] = Some(Child::AddressWithHash(
                             LinearAddress::new(address)

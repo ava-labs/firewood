@@ -507,6 +507,6 @@ mod tests {
         assert!(iter.next().is_none());
 
         let items: Vec<_> = range_proof.into_iter().collect();
-        assert!(items.is_empty());
+        assert_eq!(items, [] as [&(Vec<u8>, Vec<u8>); 0]);
     }
 }

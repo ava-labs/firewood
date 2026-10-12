@@ -65,7 +65,6 @@ metrics-exporter-prometheus = { git = "https://github.com/demosdemon/metrics.git
 firewood = { path = "firewood", version = "0.8.0" }
 firewood-macros = { path = "firewood-macros", version = "0.6.0" }
 firewood-storage = { path = "storage", version = "0.8.0" }
-firewood-ffi = { path = "ffi", version = "0.8.0" }
 firewood-metrics = { path = "metrics", version = "0.7.0" }
 firewood-replay = { path = "replay", version = "0.7.0" }
 

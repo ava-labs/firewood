@@ -50,7 +50,7 @@ impl<'a> PathGuard<'a> {
     fn new(path: &'a mut PathGuard<'_>) -> Self {
         Self {
             original_length: path.0.len(),
-            path: &mut path.path,
+            path: &mut *path.path,
         }
     }
 
