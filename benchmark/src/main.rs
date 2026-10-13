@@ -269,12 +269,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         .max_revisions(args.global_opts.revisions)
         .build();
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(args.global_opts.hash_mode.into())
         .truncate(matches!(&args.test_name, TestName::Create))
         .manager(mgrcfg)
         .build();
 
-    let db = open(args.global_opts.dbname.clone(), cfg).expect("db initiation should succeed");
+    let db = open(
+        args.global_opts.dbname.clone(),
+        args.global_opts.hash_mode.into(),
+        cfg,
+    )
+    .expect("db initiation should succeed");
 
     match args.test_name {
         TestName::Create => {

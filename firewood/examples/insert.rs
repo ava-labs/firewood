@@ -60,12 +60,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         .max_revisions(args.revisions)
         .build();
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
         .truncate(args.truncate)
         .manager(mgrcfg)
         .build();
 
-    let db = open("firewood", cfg).expect("db initiation should succeed");
+    let db =
+        open("firewood", DefaultHashMode::ALGORITHM, cfg).expect("db initiation should succeed");
 
     let keys = args.batch_size;
     let start = Instant::now();

@@ -580,9 +580,9 @@ mod tests {
     };
 
     use firewood_storage::{
-        Committed, DefaultHashMode, DeletedNodeTracking, FileBacked, FileIoError, HashMode,
-        HashedNodeReader, ImmutableProposal, MemStore, Mutable, NodeStore, Propose, SeededRng,
-        TestRecorder, TrieReader,
+        Committed, DefaultHashMode, DeletedNodeTracking, FileBacked, FileIoError, HashedNodeReader,
+        ImmutableProposal, MemStore, Mutable, NodeStore, Propose, SeededRng, TestRecorder,
+        TrieReader,
     };
     use lender::Lender;
     use std::{collections::HashSet, ops::Deref, path::PathBuf, sync::Arc};
@@ -605,14 +605,11 @@ mod tests {
     impl TestDb {
         pub fn new() -> Self {
             let tmpdir = tempfile::tempdir().unwrap();
-            let dbconfig = DbConfig::builder()
-                .node_hash_algorithm(DefaultHashMode::ALGORITHM)
-                .truncate(true)
-                .build();
+            let dbconfig = DbConfig::builder().truncate(true).build();
             let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
                 .iter()
                 .collect();
-            let db = Db::<DefaultHashMode>::new_with_hash_mode(dbpath, dbconfig).unwrap();
+            let db = Db::<DefaultHashMode>::new(dbpath, dbconfig).unwrap();
             TestDb { db }
         }
     }

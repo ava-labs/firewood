@@ -78,12 +78,10 @@ pub struct Options {
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("import database {opts:?}");
 
-    let cfg = DbConfig::builder()
-        .node_hash_algorithm(opts.database.node_hash_algorithm()?)
-        .create_if_missing(false)
-        .truncate(false);
+    let algorithm = opts.database.node_hash_algorithm()?;
+    let cfg = DbConfig::builder().create_if_missing(false).truncate(false);
 
-    let db = open(opts.database.dbpath.clone(), cfg.build())?;
+    let db = open(opts.database.dbpath.clone(), algorithm, cfg.build())?;
 
     let reader: Box<dyn std::io::Read> = if let Some(path) = &opts.input_file_name {
         Box::new(File::open(path)?)

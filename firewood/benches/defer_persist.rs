@@ -39,7 +39,6 @@ fn bench_deferred_persistence<const N: usize, const MAX_PERSISTENCE_GAP: u64>(
                 |batch_ops| {
                     let tmpdir = tempfile::tempdir().unwrap();
                     let dbcfg = DbConfig::builder()
-                        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
                         .manager(
                             RevisionManagerConfig::builder()
                                 .max_revisions(max_revisions)
@@ -47,7 +46,7 @@ fn bench_deferred_persistence<const N: usize, const MAX_PERSISTENCE_GAP: u64>(
                                 .build(),
                         )
                         .build();
-                    let db = open(tmpdir, dbcfg).unwrap();
+                    let db = open(tmpdir, DefaultHashMode::ALGORITHM, dbcfg).unwrap();
 
                     for op in batch_ops {
                         let batch: api::OwnedBatch = Box::new([op]);

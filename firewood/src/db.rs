@@ -21,8 +21,6 @@ use crate::verify_change_proof_structure;
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_metrics::{firewood_counter, firewood_gauge, firewood_histogram};
-#[cfg(test)]
-use firewood_storage::DefaultHashMode;
 use firewood_storage::{
     CargoVersion, CheckOpt, CheckerReport, Committed, CommittedParentHash, EthHash, FileBacked,
     FileIoError, GitDescribe, HashMode, HashedNodeReader, ImmutableProposal, MerkleDbHash, Mutable,
@@ -110,12 +108,6 @@ pub enum UseParallel {
 #[derive(Clone, TypedBuilder, Debug)]
 #[non_exhaustive]
 pub struct DbConfig {
-    /// The algorithm used for hashing nodes (required).
-    ///
-    /// In tests this defaults to the feature-selected compatibility algorithm.
-    /// Production callers must select the algorithm explicitly.
-    #[cfg_attr(test, builder(default = DefaultHashMode::ALGORITHM))]
-    pub node_hash_algorithm: NodeHashAlgorithm,
     /// Whether to create the DB if it doesn't exist.
     #[builder(default = true)]
     pub create_if_missing: bool,
@@ -274,8 +266,8 @@ impl<H: HashMode> api::DynDb for Db<H> {
     }
 }
 
-/// Open or create a database, selecting the concrete hash mode at runtime from
-/// [`DbConfig::node_hash_algorithm`], and return it as an erased [`api::DynDb`].
+/// Open or create a database with the requested node-hashing scheme and return
+/// it as an erased [`api::DynDb`].
 /// This is the public way to construct a database; the concrete [`Db<H>`](Db)
 /// type is an implementation detail.
 ///
@@ -288,40 +280,20 @@ impl<H: HashMode> api::DynDb for Db<H> {
 ///
 /// Returns an error if the database cannot be opened, or if the configured node
 /// hash algorithm does not match an existing database's header.
-pub fn open<P: AsRef<Path>>(db_dir: P, cfg: DbConfig) -> Result<Box<dyn api::DynDb>, api::Error> {
-    Ok(match cfg.node_hash_algorithm {
-        NodeHashAlgorithm::Ethereum => Box::new(Db::<EthHash>::new_with_hash_mode(db_dir, cfg)?),
-        NodeHashAlgorithm::MerkleDB => {
-            Box::new(Db::<MerkleDbHash>::new_with_hash_mode(db_dir, cfg)?)
-        }
+pub fn open<P: AsRef<Path>>(
+    db_dir: P,
+    algorithm: NodeHashAlgorithm,
+    cfg: DbConfig,
+) -> Result<Box<dyn api::DynDb>, api::Error> {
+    Ok(match algorithm {
+        NodeHashAlgorithm::Ethereum => Box::new(Db::<EthHash>::new(db_dir, cfg)?),
+        NodeHashAlgorithm::MerkleDB => Box::new(Db::<MerkleDbHash>::new(db_dir, cfg)?),
     })
 }
 
 impl<H: HashMode> Db<H> {
-    /// Synchronously get an opaque handle to a committed historical revision.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`api::Error::RevisionNotFound`] if `root_hash` does not identify
-    /// an available committed revision.
-    pub fn committed_view(&self, root_hash: HashKey) -> Result<CommittedView, api::Error> {
-        Ok(CommittedView {
-            nodestore: self.manager.revision(root_hash)?,
-        })
-    }
-
     /// Create or open a database with the hash mode fixed by `H`.
-    // In-crate tests and benchmarks need typed construction; public callers use `open`.
-    pub(crate) fn new_with_hash_mode<P: AsRef<Path>>(
-        db_dir: P,
-        cfg: DbConfig,
-    ) -> Result<Self, api::Error> {
-        if cfg.node_hash_algorithm != H::ALGORITHM {
-            return Err(api::Error::HashModeMismatch {
-                expected: H::ALGORITHM,
-                found: cfg.node_hash_algorithm,
-            });
-        }
+    pub(crate) fn new<P: AsRef<Path>>(db_dir: P, cfg: DbConfig) -> Result<Self, api::Error> {
         let config_manager = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
             .create(cfg.create_if_missing)
@@ -341,6 +313,18 @@ impl<H: HashMode> Db<H> {
             use_parallel: cfg.use_parallel,
         };
         Ok(db)
+    }
+
+    /// Synchronously get an opaque handle to a committed historical revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`api::Error::RevisionNotFound`] if `root_hash` does not identify
+    /// an available committed revision.
+    pub fn committed_view(&self, root_hash: HashKey) -> Result<CommittedView, api::Error> {
+        Ok(CommittedView {
+            nodestore: self.manager.revision(root_hash)?,
+        })
     }
 
     /// Synchronously get a view, either committed or proposed
@@ -1039,18 +1023,16 @@ mod test {
         let ethereum_dir = tempfile::tempdir().unwrap();
         let ethereum_db = open(
             ethereum_dir.path(),
-            DbConfig::builder()
-                .node_hash_algorithm(NodeHashAlgorithm::Ethereum)
-                .build(),
+            NodeHashAlgorithm::Ethereum,
+            DbConfig::builder().build(),
         )
         .unwrap();
 
         let merkledb_dir = tempfile::tempdir().unwrap();
         let merkledb_db = open(
             merkledb_dir.path(),
-            DbConfig::builder()
-                .node_hash_algorithm(NodeHashAlgorithm::MerkleDB)
-                .build(),
+            NodeHashAlgorithm::MerkleDB,
+            DbConfig::builder().build(),
         )
         .unwrap();
 
@@ -1111,9 +1093,8 @@ mod test {
         // The persisted header restores the selected algorithm and root.
         let ethereum_db = open(
             ethereum_dir.path(),
-            DbConfig::builder()
-                .node_hash_algorithm(NodeHashAlgorithm::Ethereum)
-                .build(),
+            NodeHashAlgorithm::Ethereum,
+            DbConfig::builder().build(),
         )
         .unwrap();
         assert_eq!(
@@ -1127,9 +1108,8 @@ mod test {
 
         let merkledb_db = open(
             merkledb_dir.path(),
-            DbConfig::builder()
-                .node_hash_algorithm(NodeHashAlgorithm::MerkleDB)
-                .build(),
+            NodeHashAlgorithm::MerkleDB,
+            DbConfig::builder().build(),
         )
         .unwrap();
         assert_eq!(
@@ -1150,9 +1130,8 @@ mod test {
         let dir = tempfile::tempdir().unwrap();
         let db = open(
             dir.path(),
-            DbConfig::builder()
-                .node_hash_algorithm(DefaultHashMode::ALGORITHM)
-                .build(),
+            DefaultHashMode::ALGORITHM,
+            DbConfig::builder().build(),
         )
         .unwrap();
 
@@ -2416,12 +2395,9 @@ mod test {
         let tmpdir = tempfile::tempdir().unwrap();
 
         assert!(
-            Db::<DefaultHashMode>::new_with_hash_mode(
+            Db::<DefaultHashMode>::new(
                 tmpdir,
-                DbConfig::builder()
-                    .node_hash_algorithm(DefaultHashMode::ALGORITHM)
-                    .create_if_missing(false)
-                    .build(),
+                DbConfig::builder().create_if_missing(false).build(),
             )
             .is_err()
         );
@@ -2430,22 +2406,17 @@ mod test {
     #[test]
     fn test_new_rejects_hash_mode_mismatch() {
         let tmpdir = tempfile::tempdir().unwrap();
-        let configured_algorithm = match DefaultHashMode::ALGORITHM {
-            NodeHashAlgorithm::MerkleDB => NodeHashAlgorithm::Ethereum,
-            NodeHashAlgorithm::Ethereum => NodeHashAlgorithm::MerkleDB,
-        };
-        let config = DbConfig::builder()
-            .node_hash_algorithm(configured_algorithm)
-            .build();
+        // Truncation persists the hash-mode header without a committed proposal.
+        let db =
+            Db::<DefaultHashMode>::new(tmpdir.path(), DbConfig::builder().truncate(true).build())
+                .unwrap();
+        db.close().unwrap();
 
-        let error = Db::<DefaultHashMode>::new_with_hash_mode(tmpdir.path(), config).unwrap_err();
-        assert!(matches!(
-            error,
-            api::Error::HashModeMismatch {
-                expected: DefaultHashMode::ALGORITHM,
-                found,
-            } if found == configured_algorithm
-        ));
+        let wrong_algorithm = match DefaultHashMode::ALGORITHM {
+            NodeHashAlgorithm::Ethereum => NodeHashAlgorithm::MerkleDB,
+            NodeHashAlgorithm::MerkleDB => NodeHashAlgorithm::Ethereum,
+        };
+        assert!(open(tmpdir.path(), wrong_algorithm, DbConfig::builder().build()).is_err());
     }
 
     #[test]
@@ -2802,17 +2773,12 @@ mod test {
 
     impl TestDb {
         pub fn new() -> Self {
-            TestDb::new_with_config(
-                DbConfig::builder()
-                    .node_hash_algorithm(DefaultHashMode::ALGORITHM)
-                    .build(),
-            )
+            TestDb::new_with_config(DbConfig::builder().build())
         }
 
         pub fn new_with_config(dbconfig: DbConfig) -> Self {
             let tmpdir = tempfile::tempdir().unwrap();
-            let db = Db::<DefaultHashMode>::new_with_hash_mode(tmpdir.as_ref(), dbconfig.clone())
-                .unwrap();
+            let db = Db::<DefaultHashMode>::new(tmpdir.as_ref(), dbconfig.clone()).unwrap();
             TestDb {
                 db: Some(db),
                 tmpdir,
@@ -2827,11 +2793,7 @@ mod test {
         pub fn reopen(mut self) -> Self {
             self.db.take().unwrap().close().unwrap();
 
-            let db = Db::<DefaultHashMode>::new_with_hash_mode(
-                self.tmpdir.path(),
-                self.dbconfig.clone(),
-            )
-            .unwrap();
+            let db = Db::<DefaultHashMode>::new(self.tmpdir.path(), self.dbconfig.clone()).unwrap();
             self.db = Some(db);
             self
         }
@@ -2848,15 +2810,8 @@ mod test {
         pub fn replace(mut self) -> Self {
             self.db.take().unwrap().close().unwrap();
 
-            self.dbconfig = DbConfig::builder()
-                .node_hash_algorithm(DefaultHashMode::ALGORITHM)
-                .truncate(true)
-                .build();
-            let db = Db::<DefaultHashMode>::new_with_hash_mode(
-                self.tmpdir.path(),
-                self.dbconfig.clone(),
-            )
-            .unwrap();
+            self.dbconfig = DbConfig::builder().truncate(true).build();
+            let db = Db::<DefaultHashMode>::new(self.tmpdir.path(), self.dbconfig.clone()).unwrap();
             self.db = Some(db);
             self
         }

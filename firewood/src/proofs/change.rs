@@ -62,7 +62,7 @@ where
         key_values: Box<[BatchOp<K, V>]>,
     ) -> Self {
         // Proofs built in this binary carry the compile-default mode; the parse
-        // path stamps the resolved header mode via `new_with_hash_mode`.
+        // path stamps the resolved header mode via `Db::new`.
         Self::with_hash_mode(
             start_proof,
             end_proof,
