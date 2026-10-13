@@ -15,7 +15,6 @@ use std::sync::Arc;
 
 use firewood_macros::hash_mode;
 use firewood_storage::Committed;
-use firewood_storage::DefaultHashMode;
 use firewood_storage::DeletedNodeTracking;
 use firewood_storage::EthHash;
 use firewood_storage::HashMode;
@@ -50,15 +49,16 @@ use crate::proofs::verify_range_proof_structure;
 
 const SEED: u64 = 0x243F_6A88_85A3_08D3;
 
+#[hash_mode]
 #[test_case(32 * 1024, None; "no hint")]
 #[test_case(32 * 1024, Some(hint(5, 100)); "optimistic hint overfills then shrinks")]
 #[test_case(32 * 1024, Some(hint(2, 1)); "pessimistic hint underfills then grows")]
 #[test_case(32 * 1024, Some(hint(0, 0)); "zero hint is sanitized")]
 #[test_case(4 * 1024 * 1024, None; "budget covering the whole trie")]
-fn test_range_sized_matches_plain_proof(budget: usize, hint: Option<SizingHint>) {
+fn test_range_sized_matches_plain_proof<H: HashMode>(budget: usize, hint: Option<SizingHint>) {
     let kvs = test_kvs(2_000, false);
     let total = sorted_unique(&kvs).len();
-    let merkle = init_merkle::<DefaultHashMode, _, _, _>(kvs);
+    let merkle = init_merkle::<H, _, _, _>(kvs);
 
     let sized = merkle.range_proof_sized(None, budget, hint).unwrap();
 
@@ -67,15 +67,16 @@ fn test_range_sized_matches_plain_proof(budget: usize, hint: Option<SizingHint>)
     verify_range_chunk(&merkle, None, &sized);
 }
 
+#[hash_mode]
 #[test_case(16 * 1024, None; "no hint")]
 #[test_case(16 * 1024, Some(hint(5, 100)); "optimistic hint overfills then shrinks")]
 #[test_case(16 * 1024, Some(hint(2, 1)); "pessimistic hint underfills then grows")]
 #[test_case(16 * 1024, Some(hint(0, 0)); "zero hint is sanitized")]
 #[test_case(4 * 1024 * 1024, None; "budget covering the whole diff")]
-fn test_change_sized_matches_plain_proof(budget: usize, hint: Option<SizingHint>) {
+fn test_change_sized_matches_plain_proof<H: HashMode>(budget: usize, hint: Option<SizingHint>) {
     let base = test_kvs(1_500, false);
-    let source = init_merkle::<DefaultHashMode, _, _, _>(base.clone());
-    let target = init_merkle::<DefaultHashMode, _, _, _>(modified_kvs(&base));
+    let source = init_merkle::<H, _, _, _>(base.clone());
+    let target = init_merkle::<H, _, _, _>(modified_kvs(&base));
     let total = full_diff(&target, &source).len();
 
     let sized = target
@@ -87,12 +88,13 @@ fn test_change_sized_matches_plain_proof(budget: usize, hint: Option<SizingHint>
     verify_change_chunk(&target, &source, None, &sized);
 }
 
+#[hash_mode]
 #[test_case(8 * 1024, false; "incompressible values")]
 #[test_case(8 * 1024, true; "compressible values")]
-fn test_range_sized_paging_covers_keyspace(budget: usize, compressible: bool) {
+fn test_range_sized_paging_covers_keyspace<H: HashMode>(budget: usize, compressible: bool) {
     let kvs = test_kvs(3_000, compressible);
     let expected = sorted_unique(&kvs);
-    let merkle = init_merkle::<DefaultHashMode, _, _, _>(kvs);
+    let merkle = init_merkle::<H, _, _, _>(kvs);
 
     let chunks = page_range_chunks(&merkle, budget);
 
@@ -107,12 +109,13 @@ fn test_range_sized_paging_covers_keyspace(budget: usize, compressible: bool) {
     );
 }
 
+#[hash_mode]
 #[test_case(4 * 1024, false; "incompressible values")]
 #[test_case(8 * 1024, true; "compressible values")]
-fn test_change_sized_paging_covers_diff(budget: usize, compressible: bool) {
+fn test_change_sized_paging_covers_diff<H: HashMode>(budget: usize, compressible: bool) {
     let base = test_kvs(2_000, compressible);
-    let source = init_merkle::<DefaultHashMode, _, _, _>(base.clone());
-    let target = init_merkle::<DefaultHashMode, _, _, _>(modified_kvs(&base));
+    let source = init_merkle::<H, _, _, _>(base.clone());
+    let target = init_merkle::<H, _, _, _>(modified_kvs(&base));
     let expected = full_diff(&target, &source);
     assert!(expected.len() > 100, "diff should be non-trivial");
 
@@ -129,10 +132,11 @@ fn test_change_sized_paging_covers_diff(budget: usize, compressible: bool) {
 
 /// A chained hint keeps every later chunk inside the acceptance window on
 /// both compressible and incompressible data.
+#[hash_mode]
 #[test_case(16 * 1024, false; "incompressible")]
 #[test_case(16 * 1024, true; "compressible")]
-fn test_range_sized_chained_hint_stays_in_window(budget: usize, compressible: bool) {
-    let merkle = init_merkle::<DefaultHashMode, _, _, _>(test_kvs(4_000, compressible));
+fn test_range_sized_chained_hint_stays_in_window<H: HashMode>(budget: usize, compressible: bool) {
+    let merkle = init_merkle::<H, _, _, _>(test_kvs(4_000, compressible));
 
     let chunks = page_range_chunks(&merkle, budget);
 
@@ -151,12 +155,13 @@ fn test_range_sized_chained_hint_stays_in_window(budget: usize, compressible: bo
 
 /// When the budget exceeds what the decoder's body limit allows, the body
 /// limit bounds the chunk and nearly all of it is used.
+#[hash_mode]
 #[test]
-fn test_sized_body_limit_bounds_the_chunk() {
+fn test_sized_body_limit_bounds_the_chunk<H: HashMode>() {
     let budget = 4 * 1024 * 1024;
     let base = half_entropy_kvs(22_000, 1024);
-    let source = init_merkle::<DefaultHashMode, _, _, _>(base.clone());
-    let target = init_merkle::<DefaultHashMode, _, _, _>(modified_kvs(&base));
+    let source = init_merkle::<H, _, _, _>(base.clone());
+    let target = init_merkle::<H, _, _, _>(modified_kvs(&base));
 
     let range = target.range_proof_sized(None, budget, None).unwrap();
     let change = target
@@ -187,8 +192,9 @@ fn test_sized_body_limit_bounds_the_chunk() {
 
 /// A few oversized values among small ones: shrinking must drop the heavy
 /// tail entry, not a uniform share, so chunks stay well filled.
+#[hash_mode]
 #[test]
-fn test_range_sized_heavy_tail_entries_stay_well_filled() {
+fn test_range_sized_heavy_tail_entries_stay_well_filled<H: HashMode>() {
     let budget = 8 * 1024;
     let rng = SeededRng::new(SEED ^ 0x7E57);
     let mut kvs = test_kvs(600, false);
@@ -197,7 +203,7 @@ fn test_range_sized_heavy_tail_entries_stay_well_filled() {
             .chain((0..3 * 1024).map(|_| rng.random()))
             .collect();
     }
-    let merkle = init_merkle::<DefaultHashMode, _, _, _>(kvs);
+    let merkle = init_merkle::<H, _, _, _>(kvs);
 
     let chunks = page_range_chunks(&merkle, budget);
 
@@ -207,13 +213,14 @@ fn test_range_sized_heavy_tail_entries_stay_well_filled() {
 /// Constant values compress far beyond the decoder's ratio cap; the
 /// serializer's flushed-block encoding keeps such chunks decodable, and the
 /// body limit still bounds them.
+#[hash_mode]
 #[test]
-fn test_sized_constant_values_stay_decodable() {
+fn test_sized_constant_values_stay_decodable<H: HashMode>() {
     let kvs: Vec<_> = (0u32..120)
         .map(|i| (i.to_be_bytes().to_vec(), vec![0x42; 64 * 1024]))
         .collect();
-    let target = init_merkle::<DefaultHashMode, _, _, _>(kvs);
-    let source = init_merkle::<DefaultHashMode, _, _, _>(Vec::<(Vec<u8>, Vec<u8>)>::new());
+    let target = init_merkle::<H, _, _, _>(kvs);
+    let source = init_merkle::<H, _, _, _>(Vec::<(Vec<u8>, Vec<u8>)>::new());
 
     let range = target.range_proof_sized(None, usize::MAX, None).unwrap();
     assert!(!range.natural_end, "the body limit must bound the chunk");
@@ -229,8 +236,9 @@ fn test_sized_constant_values_stay_decodable() {
 /// The budget is a message limit: a chunk that cannot fit it is an error,
 /// never an oversized proof. Paging reaches the oversized entry, reports
 /// it, and a budget that holds it pages through.
+#[hash_mode]
 #[test]
-fn test_sized_budget_below_one_entry_is_an_error() {
+fn test_sized_budget_below_one_entry_is_an_error<H: HashMode>() {
     let budget = 8 * 1024;
     let rng = SeededRng::new(SEED ^ 0xDEAD_BEEF);
     let mut kvs = test_kvs(200, false);
@@ -240,8 +248,8 @@ fn test_sized_budget_below_one_entry_is_an_error() {
         .collect();
     kvs.push((big_key.clone(), big_value));
     let expected = sorted_unique(&kvs);
-    let merkle = init_merkle::<DefaultHashMode, _, _, _>(kvs);
-    let source = init_merkle::<DefaultHashMode, _, _, _>(Vec::<(Vec<u8>, Vec<u8>)>::new());
+    let merkle = init_merkle::<H, _, _, _>(kvs);
+    let source = init_merkle::<H, _, _, _>(Vec::<(Vec<u8>, Vec<u8>)>::new());
 
     assert!(matches!(
         merkle.range_proof_sized(None, 0, None),
@@ -286,10 +294,11 @@ fn test_sized_budget_below_one_entry_is_an_error() {
     );
 }
 
+#[hash_mode]
 #[test]
-fn test_sized_empty_trie_errors_like_plain_api() {
-    let empty = init_merkle::<DefaultHashMode, _, _, _>(Vec::<(Vec<u8>, Vec<u8>)>::new());
-    let target = init_merkle::<DefaultHashMode, _, _, _>([(b"key", b"value")]);
+fn test_sized_empty_trie_errors_like_plain_api<H: HashMode>() {
+    let empty = init_merkle::<H, _, _, _>(Vec::<(Vec<u8>, Vec<u8>)>::new());
+    let target = init_merkle::<H, _, _, _>([(b"key", b"value")]);
 
     assert!(matches!(
         empty.range_proof_sized(None, 8 * 1024, None),
@@ -317,10 +326,11 @@ fn test_sized_empty_trie_errors_like_plain_api() {
 
 /// A start past the last key, or identical tries, yield an empty proof at
 /// the natural end, byte-equal to the plain API's.
+#[hash_mode]
 #[test]
-fn test_sized_exhausted_inputs_yield_empty_natural_end() {
+fn test_sized_exhausted_inputs_yield_empty_natural_end<H: HashMode>() {
     let kvs = test_kvs(300, false);
-    let merkle = init_merkle::<DefaultHashMode, _, _, _>(kvs.clone());
+    let merkle = init_merkle::<H, _, _, _>(kvs.clone());
     let past_end = vec![0xFFu8; 33]; // greater than every 32-byte key
 
     let range = merkle
@@ -330,7 +340,7 @@ fn test_sized_exhausted_inputs_yield_empty_natural_end() {
     assert!(range.natural_end);
     verify_range_chunk(&merkle, Some(&past_end), &range);
 
-    let same = init_merkle::<DefaultHashMode, _, _, _>(kvs);
+    let same = init_merkle::<H, _, _, _>(kvs);
     let change = merkle
         .change_proof_sized(same.nodestore(), None, 8 * 1024, None)
         .unwrap();
@@ -342,10 +352,11 @@ fn test_sized_exhausted_inputs_yield_empty_natural_end() {
     verify_change_chunk(&merkle, &same, None, &change);
 }
 
+#[hash_mode]
 #[test]
-fn test_change_sized_from_empty_source_covers_target() {
-    let target = init_merkle::<DefaultHashMode, _, _, _>([(b"key", b"value")]);
-    let empty = init_merkle::<DefaultHashMode, _, _, _>(Vec::<(Vec<u8>, Vec<u8>)>::new());
+fn test_change_sized_from_empty_source_covers_target<H: HashMode>() {
+    let target = init_merkle::<H, _, _, _>([(b"key", b"value")]);
+    let empty = init_merkle::<H, _, _, _>(Vec::<(Vec<u8>, Vec<u8>)>::new());
 
     let change = target
         .change_proof_sized(empty.nodestore(), None, 4096, None)
@@ -357,12 +368,13 @@ fn test_change_sized_from_empty_source_covers_target() {
 }
 
 /// Inclusive lower bounds on existing, absent, and prefix keys.
+#[hash_mode]
 #[test]
-fn test_sized_bounded_starts_and_prefix_keys() {
+fn test_sized_bounded_starts_and_prefix_keys<H: HashMode>() {
     let kvs = [b"".as_slice(), b"a", b"a\0", b"ab", b"abc", b"b", b"z"]
         .map(|key| (key.to_vec(), vec![0x42; 128]));
-    let merkle = init_merkle::<DefaultHashMode, _, _, _>(kvs.clone());
-    let source = init_merkle::<DefaultHashMode, _, _, _>(Vec::<(Vec<u8>, Vec<u8>)>::new());
+    let merkle = init_merkle::<H, _, _, _>(kvs.clone());
+    let source = init_merkle::<H, _, _, _>(Vec::<(Vec<u8>, Vec<u8>)>::new());
 
     for start in [b"".as_slice(), b"a", b"aa", b"ab", b"zz"] {
         for budget in [1024, usize::MAX] {
@@ -377,13 +389,14 @@ fn test_sized_bounded_starts_and_prefix_keys() {
 }
 
 /// Values and keys around the varint length-prefix boundaries.
+#[hash_mode]
 #[test]
-fn test_sized_length_prefix_boundaries() {
+fn test_sized_length_prefix_boundaries<H: HashMode>() {
     let rng = SeededRng::new(SEED);
     for len in [127, 128, 16_383, 16_384] {
         let value: Vec<u8> = (0..len).map(|_| rng.random()).collect();
-        let target = init_merkle::<DefaultHashMode, _, _, _>([(vec![0x42; len.min(128)], value)]);
-        let source = init_merkle::<DefaultHashMode, _, _, _>(Vec::<(Vec<u8>, Vec<u8>)>::new());
+        let target = init_merkle::<H, _, _, _>([(vec![0x42; len.min(128)], value)]);
+        let source = init_merkle::<H, _, _, _>(Vec::<(Vec<u8>, Vec<u8>)>::new());
 
         let range = target.range_proof_sized(None, usize::MAX, None).unwrap();
         assert_eq!(range.proof.key_values().len(), 1);
@@ -434,9 +447,8 @@ fn test_sized_immutable_proposal_target<H: HashMode>() {
     .unwrap();
 }
 
-#[cfg(feature = "ethhash")]
 #[test]
-fn test_sized_account_with_storage_children() {
+fn test_sized_account_with_storage_children_ethhash() {
     let account = vec![0x42; 32];
     let value = super::ethhash::rlp_encode_account(1, 100, &[0; 32], &[0x55; 32]);
     let mut kvs = vec![(account.clone(), value.into_vec())];
@@ -444,8 +456,8 @@ fn test_sized_account_with_storage_children() {
         let key = [account.as_slice(), &[suffix; 32]].concat();
         kvs.push((key, super::ethhash::rlp_encode_storage(&[suffix; 32])));
     }
-    let source = init_merkle::<DefaultHashMode, _, _, _>(vec![kvs.first().unwrap().clone()]);
-    let target = init_merkle::<DefaultHashMode, _, _, _>(kvs);
+    let source = init_merkle::<EthHash, _, _, _>(vec![kvs.first().unwrap().clone()]);
+    let target = init_merkle::<EthHash, _, _, _>(kvs);
 
     let chunks = page_range_chunks(&target, 64 * 1024);
     assert_eq!(
