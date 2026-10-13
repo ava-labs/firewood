@@ -70,7 +70,7 @@ ci-machete:
 ci-build-ffi:
     RUSTUP_TOOLCHAIN=stable cargo build --locked -p firewood-ffi --features logger
 
-# Test the Go FFI against a Rust library built for a hash mode.
+# Test the Go FFI in one runtime hash mode against the built Rust library.
 ci-test-ffi hash_mode:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -84,6 +84,17 @@ ci-test-ffi hash_mode:
 # Test both explicit-hash-mode Go compatibility suites against the built FFI.
 ci-test-ffi-compat:
     cd ffi/tests && go test -count=1 -race ./...
+
+# Discover and fuzz every Go compatibility target against the built FFI.
+ci-fuzz-ffi-compat:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ffi/tests
+    tests=$(go test -list '^Fuzz' .)
+    while IFS= read -r test; do
+        [[ "$test" == Fuzz* ]] || continue
+        go test -race -run '^$' -fuzz "^${test}$" -fuzztime=30s .
+    done <<< "$tests"
 
 # Run macOS-compatible CI lints.
 lint:
