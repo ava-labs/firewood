@@ -330,6 +330,7 @@ impl<H: HashMode> Db<H> {
             .manager(cfg.manager)
             .build();
         let manager = RevisionManager::<H>::new(config_manager)?;
+        crate::membership::open(manager.root_hash().as_ref());
         firewood_gauge!(
             BUILD_INFO,
             "version" => CargoVersion::CARGO_PKG_VERSION,
@@ -611,6 +612,7 @@ impl<H: HashMode> Db<H> {
     /// committed revision to disk. This method **must** be called before the
     /// database is dropped as otherwise, any committed data may be lost.
     pub fn close(self) -> Result<(), api::Error> {
+        crate::membership::checkpoint_on_close(self.manager.root_hash().as_ref());
         self.manager.close().map_err(Into::into)
     }
 }
