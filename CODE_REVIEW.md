@@ -34,6 +34,14 @@ providing inline feedback — in addition to general best practices.
 - **Error propagation (`?`)**: Ensure propagated errors carry enough context to diagnose
   the failure at the call site. Reject silently discarded errors and uses where the error
   should be handled locally rather than propagated upward.
+- **Trie-depth recursion**: Trie depth follows key length, and a peer controls key length
+  during proof verification. A function that recurses once per trie level, directly or
+  through another function, must pass every recursive call through
+  `firewood_storage::ensure_stack`, so depth costs heap rather than call stack. Check
+  compiler-generated recursion too: `Node`'s `Clone` and `BranchNode`'s `Drop` are
+  hand-written for this reason and must not be re-derived, and a new `Child` variant that
+  can own a `Node` must be added to the scan in `BranchNode::drop`. `Node`'s derived
+  `PartialEq` recurses and is for tests only.
 - **Nibble range bounds**: A nibble-path lower bound uses the empty slice for
   "unbounded" — the empty slice already sorts as the minimum key. An upper bound must be
   `Option<&[u8]>` with `None` for unbounded (+∞); reusing the empty slice there judges

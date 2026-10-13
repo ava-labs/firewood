@@ -6,6 +6,8 @@
     reason = "integration test binary; unwrap failures surface as test failures"
 )]
 
+use firewood_macros::hash_mode;
+use firewood_storage::{EthHash, HashMode, MerkleDbHash, NodeHashAlgorithm};
 use predicates::prelude::*;
 use std::fmt::Write;
 use std::fs;
@@ -25,18 +27,11 @@ fn with_tmpdir(test: impl FnOnce(&Path)) {
     test(tmpdir.path());
 }
 
-/// Creates a database in the build's compatibility mode for legacy CLI tests.
-/// Tests that exercise runtime selection use `create_db_with_hash_mode` instead.
-fn create_db(db_path: &Path) {
-    let hash_mode = if cfg!(feature = "ethhash") {
-        "ethereum"
-    } else {
-        "merkle-db"
+fn create_db(db_path: &Path, algorithm: NodeHashAlgorithm) {
+    let hash_mode = match algorithm {
+        NodeHashAlgorithm::Ethereum => "ethereum",
+        NodeHashAlgorithm::MerkleDB => "merkle-db",
     };
-    create_db_with_hash_mode(db_path, hash_mode);
-}
-
-fn create_db_with_hash_mode(db_path: &Path, hash_mode: &str) {
     cargo_bin_cmd!()
         .arg("create")
         .arg("--db")
@@ -58,19 +53,16 @@ fn insert_key_value(db_path: &Path, key: &str, value: &str) {
         .stdout(format!("0x{}\n", hex::encode(key)));
 }
 
-#[cfg(feature = "ethhash")]
 const ACCOUNT: &str = "00112233445566778899aabbccddeeff00112233";
-#[cfg(feature = "ethhash")]
 const SLOT: &str = "0000000000000000000000000000000000000000000000000000000000000001";
-#[cfg(feature = "ethhash")]
 const ACCOUNT_HASH: &str = "b7ff4d50bd18751616802a406c94b190f1a3fd4fc82b06db40943e0119c5e8bc";
-#[cfg(feature = "ethhash")]
 const STORAGE_KEY: &str = "b7ff4d50bd18751616802a406c94b190f1a3fd4fc82b06db40943e0119c5e8bcb10e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf6";
 
+#[hash_mode]
 #[test]
-fn fwdctl_hex_key_round_trip() {
+fn fwdctl_hex_key_round_trip<H: HashMode>() {
     with_tmpdir(|db_path| {
-        create_db(db_path);
+        create_db(db_path, H::ALGORITHM);
 
         cargo_bin_cmd!()
             .args(["insert", "--hex", "79656172", "2023"])
@@ -96,23 +88,17 @@ fn fwdctl_hex_key_round_trip() {
             .success()
             .stdout("key 0x79656172 deleted successfully\n");
 
-        #[cfg(not(feature = "ethhash"))]
-        cargo_bin_cmd!()
+        let result = cargo_bin_cmd!()
             .args(["get", "year"])
             .arg("--db")
             .arg(db_path)
             .assert()
-            .success()
-            .stdout(predicate::str::contains("Database is empty"));
-
-        #[cfg(feature = "ethhash")]
-        cargo_bin_cmd!()
-            .args(["get", "year"])
-            .arg("--db")
-            .arg(db_path)
-            .assert()
-            .success()
-            .stderr("Key '0x79656172' not found\n");
+            .success();
+        if H::ALGORITHM == NodeHashAlgorithm::Ethereum {
+            result.stderr("Key '0x79656172' not found\n");
+        } else {
+            result.stdout("Database is empty\n");
+        }
     });
 }
 
@@ -125,7 +111,6 @@ fn fwdctl_hex_key_rejects_malformed_input() {
         .stderr(predicate::str::contains("key must be hexadecimal"));
 }
 
-#[cfg(feature = "ethhash")]
 #[test]
 fn fwdctl_key_modes_conflict() {
     cargo_bin_cmd!()
@@ -137,7 +122,6 @@ fn fwdctl_key_modes_conflict() {
         ));
 }
 
-#[cfg(feature = "ethhash")]
 #[test]
 fn fwdctl_key_hashing_is_documented_in_help() {
     cargo_bin_cmd!()
@@ -154,11 +138,11 @@ fn fwdctl_key_hashing_is_documented_in_help() {
         ));
 }
 
-#[cfg(feature = "ethhash")]
+#[hash_mode]
 #[test]
-fn fwdctl_account_key_round_trip() {
+fn fwdctl_account_key_round_trip<H: HashMode>() {
     with_tmpdir(|db_path| {
-        create_db(db_path);
+        create_db(db_path, H::ALGORITHM);
 
         cargo_bin_cmd!()
             .args(["insert", "--account", ACCOUNT, "account value"])
@@ -186,11 +170,11 @@ fn fwdctl_account_key_round_trip() {
     });
 }
 
-#[cfg(feature = "ethhash")]
+#[hash_mode]
 #[test]
-fn fwdctl_storage_key_round_trip() {
+fn fwdctl_storage_key_round_trip<H: HashMode>() {
     with_tmpdir(|db_path| {
-        create_db(db_path);
+        create_db(db_path, H::ALGORITHM);
 
         cargo_bin_cmd!()
             .args(["insert", "--storage", SLOT, ACCOUNT, "storage value"])
@@ -224,17 +208,20 @@ fn fwdctl_storage_key_round_trip() {
             .success()
             .stdout(format!("key 0x{STORAGE_KEY} deleted successfully\n"));
 
-        cargo_bin_cmd!()
+        let result = cargo_bin_cmd!()
             .args(["get", "--storage", SLOT, ACCOUNT])
             .arg("--db")
             .arg(db_path)
             .assert()
-            .success()
-            .stderr(format!("Key '0x{STORAGE_KEY}' not found\n"));
+            .success();
+        if H::ALGORITHM == NodeHashAlgorithm::Ethereum {
+            result.stderr(format!("Key '0x{STORAGE_KEY}' not found\n"));
+        } else {
+            result.stdout("Database is empty\n");
+        }
     });
 }
 
-#[cfg(feature = "ethhash")]
 #[test]
 fn fwdctl_account_rejects_malformed_hex() {
     cargo_bin_cmd!()
@@ -250,7 +237,6 @@ fn fwdctl_account_rejects_malformed_hex() {
         ));
 }
 
-#[cfg(feature = "ethhash")]
 #[test]
 fn fwdctl_storage_rejects_wrong_length() {
     cargo_bin_cmd!()
@@ -274,9 +260,10 @@ fn fwdctl_prints_version() {
         .stdout(predicate::str::contains(expected_version_output));
 }
 
+#[hash_mode]
 #[test]
-fn fwdctl_creates_database() {
-    with_tmpdir(create_db);
+fn fwdctl_creates_database<H: HashMode>() {
+    with_tmpdir(|db_path| create_db(db_path, H::ALGORITHM));
 }
 
 #[test]
@@ -292,18 +279,20 @@ fn fwdctl_create_requires_hash_mode() {
     });
 }
 
+#[hash_mode]
 #[test]
-fn fwdctl_insert_successful() {
+fn fwdctl_insert_successful<H: HashMode>() {
     with_tmpdir(|db_path| {
-        create_db(db_path);
+        create_db(db_path, H::ALGORITHM);
         insert_key_value(db_path, "year", "2023");
     });
 }
 
+#[hash_mode]
 #[test]
-fn fwdctl_get_successful() {
+fn fwdctl_get_successful<H: HashMode>() {
     with_tmpdir(|db_path| {
-        create_db(db_path);
+        create_db(db_path, H::ALGORITHM);
         insert_key_value(db_path, "year", "2023");
 
         cargo_bin_cmd!()
@@ -317,10 +306,11 @@ fn fwdctl_get_successful() {
     });
 }
 
+#[hash_mode]
 #[test]
-fn fwdctl_delete_successful() {
+fn fwdctl_delete_successful<H: HashMode>() {
     with_tmpdir(|db_path| {
-        create_db(db_path);
+        create_db(db_path, H::ALGORITHM);
         insert_key_value(db_path, "year", "2023");
 
         // Delete key -- prints raw data of deleted value
@@ -335,10 +325,11 @@ fn fwdctl_delete_successful() {
     });
 }
 
+#[hash_mode]
 #[test]
-fn fwdctl_root_hash() {
+fn fwdctl_root_hash<H: HashMode>() {
     with_tmpdir(|db_path| {
-        create_db(db_path);
+        create_db(db_path, H::ALGORITHM);
         insert_key_value(db_path, "year", "2023");
 
         cargo_bin_cmd!()
@@ -351,10 +342,11 @@ fn fwdctl_root_hash() {
     });
 }
 
+#[hash_mode]
 #[test]
-fn fwdctl_dump() {
+fn fwdctl_dump<H: HashMode>() {
     with_tmpdir(|db_path| {
-        create_db(db_path);
+        create_db(db_path, H::ALGORITHM);
         insert_key_value(db_path, "year", "2023");
 
         cargo_bin_cmd!()
@@ -367,10 +359,11 @@ fn fwdctl_dump() {
     });
 }
 
+#[hash_mode]
 #[test]
-fn test_slow_fwdctl_dump_with_start_stop_and_max() {
+fn test_slow_fwdctl_dump_with_start_stop_and_max<H: HashMode>() {
     with_tmpdir(|db_path| {
-        create_db(db_path);
+        create_db(db_path, H::ALGORITHM);
         insert_key_value(db_path, "a", "1");
         insert_key_value(db_path, "b", "2");
         insert_key_value(db_path, "c", "3");
@@ -446,11 +439,12 @@ fn test_slow_fwdctl_dump_with_start_stop_and_max() {
     });
 }
 
+#[hash_mode]
 #[test]
-fn test_slow_fwdctl_dump_with_csv_and_json() {
+fn test_slow_fwdctl_dump_with_csv_and_json<H: HashMode>() {
     with_tmpdir(|tmp_dir| {
         let db_path = tmp_dir.join("db");
-        create_db(&db_path);
+        create_db(&db_path, H::ALGORITHM);
         insert_key_value(&db_path, "a", "1");
         insert_key_value(&db_path, "b", "2");
         insert_key_value(&db_path, "c", "3");
@@ -500,11 +494,12 @@ fn test_slow_fwdctl_dump_with_csv_and_json() {
     });
 }
 
+#[hash_mode]
 #[test]
-fn fwdctl_dump_json_escapes_special_characters() {
+fn fwdctl_dump_json_escapes_special_characters<H: HashMode>() {
     with_tmpdir(|tmp_dir| {
         let db_path = tmp_dir.join("db");
-        create_db(&db_path);
+        create_db(&db_path, H::ALGORITHM);
 
         cargo_bin_cmd!()
             .arg("insert")
@@ -533,11 +528,12 @@ fn fwdctl_dump_json_escapes_special_characters() {
     });
 }
 
+#[hash_mode]
 #[test]
-fn fwdctl_dump_with_file_name() {
+fn fwdctl_dump_with_file_name<H: HashMode>() {
     with_tmpdir(|tmp_dir| {
         let db_path = tmp_dir.join("db");
-        create_db(&db_path);
+        create_db(&db_path, H::ALGORITHM);
         insert_key_value(&db_path, "a", "1");
 
         // `--output-file-name` is a base path; `dump` sets the extension from
@@ -597,10 +593,11 @@ fn fwdctl_dump_with_file_name() {
     });
 }
 
+#[hash_mode]
 #[test]
-fn test_slow_fwdctl_dump_with_hex() {
+fn test_slow_fwdctl_dump_with_hex<H: HashMode>() {
     with_tmpdir(|db_path| {
-        create_db(db_path);
+        create_db(db_path, H::ALGORITHM);
         insert_key_value(db_path, "a", "1");
         insert_key_value(db_path, "b", "2");
         insert_key_value(db_path, "c", "3");
@@ -646,59 +643,58 @@ fn test_slow_fwdctl_dump_with_hex() {
     });
 }
 
+#[hash_mode]
 #[test]
-fn fwdctl_check_empty_db() {
-    for hash_mode in ["merkle-db", "ethereum"] {
-        with_tmpdir(|db_path| {
-            create_db_with_hash_mode(db_path, hash_mode);
+fn fwdctl_check_empty_db<H: HashMode>() {
+    with_tmpdir(|db_path| {
+        create_db(db_path, H::ALGORITHM);
 
-            // `check` must infer the mode from the existing database header.
-            cargo_bin_cmd!()
-                .arg("check")
-                .arg("--db")
-                .arg(db_path)
-                .assert()
-                .success();
-        });
-    }
+        // `check` must infer the mode from the existing database header.
+        cargo_bin_cmd!()
+            .arg("check")
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success();
+    });
 }
 
+#[hash_mode]
 #[test]
-fn test_slow_fwdctl_check_db_with_data() {
+fn test_slow_fwdctl_check_db_with_data<H: HashMode>() {
     use rand::{RngExt, distr::Alphanumeric};
 
-    for hash_mode in ["merkle-db", "ethereum"] {
-        with_tmpdir(|db_path| {
-            let rng = firewood_storage::SeededRng::from_env_or_random();
-            let mut sample_iter = rng.sample_iter(Alphanumeric).map(char::from);
+    with_tmpdir(|db_path| {
+        let rng = firewood_storage::SeededRng::from_env_or_random();
+        let mut sample_iter = rng.sample_iter(Alphanumeric).map(char::from);
 
-            create_db_with_hash_mode(db_path, hash_mode);
+        create_db(db_path, H::ALGORITHM);
 
-            // TODO(#2047): bulk loading data instead of inserting one by one
-            for _ in 0..4 {
-                let key = sample_iter.by_ref().take(64).collect::<String>();
-                let value = sample_iter.by_ref().take(10).collect::<String>();
-                insert_key_value(db_path, &key, &value);
-            }
+        // TODO(#2047): bulk loading data instead of inserting one by one
+        for _ in 0..4 {
+            let key = sample_iter.by_ref().take(64).collect::<String>();
+            let value = sample_iter.by_ref().take(10).collect::<String>();
+            insert_key_value(db_path, &key, &value);
+        }
 
-            // Exercise mode-specific hash recomputation after inferring the
-            // mode from the existing database header.
-            cargo_bin_cmd!()
-                .arg("check")
-                .arg("--db")
-                .arg(db_path)
-                .arg("--hash-check")
-                .assert()
-                .success();
-        });
-    }
+        // Exercise mode-specific hash recomputation after inferring the
+        // mode from the existing database header.
+        cargo_bin_cmd!()
+            .arg("check")
+            .arg("--db")
+            .arg(db_path)
+            .arg("--hash-check")
+            .assert()
+            .success();
+    });
 }
 
+#[hash_mode]
 #[test]
-fn test_slow_fwdctl_import_csv() {
+fn test_slow_fwdctl_import_csv<H: HashMode>() {
     with_tmpdir(|tmp_dir| {
         let db_path1 = tmp_dir.join("db1");
-        create_db(&db_path1);
+        create_db(&db_path1, H::ALGORITHM);
         insert_key_value(&db_path1, "a", "1");
         insert_key_value(&db_path1, "b", "2");
         insert_key_value(&db_path1, "c", "3");
@@ -716,7 +712,7 @@ fn test_slow_fwdctl_import_csv() {
             .success();
 
         let db_path2 = tmp_dir.join("db2");
-        create_db(&db_path2);
+        create_db(&db_path2, H::ALGORITHM);
         cargo_bin_cmd!()
             .arg("import")
             .arg("--db")
@@ -744,11 +740,12 @@ fn test_slow_fwdctl_import_csv() {
     });
 }
 
+#[hash_mode]
 #[test]
-fn test_slow_fwdctl_import_csv_hex() {
+fn test_slow_fwdctl_import_csv_hex<H: HashMode>() {
     with_tmpdir(|tmp_dir| {
         let db_path1 = tmp_dir.join("db1");
-        create_db(&db_path1);
+        create_db(&db_path1, H::ALGORITHM);
         insert_key_value(&db_path1, "a", "1");
         insert_key_value(&db_path1, "b", "2");
 
@@ -766,7 +763,7 @@ fn test_slow_fwdctl_import_csv_hex() {
             .success();
 
         let db_path2 = tmp_dir.join("db2");
-        create_db(&db_path2);
+        create_db(&db_path2, H::ALGORITHM);
         cargo_bin_cmd!()
             .arg("import")
             .arg("--db")
@@ -796,11 +793,12 @@ fn test_slow_fwdctl_import_csv_hex() {
     });
 }
 
+#[hash_mode]
 #[test]
-fn test_slow_fwdctl_import_csv_malformed() {
+fn test_slow_fwdctl_import_csv_malformed<H: HashMode>() {
     with_tmpdir(|tmp_dir| {
         let db_path = tmp_dir.join("db");
-        create_db(&db_path);
+        create_db(&db_path, H::ALGORITHM);
 
         let dump_file = tmp_dir.join("malformed.csv");
         // Row 1: good
@@ -823,8 +821,9 @@ fn test_slow_fwdctl_import_csv_malformed() {
     });
 }
 
+#[hash_mode]
 #[test]
-fn test_slow_fwdctl_import_large_random_database() {
+fn test_slow_fwdctl_import_large_random_database<H: HashMode>() {
     with_tmpdir(|tmp_dir| {
         //Generate a large random database dump
         let dump_file1 = tmp_dir.join("bulk1.csv");
@@ -837,7 +836,7 @@ fn test_slow_fwdctl_import_large_random_database() {
 
         // Import it into db1
         let db_path1 = tmp_dir.join("db1");
-        create_db(&db_path1);
+        create_db(&db_path1, H::ALGORITHM);
         cargo_bin_cmd!()
             .arg("import")
             .arg("--db")
@@ -864,7 +863,7 @@ fn test_slow_fwdctl_import_large_random_database() {
 
         // Import dump_file2 into db2
         let db_path2 = tmp_dir.join("db2");
-        create_db(&db_path2);
+        create_db(&db_path2, H::ALGORITHM);
         cargo_bin_cmd!()
             .arg("import")
             .arg("--db")

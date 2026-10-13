@@ -209,7 +209,9 @@ where
                     if !(H::ALGORITHM.is_ethereum() && make_fake_root.is_some()) {
                         child_path_prefix.0.push(nibble.as_u8());
                     }
-                    self.hash_helper_inner(child_node, child_path_prefix, make_fake_root)?
+                    crate::stack::ensure_stack(|| {
+                        self.hash_helper_inner(child_node, child_path_prefix, make_fake_root)
+                    })?
                 };
 
                 *child = Some(Child::MaybePersisted(child_node, child_hash));

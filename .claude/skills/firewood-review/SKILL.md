@@ -122,7 +122,7 @@ Non-zero exit = stale header → blocking finding. Write results to `$SCRATCH/ru
 Go bindings require the FFI build to use the workspace `target/` dir (the `LDFLAGS` in `ffi/firewood.go` reference it directly — do not use `--target-dir` here):
 
 ```bash
-cargo build -p firewood-ffi -F ethhash,logger --frozen
+cargo build -p firewood-ffi -F logger --frozen
 cd ffi
 ./scripts/lint.sh
 go test ./... -race

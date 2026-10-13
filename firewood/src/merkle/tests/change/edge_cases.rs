@@ -8,6 +8,8 @@ use std::num::NonZeroUsize;
 use tempfile::TempDir;
 use test_case::test_case;
 
+use crate::merkle::tests::{DEFAULT_THREAD_STACK, prefix_chain_keys, spawn_on_stack};
+use crate::proofs::de::MAX_KEY_BYTES;
 use firewood_storage::{DefaultHashMode, HashMode};
 
 #[test]
@@ -1317,4 +1319,94 @@ fn test_same_change_proof_applied_twice_succeeds() {
     let ctx2 = verify_change_proof_structure(&proof, root2.clone(), None, None, None).unwrap();
     verify_and_check(&target, &proof, &ctx2, root2)
         .expect("re-applying the same proof must verify");
+}
+
+/// Over-long keys are rejected while a proof is being read, before any trie is
+/// rebuilt. The forged operations sit behind valid start and end proofs, so the
+/// reader reaches them and the rejection is the key-length check rather than an
+/// earlier failure.
+#[test]
+fn test_deep_forged_ops_rejected_at_deserialization() {
+    let (db, _dir) = setup_db![(b"\x05", b"init")];
+    let (root1, root2) = setup_2nd_commit!(db, [(b"\x10", b"v0")]);
+    let honest = db.change_proof(root1, root2, None, None, None).unwrap();
+
+    // Keys of every length from 1 to 1500 bytes, the longest far past the
+    // bound, added to the honest proof's own operations. The bytes come from a
+    // seeded RNG: the proof body is compressed on the wire and the reader caps
+    // the compression ratio, so repetitive keys would be rejected as a frame
+    // before the reader ever reached a key.
+    let rng = firewood_storage::SeededRng::from_option(Some(1234));
+    let mut ops: Vec<BatchOp<Key, Value>> = (1..=1500usize)
+        .map(|len| BatchOp::Put {
+            key: (0..len).map(|_| rng.random::<u8>()).collect(),
+            value: Box::from(b"v".as_slice()),
+        })
+        .collect();
+    ops.extend_from_slice(honest.batch_ops());
+    let forged: FrozenChangeProof = crate::ChangeProof::new(
+        honest.start_proof().clone(),
+        honest.end_proof().clone(),
+        ops.into_boxed_slice(),
+    );
+
+    let mut bytes = Vec::new();
+    forged.write_to_vec(&mut bytes).expect("serialize proof");
+    let err = FrozenChangeProof::from_slice(&bytes)
+        .expect_err("a proof carrying over-long keys must not deserialize");
+    assert!(
+        matches!(
+            err,
+            crate::ReadError::InvalidItem {
+                item: "key length",
+                ..
+            }
+        ),
+        "expected the key-length bound to reject it, got {err:?}"
+    );
+}
+
+/// A change proof over a trie as deep as the key-length bound allows survives a
+/// default stack.
+///
+/// The range-proof guard covers the walks that rebuild and hash a proving trie.
+/// Change-proof verification does more: it applies the peer's batch ops, which
+/// reaches the removal walks, and collapses the proving trie to the shape
+/// `end_root` has, which reaches the collapse walks. Both are driven to a depth
+/// the peer chooses, so this drives both to the deepest key the bound admits.
+#[test]
+fn test_max_bounded_depth_change_proof_survives_default_stack() {
+    spawn_on_stack(DEFAULT_THREAD_STACK, || {
+        let keys = prefix_chain_keys(MAX_KEY_BYTES, 0x11);
+
+        let (source, _dir_source) = new_db();
+        let (target, _dir_target) = new_db();
+        for db in [&source, &target] {
+            let puts: Vec<BatchOp<&[u8], &[u8]>> = keys
+                .iter()
+                .map(|key| BatchOp::Put {
+                    key: key.as_slice(),
+                    value: b"v".as_slice(),
+                })
+                .collect();
+            db.propose(puts).unwrap().commit().unwrap();
+        }
+        let root1_source = source.root_hash().unwrap();
+        let root1_target = target.root_hash().unwrap();
+
+        // Deleting the deepest key is what drives the removal walk the full
+        // length of the chain, and the collapse walk with it.
+        let deepest = keys.last().expect("the chain is non-empty");
+        let deletion: Vec<BatchOp<&[u8], &[u8]>> = vec![BatchOp::Delete {
+            key: deepest.as_slice(),
+        }];
+        source.propose(deletion).unwrap().commit().unwrap();
+        let root2 = source.root_hash().unwrap();
+
+        let proof = source
+            .change_proof(root1_source, root2.clone(), None, None, None)
+            .unwrap();
+        let ctx = verify_change_proof_structure(&proof, root2, None, None, None).unwrap();
+        verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
+    });
 }

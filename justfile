@@ -57,18 +57,9 @@ ci-check-go-generate:
 ci-machete:
     cargo machete --with-metadata
 
-# Build the Go FFI's Rust library for a hash mode.
-ci-build-ffi hash_mode:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    case "{{hash_mode}}" in
-        firewood) features=() ;;
-        ethhash) features=(--features ethhash,logger) ;;
-        *) echo "error: unknown FFI hash mode '{{hash_mode}}'" >&2; exit 2 ;;
-    esac
-    # ${features[@]+…} guard: empty-array expansion errors under `set -u` on
-    # the stock macOS bash 3.2.
-    cargo build --locked -p firewood-ffi ${features[@]+"${features[@]}"}
+# Build the Go FFI's Rust library; tests select hash mode at runtime.
+ci-build-ffi:
+    cargo build --locked -p firewood-ffi --features logger
 
 # Test the Go FFI against a Rust library built for a hash mode.
 ci-test-ffi hash_mode:
@@ -81,17 +72,9 @@ ci-test-ffi hash_mode:
     cd ffi
     GOEXPERIMENT=cgocheck2 TEST_FIREWOOD_HASH_MODE="{{hash_mode}}" go test -count=1 -race ./...
 
-# Test a Go compatibility suite against the corresponding FFI hash mode.
-ci-test-ffi-compat hash_mode:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    case "{{hash_mode}}" in
-        firewood) test_dir=ffi/tests/firewood ;;
-        ethhash) test_dir=ffi/tests/eth ;;
-        *) echo "error: unknown FFI hash mode '{{hash_mode}}'" >&2; exit 2 ;;
-    esac
-    cd "$test_dir"
-    go test -count=1 -race ./...
+# Test both explicit-hash-mode Go compatibility suites against the built FFI.
+ci-test-ffi-compat:
+    cd ffi/tests && go test -count=1 -race ./...
 
 # Run macOS-compatible CI lints.
 lint:
@@ -115,12 +98,10 @@ test:
     ./scripts/run-just.sh ci-rust test debug-ethhash-logger
     ./scripts/run-just.sh ci-rust test debug-all-features
     ./scripts/run-just.sh ci-rust test maxperf-ethhash-logger
-    ./scripts/run-just.sh ci-build-ffi firewood
+    ./scripts/run-just.sh ci-build-ffi
     ./scripts/run-just.sh ci-test-ffi firewood
-    ./scripts/run-just.sh ci-test-ffi-compat firewood
-    ./scripts/run-just.sh ci-build-ffi ethhash
     ./scripts/run-just.sh ci-test-ffi ethhash
-    ./scripts/run-just.sh ci-test-ffi-compat ethhash
+    ./scripts/run-just.sh ci-test-ffi-compat
 
 # Run every macOS-compatible pre-push check, with linting first.
 prepush: lint test
@@ -208,19 +189,11 @@ check-golang-version: check-nix
     GO_VERSION=$(nix develop --command bash -c "go mod edit -json | jq -r '.Go'")
     echo "go version in ffi/go.mod is ${GO_VERSION}"
 
-    ETH_TESTS_VERSION=$(nix develop --command bash -c "cd tests/eth && go mod edit -json | jq -r '.Go'")
-    echo "go version in ffi/tests/eth/go.mod is ${ETH_TESTS_VERSION}"
+    COMPAT_TESTS_VERSION=$(nix develop --command bash -c "cd tests && go mod edit -json | jq -r '.Go'")
+    echo "go version in ffi/tests/go.mod is ${COMPAT_TESTS_VERSION}"
 
-    if [[ "${GO_VERSION}" != "${ETH_TESTS_VERSION}" ]]; then
-        echo "❌ go version in ffi/tests/eth/go.mod should be ${GO_VERSION}"
-        FAILED=1
-    fi
-
-    FIREWOOD_TESTS_VERSION=$(nix develop --command bash -c "cd tests/firewood && go mod edit -json | jq -r '.Go'")
-    echo "go version in ffi/tests/firewood/go.mod is ${FIREWOOD_TESTS_VERSION}"
-
-    if [[ "${GO_VERSION}" != "${FIREWOOD_TESTS_VERSION}" ]]; then
-        echo "❌ go version in ffi/tests/firewood/go.mod should be ${GO_VERSION}"
+    if [[ "${GO_VERSION}" != "${COMPAT_TESTS_VERSION}" ]]; then
+        echo "❌ go version in ffi/tests/go.mod should be ${GO_VERSION}"
         FAILED=1
     fi
 
@@ -257,7 +230,7 @@ setup-go-workspace:
     if [ -f "go.work" ]; then
         rm go.work go.work.sum
     fi
-    go work init ./ffi ./ffi/tests/eth ./ffi/tests/firewood
+    go work init ./ffi ./ffi/tests
 
 # Run all checks of ffi built with nix
 test-ffi-nix: test-ffi-nix-go-bindings
@@ -283,7 +256,7 @@ test-ffi-nix-go-bindings: build-ffi-nix
     cd result/ffi
 
     # - cgocheck2 is expensive but provides complete pointer checks
-    # - use hash mode ethhash since the flake builds with `--features ethhash,logger`
+    # - use hash mode ethhash to exercise Ethereum-compatible hashing at runtime
     GOEXPERIMENT=cgocheck2 TEST_FIREWOOD_HASH_MODE=ethhash ${GO} test ./...
 
 # Ensure the FFI flake is up-to-date

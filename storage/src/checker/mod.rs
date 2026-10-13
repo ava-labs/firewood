@@ -422,13 +422,15 @@ where
                         path_prefix: child_path_prefix,
                         has_peers: num_children != 1,
                     };
-                    if let Err(e) = self.visit_trie_helper(
-                        child_subtrie,
-                        visited,
-                        trie_stats,
-                        progress_bar,
-                        hash_check,
-                    ) {
+                    if let Err(e) = crate::stack::ensure_stack(|| {
+                        self.visit_trie_helper(
+                            child_subtrie,
+                            visited,
+                            trie_stats,
+                            progress_bar,
+                            hash_check,
+                        )
+                    }) {
                         errors.extend(e);
                     }
                 }
