@@ -2480,10 +2480,8 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 // so we can start deleting below here
                 match node {
                     Node::Branch(branch) => {
-                        if branch.value.is_some() {
-                            // a KV pair was in the branch itself
-                            *deleted = deleted.saturating_add(1);
-                        }
+                        // `delete_children` counts the branch's own value along
+                        // with everything below it.
                         self.delete_children(branch, deleted)?;
                     }
                     Node::Leaf(_) => {
