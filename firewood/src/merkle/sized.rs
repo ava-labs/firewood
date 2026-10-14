@@ -208,13 +208,6 @@ impl<T: TrieReader> Merkle<T> {
     ///   body limit, so it can never be sent regardless of budget.
     /// * A bounded request on an empty trie returns [`ProofError::Empty`].
     /// * Proof generation, iteration, or compression errors.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no in-crate caller until the `Db` API exposes sized proofs"
-        )
-    )]
     pub(crate) fn range_proof_sized(
         &self,
         start_key: Option<&[u8]>,
@@ -260,13 +253,6 @@ impl<T: HashedNodeReader> Merkle<T> {
     /// * [`ProofError::Empty`] - this trie is empty, as in
     ///   [`Self::change_proof`].
     /// * Proof generation, diff iteration, body-size, or compression errors.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no in-crate caller until the `Db` API exposes sized proofs"
-        )
-    )]
     pub(crate) fn change_proof_sized(
         &self,
         source_trie: &impl HashedNodeReader,
