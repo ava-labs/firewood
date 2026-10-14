@@ -20,6 +20,8 @@ pub use crate::batch_op::KeyValuePair;
 pub use crate::batch_op::TryIntoBatch;
 use crate::manager::RevisionManagerError;
 use crate::merkle::Key;
+use crate::merkle::SizedProof;
+use crate::merkle::SizingHint;
 use crate::merkle::Value;
 use crate::merkle::parallel::CreateProposalError;
 use crate::persist_worker::PersistError;
@@ -709,6 +711,35 @@ pub trait DynDb: Debug + Send + Sync + 'static {
         end_key: Option<&[u8]>,
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenChangeProof, Error>;
+
+    /// Object-safe version of
+    /// [`Db::range_proof_sized`](crate::db::Db::range_proof_sized).
+    ///
+    /// # Errors
+    ///
+    /// As [`Db::range_proof_sized`](crate::db::Db::range_proof_sized).
+    fn range_proof_sized(
+        &self,
+        root: HashKey,
+        start_key: Option<&[u8]>,
+        budget: usize,
+        hint: Option<SizingHint>,
+    ) -> Result<SizedProof<FrozenRangeProof>, Error>;
+
+    /// Object-safe version of
+    /// [`Db::change_proof_sized`](crate::db::Db::change_proof_sized).
+    ///
+    /// # Errors
+    ///
+    /// As [`Db::change_proof_sized`](crate::db::Db::change_proof_sized).
+    fn change_proof_sized(
+        &self,
+        start_hash: HashKey,
+        end_hash: HashKey,
+        start_key: Option<&[u8]>,
+        budget: usize,
+        hint: Option<SizingHint>,
+    ) -> Result<SizedProof<FrozenChangeProof>, Error>;
 
     /// Object-safe version of
     /// [`Db::verify_change_proof`](crate::db::Db::verify_change_proof).

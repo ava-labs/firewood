@@ -554,21 +554,23 @@ impl<H: HashMode> RevisionManager<H> {
     /// 2. Try to find it in committed revisions.
     pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, RevisionManagerError> {
         // 1. Try to find it in proposals.
-        // BLOCKING: mutex lock on `proposals` held while scanning all proposals for the target
-        // hash. Concurrent commits that need the proposals lock will queue behind this.
-        let proposal = self
-            .proposals
-            .lock()
-            .iter()
-            .find(|p| p.root_hash().as_ref() == Some(&root_hash))
-            .cloned();
-
-        if let Some(proposal) = proposal {
+        if let Some(proposal) = self.proposal(&root_hash) {
             return Ok(proposal);
         }
 
         // 2. Try to find it in committed revisions.
         self.revision(root_hash).map(|r| r as ArcDynDbView)
+    }
+
+    /// The in-flight proposal whose root is `root_hash`, if any.
+    pub(crate) fn proposal(&self, root_hash: &HashKey) -> Option<ProposedRevision<H>> {
+        // BLOCKING: mutex lock on `proposals` held while scanning all proposals for the target
+        // hash. Concurrent commits that need the proposals lock will queue behind this.
+        self.proposals
+            .lock()
+            .iter()
+            .find(|p| p.root_hash().as_ref() == Some(root_hash))
+            .cloned()
     }
 
     /// Remove a proposal from the tracking list. Retains all proposals
