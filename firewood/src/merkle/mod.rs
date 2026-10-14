@@ -11,7 +11,7 @@ mod merge;
 /// Parallel merkle
 pub mod parallel;
 pub(crate) mod reconcile;
-mod sized;
+pub(crate) mod sized;
 
 use crate::api::{
     self, BatchIter, FrozenChangeProof, FrozenProof, FrozenRangeProof, HashKey, KeyType,

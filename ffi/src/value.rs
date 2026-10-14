@@ -23,7 +23,8 @@ pub(crate) use self::results::{CResult, NullHandleResult};
 pub use self::results::{
     ChangeProofResult, CodeIteratorResult, EthProofResult, HandleResult, HashResult,
     IteratorResult, KeyValueBatchResult, KeyValueResult, NextKeyRangeResult, ProposalResult,
-    RangeProofResult, ReconstructedResult, RenderedMetricsResult, RevisionResult, ValueResult,
+    RangeProofResult, ReconstructedResult, RenderedMetricsResult, RevisionResult, SizedChangeProof,
+    SizedChangeProofResult, SizedRangeProof, SizedRangeProofResult, SizingHint, ValueResult,
     VoidResult,
 };
 

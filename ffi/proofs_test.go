@@ -1397,3 +1397,124 @@ func TestUnboundChangeProofOutlivesDatabase(t *testing.T) {
 		})
 	}
 }
+
+// lexSuccessor is the smallest key strictly greater than key: a
+// NextKeyRange's start key is the last key already covered, while the sized
+// proof requests take an inclusive start.
+func lexSuccessor(key []byte) []byte {
+	return append(append([]byte{}, key...), 0)
+}
+
+// TestRangeProofSizedSyncsWholeKeyspace pages sized range proofs from dbA into
+// dbB like a syncing client: each chunk fits the budget, its wire bytes match
+// the proof's own serialization, and the final committed root matches.
+func TestRangeProofSizedSyncsWholeKeyspace(t *testing.T) {
+	r := require.New(t)
+	dbA := newTestDatabase(t)
+	dbB := newTestDatabase(t)
+
+	_, _, batch := kvForTest(6000)
+	root, err := dbA.Update(batch)
+	r.NoError(err)
+
+	// Edge proofs are ~1.3 KiB here, so keep them a minority of the chunk
+	// while still needing several chunks for the keyspace.
+	const budget = 4096
+	startKey := nothing()
+	var hint SizingHint
+	chunks := 0
+	for {
+		sized, err := dbA.RangeProofSized(root, startKey, budget, hint)
+		r.NoError(err)
+		assertProofNotNil(t, sized.Proof)
+		hint = sized.Hint
+		r.NotZero(hint.Ratio, "each chunk measures a ratio for the next")
+
+		marshaled, err := sized.Proof.Marshal()
+		r.NoError(err)
+		r.Equal(marshaled, sized.Wire, "wire must match the proof serialization")
+		r.LessOrEqual(len(sized.Wire), budget)
+
+		_, err = dbB.VerifyAndCommitRangeProof(sized.Proof, startKey, nothing(), root, rangeProofLenUnbounded)
+		r.NoError(err)
+
+		if sized.NaturalEnd {
+			r.NoError(sized.Proof.Drop())
+			break
+		}
+		next, err := sized.Proof.FindNextKey()
+		r.NoError(err)
+		r.NotNil(next, "non-final chunk must yield a next key range")
+		startKey = something(lexSuccessor(next.StartKey()))
+		r.NoError(next.Free())
+		r.NoError(sized.Proof.Drop())
+
+		chunks++
+		r.Less(chunks, 1000, "runaway paging")
+	}
+	r.Positive(chunks, "budget should force multiple chunks")
+	r.Equal(root, dbB.Root())
+}
+
+// TestChangeProofSizedPagesWholeDiff pages sized change proofs across a diff:
+// each chunk fits the budget, its wire bytes match the proof's own
+// serialization, and paging terminates via NaturalEnd.
+func TestChangeProofSizedPagesWholeDiff(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	_, _, batch := kvForTest(6000)
+	startRoot, err := db.Update(batch[:3000])
+	r.NoError(err)
+	endRoot, err := db.Update(batch[3000:])
+	r.NoError(err)
+
+	const budget = 4096
+	startKey := nothing()
+	var hint SizingHint
+	chunks := 0
+	for {
+		sized, err := db.ChangeProofSized(startRoot, endRoot, startKey, budget, hint)
+		r.NoError(err)
+		r.NotNil(sized.Proof)
+		hint = sized.Hint
+		r.NotZero(hint.Ratio)
+
+		marshaled, err := sized.Proof.Marshal()
+		r.NoError(err)
+		r.Equal(marshaled, sized.Wire, "wire must match the proof serialization")
+		r.LessOrEqual(len(sized.Wire), budget)
+
+		if sized.NaturalEnd {
+			r.NoError(sized.Proof.Drop())
+			break
+		}
+		next, err := sized.Proof.FindNextKey(nothing())
+		r.NoError(err)
+		r.NotNil(next, "non-final chunk must yield a next key range")
+		startKey = something(lexSuccessor(next.StartKey()))
+		r.NoError(next.Free())
+		r.NoError(sized.Proof.Drop())
+
+		chunks++
+		r.Less(chunks, 1000, "runaway paging")
+	}
+	r.Positive(chunks, "budget should force multiple chunks")
+}
+
+// TestRangeProofSizedErrors covers the sized-specific error mapping: a missing
+// root and a budget too small for even one entry.
+func TestRangeProofSizedErrors(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	_, _, batch := kvForTest(10)
+	root, err := db.Update(batch)
+	r.NoError(err)
+
+	_, err = db.RangeProofSized(Hash{1}, nothing(), 4096, SizingHint{})
+	r.ErrorIs(err, ErrRevisionNotFound)
+
+	_, err = db.RangeProofSized(root, nothing(), 1, SizingHint{})
+	r.ErrorIs(err, ErrProofOverBudget)
+}

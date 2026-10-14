@@ -3,6 +3,7 @@
 
 use crate::manager::RevisionManagerError;
 use crate::merkle::parallel::CreateProposalError;
+use crate::merkle::sized::{SizedProof, SizingHint};
 use crate::merkle::{Key, Value};
 use crate::persist_worker::PersistError;
 use crate::{Proof, ProofError, ProofNode, RangeProof};
@@ -698,6 +699,29 @@ pub trait DynDb: Debug + Send + Sync + 'static {
         end_key: Option<&[u8]>,
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenChangeProof, Error>;
+
+    /// Object-safe version of
+    /// [`Db::range_proof_sized`](crate::db::Db::range_proof_sized).
+    #[expect(clippy::missing_errors_doc)]
+    fn range_proof_sized(
+        &self,
+        root: HashKey,
+        start_key: Option<&[u8]>,
+        budget: usize,
+        hint: Option<SizingHint>,
+    ) -> Result<SizedProof<FrozenRangeProof>, Error>;
+
+    /// Object-safe version of
+    /// [`Db::change_proof_sized`](crate::db::Db::change_proof_sized).
+    #[expect(clippy::missing_errors_doc)]
+    fn change_proof_sized(
+        &self,
+        start_hash: HashKey,
+        end_hash: HashKey,
+        start_key: Option<&[u8]>,
+        budget: usize,
+        hint: Option<SizingHint>,
+    ) -> Result<SizedProof<FrozenChangeProof>, Error>;
 
     /// Object-safe version of
     /// [`Db::verify_change_proof`](crate::db::Db::verify_change_proof).

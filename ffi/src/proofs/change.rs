@@ -11,7 +11,8 @@ use firewood::{
 
 use crate::{
     BorrowedBytes, ChangeProofResult, CodeIteratorHandle, CodeIteratorResult, DatabaseHandle,
-    HashKey, HashResult, KeyRange, Maybe, NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult,
+    HashKey, HashResult, KeyRange, Maybe, NextKeyRangeResult, OwnedBytes, SizedChangeProofResult,
+    SizingHint, ValueResult, VoidResult,
 };
 
 /// Arguments for creating a change proof.
@@ -137,6 +138,65 @@ pub extern "C" fn fwd_db_change_proof(
                 .map(BorrowedBytes::as_slice)
                 .into_option(),
             NonZeroUsize::new(args.max_length as usize),
+        )
+    })
+}
+
+/// Arguments for creating a size-targeted change proof.
+#[derive(Debug)]
+#[repr(C)]
+pub struct CreateSizedChangeProofArgs<'a> {
+    /// The root hash of the starting revision. This must be provided.
+    /// If the root is not found in the database, the function will return
+    /// [`SizedChangeProofResult::StartRevisionNotFound`].
+    pub start_root: HashKey,
+    /// The root hash of the ending revision. This must be provided.
+    /// If the root is not found in the database, the function will return
+    /// [`SizedChangeProofResult::EndRevisionNotFound`].
+    pub end_root: HashKey,
+    /// The start key. If `None`, the proof starts at the beginning of the
+    /// keyspace.
+    pub start_key: Maybe<BorrowedBytes<'a>>,
+    /// The wire byte budget the serialized proof must fit.
+    pub budget: u64,
+    /// The previous chunk's measured hint, or the zero value for none.
+    pub hint: SizingHint,
+}
+
+/// Generate a change proof between two roots from `start_key` whose
+/// serialized size approaches `budget` bytes and never exceeds it. The
+/// serialized wire bytes are returned alongside the proof handle: they were
+/// already computed during sizing, so send them rather than re-marshaling.
+///
+/// # Arguments
+///
+/// - `db` - The database to create the proof from.
+/// - `args` - The arguments for creating the sized change proof.
+///
+/// # Returns
+///
+/// - [`SizedChangeProofResult::NullHandlePointer`] if the caller provided a null pointer.
+/// - [`SizedChangeProofResult::StartRevisionNotFound`] if the start root was not found.
+/// - [`SizedChangeProofResult::EndRevisionNotFound`] if the end root was not found. If
+///   both roots are missing, only the end root is reported.
+/// - [`SizedChangeProofResult::OverBudget`] if one operation, or the edge proofs alone, do not fit.
+/// - [`SizedChangeProofResult::Ok`] containing the proof, its wire bytes, and the next hint.
+/// - [`SizedChangeProofResult::Err`] containing an error message.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_db_change_proof_sized(
+    db: Option<&DatabaseHandle>,
+    args: CreateSizedChangeProofArgs,
+) -> SizedChangeProofResult {
+    crate::invoke_with_handle(db, |db| {
+        db.change_proof_sized(
+            args.start_root.into(),
+            args.end_root.into(),
+            args.start_key
+                .as_ref()
+                .map(BorrowedBytes::as_slice)
+                .into_option(),
+            usize::try_from(args.budget).unwrap_or(usize::MAX),
+            args.hint.into_option(),
         )
     })
 }
