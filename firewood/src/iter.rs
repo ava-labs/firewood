@@ -1,15 +1,26 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::api::{KeyType, KeyValuePair};
-use crate::merkle::{Key, Value};
-
-use firewood_storage::{
-    BranchNode, Child, FileIoError, NibblesIterator, Node, NodeHashAlgorithm, PathBuf,
-    PathComponent, PathIterItem, SharedNode, TriePathFromUnpackedBytes, TrieReader,
-};
 use std::cmp::Ordering;
 use std::iter::FusedIterator;
+
+use firewood_storage::BranchNode;
+use firewood_storage::Child;
+use firewood_storage::FileIoError;
+use firewood_storage::NibblesIterator;
+use firewood_storage::Node;
+use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::PathBuf;
+use firewood_storage::PathComponent;
+use firewood_storage::PathIterItem;
+use firewood_storage::SharedNode;
+use firewood_storage::TriePathFromUnpackedBytes;
+use firewood_storage::TrieReader;
+
+use crate::api::KeyType;
+use crate::api::KeyValuePair;
+use crate::merkle::Key;
+use crate::merkle::Value;
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode {
@@ -262,7 +273,8 @@ fn get_iterator_intial_state<T: TrieReader>(
                     node = match child {
                         None => return Ok(NodeIterState::Iterating { iter_stack }),
                         Some(Child::AddressWithHash(addr, _)) => merkle.read_node(*addr)?,
-                        Some(Child::Node(node)) => (*node).clone().into(), // TODO(rkuris) can we avoid cloning this?
+                        // TODO(rkuris) can we avoid cloning this?
+                        Some(Child::Node(node)) => (*node).clone().into(),
                         Some(Child::MaybePersisted(maybe_persisted, _)) => {
                             // For MaybePersisted, we need to get the node
                             maybe_persisted.as_shared_node(merkle)?
@@ -660,14 +672,19 @@ impl<I: Iterator<Item = T>, T: KeyValuePair, K: KeyType> Iterator for FilteredKe
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use firewood_storage::DefaultHashMode;
+    use firewood_storage::DeletedNodeTracking;
+    use firewood_storage::ImmutableProposal;
+    use firewood_storage::MemStore;
+    use firewood_storage::Mutable;
+    use firewood_storage::NodeStore;
+    use firewood_storage::Propose;
+    use test_case::test_case;
+
     use super::*;
     use crate::merkle::Merkle;
-    use firewood_storage::{
-        DefaultHashMode, DeletedNodeTracking, ImmutableProposal, MemStore, Mutable, NodeStore,
-        Propose,
-    };
-    use std::sync::Arc;
-    use test_case::test_case;
 
     macro_rules! path {
         ($($elem:expr),* $(,)?)=>{

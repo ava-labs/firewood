@@ -472,8 +472,9 @@ const fn minimal_be_len(n: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use test_case::test_case;
+
+    use super::*;
 
     fn encode_bytes(b: &[u8]) -> Box<[u8]> {
         let mut out = Vec::with_capacity(bytes_encoded_len(b));
@@ -490,7 +491,8 @@ mod tests {
 
     #[test]
     fn empty_trie_root_matches() {
-        use sha3::{Digest as _, Keccak256};
+        use sha3::Digest as _;
+        use sha3::Keccak256;
         assert_eq!(&EMPTY_TRIE_ROOT[..], Keccak256::digest(NULL_RLP).as_slice());
     }
 

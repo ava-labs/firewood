@@ -14,17 +14,30 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
+use std::fmt::Debug;
+use std::io::Error;
+use std::io::Read;
+use std::io::Write;
+
+use bitfield::bitfield;
+pub use branch::BranchNode;
+pub use branch::Child;
+pub use children::Children;
+pub use children::ChildrenSlots;
+pub use children::DenseChildren;
+use enum_as_inner::EnumAsInner;
+use integer_encoding::VarInt;
+use integer_encoding::VarIntReader as _;
+pub use leaf::LeafNode;
+
+use crate::HashMode;
+use crate::LinearAddress;
+use crate::Path;
+use crate::PathBuf;
+use crate::PathComponent;
+use crate::SharedNode;
 use crate::node::branch::ReadSerializable;
 use crate::nodestore::AreaIndex;
-use crate::{HashMode, LinearAddress, Path, PathBuf, PathComponent, SharedNode};
-use bitfield::bitfield;
-pub use branch::{BranchNode, Child};
-pub use children::{Children, ChildrenSlots, DenseChildren};
-use enum_as_inner::EnumAsInner;
-use integer_encoding::{VarInt, VarIntReader as _};
-pub use leaf::LeafNode;
-use std::fmt::Debug;
-use std::io::{Error, Read, Write};
 
 pub mod branch;
 pub mod children;
@@ -541,15 +554,23 @@ mod snapshot_tests;
 
 #[cfg(test)]
 mod test {
-    #[cfg(feature = "ethhash")]
-    use crate::DefaultHashMode;
-    use crate::node::{BranchNode, LeafNode, Node};
-    use crate::{
-        Child, Children, EthHash, HashMode, LinearAddress, MerkleDbHash, NibblesIterator,
-        NodeHashAlgorithm, Path,
-    };
     use firewood_macros::hash_mode;
     use test_case::test_case;
+
+    use crate::Child;
+    use crate::Children;
+    #[cfg(feature = "ethhash")]
+    use crate::DefaultHashMode;
+    use crate::EthHash;
+    use crate::HashMode;
+    use crate::LinearAddress;
+    use crate::MerkleDbHash;
+    use crate::NibblesIterator;
+    use crate::NodeHashAlgorithm;
+    use crate::Path;
+    use crate::node::BranchNode;
+    use crate::node::LeafNode;
+    use crate::node::Node;
 
     #[hash_mode]
     #[test_case(
@@ -602,8 +623,9 @@ than 126 bytes as the length would be encoded in multiple bytes.
         )})), 1165; "full branch node with obnoxiously long partial path and long value"
     )]
     fn test_serialize_deserialize<H: HashMode>(node: Node, expected_length: usize) {
-        use crate::node::Node;
         use std::io::Cursor;
+
+        use crate::node::Node;
 
         let mut serialized = Vec::new();
         let _area_index = node.as_bytes::<H, _>(&mut serialized).unwrap();
@@ -739,9 +761,12 @@ impl Clone for Node {
 
 #[cfg(test)]
 mod clone_tests {
-    use super::*;
-    use crate::{HashType, MaybePersistedNode, TrieHash};
     use test_case::test_case;
+
+    use super::*;
+    use crate::HashType;
+    use crate::MaybePersistedNode;
+    use crate::TrieHash;
 
     /// Builds a chain `depth` branches deep, ending in a leaf. The top branch
     /// also holds an `AddressWithHash` child and a leaf child. `fan_out` covers

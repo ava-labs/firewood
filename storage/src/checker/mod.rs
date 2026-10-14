@@ -2,22 +2,36 @@
 // See the file LICENSE.md for licensing terms.
 
 mod range_set;
-pub(crate) use range_set::LinearAddressRangeSet;
-
-use crate::logger::warn;
-use crate::nodestore::alloc::FreeAreaWithMetadata;
-use crate::nodestore::primitives::{AreaIndex, area_size_iter};
-use crate::{
-    CheckerError, Committed, FileIoError, HashMode, HashType, HashedNodeReader, LinearAddress,
-    Mutable, Node, NodeReader, NodeStore, Path, Propose, ReadableStorage, RootReader,
-    StoredAreaParent, TrieNodeParent, WritableStorage, nodestore::NodeStoreHeader,
-};
-
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::ops::Range;
 
 use indicatif::ProgressBar;
+pub(crate) use range_set::LinearAddressRangeSet;
+
+use crate::CheckerError;
+use crate::Committed;
+use crate::FileIoError;
+use crate::HashMode;
+use crate::HashType;
+use crate::HashedNodeReader;
+use crate::LinearAddress;
+use crate::Mutable;
+use crate::Node;
+use crate::NodeReader;
+use crate::NodeStore;
+use crate::Path;
+use crate::Propose;
+use crate::ReadableStorage;
+use crate::RootReader;
+use crate::StoredAreaParent;
+use crate::TrieNodeParent;
+use crate::WritableStorage;
+use crate::logger::warn;
+use crate::nodestore::NodeStoreHeader;
+use crate::nodestore::alloc::FreeAreaWithMetadata;
+use crate::nodestore::primitives::AreaIndex;
+use crate::nodestore::primitives::area_size_iter;
 
 const OS_PAGE_SIZE: u64 = 4096;
 
@@ -726,23 +740,35 @@ fn update_progress_bar(progress_bar: Option<&ProgressBar>, range_set: &LinearAdd
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
+    use firewood_macros::hash_mode;
     use nonzero_ext::nonzero;
 
     use super::*;
+    use crate::BranchNode;
+    use crate::Child;
+    use crate::Children;
     use crate::DeletedNodeTracking;
+    use crate::EthHash;
+    use crate::FreeListParent;
+    use crate::HashMode;
+    use crate::ImmutableProposal;
+    use crate::LeafNode;
+    use crate::MerkleDbHash;
+    use crate::NodeStore;
+    use crate::Path;
+    use crate::PathComponent;
+    use crate::area_index;
+    use crate::hash_node;
     use crate::linear::memory::MemStore;
     use crate::nodestore::NodeStoreHeader;
     use crate::nodestore::alloc::FreeLists;
-    use crate::nodestore::alloc::test_utils::{
-        test_write_free_area, test_write_header, test_write_new_node, test_write_zeroed_area,
-    };
+    use crate::nodestore::alloc::test_utils::test_write_free_area;
+    use crate::nodestore::alloc::test_utils::test_write_header;
+    use crate::nodestore::alloc::test_utils::test_write_new_node;
+    use crate::nodestore::alloc::test_utils::test_write_zeroed_area;
     use crate::nodestore::primitives::area_size_iter;
-    use crate::{
-        BranchNode, Child, Children, EthHash, FreeListParent, HashMode, ImmutableProposal,
-        LeafNode, MerkleDbHash, NodeStore, Path, PathComponent, area_index, hash_node,
-    };
-    use firewood_macros::hash_mode;
-    use std::sync::Arc;
 
     #[derive(Debug)]
     struct TestTrie {
@@ -754,7 +780,6 @@ mod test {
     }
 
     /// Generate a test trie with the following structure:
-    ///
     #[cfg_attr(doc, aquamarine::aquamarine)]
     /// ```mermaid
     /// graph TD

@@ -1,16 +1,20 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-use clap::Args;
-use firewood::api::{self, DynDb};
-use firewood::db::DbConfig;
-use firewood::open;
-use firewood::{Key, Value};
-use firewood_storage::FileIoError;
 use std::borrow::Cow;
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::BufWriter;
+use std::io::Write;
 use std::path::PathBuf;
+
+use clap::Args;
+use firewood::Key;
+use firewood::Value;
+use firewood::api;
+use firewood::api::DynDb;
+use firewood::db::DbConfig;
+use firewood::open;
+use firewood_storage::FileIoError;
 
 use crate::DatabasePath;
 

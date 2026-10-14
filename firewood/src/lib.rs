@@ -101,7 +101,6 @@
 //! - Since the root is guaranteed to be new, the new root will reference all of the new revision.
 //!
 //! A commit involves allocating space for the nmodes and writing them as well as the freelist to disk.
-//!
 // Instead of using a `compile_error!`, cause clippy to hard fail if the target is not 64-bit. This
 // is a workaround for the fact that the `clippy::cast_possible_truncation` lint does not delineate
 // between 64-bit and non-64-bit targets with respect to `usize -> u64` casts and vice versa which
@@ -159,18 +158,35 @@ pub mod proofs;
 pub mod eth_proof;
 
 // Re-export commonly used proof types at the crate root for ergonomic access
+pub use eth_proof::EthProof;
+pub use eth_proof::EthStorageProof;
 pub use eth_proof::account_code_hash;
-pub use eth_proof::{EthProof, EthStorageProof, eth_get_proof};
-pub use merkle::{Key, ProvenRange, Value, verify_change_proof_root_hash, verify_range_proof};
-pub use proofs::{
-    ChangeProof, ChangeProofVerificationContext, EmptyProofCollection, InvalidHeader, KeyRange,
-    Proof, ProofCollection, ProofEdge, ProofError, ProofNode, ProofType, RangeProof,
-    RangeProofVerificationContext, ReadError, find_next_key_after_change_proof,
-    find_next_key_after_range_proof, verify_change_proof_structure, verify_range_proof_structure,
-};
-
+pub use eth_proof::eth_get_proof;
 // Re-export the proc macro from firewood-macros
 pub use firewood_macros::metrics;
+pub use merkle::Key;
+pub use merkle::ProvenRange;
+pub use merkle::Value;
+pub use merkle::verify_change_proof_root_hash;
+pub use merkle::verify_range_proof;
+pub use proofs::ChangeProof;
+pub use proofs::ChangeProofVerificationContext;
+pub use proofs::EmptyProofCollection;
+pub use proofs::InvalidHeader;
+pub use proofs::KeyRange;
+pub use proofs::Proof;
+pub use proofs::ProofCollection;
+pub use proofs::ProofEdge;
+pub use proofs::ProofError;
+pub use proofs::ProofNode;
+pub use proofs::ProofType;
+pub use proofs::RangeProof;
+pub use proofs::RangeProofVerificationContext;
+pub use proofs::ReadError;
+pub use proofs::find_next_key_after_change_proof;
+pub use proofs::find_next_key_after_range_proof;
+pub use proofs::verify_change_proof_structure;
+pub use proofs::verify_range_proof_structure;
 
 // Persistence worker module
 mod persist_worker;
@@ -181,17 +197,16 @@ pub mod api;
 /// A batch operation and associated types
 mod batch_op;
 
-/// Expose the storage logger
-pub use firewood_storage::logger;
-pub use firewood_storage::{EthHash, HashMode};
-
+pub use firewood_storage::EthHash;
+pub use firewood_storage::HashMode;
 /// Hashing mode used for trie nodes.
 pub use firewood_storage::NodeHashAlgorithm;
-
 /// Root or node hash used by Firewood tries.
 ///
 /// This is the same type exposed as [`api::HashKey`] in the database API.
 pub use firewood_storage::TrieHash;
+/// Expose the storage logger
+pub use firewood_storage::logger;
 
 #[cfg(all(not(miri), test, feature = "logger"))]
 // SAFETY: Called pre-main in test builds only. Does not panic (try_init + ok),

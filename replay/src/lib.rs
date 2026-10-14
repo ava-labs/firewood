@@ -20,16 +20,19 @@
 //! A file may contain multiple segments appended sequentially.
 
 use std::collections::HashMap;
-use std::io::{self, Read};
+use std::io;
+use std::io::Read;
 use std::time::Instant;
 
-use firewood::api::{self, DynDb};
+use firewood::api;
+use firewood::api::DynDb;
 use firewood::db::BatchOp;
 use firewood_metrics::firewood_histogram;
 use firewood_storage::InvalidTrieHashLength;
 
 pub mod registry;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use serde_with::serde_as;
 use thiserror::Error;
 
@@ -373,14 +376,19 @@ pub fn replay_from_file(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::io::Cursor;
+
     use firewood::db::DbConfig;
     use firewood::manager::RevisionManagerConfig;
     use firewood::open;
     use firewood_macros::hash_mode;
-    use firewood_storage::{EthHash, HashMode, MerkleDbHash, NodeHashAlgorithm};
-    use std::io::Cursor;
+    use firewood_storage::EthHash;
+    use firewood_storage::HashMode;
+    use firewood_storage::MerkleDbHash;
+    use firewood_storage::NodeHashAlgorithm;
     use tempfile::tempdir;
+
+    use super::*;
 
     fn create_test_db(algorithm: NodeHashAlgorithm) -> (tempfile::TempDir, Box<dyn DynDb>) {
         let tmpdir = tempdir().expect("create tempdir");

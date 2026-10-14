@@ -1,14 +1,16 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood_storage::{FileIoError, TrieReader};
+use firewood_storage::FileIoError;
+use firewood_storage::TrieReader;
 
-use crate::{
-    api::{BatchIter, KeyType, KeyValuePair},
-    db::BatchOp,
-    iter::{FilteredKeyRangeIter, MerkleKeyValueIter},
-    merkle::Key,
-};
+use crate::api::BatchIter;
+use crate::api::KeyType;
+use crate::api::KeyValuePair;
+use crate::db::BatchOp;
+use crate::iter::FilteredKeyRangeIter;
+use crate::iter::MerkleKeyValueIter;
+use crate::merkle::Key;
 
 /// Serializes a sequence of key-value pairs merged with the base merkle trie
 /// as a sequence of [`BatchOp`]s.

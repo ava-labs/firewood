@@ -38,13 +38,18 @@
 
 use std::thread;
 
-use firewood_storage::{CheckOpt, CheckerError, DefaultHashMode};
-
-use crate::api::{self, Db as _, DbView as _, Proposal as _};
-use crate::db::{BatchOp, DbConfig};
-use crate::manager::RevisionManagerConfig;
+use firewood_storage::CheckOpt;
+use firewood_storage::CheckerError;
+use firewood_storage::DefaultHashMode;
 
 use super::TestDb;
+use crate::api;
+use crate::api::Db as _;
+use crate::api::DbView as _;
+use crate::api::Proposal as _;
+use crate::db::BatchOp;
+use crate::db::DbConfig;
+use crate::manager::RevisionManagerConfig;
 
 /// Number of concurrent commit threads. Each commits a single batch with
 /// a disjoint keyspace, so all batches can succeed (one direct commit,

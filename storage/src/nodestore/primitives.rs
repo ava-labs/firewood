@@ -15,7 +15,8 @@
 //! `build.rs`.
 
 use std::fmt;
-use std::io::{Error, ErrorKind};
+use std::io::Error;
+use std::io::ErrorKind;
 use std::num::NonZeroU64;
 
 // See build.rs for how this is generated
@@ -231,7 +232,6 @@ impl LinearAddress {
     ///
     /// Returns `None` if the result overflows a u64
     /// Some(LinearAddress) otherwise
-    ///
     #[inline]
     #[must_use]
     pub const fn advance(self, n: u64) -> Option<Self> {
@@ -286,10 +286,11 @@ impl From<NonZeroU64> for LinearAddress {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use sha2::Digest;
+    use sha2::Sha256;
 
+    use super::*;
     use crate::TrieHash;
-    use sha2::{Digest, Sha256};
 
     #[test]
     fn test_area_size_hash_matches_old_calculation() {

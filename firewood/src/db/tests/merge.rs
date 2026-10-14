@@ -1,13 +1,13 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{
-    api::{Db, DbView, Proposal},
-    db::BatchOp,
-};
+use test_case::test_case;
 
 use super::*;
-use test_case::test_case;
+use crate::api::Db;
+use crate::api::DbView;
+use crate::api::Proposal;
+use crate::db::BatchOp;
 
 #[test_case(
         &[],

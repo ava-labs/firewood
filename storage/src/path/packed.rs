@@ -1,9 +1,11 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use super::PathComponent;
+use super::SplitPath;
+use super::TriePath;
+use super::TriePathFromPackedBytes;
 use crate::TriePathAsPackedBytes;
-
-use super::{PathComponent, SplitPath, TriePath, TriePathFromPackedBytes};
 
 /// A packed representation of a trie path where each byte encodes two path components.
 ///

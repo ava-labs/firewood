@@ -22,17 +22,23 @@
 //! - Fixed size for alignment with disk block boundaries
 //! - Zero-padded to full size for consistent layout
 //! - Uses C-compatible representation for cross-language access
-//!
 
-use bytemuck_derive::{Pod, Zeroable};
 use std::fs::File;
-use std::io::{Error, ErrorKind, Read};
+use std::io::Error;
+use std::io::ErrorKind;
+use std::io::Read;
 use std::path::Path;
 
+use bytemuck_derive::Pod;
+use bytemuck_derive::Zeroable;
+
 use super::alloc::FreeLists;
-use super::primitives::{AREA_SIZES_HASH, LinearAddress};
-use crate::logger::{debug, trace};
-use crate::{NodeHashAlgorithm, TrieHash};
+use super::primitives::AREA_SIZES_HASH;
+use super::primitives::LinearAddress;
+use crate::NodeHashAlgorithm;
+use crate::TrieHash;
+use crate::logger::debug;
+use crate::logger::trace;
 
 /// A tuple indicating the address and hash of a node (the root node).
 pub type RootNodeInfo = (LinearAddress, TrieHash);
@@ -628,10 +634,14 @@ const fn const_copy(src: &[u8], dst: &mut [u8]) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{EthHash, HashMode, MemStore, MerkleDbHash};
     use firewood_macros::hash_mode;
     use test_case::test_case;
+
+    use super::*;
+    use crate::EthHash;
+    use crate::HashMode;
+    use crate::MemStore;
+    use crate::MerkleDbHash;
 
     #[test]
     fn test_version_new_is_valid() {
