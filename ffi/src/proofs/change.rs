@@ -19,8 +19,11 @@ use crate::KeyRange;
 use crate::Maybe;
 use crate::NextKeyRangeResult;
 use crate::OwnedBytes;
+use crate::SizedChangeProofResult;
+use crate::SizingHint;
 use crate::ValueResult;
 use crate::VoidResult;
+use crate::proofs::budget_to_usize;
 
 /// Arguments for creating a change proof.
 #[derive(Debug)]
@@ -173,6 +176,83 @@ pub extern "C" fn fwd_db_change_proof_from_bytes(
     crate::invoke_with_handle(db, move |db| {
         FrozenChangeProof::from_slice_in_mode(&bytes, db.node_hash_algorithm())
             .map_err(api::Error::ProofError)
+    })
+}
+
+/// Arguments for creating a size-targeted change proof.
+#[derive(Debug)]
+#[repr(C)]
+pub struct CreateSizedChangeProofArgs<'a> {
+    /// The root hash of the starting revision. If the root is not found in
+    /// the database, the function will return
+    /// [`SizedChangeProofResult::StartRevisionNotFound`].
+    pub start_root: HashKey,
+    /// The root hash of the ending revision. If the root is not found in the
+    /// database, the function will return
+    /// [`SizedChangeProofResult::EndRevisionNotFound`].
+    pub end_root: HashKey,
+    /// The inclusive start key. If `None`, the proof starts at the beginning
+    /// of the keyspace. To continue after a chunk, pass a key strictly after
+    /// the last operation that chunk carried, or that operation is sent again.
+    pub start_key: Maybe<BorrowedBytes<'a>>,
+    /// The wire byte budget the serialized proof must fit.
+    pub budget: u64,
+    /// The previous chunk's measured hint, or the zero value for none.
+    pub hint: SizingHint,
+}
+
+/// Generate a change proof between two roots from `start_key` whose
+/// serialized size approaches `budget` bytes and never exceeds it. The
+/// serialized wire bytes are returned alongside the proof handle: they were
+/// already computed during sizing, so send them rather than re-marshaling.
+///
+/// # Arguments
+///
+/// - `db` - The database to create the proof from.
+/// - `args` - The arguments for creating the sized change proof.
+///
+/// # Returns
+///
+/// - [`SizedChangeProofResult::NullHandlePointer`] if the caller provided a null pointer.
+/// - [`SizedChangeProofResult::StartRevisionNotFound`] if the start root was not found.
+/// - [`SizedChangeProofResult::EndRevisionNotFound`] if the end root was not found. If
+///   both roots are missing, only the end root is reported.
+/// - [`SizedChangeProofResult::OverBudget`] if one operation, or the edge proofs alone, do not fit.
+/// - [`SizedChangeProofResult::Ok`] containing the proof, its wire bytes, and the next hint.
+/// - [`SizedChangeProofResult::Err`] containing an error message, including for an
+///   end revision whose trie is empty, a budget this platform cannot represent,
+///   and a single operation whose proof body exceeds the decoder limit.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `db` is a valid pointer to a [`DatabaseHandle`] for the
+///   duration of the call.
+/// * ensure that `args.start_key`, when present, is a valid [`BorrowedBytes`]
+///   whose pointer and length stay valid for the duration of the call.
+/// * free a returned proof with [`fwd_free_change_proof`], a returned wire with
+///   [`fwd_free_owned_bytes`], and a returned error with
+///   [`fwd_free_owned_bytes`].
+///
+/// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_db_change_proof_sized(
+    db: Option<&DatabaseHandle>,
+    args: CreateSizedChangeProofArgs,
+) -> SizedChangeProofResult {
+    // Unlike its range twin, the result carries no lifetime: a change proof
+    // never borrows the database, not even once verified.
+    crate::invoke_with_handle(db, |db| {
+        db.change_proof_sized(
+            args.start_root.into(),
+            args.end_root.into(),
+            args.start_key
+                .as_ref()
+                .map(BorrowedBytes::as_slice)
+                .into_option(),
+            budget_to_usize(args.budget)?,
+            args.hint.into(),
+        )
     })
 }
 
