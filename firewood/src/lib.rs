@@ -164,8 +164,11 @@ pub use eth_proof::account_code_hash;
 pub use eth_proof::eth_get_proof;
 // Re-export the proc macro from firewood-macros
 pub use firewood_macros::metrics;
+pub use merkle::CompressionRatio;
 pub use merkle::Key;
 pub use merkle::ProvenRange;
+pub use merkle::SizedProof;
+pub use merkle::SizingHint;
 pub use merkle::Value;
 pub use merkle::verify_change_proof_root_hash;
 pub use merkle::verify_range_proof;
