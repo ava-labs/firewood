@@ -18,11 +18,11 @@
 //!   `CommittedId` parent identity.
 //!
 //! - `test_trivial_rebase_succeeds_without_corruption`: two proposals
-//!   making the same `Put` race to commit. After the first commits, the
-//!   second's rebase produces a no-op (hash-identical to current). The
-//!   trivial-commit fast path must absorb this without pushing a duplicate
-//!   revision; otherwise the duplicate's deleted list aliases current's
-//!   root address and reaping double-frees it.
+//!   making the same `Put`, modeling a commit race. After the first
+//!   commits, the second's rebase produces a no-op (hash-identical to
+//!   current). The trivial-commit fast path must absorb this without
+//!   pushing a duplicate revision; otherwise the duplicate's deleted list
+//!   aliases current's root address and reaping double-frees it.
 //!
 //! - `test_round_trip_rejects_stale_parent`: an A→B→A sequence produces
 //!   two committed revisions with the same root hash but different
@@ -58,9 +58,9 @@ use crate::manager::RevisionManagerConfig;
 
 use super::TestDb;
 
-/// Number of concurrent commit threads. Each commits a single batch with
-/// a disjoint keyspace, so all batches can succeed (one direct commit,
-/// the rest rebased).
+/// Number of concurrent commit threads. Each one repeatedly commits batches
+/// over a keyspace disjoint from every other thread's, so every batch can
+/// succeed (whichever arrives first commits directly, the rest rebase).
 const THREADS: usize = 8;
 
 /// Number of commits per thread. Set high enough that the total number of
@@ -363,7 +363,7 @@ fn test_trivial_rebase_succeeds_without_corruption() {
     assert_eq!(view.val(&key).unwrap().as_deref(), Some(val.as_slice()));
     drop(view);
 
-    // Reopen forces the persist worker to flush before we run check();
+    // Reopen forces the persist worker to flush before check() runs;
     // otherwise the checker may race the worker and report `UnpersistedRoot`.
     let db = db.reopen();
     assert_check_clean(&db, "post-trivial-rebase", false);
@@ -496,7 +496,7 @@ fn test_empty_parent_rebase_after_reap() {
             .expect("commit filler");
     }
 
-    // P's parent is now stale (initial empty revision, possibly reaped).
+    // P's parent is now stale (the initial empty revision, now reaped).
     // commit_with_rebase must use a synthetic empty parent for diffing and
     // produce exactly [Put(p_key, p_val)] as the rebased batch.
     proposal
