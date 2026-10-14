@@ -1,7 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::io::{Write, stdout};
+use std::io::Write;
+use std::io::stdout;
 
 use clap::Args;
 use firewood::api;

@@ -3,16 +3,28 @@
 
 use std::fmt;
 
+use firewood::Key;
+use firewood::Value;
 use firewood::api;
-use firewood::{Key, Value};
 
-use crate::revision::{GetRevisionResult, RevisionHandle};
-use crate::{
-    ChangeProofContext, CodeIteratorHandle, CreateIteratorResult, CreateProposalResult,
-    EthProofOwned, HashKey, IteratorHandle, KeyRange, NextKeyRange, OwnedBytes, OwnedKeyValueBatch,
-    OwnedKeyValuePair, OwnedRenderedMetrics, ProposalHandle, RangeProofContext,
-    ReconstructedHandle,
-};
+use crate::ChangeProofContext;
+use crate::CodeIteratorHandle;
+use crate::CreateIteratorResult;
+use crate::CreateProposalResult;
+use crate::EthProofOwned;
+use crate::HashKey;
+use crate::IteratorHandle;
+use crate::KeyRange;
+use crate::NextKeyRange;
+use crate::OwnedBytes;
+use crate::OwnedKeyValueBatch;
+use crate::OwnedKeyValuePair;
+use crate::OwnedRenderedMetrics;
+use crate::ProposalHandle;
+use crate::RangeProofContext;
+use crate::ReconstructedHandle;
+use crate::revision::GetRevisionResult;
+use crate::revision::RevisionHandle;
 
 /// The result type returned from an FFI function that returns no value but may
 /// return an error.

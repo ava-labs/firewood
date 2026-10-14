@@ -3,7 +3,8 @@
 
 use clap::Args;
 use firewood::api;
-use sha3::{Digest, Keccak256};
+use sha3::Digest;
+use sha3::Keccak256;
 
 #[derive(Debug, Args)]
 pub struct KeyArgument {

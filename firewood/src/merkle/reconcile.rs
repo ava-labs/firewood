@@ -1,13 +1,21 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood_storage::{
-    HashMode, Mutable, NodeHashAlgorithm, NodeStore, Propose, ReadableStorage, ValueDigest,
-    logger::warn, replace_list_field,
-};
+use firewood_storage::HashMode;
+use firewood_storage::Mutable;
+use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::NodeStore;
+use firewood_storage::Propose;
+use firewood_storage::ReadableStorage;
+use firewood_storage::ValueDigest;
+use firewood_storage::logger::warn;
+use firewood_storage::replace_list_field;
 
+use crate::ProofError;
+use crate::ProofNode;
+use crate::Value;
+use crate::merkle::Merkle;
 use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
-use crate::{ProofError, ProofNode, Value, merkle::Merkle};
 
 impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> {
     /// Reconciles a branch proof node against the in-memory proving merkle.

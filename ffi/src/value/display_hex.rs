@@ -52,7 +52,9 @@ fn display_hex_bytes(bytes: &[u8], f: &mut fmt::Formatter<'_>) -> fmt::Result {
 
 #[cfg(test)]
 mod tests {
-    use firewood::{EthHash, HashMode, api::HashKey};
+    use firewood::EthHash;
+    use firewood::HashMode;
+    use firewood::api::HashKey;
     use test_case::test_case;
 
     use super::*;
