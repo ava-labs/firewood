@@ -676,7 +676,9 @@ impl<H: HashMode> RevisionManager<H> {
     ) -> Result<NodeStore<Mutable<K>, FileBacked, BH>, api::Error> {
         let mut merkle = Merkle::from(mutable_nodestore);
         for res in batch.into_batch_iter::<api::Error>() {
-            match res? {
+            let op = res?;
+            api::check_key_len(op.key().as_ref())?;
+            match op {
                 BatchOp::Put { key, value } => {
                     merkle.insert(key.as_ref(), value.as_ref().into())?;
                 }

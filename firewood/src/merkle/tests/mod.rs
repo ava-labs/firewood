@@ -20,7 +20,7 @@ use std::fmt::Write;
 
 use super::*;
 use crate::api::Error;
-use crate::proofs::de::MAX_KEY_BYTES;
+use crate::api::MAX_KEY_BYTES;
 use crate::{ProofError, ProofNode};
 use firewood_storage::{
     Committed, DefaultHashMode, DeletedNodeTracking, DenseChildren, HashMode, MemStore, Mutable,
