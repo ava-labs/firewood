@@ -1,19 +1,15 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-package eth
+package tests
 
 import (
-	"context"
 	"encoding/binary"
-	"errors"
 	"math/rand"
-	"runtime"
 	"slices"
 	"testing"
-	"time"
 
-	"github.com/ava-labs/firewood-go-ethhash/ffi"
+	"github.com/ava-labs/firewood-go/ffi"
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/rawdb"
 	"github.com/ava-labs/libevm/core/state"
@@ -23,7 +19,6 @@ import (
 	"github.com/ava-labs/libevm/trie/trienode"
 	"github.com/ava-labs/libevm/triedb"
 	"github.com/holiman/uint256"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,10 +30,10 @@ const (
 	addStorage
 	updateStorage
 	deleteStorage
-	maxStep
+	ethMaxStep
 )
 
-var stepMap = map[byte]string{
+var ethStepMap = map[byte]string{
 	commit:        "commit",
 	createAccount: "createAccount",
 	updateAccount: "updateAccount",
@@ -66,41 +61,10 @@ type merkleTriePair struct {
 	pendingFwdBatch  []ffi.BatchOp
 }
 
-// oneSecCtx returns `tb.Context()` with a 1-second timeout added. Any existing
-// cancellation on `tb.Context()` is removed, which allows this function to be
-// used inside a `tb.Cleanup()`
-func oneSecCtx(tb testing.TB) context.Context {
-	ctx := context.WithoutCancel(tb.Context())
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
-	tb.Cleanup(cancel)
-	return ctx
-}
-
-func newFirewoodDB(t *testing.T) *ffi.Database {
-	t.Helper()
-	r := require.New(t)
-
-	db, err := ffi.New(t.TempDir(), ffi.EthereumNodeHashing)
-	r.NoError(err, "firewood.New()")
-	t.Cleanup(func() {
-		err := db.Close(oneSecCtx(t))
-		if errors.Is(err, ffi.ErrActiveKeepAliveHandles) {
-			// force a GC to clean up dangling handles that are preventing the
-			// database from closing, then try again. Intentionally not looping
-			// since a subsequent attempt is unlikely to succeed if the first
-			// one didn't.
-			runtime.GC()
-			err = db.Close(oneSecCtx(t))
-		}
-		assert.NoError(t, err, "%T.Close()", db)
-	})
-	return db
-}
-
 func newMerkleTriePair(t *testing.T) *merkleTriePair {
 	r := require.New(t)
 
-	db := newFirewoodDB(t)
+	db := newTestDatabase(t, ffi.EthereumNodeHashing)
 	tdb := state.NewDatabaseWithConfig(rawdb.NewMemoryDatabase(), triedb.HashDefaults)
 	ethRoot := types.EmptyRootHash
 	tr, err := tdb.OpenTrie(ethRoot)
@@ -341,8 +305,8 @@ func FuzzFirewoodTree(f *testing.F) {
 		}
 
 		for _, step := range byteSteps {
-			step = step % maxStep
-			t.Log(stepMap[step])
+			step = step % ethMaxStep
+			t.Log(ethStepMap[step])
 			switch step {
 			case commit:
 				tr.commit()
