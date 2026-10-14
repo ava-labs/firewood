@@ -682,6 +682,238 @@ impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult {
     }
 }
 
+/// The fixed-point scale of [`SizingHint::ratio`]: this value is a 1:1
+/// ratio.
+pub const SIZING_RATIO_SCALE: u32 = 1 << 16;
+
+const _: () = assert!(
+    SIZING_RATIO_SCALE == firewood::CompressionRatio::SCALE,
+    "the C ratio scale must match the sizer's"
+);
+
+/// What a sized proof measured about its chunk, calibrating the next
+/// request: pass a result's `hint` as the next request's `hint`. The zero
+/// value means no hint, typically on the first chunk. A hint is never
+/// validated against the proof chain: one measured on another trie or root
+/// only costs sizing probes, never correctness.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct SizingHint {
+    /// Compressed/uncompressed body size ratio in fixed point, where
+    /// `1 << 16` is 1:1 and smaller values mean the body compressed. Zero
+    /// means no hint, in which case `edges` is ignored too.
+    pub ratio: u32,
+    /// Body bytes the edge proofs and their length prefixes took. Zero means
+    /// unknown, not a measured zero.
+    pub edges: u64,
+}
+
+impl From<SizingHint> for Option<firewood::SizingHint> {
+    /// `None` when `ratio` is zero, which discards `edges`; an `edges` value
+    /// this platform cannot represent counts as unknown.
+    fn from(hint: SizingHint) -> Self {
+        let ratio = firewood::CompressionRatio::try_from_scaled(hint.ratio)?;
+        let edges = (hint.edges != 0)
+            .then(|| usize::try_from(hint.edges).ok())
+            .flatten();
+        Some(firewood::SizingHint::new(ratio, edges))
+    }
+}
+
+impl From<firewood::SizingHint> for SizingHint {
+    fn from(hint: firewood::SizingHint) -> Self {
+        Self {
+            ratio: hint.ratio().scaled(),
+            edges: hint.edges().map_or(0, byte_count),
+        }
+    }
+}
+
+/// Converts a byte count for the C ABI.
+fn byte_count(len: usize) -> u64 {
+    u64::try_from(len).expect("usize fits in u64 on every supported (64-bit) target")
+}
+
+/// Splits a sized proof into the parts both sized result types carry: the
+/// proof handle, the wire bytes, the natural-end flag, and the hint.
+fn sized_parts<P, C: From<P>>(
+    sized: firewood::SizedProof<P>,
+) -> (Box<C>, OwnedBytes, bool, SizingHint) {
+    let natural_end = sized.natural_end();
+    let hint = sized.hint().into();
+    let (proof, wire) = sized.into_parts();
+    (Box::new(proof.into()), wire.into(), natural_end, hint)
+}
+
+/// A size-targeted range proof: the proof handle plus its serialized wire
+/// bytes and sizing outputs. `proof` and `wire` are independent allocations
+/// the caller owns and frees separately.
+#[derive(Debug)]
+#[repr(C)]
+pub struct SizedRangeProof<'db> {
+    /// The proof; free with [`fwd_free_range_proof`].
+    ///
+    /// [`fwd_free_range_proof`]: crate::fwd_free_range_proof
+    pub proof: Box<RangeProofContext<'db>>,
+    /// The serialized proof, already computed during sizing; send these bytes
+    /// rather than re-marshaling. Free with [`fwd_free_owned_bytes`]; it stays
+    /// valid after `proof` is freed.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    pub wire: OwnedBytes,
+    /// True if the proof reached the natural end of the keyspace. This is
+    /// out-of-band metadata, not part of `wire`: a receiver must verify the
+    /// proof before trusting it as the end of the sync.
+    pub natural_end: bool,
+    /// What this chunk measured; pass it as the hint when requesting the
+    /// next chunk.
+    pub hint: SizingHint,
+}
+
+/// A result type returned from [`fwd_db_range_proof_sized`].
+///
+/// [`fwd_db_range_proof_sized`]: crate::fwd_db_range_proof_sized
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum SizedRangeProofResult<'db> {
+    /// The caller provided a null pointer to the input handle.
+    NullHandlePointer,
+    /// The provided root was not found in the database; the payload is that
+    /// root.
+    RevisionNotFound(HashKey),
+    /// A range proof was requested on an empty trie with no start key. With a
+    /// start key the same situation is reported as [`Err`](Self::Err).
+    EmptyTrie,
+    /// One entry, or the edge proofs alone, serialize past the budget; the
+    /// value is the wire size of that smallest chunk.
+    OverBudget(u64),
+    /// The proof was successfully created.
+    Ok(SizedRangeProof<'db>),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. Its
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl From<Result<firewood::SizedProof<api::FrozenRangeProof>, api::Error>>
+    for SizedRangeProofResult<'_>
+{
+    fn from(value: Result<firewood::SizedProof<api::FrozenRangeProof>, api::Error>) -> Self {
+        match value {
+            Err(api::Error::RevisionNotFound { provided }) => {
+                SizedRangeProofResult::RevisionNotFound(HashKey::from(
+                    provided.unwrap_or_else(api::HashKey::empty),
+                ))
+            }
+            Err(api::Error::RangeProofOnEmptyTrie) => SizedRangeProofResult::EmptyTrie,
+            Err(api::Error::ProofOverBudget { wire, .. }) => {
+                SizedRangeProofResult::OverBudget(byte_count(wire))
+            }
+            Ok(sized) => {
+                let (proof, wire, natural_end, hint) = sized_parts(sized);
+                SizedRangeProofResult::Ok(SizedRangeProof {
+                    proof,
+                    wire,
+                    natural_end,
+                    hint,
+                })
+            }
+            Err(err) => SizedRangeProofResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+/// A size-targeted change proof: the proof handle plus its serialized wire
+/// bytes and sizing outputs. `proof` and `wire` are independent allocations
+/// the caller owns and frees separately.
+#[derive(Debug)]
+#[repr(C)]
+pub struct SizedChangeProof {
+    /// The proof; free with [`fwd_free_change_proof`].
+    ///
+    /// [`fwd_free_change_proof`]: crate::fwd_free_change_proof
+    pub proof: Box<ChangeProofContext>,
+    /// The serialized proof, already computed during sizing; send these bytes
+    /// rather than re-marshaling. Free with [`fwd_free_owned_bytes`]; it stays
+    /// valid after `proof` is freed.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    pub wire: OwnedBytes,
+    /// True if the proof reached the natural end of the diff. This is
+    /// out-of-band metadata, not part of `wire`: a receiver must verify the
+    /// proof against the end root before trusting it as the end of the diff.
+    pub natural_end: bool,
+    /// What this chunk measured; pass it as the hint when requesting the
+    /// next chunk.
+    pub hint: SizingHint,
+}
+
+/// A result type returned from [`fwd_db_change_proof_sized`].
+///
+/// [`fwd_db_change_proof_sized`]: crate::fwd_db_change_proof_sized
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum SizedChangeProofResult {
+    /// The caller provided a null pointer to the input handle.
+    NullHandlePointer,
+    /// The provided start root was not found in the database; the payload is
+    /// that root.
+    StartRevisionNotFound(HashKey),
+    /// The provided end root was not found in the database; the payload is
+    /// that root.
+    EndRevisionNotFound(HashKey),
+    /// One operation, or the edge proofs alone, serialize past the budget;
+    /// the value is the wire size of that smallest chunk.
+    OverBudget(u64),
+    /// The proof was successfully created.
+    Ok(SizedChangeProof),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. Its
+    /// value is guaranteed to contain only valid UTF-8. An end revision whose
+    /// trie is empty is reported this way.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl From<Result<firewood::SizedProof<api::FrozenChangeProof>, api::Error>>
+    for SizedChangeProofResult
+{
+    fn from(value: Result<firewood::SizedProof<api::FrozenChangeProof>, api::Error>) -> Self {
+        match value {
+            Err(api::Error::StartRevisionNotFound { provided }) => {
+                SizedChangeProofResult::StartRevisionNotFound(HashKey::from(
+                    provided.unwrap_or_else(api::HashKey::empty),
+                ))
+            }
+            Err(api::Error::EndRevisionNotFound { provided }) => {
+                SizedChangeProofResult::EndRevisionNotFound(HashKey::from(
+                    provided.unwrap_or_else(api::HashKey::empty),
+                ))
+            }
+            Err(api::Error::ProofOverBudget { wire, .. }) => {
+                SizedChangeProofResult::OverBudget(byte_count(wire))
+            }
+            Ok(sized) => {
+                let (proof, wire, natural_end, hint) = sized_parts(sized);
+                SizedChangeProofResult::Ok(SizedChangeProof {
+                    proof,
+                    wire,
+                    natural_end,
+                    hint,
+                })
+            }
+            Err(err) => SizedChangeProofResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
 /// Helper trait to handle the different result types returned from FFI functions.
 ///
 /// Once Try trait is stable, we can use that instead of this trait:
@@ -748,6 +980,8 @@ impl_null_handle_result!(
     HashResult,
     RangeProofResult<'_>,
     ChangeProofResult,
+    SizedRangeProofResult<'_>,
+    SizedChangeProofResult,
     EthProofResult,
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
@@ -766,6 +1000,8 @@ impl_cresult!(
     HandleResult,
     RangeProofResult<'_>,
     ChangeProofResult,
+    SizedRangeProofResult<'_>,
+    SizedChangeProofResult,
     EthProofResult,
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
