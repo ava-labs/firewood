@@ -3,6 +3,12 @@
 
 // hash benchmarks; run with 'cargo bench'
 
+use std::fs::File;
+use std::iter::repeat_with;
+use std::os::raw::c_int;
+use std::path::Path;
+use std::sync::Arc;
+
 use criterion::profiler::Profiler;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use firewood::Merkle;
@@ -12,11 +18,6 @@ use firewood::open;
 use firewood_storage::{DefaultHashMode, DeletedNodeTracking, HashMode, MemStore, NodeStore};
 use pprof::ProfilerGuard;
 use rand::{RngExt, distr::Alphanumeric};
-use std::fs::File;
-use std::iter::repeat_with;
-use std::os::raw::c_int;
-use std::path::Path;
-use std::sync::Arc;
 use tempfile::TempDir;
 
 // To enable flamegraph output

@@ -3,14 +3,14 @@
 
 //! Edge cases: odd depths, divergence, exclusion, deletion, children.
 
-use super::*;
 use std::num::NonZeroUsize;
+
+use firewood_storage::{DefaultHashMode, HashMode};
 use tempfile::TempDir;
 use test_case::test_case;
 
-use crate::merkle::tests::{DEFAULT_THREAD_STACK, prefix_chain_keys, spawn_on_stack};
+use super::*;
 use crate::proofs::de::MAX_KEY_BYTES;
-use firewood_storage::{DefaultHashMode, HashMode};
 
 #[test]
 fn test_empty_batch_ops_with_nonempty_proofs() {

@@ -1,11 +1,12 @@
 // Copyright (C) 2026, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::collections::HashMap;
+
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::Serialize;
 use serde_json::json;
-use std::collections::HashMap;
 
 use super::stage_config::{StageConfig, TemplateContext};
 use super::{DeployOptions, LaunchError};
