@@ -315,8 +315,8 @@ pub trait Db {
     ///
     /// # Note
     ///
-    /// If the database is empty, this will return None, unless the ethhash feature is enabled.
-    /// In that case, we return the special ethhash compatible empty trie hash.
+    /// If the database is empty, this will return None, unless the database uses
+    /// Ethereum hashing, whose empty-trie root is the non-empty `keccak256(0x80)`.
     fn root_hash(&self) -> Option<TrieHash>;
 
     /// Propose a change to the database via a batch
@@ -368,8 +368,8 @@ pub trait DbView {
     ///
     /// # Note
     ///
-    /// If the database is empty, this will return None, unless the ethhash feature is enabled.
-    /// In that case, we return the special ethhash compatible empty trie hash.
+    /// If the database is empty, this will return None, unless the database uses
+    /// Ethereum hashing, whose empty-trie root is the non-empty `keccak256(0x80)`.
     fn root_hash(&self) -> Option<HashKey>;
 
     /// Get the value of a specific key
@@ -445,8 +445,8 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
     ///
     /// # Note
     ///
-    /// If the database is empty, this will return None, unless the ethhash feature is enabled.
-    /// In that case, we return the special ethhash compatible empty trie hash.
+    /// If the database is empty, this will return None, unless the database uses
+    /// Ethereum hashing, whose empty-trie root is the non-empty `keccak256(0x80)`.
     fn root_hash(&self) -> Option<HashKey>;
 
     /// Get the value of a specific key
