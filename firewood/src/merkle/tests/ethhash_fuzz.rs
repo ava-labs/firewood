@@ -27,7 +27,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 use firewood_storage::DefaultHashMode;
-use firewood_storage::HashMode;
 use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::SeededRng;
 use firewood_storage::replace_list_field;
@@ -296,13 +295,7 @@ fn build_shaped_db(rng: &SeededRng) -> ShapedFixture {
         }
     }
     let dir = tempfile::tempdir().unwrap();
-    let db = Db::<DefaultHashMode>::new_with_hash_mode(
-        dir.path(),
-        DbConfig::builder()
-            .node_hash_algorithm(DefaultHashMode::ALGORITHM)
-            .build(),
-    )
-    .unwrap();
+    let db = Db::<DefaultHashMode>::new(dir.path(), DbConfig::builder().build()).unwrap();
     let start_batch: Vec<BatchOp<Vec<u8>, Vec<u8>>> = state
         .iter()
         .map(|(k, v)| BatchOp::Put {

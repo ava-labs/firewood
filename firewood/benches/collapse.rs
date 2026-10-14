@@ -70,10 +70,8 @@ fn bench_collapse(criterion: &mut Criterion) {
     group.sample_size(30);
 
     let dir = tempfile::tempdir().expect("tempdir should be created");
-    let cfg = DbConfig::builder()
-        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
-        .build();
-    let db = open(dir.path(), cfg).expect("db should open");
+    let cfg = DbConfig::builder().build();
+    let db = open(dir.path(), DefaultHashMode::ALGORITHM, cfg).expect("db should open");
 
     let rng = SeededRng::new(0xdead_beef);
     let keys = generate_sorted_keys(&rng);

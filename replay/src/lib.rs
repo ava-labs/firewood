@@ -394,11 +394,10 @@ mod tests {
         let tmpdir = tempdir().expect("create tempdir");
         let db_path = tmpdir.path().join("test.db");
         let cfg = DbConfig::builder()
-            .node_hash_algorithm(algorithm)
             .truncate(true)
             .manager(RevisionManagerConfig::builder().build())
             .build();
-        let db = open(&db_path, cfg).expect("db creation should succeed");
+        let db = open(&db_path, algorithm, cfg).expect("db creation should succeed");
         (tmpdir, db)
     }
 

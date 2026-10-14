@@ -114,11 +114,8 @@ fn bench_proposal_chain(criterion: &mut Criterion) {
                 |(initial, batches)| {
                     let db_dir = TempDir::new().unwrap();
                     let db_path = db_dir.path().join("benchmark_db");
-                    let cfg = DbConfig::builder()
-                        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
-                        .truncate(true)
-                        .build();
-                    let db = open(db_path, cfg).unwrap();
+                    let cfg = DbConfig::builder().truncate(true).build();
+                    let db = open(db_path, DefaultHashMode::ALGORITHM, cfg).unwrap();
 
                     db.propose(initial).unwrap().commit().unwrap();
 
@@ -154,11 +151,10 @@ fn bench_reconstructed_chain(criterion: &mut Criterion) {
                     // extra threads muddying up any flamegraphs when creating the
                     // initial proposal
                     let cfg = DbConfig::builder()
-                        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
                         .truncate(true)
                         .use_parallel(UseParallel::Never)
                         .build();
-                    let db = open(db_path, cfg).unwrap();
+                    let db = open(db_path, DefaultHashMode::ALGORITHM, cfg).unwrap();
 
                     db.propose(initial).unwrap().commit().unwrap();
 

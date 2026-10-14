@@ -129,11 +129,8 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
                 |batch_ops| {
                     let db_path = TempDir::new().unwrap();
                     let db_path = db_path.path().join("benchmark_db");
-                    let cfg = DbConfig::builder()
-                        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
-                        .truncate(true)
-                        .build();
-                    let db = open(db_path, cfg).unwrap();
+                    let cfg = DbConfig::builder().truncate(true).build();
+                    let db = open(db_path, DefaultHashMode::ALGORITHM, cfg).unwrap();
 
                     db.propose(batch_ops).unwrap().commit().unwrap();
                 },

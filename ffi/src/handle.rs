@@ -182,7 +182,6 @@ impl DatabaseHandle {
         let metrics_context = MetricsContext::new(args.expensive_metrics).with_db_tag(db_tag);
 
         let cfg = DbConfig::builder()
-            .node_hash_algorithm(args.node_hash_algorithm.into())
             .truncate(args.truncate)
             .manager(args.as_rev_manager_config()?)
             .root_store(args.root_store)
@@ -199,7 +198,7 @@ impl DatabaseHandle {
 
         // Select the concrete `Db<H>` at runtime from the configured algorithm,
         // validated against the on-disk header, and hold it erased.
-        let db = open(path, cfg)?;
+        let db = open(path, args.node_hash_algorithm.into(), cfg)?;
         Ok(Self {
             db,
             metrics_context,
