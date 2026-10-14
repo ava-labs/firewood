@@ -137,12 +137,6 @@ High tail latencies indicate write–read contention between concurrent commits 
 | `firewood_nodes_allocated_total`        | counter | `index` | Node allocations per size class                                   |
 | `firewood_nodes_deleted_total`          | counter | `index` | Node deletions per size class                                     |
 
-#### Free lists
-
-| Metric                       | Type  | Labels  | Description                                  |
-| ---------------------------- | ----- | ------- | -------------------------------------------- |
-| `firewood_free_list_entries` | gauge | `index` | Current entry count per free-list size class |
-
 #### Node reads
 
 | Metric                                   | Type    | Labels         | Description                                |
@@ -269,6 +263,10 @@ rate(firewood_storage_bytes_wasted_total[5m])
 
 # Database growth rate (bytes/sec)
 rate(firewood_storage_bytes_appended_total[5m])
+
+# Net free-list growth (bytes/sec); negative means free space is being consumed
+rate(firewood_storage_bytes_freed_total[5m])
+  - rate(firewood_storage_bytes_reused_total[5m])
 
 # I/O read throughput (bytes/sec)
 rate(firewood_io_bytes_read_total[1m])

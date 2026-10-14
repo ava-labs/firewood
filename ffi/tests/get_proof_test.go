@@ -1,13 +1,14 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-package eth
+package tests
 
 import (
 	"encoding/binary"
 	"fmt"
 	"testing"
 
+	"github.com/ava-labs/firewood-go/ffi"
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/rawdb"
 	"github.com/ava-labs/libevm/core/state"
@@ -20,8 +21,6 @@ import (
 	"github.com/ava-labs/libevm/triedb"
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
-
-	"github.com/ava-labs/firewood-go-ethhash/ffi"
 )
 
 // slot is a single storage entry: the raw 32-byte slot key and its value.
@@ -53,7 +52,7 @@ func buildState(t *testing.T, specs []accountSpec) builtState {
 	t.Helper()
 	r := require.New(t)
 
-	db := newFirewoodDB(t)
+	db := newTestDatabase(t, ffi.EthereumNodeHashing)
 	tdb := state.NewDatabaseWithConfig(rawdb.NewMemoryDatabase(), triedb.HashDefaults)
 	accountTrie, err := tdb.OpenTrie(types.EmptyRootHash)
 	r.NoError(err)
@@ -137,11 +136,14 @@ func verifyProof(t *testing.T, root common.Hash, key []byte, nodes [][]byte) []b
 	return value
 }
 
-// ethProver is satisfied by *ffi.Revision and *ffi.Reconstructed,
-// which expose the same EthGetProof signature.
 type ethProver interface {
 	EthGetProof(accountKey []byte, slotKeys [][]byte) (*ffi.EthAccountProof, error)
 }
+
+var (
+	_ ethProver = (*ffi.Revision)(nil)
+	_ ethProver = (*ffi.Reconstructed)(nil)
+)
 
 // proversAtRoot returns the committed revision and an equivalent reconstructed
 // view, both rooted at built.root. Each view is released via t.Cleanup.

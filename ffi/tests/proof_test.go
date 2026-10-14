@@ -1,13 +1,13 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-package eth
+package tests
 
 import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/ava-labs/firewood-go-ethhash/ffi"
+	"github.com/ava-labs/firewood-go/ffi"
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/types"
 	"github.com/ava-labs/libevm/crypto"
@@ -16,21 +16,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var _ ffi.Maybe[[]byte] = nothing{}
-
-type nothing struct{}
-
-func (nothing) HasValue() bool {
-	return false
-}
-
-func (nothing) Value() []byte {
-	return nil
-}
-
 func FuzzRangeProofCreation(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
-		db := newFirewoodDB(t)
+		db := newTestDatabase(t, ffi.EthereumNodeHashing)
 		numAccounts := len(data)
 
 		if numAccounts == 0 {
@@ -67,11 +55,11 @@ func FuzzRangeProofCreation(f *testing.F) {
 		root, err := db.Update(batch)
 		require.NoErrorf(t, err, "%T.Update()", db)
 
-		proof, err := db.RangeProof(root, nothing{}, nothing{}, uint32(numAccounts))
+		proof, err := db.RangeProof(root, nil, nil, uint32(numAccounts))
 		require.NoErrorf(t, err, "%T.RangeProof()", db)
 		require.NotNil(t, proof)
 
-		err = proof.Verify(root, nothing{}, nothing{}, uint32(numAccounts))
+		err = proof.Verify(root, nil, nil, uint32(numAccounts))
 		require.NoErrorf(t, err, "%T.Verify()", proof)
 
 		seen := make(map[common.Hash]struct{})

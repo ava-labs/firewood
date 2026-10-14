@@ -269,6 +269,7 @@ jobs:
           go-version-file: "ffi/go.mod"
           cache-dependency-path: |
             ffi/go.sum
+            ffi/tests/go.sum
             ffi/tools/external/go.sum
       - name: Run golangci-lint
         run: ./scripts/run-just.sh ci-lint-ffi
@@ -280,7 +281,8 @@ jobs:
   # Replay recorded C-Chain execution logs against Firewood to catch changes that would break the C-Chain.
   replay-test:
     needs: [build]
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    # Dependabot runs don't receive Actions secrets, so the AWS role is unavailable.
+    if: ${{ github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -347,10 +349,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: "ffi/tests/eth/go.mod"
-          cache-dependency-path: "ffi/tests/eth/go.sum"
+          go-version-file: "ffi/tests/go.mod"
+          cache-dependency-path: "ffi/tests/go.sum"
       - name: Test Firewood <> Ethereum Differential Fuzz
-        working-directory: ffi/tests/eth
+        working-directory: ffi/tests
         run: |
           # Set memlock to unlimited for the shell invoking the fuzz tests
           ulimit -Sa
@@ -365,7 +367,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ethhash-differential-fuzz-testdata
-          path: ffi/tests/eth/testdata
+          path: ffi/tests/testdata
           retention-days: 30
 
   firewood-merkle-differential-fuzz:
@@ -388,10 +390,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: "ffi/tests/firewood/go.mod"
-          cache-dependency-path: "ffi/tests/firewood/go.sum"
+          go-version-file: "ffi/tests/go.mod"
+          cache-dependency-path: "ffi/tests/go.sum"
       - name: Test Firewood <> MerkleDB Differential fuzz
-        working-directory: ffi/tests/firewood
+        working-directory: ffi/tests
         run: |
           # Set memlock to unlimited for the shell invoking the fuzz tests
           ulimit -Sa
@@ -399,13 +401,13 @@ jobs:
           sudo prlimit --pid $$ --memlock=-1:-1 || echo "prlimit not available, locking kernel memory may fail when setting up io-uring"
           ulimit -Sa
           ulimit -Ha
-          go test -race -fuzz=. -fuzztime=1m
+          go test -race -fuzz=FuzzTree -fuzztime=1m
       - name: Upload Fuzz testdata
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: firewood-merkle-differential-fuzz-testdata
-          path: ffi/tests/firewood/testdata
+          path: ffi/tests/testdata
           retention-days: 30
 
   stale-deps:
