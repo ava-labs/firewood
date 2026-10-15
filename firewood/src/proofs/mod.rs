@@ -334,7 +334,6 @@ pub(crate) mod types;
 pub use self::change::ChangeProof;
 pub use self::change::ChangeProofVerificationContext;
 pub use self::change::VerifiedChangeProof;
-pub use self::change::find_next_key_after_change_proof;
 pub use self::change::verify_change_proof_structure;
 pub(crate) use self::frame::MAX_DECOMPRESSED_LEN;
 pub use self::header::InvalidHeader;
@@ -363,9 +362,6 @@ pub use self::types::ProofType;
 ///
 /// [`fetch_ranges`] uses it as the exclusive upper bound of a single-key
 /// label, so that a point and the span starting right after it coalesce.
-/// [`find_next_key_after_change_proof`] uses it to resume strictly above the
-/// last key a change proof covered; both request bounds are inclusive, so
-/// resuming at that key would cover it again and never advance.
 pub(crate) fn lex_successor(key: &[u8]) -> Box<[u8]> {
     [key, &[0]].concat().into_boxed_slice()
 }

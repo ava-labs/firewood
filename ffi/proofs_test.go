@@ -1020,10 +1020,9 @@ func TestVerifiedChangeProofCommitAfterDatabaseAdvanced(t *testing.T) {
 	r.NoError(verified.Drop())
 }
 
-// TestVerifiedChangeProofCommitAfterUnrelatedAdvance checks the rebuild path
-// for change proofs: a proposal made stale by a commit outside the proven
-// range is applied again to the latest revision, its root re-checked, and
-// committed.
+// TestVerifiedChangeProofCommitAfterUnrelatedAdvance checks that Commit
+// succeeds after the target commits a key outside the proven range: the
+// target lands on the proof's end root and the outside key is deleted.
 func TestVerifiedChangeProofCommitAfterUnrelatedAdvance(t *testing.T) {
 	r := require.New(t)
 	src := newTestDatabase(t)
@@ -1045,6 +1044,7 @@ func TestVerifiedChangeProofCommitAfterUnrelatedAdvance(t *testing.T) {
 	committed, err := verified.Commit()
 	r.NoError(err, "a stale proposal is rebuilt when the proven range is untouched")
 	r.NotEqual(advanced, committed)
+	r.Equal(endRoot, committed, "the commit's remedies bring the database to the target root")
 	r.Equal(committed, dst.Root())
 	for i := half; i < len(keys); i++ {
 		got, err := dst.Get(keys[i])
@@ -1053,7 +1053,7 @@ func TestVerifiedChangeProofCommitAfterUnrelatedAdvance(t *testing.T) {
 	}
 	got, err := dst.Get(unrelated)
 	r.NoError(err)
-	r.Equal([]byte("value"), got, "the key outside the proven range survives the commit")
+	r.Nil(got, "the commit deletes the key the target does not hold")
 	r.NoError(verified.Drop())
 }
 
@@ -1620,21 +1620,18 @@ func TestChangeProofNextKeyRanges(t *testing.T) {
 	verified, err := proof.Verify(rootAUpdated, nothing(), nothing(), changeProofLenTruncated)
 	r.NoError(err)
 
-	ranges, err := verified.NextKeyRanges()
+	before, err := verified.NextKeyRanges()
 	r.NoError(err)
-	r.Len(ranges, 1)
-	startKey := ranges[0].StartKey
-	r.NotEmpty(startKey)
-	r.False(ranges[0].EndKey.HasValue())
+	r.NotEmpty(before, "a truncated proof leaves changes to fetch")
+	assertRangesWellFormed(t, before, nil)
 
 	_, err = verified.Commit()
 	r.NoError(err)
 
-	// NextKeyRanges reads the proof, not the proposal, so commit changes nothing.
-	ranges, err = verified.NextKeyRanges()
+	// The ranges are the same before and after the commit.
+	after, err := verified.NextKeyRanges()
 	r.NoError(err)
-	r.Len(ranges, 1)
-	r.Equal(startKey, ranges[0].StartKey)
+	r.Equal(before, after)
 	r.NoError(verified.Drop())
 }
 

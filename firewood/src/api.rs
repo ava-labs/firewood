@@ -751,7 +751,7 @@ pub trait DynDb: Debug + Send + Sync + 'static {
     fn apply_verified_change_proof(
         &self,
         verified: &crate::proofs::VerifiedChangeProof,
-    ) -> Result<Box<dyn DynProposal<'_> + '_>, Error>;
+    ) -> Result<(Box<dyn DynProposal<'_> + '_>, Vec<crate::proofs::Hole>), Error>;
 
     /// Object-safe version of
     /// [`Db::merge_key_value_range`](crate::db::Db::merge_key_value_range),

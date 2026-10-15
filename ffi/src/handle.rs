@@ -322,21 +322,22 @@ impl DatabaseHandle {
         Ok((CreateProposalResult::new(self, || Ok(proposal))?, holes))
     }
 
-    /// Apply an already verified change proof to the latest revision and
-    /// check the result against the root it was verified with.
-    ///
-    /// See [`DynDb::apply_verified_change_proof`].
+    /// Apply a verified change proof to the latest revision, with the local
+    /// remedies its boundary proofs justify, check the result against the
+    /// root it was verified with, and return the proposal together with the
+    /// walk's labels. See [`DynDb::apply_verified_change_proof`].
     ///
     /// # Errors
     ///
     /// A hash-mode mismatch between the proof and this database, or any
-    /// error from applying the proof's operations or from the root hash
-    /// check.
+    /// error from the walk, from applying the proof's operations, or from
+    /// the root hash check.
     pub fn apply_verified_change_proof(
         &self,
         verified: &VerifiedChangeProof,
-    ) -> Result<CreateProposalResult<'_>, api::Error> {
-        CreateProposalResult::new(self, || self.db.apply_verified_change_proof(verified))
+    ) -> Result<(CreateProposalResult<'_>, Vec<Hole>), api::Error> {
+        let (proposal, holes) = self.db.apply_verified_change_proof(verified)?;
+        Ok((CreateProposalResult::new(self, || Ok(proposal))?, holes))
     }
 
     /// Dumps the Trie structure of the latest revision to a DOT (Graphviz) format string.

@@ -270,9 +270,9 @@ impl<H: HashMode> api::DynDb for Db<H> {
     fn apply_verified_change_proof(
         &self,
         verified: &VerifiedChangeProof,
-    ) -> Result<Box<dyn api::DynProposal<'_> + '_>, api::Error> {
-        let proposal = Db::apply_verified_change_proof(self, verified)?;
-        Ok(Box::new(proposal))
+    ) -> Result<(Box<dyn api::DynProposal<'_> + '_>, Vec<Hole>), api::Error> {
+        let (proposal, holes) = Db::apply_verified_change_proof(self, verified)?;
+        Ok((Box::new(proposal), holes))
     }
 
     fn merge_key_value_range(
@@ -539,8 +539,10 @@ impl<H: HashMode> Db<H> {
     /// still be available and reduces rebasing in `commit_with_rebase`.
     ///
     /// The proof is borrowed, not consumed — the caller retains it for
-    /// `find_next_key` or serialization. Returns a standard `Proposal`
-    /// ready for commit.
+    /// serialization. Returns a standard `Proposal` ready for commit. The
+    /// proposal holds the proof's operations only; applying a
+    /// [`VerifiedChangeProof`] through [`Db::apply_verified_change_proof`]
+    /// adds the local remedies the boundary proofs justify.
     pub fn verify_change_proof(
         &self,
         proof: &FrozenChangeProof,
@@ -608,27 +610,44 @@ impl<H: HashMode> Db<H> {
         Ok((proposal, holes))
     }
 
-    /// Apply an already structurally verified change proof to the latest
-    /// revision and check the result against the `end_root` it was verified
-    /// with.
+    /// Apply a verified change proof to the latest revision, together with
+    /// the local remedies its boundary proofs justify, and check the result
+    /// against the `end_root` it was verified with.
     ///
-    /// This is [`Db::verify_change_proof`] without the structural pass, for a
-    /// caller holding a [`VerifiedChangeProof`]. Calling it again after the
-    /// database advances re-checks the root against the then-latest revision
-    /// without repeating the boundary-proof verification, whose result does
-    /// not depend on the revision.
+    /// This is [`Db::verify_change_proof`] without the structural pass and
+    /// with the post-merge hole walk added
+    /// ([`CommittedView::find_holes_after_change_proof`]): the proposal holds
+    /// the proof's operations and, outside the applied range, the deletions
+    /// and point writes the walk justifies. The root check hashes only the
+    /// proposal's in-range content, so the remedies do not disturb it. The
+    /// walk's labels are returned alongside the proposal.
+    ///
+    /// Calling this again after the database advances re-walks and re-checks
+    /// against the then-latest revision without repeating the boundary-proof
+    /// verification, whose result does not depend on the revision.
     ///
     /// # Errors
     ///
     /// [`ProofError::HashModeMismatch`] when the proof was verified under a
-    /// hash mode other than this database's, or any error from applying the
-    /// operations or from the root hash check.
+    /// hash mode other than this database's, or any error from the walk, from
+    /// applying the operations, or from the root hash check.
     pub fn apply_verified_change_proof(
         &self,
         verified: &VerifiedChangeProof,
-    ) -> Result<Proposal<'_, H>, api::Error> {
+    ) -> Result<(Proposal<'_, H>, Vec<Hole>), api::Error> {
         Self::reject_mode_mismatch(verified.proof().hash_mode())?;
-        self.apply_change_proof_to_latest(verified.proof(), verified.verification())
+        let parent = self.manager.current_revision();
+        let holes =
+            crate::merkle::holes::find_holes_after_change_proof::<H, _>(verified, &*parent)?;
+        let proof = verified.proof();
+        let ops = proof
+            .batch_ops()
+            .iter()
+            .cloned()
+            .chain(crate::proofs::holes::remedy_ops(&holes));
+        let proposal = self.propose_with_parent(ops, &*parent)?;
+        verify_change_proof_root_hash(proof, verified.verification(), &proposal)?;
+        Ok((proposal, holes))
     }
 
     fn reject_mode_mismatch(found: NodeHashAlgorithm) -> Result<(), api::Error> {
@@ -890,7 +909,11 @@ impl CommittedView {
     /// applied over, against this revision. The contract is that of
     /// [`Self::find_holes_after_range_proof`], with the applied range
     /// `[start_key, right_edge_key]` taken from the change proof's
-    /// verification context.
+    /// verification context. [`Db::apply_verified_change_proof`] walks the
+    /// revision the proof will be applied to, as
+    /// [`Db::apply_verified_range_proof`] does for a range proof; the proof's
+    /// operations write only inside the applied range, so outside it the
+    /// labels agree with a walk of the revision the proof was applied into.
     ///
     /// Nothing is labeled on a side whose boundary proof is empty.
     /// Change-proof verification hashes the proposal's own content wherever

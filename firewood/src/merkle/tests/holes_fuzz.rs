@@ -45,6 +45,7 @@ use firewood_storage::HashMode;
 use firewood_storage::HashedNodeReader;
 use firewood_storage::LinearAddress;
 use firewood_storage::MaybePersistedNode;
+use firewood_storage::MemStore;
 use firewood_storage::MerkleDbHash;
 use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::NodeReader;
@@ -80,6 +81,7 @@ use crate::api::HashKey;
 use crate::api::Proposal as _;
 use crate::api::{self};
 use crate::db::Db;
+use crate::merkle::Merkle;
 use crate::merkle::RightBoundary;
 use crate::merkle::holes::find_holes_after_change_proof;
 use crate::merkle::holes::find_holes_after_range_proof;
@@ -545,6 +547,67 @@ fn merge_range(verified: &VerifiedRangeProof) -> Applied {
     )
 }
 
+/// The change-proof counterpart of [`apply_leg`]: applies `verified` through
+/// [`Db::apply_verified_change_proof`] and makes the same assertions against
+/// `change_holes`.
+fn apply_change_leg<H: HashMode>(
+    db: &Db<H>,
+    local: &Map,
+    verified: &VerifiedChangeProof,
+    change_holes: &[Hole],
+    locator: &str,
+) {
+    reset_to(db, local);
+    let (proposal, pre) = db
+        .apply_verified_change_proof(verified)
+        .unwrap_or_else(|e| panic!("change apply failed ({locator}): {e}"));
+    assert_eq!(
+        fetch_ranges(&pre),
+        fetch_ranges(change_holes),
+        "parent walk {pre:?} against post-apply walk {change_holes:?} ({locator})"
+    );
+    for label in &pre {
+        assert!(
+            matches!(label, Hole::Surplus(_) | Hole::PointSurplus { .. })
+                || change_holes.contains(label),
+            "{label:?} from the parent walk is neither a deletion nor in {change_holes:?} \
+             ({locator})"
+        );
+    }
+    proposal.commit().unwrap();
+    let again = db
+        .current_committed_view()
+        .find_holes_after_change_proof(verified)
+        .unwrap_or_else(|e| panic!("walk after change apply failed ({locator}): {e}"));
+    assert!(
+        only_fetch_or_synced(&again),
+        "labels other than fetch or synced remain after change apply: {again:?} ({locator})"
+    );
+    assert_eq!(
+        fetch_ranges(&again),
+        fetch_ranges(&pre),
+        "the change commit changed the fetch ranges ({locator})"
+    );
+}
+
+/// The change proof a syncing client would hold: from the target `t`, with
+/// the client's own state `local` as the source, verified for the request.
+fn client_change_proof<H: HashMode>(
+    t: &Merkle<NodeStore<Committed, MemStore, H>>,
+    local: &Map,
+    start: Option<&[u8]>,
+    end: Option<&[u8]>,
+    limit: Option<NonZeroUsize>,
+    locator: &str,
+) -> VerifiedChangeProof {
+    let source = trie::<H>(local);
+    let change = t
+        .change_proof(start, end, source.nodestore(), limit)
+        .unwrap();
+    VerifiedChangeProof::verify(Arc::new(change), root(t), start, end, H::ALGORITHM, limit)
+        .unwrap_or_else(|e| panic!("change verify failed ({locator}): {e}"))
+}
+
 fn run_one<H: HashMode>(run: usize, seed: u64, db: &Db<H>, stats: &mut Stats) {
     eprintln!(
         "run {run} ({:?}): seed={seed} (export FIREWOOD_TEST_SEED={seed} to reproduce)",
@@ -605,21 +668,15 @@ fn run_one<H: HashMode>(run: usize, seed: u64, db: &Db<H>, stats: &mut Stats) {
         apply_leg(db, &local, &verified, range_holes, &locator);
     }
 
-    // Change-proof leg: the proof a syncing client would hold, from the
-    // target with the client's own state as the source.
-    let source = trie::<H>(&local);
-    let change = t
-        .change_proof(start.as_deref(), end.as_deref(), source.nodestore(), limit)
-        .unwrap();
-    let verified_change = VerifiedChangeProof::verify(
-        Arc::new(change),
-        root(&t),
+    // Change-proof leg.
+    let verified_change = client_change_proof(
+        &t,
+        &local,
         start.as_deref(),
         end.as_deref(),
-        H::ALGORITHM,
         limit,
-    )
-    .unwrap_or_else(|e| panic!("change verify failed ({locator}): {e}"));
+        &locator,
+    );
     let change_edge = verified_change.verification().right_edge_key();
     let applied_change: Applied = (start.clone(), change_edge.map(<[u8]>::to_vec));
     // Applying a change proof writes only its operations, which here are the
@@ -637,6 +694,9 @@ fn run_one<H: HashMode>(run: usize, seed: u64, db: &Db<H>, stats: &mut Stats) {
         stats,
         |view| find_holes_after_change_proof::<H, _>(&verified_change, view),
     );
+    if let Some(change_holes) = &change_holes {
+        apply_change_leg(db, &local, &verified_change, change_holes, &locator);
+    }
 
     // The two walks must agree label for label when both proofs applied over
     // the same range and the range proof's right boundary is in range.

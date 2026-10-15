@@ -410,8 +410,11 @@ func (db *Database) ChangeProof(
 
 // Verify checks the proof structurally, applies its changes to the latest
 // revision of the database the proof belongs to, and checks that the result
-// matches [endRoot] across [startKey, endKey]. On success the prepared proposal
-// is held by the returned [VerifiedChangeProof].
+// matches [endRoot] across [startKey, endKey]. The proposal also applies, outside
+// that range, the local remedies the proof's boundary hashes justify: content
+// the target does not hold is deleted and keys whose target value the proof
+// carries are written. On success the prepared proposal is held by the
+// returned [VerifiedChangeProof].
 //
 // Verify does not consume the proof: it stays usable for [ChangeProof.Marshal]
 // or for another Verify. Each successful call builds its own proposal, so a
@@ -455,11 +458,16 @@ func (p *ChangeProof) Verify(
 }
 
 // Commit applies the proof to the database and returns the new root hash.
+// The proposal is the one [ChangeProof.Verify] describes: the proof's
+// operations are applied and the walk's local remedies outside the proven
+// range are written.
 //
 // If the database advanced since Verify, Commit applies the proof again to the
 // current latest revision and re-checks its root against the verified end root
 // before committing, so the proven range is checked on the state it lands on
-// rather than rebased blindly. A second Commit returns the same root without
+// rather than rebased blindly. The rebuild walks that revision again, so
+// content written in between that the target does not hold is deleted too. A
+// second Commit returns the same root without
 // touching the database. Commit does not consume the proof and does not
 // release the lease; call [VerifiedChangeProof.Drop] for that.
 //
@@ -478,13 +486,8 @@ func (p *VerifiedChangeProof) Commit() (Hash, error) {
 	return getHashKeyFromHashResult(C.fwd_verified_change_proof_commit(p.ptr))
 }
 
-// NextKeyRanges returns the key ranges still to fetch after this proof, sorted
-// ascending by start key. An empty result means the proof covered the
-// requested range. It reads only the proof and the end key it was verified
-// with.
-//
-// Each range is `[StartKey, EndKey]`; EndKey is the bound the proof was
-// verified with.
+// NextKeyRanges returns the key ranges still to fetch after this proof, on the
+// same terms as [VerifiedRangeProof.NextKeyRanges].
 func (p *VerifiedChangeProof) NextKeyRanges() ([]NextKeyRange, error) {
 	p.lease.mu.RLock()
 	defer p.lease.mu.RUnlock()

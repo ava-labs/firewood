@@ -248,7 +248,13 @@ fn db_applies_verified_change_proof<H: HashMode>() {
     )
     .unwrap();
 
-    let proposal = target.apply_verified_change_proof(&verified).unwrap();
+    // Source and target agree outside the proof's range, so the walk finds
+    // nothing to repair and the proposal is the proof's operations alone.
+    let (proposal, holes) = target.apply_verified_change_proof(&verified).unwrap();
+    assert!(
+        holes.iter().all(|h| matches!(h, Hole::Synced(_))),
+        "source and target agree outside the proof, yet the walk reported {holes:?}"
+    );
     assert_eq!(proposal.root_hash(), Some(root2.clone()));
     proposal.commit().unwrap();
     assert_eq!(target.root_hash().unwrap(), root2);
@@ -256,7 +262,7 @@ fn db_applies_verified_change_proof<H: HashMode>() {
     // Applying the same verified proof again, now on top of the revision it
     // produced, is the path a commit retry takes after the database advanced.
     // The operations are idempotent puts, so the result is the same root.
-    let again = target.apply_verified_change_proof(&verified).unwrap();
+    let (again, _) = target.apply_verified_change_proof(&verified).unwrap();
     assert_eq!(again.root_hash(), Some(root2));
 }
 
