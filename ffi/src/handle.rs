@@ -5,6 +5,7 @@ use std::num::NonZeroU64;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use firewood::VerifiedChangeProof;
 use firewood::api;
 use firewood::api::ArcDynDbView;
 use firewood::api::DynDb;
@@ -319,28 +320,19 @@ impl DatabaseHandle {
             .change_proof(start_hash, end_hash, start_key, end_key, limit)
     }
 
-    /// Verify a change proof and create a proposal from it.
+    /// Apply an already verified change proof to the latest revision and
+    /// check the result against the root it was verified with.
     ///
-    /// Performs structural validation, applies batch ops to the latest
-    /// revision, and verifies the root hash against `end_root`. The proof
-    /// is borrowed, not consumed.
+    /// See [`Db::apply_verified_change_proof`](firewood::db::Db::apply_verified_change_proof).
     ///
     /// # Errors
     ///
-    /// Returns an error if structural validation fails or the root hash
-    /// doesn't match `end_root`.
-    pub fn verify_change_proof(
+    /// Any error `Db::apply_verified_change_proof` returns.
+    pub fn apply_verified_change_proof(
         &self,
-        proof: &FrozenChangeProof,
-        end_root: HashKey,
-        start_key: Option<&[u8]>,
-        end_key: Option<&[u8]>,
-        max_length: Option<NonZeroUsize>,
+        verified: &VerifiedChangeProof,
     ) -> Result<CreateProposalResult<'_>, api::Error> {
-        CreateProposalResult::new(self, || {
-            self.db
-                .verify_change_proof(proof, end_root, start_key, end_key, max_length)
-        })
+        CreateProposalResult::new(self, || self.db.apply_verified_change_proof(verified))
     }
 
     /// Dumps the Trie structure of the latest revision to a DOT (Graphviz) format string.

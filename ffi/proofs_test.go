@@ -828,7 +828,8 @@ func TestVerifiedChangeProofCommitAfterDatabaseAdvanced(t *testing.T) {
 
 // TestVerifiedChangeProofCommitAfterUnrelatedAdvance checks the rebuild path
 // for change proofs: a proposal made stale by a commit outside the proven
-// range is verified again against the latest revision and committed.
+// range is applied again to the latest revision, its root re-checked, and
+// committed.
 func TestVerifiedChangeProofCommitAfterUnrelatedAdvance(t *testing.T) {
 	r := require.New(t)
 	src := newTestDatabase(t)
