@@ -56,10 +56,11 @@ providing inline feedback — in addition to general best practices.
   tampered split still verifies. See `merkle::holes::Walk::boundary`.
 - **Ethereum storage-child fold**: under the Ethereum mode a stored child hash at depth
   65 depends on the account's storage-child count (folded as a storage-trie root iff the
-  account has exactly one). Compare depth-65 hashes from two tries directly only when
-  both counts agree; otherwise re-hash the local child under the target's convention
-  (folded via `hash_node_as_storage_trie_root_parts`, unfolded via `HashableShunt`).
-  See `merkle::holes::Walk::straddle`.
+  account has exactly one), and a trie with no node at depth 64 stores its one slot
+  unfolded regardless. Compare depth-65 hashes from two tries directly only when both
+  sides fold alike; otherwise re-hash the local slot under the target's convention
+  (`merkle::holes::fold` to fold, `HashableShunt` to unfold). See
+  `merkle::holes::Walk::straddle`.
 
 ## Lint Suppression Policy
 
