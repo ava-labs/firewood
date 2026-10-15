@@ -362,8 +362,11 @@ func TestRangeProofFindNextKeyDivergentReceiver(t *testing.T) {
 	nextRange, err := proof.FindNextKey()
 	r.NoError(err)
 	r.NotNil(nextRange)
+	// The next request resumes after the last proven key without skipping the
+	// first unproven one.
 	startKey := nextRange.StartKey()
-	r.NotEmpty(startKey)
+	r.Positive(bytes.Compare(startKey, keys[rangeProofLenTruncated-1]), "start key repeats a proven key")
+	r.LessOrEqual(bytes.Compare(startKey, keys[rangeProofLenTruncated]), 0, "start key skips an unproven key")
 	r.NoError(nextRange.Free())
 }
 
