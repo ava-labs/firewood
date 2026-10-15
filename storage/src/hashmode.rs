@@ -99,32 +99,27 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "ethhash")]
-    fn default_root_hash() {
-        assert!(DefaultHashMode::default_root_hash().is_some());
+    fn default_root_hash_per_mode() {
+        assert_eq!(EthHash::ALGORITHM, NodeHashAlgorithm::Ethereum);
+        assert!(EthHash::default_root_hash().is_some());
+
+        assert_eq!(MerkleDbHash::ALGORITHM, NodeHashAlgorithm::MerkleDB);
+        assert!(MerkleDbHash::default_root_hash().is_none());
     }
 
     #[test]
-    #[cfg(not(feature = "ethhash"))]
-    fn default_root_hash() {
-        assert!(DefaultHashMode::default_root_hash().is_none());
-    }
+    fn is_valid_key_per_mode() {
+        // Ethereum accepts only account (64 nibbles) and storage-slot
+        // (128 nibbles) keys.
+        assert!(EthHash::is_valid_key(&path_of_len(64)));
+        assert!(EthHash::is_valid_key(&path_of_len(128)));
+        assert!(!EthHash::is_valid_key(&path_of_len(66)));
+        assert!(!EthHash::is_valid_key(&path_of_len(63)));
 
-    #[test]
-    #[cfg(feature = "ethhash")]
-    fn is_valid_key() {
-        assert!(DefaultHashMode::is_valid_key(&path_of_len(64)));
-        assert!(DefaultHashMode::is_valid_key(&path_of_len(128)));
-        assert!(!DefaultHashMode::is_valid_key(&path_of_len(66)));
-        assert!(!DefaultHashMode::is_valid_key(&path_of_len(63)));
-    }
-
-    #[test]
-    #[cfg(not(feature = "ethhash"))]
-    fn is_valid_key() {
-        assert!(DefaultHashMode::is_valid_key(&path_of_len(64)));
-        assert!(DefaultHashMode::is_valid_key(&path_of_len(2)));
-        assert!(!DefaultHashMode::is_valid_key(&path_of_len(3)));
+        // MerkleDB accepts any even nibble length.
+        assert!(MerkleDbHash::is_valid_key(&path_of_len(64)));
+        assert!(MerkleDbHash::is_valid_key(&path_of_len(2)));
+        assert!(!MerkleDbHash::is_valid_key(&path_of_len(3)));
     }
 
     #[test]

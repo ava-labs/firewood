@@ -44,12 +44,10 @@
 //! | [`proof_node`] | `partial_path` | `[1, 2, 3, 4, 5]` | 3 | none | none |
 //! | [`branch_node`] | `single_child` | `[1]` | 0 | none | nibble 7 |
 //! | [`branch_node`] | `all_children` | `[0]` | 0 | none | all 16 |
-//! | [`branch_node`] | `large_value_becomes_hash` | `[1, 2]` | 0 | 32 × `0xAB` | none |
+//! | [`large_value_becomes_hash`] | — | `[1, 2]` | 0 | 32 × `0xAB` | none |
 //!
-//! `large_value_becomes_hash` is `merkledb`-only (via `cfg_attr`): the
-//! large-value → hash behaviour is format-agnostic and is fully covered by the
-//! MerkleDB variant, while `single_child` / `all_children` already exercise the
-//! complete child-hash encoding under both modes.
+//! [`large_value_becomes_hash`] is MerkleDB-only: MerkleDB hashes large values,
+//! whereas Ethereum retains the raw value.
 //!
 //! ## Header, key-values, and batch ops
 //!
@@ -73,9 +71,12 @@
 //! | [`batch_op`] | `delete_range` | Single `DeleteRange` operation (opcode `0x02`) |
 //! | [`batch_op`] | `all_ops` | All three operations in sequence |
 
-use firewood_storage::DefaultHashMode;
+use firewood_macros::hash_mode;
 use firewood_storage::DenseChildren;
+use firewood_storage::EthHash;
 use firewood_storage::HashMode;
+use firewood_storage::MerkleDbHash;
+use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::PathComponent;
 use firewood_storage::TrieHash;
 use firewood_storage::ValueDigest;
@@ -91,14 +92,13 @@ use crate::db::BatchOp;
 use crate::merkle::Key;
 use crate::merkle::Value;
 
-/// Prefixes a snapshot name with the active hash mode so feature-split tests
+/// Prefixes a snapshot name with the selected hash mode so runtime-mode tests
 /// write distinct snapshot files. Bytes differ between modes, so `merkledb` and
 /// `ethhash` snapshots must not share a filename.
-fn hash_mode_name(name: &str) -> String {
-    let mode = if cfg!(feature = "ethhash") {
-        "ethhash"
-    } else {
-        "merkledb"
+fn hash_mode_name(hash_mode: NodeHashAlgorithm, name: &str) -> String {
+    let mode = match hash_mode {
+        NodeHashAlgorithm::MerkleDB => "merkledb",
+        NodeHashAlgorithm::Ethereum => "ethhash",
     };
     format!("{mode}__{name}")
 }
@@ -109,12 +109,12 @@ fn hash_mode_name(name: &str) -> String {
 /// The returned bytes begin with the varint-encoded start-proof node count,
 /// followed by the [`ProofNode`] encoding, then the empty end-proof and
 /// key-values counts.
-fn node_bytes(node: &ProofNode) -> Vec<u8> {
+fn node_bytes(node: &ProofNode, hash_mode: NodeHashAlgorithm) -> Vec<u8> {
     let proof = FrozenRangeProof::new(
         Proof::new(Box::new([node.clone()])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([]),
-        DefaultHashMode::ALGORITHM,
+        hash_mode,
     );
     let mut out = Vec::new();
     // Snapshot the canonical (uncompressed) body: the wire compresses this
@@ -162,7 +162,8 @@ fn range_proof_bytes(kvs: &[(&[u8], &[u8])]) -> Vec<u8> {
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         kv_pairs,
-        DefaultHashMode::ALGORITHM,
+        // TODO(RodrigoVillar): Remove the arbitrary MerkleDB mode from this encoding.
+        NodeHashAlgorithm::MerkleDB,
     );
     let mut out = Vec::new();
     proof.write_body_to_vec(&mut out);
@@ -176,7 +177,8 @@ fn change_proof_bytes(ops: Box<[BatchOp<Key, Value>]>) -> Vec<u8> {
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         ops,
-        DefaultHashMode::ALGORITHM,
+        // TODO(RodrigoVillar): Remove the arbitrary MerkleDB mode from this encoding.
+        NodeHashAlgorithm::MerkleDB,
     );
     let mut out = Vec::new();
     proof.write_body_to_vec(&mut out);
@@ -202,7 +204,11 @@ fn proof_node(
     children: &[u8],
 ) {
     let node = make_node(key, partial_len, value, children);
-    insta::assert_snapshot!(name, hex::encode(node_bytes(&node)));
+    // TODO(RodrigoVillar): Remove the arbitrary MerkleDB mode from this encoding.
+    insta::assert_snapshot!(
+        name,
+        hex::encode(node_bytes(&node, NodeHashAlgorithm::MerkleDB))
+    );
 }
 
 /// [`ProofNode`] encodings whose bytes depend on the hash mode, so
@@ -214,15 +220,10 @@ fn proof_node(
 ///
 /// - `single_child`: one child at nibble 7 (`ChildMask` bit 7, `0x0080`).
 /// - `all_children`: all 16 children (`ChildMask = 0xFFFF`).
-/// - `large_value_becomes_hash` (merkledb-only): a 32-byte value is hashed by
-///   `make_hash()` and encoded as `ValueDigest::Hash`.
+#[hash_mode]
 #[test_case("single_child", &[1], 0, None, &[7] ; "single_child")]
 #[test_case("all_children", &[0], 0, None, &[0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] ; "all_children")]
-#[cfg_attr(
-    not(feature = "ethhash"),
-    test_case("large_value_becomes_hash", &[1, 2], 0, Some(vec![0xABu8; 32].into_boxed_slice()), &[] ; "large_value_becomes_hash")
-)]
-fn branch_node(
+fn branch_node<H: HashMode>(
     name: &str,
     key: &[u8],
     partial_len: usize,
@@ -230,7 +231,20 @@ fn branch_node(
     children: &[u8],
 ) {
     let node = make_node(key, partial_len, value, children);
-    insta::assert_snapshot!(hash_mode_name(name), hex::encode(node_bytes(&node)));
+    insta::assert_snapshot!(
+        hash_mode_name(H::ALGORITHM, name),
+        hex::encode(node_bytes(&node, H::ALGORITHM))
+    );
+}
+
+/// A 32-byte value encoded as a MerkleDB `ValueDigest::Hash`.
+#[test]
+fn large_value_becomes_hash() {
+    let node = make_node(&[1, 2], 0, Some(vec![0xABu8; 32].into_boxed_slice()), &[]);
+    insta::assert_snapshot!(
+        hash_mode_name(NodeHashAlgorithm::MerkleDB, "large_value_becomes_hash"),
+        hex::encode(node_bytes(&node, NodeHashAlgorithm::MerkleDB))
+    );
 }
 
 /// Proof header encoding — the full 32-byte header. The `hash_mode` byte is
@@ -241,12 +255,13 @@ fn branch_node(
 /// `range` (`proof_type` `0x01`) and `change` (`proof_type` `0x02`) otherwise
 /// share the same magic `fwdproof`, version `0x00`, `branch_factor` `0x10`, and
 /// 20 zero reserved bytes.
+#[hash_mode]
 #[test_case(ProofType::Range ; "range")]
 #[test_case(ProofType::Change ; "change")]
-fn proof_header(proof_type: ProofType) {
-    let header = Header::from((proof_type, DefaultHashMode::ALGORITHM));
+fn proof_header<H: HashMode>(proof_type: ProofType) {
+    let header = Header::from((proof_type, H::ALGORITHM));
     insta::assert_snapshot!(
-        hash_mode_name(&format!("{proof_type:?}").to_lowercase()),
+        hash_mode_name(H::ALGORITHM, &format!("{proof_type:?}").to_lowercase()),
         hex::encode(bytemuck::bytes_of(&header))
     );
 }
