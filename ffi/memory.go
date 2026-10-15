@@ -454,16 +454,25 @@ func getKeyValueBatchFromResult(result C.KeyValueBatchResult) (*ownedKeyValueBat
 	}
 }
 
+// untaggedDBTag is the db_tag of a database opened without [WithMetricsTag].
+// It mirrors DEFAULT_DB_TAG in the firewood-metrics crate, which the Rust
+// recorder applies to the same databases; change both together.
+const untaggedDBTag = "untagged"
+
 // getDatabaseFromHandleResult converts a C.HandleResult to a Database or error.
 //
 // If the C.HandleResult is an error, it returns an error instead of a Database.
-func getDatabaseFromHandleResult(result C.HandleResult) (*Database, error) {
+func getDatabaseFromHandleResult(result C.HandleResult, metricsTag string) (*Database, error) {
+	if metricsTag == "" {
+		metricsTag = untaggedDBTag
+	}
 	switch result.tag {
 	case C.HandleResult_Ok:
 		ptr := *(**C.DatabaseHandle)(unsafe.Pointer(&result.anon0))
 		db := &Database{
 			handle:     ptr,
 			keepAlives: newKeepAliveRegistry(),
+			metricsTag: metricsTag,
 		}
 		return db, nil
 	case C.HandleResult_Err:

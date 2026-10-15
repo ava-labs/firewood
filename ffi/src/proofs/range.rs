@@ -336,6 +336,40 @@ pub extern "C" fn fwd_db_range_proof(
     })
 }
 
+/// Deserialize a range proof from bytes for use with `db`.
+///
+/// The database supplies the hash mode the proof must be encoded with; a
+/// proof whose header advertises another mode is rejected here rather than
+/// at verification.
+///
+/// # Arguments
+///
+/// - `db` - The database the proof will be verified against.
+/// - `bytes` - The bytes to deserialize the proof from.
+///
+/// # Returns
+///
+/// - [`RangeProofResult::NullHandlePointer`] if the caller provided a null database pointer.
+/// - [`RangeProofResult::Ok`] containing a pointer to the `RangeProofContext` if the proof
+///   was successfully parsed. This does not imply that the proof is valid, only that it is
+///   well-formed and uses `db`'s hash mode. Call [`fwd_db_verify_range_proof`] to check it.
+/// - [`RangeProofResult::Err`] containing an error message if the proof could not be parsed
+///   or its hash mode does not match `db`'s.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_db_range_proof_from_bytes(
+    db: Option<&DatabaseHandle>,
+    bytes: BorrowedBytes<'_>,
+) -> RangeProofResult<'static> {
+    // static lifetime is safe because the returned `RangeProofResult` does not
+    // retain a reference to the provided database handle.
+    crate::invoke_with_handle(db, move |db| {
+        let proof = FrozenRangeProof::from_slice(&bytes)
+            .map_err(|err| api::Error::ProofError(ProofError::Deserialization(err)))?;
+        super::check_hash_mode(db, proof.hash_mode())?;
+        Ok(proof)
+    })
+}
+
 /// Verify a range proof against the given start and end keys and root hash. The
 /// proof will be updated with the validation context if the proof is valid to
 /// avoid re-verifying it during commit.
@@ -571,29 +605,6 @@ pub extern "C" fn fwd_range_proof_to_bytes(proof: Option<&RangeProofContext>) ->
             .write_to_vec(&mut vec)
             .map_err(api::Error::ProofError)?;
         Ok(Some(vec.into_boxed_slice()))
-    })
-}
-
-/// Deserialize a `RangeProof` from bytes.
-///
-/// # Arguments
-///
-/// - `bytes` - The bytes to deserialize the proof from.
-///
-/// # Returns
-///
-/// - [`RangeProofResult::NullHandlePointer`] if the caller provided a null or zero-length slice.
-/// - [`RangeProofResult::Ok`] containing a pointer to the `RangeProofContext` if the proof
-///   was successfully parsed. This does not imply that the proof is valid, only that it is
-///   well-formed. The verify method must be called to ensure the proof is cryptographically valid.
-/// - [`RangeProofResult::Err`] containing an error message if the proof could not be parsed.
-#[unsafe(no_mangle)]
-pub extern "C" fn fwd_range_proof_from_bytes(
-    bytes: BorrowedBytes<'_>,
-) -> RangeProofResult<'static> {
-    crate::invoke(move || {
-        FrozenRangeProof::from_slice(&bytes)
-            .map_err(|err| api::Error::ProofError(ProofError::Deserialization(err)))
     })
 }
 
