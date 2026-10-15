@@ -104,9 +104,10 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
         // the `storageRoot` field. This happens when the proposal was built
         // from a subset of the account's storage children: live hashing
         // splices in a partial storageRoot, while the proof carries the
-        // full on-disk value. Both produce the same final hash because
-        // `Preimage::write` always recomputes storageRoot from the current
-        // children at hash time, but byte equality fails.
+        // full on-disk value. Both produce the same final hash because the
+        // Ethereum implementation of `HashMode::write_preimage` always recomputes
+        // storageRoot from the current children at hash time, but byte equality
+        // fails.
         //
         // This early-return is safe regardless of how the divergence arose: the
         // caller (`verify_change_proof_root_hash`) still gates acceptance on the
@@ -127,14 +128,15 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
 }
 
 /// Two ethhash account RLP values are equivalent for hashing if they agree
-/// on every field except `storageRoot` (index 2). `Preimage::write` always
-/// recomputes that field from the current children, so the on-disk byte
-/// difference is invisible in the final hash.
+/// on every field except `storageRoot` (index 2). The Ethereum implementation of
+/// `HashMode::write_preimage` always recomputes that field from the current
+/// children, so the on-disk byte difference is invisible in the final hash.
 ///
 /// This is a hashing-equivalence check, not a general account-equality
-/// predicate: it is only valid because `Preimage::write` re-derives
-/// `storageRoot` from the children. Do not call it anywhere that does not
-/// recompute `storageRoot`, or it would treat two different accounts as equal.
+/// predicate: it is only valid because the Ethereum implementation of
+/// `HashMode::write_preimage` re-derives `storageRoot` from the children. Do not
+/// call it anywhere that does not recompute `storageRoot`, or it would treat two
+/// different accounts as equal.
 ///
 /// Logs a warning when either side fails to parse as account RLP. The
 /// resulting `false` return falls through to `on_conflict`, which surfaces

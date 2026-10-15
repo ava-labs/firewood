@@ -49,7 +49,7 @@ mod u4;
 /// Logger module for handling logging functionality
 pub mod logger;
 
-/// Ethereum MPT path encoding primitives shared by the ethhash hasher and the
+/// Ethereum MPT path encoding primitives shared by the Ethereum hasher and the
 /// `eth_getProof`-compatible proof emitter.
 pub mod eth_encoding;
 
@@ -69,7 +69,6 @@ pub use checker::DBStats;
 pub use checker::FreeListsStats;
 pub use checker::TrieStats;
 pub use hashednode::Hashable;
-pub use hashednode::Preimage;
 pub use hashednode::ValueDigest;
 pub use hashednode::hash_node;
 pub use hashednode::hash_preimage;
@@ -450,8 +449,8 @@ pub enum CheckerError {
         "The node {key:#x} at {address:#x} (parent: {parent:#x}) has a value but its path is not 32 or 64 bytes long"
     )]
     /// A value is found corresponding to an invalid key.
-    /// With ethhash, keys must be 32 or 64 bytes long.
-    /// Without ethhash, keys cannot contain half-bytes (i.e., odd number of nibbles).
+    /// Under Ethereum hashing, keys must be 32 or 64 bytes long.
+    /// Under MerkleDB hashing, keys cannot contain half-bytes (i.e., odd number of nibbles).
     InvalidKey {
         /// The key found, or equivalently the path of the node that stores the value
         key: Path,

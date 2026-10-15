@@ -21,8 +21,8 @@
 //! inline-extension override both fall through naturally and the emitter
 //! produces vanilla MPT-RLP for every node.
 //!
-//! The bulk of the encoding mirrors [`firewood_storage::Preimage`] for the
-//! ethhash hasher (see `storage/src/hashers/ethhash.rs`). Where the hasher
+//! The bulk of the Ethereum-specific encoding mirrors [`firewood_storage::HashMode::write_preimage`]
+//! (see `storage/src/hashers/ethhash.rs`). Where the hasher
 //! collapses encoded bytes into a hash, this module keeps the bytes so a
 //! verifier can walk them.
 
