@@ -1336,6 +1336,35 @@ fn assert_converges(
 }
 
 #[test]
+fn fold_through_sibling_account_sharing_63_nibbles() {
+    // Two accounts whose keys differ only in the last nibble, so they share a
+    // branch at depth 63. Target A has one slot and local A has two: the shared
+    // slot reads Synced, the extra slot Surplus, and nothing Stale.
+    let mut sibling = ACCOUNT_A;
+    sibling[31] = 0x12;
+    let mut target = account_with_slots(&[0x10]);
+    target.insert(sibling.to_vec(), account(1, 0xBB));
+    let mut local = account_with_slots(&[0x10, 0x20]);
+    local.insert(sibling.to_vec(), account(1, 0xBB));
+    let holes = assert_converges(&target, &local, Some(&ACCOUNT_A), Some(&ACCOUNT_A));
+
+    let labels = spans(&holes);
+    assert!(
+        labels
+            .iter()
+            .any(|(l, p)| *l == "Synced" && p.ends_with(&[0x1])),
+        "{holes:?}"
+    );
+    assert!(
+        labels
+            .iter()
+            .any(|(l, p)| *l == "Surplus" && p.ends_with(&[0x2])),
+        "{holes:?}"
+    );
+    assert!(!labels.iter().any(|(l, _)| *l == "Stale"), "{holes:?}");
+}
+
+#[test]
 fn fold_target_one_child_local_two() {
     // The target stores slot 1 folded, the local trie stores it unfolded
     // beside a surplus slot 2. Identical content under slot 1 is Synced, not

@@ -361,9 +361,12 @@ impl<'a, H: HashMode, T: HashedNodeReader> Walk<'a, H, T> {
     /// convention under which to compare its slots, when the boundary node at
     /// `depth` is an account branch and the local trie holds an account
     /// branch at the same position whose storage-child count straddles one
-    /// against the target's `target_count`. Returns `None` in every other
-    /// case, including a local trie with no branch exactly at that depth,
-    /// where the ordinary probe is already right.
+    /// against the target's `target_count`. The local branch is found whether
+    /// the probe lands on it or on the child edge of a branch at depth 63,
+    /// which is where a sibling account sharing the first 63 nibbles puts it.
+    /// Returns `None` in every other case, including a local trie with no
+    /// branch exactly at that depth, where the ordinary probe is already
+    /// right.
     fn straddle(
         &self,
         boundary: &[PathComponent],
@@ -376,8 +379,29 @@ impl<'a, H: HashMode, T: HashedNodeReader> Walk<'a, H, T> {
         let Some(prefix) = boundary.get(..depth) else {
             return Ok(None);
         };
-        let ProbeOutcome::AtNode { node, consumed } = descend_to_prefix(self.view, prefix)? else {
-            return Ok(None);
+        let (node, consumed) = match descend_to_prefix(self.view, prefix)? {
+            ProbeOutcome::AtNode { node, consumed } => (node, consumed),
+            // The position is a child edge of a branch at depth 63: the child
+            // is the local node at the account's position, with none of its
+            // partial path above it.
+            ProbeOutcome::EdgeExact(_) => {
+                let Some((&slot, parent)) = prefix.split_last() else {
+                    return Ok(None);
+                };
+                let ProbeOutcome::AtNode { node: parent, .. } =
+                    descend_to_prefix(self.view, parent)?
+                else {
+                    return Ok(None);
+                };
+                let Node::Branch(branch) = &*parent else {
+                    return Ok(None);
+                };
+                let Some(child) = &branch.children[slot] else {
+                    return Ok(None);
+                };
+                (self.load_child(child)?, 0)
+            }
+            ProbeOutcome::Empty | ProbeOutcome::UnhashedChild => return Ok(None),
         };
         let Node::Branch(branch) = &*node else {
             return Ok(None);
@@ -396,6 +420,20 @@ impl<'a, H: HashMode, T: HashedNodeReader> Walk<'a, H, T> {
         }))
     }
 
+    /// The node behind a hashed child slot. A child held in memory without a
+    /// hash is an error here as everywhere else in the walk.
+    fn load_child(&self, child: &Child) -> Result<SharedNode, api::Error> {
+        match child {
+            Child::Node(_) => Err(api::Error::UnhashedView {
+                reason: "a child on the account's path is held in memory without a hash",
+            }),
+            Child::AddressWithHash(address, _) => Ok(self.view.read_node(*address)?),
+            Child::MaybePersisted(maybe_persisted, _) => {
+                Ok(maybe_persisted.as_shared_node(self.view)?)
+            }
+        }
+    }
+
     /// The hash of the local storage child `child` in slot `n` of the account
     /// branch, under the target's convention: folded as a standalone
     /// storage-trie root when the target account has exactly one storage
@@ -407,17 +445,7 @@ impl<'a, H: HashMode, T: HashedNodeReader> Walk<'a, H, T> {
         child: &Child,
         target_folded: bool,
     ) -> Result<HashType, api::Error> {
-        let node: SharedNode = match child {
-            Child::Node(_) => {
-                return Err(api::Error::UnhashedView {
-                    reason: "the account's storage child is held in memory without a hash",
-                });
-            }
-            Child::AddressWithHash(address, _) => self.view.read_node(*address)?,
-            Child::MaybePersisted(maybe_persisted, _) => {
-                maybe_persisted.as_shared_node(self.view)?
-            }
-        };
+        let node = self.load_child(child)?;
         let (value_digest, children) = hashable_parts(&node)?;
         let partial = node.partial_path().as_components();
         if target_folded {
