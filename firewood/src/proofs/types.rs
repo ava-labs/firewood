@@ -233,9 +233,6 @@ pub enum ProofError {
     #[error("the requested end key is less than the last key in the range proof")]
     RangeProofEndBeforeLastKey,
 
-    #[error("the proof is None as it has been consumed")]
-    ProofIsNone,
-
     // ── Range proof verification variants (from main) ──
     /// Key-value pair is outside the requested range
     #[error("key-value pair is outside the requested range")]
