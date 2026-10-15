@@ -191,10 +191,6 @@ pub enum ProofError {
     #[error("empty range")]
     EmptyRange,
 
-    /// The proof has not yet been verified.
-    #[error("the proof has not yet been verified")]
-    Unverified,
-
     /// Invalid Ethereum account value format
     #[error("invalid Ethereum account value format: {source}")]
     InvalidAccountValueFormat {
