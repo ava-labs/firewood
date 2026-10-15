@@ -5,7 +5,9 @@ use std::num::NonZeroU64;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use firewood::Hole;
 use firewood::VerifiedChangeProof;
+use firewood::VerifiedRangeProof;
 use firewood::api;
 use firewood::api::ArcDynDbView;
 use firewood::api::DynDb;
@@ -283,26 +285,10 @@ impl DatabaseHandle {
         self.db.view(root)
     }
 
-    pub(crate) fn merge_key_value_range(
-        &self,
-        first_key: Option<impl KeyType>,
-        last_key: Option<impl KeyType>,
-        key_values: impl IntoIterator<Item: api::KeyValuePair>,
-    ) -> Result<CreateProposalResult<'_>, api::Error> {
-        let first_key = first_key.map(|k| k.as_ref().to_vec());
-        let last_key = last_key.map(|k| k.as_ref().to_vec());
-        let key_values: api::OwnedKeyValuePairs = key_values
-            .into_iter()
-            .map(|pair| {
-                let (key, value) = api::KeyValuePair::try_into_tuple(pair)
-                    .map_err(|e| api::Error::from(e.into()))?;
-                Ok::<_, api::Error>((key.as_ref().into(), value.as_ref().into()))
-            })
-            .collect::<Result<_, api::Error>>()?;
-        CreateProposalResult::new(self, || {
-            self.db
-                .merge_key_value_range(first_key.as_deref(), last_key.as_deref(), key_values)
-        })
+    /// An opaque handle to the latest committed revision, needing no root
+    /// hash; see [`DynDb::current_committed_view`].
+    pub(crate) fn current_committed_view(&self) -> CommittedView {
+        self.db.current_committed_view()
     }
 
     /// Create a Change Proof between two revisions specified by the start and end hash.
@@ -318,6 +304,22 @@ impl DatabaseHandle {
     ) -> Result<FrozenChangeProof, api::Error> {
         self.db
             .change_proof(start_hash, end_hash, start_key, end_key, limit)
+    }
+
+    /// Apply a verified range proof to the latest revision, with the local
+    /// remedies its boundary proofs justify, and return the proposal together
+    /// with the walk's labels. See [`DynDb::apply_verified_range_proof`].
+    ///
+    /// # Errors
+    ///
+    /// A hash-mode mismatch between the proof and this database, or any
+    /// error from the walk or from building the proposal.
+    pub fn apply_verified_range_proof(
+        &self,
+        verified: &VerifiedRangeProof,
+    ) -> Result<(CreateProposalResult<'_>, Vec<Hole>), api::Error> {
+        let (proposal, holes) = self.db.apply_verified_range_proof(verified)?;
+        Ok((CreateProposalResult::new(self, || Ok(proposal))?, holes))
     }
 
     /// Apply an already verified change proof to the latest revision and
