@@ -28,9 +28,12 @@ typedef enum NodeHashAlgorithm {
 } NodeHashAlgorithm;
 
 /**
- * FFI context for a parsed or generated change proof. The proof is borrowed
- * (not consumed) during verification via `fwd_db_verify_change_proof`, so it
- * remains available for serialization and `find_next_key` afterward.
+ * FFI context for a parsed or generated change proof.
+ *
+ * Holds no database reference and borrows nothing, so it is portable:
+ * serialize it with [`fwd_change_proof_to_bytes`] or check it against a
+ * database with [`fwd_db_verify_change_proof`], which produces a
+ * [`VerifiedChangeProofContext`] and leaves this context usable.
  */
 typedef struct ChangeProofContext ChangeProofContext;
 
@@ -67,6 +70,15 @@ typedef struct RangeProofContext RangeProofContext;
 typedef struct ReconstructedHandle ReconstructedHandle;
 
 typedef struct RevisionHandle RevisionHandle;
+
+/**
+ * FFI context for a change proof verified against one database.
+ *
+ * Owns the proposal that applies the proof and records the constraints it
+ * was verified with, so a commit can rebuild the proposal and
+ * `next_key_ranges` can resume from the verified `end_key`.
+ */
+typedef struct VerifiedChangeProofContext VerifiedChangeProofContext;
 
 /**
  * A database hash key, used in FFI functions that require hashes.
@@ -657,9 +669,10 @@ enum ChangeProofResult_Tag
   /**
    * The proof was successfully created or parsed.
    *
-   * If the value was parsed from a serialized proof, this does not imply that
-   * the proof is valid, only that it is well-formed. The verify method must
-   * be called to ensure the proof is cryptographically valid.
+   * A parsed proof is well-formed, not yet valid: pass it to
+   * [`fwd_db_verify_change_proof`] to check it against a database.
+   *
+   * [`fwd_db_verify_change_proof`]: crate::fwd_db_verify_change_proof
    */
   ChangeProofResult_Ok,
   /**
@@ -702,14 +715,14 @@ typedef struct ChangeProofResult {
  */
 typedef struct CreateChangeProofArgs {
   /**
-   * The root hash of the starting revision. This must be provided.
-   * If the root is not found in the database, the function will return
+   * The root hash of the starting revision. If [`fwd_db_change_proof`]
+   * does not find it in the database, it returns
    * [`ChangeProofResult::StartRevisionNotFound`].
    */
   struct HashKey start_root;
   /**
-   * The root hash of the ending revision. This must be provided.
-   * If the root is not found in the database, the function will return
+   * The root hash of the ending revision. If [`fwd_db_change_proof`] does
+   * not find it in the database, it returns
    * [`ChangeProofResult::EndRevisionNotFound`].
    */
   struct HashKey end_root;
@@ -871,25 +884,29 @@ typedef struct VerifyRangeProofArgs {
 } VerifyRangeProofArgs;
 
 /**
- * A result type returned from FFI functions that create a proposal but do not
- * commit it to the database.
+ * A result type returned from [`fwd_db_verify_change_proof`].
+ *
+ * The caller must ensure that [`fwd_free_verified_change_proof`] is called to
+ * free the returned context when it is no longer needed.
+ *
+ * [`fwd_db_verify_change_proof`]: crate::fwd_db_verify_change_proof
+ * [`fwd_free_verified_change_proof`]: crate::fwd_free_verified_change_proof
  */
-enum ProposalResult_Tag
+enum VerifiedChangeProofResult_Tag
 #if __STDC_VERSION__ >= 202311L
   : size_t
 #endif // __STDC_VERSION__ >= 202311L
  {
   /**
-   * The caller provided a null pointer to a database handle.
+   * The caller provided a null pointer to the database or the proof.
    */
-  ProposalResult_NullHandlePointer,
+  VerifiedChangeProofResult_NullHandlePointer,
   /**
-   * Buulding the proposal was successful and the proposal ID and root hash
-   * are returned.
+   * The proof was verified and its proposal prepared.
    */
-  ProposalResult_Ok,
+  VerifiedChangeProofResult_Ok,
   /**
-   * An error occurred and the message is returned as an [`OwnedBytes`]. If
+   * An error occurred and the message is returned as an [`OwnedBytes`]. Its
    * value is guaranteed to contain only valid UTF-8.
    *
    * The caller must call [`fwd_free_owned_bytes`] to free the memory
@@ -897,39 +914,54 @@ enum ProposalResult_Tag
    *
    * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
    */
-  ProposalResult_Err,
+  VerifiedChangeProofResult_Err,
 };
 #if __STDC_VERSION__ >= 202311L
-typedef enum ProposalResult_Tag ProposalResult_Tag;
+typedef enum VerifiedChangeProofResult_Tag VerifiedChangeProofResult_Tag;
 #else
-typedef size_t ProposalResult_Tag;
+typedef size_t VerifiedChangeProofResult_Tag;
 #endif // __STDC_VERSION__ >= 202311L
 
-typedef struct ProposalResult_Ok_Body {
-  /**
-   * An opaque pointer to the [`ProposalHandle`] that can be use to create
-   * an additional proposal or later commit. The caller must ensure that this
-   * pointer is freed with [`fwd_free_proposal`] if it is not committed.
-   *
-   * [`fwd_free_proposal`]: crate::fwd_free_proposal
-   */
-  struct ProposalHandle *handle;
-  /**
-   * The root hash of the proposal. Zeroed if the proposal resulted in an
-   * empty database.
-   */
-  struct HashKey root_hash;
-} ProposalResult_Ok_Body;
-
-typedef struct ProposalResult {
-  ProposalResult_Tag tag;
+typedef struct VerifiedChangeProofResult {
+  VerifiedChangeProofResult_Tag tag;
   union {
-    ProposalResult_Ok_Body ok;
+    struct {
+      struct VerifiedChangeProofContext *ok;
+    };
     struct {
       OwnedBytes err;
     };
   };
-} ProposalResult;
+} VerifiedChangeProofResult;
+
+/**
+ * Arguments for verifying a change proof.
+ *
+ * The proof is applied to the database's latest revision, so there is no
+ * start root to name; the applied result is checked against `end_root`.
+ */
+typedef struct VerifyChangeProofArgs {
+  /**
+   * The root hash the applied proof must reproduce across the verified
+   * range. It is not looked up in the database.
+   */
+  struct HashKey end_root;
+  /**
+   * The lower bound of the key range the proof is expected to cover. If
+   * `None`, the proof is expected to cover from the start of the keyspace.
+   */
+  struct Maybe_BorrowedBytes start_key;
+  /**
+   * The upper bound of the key range the proof is expected to cover. If
+   * `None`, the proof is expected to cover to the end of the keyspace.
+   */
+  struct Maybe_BorrowedBytes end_key;
+  /**
+   * The maximum number of operations the proof may carry. If `0`, there is
+   * no limit.
+   */
+  uint32_t max_length;
+} VerifyChangeProofArgs;
 
 /**
  * A Rust-owned vector of bytes that can be passed to C code.
@@ -1104,6 +1136,17 @@ typedef struct BorrowedSlice_BorrowedBytes {
  * [`fwd_eth_get_proof`]: crate::fwd_eth_get_proof
  */
 typedef struct BorrowedSlice_BorrowedBytes BorrowedBytes2D;
+
+/**
+ * A Rust-owned vector of bytes that can be passed to C code.
+ *
+ * C callers must free this memory using the respective FFI function for the
+ * concrete type (but not using the `free` function from the C standard library).
+ */
+typedef struct OwnedSlice_NextKeyRange {
+  struct NextKeyRange *ptr;
+  size_t len;
+} OwnedSlice_NextKeyRange;
 
 /**
  * Owned version of `KeyValuePair`, returned to ffi callers.
@@ -1745,6 +1788,67 @@ typedef struct DatabaseHandleArgs {
 } DatabaseHandleArgs;
 
 /**
+ * A result type returned from FFI functions that create a proposal but do not
+ * commit it to the database.
+ */
+enum ProposalResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  /**
+   * The caller provided a null pointer to a database handle.
+   */
+  ProposalResult_NullHandlePointer,
+  /**
+   * Buulding the proposal was successful and the proposal ID and root hash
+   * are returned.
+   */
+  ProposalResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. If
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  ProposalResult_Err,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum ProposalResult_Tag ProposalResult_Tag;
+#else
+typedef size_t ProposalResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
+
+typedef struct ProposalResult_Ok_Body {
+  /**
+   * An opaque pointer to the [`ProposalHandle`] that can be use to create
+   * an additional proposal or later commit. The caller must ensure that this
+   * pointer is freed with [`fwd_free_proposal`] if it is not committed.
+   *
+   * [`fwd_free_proposal`]: crate::fwd_free_proposal
+   */
+  struct ProposalHandle *handle;
+  /**
+   * The root hash of the proposal. Zeroed if the proposal resulted in an
+   * empty database.
+   */
+  struct HashKey root_hash;
+} ProposalResult_Ok_Body;
+
+typedef struct ProposalResult {
+  ProposalResult_Tag tag;
+  union {
+    ProposalResult_Ok_Body ok;
+    struct {
+      OwnedBytes err;
+    };
+  };
+} ProposalResult;
+
+/**
  * Arguments for initializing logging for the Firewood FFI.
  */
 typedef struct LogArgs {
@@ -1765,6 +1869,57 @@ typedef struct LogArgs {
    */
   BorrowedBytes filter_level;
 } LogArgs;
+
+/**
+ * A result type returned from the `next_key_ranges` functions of verified
+ * proofs.
+ */
+enum NextKeyRangesResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  /**
+   * The caller provided a null pointer to the input handle.
+   */
+  NextKeyRangesResult_NullHandlePointer,
+  /**
+   * The key ranges still to fetch, sorted ascending by start key. Empty when
+   * the proof's range is fully accounted for.
+   *
+   * The caller must call [`fwd_free_next_key_ranges`] to free this value.
+   *
+   * [`fwd_free_next_key_ranges`]: crate::fwd_free_next_key_ranges
+   */
+  NextKeyRangesResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. Its
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  NextKeyRangesResult_Err,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum NextKeyRangesResult_Tag NextKeyRangesResult_Tag;
+#else
+typedef size_t NextKeyRangesResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
+
+typedef struct NextKeyRangesResult {
+  NextKeyRangesResult_Tag tag;
+  union {
+    struct {
+      struct OwnedSlice_NextKeyRange ok;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} NextKeyRangesResult;
 
 /**
  * Puts the given key-value pairs into the database.
@@ -1849,12 +2004,7 @@ struct NextKeyRangeResult fwd_change_proof_find_next_key(const struct ChangeProo
                                                          struct Maybe_BorrowedBytes end_key);
 
 /**
- * Serialize a `ChangeProof` to bytes.
- *
- * # Arguments
- *
- * - `proof` - A [`ChangeProofContext`] previously returned from the create
- *   method.
+ * Serialize a change proof to bytes.
  *
  * # Returns
  *
@@ -2054,8 +2204,7 @@ struct ChangeProofResult fwd_db_change_proof(const struct DatabaseHandle *db,
  * - [`ChangeProofResult::NullHandlePointer`] if the caller provided a null database pointer.
  * - [`ChangeProofResult::Ok`] containing a pointer to the `ChangeProofContext` if the proof
  *   was successfully parsed. This does not imply that the proof is valid, only that it is
- *   well-formed and uses `db`'s hash mode. Use [`fwd_db_verify_change_proof`] or
- *   [`fwd_db_verify_and_commit_change_proof`] to verify the proof.
+ *   well-formed and uses `db`'s hash mode. Call [`fwd_db_verify_change_proof`] to check it.
  * - [`ChangeProofResult::Err`] containing an error message if the proof could not be parsed
  *   or its hash mode does not match `db`'s.
  */
@@ -2187,25 +2336,28 @@ struct HashResult fwd_db_verify_and_commit_range_proof(const struct DatabaseHand
                                                        struct VerifyRangeProofArgs args);
 
 /**
- * Verify a change proof and create a standard proposal.
+ * Verify a change proof against `db` and prepare the proposal that applies it.
  *
- * Performs structural validation, applies batch ops to the latest
- * revision, and verifies the root hash against `end_root`. The proof is
- * borrowed, not consumed — the caller retains it for `find_next_key` or
- * serialization.
+ * Performs structural validation, applies the batch operations to the latest
+ * revision, and verifies the result against `args.end_root`. The input proof
+ * is borrowed, not consumed.
  *
  * # Returns
  *
- * - `ProposalResult::NullHandlePointer` if the caller provided a null
+ * - [`VerifiedChangeProofResult::NullHandlePointer`] if the caller provided a null
  *   pointer to either the database or the proof.
- * - `ProposalResult::Ok` if verification succeeded and a proposal was
- *   created.
- * - `ProposalResult::Err` containing an error message if verification
- *   failed.
+ * - [`VerifiedChangeProofResult::Ok`] containing a pointer to the
+ *   [`VerifiedChangeProofContext`] if verification succeeded.
+ * - [`VerifiedChangeProofResult::Err`] containing an error message if verification failed.
+ *
+ * # Thread Safety
+ *
+ * The proof context is read, not mutated; concurrent calls on the same proof
+ * are safe provided none of them frees it.
  */
-struct ProposalResult fwd_db_verify_change_proof(const struct DatabaseHandle *db,
-                                                 const struct ChangeProofContext *proof,
-                                                 struct CreateChangeProofArgs args);
+struct VerifiedChangeProofResult fwd_db_verify_change_proof(const struct DatabaseHandle *db,
+                                                            const struct ChangeProofContext *proof,
+                                                            struct VerifyChangeProofArgs args);
 
 /**
  * Verify a range proof and prepare a proposal to later commit or drop. If the
@@ -2296,10 +2448,6 @@ struct EthProofResult fwd_eth_get_proof_on_reconstructed(const struct Reconstruc
 /**
  * Frees the memory associated with a `ChangeProofContext`.
  *
- * # Arguments
- *
- * * `proof` - The `ChangeProofContext` to free, previously returned from any Rust function.
- *
  * # Returns
  *
  * - [`VoidResult::Ok`] if the memory was successfully freed.
@@ -2342,6 +2490,17 @@ struct VoidResult fwd_free_eth_proof(struct EthProofOwned *proof);
  * a valid [`IteratorHandle`] previously returned by a function from this library.
  */
 struct VoidResult fwd_free_iterator(struct IteratorHandle *iterator);
+
+/**
+ * Frees a list of key ranges returned by a `next_key_ranges` function,
+ * including every key it holds.
+ *
+ * # Returns
+ *
+ * - [`VoidResult::Ok`] if the memory was successfully freed.
+ * - [`VoidResult::Err`] if the process panics while freeing the memory.
+ */
+struct VoidResult fwd_free_next_key_ranges(struct OwnedSlice_NextKeyRange ranges);
 
 /**
  * Consumes the [`OwnedBytes`] and frees the memory associated with it.
@@ -2505,6 +2664,17 @@ struct VoidResult fwd_free_rendered_metrics(OwnedRenderedMetrics metrics);
  * this function is called.
  */
 struct VoidResult fwd_free_revision(struct RevisionHandle *revision);
+
+/**
+ * Frees the memory associated with a `VerifiedChangeProofContext`, dropping
+ * its proposal if it was not committed.
+ *
+ * # Returns
+ *
+ * - [`VoidResult::Ok`] if the memory was successfully freed.
+ * - [`VoidResult::Err`] if the process panics while freeing the memory.
+ */
+struct VoidResult fwd_free_verified_change_proof(struct VerifiedChangeProofContext *proof);
 
 /**
  * Gather latest metrics for this process as structured data.
@@ -3168,3 +3338,57 @@ struct VoidResult fwd_start_logs(struct LogArgs args);
  * - [`VoidResult::Err`] if an error occurs during initialization.
  */
 struct VoidResult fwd_start_metrics(void);
+
+/**
+ * Returns an iterator over the code hashes contained in a verified change
+ * proof. Only `BatchOp::Put` entries contribute code hashes; `Delete` and
+ * `DeleteRange` entries are skipped. The iterator borrows the proof and must
+ * be freed with [`fwd_code_hash_iter_free`] before the proof is.
+ *
+ * # Returns
+ *
+ * - [`CodeIteratorResult::NullHandlePointer`] if the caller provided a null pointer.
+ * - [`CodeIteratorResult::Ok`] containing a pointer to the `CodeIteratorHandle` if successful.
+ * - [`CodeIteratorResult::Err`] containing an error message if the iterator could not be
+ *   created, including when the proof is not an Ethereum-mode proof.
+ *
+ * [`fwd_code_hash_iter_free`]: crate::fwd_code_hash_iter_free
+ */
+struct CodeIteratorResult fwd_verified_change_proof_code_hash_iter(const struct VerifiedChangeProofContext *proof);
+
+/**
+ * Commit a verified change proof to its database.
+ *
+ * If the database advanced since verification, the proof is verified again
+ * against the latest revision and committed from there, so the proven range
+ * is checked against the verified end root on the state it lands on. A
+ * proposal consumed by a failed commit is rebuilt on the next call. After a
+ * successful commit the root is cached, and later calls return it without
+ * touching the database. The context stays usable afterwards.
+ *
+ * # Returns
+ *
+ * - [`HashResult::NullHandlePointer`] if the caller provided a null pointer.
+ * - [`HashResult::None`] if the trie has no root hash (MerkleDB mode only;
+ *   Ethereum mode always returns a root hash, even for an empty trie).
+ * - [`HashResult::Some`] containing the new root hash.
+ * - [`HashResult::Err`] if the commit failed.
+ *
+ * # Thread Safety
+ *
+ * Takes the context mutably: the caller must ensure exclusive access for the
+ * duration of the call.
+ */
+struct HashResult fwd_verified_change_proof_commit(struct VerifiedChangeProofContext *proof);
+
+/**
+ * Returns the key ranges still to fetch after this change proof.
+ *
+ * # Returns
+ *
+ * - [`NextKeyRangesResult::NullHandlePointer`] if the caller provided a null pointer.
+ * - [`NextKeyRangesResult::Ok`] containing the ranges; empty when nothing remains. The
+ *   caller frees it with [`fwd_free_next_key_ranges`].
+ * - [`NextKeyRangesResult::Err`] containing an error message.
+ */
+struct NextKeyRangesResult fwd_verified_change_proof_next_key_ranges(const struct VerifiedChangeProofContext *proof);
