@@ -172,11 +172,13 @@ impl<'db> VerifiedChangeProofContext<'db> {
     }
 }
 
-/// A key range still to fetch after a truncated range or change proof,
-/// `[start_key, end_key]`, both inclusive: `start_key` is the smallest key
-/// above the last one already synchronized, so passing it as the next
-/// request's start bound resumes without covering that key again. An absent
-/// `end_key` means the range is unbounded above.
+/// A key range still to fetch after a range or change proof, `[start_key,
+/// end_key]`, both inclusive. An absent `end_key` means the range is
+/// unbounded above. [`fwd_verified_range_proof_next_key_ranges`] and
+/// [`fwd_verified_change_proof_next_key_ranges`] document how each proof
+/// derives its ranges.
+///
+/// [`fwd_verified_range_proof_next_key_ranges`]: crate::fwd_verified_range_proof_next_key_ranges
 #[derive(Debug)]
 #[repr(C)]
 pub struct NextKeyRange {

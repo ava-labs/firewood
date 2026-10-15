@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"runtime"
+	"slices"
 	"sync"
 	"testing"
 
@@ -410,22 +411,218 @@ func TestRangeProofNextKeyRangesDivergentReceiver(t *testing.T) {
 	}
 
 	// The truncated proof only proved a prefix, and dbTarget started with
-	// none of the data, so there is genuinely more to fetch.
+	// none of the data, so there is genuinely more to fetch: everything the
+	// end proof's sibling hashes commit to above the last proven key, which
+	// the walk reports as sorted, non-overlapping ranges past that key.
 	ranges, err := verified.NextKeyRanges()
 	r.NoError(err)
-	r.Len(ranges, 1)
-	r.False(ranges[0].EndKey.HasValue(), "the request was unbounded above")
+	r.NotEmpty(ranges)
+	lastProven := keys[rangeProofLenTruncated-1]
+	assertRangesWellFormed(t, ranges, lastProven)
+
+	// The keys are Go-owned, so a later call cannot overwrite them. The flip
+	// is undone so the sync below resumes from the real key.
+	want := bytes.Clone(ranges[0].StartKey)
+	ranges[0].StartKey[0] ^= 0xFF
+	_, err = verified.NextKeyRanges()
+	r.NoError(err)
+	ranges[0].StartKey[0] ^= 0xFF
+	r.Equal(want, ranges[0].StartKey, "a later NextKeyRanges call overwrote a returned key")
 
 	// The next request resumes after the last proven key without skipping the
-	// first unproven one. The keys are Go-owned, so they outlive the proof.
+	// first unproven one, and the keys outlive the proof.
 	r.NoError(verified.Drop())
 	r.NoError(proof.Drop())
 	r.Positive(bytes.Compare(ranges[0].StartKey, keys[rangeProofLenTruncated-1]), "start key repeats a proven key")
 	r.LessOrEqual(bytes.Compare(ranges[0].StartKey, keys[rangeProofLenTruncated]), 0, "start key skips an unproven key")
+
+	// Following the ranges brings dbTarget to the source's root.
+	syncUntilCaughtUp(t, dbSource, dbTarget, sourceRoot, ranges)
+}
+
+// assertRangesWellFormed checks that ranges are sorted, non-overlapping, and
+// all strictly above lastProven.
+func assertRangesWellFormed(t *testing.T, ranges []NextKeyRange, lastProven []byte) {
+	t.Helper()
+	r := require.New(t)
+	prevEnd := lastProven
+	for i, rg := range ranges {
+		r.Positive(bytes.Compare(rg.StartKey, prevEnd), "range %d starts at or below the previous bound", i)
+		if rg.EndKey.HasValue() {
+			r.Negative(bytes.Compare(rg.StartKey, rg.EndKey.Value()), "range %d is inverted", i)
+			prevEnd = rg.EndKey.Value()
+		} else {
+			r.Equal(len(ranges)-1, i, "an unbounded range must be the last")
+		}
+	}
+}
+
+// syncUntilCaughtUp follows NextKeyRanges the way a sync loop does: fetch the
+// first range from src at root, verify and commit it on dst, read the ranges
+// the committed proof reports, and repeat until nothing remains. Asserts dst
+// ends at root.
+func syncUntilCaughtUp(t *testing.T, src, dst *Database, root Hash, ranges []NextKeyRange) {
+	t.Helper()
+	r := require.New(t)
+	const maxSyncRounds = 100
+	for range maxSyncRounds {
+		if len(ranges) == 0 {
+			break
+		}
+		next := ranges[0]
+		end := nothing()
+		if next.EndKey.HasValue() {
+			end = something(next.EndKey.Value())
+		}
+		proof := newRangeProof(t, src, root, something(next.StartKey), end, rangeProofLenUnbounded)
+		proof = transferRangeProof(t, proof, dst)
+		verified := verifyRangeProof(t, proof, root, something(next.StartKey), end, rangeProofLenUnbounded)
+		_, err := verified.Commit()
+		r.NoError(err)
+		ranges, err = verified.NextKeyRanges()
+		r.NoError(err)
+		r.NoError(verified.Drop())
+		r.NoError(proof.Drop())
+	}
+	r.Empty(ranges, "sync did not converge within %d rounds", maxSyncRounds)
+	r.Equal(root, dst.Root(), "dst did not reach the source root")
+}
+
+// TestRangeProofCommitAppliesRemediesOutsideProvenRange checks that committing
+// a truncated proof deletes a surplus key past the proven edge, leaves a stale
+// value there for NextKeyRanges to report, and that the reported ranges match
+// before the commit, after it, and after an unrelated commit.
+func TestRangeProofCommitAppliesRemediesOutsideProvenRange(t *testing.T) {
+	r := require.New(t)
+
+	dbSource := newTestDatabase(t)
+	dbTarget := newTestDatabase(t)
+
+	keys, vals, batch := kvForTest(100)
+	sourceRoot, err := dbSource.Update(batch)
+	r.NoError(err)
+
+	// dbTarget holds dbSource's keys plus two defects past the truncated
+	// proof's edge: a key under a prefix dbSource never uses, which the walk
+	// proves absent from dbSource and the commit therefore deletes, and a
+	// wrong value for an existing key, which the walk can only report as a
+	// range to fetch.
+	const staleIdx = 90
+	r.Greater(staleIdx, rangeProofLenTruncated, "the stale key must lie past the truncated proof's edge")
+	surplus := []byte("zzz-surplus")
+	stale := keys[staleIdx]
+	_, err = dbTarget.Update(batch)
+	r.NoError(err)
+	_, err = dbTarget.Update([]BatchOp{Put(surplus, []byte("gone")), Put(stale, []byte("wrong"))})
+	r.NoError(err)
+
+	proof := newRangeProof(t, dbSource, sourceRoot, nothing(), nothing(), rangeProofLenTruncated)
+	proof = transferRangeProof(t, proof, dbTarget)
+	verified := verifyRangeProof(t, proof, sourceRoot, nothing(), nothing(), rangeProofLenTruncated)
+
+	before, err := verified.NextKeyRanges()
+	r.NoError(err)
+	r.NotEmpty(before)
+	assertRangesWellFormed(t, before, keys[rangeProofLenTruncated-1])
+	r.True(coveredBy(before, stale), "the stale key must lie in a range to fetch: %v", before)
+	r.False(coveredBy(before, surplus), "the surplus key is a local remedy, not a fetch: %v", before)
+
+	_, err = verified.Commit()
+	r.NoError(err)
+
+	got, err := dbTarget.Get(surplus)
+	r.NoError(err)
+	r.Nil(got, "the commit deletes content the target does not hold")
+	got, err = dbTarget.Get(stale)
+	r.NoError(err)
+	r.Equal([]byte("wrong"), got, "a stale value is fetched, not repaired, by the commit")
+
+	after, err := verified.NextKeyRanges()
+	r.NoError(err)
+	r.Equal(before, after, "the ranges describe key space the commit does not touch")
+
+	// An unrelated commit invalidates the cached answer; the walk runs again
+	// against the new revision and finds the same holes plus nothing to
+	// fetch for the new surplus key.
+	_, err = dbTarget.Update([]BatchOp{Put([]byte("zzz-other"), []byte("gone"))})
+	r.NoError(err)
+	again, err := verified.NextKeyRanges()
+	r.NoError(err)
+	r.Equal(before, again)
+
+	r.NoError(verified.Drop())
+	r.NoError(proof.Drop())
+
+	syncUntilCaughtUp(t, dbSource, dbTarget, sourceRoot, again)
+	got, err = dbTarget.Get(stale)
+	r.NoError(err)
+	r.Equal(vals[staleIdx], got, "the sync loop did not fetch the stale key's value")
+	got, err = dbTarget.Get([]byte("zzz-other"))
+	r.NoError(err)
+	r.Nil(got, "the sync loop's commits delete surplus content as they go")
+}
+
+// TestRangeProofNextKeyRangesReachOutsideTheRequest pins that the ranges are
+// not confined to the request's bounds: the boundary proofs speak for the
+// whole key space, so holes below the start key and above the end key are
+// reported too, and following them converges.
+func TestRangeProofNextKeyRangesReachOutsideTheRequest(t *testing.T) {
+	r := require.New(t)
+	src := newTestDatabase(t)
+	dst := newTestDatabase(t)
+
+	keys, _, batch := kvForTest(100)
+	root, err := src.Update(batch)
+	r.NoError(err)
+	// dst lacks one key below the request and one above it.
+	const (
+		missingBelow = 5
+		startIdx     = 20
+		endIdx       = 40
+		missingAbove = 70
+	)
+	partial := make([]BatchOp, 0, len(batch))
+	for i, op := range batch {
+		if i != missingBelow && i != missingAbove {
+			partial = append(partial, op)
+		}
+	}
+	_, err = dst.Update(partial)
+	r.NoError(err)
+
+	start, end := something(keys[startIdx]), something(keys[endIdx])
+	proof := newRangeProof(t, src, root, start, end, rangeProofLenUnbounded)
+	proof = transferRangeProof(t, proof, dst)
+	verified := verifyRangeProof(t, proof, root, start, end, rangeProofLenUnbounded)
+	_, err = verified.Commit()
+	r.NoError(err)
+	ranges, err := verified.NextKeyRanges()
+	r.NoError(err)
+	assertRangesWellFormed(t, ranges, nil)
+	r.True(coveredBy(ranges, keys[missingBelow]), "a hole below the request's start key is reported: %v", ranges)
+	r.True(coveredBy(ranges, keys[missingAbove]), "a hole above the request's end key is reported: %v", ranges)
+	r.NoError(verified.Drop())
+	r.NoError(proof.Drop())
+
+	syncUntilCaughtUp(t, src, dst, root, ranges)
+}
+
+// coveredBy reports whether key lies in one of ranges.
+func coveredBy(ranges []NextKeyRange, key []byte) bool {
+	for _, rg := range ranges {
+		if bytes.Compare(key, rg.StartKey) < 0 {
+			continue
+		}
+		if !rg.EndKey.HasValue() || bytes.Compare(key, rg.EndKey.Value()) <= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // TestRangeProofNextKeyRangesBoundedAbove checks that a truncated proof
-// verified with an end key reports that key as the next range's end.
+// verified with an end key reports ranges, bounded above, that cover every key
+// the proof left unproven.
 func TestRangeProofNextKeyRangesBoundedAbove(t *testing.T) {
 	r := require.New(t)
 
@@ -444,11 +641,15 @@ func TestRangeProofNextKeyRangesBoundedAbove(t *testing.T) {
 	_, err = verified.Commit()
 	r.NoError(err)
 
+	// dbTarget started empty, so every key the proof left unproven, above the
+	// end key included, is still to fetch.
 	ranges, err := verified.NextKeyRanges()
 	r.NoError(err)
-	r.Len(ranges, 1)
-	r.True(ranges[0].EndKey.HasValue(), "the request was bounded above")
-	r.Equal(endKey.Value(), ranges[0].EndKey.Value(), "the next range ends at the verified end key")
+	assertRangesWellFormed(t, ranges, keys[rangeProofLenTruncated-1])
+	r.True(slices.ContainsFunc(ranges, func(rg NextKeyRange) bool { return rg.EndKey.HasValue() }), "no range is bounded above")
+	for i := rangeProofLenTruncated; i < len(keys); i++ {
+		r.True(coveredBy(ranges, keys[i]), "unproven key %d is in no range", i)
+	}
 
 	r.NoError(verified.Drop())
 	r.NoError(proof.Drop())

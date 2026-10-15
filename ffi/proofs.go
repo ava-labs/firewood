@@ -124,10 +124,10 @@ type VerifiedChangeProof struct {
 }
 
 // NextKeyRange is a range of keys still to fetch, `[StartKey, EndKey]`, both
-// inclusive. StartKey is the smallest key above the last one already
-// synchronized, so passing it as the next request's start key resumes without
-// fetching that key again. If EndKey has no value, the range is unbounded
-// above.
+// inclusive; passing StartKey as the next request's start key resumes there.
+// If EndKey has no value, the range is unbounded above.
+// [VerifiedRangeProof.NextKeyRanges] and [VerifiedChangeProof.NextKeyRanges]
+// document how each proof derives its ranges.
 //
 // The keys are Go-owned copies; a NextKeyRange needs no release.
 type NextKeyRange struct {
@@ -179,12 +179,15 @@ func (db *Database) RangeProof(
 // the database the proof belongs to. It reads nothing else from the database;
 // [VerifiedRangeProof.Commit] applies the proof.
 //
-// Applying the proof replaces state across the range the proof proves: any existing
-// key in that range that the proof does not carry is deleted. The range runs
-// from [startKey] to the proof's right edge, which is [endKey] when the
-// responder covered the whole request and a smaller key when it truncated.
-// Keys past that edge are left alone; [VerifiedRangeProof.NextKeyRanges]
-// reports where to resume.
+// Committing the proof brings the database into agreement with the proof's
+// target everywhere the proof speaks. Across the range the proof proves — from
+// [startKey] to the proof's right edge, which is [endKey] when the responder
+// covered the whole request and a smaller key when it truncated — state is
+// replaced: any existing key there that the proof does not carry is deleted.
+// Outside that range the proof's boundary hashes settle some of the key space
+// too: content the target does not hold is deleted, and keys whose target
+// value the proof carries are written. What they cannot settle is what
+// [VerifiedRangeProof.NextKeyRanges] reports as still to fetch.
 //
 // Verify does not consume the proof: it stays usable for [RangeProof.Marshal]
 // or for another Verify with other constraints. Returns an error once the
@@ -221,7 +224,9 @@ func (p *RangeProof) Verify(
 }
 
 // Commit applies the proof to the database and returns the new root hash,
-// which may differ from the verified root when the proof was truncated.
+// which may differ from the verified root when the proof was truncated. It
+// applies the proof as [RangeProof.Verify] describes: the proven range is
+// replaced and the walk's local remedies outside it are written.
 //
 // Commit builds the proposal on the database's latest revision and commits it.
 // If another commit lands while the proposal is built, Commit returns that
@@ -247,13 +252,23 @@ func (p *VerifiedRangeProof) Commit() (Hash, error) {
 }
 
 // NextKeyRanges returns the key ranges still to fetch after this proof, sorted
-// ascending by start key. An empty result means the requested range is fully
-// accounted for: the proof covered it, or the database's root (after Commit,
-// the root that Commit produced) is the verified root.
+// ascending by start key and coalesced where adjacent. The answer describes
+// the database's latest committed revision as of the call (a commit that lands
+// during the call may or may not be reflected): the proof's boundary hashes
+// are compared against it, and every span of key space outside the proven
+// range whose target content the database lacks or holds differently becomes
+// a range. The boundary proofs speak for the whole key space, so ranges are
+// not confined to the request's bounds: they may lie below its start key or
+// above its end key. An empty result means nothing
+// remains to fetch: outside the proven range the database already holds what
+// the target holds, apart from content a commit of this proof deletes or
+// writes.
 //
-// Each range is `[StartKey, EndKey]`; EndKey is the bound the proof was
-// verified with. The result holds at most one range; ava-labs/firewood#352
-// tracks tightening it beyond the last proven key.
+// Each range is `[StartKey, EndKey]`, both inclusive. EndKey covers one key
+// more than strictly needed — the first key of whatever follows the holes —
+// because a span of the key space has no exact inclusive upper bound; a
+// reply over the range rewrites or deletes that key exactly as the target
+// holds it, so the extra key is harmless.
 func (p *VerifiedRangeProof) NextKeyRanges() ([]NextKeyRange, error) {
 	p.lease.mu.RLock()
 	defer p.lease.mu.RUnlock()

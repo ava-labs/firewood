@@ -8,9 +8,9 @@ use firewood::KeyRange;
 use firewood::ProofError;
 use firewood::VerifiedRangeProof;
 use firewood::api;
-use firewood::api::DbView;
 use firewood::api::FrozenRangeProof;
 use firewood::api::HashKey;
+use firewood::fetch_ranges;
 use firewood_metrics::MetricsContext;
 use firewood_metrics::firewood_counter;
 
@@ -124,6 +124,7 @@ impl RangeProofContext {
             db,
             verified,
             proposal_state: ProposalState::Pending,
+            fetch: Vec::new(),
         })
     }
 }
@@ -139,67 +140,76 @@ pub struct VerifiedRangeProofContext<'db> {
     db: &'db DatabaseHandle,
     verified: VerifiedRangeProof,
     proposal_state: ProposalState<'db>,
+    /// The ranges still to fetch, as the walk that built the current proposal
+    /// reported them. The proposal never touches the key space they name, so
+    /// they describe both the revision it was built on and the revision a
+    /// commit of it produces.
+    fetch: Vec<KeyRange>,
 }
 
 impl<'db> VerifiedRangeProofContext<'db> {
     /// Build a proposal on `db`'s latest revision that applies the verified
-    /// proof over the range it proves.
+    /// proof — the proven range by replacement, the key space outside it by
+    /// the local remedies the boundary proofs justify — and return it with
+    /// the ranges still to fetch from the same walk.
     fn propose(
         db: &'db DatabaseHandle,
         verified: &VerifiedRangeProof,
-    ) -> Result<crate::ProposalHandle<'db>, api::Error> {
-        let verification = verified.verification();
-        Ok(db
-            .merge_key_value_range(
-                verification.start_key(),
-                verification.right_edge_key(),
-                verified.proof().key_values(),
-            )?
-            .handle)
+    ) -> Result<(crate::ProposalHandle<'db>, Vec<KeyRange>), api::Error> {
+        let (proposal, holes) = db.apply_verified_range_proof(verified)?;
+        Ok((proposal.handle, fetch_ranges(&holes)))
+    }
+
+    /// Build a fresh proposal on the latest revision and cache its walk's
+    /// ranges in place of the previous proposal's.
+    fn rebuild(&mut self) -> Result<crate::ProposalHandle<'db>, api::Error> {
+        let (proposal, fetch) = Self::propose(self.db, &self.verified)?;
+        self.fetch = fetch;
+        Ok(proposal)
     }
 
     /// Implements [`fwd_verified_range_proof_commit`]; see
     /// [`ProposalState::commit`].
     fn commit(&mut self) -> Result<Option<HashKey>, api::Error> {
         let mut state = std::mem::replace(&mut self.proposal_state, ProposalState::Pending);
-        let result = state.commit(|| Self::propose(self.db, &self.verified));
+        let result = state.commit(|| self.rebuild());
         self.proposal_state = state;
         let hash = result?;
         firewood_counter!(MERGE_COUNT).increment(1);
         Ok(hash)
     }
 
-    /// The key ranges still to fetch after applying this proof, sorted
-    /// ascending by start key; empty when nothing remains.
+    /// The key ranges still to fetch after this proof, sorted ascending by
+    /// start key and coalesced where adjacent; empty when nothing remains.
     ///
-    /// Each range is `[start_key, end_key]`: `start_key` is the smallest key
-    /// above the last one known to be synchronized, and `end_key` is the
-    /// inclusive bound the proof was verified with, which need not match the
-    /// bound it was created with.
+    /// The answer always describes the database's latest committed revision.
+    /// After a commit, while the database's root is still the one that
+    /// commit produced, it is the result of the walk that built the committed
+    /// proposal; otherwise — before any commit, or once something else has
+    /// committed — the walk runs again against the latest revision. When
+    /// that revision's root equals the verification target nothing remains.
     ///
-    /// When the receiver's root already equals the verification target —
-    /// the root the commit produced, or before a commit the database's
-    /// current root — nothing remains and the list is empty.
-    ///
-    /// The proof carries hashes for the state outside its key-value pairs, so
-    /// the start key could be tightened beyond the last key; #352 tracks that.
-    /// Until then the list holds at most one range.
+    /// Each range is `[start_key, end_key]`, both inclusive. `end_key` is the
+    /// exclusive upper bound of the last hole in the range used as an
+    /// inclusive one, so a range covers one key more than strictly needed —
+    /// the first key of whatever follows — which a reply over the range
+    /// rewrites or deletes exactly as the target holds it; an exact
+    /// inclusive bound does not exist for a prefix of the key space.
     fn next_key_ranges(&self) -> Result<Vec<KeyRange>, api::Error> {
-        let root_hash: Option<HashKey> = match &self.proposal_state {
-            ProposalState::Committed(hash) => hash.clone(),
-            ProposalState::Proposed(proposal) => proposal.root_hash(),
-            ProposalState::Pending => self.db.current_root_hash(),
-        };
-        let verification = self.verified.verification();
-        if root_hash.as_ref() == Some(verification.root()) {
+        let current = self.db.current_root_hash();
+        if let ProposalState::Committed(committed) = &self.proposal_state
+            && *committed == current
+        {
+            return Ok(self.fetch.clone());
+        }
+        if current.as_ref() == Some(self.verified.verification().root()) {
             return Ok(Vec::new());
         }
-
-        Ok(
-            firewood::find_next_key_after_range_proof(self.verified.proof(), verification)?
-                .into_iter()
-                .collect(),
-        )
+        let holes = self
+            .db
+            .current_committed_view()
+            .find_holes_after_range_proof(&self.verified)?;
+        Ok(fetch_ranges(&holes))
     }
 
     fn code_hash_iter(&self) -> Result<CodeIteratorHandle<'_>, api::Error> {
@@ -333,14 +343,21 @@ pub extern "C" fn fwd_db_verify_range_proof<'db>(
 
 /// Commit a verified range proof to its database.
 ///
-/// Builds the proposal that applies the proof on the latest revision and
+/// The commit brings the database into agreement with the proof's target
+/// everywhere the proof speaks: the proven range is replaced by the proof's
+/// key-value pairs, and outside it the content the proof's boundary hashes
+/// show the target does not hold is deleted and keys whose target value the
+/// proof carries are written. What the proof cannot settle — key space whose
+/// target content differs and is not in hand — is what
+/// [`fwd_verified_range_proof_next_key_ranges`] reports afterwards.
+///
+/// Builds that proposal on the latest revision, the walk included, and
 /// commits it. If another commit lands while the proposal is built, this
 /// returns the `ParentNotLatest` error and a later call builds again. After a
-/// successful commit the root is cached, and
-/// later calls return it without touching the database. The root may differ
-/// from the verified one when the proof covered less than the full keyspace.
-/// The context stays usable afterwards for
-/// [`fwd_verified_range_proof_next_key_ranges`] and
+/// successful commit the root is cached, and later calls return it without
+/// touching the database. The root may differ from the verified one when the
+/// proof covered less than the full keyspace. The context stays usable
+/// afterwards for [`fwd_verified_range_proof_next_key_ranges`] and
 /// [`fwd_verified_range_proof_code_hash_iter`].
 ///
 /// # Returns
@@ -362,7 +379,15 @@ pub extern "C" fn fwd_verified_range_proof_commit(
     crate::invoke_with_handle(proof, VerifiedRangeProofContext::commit)
 }
 
-/// Returns the key ranges still to fetch after this proof, sorted ascending.
+/// Returns the key ranges still to fetch after this proof, sorted ascending
+/// and coalesced where adjacent. The answer describes the database's latest
+/// committed revision as of the call: the proof's boundary proofs are
+/// compared against it, and every span of key space outside the proven range
+/// whose content the target has and the database lacks or holds differently
+/// becomes a range. The boundary proofs speak for the whole key space, so a
+/// range may lie below the request's start key or above its end key.
+/// Content the database holds that the target does not is not reported
+/// here; committing the proof deletes it.
 ///
 /// # Returns
 ///
