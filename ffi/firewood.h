@@ -79,9 +79,10 @@ typedef struct RevisionHandle RevisionHandle;
 /**
  * FFI context for a change proof verified against one database.
  *
- * Owns the proposal that applies the proof and records the constraints it
- * was verified with, so a commit can rebuild the proposal and
- * `next_key_ranges` can resume from the verified `end_key`.
+ * Owns the proposal that applies the proof. The proof and the constraints
+ * it was verified with travel together as a [`VerifiedChangeProof`], so a
+ * commit can rebuild the proposal and `next_key_ranges` can resume from the
+ * verified `end_key`.
  */
 typedef struct VerifiedChangeProofContext VerifiedChangeProofContext;
 
@@ -90,7 +91,8 @@ typedef struct VerifiedChangeProofContext VerifiedChangeProofContext;
  *
  * Borrows the database for its whole life, since commit builds the proposal
  * there and the code-hash iterator and next key ranges read it: the Go
- * wrapper holds a keep-alive lease for it.
+ * wrapper holds a keep-alive lease for it. The proof and its verification
+ * context travel together as a [`VerifiedRangeProof`].
  */
 typedef struct VerifiedRangeProofContext VerifiedRangeProofContext;
 
@@ -3196,12 +3198,13 @@ struct CodeIteratorResult fwd_verified_change_proof_code_hash_iter(const struct 
 /**
  * Commit a verified change proof to its database.
  *
- * If the database advanced since verification, the proof is verified again
- * against the latest revision and committed from there, so the proven range
- * is checked against the verified end root on the state it lands on. A
- * proposal consumed by a failed commit is rebuilt on the next call. After a
- * successful commit the root is cached, and later calls return it without
- * touching the database. The context stays usable afterwards.
+ * If the database advanced since verification, the proof is applied again
+ * to the latest revision and its root re-checked against the verified end
+ * root before committing, so the proven range is checked on the state it
+ * lands on. The structural pass is not repeated. A proposal consumed by a
+ * failed commit is rebuilt on the next call. After a successful commit the
+ * root is cached, and later calls return it without touching the database.
+ * The context stays usable afterwards.
  *
  * # Returns
  *

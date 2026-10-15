@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use firewood::KeyRange;
 use firewood::ProofError;
-use firewood::RangeProofVerificationContext;
+use firewood::VerifiedRangeProof;
 use firewood::api;
 use firewood::api::DbView;
 use firewood::api::FrozenRangeProof;
@@ -112,8 +112,8 @@ impl RangeProofContext {
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
     ) -> Result<VerifiedRangeProofContext<'db>, api::Error> {
-        let verification = firewood::verify_range_proof_structure(
-            &self.proof,
+        let verified = VerifiedRangeProof::verify(
+            Arc::clone(&self.proof),
             root,
             start_key,
             end_key,
@@ -122,8 +122,7 @@ impl RangeProofContext {
         )?;
         Ok(VerifiedRangeProofContext {
             db,
-            proof: Arc::clone(&self.proof),
-            verification,
+            verified,
             proposal_state: ProposalState::Pending,
         })
     }
@@ -133,28 +132,28 @@ impl RangeProofContext {
 ///
 /// Borrows the database for its whole life, since commit builds the proposal
 /// there and the code-hash iterator and next key ranges read it: the Go
-/// wrapper holds a keep-alive lease for it.
+/// wrapper holds a keep-alive lease for it. The proof and its verification
+/// context travel together as a [`VerifiedRangeProof`].
 #[derive(Debug)]
 pub struct VerifiedRangeProofContext<'db> {
     db: &'db DatabaseHandle,
-    proof: Arc<FrozenRangeProof>,
-    verification: RangeProofVerificationContext,
+    verified: VerifiedRangeProof,
     proposal_state: ProposalState<'db>,
 }
 
 impl<'db> VerifiedRangeProofContext<'db> {
-    /// Build a proposal on `db`'s latest revision that applies `proof` over the
-    /// range `verification` proves.
+    /// Build a proposal on `db`'s latest revision that applies the verified
+    /// proof over the range it proves.
     fn propose(
         db: &'db DatabaseHandle,
-        verification: &RangeProofVerificationContext,
-        proof: &FrozenRangeProof,
+        verified: &VerifiedRangeProof,
     ) -> Result<crate::ProposalHandle<'db>, api::Error> {
+        let verification = verified.verification();
         Ok(db
             .merge_key_value_range(
                 verification.start_key(),
                 verification.right_edge_key(),
-                proof.key_values(),
+                verified.proof().key_values(),
             )?
             .handle)
     }
@@ -163,7 +162,7 @@ impl<'db> VerifiedRangeProofContext<'db> {
     /// [`ProposalState::commit`].
     fn commit(&mut self) -> Result<Option<HashKey>, api::Error> {
         let mut state = std::mem::replace(&mut self.proposal_state, ProposalState::Pending);
-        let result = state.commit(|| Self::propose(self.db, &self.verification, &self.proof));
+        let result = state.commit(|| Self::propose(self.db, &self.verified));
         self.proposal_state = state;
         let hash = result?;
         firewood_counter!(MERGE_COUNT).increment(1);
@@ -191,19 +190,21 @@ impl<'db> VerifiedRangeProofContext<'db> {
             ProposalState::Proposed(proposal) => proposal.root_hash(),
             ProposalState::Pending => self.db.current_root_hash(),
         };
-        if root_hash.as_ref() == Some(self.verification.root()) {
+        let verification = self.verified.verification();
+        if root_hash.as_ref() == Some(verification.root()) {
             return Ok(Vec::new());
         }
 
         Ok(
-            firewood::find_next_key_after_range_proof(&self.proof, &self.verification)?
+            firewood::find_next_key_after_range_proof(self.verified.proof(), verification)?
                 .into_iter()
                 .collect(),
         )
     }
 
     fn code_hash_iter(&self) -> Result<CodeIteratorHandle<'_>, api::Error> {
-        CodeIteratorHandle::from_key_values(self.proof.hash_mode(), self.proof.key_values())
+        let proof = self.verified.proof();
+        CodeIteratorHandle::from_key_values(proof.hash_mode(), proof.key_values())
     }
 }
 

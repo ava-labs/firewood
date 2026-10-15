@@ -441,9 +441,9 @@ func (p *ChangeProof) Verify(
 
 // Commit applies the proof to the database and returns the new root hash.
 //
-// If the database advanced since Verify, Commit verifies the proof again
-// against the current latest revision and commits from there, so the proven
-// range is checked against the verified end root on the state it lands on
+// If the database advanced since Verify, Commit applies the proof again to the
+// current latest revision and re-checks its root against the verified end root
+// before committing, so the proven range is checked on the state it lands on
 // rather than rebased blindly. A second Commit returns the same root without
 // touching the database. Commit does not consume the proof and does not
 // release the lease; call [VerifiedChangeProof.Drop] for that.
