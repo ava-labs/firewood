@@ -38,6 +38,17 @@ impl KeySpan {
         Self { prefix }
     }
 
+    /// The nibble prefix naming this span.
+    #[cfg(test)]
+    pub(crate) fn prefix(&self) -> &[PathComponent] {
+        &self.prefix
+    }
+
+    /// The nibble prefix naming this span, by value.
+    pub(crate) fn into_prefix(self) -> PathBuf {
+        self.prefix
+    }
+
     /// Half-open byte-key range `[lower, upper)` covering exactly the keys
     /// carrying this span's nibble prefix.
     ///
@@ -171,13 +182,6 @@ pub enum Hole {
 /// excludes it, so those keys are reported separately as points. Only
 /// even-length prefixes are keys, since keys are byte strings.
 #[derive(Debug, Default, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no production caller yet; the hole-detection walk lands in a later change"
-    )
-)]
 pub(crate) struct OpenInterval {
     /// Pairwise incomparable: no span's prefix is a prefix of another's.
     pub(crate) spans: Vec<KeySpan>,
@@ -205,13 +209,6 @@ pub(crate) struct OpenInterval {
 /// Every span owns its prefix, so for bounds of `n` nibbles the result holds
 /// O(n²) nibbles. The bounds are proof keys, which the proof reader caps at
 /// [`MAX_KEY_BYTES`](super::de::MAX_KEY_BYTES).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no production caller yet; the hole-detection walk lands in a later change"
-    )
-)]
 pub(crate) fn open_interval(
     lower_exclusive: Option<&[PathComponent]>,
     upper_exclusive: &[PathComponent],
@@ -297,13 +294,6 @@ type RangedLabel = (Box<[u8]>, Option<Box<[u8]>>, Hole);
 /// # Errors
 ///
 /// [`api::Error::InternalError`] on a disallowed overlap.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no production caller yet; the hole-detection walk lands in a later change"
-    )
-)]
 pub(crate) fn merge_labels(labels: Vec<Hole>) -> Result<Vec<Hole>, api::Error> {
     let mut ranged: Vec<RangedLabel> = labels
         .into_iter()

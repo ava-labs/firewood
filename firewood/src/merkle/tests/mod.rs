@@ -8,6 +8,7 @@ mod descend;
 mod ethhash;
 #[cfg(feature = "ethhash")]
 mod ethhash_fuzz;
+mod holes;
 // TODO(rkuris): get the hashes from merkledb and verify compatibility with branch factor 256
 mod proof;
 mod range;
