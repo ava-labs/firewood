@@ -41,6 +41,7 @@ pub use self::results::IteratorResult;
 pub use self::results::KeyValueBatchResult;
 pub use self::results::KeyValueResult;
 pub use self::results::NextKeyRangeResult;
+pub use self::results::NextKeyRangesResult;
 pub(crate) use self::results::NullHandleResult;
 pub use self::results::ProposalResult;
 pub use self::results::RangeProofResult;
@@ -48,6 +49,7 @@ pub use self::results::ReconstructedResult;
 pub use self::results::RenderedMetricsResult;
 pub use self::results::RevisionResult;
 pub use self::results::ValueResult;
+pub use self::results::VerifiedChangeProofResult;
 pub use self::results::VoidResult;
 
 /// Maybe is a C-compatible optional type using a tagged union pattern.
