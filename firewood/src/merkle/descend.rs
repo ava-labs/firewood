@@ -10,22 +10,22 @@
 //! [`Merkle::path_iter`]: super::Merkle::path_iter
 
 use firewood_storage::Child;
+use firewood_storage::Children;
 use firewood_storage::FileIoError;
+use firewood_storage::HashMode;
 use firewood_storage::HashType;
+use firewood_storage::HashableShunt;
+use firewood_storage::HashedNodeReader;
 use firewood_storage::Node;
 use firewood_storage::PathComponent;
 use firewood_storage::SharedNode;
 use firewood_storage::TrieReader;
+use firewood_storage::ValueDigest;
+
+use crate::api;
 
 /// Where a nibble-path probe landed in the local trie.
 #[derive(Debug)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no production caller yet; the hole-detection walk that probes subtree hashes lands in a later change"
-    )
-)]
 pub(crate) enum ProbeOutcome {
     /// The trie is empty, or the descent diverged inside a compressed path,
     /// hit an absent child slot, or ran past a leaf: no local keys carry the
@@ -78,13 +78,6 @@ pub(crate) enum ProbeOutcome {
 /// `root_as_maybe_persisted_node` rather than `root_node`, whose `Option`
 /// return folds a failed root read into "no root" and would make a transient
 /// I/O error look like an empty trie.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no production caller yet; the hole-detection walk that probes subtree hashes lands in a later change"
-    )
-)]
 pub(crate) fn descend_to_prefix<T: TrieReader>(
     nodestore: &T,
     prefix: &[PathComponent],
@@ -164,5 +157,91 @@ pub(crate) fn descend_to_prefix<T: TrieReader>(
             }
         }
         remaining = rest;
+    }
+}
+
+/// The canonical hash of the local subtree under `prefix`: the value a
+/// sealed sibling stub at that position would hold if the local trie were
+/// the target. `Ok(None)` means no local key carries the prefix.
+///
+/// Three positions yield a hash. A probe ending exactly on a child edge
+/// returns the parent's stored hash for that child, verbatim. A probe ending
+/// inside or at the start of a node's partial path re-encodes the node with
+/// the probe as its parent prefix and the unconsumed remainder as its partial
+/// path, through [`HashableShunt`] under `H`. Under the MerkleDB scheme that
+/// re-encoding hashes the same full path and reproduces the stored hash;
+/// under the Ethereum scheme the partial path is part of the preimage, so
+/// the result differs from the stored hash and matches what a trie with a
+/// child edge at `prefix` would store.
+///
+/// No account `storageRoot` repair is needed on the way. Databases written
+/// before `firewood-v1-hfix` store account values with a stale `storageRoot`
+/// field, but the Ethereum hasher derives that field while building the
+/// preimage (from the child hashes, or the empty-trie root when there are
+/// none), so a re-encoded account node hashes canonically on any database
+/// version.
+///
+/// # Errors
+///
+/// [`api::Error::UnhashedView`] when the probe runs through or lands on a
+/// node whose child slots include a [`Child::Node`], which carries no hash.
+/// Node reads, the root included, propagate their [`FileIoError`]. Neither
+/// case is folded into `Ok(None)`: a consumer reads `None` as "the target
+/// has keys here and the local trie has none" or as "nothing to delete", and
+/// either reading over an unreadable or unhashed subtree orders the wrong
+/// remedy.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "no production caller yet; the hole-detection walk lands in a later change"
+    )
+)]
+pub(crate) fn subtree_hash<H: HashMode, T: HashedNodeReader>(
+    view: &T,
+    prefix: &[PathComponent],
+) -> Result<Option<HashType>, api::Error> {
+    debug_assert_eq!(
+        view.node_hash_algorithm(),
+        H::ALGORITHM,
+        "subtree hashes must be formed under the view's own hash mode"
+    );
+
+    match descend_to_prefix(view, prefix)? {
+        ProbeOutcome::Empty => Ok(None),
+        ProbeOutcome::EdgeExact(hash) => Ok(Some(hash)),
+        ProbeOutcome::UnhashedChild => Err(api::Error::UnhashedView {
+            reason: "the probed path runs through a child held in memory without a hash",
+        }),
+        ProbeOutcome::AtNode { node, consumed } => {
+            let partial = node.partial_path().as_components();
+            let remaining = partial.get(consumed..).unwrap_or_default();
+            let hash = match &*node {
+                Node::Leaf(leaf) => H::to_hash(&HashableShunt::new(
+                    prefix,
+                    remaining,
+                    Some(ValueDigest::Value(&*leaf.value)),
+                    Children::new(),
+                )),
+                Node::Branch(branch) => {
+                    if branch
+                        .children
+                        .iter()
+                        .any(|(_, child)| matches!(child, Some(Child::Node(_))))
+                    {
+                        return Err(api::Error::UnhashedView {
+                            reason: "the node at the probed position has a child held in memory without a hash",
+                        });
+                    }
+                    H::to_hash(&HashableShunt::new(
+                        prefix,
+                        remaining,
+                        branch.value.as_deref().map(ValueDigest::Value),
+                        branch.children_hashes(),
+                    ))
+                }
+            };
+            Ok(Some(hash))
+        }
     }
 }
