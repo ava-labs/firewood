@@ -5,9 +5,7 @@ use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use firewood_storage::DefaultHashMode;
 use firewood_storage::FileIoError;
-use firewood_storage::HashMode;
 use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::TrieHash;
 
@@ -51,34 +49,6 @@ impl<T> ValueType for T where T: AsRef<[u8]> + Debug {}
 ///  - They are used to provide integrity at different points in a
 ///    proof
 pub type HashKey = firewood_storage::TrieHash;
-
-/// An extension trait for the [`HashKey`] type to provide additional methods.
-pub trait HashKeyExt: Sized {
-    /// Default root hash for an empty database.
-    fn default_root_hash() -> Option<HashKey>;
-}
-
-/// An extension trait for an optional `HashKey` type to provide additional methods.
-pub trait OptionalHashKeyExt: Sized {
-    /// Returns the default root hash if the current value is [`None`].
-    fn or_default_root_hash(self) -> Option<HashKey>;
-}
-
-impl HashKeyExt for HashKey {
-    /// Returns the empty-database root hash for the compile-selected mode:
-    /// `None` for merkledb, `Some(keccak256(0x80))` for ethhash.
-    #[inline]
-    fn default_root_hash() -> Option<HashKey> {
-        DefaultHashMode::default_root_hash()
-    }
-}
-
-impl OptionalHashKeyExt for Option<HashKey> {
-    #[inline]
-    fn or_default_root_hash(self) -> Option<HashKey> {
-        self.or_else(HashKey::default_root_hash)
-    }
-}
 
 /// A frozen proof is a proof that is stored in immutable memory.
 pub type FrozenRangeProof = RangeProof<Key, Value, Box<[ProofNode]>>;
@@ -835,22 +805,21 @@ pub trait DynProposal<'db>: Debug + Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use firewood_storage::EthHash;
+    use firewood_storage::HashMode;
+    use firewood_storage::MerkleDbHash;
+    use sha3::Digest as _;
 
     #[test]
-    #[cfg(feature = "ethhash")]
-    fn test_ethhash_compat_default_root_hash_equals_empty_rlp_hash() {
-        use sha3::Digest as _;
-
+    fn test_ethhash_default_root_hash_equals_empty_rlp_hash() {
         assert_eq!(
-            TrieHash::default_root_hash(),
+            EthHash::default_root_hash(),
             Some(sha3::Keccak256::digest(rlp::NULL_RLP).into()),
         );
     }
 
     #[test]
-    #[cfg(not(feature = "ethhash"))]
-    fn test_firewood_default_root_hash_equals_none() {
-        assert_eq!(TrieHash::default_root_hash(), None);
+    fn test_merkledb_default_root_hash_is_none() {
+        assert_eq!(MerkleDbHash::default_root_hash(), None);
     }
 }

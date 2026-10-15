@@ -4,6 +4,8 @@
 use ethereum_types::H256;
 use firewood_storage::Committed;
 use firewood_storage::DeletedNodeTracking;
+use firewood_storage::EthHash;
+use firewood_storage::HashMode;
 use firewood_storage::MemStore;
 use firewood_storage::NodeStore;
 use hash_db::Hasher;
@@ -13,7 +15,6 @@ use sha3::Keccak256;
 use test_case::test_case;
 
 use super::*;
-use crate::api::OptionalHashKeyExt;
 use crate::merkle::Merkle;
 
 fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
@@ -189,7 +190,7 @@ fn test_root_hash_random_deletions() {
             let h0 = committed_merkle
                 .nodestore()
                 .root_hash()
-                .or_default_root_hash()
+                .or_else(EthHash::default_root_hash)
                 .unwrap();
 
             assert_eq!(h, h0);
