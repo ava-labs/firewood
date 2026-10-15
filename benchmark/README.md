@@ -54,7 +54,7 @@ run in seconds with no external dependencies and also run in CI on every push to
 | Node serialization / deserialization | `storage/benches/serializer.rs` |
 
 ```bash
-cargo bench --features ethhash,logger
+cargo bench --features logger
 ```
 
 Benchmarks can also produce flamegraphs. See the header comment in

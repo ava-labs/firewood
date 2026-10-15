@@ -91,9 +91,8 @@ lint:
     ./scripts/run-just.sh ci-check-todos
     ./scripts/run-just.sh ci-rust clippy debug-no-default-features
     ./scripts/run-just.sh ci-rust clippy debug-no-features
-    ./scripts/run-just.sh ci-rust clippy debug-ethhash-logger
     ./scripts/run-just.sh ci-rust clippy debug-all-features
-    ./scripts/run-just.sh ci-rust clippy maxperf-ethhash-logger
+    ./scripts/run-just.sh ci-rust clippy maxperf-logger
     ./scripts/run-just.sh ci-lint-markdown
     ./scripts/run-just.sh ci-docs
     ./scripts/run-just.sh ci-lint-ffi
@@ -104,9 +103,8 @@ lint:
 test:
     ./scripts/run-just.sh ci-rust test debug-no-default-features
     ./scripts/run-just.sh ci-rust test debug-no-features
-    ./scripts/run-just.sh ci-rust test debug-ethhash-logger
     ./scripts/run-just.sh ci-rust test debug-all-features
-    ./scripts/run-just.sh ci-rust test maxperf-ethhash-logger
+    ./scripts/run-just.sh ci-rust test maxperf-logger
     ./scripts/run-just.sh ci-build-ffi
     ./scripts/run-just.sh ci-test-ffi firewood
     ./scripts/run-just.sh ci-test-ffi ethhash
@@ -115,12 +113,12 @@ test:
 # Run every macOS-compatible pre-push check, with linting first.
 prepush: lint test
 
-# `prepush`, minus the four extra Rust profiles, the FFI steps, and ci-machete.
+# `prepush`, minus the three extra Rust profiles, the FFI steps, and ci-machete.
 prepush-lite:
     ./scripts/run-just.sh ci-format
     ./scripts/run-just.sh ci-check-todos
-    ./scripts/run-just.sh ci-rust clippy debug-ethhash-logger
-    ./scripts/run-just.sh ci-rust test debug-ethhash-logger
+    ./scripts/run-just.sh ci-rust clippy debug-no-features
+    ./scripts/run-just.sh ci-rust test debug-no-features
     ./scripts/run-just.sh ci-lint-markdown
     ./scripts/run-just.sh ci-docs
 
@@ -297,7 +295,6 @@ release-step-update-rust-dependencies:
 
     echo "Executing tests to ensure upgrades did not break anything..."
     cargo test --workspace --all-targets -F logger
-    cargo test --workspace --all-targets -F ethhash,logger
 
 # RELEASE PREP: refresh changelog
 release-step-refresh-changelog tag:

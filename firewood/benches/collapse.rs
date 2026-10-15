@@ -15,8 +15,8 @@ use criterion::criterion_main;
 use firewood::api::BatchOp;
 use firewood::db::DbConfig;
 use firewood::open;
-use firewood_storage::DefaultHashMode;
 use firewood_storage::HashMode;
+use firewood_storage::MerkleDbHash;
 use firewood_storage::SeededRng;
 
 const KEY_COUNT: usize = 10_000;
@@ -71,7 +71,7 @@ fn bench_collapse(criterion: &mut Criterion) {
 
     let dir = tempfile::tempdir().expect("tempdir should be created");
     let cfg = DbConfig::builder().build();
-    let db = open(dir.path(), DefaultHashMode::ALGORITHM, cfg).expect("db should open");
+    let db = open(dir.path(), MerkleDbHash::ALGORITHM, cfg).expect("db should open");
 
     let rng = SeededRng::new(0xdead_beef);
     let keys = generate_sorted_keys(&rng);

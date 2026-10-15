@@ -66,19 +66,18 @@ benchmark/            # Performance benchmarking suite
 - **Commit**: Operation of applying Proposals to the most recent Revision
 - **Batch**: Ordered set of Put/Delete operations
 
+## Hash Modes
+
+The node-hashing scheme is a per-database runtime choice (selected when a
+database is created and recorded in its file header), not a Cargo feature:
+
+- **MerkleDB mode**: SHA-256 hashing compatible with merkledb
+- **Ethereum mode**: Keccak-256 hashing; understands "account" nodes at
+  specific depths with RLP-encoded values and computes the account trie hash
+  as the actual root. See `storage/src/hashers/ethhash.rs` for implementation
+  details.
+
 ## Feature Flags
-
-### `ethhash`
-
-By default, Firewood uses SHA-256 hashing compatible with merkledb. Enable this feature for Ethereum compatibility:
-
-- Changes hashing from SHA-256 to Keccak-256
-- Understands "account" nodes at specific depths with RLP-encoded values
-- Computes account trie hash as actual root
-- When an account has exactly one storage child, hashes that child as a
-  standalone storage-trie root, so a child's hash depends on the account's
-  storage-child count
-- See `storage/src/hashers/ethhash.rs` for implementation details
 
 ### `logger`
 
@@ -158,12 +157,12 @@ just prepush-lite
 ```
 
 That runs `ci-format`, `ci-check-todos`, clippy and tests for the single
-`debug-ethhash-logger` profile, `ci-lint-markdown`, and `ci-docs`. Note that
-`ci-format` only *checks* formatting — run `just fmt` to apply it.
+`debug-no-features` profile, `ci-lint-markdown`, and `ci-docs`. Note that
+`ci-format` only *checks* formatting — run `cargo fmt` yourself to apply it.
 
 The full local matrix is available when a change warrants it — in particular
 when it touches the FFI, workspace dependencies, or code gated behind a feature
-that `debug-ethhash-logger` does not enable:
+that `debug-no-features` does not enable:
 
 ```bash
 just prepush
@@ -233,7 +232,7 @@ with no rustup, so it never reads `rust-toolchain.toml`.
 ### Toolchain Floor for `--all-features`
 
 The workspace declares `rust-version = "1.94.0"`, and that is accurate for the
-default build, `--no-default-features`, and `--features ethhash,logger`.
+default build, `--no-default-features`, and `--features logger`.
 `--all-features` needs **1.94.1**.
 
 `--all-features` turns on `fwdctl`'s `launch` feature, which pulls in the AWS SDK
@@ -343,7 +342,7 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
 2. **Testing**: Any changes should include appropriate tests. Run targeted tests
    while iterating and `./scripts/run-just.sh prepush-lite` before handoff;
    reach for the full `prepush` only when the change touches the FFI or a
-   feature combination `debug-ethhash-logger` does not cover.
+   feature combination `debug-no-features` does not cover.
 
 3. **Performance Context**: This is a database designed for blockchain state. Performance matters. Consider allocation patterns and hot paths.
 
@@ -356,7 +355,7 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
 
 5. **Beta Status**: The API may change. Don't assume stability guarantees.
 
-6. **Feature Flags**: Be aware of `ethhash` feature flag when discussing Ethereum compatibility vs. default merkledb compatibility.
+6. **Hash Modes**: The hashing scheme (Ethereum Keccak-256 vs. merkledb SHA-256) is a per-database runtime choice, not a compile-time feature.
 
 7. **Documentation**: Public APIs should be well-documented. The documentation
    check is included in `./scripts/run-just.sh lint` and

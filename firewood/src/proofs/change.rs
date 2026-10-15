@@ -590,9 +590,6 @@ pub fn verify_change_proof_structure(
 
 #[cfg(test)]
 mod tests {
-    use firewood_storage::DefaultHashMode;
-    use firewood_storage::HashMode;
-
     use super::*;
     use crate::merkle::Key;
     use crate::merkle::Value;
@@ -621,7 +618,7 @@ mod tests {
             start_proof,
             end_proof,
             key_values,
-            DefaultHashMode::ALGORITHM,
+            NodeHashAlgorithm::Ethereum,
         );
 
         let mut iter = change_proof.iter();
@@ -664,7 +661,7 @@ mod tests {
             start_proof,
             end_proof,
             key_values,
-            DefaultHashMode::ALGORITHM,
+            NodeHashAlgorithm::Ethereum,
         );
 
         let mut items = Vec::new();
@@ -690,7 +687,7 @@ mod tests {
             start_proof,
             end_proof,
             key_values,
-            DefaultHashMode::ALGORITHM,
+            NodeHashAlgorithm::Ethereum,
         );
 
         let mut iter = change_proof.iter();
