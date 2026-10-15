@@ -5,7 +5,7 @@
 //! boundary proofs that labels the key space outside the proven range.
 //!
 //! Most tests build a target trie `M` and a local trie `L` from flat maps,
-//! take a range proof from `M`, verify it, run the walk against
+//! take a range or change proof from `M`, verify it, run the walk against
 //! `L`, and check every label against the maps directly. The checker also
 //! asserts coverage: every key of either map outside the applied range lies
 //! in exactly one label, and any label reaching into the applied range is a
@@ -29,10 +29,18 @@ use firewood_storage::TriePathFromPackedBytes;
 use super::init_merkle;
 use crate::Hole;
 use crate::ProofError;
+use crate::VerifiedChangeProof;
 use crate::VerifiedRangeProof;
+use crate::api::BatchOp;
+use crate::api::Db as _;
+use crate::api::DbView as _;
 use crate::api::HashKey;
+use crate::api::Proposal as _;
 use crate::api::{self};
+use crate::db::Db;
+use crate::db::DbConfig;
 use crate::merkle::Merkle;
+use crate::merkle::holes::find_holes_after_change_proof;
 use crate::merkle::holes::find_holes_after_range_proof;
 
 type Map = BTreeMap<Vec<u8>, Vec<u8>>;
@@ -698,6 +706,99 @@ fn fully_synced_emits_only_synced<H: HashMode>() {
     }
 }
 
+#[hash_mode]
+#[test]
+fn change_proof_labels_match_range_proof_labels<H: HashMode>() {
+    // The same target/local pair classified through a change proof's
+    // boundary proofs yields the same span labels as the range-proof path
+    // over the same bounds.
+    let source = map(&[(&[0xA7, 0x11], b"one"), (&[0xB0], b"four")]);
+    let target = worked_target();
+    let local = map(&[(&[0xA7, 0xFF], b"three"), (&[0xB0], b"OLD")]);
+    let (s, t, l) = (trie::<H>(&source), trie::<H>(&target), trie::<H>(&local));
+
+    let start: &[u8] = &[0xA7, 0x20];
+    let end: &[u8] = &[0xA7, 0x80];
+    let proof = t
+        .change_proof(Some(start), Some(end), s.nodestore(), None)
+        .unwrap();
+    let verified = VerifiedChangeProof::verify(
+        Arc::new(proof),
+        root(&t),
+        Some(start),
+        Some(end),
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
+    let change = find_holes_after_change_proof::<H, _>(&verified, l.nodestore()).unwrap();
+    let (_, range) = range_holes(&t, &l, Some(start), Some(end), None);
+
+    assert_eq!(spans(&change), spans(&range));
+    assert_eq!(
+        spans(&change),
+        vec![
+            ("Missing", vec![0xA, 0x7, 0x1]),
+            ("Synced", vec![0xA, 0x7, 0xF]),
+            ("Stale", vec![0xB]),
+        ]
+    );
+}
+
+#[hash_mode]
+#[test]
+fn change_proof_empty_start_proof_labels_nothing_below_start<H: HashMode>() {
+    // A change proof with an empty start proof, verified for a requested start
+    // key: the walk labels no local key below the start key, and the end side
+    // still reports its spans.
+    let source = map(&[(&[0xA7, 0x11], b"one")]);
+    let target = worked_target();
+    let mut local = target.clone();
+    local.insert(vec![0x05], b"below".to_vec());
+    local.insert(vec![0x50], b"below".to_vec());
+    let (s, t, l) = (trie::<H>(&source), trie::<H>(&target), trie::<H>(&local));
+
+    let end: &[u8] = &[0xA7, 0x4F];
+    let generated = t
+        .change_proof(None, Some(end), s.nodestore(), None)
+        .unwrap();
+    assert!(generated.start_proof().is_empty());
+    let proof = crate::ChangeProof::new(
+        crate::Proof::new(Box::<[crate::ProofNode]>::default()),
+        generated.end_proof().clone(),
+        generated.batch_ops().to_vec().into_boxed_slice(),
+        H::ALGORITHM,
+    );
+    let start: &[u8] = &[0x60];
+    let verified = VerifiedChangeProof::verify(
+        Arc::new(proof),
+        root(&t),
+        Some(start),
+        Some(end),
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
+    let holes = find_holes_after_change_proof::<H, _>(&verified, l.nodestore()).unwrap();
+
+    assert!(
+        holes
+            .iter()
+            .all(|h| !covers(h, &[0x05]) && !covers(h, &[0x50])),
+        "{holes:?}"
+    );
+    // The end side still walks, so the silence below is the empty start
+    // proof's doing and not a walk that did nothing.
+    assert_eq!(
+        spans(&holes),
+        vec![
+            ("Synced", vec![0xA, 0x7, 0x7]),
+            ("Synced", vec![0xA, 0x7, 0xF]),
+            ("Synced", vec![0xB]),
+        ]
+    );
+}
+
 #[test]
 fn hash_mode_mismatch_rejected() {
     let target = worked_target();
@@ -717,4 +818,120 @@ fn hash_mode_mismatch_rejected() {
         result,
         Err(api::Error::ProofError(ProofError::HashModeMismatch { .. }))
     ));
+}
+
+fn new_db<H: HashMode>() -> (Db<H>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::<H>::new(dir.path(), DbConfig::builder().build()).unwrap();
+    (db, dir)
+}
+
+fn commit<H: HashMode>(db: &Db<H>, m: &Map) -> HashKey {
+    let batch: Vec<BatchOp<&[u8], &[u8]>> = m
+        .iter()
+        .map(|(k, v)| BatchOp::Put {
+            key: k.as_slice(),
+            value: v.as_slice(),
+        })
+        .collect();
+    db.propose(batch).unwrap().commit().unwrap();
+    db.root_hash().unwrap()
+}
+
+#[hash_mode]
+#[test]
+fn erased_views_reach_the_walk<H: HashMode>() {
+    // A committed view and a reconstructed view of the local database return,
+    // through the public `find_holes_after_*` methods, the labels the generic
+    // walk returns over an equal in-memory trie.
+    let source = map(&[(&[0xA7, 0x11], b"one")]);
+    let target = worked_target();
+    let local = map(&[(&[0xA7, 0x11], b"one"), (&[0xB0], b"OLD")]);
+    let (target_db, _target_dir) = new_db::<H>();
+    let (local_db, _local_dir) = new_db::<H>();
+    let source_root = commit(&target_db, &source);
+    let target_root = commit(&target_db, &target);
+
+    // Commit the local state without `0xB0`, then reconstruct it with the
+    // `0xB0` write so the reconstructed view holds the full local map.
+    let mut local_base = local.clone();
+    local_base.remove(&vec![0xB0]);
+    let local_root = commit(&local_db, &local_base);
+
+    let end: &[u8] = &[0xA7, 0x4F];
+    let proof = target_db
+        .revision(target_root.clone())
+        .unwrap()
+        .range_proof(None, Some(end), None)
+        .unwrap();
+    let verified = VerifiedRangeProof::verify(
+        Arc::new(proof),
+        target_root.clone(),
+        None,
+        Some(end),
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
+    let change_proof = target_db
+        .change_proof(source_root, target_root.clone(), None, Some(end), None)
+        .unwrap();
+    let verified_change = VerifiedChangeProof::verify(
+        Arc::new(change_proof),
+        target_root,
+        None,
+        Some(end),
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
+    let (t, l, l_base) = (
+        trie::<H>(&target),
+        trie::<H>(&local),
+        trie::<H>(&local_base),
+    );
+
+    let committed = local_db.committed_view(local_root).unwrap();
+    let from_committed = committed.find_holes_after_range_proof(&verified).unwrap();
+    assert_eq!(
+        spans(&from_committed),
+        vec![
+            ("Missing", vec![0xA, 0x7, 0x7]),
+            ("Missing", vec![0xA, 0x7, 0xF]),
+            ("Missing", vec![0xB]),
+        ]
+    );
+
+    let reconstructed = local_db
+        .reconstruct_from_view(
+            &committed,
+            vec![BatchOp::Put {
+                key: &[0xB0][..],
+                value: &b"OLD"[..],
+            }],
+        )
+        .unwrap();
+    let from_reconstructed = reconstructed
+        .find_holes_after_range_proof(&verified)
+        .unwrap();
+    let (_, expected) = range_holes(&t, &l, None, Some(end), None);
+    assert_eq!(from_reconstructed, expected);
+    assert!(spans(&from_reconstructed).contains(&("Stale", vec![0xB])));
+
+    for (holes, local_trie) in [
+        (
+            committed.find_holes_after_change_proof(&verified_change),
+            &l_base,
+        ),
+        (
+            reconstructed.find_holes_after_change_proof(&verified_change),
+            &l,
+        ),
+    ] {
+        let expected =
+            find_holes_after_change_proof::<H, _>(&verified_change, local_trie.nodestore())
+                .unwrap();
+        assert!(!expected.is_empty(), "no labels to compare");
+        assert_eq!(holes.unwrap(), expected);
+    }
 }
