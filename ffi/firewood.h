@@ -1080,11 +1080,13 @@ typedef struct BorrowedSlice_BorrowedBytes {
 typedef struct BorrowedSlice_BorrowedBytes BorrowedBytes2D;
 
 /**
- * A key range still to fetch after a truncated range or change proof,
- * `[start_key, end_key]`, both inclusive: `start_key` is the smallest key
- * above the last one already synchronized, so passing it as the next
- * request's start bound resumes without covering that key again. An absent
- * `end_key` means the range is unbounded above.
+ * A key range still to fetch after a range or change proof, from `start_key`
+ * to `end_key`, both inclusive. An absent `end_key` means the range is
+ * unbounded above. [`fwd_verified_range_proof_next_key_ranges`] and
+ * [`fwd_verified_change_proof_next_key_ranges`] document how each proof
+ * derives its ranges.
+ *
+ * [`fwd_verified_range_proof_next_key_ranges`]: crate::fwd_verified_range_proof_next_key_ranges
  */
 typedef struct NextKeyRange {
   /**
@@ -3254,13 +3256,21 @@ struct CodeIteratorResult fwd_verified_range_proof_code_hash_iter(const struct V
 /**
  * Commit a verified range proof to its database.
  *
- * Builds the proposal that applies the proof on the latest revision and
- * commits it. If another commit lands while the proposal is built, this
- * returns the `ParentNotLatest` error and a later call builds again. After a
- * successful commit the root is cached, and later calls return it without
- * touching the database. The root may differ from the verified one when the
- * proof covered less than the full keyspace. The context stays usable
- * afterwards for [`fwd_verified_range_proof_next_key_ranges`] and
+ * The commit brings the database into agreement with the proof's target
+ * everywhere the proof speaks: the proven range is replaced by the proof's
+ * key-value pairs, and outside it the content the proof's boundary hashes
+ * show the target does not hold is deleted and keys whose target value the
+ * proof carries are written. What the proof cannot settle — key space whose
+ * target content differs and is not in hand — is what
+ * [`fwd_verified_range_proof_next_key_ranges`] reports afterwards.
+ *
+ * Builds a proposal on the latest revision that applies the proof and finds
+ * the remaining holes, then commits it. If another commit lands while the
+ * proposal is built, this returns the `ParentNotLatest` error and a later call
+ * builds again. After a successful commit the root is cached, and later calls
+ * return it without touching the database. The root may differ from the
+ * verified one when the proof covered less than the full keyspace. The context
+ * stays usable afterwards for [`fwd_verified_range_proof_next_key_ranges`] and
  * [`fwd_verified_range_proof_code_hash_iter`].
  *
  * # Returns
@@ -3279,7 +3289,15 @@ struct CodeIteratorResult fwd_verified_range_proof_code_hash_iter(const struct V
 struct HashResult fwd_verified_range_proof_commit(struct VerifiedRangeProofContext *proof);
 
 /**
- * Return the key ranges still to fetch after this proof, sorted ascending.
+ * Returns the key ranges still to fetch after this proof, sorted ascending
+ * and coalesced where adjacent. The answer describes the database's latest
+ * committed revision as of the call: the proof's boundary proofs are
+ * compared against it.
+ *
+ * See [`fetch_ranges`] for how ranges are
+ * built and why they can lie outside the request's bounds. An empty result
+ * means nothing remains to fetch, not that the database is at the target
+ * root.
  *
  * # Returns
  *
