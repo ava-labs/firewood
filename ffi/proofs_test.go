@@ -9,7 +9,6 @@ import (
 	"runtime"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -362,12 +361,13 @@ func TestRangeProofFindNextKeyDivergentReceiver(t *testing.T) {
 	nextRange, err := proof.FindNextKey()
 	r.NoError(err)
 	r.NotNil(nextRange)
+	r.False(nextRange.EndKey.HasValue(), "the request was unbounded above")
+
 	// The next request resumes after the last proven key without skipping the
-	// first unproven one.
-	startKey := nextRange.StartKey()
-	r.Positive(bytes.Compare(startKey, keys[rangeProofLenTruncated-1]), "start key repeats a proven key")
-	r.LessOrEqual(bytes.Compare(startKey, keys[rangeProofLenTruncated]), 0, "start key skips an unproven key")
-	r.NoError(nextRange.Free())
+	// first unproven one. The keys are Go-owned, so they outlive the proof.
+	r.NoError(proof.Drop())
+	r.Positive(bytes.Compare(nextRange.StartKey, keys[rangeProofLenTruncated-1]), "start key repeats a proven key")
+	r.LessOrEqual(bytes.Compare(nextRange.StartKey, keys[rangeProofLenTruncated]), 0, "start key skips an unproven key")
 }
 
 // TestRangeProofMethodFreeRace is a regression test for ava-labs/firewood#2137.
@@ -421,11 +421,7 @@ func TestRangeProofMethodFreeRace(t *testing.T) {
 		},
 		{
 			name: "CodeHashes",
-			call: func(p *RangeProof) {
-				for _, err := range p.CodeHashes() {
-					_ = err
-				}
-			},
+			call: func(p *RangeProof) { _, _ = p.CodeHashes() },
 		},
 	}
 
@@ -483,11 +479,7 @@ func TestChangeProofMethodDropRace(t *testing.T) {
 		},
 		{
 			name: "CodeHashes",
-			call: func(p *ChangeProof) {
-				for _, err := range p.CodeHashes() {
-					_ = err
-				}
-			},
+			call: func(p *ChangeProof) { _, _ = p.CodeHashes() },
 		},
 	}
 
@@ -534,57 +526,8 @@ func TestRangeProofVerifyTwiceIdempotent(t *testing.T) {
 	r.NoError(db.VerifyRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated))
 
 	// The proof is still usable after the redundant verify.
-	nkr, err := proof.FindNextKey()
+	_, err = proof.FindNextKey()
 	r.NoError(err)
-	if nkr != nil {
-		r.NoError(nkr.Free())
-	}
-}
-
-// TestForceCloseDuringCodeHashIteration is a regression test for force-close
-// freeing a proof while a code-hash iteration still borrows it. The Rust
-// iterator reads the proof's data directly, so [WithForceCloseHandles] must
-// wait until the iteration ends before dropping the proof.
-func TestForceCloseDuringCodeHashIteration(t *testing.T) {
-	if selectedHashMode != ethhashKey {
-		t.Skip("code hash iterators are only created for ethereum-mode proofs")
-	}
-
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	key, val, codeHash := ethAccountWithCodeHash(t)
-	root, err := db.Update([]BatchOp{Put(key[:], val)})
-	r.NoError(err)
-	proof, err := db.RangeProof(root, nothing(), nothing(), rangeProofLenUnbounded)
-	r.NoError(err)
-	// Verifying binds the proof to db, so force-close drops it.
-	r.NoError(db.VerifyRangeProof(proof, nothing(), nothing(), root, rangeProofLenUnbounded))
-
-	ctx := oneSecCtx(t)
-	closeErr := make(chan error, 1)
-	yielded := 0
-	for hash, err := range proof.CodeHashes() {
-		r.NoError(err)
-		r.Equal(codeHash, hash)
-		yielded++
-
-		go func() {
-			closeErr <- db.Close(ctx, WithForceCloseHandles())
-		}()
-		select {
-		case err := <-closeErr:
-			r.FailNowf("force-close returned while an iteration still borrowed the proof", "Close: %v", err)
-		case <-time.After(300 * time.Millisecond):
-		}
-	}
-	r.Equal(1, yielded)
-
-	// The iteration has ended, so force-close can drop the proof and finish.
-	r.NoError(<-closeErr)
-
-	_, err = proof.Marshal()
-	r.ErrorIs(err, ErrDropped, "force-close must drop the proof once the iteration ends")
 }
 
 func TestRangeProofCodeHashes(t *testing.T) {
@@ -597,18 +540,13 @@ func TestRangeProofCodeHashes(t *testing.T) {
 
 	proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenUnbounded)
 
-	i := 0
-	for h, err := range proof.CodeHashes() {
-		i++
-		if selectedHashMode == ethhashKey {
-			r.NoError(err, "%T.CodeHashes()", proof)
-			r.Equal(codeHash, h)
-		} else {
-			require.ErrorContains(t, err, "code hash iteration requires an ethereum-mode proof")
-		}
+	hashes, err := proof.CodeHashes()
+	if selectedHashMode == ethhashKey {
+		r.NoError(err, "%T.CodeHashes()", proof)
+		r.Equal([]Hash{codeHash}, hashes)
+	} else {
+		r.ErrorContains(err, "code hash iteration requires an ethereum-mode proof")
 	}
-
-	require.Equalf(t, 1, i, "expected one yield from %T.CodeHashes()", proof)
 }
 
 func TestChangeProofCodeHashes(t *testing.T) {
@@ -629,18 +567,13 @@ func TestChangeProofCodeHashes(t *testing.T) {
 	proof, err := db.ChangeProof(startRoot, endRoot, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
 
-	i := 0
-	for h, err := range proof.CodeHashes() {
-		i++
-		if selectedHashMode == ethhashKey {
-			r.NoError(err, "%T.CodeHashes()", proof)
-			r.Equal(codeHash, h)
-		} else {
-			require.ErrorContains(t, err, "code hash iteration requires an ethereum-mode proof")
-		}
+	hashes, err := proof.CodeHashes()
+	if selectedHashMode == ethhashKey {
+		r.NoError(err, "%T.CodeHashes()", proof)
+		r.Equal([]Hash{codeHash}, hashes)
+	} else {
+		r.ErrorContains(err, "code hash iteration requires an ethereum-mode proof")
 	}
-
-	require.Equalf(t, 1, i, "expected one yield from %T.CodeHashes()", proof)
 }
 
 func TestRangeProofBlocksClose(t *testing.T) {
@@ -1060,9 +993,9 @@ func TestChangeProofFindNextKey(t *testing.T) {
 	nextRange, err := proof.FindNextKey(nothing())
 	r.NoError(err)
 	r.NotNil(nextRange)
-	startKey := nextRange.StartKey()
+	startKey := nextRange.StartKey
 	r.NotEmpty(startKey)
-	r.NoError(nextRange.Free())
+	r.False(nextRange.EndKey.HasValue())
 
 	// Commit the proposal on dbB.
 	_, err = proposal.CommitWithRebase()
@@ -1072,8 +1005,7 @@ func TestChangeProofFindNextKey(t *testing.T) {
 	nextRange, err = proof.FindNextKey(nothing())
 	r.NoError(err)
 	r.NotNil(nextRange)
-	r.Equal(nextRange.StartKey(), startKey)
-	r.NoError(nextRange.Free())
+	r.Equal(startKey, nextRange.StartKey)
 }
 
 func TestChangeProofProposalKeepAlive(t *testing.T) {
@@ -1191,11 +1123,7 @@ func TestMultiRoundChangeProof(t *testing.T) {
 				if nextRange == nil {
 					break
 				}
-				startKey = maybe{
-					hasValue: true,
-					value:    nextRange.StartKey(),
-				}
-				require.NoError(t, nextRange.Free())
+				startKey = something(nextRange.StartKey)
 			}
 
 			// Verify that the root hashes match
@@ -1391,11 +1319,8 @@ func TestUnboundChangeProofOutlivesDatabase(t *testing.T) {
 
 			_, err = proof.Marshal()
 			require.NoError(t, err)
-			nkr, err := proof.FindNextKey(nothing())
+			_, err = proof.FindNextKey(nothing())
 			require.NoError(t, err)
-			if nkr != nil {
-				require.NoError(t, nkr.Free())
-			}
 			require.NoError(t, proof.Drop())
 		})
 	}
