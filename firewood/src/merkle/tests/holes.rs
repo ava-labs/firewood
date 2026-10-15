@@ -1775,6 +1775,49 @@ fn apply_verified_range_proof_commits_merge_and_remedies<H: HashMode>() {
     assert_eq!(fetch_ranges(&again), fetch_ranges(&holes));
 }
 
+#[hash_mode]
+#[test]
+fn apply_verified_change_proof_commits_ops_and_remedies<H: HashMode>() {
+    // The same shape through a change proof whose source is the local state:
+    // the proposal carries the proof's operations plus the surplus deletion,
+    // and the root check passes with the remedies present.
+    let target = worked_target();
+    let mut local = target.clone();
+    local.insert(vec![0xC0], b"surplus".to_vec());
+    local.remove(&vec![0xB0]);
+    local.insert(vec![0xA7, 0x11], b"old".to_vec());
+    let (t, l) = (trie::<H>(&target), trie::<H>(&local));
+    let (db, _dir) = new_db::<H>();
+    commit(&db, &local);
+
+    let key: &[u8] = &[0xA7, 0x11];
+    let proof = t
+        .change_proof(Some(key), Some(key), l.nodestore(), None)
+        .unwrap();
+    let verified = VerifiedChangeProof::verify(
+        Arc::new(proof),
+        root(&t),
+        Some(key),
+        Some(key),
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
+
+    let (proposal, holes) = db.apply_verified_change_proof(&verified).unwrap();
+    assert!(spans(&holes).contains(&("Surplus", vec![0xC])), "{holes:?}");
+    assert!(spans(&holes).contains(&("Missing", vec![0xB])), "{holes:?}");
+    proposal.commit().unwrap();
+
+    let view = db.current_committed_view();
+    let rev = db.revision(db.root_hash().unwrap()).unwrap();
+    assert_eq!(rev.val([0xA7, 0x11]).unwrap().as_deref(), Some(&b"one"[..]));
+    assert_eq!(rev.val([0xC0]).unwrap(), None);
+    let again = view.find_holes_after_change_proof(&verified).unwrap();
+    assert!(only_fetch_or_synced(&again), "{again:?}");
+    assert_eq!(fetch_ranges(&again), fetch_ranges(&holes));
+}
+
 #[test]
 fn apply_verified_range_proof_rejects_a_foreign_hash_mode() {
     let target = worked_target();

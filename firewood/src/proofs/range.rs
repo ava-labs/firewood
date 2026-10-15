@@ -71,8 +71,7 @@ use crate::proofs::ProofError;
 
 /// `(start_key, end_key)` describing a key range still to fetch after a range
 /// or change proof, both bounds inclusive and `None` unbounded above. Produced
-/// by [`fetch_ranges`](crate::proofs::fetch_ranges) and
-/// [`find_next_key_after_change_proof`](crate::proofs::find_next_key_after_change_proof).
+/// by [`fetch_ranges`](crate::proofs::fetch_ranges).
 pub type KeyRange = (Box<[u8]>, Option<Box<[u8]>>);
 
 /// Verification context captured after structural validation of a range proof.
