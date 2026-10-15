@@ -46,11 +46,13 @@ By default, we prohibit bare `unwrap` calls and index dereferencing, as there ar
   hand-written for this reason and must not be re-derived, and a new `Child` variant that
   can own a `Node` must be added to the scan in `BranchNode::drop`. `Node`'s derived
   `PartialEq` recurses and is for tests only.
-- **Nibble range bounds**: A nibble-path lower bound uses the empty slice for
+- **Nibble range bounds**: An inclusive nibble-path lower bound uses the empty slice for
   "unbounded" — the empty slice already sorts as the minimum key. An upper bound must be
   `Option<&[u8]>` with `None` for unbounded (+∞); reusing the empty slice there judges
-  every key out of range. When either bound is threaded through new code, check every
-  comparison site. See `merkle::collapse::CollapseRange` and
+  every key out of range. An *exclusive* lower bound is the one case that needs
+  `Option` too, because `Some(&[])` excludes the empty key and `None` admits it (see
+  `proofs::holes::open_interval`). When either bound is threaded through new code, check
+  every comparison site. See `merkle::collapse::CollapseRange` and
   `proofs::holes::KeySpan::as_key_range`.
 
 ## Lint Suppression Policy
