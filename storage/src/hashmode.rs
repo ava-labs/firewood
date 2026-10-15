@@ -69,27 +69,6 @@ pub struct MerkleDbHash;
 #[derive(Debug, Default)]
 pub struct EthHash;
 
-/// The hash mode selected by the `ethhash` feature's compile-time state:
-/// `EthHash` when enabled, `MerkleDbHash` otherwise.
-#[cfg(feature = "ethhash")]
-pub type DefaultHashMode = EthHash;
-
-/// The hash mode selected by the `ethhash` feature's compile-time state:
-/// `EthHash` when enabled, `MerkleDbHash` otherwise.
-#[cfg(not(feature = "ethhash"))]
-pub type DefaultHashMode = MerkleDbHash;
-
-const _: () = {
-    // `DefaultHashMode` must stay coupled to the `ethhash` feature: it is
-    // the cfg-selected default `H` until the flag is removed.
-    let expected = if cfg!(feature = "ethhash") {
-        NodeHashAlgorithm::Ethereum
-    } else {
-        NodeHashAlgorithm::MerkleDB
-    };
-    assert!(DefaultHashMode::ALGORITHM as u8 == expected as u8);
-};
-
 #[cfg(test)]
 mod tests {
     use super::*;
