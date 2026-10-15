@@ -58,6 +58,9 @@
 //! robust architecture that fulfills the need for such blockchain storage. However, firewood
 //! can also efficiently handle the first regime.
 //!
+//! [View the interactive Merkle trie animation](https://ava-labs.github.io/firewood/assets/firewood_trie.html)
+//! to see how Firewood allocates, reuses, and manages trie nodes across revisions.
+//!
 //! ## Storage Model
 //!
 //! Firewood is built by layers of abstractions that totally decouple the layout/representation
