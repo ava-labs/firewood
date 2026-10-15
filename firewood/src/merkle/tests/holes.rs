@@ -1475,6 +1475,105 @@ fn fold_sibling_below_the_boundary() {
 }
 
 #[test]
+fn fold_target_one_child_local_no_account_value() {
+    // The local trie holds the one storage slot but not the account value,
+    // so no node sits at depth 64 and the slot is stored unfolded, while the
+    // one-child target stores it folded. The start key runs through an
+    // absent slot of the account: the account key is a point fix, the shared
+    // slot is Synced, and after the fix the account branch exists and both
+    // sides fold alike.
+    let target = account_with_slots(&[0x20]);
+    let mut local = target.clone();
+    local.remove(ACCOUNT_A.as_slice());
+    let start = account_storage_key(&ACCOUNT_A, 0xF0);
+    let holes = assert_converges(&target, &local, Some(&start), None);
+
+    assert!(
+        holes
+            .iter()
+            .any(|h| matches!(h, Hole::PointFix { key, .. } if **key == ACCOUNT_A)),
+        "{holes:?}"
+    );
+    let labels = spans(&holes);
+    assert!(
+        labels
+            .iter()
+            .any(|(l, p)| *l == "Synced" && p.ends_with(&[0x2])),
+        "{holes:?}"
+    );
+    assert!(!labels.iter().any(|(l, _)| *l == "Stale"), "{holes:?}");
+}
+
+#[test]
+fn fold_compressed_local_shapes() {
+    // The local account value is absent, so the local slot sits in a node
+    // whose partial path runs through the account's position, while the
+    // one-child target folds it. The shapes below reach that compressed node
+    // in different ways; none may read Stale, and one round of remedies
+    // converges.
+    let target = account_with_slots(&[0x20]);
+    let mut local = target.clone();
+    local.remove(ACCOUNT_A.as_slice());
+    let below = account_storage_key(&ACCOUNT_A, 0xF0);
+
+    // Swapped sides: the end key ends inside the target proof node's partial
+    // path, which runs through the account's position, while the local
+    // account branch folds its one slot.
+    assert_no_stale(&assert_converges(&local, &target, None, Some(&ACCOUNT_A)));
+    // The start key diverges from the local node's partial path below it.
+    assert_no_stale(&assert_converges(&target, &local, Some(&below), None));
+
+    // A sibling sharing 63 nibbles puts the compressed node on a child edge.
+    let mut sibling = ACCOUNT_A;
+    sibling[31] = 0x12;
+    let (mut target_s, mut local_s) = (target.clone(), local.clone());
+    target_s.insert(sibling.to_vec(), account(1, 0xBB));
+    local_s.insert(sibling.to_vec(), account(1, 0xBB));
+    assert_no_stale(&assert_converges(&target_s, &local_s, Some(&below), None));
+
+    // The local slot differs from the target's: the target slot is missing
+    // and the local one surplus.
+    let mut other = account_with_slots(&[0x30]);
+    other.remove(ACCOUNT_A.as_slice());
+    let holes = assert_converges(&target, &other, Some(&below), None);
+    assert_no_stale(&holes);
+    let labels = spans(&holes);
+    assert!(labels.iter().any(|(l, _)| *l == "Missing"), "{holes:?}");
+    assert!(labels.iter().any(|(l, _)| *l == "Surplus"), "{holes:?}");
+}
+
+fn assert_no_stale(holes: &[Hole]) {
+    assert!(
+        !holes.iter().any(|h| matches!(h, Hole::Stale(_))),
+        "{holes:?}"
+    );
+}
+
+#[test]
+fn fold_target_slot_without_account_local_one_child() {
+    // The mirror of the shape above: the target holds one storage slot and
+    // no account value, while the local account holds the same slot alone.
+    // With the end key diverging at the slot nibble, the shared slot reads
+    // Synced, not Stale.
+    let mut target = account_with_slots(&[0x20]);
+    target.remove(ACCOUNT_A.as_slice());
+    let local = account_with_slots(&[0x20]);
+    let end = account_storage_key(&ACCOUNT_A, 0x10);
+    let holes = assert_converges(&target, &local, None, Some(&end));
+
+    // The account's nibbles plus the slot nibble.
+    let slot_span_len = 2 * ACCOUNT_A.len() + 1;
+    let labels = spans(&holes);
+    assert!(
+        labels
+            .iter()
+            .any(|(l, p)| *l == "Synced" && p.len() == slot_span_len && p.ends_with(&[0x2])),
+        "{holes:?}"
+    );
+    assert!(!labels.iter().any(|(l, _)| *l == "Stale"), "{holes:?}");
+}
+
+#[test]
 fn fold_same_count_needs_no_normalization() {
     // One slot on both sides: both stored hashes are folded and compare
     // directly. Pins that the normalization stays out of the way.
