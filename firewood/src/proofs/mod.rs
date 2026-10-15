@@ -341,6 +341,8 @@ pub use self::header::InvalidHeader;
 pub use self::holes::DeletePrefixes;
 pub use self::holes::Hole;
 pub use self::holes::KeySpan;
+pub use self::holes::fetch_ranges;
+pub use self::holes::remedy_ops;
 pub use self::range::KeyRange;
 pub use self::range::RangeProof;
 pub use self::range::RangeProofVerificationContext;

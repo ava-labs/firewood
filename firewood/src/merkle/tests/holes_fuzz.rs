@@ -65,6 +65,7 @@ use super::holes::assert_matches_truth;
 use super::holes::covers;
 use super::holes::in_applied;
 use super::holes::new_db;
+use super::holes::only_fetch_or_synced;
 use super::holes::remedy_batch;
 use super::holes::root;
 use super::holes::trie;
@@ -83,11 +84,25 @@ use crate::merkle::RightBoundary;
 use crate::merkle::holes::find_holes_after_change_proof;
 use crate::merkle::holes::find_holes_after_range_proof;
 use crate::merkle::right_edge;
+use crate::proofs::fetch_ranges;
 
 /// A view that counts the node reads made through it.
-struct Counting<'a, T> {
+pub(super) struct Counting<'a, T> {
     inner: &'a T,
     reads: Cell<usize>,
+}
+
+impl<'a, T> Counting<'a, T> {
+    pub(super) const fn new(inner: &'a T) -> Self {
+        Self {
+            inner,
+            reads: Cell::new(0),
+        }
+    }
+
+    pub(super) fn reads(&self) -> usize {
+        self.reads.get()
+    }
 }
 
 impl<T: NodeReader> NodeReader for Counting<'_, T> {
@@ -489,6 +504,60 @@ fn leg<H: HashMode>(
     Some(holes)
 }
 
+/// Applies `verified` to `local` through [`Db::apply_verified_range_proof`]
+/// and asserts that its labels report the same fetch ranges as `range_holes`
+/// and differ from them only by deletions, and that after the commit only
+/// fetch and agreement labels remain, with the fetch ranges unchanged.
+fn apply_leg<H: HashMode>(
+    db: &Db<H>,
+    local: &Map,
+    verified: &VerifiedRangeProof,
+    range_holes: &[Hole],
+    locator: &str,
+) {
+    reset_to(db, local);
+    let (proposal, pre) = db
+        .apply_verified_range_proof(verified)
+        .unwrap_or_else(|e| panic!("apply failed ({locator}): {e}"));
+    assert_eq!(
+        fetch_ranges(&pre),
+        fetch_ranges(range_holes),
+        "parent walk {pre:?} against post-merge walk {range_holes:?} ({locator})"
+    );
+    for label in &pre {
+        assert!(
+            matches!(label, Hole::Surplus(_) | Hole::PointSurplus { .. })
+                || range_holes.contains(label),
+            "{label:?} from the parent walk is neither a deletion nor in {range_holes:?} \
+             ({locator})"
+        );
+    }
+    proposal.commit().unwrap();
+    let again = db
+        .current_committed_view()
+        .find_holes_after_range_proof(verified)
+        .unwrap_or_else(|e| panic!("walk after apply failed ({locator}): {e}"));
+    assert!(
+        only_fetch_or_synced(&again),
+        "labels other than fetch or synced remain after apply: {again:?} ({locator})"
+    );
+    assert_eq!(
+        fetch_ranges(&again),
+        fetch_ranges(&pre),
+        "the commit changed the fetch ranges ({locator})"
+    );
+}
+
+/// The range the merge writes: `[start_key, right_edge_key]` from the
+/// verification context.
+fn merge_range(verified: &VerifiedRangeProof) -> Applied {
+    let ctx = verified.verification();
+    (
+        ctx.start_key().map(<[u8]>::to_vec),
+        ctx.right_edge_key().map(<[u8]>::to_vec),
+    )
+}
+
 fn run_one<H: HashMode>(run: usize, seed: u64, db: &Db<H>, stats: &mut Stats) {
     eprintln!(
         "run {run} ({:?}): seed={seed} (export FIREWOOD_TEST_SEED={seed} to reproduce)",
@@ -523,15 +592,10 @@ fn run_one<H: HashMode>(run: usize, seed: u64, db: &Db<H>, stats: &mut Stats) {
         limit,
     )
     .unwrap_or_else(|e| panic!("verify failed ({locator}): {e}"));
-    // The merge writes `[start_key, right_edge_key]` from the verification
-    // context. The oracle's scope is `applied_range`, which drops the lower
-    // bound when the start proof is empty: the walk labels nothing below the
-    // start key then, and the local keys there must survive untouched.
-    let ctx = verified.verification();
-    let merge_range: Applied = (
-        ctx.start_key().map(<[u8]>::to_vec),
-        ctx.right_edge_key().map(<[u8]>::to_vec),
-    );
+    // The oracle's scope is `applied_range`, which drops the lower bound when
+    // the start proof is empty: the walk labels nothing below the start key
+    // then, and the local keys there must survive untouched.
+    let merge_range = merge_range(&verified);
     let applied = applied_range(&verified);
     let local_range = merged(&target.map, &local, &merge_range);
     let unlabelled_below: Vec<Vec<u8>> = match (&applied.0, &merge_range.0) {
@@ -550,6 +614,9 @@ fn run_one<H: HashMode>(run: usize, seed: u64, db: &Db<H>, stats: &mut Stats) {
         stats,
         |view| find_holes_after_range_proof::<H, _>(&verified, view),
     );
+    if let Some(range_holes) = &range_holes {
+        apply_leg(db, &local, &verified, range_holes, &locator);
+    }
 
     // Change-proof leg: the proof a syncing client would hold, from the
     // target with the client's own state as the source.

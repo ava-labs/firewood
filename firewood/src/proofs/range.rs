@@ -69,8 +69,9 @@ use crate::api::HashKey;
 use crate::merkle::verify_range_proof;
 use crate::proofs::ProofError;
 
-/// `(start_key, end_key)` describing the next key range to fetch after a
-/// range or change proof. Returned by `find_next_key_after_*_proof`.
+/// `(start_key, end_key)` describing a key range to fetch, both bounds
+/// inclusive; `None` is unbounded above. Returned by
+/// `find_next_key_after_*_proof` and [`fetch_ranges`](crate::proofs::fetch_ranges).
 pub type KeyRange = (Box<[u8]>, Option<Box<[u8]>>);
 
 /// Verification context captured after structural validation of a range proof.

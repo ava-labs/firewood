@@ -2,8 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 //! Tests for [`VerifiedRangeProof`] and [`VerifiedChangeProof`], which pair a
-//! proof with the verification context produced from it, and for applying a
-//! verified change proof to a database.
+//! proof with the verification context produced from it, and for applying
+//! verified proofs to a database.
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -15,17 +15,22 @@ use firewood_storage::HashedNodeReader;
 use firewood_storage::MerkleDbHash;
 use firewood_storage::NodeHashAlgorithm;
 
+use super::DEFAULT_THREAD_STACK;
 use super::init_merkle;
+use super::prefix_chain_keys;
+use super::spawn_on_stack;
 use crate::ProofError;
 use crate::VerifiedChangeProof;
 use crate::VerifiedRangeProof;
 use crate::api::BatchOp;
 use crate::api::Db as _;
 use crate::api::DbView as _;
+use crate::api::MAX_KEY_BYTES;
 use crate::api::Proposal as _;
 use crate::api::{self};
 use crate::db::Db;
 use crate::db::DbConfig;
+use crate::proofs::Hole;
 
 fn kvs(n: u8) -> Vec<(Vec<u8>, Vec<u8>)> {
     (0..n).map(|i| (vec![i, i ^ 0x5A], vec![i; 4])).collect()
@@ -303,4 +308,69 @@ fn db_rejects_verified_change_proof_from_other_mode() {
     .unwrap();
 
     assert_hash_mode_mismatch(target.apply_verified_change_proof(&verified));
+}
+
+/// Applying a verified range proof whose boundary keys sit at the bottom and
+/// middle of a maximal-depth prefix chain, to a local trie holding a surplus
+/// key at each boundary, deletes the surplus and reaches the proof's root on
+/// a default-size thread stack.
+#[hash_mode]
+#[test]
+fn test_max_bounded_depth_apply_verified_range_proof_survives_default_stack<H: HashMode>() {
+    spawn_on_stack(DEFAULT_THREAD_STACK, || {
+        const CHAIN_TAIL: u8 = 0x11;
+        let mut keys = prefix_chain_keys(MAX_KEY_BYTES, CHAIN_TAIL);
+        keys.sort_unstable();
+        let target: Vec<(Vec<u8>, Vec<u8>)> =
+            keys.iter().map(|k| (k.clone(), b"v".to_vec())).collect();
+        let (start, end) = (&keys[0], &keys[MAX_KEY_BYTES / 2]);
+        // A proper prefix of the deepest key, below the start key, and a
+        // sibling of the end key one byte above it.
+        let (_, below_start) = start.split_last().unwrap();
+        let below_start = below_start.to_vec();
+        let mut above_end = end.clone();
+        *above_end.last_mut().unwrap() = CHAIN_TAIL + 1;
+        let mut local = target.clone();
+        local.push((below_start, b"surplus".to_vec()));
+        local.push((above_end, b"surplus".to_vec()));
+
+        let (target_db, _target_dir) = new_db::<H>();
+        let target_root = commit_puts(&target_db, &target);
+        let (local_db, _local_dir) = new_db::<H>();
+        commit_puts(&local_db, &local);
+
+        let proof = target_db
+            .revision(target_root.clone())
+            .unwrap()
+            .range_proof(Some(start.as_slice()), Some(end.as_slice()), None)
+            .unwrap();
+        let verified = VerifiedRangeProof::verify(
+            Arc::new(proof),
+            target_root.clone(),
+            Some(start),
+            Some(end),
+            H::ALGORITHM,
+            None,
+        )
+        .unwrap();
+
+        let (proposal, holes) = local_db.apply_verified_range_proof(&verified).unwrap();
+        assert!(
+            holes
+                .iter()
+                .any(|h| matches!(h, Hole::Surplus(_) | Hole::PointSurplus { .. })),
+            "the walk labeled no surplus key for deletion: {holes:?}"
+        );
+        proposal.commit().unwrap();
+        assert_eq!(local_db.root_hash(), Some(target_root));
+
+        let again = local_db
+            .current_committed_view()
+            .find_holes_after_range_proof(&verified)
+            .unwrap();
+        assert!(
+            again.iter().all(|h| matches!(h, Hole::Synced(_))),
+            "labels other than Synced remain after commit: {again:?}"
+        );
+    });
 }
