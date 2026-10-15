@@ -6,9 +6,7 @@
 use std::sync::Arc;
 
 use firewood_macros::hash_mode;
-use firewood_storage::BranchNode;
 use firewood_storage::Child;
-use firewood_storage::Children;
 use firewood_storage::Committed;
 use firewood_storage::DeletedNodeTracking;
 use firewood_storage::EthHash;
@@ -240,19 +238,10 @@ fn assert_file_io<T: std::fmt::Debug>(result: Result<T, api::Error>) {
 /// slot A (partial path from [`UNHASHED_LEAF_PATH`]), so a probe through A
 /// meets an unhashed child until `root_hash()` is first called.
 fn unhashed_recon_fixture<H: HashMode>() -> NodeStore<Reconstructed<MemStore, H>, MemStore, H> {
-    let storage = Arc::new(MemStore::new(Vec::new()));
-    let mut recon = NodeStore::new_empty_recon(Arc::clone(&storage));
-    let mut children = Children::new();
-    children[PathComponent::ALL[0xA]] = Some(Child::Node(Node::Leaf(LeafNode {
+    super::holes::recon_with_child_at_a::<H>(Node::Leaf(LeafNode {
         partial_path: Path::from_nibbles_iterator(NibblesIterator::new(UNHASHED_LEAF_PATH)),
         value: b"v0".to_vec().into_boxed_slice(),
-    })));
-    recon.root_mut().replace(Node::Branch(Box::new(BranchNode {
-        partial_path: Path::new(),
-        value: None,
-        children,
-    })));
-    recon.into()
+    }))
 }
 
 /// The fixture's keys plus 0xB155, so that [B] becomes a branch with
