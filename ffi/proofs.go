@@ -29,12 +29,6 @@ package ffi
 // #cgo nocallback fwd_db_change_proof
 // #cgo noescape fwd_db_verify_change_proof
 // #cgo nocallback fwd_db_verify_change_proof
-// #cgo noescape fwd_db_verify_and_commit_change_proof
-// #cgo nocallback fwd_db_verify_and_commit_change_proof
-// #cgo noescape fwd_change_proof_find_next_key
-// #cgo nocallback fwd_change_proof_find_next_key
-// #cgo noescape fwd_change_proof_code_hash_iter
-// #cgo nocallback fwd_change_proof_code_hash_iter
 // #cgo noescape fwd_verified_change_proof_commit
 // #cgo nocallback fwd_verified_change_proof_commit
 // #cgo noescape fwd_verified_change_proof_next_key_ranges
@@ -510,71 +504,6 @@ func (p *ChangeProof) Verify(
 	}
 
 	return p.db.newVerifiedChangeProof(C.fwd_db_verify_change_proof(p.db.handle, p.ptr, args))
-}
-
-// VerifyAndCommitChangeProof verifies the change proof and commits it in a
-// single call. The proof is not consumed — it remains available for
-// [ChangeProof.FindNextKey] or serialization afterward.
-func (db *Database) VerifyAndCommitChangeProof(
-	proof *ChangeProof,
-	endRoot Hash,
-	startKey, endKey Maybe[[]byte],
-	maxLength uint32,
-) (Hash, error) {
-	db.handleLock.RLock()
-	defer db.handleLock.RUnlock()
-	if db.handle == nil {
-		return EmptyRoot, errDBClosed
-	}
-
-	proof.lease.mu.RLock()
-	defer proof.lease.mu.RUnlock()
-	if proof.dropped {
-		return EmptyRoot, errDroppedChangeProof
-	}
-
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	args := C.CreateChangeProofArgs{
-		end_root:   newCHashKey(endRoot),
-		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
-		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
-		max_length: C.uint32_t(maxLength),
-	}
-
-	db.commitLock.Lock()
-	defer db.commitLock.Unlock()
-	return getHashKeyFromHashResult(C.fwd_db_verify_and_commit_change_proof(db.handle, proof.ptr, args))
-}
-
-// FindNextKey returns the next key range to fetch for a change proof,
-// or nil if there are no more keys to fetch. The proof is not consumed.
-func (proof *ChangeProof) FindNextKey(endKey Maybe[[]byte]) (*NextKeyRange, error) {
-	proof.lease.mu.RLock()
-	defer proof.lease.mu.RUnlock()
-	if proof.dropped {
-		return nil, errDroppedChangeProof
-	}
-
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	return getNextKeyRangeFromNextKeyRangeResult(
-		C.fwd_change_proof_find_next_key(proof.ptr, newMaybeBorrowedBytes(endKey, &pinner)),
-	)
-}
-
-// CodeHashes returns the contract code hashes referenced by the account values
-// this proof puts, on the same terms as [RangeProof.CodeHashes]. Delete and
-// DeleteRange entries are skipped.
-func (p *ChangeProof) CodeHashes() ([]Hash, error) {
-	p.lease.mu.RLock()
-	defer p.lease.mu.RUnlock()
-	if p.dropped {
-		return nil, errDroppedChangeProof
-	}
-	return collectCodeHashes(C.fwd_change_proof_code_hash_iter(p.ptr))
 }
 
 // Commit applies the proof to the database and returns the new root hash.
