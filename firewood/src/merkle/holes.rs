@@ -83,7 +83,7 @@ use crate::merkle::Merkle;
 use crate::merkle::RightBoundary;
 use crate::merkle::Value;
 use crate::merkle::descend::ProbeOutcome;
-use crate::merkle::descend::descend_to_prefix;
+use crate::merkle::descend::descend_to_node;
 use crate::merkle::descend::hashable_parts;
 use crate::merkle::descend::subtree_hash;
 use crate::merkle::proven_right_edge;
@@ -363,9 +363,12 @@ impl<'a, H: HashMode, T: HashedNodeReader> Walk<'a, H, T> {
     /// convention under which to compare its slots, when the boundary node at
     /// `depth` is an account branch and the local trie holds an account
     /// branch at the same position whose storage-child count straddles one
-    /// against the target's `target_count`. Returns `None` in every other
-    /// case, including a local trie with no branch exactly at that depth,
-    /// where the ordinary probe is already right.
+    /// against the target's `target_count`. The local branch is found whether
+    /// the probe lands on it or on the child edge of a branch at depth 63,
+    /// which is where a sibling account sharing the first 63 nibbles puts it.
+    /// Returns `None` in every other case, including a local trie with no
+    /// branch exactly at that depth, where the ordinary probe is already
+    /// right.
     fn straddle(
         &self,
         boundary: &[PathComponent],
@@ -378,8 +381,13 @@ impl<'a, H: HashMode, T: HashedNodeReader> Walk<'a, H, T> {
         let Some(prefix) = boundary.get(..depth) else {
             return Ok(None);
         };
-        let ProbeOutcome::AtNode { node, consumed } = descend_to_prefix(self.view, prefix)? else {
-            return Ok(None);
+        // Reading the child at a child edge finds the node at the account's
+        // position however many branches sit above it.
+        let (node, consumed) = match descend_to_node(self.view, prefix)? {
+            ProbeOutcome::AtNode { node, consumed } => (node, consumed),
+            ProbeOutcome::Empty | ProbeOutcome::UnhashedChild | ProbeOutcome::EdgeExact(_) => {
+                return Ok(None);
+            }
         };
         let Node::Branch(branch) = &*node else {
             return Ok(None);

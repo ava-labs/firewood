@@ -83,6 +83,29 @@ pub(crate) fn descend_to_prefix<T: TrieReader>(
     nodestore: &T,
     prefix: &[PathComponent],
 ) -> Result<ProbeOutcome, FileIoError> {
+    descend(nodestore, prefix, true)
+}
+
+/// As [`descend_to_prefix`], but a probe ending exactly on a child edge reads
+/// the child and reports it as [`ProbeOutcome::AtNode`] with `consumed` 0,
+/// so the outcome is never [`ProbeOutcome::EdgeExact`]. For a caller that
+/// needs the node at a position rather than its hash.
+///
+/// # Errors
+///
+/// As [`descend_to_prefix`].
+pub(crate) fn descend_to_node<T: TrieReader>(
+    nodestore: &T,
+    prefix: &[PathComponent],
+) -> Result<ProbeOutcome, FileIoError> {
+    descend(nodestore, prefix, false)
+}
+
+fn descend<T: TrieReader>(
+    nodestore: &T,
+    prefix: &[PathComponent],
+    stop_at_edge: bool,
+) -> Result<ProbeOutcome, FileIoError> {
     let Some(root) = nodestore.root_as_maybe_persisted_node() else {
         return Ok(ProbeOutcome::Empty);
     };
@@ -145,13 +168,13 @@ pub(crate) fn descend_to_prefix<T: TrieReader>(
                 return Ok(ProbeOutcome::UnhashedChild);
             }
             Some(Child::AddressWithHash(address, hash)) => {
-                if rest.is_empty() {
+                if stop_at_edge && rest.is_empty() {
                     return Ok(ProbeOutcome::EdgeExact(hash.clone()));
                 }
                 node = nodestore.read_node(*address)?;
             }
             Some(Child::MaybePersisted(maybe_persisted, hash)) => {
-                if rest.is_empty() {
+                if stop_at_edge && rest.is_empty() {
                     return Ok(ProbeOutcome::EdgeExact(hash.clone()));
                 }
                 node = maybe_persisted.as_shared_node(nodestore)?;
