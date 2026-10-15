@@ -28,8 +28,10 @@ use firewood_storage::TriePathFromPackedBytes;
 
 use super::init_merkle_in;
 use crate::Hole;
+use crate::ProofError;
 use crate::VerifiedRangeProof;
 use crate::api::HashKey;
+use crate::api::{self};
 use crate::merkle::Merkle;
 use crate::merkle::holes::find_holes_after_range_proof;
 
@@ -53,6 +55,13 @@ fn root<H: HashMode>(t: &Trie<H>) -> HashKey {
 
 fn nibbles(key: &[u8]) -> Vec<PathComponent> {
     Vec::<PathComponent>::path_from_packed_bytes(key)
+}
+
+fn components(nibbles: &[u8]) -> Vec<PathComponent> {
+    nibbles
+        .iter()
+        .map(|&n| PathComponent::try_new(n).expect("test nibble in range"))
+        .collect()
 }
 
 /// Take a range proof from `target`, verify it under `H`, and run the walk
@@ -340,4 +349,368 @@ fn surplus_hole<H: HashMode>() {
         "the local trie holds every target key"
     );
     assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+}
+
+#[hash_mode]
+#[test]
+fn mid_edge_adjustment<H: HashMode>() {
+    // The local trie holds only `0xA711`, as one leaf whose edge passes through
+    // `[A,7,1]`, the stub the start proof carries for the target's subtree
+    // there. That subtree reads Synced and nothing reads Stale.
+    let target = map(&[
+        (&[0xA7, 0x11], b"one"),
+        (&[0xA7, 0x77], b"two"),
+        (&[0xB0, 0x55], b"three"),
+    ]);
+    let local = map(&[(&[0xA7, 0x11], b"one")]);
+    let (t, l) = (trie::<H>(&target), trie::<H>(&local));
+    let (verified, holes) = range_holes(&t, &l, Some(&[0xA7, 0x77]), None, None);
+
+    assert!(spans(&holes).contains(&("Synced", vec![0xA, 0x7, 0x1])));
+    assert!(!spans(&holes).iter().any(|(label, _)| *label == "Stale"));
+    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+}
+
+#[hash_mode]
+#[test]
+fn prefix_value_surplus<H: HashMode>() {
+    // A local value at `0xA7`, a proper prefix of the start key, where the
+    // target's node at `[A,7]` carries no value.
+    let target = map(&[(&[0xA7, 0x11], b"one"), (&[0xA7, 0x77], b"two")]);
+    let mut local = target.clone();
+    local.insert(vec![0xA7], b"prefix".to_vec());
+    let (t, l) = (trie::<H>(&target), trie::<H>(&local));
+    let (verified, holes) = range_holes(&t, &l, Some(&[0xA7, 0x11]), None, None);
+
+    assert!(
+        holes
+            .iter()
+            .any(|h| matches!(h, Hole::PointSurplus { key } if **key == [0xA7]))
+    );
+    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+}
+
+#[hash_mode]
+#[test]
+fn path_value_repair<H: HashMode>() {
+    // The target's path node at `[A,7]` carries a value at key `0xA7`, a
+    // proper prefix of the start key; the proof carries it in full, so the
+    // local side is repaired without a fetch whether it is absent or wrong.
+    let target = map(&[
+        (&[0xA7], b"value"),
+        (&[0xA7, 0x11], b"one"),
+        (&[0xA7, 0x77], b"two"),
+    ]);
+    let mut local = target.clone();
+    local.remove(&vec![0xA7]);
+    let (t, l) = (trie::<H>(&target), trie::<H>(&local));
+    let (verified, holes) = range_holes(&t, &l, Some(&[0xA7, 0x11]), None, None);
+    assert!(holes.iter().any(
+        |h| matches!(h, Hole::PointFix { key, value } if **key == [0xA7] && &**value == b"value")
+    ));
+    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+
+    local.insert(vec![0xA7], b"wrong".to_vec());
+    let l = trie::<H>(&local);
+    let (verified, holes) = range_holes(&t, &l, Some(&[0xA7, 0x11]), None, None);
+    assert!(
+        holes
+            .iter()
+            .any(|h| matches!(h, Hole::PointFix { key, .. } if **key == [0xA7]))
+    );
+    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+}
+
+#[test]
+fn hashed_path_value_is_point_stale() {
+    // Proofs built here carry values in full, but a MerkleDB proof from
+    // another implementation carries only the digest of a value of 32 bytes
+    // or more. The path node at `0xA7` is below the start key, so the
+    // verifier does not check its value against the key-value pairs and the
+    // hashed form verifies. A differing local value then needs a fetch:
+    // PointStale, since there is no value in hand to write.
+    type H = MerkleDbHash;
+    let long = vec![0x5A; 40];
+    let target = map(&[
+        (&[0xA7], long.as_slice()),
+        (&[0xA7, 0x11], b"one"),
+        (&[0xA7, 0x77], b"two"),
+    ]);
+    let mut local = target.clone();
+    local.insert(vec![0xA7], b"wrong".to_vec());
+    let (t, l) = (trie::<H>(&target), trie::<H>(&local));
+    let start: &[u8] = &[0xA7, 0x11];
+
+    let honest = t.range_proof(Some(start), None, None).unwrap();
+    let mut start_nodes: Vec<crate::ProofNode> = honest.start_proof().as_ref().to_vec();
+    let path_node = start_nodes
+        .iter_mut()
+        .find(|n| n.key.as_slice() == components(&[0xA, 0x7]).as_slice())
+        .expect("the start proof passes through the path node");
+    let digest = path_node
+        .value_digest
+        .take()
+        .expect("the path node carries a value");
+    path_node.value_digest = Some(digest.make_hash(H::ALGORITHM).map(Box::from));
+    let hashed = crate::RangeProof::new(
+        crate::Proof::new(start_nodes.into_boxed_slice()),
+        honest.end_proof().clone(),
+        honest.key_values().to_vec().into_boxed_slice(),
+        H::ALGORITHM,
+    );
+    let verified =
+        VerifiedRangeProof::verify(hashed, root(&t), Some(start), None, H::ALGORITHM, None)
+            .expect("a hashed out-of-range value verifies");
+    let holes = find_holes_after_range_proof::<H, _>(&verified, l.nodestore()).unwrap();
+    assert!(
+        holes
+            .iter()
+            .any(|h| matches!(h, Hole::PointStale { key } if **key == [0xA7])),
+        "{holes:?}"
+    );
+    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+}
+
+#[hash_mode]
+#[test]
+fn straddle_terminal_surplus<H: HashMode>() {
+    // Absent-child terminal: the end proof for `0xA74F` ends at `[A,7]` with
+    // slot 4 absent, so `[A,7,4]` is proven empty over its whole extent. Local
+    // keys there on both sides of the boundary are Surplus, including the
+    // ones inside the applied range.
+    let target = map(&[(&[0xA7, 0x11], b"one"), (&[0xA7, 0x77], b"two")]);
+    let mut local = target.clone();
+    local.insert(vec![0xA7, 0x40], b"in".to_vec());
+    local.insert(vec![0xA7, 0x4F], b"edge".to_vec());
+    local.insert(vec![0xA7, 0x4A], b"out".to_vec());
+    let (t, l) = (trie::<H>(&target), trie::<H>(&local));
+    let (verified, holes) = range_holes(&t, &l, None, Some(&[0xA7, 0x4F]), None);
+    assert!(spans(&holes).contains(&("Surplus", vec![0xA, 0x7, 0x4])));
+    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+
+    // Divergence terminal: the end proof for `0xA800` diverges inside `A`'s
+    // partial path `[7]`, so `[A,8]` is proven empty. The applied range ends
+    // at the requested `0xA800`, and local keys `0xA800` and `0xA8FF` straddle
+    // it.
+    let mut local = target.clone();
+    local.insert(vec![0xA8, 0x00], b"in".to_vec());
+    local.insert(vec![0xA8, 0xFF], b"out".to_vec());
+    let l = trie::<H>(&local);
+    let (verified, holes) = range_holes(&t, &l, None, Some(&[0xA8, 0x00]), None);
+    assert!(spans(&holes).contains(&("Surplus", vec![0xA, 0x8])));
+    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+}
+
+#[hash_mode]
+#[test]
+fn end_key_ending_inside_a_compressed_edge<H: HashMode>() {
+    // The requested end `0xB0` ends inside the partial path `[0,5,5]` of the
+    // branch under `B`, which carries no value, so the right edge stays at the
+    // requested key and the terminal is the mid-edge case: the node's
+    // continuation `[B,0,5]` is reported above via a re-encoded hash and the
+    // other continuations are empty.
+    let target = map(&[
+        (&[0xA7, 0x11], b"one"),
+        (&[0xA7, 0x77], b"two"),
+        (&[0xB0, 0x55, 0x11], b"three"),
+        (&[0xB0, 0x55, 0x22], b"four"),
+    ]);
+    let t = trie::<H>(&target);
+
+    let l = trie::<H>(&target);
+    let (verified, holes) = range_holes(&t, &l, None, Some(&[0xB0]), None);
+    assert_eq!(verified.verification().right_edge_key(), Some(&[0xB0][..]));
+    assert!(spans(&holes).contains(&("Synced", vec![0xB, 0x0, 0x5])));
+    assert_matches_truth(&target, &target, &applied_range(&verified), &holes);
+
+    let local = map(&[(&[0xA7, 0x11], b"one"), (&[0xA7, 0x77], b"two")]);
+    let l = trie::<H>(&local);
+    let (verified, holes) = range_holes(&t, &l, None, Some(&[0xB0]), None);
+    assert!(spans(&holes).contains(&("Missing", vec![0xB, 0x0, 0x5])));
+    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+}
+
+#[hash_mode]
+#[test]
+fn empty_start_proof_emits_nothing_below_start<H: HashMode>() {
+    // A range proof with an empty start proof, verified for a requested start
+    // key: the walk labels no local key below the start key, and the end side
+    // still reports its Synced span.
+    let target = map(&[(&[0x20], b"a"), (&[0x30], b"b"), (&[0x40], b"c")]);
+    let mut local = target.clone();
+    local.insert(vec![0x05], b"low".to_vec());
+    local.insert(vec![0x0A, 0x0A], b"low".to_vec());
+    let (t, l) = (trie::<H>(&target), trie::<H>(&local));
+
+    let proof = t.range_proof(None, Some(&[0x30]), None).unwrap();
+    assert!(proof.start_proof().is_empty());
+    let start: &[u8] = &[0x10];
+    let verified = VerifiedRangeProof::verify(
+        Arc::new(proof),
+        root(&t),
+        Some(start),
+        Some(&[0x30]),
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
+    let holes = find_holes_after_range_proof::<H, _>(&verified, l.nodestore()).unwrap();
+
+    for key in local.keys().filter(|k| k.as_slice() < start) {
+        assert!(
+            holes.iter().all(|h| !covers(h, key)),
+            "{key:02x?} below the start key is labeled by {holes:?}"
+        );
+    }
+    assert!(spans(&holes).contains(&("Synced", vec![0x4])));
+    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+}
+
+#[test]
+fn tampered_partial_len_does_not_steer_the_walk() {
+    // An end proof with `partial_len` zeroed below the root verifies under
+    // MerkleDB, whose preimage omits it, and the walk returns the same labels
+    // as for the untampered proof. MerkleDB-only: the Ethereum preimage
+    // includes the partial path, so the tamper does not verify there.
+    type H = MerkleDbHash;
+    let target = worked_target();
+    let local = map(&[(&[0xB0], b"stale")]);
+    let (t, l) = (trie::<H>(&target), trie::<H>(&local));
+    let end: &[u8] = &[0xA7, 0x4F];
+    let (_, expected) = range_holes(&t, &l, None, Some(end), None);
+
+    let honest = t.range_proof(None, Some(end), None).unwrap();
+    let mut end_nodes: Vec<crate::ProofNode> = honest.end_proof().as_ref().to_vec();
+    assert!(
+        end_nodes.len() >= 2,
+        "the end proof descends below the root"
+    );
+    for node in end_nodes.iter_mut().skip(1) {
+        node.partial_len = 0;
+    }
+    let tampered = crate::RangeProof::new(
+        honest.start_proof().clone(),
+        crate::Proof::new(end_nodes.into_boxed_slice()),
+        honest.key_values().to_vec().into_boxed_slice(),
+        H::ALGORITHM,
+    );
+    let verified =
+        VerifiedRangeProof::verify(tampered, root(&t), None, Some(end), H::ALGORITHM, None)
+            .expect("MerkleDB does not authenticate partial_len");
+    let holes = find_holes_after_range_proof::<H, _>(&verified, l.nodestore()).unwrap();
+    assert_eq!(holes, expected);
+}
+
+#[hash_mode]
+#[test]
+fn out_of_range_interval_covered<H: HashMode>() {
+    // Target `{0x10, 0x28}`, local `{0x10, 0x26, 0x28}`, request `[0x00,
+    // 0x25]`. The end proof's terminal is the leaf for `0x28`, outside the
+    // request, so the proven right edge falls back to `0x25`; `0x26` lies in
+    // the interval `(0x25, 0x28)` that neither the merge nor the walk above
+    // `0x28` touches, and must still be labeled.
+    let target = map(&[(&[0x10], b"a"), (&[0x28], b"b")]);
+    let local = map(&[(&[0x10], b"a"), (&[0x26], b"x"), (&[0x28], b"b")]);
+    let (t, l) = (trie::<H>(&target), trie::<H>(&local));
+    let (verified, holes) = range_holes(&t, &l, Some(&[0x00]), Some(&[0x25]), None);
+
+    assert_eq!(verified.verification().right_edge_key(), Some(&[0x25][..]));
+    assert!(
+        holes
+            .iter()
+            .any(|h| matches!(h, Hole::Surplus(_)) && covers(h, &[0x26]))
+    );
+    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+
+    // The terminal key itself is probed as a point: a differing local value
+    // is repaired from the proof.
+    let mut local = local.clone();
+    local.insert(vec![0x28], b"old".to_vec());
+    let l = trie::<H>(&local);
+    let (verified, holes) = range_holes(&t, &l, Some(&[0x00]), Some(&[0x25]), None);
+    assert!(
+        holes
+            .iter()
+            .any(|h| matches!(h, Hole::PointFix { key, .. } if **key == [0x28]))
+    );
+    assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+}
+
+#[hash_mode]
+#[test]
+fn holes_partition<H: HashMode>() {
+    // A larger shaped pair: the local trie drops a span, alters values, and
+    // adds surplus keys. Every label must match the maps and the complement
+    // of the applied range must be covered exactly once.
+    let mut target = Map::new();
+    for i in 0u8..48 {
+        target.insert(vec![i.wrapping_mul(5), i ^ 0x3C], vec![i; 3]);
+    }
+    let mut local = target.clone();
+    let keys: Vec<Vec<u8>> = target.keys().cloned().collect();
+    for key in keys.iter().step_by(7) {
+        local.remove(key);
+    }
+    for key in keys.iter().skip(3).step_by(11) {
+        local.insert(key.clone(), b"altered".to_vec());
+    }
+    local.insert(vec![0x33, 0x33, 0x33], b"surplus".to_vec());
+    local.insert(vec![0xFE], b"surplus".to_vec());
+    let (t, l) = (trie::<H>(&target), trie::<H>(&local));
+
+    for (start, end, limit) in [
+        (Some(&keys[10][..]), Some(&keys[25][..]), None),
+        (None, Some(&keys[25][..]), NonZeroUsize::new(5)),
+        (Some(&keys[30][..]), None, NonZeroUsize::new(3)),
+        (Some(&[0x00][..]), Some(&[0xFF][..]), NonZeroUsize::new(9)),
+    ] {
+        let (verified, holes) = range_holes(&t, &l, start, end, limit);
+        assert_matches_truth(&target, &local, &applied_range(&verified), &holes);
+    }
+}
+
+#[hash_mode]
+#[test]
+fn fully_synced_emits_only_synced<H: HashMode>() {
+    // `L == M`: every boundary shape yields only Synced spans and silence.
+    let mut target = Map::new();
+    for i in 0u8..40 {
+        target.insert(vec![i.wrapping_mul(7), i], vec![i; 2]);
+    }
+    let keys: Vec<Vec<u8>> = target.keys().cloned().collect();
+    let (t, l) = (trie::<H>(&target), trie::<H>(&target));
+    for (start, end, limit) in [
+        (Some(&keys[5][..]), Some(&keys[20][..]), None),
+        (None, Some(&keys[33][..]), NonZeroUsize::new(4)),
+        (Some(&keys[2][..]), None, NonZeroUsize::new(6)),
+        (None, None, NonZeroUsize::new(1)),
+    ] {
+        let (_, holes) = range_holes(&t, &l, start, end, limit);
+        assert!(!holes.is_empty(), "a bounded request leaves synced space");
+        assert!(
+            holes.iter().all(|h| matches!(h, Hole::Synced(_))),
+            "{holes:?}"
+        );
+    }
+}
+
+#[test]
+fn hash_mode_mismatch_rejected() {
+    let target = worked_target();
+    let t = trie::<MerkleDbHash>(&target);
+    let proof = t.range_proof(None, Some(&[0xA7, 0x4F]), None).unwrap();
+    let verified = VerifiedRangeProof::verify(
+        Arc::new(proof),
+        root(&t),
+        None,
+        Some(&[0xA7, 0x4F]),
+        MerkleDbHash::ALGORITHM,
+        None,
+    )
+    .unwrap();
+    let result = find_holes_after_range_proof::<EthHash, _>(&verified, t.nodestore());
+    assert!(matches!(
+        result,
+        Err(api::Error::ProofError(ProofError::HashModeMismatch { .. }))
+    ));
 }
