@@ -3,6 +3,7 @@
 
 use ethereum_types::H256;
 use firewood_storage::Committed;
+use firewood_storage::DefaultHashMode;
 use firewood_storage::DeletedNodeTracking;
 use firewood_storage::EthHash;
 use firewood_storage::HashMode;
@@ -678,7 +679,12 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values);
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values,
+        DefaultHashMode::ALGORITHM,
+    );
     verify_range_proof(
         Some(left_key.as_ref()),
         Some(right_key.as_ref()),

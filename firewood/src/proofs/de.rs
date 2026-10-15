@@ -184,7 +184,7 @@ impl Version0 for FrozenRangeProof {
         let end_proof = reader.read_v0_item()?;
         let key_values = reader.read_v0_item()?;
 
-        Ok(Self::with_hash_mode(
+        Ok(Self::new(
             Proof::new(start_proof),
             Proof::new(end_proof),
             key_values,
@@ -199,7 +199,7 @@ impl Version0 for FrozenChangeProof {
         let end_proof = reader.read_v0_item()?;
         let key_values = reader.read_v0_item()?;
 
-        Ok(Self::with_hash_mode(
+        Ok(Self::new(
             Proof::new(start_proof),
             Proof::new(end_proof),
             key_values,

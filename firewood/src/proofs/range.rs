@@ -58,8 +58,6 @@
 
 use std::num::NonZeroUsize;
 
-use firewood_storage::DefaultHashMode;
-use firewood_storage::HashMode;
 use firewood_storage::NodeHashAlgorithm;
 
 use super::types::Proof;
@@ -236,10 +234,9 @@ pub struct RangeProof<K, V, H> {
     start_proof: Proof<H>,
     end_proof: Proof<H>,
     key_values: Box<[(K, V)]>,
-    /// The hash algorithm this proof was constructed or parsed with. For proofs
-    /// built in this binary it is the compile default; for proofs parsed via
+    /// The hash algorithm used to construct this proof or parsed from its header.
     /// [`FrozenRangeProof::from_slice`](crate::api::FrozenRangeProof::from_slice)
-    /// it is resolved from the self-describing header byte. A mismatch against
+    /// resolves it from the self-describing header byte. A mismatch against
     /// the algorithm a verifier expects is rejected with
     /// [`ProofError::HashModeMismatch`].
     hash_mode: NodeHashAlgorithm,
@@ -290,27 +287,9 @@ where
     ///   established by the start and end proofs. The keys should be in lexicographic
     ///   order as they appear in the trie. May be empty if proving the absence of keys
     ///   in a range.
+    /// * `hash_mode` - The algorithm recorded in the serialized proof header.
     #[must_use]
     pub const fn new(
-        start_proof: Proof<H>,
-        end_proof: Proof<H>,
-        key_values: Box<[(K, V)]>,
-    ) -> Self {
-        // Proofs built in this binary carry the compile-default mode.
-        Self::with_hash_mode(
-            start_proof,
-            end_proof,
-            key_values,
-            DefaultHashMode::ALGORITHM,
-        )
-    }
-
-    /// Like [`RangeProof::new`], but records the [`NodeHashAlgorithm`] the proof
-    /// was encoded with. Used by the parse path
-    /// ([`FrozenRangeProof::from_slice`](crate::api::FrozenRangeProof::from_slice))
-    /// to stamp the mode resolved from the self-describing header byte.
-    #[must_use]
-    pub(crate) const fn with_hash_mode(
         start_proof: Proof<H>,
         end_proof: Proof<H>,
         key_values: Box<[(K, V)]>,
@@ -408,6 +387,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    use firewood_storage::DefaultHashMode;
+    use firewood_storage::HashMode;
+
     use super::*;
     use crate::api::TryIntoBatch;
 
@@ -424,7 +406,12 @@ mod tests {
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
 
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values);
+        let range_proof = RangeProof::new(
+            start_proof,
+            end_proof,
+            key_values,
+            DefaultHashMode::ALGORITHM,
+        );
 
         // Test basic iterator functionality
         let mut iter = range_proof.iter();
@@ -454,7 +441,12 @@ mod tests {
 
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values);
+        let range_proof = RangeProof::new(
+            start_proof,
+            end_proof,
+            key_values,
+            DefaultHashMode::ALGORITHM,
+        );
 
         // Test that we can use for-loop syntax
         let mut items = Vec::new();
@@ -476,7 +468,12 @@ mod tests {
 
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values);
+        let range_proof = RangeProof::new(
+            start_proof,
+            end_proof,
+            key_values,
+            DefaultHashMode::ALGORITHM,
+        );
 
         // Test that our iterator implements KeyValuePairIter
         let iter = range_proof.iter();
@@ -500,7 +497,12 @@ mod tests {
         let key_values: Box<[(Vec<u8>, Vec<u8>)]> = Box::new([]);
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values);
+        let range_proof = RangeProof::new(
+            start_proof,
+            end_proof,
+            key_values,
+            DefaultHashMode::ALGORITHM,
+        );
 
         let mut iter = range_proof.iter();
         assert_eq!(iter.len(), 0);
