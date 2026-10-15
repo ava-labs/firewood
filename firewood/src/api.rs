@@ -639,12 +639,15 @@ pub trait Proposal: DbView {
     fn propose(&self, data: impl IntoBatchIter) -> Result<Self::Proposal, Error>;
 }
 
+/// A batch operation with an owned key and value.
+pub type OwnedBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
+
 /// A batch already collected into owned key/value pairs.
 ///
 /// The [`DynDb`]/[`DynProposal`] boundary cannot accept an `impl IntoBatchIter`
 /// (a generic method is not dispatchable through a vtable), so the generic
 /// batch is pre-collected into this concrete, owned shape at the boundary.
-pub type OwnedBatch = Box<[BatchOp<Box<[u8]>, Box<[u8]>>]>;
+pub type OwnedBatch = Box<[OwnedBatchOp]>;
 
 /// Key/value pairs collected into an owned shape for range merging across the
 /// [`DynDb`] boundary.
@@ -729,6 +732,17 @@ pub trait DynDb: Debug + Send + Sync + 'static {
     ) -> Result<Box<dyn DynProposal<'_> + '_>, Error>;
 
     /// Object-safe version of
+    /// [`Db::apply_verified_range_proof`](crate::db::Db::apply_verified_range_proof).
+    #[expect(
+        clippy::missing_errors_doc,
+        reason = "documented on Db::apply_verified_range_proof"
+    )]
+    fn apply_verified_range_proof(
+        &self,
+        verified: &crate::proofs::VerifiedRangeProof,
+    ) -> Result<(Box<dyn DynProposal<'_> + '_>, Vec<crate::proofs::Hole>), Error>;
+
+    /// Object-safe version of
     /// [`Db::apply_verified_change_proof`](crate::db::Db::apply_verified_change_proof).
     #[expect(
         clippy::missing_errors_doc,
@@ -776,6 +790,10 @@ pub trait DynDb: Debug + Send + Sync + 'static {
     /// revision.
     #[expect(clippy::missing_errors_doc)]
     fn committed_view(&self, hash: TrieHash) -> Result<Option<crate::db::CommittedView>, Error>;
+
+    /// Object-safe version of
+    /// [`Db::current_committed_view`](crate::db::Db::current_committed_view).
+    fn current_committed_view(&self) -> crate::db::CommittedView;
 
     /// Object-safe version of [`Db::close`](crate::db::Db::close), consuming
     /// the box instead of `self` by value.

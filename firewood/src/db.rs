@@ -259,6 +259,14 @@ impl<H: HashMode> api::DynDb for Db<H> {
         Ok(Box::new(proposal))
     }
 
+    fn apply_verified_range_proof(
+        &self,
+        verified: &VerifiedRangeProof,
+    ) -> Result<(Box<dyn api::DynProposal<'_> + '_>, Vec<Hole>), api::Error> {
+        let (proposal, holes) = Db::apply_verified_range_proof(self, verified)?;
+        Ok((Box::new(proposal), holes))
+    }
+
     fn apply_verified_change_proof(
         &self,
         verified: &VerifiedChangeProof,
@@ -300,6 +308,10 @@ impl<H: HashMode> api::DynDb for Db<H> {
             Err(api::Error::RevisionNotFound { .. }) => Ok(None),
             Err(err) => Err(err),
         }
+    }
+
+    fn current_committed_view(&self) -> CommittedView {
+        Db::current_committed_view(self)
     }
 
     fn close(self: Box<Self>) -> Result<(), api::Error> {
@@ -366,6 +378,19 @@ impl<H: HashMode> Db<H> {
         Ok(CommittedView {
             nodestore: self.manager.revision(root_hash)?,
         })
+    }
+
+    /// An opaque handle to the latest committed revision.
+    ///
+    /// Unlike [`Db::committed_view`] this needs no root hash, so it works on a
+    /// database whose trie is empty and, under the MerkleDB hashing scheme,
+    /// has no root hash at all, and it cannot race another commit between
+    /// reading the root and resolving it.
+    #[must_use]
+    pub fn current_committed_view(&self) -> CommittedView {
+        CommittedView {
+            nodestore: self.manager.current_revision(),
+        }
     }
 
     /// Synchronously get a view, either committed or proposed
@@ -440,14 +465,14 @@ impl<H: HashMode> Db<H> {
     /// proof, that is the proof's proven right edge ([`ProvenRange::end`]) and
     /// not the bound the caller requested: a truncated reply proves less than
     /// was asked for, and merging to the requested bound erases every local key
-    /// in the span the proof never covered. Cover the remainder by iterating
-    /// [`find_next_key_after_range_proof`] — each reply can truncate again.
+    /// in the span the proof never covered. What remains to fetch after the
+    /// merge is what [`CommittedView::find_holes_after_range_proof`] reports,
+    /// or [`Db::apply_verified_range_proof`] returns alongside its proposal.
     ///
     /// Invariant: `key_values` must be sorted by key in ascending order; however,
     /// because debug assertions are disabled, this is not checked.
     ///
     /// [`ProvenRange::end`]: crate::ProvenRange::end
-    /// [`find_next_key_after_range_proof`]: crate::find_next_key_after_range_proof
     pub fn merge_key_value_range(
         &self,
         first_key: Option<impl KeyType>,
@@ -538,6 +563,51 @@ impl<H: HashMode> Db<H> {
         self.apply_change_proof_to_latest(proof, &verification)
     }
 
+    /// Apply a verified range proof to the latest revision, together with the
+    /// local remedies its boundary proofs justify.
+    ///
+    /// The proposal replaces the content of the proven range
+    /// `[start_key, right_edge_key]` with the proof's key-value pairs, as
+    /// [`Db::merge_key_value_range`] does, and in the same proposal applies
+    /// every local remedy from the post-merge hole walk
+    /// ([`CommittedView::find_holes_after_range_proof`]) over the latest
+    /// revision: content the proof authenticates as absent from the target is
+    /// deleted, and keys whose target value the proof carries are written.
+    ///
+    /// The walk's labels are returned with the proposal. Its fetch labels,
+    /// packed by [`fetch_ranges`](crate::proofs::fetch_ranges), are what the
+    /// caller still has to request; they name key space the proposal leaves
+    /// untouched, so they describe the parent and the committed revision
+    /// alike. `Synced` labels need nothing, and every other label is a remedy
+    /// the proposal applies.
+    ///
+    /// # Errors
+    ///
+    /// [`ProofError::HashModeMismatch`] when the proof was verified under a
+    /// hash mode other than this database's, or any error from the walk or
+    /// from building the proposal.
+    pub fn apply_verified_range_proof(
+        &self,
+        verified: &VerifiedRangeProof,
+    ) -> Result<(Proposal<'_, H>, Vec<Hole>), api::Error> {
+        Self::reject_mode_mismatch(verified.proof().hash_mode())?;
+        let parent = self.manager.current_revision();
+        let holes = crate::merkle::holes::find_holes_after_range_proof::<H, _>(verified, &*parent)?;
+        let verification = verified.verification();
+        let merkle = Merkle::from(&*parent);
+        let merge = api::collect_owned_batch(merkle.merge_key_value_range(
+            verification.start_key(),
+            verification.right_edge_key(),
+            verified.proof().key_values(),
+        ))?;
+        let ops = merge
+            .into_vec()
+            .into_iter()
+            .chain(crate::proofs::holes::remedy_ops(&holes));
+        let proposal = self.propose_with_parent(ops, &*parent)?;
+        Ok((proposal, holes))
+    }
+
     /// Apply an already structurally verified change proof to the latest
     /// revision and check the result against the `end_root` it was verified
     /// with.
@@ -557,14 +627,19 @@ impl<H: HashMode> Db<H> {
         &self,
         verified: &VerifiedChangeProof,
     ) -> Result<Proposal<'_, H>, api::Error> {
-        let found = verified.proof().hash_mode();
-        if found != H::ALGORITHM {
-            return Err(api::Error::ProofError(ProofError::HashModeMismatch {
+        Self::reject_mode_mismatch(verified.proof().hash_mode())?;
+        self.apply_change_proof_to_latest(verified.proof(), verified.verification())
+    }
+
+    fn reject_mode_mismatch(found: NodeHashAlgorithm) -> Result<(), api::Error> {
+        if found == H::ALGORITHM {
+            Ok(())
+        } else {
+            Err(api::Error::ProofError(ProofError::HashModeMismatch {
                 expected: H::ALGORITHM,
                 found,
-            }));
+            }))
         }
-        self.apply_change_proof_to_latest(verified.proof(), verified.verification())
     }
 
     fn apply_change_proof_to_latest(
@@ -769,9 +844,14 @@ impl CommittedView {
     /// values below that key. Which remedy each label calls for is documented
     /// on [`Hole`].
     ///
-    /// Call this against the revision the proof was merged into. The labels
-    /// authorize remedies against that revision only; applying them to a
-    /// proposal rooted on a later revision voids the authorization.
+    /// Call this against the revision the proof was merged into, or against
+    /// the revision the merge will be applied to, as
+    /// [`Db::apply_verified_range_proof`] does. Outside the applied range the
+    /// two hold the same keys, so the fetch labels agree; the parent may
+    /// additionally report `Surplus` over local keys inside the range, which
+    /// the merge deletes anyway. The labels authorize remedies against the
+    /// revision walked, or a proposal built directly on it; applying them on
+    /// top of a later revision voids the authorization.
     /// [`KeySpan::as_key_range`]'s upper bound is exclusive and must not be
     /// passed as `merge_key_value_range`'s inclusive `last_key`; deletions go
     /// through [`KeySpan::delete_prefixes`].

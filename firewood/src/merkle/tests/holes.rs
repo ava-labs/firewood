@@ -46,6 +46,7 @@ use crate::api::Proposal as _;
 use crate::api::{self};
 use crate::db::Db;
 use crate::db::DbConfig;
+use crate::fetch_ranges;
 use crate::merkle::Merkle;
 use crate::merkle::holes::find_holes_after_change_proof;
 use crate::merkle::holes::find_holes_after_range_proof;
@@ -1635,4 +1636,221 @@ fn noncanonical_local_manufactures_stale<H: HashMode>() {
     let repaired = db.revision(db.root_hash().unwrap()).unwrap();
     let again = find_holes_after_range_proof::<H, _>(&verified, &*repaired).unwrap();
     assert_eq!(spans(&again), vec![("Synced", vec![0xA])], "{again:?}");
+}
+
+// Applying a verified proof through the database: the proof's content and
+// the walk's local remedies land in one proposal, and the labels come back
+// with it.
+
+/// The labels a second walk may still report after `holes` were applied:
+/// fetch labels for content not in hand, and agreement.
+pub(super) fn only_fetch_or_synced(holes: &[Hole]) -> bool {
+    holes.iter().all(|h| {
+        matches!(
+            h,
+            Hole::Missing(_) | Hole::Stale(_) | Hole::PointStale { .. } | Hole::Synced(_)
+        )
+    })
+}
+
+#[hash_mode]
+#[test]
+fn apply_verified_range_proof_commits_merge_and_remedies<H: HashMode>() {
+    // Local holds a surplus key under `[C]`, a stale `0xA7FF`, and lacks
+    // `0xB0`; the proof covers `[0xA711, 0xA711]`. One commit replaces the
+    // proven range, deletes the surplus, and leaves the stale and missing
+    // content as ranges to fetch, which a second walk over the committed
+    // revision reports unchanged.
+    let target = worked_target();
+    let mut local = target.clone();
+    local.insert(vec![0xC0], b"surplus".to_vec());
+    local.insert(vec![0xA7, 0xFF], b"wrong".to_vec());
+    local.remove(&vec![0xB0]);
+    local.insert(vec![0xA7, 0x11], b"old".to_vec());
+    let t = trie::<H>(&target);
+    let (db, _dir) = new_db::<H>();
+    commit(&db, &local);
+
+    let key: &[u8] = &[0xA7, 0x11];
+    let proof = t.range_proof(Some(key), Some(key), None).unwrap();
+    let verified = VerifiedRangeProof::verify(
+        Arc::new(proof),
+        root(&t),
+        Some(key),
+        Some(key),
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
+
+    let (proposal, holes) = db.apply_verified_range_proof(&verified).unwrap();
+    assert!(spans(&holes).contains(&("Surplus", vec![0xC])), "{holes:?}");
+    assert!(
+        spans(&holes).contains(&("Stale", vec![0xA, 0x7, 0xF])),
+        "{holes:?}"
+    );
+    assert!(spans(&holes).contains(&("Missing", vec![0xB])), "{holes:?}");
+    proposal.commit().unwrap();
+
+    let view = db.current_committed_view();
+    let rev = db.revision(db.root_hash().unwrap()).unwrap();
+    assert_eq!(rev.val([0xA7, 0x11]).unwrap().as_deref(), Some(&b"one"[..]));
+    assert_eq!(rev.val([0xC0]).unwrap(), None, "the surplus key is deleted");
+    assert_eq!(
+        rev.val([0xA7, 0xFF]).unwrap().as_deref(),
+        Some(&b"wrong"[..]),
+        "stale content is fetched, not repaired"
+    );
+
+    let again = view.find_holes_after_range_proof(&verified).unwrap();
+    assert!(only_fetch_or_synced(&again), "{again:?}");
+    assert_eq!(fetch_ranges(&again), fetch_ranges(&holes));
+}
+
+#[test]
+fn apply_verified_range_proof_rejects_a_foreign_hash_mode() {
+    let target = worked_target();
+    let t = trie::<MerkleDbHash>(&target);
+    let (db, _dir) = new_db::<EthHash>();
+    let before = commit(&db, &map(&[(&[0xC0], b"local")]));
+
+    let key: &[u8] = &[0xA7, 0x11];
+    let proof = t.range_proof(Some(key), Some(key), None).unwrap();
+    let verified = VerifiedRangeProof::verify(
+        Arc::new(proof),
+        root(&t),
+        Some(key),
+        Some(key),
+        MerkleDbHash::ALGORITHM,
+        None,
+    )
+    .unwrap();
+
+    let err = db.apply_verified_range_proof(&verified).err();
+    assert!(
+        matches!(
+            err,
+            Some(api::Error::ProofError(ProofError::HashModeMismatch { .. }))
+        ),
+        "{err:?}"
+    );
+    assert_eq!(db.root_hash(), Some(before));
+}
+
+#[test]
+fn empty_merkledb_database_walks_without_a_root_hash() {
+    // A fresh MerkleDB database has no root hash. Its current view still walks,
+    // labelling everything Missing, and applying the proof commits a root.
+    let target = worked_target();
+    let t = trie::<MerkleDbHash>(&target);
+    let (db, _dir) = new_db::<MerkleDbHash>();
+    assert!(db.root_hash().is_none());
+
+    let key: &[u8] = &[0xA7, 0x11];
+    let proof = t.range_proof(Some(key), Some(key), None).unwrap();
+    let verified = VerifiedRangeProof::verify(
+        Arc::new(proof),
+        root(&t),
+        Some(key),
+        Some(key),
+        MerkleDbHash::ALGORITHM,
+        None,
+    )
+    .unwrap();
+
+    let holes = db
+        .current_committed_view()
+        .find_holes_after_range_proof(&verified)
+        .unwrap();
+    assert!(
+        !holes.is_empty() && holes.iter().all(|h| matches!(h, Hole::Missing(_))),
+        "{holes:?}"
+    );
+    assert!(!fetch_ranges(&holes).is_empty());
+
+    let (proposal, _) = db.apply_verified_range_proof(&verified).unwrap();
+    proposal.commit().unwrap();
+    assert!(db.root_hash().is_some());
+}
+
+/// Walk a 100,000-key local trie against 20 truncated range proofs and
+/// assert the mean walk stays under 250 ms, far below the cost of a walk
+/// proportional to the trie's size.
+#[hash_mode]
+#[test]
+fn test_slow_walk_cost_on_a_large_trie<H: HashMode>() {
+    use std::time::Duration;
+    use std::time::Instant;
+
+    use firewood_storage::SeededRng;
+
+    const KEYS: usize = 100_000;
+    const DIFFS: usize = 50;
+    const WALKS: u32 = 20;
+    const WALK_STRIDE: usize = KEYS / WALKS as usize;
+    const LIMIT: NonZeroUsize = NonZeroUsize::new(16).unwrap();
+    const BOUND: Duration = Duration::from_millis(250);
+
+    let rng = SeededRng::from_env_or_random();
+    let mut target = Map::new();
+    while target.len() < KEYS {
+        let key: [u8; 32] = rng.random();
+        target.insert(key.to_vec(), rng.random::<[u8; 24]>().to_vec());
+    }
+    let keys: Vec<Vec<u8>> = target.keys().cloned().collect();
+    // Local lacks DIFFS keys, holds DIFFS surplus ones, and differs in DIFFS
+    // values, spread over the key space.
+    let mut local = target.clone();
+    for key in keys.iter().step_by(KEYS / DIFFS) {
+        local.remove(key);
+        local.insert(rng.random::<[u8; 32]>().to_vec(), b"surplus".to_vec());
+    }
+    for key in keys.iter().skip(1).step_by(KEYS / DIFFS) {
+        local.insert(key.clone(), b"wrong".to_vec());
+    }
+
+    let (target_db, _target_dir) = new_db::<H>();
+    let target_root = commit(&target_db, &target);
+    let (local_db, _local_dir) = new_db::<H>();
+    let local_root = commit(&local_db, &local);
+    let target_rev = target_db.revision(target_root.clone()).unwrap();
+    let local_rev = local_db.revision(local_root).unwrap();
+
+    // Truncated proofs starting throughout the key space, so both boundary
+    // walks run the full depth of the trie.
+    let (times, labels): (Vec<Duration>, Vec<usize>) = keys
+        .iter()
+        .step_by(WALK_STRIDE)
+        .map(|start| {
+            let proof = target_rev
+                .range_proof(Some(start.as_slice()), None, Some(LIMIT))
+                .unwrap();
+            let verified = VerifiedRangeProof::verify(
+                Arc::new(proof),
+                target_root.clone(),
+                Some(start),
+                None,
+                H::ALGORITHM,
+                Some(LIMIT),
+            )
+            .unwrap();
+            let began = Instant::now();
+            let holes = find_holes_after_range_proof::<H, _>(&verified, &*local_rev).unwrap();
+            (began.elapsed(), holes.len())
+        })
+        .unzip();
+    let mean = times
+        .iter()
+        .sum::<Duration>()
+        .checked_div(WALKS)
+        .expect("WALKS is nonzero");
+    let labels: usize = labels.iter().sum();
+    eprintln!(
+        "walk cost ({:?}): {KEYS} keys, {WALKS} walks, {labels} labels, mean {mean:?} per walk",
+        H::ALGORITHM,
+    );
+    assert!(
+        mean < BOUND,
+        "mean walk time {mean:?} over a {KEYS}-key trie exceeds the {BOUND:?} bound"
+    );
 }
