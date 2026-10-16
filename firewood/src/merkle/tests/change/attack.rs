@@ -3,7 +3,7 @@
 
 //! Attack detection: forged, omitted, or spurious batch ops.
 
-use firewood_storage::DefaultHashMode;
+use firewood_macros::hash_mode;
 use firewood_storage::HashMode;
 
 use super::*;
@@ -12,23 +12,25 @@ type OwnedBatchOps = Vec<BatchOp<Box<[u8]>, Box<[u8]>>>;
 
 /// Helper: returns true if the (possibly corrupted) proof is rejected by
 /// either the structural check or the root hash check.
-fn is_rejected(
-    db: &Db<DefaultHashMode>,
+fn is_rejected<H: HashMode>(
+    db: &Db<H>,
     proof: &FrozenChangeProof,
     end_root: api::HashKey,
     start_key: Option<&[u8]>,
     end_key: Option<&[u8]>,
     start_root: api::HashKey,
 ) -> bool {
-    match verify_change_proof_structure(proof, end_root, start_key, end_key, None) {
+    match verify_change_proof_structure(proof, end_root, start_key, end_key, H::ALGORITHM, None) {
         Err(_) => true,
         Ok(ctx) => verify_and_check(db, proof, &ctx, start_root).is_err(),
     }
 }
 
+#[hash_mode]
 #[test]
-fn test_crafted_omitted_change_detected() {
+fn test_crafted_omitted_change_detected<H: HashMode>() {
     let (source, target, root1_target, _ds, _dt) = setup_source_target![
+        mode = H;
         (b"\x10", b"v0"),
         (b"\x20", b"v1"),
         (b"\x30", b"v2"),
@@ -54,11 +56,18 @@ fn test_crafted_omitted_change_detected() {
         crate::Proof::new(valid.start_proof().as_ref().into()),
         crate::Proof::new(valid.end_proof().as_ref().into()),
         shortened.into_boxed_slice(),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
 
-    let ctx =
-        verify_change_proof_structure(&crafted, root2, Some(b"\x10"), Some(b"\x40"), None).unwrap();
+    let ctx = verify_change_proof_structure(
+        &crafted,
+        root2,
+        Some(b"\x10"),
+        Some(b"\x40"),
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
     let err = verify_and_check(&target, &crafted, &ctx, root1_target)
         .expect_err("omitted change must be detected");
     assert!(matches!(
@@ -67,10 +76,11 @@ fn test_crafted_omitted_change_detected() {
     ));
 }
 
+#[hash_mode]
 #[test]
-fn test_crafted_forged_value_detected() {
+fn test_crafted_forged_value_detected<H: HashMode>() {
     let (source, target, root1_target, _ds, _dt) =
-        setup_source_target![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+        setup_source_target![mode = H; (b"\x10", b"v0"), (b"\xa0", b"v1")];
 
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x10", b"real")]);
 
@@ -87,10 +97,11 @@ fn test_crafted_forged_value_detected() {
         crate::Proof::new(valid.start_proof().as_ref().into()),
         crate::Proof::new(valid.end_proof().as_ref().into()),
         forged_ops.into_boxed_slice(),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
 
-    let ctx = verify_change_proof_structure(&crafted, root2, None, None, None).unwrap();
+    let ctx =
+        verify_change_proof_structure(&crafted, root2, None, None, H::ALGORITHM, None).unwrap();
     let err = verify_and_check(&target, &crafted, &ctx, root1_target)
         .expect_err("forged value must be detected");
     assert!(matches!(
@@ -99,9 +110,10 @@ fn test_crafted_forged_value_detected() {
     ));
 }
 
+#[hash_mode]
 #[test]
-fn test_crafted_spurious_batch_op_detected() {
-    let (source, _dir_source) = setup_db![(b"\x10", b"v0"), (b"\xa0", b"v1")];
+fn test_crafted_spurious_batch_op_detected<H: HashMode>() {
+    let (source, _dir_source) = setup_db![mode = H; (b"\x10", b"v0"), (b"\xa0", b"v1")];
 
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\xa0", b"changed")]);
 
@@ -120,10 +132,10 @@ fn test_crafted_spurious_batch_op_detected() {
         crate::Proof::new(valid.start_proof().as_ref().into()),
         crate::Proof::new(valid.end_proof().as_ref().into()),
         ops.into_boxed_slice(),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
 
-    let err = verify_change_proof_structure(&crafted, root2, None, None, None)
+    let err = verify_change_proof_structure(&crafted, root2, None, None, H::ALGORITHM, None)
         .expect_err("structural check should reject spurious batch op");
     assert!(matches!(
         err,
@@ -135,10 +147,11 @@ fn test_crafted_spurious_batch_op_detected() {
 /// exist in `end_root`. The start proof is an exclusion proof. The
 /// `StartProofOperationMismatch` check catches this: Put expects inclusion
 /// but the proof is exclusion.
+#[hash_mode]
 #[test]
-fn test_crafted_spurious_put_at_start_key_boundary() {
+fn test_crafted_spurious_put_at_start_key_boundary<H: HashMode>() {
     // Keys \x20 and \x90 exist. \x10 (start_key) does NOT exist.
-    let (source, _dir_source) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+    let (source, _dir_source) = setup_db![mode = H; (b"\x20", b"v2"), (b"\x90", b"v9")];
 
     // Change \x20 on source
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x20", b"changed")]);
@@ -167,11 +180,18 @@ fn test_crafted_spurious_put_at_start_key_boundary() {
         crate::Proof::new(honest.start_proof().as_ref().into()),
         crate::Proof::new(honest.end_proof().as_ref().into()),
         ops.into_boxed_slice(),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
 
-    let err = verify_change_proof_structure(&crafted, root2, Some(b"\x10"), Some(b"\x90"), None)
-        .expect_err("structural check should reject spurious Put at start_key");
+    let err = verify_change_proof_structure(
+        &crafted,
+        root2,
+        Some(b"\x10"),
+        Some(b"\x90"),
+        H::ALGORITHM,
+        None,
+    )
+    .expect_err("structural check should reject spurious Put at start_key");
     assert!(matches!(
         err,
         api::Error::ProofError(crate::ProofError::StartProofOperationMismatch)
@@ -181,10 +201,11 @@ fn test_crafted_spurious_put_at_start_key_boundary() {
 /// Attacker adds a spurious Delete at `start_key` when `start_key` EXISTS
 /// in `end_root`. The start proof is an inclusion proof, but the Delete
 /// claims the key was removed — `StartProofOperationMismatch`.
+#[hash_mode]
 #[test]
-fn test_crafted_spurious_delete_at_start_key_boundary() {
+fn test_crafted_spurious_delete_at_start_key_boundary<H: HashMode>() {
     // Keys \x20 and \x90 exist. start_key \x20 EXISTS in end_root.
-    let (source, _dir_source) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+    let (source, _dir_source) = setup_db![mode = H; (b"\x20", b"v2"), (b"\x90", b"v9")];
 
     // Change \x90 on source (not \x20 — \x20 stays in end_root).
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x90", b"changed")]);
@@ -214,11 +235,18 @@ fn test_crafted_spurious_delete_at_start_key_boundary() {
         crate::Proof::new(honest.start_proof().as_ref().into()),
         crate::Proof::new(honest.end_proof().as_ref().into()),
         ops.into_boxed_slice(),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
 
-    let err = verify_change_proof_structure(&crafted, root2, Some(b"\x20"), Some(b"\x90"), None)
-        .expect_err("structural check should reject spurious Delete at start_key");
+    let err = verify_change_proof_structure(
+        &crafted,
+        root2,
+        Some(b"\x20"),
+        Some(b"\x90"),
+        H::ALGORITHM,
+        None,
+    )
+    .expect_err("structural check should reject spurious Delete at start_key");
     assert!(matches!(
         err,
         api::Error::ProofError(crate::ProofError::StartProofOperationMismatch)
@@ -229,9 +257,10 @@ fn test_crafted_spurious_delete_at_start_key_boundary() {
 /// The end proof is exclusion but Put expects inclusion — mismatch.
 ///
 /// Exercises: `EndProofOperationMismatch`
+#[hash_mode]
 #[test]
-fn test_crafted_spurious_put_at_end_key_boundary() {
-    let (source, _dir_source) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+fn test_crafted_spurious_put_at_end_key_boundary<H: HashMode>() {
+    let (source, _dir_source) = setup_db![mode = H; (b"\x20", b"v2"), (b"\x90", b"v9")];
 
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x20", b"changed")]);
 
@@ -258,12 +287,18 @@ fn test_crafted_spurious_put_at_end_key_boundary() {
         crate::Proof::new(honest.start_proof().as_ref().into()),
         crate::Proof::new(honest.end_proof().as_ref().into()),
         ops.into_boxed_slice(),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
 
-    let err =
-        verify_change_proof_structure(&crafted, root2.clone(), Some(b"\x20"), Some(b"\xb0"), None)
-            .expect_err("structural check should reject spurious Put at end_key");
+    let err = verify_change_proof_structure(
+        &crafted,
+        root2.clone(),
+        Some(b"\x20"),
+        Some(b"\xb0"),
+        H::ALGORITHM,
+        None,
+    )
+    .expect_err("structural check should reject spurious Put at end_key");
     assert!(matches!(
         err,
         api::Error::ProofError(crate::ProofError::EndProofOperationMismatch)
@@ -274,9 +309,10 @@ fn test_crafted_spurious_put_at_end_key_boundary() {
 /// The end proof is inclusion but Delete expects exclusion — mismatch.
 ///
 /// Exercises: `EndProofOperationMismatch`
+#[hash_mode]
 #[test]
-fn test_crafted_spurious_delete_at_end_key_boundary() {
-    let (source, _dir_source) = setup_db![(b"\x20", b"v2"), (b"\x90", b"v9")];
+fn test_crafted_spurious_delete_at_end_key_boundary<H: HashMode>() {
+    let (source, _dir_source) = setup_db![mode = H; (b"\x20", b"v2"), (b"\x90", b"v9")];
 
     // Change \x20, leave \x90 unchanged.
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x20", b"changed")]);
@@ -303,12 +339,18 @@ fn test_crafted_spurious_delete_at_end_key_boundary() {
         crate::Proof::new(honest.start_proof().as_ref().into()),
         crate::Proof::new(honest.end_proof().as_ref().into()),
         ops.into_boxed_slice(),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
 
-    let err =
-        verify_change_proof_structure(&crafted, root2.clone(), Some(b"\x20"), Some(b"\x90"), None)
-            .expect_err("structural check should reject spurious Delete at end_key");
+    let err = verify_change_proof_structure(
+        &crafted,
+        root2.clone(),
+        Some(b"\x20"),
+        Some(b"\x90"),
+        H::ALGORITHM,
+        None,
+    )
+    .expect_err("structural check should reject spurious Delete at end_key");
     assert!(matches!(
         err,
         api::Error::ProofError(crate::ProofError::EndProofOperationMismatch)
@@ -318,10 +360,11 @@ fn test_crafted_spurious_delete_at_end_key_boundary() {
 /// The `start_key` value MUST be checked for inclusion proofs. If the
 /// proposal has a different value at `start_key` than `end_root`, the
 /// reconciliation or root hash comparison should detect the mismatch.
+#[hash_mode]
 #[test]
-fn test_crafted_tampered_start_key_value_detected() {
+fn test_crafted_tampered_start_key_value_detected<H: HashMode>() {
     let (source, target, root1_target, _ds, _dt) =
-        setup_source_target![(b"\x10", b"v0"), (b"\x30", b"v1")];
+        setup_source_target![mode = H; (b"\x10", b"v0"), (b"\x30", b"v1")];
 
     let (root1_source, root2) =
         setup_2nd_commit!(source, [(b"\x10", b"changed"), (b"\x30", b"changed")]);
@@ -331,8 +374,15 @@ fn test_crafted_tampered_start_key_value_detected() {
         .unwrap();
 
     // Verify the honest proof works.
-    let ctx =
-        verify_change_proof_structure(&honest, root2.clone(), Some(b"\x10"), None, None).unwrap();
+    let ctx = verify_change_proof_structure(
+        &honest,
+        root2.clone(),
+        Some(b"\x10"),
+        None,
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
     verify_and_check(&target, &honest, &ctx, root1_target.clone()).unwrap();
 
     // Tamper: replace Put(\x10, "changed") with Put(\x10, "WRONG").
@@ -350,12 +400,14 @@ fn test_crafted_tampered_start_key_value_detected() {
         crate::Proof::new(honest.start_proof().as_ref().into()),
         crate::Proof::new(honest.end_proof().as_ref().into()),
         tampered_ops.into_boxed_slice(),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
 
     // Structural checks pass (hash chain is valid), but root hash
     // verification catches the tampered value.
-    let ctx2 = verify_change_proof_structure(&crafted, root2, Some(b"\x10"), None, None).unwrap();
+    let ctx2 =
+        verify_change_proof_structure(&crafted, root2, Some(b"\x10"), None, H::ALGORITHM, None)
+            .unwrap();
     let err = verify_and_check(&target, &crafted, &ctx2, root1_target)
         .expect_err("tampered start_key value must be detected");
     assert!(
@@ -376,9 +428,10 @@ fn test_crafted_tampered_start_key_value_detected() {
 /// This breaks the structural hash chain, so we skip structural validation
 /// and call `verify_change_proof_root_hash` directly. The start and end
 /// proofs both contain the root node, but now they disagree.
+#[hash_mode]
 #[test]
-fn test_crafted_conflicting_proof_nodes_rejected() {
-    let (db, _dir) = setup_db![(b"\x10", b"a"), (b"\x20", b"b")];
+fn test_crafted_conflicting_proof_nodes_rejected<H: HashMode>() {
+    let (db, _dir) = setup_db![mode = H; (b"\x10", b"a"), (b"\x20", b"b")];
     let (root1, root2) = setup_2nd_commit!(db, [(b"\x10", b"A"), (b"\x20", b"B")]);
 
     let valid = db
@@ -412,7 +465,7 @@ fn test_crafted_conflicting_proof_nodes_rejected() {
         crate::Proof::new(valid.start_proof().as_ref().into()),
         crate::Proof::new(end_nodes.into_boxed_slice()),
         valid.batch_ops().into(),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
 
     // Skip structural validation (the modified hash chain won't pass).
@@ -441,9 +494,10 @@ fn test_crafted_conflicting_proof_nodes_rejected() {
 /// Keys `\x10` and `\x15` share nibble 1 at depth 0, then fork at depth 1
 /// (nibbles 0 vs 5). The branch at depth 1 is at odd nibble length. We
 /// inject a spurious value into that odd-depth proof node.
+#[hash_mode]
 #[test]
-fn test_crafted_value_at_odd_nibble_length_rejected() {
-    let (db, _dir) = setup_db![(b"\x10", b"a"), (b"\x15", b"b"), (b"\x30", b"c")];
+fn test_crafted_value_at_odd_nibble_length_rejected<H: HashMode>() {
+    let (db, _dir) = setup_db![mode = H; (b"\x10", b"a"), (b"\x15", b"b"), (b"\x30", b"c")];
     let (root1, root2) = setup_2nd_commit!(db, [(b"\x30", b"changed")]);
 
     let valid = db
@@ -465,7 +519,7 @@ fn test_crafted_value_at_odd_nibble_length_rejected() {
         crate::Proof::new(start_nodes.into_boxed_slice()),
         crate::Proof::new(valid.end_proof().as_ref().into()),
         valid.batch_ops().into(),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
 
     // Skip structural validation (injected value breaks the hash chain).
@@ -487,9 +541,11 @@ fn test_crafted_value_at_odd_nibble_length_rejected() {
 /// Craft start/end proofs from two disjoint bounded proofs, skipping the
 /// shared root node. The proofs diverge at depth zero — reconciliation
 /// should detect the inconsistency.
+#[hash_mode]
 #[test]
-fn test_crafted_divergence_at_depth_zero() {
+fn test_crafted_divergence_at_depth_zero<H: HashMode>() {
     let (source, target, root1_target, _ds, _dt) = setup_source_target![
+        mode = H;
         (b"\x10", b"v0"),
         (b"\x11", b"v1"),
         (b"\xa0", b"v2"),
@@ -541,7 +597,7 @@ fn test_crafted_divergence_at_depth_zero() {
             key: b"\x50".to_vec().into(),
             value: b"mid".to_vec().into(),
         }]),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
 
     let parent = target.revision(root1_target).unwrap();
@@ -573,9 +629,11 @@ fn test_crafted_divergence_at_depth_zero() {
 /// divergent siblings at nibbles 8 and f. The branch survives deletion
 /// because two children remain. Stripping nibble 8's child hash from
 /// the proof node at [1, 0, 5] should cause rejection.
+#[hash_mode]
 #[test]
-fn test_crafted_stripped_divergent_child_rejected() {
+fn test_crafted_stripped_divergent_child_rejected<H: HashMode>() {
     let (source, target, root1_target, _ds, _dt) = setup_source_target![
+        mode = H;
         (b"\x10\x50", b"a"),
         (b"\x10\x58", b"b"),
         (b"\x10\x5f", b"d"),
@@ -614,6 +672,7 @@ fn test_crafted_stripped_divergent_child_rejected() {
         root2.clone(),
         Some(b"\x10\x50"),
         Some(b"\x30\x00"),
+        H::ALGORITHM,
         None,
     )
     .unwrap();
@@ -634,7 +693,7 @@ fn test_crafted_stripped_divergent_child_rejected() {
         crate::Proof::new(start_nodes.into_boxed_slice()),
         crate::Proof::new(valid.end_proof().as_ref().into()),
         valid.batch_ops().into(),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
 
     assert!(
@@ -659,10 +718,11 @@ fn test_crafted_stripped_divergent_child_rejected() {
 ///
 /// The verifier would then commit the incomplete `batch_ops`, leaving `\x05`
 /// in their state when `end_root` says it shouldn't exist.
+#[hash_mode]
 #[test]
-fn test_crafted_omitted_delete_at_straddling_nibble() {
+fn test_crafted_omitted_delete_at_straddling_nibble<H: HashMode>() {
     // start_root: \x00, \x05, \x10
-    let (db, _dir) = setup_db![(b"\x00", b"a"), (b"\x05", b"e"), (b"\x10", b"b")];
+    let (db, _dir) = setup_db![mode = H; (b"\x00", b"a"), (b"\x05", b"e"), (b"\x10", b"b")];
     let root1 = db.root_hash().unwrap();
 
     // end_root: only \x10 (both \x00 and \x05 deleted)
@@ -697,7 +757,7 @@ fn test_crafted_omitted_delete_at_straddling_nibble() {
             key: b"\x10".to_vec().into(),
             value: b"changed".to_vec().into(),
         }]),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
 
     assert!(
@@ -713,9 +773,10 @@ fn test_crafted_omitted_delete_at_straddling_nibble() {
 /// "non-on-path"), so the hash computation never sees it.
 /// The range-safety check in `collapse_strip` detects the in-range child
 /// before stripping and rejects with `EndRootMismatch`.
+#[hash_mode]
 #[test]
-fn test_collapse_root_hides_spurious_key() {
-    let (db, _dir) = setup_db![(b"\x90", b"orig")];
+fn test_collapse_root_hides_spurious_key<H: HashMode>() {
+    let (db, _dir) = setup_db![mode = H; (b"\x90", b"orig")];
     let (root1, root2) = setup_2nd_commit!(db, [(b"\x90", b"new!")]);
 
     let valid_proof = db
@@ -737,7 +798,7 @@ fn test_collapse_root_hides_spurious_key() {
         crate::Proof::new(valid_proof.start_proof().as_ref().into()),
         crate::Proof::new(valid_proof.end_proof().as_ref().into()),
         ops.into_boxed_slice(),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
 
     assert!(
@@ -774,8 +835,8 @@ fn gap_boundaries() -> ([u8; 32], [u8; 32]) {
 /// Helper for the common adversarial pattern: generate a valid bounded proof
 /// for the 5-key setup, inject a spurious operation, and assert rejection.
 #[expect(clippy::too_many_arguments)]
-fn inject_and_assert_rejected(
-    db: &Db<DefaultHashMode>,
+fn inject_and_assert_rejected<H: HashMode>(
+    db: &Db<H>,
     root1: api::HashKey,
     root2: api::HashKey,
     valid_proof: &FrozenChangeProof,
@@ -794,7 +855,7 @@ fn inject_and_assert_rejected(
         crate::Proof::new(valid_proof.start_proof().as_ref().into()),
         crate::Proof::new(valid_proof.end_proof().as_ref().into()),
         ops.into_boxed_slice(),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
 
     assert!(
@@ -819,10 +880,12 @@ fn inject_and_assert_rejected(
 ///   - The change proof is bounded by non-existent gap keys around B..D.
 ///   - Key C is unchanged between revisions and is NOT in `batch_ops`.
 ///   - An attacker adds `Delete { key: C }` to `batch_ops`.
+#[hash_mode]
 #[test]
-fn test_spurious_delete_in_range_is_rejected() {
+fn test_spurious_delete_in_range_is_rejected<H: HashMode>() {
     let keys = five_keys();
     let (db, _dir) = setup_db![
+        mode = H;
         (&keys[0], &[0xAAu8; 20]),
         (&keys[1], &[0xBBu8; 20]),
         (&keys[2], &[0xCCu8; 20]),
@@ -872,12 +935,14 @@ fn test_spurious_delete_in_range_is_rejected() {
 /// IS in `batch_ops`, forcing them into the same top-level subtree. The subtree
 /// must be recomputed because it contains a changed key, so the delete of the
 /// unchanged sibling should be visible.
+#[hash_mode]
 #[test]
-fn test_spurious_delete_same_subtree_as_changed_key() {
+fn test_spurious_delete_same_subtree_as_changed_key<H: HashMode>() {
     let mut keys = five_keys();
     keys[2][0] = 0x38; // C — target, same first nibble as B (0x30)
 
     let (db, _dir) = setup_db![
+        mode = H;
         (&keys[0], &[0xAAu8; 20]),
         (&keys[1], &[0xBBu8; 20]),
         (&keys[2], &[0xCCu8; 20]),
@@ -912,10 +977,12 @@ fn test_spurious_delete_same_subtree_as_changed_key() {
 }
 
 /// Same attack with EXISTING boundary keys (inclusion proofs).
+#[hash_mode]
 #[test]
-fn test_spurious_delete_with_existing_boundaries() {
+fn test_spurious_delete_with_existing_boundaries<H: HashMode>() {
     let keys = five_keys();
     let (db, _dir) = setup_db![
+        mode = H;
         (&keys[0], &[0xAAu8; 20]),
         (&keys[1], &[0xBBu8; 20]),
         (&keys[2], &[0xCCu8; 20]),
@@ -964,10 +1031,12 @@ fn test_spurious_delete_with_existing_boundaries() {
 /// rejected. This confirms the hybrid hash works for keys that were changed
 /// between revisions (their subtree is computed from the proposal, not borrowed
 /// from proof nodes).
+#[hash_mode]
 #[test]
-fn test_swapped_value_in_range_is_rejected() {
+fn test_swapped_value_in_range_is_rejected<H: HashMode>() {
     let keys = five_keys();
     let (db, _dir) = setup_db![
+        mode = H;
         (&keys[0], &[0xAAu8; 20]),
         (&keys[1], &[0xBBu8; 20]),
         (&keys[2], &[0xCCu8; 20]),
@@ -1008,7 +1077,7 @@ fn test_swapped_value_in_range_is_rejected() {
         crate::Proof::new(valid_proof.start_proof().as_ref().into()),
         crate::Proof::new(valid_proof.end_proof().as_ref().into()),
         ops.into_boxed_slice(),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
 
     assert!(
@@ -1035,13 +1104,26 @@ fn test_swapped_value_in_range_is_rejected() {
 /// silently accepted it (`None == None`). The second op (`\x90`) keeps the
 /// batch non-empty so the tamper reaches reconcile instead of the structural
 /// check.
-#[cfg(not(feature = "ethhash"))]
+///
+/// Pinned to `MerkleDbHash`: `ValueDigest::Hash` (the >= 32 byte cap this
+/// test relies on to give the boundary node a hash digest) is only ever
+/// produced by the merkledb wire-serialization rule — the Ethereum scheme
+/// never emits a `Hash` digest (see `ValueDigest::write_item`), so the
+/// scenario this test exercises doesn't exist under `ethhash`.
 #[test]
-fn test_crafted_dropped_hashed_put_behind_left_exclusion_rejected() {
+fn test_crafted_dropped_hashed_put_behind_left_exclusion_rejected_merkledb() {
+    // Pinned to MerkleDbHash: see the doc comment.
+    type H = MerkleDbHash;
+
+    test_crafted_dropped_hashed_put_behind_left_exclusion_rejected::<H>();
+}
+
+fn test_crafted_dropped_hashed_put_behind_left_exclusion_rejected<H: HashMode>() {
     let big = [0xabu8; 40]; // >= 32 bytes => Hash after serialization
     // start: 0x90 only. end: add NEW key 0x1234 (large value) AND change 0x90
     // (a second in-range op so the batch isn't empty after dropping 0x1234).
-    let (source, target, root1_target, _ds, _dt) = setup_source_target![(b"\x90", b"anchor")];
+    let (source, target, root1_target, _ds, _dt) =
+        setup_source_target![mode = H; (b"\x90", b"anchor")];
     let (root1_source, root2) = setup_2nd_commit!(
         source,
         [
@@ -1066,13 +1148,14 @@ fn test_crafted_dropped_hashed_put_behind_left_exclusion_rejected() {
         crate::Proof::new(valid.start_proof().as_ref().into()),
         crate::Proof::new(valid.end_proof().as_ref().into()),
         ops.into_boxed_slice(),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
 
     // The structural checks pass (the hash chain is intact); the reconcile
     // in-range guard rejects the empty-branch-vs-Hash conflict.
     let ctx =
-        verify_change_proof_structure(&crafted, root2, Some(b"\x12\x30"), None, None).unwrap();
+        verify_change_proof_structure(&crafted, root2, Some(b"\x12\x30"), None, H::ALGORITHM, None)
+            .unwrap();
     let err = verify_and_check(&target, &crafted, &ctx, root1_target)
         .expect_err("dropped in-range Put (hashed) behind a left exclusion must be rejected");
     assert!(
@@ -1092,11 +1175,22 @@ fn test_crafted_dropped_hashed_put_behind_left_exclusion_rejected() {
 /// hash; the empty-branch-vs-`Hash` conflict must route to the end-proof
 /// in-range guard (`\x12\x34` <= `end_key`) and be rejected. The second op
 /// (`\x10`, below the dropped key) keeps the batch non-empty.
-#[cfg(not(feature = "ethhash"))]
+///
+/// Pinned to `MerkleDbHash` for the same reason as the left-edge sibling
+/// test above: the >= 32 byte raw value driving the `Hash` digest is a
+/// merkledb-specific serialization threshold.
 #[test]
-fn test_crafted_dropped_hashed_put_behind_right_exclusion_rejected() {
+fn test_crafted_dropped_hashed_put_behind_right_exclusion_rejected_merkledb() {
+    // Pinned to MerkleDbHash: see the doc comment.
+    type H = MerkleDbHash;
+
+    test_crafted_dropped_hashed_put_behind_right_exclusion_rejected::<H>();
+}
+
+fn test_crafted_dropped_hashed_put_behind_right_exclusion_rejected<H: HashMode>() {
     let big = [0xabu8; 40]; // >= 32 bytes => Hash after serialization
-    let (source, target, root1_target, _ds, _dt) = setup_source_target![(b"\x10", b"anchor")];
+    let (source, target, root1_target, _ds, _dt) =
+        setup_source_target![mode = H; (b"\x10", b"anchor")];
     let (root1_source, root2) = setup_2nd_commit!(
         source,
         [
@@ -1121,13 +1215,14 @@ fn test_crafted_dropped_hashed_put_behind_right_exclusion_rejected() {
         crate::Proof::new(valid.start_proof().as_ref().into()),
         crate::Proof::new(valid.end_proof().as_ref().into()),
         ops.into_boxed_slice(),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
 
     // The structural checks pass (the hash chain is intact); the reconcile
     // in-range guard rejects the empty-branch-vs-Hash conflict.
     let ctx =
-        verify_change_proof_structure(&crafted, root2, None, Some(b"\x12\x38"), None).unwrap();
+        verify_change_proof_structure(&crafted, root2, None, Some(b"\x12\x38"), H::ALGORITHM, None)
+            .unwrap();
     let err = verify_and_check(&target, &crafted, &ctx, root1_target)
         .expect_err("dropped in-range Put (hashed) behind a right exclusion must be rejected");
     assert!(
@@ -1141,10 +1236,12 @@ fn test_crafted_dropped_hashed_put_behind_right_exclusion_rejected() {
 
 /// Control test: a spurious Put for a non-existent in-range key is correctly
 /// rejected when the key falls in a subtree that is recomputed (not borrowed).
+#[hash_mode]
 #[test]
-fn test_spurious_put_in_range_is_rejected() {
+fn test_spurious_put_in_range_is_rejected<H: HashMode>() {
     let keys = five_keys();
     let (db, _dir) = setup_db![
+        mode = H;
         (&keys[0], &[0xAAu8; 20]),
         (&keys[1], &[0xBBu8; 20]),
         (&keys[2], &[0xCCu8; 20]),

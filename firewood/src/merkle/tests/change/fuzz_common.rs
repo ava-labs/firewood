@@ -4,9 +4,8 @@
 //! Helpers shared by fuzz tests: proof reconstruction from tampered parts,
 //! the rejected-by-either-check predicate, and serialization round-trips.
 
-use firewood_storage::DefaultHashMode;
+use firewood_storage::EthHash;
 use firewood_storage::HashMode;
-use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::SeededRng;
 
 use super::verify_and_check;
@@ -22,6 +21,9 @@ use crate::merkle::Key;
 use crate::merkle::Value;
 use crate::verify_change_proof_structure;
 
+// Pinned to EthHash: the fuzzers exercise Ethereum-shaped tries.
+type H = EthHash;
+
 /// Build a `FrozenChangeProof` from mutated parts.
 pub(in crate::merkle::tests) fn build_change_proof(
     start: Vec<ProofNode>,
@@ -32,7 +34,7 @@ pub(in crate::merkle::tests) fn build_change_proof(
         Proof::new(start.into_boxed_slice()),
         Proof::new(end.into_boxed_slice()),
         ops.into_boxed_slice(),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     )
 }
 
@@ -46,14 +48,14 @@ pub(in crate::merkle::tests) fn build_range_proof(
         Proof::new(start.into_boxed_slice()),
         Proof::new(end.into_boxed_slice()),
         kvs.into_boxed_slice(),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     )
 }
 
 /// Whether a change proof is rejected by the structural check or, failing
 /// that, the root-hash check (its proposal won't match `end_root`).
 pub(in crate::merkle::tests) fn change_proof_rejected(
-    db: &Db<DefaultHashMode>,
+    db: &Db<H>,
     proof: &FrozenChangeProof,
     start_root: &HashKey,
     end_root: &HashKey,
@@ -62,14 +64,7 @@ pub(in crate::merkle::tests) fn change_proof_rejected(
 ) -> bool {
     // This module is ethhash-gated (only the ethhash-shaped fuzzer uses it),
     // so every proof it sees is Ethereum-mode.
-    match verify_change_proof_structure(
-        proof,
-        end_root.clone(),
-        first,
-        last,
-        NodeHashAlgorithm::Ethereum,
-        None,
-    ) {
+    match verify_change_proof_structure(proof, end_root.clone(), first, last, H::ALGORITHM, None) {
         Err(_) => true,
         Ok(ctx) => verify_and_check(db, proof, &ctx, start_root.clone()).is_err(),
     }
