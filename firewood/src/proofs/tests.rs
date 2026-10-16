@@ -1,10 +1,13 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use firewood_macros::hash_mode;
 use firewood_storage::DefaultHashMode;
 use firewood_storage::DenseChildren;
+use firewood_storage::EthHash;
 use firewood_storage::HashMode;
 use firewood_storage::HashType;
+use firewood_storage::MerkleDbHash;
 use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::PathComponent;
 use firewood_storage::SeededRng;
@@ -35,7 +38,10 @@ const HEADER_LEN: usize = size_of::<Header>();
 
 /// Builds the serialized proof header
 fn raw_header(proof_type: ProofType) -> Vec<u8> {
-    bytemuck::bytes_of(&Header::from((proof_type, DefaultHashMode::ALGORITHM))).to_vec()
+    // Pinned to MerkleDbHash: the golden wire bytes are MerkleDB-mode.
+    type H = MerkleDbHash;
+
+    bytemuck::bytes_of(&Header::from((proof_type, H::ALGORITHM))).to_vec()
 }
 
 /// Builds real wire bytes from `data` in uncompressed `header || body` form
@@ -79,7 +85,10 @@ fn compress_and_parse_change(data: &[u8]) -> Result<FrozenChangeProof, ReadError
 /// single-byte keys keep the byte offsets those tests hard-code small and
 /// stable.
 fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
-    let merkle = crate::merkle::tests::init_merkle((0u8..=10).map(|k| ([k], [k])));
+    // Pinned to MerkleDbHash: the golden wire bytes are MerkleDB-mode.
+    type H = MerkleDbHash;
+
+    let merkle = crate::merkle::tests::init_merkle::<H, _, _, _>((0u8..=10).map(|k| ([k], [k])));
     let proof = merkle
         .range_proof(Some(&[2u8]), Some(&[8u8]), std::num::NonZeroUsize::new(5))
         .unwrap();
@@ -401,11 +410,14 @@ fn test_partial_key_len_exceeds_key_len() {
 
 #[test]
 fn test_empty_proof() {
+    // Pinned to MerkleDbHash: the golden wire bytes are MerkleDB-mode.
+    type H = MerkleDbHash;
+
     #[rustfmt::skip]
     let bytes = [
         b'f', b'w', b'd', b'p', b'r', b'o', b'o', b'f', // magic
         0, // version
-        hash_mode_byte(DefaultHashMode::ALGORITHM),
+        hash_mode_byte(H::ALGORITHM),
         magic::BRANCH_FACTOR,
         ProofType::Range as u8,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // reserved
@@ -458,7 +470,10 @@ fn test_change_proof_invalid_header(
     mutator: impl FnOnce(&mut Vec<u8>),
     expected: impl FnOnce(&InvalidHeader) -> bool,
 ) {
-    let (_, mut data) = create_valid_change_proof(DefaultHashMode::ALGORITHM);
+    // Pinned to MerkleDbHash: the fixture is MerkleDB-mode.
+    type H = MerkleDbHash;
+
+    let (_, mut data) = create_valid_change_proof(H::ALGORITHM);
 
     mutator(&mut data);
 
@@ -488,7 +503,10 @@ fn test_change_proof_incomplete_item(
     expected_len: usize,
     found_len: usize,
 ) {
-    let (_, mut data) = create_valid_change_proof(DefaultHashMode::ALGORITHM);
+    // Pinned to MerkleDbHash: the fixture is MerkleDB-mode.
+    type H = MerkleDbHash;
+
+    let (_, mut data) = create_valid_change_proof(H::ALGORITHM);
 
     mutator(&mut data);
 
@@ -545,7 +563,10 @@ fn test_change_proof_invalid_item(
     expected: &'static str,
     found: &'static str,
 ) {
-    let (proof, mut data) = create_valid_change_proof(DefaultHashMode::ALGORITHM);
+    // Pinned to MerkleDbHash: the fixture is MerkleDB-mode.
+    type H = MerkleDbHash;
+
+    let (proof, mut data) = create_valid_change_proof(H::ALGORITHM);
 
     mutator(&proof, &mut data);
 
@@ -604,13 +625,23 @@ fn make_proof_node(
 /// Returns the proof plus its canonical uncompressed bytes
 /// (`header || body`); parse with [`compress_and_parse_range`].
 fn make_range_proof_from_single_node(node: ProofNode) -> (FrozenRangeProof, Vec<u8>) {
+    // Pinned to MerkleDbHash: the golden wire bytes are MerkleDB-mode.
+    type H = MerkleDbHash;
+
+    make_range_proof_from_single_node_new(node, H::ALGORITHM)
+}
+
+fn make_range_proof_from_single_node_new(
+    node: ProofNode,
+    hash_mode: NodeHashAlgorithm,
+) -> (FrozenRangeProof, Vec<u8>) {
     let proof = FrozenRangeProof::new(
         Proof::new(Box::new([node])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([]),
-        DefaultHashMode::ALGORITHM,
+        hash_mode,
     );
-    let mut serialized = raw_header(ProofType::Range);
+    let mut serialized = bytemuck::bytes_of(&Header::from((ProofType::Range, hash_mode))).to_vec();
     proof.write_body_to_vec(&mut serialized);
     (proof, serialized)
 }
@@ -649,7 +680,6 @@ fn test_proof_node_all_children_round_trip() {
     assert_range_proof_round_trip(serialized);
 }
 
-#[cfg(not(feature = "ethhash"))]
 #[test]
 fn test_value_digest_hash_round_trip() {
     // Values >= 32 bytes are converted to a hash by make_hash() during serialization.
@@ -788,7 +818,6 @@ fn test_incomplete_item_known_layout(
     }
 }
 
-#[cfg(not(feature = "ethhash"))]
 #[test]
 fn test_incomplete_trie_hash() {
     let node = make_proof_node(&[1], 0, None, &[7]);
@@ -809,11 +838,10 @@ fn test_incomplete_trie_hash() {
     }
 }
 
-#[cfg(feature = "ethhash")]
 #[test]
 fn test_incomplete_hash_type_discriminant() {
     let node = make_proof_node(&[1], 0, None, &[7]);
-    let (_, mut data) = make_range_proof_from_single_node(node);
+    let (_, mut data) = make_range_proof_from_single_node_new(node, NodeHashAlgorithm::Ethereum);
     data.truncate(39); // ChildMask ends at [38]; HashType discriminant is at [39]
     match compress_and_parse_range(&data) {
         Err(ReadError::IncompleteItem {
@@ -832,11 +860,10 @@ fn test_incomplete_hash_type_discriminant() {
     }
 }
 
-#[cfg(feature = "ethhash")]
 #[test]
 fn test_invalid_hash_type_discriminant() {
     let node = make_proof_node(&[1], 0, None, &[7]);
-    let (_, mut data) = make_range_proof_from_single_node(node);
+    let (_, mut data) = make_range_proof_from_single_node_new(node, NodeHashAlgorithm::Ethereum);
     data[39] = 2; // invalid HashType discriminant (must be 0 or 1)
     match compress_and_parse_range(&data) {
         Err(ReadError::InvalidItem {
@@ -857,10 +884,13 @@ fn test_invalid_hash_type_discriminant() {
 
 #[test]
 fn test_change_proof_incomplete_batch_op_discriminant() {
+    // Pinned to MerkleDbHash: the fixture is MerkleDB-mode.
+    type H = MerkleDbHash;
+
     // Layout of create_valid_change_proof() after the 32-byte header:
     //   [32]=0x00 (start_proof count=0)  [33]=0x00 (end_proof count=0)
     //   [34]=0x03 (batch_ops count=3)    [35]=0x00 (first BatchOp discriminant)
-    let (_, mut data) = create_valid_change_proof(DefaultHashMode::ALGORITHM);
+    let (_, mut data) = create_valid_change_proof(H::ALGORITHM);
     data.truncate(35); // cut before the first BatchOp discriminant byte
     match compress_and_parse_change(&data) {
         Err(ReadError::InvalidItem {
@@ -1178,10 +1208,13 @@ mod box_array_deserialization_tests {
     }
 
     fn v0_reader(data: &[u8]) -> V0Reader<'_> {
+        // Pinned to MerkleDbHash: these tests exercise mode-independent reads,
+        // so any consistent mode works.
+        type H = MerkleDbHash;
+
         // Resolve the algorithm from the header itself, mirroring the
-        // production validate-then-into_body flow. (These tests exercise
-        // mode-independent reads, so any consistent mode works.)
-        let header = Header::from((ProofType::Range, DefaultHashMode::ALGORITHM));
+        // production validate-then-into_body flow.
+        let header = Header::from((ProofType::Range, H::ALGORITHM));
         let validated_header = header
             .validate(Some(ProofType::Range))
             .expect("default header should be valid");
@@ -1284,7 +1317,10 @@ fn range_wire() -> Vec<u8> {
 }
 
 fn change_wire() -> Vec<u8> {
-    let (proof, _) = create_valid_change_proof(DefaultHashMode::ALGORITHM);
+    // Pinned to MerkleDbHash: the golden wire bytes are MerkleDB-mode.
+    type H = MerkleDbHash;
+
+    let (proof, _) = create_valid_change_proof(H::ALGORITHM);
     let mut wire = Vec::new();
     proof.write_to_vec(&mut wire).expect("serialize proof");
     wire
@@ -1545,6 +1581,9 @@ const GOLDEN_WIRE_TAIL: &str =
     "28b52ffd201bd90000000002046b6579310676616c756531046b6579320676616c756532";
 
 fn golden_proof() -> FrozenRangeProof {
+    // Pinned to MerkleDbHash: the golden wire bytes are MerkleDB-mode.
+    type H = MerkleDbHash;
+
     FrozenRangeProof::new(
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
@@ -1558,7 +1597,7 @@ fn golden_proof() -> FrozenRangeProof {
                 Box::from(b"value2".as_slice()),
             ),
         ]),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     )
 }
 
@@ -1720,7 +1759,10 @@ fn test_verify_range_proof_rejects_hash_mode_mismatch() {
 
 #[test]
 fn test_verify_change_proof_structure_rejects_hash_mode_mismatch() {
-    let (proof, _) = create_valid_change_proof(DefaultHashMode::ALGORITHM);
+    // Pinned to MerkleDbHash: the fixture is MerkleDB-mode.
+    type H = MerkleDbHash;
+
+    let (proof, _) = create_valid_change_proof(H::ALGORITHM);
     let other_mode = if proof.hash_mode().is_ethereum() {
         NodeHashAlgorithm::MerkleDB
     } else {
@@ -1800,12 +1842,16 @@ fn delete_range(prefix: Box<[u8]>) -> BoxedOp {
 
 /// Serializes a change proof carrying one operation, built by `op` from a key of
 /// `key_len` zero bytes.
-fn change_proof_with_key_len(op: fn(Box<[u8]>) -> BoxedOp, key_len: usize) -> Vec<u8> {
+fn change_proof_with_key_len(
+    op: fn(Box<[u8]>) -> BoxedOp,
+    key_len: usize,
+    hash_mode: NodeHashAlgorithm,
+) -> Vec<u8> {
     let proof = FrozenChangeProof::new(
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([op(vec![0u8; key_len].into_boxed_slice())]),
-        DefaultHashMode::ALGORITHM,
+        hash_mode,
     );
     let mut serialized = Vec::new();
     proof
@@ -1843,14 +1889,19 @@ fn assert_bound_outcome<T: std::fmt::Debug>(
 
 /// Every batch operation's key is bounded. A key at the bound deserializes and
 /// one byte over is rejected.
+#[hash_mode]
 #[test_case(put, MAX_KEY_BYTES, true ; "put at the bound")]
 #[test_case(put, MAX_KEY_BYTES + 1, false ; "put one byte over")]
 #[test_case(delete, MAX_KEY_BYTES, true ; "delete at the bound")]
 #[test_case(delete, MAX_KEY_BYTES + 1, false ; "delete one byte over")]
 #[test_case(delete_range, MAX_KEY_BYTES, true ; "delete range at the bound")]
 #[test_case(delete_range, MAX_KEY_BYTES + 1, false ; "delete range one byte over")]
-fn test_batch_op_key_length_bound(op: fn(Box<[u8]>) -> BoxedOp, key_len: usize, accepted: bool) {
-    let data = change_proof_with_key_len(op, key_len);
+fn test_batch_op_key_length_bound<H: HashMode>(
+    op: fn(Box<[u8]>) -> BoxedOp,
+    key_len: usize,
+    accepted: bool,
+) {
+    let data = change_proof_with_key_len(op, key_len, H::ALGORITHM);
     assert_bound_outcome(
         FrozenChangeProof::from_slice(&data),
         accepted,
@@ -1860,9 +1911,10 @@ fn test_batch_op_key_length_bound(op: fn(Box<[u8]>) -> BoxedOp, key_len: usize, 
 }
 
 /// The same bound applies to a range proof's key-value pairs.
+#[hash_mode]
 #[test_case(MAX_KEY_BYTES, true ; "at the bound")]
 #[test_case(MAX_KEY_BYTES + 1, false ; "one byte over")]
-fn test_range_proof_key_length_bound(key_len: usize, accepted: bool) {
+fn test_range_proof_key_length_bound<H: HashMode>(key_len: usize, accepted: bool) {
     let proof = FrozenRangeProof::new(
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
@@ -1870,7 +1922,7 @@ fn test_range_proof_key_length_bound(key_len: usize, accepted: bool) {
             vec![0u8; key_len].into_boxed_slice(),
             Box::from(b"v".as_slice()),
         )]),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
     let mut data = Vec::new();
     proof.write_to_vec(&mut data).expect("serialize proof");
@@ -1883,9 +1935,10 @@ fn test_range_proof_key_length_bound(key_len: usize, accepted: bool) {
 }
 
 /// A proof node's path is nibbles, so it is bounded in nibbles rather than bytes.
+#[hash_mode]
 #[test_case(MAX_KEY_NIBBLES, true ; "at the bound")]
 #[test_case(MAX_KEY_NIBBLES + 1, false ; "one nibble over")]
-fn test_proof_node_path_length_bound(nibbles: usize, accepted: bool) {
+fn test_proof_node_path_length_bound<H: HashMode>(nibbles: usize, accepted: bool) {
     let node = ProofNode {
         key: (0..nibbles)
             .map(|_| PathComponent::try_new(0).expect("0 is a valid nibble"))
@@ -1898,7 +1951,7 @@ fn test_proof_node_path_length_bound(nibbles: usize, accepted: bool) {
         Proof::new(Box::<[ProofNode]>::from([node])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([]),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
     let mut data = Vec::new();
     proof.write_to_vec(&mut data).expect("serialize proof");

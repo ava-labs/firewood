@@ -364,6 +364,7 @@ impl std::fmt::Debug for ProofNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Filter the missing children and only show the present ones with their indices
         let child_hashes = self.child_hashes.iter_present().collect::<Vec<_>>();
+
         f.debug_struct("ProofNode")
             .field("key", &self.key)
             .field("partial_len", &self.partial_len)
@@ -950,8 +951,11 @@ mod tests {
     /// `partial_len == 0` (empty parent prefix) is rejected with `UnexpectedHash`.
     /// `partial_len` is an independent wire field, so a proof can carry a
     /// correctly sized key and set only `partial_len` to 0.
+    ///
+    /// Uses Ethereum hashing because a single storage child is folded into its
+    /// account node; this fixture exercises validation at that fold position.
     #[test]
-    fn fold_rejects_zero_partial_len_storage_child() {
+    fn fold_rejects_zero_partial_len_storage_child_ethhash() {
         use firewood_storage::U4;
 
         // Account branch at depth 64 (64 nibbles) with exactly one child at nibble 1.
@@ -1019,11 +1023,9 @@ mod tests {
         ));
     }
 
-    /// Under the Ethereum scheme a hashed value digest must be rejected
-    /// outright. It cannot be caught by the root-hash check: eth's preimage
-    /// encoding ignores a `Hash` digest, so a node carrying one hashes exactly
-    /// like the valueless node it was forged from. Without the guard, such a
-    /// proof would verify as asserting a value the trie does not hold.
+    /// Uses Ethereum hashing because Ethereum proofs never use hashed value
+    /// digests. The preimage ignores a `Hash` digest, so the explicit guard is
+    /// needed to reject a forged proof that otherwise matches the root hash.
     #[test]
     fn eth_hashed_value_digest_is_rejected() {
         use firewood_storage::U4;

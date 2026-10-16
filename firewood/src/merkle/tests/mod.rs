@@ -3,7 +3,6 @@
 
 mod change;
 mod collapse;
-#[cfg(feature = "ethhash")]
 mod ethhash;
 #[cfg(feature = "ethhash")]
 mod ethhash_fuzz;
@@ -12,19 +11,21 @@ mod proof;
 mod range;
 mod reconcile;
 mod sized;
-#[cfg(not(feature = "ethhash"))]
 mod triehash;
 
 use std::collections::HashMap;
 use std::fmt::Write;
 
+use firewood_macros::hash_mode;
 use firewood_storage::Committed;
-use firewood_storage::DefaultHashMode;
 use firewood_storage::DeletedNodeTracking;
 use firewood_storage::DenseChildren;
+use firewood_storage::EthHash;
 use firewood_storage::HashMode;
 use firewood_storage::MemStore;
+use firewood_storage::MerkleDbHash;
 use firewood_storage::Mutable;
+use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::NodeStore;
 use firewood_storage::NodeStoreHeader;
 use firewood_storage::PathComponent;
@@ -40,24 +41,16 @@ use crate::ProofNode;
 use crate::api::Error;
 use crate::proofs::de::MAX_KEY_BYTES;
 
-/// Test wrapper around [`crate::merkle::verify_range_proof`] that supplies the
-/// compile-default hash mode as the expected `algorithm` (the mode every proof
-/// built in the test binary carries). Shadows the glob-imported real function
-/// so the many existing call sites need not pass the mode explicitly.
+/// Test wrapper around [`crate::merkle::verify_range_proof`] that discards the
+/// proven range when a test only needs to assert successful verification.
 fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     first_key: Option<impl KeyType>,
     last_key: Option<impl KeyType>,
     root_hash: &TrieHash,
+    algorithm: NodeHashAlgorithm,
     proof: &RangeProof<impl KeyType, impl ValueType, H>,
 ) -> Result<(), Error> {
-    crate::merkle::verify_range_proof(
-        first_key,
-        last_key,
-        root_hash,
-        DefaultHashMode::ALGORITHM,
-        proof,
-    )
-    .map(drop)
+    crate::merkle::verify_range_proof(first_key, last_key, root_hash, algorithm, proof).map(drop)
 }
 
 /// The stack size `std::thread` gives a spawned thread when none is requested:
@@ -122,42 +115,23 @@ fn into_committed<H: HashMode>(
     ns.into()
 }
 
-/// Calls [`init_merkle_in`] under the compile-default hash mode, for tests
-/// that are not generic over the mode.
-pub(crate) fn init_merkle<I, K, V>(
-    iter: I,
-) -> Merkle<NodeStore<Committed, MemStore, DefaultHashMode>>
-where
-    I: Clone + IntoIterator<Item = (K, V)>,
-    K: AsRef<[u8]>,
-    V: AsRef<[u8]>,
-{
-    init_merkle_in::<DefaultHashMode, _, _, _>(iter)
-}
-
-/// Builds a committed in-memory trie holding `iter` under hash mode `H`.
-///
-/// Pair with `#[hash_mode]` to generate both mode-specific tests from one
-/// generic definition.
-pub(crate) fn init_merkle_in<H, I, K, V>(iter: I) -> Merkle<NodeStore<Committed, MemStore, H>>
+/// Builds a committed in-memory merkle with the given key-value pairs, hashed
+/// under the mode `H`. Callers choose `H` explicitly (there is no default) so
+/// that mode-agnostic tests can be instantiated under both `EthHash` and
+/// `MerkleDbHash` via `#[hash_mode]`, and mode-specific tests
+/// can pin a concrete mode regardless of the binary's `ethhash` feature.
+pub(crate) fn init_merkle<H, I, K, V>(iter: I) -> Merkle<NodeStore<Committed, MemStore, H>>
 where
     H: HashMode,
     I: Clone + IntoIterator<Item = (K, V)>,
     K: AsRef<[u8]>,
     V: AsRef<[u8]>,
 {
-    let (merkle, _header) = init_merkle_with_header_in::<H, _, _, _>(iter);
+    let (merkle, _header) = init_merkle_with_header(iter);
     merkle
 }
 
-/// Builds the same trie as [`init_merkle_in`] and also returns the header
-/// the store was persisted with, for tests that inspect or rewrite it.
-///
-/// Every inserted key is read back after commit. Under the Ethereum mode an
-/// account key (32 bytes) is checked for presence only: when its value is
-/// well-formed account RLP, hashing rewrites the `storageRoot` field, so the
-/// stored value may differ from the inserted one.
-pub(crate) fn init_merkle_with_header_in<H, I, K, V>(
+pub(crate) fn init_merkle_with_header<H, I, K, V>(
     iter: I,
 ) -> (Merkle<NodeStore<Committed, MemStore, H>>, NodeStoreHeader)
 where
@@ -168,10 +142,9 @@ where
 {
     let memstore = Arc::new(MemStore::new(Vec::with_capacity(64 * 1024)));
     let mut header = NodeStoreHeader::new(H::ALGORITHM);
-    let base = Merkle::from(NodeStore::new_empty_committed(
-        memstore.clone(),
-        DeletedNodeTracking::Enabled,
-    ));
+    let base: Merkle<NodeStore<Committed, MemStore, H>> = Merkle::from(
+        NodeStore::new_empty_committed(memstore, DeletedNodeTracking::Enabled),
+    );
     let mut merkle = base.fork().unwrap();
 
     for (k, v) in iter.clone() {
@@ -190,6 +163,9 @@ where
         let value = v.as_ref();
 
         let stored = merkle.get_value(key).unwrap();
+        // Under Ethereum hashing, account keys (32 bytes) have their storageRoot
+        // field updated during hashing, so the stored value will differ from the
+        // original.
         if H::ALGORITHM.is_ethereum() && key.len() == 32 {
             assert!(
                 stored.is_some(),
@@ -263,9 +239,10 @@ fn decrease_key(key: &[u8; 32]) -> [u8; 32] {
     new_key
 }
 
+#[hash_mode]
 #[test]
-fn test_get_regression() {
-    let mut merkle = create_in_memory_merkle();
+fn test_get_regression<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
 
     merkle.insert(&[0], Box::new([0])).unwrap();
     assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
@@ -287,13 +264,14 @@ fn test_get_regression() {
     }
 }
 
+#[hash_mode]
 #[test]
-fn insert_one() {
-    let mut merkle = create_in_memory_merkle();
+fn insert_one<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
     merkle.insert(b"abc", Box::new([])).unwrap();
 }
 
-fn create_in_memory_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>> {
+fn create_in_memory_merkle<H: HashMode>() -> Merkle<NodeStore<Mutable<Propose>, MemStore, H>> {
     let memstore = MemStore::new(Vec::new());
 
     let nodestore = NodeStore::new_empty_proposal(memstore.into(), DeletedNodeTracking::Enabled);
@@ -319,9 +297,10 @@ fn test_branch_proof_node(
     }
 }
 
+#[hash_mode]
 #[test]
-fn test_get_node_from_nibbles_matches_byte_lookup() {
-    let mut merkle = create_in_memory_merkle();
+fn test_get_node_from_nibbles_matches_byte_lookup<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
     merkle.insert(&[0xab, 0xcd], Box::from([1u8])).unwrap();
 
     let from_bytes = merkle.get_node(&[0xab, 0xcd]).unwrap();
@@ -330,9 +309,10 @@ fn test_get_node_from_nibbles_matches_byte_lookup() {
     assert_eq!(from_bytes, from_nibbles);
 }
 
+#[hash_mode]
 #[test]
-fn test_insert_branch_from_nibbles_into_empty_trie() {
-    let mut merkle = create_in_memory_merkle();
+fn test_insert_branch_from_nibbles_into_empty_trie<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
 
     merkle.insert_branch_from_nibbles(&[0xa, 0xb, 0xc]).unwrap();
 
@@ -344,9 +324,10 @@ fn test_insert_branch_from_nibbles_into_empty_trie() {
     assert!(branch.value.is_none());
 }
 
+#[hash_mode]
 #[test]
-fn test_insert_branch_from_nibbles_converts_leaf_to_branch() {
-    let mut merkle = create_in_memory_merkle();
+fn test_insert_branch_from_nibbles_converts_leaf_to_branch<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
     merkle.insert(&[0xab], Box::from([9u8])).unwrap();
 
     merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
@@ -360,9 +341,10 @@ fn test_insert_branch_from_nibbles_converts_leaf_to_branch() {
     );
 }
 
+#[hash_mode]
 #[test]
-fn test_insert_branch_from_nibbles_inserts_missing_ancestor() {
-    let mut merkle = create_in_memory_merkle();
+fn test_insert_branch_from_nibbles_inserts_missing_ancestor<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
     merkle.insert(&[0xab, 0xcd], Box::from([7u8])).unwrap();
 
     merkle.insert_branch_from_nibbles(&[0xa]).unwrap();
@@ -376,9 +358,10 @@ fn test_insert_branch_from_nibbles_inserts_missing_ancestor() {
     );
 }
 
+#[hash_mode]
 #[test]
-fn test_insert_branch_from_nibbles_inserts_missing_descendant() {
-    let mut merkle = create_in_memory_merkle();
+fn test_insert_branch_from_nibbles_inserts_missing_descendant<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
     merkle.insert(&[0xab], Box::from([5u8])).unwrap();
 
     merkle.insert_branch_from_nibbles(&[0xa, 0xb, 0xc]).unwrap();
@@ -395,9 +378,10 @@ fn test_insert_branch_from_nibbles_inserts_missing_descendant() {
     );
 }
 
+#[hash_mode]
 #[test]
-fn test_insert_branch_from_nibbles_splits_divergent_paths() {
-    let mut merkle = create_in_memory_merkle();
+fn test_insert_branch_from_nibbles_splits_divergent_paths<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
     // Leaf at [0xab] has nibble path [a, b]
     merkle.insert(&[0xab], Box::from([3u8])).unwrap();
 
@@ -414,9 +398,10 @@ fn test_insert_branch_from_nibbles_splits_divergent_paths() {
     );
 }
 
+#[hash_mode]
 #[test]
-fn test_insert_and_get() {
-    let mut merkle = create_in_memory_merkle();
+fn test_insert_and_get<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
 
     // insert values
     for key_val in u8::MIN..=u8::MAX {
@@ -442,13 +427,14 @@ fn test_insert_and_get() {
     }
 }
 
+#[hash_mode]
 #[test]
-fn overwrite_leaf() {
+fn overwrite_leaf<H: HashMode>() {
     let key = &[0x00];
     let val = &[1];
     let overwrite = &[2];
 
-    let mut merkle = create_in_memory_merkle();
+    let mut merkle = create_in_memory_merkle::<H>();
 
     merkle.insert(key, val[..].into()).unwrap();
 
@@ -465,8 +451,9 @@ fn overwrite_leaf() {
     );
 }
 
+#[hash_mode]
 #[test]
-fn remove_root() {
+fn remove_root<H: HashMode>() {
     let key0 = vec![0];
     let val0 = [0];
     let key1 = vec![0, 1];
@@ -476,7 +463,7 @@ fn remove_root() {
     let key3 = vec![0, 1, 15];
     let val3 = [0, 1, 15];
 
-    let mut merkle = create_in_memory_merkle();
+    let mut merkle = create_in_memory_merkle::<H>();
 
     merkle.insert(&key0, Box::from(val0)).unwrap();
     merkle.insert(&key1, Box::from(val1)).unwrap();
@@ -524,9 +511,10 @@ fn remove_root() {
     assert!(merkle.nodestore.root_node().is_none());
 }
 
+#[hash_mode]
 #[test]
-fn remove_prefix_exact() {
-    let mut merkle = two_byte_all_keys();
+fn remove_prefix_exact<H: HashMode>() {
+    let mut merkle = two_byte_all_keys::<H>();
     for key_val in u8::MIN..=u8::MAX {
         let key = [key_val];
         let got = merkle.remove_prefix(&key).unwrap();
@@ -536,8 +524,8 @@ fn remove_prefix_exact() {
     }
 }
 
-fn two_byte_all_keys() -> Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>> {
-    let mut merkle = create_in_memory_merkle();
+fn two_byte_all_keys<H: HashMode>() -> Merkle<NodeStore<Mutable<Propose>, MemStore, H>> {
+    let mut merkle = create_in_memory_merkle::<H>();
     for key_val in u8::MIN..=u8::MAX {
         let key = [key_val, key_val];
         let val = [key_val];
@@ -549,16 +537,18 @@ fn two_byte_all_keys() -> Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHa
     merkle
 }
 
+#[hash_mode]
 #[test]
-fn remove_prefix_all() {
-    let mut merkle = two_byte_all_keys();
+fn remove_prefix_all<H: HashMode>() {
+    let mut merkle = two_byte_all_keys::<H>();
     let got = merkle.remove_prefix(&[]).unwrap();
     assert_eq!(got, 256);
 }
 
+#[hash_mode]
 #[test]
-fn remove_prefix_partial() {
-    let mut merkle = create_in_memory_merkle();
+fn remove_prefix_partial<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
     merkle
         .insert(b"abc", Box::from(b"value".as_slice()))
         .unwrap();
@@ -569,9 +559,10 @@ fn remove_prefix_partial() {
     assert_eq!(got, 2);
 }
 
+#[hash_mode]
 #[test]
-fn remove_many() {
-    let mut merkle = create_in_memory_merkle();
+fn remove_many<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
 
     // insert key-value pairs
     for key_val in u8::MIN..=u8::MAX {
@@ -600,9 +591,10 @@ fn remove_many() {
     assert!(merkle.nodestore.root_node().is_none());
 }
 
+#[hash_mode]
 #[test]
-fn remove_prefix() {
-    let mut merkle = create_in_memory_merkle();
+fn remove_prefix<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
 
     // insert key-value pairs
     for key_val in u8::MIN..=u8::MAX {
@@ -630,18 +622,20 @@ fn remove_prefix() {
     }
 }
 
+#[hash_mode]
 #[test]
-fn get_empty_proof() {
-    let merkle = create_in_memory_merkle().hash();
+fn get_empty_proof<H: HashMode>() {
+    let merkle = create_in_memory_merkle::<H>().hash();
     let proof = merkle.prove(b"any-key");
     assert!(matches!(proof.unwrap_err(), ProofError::Empty));
 }
 
+#[hash_mode]
 #[test]
-fn single_key_proof() {
+fn single_key_proof<H: HashMode>() {
     const TEST_SIZE: usize = 1;
 
-    let mut merkle = create_in_memory_merkle();
+    let mut merkle = create_in_memory_merkle::<H>();
 
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -659,12 +653,7 @@ fn single_key_proof() {
         let proof = merkle.prove(&key).unwrap();
 
         proof
-            .verify(
-                key.clone(),
-                Some(value.clone()),
-                &root_hash,
-                DefaultHashMode::ALGORITHM,
-            )
+            .verify(key.clone(), Some(value.clone()), &root_hash, H::ALGORITHM)
             .unwrap();
 
         {
@@ -673,12 +662,7 @@ fn single_key_proof() {
             value[0] = value[0].wrapping_add(1);
             assert!(
                 proof
-                    .verify(
-                        key.clone(),
-                        Some(value),
-                        &root_hash,
-                        DefaultHashMode::ALGORITHM
-                    )
+                    .verify(key.clone(), Some(value), &root_hash, H::ALGORITHM)
                     .is_err()
             );
         }
@@ -687,21 +671,17 @@ fn single_key_proof() {
             // Test that the proof is invalid when the hash is different
             assert!(
                 proof
-                    .verify(
-                        key,
-                        Some(value),
-                        &TrieHash::empty(),
-                        DefaultHashMode::ALGORITHM
-                    )
+                    .verify(key, Some(value), &TrieHash::empty(), H::ALGORITHM)
                     .is_err()
             );
         }
     }
 }
 
+#[hash_mode]
 #[test]
-fn empty_range_proof() {
-    let merkle = create_in_memory_merkle();
+fn empty_range_proof<H: HashMode>() {
+    let merkle = create_in_memory_merkle::<H>();
 
     assert!(matches!(
         merkle.range_proof(None, None, None).unwrap_err(),
@@ -709,15 +689,16 @@ fn empty_range_proof() {
     ));
 }
 
+#[hash_mode]
 #[test]
-fn test_insert_leaf_suffix() {
+fn test_insert_leaf_suffix<H: HashMode>() {
     // key_2 is a suffix of key, which is a leaf
     let key = vec![0xff];
     let val = [1];
     let key_2 = vec![0xff, 0x00];
     let val_2 = [2];
 
-    let mut merkle = create_in_memory_merkle();
+    let mut merkle = create_in_memory_merkle::<H>();
 
     merkle.insert(&key, Box::new(val)).unwrap();
     merkle.insert(&key_2, Box::new(val_2)).unwrap();
@@ -730,15 +711,16 @@ fn test_insert_leaf_suffix() {
     assert_eq!(*got, val_2);
 }
 
+#[hash_mode]
 #[test]
-fn test_insert_leaf_prefix() {
+fn test_insert_leaf_prefix<H: HashMode>() {
     // key_2 is a prefix of key, which is a leaf
     let key = vec![0xff, 0x00];
     let val = [1];
     let key_2 = vec![0xff];
     let val_2 = [2];
 
-    let mut merkle = create_in_memory_merkle();
+    let mut merkle = create_in_memory_merkle::<H>();
 
     merkle.insert(&key, Box::new(val)).unwrap();
     merkle.insert(&key_2, Box::new(val_2)).unwrap();
@@ -750,8 +732,9 @@ fn test_insert_leaf_prefix() {
     assert_eq!(*got, val_2);
 }
 
+#[hash_mode]
 #[test]
-fn test_insert_sibling_leaf() {
+fn test_insert_sibling_leaf<H: HashMode>() {
     // The node at key is a branch node with children key_2 and key_3.
     // TODO(rkuris) assert in this test that key is the parent of key_2 and key_3.
     // i.e. the node types are branch, leaf, leaf respectively.
@@ -762,7 +745,7 @@ fn test_insert_sibling_leaf() {
     let key_3 = vec![0xff, 0x0f];
     let val_3 = [3];
 
-    let mut merkle = create_in_memory_merkle();
+    let mut merkle = create_in_memory_merkle::<H>();
 
     merkle.insert(&key, Box::new(val)).unwrap();
     merkle.insert(&key_2, Box::new(val_2)).unwrap();
@@ -778,8 +761,9 @@ fn test_insert_sibling_leaf() {
     assert_eq!(*got, val_3);
 }
 
+#[hash_mode]
 #[test]
-fn test_insert_branch_as_branch_parent() {
+fn test_insert_branch_as_branch_parent<H: HashMode>() {
     let key = vec![0xff, 0xf0];
     let val = [1];
     let key_2 = vec![0xff, 0xf0, 0x00];
@@ -787,7 +771,7 @@ fn test_insert_branch_as_branch_parent() {
     let key_3 = vec![0xff];
     let val_3 = [3];
 
-    let mut merkle = create_in_memory_merkle();
+    let mut merkle = create_in_memory_merkle::<H>();
 
     merkle.insert(&key, Box::new(val)).unwrap();
     // key is a leaf
@@ -809,15 +793,16 @@ fn test_insert_branch_as_branch_parent() {
     assert_eq!(&*got, val_3);
 }
 
+#[hash_mode]
 #[test]
-fn test_insert_overwrite_branch_value() {
+fn test_insert_overwrite_branch_value<H: HashMode>() {
     let key = vec![0xff];
     let val = [1];
     let key_2 = vec![0xff, 0x00];
     let val_2 = [2];
     let overwrite = [3];
 
-    let mut merkle = create_in_memory_merkle();
+    let mut merkle = create_in_memory_merkle::<H>();
 
     merkle.insert(&key, Box::new(val)).unwrap();
     merkle.insert(&key_2, Box::new(val_2)).unwrap();
@@ -837,9 +822,10 @@ fn test_insert_overwrite_branch_value() {
     assert_eq!(*got, val_2);
 }
 
+#[hash_mode]
 #[test]
-fn test_delete_one_child_with_branch_value() {
-    let mut merkle = create_in_memory_merkle();
+fn test_delete_one_child_with_branch_value<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
     // insert a parent with a value
     merkle.insert(&[0], Box::new([42u8])).unwrap();
     // insert child1 with a value
@@ -860,9 +846,10 @@ fn test_delete_one_child_with_branch_value() {
     assert_eq!(*other_child, [44u8]);
 }
 
+#[hash_mode]
 #[test]
-fn test_root_hash_simple_insertions() -> Result<(), Error> {
-    init_merkle([
+fn test_root_hash_simple_insertions<H: HashMode>() -> Result<(), Error> {
+    init_merkle::<H, _, _, _>([
         ("do", "verb"),
         ("doe", "reindeer"),
         ("dog", "puppy"),
@@ -875,8 +862,9 @@ fn test_root_hash_simple_insertions() -> Result<(), Error> {
     Ok(())
 }
 
+#[hash_mode]
 #[test]
-fn test_root_hash_fuzz_insertions() -> Result<(), FileIoError> {
+fn test_root_hash_fuzz_insertions<H: HashMode>() -> Result<(), FileIoError> {
     let rng = firewood_storage::SeededRng::from_option(Some(42));
     let max_len0 = 8;
     let max_len1 = 4;
@@ -902,24 +890,26 @@ fn test_root_hash_fuzz_insertions() -> Result<(), FileIoError> {
             items.push((keygen(), val));
         }
 
-        init_merkle(items);
+        init_merkle::<H, _, _, _>(items);
     }
 
     Ok(())
 }
 
+#[hash_mode]
 #[test]
-fn test_delete_child() {
+fn test_delete_child<H: HashMode>() {
     let items = vec![("do", "verb")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<H, _, _, _>(items);
     let mut merkle = merkle.fork().unwrap();
 
     assert_eq!(merkle.remove(b"does_not_exist").unwrap(), None);
     assert_eq!(&*merkle.get_value(b"do").unwrap().unwrap(), b"verb");
 }
 
+#[hash_mode]
 #[test]
-fn test_delete_some() {
+fn test_delete_some<H: HashMode>() {
     let items = (0..100)
         .map(|n| {
             let key = format!("key{n}");
@@ -927,7 +917,7 @@ fn test_delete_some() {
             (key.as_bytes().to_vec(), val.as_bytes().to_vec())
         })
         .collect::<Vec<(Vec<u8>, Vec<u8>)>>();
-    let mut merkle = init_merkle(items.clone()).fork().unwrap();
+    let mut merkle = init_merkle::<H, _, _, _>(items.clone()).fork().unwrap();
     merkle.remove_prefix(b"key1").unwrap();
     for item in items {
         let (key, val) = item;
@@ -939,8 +929,9 @@ fn test_delete_some() {
     }
 }
 
+#[hash_mode]
 #[test]
-fn test_root_hash_reversed_deletions() -> Result<(), FileIoError> {
+fn test_root_hash_reversed_deletions<H: HashMode>() -> Result<(), FileIoError> {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
     let max_len0 = 8;
@@ -970,7 +961,7 @@ fn test_root_hash_reversed_deletions() -> Result<(), FileIoError> {
         items.sort_unstable();
         items.dedup_by_key(|(k, _)| k.clone());
 
-        let init_merkle = create_in_memory_merkle();
+        let init_merkle = create_in_memory_merkle::<H>();
         let init_immutable_merkle = init_merkle.hash();
 
         let (hashes, complete_immutable_merkle) = items.iter().fold(
@@ -993,7 +984,7 @@ fn test_root_hash_reversed_deletions() -> Result<(), FileIoError> {
                 );
                 merkle.remove(k).unwrap();
                 let immutable_merkle_after_removal: Merkle<
-                    NodeStore<Arc<ImmutableProposal>, _, DefaultHashMode>,
+                    NodeStore<Arc<ImmutableProposal>, _, H>,
                 > = merkle.try_into().unwrap();
                 new_hashes.push((
                     immutable_merkle_after_removal.nodestore.root_hash(),
@@ -1022,38 +1013,40 @@ fn test_root_hash_reversed_deletions() -> Result<(), FileIoError> {
     Ok(())
 }
 
+#[hash_mode]
 #[test]
-fn remove_nonexistent_with_one() {
+fn remove_nonexistent_with_one<H: HashMode>() {
     let items = [("do", "verb")];
-    let mut merkle = init_merkle(items).fork().unwrap();
+    let mut merkle = init_merkle::<H, _, _, _>(items).fork().unwrap();
 
     assert_eq!(merkle.remove(b"does_not_exist").unwrap(), None);
     assert_eq!(&*merkle.get_value(b"do").unwrap().unwrap(), b"verb");
 }
 
+#[hash_mode]
 #[test]
-fn test_get_branch_from_nibbles_mut() {
-    type TestMerkle = Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>>;
-    let mut merkle = create_in_memory_merkle();
+fn test_get_branch_from_nibbles_mut<H: HashMode>() {
+    type TestMerkle<H> = Merkle<NodeStore<Mutable<Propose>, MemStore, H>>;
+    let mut merkle = create_in_memory_merkle::<H>();
     merkle.insert(b"\xab", Box::from([1])).unwrap();
     merkle.insert(b"\xac", Box::from([2])).unwrap();
 
     // Branch exists at [a] — has children at b and c
-    let branch = TestMerkle::get_branch_from_nibbles_mut(
+    let branch = TestMerkle::<H>::get_branch_from_nibbles_mut(
         merkle.nodestore.root_mut(),
         &[PathComponent::try_new(0xa).unwrap()],
     );
     assert!(branch.is_some());
 
     // Nothing at [f]
-    let missing = TestMerkle::get_branch_from_nibbles_mut(
+    let missing = TestMerkle::<H>::get_branch_from_nibbles_mut(
         merkle.nodestore.root_mut(),
         &[PathComponent::try_new(0xf).unwrap()],
     );
     assert!(missing.is_none());
 
     // [a, b] is a leaf, not a branch
-    let leaf = TestMerkle::get_branch_from_nibbles_mut(
+    let leaf = TestMerkle::<H>::get_branch_from_nibbles_mut(
         merkle.nodestore.root_mut(),
         &[
             PathComponent::try_new(0xa).unwrap(),
@@ -1074,20 +1067,21 @@ fn test_get_branch_from_nibbles_mut() {
 /// spans the whole trie. A removal walks the chain and reattaches it on the way
 /// back. `Merkle::insert` applies no key-length bound, so this drives those
 /// walks past the bound the proof decoder enforces.
+#[hash_mode]
 #[test]
-fn test_in_memory_ops_far_beyond_the_bound_survive_a_small_stack() {
+fn test_in_memory_ops_far_beyond_the_bound_survive_a_small_stack<H: HashMode>() {
     spawn_on_stack(256 * 1024, || {
         let depth = MAX_KEY_BYTES * 2;
         let mut keys: Vec<Vec<u8>> = Vec::with_capacity(depth * 2);
         for i in 0..depth {
-            let mut key = vec![0x00u8; i + 1];
+            let mut key = vec![0x00u8; i.checked_add(1).expect("depth is bounded")];
             keys.push(key.clone());
             *key.last_mut().expect("key is non-empty") = 0x10;
             keys.push(key);
         }
 
         let memstore = Arc::new(MemStore::new(Vec::with_capacity(64 * 1024)));
-        let base: Merkle<NodeStore<Committed, MemStore, DefaultHashMode>> = Merkle::from(
+        let base: Merkle<NodeStore<Committed, MemStore, H>> = Merkle::from(
             NodeStore::new_empty_committed(memstore, DeletedNodeTracking::Enabled),
         );
         let mut merkle = base.fork().unwrap();
