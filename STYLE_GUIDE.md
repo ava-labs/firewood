@@ -46,11 +46,25 @@ By default, we prohibit bare `unwrap` calls and index dereferencing, as there ar
   hand-written for this reason and must not be re-derived, and a new `Child` variant that
   can own a `Node` must be added to the scan in `BranchNode::drop`. `Node`'s derived
   `PartialEq` recurses and is for tests only.
-- **Nibble range bounds**: A nibble-path lower bound uses the empty slice for
+- **Nibble range bounds**: An inclusive nibble-path lower bound uses the empty slice for
   "unbounded" — the empty slice already sorts as the minimum key. An upper bound must be
   `Option<&[u8]>` with `None` for unbounded (+∞); reusing the empty slice there judges
-  every key out of range. When either bound is threaded through new code, check every
-  comparison site. See `merkle::collapse::CollapseRange`.
+  every key out of range. An *exclusive* lower bound is the one case that needs
+  `Option` too, because `Some(&[])` excludes the empty key and `None` admits it (see
+  `proofs::holes::open_interval`). When either bound is threaded through new code, check
+  every comparison site. See `merkle::collapse::CollapseRange` and
+  `proofs::holes::KeySpan::as_key_range`.
+- **Proof node structure**: A consumer of a verified proof takes trie structure from
+  `ProofNode::key`, which the node hash commits to in both modes. `partial_len` (and
+  `partial_path()`) is authenticated only under the Ethereum mode; under MerkleDB a
+  tampered split still verifies. See `merkle::holes::Walk::boundary`.
+- **Ethereum storage-child fold**: Under the Ethereum mode a stored child hash at depth
+  65 depends on the account's storage-child count (folded as a storage-trie root iff the
+  account has exactly one), and a trie with no node at depth 64 stores its one slot
+  unfolded regardless. Compare depth-65 hashes from two tries directly only when both
+  sides fold alike; otherwise re-hash the local slot under the target's convention
+  (`merkle::holes::fold` to fold, `HashableShunt` to unfold). See
+  `merkle::holes::Walk::straddle`.
 
 ## Lint Suppression Policy
 
