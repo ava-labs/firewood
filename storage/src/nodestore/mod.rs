@@ -101,7 +101,6 @@ use smallvec::SmallVec;
 use super::linear::WritableStorage;
 use crate::CacheReadStrategy;
 use crate::Child;
-use crate::DefaultHashMode;
 use crate::FileIoError;
 use crate::HashMode;
 use crate::HashType;
@@ -650,13 +649,8 @@ pub trait NodeReader {
     /// database was created with.
     ///
     /// Proof emission (child-hash wire layout, value-digest rule, and the
-    /// account storage-root fix) is governed by the source DB's runtime mode,
-    /// not the build's compile-time default. The default returns
-    /// [`DefaultHashMode::ALGORITHM`]; [`NodeStore`] overrides it with the
-    /// algorithm selected by its [`HashMode`] type.
-    fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
-        DefaultHashMode::ALGORITHM
-    }
+    /// account storage-root fix) is governed by the source DB's runtime mode.
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm;
 }
 
 impl<T> NodeReader for T
@@ -1575,7 +1569,6 @@ where
 #[cfg(test)]
 #[expect(clippy::cast_possible_truncation)]
 mod tests {
-
     use std::error::Error;
 
     use firewood_macros::hash_mode;
@@ -1585,6 +1578,7 @@ mod tests {
     use super::*;
     use crate::BranchNode;
     use crate::Children;
+    use crate::DefaultHashMode;
     use crate::EthHash;
     use crate::FileBacked;
     use crate::HashMode;

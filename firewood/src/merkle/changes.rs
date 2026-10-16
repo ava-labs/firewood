@@ -584,6 +584,7 @@ mod tests {
     use firewood_storage::DeletedNodeTracking;
     use firewood_storage::FileBacked;
     use firewood_storage::FileIoError;
+    use firewood_storage::HashMode;
     use firewood_storage::HashedNodeReader;
     use firewood_storage::ImmutableProposal;
     use firewood_storage::MemStore;
@@ -1857,7 +1858,12 @@ mod tests {
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
 
-        let change_proof = ChangeProof::new(start_proof, end_proof, key_values);
+        let change_proof = ChangeProof::new(
+            start_proof,
+            end_proof,
+            key_values,
+            DefaultHashMode::ALGORITHM,
+        );
 
         // Test basic iterator functionality
         let mut iter = change_proof.iter();
@@ -1896,7 +1902,12 @@ mod tests {
 
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
-        let change_proof = ChangeProof::new(start_proof, end_proof, key_values);
+        let change_proof = ChangeProof::new(
+            start_proof,
+            end_proof,
+            key_values,
+            DefaultHashMode::ALGORITHM,
+        );
 
         // Test that we can use for-loop syntax
         let mut items = Vec::new();
@@ -1918,7 +1929,12 @@ mod tests {
         let key_values: Box<[BatchOp<Key, Value>]> = Box::new([]);
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
-        let change_proof = ChangeProof::new(start_proof, end_proof, key_values);
+        let change_proof = ChangeProof::new(
+            start_proof,
+            end_proof,
+            key_values,
+            DefaultHashMode::ALGORITHM,
+        );
 
         let mut iter = change_proof.iter();
         assert_eq!(iter.len(), 0);

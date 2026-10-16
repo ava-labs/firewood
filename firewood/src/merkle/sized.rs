@@ -466,7 +466,7 @@ impl<T: TrieReader> ChunkBuilder for RangeChunkBuilder<'_, T> {
             Some((last, _)) if !natural_end => self.merkle.prove(last)?,
             _ => Proof::default(),
         };
-        Ok(RangeProof::with_hash_mode(
+        Ok(RangeProof::new(
             self.start_proof.clone(),
             end,
             kvs.to_vec().into_boxed_slice(),
@@ -509,7 +509,7 @@ impl<T: HashedNodeReader> ChunkBuilder for ChangeChunkBuilder<'_, T> {
             Some(op) => self.merkle.prove(op.key())?,
             None => Proof::default(),
         };
-        Ok(ChangeProof::with_hash_mode(
+        Ok(ChangeProof::new(
             self.start_proof.clone(),
             end,
             ops.to_vec().into_boxed_slice(),

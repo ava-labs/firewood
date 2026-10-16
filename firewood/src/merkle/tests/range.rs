@@ -1,6 +1,8 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use firewood_storage::DefaultHashMode;
+use firewood_storage::HashMode;
 use firewood_storage::U4;
 
 use super::verify_range_proof;
@@ -355,6 +357,7 @@ fn test_dropped_trailing_key_accepted_as_partial_coverage() {
         crate::Proof::<Box<[ProofNode]>>::new(honest.start_proof().as_ref().into()),
         crate::Proof::<Box<[ProofNode]>>::new(honest.end_proof().as_ref().into()),
         tampered_kvs.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     );
 
     // The verifier accepts: the proof is internally consistent and proves
@@ -418,6 +421,7 @@ fn test_tampered_in_range_value_rejected() {
         crate::Proof::<Box<[ProofNode]>>::new(honest.start_proof().as_ref().into()),
         crate::Proof::<Box<[ProofNode]>>::new(honest.end_proof().as_ref().into()),
         tampered_kvs.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     );
 
     let result = crate::merkle::verify_range_proof(
@@ -517,7 +521,12 @@ fn test_range_proof() {
 
         let key_values = stored_key_values(&merkle, items[start..end].iter().map(|(k, _)| *k));
 
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+        let range_proof = RangeProof::new(
+            start_proof,
+            end_proof,
+            key_values.into_boxed_slice(),
+            DefaultHashMode::ALGORITHM,
+        );
 
         let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -577,7 +586,12 @@ fn test_bad_range_proof_out_of_order() {
         let start_proof = merkle.prove(items[start].0).unwrap();
         let end_proof = merkle.prove(items[end - 1].0).unwrap();
 
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+        let range_proof = RangeProof::new(
+            start_proof,
+            end_proof,
+            key_values.into_boxed_slice(),
+            DefaultHashMode::ALGORITHM,
+        );
 
         let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -621,7 +635,12 @@ fn test_bad_range_proof_modified_key() {
     kvs[mid].0 = key.into_boxed_slice();
     kvs.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-    let range_proof = RangeProof::new(start_proof, end_proof, kvs.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        kvs.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
     assert!(
         verify_range_proof(
             Some(items[start].0),
@@ -667,7 +686,12 @@ fn test_bad_range_proof_modified_value() {
     val[0] ^= 0x01;
     kvs[mid].1 = val.into_boxed_slice();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, kvs.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        kvs.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
     assert!(
         verify_range_proof(
             Some(items[start].0),
@@ -706,7 +730,12 @@ fn test_bad_range_proof_gapped_entries() {
     let mid = kvs.len() / 2;
     kvs.remove(mid);
 
-    let range_proof = RangeProof::new(start_proof, end_proof, kvs.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        kvs.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
     assert!(
         verify_range_proof(
             Some(items[start].0),
@@ -758,7 +787,12 @@ fn test_range_proof_with_non_existent_proof() {
 
         let key_values = stored_key_values(&merkle, items[start..end].iter().map(|(k, _)| *k));
 
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+        let range_proof = RangeProof::new(
+            start_proof,
+            end_proof,
+            key_values.into_boxed_slice(),
+            DefaultHashMode::ALGORITHM,
+        );
 
         let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -774,7 +808,12 @@ fn test_range_proof_with_non_existent_proof() {
 
     let key_values = stored_key_values(&merkle, items.iter().map(|(k, _)| *k));
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -808,7 +847,12 @@ fn test_range_proof_with_invalid_non_existent_proof() {
         .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -836,8 +880,12 @@ fn test_range_proof_with_invalid_non_existent_proof() {
         .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
         .collect();
 
-    let range_proof_2 =
-        RangeProof::new(start_proof_2, end_proof_2, key_values_2.into_boxed_slice());
+    let range_proof_2 = RangeProof::new(
+        start_proof_2,
+        end_proof_2,
+        key_values_2.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let root_hash_2 = merkle.nodestore().root_hash().unwrap();
 
@@ -875,6 +923,7 @@ fn test_one_element_range_proof() {
         proof.clone(), // Same proof for start and end
         proof,
         key_values.into(),
+        DefaultHashMode::ALGORITHM,
     );
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
@@ -894,7 +943,12 @@ fn test_one_element_range_proof() {
 
     let key_values_2 = stored_key_values(&merkle, std::iter::once(*items[start].0));
 
-    let range_proof_2 = RangeProof::new(start_proof_2, end_proof_2, key_values_2.into());
+    let range_proof_2 = RangeProof::new(
+        start_proof_2,
+        end_proof_2,
+        key_values_2.into(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     verify_range_proof(
         Some(&first),
@@ -911,7 +965,12 @@ fn test_one_element_range_proof() {
 
     let key_values_3 = stored_key_values(&merkle, std::iter::once(*items[start].0));
 
-    let range_proof_3 = RangeProof::new(start_proof_3, end_proof_3, key_values_3.into());
+    let range_proof_3 = RangeProof::new(
+        start_proof_3,
+        end_proof_3,
+        key_values_3.into(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     verify_range_proof(
         Some(items[start].0),
@@ -927,7 +986,12 @@ fn test_one_element_range_proof() {
 
     let key_values_4 = stored_key_values(&merkle, std::iter::once(*items[start].0));
 
-    let range_proof_4 = RangeProof::new(start_proof_4, end_proof_4, key_values_4.into());
+    let range_proof_4 = RangeProof::new(
+        start_proof_4,
+        end_proof_4,
+        key_values_4.into(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof_4).unwrap();
 
@@ -942,7 +1006,12 @@ fn test_one_element_range_proof() {
 
     let key_values_5 = stored_key_values(&merkle_mini, std::iter::once(key));
 
-    let range_proof_5 = RangeProof::new(start_proof_5, end_proof_5, key_values_5.into());
+    let range_proof_5 = RangeProof::new(
+        start_proof_5,
+        end_proof_5,
+        key_values_5.into(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let root_hash_mini = merkle_mini.nodestore().root_hash().unwrap();
 
@@ -970,8 +1039,12 @@ fn test_all_elements_proof() {
 
     let key_values_2 = stored_key_values(&merkle, items.iter().map(|(k, _)| *k));
 
-    let range_proof_2 =
-        RangeProof::new(start_proof_2, end_proof_2, key_values_2.into_boxed_slice());
+    let range_proof_2 = RangeProof::new(
+        start_proof_2,
+        end_proof_2,
+        key_values_2.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     verify_range_proof(
         Some(items[start].0),
@@ -989,8 +1062,12 @@ fn test_all_elements_proof() {
 
     let key_values_3 = stored_key_values(&merkle, items.iter().map(|(k, _)| *k));
 
-    let range_proof_3 =
-        RangeProof::new(start_proof_3, end_proof_3, key_values_3.into_boxed_slice());
+    let range_proof_3 = RangeProof::new(
+        start_proof_3,
+        end_proof_3,
+        key_values_3.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     verify_range_proof(Some(first), Some(last), &root_hash, &range_proof_3).unwrap();
 }
@@ -1011,7 +1088,12 @@ fn test_empty_range_proof() {
     assert!(!proof.is_empty());
 
     let key_values: KeyValuePairs = Vec::new();
-    let range_proof = RangeProof::new(proof.clone(), proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        proof.clone(),
+        proof,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof).unwrap();
 }
@@ -1049,7 +1131,12 @@ fn test_gapped_range_proof() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -1088,7 +1175,12 @@ fn test_same_side_proof() {
         items[pos].1.to_vec().into_boxed_slice(),
     )];
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -1106,8 +1198,12 @@ fn test_same_side_proof() {
         items[pos].1.to_vec().into_boxed_slice(),
     )];
 
-    let range_proof_2 =
-        RangeProof::new(start_proof_2, end_proof_2, key_values_2.into_boxed_slice());
+    let range_proof_2 = RangeProof::new(
+        start_proof_2,
+        end_proof_2,
+        key_values_2.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     assert!(verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof_2,).is_err());
 }
@@ -1137,8 +1233,12 @@ fn test_single_side_range_proof() {
             let key_values =
                 stored_key_values(&merkle, items.iter().take(case + 1).map(|(k, _)| *k));
 
-            let range_proof =
-                RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+            let range_proof = RangeProof::new(
+                start_proof,
+                end_proof,
+                key_values.into_boxed_slice(),
+                DefaultHashMode::ALGORITHM,
+            );
 
             let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -1172,8 +1272,12 @@ fn test_reverse_single_side_range_proof() {
 
             let key_values = stored_key_values(&merkle, items.iter().skip(case).map(|(k, _)| *k));
 
-            let range_proof =
-                RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+            let range_proof = RangeProof::new(
+                start_proof,
+                end_proof,
+                key_values.into_boxed_slice(),
+                DefaultHashMode::ALGORITHM,
+            );
 
             let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -1205,7 +1309,12 @@ fn test_both_sides_range_proof() {
 
         let key_values = stored_key_values(&merkle, items.iter().map(|(k, _)| *k));
 
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+        let range_proof = RangeProof::new(
+            start_proof,
+            end_proof,
+            key_values.into_boxed_slice(),
+            DefaultHashMode::ALGORITHM,
+        );
 
         let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -1244,7 +1353,12 @@ fn test_empty_value_range_proof() {
         .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -1288,7 +1402,12 @@ fn test_all_elements_empty_value_range_proof() {
         .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -1329,7 +1448,12 @@ fn test_range_proof_keys_with_shared_prefix() {
 
     let key_values = stored_key_values(&merkle, items.iter().map(|(k, _)| k.as_slice()));
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -1370,7 +1494,12 @@ fn test_bloated_range_proof() {
 
     let key_values = stored_key_values(&merkle, std::iter::once(target.0));
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -1398,7 +1527,12 @@ fn test_bad_range_proof_key_below_start() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let result = verify_range_proof(
         Some(b"cc".as_slice()),
@@ -1436,7 +1570,12 @@ fn test_bad_range_proof_key_above_end() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let result = verify_range_proof(
         Some(b"bb".as_slice()),
@@ -1473,7 +1612,12 @@ fn test_bad_range_proof_missing_end_proof() {
         .collect();
 
     let empty_end: Proof<Box<[ProofNode]>> = Proof::new(Vec::new().into_boxed_slice());
-    let range_proof = RangeProof::new(start_proof, empty_end, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        empty_end,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let result = verify_range_proof(
         Some(b"bb".as_slice()),
@@ -1510,7 +1654,12 @@ fn test_bad_range_proof_unexpected_start_proof() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     // Pass None as start key but provide a start proof — should be rejected
     let result = verify_range_proof(
@@ -1653,7 +1802,12 @@ fn test_bad_range_proof_truncated_end_proof() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, truncated_end, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        truncated_end,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let result = verify_range_proof(
         Some(b"aa".as_slice()),
@@ -1689,7 +1843,12 @@ fn test_bad_range_proof_truncated_start_proof() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(truncated_start, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        truncated_start,
+        end_proof,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let result = verify_range_proof(
         Some(b"aa".as_slice()),
@@ -1732,7 +1891,12 @@ fn test_bad_range_proof_value_at_odd_nibble() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, corrupt_end, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        corrupt_end,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let result = verify_range_proof(
         Some(b"aa".as_slice()),
@@ -1777,7 +1941,12 @@ fn test_range_proof_left_edge_hash_mismatch() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(corrupt_start, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        corrupt_start,
+        end_proof,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let err = verify_range_proof(
         Some(b"aa".as_slice()),
@@ -1824,7 +1993,12 @@ fn test_range_proof_right_edge_hash_mismatch() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, corrupt_end, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        corrupt_end,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let err = verify_range_proof(
         Some(b"aa".as_slice()),
@@ -1872,7 +2046,12 @@ fn test_bad_range_proof_hidden_value_on_edge_path() {
         ),
     ];
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let result = verify_range_proof(
         Some(b"a".as_slice()),
@@ -1939,7 +2118,12 @@ fn test_bad_range_proof_truncated_non_existent_edge() {
         .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
         .collect();
 
-    let range_proof = RangeProof::new(truncated_start, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        truncated_start,
+        end_proof,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let result = verify_range_proof(
         Some(start_bound.as_slice()),
@@ -2074,7 +2258,12 @@ fn test_bad_range_proof_value_mismatch_on_proof_path() {
         ),
     ];
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
+    );
 
     let result = verify_range_proof(
         Some(b"a".as_slice()),

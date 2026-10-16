@@ -1196,6 +1196,7 @@ fn test_mismatch_ending_in_a_put_is_still_rejected() {
         crate::Proof::new(honest.start_proof().to_vec().into_boxed_slice()),
         crate::Proof::new(honest.end_proof().to_vec().into_boxed_slice()),
         ops.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     );
 
     let ctx = verify_change_proof_structure(&tampered, root2, None, Some(b"\xff"), None).unwrap();
@@ -1232,6 +1233,7 @@ fn test_an_unrelated_end_proof_does_not_narrow() {
         crate::Proof::new(f.proof.start_proof().to_vec().into_boxed_slice()),
         crate::Proof::new(donor.end_proof().to_vec().into_boxed_slice()),
         f.proof.batch_ops().to_vec().into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     );
 
     match verify_change_proof_structure(
@@ -1349,6 +1351,7 @@ fn test_deep_forged_ops_rejected_at_deserialization() {
         honest.start_proof().clone(),
         honest.end_proof().clone(),
         ops.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     );
 
     let mut bytes = Vec::new();
