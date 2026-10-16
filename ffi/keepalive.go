@@ -30,7 +30,7 @@ import (
 
 // ErrDropped is the shared sentinel wrapped by every dropped-handle error
 // in this package: [ErrDroppedRevision], [ErrDroppedReconstructed], and the
-// unexported proposal and iterator equivalents. Callers that don't care
+// unexported proposal, iterator, and proof equivalents. Callers that don't care
 // which handle type was invalidated — for example after
 // [WithForceCloseHandles] drops every outstanding handle — can match all
 // of them with errors.Is(err, ErrDropped).
@@ -48,7 +48,7 @@ type handle[T any] struct {
 	dropped bool
 
 	// lease keeps the parent database alive while this handle is in use.
-	// It is initialized by [lease.attach] or [lease.ensureAttached] and released
+	// It is initialized by [lease.attach] and released
 	// when [Drop] is called.
 	lease lease
 
@@ -57,9 +57,10 @@ type handle[T any] struct {
 
 // newHandle constructs an inactive handle: the C pointer and free
 // function are set, but the lease is not yet attached to any registry.
-// Callers must invoke [lease.attach] before the handle becomes visible,
-// or the registry's count/dropFn invariants will be broken. Proofs are the
-// exception: they hold no lease until [lease.ensureAttached] binds them.
+// Callers of leased handles must invoke [lease.attach] before the handle
+// becomes visible, or the registry's count/dropFn invariants will be broken.
+// [RangeProof] and [ChangeProof] never attach: their lease stays inactive for
+// the handle's whole life and only its mutex is used.
 func newHandle[T any](ptr T, free func(T) C.VoidResult) *handle[T] {
 	return &handle[T]{
 		ptr:     ptr,
@@ -123,8 +124,8 @@ func (h *handle[T]) Drop() error {
 // ctx cancellation, so a failed-and-retried Close costs nothing.
 type keepAliveRegistry struct {
 	mu sync.Mutex
-	// count is the number of outstanding leases. Bumped by [lease.attach]
-	// and [lease.ensureAttached]; decremented by [lease.releaseLocked].
+	// count is the number of outstanding leases. Bumped by [lease.attach];
+	// decremented by [lease.releaseLocked].
 	count int
 	// waiters are channels closed when count drops to zero. Each call to
 	// [waitDrained] appends one and removes it on ctx cancellation.
@@ -265,7 +266,8 @@ func (r *keepAliveRegistry) closeAndForceDrop(ctx context.Context) error {
 // lease represents a single outstanding handle's claim on the parent
 // database. It exists so that operations on the wrapping handle can be
 // serialized against [Database.Close] / [WithForceCloseHandles]: every
-// public method on a Proposal, Revision, Reconstructed, or Iterator
+// public method on a [Proposal], [Revision], [Reconstructed], [Iterator],
+// [VerifiedRangeProof], or [VerifiedChangeProof]
 // takes mu.RLock for the duration of the call, and force-drop takes
 // mu.Lock via [release] before tearing down the C handle.
 //
@@ -275,7 +277,7 @@ func (r *keepAliveRegistry) closeAndForceDrop(ctx context.Context) error {
 type lease struct {
 	mu sync.RWMutex
 	// registry is the parent database's keep-alive registry. Set by
-	// [lease.attach] or [lease.ensureAttached], cleared in
+	// [lease.attach], cleared in
 	// [releaseLocked]; nil indicates the lease has already been released.
 	registry *keepAliveRegistry
 }
@@ -321,48 +323,6 @@ func (l *lease) attach(registry *keepAliveRegistry, dropFn func() error) error {
 	return nil
 }
 
-// ensureAttached registers this lease with the registry's outstanding-handle
-// count and drop map, like [lease.attach], for a lease that may already be
-// attached. It exists for [RangeProof], which takes its lease only once
-// [Database.VerifyRangeProof] or [Database.VerifyAndCommitRangeProof]
-// succeeds, and may succeed more than once on the same proof.
-//
-// Re-attaching the same lease to the same registry is a no-op, which keeps
-// the count balanced — one attach, one release. Re-attaching to a
-// *different* registry is a bug the count/registry bookkeeping cannot
-// represent, so it panics; callers check [lease.registry] first.
-//
-// Callers must hold l.mu.Lock and serialize against [Database.Close] (e.g.
-// via db.handleLock.RLock) before invoking this — there is no
-// closed-registry guard here.
-func (l *lease) ensureAttached(registry *keepAliveRegistry, dropFn func() error) error {
-	if l.registry == registry {
-		// Already attached to this registry — idempotent; do not double-count.
-		return nil
-	}
-	if l.registry != nil {
-		panic("lease already attached to a different registry")
-	}
-
-	registry.mu.Lock()
-	if registry.closed {
-		registry.mu.Unlock()
-		// Call dropFn outside registry.mu to preserve the lease.mu →
-		// registry.mu lock order (dropFn → handle.Drop → lease.release
-		// takes lease.mu, which would then take registry.mu via
-		// removeAndDecr). No count++ ran, so no decrement is needed.
-		// errors.Join discards nil, so a successful dropFn yields just
-		// errDBClosed.
-		return errors.Join(errDBClosed, dropFn())
-	}
-
-	registry.count++
-	registry.handles[l] = dropFn
-	l.registry = registry
-	registry.mu.Unlock()
-	return nil
-}
-
 // release runs attemptDisown and releases the lease via [releaseLocked].
 //
 // The release is unconditional — even when attemptDisown errors or
@@ -372,7 +332,7 @@ func (l *lease) ensureAttached(registry *keepAliveRegistry, dropFn func() error)
 //
 // Safe to call multiple times; subsequent calls after the first continue
 // to invoke attemptDisown but do not double-decrement the count unless
-// [attach] or [ensureAttached] runs again in between.
+// [attach] runs again in between.
 func (l *lease) release(attemptDisown func() error) (err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -391,7 +351,7 @@ func (l *lease) release(attemptDisown func() error) (err error) {
 // Exists for callers like [Reconstructed.Reconstruct] that hold mu.Lock
 // for a wider critical section and would otherwise deadlock through
 // [release]. Idempotent: calls after the first are no-ops until
-// [lease.attach] or [lease.ensureAttached] runs again.
+// [lease.attach] runs again.
 func (l *lease) releaseLocked() {
 	if l.registry == nil {
 		return

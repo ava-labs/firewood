@@ -32,14 +32,14 @@ use firewood_storage::SeededRng;
 use firewood_storage::replace_list_field;
 use rand::seq::SliceRandom;
 
+use super::accounts::account_storage_key;
+use super::accounts::empty_code_hash;
+use super::accounts::rlp_encode_account;
 use super::change::fuzz_common::build_change_proof;
 use super::change::fuzz_common::build_range_proof;
 use super::change::fuzz_common::change_proof_rejected;
 use super::change::fuzz_common::maybe_serialize_round_trip_change;
 use super::change::fuzz_common::maybe_serialize_round_trip_range;
-use super::ethhash::account_storage_key;
-use super::ethhash::empty_code_hash;
-use super::ethhash::rlp_encode_account;
 use crate::api::BatchOp;
 use crate::api::Db as DbTrait;
 use crate::api::DbView;

@@ -321,6 +321,7 @@ pub(super) mod de;
 pub(crate) mod eth;
 pub(crate) mod frame;
 pub(crate) mod header;
+pub(crate) mod holes;
 pub(crate) mod range;
 pub(crate) mod reader;
 pub(super) mod ser;
@@ -332,14 +333,19 @@ pub(crate) mod types;
 
 pub use self::change::ChangeProof;
 pub use self::change::ChangeProofVerificationContext;
-pub use self::change::find_next_key_after_change_proof;
+pub use self::change::VerifiedChangeProof;
 pub use self::change::verify_change_proof_structure;
 pub(crate) use self::frame::MAX_DECOMPRESSED_LEN;
 pub use self::header::InvalidHeader;
+pub use self::holes::DeletePrefixes;
+pub use self::holes::Hole;
+pub use self::holes::KeySpan;
+pub use self::holes::fetch_ranges;
+pub use self::holes::remedy_ops;
 pub use self::range::KeyRange;
 pub use self::range::RangeProof;
 pub use self::range::RangeProofVerificationContext;
-pub use self::range::find_next_key_after_range_proof;
+pub use self::range::VerifiedRangeProof;
 pub use self::range::verify_range_proof_structure;
 pub use self::reader::ReadError;
 pub use self::types::EmptyProofCollection;
@@ -354,10 +360,8 @@ pub use self::types::ProofType;
 /// `0x00` byte appended, since nothing sorts between the two. Total — every byte
 /// string has one, including the empty key.
 ///
-/// [`find_next_key_after_range_proof`] and [`find_next_key_after_change_proof`]
-/// use it to resume strictly above the last key a proof covered. Both request
-/// bounds are inclusive, so resuming at that key would cover it again and never
-/// advance.
+/// [`fetch_ranges`] uses it as the exclusive upper bound of a single-key
+/// label, so that a point and the span starting right after it coalesce.
 pub(crate) fn lex_successor(key: &[u8]) -> Box<[u8]> {
     [key, &[0]].concat().into_boxed_slice()
 }

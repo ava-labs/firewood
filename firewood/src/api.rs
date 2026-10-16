@@ -130,6 +130,15 @@ pub enum Error {
     #[error("Internal error")]
     InternalError(Box<dyn std::error::Error + Send + Sync>),
 
+    /// A view could not supply the hash of a subtree because the probed
+    /// position runs through, or lands on a node that holds, a child kept in
+    /// memory without a hash.
+    #[error("view cannot supply a subtree hash: {reason}")]
+    UnhashedView {
+        /// Where on the probed path the unhashed child was met.
+        reason: &'static str,
+    },
+
     /// Cannot rebase a proposal whose parent is not a committed revision
     #[error("cannot rebase: proposal parent is not committed")]
     ParentNotCommitted,
@@ -519,13 +528,34 @@ where
     }
 }
 
+/// A hashed view that can classify the key space outside a verified proof.
+///
+/// This is the erased capability behind
+/// [`CommittedView::find_holes_after_range_proof`](crate::db::CommittedView::find_holes_after_range_proof)
+/// and its siblings: the blanket impls in `db.rs` cover the committed and
+/// reconstructed nodestores of every hash mode and recover the mode for the
+/// generic walk, so no caller names it.
+pub(crate) trait DynHoleFinder: DynDbView {
+    /// Object-safe version of the generic walk over a verified range proof.
+    fn find_holes_after_range_proof(
+        &self,
+        verified: &crate::proofs::VerifiedRangeProof,
+    ) -> Result<Vec<crate::proofs::Hole>, Error>;
+
+    /// Object-safe version of the generic walk over a verified change proof.
+    fn find_holes_after_change_proof(
+        &self,
+        verified: &crate::proofs::VerifiedChangeProof,
+    ) -> Result<Vec<crate::proofs::Hole>, Error>;
+}
+
 /// A shareable committed revision that can start a reconstruction chain.
 ///
 /// This is the erased capability behind
 /// [`CommittedView`](crate::db::CommittedView): the blanket impl in `db.rs`
 /// covers the committed nodestore of every hash mode, so reconstruction works
 /// regardless of the mode the database was opened with.
-pub(crate) trait DynCommittedRevision: DynDbView {
+pub(crate) trait DynCommittedRevision: DynHoleFinder {
     /// Start a reconstruction chain from this committed revision by applying
     /// `batch`, producing an erased reconstructed state.
     fn begin_reconstruction(
@@ -540,7 +570,7 @@ pub(crate) trait DynCommittedRevision: DynDbView {
 /// [`ReconstructedView`](crate::db::ReconstructedView); like
 /// [`DynCommittedRevision`], its blanket impl in `db.rs` covers every hash
 /// mode.
-pub(crate) trait DynReconstructed: DynDbView {
+pub(crate) trait DynReconstructed: DynHoleFinder {
     /// Continue the reconstruction chain by applying `batch` on top of this
     /// state.
     ///
@@ -609,12 +639,15 @@ pub trait Proposal: DbView {
     fn propose(&self, data: impl IntoBatchIter) -> Result<Self::Proposal, Error>;
 }
 
+/// A batch operation with an owned key and value.
+pub type OwnedBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
+
 /// A batch already collected into owned key/value pairs.
 ///
 /// The [`DynDb`]/[`DynProposal`] boundary cannot accept an `impl IntoBatchIter`
 /// (a generic method is not dispatchable through a vtable), so the generic
 /// batch is pre-collected into this concrete, owned shape at the boundary.
-pub type OwnedBatch = Box<[BatchOp<Box<[u8]>, Box<[u8]>>]>;
+pub type OwnedBatch = Box<[OwnedBatchOp]>;
 
 /// Key/value pairs collected into an owned shape for range merging across the
 /// [`DynDb`] boundary.
@@ -699,6 +732,28 @@ pub trait DynDb: Debug + Send + Sync + 'static {
     ) -> Result<Box<dyn DynProposal<'_> + '_>, Error>;
 
     /// Object-safe version of
+    /// [`Db::apply_verified_range_proof`](crate::db::Db::apply_verified_range_proof).
+    #[expect(
+        clippy::missing_errors_doc,
+        reason = "documented on Db::apply_verified_range_proof"
+    )]
+    fn apply_verified_range_proof(
+        &self,
+        verified: &crate::proofs::VerifiedRangeProof,
+    ) -> Result<(Box<dyn DynProposal<'_> + '_>, Vec<crate::proofs::Hole>), Error>;
+
+    /// Object-safe version of
+    /// [`Db::apply_verified_change_proof`](crate::db::Db::apply_verified_change_proof).
+    #[expect(
+        clippy::missing_errors_doc,
+        reason = "documented on Db::apply_verified_change_proof"
+    )]
+    fn apply_verified_change_proof(
+        &self,
+        verified: &crate::proofs::VerifiedChangeProof,
+    ) -> Result<(Box<dyn DynProposal<'_> + '_>, Vec<crate::proofs::Hole>), Error>;
+
+    /// Object-safe version of
     /// [`Db::merge_key_value_range`](crate::db::Db::merge_key_value_range),
     /// taking already-collected [`OwnedKeyValuePairs`].
     #[expect(clippy::missing_errors_doc)]
@@ -735,6 +790,10 @@ pub trait DynDb: Debug + Send + Sync + 'static {
     /// revision.
     #[expect(clippy::missing_errors_doc)]
     fn committed_view(&self, hash: TrieHash) -> Result<Option<crate::db::CommittedView>, Error>;
+
+    /// Object-safe version of
+    /// [`Db::current_committed_view`](crate::db::Db::current_committed_view).
+    fn current_committed_view(&self) -> crate::db::CommittedView;
 
     /// Object-safe version of [`Db::close`](crate::db::Db::close), consuming
     /// the box instead of `self` by value.
