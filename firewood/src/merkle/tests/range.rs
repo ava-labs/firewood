@@ -2382,7 +2382,7 @@ fn test_empty_range_proof_with_hashed_value() {
     let proof = merkle
         .range_proof(Some(b"\x30"), Some(b"\x40"), None)
         .unwrap();
-    assert!(proof.key_values().is_empty());
+    assert_eq!(proof.key_values(), []);
 
     // Serialize/deserialize to convert Value to Hash
     let mut serialized = Vec::new();
