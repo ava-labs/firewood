@@ -173,6 +173,7 @@ pub use proofs::ChangeProof;
 pub use proofs::ChangeProofVerificationContext;
 pub use proofs::DeletePrefixes;
 pub use proofs::EmptyProofCollection;
+pub use proofs::Hole;
 pub use proofs::InvalidHeader;
 pub use proofs::KeyRange;
 pub use proofs::KeySpan;

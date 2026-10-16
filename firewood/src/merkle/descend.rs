@@ -190,13 +190,6 @@ pub(crate) fn descend_to_prefix<T: TrieReader>(
 /// has keys here and the local trie has none" or as "nothing to delete", and
 /// either reading over an unreadable or unhashed subtree orders the wrong
 /// remedy.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no production caller yet; the hole-detection walk lands in a later change"
-    )
-)]
 pub(crate) fn subtree_hash<H: HashMode, T: HashedNodeReader>(
     view: &T,
     prefix: &[PathComponent],
