@@ -47,16 +47,34 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
+use firewood_storage::Children;
+use firewood_storage::DenseChildren;
+use firewood_storage::EthHash;
+use firewood_storage::FileIoError;
+use firewood_storage::HashMode;
+use firewood_storage::HashType;
+use firewood_storage::Hashable;
+use firewood_storage::IntoSplitPath;
+use firewood_storage::MerkleDbHash;
+use firewood_storage::NibblesIterator;
+use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::Path;
+use firewood_storage::PathBuf;
+use firewood_storage::PathComponent;
+use firewood_storage::PathIterItem;
+use firewood_storage::Preimage;
+use firewood_storage::RlpError;
+use firewood_storage::RlpList;
+use firewood_storage::SplitPath;
+use firewood_storage::TrieHash;
+use firewood_storage::TriePath;
+use firewood_storage::ValueDigest;
+use firewood_storage::check_inline_node;
 use firewood_storage::hash_node_as_storage_trie_root_parts;
-use firewood_storage::{
-    Children, DenseChildren, EthHash, FileIoError, HashMode, HashType, Hashable, IntoSplitPath,
-    MerkleDbHash, NibblesIterator, NodeHashAlgorithm, Path, PathBuf, PathComponent, PathIterItem,
-    Preimage, RlpError, RlpList, SplitPath, TrieHash, TriePath, ValueDigest, check_inline_node,
-};
 use thiserror::Error;
 
 use crate::merkle::Value;
+use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
 
 /// Which edge of a range proof was being verified when an error occurred.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1047,8 +1065,9 @@ impl ProofType {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use firewood_storage::DefaultHashMode;
+
+    use super::*;
 
     /// An absent value and a present zero-length value hash identically, so the
     /// verifier rejects a node that carries an empty value.

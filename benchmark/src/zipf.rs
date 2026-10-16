@@ -18,16 +18,21 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use crate::TestRunner;
-use firewood::api::{self, DynDb};
-use firewood::db::BatchOp;
-use log::{debug, trace};
-use pretty_duration::pretty_duration;
-use rand::prelude::*;
-use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::error::Error;
 use std::time::Instant;
+
+use firewood::api;
+use firewood::api::DynDb;
+use firewood::db::BatchOp;
+use log::debug;
+use log::trace;
+use pretty_duration::pretty_duration;
+use rand::prelude::*;
+use sha2::Digest;
+use sha2::Sha256;
+
+use crate::TestRunner;
 
 #[derive(clap::Args, Debug, PartialEq)]
 pub struct Args {

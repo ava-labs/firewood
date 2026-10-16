@@ -61,11 +61,10 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     // persisted hashing scheme.
     let node_hash_algorithm = opts.database.node_hash_algorithm()?;
     let cfg = DbConfig::builder()
-        .node_hash_algorithm(node_hash_algorithm)
         .create_if_missing(false)
         .truncate(opts.truncate)
         .build();
-    let db = open(opts.database.dbpath.clone(), cfg)?;
+    let db = open(opts.database.dbpath.clone(), node_hash_algorithm, cfg)?;
 
     let start = Instant::now();
 

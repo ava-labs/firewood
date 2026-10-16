@@ -1,9 +1,10 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::*;
 #[cfg(feature = "ethhash")]
 use test_case::test_case;
+
+use super::*;
 
 #[cfg(feature = "ethhash")]
 #[test]
@@ -135,7 +136,8 @@ fn test_reconcile_branch_proof_node_account_storage_root_relaxation(
     proof_balance: u64,
     expect_reconciled: bool,
 ) {
-    use crate::merkle::tests::ethhash::{empty_code_hash, rlp_encode_account};
+    use crate::merkle::tests::ethhash::empty_code_hash;
+    use crate::merkle::tests::ethhash::rlp_encode_account;
 
     // 32-byte account key == 64 nibbles == ACCOUNT_DEPTH_NIBBLES.
     let account_key = [0x11u8; 32];

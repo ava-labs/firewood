@@ -1,15 +1,21 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use criterion::{Criterion, criterion_group, criterion_main};
-use firewood::api;
-use firewood::db::{BatchOp, DbConfig};
-use firewood::manager::RevisionManagerConfig;
-use firewood::open;
-use firewood_storage::{DefaultHashMode, HashMode};
-use rand::{RngExt, distr::Alphanumeric};
 use std::iter::repeat_with;
 use std::num::NonZeroU64;
+
+use criterion::Criterion;
+use criterion::criterion_group;
+use criterion::criterion_main;
+use firewood::api;
+use firewood::db::BatchOp;
+use firewood::db::DbConfig;
+use firewood::manager::RevisionManagerConfig;
+use firewood::open;
+use firewood_storage::DefaultHashMode;
+use firewood_storage::HashMode;
+use rand::RngExt;
+use rand::distr::Alphanumeric;
 
 #[expect(clippy::unwrap_used)]
 fn bench_deferred_persistence<const N: usize, const MAX_PERSISTENCE_GAP: u64>(
@@ -39,7 +45,6 @@ fn bench_deferred_persistence<const N: usize, const MAX_PERSISTENCE_GAP: u64>(
                 |batch_ops| {
                     let tmpdir = tempfile::tempdir().unwrap();
                     let dbcfg = DbConfig::builder()
-                        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
                         .manager(
                             RevisionManagerConfig::builder()
                                 .max_revisions(max_revisions)
@@ -47,7 +52,7 @@ fn bench_deferred_persistence<const N: usize, const MAX_PERSISTENCE_GAP: u64>(
                                 .build(),
                         )
                         .build();
-                    let db = open(tmpdir, dbcfg).unwrap();
+                    let db = open(tmpdir, DefaultHashMode::ALGORITHM, dbcfg).unwrap();
 
                     for op in batch_ops {
                         let batch: api::OwnedBatch = Box::new([op]);

@@ -1,16 +1,20 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-use clap::Args;
-use firewood::api::{self, DynDb};
-use firewood::db::DbConfig;
-use firewood::open;
-use firewood::{Key, Value};
-use firewood_storage::FileIoError;
 use std::borrow::Cow;
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::BufWriter;
+use std::io::Write;
 use std::path::PathBuf;
+
+use clap::Args;
+use firewood::Key;
+use firewood::Value;
+use firewood::api;
+use firewood::api::DynDb;
+use firewood::db::DbConfig;
+use firewood::open;
+use firewood_storage::FileIoError;
 
 use crate::DatabasePath;
 
@@ -143,11 +147,8 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     }
 
     let algorithm = opts.database.node_hash_algorithm()?;
-    let cfg = DbConfig::builder()
-        .node_hash_algorithm(algorithm)
-        .create_if_missing(false)
-        .truncate(false);
-    let db = open(opts.database.dbpath.clone(), cfg.build())?;
+    let cfg = DbConfig::builder().create_if_missing(false).truncate(false);
+    let db = open(opts.database.dbpath.clone(), algorithm, cfg.build())?;
     let latest_hash = db.root_hash();
     let Some(latest_hash) = latest_hash else {
         println!("Database is empty");

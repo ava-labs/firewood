@@ -1,11 +1,13 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use smallvec::SmallVec;
-
-use super::{PartialPath, TriePath, TriePathFromUnpackedBytes};
 use bytemuck::TransparentWrapper;
 use bytemuck_derive::TransparentWrapper;
+use smallvec::SmallVec;
+
+use super::PartialPath;
+use super::TriePath;
+use super::TriePathFromUnpackedBytes;
 
 /// A path component in a hexary trie; which is only 4 bits (aka a nibble).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, TransparentWrapper)]

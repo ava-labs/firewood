@@ -21,25 +21,42 @@
 //! that a forged storageRoot is still accepted, since the verifier recomputes
 //! that field from the storage children.
 
-use std::collections::{BTreeMap, HashSet};
-use std::time::{Duration, Instant};
+use std::collections::BTreeMap;
+use std::collections::HashSet;
+use std::time::Duration;
+use std::time::Instant;
 
-use super::change::fuzz_common::{
-    build_change_proof, build_range_proof, change_proof_rejected,
-    maybe_serialize_round_trip_change, maybe_serialize_round_trip_range,
-};
-use super::ethhash::{account_storage_key, empty_code_hash, rlp_encode_account};
-use crate::ProofNode;
-use crate::api::{
-    BatchOp, Db as DbTrait, DbView, FrozenChangeProof, FrozenRangeProof, HashKey, Proposal as _,
-};
-use crate::db::{Db, DbConfig};
-use crate::merkle::{Key, Value, verify_change_proof_root_hash, verify_range_proof};
-use crate::verify_change_proof_structure;
-use firewood_storage::{
-    DefaultHashMode, HashMode, NodeHashAlgorithm, PathComponent, SeededRng, U4, replace_list_field,
-};
+use firewood_storage::DefaultHashMode;
+use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::PathComponent;
+use firewood_storage::SeededRng;
+use firewood_storage::U4;
+use firewood_storage::replace_list_field;
 use rand::seq::SliceRandom;
+
+use super::change::fuzz_common::build_change_proof;
+use super::change::fuzz_common::build_range_proof;
+use super::change::fuzz_common::change_proof_rejected;
+use super::change::fuzz_common::maybe_serialize_round_trip_change;
+use super::change::fuzz_common::maybe_serialize_round_trip_range;
+use super::ethhash::account_storage_key;
+use super::ethhash::empty_code_hash;
+use super::ethhash::rlp_encode_account;
+use crate::ProofNode;
+use crate::api::BatchOp;
+use crate::api::Db as DbTrait;
+use crate::api::DbView;
+use crate::api::FrozenChangeProof;
+use crate::api::FrozenRangeProof;
+use crate::api::HashKey;
+use crate::api::Proposal as _;
+use crate::db::Db;
+use crate::db::DbConfig;
+use crate::merkle::Key;
+use crate::merkle::Value;
+use crate::merkle::verify_change_proof_root_hash;
+use crate::merkle::verify_range_proof;
+use crate::verify_change_proof_structure;
 
 /// An account's key paired with its sorted, distinct storage-slot bytes (byte
 /// 32 of its 64-byte storage keys). The generator only emits slot bytes of the
@@ -281,13 +298,7 @@ fn build_shaped_db(rng: &SeededRng) -> ShapedFixture {
         }
     }
     let dir = tempfile::tempdir().unwrap();
-    let db = Db::<DefaultHashMode>::new_with_hash_mode(
-        dir.path(),
-        DbConfig::builder()
-            .node_hash_algorithm(DefaultHashMode::ALGORITHM)
-            .build(),
-    )
-    .unwrap();
+    let db = Db::<DefaultHashMode>::new(dir.path(), DbConfig::builder().build()).unwrap();
     let start_batch: Vec<BatchOp<Vec<u8>, Vec<u8>>> = state
         .iter()
         .map(|(k, v)| BatchOp::Put {

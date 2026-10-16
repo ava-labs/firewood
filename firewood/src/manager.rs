@@ -6,31 +6,58 @@
     reason = "Found 3 occurrences after enabling the lint."
 )]
 
-use nonzero_ext::nonzero;
-use parking_lot::{Mutex, RwLock};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::io;
-use std::num::{NonZero, NonZeroU64};
+use std::num::NonZero;
+use std::num::NonZeroU64;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
+use std::sync::OnceLock;
 
-use firewood_storage::logger::{trace, warn};
-use rayon::{ThreadPool, ThreadPoolBuilder};
+use firewood_metrics::GaugeExt;
+use firewood_metrics::firewood_counter;
+use firewood_metrics::firewood_gauge;
+use firewood_metrics::firewood_histogram;
+use firewood_storage::BranchNode;
+pub use firewood_storage::CacheReadStrategy;
+use firewood_storage::CheckOpt;
+use firewood_storage::CheckerReport;
+use firewood_storage::Committed;
+use firewood_storage::CommittedId;
+use firewood_storage::DeletedNodeTracking;
+use firewood_storage::FileBacked;
+use firewood_storage::FileIoError;
+use firewood_storage::HashMode;
+use firewood_storage::HashedNodeReader;
+use firewood_storage::ImmutableProposal;
+use firewood_storage::Mutable;
+use firewood_storage::MutableKind;
+use firewood_storage::MutableReconNodeStore;
+use firewood_storage::NodeStore;
+use firewood_storage::NodeStoreHeader;
+use firewood_storage::Propose;
+use firewood_storage::RootStore;
+use firewood_storage::TrieHash;
+use firewood_storage::logger::trace;
+use firewood_storage::logger::warn;
+use nonzero_ext::nonzero;
+use parking_lot::Mutex;
+use parking_lot::RwLock;
+use rayon::ThreadPool;
+use rayon::ThreadPoolBuilder;
 use typed_builder::TypedBuilder;
 
-use crate::api::{self, ArcDynDbView, HashKey, IntoBatchIter};
-use crate::db::{BatchOp, UseParallel};
+use crate::api;
+use crate::api::ArcDynDbView;
+use crate::api::HashKey;
+use crate::api::IntoBatchIter;
+use crate::db::BatchOp;
+use crate::db::UseParallel;
 use crate::merkle::Merkle;
 use crate::merkle::parallel::ParallelMerkle;
-use crate::persist_worker::{PersistError, PersistWorker};
-use firewood_metrics::{GaugeExt, firewood_counter, firewood_gauge, firewood_histogram};
-pub use firewood_storage::CacheReadStrategy;
-use firewood_storage::RootStore;
-use firewood_storage::{
-    BranchNode, CheckOpt, CheckerReport, Committed, CommittedId, DeletedNodeTracking, FileBacked,
-    FileIoError, HashMode, HashedNodeReader, ImmutableProposal, Mutable, MutableKind,
-    MutableReconNodeStore, NodeStore, NodeStoreHeader, Propose, TrieHash,
-};
+use crate::persist_worker::PersistError;
+use crate::persist_worker::PersistWorker;
 
 pub(crate) const DB_FILE_NAME: &str = "firewood.db";
 
@@ -727,20 +754,20 @@ impl<H: HashMode> RevisionManager<H> {
 
 #[cfg(test)]
 mod tests {
-    use firewood_storage::{DefaultHashMode, RootReader};
+    use firewood_macros::hash_mode;
+    use firewood_storage::EthHash;
+    use firewood_storage::MerkleDbHash;
+    use firewood_storage::RootReader;
 
     use super::*;
-    #[cfg(feature = "ethhash")]
-    use crate::api::HashKeyExt;
-    use crate::api::OptionalHashKeyExt;
 
-    impl RevisionManager<DefaultHashMode> {
+    impl<H: HashMode> RevisionManager<H> {
         /// Get all proposal hashes available.
         pub fn proposal_hashes(&self) -> Vec<TrieHash> {
             self.proposals
                 .lock()
                 .iter()
-                .filter_map(|p| p.root_hash().or_default_root_hash())
+                .filter_map(|p| p.root_hash().or_else(H::default_root_hash))
                 .collect()
         }
 
@@ -766,8 +793,9 @@ mod tests {
         }
     }
 
+    #[hash_mode]
     #[test]
-    fn test_file_advisory_lock() {
+    fn test_file_advisory_lock<H: HashMode>() {
         // Create a temporary file for testing
         let db_dir = tempfile::tempdir().unwrap();
 
@@ -778,14 +806,14 @@ mod tests {
             .build();
 
         // First database instance should open successfully
-        let first_manager = RevisionManager::<DefaultHashMode>::new(config.clone());
+        let first_manager = RevisionManager::<H>::new(config.clone());
         assert!(
             first_manager.is_ok(),
             "First database should open successfully"
         );
 
         // Second database instance should fail to open due to file locking
-        let second_manager = RevisionManager::<DefaultHashMode>::new(config.clone());
+        let second_manager = RevisionManager::<H>::new(config.clone());
         assert!(
             second_manager.is_err(),
             "Second database should fail to open"
@@ -805,22 +833,33 @@ mod tests {
         drop(first_manager.unwrap());
 
         // Now the second database should open successfully
-        let third_manager = RevisionManager::<DefaultHashMode>::new(config);
+        let third_manager = RevisionManager::<H>::new(config);
         assert!(
             third_manager.is_ok(),
             "Database should open after first instance is dropped"
         );
     }
 
+    #[hash_mode]
     #[test]
     #[expect(clippy::too_many_lines)]
-    fn test_slow_concurrent_view_during_commit() {
-        use firewood_storage::{
-            ImmutableProposal, LeafNode, NibblesIterator, Node, NodeStore, Path,
-        };
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "the test's local error counter is bounded by its iterations"
+    )]
+    fn test_slow_concurrent_view_during_commit<H: HashMode>() {
         use std::sync::Barrier;
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::atomic::AtomicBool;
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::atomic::Ordering;
         use std::thread;
+
+        use firewood_storage::ImmutableProposal;
+        use firewood_storage::LeafNode;
+        use firewood_storage::NibblesIterator;
+        use firewood_storage::Node;
+        use firewood_storage::NodeStore;
+        use firewood_storage::Path;
 
         const NUM_ITERATIONS: usize = 1000;
         const NUM_VIEWER_THREADS: usize = 10;
@@ -839,7 +878,7 @@ mod tests {
             )
             .build();
 
-        let manager = Arc::new(RevisionManager::<DefaultHashMode>::new(config).unwrap());
+        let manager = Arc::new(RevisionManager::<H>::new(config).unwrap());
 
         // Create an initial proposal and commit it to have a non-empty base
         let base_revision = manager.current_revision();
@@ -851,7 +890,7 @@ mod tests {
                 value: b"value".to_vec().into_boxed_slice(),
             }));
         }
-        let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _, DefaultHashMode>> =
+        let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _, H>> =
             Arc::new(proposal.try_into().unwrap());
         manager.add_proposal(proposal.clone());
         manager.commit(proposal).unwrap();
@@ -939,7 +978,7 @@ mod tests {
                         }));
                     }
 
-                    let immutable: Arc<NodeStore<Arc<ImmutableProposal>, _, DefaultHashMode>> =
+                    let immutable: Arc<NodeStore<Arc<ImmutableProposal>, _, H>> =
                         Arc::new(match new_proposal.try_into() {
                             Ok(p) => p,
                             Err(e) => {
@@ -995,8 +1034,9 @@ mod tests {
         );
     }
 
+    #[hash_mode]
     #[test]
-    fn test_no_fjall_directory_when_root_store_disabled() {
+    fn test_no_fjall_directory_when_root_store_disabled<H: HashMode>() {
         // Create a temporary directory for the database
         let db_dir = tempfile::tempdir().unwrap();
         let db_path = db_dir.as_ref().to_path_buf();
@@ -1008,7 +1048,7 @@ mod tests {
             .root_store(false)
             .build();
 
-        let _manager = RevisionManager::<DefaultHashMode>::new(config).unwrap();
+        let _manager = RevisionManager::<H>::new(config).unwrap();
 
         // Verify that the root_store directory does NOT exist
         let root_store_dir = db_path.join("root_store");
@@ -1018,8 +1058,9 @@ mod tests {
         );
     }
 
+    #[hash_mode]
     #[test]
-    fn test_fjall_directory_when_root_store_enabled() {
+    fn test_fjall_directory_when_root_store_enabled<H: HashMode>() {
         // Create a temporary directory for the database
         let db_dir = tempfile::tempdir().unwrap();
         let db_path = db_dir.as_ref().to_path_buf();
@@ -1031,7 +1072,7 @@ mod tests {
             .root_store(true)
             .build();
 
-        let _manager = RevisionManager::<DefaultHashMode>::new(config).unwrap();
+        let _manager = RevisionManager::<H>::new(config).unwrap();
 
         // Verify that the root_store directory DOES exist
         let root_store_dir = db_path.join("root_store");
@@ -1041,8 +1082,9 @@ mod tests {
         );
     }
 
+    #[hash_mode]
     #[test]
-    fn test_revision_count() {
+    fn test_revision_count<H: HashMode>() {
         let db_dir = tempfile::tempdir().unwrap();
         let max_persistence_gap = nonzero!(10u64);
 
@@ -1058,7 +1100,7 @@ mod tests {
             )
             .build();
 
-        let result = RevisionManager::<DefaultHashMode>::new(config);
+        let result = RevisionManager::<H>::new(config);
         assert!(result.is_err());
 
         // `max_revisions` == `max_persistence_gap`
@@ -1072,7 +1114,7 @@ mod tests {
             )
             .build();
 
-        let result = RevisionManager::<DefaultHashMode>::new(config);
+        let result = RevisionManager::<H>::new(config);
         assert!(result.is_err());
 
         // `max_revisions` > `max_persistence_gap`
@@ -1087,7 +1129,7 @@ mod tests {
             )
             .build();
 
-        let result = RevisionManager::<DefaultHashMode>::new(config);
+        let result = RevisionManager::<H>::new(config);
         assert!(result.is_ok());
     }
 
@@ -1098,13 +1140,14 @@ mod tests {
     /// `revision()` previously fell through to `RootStore::get` and returned
     /// `RevisionNotFound`. The fix synthesizes an empty committed nodestore
     /// when the caller asks for the default empty-trie hash.
-    #[cfg(feature = "ethhash")]
     #[test]
-    fn test_revision_empty_root_after_eviction() {
-        use firewood_storage::{LeafNode, NibblesIterator, Node, Path};
+    fn test_revision_empty_root_after_eviction_ethhash() {
+        use firewood_storage::LeafNode;
+        use firewood_storage::NibblesIterator;
+        use firewood_storage::Node;
+        use firewood_storage::Path;
 
-        let empty_hash =
-            HashKey::default_root_hash().expect("ethhash exposes a default empty-trie hash");
+        let empty_hash = EthHash::default_root_hash().expect("Ethereum exposes an empty-trie hash");
 
         let db_dir = tempfile::tempdir().unwrap();
         let config = ConfigManager::builder()
@@ -1119,7 +1162,7 @@ mod tests {
             )
             .build();
 
-        let manager = RevisionManager::<DefaultHashMode>::new(config).unwrap();
+        let manager = RevisionManager::<EthHash>::new(config).unwrap();
 
         // Sanity: the fresh manager indexes the empty revision under the
         // default hash.
@@ -1134,7 +1177,7 @@ mod tests {
                 partial_path: Path::from_nibbles_iterator(NibblesIterator::new(&[i])),
                 value: Box::new([i]),
             }));
-            let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _, DefaultHashMode>> =
+            let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _, EthHash>> =
                 Arc::new(proposal.try_into().unwrap());
             manager.add_proposal(proposal.clone());
             manager.commit(proposal).unwrap();
