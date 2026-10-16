@@ -15,6 +15,11 @@
 //! the labels' own payloads, replacement content from `M` — and the walk over
 //! the committed result must find only agreement.
 //!
+//! Each run then repeats the exercise through a change proof taken from `M`
+//! with `L` as the source — the proof a syncing client would hold — and,
+//! when the two proofs apply over the same range and anchor at the same
+//! boundary keys, asserts the two walks agree label for label.
+//!
 //! Under the Ethereum mode the generator also plants well-formed accounts
 //! with storage children, so the masked account comparison and the
 //! lone-storage-child fold normalization get random coverage.
@@ -66,6 +71,7 @@ use super::holes::trie;
 use super::holes::values_equal;
 use super::holes::view_map;
 use crate::Hole;
+use crate::VerifiedChangeProof;
 use crate::VerifiedRangeProof;
 use crate::api::BatchOp;
 use crate::api::Db as _;
@@ -73,7 +79,10 @@ use crate::api::HashKey;
 use crate::api::Proposal as _;
 use crate::api::{self};
 use crate::db::Db;
+use crate::merkle::RightBoundary;
+use crate::merkle::holes::find_holes_after_change_proof;
 use crate::merkle::holes::find_holes_after_range_proof;
+use crate::merkle::right_edge;
 
 /// A view that counts the node reads made through it.
 struct Counting<'a, T> {
@@ -272,6 +281,8 @@ struct Stats {
     time_max: Duration,
     time_total: Duration,
     labels_total: usize,
+    /// Runs where the two walks were required to agree label for label.
+    equivalence_checks: usize,
 }
 
 /// Replace the database's content with `m` in one batch: a `DeleteRange`
@@ -527,7 +538,7 @@ fn run_one<H: HashMode>(run: usize, seed: u64, db: &Db<H>, stats: &mut Stats) {
         (None, Some(s)) => local_range.keys().filter(|k| *k < s).cloned().collect(),
         _ => Vec::new(),
     };
-    leg(
+    let range_holes = leg(
         db,
         &target.map,
         LegInput {
@@ -539,6 +550,63 @@ fn run_one<H: HashMode>(run: usize, seed: u64, db: &Db<H>, stats: &mut Stats) {
         stats,
         |view| find_holes_after_range_proof::<H, _>(&verified, view),
     );
+
+    // Change-proof leg: the proof a syncing client would hold, from the
+    // target with the client's own state as the source.
+    let source = trie::<H>(&local);
+    let change = t
+        .change_proof(start.as_deref(), end.as_deref(), source.nodestore(), limit)
+        .unwrap();
+    let verified_change = VerifiedChangeProof::verify(
+        Arc::new(change),
+        root(&t),
+        start.as_deref(),
+        end.as_deref(),
+        H::ALGORITHM,
+        limit,
+    )
+    .unwrap_or_else(|e| panic!("change verify failed ({locator}): {e}"));
+    let change_edge = verified_change.verification().right_edge_key();
+    let applied_change: Applied = (start.clone(), change_edge.map(<[u8]>::to_vec));
+    // Applying a change proof writes only its operations, which here are the
+    // local-to-target diff over the applied range, so `merged` over that
+    // range is the state the proposal produces.
+    let change_holes = leg(
+        db,
+        &target.map,
+        LegInput {
+            local: &merged(&target.map, &local, &applied_change),
+            applied: &applied_change,
+            unlabelled: &[],
+        },
+        &locator,
+        stats,
+        |view| find_holes_after_change_proof::<H, _>(&verified_change, view),
+    );
+
+    // The two walks must agree label for label when both proofs applied over
+    // the same range and the range proof's right boundary is in range.
+    // Otherwise they partition the same key space differently. The rules
+    // that make the applied ranges differ are documented on
+    // `ChangeProofVerificationContext::right_edge_key`.
+    let range_in_range = matches!(
+        right_edge(
+            verified.proof().end_proof().as_ref(),
+            verified.proof().key_values().last().map(|(k, _)| &**k),
+            end.as_deref(),
+        ),
+        RightBoundary::InRange(_)
+    );
+    if let (Some(range_holes), Some(change_holes)) = (range_holes, change_holes)
+        && applied == applied_change
+        && range_in_range
+    {
+        stats.equivalence_checks = stats.equivalence_checks.saturating_add(1);
+        assert_eq!(
+            change_holes, range_holes,
+            "range and change walks disagree over the same applied range ({locator})"
+        );
+    }
 }
 
 #[hash_mode]
@@ -551,6 +619,7 @@ fn test_slow_holes_differential_fuzz<H: HashMode>() {
         time_max: Duration::ZERO,
         time_total: Duration::ZERO,
         labels_total: 0,
+        equivalence_checks: 0,
     };
     // One database for the whole run, reset per iteration: every `Db` owns a
     // thread pool, so opening one per iteration exhausts the process's threads
@@ -587,13 +656,24 @@ fn test_slow_holes_differential_fuzz<H: HashMode>() {
         }
     }
 
+    // A single replayed seed may legitimately never compare the two walks;
+    // every other mode runs enough shapes that zero checks means the
+    // equivalence condition has drifted shut.
+    if std::env::var_os("FIREWOOD_TEST_SEED").is_none() {
+        assert!(
+            stats.equivalence_checks > 0,
+            "no run compared the range and change walks"
+        );
+    }
+
     let walks = u32::try_from(stats.walks.max(1)).unwrap_or(u32::MAX);
     eprintln!(
-        "holes fuzz ({:?}): {} walks, {} labels; \
+        "holes fuzz ({:?}): {} walks, {} labels, {} range/change equivalence checks; \
          node reads per walk max {} mean {}; walk time max {:?} mean {:?}",
         H::ALGORITHM,
         stats.walks,
         stats.labels_total,
+        stats.equivalence_checks,
         stats.reads_max,
         stats.reads_total.checked_div(walks as usize).unwrap_or(0),
         stats.time_max,
