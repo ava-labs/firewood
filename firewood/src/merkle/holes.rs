@@ -53,11 +53,14 @@ use firewood_storage::HashMode;
 use firewood_storage::HashType;
 use firewood_storage::HashableShunt;
 use firewood_storage::HashedNodeReader;
+use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::PathBuf;
 use firewood_storage::PathComponent;
+use firewood_storage::RlpError;
 use firewood_storage::TriePathAsPackedBytes;
 use firewood_storage::TriePathFromPackedBytes;
 use firewood_storage::ValueDigest;
+use firewood_storage::replace_list_field;
 
 use crate::api;
 use crate::merkle::Merkle;
@@ -70,7 +73,9 @@ use crate::proofs::Hole;
 use crate::proofs::KeySpan;
 use crate::proofs::ProofError;
 use crate::proofs::ProofNode;
+use crate::proofs::VerifiedChangeProof;
 use crate::proofs::VerifiedRangeProof;
+use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
 use crate::proofs::holes::merge_labels;
 use crate::proofs::holes::open_interval;
 
@@ -83,7 +88,9 @@ use crate::proofs::holes::open_interval;
 /// probed point, or is a silent both-empty agreement. When the start proof
 /// is empty, nothing below `start_key` is classified: the verifier does not
 /// check end-proof node values below it against the key-value pairs, so the
-/// proof says nothing about that space.
+/// proof says nothing about that space. See
+/// [`CommittedView::find_holes_after_range_proof`] for the caller-facing
+/// contract.
 ///
 /// # Errors
 ///
@@ -93,33 +100,20 @@ use crate::proofs::holes::open_interval;
 /// invariants fail — the recomputed right edge disagrees with the context,
 /// a verified proof ends without a terminal, or an authenticated-empty span
 /// overlaps a label that is not a deletion.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no production caller yet; the database views expose the walk in a later change"
-    )
-)]
+///
+/// [`CommittedView::find_holes_after_range_proof`]: crate::db::CommittedView::find_holes_after_range_proof
 pub(crate) fn find_holes_after_range_proof<H: HashMode, T: HashedNodeReader>(
     verified: &VerifiedRangeProof,
     view: &T,
 ) -> Result<Vec<Hole>, api::Error> {
     let proof = verified.proof();
     let ctx = verified.verification();
-    reject_mode_mismatch::<H>(proof.hash_mode())?;
-    // Forces a reconstructed view's lazy hashing, which swaps its in-memory
-    // children for hashed ones; without it every probe below the root errors.
-    view.root_hash();
-
-    let mut walk = Walk::<H, T>::new(view);
-
-    // See the rustdoc: an empty start proof authenticates nothing below the
-    // start key.
-    if let Some(start) = ctx.start_key()
-        && !proof.start_proof().is_empty()
-    {
-        walk.boundary(proof.start_proof().as_ref(), &nibbles(start), Side::Below)?;
-    }
+    let mut walk = start::<H, T>(
+        view,
+        proof.hash_mode(),
+        proof.start_proof().as_ref(),
+        ctx.start_key(),
+    )?;
 
     let end_proof: &[ProofNode] = proof.end_proof().as_ref();
     let last_kv = proof.key_values().last().map(|(k, _)| k.as_ref());
@@ -166,9 +160,62 @@ pub(crate) fn find_holes_after_range_proof<H: HashMode, T: HashedNodeReader>(
     walk.finish()
 }
 
-fn reject_mode_mismatch<H: HashMode>(
-    found: firewood_storage::NodeHashAlgorithm,
-) -> Result<(), api::Error> {
+/// Classify the key space outside the range a verified change proof was
+/// applied over, against the local trie `view`.
+///
+/// Both boundaries come from the verification context: `start_key` below
+/// and `right_edge_key` above, the latter being the key the verifier
+/// anchored the end proof at. An empty boundary proof on either side emits
+/// nothing. Change-proof verification hashes the proposal's own content wherever the boundary proofs supply no sibling
+/// hash, so a root match there says nothing about whether that content
+/// equals the target's or is absent from it; neither `Surplus` nor `Synced`
+/// is justified, so that boundary emits nothing.
+///
+/// # Errors
+///
+/// As [`find_holes_after_range_proof`].
+pub(crate) fn find_holes_after_change_proof<H: HashMode, T: HashedNodeReader>(
+    verified: &VerifiedChangeProof,
+    view: &T,
+) -> Result<Vec<Hole>, api::Error> {
+    let proof = verified.proof();
+    let ctx = verified.verification();
+    let mut walk = start::<H, T>(
+        view,
+        proof.hash_mode(),
+        proof.start_proof().as_ref(),
+        ctx.start_key(),
+    )?;
+    if let Some(edge) = ctx.right_edge_key() {
+        walk.boundary(proof.end_proof().as_ref(), &nibbles(edge), Side::Above)?;
+    }
+    walk.finish()
+}
+
+/// Starts a walk over `view` for a proof parsed under `hash_mode` and
+/// classifies the space below `start_key`. An empty start proof classifies
+/// nothing there; each entry point documents why.
+fn start<'a, H: HashMode, T: HashedNodeReader>(
+    view: &'a T,
+    hash_mode: NodeHashAlgorithm,
+    start_proof: &[ProofNode],
+    start_key: Option<&[u8]>,
+) -> Result<Walk<'a, H, T>, api::Error> {
+    reject_mode_mismatch::<H>(hash_mode)?;
+    // Forces a reconstructed view's lazy hashing, which swaps its in-memory
+    // children for hashed ones; without it every probe below the root errors.
+    view.root_hash();
+
+    let mut walk = Walk::<H, T>::new(view);
+    if let Some(start) = start_key
+        && !start_proof.is_empty()
+    {
+        walk.boundary(start_proof, &nibbles(start), Side::Below)?;
+    }
+    Ok(walk)
+}
+
+fn reject_mode_mismatch<H: HashMode>(found: NodeHashAlgorithm) -> Result<(), api::Error> {
     if found == H::ALGORITHM {
         Ok(())
     } else {
@@ -246,6 +293,9 @@ impl<'a, H: HashMode, T: HashedNodeReader> Walk<'a, H, T> {
 
     /// Reconcile the exact byte key `key` between the target's value digest,
     /// if the target has one, and the local value.
+    ///
+    /// Under the Ethereum mode an account value (a 32-byte key) is compared
+    /// with its `storageRoot` field masked; see [`values_agree`].
     fn point(
         &mut self,
         key: Box<[u8]>,
@@ -256,7 +306,7 @@ impl<'a, H: HashMode, T: HashedNodeReader> Walk<'a, H, T> {
             (None, None) => {}
             (None, Some(_)) => self.out.push(Hole::PointSurplus { key }),
             (Some(digest), local) => {
-                if local.is_some_and(|value| digest.verify(&value)) {
+                if local.is_some_and(|value| values_agree::<H>(&key, digest, &value)) {
                     return Ok(());
                 }
                 // A digest that is only a hash cannot be written locally; the
@@ -436,6 +486,41 @@ impl<'a, H: HashMode, T: HashedNodeReader> Walk<'a, H, T> {
     fn finish(self) -> Result<Vec<Hole>, api::Error> {
         merge_labels(self.out)
     }
+}
+
+/// Whether the target's value digest for `key` agrees with the local value.
+///
+/// Under the Ethereum mode an account value — the value at a 32-byte key —
+/// embeds the root of the account's storage trie as its third RLP field, and
+/// hashing derives that field from the storage children rather than trusting
+/// the stored bytes (see [`subtree_hash`]). The field is
+/// therefore not independently repairable: writing the target's value
+/// locally stores the local storage root again, so a [`Hole::PointFix`] on a
+/// `storageRoot`-only difference would be re-emitted by every later walk.
+/// The storage difference it stands for is already reported by the span
+/// labels at and below the account. Account values are compared with that
+/// field masked, so a point label at an account key means some other field
+/// differs: nonce, balance, code hash, or a trailing field a client appends.
+/// The mask also makes the comparison indifferent to databases written
+/// before `firewood-v1-hfix`, whose stored account values hold a stale
+/// `storageRoot`.
+///
+/// A value that is not well-formed account RLP is compared as-is.
+fn values_agree<H: HashMode>(key: &[u8], target: &ValueDigest<Value>, local: &[u8]) -> bool {
+    if H::ALGORITHM.is_ethereum()
+        && key.len() == ACCOUNT_DEPTH_NIBBLES / 2
+        && let Some(target) = target.value()
+        && let (Ok(target), Ok(local)) = (mask_storage_root(target), mask_storage_root(local))
+    {
+        return target == local;
+    }
+    target.verify(local)
+}
+
+/// `value` with its `storageRoot` field (the third item of an account's RLP
+/// list) replaced by zeros.
+fn mask_storage_root(value: &[u8]) -> Result<Box<[u8]>, RlpError> {
+    replace_list_field(value, 2, &[0; 32])
 }
 
 /// The hash a proof node would have with `prefix` as its parent prefix and
