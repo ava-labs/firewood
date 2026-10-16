@@ -79,8 +79,8 @@ var (
 	// ErrActiveKeepAliveHandles is returned by [Database.Close] when the
 	// supplied context is cancelled before every outstanding handle that
 	// holds a keep-alive lease on the database has been released. That
-	// set includes [Proposal], [Revision], [Reconstructed], [Iterator] and
-	// [RangeProof] and instances. Pass [WithForceCloseHandles] to drop
+	// set includes [Proposal], [Revision], [Reconstructed], [Iterator],
+	// [RangeProof], and [VerifiedChangeProof]. Pass [WithForceCloseHandles] to drop
 	// them automatically.
 	ErrActiveKeepAliveHandles = errors.New("cannot close database with active keep-alive handles")
 
@@ -109,7 +109,7 @@ type Database struct {
 	handleLock sync.RWMutex
 
 	// keepAlives tracks every outstanding [Proposal], [Revision],
-	// [Reconstructed], [Iterator], [RangeProof], and [ChangeProof] created
+	// [Reconstructed], [Iterator], [RangeProof], and [VerifiedChangeProof] created
 	// from this database. It carries both the outstanding-handle count that
 	// [Database.Close] waits on and the registry of drop callbacks that
 	// [WithForceCloseHandles] uses to release them forcibly.
@@ -490,7 +490,7 @@ type closeConfig struct {
 
 // WithForceCloseHandles makes [Database.Close] forcibly drop every outstanding
 // [Proposal], [Revision], [Reconstructed], [Iterator], [RangeProof], and
-// [ChangeProof] before closing the database, instead of waiting for the
+// [VerifiedChangeProof] before closing the database, instead of waiting for the
 // caller to release them.
 //
 // Each handle is dropped once even if its underlying free errors, so a
@@ -518,7 +518,7 @@ func WithForceCloseHandles() CloseOption {
 // By default Close blocks until all outstanding keep-alive handles are
 // disowned or the [context.Context] is cancelled. That is, until every
 // [Proposal], [Revision], [Reconstructed], [Iterator], [RangeProof], and
-// [ChangeProof] created from this Database is either unreachable or has
+// [VerifiedChangeProof] created from this Database is either unreachable or has
 // been explicitly released via [Proposal.Commit] or its Drop method.
 // Committing a proof does not release it. Unreachable objects are released
 // by their GC cleanups before Close returns. If the context expires first,
