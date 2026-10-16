@@ -273,8 +273,9 @@ where
     V: AsRef<[u8]>,
     H: ProofCollection,
 {
-    /// Create a new range proof with the given start and end proofs
-    /// and the key-value pairs that are included in the proof.
+    /// Create a range proof with the given proofs, key-value pairs, and hash algorithm.
+    ///
+    /// `hash_mode` is recorded in the serialized proof header.
     ///
     /// # Parameters
     ///
@@ -295,6 +296,7 @@ where
     ///   established by the start and end proofs. The keys should be in lexicographic
     ///   order as they appear in the trie. May be empty if proving the absence of keys
     ///   in a range.
+    ///
     /// * `hash_mode` - The algorithm recorded in the serialized proof header.
     #[must_use]
     pub const fn new(
@@ -395,9 +397,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use firewood_storage::DefaultHashMode;
-    use firewood_storage::HashMode;
-
     use super::*;
     use crate::api::TryIntoBatch;
 
@@ -418,7 +417,7 @@ mod tests {
             start_proof,
             end_proof,
             key_values,
-            DefaultHashMode::ALGORITHM,
+            NodeHashAlgorithm::Ethereum,
         );
 
         // Test basic iterator functionality
@@ -453,7 +452,7 @@ mod tests {
             start_proof,
             end_proof,
             key_values,
-            DefaultHashMode::ALGORITHM,
+            NodeHashAlgorithm::Ethereum,
         );
 
         // Test that we can use for-loop syntax
@@ -480,7 +479,7 @@ mod tests {
             start_proof,
             end_proof,
             key_values,
-            DefaultHashMode::ALGORITHM,
+            NodeHashAlgorithm::Ethereum,
         );
 
         // Test that our iterator implements KeyValuePairIter
@@ -509,7 +508,7 @@ mod tests {
             start_proof,
             end_proof,
             key_values,
-            DefaultHashMode::ALGORITHM,
+            NodeHashAlgorithm::Ethereum,
         );
 
         let mut iter = range_proof.iter();

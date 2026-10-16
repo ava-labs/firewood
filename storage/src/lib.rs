@@ -73,7 +73,6 @@ pub use hashednode::ValueDigest;
 pub use hashednode::hash_node;
 pub use hashednode::hash_preimage;
 pub use hashedshunt::HashableShunt;
-pub use hashmode::DefaultHashMode;
 pub use hashmode::EthHash;
 pub use hashmode::HashMode;
 pub use hashmode::MerkleDbHash;

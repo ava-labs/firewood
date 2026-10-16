@@ -160,7 +160,7 @@ fn range_proof_bytes(kvs: &[(&[u8], &[u8])]) -> Vec<u8> {
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         kv_pairs,
-        NodeHashAlgorithm::MerkleDB,
+        NodeHashAlgorithm::Ethereum,
     );
     let mut out = Vec::new();
     proof.write_body_to_vec(&mut out);
@@ -174,7 +174,7 @@ fn change_proof_bytes(ops: Box<[BatchOp<Key, Value>]>) -> Vec<u8> {
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         ops,
-        NodeHashAlgorithm::MerkleDB,
+        NodeHashAlgorithm::Ethereum,
     );
     let mut out = Vec::new();
     proof.write_body_to_vec(&mut out);

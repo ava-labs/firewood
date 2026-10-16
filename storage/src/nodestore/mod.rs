@@ -1578,7 +1578,6 @@ mod tests {
     use super::*;
     use crate::BranchNode;
     use crate::Children;
-    use crate::DefaultHashMode;
     use crate::EthHash;
     use crate::FileBacked;
     use crate::HashMode;
@@ -1977,11 +1976,8 @@ mod tests {
             .spawn(|| {
                 let storage = Arc::new(MemStore::new(Vec::new()));
                 let recon = NodeStore::new_empty_recon(Arc::clone(&storage));
-                let reconstructed: NodeStore<
-                    Reconstructed<_, DefaultHashMode>,
-                    _,
-                    DefaultHashMode,
-                > = recon.into();
+                let reconstructed: NodeStore<Reconstructed<_, MerkleDbHash>, _, MerkleDbHash> =
+                    recon.into();
 
                 let mut node = Node::Leaf(LeafNode {
                     partial_path: Path::new(),

@@ -116,7 +116,6 @@ mod edge_cases;
 // be generated.
 mod empty;
 // Helpers shared by fuzz tests.
-#[cfg(feature = "ethhash")]
 pub(super) mod fuzz_common;
 mod partial;
 mod regression;

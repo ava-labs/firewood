@@ -581,7 +581,6 @@ mod tests {
 
     use firewood_macros::hash_mode;
     use firewood_storage::Committed;
-    use firewood_storage::DefaultHashMode;
     use firewood_storage::DeletedNodeTracking;
     use firewood_storage::EthHash;
     use firewood_storage::FileBacked;
@@ -592,6 +591,7 @@ mod tests {
     use firewood_storage::MemStore;
     use firewood_storage::MerkleDbHash;
     use firewood_storage::Mutable;
+    use firewood_storage::NodeHashAlgorithm;
     use firewood_storage::NodeStore;
     use firewood_storage::Propose;
     use firewood_storage::SeededRng;
@@ -1881,7 +1881,7 @@ mod tests {
             start_proof,
             end_proof,
             key_values,
-            DefaultHashMode::ALGORITHM,
+            NodeHashAlgorithm::Ethereum,
         );
 
         // Test basic iterator functionality
@@ -1925,7 +1925,7 @@ mod tests {
             start_proof,
             end_proof,
             key_values,
-            DefaultHashMode::ALGORITHM,
+            NodeHashAlgorithm::Ethereum,
         );
 
         // Test that we can use for-loop syntax
@@ -1952,7 +1952,7 @@ mod tests {
             start_proof,
             end_proof,
             key_values,
-            DefaultHashMode::ALGORITHM,
+            NodeHashAlgorithm::Ethereum,
         );
 
         let mut iter = change_proof.iter();

@@ -18,12 +18,12 @@ before a PR is ready, on either platform. The `io-uring` feature is portable but
 inert off Linux, so `--all-features` builds everywhere — only Linux actually
 compiles the ring backend.
 
-| Feature flags               | macOS | Linux |
-| --------------------------- | ----- | ----- |
-| (none)                      | ✓     | ✓     |
-| `--no-default-features`     | ✓     | ✓     |
-| `--features ethhash,logger` | ✓     | ✓     |
-| `--all-features`            | ✓     | ✓     |
+| Feature flags           | macOS | Linux |
+| ----------------------- | ----- | ----- |
+| (none)                  | ✓     | ✓     |
+| `--no-default-features` | ✓     | ✓     |
+| `--features logger`     | ✓     | ✓     |
+| `--all-features`        | ✓     | ✓     |
 
 `--all-features` requires rustc 1.94.1 or newer — above the 1.94.0 workspace MSRV
 — because it enables `fwdctl`'s `launch` feature, whose AWS SDK dependencies

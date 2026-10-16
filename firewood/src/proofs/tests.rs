@@ -2,7 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood_macros::hash_mode;
-use firewood_storage::DefaultHashMode;
 use firewood_storage::DenseChildren;
 use firewood_storage::EthHash;
 use firewood_storage::HashMode;
@@ -628,10 +627,10 @@ fn make_range_proof_from_single_node(node: ProofNode) -> (FrozenRangeProof, Vec<
     // Pinned to MerkleDbHash: the golden wire bytes are MerkleDB-mode.
     type H = MerkleDbHash;
 
-    make_range_proof_from_single_node_new(node, H::ALGORITHM)
+    make_range_proof_from_single_node_with_hash_mode(node, H::ALGORITHM)
 }
 
-fn make_range_proof_from_single_node_new(
+fn make_range_proof_from_single_node_with_hash_mode(
     node: ProofNode,
     hash_mode: NodeHashAlgorithm,
 ) -> (FrozenRangeProof, Vec<u8>) {
@@ -708,7 +707,7 @@ fn test_change_proof_batch_op_variant(op: BatchOp<Box<[u8]>, Box<[u8]>>) {
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([op]),
-        DefaultHashMode::ALGORITHM,
+        NodeHashAlgorithm::Ethereum,
     );
     let mut serialized = Vec::new();
     proof
@@ -841,7 +840,8 @@ fn test_incomplete_trie_hash() {
 #[test]
 fn test_incomplete_hash_type_discriminant() {
     let node = make_proof_node(&[1], 0, None, &[7]);
-    let (_, mut data) = make_range_proof_from_single_node_new(node, NodeHashAlgorithm::Ethereum);
+    let (_, mut data) =
+        make_range_proof_from_single_node_with_hash_mode(node, NodeHashAlgorithm::Ethereum);
     data.truncate(39); // ChildMask ends at [38]; HashType discriminant is at [39]
     match compress_and_parse_range(&data) {
         Err(ReadError::IncompleteItem {
@@ -863,7 +863,8 @@ fn test_incomplete_hash_type_discriminant() {
 #[test]
 fn test_invalid_hash_type_discriminant() {
     let node = make_proof_node(&[1], 0, None, &[7]);
-    let (_, mut data) = make_range_proof_from_single_node_new(node, NodeHashAlgorithm::Ethereum);
+    let (_, mut data) =
+        make_range_proof_from_single_node_with_hash_mode(node, NodeHashAlgorithm::Ethereum);
     data[39] = 2; // invalid HashType discriminant (must be 0 or 1)
     match compress_and_parse_range(&data) {
         Err(ReadError::InvalidItem {
@@ -969,7 +970,7 @@ fn generate_random_range_proof(rng: &SeededRng) -> (FrozenRangeProof, Vec<u8>) {
         Proof::new(start_nodes),
         Proof::new(end_nodes),
         key_values,
-        DefaultHashMode::ALGORITHM,
+        NodeHashAlgorithm::Ethereum,
     );
     let mut serialized = Vec::new();
     proof
@@ -1006,7 +1007,7 @@ fn generate_random_change_proof(rng: &SeededRng) -> (FrozenChangeProof, Vec<u8>)
         Proof::new(start_nodes),
         Proof::new(end_nodes),
         batch_ops,
-        DefaultHashMode::ALGORITHM,
+        NodeHashAlgorithm::Ethereum,
     );
     let mut serialized = Vec::new();
     proof
@@ -1341,7 +1342,7 @@ fn test_frame_wire_is_compressed_and_versioned() {
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         kvs,
-        DefaultHashMode::ALGORITHM,
+        NodeHashAlgorithm::Ethereum,
     );
     let mut canonical_body = Vec::new();
     proof.write_body_to_vec(&mut canonical_body);
@@ -1435,7 +1436,7 @@ fn test_write_to_vec_rejects_over_cap_body() {
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         kvs,
-        DefaultHashMode::ALGORITHM,
+        NodeHashAlgorithm::Ethereum,
     );
     let mut out = Vec::new();
     let err = proof
@@ -1468,7 +1469,7 @@ fn test_write_to_vec_keeps_over_compressible_bodies_decodable() {
             Proof::new(Box::<[ProofNode]>::from([])),
             Proof::new(Box::<[ProofNode]>::from([])),
             kvs,
-            DefaultHashMode::ALGORITHM,
+            NodeHashAlgorithm::Ethereum,
         );
         let mut wire = Vec::new();
         proof.write_to_vec(&mut wire).expect("serialize");

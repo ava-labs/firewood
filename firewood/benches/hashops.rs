@@ -19,10 +19,10 @@ use firewood::api;
 use firewood::db::BatchOp;
 use firewood::db::DbConfig;
 use firewood::open;
-use firewood_storage::DefaultHashMode;
 use firewood_storage::DeletedNodeTracking;
 use firewood_storage::HashMode;
 use firewood_storage::MemStore;
+use firewood_storage::MerkleDbHash;
 use firewood_storage::NodeStore;
 use pprof::ProfilerGuard;
 use rand::RngExt;
@@ -81,7 +81,7 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
             b.iter_batched(
                 || {
                     let store = Arc::new(MemStore::new(Vec::new()));
-                    let nodestore: NodeStore<_, _, DefaultHashMode> =
+                    let nodestore: NodeStore<_, _, MerkleDbHash> =
                         NodeStore::new_empty_proposal(store, DeletedNodeTracking::Enabled);
                     let merkle = Merkle::from(nodestore);
 
@@ -130,7 +130,7 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
                     let db_path = TempDir::new().unwrap();
                     let db_path = db_path.path().join("benchmark_db");
                     let cfg = DbConfig::builder().truncate(true).build();
-                    let db = open(db_path, DefaultHashMode::ALGORITHM, cfg).unwrap();
+                    let db = open(db_path, MerkleDbHash::ALGORITHM, cfg).unwrap();
 
                     db.propose(batch_ops).unwrap().commit().unwrap();
                 },
