@@ -14,6 +14,7 @@ use firewood_storage::PathBuf;
 use firewood_storage::TrieHash;
 use firewood_storage::TriePathFromUnpackedBytes;
 use firewood_storage::ValueDigest;
+use firewood_storage::check_inline_node;
 use integer_encoding::VarInt;
 
 use super::header::Header;
@@ -420,7 +421,13 @@ impl<'a> ReadItem<'a> for HashType {
                 .map_err(|err| err.set_item("hash type discriminant"))?
             {
                 0 => Ok(HashType::Hash(reader.read_item()?)),
-                1 => Ok(HashType::Rlp(reader.read_item::<&[u8]>()?.into())),
+                1 => {
+                    let inline = reader.read_item::<&[u8]>()?;
+                    check_inline_node(inline).map_err(|err| {
+                        reader.invalid_item("inline child", "one RLP list of 1 to 31 bytes", err)
+                    })?;
+                    Ok(HashType::Rlp(inline.into()))
+                }
                 found => {
                     Err(reader.invalid_item("hash type discriminant", "0 (hash) or 1 (rlp)", found))
                 }

@@ -1372,11 +1372,28 @@ func TestFjallStore(t *testing.T) {
 	}
 }
 
-// TestNilVsEmptyValue tests that empty []byte{} values result in inserts with
-// empty values (not missing keys), and that deletes are explicit via BatchOp.
+// TestNilVsEmptyValue tests how an empty []byte{} value (not nil) is handled.
+// Under MerkleDB hashing it results in an insert with an empty value (not a
+// missing key), and deletes are explicit via BatchOp. Under Ethereum hashing an
+// empty value would hash the same as no value, so the update is refused.
 func TestNilVsEmptyValue(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
+
+	if selectedNodeHashAlgorithm == EthereumNodeHashing {
+		_, err := db.Update([]BatchOp{Put([]byte("key"), []byte{})})
+		r.ErrorContains(err, "empty values are not stored under the Ethereum hash scheme")
+		_, err = db.Propose([]BatchOp{Put([]byte("key"), []byte{})})
+		r.ErrorContains(err, "empty values are not stored under the Ethereum hash scheme")
+
+		// The rejected batches left the database usable.
+		_, err = db.Update([]BatchOp{Put([]byte("key"), []byte("value"))})
+		r.NoError(err)
+		got, err := db.Get([]byte("key"))
+		r.NoError(err)
+		r.Equal([]byte("value"), got)
+		return
+	}
 
 	// Insert a key with a non-empty value
 	key1 := []byte("key1")

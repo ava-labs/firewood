@@ -145,6 +145,7 @@ pub use rlp::NULL_RLP;
 pub use rlp::RlpError;
 pub use rlp::RlpItem;
 pub use rlp::RlpList;
+pub use rlp::check_inline_node;
 pub use rlp::encode_list;
 pub use rlp::parse_be_uint;
 pub use rlp::parse_fixed;
