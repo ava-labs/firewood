@@ -72,11 +72,9 @@ fn manual_serializer(b: &mut Bencher, input: &Node) {
     b.iter(|| to_bytes(input));
 }
 
+#[expect(clippy::ptr_arg, reason = "criterion passes the input as `&Vec<u8>`")]
 fn manual_deserializer(b: &mut Bencher, input: &Vec<u8>) {
-    let (_area_index, input) = input
-        .as_slice()
-        .split_first()
-        .expect("always has at least one byte");
+    let (_area_index, input) = input.split_first().expect("always has at least one byte");
     b.iter(|| {
         Node::from_reader::<EthHash>(&mut std::io::Cursor::new(input)).expect("to deserialize node")
     });

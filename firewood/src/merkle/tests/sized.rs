@@ -327,7 +327,7 @@ fn test_sized_exhausted_inputs_yield_empty_natural_end() {
     let range = merkle
         .range_proof_sized(Some(&past_end), 8 * 1024, None)
         .unwrap();
-    assert!(range.proof.key_values().is_empty());
+    assert_eq!(range.proof.key_values(), []);
     assert!(range.natural_end);
     verify_range_chunk(&merkle, Some(&past_end), &range);
 
@@ -335,7 +335,10 @@ fn test_sized_exhausted_inputs_yield_empty_natural_end() {
     let change = merkle
         .change_proof_sized(same.nodestore(), None, 8 * 1024, None)
         .unwrap();
-    assert!(change.proof.batch_ops().is_empty());
+    assert_eq!(
+        change.proof.batch_ops(),
+        [] as [BatchOp<Box<[u8]>, Box<[u8]>>; 0]
+    );
     assert!(change.natural_end);
     verify_change_chunk(&merkle, &same, None, &change);
 }

@@ -214,7 +214,7 @@ mod tests {
             .iter_indices()
             .map(PathComponent::as_u8)
             .collect();
-        assert!(indices.is_empty());
+        assert_eq!(indices, []);
     }
 
     #[test]
