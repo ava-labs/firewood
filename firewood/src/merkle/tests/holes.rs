@@ -49,6 +49,7 @@ use crate::db::DbConfig;
 use crate::merkle::Merkle;
 use crate::merkle::holes::find_holes_after_change_proof;
 use crate::merkle::holes::find_holes_after_range_proof;
+use crate::proofs::holes::KeySpan;
 
 type Map = BTreeMap<Vec<u8>, Vec<u8>>;
 type Trie<H> = Merkle<NodeStore<Committed, MemStore, H>>;
@@ -1189,4 +1190,248 @@ fn malformed_account_value_is_compared_as_is() {
         "{holes:?}"
     );
     assert_matches_truth::<EthHash>(&target, &local, &applied_range(&verified), &holes);
+}
+
+// The lone-storage-child fold: an account with one storage child stores
+// it folded, so the same slot hashes differently with one or two siblings.
+// These tests pair target and local accounts on either side of that count.
+
+/// Account A holding the given storage slots, each valued by its slot byte.
+fn account_with_slots(slots: &[u8]) -> Map {
+    let mut m = Map::new();
+    m.insert(ACCOUNT_A.to_vec(), account(1, 0xAA));
+    for &slot in slots {
+        m.insert(
+            account_storage_key(&ACCOUNT_A, slot).into_vec(),
+            rlp_encode_storage(&[slot; 32]),
+        );
+    }
+    m
+}
+
+/// The batch a caller would write to apply every label, built from the
+/// labels' own payloads: deletion geometry comes from
+/// [`KeySpan::delete_prefixes`] and [`KeySpan::as_key_range`], and only the
+/// replacement *content* for fetch labels is read from `target`. Nothing here
+/// consults the local map, so a span that the write API cannot express
+/// surfaces as a convergence failure rather than being papered over.
+fn remedy_batch(target: &Map, holes: &[Hole]) -> Vec<BatchOp<Vec<u8>, Vec<u8>>> {
+    let mut batch = Vec::new();
+    let delete_span = |batch: &mut Vec<BatchOp<Vec<u8>, Vec<u8>>>, span: &KeySpan| {
+        for prefix in span.delete_prefixes() {
+            batch.push(BatchOp::DeleteRange {
+                prefix: prefix.to_vec(),
+            });
+        }
+    };
+    for hole in holes {
+        match hole {
+            Hole::Synced(_) => {}
+            Hole::Surplus(span) => delete_span(&mut batch, span),
+            Hole::PointSurplus { key } => batch.push(BatchOp::Delete { key: key.to_vec() }),
+            Hole::PointFix { key, value } => batch.push(BatchOp::Put {
+                key: key.to_vec(),
+                value: value.to_vec(),
+            }),
+            Hole::PointStale { key } => batch.push(BatchOp::Put {
+                key: key.to_vec(),
+                value: target[&**key].clone(),
+            }),
+            Hole::Missing(span) | Hole::Stale(span) => {
+                delete_span(&mut batch, span);
+                let (lower, upper) = span.as_key_range();
+                let fetched = target
+                    .range::<[u8], _>((
+                        std::ops::Bound::Included(&*lower),
+                        upper
+                            .as_deref()
+                            .map_or(std::ops::Bound::Unbounded, std::ops::Bound::Excluded),
+                    ))
+                    .map(|(k, v)| BatchOp::Put {
+                        key: k.clone(),
+                        value: v.clone(),
+                    });
+                batch.extend(fetched);
+            }
+        }
+    }
+    batch
+}
+
+/// Walk the local database at `root` against `verified`, check the labels
+/// against the maps, commit the remedies through the write API, and assert
+/// that the walk over the committed result finds only agreement. Returns the
+/// labels of the first walk and of the walk over the repaired state.
+fn assert_converges_through_db<H: HashMode>(
+    target: &Map,
+    local: &Map,
+    db: &Db<H>,
+    root: HashKey,
+    verified: &VerifiedRangeProof,
+) -> (Vec<Hole>, Vec<Hole>) {
+    let revision = db.revision(root).unwrap();
+    let holes = find_holes_after_range_proof::<H, _>(verified, &*revision).unwrap();
+    assert_matches_truth::<H>(target, local, &applied_range(verified), &holes);
+
+    db.propose(remedy_batch(target, &holes))
+        .unwrap()
+        .commit()
+        .unwrap();
+    let repaired = db.revision(db.root_hash().unwrap()).unwrap();
+    let again = find_holes_after_range_proof::<H, _>(verified, &*repaired).unwrap();
+    assert!(
+        again.iter().all(|h| matches!(h, Hole::Synced(_))),
+        "after remedies: {again:?}"
+    );
+    // The repaired state is checked against the maps too, so a residual
+    // difference the second walk failed to label still surfaces.
+    assert_matches_truth::<H>(
+        target,
+        &view_map(&*repaired),
+        &applied_range(verified),
+        &again,
+    );
+    (holes, again)
+}
+
+/// Every key-value pair a view holds, as a map.
+fn view_map(view: &dyn api::DynDbView) -> Map {
+    view.iter()
+        .unwrap()
+        .map(|kv| {
+            let (k, v) = kv.unwrap();
+            (k.to_vec(), v.to_vec())
+        })
+        .collect()
+}
+
+/// Walk a local database holding `local` against a proof from `target` over
+/// `[start, end]`, then apply the labels and re-walk; see
+/// [`assert_converges_through_db`].
+fn assert_converges(
+    target: &Map,
+    local: &Map,
+    start: Option<&[u8]>,
+    end: Option<&[u8]>,
+) -> Vec<Hole> {
+    let t = trie::<EthHash>(target);
+    let (db, _dir) = new_db::<EthHash>();
+    let root = commit(&db, local);
+    let proof = t.range_proof(start, end, None).unwrap();
+    let verified = VerifiedRangeProof::verify(
+        Arc::new(proof),
+        self::root(&t),
+        start,
+        end,
+        EthHash::ALGORITHM,
+        None,
+    )
+    .unwrap();
+    let (holes, again) = assert_converges_through_db(target, local, &db, root, &verified);
+    assert!(
+        !again.is_empty(),
+        "the walk over the repaired state returned no labels; expected Synced spans over the complement"
+    );
+    holes
+}
+
+#[test]
+fn fold_target_one_child_local_two() {
+    // The target stores slot 1 folded, the local trie stores it unfolded
+    // beside a surplus slot 2. Identical content under slot 1 is Synced, not
+    // Stale; slot 2 is the only remedy.
+    let target = account_with_slots(&[0x10]);
+    let local = account_with_slots(&[0x10, 0x20]);
+    let holes = assert_converges(&target, &local, Some(&ACCOUNT_A), Some(&ACCOUNT_A));
+
+    let labels = spans(&holes);
+    assert!(
+        labels
+            .iter()
+            .any(|(l, p)| *l == "Synced" && p.ends_with(&[0x1])),
+        "{holes:?}"
+    );
+    assert!(
+        labels
+            .iter()
+            .any(|(l, p)| *l == "Surplus" && p.ends_with(&[0x2])),
+        "{holes:?}"
+    );
+    assert!(!labels.iter().any(|(l, _)| *l == "Stale"), "{holes:?}");
+}
+
+#[test]
+fn fold_target_two_children_local_one() {
+    // The reverse: the local trie stores its single slot folded while the
+    // target stores both slots unfolded. Slot 1 is Synced and slot 2 Missing.
+    let target = account_with_slots(&[0x10, 0x20]);
+    let local = account_with_slots(&[0x10]);
+    let holes = assert_converges(&target, &local, Some(&ACCOUNT_A), Some(&ACCOUNT_A));
+
+    let labels = spans(&holes);
+    assert!(
+        labels
+            .iter()
+            .any(|(l, p)| *l == "Synced" && p.ends_with(&[0x1])),
+        "{holes:?}"
+    );
+    assert!(
+        labels
+            .iter()
+            .any(|(l, p)| *l == "Missing" && p.ends_with(&[0x2])),
+        "{holes:?}"
+    );
+    assert!(!labels.iter().any(|(l, _)| *l == "Stale"), "{holes:?}");
+}
+
+#[test]
+fn fold_sibling_through_storage_boundary() {
+    // The boundary runs through slot 1 of a two-slot target account; the
+    // local account holds only slot 2, folded. The sibling comparison at
+    // slot 2 crosses the fold and still reads Synced.
+    let target = account_with_slots(&[0x10, 0x20]);
+    let local = account_with_slots(&[0x20]);
+    let slot_one = account_storage_key(&ACCOUNT_A, 0x10);
+    let holes = assert_converges(&target, &local, Some(&slot_one), Some(&slot_one));
+
+    let labels = spans(&holes);
+    assert!(
+        labels
+            .iter()
+            .any(|(l, p)| *l == "Synced" && p.ends_with(&[0x2])),
+        "{holes:?}"
+    );
+    assert!(!labels.iter().any(|(l, _)| *l == "Stale"), "{holes:?}");
+}
+
+#[test]
+fn fold_sibling_below_the_boundary() {
+    // The same shape on the Below side: the boundary runs through slot 2 of
+    // a two-slot target account and the local account holds only slot 1. Slot
+    // 1 reads Synced.
+    let target = account_with_slots(&[0x10, 0x20]);
+    let local = account_with_slots(&[0x10]);
+    let slot_two = account_storage_key(&ACCOUNT_A, 0x20);
+    let holes = assert_converges(&target, &local, Some(&slot_two), Some(&slot_two));
+
+    let labels = spans(&holes);
+    assert!(
+        labels
+            .iter()
+            .any(|(l, p)| *l == "Synced" && p.ends_with(&[0x1])),
+        "{holes:?}"
+    );
+    assert!(!labels.iter().any(|(l, _)| *l == "Stale"), "{holes:?}");
+}
+
+#[test]
+fn fold_same_count_needs_no_normalization() {
+    // One slot on both sides: both stored hashes are folded and compare
+    // directly. Pins that the normalization stays out of the way.
+    let target = account_with_slots(&[0x10]);
+    let holes = assert_converges(&target, &target, Some(&ACCOUNT_A), Some(&ACCOUNT_A));
+    assert!(
+        holes.iter().all(|h| matches!(h, Hole::Synced(_))),
+        "{holes:?}"
+    );
 }
