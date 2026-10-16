@@ -10,6 +10,7 @@ mod split;
 pub use self::buf::PartialPath;
 pub use self::buf::PathBuf;
 pub use self::buf::PathGuard;
+pub use self::buf::prefix_successor;
 pub use self::component::ComponentIter;
 pub use self::component::PathComponent;
 pub use self::component::PathComponentSliceExt;

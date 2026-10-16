@@ -4,7 +4,6 @@
 use ethereum_types::H256;
 use firewood_storage::Committed;
 use firewood_storage::DefaultHashMode;
-use firewood_storage::DeletedNodeTracking;
 use firewood_storage::EthHash;
 use firewood_storage::HashMode;
 use firewood_storage::MemStore;
@@ -15,8 +14,18 @@ use sha3::Digest;
 use sha3::Keccak256;
 use test_case::test_case;
 
+use super::accounts::account_storage_key;
+use super::accounts::empty_code_hash;
+use super::accounts::reopen_as_legacy;
+use super::accounts::rlp_encode_account;
+use super::accounts::rlp_encode_storage;
 use super::*;
 use crate::merkle::Merkle;
+
+/// Keccak256 of RLP-encoded empty string (0x80) — the hash of an empty storage trie.
+fn empty_trie_root() -> [u8; 32] {
+    Keccak256::digest(rlp::NULL_RLP).into()
+}
 
 fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     first_key: Option<impl KeyType>,
@@ -200,52 +209,6 @@ fn test_root_hash_random_deletions() {
 
         println!("i = {i}");
     }
-}
-
-/// Keccak256 of empty bytes — the codeHash for accounts with no contract code.
-pub(super) fn empty_code_hash() -> [u8; 32] {
-    Keccak256::digest([]).into()
-}
-
-/// Keccak256 of RLP-encoded empty string (0x80) — the hash of an empty storage trie.
-fn empty_trie_root() -> [u8; 32] {
-    Keccak256::digest(rlp::NULL_RLP).into()
-}
-
-/// RLP-encode an Ethereum account value: [nonce, balance, storageRoot, codeHash].
-pub(super) fn rlp_encode_account(
-    nonce: u64,
-    balance: u64,
-    storage_root: &[u8; 32],
-    code_hash: &[u8; 32],
-) -> Box<[u8]> {
-    use rlp::RlpStream;
-
-    let mut rlp = RlpStream::new_list(4);
-    rlp.append(&nonce);
-    rlp.append(&balance);
-    rlp.append(&storage_root.as_slice());
-    rlp.append(&code_hash.as_slice());
-    rlp.out().to_vec().into_boxed_slice()
-}
-
-/// RLP-encode a 32-byte storage slot value.
-pub(super) fn rlp_encode_storage(value: &[u8; 32]) -> Vec<u8> {
-    use rlp::RlpStream;
-
-    let mut rlp = RlpStream::new();
-    rlp.append(&value.as_slice());
-    rlp.out().to_vec()
-}
-
-/// Build a storage-slot key: `account_key` plus a 32-byte suffix of
-/// `first_suffix_byte` followed by zeros. At depth 64 the account branch fans
-/// out on the next nibble, so the high nibble of `first_suffix_byte` selects
-/// which child slot this entry occupies.
-pub(super) fn account_storage_key(account_key: &[u8], first_suffix_byte: u8) -> Box<[u8]> {
-    let mut suffix = [0u8; 32];
-    suffix[0] = first_suffix_byte;
-    [account_key, &suffix].concat().into()
 }
 
 /// Verify a range proof against `root_hash`, then round-trip it through
@@ -562,61 +525,6 @@ fn test_range_proof_accounts_have_computed_storage_root() {
     }
 }
 
-/// Find `value_bytes` in the raw [`MemStore`] and overwrite it with `replacement`.
-/// The two slices must be the same length. Returns the number of occurrences
-/// replaced.
-///
-/// This is used to simulate legacy databases that stored zeroed hashes inside
-/// the RLP-encoded account values. We search for the full serialized value
-/// (not just the 32-byte hash) so we won't accidentally corrupt unrelated
-/// node hashes or structural data in the [`MemStore`].
-fn clobber_value_in_memstore(
-    storage: &firewood_storage::MemStore,
-    value_bytes: &[u8],
-    replacement: &[u8],
-) -> usize {
-    use std::io::Read;
-
-    use firewood_storage::ReadableStorage;
-    use firewood_storage::WritableStorage;
-    assert_eq!(value_bytes.len(), replacement.len());
-
-    let mut buf = Vec::new();
-    storage
-        .stream_from(0)
-        .unwrap()
-        .read_to_end(&mut buf)
-        .unwrap();
-
-    let len = value_bytes.len();
-    let mut count = 0;
-    for offset in 0..buf.len().saturating_sub(len.saturating_sub(1)) {
-        #[expect(clippy::arithmetic_side_effects)]
-        if buf.get(offset..offset + len) == Some(value_bytes) {
-            storage.write(offset as u64, replacement).unwrap();
-            count += 1;
-        }
-    }
-    count
-}
-
-/// Given an RLP-encoded account value, return a copy with field 2 (storageRoot)
-/// replaced by the given 32-byte value.
-fn zero_storage_root_in_rlp(value: &[u8], replacement: &[u8; 32]) -> Vec<u8> {
-    let list: Vec<Vec<u8>> = rlp::Rlp::new(value).as_list().unwrap();
-    assert!(list.len() >= 3);
-
-    let mut rlp = rlp::RlpStream::new_list(list.len());
-    for (i, item) in list.iter().enumerate() {
-        if i == 2 {
-            rlp.append(&replacement.as_slice());
-        } else {
-            rlp.append(item);
-        }
-    }
-    rlp.out().to_vec()
-}
-
 /// Simulate a pre-fix database: after committing normally (which computes the
 /// correct storageRoot), clobber the persisted storageRoot bytes back to zeros
 /// in the raw [`MemStore`]. This replicates what old databases look like — correct
@@ -627,8 +535,6 @@ fn zero_storage_root_in_rlp(value: &[u8], replacement: &[u8; 32]) -> Vec<u8> {
 /// correct storageRoot from the node's children.
 #[test]
 fn test_range_proof_fixes_legacy_zeroed_storage_root() {
-    use firewood_storage::WritableStorage;
-
     use crate::RangeProof;
     type BoxedAccounts = Box<[(Box<[u8]>, Box<[u8]>)]>;
 
@@ -693,37 +599,9 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
     )
     .unwrap();
 
-    // ── Phase 2: clobber account values in the MemStore ──
-    //
-    // For each account, find its full RLP-encoded value in the raw storage
-    // and replace it with a copy where the storageRoot field is zeroed.
-    // This surgically targets only the value bytes, avoiding collateral
-    // damage to node hashes. Then re-open so all reads come from disk.
-    let storage = merkle.nodestore().storage().clone();
-    for (k, _) in &*accounts {
-        let stored = merkle.get_value(k.as_ref()).unwrap().unwrap();
-        let zeroed = zero_storage_root_in_rlp(&stored, &dummy_storage_root);
-        let replaced = clobber_value_in_memstore(&storage, &stored, &zeroed);
-        assert_eq!(
-            replaced,
-            1,
-            "expected exactly one occurrence of account value in MemStore for key {:02x?}",
-            k.as_ref(),
-        );
-    }
-
-    // Overwrite the version string to simulate a pre-hfix database.
-    // The old version lacks the persisted storageRoot fix, so the iterator
-    // and proof-node paths must recompute the correct values.
-    storage.write(0, b"firewood-v1\0\0\0\0\0").unwrap();
-
-    // Re-read the header from the clobbered storage so the version matches.
-    let header = NodeStoreHeader::read_from_storage(&*storage, DefaultHashMode::ALGORITHM).unwrap();
-
-    // Re-open from the clobbered MemStore so all reads come from disk.
-    let reopened: NodeStore<Committed, _, DefaultHashMode> =
-        NodeStore::open(&header, storage, DeletedNodeTracking::Enabled).unwrap();
-    let merkle = Merkle::from(reopened);
+    // ── Phase 2: turn the store into a pre-hfix database ──
+    let account_keys: Vec<&[u8]> = accounts.iter().map(|(k, _)| k.as_ref()).collect();
+    let merkle = Merkle::from(reopen_as_legacy(&merkle, &account_keys));
 
     // Sanity check: the stored values now contain dummy zeros.
     for (k, _) in &*accounts {

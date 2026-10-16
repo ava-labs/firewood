@@ -72,9 +72,14 @@ benchmark/            # Performance benchmarking suite
 
 By default, Firewood uses SHA-256 hashing compatible with merkledb. Enable this feature for Ethereum compatibility:
 
-- Changes hashing from SHA-256 to Keccak-256
+- Selects Keccak-256 hashing (`EthHash`) as the compile-time default. Both
+  hashers are always compiled; a database's mode is chosen when it is opened
 - Understands "account" nodes at specific depths with RLP-encoded values
 - Computes account trie hash as actual root
+- Derives an account value's `storageRoot` field from the storage children at
+  hash time, so the stored bytes may hold a stale field on databases written
+  before `firewood-v1-hfix`; compare account values with that field masked
+  (see `merkle::holes::values_agree`)
 - When an account has exactly one storage child, hashes that child as a
   standalone storage-trie root, so a child's hash depends on the account's
   storage-child count
@@ -267,9 +272,10 @@ default-profile test commands are useful during development, but do not replace
 ### Linux-only Checks
 
 The local `lint`, `test`, `prepush`, and `prepush-lite` recipes are designed to
-run on macOS. They intentionally omit CI checks that require Linux: the
+run on macOS. They intentionally omit CI checks that require Linux: the Go
 differential fuzz jobs, which use Linux-specific resource limits and tooling.
-GitHub Actions remains authoritative for those.
+GitHub Actions remains authoritative for those. The Rust `test_slow_*`
+differential fuzzes run everywhere through `just test`.
 
 `--all-features` is *not* in that category. The `io-uring` feature is accepted on
 every platform but only takes effect on Linux, where `storage/build.rs` sets the
