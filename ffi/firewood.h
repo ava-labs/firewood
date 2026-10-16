@@ -521,75 +521,6 @@ typedef struct Maybe_BorrowedBytes {
 } Maybe_BorrowedBytes;
 
 /**
- * A result type returned from FFI functions that create or parse change proofs.
- *
- * The caller must ensure that [`fwd_free_change_proof`] is called to
- * free the memory associated with the returned context when it is no longer
- * needed.
- *
- * [`fwd_free_change_proof`]: crate::fwd_free_change_proof
- */
-enum ChangeProofResult_Tag
-#if __STDC_VERSION__ >= 202311L
-  : size_t
-#endif // __STDC_VERSION__ >= 202311L
- {
-  /**
-   * The caller provided a null pointer to the input handle.
-   */
-  ChangeProofResult_NullHandlePointer,
-  /**
-   * The provided start root was not found in the database.
-   */
-  ChangeProofResult_StartRevisionNotFound,
-  /**
-   * The provided end root was not found in the database.
-   */
-  ChangeProofResult_EndRevisionNotFound,
-  /**
-   * The proof was successfully created or parsed.
-   *
-   * If the value was parsed from a serialized proof, this does not imply that
-   * the proof is valid, only that it is well-formed. The verify method must
-   * be called to ensure the proof is cryptographically valid.
-   */
-  ChangeProofResult_Ok,
-  /**
-   * An error occurred and the message is returned as an [`OwnedBytes`]. If
-   * value is guaranteed to contain only valid UTF-8.
-   *
-   * The caller must call [`fwd_free_owned_bytes`] to free the memory
-   * associated with this error.
-   *
-   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
-   */
-  ChangeProofResult_Err,
-};
-#if __STDC_VERSION__ >= 202311L
-typedef enum ChangeProofResult_Tag ChangeProofResult_Tag;
-#else
-typedef size_t ChangeProofResult_Tag;
-#endif // __STDC_VERSION__ >= 202311L
-
-typedef struct ChangeProofResult {
-  ChangeProofResult_Tag tag;
-  union {
-    struct {
-      struct HashKey start_revision_not_found;
-    };
-    struct {
-      struct HashKey end_revision_not_found;
-    };
-    struct {
-      struct ChangeProofContext *ok;
-    };
-    struct {
-      OwnedBytes err;
-    };
-  };
-} ChangeProofResult;
-
-/**
  * A result type returned from FFI functions that retrieve a single value.
  */
 enum ValueResult_Tag
@@ -696,6 +627,75 @@ typedef struct ReconstructedResult {
     };
   };
 } ReconstructedResult;
+
+/**
+ * A result type returned from FFI functions that create or parse change proofs.
+ *
+ * The caller must ensure that [`fwd_free_change_proof`] is called to
+ * free the memory associated with the returned context when it is no longer
+ * needed.
+ *
+ * [`fwd_free_change_proof`]: crate::fwd_free_change_proof
+ */
+enum ChangeProofResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  /**
+   * The caller provided a null pointer to the input handle.
+   */
+  ChangeProofResult_NullHandlePointer,
+  /**
+   * The provided start root was not found in the database.
+   */
+  ChangeProofResult_StartRevisionNotFound,
+  /**
+   * The provided end root was not found in the database.
+   */
+  ChangeProofResult_EndRevisionNotFound,
+  /**
+   * The proof was successfully created or parsed.
+   *
+   * If the value was parsed from a serialized proof, this does not imply that
+   * the proof is valid, only that it is well-formed. The verify method must
+   * be called to ensure the proof is cryptographically valid.
+   */
+  ChangeProofResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. If
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  ChangeProofResult_Err,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum ChangeProofResult_Tag ChangeProofResult_Tag;
+#else
+typedef size_t ChangeProofResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
+
+typedef struct ChangeProofResult {
+  ChangeProofResult_Tag tag;
+  union {
+    struct {
+      struct HashKey start_revision_not_found;
+    };
+    struct {
+      struct HashKey end_revision_not_found;
+    };
+    struct {
+      struct ChangeProofContext *ok;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} ChangeProofResult;
 
 /**
  * Arguments for creating a change proof.
@@ -1849,24 +1849,6 @@ struct NextKeyRangeResult fwd_change_proof_find_next_key(const struct ChangeProo
                                                          struct Maybe_BorrowedBytes end_key);
 
 /**
- * Deserialize a `ChangeProof` from bytes.
- *
- * # Arguments
- *
- * * `bytes` - The bytes to deserialize the proof from.
- *
- * # Returns
- *
- * - [`ChangeProofResult::NullHandlePointer`] if the caller provided a null or zero-length slice.
- * - [`ChangeProofResult::Ok`] containing a pointer to the `ChangeProofContext` if the proof
- *   was successfully parsed. This does not imply that the proof is valid, only that it is
- *   well-formed. Use [`fwd_db_verify_change_proof`] or
- *   [`fwd_db_verify_and_commit_change_proof`] to verify the proof.
- * - [`ChangeProofResult::Err`] containing an error message if the proof could not be parsed.
- */
-struct ChangeProofResult fwd_change_proof_from_bytes(BorrowedBytes bytes);
-
-/**
  * Serialize a `ChangeProof` to bytes.
  *
  * # Arguments
@@ -2061,6 +2043,26 @@ struct ChangeProofResult fwd_db_change_proof(const struct DatabaseHandle *db,
                                              struct CreateChangeProofArgs args);
 
 /**
+ * Deserialize a change proof from bytes for use with `db`.
+ *
+ * The database supplies the hash mode the proof must be encoded with; a
+ * proof whose header advertises another mode is rejected here rather than
+ * at verification.
+ *
+ * # Returns
+ *
+ * - [`ChangeProofResult::NullHandlePointer`] if the caller provided a null database pointer.
+ * - [`ChangeProofResult::Ok`] containing a pointer to the `ChangeProofContext` if the proof
+ *   was successfully parsed. This does not imply that the proof is valid, only that it is
+ *   well-formed and uses `db`'s hash mode. Use [`fwd_db_verify_change_proof`] or
+ *   [`fwd_db_verify_and_commit_change_proof`] to verify the proof.
+ * - [`ChangeProofResult::Err`] containing an error message if the proof could not be parsed
+ *   or its hash mode does not match `db`'s.
+ */
+struct ChangeProofResult fwd_db_change_proof_from_bytes(const struct DatabaseHandle *db,
+                                                        BorrowedBytes bytes);
+
+/**
  * Dumps the Trie structure of the latest revision of the database to a DOT
  * (Graphviz) format string for debugging.
  *
@@ -2103,6 +2105,30 @@ struct ValueResult fwd_db_dump(const struct DatabaseHandle *db);
  */
 struct RangeProofResult fwd_db_range_proof(const struct DatabaseHandle *db,
                                            struct CreateRangeProofArgs args);
+
+/**
+ * Deserialize a range proof from bytes for use with `db`.
+ *
+ * The database supplies the hash mode the proof must be encoded with; a
+ * proof whose header advertises another mode is rejected here rather than
+ * at verification.
+ *
+ * # Arguments
+ *
+ * - `db` - The database the proof will be verified against.
+ * - `bytes` - The bytes to deserialize the proof from.
+ *
+ * # Returns
+ *
+ * - [`RangeProofResult::NullHandlePointer`] if the caller provided a null database pointer.
+ * - [`RangeProofResult::Ok`] containing a pointer to the `RangeProofContext` if the proof
+ *   was successfully parsed. This does not imply that the proof is valid, only that it is
+ *   well-formed and uses `db`'s hash mode. Call [`fwd_db_verify_range_proof`] to check it.
+ * - [`RangeProofResult::Err`] containing an error message if the proof could not be parsed
+ *   or its hash mode does not match `db`'s.
+ */
+struct RangeProofResult fwd_db_range_proof_from_bytes(const struct DatabaseHandle *db,
+                                                      BorrowedBytes bytes);
 
 /**
  * Verify and commit a change proof in a single call.
@@ -2922,23 +2948,6 @@ struct CodeIteratorResult fwd_range_proof_code_hash_iter(const struct RangeProof
  * for the duration of the call.
  */
 struct NextKeyRangeResult fwd_range_proof_find_next_key(struct RangeProofContext *proof);
-
-/**
- * Deserialize a `RangeProof` from bytes.
- *
- * # Arguments
- *
- * - `bytes` - The bytes to deserialize the proof from.
- *
- * # Returns
- *
- * - [`RangeProofResult::NullHandlePointer`] if the caller provided a null or zero-length slice.
- * - [`RangeProofResult::Ok`] containing a pointer to the `RangeProofContext` if the proof
- *   was successfully parsed. This does not imply that the proof is valid, only that it is
- *   well-formed. The verify method must be called to ensure the proof is cryptographically valid.
- * - [`RangeProofResult::Err`] containing an error message if the proof could not be parsed.
- */
-struct RangeProofResult fwd_range_proof_from_bytes(BorrowedBytes bytes);
 
 /**
  * Serialize a `RangeProof` to bytes.

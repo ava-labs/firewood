@@ -29,21 +29,24 @@ import (
 // These cover operations that happen entirely in Go and are invisible to the Rust recorder.
 var goMetricsRegistry = prometheus.NewRegistry()
 
-// proofMarshalDuration tracks the duration of proof marshal calls,
-// labeled by proof_type ("range", "change").
+// proofMarshalDuration tracks the duration of proof marshal calls, labeled by
+// proof_type ("range", "change"). It carries no db_tag: Marshal makes no
+// database call and keeps working after the database is closed, so there is
+// no database to attribute it to.
 var proofMarshalDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Name:    "firewood_go_proof_marshal_duration_seconds",
 	Help:    "Duration of Go-side proof marshal operations",
 	Buckets: []float64{5e-6, 25e-6, 1e-4, 5e-4, 1e-3, 5e-3, 25e-3, 0.1},
 }, []string{"proof_type"})
 
-// proofUnmarshalDuration tracks the duration of proof unmarshal calls,
-// labeled by proof_type ("range", "change").
+// proofUnmarshalDuration tracks the duration of proof unmarshal calls, labeled
+// by proof_type ("range", "change") and the db_tag of the database the proof
+// was parsed for.
 var proofUnmarshalDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Name:    "firewood_go_proof_unmarshal_duration_seconds",
 	Help:    "Duration of Go-side proof unmarshal operations",
 	Buckets: []float64{5e-6, 25e-6, 1e-4, 5e-4, 1e-3, 5e-3, 25e-3, 0.1},
-}, []string{"proof_type"})
+}, []string{"proof_type", "db_tag"})
 
 func init() {
 	goMetricsRegistry.MustRegister(proofMarshalDuration, proofUnmarshalDuration)
@@ -55,7 +58,8 @@ var _ prometheus.Gatherer = (*Gatherer)(nil)
 // library.
 //
 // Metrics carry a `db_tag` label identifying the database that recorded them
-// (see [WithMetricsTag]).
+// (see [WithMetricsTag]), except proof-marshal timing, which runs without a
+// database in scope.
 type Gatherer struct{}
 
 func (Gatherer) Gather() ([]*dto.MetricFamily, error) {
