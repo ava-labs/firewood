@@ -45,11 +45,15 @@
 //! same child content hashes differently under a one-child account than
 //! under a many-child one. Where a boundary runs through an account whose
 //! storage-child counts straddle one between the two sides, [`Walk::boundary`]
-//! reads the local account branch once and re-hashes each shared depth-65
-//! slot under the target's convention before comparing; this is the one
-//! place the walk reads local branch structure rather than a single probe
-//! result. Without it identical storage would be labeled `Stale` until the
-//! sibling difference was repaired.
+//! reads the local trie's shape at that position once — an account branch,
+//! or, where no node sits at depth 64, the one compressed slot — and
+//! re-hashes each shared depth-65 slot under the target's convention before
+//! comparing; this is the one place the walk reads local branch structure
+//! rather than a single probe result. The target has the same two shapes: an
+//! account branch in the boundary proof, or a proof node whose partial path
+//! runs through depth 64 and holds its one slot unfolded. Without the
+//! re-hash identical storage would be labeled `Stale` until the sibling
+//! difference was repaired.
 //!
 //! The local side must be canonical. A false match would be a hash
 //! collision, so every mistake on the local side manufactures a hole rather
@@ -279,16 +283,33 @@ impl Side {
     }
 }
 
-/// A boundary node that is an account branch whose storage-child count
-/// straddles one against the local account branch at the same position, so
-/// the two sides store their depth-65 child hashes under different fold
-/// conventions. See the module documentation.
+/// What the local trie holds at an account's position, when it stores its
+/// depth-65 child hashes under a different fold convention than the target
+/// does there. See the module documentation.
 struct Straddle {
-    /// The local account branch.
-    account: SharedNode,
-    /// Whether the target account has exactly one storage child, in which
-    /// case its stored child hash is the folded storage-trie root.
+    /// What the local trie holds at the account's position.
+    local: LocalAccount,
+    /// Whether the target stores its depth-65 child hash folded: an account
+    /// branch with exactly one storage child.
     target_folded: bool,
+}
+
+/// The local trie's shape at an account's 64-nibble position.
+enum LocalAccount {
+    /// A branch exactly at depth 64: its child slots hold the storage
+    /// children, stored folded when there is exactly one.
+    Branch(SharedNode),
+    /// No node at depth 64: the account has no local value and exactly one
+    /// occupied child slot at depth 65 (with any number of keys under it),
+    /// so one node's partial path runs through depth 64 and
+    /// `partial[consumed]` is that slot's nibble. Everything under the slot
+    /// is stored unfolded, since there is no account branch to fold it.
+    Compressed {
+        /// The node whose partial path covers the position.
+        node: SharedNode,
+        /// Components of the partial path above the position.
+        consumed: usize,
+    },
 }
 
 /// Accumulates labels for one or two boundary walks over the same view.
@@ -332,11 +353,13 @@ impl<'a, H: HashMode, T: HashedNodeReader> Walk<'a, H, T> {
         self.out.push(label(KeySpan::new(prefix)));
     }
 
-    /// Compare the child slot `n` of the boundary node at `depth` against the
-    /// target's stored hash for it. When `straddle` is `Some`, the target
-    /// reports a hash for this slot, and the local account branch holds a
-    /// child there, the local child is re-hashed under the target's fold
-    /// convention before comparing; otherwise this is an ordinary probe.
+    /// Compare slot `n` at `depth` on the boundary path against the target's
+    /// hash for it. When `straddle` is `Some`, the target
+    /// reports a hash for this slot, and the local trie holds content there
+    /// — an account branch's child, or the compressed one-slot subtree
+    /// running through the position — that content is re-hashed under the
+    /// target's fold convention before comparing; otherwise this is an
+    /// ordinary probe.
     fn compare_slot(
         &mut self,
         boundary: &[PathComponent],
@@ -346,29 +369,55 @@ impl<'a, H: HashMode, T: HashedNodeReader> Walk<'a, H, T> {
         straddle: Option<&Straddle>,
     ) -> Result<(), api::Error> {
         let prefix = path(boundary, depth, n);
-        if let (Some(straddle), Some(_)) = (straddle, &target)
-            && let Node::Branch(branch) = &*straddle.account
-            && let Some(child) = &branch.children[n]
-        {
-            let local = self.child_hash_under(&prefix, n, child, straddle.target_folded)?;
-            self.compare_hashes(prefix, target, Some(local));
-            return Ok(());
-        }
-        self.compare(prefix, target)
+        let Some(straddle) = straddle.filter(|_| target.is_some()) else {
+            return self.compare(prefix, target);
+        };
+        let local = match &straddle.local {
+            LocalAccount::Branch(account) => {
+                let Node::Branch(branch) = &**account else {
+                    return self.compare(prefix, target);
+                };
+                let Some(child) = &branch.children[n] else {
+                    return self.compare(prefix, target);
+                };
+                self.child_hash_under(&prefix, n, child, straddle.target_folded)?
+            }
+            LocalAccount::Compressed { node, consumed } => {
+                let partial = node.partial_path().as_components();
+                if partial.get(*consumed) != Some(&n) {
+                    return self.compare(prefix, target);
+                }
+                // The node continues past the slot nibble; the remainder is
+                // the partial path a child at the slot would carry.
+                debug_assert!(*consumed < partial.len());
+                let rest = partial.get(consumed.wrapping_add(1)..).unwrap_or_default();
+                let (value_digest, children) = hashable_parts(node)?;
+                fold::<H>(&prefix, n, rest, value_digest, children)
+            }
+        };
+        self.compare_hashes(prefix, target, Some(local));
+        Ok(())
     }
 
-    /// Under the Ethereum mode, returns the local account branch and the
-    /// convention under which to compare its slots, when the boundary node at
-    /// `depth` is an account branch and the local trie holds an account
-    /// branch at the same position whose storage-child count straddles one
-    /// against the target's `target_count`. Returns `None` in every other
-    /// case, including a local trie with no branch exactly at that depth,
-    /// where the ordinary probe is already right.
+    /// Under the Ethereum mode, when `depth` is an account's position, returns
+    /// the local trie's shape there and the convention under which to compare
+    /// its slots — whenever the two sides store the slot hashes under
+    /// different fold conventions. `target_folded` says whether the target
+    /// folds: true for an account branch with one storage child, false for
+    /// one with several or for a proof node whose partial path runs through
+    /// the position. The local side folds when it holds an account branch
+    /// with one storage child, and stores unfolded when its branch has
+    /// several or no node sits at depth 64 (one occupied slot, no account
+    /// value). The local node at the position is found whether the probe
+    /// lands on it or on the child edge of a branch at depth 63. Returns
+    /// `None` when both sides already agree on the convention, or when the
+    /// local trie holds nothing at the position, so the ordinary probe is
+    /// right.
     fn straddle(
         &self,
         boundary: &[PathComponent],
         depth: usize,
-        target_count: usize,
+        target_folded: bool,
     ) -> Result<Option<Straddle>, api::Error> {
         if !H::ALGORITHM.is_ethereum() || depth != ACCOUNT_DEPTH_NIBBLES {
             return Ok(None);
@@ -376,24 +425,84 @@ impl<'a, H: HashMode, T: HashedNodeReader> Walk<'a, H, T> {
         let Some(prefix) = boundary.get(..depth) else {
             return Ok(None);
         };
-        let ProbeOutcome::AtNode { node, consumed } = descend_to_prefix(self.view, prefix)? else {
-            return Ok(None);
+        let (node, consumed) = match descend_to_prefix(self.view, prefix)? {
+            ProbeOutcome::AtNode { node, consumed } => (node, consumed),
+            // The position is a child edge of a branch at depth 63: the child
+            // is the local node at the account's position, with none of its
+            // partial path above it.
+            ProbeOutcome::EdgeExact(_) => {
+                let Some((&slot, parent)) = prefix.split_last() else {
+                    return Ok(None);
+                };
+                let ProbeOutcome::AtNode { node: parent, .. } =
+                    descend_to_prefix(self.view, parent)?
+                else {
+                    return Ok(None);
+                };
+                let Node::Branch(branch) = &*parent else {
+                    return Ok(None);
+                };
+                let Some(child) = &branch.children[slot] else {
+                    return Ok(None);
+                };
+                (self.load_child(child)?, 0)
+            }
+            ProbeOutcome::Empty | ProbeOutcome::UnhashedChild => return Ok(None),
         };
+        if consumed < node.partial_path().as_components().len() {
+            return Ok(target_folded.then_some(Straddle {
+                local: LocalAccount::Compressed { node, consumed },
+                target_folded,
+            }));
+        }
         let Node::Branch(branch) = &*node else {
             return Ok(None);
         };
-        if consumed != branch.partial_path.as_components().len() {
-            return Ok(None);
-        }
-        let local_folded = branch.children.count() == 1;
-        let target_folded = target_count == 1;
-        if local_folded == target_folded {
+        if (branch.children.count() == 1) == target_folded {
             return Ok(None);
         }
         Ok(Some(Straddle {
-            account: node,
+            local: LocalAccount::Branch(node),
             target_folded,
         }))
+    }
+
+    /// Compare the slot `own` at `depth`, where a terminal proof node's
+    /// partial path continues past the boundary key, against the node
+    /// re-encoded below that slot. A proof node whose partial path runs
+    /// through an account's position holds its one slot unfolded, so the
+    /// local slot is re-hashed unfolded where the local account branch
+    /// folds it.
+    fn compare_continuation(
+        &mut self,
+        node: &ProofNode,
+        boundary: &[PathComponent],
+        depth: usize,
+        own: PathComponent,
+        partial: &[PathComponent],
+        common: usize,
+    ) -> Result<(), api::Error> {
+        let hash = reencode::<H>(
+            node,
+            &path(boundary, depth, own),
+            partial.get(common.wrapping_add(1)..).unwrap_or_default(),
+        );
+        let straddle = self.straddle(boundary, depth, false)?;
+        self.compare_slot(boundary, depth, own, Some(hash), straddle.as_ref())
+    }
+
+    /// The node behind a hashed child slot. A child held in memory without a
+    /// hash is an error here as everywhere else in the walk.
+    fn load_child(&self, child: &Child) -> Result<SharedNode, api::Error> {
+        match child {
+            Child::Node(_) => Err(api::Error::UnhashedView {
+                reason: "a child on the account's path is held in memory without a hash",
+            }),
+            Child::AddressWithHash(address, _) => Ok(self.view.read_node(*address)?),
+            Child::MaybePersisted(maybe_persisted, _) => {
+                Ok(maybe_persisted.as_shared_node(self.view)?)
+            }
+        }
     }
 
     /// The hash of the local storage child `child` in slot `n` of the account
@@ -407,31 +516,14 @@ impl<'a, H: HashMode, T: HashedNodeReader> Walk<'a, H, T> {
         child: &Child,
         target_folded: bool,
     ) -> Result<HashType, api::Error> {
-        let node: SharedNode = match child {
-            Child::Node(_) => {
-                return Err(api::Error::UnhashedView {
-                    reason: "the account's storage child is held in memory without a hash",
-                });
-            }
-            Child::AddressWithHash(address, _) => self.view.read_node(*address)?,
-            Child::MaybePersisted(maybe_persisted, _) => {
-                maybe_persisted.as_shared_node(self.view)?
-            }
-        };
+        let node = self.load_child(child)?;
         let (value_digest, children) = hashable_parts(&node)?;
         let partial = node.partial_path().as_components();
         if target_folded {
             // `prefix` is the account prefix plus the slot nibble; a shorter
             // one would fold under the wrong account and read as `Stale`.
             debug_assert_eq!(prefix.len(), ACCOUNT_DEPTH_NIBBLES.wrapping_add(1));
-            let account_prefix = prefix.get(..ACCOUNT_DEPTH_NIBBLES).unwrap_or_default();
-            return Ok(hash_node_as_storage_trie_root_parts::<H, _, _>(
-                account_prefix,
-                n,
-                partial,
-                value_digest,
-                children,
-            ));
+            return Ok(fold::<H>(prefix, n, partial, value_digest, children));
         }
         Ok(H::to_hash(&HashableShunt::new(
             prefix,
@@ -551,13 +643,7 @@ impl<'a, H: HashMode, T: HashedNodeReader> Walk<'a, H, T> {
                         self.compare(path(boundary, depth, n), None)?;
                     }
                     if side.contains(at, own) {
-                        let prefix = path(boundary, depth, own);
-                        let hash = reencode::<H>(
-                            node,
-                            &prefix,
-                            partial.get(common.wrapping_add(1)..).unwrap_or_default(),
-                        );
-                        self.compare(prefix, Some(hash))?;
+                        self.compare_continuation(node, boundary, depth, own, partial, common)?;
                     }
                     if side == Side::Below && depth.is_multiple_of(2) {
                         self.point(packed(boundary, depth), None)?;
@@ -566,13 +652,7 @@ impl<'a, H: HashMode, T: HashedNodeReader> Walk<'a, H, T> {
                 } else if side == Side::Above {
                     // Terminal: the boundary key ends inside the partial path,
                     // so every key under this node extends it and lies above.
-                    let prefix = path(boundary, depth, own);
-                    let hash = reencode::<H>(
-                        node,
-                        &prefix,
-                        partial.get(common.wrapping_add(1)..).unwrap_or_default(),
-                    );
-                    self.compare(prefix, Some(hash))?;
+                    self.compare_continuation(node, boundary, depth, own, partial, common)?;
                     for n in PathComponent::ALL.into_iter().filter(|n| *n != own) {
                         self.compare(path(boundary, depth, n), None)?;
                     }
@@ -584,7 +664,7 @@ impl<'a, H: HashMode, T: HashedNodeReader> Walk<'a, H, T> {
 
             cur = cur.wrapping_add(common);
             let children: Children<Option<HashType>> = (&node.child_hashes).into();
-            let straddle = self.straddle(boundary, cur, children.count())?;
+            let straddle = self.straddle(boundary, cur, children.count() == 1)?;
 
             // (3) The node's own key, a proper prefix of the boundary key: the
             // proof carries its value in full.
@@ -672,6 +752,26 @@ fn values_agree<H: HashMode>(key: &[u8], target: &ValueDigest<Value>, local: &[u
 /// list) replaced by zeros.
 fn mask_storage_root(value: &[u8]) -> Result<Box<[u8]>, RlpError> {
     replace_list_field(value, 2, &[0; 32])
+}
+
+/// The hash of a storage child in slot `n` of the account at the first 64
+/// components of `prefix`, folded as a standalone storage-trie root: what a
+/// one-child account stores for it.
+fn fold<H: HashMode>(
+    prefix: &[PathComponent],
+    n: PathComponent,
+    partial: &[PathComponent],
+    value_digest: Option<ValueDigest<&[u8]>>,
+    children: Children<Option<HashType>>,
+) -> HashType {
+    let account_prefix = prefix.get(..ACCOUNT_DEPTH_NIBBLES).unwrap_or_default();
+    hash_node_as_storage_trie_root_parts::<H, _, _>(
+        account_prefix,
+        n,
+        partial,
+        value_digest,
+        children,
+    )
 }
 
 /// The hash a proof node would have with `prefix` as its parent prefix and
