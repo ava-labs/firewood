@@ -6,8 +6,9 @@
 //! When a change-proof proposal is built from only a subset of an account's
 //! storage children, live hashing splices a *partial* `storageRoot` into the
 //! account value. That value byte-differs from the proof's full on-disk value
-//! even though both hash identically (`Preimage::write` recomputes
-//! `storageRoot` from the current children at hash time). Without the
+//! even though both hash identically (the Ethereum implementation of
+//! `HashMode::write_preimage` recomputes `storageRoot` from the current children
+//! at hash time). Without the
 //! `account_values_equal_except_storage_root` relaxation in
 //! `reconcile_branch_proof_node`, that mismatch is rejected as
 //! `UnexpectedValue`.

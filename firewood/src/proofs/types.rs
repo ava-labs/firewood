@@ -62,7 +62,6 @@ use firewood_storage::Path;
 use firewood_storage::PathBuf;
 use firewood_storage::PathComponent;
 use firewood_storage::PathIterItem;
-use firewood_storage::Preimage;
 use firewood_storage::RlpError;
 use firewood_storage::SplitPath;
 use firewood_storage::TrieHash;
@@ -365,15 +364,11 @@ impl std::fmt::Debug for ProofNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Filter the missing children and only show the present ones with their indices
         let child_hashes = self.child_hashes.iter_present().collect::<Vec<_>>();
-        // Compute the hash and render it as well
-        let hash = self.to_hash();
-
         f.debug_struct("ProofNode")
             .field("key", &self.key)
             .field("partial_len", &self.partial_len)
             .field("value_digest", &self.value_digest)
             .field("child_hashes", &child_hashes)
-            .field("hash", &hash)
             .finish()
     }
 }
@@ -925,7 +920,10 @@ impl ProofType {
 
 #[cfg(test)]
 mod tests {
-    use firewood_storage::DefaultHashMode;
+    use firewood_macros::hash_mode;
+    use firewood_storage::EthHash;
+    use firewood_storage::HashMode;
+    use firewood_storage::MerkleDbHash;
 
     use super::*;
 
@@ -952,7 +950,6 @@ mod tests {
     /// `partial_len == 0` (empty parent prefix) is rejected with `UnexpectedHash`.
     /// `partial_len` is an independent wire field, so a proof can carry a
     /// correctly sized key and set only `partial_len` to 0.
-    #[cfg(feature = "ethhash")]
     #[test]
     fn fold_rejects_zero_partial_len_storage_child() {
         use firewood_storage::U4;
@@ -969,7 +966,7 @@ mod tests {
         let mut account_children = DenseChildren::new();
         account_children.insert(U4::new_masked(1), HashType::from([0xABu8; 32]));
         let account = make_node(&account_nibbles, 0, None, account_children);
-        let root_hash: TrieHash = account.to_hash().into_triehash();
+        let root_hash: TrieHash = EthHash::to_hash(&account).into_triehash();
 
         let proof = Proof::new(vec![account, storage_child]);
 
@@ -980,22 +977,19 @@ mod tests {
         proven_key.extend([0x00u8; 31]);
 
         assert!(matches!(
-            proof.value_digest(
-                proven_key.as_slice(),
-                &root_hash,
-                DefaultHashMode::ALGORITHM,
-            ),
+            proof.value_digest(proven_key.as_slice(), &root_hash, EthHash::ALGORITHM,),
             Err(ProofError::UnexpectedHash { .. })
         ));
     }
 
     /// A proof for key B (nibble 3) must not be accepted as an exclusion
     /// proof for key C (nibble 5).
+    #[hash_mode]
     #[test]
-    fn proof_for_wrong_branch_is_rejected() {
+    fn proof_for_wrong_branch_is_rejected<H: HashMode>() {
         // Leaf at nibble path [3, 0] with a value.
         let leaf = make_node(&[3, 0], 1, Some(b"val_b"), DenseChildren::new());
-        let leaf_hash = leaf.to_hash();
+        let leaf_hash = H::to_hash(&leaf);
 
         // Root branch with children at nibbles 3 and 5.
         let mut root_children = DenseChildren::new();
@@ -1005,7 +999,7 @@ mod tests {
             HashType::from([0xCC; 32]),
         );
         let root = make_node(&[], 0, None, root_children);
-        let root_hash: TrieHash = root.to_hash().into_triehash();
+        let root_hash: TrieHash = H::to_hash(&root).into_triehash();
 
         let proof = Proof::new(vec![root, leaf]);
 
@@ -1013,14 +1007,14 @@ mod tests {
         // — this is the key the proof was built for.
         assert!(
             proof
-                .value_digest([0x30u8], &root_hash, DefaultHashMode::ALGORITHM,)
+                .value_digest([0x30u8], &root_hash, H::ALGORITHM,)
                 .is_ok()
         );
 
         // Verifying against key [0x50] (nibble path [5, 0]) must fail
         // — the proof goes to nibble 3, not nibble 5.
         assert!(matches!(
-            proof.value_digest([0x50u8], &root_hash, DefaultHashMode::ALGORITHM,),
+            proof.value_digest([0x50u8], &root_hash, H::ALGORITHM,),
             Err(ProofError::ShouldBePrefixOfNextKey),
         ));
     }
