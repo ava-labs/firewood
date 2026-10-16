@@ -117,6 +117,14 @@ impl PathComponent {
         // arity's `U4` provides no `join`; compute it directly.
         (self.0.as_u8() << 4) | other.0.as_u8()
     }
+
+    /// Returns the next path component, or `None` for `0xF`.
+    #[must_use]
+    pub const fn checked_next(self) -> Option<Self> {
+        // `as_u8() <= 0xF`, so the add cannot overflow; `try_new` turns the
+        // resulting `0x10` into the `None` carry.
+        Self::try_new(self.as_u8().wrapping_add(1))
+    }
 }
 
 impl std::fmt::Debug for PathComponent {
@@ -509,5 +517,21 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![0x09, 0x0A, 0x0B, 0x0C, 0x0D],
         );
+    }
+
+    #[test]
+    fn checked_next_increments_every_component_but_the_last() {
+        let mut iter = PathComponent::ALL.iter().copied();
+        let mut current = iter.next().expect("ALL is non-empty");
+        for expected in iter {
+            assert_eq!(current.checked_next(), Some(expected));
+            current = expected;
+        }
+    }
+
+    #[test]
+    fn checked_next_of_the_maximum_component_is_none() {
+        let [.., last] = PathComponent::ALL;
+        assert_eq!(last.checked_next(), None);
     }
 }

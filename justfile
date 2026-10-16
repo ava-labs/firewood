@@ -111,7 +111,7 @@ lint:
     ./scripts/run-just.sh ci-check-go-generate
     ./scripts/run-just.sh ci-machete
 
-# Run macOS-compatible CI unit tests (differential fuzzing remains Linux-only).
+# Run macOS-compatible CI unit tests (Go differential fuzzing remains Linux-only).
 test:
     ./scripts/run-just.sh ci-rust test debug-no-default-features
     ./scripts/run-just.sh ci-rust test debug-no-features

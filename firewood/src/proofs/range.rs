@@ -57,6 +57,7 @@
 //! ```
 
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
 use firewood_storage::NodeHashAlgorithm;
 
@@ -68,8 +69,9 @@ use crate::api::HashKey;
 use crate::merkle::verify_range_proof;
 use crate::proofs::ProofError;
 
-/// `(start_key, end_key)` describing the next key range to fetch after a
-/// range or change proof. Returned by `find_next_key_after_*_proof`.
+/// `(start_key, end_key)` describing a key range to fetch, both bounds
+/// inclusive; `None` is unbounded above. Returned by
+/// `find_next_key_after_*_proof` and [`fetch_ranges`](crate::proofs::fetch_ranges).
 pub type KeyRange = (Box<[u8]>, Option<Box<[u8]>>);
 
 /// Verification context captured after structural validation of a range proof.
@@ -127,6 +129,62 @@ impl RangeProofVerificationContext {
     #[must_use]
     pub fn right_edge_key(&self) -> Option<&[u8]> {
         self.right_edge_key.as_deref()
+    }
+}
+
+/// A range proof together with the verification context produced from it.
+///
+/// Constructible only by [`VerifiedRangeProof::verify`], which runs
+/// [`verify_range_proof_structure`] on the proof it is given and stores the
+/// two side by side. A context can therefore never be paired with a proof
+/// other than the one it was produced from, which a caller holding the two
+/// as separate values cannot guarantee.
+///
+/// The proof is held behind an [`Arc`] so a caller that keeps using the
+/// unverified proof after verification shares the body instead of cloning it.
+/// Not `Clone`: a verified value is a witness; share the body through
+/// [`proof`](Self::proof).
+#[derive(Debug)]
+pub struct VerifiedRangeProof {
+    proof: Arc<FrozenRangeProof>,
+    verification: RangeProofVerificationContext,
+}
+
+impl VerifiedRangeProof {
+    /// Verify `proof` with [`verify_range_proof_structure`], whose parameters
+    /// this takes unchanged, and pair it with the resulting context. `proof`
+    /// may be owned or already shared.
+    ///
+    /// # Errors
+    ///
+    /// Any error [`verify_range_proof_structure`] returns.
+    pub fn verify(
+        proof: impl Into<Arc<FrozenRangeProof>>,
+        root: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        algorithm: NodeHashAlgorithm,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<Self, api::Error> {
+        let proof = proof.into();
+        let verification =
+            verify_range_proof_structure(&proof, root, start_key, end_key, algorithm, max_length)?;
+        Ok(Self {
+            proof,
+            verification,
+        })
+    }
+
+    /// The verified proof.
+    #[must_use]
+    pub const fn proof(&self) -> &Arc<FrozenRangeProof> {
+        &self.proof
+    }
+
+    /// The parameters the proof was verified with and the range it proves.
+    #[must_use]
+    pub const fn verification(&self) -> &RangeProofVerificationContext {
+        &self.verification
     }
 }
 
