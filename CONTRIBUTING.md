@@ -30,8 +30,9 @@ After submitting a PR, we'll run all the tests and verify your code meets our su
     just prepush-lite
 
 `just fmt` applies formatting; the recipes only check it. `prepush-lite` checks
-formatting and TODOs, runs clippy and the tests for one feature profile, and
-lints the Markdown and the documentation build.
+formatting and TODOs, runs clippy and the tests for one feature profile,
+lints the Markdown and the documentation build, and checks Bazel metadata and
+Rust toolchain settings.
 
 CI is authoritative for the full matrix, and a change that touches the FFI,
 workspace dependencies, or a feature that profile does not enable warrants the
@@ -42,6 +43,12 @@ whole thing before you push:
 Use `./scripts/run-just.sh <recipe>` in place of `just` if you do not have `just`
 installed; the wrapper falls back to Nix and otherwise prints installation
 instructions. Resolve any warnings or errors before making your PR.
+
+The Bazel checks require [Bazelisk](https://github.com/bazelbuild/bazelisk#installation)
+or [Nix](https://nixos.org/download/). The recipes use `scripts/run-bazel.sh`,
+which runs Bazelisk directly or through Nix to select the repository's pinned
+Bazel version. See [Bazel Source Builds](ffi/README.md#bazel-source-builds) for
+FFI integration and dependency-update instructions.
 
 Use the recipes rather than bare Cargo for anything that builds or runs code.
 `rust-toolchain.toml` pins a nightly for `cargo fmt`, clippy, and miri, so a

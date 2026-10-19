@@ -2,6 +2,20 @@
 
 The FFI package provides a golang FFI layer for Firewood.
 
+## Table of Contents
+
+- [Usage](#usage)
+  - [Basic Usage](#basic-usage)
+  - [Configuration Options](#configuration-options)
+- [Building Firewood Golang FFI](#building-firewood-golang-ffi)
+  - [Local Development](#local-development)
+  - [Production Development Flow](#production-development-flow)
+  - [Bazel Source Builds](#bazel-source-builds)
+  - [Hash Mode](#hash-mode)
+- [Development](#development)
+  - [CGO Regeneration](#cgo-regeneration)
+  - [Testing](#testing)
+
 ## Usage
 
 ### Basic Usage
@@ -89,7 +103,39 @@ Firewood pushes the FFI source code and attached static libraries to [firewood-g
 
 This enables consumers to utilize it directly without forcing them to compile Firewood locally. Go programs running on supported architectures can utilize `firewood-go/ffi` just like any other dependency and select a hashing algorithm per database.
 
-To trigger this build, [attach-static-libs](../.github/workflows/attach-static-libs.yaml) supports triggers for both manual GitHub Actions and tags, so you can create a mirror branch/tag on [firewood-go](https://github.com/ava-labs/firewood-go) by either trigger a manual GitHub Action and selecting your branch or pushing a tag to Firewood.
+To trigger this build, [attach-static-libs](../.github/workflows/attach-static-libs.yaml) supports triggers for both manual GitHub Actions and tags, so you can create a mirror branch/tag on [firewood-go](https://github.com/ava-labs/firewood-go) by either triggering a manual GitHub Action and selecting your branch or pushing a tag to Firewood.
+
+### Bazel Source Builds
+
+Use Bazel targets when a consumer must build Firewood from source. This flow does
+not change ordinary Go builds. They continue to use the published FFI module and
+its pre-built static libraries.
+
+[`ffi/BUILD.bazel`](BUILD.bazel) exports `//ffi:ffi`, with import path
+`github.com/ava-labs/firewood-go/ffi`.
+
+[`MODULE.bazel`](../MODULE.bazel) declares Firewood's module dependencies and
+Rust toolchain. A Bazel consumer must add a `firewood` module dependency and a
+`git_override` that points to a fetchable Firewood commit. The consumer's root
+module must register the Rust toolchain configured in `MODULE.bazel`. A dependency
+module cannot select a toolchain for the root build.
+
+Keep the Go import path and the `go.mod` dependency unchanged. In Bazel
+`BUILD.bazel` files, make Go targets that import the FFI depend on
+`@firewood//ffi:ffi`.
+
+After you change Cargo dependencies or Bazel module dependencies, run:
+
+```sh
+just update-bazel-metadata
+just ci-check-bazel-metadata
+just ci-check-bazel-toolchain
+just ci-bazel-ffi
+```
+
+`update-bazel-metadata` updates `MODULE.bazel.lock`. The check commands verify
+that metadata is current, that the Cargo and Bazel Rust settings match, and that
+the FFI builds and tests pass.
 
 ### Hash Mode
 

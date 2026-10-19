@@ -1,0 +1,5 @@
+# crate_universe reads the workspace manifest and lockfile through these labels.
+exports_files([
+    "Cargo.lock",
+    "Cargo.toml",
+])

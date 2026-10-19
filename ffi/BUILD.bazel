@@ -1,0 +1,101 @@
+# gazelle:ignore
+#
+# The FFI crosses Rust, C, and Go boundaries. Keep these rules hand-written so
+# the Rust static library, C linker requirements, and published Go import path
+# stay in one reviewed definition.
+
+load("@firewood_crates//:defs.bzl", "all_crate_deps")
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_rust//rust:defs.bzl", "rust_static_library")
+
+# crate_universe supplies third-party crates. Workspace crates stay explicit so
+# this target uses the same logger-enabled Firewood stack as cargo build.
+_RUST_FFI_DEPS = [
+    "//firewood:firewood",
+    "//metrics:firewood-metrics",
+    "//storage:firewood-storage",
+] + all_crate_deps(package_name = "ffi") + [
+    "@firewood_crates//:env_logger",
+    "@firewood_crates//:log",
+] + select({
+    # jemalloc is available only on the Unix targets supported by the FFI.
+    "@platforms//os:linux": ["@firewood_crates//:tikv-jemallocator"],
+    "@platforms//os:macos": ["@firewood_crates//:tikv-jemallocator"],
+    "//conditions:default": [],
+})
+
+# The Rust static library leaves these system libraries for the final CGO link.
+_PLATFORM_LINKOPTS = select({
+    "@platforms//os:linux": [
+        "-lm",
+        "-ldl",
+        "-lpthread",
+    ],
+    "@platforms//os:macos": ["-lm"],
+    "//conditions:default": ["-lm"],
+})
+
+# Include the generated C header so CGO recompiles when the FFI ABI changes.
+_GO_SRCS = glob(
+    ["*.go"],
+    exclude = ["*_test.go"],
+) + ["firewood.h"]
+
+_GO_DEPS = [
+    "@com_github_prometheus_client_golang//prometheus",
+    "@com_github_prometheus_client_model//go",
+]
+
+# Build one runtime-selectable FFI library. Hash mode is a database setting, not
+# a Bazel or Cargo feature.
+rust_static_library(
+    name = "firewood_ffi_rust",
+    srcs = glob(["src/**/*.rs"]),
+    compile_data = ["README.md"],
+    crate_features = ["logger"],
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    deps = _RUST_FFI_DEPS,
+)
+
+# Present the Rust archive and its generated C header as the CGO dependency.
+cc_library(
+    name = "firewood_ffi",
+    hdrs = ["firewood.h"],
+    linkopts = _PLATFORM_LINKOPTS,
+    visibility = ["//visibility:public"],
+    deps = [":firewood_ffi_rust"],
+)
+
+# Bazel consumers import the same path as ordinary Go consumers. Bazel replaces
+# only the implementation with the source-built archive.
+go_library(
+    name = "ffi",
+    srcs = _GO_SRCS,
+    cdeps = [":firewood_ffi"],
+    cgo = True,
+    importpath = "github.com/ava-labs/firewood-go/ffi",
+    visibility = ["//visibility:public"],
+    deps = _GO_DEPS,
+)
+
+# Keep this target focused on portable FFI binding tests. Replay and
+# reconstruction tests have separate integration requirements.
+go_test(
+    name = "ffi_test",
+    size = "small",
+    srcs = glob(
+        ["*_test.go"],
+        exclude = [
+            "reconstructed_test.go",
+            "replay_test.go",
+        ],
+    ),
+    embed = [":ffi"],
+    deps = [
+        "@com_github_prometheus_client_model//go",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
