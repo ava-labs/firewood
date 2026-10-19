@@ -107,6 +107,7 @@ Use this when your review is incomplete, or you're not ready to approve or rejec
 
 * This can be helpful for asking clarifying questions, suggesting optional improvements, or flagging issues you're unsure about.
 * This state signals that your review is in progress or advisory, not final.
+* Make sure your review comments are actionable, or mark them as "nit" which implies that no action is required. If there's any doubt if your comment is actionable, call out exactly what action to take to resolve the comment.
 
 #### ❌ Reject (Request Changes)
 
@@ -130,7 +131,13 @@ As the author of a pull request, your responsibility is to ensure the review pro
 
 * Review your own code. Catch obvious issues and clean up unnecessary changes.
 * Some code changes are too large to be reviewed quickly. This can happen when the number of lines of new code is more than a few hundred. Consider breaking up your code in this case.
-* Write a clear PR description. Include context, reasoning, and anything reviewers should know up front.
+* Write a concise, accurate PR description. Keep claims factual and focus on motivation, behavior, scope, and impact. Avoid implementation details that are apparent from the code unless they help explain the purpose of the PR. Whenever possible, use pre-defined vocabulary from the README or elsewhere in the codebase. Do not introduce new terms in the PR description that are not defined in the codebase.
+* Lead with the problem and the fix. Reviewers assume every claim in the description has been checked, so each claim costs review time. A reviewer should be able to tell what is broken from the first line of *Why this should be merged* and how it is fixed from the first line of *How this works*; keep the rest short or leave it out, and do not restate what the diff already shows.
+* Use the repository [pull request template](.github/pull_request_template.md):
+  * **Why this should be merged:** Explain the problem and why the change is needed.
+  * **How this works:** Summarize the behavior and scope of the change. Distinguish between similar but different operations and state important limitations or compatibility effects.
+  * **How this was tested:** Summarize tests added and validation run. For most PRs, it is enough to say "Required CI checks pass" once they have passed. Note important validation that was not run.
+  * **Breaking Changes:** Check every affected project component and briefly explain the compatibility impact after each checked box. If no components are affected, remove the checkboxes and write "None".
 * Add tests and verify they pass locally and in CI.
 
 #### During Review
