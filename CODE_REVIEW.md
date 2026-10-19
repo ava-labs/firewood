@@ -43,9 +43,7 @@ providing inline feedback — in addition to general best practices.
   can own a `Node` must be added to the scan in `BranchNode::drop`. `Node`'s derived
   `PartialEq` recurses and is for tests only.
 - **Key length**: `firewood::api::MAX_KEY_BYTES` bounds every key firewood stores or accepts
-  from a peer. A new entry point that takes keys from outside, whether a batch, a proof, or an
-  FFI call, must reach `api::check_key_len` or the proof decoder's key checks. Do not add a
-  second constant or a setting.
+  from a peer. Do not add a second constant or a setting.
 - **Nibble range bounds**: A nibble-path lower bound uses the empty slice for
   "unbounded" — the empty slice already sorts as the minimum key. An upper bound must be
   `Option<&[u8]>` with `None` for unbounded (+∞); reusing the empty slice there judges
