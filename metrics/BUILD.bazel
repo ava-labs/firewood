@@ -1,0 +1,16 @@
+# gazelle:ignore
+
+load("@firewood_crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+rust_library(
+    name = "firewood-metrics",
+    srcs = glob(["src/**/*.rs"]),
+    crate_features = ["logger"],
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    visibility = ["//:__subpackages__"],
+    deps = all_crate_deps(package_name = "metrics") + [
+        "@firewood_crates//:log",
+    ],
+)
