@@ -11,6 +11,8 @@
 //! - `StartProofOperationMismatch` — attack.rs (adversarial boundary injection)
 //! - `EndProofOperationMismatch` — attack.rs (adversarial boundary injection)
 
+use firewood_storage::DefaultHashMode;
+use firewood_storage::HashMode;
 use test_case::test_case;
 
 use super::*;
@@ -76,6 +78,7 @@ fn test_crafted_out_of_order_or_dup_keys(key_a: &[u8], key_b: &[u8]) {
                 value: b"b".to_vec().into(),
             },
         ]),
+        DefaultHashMode::ALGORITHM,
     );
 
     let err = verify_change_proof_structure(&crafted, root2, None, None, None).unwrap_err();
@@ -143,6 +146,7 @@ fn test_crafted_missing_boundary_proof() {
             key: b"\x50".to_vec().into(),
             value: b"value".to_vec().into(),
         }]),
+        DefaultHashMode::ALGORITHM,
     );
     let err = verify_change_proof_structure(
         &proof,
@@ -176,6 +180,7 @@ fn test_crafted_missing_end_proof() {
         crate::Proof::new(valid.start_proof().as_ref().into()),
         crate::Proof::new(Box::new([])),
         valid.batch_ops().into(),
+        DefaultHashMode::ALGORITHM,
     );
     let err = verify_change_proof_structure(&crafted, root2, None, None, None).unwrap_err();
     assert!(matches!(
@@ -199,6 +204,7 @@ fn test_crafted_unexpected_end_proof() {
         crate::Proof::new(Box::new([])),
         crate::Proof::new(valid.end_proof().as_ref().into()),
         Box::new([]),
+        DefaultHashMode::ALGORITHM,
     );
 
     let err = verify_change_proof_structure(&crafted, root2, None, None, None).unwrap_err();
@@ -275,6 +281,7 @@ fn test_crafted_delete_range_rejected() {
         Box::new([BatchOp::DeleteRange {
             prefix: b"\x50".to_vec().into(),
         }]),
+        DefaultHashMode::ALGORITHM,
     );
 
     let err = verify_change_proof_structure(&crafted, root2, None, None, None).unwrap_err();
@@ -290,6 +297,7 @@ fn test_crafted_missing_end_proof_empty_batch_ops() {
         crate::Proof::new(Box::new([])),
         crate::Proof::new(Box::new([])),
         Box::new([]),
+        DefaultHashMode::ALGORITHM,
     );
     let err =
         verify_change_proof_structure(&proof, api::HashKey::empty(), None, Some(b"\x50"), None)

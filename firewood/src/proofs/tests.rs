@@ -95,7 +95,7 @@ fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
 /// and one operation of each kind (`Put`, `Delete`, `DeleteRange`) covers all
 /// three opcodes on the wire.
 fn create_valid_change_proof(hash_mode: NodeHashAlgorithm) -> (FrozenChangeProof, Vec<u8>) {
-    let proof = FrozenChangeProof::with_hash_mode(
+    let proof = FrozenChangeProof::new(
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([
@@ -164,7 +164,7 @@ fn test_mode_dependent_proof_node_roundtrip(hash_mode: NodeHashAlgorithm) {
         TrieHash::from([0xabu8; 32]).into(),
     );
 
-    let range = FrozenRangeProof::with_hash_mode(
+    let range = FrozenRangeProof::new(
         Proof::new(Box::new([node])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([]),
@@ -626,6 +626,7 @@ fn make_range_proof_from_single_node(node: ProofNode) -> (FrozenRangeProof, Vec<
         Proof::new(Box::new([node])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([]),
+        DefaultHashMode::ALGORITHM,
     );
     let mut serialized = raw_header(ProofType::Range);
     proof.write_body_to_vec(&mut serialized);
@@ -695,6 +696,7 @@ fn test_change_proof_batch_op_variant(op: BatchOp<Box<[u8]>, Box<[u8]>>) {
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([op]),
+        DefaultHashMode::ALGORITHM,
     );
     let mut serialized = Vec::new();
     proof
@@ -951,7 +953,12 @@ fn generate_random_range_proof(rng: &SeededRng) -> (FrozenRangeProof, Vec<u8>) {
         })
         .collect();
 
-    let proof = FrozenRangeProof::new(Proof::new(start_nodes), Proof::new(end_nodes), key_values);
+    let proof = FrozenRangeProof::new(
+        Proof::new(start_nodes),
+        Proof::new(end_nodes),
+        key_values,
+        DefaultHashMode::ALGORITHM,
+    );
     let mut serialized = Vec::new();
     proof
         .write_to_vec(&mut serialized)
@@ -983,7 +990,12 @@ fn generate_random_change_proof(rng: &SeededRng) -> (FrozenChangeProof, Vec<u8>)
         })
         .collect();
 
-    let proof = FrozenChangeProof::new(Proof::new(start_nodes), Proof::new(end_nodes), batch_ops);
+    let proof = FrozenChangeProof::new(
+        Proof::new(start_nodes),
+        Proof::new(end_nodes),
+        batch_ops,
+        DefaultHashMode::ALGORITHM,
+    );
     let mut serialized = Vec::new();
     proof
         .write_to_vec(&mut serialized)
@@ -1311,6 +1323,7 @@ fn test_frame_wire_is_compressed_and_versioned() {
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         kvs,
+        DefaultHashMode::ALGORITHM,
     );
     let mut canonical_body = Vec::new();
     proof.write_body_to_vec(&mut canonical_body);
@@ -1404,6 +1417,7 @@ fn test_write_to_vec_rejects_over_cap_body() {
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         kvs,
+        DefaultHashMode::ALGORITHM,
     );
     let mut out = Vec::new();
     let err = proof
@@ -1436,6 +1450,7 @@ fn test_write_to_vec_keeps_over_compressible_bodies_decodable() {
             Proof::new(Box::<[ProofNode]>::from([])),
             Proof::new(Box::<[ProofNode]>::from([])),
             kvs,
+            DefaultHashMode::ALGORITHM,
         );
         let mut wire = Vec::new();
         proof.write_to_vec(&mut wire).expect("serialize");
@@ -1561,6 +1576,7 @@ fn golden_proof() -> FrozenRangeProof {
                 Box::from(b"value2".as_slice()),
             ),
         ]),
+        DefaultHashMode::ALGORITHM,
     )
 }
 
@@ -1803,7 +1819,7 @@ fn delete_range(prefix: Box<[u8]>) -> BoxedOp {
 /// Serializes a change proof carrying one operation, built by `op` from a key of
 /// `key_len` zero bytes.
 fn change_proof_with_key_len(op: fn(Box<[u8]>) -> BoxedOp, key_len: usize) -> Vec<u8> {
-    let proof = FrozenChangeProof::with_hash_mode(
+    let proof = FrozenChangeProof::new(
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([op(vec![0u8; key_len].into_boxed_slice())]),
@@ -1865,7 +1881,7 @@ fn test_batch_op_key_length_bound(op: fn(Box<[u8]>) -> BoxedOp, key_len: usize, 
 #[test_case(MAX_KEY_BYTES, true ; "at the bound")]
 #[test_case(MAX_KEY_BYTES + 1, false ; "one byte over")]
 fn test_range_proof_key_length_bound(key_len: usize, accepted: bool) {
-    let proof = FrozenRangeProof::with_hash_mode(
+    let proof = FrozenRangeProof::new(
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([(
@@ -1896,7 +1912,7 @@ fn test_proof_node_path_length_bound(nibbles: usize, accepted: bool) {
         value_digest: None,
         child_hashes: DenseChildren::new(),
     };
-    let proof = FrozenRangeProof::with_hash_mode(
+    let proof = FrozenRangeProof::new(
         Proof::new(Box::<[ProofNode]>::from([node])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([]),

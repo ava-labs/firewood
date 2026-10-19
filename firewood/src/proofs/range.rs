@@ -58,8 +58,6 @@
 
 use std::num::NonZeroUsize;
 
-use firewood_storage::DefaultHashMode;
-use firewood_storage::HashMode;
 use firewood_storage::NodeHashAlgorithm;
 
 use super::types::Proof;
@@ -181,7 +179,12 @@ pub fn verify_range_proof_structure(
 /// Determine the next key range to fetch after this range proof.
 ///
 /// Returns `None` when the originally-requested range is fully accounted
-/// for; otherwise returns `Some((last_key, end_key))`.
+/// for; otherwise returns `Some((start, end_key))` where `start` is the
+/// smallest key strictly above the last proven key, so that an inclusive
+/// request bound resumes without covering that key again. This is the same
+/// convention as [`find_next_key_after_change_proof`].
+///
+/// [`find_next_key_after_change_proof`]: crate::find_next_key_after_change_proof
 ///
 /// # Errors
 ///
@@ -191,8 +194,8 @@ pub fn find_next_key_after_range_proof(
     proof: &FrozenRangeProof,
     verification: &RangeProofVerificationContext,
 ) -> Result<Option<KeyRange>, api::Error> {
-    // TODO(#352): proper implementation, this naively returns the last key
-    // in the range, which is correct, but not ideal.
+    // TODO(#352): proper implementation, this naively resumes right after
+    // the last key in the range, which is correct, but not ideal.
     let Some((last_key, _)) = proof.key_values().last() else {
         // no key-values in the proof, so we are done
         return Ok(None);
@@ -210,7 +213,10 @@ pub fn find_next_key_after_range_proof(
         return Ok(None);
     }
 
-    Ok(Some((last_key.clone(), verification.end_key.clone())))
+    Ok(Some((
+        super::lex_successor(last_key),
+        verification.end_key.clone(),
+    )))
 }
 
 /// A range proof is a cryptographic proof that demonstrates a contiguous set of key-value pairs
@@ -236,10 +242,9 @@ pub struct RangeProof<K, V, H> {
     start_proof: Proof<H>,
     end_proof: Proof<H>,
     key_values: Box<[(K, V)]>,
-    /// The hash algorithm this proof was constructed or parsed with. For proofs
-    /// built in this binary it is the compile default; for proofs parsed via
+    /// The hash algorithm used to construct this proof or parsed from its header.
     /// [`FrozenRangeProof::from_slice`](crate::api::FrozenRangeProof::from_slice)
-    /// it is resolved from the self-describing header byte. A mismatch against
+    /// resolves it from the self-describing header byte. A mismatch against
     /// the algorithm a verifier expects is rejected with
     /// [`ProofError::HashModeMismatch`].
     hash_mode: NodeHashAlgorithm,
@@ -290,27 +295,9 @@ where
     ///   established by the start and end proofs. The keys should be in lexicographic
     ///   order as they appear in the trie. May be empty if proving the absence of keys
     ///   in a range.
+    /// * `hash_mode` - The algorithm recorded in the serialized proof header.
     #[must_use]
     pub const fn new(
-        start_proof: Proof<H>,
-        end_proof: Proof<H>,
-        key_values: Box<[(K, V)]>,
-    ) -> Self {
-        // Proofs built in this binary carry the compile-default mode.
-        Self::with_hash_mode(
-            start_proof,
-            end_proof,
-            key_values,
-            DefaultHashMode::ALGORITHM,
-        )
-    }
-
-    /// Like [`RangeProof::new`], but records the [`NodeHashAlgorithm`] the proof
-    /// was encoded with. Used by the parse path
-    /// ([`FrozenRangeProof::from_slice`](crate::api::FrozenRangeProof::from_slice))
-    /// to stamp the mode resolved from the self-describing header byte.
-    #[must_use]
-    pub(crate) const fn with_hash_mode(
         start_proof: Proof<H>,
         end_proof: Proof<H>,
         key_values: Box<[(K, V)]>,
@@ -408,6 +395,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    use firewood_storage::DefaultHashMode;
+    use firewood_storage::HashMode;
+
     use super::*;
     use crate::api::TryIntoBatch;
 
@@ -424,7 +414,12 @@ mod tests {
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
 
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values);
+        let range_proof = RangeProof::new(
+            start_proof,
+            end_proof,
+            key_values,
+            DefaultHashMode::ALGORITHM,
+        );
 
         // Test basic iterator functionality
         let mut iter = range_proof.iter();
@@ -454,7 +449,12 @@ mod tests {
 
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values);
+        let range_proof = RangeProof::new(
+            start_proof,
+            end_proof,
+            key_values,
+            DefaultHashMode::ALGORITHM,
+        );
 
         // Test that we can use for-loop syntax
         let mut items = Vec::new();
@@ -476,7 +476,12 @@ mod tests {
 
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values);
+        let range_proof = RangeProof::new(
+            start_proof,
+            end_proof,
+            key_values,
+            DefaultHashMode::ALGORITHM,
+        );
 
         // Test that our iterator implements KeyValuePairIter
         let iter = range_proof.iter();
@@ -500,7 +505,12 @@ mod tests {
         let key_values: Box<[(Vec<u8>, Vec<u8>)]> = Box::new([]);
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values);
+        let range_proof = RangeProof::new(
+            start_proof,
+            end_proof,
+            key_values,
+            DefaultHashMode::ALGORITHM,
+        );
 
         let mut iter = range_proof.iter();
         assert_eq!(iter.len(), 0);

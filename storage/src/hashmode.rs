@@ -3,10 +3,11 @@
 
 //! Runtime-selectable node-hashing scheme.
 //!
-//! [`HashMode`] is the trait that will eventually carry every behavior that
-//! differs between the MerkleDB (SHA-256) and Ethereum (Keccak-256) hashing
-//! schemes, implemented by the two zero-sized types [`MerkleDbHash`] and
-//! [`EthHash`].
+//! [`HashMode`] is the trait that carries every behavior that differs between
+//! the MerkleDB (SHA-256) and Ethereum (Keccak-256) hashing schemes, implemented
+//! by the two zero-sized types [`MerkleDbHash`] and [`EthHash`]. Threading it as
+//! a type parameter is how issue #1088 makes the scheme a per-database runtime
+//! choice instead of a compile-time feature.
 
 use std::io::Error;
 use std::io::Read;

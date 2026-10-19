@@ -114,6 +114,7 @@ fn node_bytes(node: &ProofNode) -> Vec<u8> {
         Proof::new(Box::new([node.clone()])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([]),
+        DefaultHashMode::ALGORITHM,
     );
     let mut out = Vec::new();
     // Snapshot the canonical (uncompressed) body: the wire compresses this
@@ -161,6 +162,7 @@ fn range_proof_bytes(kvs: &[(&[u8], &[u8])]) -> Vec<u8> {
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         kv_pairs,
+        DefaultHashMode::ALGORITHM,
     );
     let mut out = Vec::new();
     proof.write_body_to_vec(&mut out);
@@ -174,6 +176,7 @@ fn change_proof_bytes(ops: Box<[BatchOp<Key, Value>]>) -> Vec<u8> {
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         ops,
+        DefaultHashMode::ALGORITHM,
     );
     let mut out = Vec::new();
     proof.write_body_to_vec(&mut out);

@@ -5,6 +5,7 @@
 //! the rejected-by-either-check predicate, and serialization round-trips.
 
 use firewood_storage::DefaultHashMode;
+use firewood_storage::HashMode;
 use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::SeededRng;
 
@@ -31,6 +32,7 @@ pub(in crate::merkle::tests) fn build_change_proof(
         Proof::new(start.into_boxed_slice()),
         Proof::new(end.into_boxed_slice()),
         ops.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     )
 }
 
@@ -44,6 +46,7 @@ pub(in crate::merkle::tests) fn build_range_proof(
         Proof::new(start.into_boxed_slice()),
         Proof::new(end.into_boxed_slice()),
         kvs.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     )
 }
 

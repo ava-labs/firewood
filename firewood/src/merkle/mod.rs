@@ -1753,7 +1753,7 @@ impl<T: TrieReader> Merkle<T> {
         // build's compile default) so it serializes in the correct wire format
         // and round-trips for a cross-mode DB.
         let algorithm = self.nodestore().node_hash_algorithm();
-        Ok(RangeProof::with_hash_mode(
+        Ok(RangeProof::new(
             start_proof,
             end_proof,
             key_values,
@@ -1978,7 +1978,7 @@ impl<T: HashedNodeReader> Merkle<T> {
         // build's compile default) so it serializes in the correct wire format
         // and round-trips for a cross-mode DB.
         let algorithm = self.nodestore().node_hash_algorithm();
-        Ok(ChangeProof::with_hash_mode(
+        Ok(ChangeProof::new(
             start_proof,
             end_proof,
             batch_ops,
