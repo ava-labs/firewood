@@ -91,10 +91,11 @@ type ChangeProof struct {
 	*handle[*C.ChangeProofContext]
 }
 
-// NextKeyRange represents a range of keys to fetch from the database,
-// `(startKey, endKey]`: the start key is exclusive because it has already been
-// synchronized, and the end key is inclusive. If the end key is Nothing, the
-// range is unbounded in that direction.
+// NextKeyRange is a range of keys still to fetch, `[StartKey, EndKey]`, both
+// inclusive. The start key is the smallest key above the last one already
+// synchronized, so passing it as the next request's start key resumes without
+// fetching that key again. If there is no end key, the range is unbounded
+// above.
 type NextKeyRange struct {
 	startKey *ownedBytes
 	endKey   Maybe[*ownedBytes]
@@ -283,11 +284,10 @@ func (db *Database) VerifyAndCommitRangeProof(
 // FindNextKey can only be called after a successful call to [*Database.VerifyRangeProof] or
 // [*Database.VerifyAndCommitRangeProof].
 //
-// The next key range indicates the next `(startKey, endKey]` range of keys that
-// should be synchronized to complete the requested range. `startKey` is non-
-// inclusive and `endKey`, if present, is inclusive.
-//
-// TODO(#352): the start key will be inclusive in the future; update documentation then.
+// The next key range indicates the next `[StartKey, EndKey]` range of keys
+// that should be synchronized to complete the requested range; see
+// [NextKeyRange]. ava-labs/firewood#352 tracks tightening the start key beyond
+// the last proven key.
 func (p *RangeProof) FindNextKey() (*NextKeyRange, error) {
 	// Write lock: fwd_range_proof_find_next_key takes the proof mutably.
 	p.lease.mu.Lock()
@@ -561,8 +561,8 @@ func UnmarshalChangeProof(data []byte) (*ChangeProof, error) {
 	return getChangeProofFromChangeProofResult(C.fwd_change_proof_from_bytes(newBorrowedBytes(data, &pinner)))
 }
 
-// StartKey returns the exclusive start key of this key range: it has already
-// been synchronized, so the next request begins strictly after it.
+// StartKey returns the inclusive start key of this key range: the smallest key
+// above the last one already synchronized.
 func (r *NextKeyRange) StartKey() []byte {
 	return r.startKey.CopiedBytes()
 }

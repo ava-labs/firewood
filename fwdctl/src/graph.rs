@@ -1,11 +1,13 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::io::Write;
+use std::io::stdout;
+
 use clap::Args;
 use firewood::api;
 use firewood::db::DbConfig;
 use firewood::open;
-use std::io::{Write, stdout};
 
 use crate::DatabasePath;
 
@@ -17,12 +19,10 @@ pub struct Options {
 
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("dump database {opts:?}");
-    let cfg = DbConfig::builder()
-        .node_hash_algorithm(opts.database.node_hash_algorithm()?)
-        .create_if_missing(false)
-        .truncate(false);
+    let algorithm = opts.database.node_hash_algorithm()?;
+    let cfg = DbConfig::builder().create_if_missing(false).truncate(false);
 
-    let db = open(opts.database.dbpath.clone(), cfg.build())?;
+    let db = open(opts.database.dbpath.clone(), algorithm, cfg.build())?;
     stdout().write_all(db.dump_to_string()?.as_bytes())?;
     db.close()
 }

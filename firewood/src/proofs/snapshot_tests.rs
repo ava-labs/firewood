@@ -73,17 +73,23 @@
 //! | [`batch_op`] | `delete_range` | Single `DeleteRange` operation (opcode `0x02`) |
 //! | [`batch_op`] | `all_ops` | All three operations in sequence |
 
+use firewood_storage::DefaultHashMode;
+use firewood_storage::DenseChildren;
+use firewood_storage::HashMode;
+use firewood_storage::PathComponent;
+use firewood_storage::TrieHash;
+use firewood_storage::ValueDigest;
 use test_case::test_case;
 
-use firewood_storage::{
-    DefaultHashMode, DenseChildren, HashMode, PathComponent, TrieHash, ValueDigest,
-};
-
 use super::header::Header;
-use super::types::{Proof, ProofNode, ProofType};
-use crate::api::{FrozenChangeProof, FrozenRangeProof};
+use super::types::Proof;
+use super::types::ProofNode;
+use super::types::ProofType;
+use crate::api::FrozenChangeProof;
+use crate::api::FrozenRangeProof;
 use crate::db::BatchOp;
-use crate::merkle::{Key, Value};
+use crate::merkle::Key;
+use crate::merkle::Value;
 
 /// Prefixes a snapshot name with the active hash mode so feature-split tests
 /// write distinct snapshot files. Bytes differ between modes, so `merkledb` and
@@ -108,6 +114,7 @@ fn node_bytes(node: &ProofNode) -> Vec<u8> {
         Proof::new(Box::new([node.clone()])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([]),
+        DefaultHashMode::ALGORITHM,
     );
     let mut out = Vec::new();
     // Snapshot the canonical (uncompressed) body: the wire compresses this
@@ -155,6 +162,7 @@ fn range_proof_bytes(kvs: &[(&[u8], &[u8])]) -> Vec<u8> {
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         kv_pairs,
+        DefaultHashMode::ALGORITHM,
     );
     let mut out = Vec::new();
     proof.write_body_to_vec(&mut out);
@@ -168,6 +176,7 @@ fn change_proof_bytes(ops: Box<[BatchOp<Key, Value>]>) -> Vec<u8> {
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         ops,
+        DefaultHashMode::ALGORITHM,
     );
     let mut out = Vec::new();
     proof.write_body_to_vec(&mut out);

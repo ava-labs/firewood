@@ -4,15 +4,23 @@
 use std::convert::Into;
 use std::num::NonZeroUsize;
 
-use firewood::{
-    ProofError,
-    api::{self, FrozenChangeProof},
-};
+use firewood::ProofError;
+use firewood::api;
+use firewood::api::FrozenChangeProof;
 
-use crate::{
-    BorrowedBytes, ChangeProofResult, CodeIteratorHandle, CodeIteratorResult, DatabaseHandle,
-    HashKey, HashResult, KeyRange, Maybe, NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult,
-};
+use crate::BorrowedBytes;
+use crate::ChangeProofResult;
+use crate::CodeIteratorHandle;
+use crate::CodeIteratorResult;
+use crate::DatabaseHandle;
+use crate::HashKey;
+use crate::HashResult;
+use crate::KeyRange;
+use crate::Maybe;
+use crate::NextKeyRangeResult;
+use crate::OwnedBytes;
+use crate::ValueResult;
+use crate::VoidResult;
 
 /// Arguments for creating a change proof.
 #[derive(Debug)]
@@ -83,17 +91,18 @@ impl ChangeProofContext {
     }
 }
 
-/// A key range that should be fetched to continue iterating through a range
-/// or change proof that was truncated. Represents a half-open range
-/// `[start_key, end_key)`. If `end_key` is `None`, the range is unbounded
-/// and continues to the end of the keyspace.
+/// A key range still to fetch after a truncated range or change proof,
+/// `[start_key, end_key]`, both inclusive: `start_key` is the smallest key
+/// above the last one already synchronized, so passing it as the next
+/// request's start bound resumes without covering that key again. An absent
+/// `end_key` means the range is unbounded above.
 #[derive(Debug)]
 #[repr(C)]
 pub struct NextKeyRange {
-    /// The start key of the next range to fetch.
+    /// The inclusive start key of the next range to fetch.
     pub start_key: OwnedBytes,
 
-    /// If set, a non-inclusive upper bound for the next range to fetch. If not
+    /// If set, the inclusive upper bound of the next range to fetch. If not
     /// set, the range is unbounded (this is the final range).
     pub end_key: Maybe<OwnedBytes>,
 }

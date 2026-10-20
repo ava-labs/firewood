@@ -7,22 +7,35 @@
 //! It supports parsing proof headers, proof nodes, and range proofs with full
 //! validation of the format.
 
-use super::{
-    header::{Header, InvalidHeader},
-    reader::{ProofReader, ReadError, ReadItem, V0Reader, Version0},
-    types::{Proof, ProofNode, ProofType},
-};
-use crate::api::MAX_KEY_BYTES;
-use crate::merkle::childmask::ChildMask;
-use crate::{
-    api::{FrozenChangeProof, FrozenRangeProof},
-    db::BatchOp,
-    merkle::{Key, Value},
-    proofs::magic::{BATCH_DELETE, BATCH_DELETE_RANGE, BATCH_PUT},
-};
-use firewood_storage::{HashType, PathBuf, TrieHash, TriePathFromUnpackedBytes, ValueDigest};
-use integer_encoding::VarInt;
 use std::num::NonZeroUsize;
+
+use firewood_storage::HashType;
+use firewood_storage::PathBuf;
+use firewood_storage::TrieHash;
+use firewood_storage::TriePathFromUnpackedBytes;
+use firewood_storage::ValueDigest;
+use integer_encoding::VarInt;
+
+use super::header::Header;
+use super::header::InvalidHeader;
+use super::reader::ProofReader;
+use super::reader::ReadError;
+use super::reader::ReadItem;
+use super::reader::V0Reader;
+use super::reader::Version0;
+use super::types::Proof;
+use super::types::ProofNode;
+use super::types::ProofType;
+use crate::api::FrozenChangeProof;
+use crate::api::FrozenRangeProof;
+use crate::api::MAX_KEY_BYTES;
+use crate::db::BatchOp;
+use crate::merkle::Key;
+use crate::merkle::Value;
+use crate::merkle::childmask::ChildMask;
+use crate::proofs::magic::BATCH_DELETE;
+use crate::proofs::magic::BATCH_DELETE_RANGE;
+use crate::proofs::magic::BATCH_PUT;
 
 impl FrozenRangeProof {
     /// Parses a `FrozenRangeProof` from the given byte slice, enforcing the
@@ -162,7 +175,7 @@ impl Version0 for FrozenRangeProof {
         let end_proof = reader.read_v0_item()?;
         let key_values = reader.read_v0_item()?;
 
-        Ok(Self::with_hash_mode(
+        Ok(Self::new(
             Proof::new(start_proof),
             Proof::new(end_proof),
             key_values,
@@ -177,7 +190,7 @@ impl Version0 for FrozenChangeProof {
         let end_proof = reader.read_v0_item()?;
         let key_values = reader.read_v0_item()?;
 
-        Ok(Self::with_hash_mode(
+        Ok(Self::new(
             Proof::new(start_proof),
             Proof::new(end_proof),
             key_values,

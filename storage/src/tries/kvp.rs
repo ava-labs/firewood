@@ -1,11 +1,21 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::Children;
+use crate::HashType;
+use crate::Hashable;
+use crate::HashableShunt;
+use crate::HashedTrieNode;
+use crate::JoinedPath;
 use crate::PackedPathRef;
-use crate::{
-    Children, HashType, Hashable, HashableShunt, HashedTrieNode, JoinedPath, PathBuf,
-    PathComponent, PathGuard, SplitPath, TrieNode, TriePath, TriePathFromPackedBytes, ValueDigest,
-};
+use crate::PathBuf;
+use crate::PathComponent;
+use crate::PathGuard;
+use crate::SplitPath;
+use crate::TrieNode;
+use crate::TriePath;
+use crate::TriePathFromPackedBytes;
+use crate::ValueDigest;
 
 /// A duplicate key error when merging two key-value tries.
 #[non_exhaustive]
@@ -526,6 +536,10 @@ mod tests {
     ///     ethereum: rlp(b"c482206131"),
     /// }
     /// ```
+    // The matchers below mirror the multi-line calling convention documented
+    // above. `format_macro_matchers` collapses them onto one line and drops the
+    // space after the comma, so this one opts out.
+    #[rustfmt::skip]
     macro_rules! both_hashes {
         (
             merkledb16: $hex16:expr,

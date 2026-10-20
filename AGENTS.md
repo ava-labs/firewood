@@ -159,7 +159,7 @@ just prepush-lite
 
 That runs `ci-format`, `ci-check-todos`, clippy and tests for the single
 `debug-ethhash-logger` profile, `ci-lint-markdown`, and `ci-docs`. Note that
-`ci-format` only *checks* formatting — run `cargo fmt` yourself to apply it.
+`ci-format` only *checks* formatting — run `just fmt` to apply it.
 
 The full local matrix is available when a change warrants it — in particular
 when it touches the FFI, workspace dependencies, or code gated behind a feature
@@ -193,6 +193,42 @@ profile names instead of duplicating Cargo feature and profile arguments. When
 changing a CI Rust matrix, update the shared script and both callers as needed.
 
 All tests must pass, and there should be no clippy warnings.
+
+### Toolchain Selection
+
+Two channels are in play:
+
+| Task | Channel |
+| --- | --- |
+| `cargo fmt`, clippy, miri | the nightly pinned by `rust-toolchain.toml` |
+| everything that builds or runs code | stable |
+| the weekly `lint-nightly` workflow | the floating nightly |
+
+`rust-toolchain.toml` is the only file holding the pinned date. A bare
+`cargo fmt` or `cargo clippy` resolves to it, and so does rust-analyzer, so
+editor formatting and diagnostics match CI without configuration. Pinning keeps
+a new toolchain release from breaking the `-D warnings` gate out of band;
+`lint-nightly.yaml` runs the floating nightly weekly so new lints still surface.
+
+Everything else is held to stable by `RUSTUP_TOOLCHAIN`, which outranks the
+toolchain file. It is set in three places:
+
+- `scripts/run-rust-ci.sh`, for its build and test commands
+- the `justfile`, for recipes that call Cargo directly
+- an `env:` block in each workflow, per job in `ci.yaml` because three of its
+  jobs want the pin
+
+Two consequences:
+
+- The `toolchain:` input of `dtolnay/rust-toolchain` sets rustup's default,
+  which `rust-toolchain.toml` outranks. A job that must run stable says so with
+  `RUSTUP_TOOLCHAIN`.
+- `target/` roughly doubles, because Cargo hashes the compiler version into
+  each unit. Nothing rebuilds: stable and nightly artifacts coexist.
+
+`ffi/flake.nix` is outside this scheme. It exists only for avalanchego's ad hoc
+build and is not a supported development environment: it provides stable Rust
+with no rustup, so it never reads `rust-toolchain.toml`.
 
 ### Toolchain Floor for `--all-features`
 

@@ -48,29 +48,11 @@ pub(crate) mod header;
 pub(crate) mod persist;
 pub(crate) mod primitives;
 
-use crate::arc_swap_triomphe::TriompheArc;
-use crate::linear::{OffsetReader, ReadableNodeMode};
-use crate::logger::{debug, trace};
-use crate::node::branch::ReadSerializable as _;
-use firewood_metrics::{firewood_counter, firewood_histogram};
-use smallvec::SmallVec;
-use std::fmt::Debug;
-use std::io::{Error, ErrorKind};
-use std::num::NonZeroU64;
-use std::sync::OnceLock;
-use std::time::Instant;
-
 // Re-export types from alloc module
 pub use alloc::NodeAllocator;
-pub use hash::{
-    fix_account_storage_root_value, hash_node_as_storage_trie_root_for_node,
-    hash_node_as_storage_trie_root_parts,
-};
-pub use hash_algo::{NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError};
-pub use primitives::{AreaIndex, LinearAddress};
-// Re-export types from header module
-pub use header::{CargoVersion, GitDescribe, NodeStoreHeader};
-
+use std::fmt::Debug;
+use std::io::Error;
+use std::io::ErrorKind;
 /// The [`NodeStore`] handles the serialization of nodes and
 /// free space management of nodes in the page store. It lays out the format
 /// of the [`PageStore`]. More specifically, it places a [`FileIdentifyingMagic`]
@@ -97,18 +79,44 @@ pub use header::{CargoVersion, GitDescribe, NodeStoreHeader};
 /// ```
 use std::marker::PhantomData;
 use std::mem::take;
+use std::num::NonZeroU64;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::time::Instant;
 
-use crate::hashednode::hash_node;
-use crate::node::Node;
-use crate::node::persist::MaybePersistedNode;
-use crate::{
-    CacheReadStrategy, Child, DefaultHashMode, FileIoError, HashMode, HashType, Path,
-    ReadableStorage, SharedNode, TrieHash,
-};
+use firewood_metrics::firewood_counter;
+use firewood_metrics::firewood_histogram;
+pub use hash::fix_account_storage_root_value;
+pub use hash::hash_node_as_storage_trie_root_for_node;
+pub use hash::hash_node_as_storage_trie_root_parts;
+pub use hash_algo::NodeHashAlgorithm;
+pub use hash_algo::NodeHashAlgorithmTryFromIntError;
+// Re-export types from header module
+pub use header::{CargoVersion, GitDescribe, NodeStoreHeader};
+pub use primitives::AreaIndex;
+pub use primitives::LinearAddress;
+use smallvec::SmallVec;
 
 use super::linear::WritableStorage;
+use crate::CacheReadStrategy;
+use crate::Child;
+use crate::FileIoError;
+use crate::HashMode;
+use crate::HashType;
+use crate::Path;
+use crate::ReadableStorage;
+use crate::SharedNode;
+use crate::TrieHash;
+use crate::arc_swap_triomphe::TriompheArc;
+use crate::hashednode::hash_node;
+use crate::linear::OffsetReader;
+use crate::linear::ReadableNodeMode;
+use crate::logger::debug;
+use crate::logger::trace;
+use crate::node::Node;
+use crate::node::branch::ReadSerializable as _;
+use crate::node::persist::MaybePersistedNode;
 
 /// Initial size for the bump allocator used in node serialization batches.
 /// Set to the maximum area size to minimize allocations for large nodes.
@@ -641,13 +649,8 @@ pub trait NodeReader {
     /// database was created with.
     ///
     /// Proof emission (child-hash wire layout, value-digest rule, and the
-    /// account storage-root fix) is governed by the source DB's runtime mode,
-    /// not the build's compile-time default. The default returns
-    /// [`DefaultHashMode::ALGORITHM`]; [`NodeStore`] overrides it with the
-    /// algorithm selected by its [`HashMode`] type.
-    fn node_hash_algorithm(&self) -> NodeHashAlgorithm {
-        DefaultHashMode::ALGORITHM
-    }
+    /// account storage-root fix) is governed by the source DB's runtime mode.
+    fn node_hash_algorithm(&self) -> NodeHashAlgorithm;
 }
 
 impl<T> NodeReader for T
@@ -714,7 +717,8 @@ impl CommittedId {
     /// a workload we need to handle.
     #[must_use]
     pub fn next() -> Self {
-        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::atomic::AtomicU64;
+        use std::sync::atomic::Ordering;
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let raw = NEXT.fetch_add(1, Ordering::Relaxed);
         Self(NonZeroU64::new(raw).expect("CommittedId counter overflowed u64"))
@@ -890,7 +894,6 @@ impl ImmutableProposal {
 /// 2. Apply batch operations to the mutable reconstruction via `Merkle` insert/remove.
 /// 3. Convert to [`Reconstructed`] via [`From`]. The resulting view supports reads and lazy hashing.
 /// 4. Chain further reconstructions: convert back to [`Mutable<Recon>`] via [`From`] and repeat.
-///
 #[derive(Debug)]
 pub struct NodeStore<T, S, H> {
     /// This is one of [Committed], [`ImmutableProposal`], [`Mutable<Propose>`], [`Mutable<Recon>`], or [`Reconstructed`].
@@ -1566,9 +1569,16 @@ where
 #[cfg(test)]
 #[expect(clippy::cast_possible_truncation)]
 mod tests {
+    use std::error::Error;
 
+    use firewood_macros::hash_mode;
+    use nonzero_ext::nonzero;
+    use primitives::area_size_iter;
+
+    use super::*;
     use crate::BranchNode;
     use crate::Children;
+    use crate::DefaultHashMode;
     use crate::EthHash;
     use crate::FileBacked;
     use crate::HashMode;
@@ -1577,12 +1587,6 @@ mod tests {
     use crate::NibblesIterator;
     use crate::PathComponent;
     use crate::linear::memory::MemStore;
-
-    use super::*;
-    use firewood_macros::hash_mode;
-    use nonzero_ext::nonzero;
-    use primitives::area_size_iter;
-    use std::error::Error;
 
     #[test]
     fn area_sizes_aligned() {

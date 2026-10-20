@@ -3,20 +3,30 @@
 
 // hash benchmarks; run with 'cargo bench'
 
-use criterion::profiler::Profiler;
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use firewood::Merkle;
-use firewood::api;
-use firewood::db::{BatchOp, DbConfig};
-use firewood::open;
-use firewood_storage::{DefaultHashMode, DeletedNodeTracking, HashMode, MemStore, NodeStore};
-use pprof::ProfilerGuard;
-use rand::{RngExt, distr::Alphanumeric};
 use std::fs::File;
 use std::iter::repeat_with;
 use std::os::raw::c_int;
 use std::path::Path;
 use std::sync::Arc;
+
+use criterion::BatchSize;
+use criterion::Criterion;
+use criterion::criterion_group;
+use criterion::criterion_main;
+use criterion::profiler::Profiler;
+use firewood::Merkle;
+use firewood::api;
+use firewood::db::BatchOp;
+use firewood::db::DbConfig;
+use firewood::open;
+use firewood_storage::DefaultHashMode;
+use firewood_storage::DeletedNodeTracking;
+use firewood_storage::HashMode;
+use firewood_storage::MemStore;
+use firewood_storage::NodeStore;
+use pprof::ProfilerGuard;
+use rand::RngExt;
+use rand::distr::Alphanumeric;
 use tempfile::TempDir;
 
 // To enable flamegraph output
@@ -119,11 +129,8 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
                 |batch_ops| {
                     let db_path = TempDir::new().unwrap();
                     let db_path = db_path.path().join("benchmark_db");
-                    let cfg = DbConfig::builder()
-                        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
-                        .truncate(true)
-                        .build();
-                    let db = open(db_path, cfg).unwrap();
+                    let cfg = DbConfig::builder().truncate(true).build();
+                    let db = open(db_path, DefaultHashMode::ALGORITHM, cfg).unwrap();
 
                     db.propose(batch_ops).unwrap().commit().unwrap();
                 },

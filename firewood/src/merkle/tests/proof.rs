@@ -1,7 +1,8 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood_storage::Preimage;
+use firewood_storage::DefaultHashMode;
+use firewood_storage::HashMode;
 use firewood_storage::logger::debug;
 
 use super::*;
@@ -283,7 +284,7 @@ fn exclusion_with_proof_value_present() {
 
     debug!("{proof:#?}");
     assert_eq!(
-        proof.as_ref().first().unwrap().to_hash(),
+        DefaultHashMode::to_hash(proof.as_ref().first().unwrap()),
         HashType::from(root_hash.clone())
     );
 
@@ -303,7 +304,8 @@ fn exclusion_with_proof_value_present() {
 
 #[test]
 fn proof_path_construction_and_corruption() {
-    use crate::{Proof, ProofNode};
+    use crate::Proof;
+    use crate::ProofNode;
 
     // Build a trie with several entries
     let mut merkle = crate::merkle::tests::create_in_memory_merkle();

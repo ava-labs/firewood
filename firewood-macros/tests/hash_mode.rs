@@ -9,7 +9,9 @@
 )]
 
 use firewood_macros::hash_mode;
-use firewood_storage::{EthHash, HashMode, MerkleDbHash};
+use firewood_storage::EthHash;
+use firewood_storage::HashMode;
+use firewood_storage::MerkleDbHash;
 use test_case::test_case;
 
 #[hash_mode]

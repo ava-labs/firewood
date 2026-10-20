@@ -10,10 +10,15 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
+use std::io::Cursor;
+
 use firewood_metrics::firewood_counter;
 use parking_lot::Mutex;
-use std::io::Cursor;
+
+use super::FileIoError;
+use super::OffsetReader;
+use super::ReadableStorage;
+use super::WritableStorage;
 
 #[derive(Debug)]
 /// An in-memory impelementation of [`WritableStorage`] and [`ReadableStorage`]
@@ -67,9 +72,11 @@ impl ReadableStorage for MemStore {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use std::io::Read;
+
     use test_case::test_case;
+
+    use super::*;
 
     #[test_case(&[(0,&[1, 2, 3])],(0,&[1, 2, 3]); "write to empty store")]
     #[test_case(&[(0,&[1, 2, 3])],(1,&[2, 3]); "read from middle of store")]

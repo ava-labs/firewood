@@ -7,10 +7,17 @@ mod merge;
 use super::test::TestDb;
 
 mod key_length {
-    use super::TestDb;
-    use crate::api::{BatchOp, Db as _, Error, MAX_KEY_BYTES, Proposal as _};
-    use crate::db::{DbConfig, UseParallel};
+    use firewood_storage::DefaultHashMode;
     use test_case::test_case;
+
+    use super::TestDb;
+    use crate::api::BatchOp;
+    use crate::api::Db as _;
+    use crate::api::Error;
+    use crate::api::MAX_KEY_BYTES;
+    use crate::api::Proposal as _;
+    use crate::db::DbConfig;
+    use crate::db::UseParallel;
 
     type Op = BatchOp<Vec<u8>, Vec<u8>>;
 
@@ -44,8 +51,9 @@ mod key_length {
     fn propose_enforces_the_key_length_limit(op: fn(usize) -> Op, len: usize, accepted: bool) {
         for use_parallel in [UseParallel::Never, UseParallel::Always] {
             let path = format!("{use_parallel:?}");
-            let db =
-                TestDb::new_with_config(DbConfig::builder().use_parallel(use_parallel).build());
+            let db = TestDb::<DefaultHashMode>::new_with_config(
+                DbConfig::builder().use_parallel(use_parallel).build(),
+            );
             match db.propose(vec![op(len)]).map(drop) {
                 Ok(()) => assert!(accepted, "a {len}-byte key was accepted ({path})"),
                 Err(Error::KeyTooLong { len: got, max }) => {
@@ -63,7 +71,7 @@ mod key_length {
     /// A proposal built on another proposal goes through the same check.
     #[test]
     fn proposing_on_a_proposal_enforces_the_key_length_limit() {
-        let db = TestDb::new();
+        let db = TestDb::<DefaultHashMode>::new();
         let base = db.propose(vec![put(1)]).unwrap();
         let err = base
             .propose(vec![put(MAX_KEY_BYTES + 1)])

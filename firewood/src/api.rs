@@ -1,17 +1,28 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::manager::RevisionManagerError;
-use crate::merkle::parallel::CreateProposalError;
-use crate::merkle::{Key, Value};
-use crate::persist_worker::PersistError;
-use crate::{Proof, ProofError, ProofNode, RangeProof};
-use firewood_storage::{DefaultHashMode, FileIoError, HashMode, NodeHashAlgorithm, TrieHash};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-pub use crate::batch_op::{BatchIter, BatchOp, IntoBatchIter, KeyValuePair, TryIntoBatch};
+use firewood_storage::FileIoError;
+use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::TrieHash;
+
+use crate::Proof;
+use crate::ProofError;
+use crate::ProofNode;
+use crate::RangeProof;
+pub use crate::batch_op::BatchIter;
+pub use crate::batch_op::BatchOp;
+pub use crate::batch_op::IntoBatchIter;
+pub use crate::batch_op::KeyValuePair;
+pub use crate::batch_op::TryIntoBatch;
+use crate::manager::RevisionManagerError;
+use crate::merkle::Key;
+use crate::merkle::Value;
+use crate::merkle::parallel::CreateProposalError;
+use crate::persist_worker::PersistError;
 use crate::proofs::change::ChangeProof;
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
@@ -38,34 +49,6 @@ impl<T> ValueType for T where T: AsRef<[u8]> + Debug {}
 ///  - They are used to provide integrity at different points in a
 ///    proof
 pub type HashKey = firewood_storage::TrieHash;
-
-/// An extension trait for the [`HashKey`] type to provide additional methods.
-pub trait HashKeyExt: Sized {
-    /// Default root hash for an empty database.
-    fn default_root_hash() -> Option<HashKey>;
-}
-
-/// An extension trait for an optional `HashKey` type to provide additional methods.
-pub trait OptionalHashKeyExt: Sized {
-    /// Returns the default root hash if the current value is [`None`].
-    fn or_default_root_hash(self) -> Option<HashKey>;
-}
-
-impl HashKeyExt for HashKey {
-    /// Returns the empty-database root hash for the compile-selected mode:
-    /// `None` for merkledb, `Some(keccak256(0x80))` for ethhash.
-    #[inline]
-    fn default_root_hash() -> Option<HashKey> {
-        DefaultHashMode::default_root_hash()
-    }
-}
-
-impl OptionalHashKeyExt for Option<HashKey> {
-    #[inline]
-    fn or_default_root_hash(self) -> Option<HashKey> {
-        self.or_else(HashKey::default_root_hash)
-    }
-}
 
 /// A frozen proof is a proof that is stored in immutable memory.
 pub type FrozenRangeProof = RangeProof<Key, Value, Box<[ProofNode]>>;
@@ -252,10 +235,14 @@ impl From<std::convert::Infallible> for Error {
 
 impl From<RevisionManagerError> for Error {
     fn from(err: RevisionManagerError) -> Self {
-        use RevisionManagerError::{
-            FileIoError, IOError, InsufficientRevisions, NotLatest, PersistError, RevisionNotFound,
-            RevisionWithoutAddress, RootStoreError,
-        };
+        use RevisionManagerError::FileIoError;
+        use RevisionManagerError::IOError;
+        use RevisionManagerError::InsufficientRevisions;
+        use RevisionManagerError::NotLatest;
+        use RevisionManagerError::PersistError;
+        use RevisionManagerError::RevisionNotFound;
+        use RevisionManagerError::RevisionWithoutAddress;
+        use RevisionManagerError::RootStoreError;
         match err {
             NotLatest { provided, expected } => Self::ParentNotLatest { provided, expected },
             RevisionNotFound { provided } => Self::RevisionNotFound {
@@ -326,8 +313,8 @@ pub trait Db {
     ///
     /// # Note
     ///
-    /// If the database is empty, this will return None, unless the ethhash feature is enabled.
-    /// In that case, we return the special ethhash compatible empty trie hash.
+    /// If the database is empty, this will return None, unless the database uses
+    /// Ethereum hashing, whose empty-trie root is the non-empty `keccak256(0x80)`.
     fn root_hash(&self) -> Option<TrieHash>;
 
     /// Propose a change to the database via a batch
@@ -379,8 +366,8 @@ pub trait DbView {
     ///
     /// # Note
     ///
-    /// If the database is empty, this will return None, unless the ethhash feature is enabled.
-    /// In that case, we return the special ethhash compatible empty trie hash.
+    /// If the database is empty, this will return None, unless the database uses
+    /// Ethereum hashing, whose empty-trie root is the non-empty `keccak256(0x80)`.
     fn root_hash(&self) -> Option<HashKey>;
 
     /// Get the value of a specific key
@@ -456,8 +443,8 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
     ///
     /// # Note
     ///
-    /// If the database is empty, this will return None, unless the ethhash feature is enabled.
-    /// In that case, we return the special ethhash compatible empty trie hash.
+    /// If the database is empty, this will return None, unless the database uses
+    /// Ethereum hashing, whose empty-trie root is the non-empty `keccak256(0x80)`.
     fn root_hash(&self) -> Option<HashKey>;
 
     /// Get the value of a specific key
@@ -846,22 +833,21 @@ pub trait DynProposal<'db>: Debug + Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use firewood_storage::EthHash;
+    use firewood_storage::HashMode;
+    use firewood_storage::MerkleDbHash;
+    use sha3::Digest as _;
 
     #[test]
-    #[cfg(feature = "ethhash")]
-    fn test_ethhash_compat_default_root_hash_equals_empty_rlp_hash() {
-        use sha3::Digest as _;
-
+    fn test_ethhash_default_root_hash_equals_empty_rlp_hash() {
         assert_eq!(
-            TrieHash::default_root_hash(),
+            EthHash::default_root_hash(),
             Some(sha3::Keccak256::digest(rlp::NULL_RLP).into()),
         );
     }
 
     #[test]
-    #[cfg(not(feature = "ethhash"))]
-    fn test_firewood_default_root_hash_equals_none() {
-        assert_eq!(TrieHash::default_root_hash(), None);
+    fn test_merkledb_default_root_hash_is_none() {
+        assert_eq!(MerkleDbHash::default_root_hash(), None);
     }
 }

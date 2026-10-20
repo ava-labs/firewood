@@ -137,7 +137,7 @@
 //!   ^        ^       ^          ^ ^           ^       ^         ^
 //!   |        |       |          | |           |       |         |
 //!  0x00      |  first_proof_key | |    last_proof_key |       0xff..
-//!            |       ^          | |           ^       |     
+//!            |       ^          | |           ^       |
 //!         requested_start_key   | |        requested_end_key
 //!       (2 possible locations)  | |        (2 possible locations)
 //!                               | |
@@ -330,29 +330,34 @@ mod snapshot_tests;
 mod tests;
 pub(crate) mod types;
 
-pub use self::change::{
-    ChangeProof, ChangeProofVerificationContext, find_next_key_after_change_proof,
-    verify_change_proof_structure,
-};
-
+pub use self::change::ChangeProof;
+pub use self::change::ChangeProofVerificationContext;
+pub use self::change::find_next_key_after_change_proof;
+pub use self::change::verify_change_proof_structure;
 pub(crate) use self::frame::MAX_DECOMPRESSED_LEN;
 pub use self::header::InvalidHeader;
-pub use self::range::{
-    KeyRange, RangeProof, RangeProofVerificationContext, find_next_key_after_range_proof,
-    verify_range_proof_structure,
-};
+pub use self::range::KeyRange;
+pub use self::range::RangeProof;
+pub use self::range::RangeProofVerificationContext;
+pub use self::range::find_next_key_after_range_proof;
+pub use self::range::verify_range_proof_structure;
 pub use self::reader::ReadError;
-pub use self::types::{
-    EmptyProofCollection, Proof, ProofCollection, ProofEdge, ProofError, ProofNode, ProofType,
-};
+pub use self::types::EmptyProofCollection;
+pub use self::types::Proof;
+pub use self::types::ProofCollection;
+pub use self::types::ProofEdge;
+pub use self::types::ProofError;
+pub use self::types::ProofNode;
+pub use self::types::ProofType;
 
 /// Returns the smallest byte string strictly greater than `key`: `key` with a
 /// `0x00` byte appended, since nothing sorts between the two. Total — every byte
 /// string has one, including the empty key.
 ///
-/// [`find_next_key_after_change_proof`] uses it to resume strictly above the last
-/// key a proof covered. Both request bounds are inclusive, so resuming at that key
-/// would cover it again and never advance.
+/// [`find_next_key_after_range_proof`] and [`find_next_key_after_change_proof`]
+/// use it to resume strictly above the last key a proof covered. Both request
+/// bounds are inclusive, so resuming at that key would cover it again and never
+/// advance.
 pub(crate) fn lex_successor(key: &[u8]) -> Box<[u8]> {
     [key, &[0]].concat().into_boxed_slice()
 }

@@ -3,6 +3,9 @@
 
 //! Attack detection: forged, omitted, or spurious batch ops.
 
+use firewood_storage::DefaultHashMode;
+use firewood_storage::HashMode;
+
 use super::*;
 
 type OwnedBatchOps = Vec<BatchOp<Box<[u8]>, Box<[u8]>>>;
@@ -51,6 +54,7 @@ fn test_crafted_omitted_change_detected() {
         crate::Proof::new(valid.start_proof().as_ref().into()),
         crate::Proof::new(valid.end_proof().as_ref().into()),
         shortened.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     );
 
     let ctx =
@@ -83,6 +87,7 @@ fn test_crafted_forged_value_detected() {
         crate::Proof::new(valid.start_proof().as_ref().into()),
         crate::Proof::new(valid.end_proof().as_ref().into()),
         forged_ops.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     );
 
     let ctx = verify_change_proof_structure(&crafted, root2, None, None, None).unwrap();
@@ -115,6 +120,7 @@ fn test_crafted_spurious_batch_op_detected() {
         crate::Proof::new(valid.start_proof().as_ref().into()),
         crate::Proof::new(valid.end_proof().as_ref().into()),
         ops.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     );
 
     let err = verify_change_proof_structure(&crafted, root2, None, None, None)
@@ -161,6 +167,7 @@ fn test_crafted_spurious_put_at_start_key_boundary() {
         crate::Proof::new(honest.start_proof().as_ref().into()),
         crate::Proof::new(honest.end_proof().as_ref().into()),
         ops.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     );
 
     let err = verify_change_proof_structure(&crafted, root2, Some(b"\x10"), Some(b"\x90"), None)
@@ -207,6 +214,7 @@ fn test_crafted_spurious_delete_at_start_key_boundary() {
         crate::Proof::new(honest.start_proof().as_ref().into()),
         crate::Proof::new(honest.end_proof().as_ref().into()),
         ops.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     );
 
     let err = verify_change_proof_structure(&crafted, root2, Some(b"\x20"), Some(b"\x90"), None)
@@ -250,6 +258,7 @@ fn test_crafted_spurious_put_at_end_key_boundary() {
         crate::Proof::new(honest.start_proof().as_ref().into()),
         crate::Proof::new(honest.end_proof().as_ref().into()),
         ops.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     );
 
     let err =
@@ -294,6 +303,7 @@ fn test_crafted_spurious_delete_at_end_key_boundary() {
         crate::Proof::new(honest.start_proof().as_ref().into()),
         crate::Proof::new(honest.end_proof().as_ref().into()),
         ops.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     );
 
     let err =
@@ -340,6 +350,7 @@ fn test_crafted_tampered_start_key_value_detected() {
         crate::Proof::new(honest.start_proof().as_ref().into()),
         crate::Proof::new(honest.end_proof().as_ref().into()),
         tampered_ops.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     );
 
     // Structural checks pass (hash chain is valid), but root hash
@@ -401,6 +412,7 @@ fn test_crafted_conflicting_proof_nodes_rejected() {
         crate::Proof::new(valid.start_proof().as_ref().into()),
         crate::Proof::new(end_nodes.into_boxed_slice()),
         valid.batch_ops().into(),
+        DefaultHashMode::ALGORITHM,
     );
 
     // Skip structural validation (the modified hash chain won't pass).
@@ -453,6 +465,7 @@ fn test_crafted_value_at_odd_nibble_length_rejected() {
         crate::Proof::new(start_nodes.into_boxed_slice()),
         crate::Proof::new(valid.end_proof().as_ref().into()),
         valid.batch_ops().into(),
+        DefaultHashMode::ALGORITHM,
     );
 
     // Skip structural validation (injected value breaks the hash chain).
@@ -528,6 +541,7 @@ fn test_crafted_divergence_at_depth_zero() {
             key: b"\x50".to_vec().into(),
             value: b"mid".to_vec().into(),
         }]),
+        DefaultHashMode::ALGORITHM,
     );
 
     let parent = target.revision(root1_target).unwrap();
@@ -620,6 +634,7 @@ fn test_crafted_stripped_divergent_child_rejected() {
         crate::Proof::new(start_nodes.into_boxed_slice()),
         crate::Proof::new(valid.end_proof().as_ref().into()),
         valid.batch_ops().into(),
+        DefaultHashMode::ALGORITHM,
     );
 
     assert!(
@@ -682,6 +697,7 @@ fn test_crafted_omitted_delete_at_straddling_nibble() {
             key: b"\x10".to_vec().into(),
             value: b"changed".to_vec().into(),
         }]),
+        DefaultHashMode::ALGORITHM,
     );
 
     assert!(
@@ -721,6 +737,7 @@ fn test_collapse_root_hides_spurious_key() {
         crate::Proof::new(valid_proof.start_proof().as_ref().into()),
         crate::Proof::new(valid_proof.end_proof().as_ref().into()),
         ops.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     );
 
     assert!(
@@ -777,6 +794,7 @@ fn inject_and_assert_rejected(
         crate::Proof::new(valid_proof.start_proof().as_ref().into()),
         crate::Proof::new(valid_proof.end_proof().as_ref().into()),
         ops.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     );
 
     assert!(
@@ -990,6 +1008,7 @@ fn test_swapped_value_in_range_is_rejected() {
         crate::Proof::new(valid_proof.start_proof().as_ref().into()),
         crate::Proof::new(valid_proof.end_proof().as_ref().into()),
         ops.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     );
 
     assert!(
@@ -1047,6 +1066,7 @@ fn test_crafted_dropped_hashed_put_behind_left_exclusion_rejected() {
         crate::Proof::new(valid.start_proof().as_ref().into()),
         crate::Proof::new(valid.end_proof().as_ref().into()),
         ops.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     );
 
     // The structural checks pass (the hash chain is intact); the reconcile
@@ -1101,6 +1121,7 @@ fn test_crafted_dropped_hashed_put_behind_right_exclusion_rejected() {
         crate::Proof::new(valid.start_proof().as_ref().into()),
         crate::Proof::new(valid.end_proof().as_ref().into()),
         ops.into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     );
 
     // The structural checks pass (the hash chain is intact); the reconcile

@@ -1,10 +1,17 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use parking_lot::Mutex;
-use std::{fmt::Display, ops::Deref, sync::Arc};
+use std::fmt::Display;
+use std::ops::Deref;
+use std::sync::Arc;
 
-use crate::{FileIoError, LinearAddress, Node, NodeReader, SharedNode};
+use parking_lot::Mutex;
+
+use crate::FileIoError;
+use crate::LinearAddress;
+use crate::Node;
+use crate::NodeReader;
+use crate::SharedNode;
 
 /// A node that is either in memory or on disk.
 ///
@@ -263,12 +270,17 @@ mod test {
     use firewood_macros::hash_mode;
     use nonzero_ext::nonzero;
 
-    use crate::{
-        Committed, DeletedNodeTracking, EthHash, HashMode, LeafNode, MemStore, MerkleDbHash, Node,
-        NodeStore, Path,
-    };
-
     use super::*;
+    use crate::Committed;
+    use crate::DeletedNodeTracking;
+    use crate::EthHash;
+    use crate::HashMode;
+    use crate::LeafNode;
+    use crate::MemStore;
+    use crate::MerkleDbHash;
+    use crate::Node;
+    use crate::NodeStore;
+    use crate::Path;
 
     #[hash_mode]
     #[test]

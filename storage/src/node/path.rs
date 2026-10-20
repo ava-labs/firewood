@@ -10,12 +10,17 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use smallvec::SmallVec;
-use std::fmt::{self, Debug, LowerHex};
-use std::iter::{FusedIterator, once};
+use std::fmt;
+use std::fmt::Debug;
+use std::fmt::LowerHex;
+use std::iter::FusedIterator;
+use std::iter::once;
 use std::ops::Add;
 
-use crate::{PathComponent, TriePathFromUnpackedBytes};
+use smallvec::SmallVec;
+
+use crate::PathComponent;
+use crate::TriePathFromUnpackedBytes;
 
 static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
@@ -269,9 +274,11 @@ impl DoubleEndedIterator for NibblesIterator<'_> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use std::fmt::Debug;
+
     use test_case::test_case;
+
+    use super::*;
 
     static TEST_BYTES: [u8; 4] = [0xde, 0xad, 0xbe, 0xef];
 

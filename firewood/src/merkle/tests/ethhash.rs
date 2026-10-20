@@ -1,16 +1,22 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::api::OptionalHashKeyExt;
-use crate::merkle::Merkle;
-use firewood_storage::{Committed, DeletedNodeTracking, MemStore, NodeStore};
-
-use super::*;
 use ethereum_types::H256;
+use firewood_storage::Committed;
+use firewood_storage::DefaultHashMode;
+use firewood_storage::DeletedNodeTracking;
+use firewood_storage::EthHash;
+use firewood_storage::HashMode;
+use firewood_storage::MemStore;
+use firewood_storage::NodeStore;
 use hash_db::Hasher;
 use plain_hasher::PlainHasher;
-use sha3::{Digest, Keccak256};
+use sha3::Digest;
+use sha3::Keccak256;
 use test_case::test_case;
+
+use super::*;
+use crate::merkle::Merkle;
 
 fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     first_key: Option<impl KeyType>,
@@ -161,7 +167,8 @@ fn test_root_hash_random_deletions() {
         items_ordered.sort_unstable();
         items_ordered.shuffle(&mut &rng);
 
-        let (mut committed_merkle, mut header) = init_merkle_with_header(&items);
+        let (mut committed_merkle, mut header) =
+            init_merkle_with_header_in::<EthHash, _, _, _>(&items);
 
         for (k, v) in items_ordered {
             let mut merkle = committed_merkle.fork().unwrap();
@@ -185,7 +192,7 @@ fn test_root_hash_random_deletions() {
             let h0 = committed_merkle
                 .nodestore()
                 .root_hash()
-                .or_default_root_hash()
+                .or_else(EthHash::default_root_hash)
                 .unwrap();
 
             assert_eq!(h, h0);
@@ -568,8 +575,10 @@ fn clobber_value_in_memstore(
     value_bytes: &[u8],
     replacement: &[u8],
 ) -> usize {
-    use firewood_storage::{ReadableStorage, WritableStorage};
     use std::io::Read;
+
+    use firewood_storage::ReadableStorage;
+    use firewood_storage::WritableStorage;
     assert_eq!(value_bytes.len(), replacement.len());
 
     let mut buf = Vec::new();
@@ -618,8 +627,9 @@ fn zero_storage_root_in_rlp(value: &[u8], replacement: &[u8; 32]) -> Vec<u8> {
 /// correct storageRoot from the node's children.
 #[test]
 fn test_range_proof_fixes_legacy_zeroed_storage_root() {
-    use crate::RangeProof;
     use firewood_storage::WritableStorage;
+
+    use crate::RangeProof;
     type BoxedAccounts = Box<[(Box<[u8]>, Box<[u8]>)]>;
 
     let dummy_storage_root = [0u8; 32];
@@ -652,7 +662,7 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
         .map(|(k, v)| (k.clone(), v.clone()))
         .chain(once((storage_key, storage_value)))
         .collect();
-    let (merkle, _header) = init_merkle_with_header(items);
+    let (merkle, _header) = init_merkle_with_header_in::<EthHash, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     // ── Phase 1: generate a correct range proof to learn the real storageRoot values ──
@@ -669,7 +679,12 @@ fn test_range_proof_fixes_legacy_zeroed_storage_root() {
         })
         .collect();
 
-    let range_proof = RangeProof::new(start_proof, end_proof, key_values);
+    let range_proof = RangeProof::new(
+        start_proof,
+        end_proof,
+        key_values,
+        DefaultHashMode::ALGORITHM,
+    );
     verify_range_proof(
         Some(left_key.as_ref()),
         Some(right_key.as_ref()),
