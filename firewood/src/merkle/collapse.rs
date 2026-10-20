@@ -3,15 +3,21 @@
 
 use std::cmp::Ordering;
 
+use firewood_storage::Child;
+use firewood_storage::HashMode;
+use firewood_storage::Mutable;
+use firewood_storage::Node;
+use firewood_storage::NodeStore;
+use firewood_storage::Path;
+use firewood_storage::PathComponent;
+use firewood_storage::Propose;
+use firewood_storage::ReadableStorage;
 use firewood_storage::ensure_stack;
-use firewood_storage::{
-    Child, HashMode, Mutable, Node, NodeStore, Path, PathComponent, Propose, ReadableStorage,
-};
 
-use crate::{
-    ProofError, api,
-    merkle::{Merkle, get_helper},
-};
+use crate::ProofError;
+use crate::api;
+use crate::merkle::Merkle;
+use crate::merkle::get_helper;
 
 /// The proven range, in nibbles.
 ///
@@ -219,15 +225,15 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
     ///
     /// Must be called after `reconcile_branch_proof_node` to ensure that
     /// each proof node exists as a branch in the proving trie.
-    ///                                                                                                                                                                                                                                           
-    /// # Parameters                                                                                                                                                                                                                              
-    /// - `node`: Current node in the proving trie being traversed.                                                                                                                                                                               
+    ///
+    /// # Parameters
+    /// - `node`: Current node in the proving trie being traversed.
     /// - `key`: Remaining path to the parent proof node, shortened at each
-    ///   recursive level as partial paths and child nibbles are consumed.                                                                                                                                                                        
+    ///   recursive level as partial paths and child nibbles are consumed.
     /// - `suffix`: Path from the parent proof node to the child proof node,
-    ///   passed through unchanged to `collapse_descend`.                                                                                                                                                                                         
+    ///   passed through unchanged to `collapse_descend`.
     /// - `parent_prefix`: Nibble path from root to the parent proof node,
-    ///   used by `collapse_strip` for in-range child detection.                                                                                                                                                                                  
+    ///   used by `collapse_strip` for in-range child detection.
     /// - `range`: Optional proven range boundaries for detecting tampered
     ///   `batch_ops`.
     fn collapse_navigate(
@@ -509,7 +515,9 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
 
 #[cfg(test)]
 mod tests {
-    use firewood_storage::{DefaultHashMode, DeletedNodeTracking, MemStore};
+    use firewood_storage::DefaultHashMode;
+    use firewood_storage::DeletedNodeTracking;
+    use firewood_storage::MemStore;
 
     use super::*;
 

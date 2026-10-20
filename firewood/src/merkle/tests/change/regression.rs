@@ -38,8 +38,12 @@
 //! - `test_key_empty_range_verifies`: the range contains no keys in either
 //!   revision, so the start proof's exclusion terminal sorts past the end bound.
 
+use firewood_storage::DefaultHashMode;
+use firewood_storage::HashMode;
+
 use super::*;
-use crate::{ChangeProof, Proof};
+use crate::ChangeProof;
+use crate::Proof;
 
 /// `batch_ops` as they come off a generated proof.
 type OwnedOps = Box<[BatchOp<Box<[u8]>, Box<[u8]>>]>;
@@ -75,6 +79,7 @@ fn replace_ops(proof: &FrozenChangeProof, batch_ops: OwnedOps) -> FrozenChangePr
         Proof::new(proof.start_proof().as_ref().into()),
         Proof::new(proof.end_proof().as_ref().into()),
         batch_ops,
+        DefaultHashMode::ALGORITHM,
     )
 }
 
@@ -309,6 +314,7 @@ fn test_unbounded_end_omitted_in_range_delete_is_rejected() {
         Proof::new(proof.start_proof().as_ref().into()),
         Proof::new(Vec::new().into_boxed_slice()),
         Vec::new().into_boxed_slice(),
+        DefaultHashMode::ALGORITHM,
     );
     assert!(
         matches!(

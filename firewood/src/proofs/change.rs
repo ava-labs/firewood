@@ -1,16 +1,19 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::{fmt::Debug, num::NonZeroUsize};
+use std::fmt::Debug;
+use std::num::NonZeroUsize;
 
-use firewood_storage::{DefaultHashMode, HashMode, NodeHashAlgorithm};
+use firewood_storage::NodeHashAlgorithm;
 
-use crate::{
-    Proof, ProofCollection, ProofError,
-    api::{self, FrozenChangeProof, HashKey},
-    db::BatchOp,
-    proofs::ProofEdge,
-};
+use crate::Proof;
+use crate::ProofCollection;
+use crate::ProofError;
+use crate::api;
+use crate::api::FrozenChangeProof;
+use crate::api::HashKey;
+use crate::db::BatchOp;
+use crate::proofs::ProofEdge;
 
 /// A change proof can demonstrate that by applying the provided array of `BatchOp`s to a Merkle
 /// trie with given start root hash, the resulting trie will have the given end root hash. It
@@ -23,10 +26,9 @@ pub struct ChangeProof<K: AsRef<[u8]> + Debug, V: AsRef<[u8]> + Debug, H> {
     start_proof: Proof<H>,
     end_proof: Proof<H>,
     batch_ops: Box<[BatchOp<K, V>]>,
-    /// The hash algorithm this proof was constructed or parsed with. For proofs
-    /// built in this binary it is the compile default; for proofs parsed via
+    /// The hash algorithm used to construct this proof or parsed from its header.
     /// [`FrozenChangeProof::from_slice`](crate::api::FrozenChangeProof::from_slice)
-    /// it is resolved from the self-describing header byte.
+    /// resolves it from the self-describing header byte.
     hash_mode: NodeHashAlgorithm,
 }
 
@@ -53,30 +55,11 @@ where
     V: AsRef<[u8]> + Debug,
     H: ProofCollection,
 {
-    /// Create a new change proof with the given start and end proofs
-    /// and the `BatchOp`s that are included in the proof.
+    /// Create a change proof with the given proofs, operations, and hash algorithm.
+    ///
+    /// `hash_mode` is recorded in the serialized proof header.
     #[must_use]
     pub const fn new(
-        start_proof: Proof<H>,
-        end_proof: Proof<H>,
-        key_values: Box<[BatchOp<K, V>]>,
-    ) -> Self {
-        // Proofs built in this binary carry the compile-default mode; the parse
-        // path stamps the resolved header mode via `new_with_hash_mode`.
-        Self::with_hash_mode(
-            start_proof,
-            end_proof,
-            key_values,
-            DefaultHashMode::ALGORITHM,
-        )
-    }
-
-    /// Like [`ChangeProof::new`], but records the [`NodeHashAlgorithm`] the proof
-    /// was encoded with. Used by the parse path
-    /// ([`FrozenChangeProof::from_slice`](crate::api::FrozenChangeProof::from_slice))
-    /// to stamp the mode resolved from the self-describing header byte.
-    #[must_use]
-    pub(crate) const fn with_hash_mode(
         start_proof: Proof<H>,
         end_proof: Proof<H>,
         key_values: Box<[BatchOp<K, V>]>,
@@ -607,8 +590,12 @@ pub fn verify_change_proof_structure(
 
 #[cfg(test)]
 mod tests {
+    use firewood_storage::DefaultHashMode;
+    use firewood_storage::HashMode;
+
     use super::*;
-    use crate::merkle::{Key, Value};
+    use crate::merkle::Key;
+    use crate::merkle::Value;
 
     #[test]
     fn test_change_proof_iterator() {
@@ -630,7 +617,12 @@ mod tests {
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
 
-        let change_proof = ChangeProof::new(start_proof, end_proof, key_values);
+        let change_proof = ChangeProof::new(
+            start_proof,
+            end_proof,
+            key_values,
+            DefaultHashMode::ALGORITHM,
+        );
 
         let mut iter = change_proof.iter();
         assert_eq!(iter.len(), 3);
@@ -668,7 +660,12 @@ mod tests {
 
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
-        let change_proof = ChangeProof::new(start_proof, end_proof, key_values);
+        let change_proof = ChangeProof::new(
+            start_proof,
+            end_proof,
+            key_values,
+            DefaultHashMode::ALGORITHM,
+        );
 
         let mut items = Vec::new();
         for item in &change_proof {
@@ -689,7 +686,12 @@ mod tests {
         let key_values: Box<[BatchOp<Key, Value>]> = Box::new([]);
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
-        let change_proof = ChangeProof::new(start_proof, end_proof, key_values);
+        let change_proof = ChangeProof::new(
+            start_proof,
+            end_proof,
+            key_values,
+            DefaultHashMode::ALGORITHM,
+        );
 
         let mut iter = change_proof.iter();
         assert_eq!(iter.len(), 0);

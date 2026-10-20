@@ -6,12 +6,16 @@
     reason = "integration test binary; unwrap failures surface as test failures"
 )]
 
-use firewood_macros::hash_mode;
-use firewood_storage::{EthHash, HashMode, MerkleDbHash, NodeHashAlgorithm};
-use predicates::prelude::*;
 use std::fmt::Write;
 use std::fs;
 use std::path::Path;
+
+use firewood_macros::hash_mode;
+use firewood_storage::EthHash;
+use firewood_storage::HashMode;
+use firewood_storage::MerkleDbHash;
+use firewood_storage::NodeHashAlgorithm;
+use predicates::prelude::*;
 
 const PRG: &str = "fwdctl";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -662,7 +666,8 @@ fn fwdctl_check_empty_db<H: HashMode>() {
 #[hash_mode]
 #[test]
 fn test_slow_fwdctl_check_db_with_data<H: HashMode>() {
-    use rand::{RngExt, distr::Alphanumeric};
+    use rand::RngExt;
+    use rand::distr::Alphanumeric;
 
     with_tmpdir(|db_path| {
         let rng = firewood_storage::SeededRng::from_env_or_random();
@@ -825,7 +830,7 @@ fn test_slow_fwdctl_import_csv_malformed<H: HashMode>() {
 #[test]
 fn test_slow_fwdctl_import_large_random_database<H: HashMode>() {
     with_tmpdir(|tmp_dir| {
-        //Generate a large random database dump
+        // Generate a large random database dump
         let dump_file1 = tmp_dir.join("bulk1.csv");
         let mut csv_content = String::with_capacity(100_000 * 25);
         for i in 0..100_000 {
@@ -888,7 +893,7 @@ fn test_slow_fwdctl_import_large_random_database<H: HashMode>() {
             .assert()
             .success();
 
-        //Compare the two exported databases to ensure exact match!
+        // Compare the two exported databases to ensure exact match!
         let contents1 = fs::read_to_string(&dump_file2).expect("Should read dump file 2");
         let contents2 = fs::read_to_string(&dump_file3).expect("Should read dump file 3");
         assert_eq!(contents1, contents2, "The exported databases do not match!");

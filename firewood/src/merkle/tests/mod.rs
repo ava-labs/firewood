@@ -18,15 +18,27 @@ mod triehash;
 use std::collections::HashMap;
 use std::fmt::Write;
 
+use firewood_storage::Committed;
+use firewood_storage::DefaultHashMode;
+use firewood_storage::DeletedNodeTracking;
+use firewood_storage::DenseChildren;
+use firewood_storage::HashMode;
+use firewood_storage::MemStore;
+use firewood_storage::Mutable;
+use firewood_storage::NodeStore;
+use firewood_storage::NodeStoreHeader;
+use firewood_storage::PathComponent;
+use firewood_storage::Propose;
+use firewood_storage::RootReader;
+use firewood_storage::TrieHash;
+use firewood_storage::ValueDigest;
+use test_case::test_case;
+
 use super::*;
+use crate::ProofError;
+use crate::ProofNode;
 use crate::api::Error;
 use crate::api::MAX_KEY_BYTES;
-use crate::{ProofError, ProofNode};
-use firewood_storage::{
-    Committed, DefaultHashMode, DeletedNodeTracking, DenseChildren, HashMode, MemStore, Mutable,
-    NodeStore, NodeStoreHeader, PathComponent, Propose, RootReader, TrieHash, ValueDigest,
-};
-use test_case::test_case;
 
 /// Test wrapper around [`crate::merkle::verify_range_proof`] that supplies the
 /// compile-default hash mode as the expected `algorithm` (the mode every proof
@@ -101,15 +113,17 @@ fn generate_random_kvs(rng: &firewood_storage::SeededRng, n: usize) -> Vec<(Vec<
     kvs
 }
 
-fn into_committed(
-    merkle: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>>,
+fn into_committed<H: HashMode>(
+    merkle: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, H>>,
     header: &mut NodeStoreHeader,
-) -> Merkle<NodeStore<Committed, MemStore, DefaultHashMode>> {
+) -> Merkle<NodeStore<Committed, MemStore, H>> {
     let ns = merkle.into_inner().as_committed();
     ns.persist(header).unwrap();
     ns.into()
 }
 
+/// Calls [`init_merkle_in`] under the compile-default hash mode, for tests
+/// that are not generic over the mode.
 pub(crate) fn init_merkle<I, K, V>(
     iter: I,
 ) -> Merkle<NodeStore<Committed, MemStore, DefaultHashMode>>
@@ -118,23 +132,42 @@ where
     K: AsRef<[u8]>,
     V: AsRef<[u8]>,
 {
-    let (merkle, _header) = init_merkle_with_header(iter);
+    init_merkle_in::<DefaultHashMode, _, _, _>(iter)
+}
+
+/// Builds a committed in-memory trie holding `iter` under hash mode `H`.
+///
+/// Pair with `#[hash_mode]` to generate both mode-specific tests from one
+/// generic definition.
+pub(crate) fn init_merkle_in<H, I, K, V>(iter: I) -> Merkle<NodeStore<Committed, MemStore, H>>
+where
+    H: HashMode,
+    I: Clone + IntoIterator<Item = (K, V)>,
+    K: AsRef<[u8]>,
+    V: AsRef<[u8]>,
+{
+    let (merkle, _header) = init_merkle_with_header_in::<H, _, _, _>(iter);
     merkle
 }
 
-pub(crate) fn init_merkle_with_header<I, K, V>(
+/// Builds the same trie as [`init_merkle_in`] and also returns the header
+/// the store was persisted with, for tests that inspect or rewrite it.
+///
+/// Every inserted key is read back after commit. Under the Ethereum mode an
+/// account key (32 bytes) is checked for presence only: when its value is
+/// well-formed account RLP, hashing rewrites the `storageRoot` field, so the
+/// stored value may differ from the inserted one.
+pub(crate) fn init_merkle_with_header_in<H, I, K, V>(
     iter: I,
-) -> (
-    Merkle<NodeStore<Committed, MemStore, DefaultHashMode>>,
-    NodeStoreHeader,
-)
+) -> (Merkle<NodeStore<Committed, MemStore, H>>, NodeStoreHeader)
 where
+    H: HashMode,
     I: Clone + IntoIterator<Item = (K, V)>,
     K: AsRef<[u8]>,
     V: AsRef<[u8]>,
 {
     let memstore = Arc::new(MemStore::new(Vec::with_capacity(64 * 1024)));
-    let mut header = NodeStoreHeader::new(DefaultHashMode::ALGORITHM);
+    let mut header = NodeStoreHeader::new(H::ALGORITHM);
     let base = Merkle::from(NodeStore::new_empty_committed(
         memstore.clone(),
         DeletedNodeTracking::Enabled,
@@ -157,10 +190,7 @@ where
         let value = v.as_ref();
 
         let stored = merkle.get_value(key).unwrap();
-        // In ethhash mode, account keys (32 bytes) have their storageRoot field
-        // updated during hashing, so the stored value will differ from the original.
-        #[cfg(feature = "ethhash")]
-        if key.len() == 32 {
+        if H::ALGORITHM.is_ethereum() && key.len() == 32 {
             assert!(
                 stored.is_some(),
                 "Failed to get account key after committing: {key:?}"

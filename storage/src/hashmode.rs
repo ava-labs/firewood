@@ -3,15 +3,22 @@
 
 //! Runtime-selectable node-hashing scheme.
 //!
-//! [`HashMode`] is the trait that will eventually carry every behavior that
-//! differs between the MerkleDB (SHA-256) and Ethereum (Keccak-256) hashing
-//! schemes, implemented by the two zero-sized types [`MerkleDbHash`] and
-//! [`EthHash`].
+//! [`HashMode`] is the trait that carries every behavior that differs between
+//! the MerkleDB (SHA-256) and Ethereum (Keccak-256) hashing schemes, implemented
+//! by the two zero-sized types [`MerkleDbHash`] and [`EthHash`]. Threading it as
+//! a type parameter is how issue #1088 makes the scheme a per-database runtime
+//! choice instead of a compile-time feature.
 
-use crate::hashednode::{HasUpdate, Hashable};
+use std::io::Error;
+use std::io::Read;
+
+use crate::HashType;
+use crate::NodeHashAlgorithm;
+use crate::Path;
+use crate::TrieHash;
+use crate::hashednode::HasUpdate;
+use crate::hashednode::Hashable;
 use crate::node::ExtendableBytes;
-use crate::{HashType, NodeHashAlgorithm, Path, TrieHash};
-use std::io::{Error, Read};
 
 /// The node-hashing scheme, implemented by [`MerkleDbHash`] and [`EthHash`].
 ///
@@ -172,7 +179,10 @@ mod tests {
 
     #[test]
     fn cross_mode_leaf_preimage_differs_per_scheme() {
-        use crate::{Children, HashableShunt, Path, ValueDigest};
+        use crate::Children;
+        use crate::HashableShunt;
+        use crate::Path;
+        use crate::ValueDigest;
 
         // A single leaf with a short partial path and value. No children, so
         // the hash does not depend on any mode-specific child-hash encoding;

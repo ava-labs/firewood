@@ -1,19 +1,29 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use criterion::profiler::Profiler;
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use firewood::api::{self, DbView as _, Reconstructible as _};
-use firewood::db::{BatchOp, DbConfig, UseParallel};
-use firewood::open;
-use firewood_storage::{DefaultHashMode, HashMode};
-use pprof::ProfilerGuard;
-use rand::{RngExt, distr::Alphanumeric};
 use std::fs::File;
 use std::hint::black_box;
 use std::iter::repeat_with;
 use std::os::raw::c_int;
 use std::path::Path;
+
+use criterion::BatchSize;
+use criterion::Criterion;
+use criterion::criterion_group;
+use criterion::criterion_main;
+use criterion::profiler::Profiler;
+use firewood::api;
+use firewood::api::DbView as _;
+use firewood::api::Reconstructible as _;
+use firewood::db::BatchOp;
+use firewood::db::DbConfig;
+use firewood::db::UseParallel;
+use firewood::open;
+use firewood_storage::DefaultHashMode;
+use firewood_storage::HashMode;
+use pprof::ProfilerGuard;
+use rand::RngExt;
+use rand::distr::Alphanumeric;
 use tempfile::TempDir;
 
 const INITIAL_ITEMS: usize = 100;
@@ -104,11 +114,8 @@ fn bench_proposal_chain(criterion: &mut Criterion) {
                 |(initial, batches)| {
                     let db_dir = TempDir::new().unwrap();
                     let db_path = db_dir.path().join("benchmark_db");
-                    let cfg = DbConfig::builder()
-                        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
-                        .truncate(true)
-                        .build();
-                    let db = open(db_path, cfg).unwrap();
+                    let cfg = DbConfig::builder().truncate(true).build();
+                    let db = open(db_path, DefaultHashMode::ALGORITHM, cfg).unwrap();
 
                     db.propose(initial).unwrap().commit().unwrap();
 
@@ -144,11 +151,10 @@ fn bench_reconstructed_chain(criterion: &mut Criterion) {
                     // extra threads muddying up any flamegraphs when creating the
                     // initial proposal
                     let cfg = DbConfig::builder()
-                        .node_hash_algorithm(DefaultHashMode::ALGORITHM)
                         .truncate(true)
                         .use_parallel(UseParallel::Never)
                         .build();
-                    let db = open(db_path, cfg).unwrap();
+                    let db = open(db_path, DefaultHashMode::ALGORITHM, cfg).unwrap();
 
                     db.propose(initial).unwrap().commit().unwrap();
 

@@ -40,7 +40,6 @@ typedef struct CodeIteratorHandle CodeIteratorHandle;
  * A handle to the database, returned by `fwd_open_db`.
  *
  * These handles are passed to the other FFI functions.
- *
  */
 typedef struct DatabaseHandle DatabaseHandle;
 
@@ -418,18 +417,19 @@ typedef struct Maybe_OwnedBytes {
 } Maybe_OwnedBytes;
 
 /**
- * A key range that should be fetched to continue iterating through a range
- * or change proof that was truncated. Represents a half-open range
- * `[start_key, end_key)`. If `end_key` is `None`, the range is unbounded
- * and continues to the end of the keyspace.
+ * A key range still to fetch after a truncated range or change proof,
+ * `[start_key, end_key]`, both inclusive: `start_key` is the smallest key
+ * above the last one already synchronized, so passing it as the next
+ * request's start bound resumes without covering that key again. An absent
+ * `end_key` means the range is unbounded above.
  */
 typedef struct NextKeyRange {
   /**
-   * The start key of the next range to fetch.
+   * The inclusive start key of the next range to fetch.
    */
   OwnedBytes start_key;
   /**
-   * If set, a non-inclusive upper bound for the next range to fetch. If not
+   * If set, the inclusive upper bound of the next range to fetch. If not
    * set, the range is unbounded (this is the final range).
    */
   struct Maybe_OwnedBytes end_key;
@@ -2314,7 +2314,6 @@ struct VoidResult fwd_free_eth_proof(struct EthProofOwned *proof);
  *
  * The caller must ensure that the `iterator` is not null and that it points to
  * a valid [`IteratorHandle`] previously returned by a function from this library.
- *
  */
 struct VoidResult fwd_free_iterator(struct IteratorHandle *iterator);
 
@@ -2662,7 +2661,6 @@ struct RevisionResult fwd_get_revision(const struct DatabaseHandle *db, struct H
  * * ensure that `handle` is a valid pointer to a [`IteratorHandle`].
  * * call [`fwd_free_owned_kv_pair`] on returned [`OwnedKeyValuePair`]
  *   to free the memory associated with the returned value.
- *
  */
 struct KeyValueResult fwd_iter_next(struct IteratorHandle *handle);
 
@@ -2692,7 +2690,6 @@ struct KeyValueResult fwd_iter_next(struct IteratorHandle *handle);
  * The caller must:
  * * ensure that `handle` is a valid pointer to a [`IteratorHandle`].
  * * call [`fwd_free_owned_key_value_batch`] on the returned batch to free any allocated memory.
- *
  */
 struct KeyValueBatchResult fwd_iter_next_n(struct IteratorHandle *handle, size_t n);
 
@@ -2717,7 +2714,6 @@ struct KeyValueBatchResult fwd_iter_next_n(struct IteratorHandle *handle, size_t
  * * ensure that `handle` is a valid pointer to a [`ProposalHandle`]
  * * ensure that `key` is a valid for [`BorrowedBytes`]
  * * call [`fwd_free_iterator`] to free the memory associated with the iterator.
- *
  */
 struct IteratorResult fwd_iter_on_proposal(const struct ProposalHandle *handle, BorrowedBytes key);
 
@@ -2766,7 +2762,6 @@ struct IteratorResult fwd_iter_on_reconstructed(const struct ReconstructedHandle
  * * ensure that `revision` is a valid pointer to a [`RevisionHandle`]
  * * ensure that `key` is a valid [`BorrowedBytes`]
  * * call [`fwd_free_iterator`] to free the memory associated with the iterator.
- *
  */
 struct IteratorResult fwd_iter_on_revision(const struct RevisionHandle *revision,
                                            BorrowedBytes key);

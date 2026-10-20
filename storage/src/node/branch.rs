@@ -6,14 +6,22 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
+use std::fmt::Debug;
+use std::fmt::Formatter;
+use std::io::Read;
+
+use crate::FileIoError;
+use crate::HashType;
+use crate::LeafNode;
+use crate::LinearAddress;
+use crate::MaybePersistedNode;
+use crate::Node;
+use crate::NodeReader;
+use crate::Path;
+use crate::PathComponent;
+use crate::SharedNode;
 use crate::node::ExtendableBytes;
 use crate::node::children::Children;
-use crate::{
-    FileIoError, HashType, LeafNode, LinearAddress, MaybePersistedNode, Node, NodeReader, Path,
-    PathComponent, SharedNode,
-};
-use std::fmt::{Debug, Formatter};
-use std::io::Read;
 
 pub(crate) trait Serializable {
     fn write_to<W: ExtendableBytes>(&self, vec: &mut W);
@@ -214,7 +222,7 @@ impl Debug for BranchNode {
         for (i, c) in &self.children {
             match c {
                 None => {}
-                Some(Child::Node(_)) => {} //TODO(rkuris)
+                Some(Child::Node(_)) => {} // TODO(rkuris)
                 Some(Child::AddressWithHash(addr, hash)) => {
                     write!(f, "({i:?}: address={addr:?} hash={hash})")?;
                 }

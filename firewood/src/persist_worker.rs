@@ -37,27 +37,35 @@
 //!
 //! See [`PersistWorker`] for a sequence diagram illustrating this flow.
 
-use std::{
-    num::NonZeroU64,
-    panic::resume_unwind,
-    sync::{Arc, OnceLock},
-    thread::{self, JoinHandle},
-};
+use std::num::NonZeroU64;
+use std::panic::resume_unwind;
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::thread;
+use std::thread::JoinHandle;
 
-use firewood_metrics::{
-    GaugeExt, current_metrics_context, firewood_counter, firewood_gauge, firewood_histogram,
-    set_metrics_context,
-};
-use firewood_storage::{
-    Committed, FileBacked, FileIoError, HashMode, HashedNodeReader, LinearAddress, NodeStore,
-    NodeStoreHeader, TrieHash,
-};
-use parking_lot::{Condvar, Mutex, MutexGuard};
+use firewood_metrics::GaugeExt;
+use firewood_metrics::current_metrics_context;
+use firewood_metrics::firewood_counter;
+use firewood_metrics::firewood_gauge;
+use firewood_metrics::firewood_histogram;
+use firewood_metrics::set_metrics_context;
+use firewood_storage::Committed;
+use firewood_storage::FileBacked;
+use firewood_storage::FileIoError;
+use firewood_storage::HashMode;
+use firewood_storage::HashedNodeReader;
+use firewood_storage::LinearAddress;
+use firewood_storage::NodeStore;
+use firewood_storage::NodeStoreHeader;
+use firewood_storage::RootStore;
+use firewood_storage::TrieHash;
+use firewood_storage::logger::error;
+use parking_lot::Condvar;
+use parking_lot::Mutex;
+use parking_lot::MutexGuard;
 
 use crate::manager::CommittedRevision;
-use firewood_storage::RootStore;
-
-use firewood_storage::logger::error;
 
 /// Error type for persistence operations.
 #[derive(Clone, Debug, thiserror::Error)]
@@ -75,7 +83,6 @@ pub enum PersistError {
 /// # Sequence diagram
 ///
 /// Below is an example when `max_persistence_gap` is set to 10:
-///
 #[cfg_attr(doc, aquamarine::aquamarine)]
 /// ```mermaid
 /// sequenceDiagram
@@ -421,8 +428,9 @@ impl<H> PersistChannel<H> {
     #[cfg(test)]
     #[expect(clippy::arithmetic_side_effects)]
     fn wait_all_released(&self) {
-        use firewood_storage::logger::warn;
         use std::time::Duration;
+
+        use firewood_storage::logger::warn;
 
         const WARN_INTERVAL: Duration = Duration::from_mins(1);
 

@@ -1,7 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use clap::{Args, ValueEnum, value_parser};
+use clap::Args;
+use clap::ValueEnum;
+use clap::value_parser;
 use firewood::api;
 use firewood::db::DbConfig;
 use firewood::open;
@@ -76,17 +78,18 @@ pub struct Options {
 }
 
 pub(super) fn new(opts: &Options) -> DbConfig {
-    DbConfig::builder()
-        .node_hash_algorithm(opts.node_hash_algorithm.into())
-        .truncate(opts.truncate)
-        .build()
+    DbConfig::builder().truncate(opts.truncate).build()
 }
 
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     let db_config = new(opts);
     log::debug!("database configuration parameters: \n{db_config:?}\n");
 
-    let db = open(opts.database.dbpath.clone(), db_config)?;
+    let db = open(
+        opts.database.dbpath.clone(),
+        opts.node_hash_algorithm.into(),
+        db_config,
+    )?;
     println!(
         "created firewood database in {}",
         opts.database.dbpath.display()

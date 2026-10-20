@@ -2,8 +2,16 @@
 // See the file LICENSE.md for licensing terms.
 
 use proc_macro2::TokenStream;
-use quote::{ToTokens, format_ident, quote};
-use syn::{Attribute, FnArg, GenericParam, ItemFn, Meta, Pat, TypeParamBound};
+use quote::ToTokens;
+use quote::format_ident;
+use quote::quote;
+use syn::Attribute;
+use syn::FnArg;
+use syn::GenericParam;
+use syn::ItemFn;
+use syn::Meta;
+use syn::Pat;
+use syn::TypeParamBound;
 
 /// Retains the generic test body and emits a test wrapper for each hash mode.
 pub(crate) fn expand(args: TokenStream, mut function: ItemFn) -> syn::Result<TokenStream> {

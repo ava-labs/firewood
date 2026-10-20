@@ -3,16 +3,26 @@
 
 use std::num::NonZeroUsize;
 
-use firewood::{
-    KeyRange, ProofError, RangeProofVerificationContext,
-    api::{self, DbView, FrozenRangeProof, HashKey},
-};
-use firewood_metrics::{MetricsContext, firewood_counter};
+use firewood::KeyRange;
+use firewood::ProofError;
+use firewood::RangeProofVerificationContext;
+use firewood::api;
+use firewood::api::DbView;
+use firewood::api::FrozenRangeProof;
+use firewood::api::HashKey;
+use firewood_metrics::MetricsContext;
+use firewood_metrics::firewood_counter;
 
-use crate::{
-    BorrowedBytes, CodeIteratorHandle, CodeIteratorResult, DatabaseHandle, HashResult, Maybe,
-    NextKeyRangeResult, RangeProofResult, ValueResult, VoidResult,
-};
+use crate::BorrowedBytes;
+use crate::CodeIteratorHandle;
+use crate::CodeIteratorResult;
+use crate::DatabaseHandle;
+use crate::HashResult;
+use crate::Maybe;
+use crate::NextKeyRangeResult;
+use crate::RangeProofResult;
+use crate::ValueResult;
+use crate::VoidResult;
 
 /// Arguments for creating a range proof.
 #[derive(Debug)]
@@ -253,17 +263,14 @@ impl<'db> RangeProofContext<'db> {
     /// Returns the next key range that should be fetched after processing this
     /// range proof, or [`None`] if there are no more keys to fetch.
     ///
-    /// The returned key range represents `(finalKey, endKey]` where `finalKey`
-    /// is the last key known to be fully synchronized within the requested
-    /// range. `finalKey` is exclusive, meaning it has already been processed.
-    /// `endKey` is inclusive if provided when verifying the proof, i.e. the
-    /// `end_key` of [`VerifyRangeProofArgs`], which need not match the
-    /// `end_key` the proof was created with.
+    /// The returned key range is `[start_key, end_key]`: `start_key` is the
+    /// smallest key above the last one known to be synchronized, and `end_key`
+    /// is the inclusive bound the proof was verified with, i.e. the `end_key`
+    /// of [`VerifyRangeProofArgs`], which need not match the `end_key` the
+    /// proof was created with.
     ///
-    /// The proof carries hash information about the state outside the range of
-    /// key-value pairs it includes, so `finalKey` could in principle be
-    /// tightened beyond the last key in those pairs. That is not yet
-    /// implemented (tracked in #352); today `finalKey` is simply that last key.
+    /// The proof carries hashes for the state outside its key-value pairs, so
+    /// `start_key` could be tightened beyond the last key; #352 tracks that.
     fn find_next_key(&mut self) -> Result<Option<KeyRange>, api::Error> {
         let verification = self
             .verification

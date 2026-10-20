@@ -1,20 +1,29 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::num::{NonZeroU64, NonZeroUsize};
+use std::num::NonZeroU64;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use firewood::{
-    api::{self, ArcDynDbView, DynDb, FrozenChangeProof, HashKey, IntoBatchIter, KeyType},
-    db::{CommittedView, DbConfig},
-    manager::RevisionManagerConfig,
-    open,
-};
-
-use crate::{BatchOp, BorrowedBytes, CView, CreateProposalResult};
-
-use crate::revision::{GetRevisionResult, RevisionHandle};
+use firewood::api;
+use firewood::api::ArcDynDbView;
+use firewood::api::DynDb;
+use firewood::api::FrozenChangeProof;
+use firewood::api::HashKey;
+use firewood::api::IntoBatchIter;
+use firewood::api::KeyType;
+use firewood::db::CommittedView;
+use firewood::db::DbConfig;
+use firewood::manager::RevisionManagerConfig;
+use firewood::open;
 use firewood_metrics::MetricsContext;
+
+use crate::BatchOp;
+use crate::BorrowedBytes;
+use crate::CView;
+use crate::CreateProposalResult;
+use crate::revision::GetRevisionResult;
+use crate::revision::RevisionHandle;
 
 /// The hashing mode to use for the database.
 ///
@@ -155,7 +164,6 @@ impl DatabaseHandleArgs<'_> {
 /// A handle to the database, returned by `fwd_open_db`.
 ///
 /// These handles are passed to the other FFI functions.
-///
 #[derive(Debug)]
 pub struct DatabaseHandle {
     /// The database, erased to the runtime-selected hash mode.
@@ -174,7 +182,6 @@ impl DatabaseHandle {
         let metrics_context = MetricsContext::new(args.expensive_metrics).with_db_tag(db_tag);
 
         let cfg = DbConfig::builder()
-            .node_hash_algorithm(args.node_hash_algorithm.into())
             .truncate(args.truncate)
             .manager(args.as_rev_manager_config()?)
             .root_store(args.root_store)
@@ -191,7 +198,7 @@ impl DatabaseHandle {
 
         // Select the concrete `Db<H>` at runtime from the configured algorithm,
         // validated against the on-disk header, and hold it erased.
-        let db = open(path, cfg)?;
+        let db = open(path, args.node_hash_algorithm.into(), cfg)?;
         Ok(Self {
             db,
             metrics_context,

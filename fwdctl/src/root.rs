@@ -2,7 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 use clap::Args;
-
 use firewood::api;
 use firewood::db::DbConfig;
 use firewood::open;
@@ -17,12 +16,9 @@ pub struct Options {
 
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     let algorithm = opts.database.node_hash_algorithm()?;
-    let cfg = DbConfig::builder()
-        .node_hash_algorithm(algorithm)
-        .create_if_missing(false)
-        .truncate(false);
+    let cfg = DbConfig::builder().create_if_missing(false).truncate(false);
 
-    let db = open(opts.database.dbpath.clone(), cfg.build())?;
+    let db = open(opts.database.dbpath.clone(), algorithm, cfg.build())?;
 
     let hash = db.root_hash();
 

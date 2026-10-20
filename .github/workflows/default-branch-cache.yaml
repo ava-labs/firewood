@@ -9,6 +9,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Build on stable, not the nightly rust-toolchain.toml pin; see AGENTS.md,
+  # "Toolchain Selection".
+  RUSTUP_TOOLCHAIN: stable
 
 jobs:
   build:

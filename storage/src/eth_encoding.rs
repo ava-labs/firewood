@@ -8,10 +8,12 @@
 //! proof emitter. These helpers are always compiled, since the hash scheme is a
 //! per-database runtime choice rather than a build-time selection.
 
-use crate::TriePath;
+use std::iter::once;
+
 use bitfield::bitfield;
 use smallvec::SmallVec;
-use std::iter::once;
+
+use crate::TriePath;
 
 /// Hex-prefix encoding of a nibble path (Ethereum Yellow Paper, appendix C).
 ///
@@ -66,7 +68,8 @@ pub fn nibbles_to_eth_compact<T: TriePath>(nibbles: T, is_leaf: bool) -> SmallVe
 mod test {
     use test_case::test_case;
 
-    use crate::{PathComponent, TriePathFromUnpackedBytes};
+    use crate::PathComponent;
+    use crate::TriePathFromUnpackedBytes;
 
     #[test_case(&[], false, &[0x00])]
     #[test_case(&[], true, &[0x20])]
