@@ -556,12 +556,17 @@ fn remove_prefix_all() {
     assert_eq!(got, 256);
 }
 
-/// The count `remove_prefix` returns includes a value stored at the prefix
-/// itself exactly once, whether the prefix lands on one valued branch or on
-/// nested ones.
-#[test_case(&["ab", "abc", "abd"], "ab", 3 ; "value at the prefix")]
-#[test_case(&["a", "ab", "abc"], "a", 3 ; "nested valued branches")]
-fn remove_prefix_counts_a_value_at_the_prefix_once(keys: &[&str], prefix: &str, expected: usize) {
+/// `remove_prefix` removes every key under the prefix, counts each one once,
+/// and leaves every other key in place.
+#[test_case(&["abc", "abd"], "ab", 2 ; "matched branch has no value")]
+#[test_case(&["ab", "abc", "abd"], "ab", 3 ; "matched branch has a value")]
+#[test_case(&["a", "ab", "abc"], "a", 3 ; "matched branch and a nested branch have values")]
+#[test_case(&["ab", "abc", "abcd"], "a", 3 ; "prefix ends inside the compressed path")]
+#[test_case(&["a", "abc", "abcd"], "ab", 2 ; "prefix ends inside a descendant compressed path")]
+#[test_case(&["", "a", "ab"], "", 3 ; "empty prefix counts the root value")]
+#[test_case(&["abc"], "abc", 1 ; "prefix exactly matches a leaf")]
+#[test_case(&["ab", "ac"], "a", 2 ; "prefix is a branch without a value")]
+fn remove_prefix_partial(keys: &[&str], prefix: &str, expected: usize) {
     let mut merkle = create_in_memory_merkle();
     for key in keys {
         merkle
@@ -570,21 +575,13 @@ fn remove_prefix_counts_a_value_at_the_prefix_once(keys: &[&str], prefix: &str, 
     }
     assert_eq!(merkle.remove_prefix(prefix.as_bytes()).unwrap(), expected);
     for key in keys {
-        assert!(merkle.get_value(key.as_bytes()).unwrap().is_none());
+        let under_prefix = key.as_bytes().starts_with(prefix.as_bytes());
+        assert_eq!(
+            merkle.get_value(key.as_bytes()).unwrap().is_none(),
+            under_prefix,
+            "{key:?} after removing the prefix {prefix:?}"
+        );
     }
-}
-
-#[test]
-fn remove_prefix_partial() {
-    let mut merkle = create_in_memory_merkle();
-    merkle
-        .insert(b"abc", Box::from(b"value".as_slice()))
-        .unwrap();
-    merkle
-        .insert(b"abd", Box::from(b"value".as_slice()))
-        .unwrap();
-    let got = merkle.remove_prefix(b"ab").unwrap();
-    assert_eq!(got, 2);
 }
 
 #[test]

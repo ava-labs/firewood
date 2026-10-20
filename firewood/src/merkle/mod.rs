@@ -2518,8 +2518,6 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
                 // so we can start deleting below here
                 match node {
                     Node::Branch(branch) => {
-                        // `delete_children` counts the branch's own value along
-                        // with everything below it.
                         self.delete_children(branch, deleted)?;
                     }
                     Node::Leaf(_) => {
@@ -2557,7 +2555,8 @@ impl<K: MutableKind, S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<K
         }
     }
 
-    /// Recursively deletes all children of a branch node.
+    /// Recursively deletes a branch's own value, if any, and every value below
+    /// it, adding each one to `deleted`.
     fn delete_children(
         &mut self,
         mut branch: Box<BranchNode>,
