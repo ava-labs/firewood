@@ -1,10 +1,12 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood_storage::DefaultHashMode;
+use firewood_macros::hash_mode;
 use firewood_storage::DenseChildren;
+use firewood_storage::EthHash;
 use firewood_storage::HashMode;
 use firewood_storage::HashType;
+use firewood_storage::MerkleDbHash;
 use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::PathComponent;
 use firewood_storage::SeededRng;
@@ -34,8 +36,8 @@ use crate::db::BatchOp;
 const HEADER_LEN: usize = size_of::<Header>();
 
 /// Builds the serialized proof header
-fn raw_header(proof_type: ProofType) -> Vec<u8> {
-    bytemuck::bytes_of(&Header::from((proof_type, DefaultHashMode::ALGORITHM))).to_vec()
+fn raw_header(proof_type: ProofType, algorithm: NodeHashAlgorithm) -> Vec<u8> {
+    bytemuck::bytes_of(&Header::from((proof_type, algorithm))).to_vec()
 }
 
 /// Builds real wire bytes from `data` in uncompressed `header || body` form
@@ -78,14 +80,12 @@ fn compress_and_parse_change(data: &[u8]) -> Result<FrozenChangeProof, ReadError
 /// key-values — so a mutation test exists for each section, while the
 /// single-byte keys keep the byte offsets those tests hard-code small and
 /// stable.
-fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
-    let merkle = crate::merkle::tests::init_merkle::<DefaultHashMode, _, _, _>(
-        (0u8..=10).map(|k| ([k], [k])),
-    );
+fn create_valid_range_proof<H: HashMode>() -> (FrozenRangeProof, Vec<u8>) {
+    let merkle = crate::merkle::tests::init_merkle::<H, _, _, _>((0u8..=10).map(|k| ([k], [k])));
     let proof = merkle
         .range_proof(Some(&[2u8]), Some(&[8u8]), std::num::NonZeroUsize::new(5))
         .unwrap();
-    let mut serialized = raw_header(ProofType::Range);
+    let mut serialized = raw_header(ProofType::Range, H::ALGORITHM);
     proof.write_body_to_vec(&mut serialized);
     (proof, serialized)
 }
@@ -114,19 +114,23 @@ fn create_valid_change_proof(hash_mode: NodeHashAlgorithm) -> (FrozenChangeProof
         ]),
         hash_mode,
     );
-    let mut serialized = raw_header(ProofType::Change);
+    let mut serialized = raw_header(ProofType::Change, hash_mode);
     proof.write_body_to_vec(&mut serialized);
     (proof, serialized)
 }
 
+#[hash_mode]
 #[test]
-fn test_range_proof_roundtrip() {
-    let (proof, _) = create_valid_range_proof();
+fn test_range_proof_roundtrip<H: HashMode>() {
+    let (proof, data) = create_valid_range_proof::<H>();
+    let parsed_fixture = compress_and_parse_range(&data).expect("fixture should parse");
+    assert_eq!(proof, parsed_fixture);
+    assert_eq!(parsed_fixture.hash_mode(), H::ALGORITHM);
     let mut wire = Vec::new();
     proof.write_to_vec(&mut wire).expect("serialize proof");
     let parsed = FrozenRangeProof::from_slice(&wire).expect("roundtrip should succeed");
     assert_eq!(proof, parsed);
-    let parsed_in_mode = FrozenRangeProof::from_slice_in_mode(&wire, DefaultHashMode::ALGORITHM)
+    let parsed_in_mode = FrozenRangeProof::from_slice_in_mode(&wire, H::ALGORITHM)
         .expect("roundtrip should succeed");
     assert_eq!(proof, parsed_in_mode);
     let mut re_serialized = Vec::new();
@@ -153,7 +157,7 @@ fn test_from_slice_in_mode_rejects_another_mode_at_the_header(
     } else {
         NodeHashAlgorithm::Ethereum
     };
-    let mut data = bytemuck::bytes_of(&Header::from((proof_type, proof_mode))).to_vec();
+    let mut data = raw_header(proof_type, proof_mode);
     data.extend_from_slice(&[0xFF; 16]);
     let parse = |expected| match proof_type {
         ProofType::Range => FrozenRangeProof::from_slice_in_mode(&data, expected).map(drop),
@@ -176,7 +180,10 @@ fn test_from_slice_in_mode_rejects_another_mode_at_the_header(
 #[test_case(NodeHashAlgorithm::MerkleDB; "merkledb")]
 #[test_case(NodeHashAlgorithm::Ethereum; "ethereum")]
 fn test_change_proof_roundtrip(hash_mode: NodeHashAlgorithm) {
-    let (proof, _) = create_valid_change_proof(hash_mode);
+    let (proof, data) = create_valid_change_proof(hash_mode);
+    let parsed_fixture = compress_and_parse_change(&data).expect("fixture should parse");
+    assert_eq!(proof, parsed_fixture);
+    assert_eq!(parsed_fixture.hash_mode(), hash_mode);
     let mut wire = Vec::new();
     proof.write_to_vec(&mut wire).expect("serialize proof");
     let parsed = FrozenChangeProof::from_slice(&wire).expect("roundtrip should succeed");
@@ -240,6 +247,7 @@ fn test_mode_dependent_proof_node_roundtrip(hash_mode: NodeHashAlgorithm) {
     assert_eq!(reserialized, serialized);
 }
 
+#[hash_mode]
 #[test_case(
     |data| *<&mut [u8; 8]>::try_from(&mut data[0..8]).unwrap() = *b"badmagic",
     |err| matches!(err, InvalidHeader::InvalidMagic { found } if found == b"badmagic");
@@ -270,11 +278,11 @@ fn test_mode_dependent_proof_node_roundtrip(hash_mode: NodeHashAlgorithm) {
     |err| matches!(err, InvalidHeader::InvalidProofType { found: 2, expected: Some(ProofType::Range) });
     "wrong proof type"
 )]
-fn test_invalid_header(
+fn test_invalid_header<H: HashMode>(
     mutator: impl FnOnce(&mut Vec<u8>),
     expected: impl FnOnce(&InvalidHeader) -> bool,
 ) {
-    let (_, mut data) = create_valid_range_proof();
+    let (_, mut data) = create_valid_range_proof::<H>();
 
     mutator(&mut data);
 
@@ -284,6 +292,7 @@ fn test_invalid_header(
     }
 }
 
+#[hash_mode]
 #[test_case(
     |_, data| data.truncate(20),
     "header",
@@ -299,13 +308,13 @@ fn test_invalid_header(
     "header one byte short"
 )]
 
-fn test_incomplete_item(
+fn test_incomplete_item<H: HashMode>(
     mutator: impl FnOnce(&FrozenRangeProof, &mut Vec<u8>),
     item: &'static str,
     expected_len: usize,
     found_len: usize,
 ) {
-    let (proof, mut data) = create_valid_range_proof();
+    let (proof, mut data) = create_valid_range_proof::<H>();
 
     debug!("data len: {}", data.len());
     debug!("proof: {proof:#?}");
@@ -337,6 +346,7 @@ fn test_incomplete_item(
     }
 }
 
+#[hash_mode]
 #[test_case(
     |proof, data| data[32
         + proof.start_proof().len().required_space()
@@ -378,13 +388,13 @@ fn test_incomplete_item(
     "2 > (1 / 5)";
     "truncated node key"
 )]
-fn test_invalid_item(
+fn test_invalid_item<H: HashMode>(
     mutator: impl FnOnce(&FrozenRangeProof, &mut Vec<u8>),
     item: &'static str,
     expected: &'static str,
     found: &'static str,
 ) {
-    let (proof, mut data) = create_valid_range_proof();
+    let (proof, mut data) = create_valid_range_proof::<H>();
 
     mutator(&proof, &mut data);
 
@@ -412,9 +422,14 @@ fn test_invalid_item(
     }
 }
 
+#[hash_mode]
 #[test]
-fn test_partial_key_len_exceeds_key_len() {
-    let (proof, mut data) = create_valid_range_proof();
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "the small trie fixture bounds key lengths and serialized offsets"
+)]
+fn test_partial_key_len_exceeds_key_len<H: HashMode>() {
+    let (proof, mut data) = create_valid_range_proof::<H>();
 
     let node = &proof.start_proof()[0];
     let key_len = node.key.len();
@@ -444,13 +459,14 @@ fn test_partial_key_len_exceeds_key_len() {
     }
 }
 
+#[hash_mode]
 #[test]
-fn test_empty_proof() {
+fn test_empty_proof<H: HashMode>() {
     #[rustfmt::skip]
     let bytes = [
         b'f', b'w', b'd', b'p', b'r', b'o', b'o', b'f', // magic
         0, // version
-        hash_mode_byte(DefaultHashMode::ALGORITHM),
+        hash_mode_byte(H::ALGORITHM),
         magic::BRANCH_FACTOR,
         ProofType::Range as u8,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // reserved
@@ -469,6 +485,7 @@ fn test_empty_proof() {
     }
 }
 
+#[hash_mode]
 #[test_case(
     |data| *<&mut [u8; 8]>::try_from(&mut data[0..8]).unwrap() = *b"badmagic",
     |err| matches!(err, InvalidHeader::InvalidMagic { found } if found == b"badmagic");
@@ -499,11 +516,11 @@ fn test_empty_proof() {
     |err| matches!(err, InvalidHeader::InvalidProofType { found: 1, expected: Some(ProofType::Change) });
     "wrong proof type"
 )]
-fn test_change_proof_invalid_header(
+fn test_change_proof_invalid_header<H: HashMode>(
     mutator: impl FnOnce(&mut Vec<u8>),
     expected: impl FnOnce(&InvalidHeader) -> bool,
 ) {
-    let (_, mut data) = create_valid_change_proof(DefaultHashMode::ALGORITHM);
+    let (_, mut data) = create_valid_change_proof(H::ALGORITHM);
 
     mutator(&mut data);
 
@@ -513,6 +530,7 @@ fn test_change_proof_invalid_header(
     }
 }
 
+#[hash_mode]
 #[test_case(
     |data| data.truncate(20),
     "header",
@@ -527,13 +545,13 @@ fn test_change_proof_invalid_header(
     31; // found len
     "header one byte short"
 )]
-fn test_change_proof_incomplete_item(
+fn test_change_proof_incomplete_item<H: HashMode>(
     mutator: impl FnOnce(&mut Vec<u8>),
     item: &'static str,
     expected_len: usize,
     found_len: usize,
 ) {
-    let (_, mut data) = create_valid_change_proof(DefaultHashMode::ALGORITHM);
+    let (_, mut data) = create_valid_change_proof(H::ALGORITHM);
 
     mutator(&mut data);
 
@@ -561,6 +579,7 @@ fn test_change_proof_incomplete_item(
     }
 }
 
+#[hash_mode]
 #[test_case(
     |_, data| *<&mut [u8; 10]>::try_from(&mut data[32..42]).unwrap() = [0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89],
     "array length",
@@ -584,13 +603,13 @@ fn test_change_proof_incomplete_item(
     "99";
     "invalid batch op discriminant"
 )]
-fn test_change_proof_invalid_item(
+fn test_change_proof_invalid_item<H: HashMode>(
     mutator: impl FnOnce(&FrozenChangeProof, &mut Vec<u8>),
     item: &'static str,
     expected: &'static str,
     found: &'static str,
 ) {
-    let (proof, mut data) = create_valid_change_proof(DefaultHashMode::ALGORITHM);
+    let (proof, mut data) = create_valid_change_proof(H::ALGORITHM);
 
     mutator(&proof, &mut data);
 
@@ -648,14 +667,14 @@ fn make_proof_node(
 /// Wraps a single `ProofNode` in a minimal `FrozenRangeProof` and serializes it.
 /// Returns the proof plus its canonical uncompressed bytes
 /// (`header || body`); parse with [`compress_and_parse_range`].
-fn make_range_proof_from_single_node(node: ProofNode) -> (FrozenRangeProof, Vec<u8>) {
+fn make_range_proof_from_single_node<H: HashMode>(node: ProofNode) -> (FrozenRangeProof, Vec<u8>) {
     let proof = FrozenRangeProof::new(
         Proof::new(Box::new([node])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([]),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
-    let mut serialized = raw_header(ProofType::Range);
+    let mut serialized = raw_header(ProofType::Range, H::ALGORITHM);
     proof.write_body_to_vec(&mut serialized);
     (proof, serialized)
 }
@@ -664,48 +683,51 @@ fn make_range_proof_from_single_node(node: ProofNode) -> (FrozenRangeProof, Vec<
 /// canonical body produces the same bytes.
 fn assert_range_proof_round_trip(serialized: Vec<u8>) {
     let parsed = compress_and_parse_range(&serialized).expect("deserialization should succeed");
-    let mut re_serialized = raw_header(ProofType::Range);
+    let mut re_serialized = raw_header(ProofType::Range, parsed.hash_mode());
     parsed.write_body_to_vec(&mut re_serialized);
     assert_eq!(serialized, re_serialized, "round-trip bytes must match");
 }
 
+#[hash_mode]
 #[test]
-fn test_proof_node_leaf_round_trip() {
+fn test_proof_node_leaf_round_trip<H: HashMode>() {
     // Leaf: no children, no value, empty key
     let node = make_proof_node(&[], 0, None, &[]);
-    let (_, serialized) = make_range_proof_from_single_node(node);
+    let (_, serialized) = make_range_proof_from_single_node::<H>(node);
     assert_range_proof_round_trip(serialized);
 }
 
+#[hash_mode]
 #[test]
-fn test_proof_node_single_child_round_trip() {
+fn test_proof_node_single_child_round_trip<H: HashMode>() {
     // Branch with one child at nibble index 7
     let node = make_proof_node(&[1, 2, 3], 0, None, &[7]);
-    let (_, serialized) = make_range_proof_from_single_node(node);
+    let (_, serialized) = make_range_proof_from_single_node::<H>(node);
     assert_range_proof_round_trip(serialized);
 }
 
+#[hash_mode]
 #[test]
-fn test_proof_node_all_children_round_trip() {
+fn test_proof_node_all_children_round_trip<H: HashMode>() {
     // Branch with all 16 children present (ChildMask = 0xFFFF)
     let all_nibbles: Vec<u8> = (0u8..16).collect();
     let node = make_proof_node(&[0], 0, None, &all_nibbles);
-    let (_, serialized) = make_range_proof_from_single_node(node);
+    let (_, serialized) = make_range_proof_from_single_node::<H>(node);
     assert_range_proof_round_trip(serialized);
 }
 
-#[cfg(not(feature = "ethhash"))]
 #[test]
 fn test_value_digest_hash_round_trip() {
-    // Values >= 32 bytes are converted to a hash by make_hash() during serialization.
+    // MerkleDB values >= 32 bytes are converted to a hash during serialization.
     // The round-trip bytes should still match because re-serializing a Hash-variant
     // node also produces a hash discriminant (1) rather than a value discriminant (0).
     let value: Box<[u8]> = vec![0xABu8; 32].into_boxed_slice();
     let node = make_proof_node(&[1, 2], 0, Some(value), &[]);
-    let (_, serialized) = make_range_proof_from_single_node(node);
+    let (_, serialized) = make_range_proof_from_single_node::<MerkleDbHash>(node);
     assert_range_proof_round_trip(serialized);
 }
 
+#[hash_mode]
 #[test_case(
     BatchOp::Put { key: Box::from(b"k".as_slice()), value: Box::from(b"v".as_slice()) };
     "put"
@@ -718,12 +740,12 @@ fn test_value_digest_hash_round_trip() {
     BatchOp::DeleteRange { prefix: Box::from(b"k".as_slice()) };
     "delete range"
 )]
-fn test_change_proof_batch_op_variant(op: BatchOp<Box<[u8]>, Box<[u8]>>) {
+fn test_change_proof_batch_op_variant<H: HashMode>(op: BatchOp<Box<[u8]>, Box<[u8]>>) {
     let proof = FrozenChangeProof::new(
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([op]),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
     let mut serialized = Vec::new();
     proof
@@ -738,16 +760,17 @@ fn test_change_proof_batch_op_variant(op: BatchOp<Box<[u8]>, Box<[u8]>>) {
     assert_eq!(serialized, re_serialized, "round-trip bytes must match");
 }
 
+#[hash_mode]
 #[test]
-fn test_proof_node_partial_len_boundaries() {
+fn test_proof_node_partial_len_boundaries<H: HashMode>() {
     // partial_len = 0: no shared prefix with the parent node
     let node = make_proof_node(&[1, 2, 3, 4], 0, None, &[]);
-    let (_, serialized) = make_range_proof_from_single_node(node);
+    let (_, serialized) = make_range_proof_from_single_node::<H>(node);
     assert_range_proof_round_trip(serialized);
 
     // partial_len = key.len(): entire key is shared with the parent
     let node = make_proof_node(&[1, 2, 3, 4], 4, None, &[]);
-    let (_, serialized) = make_range_proof_from_single_node(node);
+    let (_, serialized) = make_range_proof_from_single_node::<H>(node);
     assert_range_proof_round_trip(serialized);
 }
 
@@ -770,13 +793,14 @@ fn test_proof_node_partial_len_boundaries() {
 //   [32]=0x01  [33]=0x01  [34]=0x01  (count, key len, key byte)
 //   [35]=0x00  [36]=0x00             (partial_len, option discriminant = None)
 //   [37]=0x80  [38]=0x00             (ChildMask — nibble 7 = bit 7 of low byte)
-//   Non-ethhash: [39..71] = TrieHash (32 bytes)
-//   Ethhash:     [39] = HashType discriminant, [40..72] = TrieHash
+//   MerkleDB: [39..71] = TrieHash (32 bytes)
+//   Ethereum: [39] = HashType discriminant, [40..72] = TrieHash
 
+#[hash_mode]
 #[test]
-fn test_invalid_path_nibble() {
+fn test_invalid_path_nibble<H: HashMode>() {
     let node = make_proof_node(&[1, 2, 3], 0, None, &[]);
-    let (_, mut data) = make_range_proof_from_single_node(node);
+    let (_, mut data) = make_range_proof_from_single_node::<H>(node);
     data[34] = 0x10; // first key byte set to an invalid nibble (16 > 15)
     match compress_and_parse_range(&data) {
         Err(ReadError::InvalidItem { item, .. }) => assert_eq!(item, "path"),
@@ -784,10 +808,11 @@ fn test_invalid_path_nibble() {
     }
 }
 
+#[hash_mode]
 #[test]
-fn test_invalid_value_digest_discriminant() {
+fn test_invalid_value_digest_discriminant<H: HashMode>() {
     let node = make_proof_node(&[1, 2, 3], 0, Some(Box::from(b"v".as_slice())), &[]);
-    let (_, mut data) = make_range_proof_from_single_node(node);
+    let (_, mut data) = make_range_proof_from_single_node::<H>(node);
     data[39] = 2; // invalid ValueDigest discriminant (must be 0 or 1)
     match compress_and_parse_range(&data) {
         Err(ReadError::InvalidItem {
@@ -806,17 +831,18 @@ fn test_invalid_value_digest_discriminant() {
     }
 }
 
+#[hash_mode]
 #[test_case(38, "option discriminant", 1, 0; "option discriminant")]
 #[test_case(39, "children map", 2, 0; "children map zero bytes")]
 #[test_case(40, "children map", 2, 1; "children map one byte")]
-fn test_incomplete_item_known_layout(
+fn test_incomplete_item_known_layout<H: HashMode>(
     truncate_at: usize,
     item: &'static str,
     expected_len: usize,
     found_len: usize,
 ) {
     let node = make_proof_node(&[1, 2, 3], 0, None, &[]);
-    let (_, mut data) = make_range_proof_from_single_node(node);
+    let (_, mut data) = make_range_proof_from_single_node::<H>(node);
     data.truncate(truncate_at);
     match compress_and_parse_range(&data) {
         Err(ReadError::IncompleteItem {
@@ -833,11 +859,10 @@ fn test_incomplete_item_known_layout(
     }
 }
 
-#[cfg(not(feature = "ethhash"))]
 #[test]
 fn test_incomplete_trie_hash() {
     let node = make_proof_node(&[1], 0, None, &[7]);
-    let (_, mut data) = make_range_proof_from_single_node(node);
+    let (_, mut data) = make_range_proof_from_single_node::<MerkleDbHash>(node);
     data.truncate(39); // ChildMask ends at [38]; TrieHash starts at [39]
     match compress_and_parse_range(&data) {
         Err(ReadError::IncompleteItem {
@@ -854,11 +879,10 @@ fn test_incomplete_trie_hash() {
     }
 }
 
-#[cfg(feature = "ethhash")]
 #[test]
 fn test_incomplete_hash_type_discriminant() {
     let node = make_proof_node(&[1], 0, None, &[7]);
-    let (_, mut data) = make_range_proof_from_single_node(node);
+    let (_, mut data) = make_range_proof_from_single_node::<EthHash>(node);
     data.truncate(39); // ChildMask ends at [38]; HashType discriminant is at [39]
     match compress_and_parse_range(&data) {
         Err(ReadError::IncompleteItem {
@@ -877,11 +901,10 @@ fn test_incomplete_hash_type_discriminant() {
     }
 }
 
-#[cfg(feature = "ethhash")]
 #[test]
 fn test_invalid_hash_type_discriminant() {
     let node = make_proof_node(&[1], 0, None, &[7]);
-    let (_, mut data) = make_range_proof_from_single_node(node);
+    let (_, mut data) = make_range_proof_from_single_node::<EthHash>(node);
     data[39] = 2; // invalid HashType discriminant (must be 0 or 1)
     match compress_and_parse_range(&data) {
         Err(ReadError::InvalidItem {
@@ -900,12 +923,13 @@ fn test_invalid_hash_type_discriminant() {
     }
 }
 
+#[hash_mode]
 #[test]
-fn test_change_proof_incomplete_batch_op_discriminant() {
+fn test_change_proof_incomplete_batch_op_discriminant<H: HashMode>() {
     // Layout of create_valid_change_proof() after the 32-byte header:
     //   [32]=0x00 (start_proof count=0)  [33]=0x00 (end_proof count=0)
     //   [34]=0x03 (batch_ops count=3)    [35]=0x00 (first BatchOp discriminant)
-    let (_, mut data) = create_valid_change_proof(DefaultHashMode::ALGORITHM);
+    let (_, mut data) = create_valid_change_proof(H::ALGORITHM);
     data.truncate(35); // cut before the first BatchOp discriminant byte
     match compress_and_parse_change(&data) {
         Err(ReadError::InvalidItem {
@@ -963,7 +987,10 @@ fn generate_random_proof_node(rng: &SeededRng) -> ProofNode {
 /// Generates a random `FrozenRangeProof` and returns it with its wire bytes.
 ///
 /// The seed used is printed to stderr by `SeededRng` so failures can be reproduced.
-fn generate_random_range_proof(rng: &SeededRng) -> (FrozenRangeProof, Vec<u8>) {
+fn generate_random_range_proof(
+    rng: &SeededRng,
+    hash_mode: NodeHashAlgorithm,
+) -> (FrozenRangeProof, Vec<u8>) {
     let start_nodes: Box<[ProofNode]> = (0..rng.random_range(0usize..=5))
         .map(|_| generate_random_proof_node(rng))
         .collect();
@@ -984,7 +1011,7 @@ fn generate_random_range_proof(rng: &SeededRng) -> (FrozenRangeProof, Vec<u8>) {
         Proof::new(start_nodes),
         Proof::new(end_nodes),
         key_values,
-        DefaultHashMode::ALGORITHM,
+        hash_mode,
     );
     let mut serialized = Vec::new();
     proof
@@ -994,7 +1021,10 @@ fn generate_random_range_proof(rng: &SeededRng) -> (FrozenRangeProof, Vec<u8>) {
 }
 
 /// Generates a random `FrozenChangeProof` and returns it with its wire bytes.
-fn generate_random_change_proof(rng: &SeededRng) -> (FrozenChangeProof, Vec<u8>) {
+fn generate_random_change_proof(
+    rng: &SeededRng,
+    hash_mode: NodeHashAlgorithm,
+) -> (FrozenChangeProof, Vec<u8>) {
     let start_nodes: Box<[ProofNode]> = (0..rng.random_range(0usize..=5))
         .map(|_| generate_random_proof_node(rng))
         .collect();
@@ -1021,7 +1051,7 @@ fn generate_random_change_proof(rng: &SeededRng) -> (FrozenChangeProof, Vec<u8>)
         Proof::new(start_nodes),
         Proof::new(end_nodes),
         batch_ops,
-        DefaultHashMode::ALGORITHM,
+        hash_mode,
     );
     let mut serialized = Vec::new();
     proof
@@ -1030,11 +1060,12 @@ fn generate_random_change_proof(rng: &SeededRng) -> (FrozenChangeProof, Vec<u8>)
     (proof, serialized)
 }
 
+#[hash_mode]
 #[test]
-fn test_slow_range_proof_roundtrip_fuzz() {
+fn test_slow_range_proof_roundtrip_fuzz<H: HashMode>() {
     let rng = SeededRng::from_env_or_random();
     for i in 0..100 {
-        let (proof, bytes) = generate_random_range_proof(&rng);
+        let (proof, bytes) = generate_random_range_proof(&rng, H::ALGORITHM);
         debug!("iteration {i}: proof: {proof:#?}");
         debug!("iteration {i}: bytes: {}", hex::encode(&bytes));
 
@@ -1045,11 +1076,12 @@ fn test_slow_range_proof_roundtrip_fuzz() {
     }
 }
 
+#[hash_mode]
 #[test]
-fn test_slow_change_proof_roundtrip_fuzz() {
+fn test_slow_change_proof_roundtrip_fuzz<H: HashMode>() {
     let rng = SeededRng::from_env_or_random();
     for i in 0..100 {
-        let (proof, bytes) = generate_random_change_proof(&rng);
+        let (proof, bytes) = generate_random_change_proof(&rng, H::ALGORITHM);
         debug!("iteration {i}: proof: {proof:#?}");
         debug!("iteration {i}: bytes: {}", hex::encode(&bytes));
 
@@ -1061,14 +1093,15 @@ fn test_slow_change_proof_roundtrip_fuzz() {
     }
 }
 
+#[hash_mode]
 #[test]
-fn test_slow_malformed_proof_fuzz() {
+fn test_slow_malformed_proof_fuzz<H: HashMode>() {
     let rng = SeededRng::from_env_or_random();
     for i in 0..200 {
         // Corrupt the *canonical* bytes (header || body), not the wire:
         // this test targets the body parser via compress_and_parse_range.
-        let (proof, _) = generate_random_range_proof(&rng);
-        let mut data = raw_header(ProofType::Range);
+        let (proof, _) = generate_random_range_proof(&rng, H::ALGORITHM);
+        let mut data = raw_header(ProofType::Range, H::ALGORITHM);
         proof.write_body_to_vec(&mut data);
 
         // Corrupt 1–3 bytes at random positions.
@@ -1109,11 +1142,16 @@ fn test_slow_malformed_proof_fuzz() {
     }
 }
 
+#[hash_mode]
 #[test]
-fn test_dos_array_length_bounds() {
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "the small fixture bounds offsets and contains the replaced varint"
+)]
+fn test_dos_array_length_bounds<H: HashMode>() {
     use integer_encoding::VarInt;
 
-    let (proof, mut data) = create_valid_range_proof();
+    let (proof, mut data) = create_valid_range_proof::<H>();
 
     // The first array length (for start_proof) is at offset 32.
     let original_len = proof.start_proof().len();
@@ -1222,11 +1260,10 @@ mod box_array_deserialization_tests {
         }
     }
 
-    fn v0_reader(data: &[u8]) -> V0Reader<'_> {
+    fn v0_reader(data: &[u8], algorithm: NodeHashAlgorithm) -> V0Reader<'_> {
         // Resolve the algorithm from the header itself, mirroring the
-        // production validate-then-into_body flow. (These tests exercise
-        // mode-independent reads, so any consistent mode works.)
-        let header = Header::from((ProofType::Range, DefaultHashMode::ALGORITHM));
+        // production validate-then-into_body flow.
+        let header = Header::from((ProofType::Range, algorithm));
         let validated_header = header
             .validate(Some(ProofType::Range))
             .expect("default header should be valid");
@@ -1234,12 +1271,13 @@ mod box_array_deserialization_tests {
         V0Reader::new(inner, header)
     }
 
+    #[hash_mode]
     #[test]
-    fn rejects_usize_max_items_via_length_guard() {
+    fn rejects_usize_max_items_via_length_guard<H: HashMode>() {
         // Guard catches extreme case before any iteration
         let mut data = Vec::new();
         data.extend_from_slice(&usize::MAX.encode_var_vec());
-        let mut reader = v0_reader(&data);
+        let mut reader = v0_reader(&data, H::ALGORITHM);
         let result: Result<Box<[Hash32]>, _> = reader.read_v0_item();
 
         assert!(matches!(
@@ -1251,64 +1289,69 @@ mod box_array_deserialization_tests {
         ));
     }
 
+    #[hash_mode]
     #[test]
-    fn rejects_eof_mid_array() {
+    fn rejects_eof_mid_array<H: HashMode>() {
         // Guard doesn't trigger (5 > 64 is FALSE), but loop fails safely on EOF
         let mut data = Vec::new();
         data.extend_from_slice(&5usize.encode_var_vec());
         data.extend_from_slice(&[0u8; 64]); // only 2 complete Hash32 items
-        let mut reader = v0_reader(&data);
+        let mut reader = v0_reader(&data, H::ALGORITHM);
         let result: Result<Box<[Hash32]>, _> = reader.read_v0_item();
 
         assert!(result.is_err());
     }
 
+    #[hash_mode]
     #[test]
-    fn rejects_var_len_item_with_huge_claimed_length() {
+    fn rejects_var_len_item_with_huge_claimed_length<H: HashMode>() {
         // Nested length field amplification
         let mut data = Vec::new();
         data.extend_from_slice(&1usize.encode_var_vec());
         data.extend_from_slice(&usize::MAX.encode_var_vec());
         data.extend_from_slice(&[0u8; 10]);
-        let mut reader = v0_reader(&data);
+        let mut reader = v0_reader(&data, H::ALGORITHM);
         let result: Result<Box<[VarLenVec]>, _> = reader.read_v0_item();
 
         assert!(result.is_err());
     }
 
+    #[hash_mode]
     #[test]
-    fn accepts_empty_array() {
+    fn accepts_empty_array<H: HashMode>() {
         let mut data = Vec::new();
         data.extend_from_slice(&0usize.encode_var_vec());
-        let mut reader = v0_reader(&data);
+        let mut reader = v0_reader(&data, H::ALGORITHM);
         let result: Result<Box<[Hash32]>, _> = reader.read_v0_item();
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 0);
     }
 
+    #[hash_mode]
     #[test]
-    fn boundary_exact_fit_passes() {
+    fn boundary_exact_fit_passes<H: HashMode>() {
         // 10 items, 50 bytes → 10 > 50 / 5 is FALSE → PASS
         // T = u8 so num_items directly equals bytes needed
         let mut data = Vec::new();
         data.extend_from_slice(&10usize.encode_var_vec());
         data.extend_from_slice(&[0u8; 50]);
-        let mut reader = v0_reader(&data);
+        let mut reader = v0_reader(&data, H::ALGORITHM);
         let result: Result<Box<[u8]>, _> = reader.read_v0_item();
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 10);
     }
 
+    #[hash_mode]
     #[test]
-    fn boundary_one_over_fails() {
+    fn boundary_one_over_fails<H: HashMode>() {
         // 51 items, 50 bytes → 51 > 50 / 1 is TRUE → FAIL
         // T = u8 so MIN_BYTES_PER_ITEM = 1
         let mut data = Vec::new();
         data.extend_from_slice(&51usize.encode_var_vec());
         data.extend_from_slice(&[0u8; 50]);
-        let mut reader = v0_reader(&data);
+        let mut reader = v0_reader(&data, H::ALGORITHM);
         let result: Result<Box<[u8]>, _> = reader.read_v0_item();
 
         assert!(matches!(
@@ -1321,22 +1364,27 @@ mod box_array_deserialization_tests {
     }
 }
 
-fn range_wire() -> Vec<u8> {
-    let (proof, _) = create_valid_range_proof();
+fn range_wire<H: HashMode>() -> Vec<u8> {
+    let (proof, _) = create_valid_range_proof::<H>();
     let mut wire = Vec::new();
     proof.write_to_vec(&mut wire).expect("serialize proof");
     wire
 }
 
-fn change_wire() -> Vec<u8> {
-    let (proof, _) = create_valid_change_proof(DefaultHashMode::ALGORITHM);
+fn change_wire<H: HashMode>() -> Vec<u8> {
+    let (proof, _) = create_valid_change_proof(H::ALGORITHM);
     let mut wire = Vec::new();
     proof.write_to_vec(&mut wire).expect("serialize proof");
     wire
 }
 
+#[hash_mode]
 #[test]
-fn test_frame_wire_is_compressed_and_versioned() {
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "512 small key-value pairs bound the body length"
+)]
+fn test_frame_wire_is_compressed_and_versioned<H: HashMode>() {
     // A compressible proof
     let kvs: Box<[_]> = (0u16..512)
         .map(|i| {
@@ -1350,7 +1398,7 @@ fn test_frame_wire_is_compressed_and_versioned() {
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         kvs,
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
     let mut canonical_body = Vec::new();
     proof.write_body_to_vec(&mut canonical_body);
@@ -1374,12 +1422,13 @@ fn test_frame_wire_is_compressed_and_versioned() {
     );
 }
 
+#[hash_mode]
 #[test]
-fn test_frame_rejects_over_cap_content_size() {
+fn test_frame_rejects_over_cap_content_size<H: HashMode>() {
     // A frame whose header declares a content size just over the cap: the
     // decoder must reject it before allocating.
     let body = vec![0u8; MAX_DECOMPRESSED_LEN + 1];
-    let mut wire = raw_header(ProofType::Range);
+    let mut wire = raw_header(ProofType::Range, H::ALGORITHM);
     super::frame::write_compressed_body(&body, &mut wire).expect("compress body");
     let err = FrozenRangeProof::from_slice(&wire).expect_err("over-cap content size");
     assert!(
@@ -1395,6 +1444,7 @@ fn test_frame_rejects_over_cap_content_size() {
 /// Wire mutations the frame layer must reject with
 /// `InvalidItem { item: "compressed body frame" }`.
 /// Each case runs against both proof types.
+#[hash_mode]
 #[test_case(|wire| wire.push(0xAB) ; "trailing byte")]
 #[test_case(|wire| wire[32] ^= 0xFF ; "corrupt frame magic")]
 #[test_case(|wire| { wire.pop(); } ; "truncated frame")]
@@ -1410,8 +1460,8 @@ fn test_frame_rejects_over_cap_content_size() {
         .expect("compress empty buffer");
     wire.extend_from_slice(&empty);
 } ; "trailing concatenated frame")]
-fn test_frame_rejects_malformed_wire(mutate: fn(&mut Vec<u8>)) {
-    let mut wire = range_wire();
+fn test_frame_rejects_malformed_wire<H: HashMode>(mutate: fn(&mut Vec<u8>)) {
+    let mut wire = range_wire::<H>();
     mutate(&mut wire);
     let err = FrozenRangeProof::from_slice(&wire).expect_err("range wire must be rejected");
     assert!(
@@ -1419,7 +1469,7 @@ fn test_frame_rejects_malformed_wire(mutate: fn(&mut Vec<u8>)) {
         "got {err:?}"
     );
 
-    let mut wire = change_wire();
+    let mut wire = change_wire::<H>();
     mutate(&mut wire);
     let err = FrozenChangeProof::from_slice(&wire).expect_err("change wire must be rejected");
     assert!(
@@ -1428,8 +1478,9 @@ fn test_frame_rejects_malformed_wire(mutate: fn(&mut Vec<u8>)) {
     );
 }
 
+#[hash_mode]
 #[test]
-fn test_write_to_vec_rejects_over_cap_body() {
+fn test_write_to_vec_rejects_over_cap_body<H: HashMode>() {
     // One more 1 MiB value than the cap holds
     let over_cap = u8::try_from(MAX_DECOMPRESSED_LEN / (1024 * 1024) + 1).unwrap();
     let kvs: Box<[_]> = (0u8..over_cap)
@@ -1444,7 +1495,7 @@ fn test_write_to_vec_rejects_over_cap_body() {
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         kvs,
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
     let mut out = Vec::new();
     let err = proof
@@ -1463,8 +1514,9 @@ fn test_write_to_vec_rejects_over_cap_body() {
     assert!(out.is_empty(), "a failed serialization must not write");
 }
 
+#[hash_mode]
 #[test]
-fn test_write_to_vec_keeps_over_compressible_bodies_decodable() {
+fn test_write_to_vec_keeps_over_compressible_bodies_decodable<H: HashMode>() {
     // A constant value bulk-compresses beyond the ratio decoders accept;
     // the producer re-encodes it in flushed blocks and the decoder's
     // single-frame, content-size and ratio checks must all still pass.
@@ -1477,7 +1529,7 @@ fn test_write_to_vec_keeps_over_compressible_bodies_decodable() {
             Proof::new(Box::<[ProofNode]>::from([])),
             Proof::new(Box::<[ProofNode]>::from([])),
             kvs,
-            DefaultHashMode::ALGORITHM,
+            H::ALGORITHM,
         );
         let mut wire = Vec::new();
         proof.write_to_vec(&mut wire).expect("serialize");
@@ -1487,6 +1539,7 @@ fn test_write_to_vec_keeps_over_compressible_bodies_decodable() {
 }
 
 /// Frames declaring a zero content size are rejected at the frame layer
+#[hash_mode]
 #[test_case(|wire: &mut Vec<u8>| {
     crate::proofs::frame::write_compressed_body(&[], wire).expect("compress body");
 } ; "empty body frame")]
@@ -1496,8 +1549,8 @@ fn test_write_to_vec_keeps_over_compressible_bodies_decodable() {
     wire.extend_from_slice(&4u32.to_le_bytes());
     wire.extend_from_slice(&[0xAB; 4]);
 } ; "lone skippable frame")]
-fn test_frame_rejects_zero_content_size(append_frame: fn(&mut Vec<u8>)) {
-    let mut wire = raw_header(ProofType::Range);
+fn test_frame_rejects_zero_content_size<H: HashMode>(append_frame: fn(&mut Vec<u8>)) {
+    let mut wire = raw_header(ProofType::Range, H::ALGORITHM);
     append_frame(&mut wire);
     let err = FrozenRangeProof::from_slice(&wire).expect_err("zero content size");
     assert!(
@@ -1506,10 +1559,11 @@ fn test_frame_rejects_zero_content_size(append_frame: fn(&mut Vec<u8>)) {
     );
 }
 
+#[hash_mode]
 #[test]
-fn test_frame_rejects_missing_frame() {
+fn test_frame_rejects_missing_frame<H: HashMode>() {
     // Nothing after the header: the frame is missing.
-    let wire = range_wire()[..32].to_vec();
+    let wire = range_wire::<H>()[..32].to_vec();
     let err = FrozenRangeProof::from_slice(&wire).expect_err("missing frame");
     assert!(
         matches!(err, ReadError::InvalidItem { item, .. } if item == "compressed body frame"),
@@ -1517,13 +1571,14 @@ fn test_frame_rejects_missing_frame() {
     );
 }
 
+#[hash_mode]
 #[test]
-fn test_frame_rejects_frame_without_content_size() {
+fn test_frame_rejects_frame_without_content_size<H: HashMode>() {
     // The producer's bulk compressor always records the content size in
     // the frame header, but zstd streaming encoders (which don't know the
     // input size up front) omit it. An attacker can hand-craft such a
     // frame; the decoder must reject it before allocating.
-    let (_, canonical) = create_valid_range_proof();
+    let (_, canonical) = create_valid_range_proof::<H>();
     let body = &canonical[32..];
     let frame = zstd::stream::encode_all(body, zstd::DEFAULT_COMPRESSION_LEVEL)
         .expect("stream compression of an in-memory buffer");
@@ -1540,15 +1595,16 @@ fn test_frame_rejects_frame_without_content_size() {
     );
 }
 
+#[hash_mode]
 #[test]
-fn test_frame_rejects_excessive_compression_ratio() {
+fn test_frame_rejects_excessive_compression_ratio<H: HashMode>() {
     // A 4 MiB all-zero body compresses to a few hundred bytes: under the
     // length cap and consistent with the frame header's content size, but
     // far over MAX_COMPRESSION_RATIO. The decoder must reject it before
     // allocating the 4 MiB. The producer no longer emits such a frame (it
     // re-encodes in flushed blocks), so build the bomb with zstd directly.
     let body = vec![0u8; 4 * 1024 * 1024];
-    let mut wire = raw_header(ProofType::Range);
+    let mut wire = raw_header(ProofType::Range, H::ALGORITHM);
     wire.extend_from_slice(
         &zstd::bulk::compress(&body, zstd::DEFAULT_COMPRESSION_LEVEL).expect("compress body"),
     );
@@ -1589,7 +1645,7 @@ fn test_frame_accepts_max_decompressed_len_exactly() {
 const GOLDEN_WIRE_TAIL: &str =
     "28b52ffd201bd90000000002046b6579310676616c756531046b6579320676616c756532";
 
-fn golden_proof() -> FrozenRangeProof {
+fn golden_proof<H: HashMode>() -> FrozenRangeProof {
     FrozenRangeProof::new(
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
@@ -1603,17 +1659,22 @@ fn golden_proof() -> FrozenRangeProof {
                 Box::from(b"value2".as_slice()),
             ),
         ]),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     )
 }
 
+#[hash_mode]
 #[test]
-fn test_frame_rejects_content_size_mismatch() {
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "the asserted frame byte is 0x1b"
+)]
+fn test_frame_rejects_content_size_mismatch<H: HashMode>() {
     // Bump the declared content size in the frame header (the golden
     // frame is single-segment, so its 1-byte FCS field sits at frame
     // offset 5). The frame now declares 28 bytes but decompresses to 27;
     // decompress_body relies on zstd rejecting this, so pin it.
-    let mut wire = raw_header(ProofType::Range);
+    let mut wire = raw_header(ProofType::Range, H::ALGORITHM);
     wire.extend_from_slice(&hex::decode(GOLDEN_WIRE_TAIL).expect("valid hex"));
     assert_eq!(wire[37], 0x1b, "golden frame content-size byte moved");
     wire[37] += 1;
@@ -1624,24 +1685,26 @@ fn test_frame_rejects_content_size_mismatch() {
     );
 }
 
+#[hash_mode]
 #[test]
-fn test_frame_golden_vector_decodes() {
+fn test_frame_golden_vector_decodes<H: HashMode>() {
     // The golden body is key-value-only, so its bytes are identical under
     // both hash modes; raw_header supplies the mode-correct header.
-    let mut wire = raw_header(ProofType::Range);
+    let mut wire = raw_header(ProofType::Range, H::ALGORITHM);
     wire.extend_from_slice(&hex::decode(GOLDEN_WIRE_TAIL).expect("valid hex"));
     let parsed = FrozenRangeProof::from_slice(&wire)
         .expect("checked-in compressed golden vector must always decode");
-    assert_eq!(parsed, golden_proof());
+    assert_eq!(parsed, golden_proof::<H>());
 }
 
+#[hash_mode]
 #[test]
-fn test_slow_malformed_wire_fuzz() {
+fn test_slow_malformed_wire_fuzz<H: HashMode>() {
     // Wire-level complement of test_slow_malformed_proof_fuzz: corrupts
     // the compressed wire instead of the canonical body.
     let rng = SeededRng::from_env_or_random();
     for i in 0..200 {
-        let (_, mut data) = generate_random_range_proof(&rng);
+        let (_, mut data) = generate_random_range_proof(&rng, H::ALGORITHM);
 
         let num_corruptions = rng.random_range(1usize..=3);
         for _ in 0..num_corruptions {
@@ -1668,9 +1731,10 @@ fn test_slow_malformed_wire_fuzz() {
         }
     }
 }
+#[hash_mode]
 #[test]
-fn test_header_validate_accepts_both_hash_modes() {
-    let (_, base) = create_valid_range_proof();
+fn test_header_validate_accepts_both_hash_modes<H: HashMode>() {
+    let (_, base) = create_valid_range_proof::<H>();
 
     for (byte, expected) in [
         (magic::MERKLEDB_HASH_MODE, NodeHashAlgorithm::MerkleDB),
@@ -1735,9 +1799,10 @@ fn test_hash_type_read_dispatches_on_threaded_mode() {
     );
 }
 
+#[hash_mode]
 #[test]
-fn test_verify_range_proof_rejects_hash_mode_mismatch() {
-    let (proof, _) = create_valid_range_proof();
+fn test_verify_range_proof_rejects_hash_mode_mismatch<H: HashMode>() {
+    let (proof, _) = create_valid_range_proof::<H>();
     let other_mode = if proof.hash_mode().is_ethereum() {
         NodeHashAlgorithm::MerkleDB
     } else {
@@ -1763,9 +1828,10 @@ fn test_verify_range_proof_rejects_hash_mode_mismatch() {
     }
 }
 
+#[hash_mode]
 #[test]
-fn test_verify_change_proof_structure_rejects_hash_mode_mismatch() {
-    let (proof, _) = create_valid_change_proof(DefaultHashMode::ALGORITHM);
+fn test_verify_change_proof_structure_rejects_hash_mode_mismatch<H: HashMode>() {
+    let (proof, _) = create_valid_change_proof(H::ALGORITHM);
     let other_mode = if proof.hash_mode().is_ethereum() {
         NodeHashAlgorithm::MerkleDB
     } else {
@@ -1845,12 +1911,16 @@ fn delete_range(prefix: Box<[u8]>) -> BoxedOp {
 
 /// Serializes a change proof carrying one operation, built by `op` from a key of
 /// `key_len` zero bytes.
-fn change_proof_with_key_len(op: fn(Box<[u8]>) -> BoxedOp, key_len: usize) -> Vec<u8> {
+fn change_proof_with_key_len(
+    op: fn(Box<[u8]>) -> BoxedOp,
+    key_len: usize,
+    hash_mode: NodeHashAlgorithm,
+) -> Vec<u8> {
     let proof = FrozenChangeProof::new(
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([op(vec![0u8; key_len].into_boxed_slice())]),
-        DefaultHashMode::ALGORITHM,
+        hash_mode,
     );
     let mut serialized = Vec::new();
     proof
@@ -1888,14 +1958,19 @@ fn assert_bound_outcome<T: std::fmt::Debug>(
 
 /// Every batch operation's key is bounded. A key at the bound deserializes and
 /// one byte over is rejected.
+#[hash_mode]
 #[test_case(put, MAX_KEY_BYTES, true ; "put at the bound")]
 #[test_case(put, MAX_KEY_BYTES + 1, false ; "put one byte over")]
 #[test_case(delete, MAX_KEY_BYTES, true ; "delete at the bound")]
 #[test_case(delete, MAX_KEY_BYTES + 1, false ; "delete one byte over")]
 #[test_case(delete_range, MAX_KEY_BYTES, true ; "delete range at the bound")]
 #[test_case(delete_range, MAX_KEY_BYTES + 1, false ; "delete range one byte over")]
-fn test_batch_op_key_length_bound(op: fn(Box<[u8]>) -> BoxedOp, key_len: usize, accepted: bool) {
-    let data = change_proof_with_key_len(op, key_len);
+fn test_batch_op_key_length_bound<H: HashMode>(
+    op: fn(Box<[u8]>) -> BoxedOp,
+    key_len: usize,
+    accepted: bool,
+) {
+    let data = change_proof_with_key_len(op, key_len, H::ALGORITHM);
     assert_bound_outcome(
         FrozenChangeProof::from_slice(&data),
         accepted,
@@ -1905,9 +1980,10 @@ fn test_batch_op_key_length_bound(op: fn(Box<[u8]>) -> BoxedOp, key_len: usize, 
 }
 
 /// The same bound applies to a range proof's key-value pairs.
+#[hash_mode]
 #[test_case(MAX_KEY_BYTES, true ; "at the bound")]
 #[test_case(MAX_KEY_BYTES + 1, false ; "one byte over")]
-fn test_range_proof_key_length_bound(key_len: usize, accepted: bool) {
+fn test_range_proof_key_length_bound<H: HashMode>(key_len: usize, accepted: bool) {
     let proof = FrozenRangeProof::new(
         Proof::new(Box::<[ProofNode]>::from([])),
         Proof::new(Box::<[ProofNode]>::from([])),
@@ -1915,7 +1991,7 @@ fn test_range_proof_key_length_bound(key_len: usize, accepted: bool) {
             vec![0u8; key_len].into_boxed_slice(),
             Box::from(b"v".as_slice()),
         )]),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
     let mut data = Vec::new();
     proof.write_to_vec(&mut data).expect("serialize proof");
@@ -1928,9 +2004,10 @@ fn test_range_proof_key_length_bound(key_len: usize, accepted: bool) {
 }
 
 /// A proof node's path is nibbles, so it is bounded in nibbles rather than bytes.
+#[hash_mode]
 #[test_case(MAX_KEY_NIBBLES, true ; "at the bound")]
 #[test_case(MAX_KEY_NIBBLES + 1, false ; "one nibble over")]
-fn test_proof_node_path_length_bound(nibbles: usize, accepted: bool) {
+fn test_proof_node_path_length_bound<H: HashMode>(nibbles: usize, accepted: bool) {
     let node = ProofNode {
         key: (0..nibbles)
             .map(|_| PathComponent::try_new(0).expect("0 is a valid nibble"))
@@ -1943,7 +2020,7 @@ fn test_proof_node_path_length_bound(nibbles: usize, accepted: bool) {
         Proof::new(Box::<[ProofNode]>::from([node])),
         Proof::new(Box::<[ProofNode]>::from([])),
         Box::new([]),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     );
     let mut data = Vec::new();
     proof.write_to_vec(&mut data).expect("serialize proof");
