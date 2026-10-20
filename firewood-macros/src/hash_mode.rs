@@ -116,7 +116,7 @@ fn validate_signature(sig: &syn::Signature) -> syn::Result<Vec<syn::Ident>> {
     // Wrappers make ordinary Rust calls and specialize exactly one type parameter.
     if sig.asyncness.is_some()
         || sig.constness.is_some()
-        || sig.unsafety.is_some()
+        || !matches!(sig.safety, syn::Safety::Default)
         || sig.abi.is_some()
         || sig.variadic.is_some()
         || sig.generics.where_clause.is_some()
@@ -136,7 +136,7 @@ fn validate_signature(sig: &syn::Signature) -> syn::Result<Vec<syn::Ident>> {
     let Some(TypeParamBound::Trait(bound)) = parameter.bounds.first() else {
         return Err(invalid());
     };
-    if bound.lifetimes.is_some() || !matches!(bound.modifier, syn::TraitBoundModifier::None) {
+    if bound.lifetimes.is_some() || bound.maybe.is_some() {
         return Err(invalid());
     }
 
