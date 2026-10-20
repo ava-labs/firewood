@@ -19,8 +19,9 @@ use firewood::db::BatchOp;
 use firewood::db::DbConfig;
 use firewood::db::UseParallel;
 use firewood::open;
-use firewood_storage::DefaultHashMode;
+use firewood_storage::EthHash;
 use firewood_storage::HashMode;
+use firewood_storage::MerkleDbHash;
 use pprof::ProfilerGuard;
 use rand::RngExt;
 use rand::distr::Alphanumeric;
@@ -35,7 +36,7 @@ const VALUE_LEN: usize = 32;
 type BenchBatch = api::OwnedBatch;
 
 // To enable flamegraph output:
-// cargo bench --bench proposal_reconstruct -- reconstructed_chain/nested --profile-time=5
+// cargo bench --bench proposal_reconstruct -- reconstructed_chain/ --profile-time=5
 enum FlamegraphProfiler {
     Init(c_int),
     Active(c_int, ProfilerGuard<'static>),
@@ -103,9 +104,9 @@ fn generate_batches() -> (BenchBatch, Vec<BenchBatch>) {
 }
 
 #[expect(clippy::unwrap_used)]
-fn bench_proposal_chain(criterion: &mut Criterion) {
+fn bench_proposal_chain<H: HashMode>(criterion: &mut Criterion) {
     criterion
-        .benchmark_group("proposal_chain")
+        .benchmark_group(format!("proposal_chain/{:?}", H::ALGORITHM))
         .sample_size(10)
         .warm_up_time(std::time::Duration::from_secs(5))
         .bench_function("nested", |b| {
@@ -115,7 +116,7 @@ fn bench_proposal_chain(criterion: &mut Criterion) {
                     let db_dir = TempDir::new().unwrap();
                     let db_path = db_dir.path().join("benchmark_db");
                     let cfg = DbConfig::builder().truncate(true).build();
-                    let db = open(db_path, DefaultHashMode::ALGORITHM, cfg).unwrap();
+                    let db = open(db_path, H::ALGORITHM, cfg).unwrap();
 
                     db.propose(initial).unwrap().commit().unwrap();
 
@@ -136,9 +137,9 @@ fn bench_proposal_chain(criterion: &mut Criterion) {
 }
 
 #[expect(clippy::unwrap_used)]
-fn bench_reconstructed_chain(criterion: &mut Criterion) {
+fn bench_reconstructed_chain<H: HashMode>(criterion: &mut Criterion) {
     criterion
-        .benchmark_group("reconstructed_chain")
+        .benchmark_group(format!("reconstructed_chain/{:?}", H::ALGORITHM))
         .sample_size(10)
         .warm_up_time(std::time::Duration::from_secs(5))
         .bench_function("nested", |b| {
@@ -154,7 +155,7 @@ fn bench_reconstructed_chain(criterion: &mut Criterion) {
                         .truncate(true)
                         .use_parallel(UseParallel::Never)
                         .build();
-                    let db = open(db_path, DefaultHashMode::ALGORITHM, cfg).unwrap();
+                    let db = open(db_path, H::ALGORITHM, cfg).unwrap();
 
                     db.propose(initial).unwrap().commit().unwrap();
 
@@ -186,7 +187,10 @@ criterion_group! {
         .with_profiler(FlamegraphProfiler::Init(100))
         .measurement_time(std::time::Duration::from_secs(30))
         .warm_up_time(std::time::Duration::from_secs(5));
-    targets = bench_proposal_chain, bench_reconstructed_chain
+    targets = bench_proposal_chain::<MerkleDbHash>,
+              bench_reconstructed_chain::<MerkleDbHash>,
+              bench_proposal_chain::<EthHash>,
+              bench_reconstructed_chain::<EthHash>
 }
 
 criterion_main!(benches);
