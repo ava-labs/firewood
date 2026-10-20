@@ -19,7 +19,7 @@ use firewood::db::BatchOp;
 use firewood::db::DbConfig;
 use firewood::db::UseParallel;
 use firewood::open;
-use firewood_storage::DefaultHashMode;
+use firewood_storage::EthHash;
 use firewood_storage::HashMode;
 use pprof::ProfilerGuard;
 use rand::RngExt;
@@ -115,7 +115,7 @@ fn bench_proposal_chain(criterion: &mut Criterion) {
                     let db_dir = TempDir::new().unwrap();
                     let db_path = db_dir.path().join("benchmark_db");
                     let cfg = DbConfig::builder().truncate(true).build();
-                    let db = open(db_path, DefaultHashMode::ALGORITHM, cfg).unwrap();
+                    let db = open(db_path, EthHash::ALGORITHM, cfg).unwrap();
 
                     db.propose(initial).unwrap().commit().unwrap();
 
@@ -154,7 +154,7 @@ fn bench_reconstructed_chain(criterion: &mut Criterion) {
                         .truncate(true)
                         .use_parallel(UseParallel::Never)
                         .build();
-                    let db = open(db_path, DefaultHashMode::ALGORITHM, cfg).unwrap();
+                    let db = open(db_path, EthHash::ALGORITHM, cfg).unwrap();
 
                     db.propose(initial).unwrap().commit().unwrap();
 

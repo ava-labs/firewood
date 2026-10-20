@@ -12,8 +12,8 @@ use firewood::db::BatchOp;
 use firewood::db::DbConfig;
 use firewood::manager::RevisionManagerConfig;
 use firewood::open;
-use firewood_storage::DefaultHashMode;
 use firewood_storage::HashMode;
+use firewood_storage::MerkleDbHash;
 use rand::RngExt;
 use rand::distr::Alphanumeric;
 
@@ -52,7 +52,7 @@ fn bench_deferred_persistence<const N: usize, const MAX_PERSISTENCE_GAP: u64>(
                                 .build(),
                         )
                         .build();
-                    let db = open(tmpdir, DefaultHashMode::ALGORITHM, dbcfg).unwrap();
+                    let db = open(tmpdir, MerkleDbHash::ALGORITHM, dbcfg).unwrap();
 
                     for op in batch_ops {
                         let batch: api::OwnedBatch = Box::new([op]);
