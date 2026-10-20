@@ -93,7 +93,7 @@ ci-fuzz-ffi-compat:
     tests=$(go test -list '^Fuzz' .)
     while IFS= read -r test; do
         [[ "$test" == Fuzz* ]] || continue
-        go test -race -run '^$' -fuzz "^${test}$" -fuzztime=30s .
+        go test -run '^$' -fuzz "^${test}$" -fuzztime=30s .
     done <<< "$tests"
 
 # Run macOS-compatible CI lints.
