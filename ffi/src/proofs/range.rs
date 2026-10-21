@@ -375,24 +375,20 @@ pub extern "C" fn fwd_db_range_proof_from_bytes(
 #[derive(Debug)]
 #[repr(C)]
 pub struct CreateSizedRangeProofArgs<'a> {
-    /// The root hash of the revision to prove. If the root is not found in
-    /// the database, the function will return
-    /// [`SizedRangeProofResult::RevisionNotFound`].
+    /// The root hash of the revision to prove.
     pub root: crate::HashKey,
-    /// The inclusive start key. If `None`, the proof starts at the beginning
-    /// of the keyspace. To continue after a chunk, pass a key strictly after
-    /// the last key that chunk proved, or that key is proved again.
+    /// The inclusive start key. If `None`, the proof starts from the
+    /// beginning of the keyspace.
     pub start_key: Maybe<BorrowedBytes<'a>>,
     /// The wire byte budget the serialized proof must fit.
     pub budget: u64,
-    /// The previous chunk's measured hint, or the zero value for none.
+    /// The previous chunk's hint, or the zero value for none.
     pub hint: SizingHint,
 }
 
 /// Generate a range proof from `start_key` whose serialized size approaches
-/// `budget` bytes and never exceeds it. The serialized wire bytes are
-/// returned alongside the proof handle: they were already computed during
-/// sizing, so send them rather than re-marshaling.
+/// `budget` bytes and never exceeds it. The wire bytes are returned with the
+/// proof, so they need not be marshaled again.
 ///
 /// # Arguments
 ///
@@ -406,30 +402,14 @@ pub struct CreateSizedRangeProofArgs<'a> {
 /// - [`SizedRangeProofResult::EmptyTrie`] if the trie is empty and no start key was given.
 /// - [`SizedRangeProofResult::OverBudget`] if one entry, or the edge proofs alone, do not fit.
 /// - [`SizedRangeProofResult::Ok`] containing the proof, its wire bytes, and the next hint.
-/// - [`SizedRangeProofResult::Err`] containing an error message, including for a
-///   start key on an empty trie, a budget this platform cannot represent, and a
-///   single entry whose proof body exceeds the decoder limit.
-///
-/// # Safety
-///
-/// The caller must:
-/// * ensure that `db` is a valid pointer to a [`DatabaseHandle`] for the
-///   duration of the call.
-/// * ensure that `args.start_key`, when present, is a valid [`BorrowedBytes`]
-///   whose pointer and length stay valid for the duration of the call.
-/// * free a returned proof with [`fwd_free_range_proof`], a returned wire with
-///   [`fwd_free_owned_bytes`], and a returned error with
-///   [`fwd_free_owned_bytes`].
-///
-/// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+/// - [`SizedRangeProofResult::Err`] containing an error message if the proof could not be created.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_db_range_proof_sized(
     db: Option<&DatabaseHandle>,
     args: CreateSizedRangeProofArgs,
 ) -> SizedRangeProofResult<'static> {
-    // static lifetime is safe because the returned result does not retain a
-    // reference to the provided database handle; the lifetime exists because
-    // a range proof may later be bound to the database that verifies it.
+    // static lifetime is safe because the returned `SizedRangeProofResult` does
+    // not retain a reference to the provided database handle.
     crate::invoke_with_handle(db, |db| {
         db.range_proof_sized(
             args.root.into(),
