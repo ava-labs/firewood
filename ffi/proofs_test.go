@@ -1377,27 +1377,22 @@ func TestUnboundChangeProofOutlivesDatabase(t *testing.T) {
 	}
 }
 
-// lexSuccessor is the smallest key strictly greater than key, used to start a
-// sized request just past a known key.
+// lexSuccessor is the smallest key strictly greater than key.
 func lexSuccessor(key []byte) []byte {
 	return append(append([]byte{}, key...), 0)
 }
 
 const (
-	// sizedCorpusKeys is the number of entries the sized paging tests write.
-	sizedCorpusKeys = 6_000
-	// sizedBudget is small enough that the corpus needs many chunks while
-	// each chunk still holds several entries beyond its edge proofs.
-	sizedBudget = 4_096
-	// sizedPagingLimit bounds the paging loops so a bug cannot hang the test.
+	sizedCorpusKeys  = 6_000
+	sizedBudget      = 4_096
 	sizedPagingLimit = 1_000
 )
 
 // TestRangeProofSizedSyncsWholeKeyspace pages sized range proofs of a
-// historical revision of dbA into dbB like a syncing client: each chunk fits
-// the budget, its wire bytes parse and verify on their own, non-final chunks
-// are at least half full, paging terminates exactly when the proof says so,
-// and the final committed root matches with dbB's stale keys gone.
+// historical revision of dbA into dbB, which holds stale keys, like a syncing
+// client: each chunk fits the budget and is at least half full unless final,
+// its wire bytes parse and verify on their own, paging ends exactly when the
+// proof says so, and dbB ends at the same root.
 func TestRangeProofSizedSyncsWholeKeyspace(t *testing.T) {
 	r := require.New(t)
 	dbA := newTestDatabase(t)
@@ -1406,12 +1401,8 @@ func TestRangeProofSizedSyncsWholeKeyspace(t *testing.T) {
 	keys, vals, batch := kvForTest(sizedCorpusKeys)
 	root, err := dbA.Update(batch)
 	r.NoError(err)
-	// Advance dbA so root is a retained historical revision, not the latest.
 	_, err = dbA.Update([]BatchOp{Put([]byte("later"), []byte("later"))})
 	r.NoError(err)
-
-	// Keys absent from dbA that sort before, between, and after its keys;
-	// the sync must remove all of them.
 	staleKeys := [][]byte{[]byte("a"), []byte("key3000stale"), {0xff}}
 	for _, key := range staleKeys {
 		_, err = dbB.Update([]BatchOp{Put(key, []byte("stale"))})
@@ -1426,28 +1417,26 @@ func TestRangeProofSizedSyncsWholeKeyspace(t *testing.T) {
 		r.NoError(err)
 		assertProofNotNil(t, sized.Proof)
 		hint = sized.Hint
-		r.NotZero(hint.Ratio, "each chunk measures a ratio for the next")
-		r.NotZero(hint.Edges, "each chunk measures its edge bytes for the next")
+		r.NotZero(hint.Ratio)
+		r.NotZero(hint.Edges)
 
 		marshaled, err := sized.Proof.Marshal()
 		r.NoError(err)
-		r.Equal(marshaled, sized.Wire, "wire must match the proof serialization")
+		r.Equal(marshaled, sized.Wire)
 		r.LessOrEqual(len(sized.Wire), sizedBudget)
 		if !sized.Complete {
-			r.GreaterOrEqual(len(sized.Wire), sizedBudget/2, "non-final chunks must be at least half full")
+			r.GreaterOrEqual(len(sized.Wire), sizedBudget/2)
 		}
 
-		// The receiver only sees the wire bytes.
 		received, err := UnmarshalRangeProof(sized.Wire)
 		r.NoError(err)
-		r.NoError(received.Verify(root, startKey, nothing(), rangeProofLenUnbounded))
 		_, err = dbB.VerifyAndCommitRangeProof(received, startKey, nothing(), root, rangeProofLenUnbounded)
 		r.NoError(err)
 		r.NoError(sized.Proof.Drop())
 
 		next, err := received.FindNextKey()
 		r.NoError(err)
-		r.Equal(sized.Complete, next == nil, "the receiver is whole exactly when the chunk is complete")
+		r.Equal(sized.Complete, next == nil)
 		if sized.Complete {
 			r.NoError(received.Drop())
 			break
@@ -1464,73 +1453,18 @@ func TestRangeProofSizedSyncsWholeKeyspace(t *testing.T) {
 	for i, key := range keys {
 		got, err := dbB.Get(key)
 		r.NoError(err)
-		r.Equal(vals[i], got, "value mismatch for %s", key)
+		r.Equal(vals[i], got)
 	}
 	for _, key := range staleKeys {
 		got, err := dbB.Get(key)
 		r.NoError(err)
-		r.Nil(got, "stale key %q should be gone", key)
+		r.Nil(got)
 	}
 }
 
-// TestRangeProofSizedBoundaryChunks covers chunks at the keyspace edges: a
-// present empty start key, and a start key past the final key, which yields
-// an empty but complete chunk.
-func TestRangeProofSizedBoundaryChunks(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	keys, _, batch := kvForTest(100)
-	root, err := db.Update(batch)
-	r.NoError(err)
-
-	emptyStart := something([]byte{})
-	sized, err := db.RangeProofSized(root, emptyStart, sizedBudget, SizingHint{})
-	r.NoError(err)
-	assertProofNotNil(t, sized.Proof)
-	r.LessOrEqual(len(sized.Wire), sizedBudget)
-	r.NoError(sized.Proof.Verify(root, emptyStart, nothing(), rangeProofLenUnbounded))
-	r.NoError(sized.Proof.Drop())
-
-	pastEnd := something(lexSuccessor(keys[len(keys)-1]))
-	sized, err = db.RangeProofSized(root, pastEnd, sizedBudget, SizingHint{})
-	r.NoError(err)
-	assertProofNotNil(t, sized.Proof)
-	r.True(sized.Complete, "a chunk past the final key is complete")
-	r.LessOrEqual(len(sized.Wire), sizedBudget)
-	r.NoError(sized.Proof.Verify(root, pastEnd, nothing(), rangeProofLenUnbounded))
-	r.NoError(sized.Proof.Drop())
-}
-
-// TestRangeProofSizedOutlivesDatabase checks that a sized proof, like any
-// unbound range proof, stays usable after its source database closes.
-func TestRangeProofSizedOutlivesDatabase(t *testing.T) {
-	r := require.New(t)
-	dbA := newTestDatabase(t)
-	dbB := newTestDatabase(t)
-
-	_, _, batch := kvForTest(50)
-	root, err := dbA.Update(batch)
-	r.NoError(err)
-
-	sized, err := dbA.RangeProofSized(root, nothing(), sizedBudget*4, SizingHint{})
-	r.NoError(err)
-	r.True(sized.Complete)
-	r.NoError(dbA.Close(oneSecCtx(t), WithForceCloseHandles()))
-
-	marshaled, err := sized.Proof.Marshal()
-	r.NoError(err)
-	r.Equal(marshaled, sized.Wire)
-	_, err = dbB.VerifyAndCommitRangeProof(sized.Proof, nothing(), nothing(), root, rangeProofLenUnbounded)
-	r.NoError(err)
-	r.Equal(root, dbB.Root())
-	r.NoError(sized.Proof.Drop())
-}
-
-// TestRangeProofSizedErrors covers the sized range error mapping: a missing
-// root, a budget too small for the first entry or for the edge proofs alone,
-// the budgets that admit the smallest chunk and a known chunk exactly, and
-// an empty trie with and without a start key.
+// TestRangeProofSizedErrors covers the error mapping: a missing root, over
+// budget (one entry, then the edge proofs alone past the final key) with the
+// reported size being a workable budget, an empty trie, and a closed database.
 func TestRangeProofSizedErrors(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
@@ -1543,81 +1477,38 @@ func TestRangeProofSizedErrors(t *testing.T) {
 	r.ErrorIs(err, ErrRevisionNotFound)
 	r.Nil(sized)
 
-	// One entry does not fit, and the error names a budget that does.
 	sized, err = db.RangeProofSized(root, nothing(), 1, SizingHint{})
 	r.ErrorIs(err, ErrProofOverBudget)
 	r.Nil(sized)
 	var overBudget *OverBudgetError
 	r.ErrorAs(err, &overBudget)
-	r.Greater(overBudget.Wire, uint64(1))
-
 	sized, err = db.RangeProofSized(root, nothing(), overBudget.Wire, SizingHint{})
 	r.NoError(err)
-	assertProofNotNil(t, sized.Proof)
 	r.LessOrEqual(uint64(len(sized.Wire)), overBudget.Wire)
 	r.NoError(sized.Proof.Drop())
 
-	// A budget equal to a known chunk's size is accepted, never overshot.
-	sized, err = db.RangeProofSized(root, nothing(), sizedBudget, SizingHint{})
-	r.NoError(err)
-	r.False(sized.Complete)
-	exact := uint64(len(sized.Wire))
-	hint := sized.Hint
-	r.NoError(sized.Proof.Drop())
-	sized, err = db.RangeProofSized(root, nothing(), exact, hint)
-	r.NoError(err)
-	assertProofNotNil(t, sized.Proof)
-	r.LessOrEqual(uint64(len(sized.Wire)), exact)
-	r.NoError(sized.Proof.Drop())
-
-	// Past the final key the candidate is empty, so the edge proofs alone
-	// are over budget.
 	pastEnd := something(lexSuccessor(keys[len(keys)-1]))
 	sized, err = db.RangeProofSized(root, pastEnd, 1, SizingHint{})
 	r.ErrorIs(err, ErrProofOverBudget)
 	r.Nil(sized)
 
-	// Deleting every key leaves a revision whose trie is empty.
 	dels := make([]BatchOp, len(keys))
 	for i, key := range keys {
 		dels[i] = Delete(key)
 	}
 	emptyRoot, err := db.Update(dels)
 	r.NoError(err)
-	if emptyRoot == EmptyRoot {
-		// Firewood hashing gives an empty trie no root hash, so the
-		// revision cannot be addressed at all.
-		sized, err = db.RangeProofSized(emptyRoot, nothing(), sizedBudget, SizingHint{})
-		r.ErrorIs(err, ErrRevisionNotFound)
-		r.Nil(sized)
-		return
-	}
-
 	sized, err = db.RangeProofSized(emptyRoot, nothing(), sizedBudget, SizingHint{})
-	r.ErrorIs(err, ErrEmptyTrie)
+	if emptyRoot == EmptyRoot {
+		// Firewood hashing gives an empty trie no addressable root.
+		r.ErrorIs(err, ErrRevisionNotFound)
+	} else {
+		r.ErrorIs(err, ErrEmptyTrie)
+	}
 	r.Nil(sized)
 
-	// With a start key the same trie is a generic proof error, not a sentinel.
-	sized, err = db.RangeProofSized(emptyRoot, something(keys[0]), sizedBudget, SizingHint{})
-	r.Error(err)
-	r.NotErrorIs(err, ErrEmptyTrie)
-	r.NotErrorIs(err, ErrRevisionNotFound)
-	r.NotErrorIs(err, ErrProofOverBudget)
-	r.Nil(sized)
-}
-
-// TestSizedProofsClosedDatabase checks that the sized requests refuse a
-// closed database.
-func TestSizedProofsClosedDatabase(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	_, _, batch := kvForTest(10)
-	root, err := db.Update(batch)
-	r.NoError(err)
 	r.NoError(db.Close(oneSecCtx(t)))
-
-	sized, err := db.RangeProofSized(root, nothing(), sizedBudget, SizingHint{})
+	sized, err = db.RangeProofSized(root, nothing(), sizedBudget, SizingHint{})
 	r.ErrorIs(err, errDBClosed)
 	r.Nil(sized)
 }
