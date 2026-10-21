@@ -185,11 +185,9 @@ type SizedProof[P any] struct {
 // the end of the keyspace.
 type SizedRangeProof = SizedProof[*RangeProof]
 
-// SizedChangeProof is a size-targeted change proof; see [SizedProof].
-// Complete means the proof reached the end of the diff, and it is the only
-// completion signal: [ChangeProof.FindNextKey] still returns a non-nil range
-// after the final chunk, so a non-nil result does not mean more changes
-// exist.
+// SizedChangeProof is a size-targeted change proof; Complete means it reached
+// the end of the diff and is the only completion signal, as
+// [ChangeProof.FindNextKey] is non-nil even after the final chunk.
 type SizedChangeProof = SizedProof[*ChangeProof]
 
 // NextKeyRange is a range of keys still to fetch, `[StartKey, EndKey]`, both
@@ -578,23 +576,11 @@ func (db *Database) ChangeProof(
 
 // ChangeProofSized returns a change proof between [startRoot] and [endRoot]
 // from the inclusive [startKey] whose serialized size approaches [budget]
-// bytes and never exceeds it. Both roots must be exact roots of retained
-// revisions.
-//
-// Send the result's Wire. Complete is the only completion signal: if it is
-// false, request the next chunk starting strictly after the last operation
-// in the proof, passing the result's Hint as [hint]; a hint-less request (the
-// zero SizingHint) needs extra sizing probes, so thread Hint through even
-// across retries. [ChangeProof.FindNextKey] yields that next start key
-// directly, but it also returns a non-nil range after the final chunk, so it
-// must not be used to detect completion.
-//
-// Errors: [ErrStartRevisionNotFound] if [startRoot] is not found;
-// [ErrEndRevisionNotFound] if [endRoot] is not found, which takes precedence
-// when both are missing; [ErrProofOverBudget], as an [OverBudgetError], if
-// one operation, or the edge proofs alone, do not fit in [budget]. Anything
-// else is a generic error, including an end revision whose trie is empty and
-// a single operation whose proof body exceeds the decoder's limit.
+// bytes and never exceeds it. If Complete is false, request the next chunk
+// from the start key of [ChangeProof.FindNextKey], passing Hint as [hint];
+// the zero SizingHint means no hint. Returns [ErrStartRevisionNotFound],
+// [ErrEndRevisionNotFound], or an [OverBudgetError] if even one operation
+// does not fit.
 func (db *Database) ChangeProofSized(
 	startRoot, endRoot Hash,
 	startKey Maybe[[]byte],
