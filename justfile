@@ -210,9 +210,10 @@ check-golang-version: check-nix
     echo "golang provided by ffi/flake.nix is ${NIX_VERSION}"
 
     if [[ "${GO_VERSION}" != "${NIX_VERSION}" ]]; then
-        echo "❌ golang provided by ffi/flake/nix should be ${GO_VERSION}"
-        echo "It will be necessary to update the golang.url in ffi/flake.nix to point to a SHA of"\
-             "AvalancheGo whose nix/go/flake.nix provides ${GO_VERSION}."
+        echo "❌ golang provided by ffi/flake.nix should be ${GO_VERSION}"
+        echo "Point golang.url in ffi/flake.nix at an AvalancheGo commit whose"\
+             "nix/go/default.nix sets goVersion to ${GO_VERSION}, then run update-ffi-flake."\
+             "See 'Updating the Go version' in CONTRIBUTING.md."
     fi
 
     if [[ -n "${FAILED}" ]]; then
