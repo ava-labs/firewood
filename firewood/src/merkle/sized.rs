@@ -59,12 +59,12 @@ impl CompressionRatio {
     /// The fixed-point representation of a 1:1 ratio.
     pub const SCALE: u32 = 1 << 16;
     /// An initial compressed/uncompressed estimate of 0.52.
-    const INITIAL_ESTIMATE: Self = Self::from_scaled(Self::SCALE * 52 / 100);
+    const INITIAL_ESTIMATE: Self = Self::nonzero(Self::SCALE * 52 / 100);
     // Clamp cross-page predictions to 64x compression or 2x expansion so one
     // unusual page cannot dominate the next. Flushed-block frames of constant
     // values reach ~40x, so the floor must sit above that.
-    const MIN_EXPECTED: Self = Self::from_scaled(Self::SCALE / 64);
-    const MAX_EXPECTED: Self = Self::from_scaled(Self::SCALE * 2);
+    const MIN_EXPECTED: Self = Self::nonzero(Self::SCALE / 64);
+    const MAX_EXPECTED: Self = Self::nonzero(Self::SCALE * 2);
 
     /// A ratio from its fixed-point representation, or `None` for zero.
     #[must_use]
@@ -75,18 +75,17 @@ impl CompressionRatio {
         }
     }
 
-    /// Zero rounds up to the smallest representable ratio.
-    const fn from_scaled(scaled: u32) -> Self {
-        Self(match NonZeroU32::new(scaled) {
-            Some(value) => value,
-            None => NonZeroU32::MIN,
-        })
+    /// A constant ratio; `scaled` must be non-zero.
+    const fn nonzero(scaled: u32) -> Self {
+        Self(NonZeroU32::new(scaled).expect("constant ratios are non-zero"))
     }
 
+    /// The measured ratio of a body, rounding zero up to the smallest ratio.
     fn from_lengths(compressed: usize, uncompressed: usize) -> Self {
         let uncompressed = NonZeroU128::new(uncompressed as u128).unwrap_or(NonZeroU128::MIN);
         let scaled = (compressed as u128).saturating_mul(u128::from(Self::SCALE)) / uncompressed;
-        Self::from_scaled(u32::try_from(scaled).unwrap_or(u32::MAX))
+        let scaled = u32::try_from(scaled).unwrap_or(u32::MAX);
+        Self(NonZeroU32::new(scaled).unwrap_or(NonZeroU32::MIN))
     }
 
     /// A measured body ratio, clamped for use as the next page's hint.
@@ -117,10 +116,7 @@ pub struct SizingHint {
 }
 
 impl SizingHint {
-    /// A hint from a measured body ratio and, if known, the body bytes the
-    /// edge proofs and length prefixes took. A hint only calibrates the first
-    /// candidate: one from another trie or keyspace costs probes, never
-    /// correctness.
+    /// A hint from a measured body ratio and, if known, the edge bytes.
     #[must_use]
     pub const fn new(ratio: CompressionRatio, edges: Option<usize>) -> Self {
         Self { ratio, edges }
@@ -152,7 +148,7 @@ pub struct SizedProof<P> {
 }
 
 impl<P> fmt::Debug for SizedProof<P> {
-    /// A bounded summary: the proof and wire payloads can be megabytes.
+    // Bounded: the payloads can be megabytes.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SizedProof")
             .field("wire_len", &self.wire.len())
@@ -345,6 +341,7 @@ pub(super) fn build_sized_chunk<B: ChunkBuilder>(
     let mut body = Vec::new();
     let mut wire = Vec::new();
     let mut ratio = hint.map_or(CompressionRatio::INITIAL_ESTIMATE, |h| h.ratio);
+    // Cap the default reserve so small budgets still admit items on the first probe.
     let mut edges = hint
         .and_then(|h| h.edges)
         .unwrap_or(DEFAULT_EDGE_BYTES.min(target / 2));
