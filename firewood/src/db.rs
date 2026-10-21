@@ -852,6 +852,15 @@ impl<'db, H: HashMode> api::DynProposal<'db> for Proposal<'db, H> {
         api::DbView::range_proof(self, first_key, last_key, limit)
     }
 
+    fn range_proof_sized(
+        &self,
+        start_key: Option<&[u8]>,
+        budget: usize,
+        hint: Option<SizingHint>,
+    ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
+        api::DbView::range_proof_sized(self, start_key, budget, hint)
+    }
+
     fn iter_option(
         &self,
         first_key: Option<&[u8]>,

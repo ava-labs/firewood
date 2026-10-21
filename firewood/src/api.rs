@@ -854,6 +854,18 @@ pub trait DynProposal<'db>: Debug + Send + Sync {
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, Error>;
 
+    /// Object-safe version of [`DbView::range_proof_sized`].
+    ///
+    /// # Errors
+    ///
+    /// As [`DbView::range_proof_sized`].
+    fn range_proof_sized(
+        &self,
+        start_key: Option<&[u8]>,
+        budget: usize,
+        hint: Option<SizingHint>,
+    ) -> Result<SizedProof<FrozenRangeProof>, Error>;
+
     /// Object-safe version of [`DbView::iter_option`].
     #[expect(clippy::missing_errors_doc)]
     fn iter_option(&self, first_key: Option<&[u8]>) -> Result<BoxKeyValueIter<'_>, Error>;

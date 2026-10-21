@@ -3,7 +3,6 @@
 
 mod concurrent_rebase;
 mod merge;
-mod sized;
 
 use super::test::TestDb;
 
