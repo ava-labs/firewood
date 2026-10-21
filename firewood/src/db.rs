@@ -114,6 +114,15 @@ where
         )
     }
 
+    fn range_proof_sized(
+        &self,
+        start_key: Option<&[u8]>,
+        budget: usize,
+        hint: Option<SizingHint>,
+    ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
+        Merkle::from(self).range_proof_sized(start_key, budget, hint)
+    }
+
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
         match first_key {
             Some(key) => Ok(MerkleKeyValueIter::from_key(self, key)),
@@ -241,16 +250,6 @@ impl<H: HashMode> api::DynDb for Db<H> {
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenChangeProof, api::Error> {
         Db::change_proof(self, start_hash, end_hash, start_key, end_key, limit)
-    }
-
-    fn range_proof_sized(
-        &self,
-        root: HashKey,
-        start_key: Option<&[u8]>,
-        budget: usize,
-        hint: Option<SizingHint>,
-    ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
-        Db::range_proof_sized(self, root, start_key, budget, hint)
     }
 
     fn change_proof_sized(
@@ -624,43 +623,10 @@ impl<H: HashMode> Db<H> {
         end_merkle.change_proof(start_key, end_key, start_merkle.nodestore(), limit)
     }
 
-    /// Generates a range proof from the inclusive lower bound `start_key` at
-    /// the revision or proposal `root`, whose serialized size approaches and
-    /// never exceeds `budget` bytes.
-    ///
-    /// To page, resume strictly above the last key of the returned proof and
-    /// pass its [`SizedProof::hint`] as `hint`; `None` requests an
-    /// uncalibrated chunk, which costs extra probes but is always valid.
-    ///
-    /// # Errors
-    ///
-    /// * [`api::Error::RevisionNotFound`] if `root` is neither a committed
-    ///   revision nor an active proposal.
-    /// * [`api::Error::RangeProofOnEmptyTrie`] if the trie is empty and
-    ///   `start_key` is `None`; with a `start_key`, an empty trie is
-    ///   [`ProofError::Empty`](crate::ProofError::Empty).
-    /// * [`api::Error::ProofOverBudget`] if one entry, or the edge proofs
-    ///   alone, serialize past `budget`.
-    /// * Other I/O or structural errors during proof generation.
-    pub fn range_proof_sized(
-        &self,
-        root: HashKey,
-        start_key: Option<&[u8]>,
-        budget: usize,
-        hint: Option<SizingHint>,
-    ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
-        // Proposals first, as `view` resolves roots.
-        if let Some(proposal) = self.manager.proposal(&root) {
-            return Merkle::from(proposal).range_proof_sized(start_key, budget, hint);
-        }
-        let rev = self.manager.revision(root)?;
-        Merkle::from(rev).range_proof_sized(start_key, budget, hint)
-    }
-
     /// Generates a change proof between two committed revisions from the
     /// inclusive lower bound `start_key`, whose serialized size approaches
     /// and never exceeds `budget` bytes. Paging and `hint` are as for
-    /// [`Self::range_proof_sized`].
+    /// [`api::DbView::range_proof_sized`].
     ///
     /// # Errors
     ///
@@ -828,6 +794,15 @@ impl<H: HashMode> api::DbView for Proposal<'_, H> {
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, api::Error> {
         api::DbView::range_proof(&*self.nodestore, first_key, last_key, limit)
+    }
+
+    fn range_proof_sized(
+        &self,
+        start_key: Option<&[u8]>,
+        budget: usize,
+        hint: Option<SizingHint>,
+    ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
+        api::DbView::range_proof_sized(&*self.nodestore, start_key, budget, hint)
     }
 
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
@@ -1036,6 +1011,15 @@ impl api::DbView for ReconstructedView<'_> {
             last_key.as_ref().map(AsRef::as_ref),
             limit,
         )
+    }
+
+    fn range_proof_sized(
+        &self,
+        start_key: Option<&[u8]>,
+        budget: usize,
+        hint: Option<SizingHint>,
+    ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
+        self.nodestore.range_proof_sized(start_key, budget, hint)
     }
 
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
