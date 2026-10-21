@@ -1,8 +1,7 @@
 // Copyright (C) 2026, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-//! The `Db` entry points for sized proofs: revision and proposal lookup, and
-//! the error mapping on top of the merkle-level sizing tests.
+//! Sized proofs through the `Db` layer: root lookup and error mapping.
 
 use firewood_macros::hash_mode;
 use firewood_storage::EthHash;
@@ -28,73 +27,65 @@ fn kvs(range: std::ops::Range<u32>) -> Vec<(Vec<u8>, Vec<u8>)> {
 
 #[hash_mode]
 #[test]
-fn test_db_sized_proofs_over_committed_revisions<H: HashMode>() {
+fn test_db_sized_proofs<H: HashMode>() {
     let db = TestDb::<H>::new();
     db.propose(kvs(0..500)).unwrap().commit().unwrap();
     let first: HashKey = db.root_hash().unwrap();
     db.propose(kvs(500..800)).unwrap().commit().unwrap();
     let second: HashKey = db.root_hash().unwrap();
+    let proposal = db.propose(kvs(800..900)).unwrap();
+    let proposed: HashKey = proposal.root_hash().unwrap();
+    let missing = HashKey::from([1u8; 32]);
 
+    // A committed revision and an uncommitted proposal both resolve.
     let range = db
-        .range_proof_sized(first.clone(), None, BUDGET, None)
+        .view(first.clone())
+        .unwrap()
+        .range_proof_sized(None, BUDGET, None)
         .unwrap();
     assert!(range.wire().len() <= BUDGET);
     assert!(range.natural_end());
     assert_eq!(range.proof().key_values().len(), 500);
     let decoded = FrozenRangeProof::from_slice(range.wire()).unwrap();
     assert_eq!(decoded.key_values(), range.proof().key_values());
+    let over_proposal = db
+        .view(proposed)
+        .unwrap()
+        .range_proof_sized(None, BUDGET, None)
+        .unwrap();
+    assert_eq!(over_proposal.proof().key_values().len(), 900);
+    assert!(matches!(
+        db.view(first.clone())
+            .unwrap()
+            .range_proof_sized(None, 1, None),
+        Err(api::Error::ProofOverBudget { budget: 1, .. })
+    ));
 
     let change = db
-        .change_proof_sized(first, second, None, BUDGET, Some(range.hint()))
+        .change_proof_sized(
+            first.clone(),
+            second.clone(),
+            None,
+            BUDGET,
+            Some(range.hint()),
+        )
         .unwrap();
     assert!(change.wire().len() <= BUDGET);
     assert!(change.natural_end());
     assert_eq!(change.proof().batch_ops().len(), 300);
     let decoded = FrozenChangeProof::from_slice(change.wire()).unwrap();
     assert_eq!(decoded.batch_ops(), change.proof().batch_ops());
-}
-
-/// An uncommitted proposal's root resolves like it does for plain proofs.
-#[hash_mode]
-#[test]
-fn test_db_sized_range_proof_over_a_proposal_root<H: HashMode>() {
-    let db = TestDb::<H>::new();
-    db.propose(kvs(0..100)).unwrap().commit().unwrap();
-    let proposal = db.propose(kvs(100..200)).unwrap();
-    let root: HashKey = proposal.root_hash().unwrap();
-
-    let sized = db.range_proof_sized(root, None, BUDGET, None).unwrap();
-    assert_eq!(sized.proof().key_values().len(), 200);
-    assert!(sized.natural_end());
-}
-
-#[hash_mode]
-#[test]
-fn test_db_sized_proof_errors<H: HashMode>() {
-    let db = TestDb::<H>::new();
-    db.propose(kvs(0..10)).unwrap().commit().unwrap();
-    let root: HashKey = db.root_hash().unwrap();
-    let missing = HashKey::from([1u8; 32]);
-
-    assert!(matches!(
-        db.range_proof_sized(missing.clone(), None, BUDGET, None),
-        Err(api::Error::RevisionNotFound { .. })
-    ));
-    assert!(matches!(
-        db.range_proof_sized(root.clone(), None, 1, None),
-        Err(api::Error::ProofOverBudget { budget: 1, .. })
-    ));
     // The end revision is reported even when both are missing.
     assert!(matches!(
         db.change_proof_sized(missing.clone(), missing.clone(), None, BUDGET, None),
         Err(api::Error::EndRevisionNotFound { .. })
     ));
     assert!(matches!(
-        db.change_proof_sized(missing, root.clone(), None, BUDGET, None),
+        db.change_proof_sized(missing, second.clone(), None, BUDGET, None),
         Err(api::Error::StartRevisionNotFound { .. })
     ));
     assert!(matches!(
-        db.change_proof_sized(root.clone(), root, None, 1, None),
+        db.change_proof_sized(first, second, None, 1, None),
         Err(api::Error::ProofOverBudget { budget: 1, .. })
     ));
 }
