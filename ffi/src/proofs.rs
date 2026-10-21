@@ -15,13 +15,3 @@ pub use self::change::*;
 pub use self::code_hash::*;
 pub use self::eth::*;
 pub use self::range::*;
-
-/// Converts a C `u64` byte budget for the sizer, rejecting one this platform
-/// cannot represent rather than silently altering the request.
-pub(crate) fn budget_to_usize(budget: u64) -> Result<usize, firewood::api::Error> {
-    usize::try_from(budget).map_err(|_| {
-        firewood::api::Error::InternalError(
-            format!("budget of {budget} bytes exceeds this platform's address space").into(),
-        )
-    })
-}

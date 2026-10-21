@@ -23,7 +23,6 @@ use crate::SizedChangeProofResult;
 use crate::SizingHint;
 use crate::ValueResult;
 use crate::VoidResult;
-use crate::proofs::budget_to_usize;
 
 /// Arguments for creating a change proof.
 #[derive(Debug)]
@@ -227,7 +226,7 @@ pub extern "C" fn fwd_db_change_proof_sized(
                 .as_ref()
                 .map(BorrowedBytes::as_slice)
                 .into_option(),
-            budget_to_usize(args.budget)?,
+            args.budget as usize,
             args.hint.into(),
         )
     })
