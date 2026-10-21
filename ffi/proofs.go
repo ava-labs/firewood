@@ -61,23 +61,11 @@ var (
 	errDroppedRangeProof    = fmt.Errorf("range proof %w", ErrDropped)
 	errDroppedChangeProof   = fmt.Errorf("change proof %w", ErrDropped)
 	errBoundToOtherDatabase = errors.New("range proof is bound to a different database")
-
-	// ErrEmptyTrie is returned when a range proof with no start key is
-	// requested on an empty trie.
-	ErrEmptyTrie = errors.New("a range proof was requested on an empty trie")
-
-	// ErrProofOverBudget is returned by the sized proof requests when even the
-	// smallest chunk, one entry or the edge proofs alone, exceeds the budget.
-	// The returned error is an [OverBudgetError] carrying that chunk's size.
-	ErrProofOverBudget = errors.New("the smallest proof chunk exceeds the byte budget")
 )
 
-// OverBudgetError is the error returned by the sized proof requests when even
-// the smallest chunk exceeds the budget. It matches [ErrProofOverBudget] in
-// [errors.Is].
+// OverBudgetError is the [ErrProofOverBudget] error, carrying the smallest
+// chunk's wire size in bytes.
 type OverBudgetError struct {
-	// Wire is the serialized size in bytes of the smallest chunk, so a
-	// budget of at least Wire lets that chunk through.
 	Wire uint64
 }
 
@@ -118,52 +106,34 @@ type ChangeProof struct {
 	*handle[*C.ChangeProofContext]
 }
 
-// SizingRatioScale is the fixed-point scale of [SizingHint.Ratio]: a ratio
-// equal to SizingRatioScale is 1:1, and smaller values mean the body
-// compressed. It is CompressionRatio::SCALE on the Rust side.
+// SizingRatioScale is the fixed-point scale of [SizingHint.Ratio]; a ratio
+// equal to it is 1:1.
 const SizingRatioScale uint32 = C.SIZING_RATIO_SCALE
 
-// SizingHint is what a sized proof measured about its chunk. Pass a result's
-// Hint as the next request's hint so its first candidate is calibrated; the
-// zero value means no hint. A hint is never validated against the proof
-// chain: one measured on another root or keyspace only costs extra sizing
-// probes, never correctness.
+// SizingHint is what a sized proof measured about its chunk; pass it as the
+// next request's hint. The zero value means no hint.
 type SizingHint struct {
-	// Ratio is the compressed/uncompressed body size ratio in fixed point,
-	// where [SizingRatioScale] is 1:1. Zero means no hint, in which case
-	// Edges is ignored too.
+	// Ratio is the compressed/uncompressed body size ratio in fixed point.
 	Ratio uint32
-	// Edges is the body bytes the edge proofs and their length prefixes took.
-	// Zero means unknown, not a measured zero.
+	// Edges is the body bytes the edge proofs took; zero means unknown.
 	Edges uint64
 }
 
-// SizedProof is one size-targeted proof chunk, as returned by
-// [Database.RangeProofSized].
+// SizedProof is a size-targeted proof chunk with its serialized wire bytes.
 type SizedProof[P interface{ Drop() error }] struct {
-	// Proof is the proof handle. The caller owns it and should Drop it once
-	// the chunk has been sent and paged past; otherwise the garbage collector
-	// frees it eventually.
+	// Proof is the proof handle, which the caller should Drop when done.
 	Proof P
-	// Wire is Proof's serialization, already computed during sizing: send
-	// these bytes rather than calling Marshal. It is a Go-owned copy that is
-	// independent of Proof and stays valid after Proof is dropped.
+	// Wire is Proof's serialization, ready to send without calling Marshal.
 	Wire []byte
-	// Complete reports whether this chunk reached the end of what was
-	// requested, so no further request is needed: the end of the keyspace
-	// for a range proof, the end of the diff for a change proof. It is
-	// out-of-band metadata, not part of Wire. A receiver must verify the
-	// proof (and, for a change proof, its end root) before trusting it;
-	// otherwise a peer could truncate a sync by claiming completion.
+	// Complete is true if no further request is needed. It is out-of-band
+	// metadata: verify the proof before trusting it.
 	Complete bool
-	// Hint is what this chunk measured; pass it as the next request's hint.
+	// Hint is the hint for the next request.
 	Hint SizingHint
 }
 
-// SizedRangeProof is a size-targeted range proof; see [SizedProof]. Complete
-// means the proof reached the end of the keyspace. After verification,
-// [RangeProof.FindNextKey] returns nil exactly when the receiver's trie is
-// whole, which for a complete chunk requires its root to match.
+// SizedRangeProof is a size-targeted range proof; Complete means it reached
+// the end of the keyspace.
 type SizedRangeProof = SizedProof[*RangeProof]
 
 func (h SizingHint) toC() C.SizingHint {
@@ -223,23 +193,10 @@ func (db *Database) RangeProof(
 
 // RangeProofSized returns a range proof of the revision [rootHash] from the
 // inclusive [startKey] whose serialized size approaches [budget] bytes and
-// never exceeds it. [rootHash] must be the exact root of a retained revision
-// or an active proposal; it is not an optional selector.
-//
-// Send the result's Wire. If Complete is false, request the next chunk
-// starting strictly after the last key in the proof, passing the result's
-// Hint as [hint]; a hint-less request (the zero SizingHint) needs extra sizing
-// probes, so thread Hint through even across retries. A receiver obtains that
-// next start key from [RangeProof.FindNextKey], which requires the proof to
-// have been verified with [Database.VerifyRangeProof] or
-// [Database.VerifyAndCommitRangeProof] first.
-//
-// Errors: [ErrRevisionNotFound] if [rootHash] is not found; [ErrEmptyTrie] if
-// the trie is empty and [startKey] is absent; [ErrProofOverBudget], as an
-// [OverBudgetError], if one entry, or the edge proofs alone, do not fit in
-// [budget]. Anything else is a generic error, including a present [startKey]
-// on an empty trie and a single entry whose proof body exceeds the decoder's
-// limit.
+// never exceeds it. If Complete is false, request the next chunk from the
+// start key of the verified proof's [RangeProof.FindNextKey], passing Hint as
+// [hint]; the zero SizingHint means no hint. Returns [ErrRevisionNotFound],
+// [ErrEmptyTrie], or an [OverBudgetError] if even one entry does not fit.
 func (db *Database) RangeProofSized(
 	rootHash Hash,
 	startKey Maybe[[]byte],
