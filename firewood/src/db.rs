@@ -60,6 +60,9 @@ use crate::merkle::Merkle;
 use crate::merkle::Value;
 use crate::merkle::changes::DiffMerkleNodeStream;
 use crate::merkle::verify_change_proof_root_hash;
+use crate::proofs::ChangeProofVerificationContext;
+use crate::proofs::ProofError;
+use crate::proofs::VerifiedChangeProof;
 use crate::verify_change_proof_structure;
 
 #[derive(Error, Debug)]
@@ -251,6 +254,14 @@ impl<H: HashMode> api::DynDb for Db<H> {
     ) -> Result<Box<dyn api::DynProposal<'_> + '_>, api::Error> {
         let proposal =
             Db::verify_change_proof(self, proof, end_root, start_key, end_key, max_length)?;
+        Ok(Box::new(proposal))
+    }
+
+    fn apply_verified_change_proof(
+        &self,
+        verified: &VerifiedChangeProof,
+    ) -> Result<Box<dyn api::DynProposal<'_> + '_>, api::Error> {
+        let proposal = Db::apply_verified_change_proof(self, verified)?;
         Ok(Box::new(proposal))
     }
 
@@ -516,15 +527,52 @@ impl<H: HashMode> Db<H> {
         // advertises a different mode.
         let verification = verify_change_proof_structure(
             proof,
-            end_root.clone(),
+            end_root,
             start_key,
             end_key,
             H::ALGORITHM,
             max_length,
         )?;
+        self.apply_change_proof_to_latest(proof, &verification)
+    }
+
+    /// Apply an already structurally verified change proof to the latest
+    /// revision and check the result against the `end_root` it was verified
+    /// with.
+    ///
+    /// This is [`Db::verify_change_proof`] without the structural pass, for a
+    /// caller holding a [`VerifiedChangeProof`]. Calling it again after the
+    /// database advances re-checks the root against the then-latest revision
+    /// without repeating the boundary-proof verification, whose result does
+    /// not depend on the revision.
+    ///
+    /// # Errors
+    ///
+    /// [`ProofError::HashModeMismatch`] when the proof was verified under a
+    /// hash mode other than this database's, or any error from applying the
+    /// operations or from the root hash check.
+    pub fn apply_verified_change_proof(
+        &self,
+        verified: &VerifiedChangeProof,
+    ) -> Result<Proposal<'_, H>, api::Error> {
+        let found = verified.proof().hash_mode();
+        if found != H::ALGORITHM {
+            return Err(api::Error::ProofError(ProofError::HashModeMismatch {
+                expected: H::ALGORITHM,
+                found,
+            }));
+        }
+        self.apply_change_proof_to_latest(verified.proof(), verified.verification())
+    }
+
+    fn apply_change_proof_to_latest(
+        &self,
+        proof: &FrozenChangeProof,
+        verification: &ChangeProofVerificationContext,
+    ) -> Result<Proposal<'_, H>, api::Error> {
         let parent = self.manager.current_revision();
         let proposal = self.apply_change_proof_to_parent(proof, &*parent)?;
-        verify_change_proof_root_hash(proof, &verification, &proposal)?;
+        verify_change_proof_root_hash(proof, verification, &proposal)?;
         Ok(proposal)
     }
 
