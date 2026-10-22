@@ -27,6 +27,12 @@ Apply these to every finding, in every agent and in the final report:
 - **Progress over perfection.** A change that is an improvement over the current codebase can be approved with minor comments outstanding. For larger out-of-scope improvements, suggest a follow-up issue or an annotated code `TODO(#issue)` rather than blocking.
 - **Respectful and constructive.** Comments guide the author; they do not discourage.
 
+### Public API design
+
+Changes to any crate's public interface should be as small and simple as
+possible while meeting caller needs. Keep implementation details private, and
+raise API complexity directly when a smaller contract would suffice.
+
 ## Writing a PR Description
 
 A PR description passes when a reviewer can tell what is broken (or missing) from the first line of *Why this should be merged* and how the change fixes it from the first line of *How this works* (`CONTRIBUTING.md` § Before Requesting a Review). To write a replacement:
