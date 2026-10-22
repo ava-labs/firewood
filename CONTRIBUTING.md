@@ -8,6 +8,7 @@ guidelines for contributing to firewood.
 
 * [Quick Links](#quick-links)
 * [Testing](#testing)
+* [Updating the Go version](#updating-the-go-version)
 * [How to submit changes](#how-to-submit-changes)
 * [Required merge checks](#required-merge-checks)
 * [Signing your commits](#signing-your-commits)
@@ -50,6 +51,28 @@ bare `cargo nextest run` tests on that nightly while CI tests on stable. See
 Also, if you update any versions of packages, notably the MSRV (Minimum Supported Rust Version), you ought to update the nix ffi flake lock file to pin compatible versions of nix packages as well:
 
     ./scripts/run-just.sh update-ffi-flake
+
+## Updating the Go version
+
+Firewood pins one Go version in several places, and CI fails when they
+disagree. To move to a different Go release, follow these steps:
+
+1. Set the `go` directive in `ffi/go.mod`, `ffi/tests/go.mod` and
+   `ffi/tools/external/go.mod` to the target version.
+2. Set `FIREWOOD_GO_VERSION` in `infra/toolchain-versions.sh`, and set
+   `FIREWOOD_GO_LINUX_AMD64_SHA256` to the checksum of
+   `go<version>.linux-amd64.tar.gz` from
+   <https://go.dev/dl/?mode=json&include=all>.
+3. Point the `golang.url` input in `ffi/flake.nix` at an AvalancheGo commit
+   whose `nix/go/default.nix` sets `goVersion` to the target version.
+   `ffi/flake.nix` takes its Go toolchain from AvalancheGo, so the version bump
+   must land in AvalancheGo first. To find the commit, look at the history of
+   `nix/go/default.nix` in AvalancheGo. For example, Go 1.26.10 arrived in
+   `4f8c6316bed83c3158aff4b4be43855caa14925f`.
+4. Run `./scripts/run-just.sh update-ffi-flake` to refresh `ffi/flake.lock`, and
+   commit the result. The `ffi-nix` CI job runs the same recipe and fails when it
+   changes the lock file or finds a Go version that disagrees with
+   `ffi/go.mod`.
 
 ## How to submit changes
 
