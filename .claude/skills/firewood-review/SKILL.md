@@ -178,7 +178,7 @@ Review the PR description against `.github/pull_request_template.md`:
 - Claims are factual and match the diff; motivation, behavior, scope, and impact are stated.
 - The first line of *Why this should be merged* says what is broken, the first line of *How this works* says how the change fixes it, and the rest does not restate the diff. If not, report a Warning and include a replacement written per [Writing a PR Description](#writing-a-pr-description).
 - It uses vocabulary from the README and codebase and introduces no undefined terms.
-- Labels match `CODE_REVIEW.md` § Labeling (e.g. `breaking-change`).
+- Labels match `LABELS.md` § How labels get applied (e.g. `area/c-chain`, `breaking-change`).
 
 Additionally:
 
