@@ -117,7 +117,8 @@ The `fwdctl` tool provides command-line operations on databases. See `fwdctl/REA
 
 ## Coding Conventions and Constraints
 
-For more information on coding conventions and constraints, please refer to [CONTRIBUTING.md](./CONTRIBUTING.md)
+See [`STYLE_GUIDE.md`](./STYLE_GUIDE.md) for the rules all code is held to, and
+[`CONTRIBUTING.md`](./CONTRIBUTING.md) for the contribution process.
 
 ## Commit and PR Title Convention
 
@@ -326,7 +327,8 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
 ## Key Files to Know
 
 - `README.md` - Main documentation
-- `CONTRIBUTING.md` - Contribution guidelines
+- `CONTRIBUTING.md` - Contribution guidelines and code review process
+- `STYLE_GUIDE.md` - Style guide that code is reviewed against
 - `RELEASE.md` - Release process
 - `CHANGELOG.md` - Version history
 - `.devcontainer/` - Development container configuration
@@ -372,14 +374,16 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
    tense or imperative, consistent terminology, no filler or hype, each piece of
    context stated once and cross-referenced from everywhere else. The same bar
    applies to user-facing strings — error messages, log lines, and CLI help. See
-   [Comments and documentation](./CONTRIBUTING.md#comments-and-documentation)
-   and [User-facing strings](./CONTRIBUTING.md#user-facing-strings).
+   [Comments and documentation](./STYLE_GUIDE.md#comments-and-documentation)
+   and [User-facing strings](./STYLE_GUIDE.md#user-facing-strings).
 
 9. **Workspace Awareness**: This is a multi-crate workspace. Changes may affect multiple crates. Check `Cargo.toml` for workspace structure.
 
 ## Code Review Guidelines
 
-See [`STYLE_GUIDE.md`](./STYLE_GUIDE.md) for the complete set of code review checks.
+Review changes against [`STYLE_GUIDE.md`](./STYLE_GUIDE.md), and word
+findings and choose a verdict per
+[`CONTRIBUTING.md` — Code Review Process](./CONTRIBUTING.md#code-review-process).
 
 ## Additional Resources
 

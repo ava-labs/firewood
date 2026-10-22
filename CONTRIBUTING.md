@@ -14,6 +14,7 @@ guidelines for contributing to firewood.
 * [Signing your commits](#signing-your-commits)
 * [Code Review Process](#code-review-process)
 * [Labels](#labels)
+* [Style guide](#style-guide)
 * [Where can I ask for help?](#where-can-i-ask-for-help)
 
 ## Quick Links
@@ -115,7 +116,9 @@ Code review is a critical part of our development process. It ensures that our c
 
 Reviews should be completed or commented within one business day. We have a daily reminder for reviews that have not been reviewed that is posted in slack's #firewood channel.
 
-When reviewing code, your goal is to help the author improve the quality of the change and confirm that it meets our architectural and operational standards. GitHub provides three primary review options:
+When reviewing code, your goal is to help the author improve the quality of the change and confirm that it meets our architectural and operational standards. Check the code against [`STYLE_GUIDE.md`](./STYLE_GUIDE.md), and check the PR against the author obligations in this document: the description rules in [Before Requesting a Review](#before-requesting-a-review), the [required merge checks](#required-merge-checks), the flake lock update in [Testing](#testing), and the [labels](#labels).
+
+GitHub provides three primary review options:
 
 #### ✅ Accept (Approve)
 
@@ -196,127 +199,12 @@ Issues and pull requests are organized with a namespaced label taxonomy
 Labels are managed as code in `.github/labels.yml` — edit the manifest, never
 the GitHub UI.
 
-## Style Guide / Coding Conventions
+## Style guide
 
-We generally follow the same rules that `cargo fmt` and `cargo clippy` will report as warnings, with a few notable exceptions as documented in the associated Cargo.toml file.
-
-By default, we prohibit bare `unwrap` calls and index dereferencing, as there are usually better ways to write this code. In the case where you can't, please use `expect` with a message explaining why it would be a bug, which we currently allow. For more information on our motivation, please read this great article on unwrap: [Using unwrap() in Rust is Okay](https://blog.burntsushi.net/unwrap) by [Andrew Gallant](https://blog.burntsushi.net).
-
-### Comments and documentation
-
-A comment competes with the code for the reader's attention and must win on
-information. Write what the code cannot say for itself — the invariant, the
-reason for the ordering, the failure the guard prevents, the layout of the bytes
-on disk. This comment loses, and deleting it improves the file:
-
-    // Increment the count.
-    self.count += 1;
-
-This one wins, because nothing in the surrounding code states it:
-
-    // Publish the free-list head only after the node is durable. A crash
-    // between the two leaks the space; the reverse order can hand out an
-    // address that still holds a live node.
-
-Be deliberate about what each comment carries:
-
-* **Self-contained and context free.** The reader is a stranger years from now
-  who did not see the review, does not know the issue number, and has no diff in
-  front of them. Describe the code as it stands, not as it changed: avoid "now",
-  "no longer", "previously", "this fix", and pointers to a review conversation.
-  History belongs in the commit message and the PR description.
-* **Said once.** State each piece of context in the place that owns it and refer
-  to that place from everywhere else — an intra-doc link in Rust
-  (`` [`NodeStore::flush_to`] ``), a doc link in Go (`[Revision.EthGetProof]`), or a
-  plain path (`see storage/src/nodestore/persist.rs`) where neither is available. Copies
-  drift, and a stale copy misleads more than a reference ever could.
-  [Documenting wrappers, shims, and FFI adapters](#documenting-wrappers-shims-and-ffi-adapters)
-  applies this rule to delegating functions.
-* **Consistent in voice.** Prefer the present tense or the imperative mood
-  ("returns the root hash", "hold the lock across the flush"). Use the
-  terminology defined in [AGENTS.md](./AGENTS.md#important-terminology) —
-  revision, view, proposal, commit, batch — rather than a synonym coined on the
-  spot, and do not alternate between "we", "you", and "the caller" within a
-  file.
-* **Free of filler.** No throat-clearing ("Note that", "It is important to note
-  that", "Basically"), no hype ("blazing fast", "robust", "cleanly handles"), no
-  prose restatement of the signature, and no doc section that exists only to be
-  present.
-
-### User-facing strings
-
-Error messages, log lines, and CLI help are part of the interface. Hold them to
-the same bar as the API:
-
-* Name what failed and what the operator can do about it. "failed to open
-  database" is a category; "failed to open database at {path}: {source}" is a
-  starting point for a fix.
-* Keep capitalization, punctuation, and terminology consistent across messages,
-  following the convention of the surface rather than inventing one: Rust error
-  strings are lowercase and unpunctuated because they are composed into a larger
-  chain, while CLI help is sentence case.
-* Make each message distinct enough that searching the source for it lands on a
-  single site.
-* Do not apologize, and do not suggest retrying unless a retry can succeed.
-
-Reviewers should challenge comments and strings that read as generated rather
-than written — padded, hedged, repeated at every call site, or narrating the
-change that introduced them. "This comment does not earn its line" and "say this
-once here and link to it from the other two places" are legitimate review
-feedback. See [`STYLE_GUIDE.md`](./STYLE_GUIDE.md) for the full review checklist.
-
-### Documenting wrappers, shims, and FFI adapters
-
-When a function exists only to delegate to another — an FFI adapter, a thin
-wrapper, or a shim that adds no behavior of its own — **do not duplicate the
-callee's documentation**. Duplicated docs drift: when the underlying function
-changes, every copy must be found and updated, and a stale copy misleads readers
-more than a one-line reference ever could.
-
-Instead:
-
-* Say what the wrapper *is* and link to the function it delegates to for the
-  details (parameters, return values, formats, and safety requirements). In
-  Rust, use intra-doc links (`` [`fwd_eth_get_proof`] ``) so readers can click
-  through to the canonical documentation.
-* Document only what is **unique to the wrapper**: why it exists (if
-  non-obvious), and any behavior it adds or changes — extra error conditions,
-  additional safety requirements, or different argument handling.
-* **Reference a target at least as visible as the item being documented.**
-  Public docs that link to a private item break — Rust fails CI, and Go renders
-  the link as dead plain text. A wrapper may delegate to a private helper for its
-  *implementation*, but its docs should reference the **public** canonical
-  function (or inline the details) — never the private helper.
-
-In Rust, `rustdoc` renders `[Type::method]` as a clickable link, so referencing
-the canonical documentation is both DRY and convenient — prefer it:
-
-    /// Produce an `eth_getProof`-compatible proof against a reconstructed view
-    /// rather than a committed revision.
-    ///
-    /// See [`fwd_eth_get_proof`] for the proof format, arguments, return values,
-    /// and key-encoding requirements.
-    ///
-    /// # Safety
-    ///
-    /// As [`fwd_eth_get_proof`], except `reconstructed` must be a valid pointer to
-    /// a [`ReconstructedHandle`].
-
-In Go, doc links such as `[Revision.EthGetProof]` (available since Go 1.19) are
-clickable on pkg.go.dev and navigable via `gopls`, just as in Rust, so the same
-balance applies: cross-reference the shared contract, but keep wrapper-specific
-details (such as error conditions) local rather than referring the reader away
-entirely. Go's style guides reinforce this preference for clarity over strict
-DRY — the [Google Go Style Guide][google-go-style] lists clarity as its foremost
-principle and does not treat DRY as overriding, and the
-[Uber Go Style Guide][uber-go-style] is likewise a catalog of conventions that
-favor clarity and consistency:
-
-    // EthGetProof is [Revision.EthGetProof] evaluated against this reconstructed
-    // view. It returns [ErrDroppedReconstructed] if the view has been released.
-
-[google-go-style]: https://google.github.io/styleguide/go/guide
-[uber-go-style]: https://github.com/uber-go/guide/blob/master/style.md
+`cargo fmt` and `cargo clippy` enforce the mechanical rules. Everything else the
+code is held to — panics and lint suppression, comments and user-facing strings,
+FFI safety — is in [`STYLE_GUIDE.md`](./STYLE_GUIDE.md). Read it before
+opening a PR; reviewers check changes against it.
 
 ## Where can I ask for help?
 

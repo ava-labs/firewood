@@ -11,7 +11,7 @@ allowed-tools: Read Write Bash Agent AskUserQuestion EnterWorktree ExitWorktree 
 
 Firewood-specific local code review. Dispatches parallel agents covering Rust toolchain validation, Go FFI checks, CI workflow analysis, and deep code quality. Never publishes review output to GitHub unless explicitly instructed.
 
-Code quality review rules are defined in [`STYLE_GUIDE.md`](../../../STYLE_GUIDE.md) (referenced from the Code Review Guidelines section of `AGENTS.md`). Agents should read it in full before beginning scrutiny.
+Code is reviewed against the style guide in [`STYLE_GUIDE.md`](../../../STYLE_GUIDE.md) (referenced from the Code Review Guidelines section of `AGENTS.md`). Agents should read it in full before beginning scrutiny.
 
 The review process itself follows [`CONTRIBUTING.md` — Code Review Process](../../../CONTRIBUTING.md#code-review-process), summarized in [Review Standards](#review-standards) below. They govern how findings are worded, which findings are reported, and which verdict is recommended.
 
@@ -182,8 +182,8 @@ Review the PR description against `.github/pull_request_template.md`:
 
 Additionally:
 
-- Read `CLAUDE.md` and `CONTRIBUTING.md` in full and check whether this PR's changes create any gaps or inconsistencies in those documents. Suggest specific wording updates if helpful.
-- If this review session itself introduces new conventions (e.g., a new skill, new workflow), note what should be added to `AGENTS.md` or `CONTRIBUTING.md`.
+- Read `CLAUDE.md`, `CONTRIBUTING.md`, and `STYLE_GUIDE.md` in full and check whether this PR's changes create any gaps or inconsistencies in those documents. Suggest specific wording updates if helpful.
+- If this review session itself introduces new conventions (e.g., a new skill, new workflow), note what should be added to `AGENTS.md`, `CONTRIBUTING.md`, or `STYLE_GUIDE.md`.
 
 Write findings to `$SCRATCH/code-quality.txt`.
 
