@@ -18,7 +18,6 @@ use crate::HashKey;
 use crate::HashResult;
 use crate::KeyRange;
 use crate::Maybe;
-use crate::NextKeyRangeResult;
 use crate::NextKeyRangesResult;
 use crate::OwnedBytes;
 use crate::OwnedSlice;
@@ -123,20 +122,6 @@ impl ChangeProofContext {
             max_length,
             proposal_state: ProposalState::Proposed(proposal.handle),
         })
-    }
-
-    /// Returns the next key range to fetch for a change proof,
-    /// or `None` if there are no more keys to fetch.
-    ///
-    /// Only inspects the proof structure — does not require a proposal.
-    /// `end_key` is the original requested end key passed to the proof
-    /// generator.
-    fn find_next_key(&self, end_key: Option<&[u8]>) -> Result<Option<KeyRange>, api::Error> {
-        firewood::find_next_key_after_change_proof(&self.proof, end_key)
-    }
-
-    fn code_hash_iter(&self) -> Result<CodeIteratorHandle<'_>, api::Error> {
-        CodeIteratorHandle::from_batch_ops(self.proof.hash_mode(), self.proof.batch_ops())
     }
 }
 
@@ -316,90 +301,6 @@ pub extern "C" fn fwd_db_verify_change_proof<'db>(
             NonZeroUsize::new(args.max_length as usize),
         )
     })
-}
-
-/// Verify and commit a change proof in a single call.
-///
-/// Verifies structural validity and root hash, creates a proposal, and
-/// commits it with automatic rebase if needed. The proof is borrowed,
-/// not consumed — it remains available for `fwd_change_proof_find_next_key`
-/// or serialization afterward.
-///
-/// # Returns
-///
-/// - [`HashResult::NullHandlePointer`] if the caller provided a null pointer
-///   to either the database or the proof.
-/// - [`HashResult::None`] if the trie has no root hash (MerkleDB mode only;
-///   Ethereum mode always returns a root hash, even for an empty trie).
-/// - [`HashResult::Some`] containing the new root hash.
-/// - [`HashResult::Err`] if verification or commit failed.
-#[unsafe(no_mangle)]
-pub extern "C" fn fwd_db_verify_and_commit_change_proof(
-    db: Option<&DatabaseHandle>,
-    proof: Option<&ChangeProofContext>,
-    args: CreateChangeProofArgs<'_>,
-) -> HashResult {
-    let handle = db.zip(proof);
-    crate::invoke_with_handle(handle, |(db, ctx)| {
-        let proposal = db.verify_change_proof(
-            &ctx.proof,
-            args.end_root.into(),
-            args.start_key.into_option().as_deref(),
-            args.end_key.into_option().as_deref(),
-            NonZeroUsize::new(args.max_length as usize),
-        )?;
-        proposal.handle.commit_proposal_with_rebase()
-    })
-}
-
-/// Determine the next key range to fetch for a change proof.
-///
-/// The proof is not consumed by this call. `end_key` is the original
-/// requested end key passed to the proof generator.
-///
-/// Returns:
-/// - [`NextKeyRangeResult::None`] if there are no more keys to fetch.
-/// - [`NextKeyRangeResult::Some`] containing the next key range to fetch.
-/// - [`NextKeyRangeResult::Err`] if an error occurred.
-#[unsafe(no_mangle)]
-pub extern "C" fn fwd_change_proof_find_next_key(
-    proof: Option<&ChangeProofContext>,
-    end_key: Maybe<BorrowedBytes>,
-) -> NextKeyRangeResult {
-    crate::invoke_with_handle(proof, |ctx| {
-        ctx.find_next_key(end_key.into_option().as_deref())
-    })
-}
-
-/// Returns an iterator over the code hashes contained in the change proof.
-/// The iterator must be freed after use.
-///
-/// Only `BatchOp::Put` entries contribute code hashes; `Delete` and
-/// `DeleteRange` entries are skipped. Can be called at any time after
-/// the proof has been created.
-///
-/// # Arguments
-///
-/// - `proof` - A [`ChangeProofContext`] previously returned from the create
-///   method or deserialized from bytes.
-///
-/// # Returns
-///
-/// - [`CodeIteratorResult::NullHandlePointer`] if the caller provided a null pointer.
-/// - [`CodeIteratorResult::Ok`] containing a pointer to the `CodeIteratorHandle` if successful.
-/// - [`CodeIteratorResult::Err`] containing an error message if the iterator could not be created.
-///
-/// # Thread Safety
-///
-/// It is not safe to call this function concurrently with the same proof context
-/// nor is it safe to call any other function that accesses the same proof context
-/// concurrently. The caller must ensure exclusive access to the proof context
-/// for the duration of the call.
-#[unsafe(no_mangle)]
-pub extern "C" fn fwd_change_proof_code_hash_iter(
-    proof: Option<&ChangeProofContext>,
-) -> CodeIteratorResult<'_> {
-    crate::invoke_with_handle(proof, ChangeProofContext::code_hash_iter)
 }
 
 /// Commit a verified change proof to its database.
