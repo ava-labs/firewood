@@ -5,7 +5,6 @@
 # Guides
 
 - [Getting Started]()
-  - [Development Environment]()
 
 # Concepts
 
@@ -13,7 +12,9 @@
 
 # Design Documents
 
-- [Designs]()
+- [Design Documents](designs/README.md)
+  - [Firewood mdBook Documentation Site](designs/2026-06-17-mdbook-documentation-site.md)
+  - [Template](designs/template.md)
 
 # Integration
 
@@ -25,7 +26,7 @@
 
 # Reference
 
-- [Reference]()
+- [Reference](reference/README.md)
 
 # Meta
 
