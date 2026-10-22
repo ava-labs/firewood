@@ -54,7 +54,7 @@ Pass `$SCRATCH` to every subagent as part of its prompt.
 **PR review** — prompt names a PR number, branch, or URL:
 
 1. **Gate on draft status first.** Run `gh pr view <PR_NUMBER> --json isDraft,state`. If the PR is a draft or its state is not `OPEN`, stop and use `AskUserQuestion` to ask whether to proceed before checking anything out or dispatching agents — draft PRs are usually not ready for review.
-2. If worktrees are available and no worktree is already checked out for this PR, create a dedicated worktree via `EnterWorktree` for the PR branch. Otherwise fall back to `gh pr co <PR_NUMBER>`. Create at most one checkout per review; subagents work in it and must not create worktrees or clones of their own.
+2. If worktrees are available and no worktree is already checked out for this PR, create a dedicated worktree via `EnterWorktree` for the PR branch. Otherwise fall back to `gh pr co <PR_NUMBER>`. Create at most one checkout per review - subagents can share worktrees and therefore, should not create worktrees of their own.
 3. Skip checkout if the prompt says the workspace is already on the PR branch.
 4. Fetch PR metadata — prefer the `github` MCP if available, otherwise fall back to `gh` CLI:
 
@@ -244,8 +244,8 @@ After all agents complete, read `$SCRATCH/*.txt` (and the agents' final response
 
 3. **Recommend a verdict** per `CONTRIBUTING.md` § Code Review Process:
    - **Approve** — the change is an improvement over the current codebase. Warnings and nits may remain as comments.
-   - **Comment** — the review is incomplete (for example, the PR is too large to review in 30–60 minutes; include a proposed split), or it raises only questions or optional suggestions that need answers before a decision.
-   - **Request changes** — at least one verified Blocking finding. The same reviewer re-reviews after revisions.
+   - **Comment** — the review is incomplete, or it raises only questions or optional suggestions that need answers before a decision.
+   - **Request changes** — at least one verified Blocking finding, or the PR is too large to review in 30–60 minutes (include a proposed split). The same reviewer re-reviews after revisions.
 
 4. Present the report in the current conversation, including any replacement PR description from `code-quality` so the reviewer can offer it to the author. Do not publish to GitHub unless the user explicitly asks.
 
