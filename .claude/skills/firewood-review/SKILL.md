@@ -86,7 +86,7 @@ Pass `$SCRATCH` to every subagent as part of its prompt.
 **PR description only** — prompt asks for a better, shorter, or rewritten PR description:
 
 1. Skip the draft gate and checkout. Run PR review steps 4–5, fetch the diff with `gh pr diff <PR_NUMBER>`, and fetch CI results with the `ci-review` command below.
-2. Skip Phase 1. Write a replacement following [Writing a PR Description](#writing-a-pr-description) and present it with a one-line note per claim you dropped or changed.
+2. Head to phase 2 (synthesis) and write a replacement following [Writing a PR Description](#writing-a-pr-description) and present it with a one-line note per claim you dropped or changed.
 3. Do not edit the PR unless the user asks.
 
 ### Detect Changed File Types
