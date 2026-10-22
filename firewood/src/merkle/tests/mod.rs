@@ -3,6 +3,7 @@
 
 mod change;
 mod collapse;
+mod descend;
 #[cfg(feature = "ethhash")]
 mod ethhash;
 #[cfg(feature = "ethhash")]
