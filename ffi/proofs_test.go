@@ -1400,3 +1400,139 @@ func TestUnboundChangeProofOutlivesDatabase(t *testing.T) {
 		})
 	}
 }
+
+// lexSuccessor is the smallest key strictly greater than key.
+func lexSuccessor(key []byte) []byte {
+	return append(append([]byte{}, key...), 0)
+}
+
+const (
+	sizedCorpusKeys  = 6_000
+	sizedBudget      = 4_096
+	sizedPagingLimit = 1_000
+)
+
+// TestRangeProofSizedSyncsWholeKeyspace pages sized range proofs of a
+// historical revision of dbA into dbB, which holds stale keys, like a syncing
+// client: each chunk fits the budget and is at least half full unless final,
+// its wire bytes parse and verify on their own, paging ends exactly when the
+// proof says so, and dbB ends at the same root.
+func TestRangeProofSizedSyncsWholeKeyspace(t *testing.T) {
+	r := require.New(t)
+	dbA := newTestDatabase(t)
+	dbB := newTestDatabase(t)
+
+	keys, vals, batch := kvForTest(sizedCorpusKeys)
+	root, err := dbA.Update(batch)
+	r.NoError(err)
+	_, err = dbA.Update([]BatchOp{Put([]byte("later"), []byte("later"))})
+	r.NoError(err)
+	staleKeys := [][]byte{[]byte("a"), []byte("key3000stale"), {0xff}}
+	for _, key := range staleKeys {
+		_, err = dbB.Update([]BatchOp{Put(key, []byte("stale"))})
+		r.NoError(err)
+	}
+
+	startKey := nothing()
+	var hint SizingHint
+	chunks := 0
+	for {
+		sized, err := dbA.RangeProofSized(root, startKey, sizedBudget, hint)
+		r.NoError(err)
+		assertProofNotNil(t, sized.Proof)
+		hint = sized.Hint
+		r.NotZero(hint.Ratio)
+		r.NotZero(hint.Edges)
+
+		marshaled, err := sized.Proof.Marshal()
+		r.NoError(err)
+		r.Equal(marshaled, sized.Wire)
+		r.LessOrEqual(len(sized.Wire), sizedBudget)
+		if !sized.Complete {
+			r.GreaterOrEqual(len(sized.Wire), sizedBudget/2)
+		}
+
+		received, err := UnmarshalRangeProof(sized.Wire)
+		r.NoError(err)
+		_, err = dbB.VerifyAndCommitRangeProof(received, startKey, nothing(), root, rangeProofLenUnbounded)
+		r.NoError(err)
+		r.NoError(sized.Proof.Drop())
+
+		next, err := received.FindNextKey()
+		r.NoError(err)
+		r.Equal(sized.Complete, next == nil)
+		if sized.Complete {
+			r.NoError(received.Drop())
+			break
+		}
+		startKey = something(next.StartKey())
+		r.NoError(next.Free())
+		r.NoError(received.Drop())
+
+		chunks++
+		r.Less(chunks, sizedPagingLimit, "runaway paging")
+	}
+	r.Positive(chunks, "budget should force multiple chunks")
+	r.Equal(root, dbB.Root())
+	for i, key := range keys {
+		got, err := dbB.Get(key)
+		r.NoError(err)
+		r.Equal(vals[i], got)
+	}
+	for _, key := range staleKeys {
+		got, err := dbB.Get(key)
+		r.NoError(err)
+		r.Nil(got)
+	}
+}
+
+// TestRangeProofSizedErrors covers the error mapping: a missing root, over
+// budget (one entry, then the edge proofs alone past the final key) with the
+// reported size being a workable budget, an empty trie, and a closed database.
+func TestRangeProofSizedErrors(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, _, batch := kvForTest(sizedCorpusKeys)
+	root, err := db.Update(batch)
+	r.NoError(err)
+
+	sized, err := db.RangeProofSized(Hash{1}, nothing(), sizedBudget, SizingHint{})
+	r.ErrorIs(err, ErrRevisionNotFound)
+	r.Nil(sized)
+
+	sized, err = db.RangeProofSized(root, nothing(), 1, SizingHint{})
+	r.ErrorIs(err, ErrProofOverBudget)
+	r.Nil(sized)
+	var overBudget *OverBudgetError
+	r.ErrorAs(err, &overBudget)
+	sized, err = db.RangeProofSized(root, nothing(), overBudget.Wire, SizingHint{})
+	r.NoError(err)
+	r.LessOrEqual(uint64(len(sized.Wire)), overBudget.Wire)
+	r.NoError(sized.Proof.Drop())
+
+	pastEnd := something(lexSuccessor(keys[len(keys)-1]))
+	sized, err = db.RangeProofSized(root, pastEnd, 1, SizingHint{})
+	r.ErrorIs(err, ErrProofOverBudget)
+	r.Nil(sized)
+
+	dels := make([]BatchOp, len(keys))
+	for i, key := range keys {
+		dels[i] = Delete(key)
+	}
+	emptyRoot, err := db.Update(dels)
+	r.NoError(err)
+	sized, err = db.RangeProofSized(emptyRoot, nothing(), sizedBudget, SizingHint{})
+	if emptyRoot == EmptyRoot {
+		// Firewood hashing gives an empty trie no addressable root.
+		r.ErrorIs(err, ErrRevisionNotFound)
+	} else {
+		r.ErrorIs(err, ErrEmptyTrie)
+	}
+	r.Nil(sized)
+
+	r.NoError(db.Close(oneSecCtx(t)))
+	sized, err = db.RangeProofSized(root, nothing(), sizedBudget, SizingHint{})
+	r.ErrorIs(err, errDBClosed)
+	r.Nil(sized)
+}
