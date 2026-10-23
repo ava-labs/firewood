@@ -198,6 +198,11 @@ pub enum Error {
         expected: NodeHashAlgorithm,
         found: NodeHashAlgorithm,
     },
+
+    /// A proposed batch stores a zero-length value under the Ethereum hash
+    /// scheme, which hashes an empty value the same as no value.
+    #[error("empty values are not stored under the Ethereum hash scheme, delete the key instead")]
+    EmptyValue,
 }
 
 impl From<std::convert::Infallible> for Error {
@@ -253,6 +258,7 @@ impl From<CreateProposalError> for Error {
             CreateProposalError::InvalidConversionToPathComponent => {
                 Error::InvalidConversionToPathComponent
             }
+            CreateProposalError::EmptyValue => Error::EmptyValue,
         }
     }
 }
