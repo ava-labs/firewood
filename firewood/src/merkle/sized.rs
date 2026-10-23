@@ -3,6 +3,7 @@
 
 //! Range and change proofs sized to a serialized wire byte budget.
 
+use std::fmt;
 use std::num::NonZeroU32;
 use std::num::NonZeroU128;
 
@@ -42,42 +43,60 @@ const TARGET_FILL_PERCENT: usize = 99;
 /// Growth stops once the wire reaches this share of the budget.
 const SUFFICIENT_FILL_PERCENT: usize = 97;
 /// Body bytes assumed for the edge proofs and length prefixes until a hint
-/// or probe measures them. C-Chain edges run 9-15 KiB.
+/// or probe measures them, clamped to half the target so small budgets still
+/// admit a useful first candidate. C-Chain edges run 9-15 KiB.
 const DEFAULT_EDGE_BYTES: usize = 16 * 1024;
 /// Extra body bytes cut when a body exceeds the decoder's limit, so the
 /// rebuilt chunk lands under it despite a different right edge.
 const BODY_LIMIT_MARGIN: usize = 16 * 1024;
 
-/// Compressed/uncompressed body size fraction in fixed point.
+/// Compressed/uncompressed body size ratio in fixed point, with
+/// [`Self::SCALE`] meaning 1:1; values above it mean the body expanded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct CompressionRatio(NonZeroU32);
+pub struct CompressionRatio(NonZeroU32);
 
 impl CompressionRatio {
-    const SCALE: u32 = 1 << 16;
+    /// The fixed-point representation of a 1:1 ratio.
+    pub const SCALE: u32 = 1 << 16;
     /// An initial compressed/uncompressed estimate of 0.52.
-    const INITIAL_ESTIMATE: Self = Self::from_scaled(Self::SCALE * 52 / 100);
+    const INITIAL_ESTIMATE: Self = Self::nonzero(Self::SCALE * 52 / 100);
     // Clamp cross-page predictions to 64x compression or 2x expansion so one
     // unusual page cannot dominate the next. Flushed-block frames of constant
     // values reach ~40x, so the floor must sit above that.
-    const MIN_EXPECTED: Self = Self::from_scaled(Self::SCALE / 64);
-    const MAX_EXPECTED: Self = Self::from_scaled(Self::SCALE * 2);
+    const MIN_EXPECTED: Self = Self::nonzero(Self::SCALE / 64);
+    const MAX_EXPECTED: Self = Self::nonzero(Self::SCALE * 2);
 
-    const fn from_scaled(scaled: u32) -> Self {
-        Self(match NonZeroU32::new(scaled) {
-            Some(value) => value,
-            None => NonZeroU32::MIN,
-        })
+    /// A ratio from its fixed-point representation, or `None` for zero.
+    #[must_use]
+    pub const fn try_from_scaled(scaled: u32) -> Option<Self> {
+        match NonZeroU32::new(scaled) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
     }
 
+    /// A constant ratio; `scaled` must be non-zero.
+    const fn nonzero(scaled: u32) -> Self {
+        Self(NonZeroU32::new(scaled).expect("constant ratios are non-zero"))
+    }
+
+    /// The measured ratio of a body, rounding zero up to the smallest ratio.
     fn from_lengths(compressed: usize, uncompressed: usize) -> Self {
         let uncompressed = NonZeroU128::new(uncompressed as u128).unwrap_or(NonZeroU128::MIN);
         let scaled = (compressed as u128).saturating_mul(u128::from(Self::SCALE)) / uncompressed;
-        Self::from_scaled(u32::try_from(scaled).unwrap_or(u32::MAX))
+        let scaled = u32::try_from(scaled).unwrap_or(u32::MAX);
+        Self(NonZeroU32::new(scaled).unwrap_or(NonZeroU32::MIN))
     }
 
     /// A measured body ratio, clamped for use as the next page's hint.
     pub(super) fn measured(compressed: usize, uncompressed: usize) -> Self {
         Self::from_lengths(compressed, uncompressed).clamp(Self::MIN_EXPECTED, Self::MAX_EXPECTED)
+    }
+
+    /// The fixed-point representation, with [`Self::SCALE`] meaning 1:1.
+    #[must_use]
+    pub const fn scaled(self) -> u32 {
+        self.0.get()
     }
 
     fn uncompressed_for(self, compressed: usize) -> usize {
@@ -91,31 +110,86 @@ impl CompressionRatio {
 /// first candidate: pass a chunk's [`SizedProof::hint`] when requesting the
 /// chunk that follows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct SizingHint {
+pub struct SizingHint {
+    ratio: CompressionRatio,
+    edges: Option<usize>,
+}
+
+impl SizingHint {
+    /// A hint from a measured body ratio and, if known, the edge bytes.
+    #[must_use]
+    pub const fn new(ratio: CompressionRatio, edges: Option<usize>) -> Self {
+        Self { ratio, edges }
+    }
+
     /// Compressed/uncompressed ratio of the body.
-    pub(super) ratio: CompressionRatio,
+    #[must_use]
+    pub const fn ratio(self) -> CompressionRatio {
+        self.ratio
+    }
+
     /// Body bytes the edge proofs and length prefixes took; `None` assumes
-    /// [`DEFAULT_EDGE_BYTES`] until the first probe measures them.
-    pub(super) edges: Option<usize>,
+    /// 16 KiB (clamped to half the target) until the first probe measures
+    /// them.
+    #[must_use]
+    pub const fn edges(self) -> Option<usize> {
+        self.edges
+    }
 }
 
 /// A budget-targeted proof and its serialized wire representation.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no in-crate caller until the Db API exposes sized proofs"
-    )
-)]
-pub(super) struct SizedProof<P> {
+#[derive(Clone)]
+#[must_use]
+pub struct SizedProof<P> {
+    proof: P,
+    wire: Vec<u8>,
+    natural_end: bool,
+    hint: SizingHint,
+}
+
+impl<P> fmt::Debug for SizedProof<P> {
+    // Bounded: the payloads can be megabytes.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SizedProof")
+            .field("wire_len", &self.wire.len())
+            .field("natural_end", &self.natural_end)
+            .field("hint", &self.hint)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<P> SizedProof<P> {
     /// The selected prefix and its boundary proofs.
-    pub(super) proof: P,
-    /// The bytes produced by serializing `proof`.
-    pub(super) wire: Vec<u8>,
-    /// True once paging has reached the end of the keyspace/diff.
-    pub(super) natural_end: bool,
-    /// What this chunk measured, for the next request's `hint`.
-    pub(super) hint: SizingHint,
+    pub const fn proof(&self) -> &P {
+        &self.proof
+    }
+
+    /// The bytes produced by serializing the proof, never longer than the
+    /// requested budget.
+    #[must_use]
+    pub fn wire(&self) -> &[u8] {
+        &self.wire
+    }
+
+    /// True once paging has reached the end of the keyspace/diff. This is
+    /// out-of-band metadata, not part of the serialized proof: a receiver
+    /// must verify the proof before trusting it as the end of a sync.
+    #[must_use]
+    pub const fn natural_end(&self) -> bool {
+        self.natural_end
+    }
+
+    /// What this chunk measured, for the next request's hint.
+    #[must_use]
+    pub const fn hint(&self) -> SizingHint {
+        self.hint
+    }
+
+    /// The proof and its serialized bytes.
+    #[must_use]
+    pub fn into_parts(self) -> (P, Vec<u8>) {
+        (self.proof, self.wire)
+    }
 }
 
 impl<T: TrieReader> Merkle<T> {
@@ -130,8 +204,10 @@ impl<T: TrieReader> Merkle<T> {
     ///   `start_key` is `None`, matching [`Merkle::range_proof`].
     /// * [`api::Error::ProofOverBudget`] - one entry, or the edge proofs
     ///   alone, serialize past `budget`.
+    /// * [`ProofError::BodyTooLarge`] - one entry alone exceeds the decoder's
+    ///   body limit, so it can never be sent regardless of budget.
     /// * A bounded request on an empty trie returns [`ProofError::Empty`].
-    /// * Proof generation, iteration, body-size, or compression errors.
+    /// * Proof generation, iteration, or compression errors.
     #[cfg_attr(
         not(test),
         expect(
@@ -139,7 +215,7 @@ impl<T: TrieReader> Merkle<T> {
             reason = "no in-crate caller until the `Db` API exposes sized proofs"
         )
     )]
-    pub(super) fn range_proof_sized(
+    pub(crate) fn range_proof_sized(
         &self,
         start_key: Option<&[u8]>,
         budget: usize,
@@ -191,7 +267,7 @@ impl<T: HashedNodeReader> Merkle<T> {
             reason = "no in-crate caller until the `Db` API exposes sized proofs"
         )
     )]
-    pub(super) fn change_proof_sized(
+    pub(crate) fn change_proof_sized(
         &self,
         source_trie: &impl HashedNodeReader,
         start_key: Option<&[u8]>,
@@ -265,7 +341,10 @@ pub(super) fn build_sized_chunk<B: ChunkBuilder>(
     let mut body = Vec::new();
     let mut wire = Vec::new();
     let mut ratio = hint.map_or(CompressionRatio::INITIAL_ESTIMATE, |h| h.ratio);
-    let mut edges = hint.and_then(|h| h.edges).unwrap_or(DEFAULT_EDGE_BYTES);
+    // Cap the default reserve so small budgets still admit items on the first probe.
+    let mut edges = hint
+        .and_then(|h| h.edges)
+        .unwrap_or(DEFAULT_EDGE_BYTES.min(target / 2));
     let mut count = 0usize;
     // The largest candidate that fit the budget.
     let mut fit: Option<Fit<B::Proof>> = None;
