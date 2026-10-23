@@ -14,7 +14,6 @@ guidelines for contributing to firewood.
 * [Signing your commits](#signing-your-commits)
 * [Code Review Process](#code-review-process)
 * [Labels](#labels)
-* [Style guide](#style-guide)
 * [Where can I ask for help?](#where-can-i-ask-for-help)
 
 ## Quick Links
@@ -116,9 +115,7 @@ Code review is a critical part of our development process. It ensures that our c
 
 Reviews should be completed or commented within one business day. We have a daily reminder for reviews that have not been reviewed that is posted in slack's #firewood channel.
 
-When reviewing code, your goal is to help the author improve the quality of the change and confirm that it meets our architectural and operational standards. Check the code against [`STYLE_GUIDE.md`](./STYLE_GUIDE.md), and check the PR against the author obligations in this document: the description rules in [Before Requesting a Review](#before-requesting-a-review), the [required merge checks](#required-merge-checks), the flake lock update in [Testing](#testing), and the [labels](#labels).
-
-GitHub provides three primary review options:
+When reviewing code, your goal is to help the author improve the quality of the change and confirm that it meets our architectural and operational standards. GitHub provides three primary review options:
 
 #### ✅ Accept (Approve)
 
@@ -199,12 +196,9 @@ Issues and pull requests are organized with a namespaced label taxonomy
 Labels are managed as code in `.github/labels.yml` — edit the manifest, never
 the GitHub UI.
 
-## Style guide
+## Style Guide / Coding Conventions
 
-`cargo fmt` and `cargo clippy` enforce the mechanical rules. Everything else the
-code is held to — panics and lint suppression, comments and user-facing strings,
-FFI safety — is in [`STYLE_GUIDE.md`](./STYLE_GUIDE.md). Read it before
-opening a PR; reviewers check changes against it.
+See [`STYLE_GUIDE.md`](./STYLE_GUIDE.md).
 
 ## Where can I ask for help?
 

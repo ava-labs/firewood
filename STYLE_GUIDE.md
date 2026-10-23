@@ -1,13 +1,11 @@
 # Style Guide
 
-These are the firewood-specific rules all code is held to, in addition to
-general best practices. Authors apply them while writing; reviewers check changes
-against them, following the
-[Code Review Process](./CONTRIBUTING.md#code-review-process).
+Apply these firewood-specific checks whenever reviewing code, suggesting changes, or
+providing inline feedback — in addition to general best practices.
 
-`cargo fmt` and `cargo clippy` enforce the mechanical rules, with the exceptions
-configured under `[workspace.lints]` in `Cargo.toml`. Everything below is either
-beyond what the tools can check or explains how to satisfy them.
+We generally follow the same rules that `cargo fmt` and `cargo clippy` will report as warnings, with a few notable exceptions as documented in the associated Cargo.toml file.
+
+By default, we prohibit bare `unwrap` calls and index dereferencing, as there are usually better ways to write this code. In the case where you can't, please use `expect` with a message explaining why it would be a bug, which we currently allow. For more information on our motivation, please read this great article on unwrap: [Using unwrap() in Rust is Okay](https://blog.burntsushi.net/unwrap) by [Andrew Gallant](https://blog.burntsushi.net).
 
 ## Rust
 
@@ -21,40 +19,38 @@ beyond what the tools can check or explains how to satisfy them.
   benefit. Reserve a reasoned `#[expect(clippy::arithmetic_side_effects, reason = "...")]`
   for the rare expression where every rewrite hurts clarity. Test-only arithmetic already
   runs under the dev-profile overflow canary, so a reasoned `#[expect]` there is
-  acceptable. See [Lint Suppression Policy](#lint-suppression-policy).
-- **`unwrap()`**: Not allowed in production code, and neither is
-  `#[allow(clippy::unwrap_used)]` or `#[expect(clippy::unwrap_used)]` there. There is
-  usually a better way to write the code; where there is not, use `expect`. Test context
-  is judged by location, not by `cfg(test)` alone: unit-test modules and integration
-  tests under `tests/` are exempt, and so are Criterion benches under `benches/`, which
-  are `harness = false` binaries that never compile with `cfg(test)` set. For the
-  motivation, see [Using unwrap() in Rust is Okay](https://blog.burntsushi.net/unwrap) by
-  [Andrew Gallant](https://blog.burntsushi.net).
-- **`expect()`**: The sanctioned alternative to `unwrap`. Clippy does not enforce
-  `expect_used`, so review is the only gate. The message states the invariant that makes
-  the panic unreachable — why reaching it would be a bug — rather than naming the
-  operation that failed; `.expect("valid")` and `.expect("should not fail")` do not
-  qualify. Where the caller can act on the failure, return a `Result` instead.
+  acceptable. See **Lint Suppression Policy** below.
+- **`unwrap()`**: Hard reject in production code, along with
+  `#[allow(clippy::unwrap_used)]` and `#[expect(clippy::unwrap_used)]` there. Judge test
+  context by location, not by `cfg(test)` alone: unit-test modules and integration tests
+  under `tests/` are exempt, and so are Criterion benches under `benches/`, which are
+  `harness = false` binaries that never compile with `cfg(test)` set.
+- **`expect()`**: The sanctioned alternative to `unwrap` (see
+  [Style Guide](#style-guide)), and clippy does not
+  enforce `expect_used`, so review is the only gate. The message must state the invariant
+  that makes the panic unreachable — why reaching it would be a bug — rather than name the
+  operation that failed. Reject `.expect("valid")` and `.expect("should not fail")`. Where
+  the caller can act on the failure, returning a `Result` beats any message.
 - **Lint suppression**: No local `#[allow(...)]` / `#![allow(...)]`. Use a reasoned
   `#[expect(...)]` (or `#[cfg_attr(<cfg>, expect(...))]` for feature-gated lints),
-  scoped as tightly as possible. See [Lint Suppression Policy](#lint-suppression-policy)
-  for the full rules and per-lint guidance.
-- **Error propagation (`?`)**: A propagated error carries enough context to diagnose the
-  failure at the call site. Errors are never silently discarded, and an error the
-  function should handle locally is not propagated upward.
+  scoped as tightly as possible. See **Lint Suppression Policy** below for the full rules
+  and per-lint guidance.
+- **Error propagation (`?`)**: Ensure propagated errors carry enough context to diagnose
+  the failure at the call site. Reject silently discarded errors and uses where the error
+  should be handled locally rather than propagated upward.
 - **Trie-depth recursion**: Trie depth follows key length, and a peer controls key length
   during proof verification. A function that recurses once per trie level, directly or
   through another function, must pass every recursive call through
-  `firewood_storage::ensure_stack`, so depth costs heap rather than call stack. This
-  covers compiler-generated recursion too: `Node`'s `Clone` and `BranchNode`'s `Drop` are
+  `firewood_storage::ensure_stack`, so depth costs heap rather than call stack. Check
+  compiler-generated recursion too: `Node`'s `Clone` and `BranchNode`'s `Drop` are
   hand-written for this reason and must not be re-derived, and a new `Child` variant that
   can own a `Node` must be added to the scan in `BranchNode::drop`. `Node`'s derived
   `PartialEq` recurses and is for tests only.
 - **Nibble range bounds**: A nibble-path lower bound uses the empty slice for
   "unbounded" — the empty slice already sorts as the minimum key. An upper bound must be
   `Option<&[u8]>` with `None` for unbounded (+∞); reusing the empty slice there judges
-  every key out of range. Code that threads either bound through must get every
-  comparison site right. See `merkle::collapse::CollapseRange`.
+  every key out of range. When either bound is threaded through new code, check every
+  comparison site. See `merkle::collapse::CollapseRange`.
 
 ## Lint Suppression Policy
 
@@ -154,12 +150,6 @@ Be deliberate about what each comment carries:
   prose restatement of the signature, and no doc section that exists only to be
   present.
 
-Comments and strings that read as generated rather than written — padded,
-hedged, repeated at every call site, or narrating the change that introduced
-them — do not meet this bar. "This comment does not earn its line" and "say this
-once here and link to it from the other two places" are legitimate review
-feedback.
-
 ## User-facing strings
 
 Error messages, log lines, and CLI help are part of the interface. Hold them to
@@ -175,6 +165,12 @@ the same bar as the API:
 - Make each message distinct enough that searching the source for it lands on a
   single site.
 - Do not apologize, and do not suggest retrying unless a retry can succeed.
+
+Reviewers should challenge comments and strings that read as generated rather
+than written — padded, hedged, repeated at every call site, or narrating the
+change that introduced them. "This comment does not earn its line" and "say this
+once here and link to it from the other two places" are legitimate review
+feedback.
 
 ## Documenting wrappers, shims, and FFI adapters
 
@@ -231,40 +227,42 @@ favor clarity and consistency:
 
 ## General
 
-- **Atomic operations**: Every load, store, and read-modify-write uses the memory
-  `Ordering` its synchronization actually requires.
-- **Locks**: No potential deadlocks, no excessively long critical sections, and the
-  choice of `RwLock` vs `Mutex` matches the actual access pattern.
+- **Comments and messages**: Every comment, log message, and error string must be
+  accurate, useful, and free of tautologies. Log and error messages must be unique enough
+  to locate their source quickly. Challenge text that reads as generated rather than
+  written — padded, hedged, repeated at every call site, or narrating the change that
+  introduced it. See
+  [Comments and documentation](#comments-and-documentation) and
+  [User-facing strings](#user-facing-strings) for the authoring rules.
+- **Atomic operations**: Verify correct memory ordering (`Ordering`) for every load,
+  store, and read-modify-write operation.
+- **Locks**: Check for potential deadlocks, excessively long critical sections, and
+  inappropriate `RwLock` vs `Mutex` choices given the actual access patterns.
 - **Indexing and panic potential**: Prefer iterator methods over direct indexing —
-  index access is a code smell that needs justification. Arithmetic follows
-  [Overflow arithmetic](#rust), and `unreachable!()` appears only in paths that truly
-  cannot be reached.
-- **Idioms**: Use modern idioms. Convert `&str` to `String` with `to_owned()`, not
-  `ToString::to_string`.
-- **Visibility**: No unnecessary `pub` exports. Use the tightest visibility
+  treat index access as a code smell worth scrutiny. Flag unchecked arithmetic and
+  `unreachable!()` in paths that could actually be reached.
+- **Anti-patterns**: Recommend modern idioms. Avoid `ToString::to_string` — prefer
+  `to_owned()` for `&str → String` conversions.
+- **Visibility**: Reject unnecessary `pub` exports. Prefer the tightest visibility
   (`pub(crate)`, `pub(super)`) that satisfies the interface requirements.
-- **Tests**: New non-trivial code comes with tests. Tests are targeted (not covering
-  too broad a scope), DRY, and cover edge cases; their names say clearly what they
-  check, and similar tests are grouped together.
+- **Tests**: New non-trivial code requires tests. Tests must be targeted (not covering
+  too broad a scope), DRY, and cover edge cases. Scrutinize test names for clarity.
+  Group similar tests together.
 
 ## FFI and Unsafe Code
 
-These apply to any unsafe Rust or Go code and to any change that crosses the FFI
-boundary:
+When any unsafe Rust or Go code is present, or when a change crosses the FFI boundary:
 
-- Memory safety and soundness hold end-to-end across the boundary.
-- Every value that crosses the boundary has a correct lifetime.
-- Uses of `ManuallyDrop` and `Box::from_raw` are correct, and raw pointers uphold their
-  validity invariants.
-- All supported platforms are 64-bit. Defensive 32-bit guards are acceptable; changes
-  that add 32-bit support are not needed.
-- Auto-generated C-style comments in `ffi/firewood.h` keep Rust doc style; that is
-  expected, not a defect.
+- Analyze memory safety and soundness end-to-end across the boundary.
+- Verify lifetime correctness for all values crossing the FFI boundary.
+- Check correct use of `ManuallyDrop`, `Box::from_raw`, and pointer validity invariants.
+- Assume all platforms are 64-bit. Defensive 32-bit guards are acceptable; proactive
+  32-bit support changes are not needed.
+- Auto-generated C-style comments in `ffi/firewood.h` may retain Rust doc style — do
+  not flag these.
 - Go handle types that hold a borrow on the `Database` must register a lease in the
   `keepAliveRegistry` via `lease.attach`. The registered drop function must be a method
   on the inner handle (or any type that does not back-reference the outer wrapper) so
   that `runtime.AddCleanup` can reclaim the wrapper when the user drops their last
   reference. See `ffi/keepalive.go` for the lock-ordering invariants and the
   closed-registry contract.
-- Wrapper and adapter docs follow
-  [Documenting wrappers, shims, and FFI adapters](#documenting-wrappers-shims-and-ffi-adapters).

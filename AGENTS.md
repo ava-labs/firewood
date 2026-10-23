@@ -117,8 +117,7 @@ The `fwdctl` tool provides command-line operations on databases. See `fwdctl/REA
 
 ## Coding Conventions and Constraints
 
-See [`STYLE_GUIDE.md`](./STYLE_GUIDE.md) for the rules all code is held to, and
-[`CONTRIBUTING.md`](./CONTRIBUTING.md) for the contribution process.
+For more information on coding conventions and constraints, please refer to [STYLE_GUIDE.md](./STYLE_GUIDE.md)
 
 ## Commit and PR Title Convention
 
@@ -327,8 +326,8 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
 ## Key Files to Know
 
 - `README.md` - Main documentation
-- `CONTRIBUTING.md` - Contribution guidelines and code review process
-- `STYLE_GUIDE.md` - Style guide that code is reviewed against
+- `CONTRIBUTING.md` - Contribution guidelines
+- `STYLE_GUIDE.md` - Style guide
 - `RELEASE.md` - Release process
 - `CHANGELOG.md` - Version history
 - `.devcontainer/` - Development container configuration
@@ -381,9 +380,7 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
 
 ## Code Review Guidelines
 
-Review changes against [`STYLE_GUIDE.md`](./STYLE_GUIDE.md), and word
-findings and choose a verdict per
-[`CONTRIBUTING.md` — Code Review Process](./CONTRIBUTING.md#code-review-process).
+See [`STYLE_GUIDE.md`](./STYLE_GUIDE.md) for the complete set of code review checks.
 
 ## Additional Resources
 

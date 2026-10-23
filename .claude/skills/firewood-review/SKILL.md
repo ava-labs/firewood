@@ -11,7 +11,7 @@ allowed-tools: Read Write Bash Agent AskUserQuestion EnterWorktree ExitWorktree 
 
 Firewood-specific local code review. Dispatches parallel agents covering Rust toolchain validation, Go FFI checks, CI workflow analysis, and deep code quality. Never publishes review output to GitHub unless explicitly instructed.
 
-Code is reviewed against the style guide in [`STYLE_GUIDE.md`](../../../STYLE_GUIDE.md) (referenced from the Code Review Guidelines section of `AGENTS.md`). Agents should read it in full before beginning scrutiny.
+Code quality review rules are defined in [`STYLE_GUIDE.md`](../../../STYLE_GUIDE.md) (referenced from the Code Review Guidelines section of `AGENTS.md`). Agents should read it in full before beginning scrutiny.
 
 The review process itself follows [`CONTRIBUTING.md` — Code Review Process](../../../CONTRIBUTING.md#code-review-process), summarized in [Review Standards](#review-standards) below. They govern how findings are worded, which findings are reported, and which verdict is recommended.
 
