@@ -479,7 +479,7 @@ mod tests {
         let empty: &[u8] = &[];
         let empty_components =
             <&[PathComponent]>::path_from_unpacked_bytes(empty).expect("empty is valid");
-        assert!(empty_components.is_empty());
+        assert_eq!(empty_components, []);
         assert_eq!(empty_components.as_byte_slice(), empty);
     }
 
