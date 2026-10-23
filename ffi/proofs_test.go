@@ -55,6 +55,14 @@ func assertProofNotNil(t *testing.T, proof *RangeProof) {
 	r.NotNil(proof.handle)
 }
 
+// assertChangeProofNotNil verifies that the given proof and its inner handle are not nil.
+func assertChangeProofNotNil(t *testing.T, proof *ChangeProof) {
+	t.Helper()
+	r := require.New(t)
+	r.NotNil(proof)
+	r.NotNil(proof.handle)
+}
+
 // newVerifiedRangeProof generates a range proof for the given parameters and
 // verifies using [RangeProof.Verify] which does not prepare a proposal.
 func newVerifiedRangeProof(
@@ -1486,6 +1494,102 @@ func TestRangeProofSizedSyncsWholeKeyspace(t *testing.T) {
 	}
 }
 
+// TestChangeProofSizedPagesWholeDiff pages sized change proofs of a diff into
+// a receiver at the start root: each chunk fits the budget and is at least
+// half full unless final, its wire bytes parse, verify, and commit on their
+// own, Complete ends paging, and the receiver ends at the end root.
+func TestChangeProofSizedPagesWholeDiff(t *testing.T) {
+	tests := []struct {
+		name       string
+		hasDeletes bool
+		emptyDiff  bool
+	}{
+		{name: "puts"},
+		{name: "puts_and_deletes", hasDeletes: true},
+		{name: "empty_diff", emptyDiff: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			dbA := newTestDatabase(t)
+			dbB := newTestDatabase(t)
+
+			keys, vals, batch := kvForTest(sizedCorpusKeys)
+			const half = sizedCorpusKeys / 2
+			startRoot, err := dbA.Update(batch[:half])
+			r.NoError(err)
+			rootB, err := dbB.Update(batch[:half])
+			r.NoError(err)
+			r.Equal(startRoot, rootB)
+			endRoot := startRoot
+			if !tt.emptyDiff {
+				endRoot, err = dbA.Update(batch[half:])
+				r.NoError(err)
+			}
+			if tt.hasDeletes {
+				dels := make([]BatchOp, 0, half/2)
+				for i := 0; i < half; i += 2 {
+					dels = append(dels, Delete(keys[i]))
+					keys[i] = nil
+				}
+				endRoot, err = dbA.Update(dels)
+				r.NoError(err)
+			}
+
+			startKey := nothing()
+			var hint SizingHint
+			chunks := 0
+			for {
+				sized, err := dbA.ChangeProofSized(startRoot, endRoot, startKey, sizedBudget, hint)
+				r.NoError(err)
+				assertChangeProofNotNil(t, sized.Proof)
+				hint = sized.Hint
+				r.NotZero(hint.Ratio)
+
+				marshaled, err := sized.Proof.Marshal()
+				r.NoError(err)
+				r.Equal(marshaled, sized.Wire)
+				r.LessOrEqual(len(sized.Wire), sizedBudget)
+				if !sized.Complete {
+					r.GreaterOrEqual(len(sized.Wire), sizedBudget/2)
+				}
+
+				received, err := UnmarshalChangeProof(sized.Wire)
+				r.NoError(err)
+				rootB, err = dbB.VerifyAndCommitChangeProof(received, endRoot, startKey, nothing(), changeProofLenUnbounded)
+				r.NoError(err)
+				r.NoError(sized.Proof.Drop())
+
+				if sized.Complete {
+					r.NoError(received.Drop())
+					break
+				}
+				next, err := received.FindNextKey(nothing())
+				r.NoError(err)
+				r.NotNil(next)
+				startKey = something(next.StartKey())
+				r.NoError(next.Free())
+				r.NoError(received.Drop())
+
+				chunks++
+				r.Less(chunks, sizedPagingLimit, "runaway paging")
+			}
+			r.Equal(!tt.emptyDiff, chunks > 0, "a non-empty diff needs multiple chunks")
+			r.Equal(endRoot, rootB)
+			r.Equal(endRoot, dbB.Root())
+			for i, key := range keys {
+				if key == nil || (tt.emptyDiff && i >= half) {
+					continue
+				}
+				got, err := dbB.Get(key)
+				r.NoError(err)
+				r.Equal(vals[i], got)
+			}
+		})
+	}
+}
+
 // TestRangeProofSizedErrors covers the error mapping: a missing root, over
 // budget (one entry, then the edge proofs alone past the final key) with the
 // reported size being a workable budget, an empty trie, and a closed database.
@@ -1534,5 +1638,60 @@ func TestRangeProofSizedErrors(t *testing.T) {
 	r.NoError(db.Close(oneSecCtx(t)))
 	sized, err = db.RangeProofSized(root, nothing(), sizedBudget, SizingHint{})
 	r.ErrorIs(err, errDBClosed)
+	r.Nil(sized)
+
+	changeSized, err := db.ChangeProofSized(root, root, nothing(), sizedBudget, SizingHint{})
+	r.ErrorIs(err, errDBClosed)
+	r.Nil(changeSized)
+}
+
+// TestChangeProofSizedErrors covers the error mapping: missing roots with the
+// end root taking precedence, over budget with the reported size being a
+// workable budget, and an empty end trie.
+func TestChangeProofSizedErrors(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, _, batch := kvForTest(sizedCorpusKeys)
+	const half = sizedCorpusKeys / 2
+	startRoot, err := db.Update(batch[:half])
+	r.NoError(err)
+	endRoot, err := db.Update(batch[half:])
+	r.NoError(err)
+
+	sized, err := db.ChangeProofSized(Hash{1}, endRoot, nothing(), sizedBudget, SizingHint{})
+	r.ErrorIs(err, ErrStartRevisionNotFound)
+	r.Nil(sized)
+	sized, err = db.ChangeProofSized(startRoot, Hash{1}, nothing(), sizedBudget, SizingHint{})
+	r.ErrorIs(err, ErrEndRevisionNotFound)
+	r.Nil(sized)
+	sized, err = db.ChangeProofSized(Hash{1}, Hash{2}, nothing(), sizedBudget, SizingHint{})
+	r.ErrorIs(err, ErrEndRevisionNotFound)
+	r.Nil(sized)
+
+	sized, err = db.ChangeProofSized(startRoot, endRoot, nothing(), 1, SizingHint{})
+	r.ErrorIs(err, ErrProofOverBudget)
+	r.Nil(sized)
+	var overBudget *OverBudgetError
+	r.ErrorAs(err, &overBudget)
+	sized, err = db.ChangeProofSized(startRoot, endRoot, nothing(), overBudget.Wire, SizingHint{})
+	r.NoError(err)
+	r.LessOrEqual(uint64(len(sized.Wire)), overBudget.Wire)
+	r.NoError(sized.Proof.Drop())
+
+	dels := make([]BatchOp, len(keys))
+	for i, key := range keys {
+		dels[i] = Delete(key)
+	}
+	emptyRoot, err := db.Update(dels)
+	r.NoError(err)
+	sized, err = db.ChangeProofSized(startRoot, emptyRoot, nothing(), sizedBudget, SizingHint{})
+	if emptyRoot == EmptyRoot {
+		// Firewood hashing gives an empty trie no addressable root.
+		r.ErrorIs(err, ErrEndRevisionNotFound)
+	} else {
+		r.Error(err)
+		r.NotErrorIs(err, ErrEndRevisionNotFound)
+	}
 	r.Nil(sized)
 }
