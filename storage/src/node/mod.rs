@@ -559,8 +559,6 @@ mod test {
 
     use crate::Child;
     use crate::Children;
-    #[cfg(feature = "ethhash")]
-    use crate::DefaultHashMode;
     use crate::EthHash;
     use crate::HashMode;
     use crate::LinearAddress;
@@ -643,7 +641,6 @@ than 126 bytes as the length would be encoded in multiple bytes.
     /// child-hash region in eth mode: an 8-byte native-endian address followed
     /// by the hash codec output (`0x00` + 32 raw bytes for a full hash). These
     /// bytes must stay byte-for-byte stable so existing databases keep working.
-    #[cfg(feature = "ethhash")]
     #[test]
     fn test_eth_child_hash_region_exact_bytes() {
         // A partial branch with a single child at slot 15, no value. Distinct
@@ -666,8 +663,7 @@ than 126 bytes as the length would be encoded in multiple bytes.
         }));
 
         let mut serialized = Vec::new();
-        node.as_bytes::<DefaultHashMode, _>(&mut serialized)
-            .unwrap();
+        node.as_bytes::<EthHash, _>(&mut serialized).unwrap();
 
         // The child record is the tail of the encoding.
         let mut expected_tail = Vec::new();
@@ -685,10 +681,7 @@ than 126 bytes as the length would be encoded in multiple bytes.
         // And the whole thing must round-trip.
         let mut cursor = std::io::Cursor::new(&serialized);
         cursor.set_position(1);
-        assert_eq!(
-            node,
-            Node::from_reader::<DefaultHashMode>(&mut cursor).unwrap()
-        );
+        assert_eq!(node, Node::from_reader::<EthHash>(&mut cursor).unwrap());
     }
 
     #[hash_mode]

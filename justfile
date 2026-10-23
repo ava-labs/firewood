@@ -128,30 +128,28 @@ prepush-lite:
 #
 # Run this after any intentional change to the proof binary format (ser.rs,
 # de.rs, childmask, or header). Covers ProofNode encoding, the 32-byte proof
-# header, key-value pair encoding, and BatchOp encoding. The recipe writes
-# snapshots for the MerkleDB (SHA-256) mode first, then for the Ethereum
-# (Keccak-256, ethhash) mode. Existing snapshots are overwritten when their
+# header, key-value pair encoding, and BatchOp encoding. The hash mode is a
+# runtime choice, so a single run regenerates both the MerkleDB (SHA-256) and
+# Ethereum (Keccak-256) snapshots. Existing snapshots are overwritten when their
 # content changes.
 #
 # After running, review the diffs in src/proofs/snapshots/ and commit them
 # alongside the format change.
 snapshot-proof-nodes:
-    RUSTUP_TOOLCHAIN=stable INSTA_UPDATE=always cargo nextest run -p firewood --features logger         -E 'test(~snapshot_tests)'
-    RUSTUP_TOOLCHAIN=stable INSTA_UPDATE=always cargo nextest run -p firewood --features ethhash,logger -E 'test(~snapshot_tests)'
+    RUSTUP_TOOLCHAIN=stable INSTA_UPDATE=always cargo nextest run -p firewood --features logger -E 'test(~snapshot_tests)'
 
 # Regenerate firewood-storage node serialization snapshots for both hash modes.
 #
 # Run this after any intentional change to Serializable impls (TrieHash,
-# FreeArea, HashOrRlp) or to Node::as_bytes / Node::from_reader. The recipe
-# writes snapshots for the MerkleDB (SHA-256) mode first, then for the
-# Ethereum (Keccak-256, ethhash) mode. Existing snapshots are overwritten
-# when their content changes.
+# FreeArea, HashOrRlp) or to Node::as_bytes / Node::from_reader. The hash mode
+# is a runtime choice, so a single run regenerates both the MerkleDB (SHA-256)
+# and Ethereum (Keccak-256) snapshots. Existing snapshots are overwritten when
+# their content changes.
 #
 # After running, review the diffs in storage/src/node/snapshots/ and commit
 # them alongside the format change.
 snapshot-nodes:
-    RUSTUP_TOOLCHAIN=stable INSTA_UPDATE=always cargo nextest run -p firewood-storage --features logger         -E 'test(~snapshot_tests)'
-    RUSTUP_TOOLCHAIN=stable INSTA_UPDATE=always cargo nextest run -p firewood-storage --features ethhash,logger -E 'test(~snapshot_tests)'
+    RUSTUP_TOOLCHAIN=stable INSTA_UPDATE=always cargo nextest run -p firewood-storage --features logger -E 'test(~snapshot_tests)'
 
 # Regenerate all snapshots across the workspace for both hash modes.
 #
