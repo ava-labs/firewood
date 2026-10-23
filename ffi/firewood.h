@@ -12,6 +12,12 @@
 
 
 /**
+ * The fixed-point scale of [`SizingHint::ratio`]: this value is a 1:1
+ * ratio.
+ */
+#define SIZING_RATIO_SCALE (1 << 16)
+
+/**
  * The hashing mode to use for the database.
  *
  * This determines the cryptographic hash function and trie structure used.
@@ -733,6 +739,145 @@ typedef struct CreateChangeProofArgs {
 } CreateChangeProofArgs;
 
 /**
+ * What a sized proof measured about its chunk; pass it as the next
+ * request's hint. The zero value means no hint.
+ */
+typedef struct SizingHint {
+  /**
+   * Compressed/uncompressed body size ratio in fixed point, where
+   * [`SIZING_RATIO_SCALE`] is 1:1. Zero means no hint.
+   */
+  uint32_t ratio;
+  /**
+   * Body bytes the edge proofs and length prefixes took. Zero means unknown.
+   */
+  uint64_t edges;
+} SizingHint;
+
+/**
+ * A size-targeted change proof with its serialized wire bytes.
+ */
+typedef struct SizedChangeProof {
+  /**
+   * The proof; free with [`fwd_free_change_proof`].
+   *
+   * [`fwd_free_change_proof`]: crate::fwd_free_change_proof
+   */
+  struct ChangeProofContext *proof;
+  /**
+   * The serialized proof; free with [`fwd_free_owned_bytes`].
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  OwnedBytes wire;
+  /**
+   * True if the proof reached the end of the diff. Out-of-band: verify
+   * the proof before trusting it.
+   */
+  bool natural_end;
+  /**
+   * The hint for the next request.
+   */
+  struct SizingHint hint;
+} SizedChangeProof;
+
+/**
+ * A result type returned from [`fwd_db_change_proof_sized`].
+ *
+ * [`fwd_db_change_proof_sized`]: crate::fwd_db_change_proof_sized
+ */
+enum SizedChangeProofResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  /**
+   * The caller provided a null pointer to the input handle.
+   */
+  SizedChangeProofResult_NullHandlePointer,
+  /**
+   * The provided start root was not found in the database.
+   */
+  SizedChangeProofResult_StartRevisionNotFound,
+  /**
+   * The provided end root was not found in the database.
+   */
+  SizedChangeProofResult_EndRevisionNotFound,
+  /**
+   * One operation, or the edge proofs alone, serialize past the budget;
+   * the value is that smallest chunk's wire size.
+   */
+  SizedChangeProofResult_OverBudget,
+  /**
+   * The proof was successfully created.
+   */
+  SizedChangeProofResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. Its
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  SizedChangeProofResult_Err,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum SizedChangeProofResult_Tag SizedChangeProofResult_Tag;
+#else
+typedef size_t SizedChangeProofResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
+
+typedef struct SizedChangeProofResult {
+  SizedChangeProofResult_Tag tag;
+  union {
+    struct {
+      struct HashKey start_revision_not_found;
+    };
+    struct {
+      struct HashKey end_revision_not_found;
+    };
+    struct {
+      uint64_t over_budget;
+    };
+    struct {
+      struct SizedChangeProof ok;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} SizedChangeProofResult;
+
+/**
+ * Arguments for creating a size-targeted change proof.
+ */
+typedef struct CreateSizedChangeProofArgs {
+  /**
+   * The root hash of the starting revision.
+   */
+  struct HashKey start_root;
+  /**
+   * The root hash of the ending revision.
+   */
+  struct HashKey end_root;
+  /**
+   * The inclusive start key. If `None`, the proof starts from the
+   * beginning of the keyspace.
+   */
+  struct Maybe_BorrowedBytes start_key;
+  /**
+   * The wire byte budget the serialized proof must fit.
+   */
+  uint64_t budget;
+  /**
+   * The previous chunk's hint, or the zero value for none.
+   */
+  struct SizingHint hint;
+} CreateSizedChangeProofArgs;
+
+/**
  * A result type returned from FFI functions that create or parse range proofs.
  *
  * The caller must ensure that [`fwd_free_range_proof`] is called to
@@ -829,6 +974,122 @@ typedef struct CreateRangeProofArgs {
    */
   uint32_t max_length;
 } CreateRangeProofArgs;
+
+/**
+ * A size-targeted range proof with its serialized wire bytes.
+ */
+typedef struct SizedRangeProof {
+  /**
+   * The proof; free with [`fwd_free_range_proof`].
+   *
+   * [`fwd_free_range_proof`]: crate::fwd_free_range_proof
+   */
+  struct RangeProofContext *proof;
+  /**
+   * The serialized proof; free with [`fwd_free_owned_bytes`].
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  OwnedBytes wire;
+  /**
+   * True if the proof reached the end of the keyspace. Out-of-band: verify
+   * the proof before trusting it.
+   */
+  bool natural_end;
+  /**
+   * The hint for the next request.
+   */
+  struct SizingHint hint;
+} SizedRangeProof;
+
+/**
+ * A result type returned from [`fwd_db_range_proof_sized`].
+ *
+ * [`fwd_db_range_proof_sized`]: crate::fwd_db_range_proof_sized
+ */
+enum SizedRangeProofResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  /**
+   * The caller provided a null pointer to the input handle.
+   */
+  SizedRangeProofResult_NullHandlePointer,
+  /**
+   * The provided root was not found in the database.
+   */
+  SizedRangeProofResult_RevisionNotFound,
+  /**
+   * A range proof was requested on an empty trie without a start key.
+   */
+  SizedRangeProofResult_EmptyTrie,
+  /**
+   * One entry, or the edge proofs alone, serialize past the budget; the
+   * value is that smallest chunk's wire size.
+   */
+  SizedRangeProofResult_OverBudget,
+  /**
+   * The proof was successfully created.
+   */
+  SizedRangeProofResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. Its
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  SizedRangeProofResult_Err,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum SizedRangeProofResult_Tag SizedRangeProofResult_Tag;
+#else
+typedef size_t SizedRangeProofResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
+
+typedef struct SizedRangeProofResult {
+  SizedRangeProofResult_Tag tag;
+  union {
+    struct {
+      struct HashKey revision_not_found;
+    };
+    struct {
+      uint64_t over_budget;
+    };
+    struct {
+      struct SizedRangeProof ok;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} SizedRangeProofResult;
+
+/**
+ * Arguments for creating a size-targeted range proof.
+ */
+typedef struct CreateSizedRangeProofArgs {
+  /**
+   * The root hash of the revision to prove.
+   */
+  struct HashKey root;
+  /**
+   * The inclusive start key. If `None`, the proof starts from the
+   * beginning of the keyspace.
+   */
+  struct Maybe_BorrowedBytes start_key;
+  /**
+   * The wire byte budget the serialized proof must fit.
+   */
+  uint64_t budget;
+  /**
+   * The previous chunk's hint, or the zero value for none.
+   */
+  struct SizingHint hint;
+} CreateSizedRangeProofArgs;
 
 /**
  * Arguments for verifying a range proof.
@@ -2061,6 +2322,29 @@ struct ChangeProofResult fwd_db_change_proof(const struct DatabaseHandle *db,
                                              struct CreateChangeProofArgs args);
 
 /**
+ * Generate a change proof between two roots from `start_key` whose
+ * serialized size approaches `budget` bytes and never exceeds it. The wire
+ * bytes are returned with the proof, so they need not be marshaled again.
+ *
+ * # Arguments
+ *
+ * - `db` - The database to create the proof from.
+ * - `args` - The arguments for creating the sized change proof.
+ *
+ * # Returns
+ *
+ * - [`SizedChangeProofResult::NullHandlePointer`] if the caller provided a null pointer.
+ * - [`SizedChangeProofResult::StartRevisionNotFound`] if the start root was not found.
+ * - [`SizedChangeProofResult::EndRevisionNotFound`] if the end root was not found. If
+ *   both roots are missing, only the end root is reported.
+ * - [`SizedChangeProofResult::OverBudget`] if one operation, or the edge proofs alone, do not fit.
+ * - [`SizedChangeProofResult::Ok`] containing the proof, its wire bytes, and the next hint.
+ * - [`SizedChangeProofResult::Err`] containing an error message if the proof could not be created.
+ */
+struct SizedChangeProofResult fwd_db_change_proof_sized(const struct DatabaseHandle *db,
+                                                        struct CreateSizedChangeProofArgs args);
+
+/**
  * Dumps the Trie structure of the latest revision of the database to a DOT
  * (Graphviz) format string for debugging.
  *
@@ -2103,6 +2387,28 @@ struct ValueResult fwd_db_dump(const struct DatabaseHandle *db);
  */
 struct RangeProofResult fwd_db_range_proof(const struct DatabaseHandle *db,
                                            struct CreateRangeProofArgs args);
+
+/**
+ * Generate a range proof from `start_key` whose serialized size approaches
+ * `budget` bytes and never exceeds it. The wire bytes are returned with the
+ * proof, so they need not be marshaled again.
+ *
+ * # Arguments
+ *
+ * - `db` - The database to create the proof from.
+ * - `args` - The arguments for creating the sized range proof.
+ *
+ * # Returns
+ *
+ * - [`SizedRangeProofResult::NullHandlePointer`] if the caller provided a null pointer.
+ * - [`SizedRangeProofResult::RevisionNotFound`] if the provided root was not found.
+ * - [`SizedRangeProofResult::EmptyTrie`] if the trie is empty and no start key was given.
+ * - [`SizedRangeProofResult::OverBudget`] if one entry, or the edge proofs alone, do not fit.
+ * - [`SizedRangeProofResult::Ok`] containing the proof, its wire bytes, and the next hint.
+ * - [`SizedRangeProofResult::Err`] containing an error message if the proof could not be created.
+ */
+struct SizedRangeProofResult fwd_db_range_proof_sized(const struct DatabaseHandle *db,
+                                                      struct CreateSizedRangeProofArgs args);
 
 /**
  * Verify and commit a change proof in a single call.
