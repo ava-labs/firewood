@@ -20,6 +20,8 @@ pub use crate::batch_op::KeyValuePair;
 pub use crate::batch_op::TryIntoBatch;
 use crate::manager::RevisionManagerError;
 use crate::merkle::Key;
+use crate::merkle::SizedProof;
+use crate::merkle::SizingHint;
 use crate::merkle::Value;
 use crate::merkle::parallel::CreateProposalError;
 use crate::persist_worker::PersistError;
@@ -365,6 +367,26 @@ pub trait DbView {
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, Error>;
 
+    /// Obtain a range proof from the inclusive `start_key` whose serialized
+    /// size approaches and never exceeds `budget` bytes. To page, resume
+    /// strictly above the last proven key and pass the returned
+    /// [`SizedProof::hint`] as `hint`.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::RangeProofOnEmptyTrie`] if the trie is empty and
+    ///   `start_key` is `None`; with a `start_key` it is
+    ///   [`ProofError::Empty`].
+    /// * [`Error::ProofOverBudget`] if one entry, or the edge proofs alone,
+    ///   serialize past `budget`.
+    /// * Other I/O or structural errors during proof generation.
+    fn range_proof_sized(
+        &self,
+        start_key: Option<&[u8]>,
+        budget: usize,
+        hint: Option<SizingHint>,
+    ) -> Result<SizedProof<FrozenRangeProof>, Error>;
+
     /// Obtain a stream over the keys/values of this view, using an optional starting point
     ///
     /// # Arguments
@@ -442,6 +464,18 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, Error>;
 
+    /// Object-safe version of [`DbView::range_proof_sized`].
+    ///
+    /// # Errors
+    ///
+    /// As [`DbView::range_proof_sized`].
+    fn range_proof_sized(
+        &self,
+        start_key: Option<&[u8]>,
+        budget: usize,
+        hint: Option<SizingHint>,
+    ) -> Result<SizedProof<FrozenRangeProof>, Error>;
+
     /// Obtain a stream over the keys/values of this view, using an optional starting point
     ///
     /// # Arguments
@@ -503,6 +537,15 @@ where
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, Error> {
         DbView::range_proof(self, first_key, last_key, limit)
+    }
+
+    fn range_proof_sized(
+        &self,
+        start_key: Option<&[u8]>,
+        budget: usize,
+        hint: Option<SizingHint>,
+    ) -> Result<SizedProof<FrozenRangeProof>, Error> {
+        DbView::range_proof_sized(self, start_key, budget, hint)
     }
 
     fn iter_option(&self, first_key: Option<&[u8]>) -> Result<BoxKeyValueIter<'_>, Error> {
@@ -685,6 +728,21 @@ pub trait DynDb: Debug + Send + Sync + 'static {
         end_key: Option<&[u8]>,
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenChangeProof, Error>;
+
+    /// Object-safe version of
+    /// [`Db::change_proof_sized`](crate::db::Db::change_proof_sized).
+    ///
+    /// # Errors
+    ///
+    /// As [`Db::change_proof_sized`](crate::db::Db::change_proof_sized).
+    fn change_proof_sized(
+        &self,
+        start_hash: HashKey,
+        end_hash: HashKey,
+        start_key: Option<&[u8]>,
+        budget: usize,
+        hint: Option<SizingHint>,
+    ) -> Result<SizedProof<FrozenChangeProof>, Error>;
 
     /// Object-safe version of
     /// [`Db::verify_change_proof`](crate::db::Db::verify_change_proof).
