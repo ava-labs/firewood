@@ -8,6 +8,7 @@ use firewood_storage::U4;
 use super::verify_range_proof;
 use super::*;
 use crate::RangeProof;
+use crate::api::MAX_KEY_BYTES;
 
 type KeyValuePairs = Vec<(Box<[u8]>, Box<[u8]>)>;
 

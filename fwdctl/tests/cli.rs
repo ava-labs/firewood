@@ -899,3 +899,32 @@ fn test_slow_fwdctl_import_large_random_database<H: HashMode>() {
         assert_eq!(contents1, contents2, "The exported databases do not match!");
     });
 }
+
+/// `fwdctl` prints errors in their `Debug` form, so that is the text checked for
+/// the rejected key.
+#[hash_mode]
+#[test]
+fn fwdctl_insert_enforces_the_key_length_limit<H: HashMode>() {
+    with_tmpdir(|db_path| {
+        create_db(db_path, H::ALGORITHM);
+
+        let at_limit = "ab".repeat(1024);
+        cargo_bin_cmd!()
+            .args(["insert", "--hex", &at_limit, "v"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success();
+
+        let one_over = "ab".repeat(1025);
+        cargo_bin_cmd!()
+            .args(["insert", "--hex", &one_over, "v"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "KeyTooLong { len: 1025, max: 1024 }",
+            ));
+    });
+}
