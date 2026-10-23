@@ -62,6 +62,32 @@ ci-check-go-generate:
         exit 1
     fi
 
+# Regenerate Bazel module metadata after changing Bazel or Cargo dependencies.
+update-bazel-metadata:
+    bazel mod tidy
+
+# Check that regenerating Bazel module metadata leaves tracked files unchanged.
+ci-check-bazel-metadata:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    before=$(git status --porcelain)
+    bazel mod tidy
+    after=$(git status --porcelain)
+    if [[ "$before" != "$after" ]]; then
+        echo "error: bazel mod tidy resulted in changes to tracked files. Run just update-bazel-metadata and commit the changes." >&2
+        git --no-pager diff
+        exit 1
+    fi
+
+# Check that Cargo's Rust version and edition match Bazel's Rust toolchain.
+ci-check-bazel-toolchain:
+    ./scripts/check-bazel-toolchain.sh
+
+# Build both FFI variants and run the Bazel FFI test suite.
+ci-bazel-ffi:
+    bazel build //ffi:ffi_ethhash //ffi:ffi_merkledb
+    bazel test //ffi:ffi_test
+
 # Check for unused Rust dependencies as CI does.
 ci-machete:
     cargo machete --with-metadata
@@ -98,6 +124,8 @@ lint:
     ./scripts/run-just.sh ci-docs
     ./scripts/run-just.sh ci-lint-ffi
     ./scripts/run-just.sh ci-check-go-generate
+    ./scripts/run-just.sh ci-check-bazel-metadata
+    ./scripts/run-just.sh ci-check-bazel-toolchain
     ./scripts/run-just.sh ci-machete
 
 # Run macOS-compatible CI unit tests (differential fuzzing remains Linux-only).
@@ -111,6 +139,7 @@ test:
     ./scripts/run-just.sh ci-test-ffi firewood
     ./scripts/run-just.sh ci-test-ffi ethhash
     ./scripts/run-just.sh ci-test-ffi-compat
+    ./scripts/run-just.sh ci-bazel-ffi
 
 # Run every macOS-compatible pre-push check, with linting first.
 prepush: lint test
@@ -123,6 +152,8 @@ prepush-lite:
     ./scripts/run-just.sh ci-rust test debug-ethhash-logger
     ./scripts/run-just.sh ci-lint-markdown
     ./scripts/run-just.sh ci-docs
+    ./scripts/run-just.sh ci-check-bazel-metadata
+    ./scripts/run-just.sh ci-check-bazel-toolchain
 
 # Regenerate proof wire serialization snapshots for both hash modes.
 #

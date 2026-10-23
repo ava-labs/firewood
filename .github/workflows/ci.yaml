@@ -27,6 +27,7 @@ jobs:
       - examples
       - docs
       - ffi
+      - bazel
     runs-on: ubuntu-latest
     steps:
       - name: Fail unless all required jobs succeeded
@@ -243,6 +244,21 @@ jobs:
           tool: just@1.46.0
       - name: Check `go generate` for changes
         run: ./scripts/run-just.sh ci-check-go-generate
+
+  bazel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
+        with:
+          tool: just@1.46.0
+      - uses: bazel-contrib/setup-bazel@0.15.0
+      - name: Check Bazel metadata
+        run: ./scripts/run-just.sh ci-check-bazel-metadata
+      - name: Check Cargo and Bazel Rust toolchains
+        run: ./scripts/run-just.sh ci-check-bazel-toolchain
+      - name: Build and test Bazel FFI
+        run: ./scripts/run-just.sh ci-bazel-ffi
 
   ffi:
     needs: [build, ffi-check-go-generate]

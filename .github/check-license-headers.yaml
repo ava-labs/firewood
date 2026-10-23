@@ -56,6 +56,10 @@
       "**/*.snap",
       "rust-toolchain.toml",
       "rustfmt.toml",
+      "BUILD.bazel",
+      "**/BUILD.bazel",
+      "MODULE.bazel",
+      "MODULE.bazel.lock",
     ],
   }
 ]
