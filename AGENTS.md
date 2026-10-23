@@ -379,7 +379,7 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
 
 ## Code Review Guidelines
 
-See [`CODE_REVIEW.md`](./CODE_REVIEW.md) for the complete set of code review checks.
+See [`STYLE_GUIDE.md`](./STYLE_GUIDE.md) for the complete set of code review checks.
 
 ## Additional Resources
 

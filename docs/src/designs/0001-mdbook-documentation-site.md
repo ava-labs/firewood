@@ -596,7 +596,7 @@ the rest are draft chapters):
 - `reference/` — authored landing page (`reference/README.md`): a link-out hub for
   *generated* artifacts only (rustdoc ↗, godoc ↗, benchmarks ↗). It is authored (the
   three link-outs are its content), not a draft chapter. Repository-process docs
-  (CONTRIBUTING / RELEASE / CODE_REVIEW) live in the `meta/` section, not here.
+  (CONTRIBUTING / RELEASE / STYLE_GUIDE) live in the `meta/` section, not here.
 
 ### Integration & the Go API (`integration/`, authored)
 
@@ -651,7 +651,7 @@ processes:
 - **Repository-function pages (thin, link-out).** `meta/release.md` is a thin authored
   page documenting the release process — for the MVP it links to the canonical
   `RELEASE.md` (migrating the content into the book is a follow-up) — alongside
-  link-out pointers to `CONTRIBUTING.md` and `CODE_REVIEW.md`. The section is structured
+  link-out pointers to `CONTRIBUTING.md` and `STYLE_GUIDE.md`. The section is structured
   so additional repository functions are easy to add as further thin pages or draft
   chapters.
 
@@ -753,7 +753,7 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
 - [ ] A `meta/` section exists with an **authored** `documentation.md` (how the docs
       work: tooling, layout, build/serve, authoring, design workflow) and thin
       repository-function pages (`release.md` plus link-out pointers to CONTRIBUTING /
-      CODE_REVIEW); the process-doc link-outs are in `meta/`, not `reference/`.
+      STYLE_GUIDE); the process-doc link-outs are in `meta/`, not `reference/`.
 - [x] `justfile` gains `book-assets`, `book-serve`, and `book-build` (PR 1 — foundation).
 - [ ] `justfile` gains a `new-design` recipe scaffolding
       `docs/src/designs/NNNN-slug.md` from `template.md` (PR 3 — content).

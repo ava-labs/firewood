@@ -11,7 +11,7 @@ allowed-tools: Read Write Bash Agent AskUserQuestion EnterWorktree ExitWorktree 
 
 Firewood-specific local code review. Dispatches parallel agents covering Rust toolchain validation, Go FFI checks, CI workflow analysis, and deep code quality. Never publishes review output to GitHub unless explicitly instructed.
 
-Code quality review rules are defined in [`CODE_REVIEW.md`](../../../CODE_REVIEW.md) (referenced from the Code Review Guidelines section of `AGENTS.md`). Agents should read it in full before beginning scrutiny.
+Code quality review rules are defined in [`STYLE_GUIDE.md`](../../../STYLE_GUIDE.md) (referenced from the Code Review Guidelines section of `AGENTS.md`). Agents should read it in full before beginning scrutiny.
 
 The review process itself follows [`CONTRIBUTING.md` — Code Review Process](../../../CONTRIBUTING.md#code-review-process), summarized in [Review Standards](#review-standards) below. They govern how findings are worded, which findings are reported, and which verdict is recommended.
 
@@ -22,7 +22,7 @@ The review process itself follows [`CONTRIBUTING.md` — Code Review Process](..
 Apply these to every finding, in every agent and in the final report:
 
 - **Actionable or `nit:`.** Each comment states exactly what change resolves it. A comment that requires no action is prefixed `nit:` so the author knows it can be ignored.
-- **Principles, not preferences.** Justify each finding by citing the rule it violates (`CODE_REVIEW.md`, `CONTRIBUTING.md`, `AGENTS.md`, a failing check, or a concrete correctness/performance argument). Drop findings that rest only on taste.
+- **Principles, not preferences.** Justify each finding by citing the rule it violates (`STYLE_GUIDE.md`, `CONTRIBUTING.md`, `AGENTS.md`, a failing check, or a concrete correctness/performance argument). Drop findings that rest only on taste.
 - **Ask when unsure.** If intent is unclear, phrase the finding as a question to the author instead of asserting a defect.
 - **Progress over perfection.** A change that is an improvement over the current codebase can be approved with minor comments outstanding. For larger out-of-scope improvements, suggest a follow-up issue or an annotated code `TODO(#issue)` rather than blocking.
 - **Respectful and constructive.** Comments guide the author; they do not discourage.
@@ -170,7 +170,7 @@ Write results to `$SCRATCH/go-toolchain.txt`. Report any lint violations or test
 
 **Always activated.** Read all changed files in full. Do not skim diffs — read the actual source for context. Read PR metadata from `$SCRATCH/pr.json` and `$SCRATCH/pr-comments.json` if present.
 
-Read `CODE_REVIEW.md` in full and apply every rule to the changed code.
+Read `STYLE_GUIDE.md` in full and apply every rule to the changed code.
 
 Review the PR description against `.github/pull_request_template.md`:
 

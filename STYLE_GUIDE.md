@@ -1,4 +1,4 @@
-# Code Review Guidelines
+# Style Guide
 
 Apply these firewood-specific checks whenever reviewing code, suggesting changes, or
 providing inline feedback — in addition to general best practices.

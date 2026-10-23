@@ -263,7 +263,7 @@ Reviewers should challenge comments and strings that read as generated rather
 than written — padded, hedged, repeated at every call site, or narrating the
 change that introduced them. "This comment does not earn its line" and "say this
 once here and link to it from the other two places" are legitimate review
-feedback. See [`CODE_REVIEW.md`](./CODE_REVIEW.md) for the full review checklist.
+feedback. See [`STYLE_GUIDE.md`](./STYLE_GUIDE.md) for the full review checklist.
 
 ### Documenting wrappers, shims, and FFI adapters
 
