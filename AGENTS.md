@@ -117,7 +117,7 @@ The `fwdctl` tool provides command-line operations on databases. See `fwdctl/REA
 
 ## Coding Conventions and Constraints
 
-For more information on coding conventions and constraints, please refer to [CONTRIBUTING.md](./CONTRIBUTING.md)
+For more information on coding conventions and constraints, please refer to [STYLE_GUIDE.md](./STYLE_GUIDE.md)
 
 ## Commit and PR Title Convention
 
@@ -327,6 +327,7 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
 
 - `README.md` - Main documentation
 - `CONTRIBUTING.md` - Contribution guidelines
+- `STYLE_GUIDE.md` - Style guide
 - `RELEASE.md` - Release process
 - `CHANGELOG.md` - Version history
 - `.devcontainer/` - Development container configuration
@@ -372,8 +373,8 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
    tense or imperative, consistent terminology, no filler or hype, each piece of
    context stated once and cross-referenced from everywhere else. The same bar
    applies to user-facing strings — error messages, log lines, and CLI help. See
-   [Comments and documentation](./CONTRIBUTING.md#comments-and-documentation)
-   and [User-facing strings](./CONTRIBUTING.md#user-facing-strings).
+   [Comments and documentation](./STYLE_GUIDE.md#comments-and-documentation)
+   and [User-facing strings](./STYLE_GUIDE.md#user-facing-strings).
 
 9. **Workspace Awareness**: This is a multi-crate workspace. Changes may affect multiple crates. Check `Cargo.toml` for workspace structure.
 

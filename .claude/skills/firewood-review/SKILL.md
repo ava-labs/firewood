@@ -182,8 +182,8 @@ Review the PR description against `.github/pull_request_template.md`:
 
 Additionally:
 
-- Read `CLAUDE.md` and `CONTRIBUTING.md` in full and check whether this PR's changes create any gaps or inconsistencies in those documents. Suggest specific wording updates if helpful.
-- If this review session itself introduces new conventions (e.g., a new skill, new workflow), note what should be added to `AGENTS.md` or `CONTRIBUTING.md`.
+- Read `CLAUDE.md`, `CONTRIBUTING.md`, and `STYLE_GUIDE.md` in full and check whether this PR's changes create any gaps or inconsistencies in those documents. Suggest specific wording updates if helpful.
+- If this review session itself introduces new conventions (e.g., a new skill, new workflow), note what should be added to `AGENTS.md`, `CONTRIBUTING.md`, or `STYLE_GUIDE.md`.
 
 Write findings to `$SCRATCH/code-quality.txt`.
 
