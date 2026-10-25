@@ -62,18 +62,29 @@ var (
 	errBoundToOtherDatabase = errors.New("range proof is bound to a different database")
 )
 
-// OverBudgetError is the [ErrProofOverBudget] error, carrying the smallest
-// chunk's wire size in bytes.
+var (
+	// ErrRangeProofOnEmptyTrie is returned for a range proof of an empty trie
+	// with no start key.
+	ErrRangeProofOnEmptyTrie = errors.New("cannot create a range proof for an empty trie")
+	// ErrProofOverBudget is wrapped by [OverBudgetError] when even the smallest
+	// sized proof chunk exceeds the budget.
+	ErrProofOverBudget = errors.New("the smallest proof chunk exceeds the byte budget")
+)
+
+// OverBudgetError wraps [ErrProofOverBudget] with the smallest chunk's wire
+// size in bytes; a budget of at least WireSize admits that chunk.
 type OverBudgetError struct {
-	Wire uint64
+	WireSize uint64
 }
 
+// Error implements error.
 func (e *OverBudgetError) Error() string {
-	return fmt.Sprintf("%v: %d bytes", ErrProofOverBudget, e.Wire)
+	return fmt.Sprintf("%v: smallest chunk is %d bytes", ErrProofOverBudget, e.WireSize)
 }
 
-func (*OverBudgetError) Is(target error) bool {
-	return target == ErrProofOverBudget
+// Unwrap returns [ErrProofOverBudget] so [errors.Is] matches it.
+func (*OverBudgetError) Unwrap() error {
+	return ErrProofOverBudget
 }
 
 // RangeProof represents a proof that a range of keys and their values are
@@ -110,24 +121,27 @@ type ChangeProof struct {
 const SizingRatioScale uint32 = C.SIZING_RATIO_SCALE
 
 // SizingHint is what a sized proof measured about its chunk; pass it as the
-// next request's hint. The zero value means no hint.
+// next request's hint. A zero Ratio means no hint.
 type SizingHint struct {
-	// Ratio is the compressed/uncompressed body size ratio in fixed point.
+	// Ratio is the compressed/uncompressed body size ratio in fixed point,
+	// where [SizingRatioScale] is 1:1.
 	Ratio uint32
-	// Edges is the body bytes the edge proofs took; zero means unknown.
+	// Edges is the body bytes the edge proofs and length prefixes took; zero
+	// means unknown.
 	Edges uint64
 }
 
 // SizedProof is a size-targeted proof chunk with its serialized wire bytes.
-type SizedProof[P interface{ Drop() error }] struct {
+type SizedProof[P any] struct {
 	// Proof is the proof handle, which the caller should Drop when done.
 	Proof P
 	// Wire is Proof's serialization, ready to send without calling Marshal.
+	// It is a Go copy that outlives Proof.
 	Wire []byte
 	// Complete is true if no further request is needed. It is out-of-band
 	// metadata: verify the proof before trusting it.
 	Complete bool
-	// Hint is the hint for the next request.
+	// Hint is the hint for the next request, if any.
 	Hint SizingHint
 }
 
@@ -139,7 +153,7 @@ func (h SizingHint) toC() C.SizingHint {
 	return C.SizingHint{ratio: C.uint32_t(h.Ratio), edges: C.uint64_t(h.Edges)}
 }
 
-func newSizingHint(hint C.SizingHint) SizingHint {
+func sizingHintFromC(hint C.SizingHint) SizingHint {
 	return SizingHint{Ratio: uint32(hint.ratio), Edges: uint64(hint.edges)}
 }
 
@@ -166,7 +180,8 @@ type codeIterator struct {
 // included in the tree with the current root. The proof may be truncated to at
 // most [maxLength] entries, if non-zero. If either [startKey] or [endKey] is
 // Nothing, the range is unbounded in that direction. If [rootHash] is Nothing, the
-// current root of the database is used.
+// current root of the database is used. Returns [ErrRangeProofOnEmptyTrie] if the
+// trie is empty and [startKey] is Nothing.
 func (db *Database) RangeProof(
 	rootHash Hash,
 	startKey, endKey Maybe[[]byte],
@@ -192,27 +207,32 @@ func (db *Database) RangeProof(
 }
 
 // RangeProofSized returns a range proof of the revision [rootHash] from the
-// inclusive [startKey] whose serialized size approaches [budget] bytes and
-// never exceeds it. If Complete is false, request the next chunk from the
-// start key of the verified proof's [RangeProof.FindNextKey], passing Hint as
-// [hint]; the zero SizingHint means no hint. Returns [ErrRevisionNotFound],
-// [ErrEmptyTrie], or an [OverBudgetError] if even one entry does not fit.
+// inclusive [startKey] (Nothing starts at the first key) whose serialized size
+// approaches [budget] bytes and never exceeds it. If the result's Complete is
+// false, request the next chunk from the start key of [RangeProof.FindNextKey]
+// after [Database.VerifyRangeProof] or [Database.VerifyAndCommitRangeProof],
+// passing the result's Hint as [hint]; a zero [hint] means no hint. Returns
+// [ErrRevisionNotFound], [ErrRangeProofOnEmptyTrie] if the trie is empty and
+// [startKey] is Nothing, or an [OverBudgetError] if even one entry, or the
+// edge proofs alone, do not fit.
 func (db *Database) RangeProofSized(
 	rootHash Hash,
 	startKey Maybe[[]byte],
 	budget uint64,
 	hint SizingHint,
-) (*SizedRangeProof, error) {
+) (sized *SizedRangeProof, err error) {
+	start := time.Now()
+	defer func() {
+		if err == nil {
+			sizedProofDuration.WithLabelValues("range").Observe(time.Since(start).Seconds())
+		}
+	}()
+
 	db.handleLock.RLock()
 	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
-
-	start := time.Now()
-	defer func() {
-		sizedProofDuration.WithLabelValues("range").Observe(time.Since(start).Seconds())
-	}()
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
@@ -220,7 +240,7 @@ func (db *Database) RangeProofSized(
 	args := C.CreateSizedRangeProofArgs{
 		root:      newCHashKey(rootHash),
 		start_key: newMaybeBorrowedBytes(startKey, &pinner),
-		budget:    C.uint64_t(budget),
+		budget:    C.size_t(budget),
 		hint:      hint.toC(),
 	}
 
@@ -718,7 +738,7 @@ func getRangeProofFromRangeProofResult(result C.RangeProofResult) (*RangeProof, 
 		// it in the error message if needed.
 		return nil, ErrRevisionNotFound
 	case C.RangeProofResult_EmptyTrie:
-		return nil, ErrEmptyTrie
+		return nil, ErrRangeProofOnEmptyTrie
 	case C.RangeProofResult_Ok:
 		ptr := *(**C.RangeProofContext)(unsafe.Pointer(&result.anon0))
 		return newRangeProofFromPtr(ptr), nil
@@ -751,10 +771,9 @@ func newChangeProofFromPtr(ptr *C.ChangeProofContext) *ChangeProof {
 	return proof
 }
 
-// newSizedProof assembles a sized result from its C parts. It takes
-// ownership of wire, copying it into Go memory and freeing the Rust
-// allocation; if that free fails, proof is dropped so the Rust proof does not
-// leak behind the error.
+// newSizedProof assembles a sized result from its C parts. It owns both
+// proof and wire: the wire is copied into Go memory and freed, and if that
+// free fails the proof is dropped too.
 func newSizedProof[P interface{ Drop() error }](
 	proof P,
 	wire C.OwnedBytes,
@@ -770,7 +789,7 @@ func newSizedProof[P interface{ Drop() error }](
 		Proof:    proof,
 		Wire:     copied,
 		Complete: bool(naturalEnd),
-		Hint:     newSizingHint(hint),
+		Hint:     sizingHintFromC(hint),
 	}, nil
 }
 
@@ -781,16 +800,16 @@ func getSizedRangeProofFromResult(result C.SizedRangeProofResult) (*SizedRangePr
 	case C.SizedRangeProofResult_RevisionNotFound:
 		return nil, ErrRevisionNotFound
 	case C.SizedRangeProofResult_EmptyTrie:
-		return nil, ErrEmptyTrie
+		return nil, ErrRangeProofOnEmptyTrie
 	case C.SizedRangeProofResult_OverBudget:
 		// SAFETY: the tag says the union holds the OverBudget payload, a
 		// uint64_t laid out at the start of the union by cbindgen.
-		return nil, &OverBudgetError{Wire: uint64(*(*C.uint64_t)(unsafe.Pointer(&result.anon0)))}
+		return nil, &OverBudgetError{WireSize: uint64(*(*C.uint64_t)(unsafe.Pointer(&result.anon0)))}
 	case C.SizedRangeProofResult_Ok:
 		// SAFETY: the tag says the union holds a C.SizedRangeProof, which
-		// cbindgen lays out at the start of the union. Reading it by value
-		// moves ownership of its proof and wire allocations to Go: the proof
-		// to the handle created first, the wire to newSizedProof.
+		// cbindgen lays out at the start of the union. Its proof and wire
+		// allocations are each released exactly once: the proof by the
+		// handle created here, the wire by newSizedProof.
 		ok := *(*C.SizedRangeProof)(unsafe.Pointer(&result.anon0))
 		return newSizedProof(newRangeProofFromPtr(ok.proof), ok.wire, ok.natural_end, ok.hint)
 	case C.SizedRangeProofResult_Err:

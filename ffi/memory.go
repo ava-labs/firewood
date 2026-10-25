@@ -15,7 +15,6 @@ package ffi
 import "C"
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"runtime"
@@ -212,9 +211,7 @@ func (b *ownedBytes) CopiedBytes() []byte {
 		return nil
 	}
 
-	// Clone the full-length borrowed view rather than C.GoBytes, whose C.int
-	// length would narrow payloads larger than 2 GiB.
-	return bytes.Clone(b.BorrowedBytes())
+	return C.GoBytes(unsafe.Pointer(b.owned.ptr), C.int(b.owned.len))
 }
 
 // intoError converts the ownedBytes into an error. This is used for methods

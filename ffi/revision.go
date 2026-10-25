@@ -30,11 +30,6 @@ var (
 	ErrRevisionNotFound      = errors.New("revision not found")
 	ErrEndRevisionNotFound   = errors.New("end revision not found")
 	ErrStartRevisionNotFound = errors.New("start revision not found")
-	// ErrEmptyTrie is returned for a range proof of an empty trie with no start key.
-	ErrEmptyTrie = errors.New("a range proof was requested on an empty trie")
-	// ErrProofOverBudget is returned, as an [OverBudgetError], when even the
-	// smallest sized proof chunk exceeds the budget.
-	ErrProofOverBudget = errors.New("the smallest proof chunk exceeds the byte budget")
 )
 
 // Revision is an immutable view over the state at a specific root hash.
