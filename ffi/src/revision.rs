@@ -108,13 +108,14 @@ impl DbView for RevisionHandle<'_> {
         )
     }
 
-    fn range_proof_sized(
+    fn range_proof_sized<K: api::KeyType>(
         &self,
-        start_key: Option<&[u8]>,
+        start_key: Option<K>,
         budget: usize,
         hint: Option<firewood::SizingHint>,
     ) -> Result<firewood::SizedProof<api::FrozenRangeProof>, api::Error> {
-        self.view.range_proof_sized(start_key, budget, hint)
+        self.view
+            .range_proof_sized(start_key.as_ref().map(AsRef::as_ref), budget, hint)
     }
 
     fn iter_option<K: api::KeyType>(

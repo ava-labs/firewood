@@ -53,6 +53,7 @@ use crate::api::IntoBatchIter;
 use crate::api::KeyType;
 use crate::api::KeyValuePair;
 use crate::iter::MerkleKeyValueIter;
+use crate::manager::CommittedRevision;
 use crate::manager::ConfigManager;
 use crate::manager::RevisionManager;
 use crate::manager::RevisionManagerConfig;
@@ -114,13 +115,13 @@ where
         )
     }
 
-    fn range_proof_sized(
+    fn range_proof_sized<K: api::KeyType>(
         &self,
-        start_key: Option<&[u8]>,
+        start_key: Option<K>,
         budget: usize,
         hint: Option<SizingHint>,
     ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
-        Merkle::from(self).range_proof_sized(start_key, budget, hint)
+        Merkle::from(self).range_proof_sized(start_key.as_ref().map(AsRef::as_ref), budget, hint)
     }
 
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
@@ -341,8 +342,8 @@ pub fn open<P: AsRef<Path>>(
     })
 }
 
-/// A merkle over a committed revision, as the revision manager resolves it.
-type CommittedMerkle<H> = Merkle<Arc<NodeStore<Committed, FileBacked, H>>>;
+/// A merkle over a committed revision, for [`Db::change_proof_merkles`].
+type CommittedMerkle<H> = Merkle<CommittedRevision<H>>;
 
 impl<H: HashMode> Db<H> {
     /// Create or open a database with the hash mode fixed by `H`.
@@ -608,7 +609,8 @@ impl<H: HashMode> Db<H> {
     ///
     /// # Errors
     ///
-    /// - [`api::Error::EndRevisionNotFound`] if `end_hash` is not found.
+    /// - [`api::Error::EndRevisionNotFound`] if `end_hash` is not found; it
+    ///   is reported even when both hashes are missing.
     /// - [`api::Error::StartRevisionNotFound`] if `start_hash` is not found.
     /// - Other I/O or structural errors during proof generation.
     pub fn change_proof(
@@ -623,20 +625,27 @@ impl<H: HashMode> Db<H> {
         end_merkle.change_proof(start_key, end_key, start_merkle.nodestore(), limit)
     }
 
-    /// Generates a change proof between two committed revisions from the
-    /// inclusive lower bound `start_key`, whose serialized size approaches
-    /// and never exceeds `budget` bytes. Paging and `hint` are as for
-    /// [`api::DbView::range_proof_sized`].
+    /// Generates a change proof that turns the committed revision
+    /// `start_hash` into `end_hash`, from the inclusive lower bound
+    /// `start_key`, whose wire size never exceeds `budget` bytes. Paging and
+    /// `hint` are as for [`api::DbView::range_proof_sized`], except that
+    /// [`SizedProof::natural_end`] is the only completion signal: the last
+    /// chunk still proves its last key.
     ///
     /// # Errors
     ///
     /// * [`api::Error::EndRevisionNotFound`] if `end_hash` is not found; it
     ///   is reported even when both hashes are missing.
     /// * [`api::Error::StartRevisionNotFound`] if `start_hash` is not found.
-    /// * [`ProofError::Empty`](crate::ProofError::Empty) if the end
-    ///   revision's trie is empty and `start_key` is given.
+    /// * [`api::Error::ProofError`] with
+    ///   [`ProofError::Empty`](crate::ProofError::Empty) if the end
+    ///   revision's trie is empty.
     /// * [`api::Error::ProofOverBudget`] if one operation, or the edge proofs
     ///   alone, serialize past `budget`.
+    /// * [`api::Error::ProofError`] with
+    ///   [`ProofError::BodyTooLarge`](crate::ProofError::BodyTooLarge) if the
+    ///   smallest chunk's body exceeds the decoder's limit, which no budget
+    ///   can fix.
     /// * Other I/O or structural errors during proof generation.
     pub fn change_proof_sized(
         &self,
@@ -659,22 +668,24 @@ impl<H: HashMode> Db<H> {
         start_hash: HashKey,
         end_hash: HashKey,
     ) -> Result<(CommittedMerkle<H>, CommittedMerkle<H>), api::Error> {
-        let end_rev = self.manager.revision(end_hash).map_err(|err| {
-            let err = api::Error::from(err);
-            if let api::Error::RevisionNotFound { provided } = err {
-                api::Error::EndRevisionNotFound { provided }
-            } else {
-                err
-            }
-        })?;
-        let start_rev = self.manager.revision(start_hash).map_err(|err| {
-            let err = api::Error::from(err);
-            if let api::Error::RevisionNotFound { provided } = err {
-                api::Error::StartRevisionNotFound { provided }
-            } else {
-                err
-            }
-        })?;
+        let end_rev =
+            self.manager
+                .revision(end_hash)
+                .map_err(|err| match api::Error::from(err) {
+                    api::Error::RevisionNotFound { provided } => {
+                        api::Error::EndRevisionNotFound { provided }
+                    }
+                    err => err,
+                })?;
+        let start_rev =
+            self.manager
+                .revision(start_hash)
+                .map_err(|err| match api::Error::from(err) {
+                    api::Error::RevisionNotFound { provided } => {
+                        api::Error::StartRevisionNotFound { provided }
+                    }
+                    err => err,
+                })?;
         Ok((Merkle::from(start_rev), Merkle::from(end_rev)))
     }
 
@@ -796,9 +807,9 @@ impl<H: HashMode> api::DbView for Proposal<'_, H> {
         api::DbView::range_proof(&*self.nodestore, first_key, last_key, limit)
     }
 
-    fn range_proof_sized(
+    fn range_proof_sized<K: KeyType>(
         &self,
-        start_key: Option<&[u8]>,
+        start_key: Option<K>,
         budget: usize,
         hint: Option<SizingHint>,
     ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
@@ -1022,13 +1033,14 @@ impl api::DbView for ReconstructedView<'_> {
         )
     }
 
-    fn range_proof_sized(
+    fn range_proof_sized<K: KeyType>(
         &self,
-        start_key: Option<&[u8]>,
+        start_key: Option<K>,
         budget: usize,
         hint: Option<SizingHint>,
     ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
-        self.nodestore.range_proof_sized(start_key, budget, hint)
+        self.nodestore
+            .range_proof_sized(start_key.as_ref().map(AsRef::as_ref), budget, hint)
     }
 
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {

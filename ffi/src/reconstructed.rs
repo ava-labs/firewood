@@ -51,9 +51,9 @@ impl DbView for ReconstructedHandle<'_> {
         self.reconstructed.range_proof(first_key, last_key, limit)
     }
 
-    fn range_proof_sized(
+    fn range_proof_sized<K: api::KeyType>(
         &self,
-        start_key: Option<&[u8]>,
+        start_key: Option<K>,
         budget: usize,
         hint: Option<firewood::SizingHint>,
     ) -> Result<firewood::SizedProof<api::FrozenRangeProof>, api::Error> {

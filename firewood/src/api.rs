@@ -391,22 +391,26 @@ pub trait DbView {
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, Error>;
 
-    /// Obtain a range proof from the inclusive `start_key` whose serialized
-    /// size approaches and never exceeds `budget` bytes. To page, resume
-    /// strictly above the last proven key and pass the returned
-    /// [`SizedProof::hint`] as `hint`.
+    /// Obtain a range proof from the inclusive `start_key` (`None` starts at
+    /// the lowest key) whose wire size never exceeds `budget` bytes. To page,
+    /// resume strictly above the last key in the proof with the returned
+    /// [`SizedProof::hint`] as `hint`, until [`SizedProof::natural_end`]; a
+    /// hint only calibrates the first probe.
     ///
     /// # Errors
     ///
     /// * [`Error::RangeProofOnEmptyTrie`] if the trie is empty and
     ///   `start_key` is `None`; with a `start_key` it is
-    ///   [`ProofError::Empty`].
+    ///   [`Error::ProofError`] with [`ProofError::Empty`].
     /// * [`Error::ProofOverBudget`] if one entry, or the edge proofs alone,
     ///   serialize past `budget`.
+    /// * [`Error::ProofError`] with [`ProofError::BodyTooLarge`] if the
+    ///   smallest chunk's body exceeds the decoder's limit, which no budget
+    ///   can fix.
     /// * Other I/O or structural errors during proof generation.
-    fn range_proof_sized(
+    fn range_proof_sized<K: KeyType>(
         &self,
-        start_key: Option<&[u8]>,
+        start_key: Option<K>,
         budget: usize,
         hint: Option<SizingHint>,
     ) -> Result<SizedProof<FrozenRangeProof>, Error>;
