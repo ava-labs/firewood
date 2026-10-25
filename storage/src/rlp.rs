@@ -567,7 +567,7 @@ mod tests {
     #[test]
     fn parse_empty_list() {
         let list = RlpList::parse(&[0xc0]).unwrap();
-        assert!(list.fields().unwrap().is_empty());
+        assert_eq!(list.fields().unwrap(), [] as [&[u8]; 0]);
     }
 
     #[test]
