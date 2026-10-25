@@ -319,24 +319,9 @@ impl DatabaseHandle {
             .change_proof(start_hash, end_hash, start_key, end_key, limit)
     }
 
-    /// Create a size-targeted range proof.
-    ///
-    /// Delegates to [`firewood::api::DynDbView::range_proof_sized`].
-    pub(crate) fn range_proof_sized(
-        &self,
-        root: HashKey,
-        start_key: Option<&[u8]>,
-        budget: usize,
-        hint: Option<firewood::SizingHint>,
-    ) -> Result<firewood::SizedProof<api::FrozenRangeProof>, api::Error> {
-        self.db
-            .view(root)?
-            .range_proof_sized(start_key, budget, hint)
-    }
-
     /// Create a size-targeted change proof.
     ///
-    /// Delegates to [`firewood::db::Db::change_proof_sized`].
+    /// Delegates to [`firewood::api::DynDb::change_proof_sized`].
     pub(crate) fn change_proof_sized(
         &self,
         start_hash: HashKey,

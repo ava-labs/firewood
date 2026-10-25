@@ -182,22 +182,23 @@ pub extern "C" fn fwd_db_change_proof_from_bytes(
 #[derive(Debug)]
 #[repr(C)]
 pub struct CreateSizedChangeProofArgs<'a> {
-    /// The root hash of the starting revision.
+    /// The root hash of the starting committed revision.
     pub start_root: HashKey,
-    /// The root hash of the ending revision.
+    /// The root hash of the ending committed revision.
     pub end_root: HashKey,
     /// The inclusive start key. If `None`, the proof starts from the
     /// beginning of the keyspace.
     pub start_key: Maybe<BorrowedBytes<'a>>,
-    /// The wire byte budget the serialized proof must fit.
-    pub budget: u64,
-    /// The previous chunk's hint, or the zero value for none.
+    /// The wire byte budget the serialized proof must fit; zero always
+    /// yields [`SizedChangeProofResult::OverBudget`].
+    pub budget: usize,
+    /// The previous chunk's hint, or a zero `ratio` for none.
     pub hint: SizingHint,
 }
 
-/// Generate a change proof between two roots from `start_key` whose
-/// serialized size approaches `budget` bytes and never exceeds it. The wire
-/// bytes are returned with the proof, so they need not be marshaled again.
+/// Generate a change proof from `start_root` to `end_root` from `start_key`
+/// whose serialized size approaches `budget` bytes and never exceeds it. The
+/// wire bytes are returned with the proof, so it need not be serialized again.
 ///
 /// # Arguments
 ///
@@ -208,11 +209,16 @@ pub struct CreateSizedChangeProofArgs<'a> {
 ///
 /// - [`SizedChangeProofResult::NullHandlePointer`] if the caller provided a null pointer.
 /// - [`SizedChangeProofResult::StartRevisionNotFound`] if the start root was not found.
+///   The missing root hash is included in the result.
 /// - [`SizedChangeProofResult::EndRevisionNotFound`] if the end root was not found. If
-///   both roots are missing, only the end root is reported.
-/// - [`SizedChangeProofResult::OverBudget`] if one operation, or the edge proofs alone, do not fit.
-/// - [`SizedChangeProofResult::Ok`] containing the proof, its wire bytes, and the next hint.
-/// - [`SizedChangeProofResult::Err`] containing an error message if the proof could not be created.
+///   both roots are missing, only the end root is reported. The missing root hash is
+///   included in the result.
+/// - [`SizedChangeProofResult::OverBudget`] if one operation, or the edge proofs alone,
+///   do not fit.
+/// - [`SizedChangeProofResult::Ok`] containing the proof, its wire bytes, and the next
+///   hint.
+/// - [`SizedChangeProofResult::Err`] containing an error message if the proof could not
+///   be created.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_db_change_proof_sized(
     db: Option<&DatabaseHandle>,
@@ -226,7 +232,7 @@ pub extern "C" fn fwd_db_change_proof_sized(
                 .as_ref()
                 .map(BorrowedBytes::as_slice)
                 .into_option(),
-            args.budget as usize,
+            args.budget,
             args.hint.into(),
         )
     })

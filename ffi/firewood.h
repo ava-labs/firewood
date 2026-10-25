@@ -527,6 +527,75 @@ typedef struct Maybe_BorrowedBytes {
 } Maybe_BorrowedBytes;
 
 /**
+ * A result type returned from FFI functions that create or parse change proofs.
+ *
+ * The caller must ensure that [`fwd_free_change_proof`] is called to
+ * free the memory associated with the returned context when it is no longer
+ * needed.
+ *
+ * [`fwd_free_change_proof`]: crate::fwd_free_change_proof
+ */
+enum ChangeProofResult_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  /**
+   * The caller provided a null pointer to the input handle.
+   */
+  ChangeProofResult_NullHandlePointer,
+  /**
+   * The provided start root was not found in the database.
+   */
+  ChangeProofResult_StartRevisionNotFound,
+  /**
+   * The provided end root was not found in the database.
+   */
+  ChangeProofResult_EndRevisionNotFound,
+  /**
+   * The proof was successfully created or parsed.
+   *
+   * If the value was parsed from a serialized proof, this does not imply that
+   * the proof is valid, only that it is well-formed. The verify method must
+   * be called to ensure the proof is cryptographically valid.
+   */
+  ChangeProofResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. If
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  ChangeProofResult_Err,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum ChangeProofResult_Tag ChangeProofResult_Tag;
+#else
+typedef size_t ChangeProofResult_Tag;
+#endif // __STDC_VERSION__ >= 202311L
+
+typedef struct ChangeProofResult {
+  ChangeProofResult_Tag tag;
+  union {
+    struct {
+      struct HashKey start_revision_not_found;
+    };
+    struct {
+      struct HashKey end_revision_not_found;
+    };
+    struct {
+      struct ChangeProofContext *ok;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} ChangeProofResult;
+
+/**
  * A result type returned from FFI functions that retrieve a single value.
  */
 enum ValueResult_Tag
@@ -635,75 +704,6 @@ typedef struct ReconstructedResult {
 } ReconstructedResult;
 
 /**
- * A result type returned from FFI functions that create or parse change proofs.
- *
- * The caller must ensure that [`fwd_free_change_proof`] is called to
- * free the memory associated with the returned context when it is no longer
- * needed.
- *
- * [`fwd_free_change_proof`]: crate::fwd_free_change_proof
- */
-enum ChangeProofResult_Tag
-#if __STDC_VERSION__ >= 202311L
-  : size_t
-#endif // __STDC_VERSION__ >= 202311L
- {
-  /**
-   * The caller provided a null pointer to the input handle.
-   */
-  ChangeProofResult_NullHandlePointer,
-  /**
-   * The provided start root was not found in the database.
-   */
-  ChangeProofResult_StartRevisionNotFound,
-  /**
-   * The provided end root was not found in the database.
-   */
-  ChangeProofResult_EndRevisionNotFound,
-  /**
-   * The proof was successfully created or parsed.
-   *
-   * If the value was parsed from a serialized proof, this does not imply that
-   * the proof is valid, only that it is well-formed. The verify method must
-   * be called to ensure the proof is cryptographically valid.
-   */
-  ChangeProofResult_Ok,
-  /**
-   * An error occurred and the message is returned as an [`OwnedBytes`]. If
-   * value is guaranteed to contain only valid UTF-8.
-   *
-   * The caller must call [`fwd_free_owned_bytes`] to free the memory
-   * associated with this error.
-   *
-   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
-   */
-  ChangeProofResult_Err,
-};
-#if __STDC_VERSION__ >= 202311L
-typedef enum ChangeProofResult_Tag ChangeProofResult_Tag;
-#else
-typedef size_t ChangeProofResult_Tag;
-#endif // __STDC_VERSION__ >= 202311L
-
-typedef struct ChangeProofResult {
-  ChangeProofResult_Tag tag;
-  union {
-    struct {
-      struct HashKey start_revision_not_found;
-    };
-    struct {
-      struct HashKey end_revision_not_found;
-    };
-    struct {
-      struct ChangeProofContext *ok;
-    };
-    struct {
-      OwnedBytes err;
-    };
-  };
-} ChangeProofResult;
-
-/**
  * Arguments for creating a change proof.
  */
 typedef struct CreateChangeProofArgs {
@@ -740,12 +740,12 @@ typedef struct CreateChangeProofArgs {
 
 /**
  * What a sized proof measured about its chunk; pass it as the next
- * request's hint. The zero value means no hint.
+ * request's hint. A zero `ratio` means no hint.
  */
 typedef struct SizingHint {
   /**
    * Compressed/uncompressed body size ratio in fixed point, where
-   * [`SIZING_RATIO_SCALE`] is 1:1. Zero means no hint.
+   * [`SIZING_RATIO_SCALE`] is 1:1. Zero means no hint, whatever `edges`.
    */
   uint32_t ratio;
   /**
@@ -805,7 +805,8 @@ enum SizedChangeProofResult_Tag
   SizedChangeProofResult_EndRevisionNotFound,
   /**
    * One operation, or the edge proofs alone, serialize past the budget;
-   * the value is that smallest chunk's wire size.
+   * the value is that smallest chunk's wire size, so a budget of at least
+   * that admits it.
    */
   SizedChangeProofResult_OverBudget,
   /**
@@ -855,11 +856,11 @@ typedef struct SizedChangeProofResult {
  */
 typedef struct CreateSizedChangeProofArgs {
   /**
-   * The root hash of the starting revision.
+   * The root hash of the starting committed revision.
    */
   struct HashKey start_root;
   /**
-   * The root hash of the ending revision.
+   * The root hash of the ending committed revision.
    */
   struct HashKey end_root;
   /**
@@ -868,11 +869,12 @@ typedef struct CreateSizedChangeProofArgs {
    */
   struct Maybe_BorrowedBytes start_key;
   /**
-   * The wire byte budget the serialized proof must fit.
+   * The wire byte budget the serialized proof must fit; zero always
+   * yields [`SizedChangeProofResult::OverBudget`].
    */
-  uint64_t budget;
+  size_t budget;
   /**
-   * The previous chunk's hint, or the zero value for none.
+   * The previous chunk's hint, or a zero `ratio` for none.
    */
   struct SizingHint hint;
 } CreateSizedChangeProofArgs;
@@ -1026,7 +1028,8 @@ enum SizedRangeProofResult_Tag
   SizedRangeProofResult_EmptyTrie,
   /**
    * One entry, or the edge proofs alone, serialize past the budget; the
-   * value is that smallest chunk's wire size.
+   * value is that smallest chunk's wire size, so a budget of at least
+   * that admits it.
    */
   SizedRangeProofResult_OverBudget,
   /**
@@ -1073,7 +1076,7 @@ typedef struct SizedRangeProofResult {
  */
 typedef struct CreateSizedRangeProofArgs {
   /**
-   * The root hash of the revision to prove.
+   * The root hash of the revision or proposal to prove.
    */
   struct HashKey root;
   /**
@@ -1082,11 +1085,12 @@ typedef struct CreateSizedRangeProofArgs {
    */
   struct Maybe_BorrowedBytes start_key;
   /**
-   * The wire byte budget the serialized proof must fit.
+   * The wire byte budget the serialized proof must fit; zero always
+   * yields [`SizedRangeProofResult::OverBudget`].
    */
-  uint64_t budget;
+  size_t budget;
   /**
-   * The previous chunk's hint, or the zero value for none.
+   * The previous chunk's hint, or a zero `ratio` for none.
    */
   struct SizingHint hint;
 } CreateSizedRangeProofArgs;
@@ -2110,6 +2114,24 @@ struct NextKeyRangeResult fwd_change_proof_find_next_key(const struct ChangeProo
                                                          struct Maybe_BorrowedBytes end_key);
 
 /**
+ * Deserialize a `ChangeProof` from bytes.
+ *
+ * # Arguments
+ *
+ * * `bytes` - The bytes to deserialize the proof from.
+ *
+ * # Returns
+ *
+ * - [`ChangeProofResult::NullHandlePointer`] if the caller provided a null or zero-length slice.
+ * - [`ChangeProofResult::Ok`] containing a pointer to the `ChangeProofContext` if the proof
+ *   was successfully parsed. This does not imply that the proof is valid, only that it is
+ *   well-formed. Use [`fwd_db_verify_change_proof`] or
+ *   [`fwd_db_verify_and_commit_change_proof`] to verify the proof.
+ * - [`ChangeProofResult::Err`] containing an error message if the proof could not be parsed.
+ */
+struct ChangeProofResult fwd_change_proof_from_bytes(BorrowedBytes bytes);
+
+/**
  * Serialize a `ChangeProof` to bytes.
  *
  * # Arguments
@@ -2304,29 +2326,9 @@ struct ChangeProofResult fwd_db_change_proof(const struct DatabaseHandle *db,
                                              struct CreateChangeProofArgs args);
 
 /**
- * Deserialize a change proof from bytes for use with `db`.
- *
- * The database supplies the hash mode the proof must be encoded with; a
- * proof whose header advertises another mode is rejected here, before its
- * body is decompressed, rather than at verification.
- *
- * # Returns
- *
- * - [`ChangeProofResult::NullHandlePointer`] if the caller provided a null database pointer.
- * - [`ChangeProofResult::Ok`] containing a pointer to the `ChangeProofContext` if the proof
- *   was successfully parsed. This does not imply that the proof is valid, only that it is
- *   well-formed and uses `db`'s hash mode. Use [`fwd_db_verify_change_proof`] or
- *   [`fwd_db_verify_and_commit_change_proof`] to verify the proof.
- * - [`ChangeProofResult::Err`] containing an error message if the proof could not be parsed
- *   or its hash mode does not match `db`'s.
- */
-struct ChangeProofResult fwd_db_change_proof_from_bytes(const struct DatabaseHandle *db,
-                                                        BorrowedBytes bytes);
-
-/**
- * Generate a change proof between two roots from `start_key` whose
- * serialized size approaches `budget` bytes and never exceeds it. The wire
- * bytes are returned with the proof, so they need not be marshaled again.
+ * Generate a change proof from `start_root` to `end_root` from `start_key`
+ * whose serialized size approaches `budget` bytes and never exceeds it. The
+ * wire bytes are returned with the proof, so it need not be serialized again.
  *
  * # Arguments
  *
@@ -2337,11 +2339,16 @@ struct ChangeProofResult fwd_db_change_proof_from_bytes(const struct DatabaseHan
  *
  * - [`SizedChangeProofResult::NullHandlePointer`] if the caller provided a null pointer.
  * - [`SizedChangeProofResult::StartRevisionNotFound`] if the start root was not found.
+ *   The missing root hash is included in the result.
  * - [`SizedChangeProofResult::EndRevisionNotFound`] if the end root was not found. If
- *   both roots are missing, only the end root is reported.
- * - [`SizedChangeProofResult::OverBudget`] if one operation, or the edge proofs alone, do not fit.
- * - [`SizedChangeProofResult::Ok`] containing the proof, its wire bytes, and the next hint.
- * - [`SizedChangeProofResult::Err`] containing an error message if the proof could not be created.
+ *   both roots are missing, only the end root is reported. The missing root hash is
+ *   included in the result.
+ * - [`SizedChangeProofResult::OverBudget`] if one operation, or the edge proofs alone,
+ *   do not fit.
+ * - [`SizedChangeProofResult::Ok`] containing the proof, its wire bytes, and the next
+ *   hint.
+ * - [`SizedChangeProofResult::Err`] containing an error message if the proof could not
+ *   be created.
  */
 struct SizedChangeProofResult fwd_db_change_proof_sized(const struct DatabaseHandle *db,
                                                         struct CreateSizedChangeProofArgs args);
@@ -2391,33 +2398,9 @@ struct RangeProofResult fwd_db_range_proof(const struct DatabaseHandle *db,
                                            struct CreateRangeProofArgs args);
 
 /**
- * Deserialize a range proof from bytes for use with `db`.
- *
- * The database supplies the hash mode the proof must be encoded with; a
- * proof whose header advertises another mode is rejected here, before its
- * body is decompressed, rather than at verification.
- *
- * # Arguments
- *
- * - `db` - The database the proof will be verified against.
- * - `bytes` - The bytes to deserialize the proof from.
- *
- * # Returns
- *
- * - [`RangeProofResult::NullHandlePointer`] if the caller provided a null database pointer.
- * - [`RangeProofResult::Ok`] containing a pointer to the `RangeProofContext` if the proof
- *   was successfully parsed. This does not imply that the proof is valid, only that it is
- *   well-formed and uses `db`'s hash mode. Call [`fwd_db_verify_range_proof`] to check it.
- * - [`RangeProofResult::Err`] containing an error message if the proof could not be parsed
- *   or its hash mode does not match `db`'s.
- */
-struct RangeProofResult fwd_db_range_proof_from_bytes(const struct DatabaseHandle *db,
-                                                      BorrowedBytes bytes);
-
-/**
  * Generate a range proof from `start_key` whose serialized size approaches
  * `budget` bytes and never exceeds it. The wire bytes are returned with the
- * proof, so they need not be marshaled again.
+ * proof, so it need not be serialized again.
  *
  * # Arguments
  *
@@ -2428,10 +2411,15 @@ struct RangeProofResult fwd_db_range_proof_from_bytes(const struct DatabaseHandl
  *
  * - [`SizedRangeProofResult::NullHandlePointer`] if the caller provided a null pointer.
  * - [`SizedRangeProofResult::RevisionNotFound`] if the provided root was not found.
- * - [`SizedRangeProofResult::EmptyTrie`] if the trie is empty and no start key was given.
- * - [`SizedRangeProofResult::OverBudget`] if one entry, or the edge proofs alone, do not fit.
- * - [`SizedRangeProofResult::Ok`] containing the proof, its wire bytes, and the next hint.
- * - [`SizedRangeProofResult::Err`] containing an error message if the proof could not be created.
+ *   The missing root hash is included in the result.
+ * - [`SizedRangeProofResult::EmptyTrie`] if the trie is empty and no start key was
+ *   given.
+ * - [`SizedRangeProofResult::OverBudget`] if one entry, or the edge proofs alone, do
+ *   not fit.
+ * - [`SizedRangeProofResult::Ok`] containing the proof, its wire bytes, and the next
+ *   hint.
+ * - [`SizedRangeProofResult::Err`] containing an error message if the proof could not
+ *   be created.
  */
 struct SizedRangeProofResult fwd_db_range_proof_sized(const struct DatabaseHandle *db,
                                                       struct CreateSizedRangeProofArgs args);
@@ -3254,6 +3242,23 @@ struct CodeIteratorResult fwd_range_proof_code_hash_iter(const struct RangeProof
  * for the duration of the call.
  */
 struct NextKeyRangeResult fwd_range_proof_find_next_key(struct RangeProofContext *proof);
+
+/**
+ * Deserialize a `RangeProof` from bytes.
+ *
+ * # Arguments
+ *
+ * - `bytes` - The bytes to deserialize the proof from.
+ *
+ * # Returns
+ *
+ * - [`RangeProofResult::NullHandlePointer`] if the caller provided a null or zero-length slice.
+ * - [`RangeProofResult::Ok`] containing a pointer to the `RangeProofContext` if the proof
+ *   was successfully parsed. This does not imply that the proof is valid, only that it is
+ *   well-formed. The verify method must be called to ensure the proof is cryptographically valid.
+ * - [`RangeProofResult::Err`] containing an error message if the proof could not be parsed.
+ */
+struct RangeProofResult fwd_range_proof_from_bytes(BorrowedBytes bytes);
 
 /**
  * Serialize a `RangeProof` to bytes.

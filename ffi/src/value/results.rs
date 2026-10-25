@@ -686,18 +686,13 @@ impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult {
 /// ratio.
 pub const SIZING_RATIO_SCALE: u32 = 1 << 16;
 
-const _: () = assert!(
-    SIZING_RATIO_SCALE == firewood::CompressionRatio::SCALE,
-    "the C ratio scale must match the sizer's"
-);
-
 /// What a sized proof measured about its chunk; pass it as the next
-/// request's hint. The zero value means no hint.
+/// request's hint. A zero `ratio` means no hint.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[repr(C)]
 pub struct SizingHint {
     /// Compressed/uncompressed body size ratio in fixed point, where
-    /// [`SIZING_RATIO_SCALE`] is 1:1. Zero means no hint.
+    /// [`SIZING_RATIO_SCALE`] is 1:1. Zero means no hint, whatever `edges`.
     pub ratio: u32,
     /// Body bytes the edge proofs and length prefixes took. Zero means unknown.
     pub edges: u64,
@@ -723,9 +718,14 @@ impl From<firewood::SizingHint> for SizingHint {
     }
 }
 
+const _: () = assert!(
+    SIZING_RATIO_SCALE == firewood::CompressionRatio::SCALE,
+    "the C ratio scale must match the sizer's"
+);
+
 /// Converts a byte count for the C ABI.
 fn byte_count(len: usize) -> u64 {
-    u64::try_from(len).expect("usize fits in u64 on every supported (64-bit) target")
+    u64::try_from(len).expect("usize is at most 64 bits wide")
 }
 
 /// Splits a sized proof into the parts both sized result types carry.
@@ -770,7 +770,8 @@ pub enum SizedRangeProofResult<'db> {
     /// A range proof was requested on an empty trie without a start key.
     EmptyTrie,
     /// One entry, or the edge proofs alone, serialize past the budget; the
-    /// value is that smallest chunk's wire size.
+    /// value is that smallest chunk's wire size, so a budget of at least
+    /// that admits it.
     OverBudget(u64),
     /// The proof was successfully created.
     Ok(SizedRangeProof<'db>),
@@ -844,7 +845,8 @@ pub enum SizedChangeProofResult {
     /// The provided end root was not found in the database.
     EndRevisionNotFound(HashKey),
     /// One operation, or the edge proofs alone, serialize past the budget;
-    /// the value is that smallest chunk's wire size.
+    /// the value is that smallest chunk's wire size, so a budget of at least
+    /// that admits it.
     OverBudget(u64),
     /// The proof was successfully created.
     Ok(SizedChangeProof),
