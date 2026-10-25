@@ -54,7 +54,7 @@ const SEED: u64 = 0x243F_6A88_85A3_08D3;
 #[test_case(32 * 1024, None; "no hint")]
 #[test_case(32 * 1024, Some(hint(5, 100)); "optimistic hint overfills then shrinks")]
 #[test_case(32 * 1024, Some(hint(2, 1)); "pessimistic hint underfills then grows")]
-#[test_case(32 * 1024, Some(hint(0, 0)); "zero hint is sanitized")]
+#[test_case(32 * 1024, Some(hint(0, 0)); "zero lengths give the smallest ratio")]
 #[test_case(4 * 1024 * 1024, None; "budget covering the whole trie")]
 fn test_range_sized_matches_plain_proof(budget: usize, hint: Option<SizingHint>) {
     let kvs = test_kvs(2_000, false);
@@ -74,7 +74,7 @@ fn test_range_sized_matches_plain_proof(budget: usize, hint: Option<SizingHint>)
 #[test_case(16 * 1024, None; "no hint")]
 #[test_case(16 * 1024, Some(hint(5, 100)); "optimistic hint overfills then shrinks")]
 #[test_case(16 * 1024, Some(hint(2, 1)); "pessimistic hint underfills then grows")]
-#[test_case(16 * 1024, Some(hint(0, 0)); "zero hint is sanitized")]
+#[test_case(16 * 1024, Some(hint(0, 0)); "zero lengths give the smallest ratio")]
 #[test_case(4 * 1024 * 1024, None; "budget covering the whole diff")]
 fn test_change_sized_matches_plain_proof(budget: usize, hint: Option<SizingHint>) {
     let base = test_kvs(1_500, false);
@@ -172,12 +172,12 @@ fn test_sized_body_limit_bounds_the_chunk() {
 
     for (wire, natural_end, body) in [
         (
-            &range.wire(),
+            range.wire(),
             range.natural_end(),
             body_of(|out| range.proof().write_body_to_vec(out)),
         ),
         (
-            &change.wire(),
+            change.wire(),
             change.natural_end(),
             body_of(|out| change.proof().write_body_to_vec(out)),
         ),
@@ -468,9 +468,11 @@ fn test_sized_account_with_storage_children() {
     verify_change_chunk(&target, &source, Some(&[]), &change);
 }
 
-/// The public fixed-point conversions round-trip, and zero is not a ratio.
+/// The public fixed-point conversions round-trip, zero is not a ratio, and
+/// a hint clamps an out-of-range ratio to the expected bounds.
 #[test]
 fn test_compression_ratio_scaled_round_trip() {
+    assert_eq!(CompressionRatio::SCALE, 1 << 16);
     for scaled in [
         1,
         CompressionRatio::SCALE / 2,
@@ -479,13 +481,39 @@ fn test_compression_ratio_scaled_round_trip() {
     ] {
         let ratio = CompressionRatio::try_from_scaled(scaled).unwrap();
         assert_eq!(ratio.scaled(), scaled);
-        assert_eq!(SizingHint::new(ratio, Some(7)).ratio(), ratio);
-        assert_eq!(SizingHint::new(ratio, Some(7)).edges(), Some(7));
     }
     assert!(CompressionRatio::try_from_scaled(0).is_none());
     assert_eq!(
         CompressionRatio::try_from_scaled(CompressionRatio::SCALE).unwrap(),
         CompressionRatio::measured(100, 100)
+    );
+
+    let tiny = CompressionRatio::try_from_scaled(1).unwrap();
+    let huge = CompressionRatio::try_from_scaled(u32::MAX).unwrap();
+    assert_eq!(
+        SizingHint::new(tiny, None).ratio().scaled(),
+        CompressionRatio::SCALE / 64
+    );
+    assert_eq!(
+        SizingHint::new(huge, Some(7)).ratio().scaled(),
+        CompressionRatio::SCALE * 2
+    );
+    assert_eq!(SizingHint::new(huge, Some(7)).edges(), Some(7));
+    assert_eq!(SizingHint::new(tiny, None).edges(), None);
+}
+
+/// One entry whose body exceeds the decoder's limit can never be sent: the
+/// error is `BodyTooLarge`, not `ProofOverBudget`, whatever the budget.
+#[test]
+fn test_range_sized_single_entry_over_body_limit() {
+    let key: Vec<u8> = vec![0x11; 32];
+    let merkle = init_merkle(vec![(key, vec![0x42; MAX_DECOMPRESSED_LEN + 1])]);
+    let err = merkle
+        .range_proof_sized(None, usize::MAX, None)
+        .unwrap_err();
+    assert!(
+        matches!(err, api::Error::ProofError(ProofError::BodyTooLarge { .. })),
+        "{err:?}"
     );
 }
 
