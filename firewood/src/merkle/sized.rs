@@ -50,8 +50,7 @@ const DEFAULT_EDGE_BYTES: usize = 16 * 1024;
 /// rebuilt chunk lands under it despite a different right edge.
 const BODY_LIMIT_MARGIN: usize = 16 * 1024;
 
-/// Compressed/uncompressed body size ratio in fixed point, with
-/// [`Self::SCALE`] meaning 1:1; values above it mean the body expanded.
+/// Compressed/uncompressed body size ratio in fixed point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct CompressionRatio(NonZeroU32);
 
@@ -108,8 +107,7 @@ impl SizingHint {
         Self { ratio, edges }
     }
 
-    /// The ratio, bounded like a measurement: hints are echoed through
-    /// callers unchecked.
+    /// The ratio, bounded like a measurement.
     fn ratio(self) -> CompressionRatio {
         self.ratio.clamp(
             CompressionRatio::MIN_EXPECTED,
@@ -326,7 +324,6 @@ pub(super) fn build_sized_chunk<B: ChunkBuilder>(
     let mut costs = vec![0usize];
     let mut body = Vec::new();
     let mut wire = Vec::new();
-    // A hint is echoed through callers unchecked, so bound it like a measurement.
     let mut ratio = hint.map_or(CompressionRatio::INITIAL_ESTIMATE, SizingHint::ratio);
     let mut edges = hint
         .and_then(|h| h.edges)
