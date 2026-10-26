@@ -223,11 +223,7 @@ fn proof_node(
 #[hash_mode]
 #[test_case("single_child", &[1], &[7] ; "single_child")]
 #[test_case("all_children", &[0], &[0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] ; "all_children")]
-fn branch_node<H: HashMode>(
-    name: &str,
-    key: &[u8],
-    children: &[u8],
-) {
+fn branch_node<H: HashMode>(name: &str, key: &[u8], children: &[u8]) {
     let partial_len = 0;
     let value = None;
 
