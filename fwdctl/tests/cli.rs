@@ -10,6 +10,7 @@ use std::fmt::Write;
 use std::fs;
 use std::path::Path;
 
+use firewood::api::MAX_KEY_BYTES;
 use firewood_macros::hash_mode;
 use firewood_storage::EthHash;
 use firewood_storage::HashMode;
@@ -908,7 +909,8 @@ fn fwdctl_insert_enforces_the_key_length_limit<H: HashMode>() {
     with_tmpdir(|db_path| {
         create_db(db_path, H::ALGORITHM);
 
-        let at_limit = "ab".repeat(1024);
+        let hex_value_of_key_byte = "ab";
+        let at_limit = hex_value_of_key_byte.repeat(MAX_KEY_BYTES);
         cargo_bin_cmd!()
             .args(["insert", "--hex", &at_limit, "v"])
             .arg("--db")
@@ -916,15 +918,17 @@ fn fwdctl_insert_enforces_the_key_length_limit<H: HashMode>() {
             .assert()
             .success();
 
-        let one_over = "ab".repeat(1025);
+        let one_over = hex_value_of_key_byte.repeat(MAX_KEY_BYTES + 1);
         cargo_bin_cmd!()
             .args(["insert", "--hex", &one_over, "v"])
             .arg("--db")
             .arg(db_path)
             .assert()
             .failure()
-            .stderr(predicate::str::contains(
-                "KeyTooLong { len: 1025, max: 1024 }",
-            ));
+            .stderr(predicate::str::contains(format!(
+                "KeyTooLong {{ len: {}, max: {} }}",
+                MAX_KEY_BYTES + 1,
+                MAX_KEY_BYTES
+            )));
     });
 }
