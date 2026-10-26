@@ -28,6 +28,7 @@ use firewood_storage::logger::error;
 use rayon::ThreadPool;
 
 use crate::api::IntoBatchIter;
+use crate::api::MAX_KEY_BYTES;
 use crate::db::BatchOp;
 use crate::merkle::Key;
 use crate::merkle::Merkle;
@@ -58,6 +59,7 @@ pub enum CreateProposalError {
     FileIoError(FileIoError),
     SendError,
     InvalidConversionToPathComponent,
+    KeyTooLong { len: usize, max: usize },
 }
 
 impl From<FileIoError> for CreateProposalError {
@@ -396,8 +398,10 @@ impl ParallelMerkle {
     ///
     /// Returns a `CreateProposalError::FileIoError` if it encounters an error fetching nodes
     /// from storage, a `CreateProposalError::SendError` if it is unable to send messages to
-    /// the workers, and a `CreateProposalError::InvalidConversionToPathComponent` if it is
-    /// unable to convert a u8 index into a path component.
+    /// the workers, a `CreateProposalError::InvalidConversionToPathComponent` if it is
+    /// unable to convert a u8 index into a path component, and a
+    /// `CreateProposalError::KeyTooLong` if an operation's key is longer than
+    /// [`MAX_KEY_BYTES`].
     pub fn apply<H: HashMode>(
         &mut self,
         mut mutable_nodestore: NodeStore<Mutable<Propose>, FileBacked, H>,
@@ -415,6 +419,13 @@ impl ParallelMerkle {
         // responsible for the sub-trie corresponding to the operation's first nibble.
         for res in batch.into_batch_iter::<CreateProposalError>() {
             let op = res?;
+            let key_len = op.key().as_ref().len();
+            if key_len > MAX_KEY_BYTES {
+                return Err(CreateProposalError::KeyTooLong {
+                    len: key_len,
+                    max: MAX_KEY_BYTES,
+                });
+            }
             // Get the first nibble of the key to determine which worker to send the request to.
             //
             // Need to handle an empty key. Since the partial_path of the root must be empty, an

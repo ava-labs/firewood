@@ -38,7 +38,7 @@ use super::*;
 use crate::ProofError;
 use crate::ProofNode;
 use crate::api::Error;
-use crate::proofs::de::MAX_KEY_BYTES;
+use crate::api::MAX_KEY_BYTES;
 
 /// Test wrapper around [`crate::merkle::verify_range_proof`] that supplies the
 /// compile-default hash mode as the expected `algorithm` (the mode every proof

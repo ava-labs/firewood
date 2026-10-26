@@ -11,7 +11,10 @@ use tempfile::TempDir;
 use test_case::test_case;
 
 use super::*;
-use crate::proofs::de::MAX_KEY_BYTES;
+use crate::api::MAX_KEY_BYTES;
+use crate::merkle::tests::DEFAULT_THREAD_STACK;
+use crate::merkle::tests::prefix_chain_keys;
+use crate::merkle::tests::spawn_on_stack;
 
 #[test]
 fn test_empty_batch_ops_with_nonempty_proofs() {
