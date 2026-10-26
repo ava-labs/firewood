@@ -59,7 +59,6 @@ use firewood_storage::ValueDigest;
 use firewood_storage::ensure_stack;
 use firewood_storage::hash_node_as_storage_trie_root_for_node;
 use firewood_storage::hash_node_as_storage_trie_root_parts;
-pub use sized::CompressionRatio;
 pub use sized::SizedProof;
 pub use sized::SizingHint;
 

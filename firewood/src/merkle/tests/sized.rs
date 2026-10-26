@@ -468,40 +468,6 @@ fn test_sized_account_with_storage_children() {
     verify_change_chunk(&target, &source, Some(&[]), &change);
 }
 
-/// The public fixed-point conversions round-trip, zero is not a ratio, and
-/// a hint clamps an out-of-range ratio to the expected bounds.
-#[test]
-fn test_compression_ratio_scaled_round_trip() {
-    assert_eq!(CompressionRatio::SCALE, 1 << 16);
-    for scaled in [
-        1,
-        CompressionRatio::SCALE / 2,
-        CompressionRatio::SCALE,
-        u32::MAX,
-    ] {
-        let ratio = CompressionRatio::try_from_scaled(scaled).unwrap();
-        assert_eq!(ratio.scaled(), scaled);
-    }
-    assert!(CompressionRatio::try_from_scaled(0).is_none());
-    assert_eq!(
-        CompressionRatio::try_from_scaled(CompressionRatio::SCALE).unwrap(),
-        CompressionRatio::measured(100, 100)
-    );
-
-    let tiny = CompressionRatio::try_from_scaled(1).unwrap();
-    let huge = CompressionRatio::try_from_scaled(u32::MAX).unwrap();
-    assert_eq!(
-        SizingHint::new(tiny, None).ratio().scaled(),
-        CompressionRatio::SCALE / 64
-    );
-    assert_eq!(
-        SizingHint::new(huge, Some(7)).ratio().scaled(),
-        CompressionRatio::SCALE * 2
-    );
-    assert_eq!(SizingHint::new(huge, Some(7)).edges(), Some(7));
-    assert_eq!(SizingHint::new(tiny, None).edges(), None);
-}
-
 /// One entry whose body exceeds the decoder's limit can never be sent: the
 /// error is `BodyTooLarge`, not `ProofOverBudget`, whatever the budget.
 #[test]
