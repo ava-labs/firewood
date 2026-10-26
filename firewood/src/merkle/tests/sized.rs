@@ -490,7 +490,7 @@ fn test_sized_passes_are_bounded_and_the_last_fit_is_kept() {
     // One item fits comfortably; anything larger is just over budget, so
     // each shrink drops a few items and overshoots again. The hint reserves
     // more edge bytes than the budget holds, so the first probe is one item.
-    let hint = Some(SizingHint::new(
+    let hint = Some(SizingHint::with_ratio(
         CompressionRatio::measured(52, 100),
         Some(16 * 1024),
     ));
@@ -532,7 +532,10 @@ fn test_sized_shrink_never_undercuts_a_fitting_candidate() {
 #[test]
 fn test_sized_falls_back_to_a_single_item_after_exhausted_passes() {
     // A hint that admits many items up front, so the first probe overshoots too.
-    let hint = Some(SizingHint::new(CompressionRatio::measured(1, 2), Some(0)));
+    let hint = Some(SizingHint::with_ratio(
+        CompressionRatio::measured(1, 2),
+        Some(0),
+    ));
 
     let probes = Cell::new(0);
     let builder = ScriptedBuilder {
@@ -565,7 +568,7 @@ fn test_sized_falls_back_to_a_single_item_after_exhausted_passes() {
 }
 
 fn hint(compressed: usize, uncompressed: usize) -> SizingHint {
-    SizingHint::new(CompressionRatio::measured(compressed, uncompressed), None)
+    SizingHint::with_ratio(CompressionRatio::measured(compressed, uncompressed), None)
 }
 
 /// 32-byte pseudo-random keys. Values start with 0x42 so ethhash never

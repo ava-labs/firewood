@@ -103,40 +103,39 @@ pub struct SizingHint {
 }
 
 impl SizingHint {
-    pub(super) const fn new(ratio: CompressionRatio, edges: Option<usize>) -> Self {
+    /// A hint from the parts [`Self::ratio`] and [`Self::edges`] read back; a
+    /// zero ratio means the initial estimate.
+    #[must_use]
+    pub fn new(ratio: u32, edges: Option<usize>) -> Self {
+        Self {
+            ratio: NonZeroU32::new(ratio)
+                .map_or(CompressionRatio::INITIAL_ESTIMATE, CompressionRatio),
+            edges,
+        }
+    }
+
+    /// The compressed/uncompressed body ratio in fixed point.
+    #[must_use]
+    pub const fn ratio(self) -> u32 {
+        self.ratio.0.get()
+    }
+
+    /// Body bytes the edge proofs took, once measured.
+    #[must_use]
+    pub const fn edges(self) -> Option<usize> {
+        self.edges
+    }
+
+    pub(super) const fn with_ratio(ratio: CompressionRatio, edges: Option<usize>) -> Self {
         Self { ratio, edges }
     }
 
     /// The ratio, bounded like a measurement.
-    fn ratio(self) -> CompressionRatio {
+    fn bounded_ratio(self) -> CompressionRatio {
         self.ratio.clamp(
             CompressionRatio::MIN_EXPECTED,
             CompressionRatio::MAX_EXPECTED,
         )
-    }
-}
-
-/// The hint as its fixed-point ratio and edge bytes (zero when unknown), for
-/// carrying it across the FFI.
-impl From<SizingHint> for (u32, u64) {
-    fn from(hint: SizingHint) -> Self {
-        (
-            hint.ratio.0.get(),
-            hint.edges
-                .map_or(0, |edges| u64::try_from(edges).unwrap_or(u64::MAX)),
-        )
-    }
-}
-
-/// A hint from its fixed-point ratio and edge bytes; see the reverse
-/// conversion. A zero ratio falls back to the initial estimate.
-impl From<(u32, u64)> for SizingHint {
-    fn from((ratio, edges): (u32, u64)) -> Self {
-        Self {
-            ratio: NonZeroU32::new(ratio)
-                .map_or(CompressionRatio::INITIAL_ESTIMATE, CompressionRatio),
-            edges: (edges != 0).then(|| usize::try_from(edges).ok()).flatten(),
-        }
     }
 }
 
@@ -348,7 +347,10 @@ pub(super) fn build_sized_chunk<B: ChunkBuilder>(
     let mut costs = vec![0usize];
     let mut body = Vec::new();
     let mut wire = Vec::new();
-    let mut ratio = hint.map_or(CompressionRatio::INITIAL_ESTIMATE, SizingHint::ratio);
+    let mut ratio = hint.map_or(
+        CompressionRatio::INITIAL_ESTIMATE,
+        SizingHint::bounded_ratio,
+    );
     let mut edges = hint
         .and_then(|h| h.edges)
         .unwrap_or(DEFAULT_EDGE_BYTES.min(target / 2));
@@ -437,7 +439,7 @@ pub(super) fn build_sized_chunk<B: ChunkBuilder>(
         .record_integer(probes);
     Ok(SizedProof {
         proof: fit.proof,
-        hint: SizingHint::new(
+        hint: SizingHint::with_ratio(
             CompressionRatio::measured(
                 fit.wire.len().saturating_sub(size_of::<Header>()),
                 fit.body_len,
