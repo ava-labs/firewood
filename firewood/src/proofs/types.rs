@@ -1211,12 +1211,11 @@ mod tests {
         ));
     }
 
-    /// A length bound alone would not be enough. The honest payload is
+    /// A length bound alone is not enough. Here the honest payload is
     /// re-partitioned into raw items of 1 to 31 bytes, with the hidden child
-    /// declared absent at a position where the honest stream has a 0x80 byte,
-    /// so the hash is unchanged.
-    /// Every raw item here is within 1 to 31 bytes, yet none is a complete RLP
-    /// list, so the verifier rejects them.
+    /// declared absent where the honest stream has a 0x80 byte, so the hash is
+    /// unchanged. None of the items is a complete RLP list, so the verifier
+    /// rejects them.
     #[cfg(feature = "ethhash")]
     #[test]
     fn repartitioned_inline_children_are_rejected() {

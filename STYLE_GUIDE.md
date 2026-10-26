@@ -52,16 +52,11 @@ By default, we prohibit bare `unwrap` calls and index dereferencing, as there ar
   every key out of range. When either bound is threaded through new code, check every
   comparison site. See `merkle::collapse::CollapseRange`.
 - **Proof-node fields the hash does not cover**: Under the Ethereum scheme a node's hash
-  commits to its partial path, its value bytes, and its child slots. It does not commit to
-  the parent prefix length, to whether an inline child is a well-formed RLP list, to the
-  RLP shape of an account value, or to the difference between an empty value and no value.
-  The verifier checks each of these in `check_node_shape` in `proofs/types.rs`.
-  `Proof::value_digest` applies it to each node as it walks, and
-  `Proof::check_node_shapes` applies it to every node of a proof the walk does not reach.
-  When a change adds a wire field to `ProofNode`, or reads a field the verifier did not
-  read before, ask what the hash commits to. Anything it does not commit to needs an
-  explicit check on every verification path, and a test that first shows the hash
-  collision and then the rejection.
+  doesn't commit to every field a `ProofNode` carries; `check_node_shape` in
+  `proofs/types.rs` lists and checks the gaps. When a change adds a `ProofNode` field or
+  reads one the verifier didn't before, check whether the hash commits to it. If not, it
+  needs a check on every verification path and a test that shows the collision before the
+  rejection.
 
 ## Lint Suppression Policy
 

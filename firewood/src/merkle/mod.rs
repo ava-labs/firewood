@@ -1090,14 +1090,9 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         return Err(api::Error::ProofError(ProofError::NoEndProof));
     }
 
-    // Check the shape of every end-proof node before any anchoring decision is
-    // made. The right-edge walk below does not always run. It is skipped when
-    // the terminal lies past the last key-value pair, and `verify_edge` walks
-    // nothing when the request has no end key and the proof has no pairs. In
-    // both cases the hash reconstruction that anchors the proof only checks
-    // what the hash covers. Without this pass a node in such an end proof could
-    // declare a position, a value, or children that its hash does not commit
-    // to, and `right_edge` would read its declared key.
+    // The right-edge walk below doesn't always run, so check every end-proof
+    // node's shape up front. Otherwise `right_edge` could read a position or
+    // value that the hash doesn't commit to.
     proof.end_proof().check_node_shapes(algorithm)?;
 
     let left_edge_kv = key_values.first().map(|(k, v)| (k.as_ref(), v.as_ref()));
