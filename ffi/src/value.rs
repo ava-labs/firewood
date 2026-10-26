@@ -47,7 +47,6 @@ pub use self::results::RangeProofResult;
 pub use self::results::ReconstructedResult;
 pub use self::results::RenderedMetricsResult;
 pub use self::results::RevisionResult;
-pub use self::results::SIZING_RATIO_SCALE;
 pub use self::results::SizedChangeProof;
 pub use self::results::SizedChangeProofResult;
 pub use self::results::SizedRangeProof;

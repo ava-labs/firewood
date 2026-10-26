@@ -9,13 +9,14 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
-
-
 /**
- * The fixed-point scale of [`SizingHint::ratio`]: this value is a 1:1
- * ratio.
+ * A sized proof's calibration for the next request. Opaque: pass back the
+ * value a result carried.
  */
-#define SIZING_RATIO_SCALE (1 << 16)
+typedef struct SizingHint {
+  uint64_t opaque[3];
+} SizingHint;
+
 
 /**
  * The hashing mode to use for the database.
@@ -739,22 +740,6 @@ typedef struct CreateChangeProofArgs {
 } CreateChangeProofArgs;
 
 /**
- * What a sized proof measured about its chunk; pass it as the next
- * request's hint. A zero `ratio` means no hint.
- */
-typedef struct SizingHint {
-  /**
-   * Compressed/uncompressed body size ratio in fixed point, where
-   * [`SIZING_RATIO_SCALE`] is 1:1. Zero means no hint, whatever `edges`.
-   */
-  uint32_t ratio;
-  /**
-   * Body bytes the edge proofs and length prefixes took. Zero means unknown.
-   */
-  uint64_t edges;
-} SizingHint;
-
-/**
  * A size-targeted change proof with its serialized wire bytes.
  */
 typedef struct SizedChangeProof {
@@ -778,7 +763,7 @@ typedef struct SizedChangeProof {
   /**
    * The hint for the next request.
    */
-  struct SizingHint hint;
+  SizingHint hint;
 } SizedChangeProof;
 
 /**
@@ -852,6 +837,41 @@ typedef struct SizedChangeProofResult {
 } SizedChangeProofResult;
 
 /**
+ * Maybe is a C-compatible optional type using a tagged union pattern.
+ *
+ * FFI methods and types can use this to represent optional values where `Optional<T>`
+ * does not work due to it not having a C-compatible layout.
+ */
+enum Maybe_SizingHint_Tag
+#if __STDC_VERSION__ >= 202311L
+  : size_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  /**
+   * No value present.
+   */
+  Maybe_SizingHint_None_SizingHint,
+  /**
+   * A value is present.
+   */
+  Maybe_SizingHint_Some_SizingHint,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum Maybe_SizingHint_Tag Maybe_SizingHint_Tag;
+#else
+typedef size_t Maybe_SizingHint_Tag;
+#endif // __STDC_VERSION__ >= 202311L
+
+typedef struct Maybe_SizingHint {
+  Maybe_SizingHint_Tag tag;
+  union {
+    struct {
+      SizingHint some;
+    };
+  };
+} Maybe_SizingHint;
+
+/**
  * Arguments for creating a size-targeted change proof.
  */
 typedef struct CreateSizedChangeProofArgs {
@@ -874,9 +894,9 @@ typedef struct CreateSizedChangeProofArgs {
    */
   size_t budget;
   /**
-   * The previous chunk's hint, or a zero `ratio` for none.
+   * The previous chunk's hint, if any.
    */
-  struct SizingHint hint;
+  struct Maybe_SizingHint hint;
 } CreateSizedChangeProofArgs;
 
 /**
@@ -1001,7 +1021,7 @@ typedef struct SizedRangeProof {
   /**
    * The hint for the next request.
    */
-  struct SizingHint hint;
+  SizingHint hint;
 } SizedRangeProof;
 
 /**
@@ -1090,9 +1110,9 @@ typedef struct CreateSizedRangeProofArgs {
    */
   size_t budget;
   /**
-   * The previous chunk's hint, or a zero `ratio` for none.
+   * The previous chunk's hint, if any.
    */
-  struct SizingHint hint;
+  struct Maybe_SizingHint hint;
 } CreateSizedRangeProofArgs;
 
 /**

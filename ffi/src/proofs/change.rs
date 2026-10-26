@@ -192,8 +192,8 @@ pub struct CreateSizedChangeProofArgs<'a> {
     /// The wire byte budget the serialized proof must fit; zero always
     /// yields [`SizedChangeProofResult::OverBudget`].
     pub budget: usize,
-    /// The previous chunk's hint, or a zero `ratio` for none.
-    pub hint: SizingHint,
+    /// The previous chunk's hint, if any.
+    pub hint: Maybe<SizingHint>,
 }
 
 /// Generate a change proof from `start_root` to `end_root` from `start_key`
@@ -219,6 +219,10 @@ pub struct CreateSizedChangeProofArgs<'a> {
 ///   hint.
 /// - [`SizedChangeProofResult::Err`] containing an error message if the proof could not
 ///   be created.
+#[expect(
+    improper_ctypes_definitions,
+    reason = "`SizingHint` wraps a Rust-layout value that callers only echo back"
+)]
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_db_change_proof_sized(
     db: Option<&DatabaseHandle>,
@@ -233,7 +237,7 @@ pub extern "C" fn fwd_db_change_proof_sized(
                 .map(BorrowedBytes::as_slice)
                 .into_option(),
             args.budget,
-            args.hint.into(),
+            args.hint.into_option().map(Into::into),
         )
     })
 }

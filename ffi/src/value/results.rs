@@ -682,46 +682,31 @@ impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult {
     }
 }
 
-/// The fixed-point scale of [`SizingHint::ratio`]: this value is a 1:1
-/// ratio.
-pub const SIZING_RATIO_SCALE: u32 = 1 << 16;
-
-/// What a sized proof measured about its chunk; pass it as the next
-/// request's hint. A zero `ratio` means no hint.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// A sized proof's calibration for the next request. Opaque: pass back the
+/// value a result carried.
+#[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct SizingHint {
-    /// Compressed/uncompressed body size ratio in fixed point, where
-    /// [`SIZING_RATIO_SCALE`] is 1:1. Zero means no hint, whatever `edges`.
-    pub ratio: u32,
-    /// Body bytes the edge proofs and length prefixes took. Zero means unknown.
-    pub edges: u64,
+    inner: firewood::SizingHint,
 }
 
-impl From<SizingHint> for Option<firewood::SizingHint> {
-    /// `None` for a zero `ratio`, which discards `edges`.
-    fn from(hint: SizingHint) -> Self {
-        let ratio = firewood::CompressionRatio::try_from_scaled(hint.ratio)?;
-        let edges = (hint.edges != 0)
-            .then(|| usize::try_from(hint.edges).ok())
-            .flatten();
-        Some(firewood::SizingHint::new(ratio, edges))
-    }
-}
+// The header declares `SizingHint` by hand, as three `uint64_t`s.
+const _: () = assert!(
+    size_of::<SizingHint>() == 24 && align_of::<SizingHint>() == 8,
+    "SizingHint layout must match its declaration in cbindgen.toml"
+);
 
 impl From<firewood::SizingHint> for SizingHint {
-    fn from(hint: firewood::SizingHint) -> Self {
-        Self {
-            ratio: hint.ratio().scaled(),
-            edges: hint.edges().map_or(0, byte_count),
-        }
+    fn from(inner: firewood::SizingHint) -> Self {
+        Self { inner }
     }
 }
 
-const _: () = assert!(
-    SIZING_RATIO_SCALE == firewood::CompressionRatio::SCALE,
-    "the C ratio scale must match the sizer's"
-);
+impl From<SizingHint> for firewood::SizingHint {
+    fn from(hint: SizingHint) -> Self {
+        hint.inner
+    }
+}
 
 /// Converts a byte count for the C ABI.
 fn byte_count(len: usize) -> u64 {
