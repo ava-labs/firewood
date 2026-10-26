@@ -116,6 +116,30 @@ impl SizingHint {
     }
 }
 
+/// The hint as its fixed-point ratio and edge bytes (zero when unknown), for
+/// carrying it across the FFI.
+impl From<SizingHint> for (u32, u64) {
+    fn from(hint: SizingHint) -> Self {
+        (
+            hint.ratio.0.get(),
+            hint.edges
+                .map_or(0, |edges| u64::try_from(edges).unwrap_or(u64::MAX)),
+        )
+    }
+}
+
+/// A hint from its fixed-point ratio and edge bytes; see the reverse
+/// conversion. A zero ratio falls back to the initial estimate.
+impl From<(u32, u64)> for SizingHint {
+    fn from((ratio, edges): (u32, u64)) -> Self {
+        Self {
+            ratio: NonZeroU32::new(ratio)
+                .map_or(CompressionRatio::INITIAL_ESTIMATE, CompressionRatio),
+            edges: (edges != 0).then(|| usize::try_from(edges).ok()).flatten(),
+        }
+    }
+}
+
 /// A budget-targeted proof and its serialized wire representation.
 #[derive(Clone)]
 #[must_use]
