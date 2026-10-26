@@ -60,7 +60,6 @@ pub enum CreateProposalError {
     SendError,
     InvalidConversionToPathComponent,
     KeyTooLong { len: usize, max: usize },
-    EmptyValue,
 }
 
 impl From<FileIoError> for CreateProposalError {
@@ -402,8 +401,7 @@ impl ParallelMerkle {
     /// the workers, a `CreateProposalError::InvalidConversionToPathComponent` if it is
     /// unable to convert a u8 index into a path component, and a
     /// `CreateProposalError::KeyTooLong` if an operation's key is longer than
-    /// [`MAX_KEY_BYTES`], and a `CreateProposalError::EmptyValue` if a `Put`
-    /// carries an empty value under the Ethereum hash scheme.
+    /// [`MAX_KEY_BYTES`].
     pub fn apply<H: HashMode>(
         &mut self,
         mut mutable_nodestore: NodeStore<Mutable<Propose>, FileBacked, H>,
@@ -427,12 +425,6 @@ impl ParallelMerkle {
                     len: key_len,
                     max: MAX_KEY_BYTES,
                 });
-            }
-            if H::ALGORITHM.is_ethereum()
-                && let BatchOp::Put { value, .. } = &op
-                && value.as_ref().is_empty()
-            {
-                return Err(CreateProposalError::EmptyValue);
             }
             // Get the first nibble of the key to determine which worker to send the request to.
             //

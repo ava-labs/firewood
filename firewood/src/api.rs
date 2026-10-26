@@ -221,11 +221,6 @@ pub enum Error {
     /// A key in a proposed batch is longer than [`MAX_KEY_BYTES`].
     #[error("key of {len} bytes exceeds the supported maximum of {max} bytes")]
     KeyTooLong { len: usize, max: usize },
-
-    /// A proposed batch stores a zero-length value under the Ethereum hash
-    /// scheme, which hashes an empty value the same as no value.
-    #[error("empty values are not stored under the Ethereum hash scheme, delete the key instead")]
-    EmptyValue,
 }
 
 impl From<std::convert::Infallible> for Error {
@@ -282,7 +277,6 @@ impl From<CreateProposalError> for Error {
                 Error::InvalidConversionToPathComponent
             }
             CreateProposalError::KeyTooLong { len, max } => Error::KeyTooLong { len, max },
-            CreateProposalError::EmptyValue => Error::EmptyValue,
         }
     }
 }

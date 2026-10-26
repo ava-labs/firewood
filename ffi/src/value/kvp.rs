@@ -26,8 +26,7 @@ pub type OwnedKeyValueBatch = OwnedSlice<OwnedKeyValuePair>;
 #[repr(C, usize)]
 pub enum BatchOp<'a> {
     /// Insert or update a key with a value.
-    /// The value may be empty (zero-length), except under the Ethereum hash
-    /// scheme, which rejects an empty value.
+    /// The value may be empty (zero-length).
     Put {
         key: BorrowedBytes<'a>,
         value: BorrowedBytes<'a>,

@@ -208,8 +208,7 @@ enum BatchOp_Tag
  {
   /**
    * Insert or update a key with a value.
-   * The value may be empty (zero-length), except under the Ethereum hash
-   * scheme, which rejects an empty value.
+   * The value may be empty (zero-length).
    */
   BatchOp_Put,
   /**
