@@ -695,14 +695,19 @@ pub struct SizingHint {
 
 impl From<firewood::SizingHint> for SizingHint {
     fn from(hint: firewood::SizingHint) -> Self {
-        let (ratio, edges) = hint.into();
-        Self { ratio, edges }
+        Self {
+            ratio: hint.ratio(),
+            edges: hint.edges().map_or(0, byte_count),
+        }
     }
 }
 
 impl From<SizingHint> for firewood::SizingHint {
     fn from(hint: SizingHint) -> Self {
-        (hint.ratio, hint.edges).into()
+        let edges = (hint.edges != 0)
+            .then(|| usize::try_from(hint.edges).ok())
+            .flatten();
+        Self::new(hint.ratio, edges)
     }
 }
 
