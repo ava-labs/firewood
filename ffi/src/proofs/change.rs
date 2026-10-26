@@ -150,6 +150,32 @@ pub extern "C" fn fwd_db_change_proof(
     })
 }
 
+/// Deserialize a change proof from bytes for use with `db`.
+///
+/// The database supplies the hash mode the proof must be encoded with; a
+/// proof whose header advertises another mode is rejected here, before its
+/// body is decompressed, rather than at verification.
+///
+/// # Returns
+///
+/// - [`ChangeProofResult::NullHandlePointer`] if the caller provided a null database pointer.
+/// - [`ChangeProofResult::Ok`] containing a pointer to the `ChangeProofContext` if the proof
+///   was successfully parsed. This does not imply that the proof is valid, only that it is
+///   well-formed and uses `db`'s hash mode. Use [`fwd_db_verify_change_proof`] or
+///   [`fwd_db_verify_and_commit_change_proof`] to verify the proof.
+/// - [`ChangeProofResult::Err`] containing an error message if the proof could not be parsed
+///   or its hash mode does not match `db`'s.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_db_change_proof_from_bytes(
+    db: Option<&DatabaseHandle>,
+    bytes: BorrowedBytes<'_>,
+) -> ChangeProofResult {
+    crate::invoke_with_handle(db, move |db| {
+        FrozenChangeProof::from_slice_in_mode(&bytes, db.node_hash_algorithm())
+            .map_err(api::Error::ProofError)
+    })
+}
+
 /// Verify a change proof and create a standard proposal.
 ///
 /// Performs structural validation, applies batch ops to the latest
@@ -299,28 +325,6 @@ fn serialize_change_proof(
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_change_proof_to_bytes(proof: Option<&ChangeProofContext>) -> ValueResult {
     crate::invoke_with_handle(proof, |ctx| serialize_change_proof(ctx.proof.as_ref()))
-}
-
-/// Deserialize a `ChangeProof` from bytes.
-///
-/// # Arguments
-///
-/// * `bytes` - The bytes to deserialize the proof from.
-///
-/// # Returns
-///
-/// - [`ChangeProofResult::NullHandlePointer`] if the caller provided a null or zero-length slice.
-/// - [`ChangeProofResult::Ok`] containing a pointer to the `ChangeProofContext` if the proof
-///   was successfully parsed. This does not imply that the proof is valid, only that it is
-///   well-formed. Use [`fwd_db_verify_change_proof`] or
-///   [`fwd_db_verify_and_commit_change_proof`] to verify the proof.
-/// - [`ChangeProofResult::Err`] containing an error message if the proof could not be parsed.
-#[unsafe(no_mangle)]
-pub extern "C" fn fwd_change_proof_from_bytes(bytes: BorrowedBytes) -> ChangeProofResult {
-    crate::invoke(move || {
-        FrozenChangeProof::from_slice(&bytes)
-            .map_err(|err| api::Error::ProofError(ProofError::Deserialization(err)))
-    })
 }
 
 /// Frees the memory associated with a `ChangeProofContext`.
