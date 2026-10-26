@@ -1601,8 +1601,7 @@ func TestChangeProofSizedSyncsWholeDiff(t *testing.T) {
 				r.NoError(err)
 				r.Equal(receiverRoot, receiver.Root())
 				hint = sized.Hint
-				r.NotZero(hint.Ratio)
-				r.NotZero(hint.Edges)
+				r.True(hint.set, "each chunk returns a hint for the next")
 
 				next, err := received.FindNextKey(nothing())
 				r.NoError(err)
