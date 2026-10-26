@@ -1435,8 +1435,7 @@ func TestRangeProofSizedSyncsWholeKeyspace(t *testing.T) {
 		_, err = receiver.VerifyAndCommitRangeProof(received, startKey, nothing(), root, rangeProofLenUnbounded)
 		r.NoError(err)
 		hint = sized.Hint
-		r.NotZero(hint.Ratio)
-		r.NotZero(hint.Edges)
+		r.True(hint.set, "each chunk returns a hint for the next")
 
 		next, err := received.FindNextKey()
 		r.NoError(err)

@@ -116,19 +116,11 @@ type ChangeProof struct {
 	*handle[*C.ChangeProofContext]
 }
 
-// SizingRatioScale is the fixed-point scale of [SizingHint.Ratio]; a ratio
-// equal to it is 1:1.
-const SizingRatioScale uint32 = C.SIZING_RATIO_SCALE
-
-// SizingHint is what a sized proof measured about its chunk; pass it as the
-// next request's hint. A zero Ratio means no hint.
+// SizingHint is a sized proof's calibration for the next request. It is
+// opaque: pass back the one a result carried. The zero value means no hint.
 type SizingHint struct {
-	// Ratio is the compressed/uncompressed body size ratio in fixed point,
-	// where [SizingRatioScale] is 1:1.
-	Ratio uint32
-	// Edges is the body bytes the edge proofs and length prefixes took; zero
-	// means unknown.
-	Edges uint64
+	c   C.SizingHint
+	set bool
 }
 
 // SizedProof is a size-targeted proof chunk with its serialized wire bytes.
@@ -149,12 +141,19 @@ type SizedProof[P any] struct {
 // the end of the keyspace.
 type SizedRangeProof = SizedProof[*RangeProof]
 
-func (h SizingHint) toC() C.SizingHint {
-	return C.SizingHint{ratio: C.uint32_t(h.Ratio), edges: C.uint64_t(h.Edges)}
+func (h SizingHint) toC() C.Maybe_SizingHint {
+	var cMaybe C.Maybe_SizingHint
+	if h.set {
+		*(*C.SizingHint)(unsafe.Pointer(&cMaybe.anon0)) = h.c
+		cMaybe.tag = C.Maybe_SizingHint_Some_SizingHint
+	} else {
+		cMaybe.tag = C.Maybe_SizingHint_None_SizingHint
+	}
+	return cMaybe
 }
 
 func sizingHintFromC(hint C.SizingHint) SizingHint {
-	return SizingHint{Ratio: uint32(hint.ratio), Edges: uint64(hint.edges)}
+	return SizingHint{c: hint, set: true}
 }
 
 // NextKeyRange is a range of keys still to fetch, `[StartKey, EndKey]`, both
