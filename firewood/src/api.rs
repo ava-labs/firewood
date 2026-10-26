@@ -391,23 +391,21 @@ pub trait DbView {
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, Error>;
 
-    /// Obtain a range proof from the inclusive `start_key` (`None` starts at
-    /// the lowest key) whose wire size never exceeds `budget` bytes. To page,
-    /// resume strictly above the last key in the proof with the returned
-    /// [`SizedProof::hint`] as `hint`, until [`SizedProof::natural_end`]; a
-    /// hint only calibrates the first probe.
+    /// Obtain a range proof over a set of keys, sized to a byte budget
+    ///
+    /// # Arguments
+    ///
+    /// * `start_key` - If None, start at the lowest key; inclusive otherwise
+    /// * `budget` - The serialized proof never exceeds this many bytes
+    /// * `hint` - The previous chunk's [`SizedProof::hint`], if any
     ///
     /// # Errors
     ///
     /// * [`Error::RangeProofOnEmptyTrie`] if the trie is empty and
-    ///   `start_key` is `None`; with a `start_key` it is
-    ///   [`Error::ProofError`] with [`ProofError::Empty`].
+    ///   `start_key` is `None`
     /// * [`Error::ProofOverBudget`] if one entry, or the edge proofs alone,
-    ///   serialize past `budget`.
-    /// * [`Error::ProofError`] with [`ProofError::BodyTooLarge`] if the
-    ///   smallest chunk's body exceeds the decoder's limit, which no budget
-    ///   can fix.
-    /// * Other I/O or structural errors during proof generation.
+    ///   serialize past `budget`
+    /// * Other I/O or structural errors during proof generation
     fn range_proof_sized<K: KeyType>(
         &self,
         start_key: Option<K>,

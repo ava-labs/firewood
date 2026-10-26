@@ -625,28 +625,21 @@ impl<H: HashMode> Db<H> {
         end_merkle.change_proof(start_key, end_key, start_merkle.nodestore(), limit)
     }
 
-    /// Generates a change proof that turns the committed revision
-    /// `start_hash` into `end_hash`, from the inclusive lower bound
-    /// `start_key`, whose wire size never exceeds `budget` bytes. Paging and
-    /// `hint` are as for [`api::DbView::range_proof_sized`], except that
-    /// [`SizedProof::natural_end`] is the only completion signal: the last
-    /// chunk still proves its last key.
+    /// Generate a change proof between two revisions identified by their root
+    /// hashes, sized to a byte budget.
+    ///
+    /// Returns the proof that covers key-value changes between `start_hash`
+    /// and `end_hash` from `start_key`, whose serialized size never exceeds
+    /// `budget` bytes, with the hint for the next chunk.
     ///
     /// # Errors
     ///
-    /// * [`api::Error::EndRevisionNotFound`] if `end_hash` is not found; it
+    /// - [`api::Error::EndRevisionNotFound`] if `end_hash` is not found; it
     ///   is reported even when both hashes are missing.
-    /// * [`api::Error::StartRevisionNotFound`] if `start_hash` is not found.
-    /// * [`api::Error::ProofError`] with
-    ///   [`ProofError::Empty`](crate::ProofError::Empty) if the end
-    ///   revision's trie is empty.
-    /// * [`api::Error::ProofOverBudget`] if one operation, or the edge proofs
+    /// - [`api::Error::StartRevisionNotFound`] if `start_hash` is not found.
+    /// - [`api::Error::ProofOverBudget`] if one operation, or the edge proofs
     ///   alone, serialize past `budget`.
-    /// * [`api::Error::ProofError`] with
-    ///   [`ProofError::BodyTooLarge`](crate::ProofError::BodyTooLarge) if the
-    ///   smallest chunk's body exceeds the decoder's limit, which no budget
-    ///   can fix.
-    /// * Other I/O or structural errors during proof generation.
+    /// - Other I/O or structural errors during proof generation.
     pub fn change_proof_sized(
         &self,
         start_hash: HashKey,
