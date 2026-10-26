@@ -8,6 +8,7 @@ guidelines for contributing to firewood.
 
 * [Quick Links](#quick-links)
 * [Testing](#testing)
+* [Updating the Go version](#updating-the-go-version)
 * [How to submit changes](#how-to-submit-changes)
 * [Required merge checks](#required-merge-checks)
 * [Signing your commits](#signing-your-commits)
@@ -50,6 +51,28 @@ bare `cargo nextest run` tests on that nightly while CI tests on stable. See
 Also, if you update any versions of packages, notably the MSRV (Minimum Supported Rust Version), you ought to update the nix ffi flake lock file to pin compatible versions of nix packages as well:
 
     ./scripts/run-just.sh update-ffi-flake
+
+## Updating the Go version
+
+Firewood pins one Go version in several places, and CI fails when they
+disagree. To move to a different Go release, follow these steps:
+
+1. Set the `go` directive in `ffi/go.mod`, `ffi/tests/go.mod` and
+   `ffi/tools/external/go.mod` to the target version.
+2. Set `FIREWOOD_GO_VERSION` in `infra/toolchain-versions.sh`, and set
+   `FIREWOOD_GO_LINUX_AMD64_SHA256` to the checksum of
+   `go<version>.linux-amd64.tar.gz` from
+   <https://go.dev/dl/?mode=json&include=all>.
+3. Point the `golang.url` input in `ffi/flake.nix` at an AvalancheGo commit
+   whose `nix/go/default.nix` sets `goVersion` to the target version.
+   `ffi/flake.nix` takes its Go toolchain from AvalancheGo, so the version bump
+   must land in AvalancheGo first. To find the commit, look at the history of
+   `nix/go/default.nix` in AvalancheGo. For example, Go 1.26.10 arrived in
+   `4f8c6316bed83c3158aff4b4be43855caa14925f`.
+4. Run `./scripts/run-just.sh update-ffi-flake` to refresh `ffi/flake.lock`, and
+   commit the result. The `ffi-nix` CI job runs the same recipe and fails when it
+   changes the lock file or finds a Go version that disagrees with
+   `ffi/go.mod`.
 
 ## How to submit changes
 
@@ -107,6 +130,7 @@ Use this when your review is incomplete, or you're not ready to approve or rejec
 
 * This can be helpful for asking clarifying questions, suggesting optional improvements, or flagging issues you're unsure about.
 * This state signals that your review is in progress or advisory, not final.
+* Make sure your review comments are actionable, or mark them as "nit" which implies that no action is required. If there's any doubt if your comment is actionable, call out exactly what action to take to resolve the comment.
 
 #### ❌ Reject (Request Changes)
 
@@ -130,7 +154,13 @@ As the author of a pull request, your responsibility is to ensure the review pro
 
 * Review your own code. Catch obvious issues and clean up unnecessary changes.
 * Some code changes are too large to be reviewed quickly. This can happen when the number of lines of new code is more than a few hundred. Consider breaking up your code in this case.
-* Write a clear PR description. Include context, reasoning, and anything reviewers should know up front.
+* Write a concise, accurate PR description. Keep claims factual and focus on motivation, behavior, scope, and impact. Avoid implementation details that are apparent from the code unless they help explain the purpose of the PR. Whenever possible, use pre-defined vocabulary from the README or elsewhere in the codebase. Do not introduce new terms in the PR description that are not defined in the codebase.
+* Lead with the problem and the fix. Reviewers assume every claim in the description has been checked, so each claim costs review time. A reviewer should be able to tell what is broken from the first line of *Why this should be merged* and how it is fixed from the first line of *How this works*; keep the rest short or leave it out, and do not restate what the diff already shows.
+* Use the repository [pull request template](.github/pull_request_template.md):
+  * **Why this should be merged:** Explain the problem and why the change is needed.
+  * **How this works:** Summarize the behavior and scope of the change. Distinguish between similar but different operations and state important limitations or compatibility effects.
+  * **How this was tested:** Summarize tests added and validation run. For most PRs, it is enough to say "Required CI checks pass" once they have passed. Note important validation that was not run.
+  * **Breaking Changes:** Check every affected project component and briefly explain the compatibility impact after each checked box. If no components are affected, remove the checkboxes and write "None".
 * Add tests and verify they pass locally and in CI.
 
 #### During Review
@@ -168,125 +198,7 @@ the GitHub UI.
 
 ## Style Guide / Coding Conventions
 
-We generally follow the same rules that `cargo fmt` and `cargo clippy` will report as warnings, with a few notable exceptions as documented in the associated Cargo.toml file.
-
-By default, we prohibit bare `unwrap` calls and index dereferencing, as there are usually better ways to write this code. In the case where you can't, please use `expect` with a message explaining why it would be a bug, which we currently allow. For more information on our motivation, please read this great article on unwrap: [Using unwrap() in Rust is Okay](https://blog.burntsushi.net/unwrap) by [Andrew Gallant](https://blog.burntsushi.net).
-
-### Comments and documentation
-
-A comment competes with the code for the reader's attention and must win on
-information. Write what the code cannot say for itself — the invariant, the
-reason for the ordering, the failure the guard prevents, the layout of the bytes
-on disk. This comment loses, and deleting it improves the file:
-
-    // Increment the count.
-    self.count += 1;
-
-This one wins, because nothing in the surrounding code states it:
-
-    // Publish the free-list head only after the node is durable. A crash
-    // between the two leaks the space; the reverse order can hand out an
-    // address that still holds a live node.
-
-Be deliberate about what each comment carries:
-
-* **Self-contained and context free.** The reader is a stranger years from now
-  who did not see the review, does not know the issue number, and has no diff in
-  front of them. Describe the code as it stands, not as it changed: avoid "now",
-  "no longer", "previously", "this fix", and pointers to a review conversation.
-  History belongs in the commit message and the PR description.
-* **Said once.** State each piece of context in the place that owns it and refer
-  to that place from everywhere else — an intra-doc link in Rust
-  (`` [`NodeStore::flush_to`] ``), a doc link in Go (`[Revision.EthGetProof]`), or a
-  plain path (`see storage/src/nodestore/persist.rs`) where neither is available. Copies
-  drift, and a stale copy misleads more than a reference ever could.
-  [Documenting wrappers, shims, and FFI adapters](#documenting-wrappers-shims-and-ffi-adapters)
-  applies this rule to delegating functions.
-* **Consistent in voice.** Prefer the present tense or the imperative mood
-  ("returns the root hash", "hold the lock across the flush"). Use the
-  terminology defined in [AGENTS.md](./AGENTS.md#important-terminology) —
-  revision, view, proposal, commit, batch — rather than a synonym coined on the
-  spot, and do not alternate between "we", "you", and "the caller" within a
-  file.
-* **Free of filler.** No throat-clearing ("Note that", "It is important to note
-  that", "Basically"), no hype ("blazing fast", "robust", "cleanly handles"), no
-  prose restatement of the signature, and no doc section that exists only to be
-  present.
-
-### User-facing strings
-
-Error messages, log lines, and CLI help are part of the interface. Hold them to
-the same bar as the API:
-
-* Name what failed and what the operator can do about it. "failed to open
-  database" is a category; "failed to open database at {path}: {source}" is a
-  starting point for a fix.
-* Keep capitalization, punctuation, and terminology consistent across messages,
-  following the convention of the surface rather than inventing one: Rust error
-  strings are lowercase and unpunctuated because they are composed into a larger
-  chain, while CLI help is sentence case.
-* Make each message distinct enough that searching the source for it lands on a
-  single site.
-* Do not apologize, and do not suggest retrying unless a retry can succeed.
-
-Reviewers should challenge comments and strings that read as generated rather
-than written — padded, hedged, repeated at every call site, or narrating the
-change that introduced them. "This comment does not earn its line" and "say this
-once here and link to it from the other two places" are legitimate review
-feedback. See [`CODE_REVIEW.md`](./CODE_REVIEW.md) for the full review checklist.
-
-### Documenting wrappers, shims, and FFI adapters
-
-When a function exists only to delegate to another — an FFI adapter, a thin
-wrapper, or a shim that adds no behavior of its own — **do not duplicate the
-callee's documentation**. Duplicated docs drift: when the underlying function
-changes, every copy must be found and updated, and a stale copy misleads readers
-more than a one-line reference ever could.
-
-Instead:
-
-* Say what the wrapper *is* and link to the function it delegates to for the
-  details (parameters, return values, formats, and safety requirements). In
-  Rust, use intra-doc links (`` [`fwd_eth_get_proof`] ``) so readers can click
-  through to the canonical documentation.
-* Document only what is **unique to the wrapper**: why it exists (if
-  non-obvious), and any behavior it adds or changes — extra error conditions,
-  additional safety requirements, or different argument handling.
-* **Reference a target at least as visible as the item being documented.**
-  Public docs that link to a private item break — Rust fails CI, and Go renders
-  the link as dead plain text. A wrapper may delegate to a private helper for its
-  *implementation*, but its docs should reference the **public** canonical
-  function (or inline the details) — never the private helper.
-
-In Rust, `rustdoc` renders `[Type::method]` as a clickable link, so referencing
-the canonical documentation is both DRY and convenient — prefer it:
-
-    /// Produce an `eth_getProof`-compatible proof against a reconstructed view
-    /// rather than a committed revision.
-    ///
-    /// See [`fwd_eth_get_proof`] for the proof format, arguments, return values,
-    /// and key-encoding requirements.
-    ///
-    /// # Safety
-    ///
-    /// As [`fwd_eth_get_proof`], except `reconstructed` must be a valid pointer to
-    /// a [`ReconstructedHandle`].
-
-In Go, doc links such as `[Revision.EthGetProof]` (available since Go 1.19) are
-clickable on pkg.go.dev and navigable via `gopls`, just as in Rust, so the same
-balance applies: cross-reference the shared contract, but keep wrapper-specific
-details (such as error conditions) local rather than referring the reader away
-entirely. Go's style guides reinforce this preference for clarity over strict
-DRY — the [Google Go Style Guide][google-go-style] lists clarity as its foremost
-principle and does not treat DRY as overriding, and the
-[Uber Go Style Guide][uber-go-style] is likewise a catalog of conventions that
-favor clarity and consistency:
-
-    // EthGetProof is [Revision.EthGetProof] evaluated against this reconstructed
-    // view. It returns [ErrDroppedReconstructed] if the view has been released.
-
-[google-go-style]: https://google.github.io/styleguide/go/guide
-[uber-go-style]: https://github.com/uber-go/guide/blob/master/style.md
+See [`STYLE_GUIDE.md`](./STYLE_GUIDE.md).
 
 ## Where can I ask for help?
 

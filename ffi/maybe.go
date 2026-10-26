@@ -53,3 +53,24 @@ func (b *ownedBytes) HasValue() bool {
 func (b *ownedBytes) Value() *ownedBytes {
 	return b
 }
+
+// maybeValue is the package's own [Maybe] implementation, used for values the
+// package returns to callers (for example [NextKeyRange.EndKey]).
+type maybeValue[T any] struct {
+	value    T
+	hasValue bool
+}
+
+func (m maybeValue[T]) HasValue() bool { return m.hasValue }
+
+func (m maybeValue[T]) Value() T { return m.value }
+
+// Some returns a [Maybe] holding value.
+func Some[T any](value T) Maybe[T] {
+	return maybeValue[T]{value: value, hasValue: true}
+}
+
+// Nothing returns a [Maybe] holding no value.
+func Nothing[T any]() Maybe[T] {
+	return maybeValue[T]{}
+}

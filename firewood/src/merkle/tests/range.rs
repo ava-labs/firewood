@@ -8,6 +8,7 @@ use firewood_storage::U4;
 use super::verify_range_proof;
 use super::*;
 use crate::RangeProof;
+use crate::api::MAX_KEY_BYTES;
 
 type KeyValuePairs = Vec<(Box<[u8]>, Box<[u8]>)>;
 
@@ -2382,7 +2383,7 @@ fn test_empty_range_proof_with_hashed_value() {
     let proof = merkle
         .range_proof(Some(b"\x30"), Some(b"\x40"), None)
         .unwrap();
-    assert!(proof.key_values().is_empty());
+    assert_eq!(proof.key_values(), []);
 
     // Serialize/deserialize to convert Value to Hash
     let mut serialized = Vec::new();

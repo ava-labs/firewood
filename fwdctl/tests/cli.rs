@@ -10,6 +10,7 @@ use std::fmt::Write;
 use std::fs;
 use std::path::Path;
 
+use firewood::api::MAX_KEY_BYTES;
 use firewood_macros::hash_mode;
 use firewood_storage::EthHash;
 use firewood_storage::HashMode;
@@ -897,5 +898,37 @@ fn test_slow_fwdctl_import_large_random_database<H: HashMode>() {
         let contents1 = fs::read_to_string(&dump_file2).expect("Should read dump file 2");
         let contents2 = fs::read_to_string(&dump_file3).expect("Should read dump file 3");
         assert_eq!(contents1, contents2, "The exported databases do not match!");
+    });
+}
+
+/// `fwdctl` prints errors in their `Debug` form, so that is the text checked for
+/// the rejected key.
+#[hash_mode]
+#[test]
+fn fwdctl_insert_enforces_the_key_length_limit<H: HashMode>() {
+    with_tmpdir(|db_path| {
+        create_db(db_path, H::ALGORITHM);
+
+        let hex_value_of_key_byte = "ab";
+        let at_limit = hex_value_of_key_byte.repeat(MAX_KEY_BYTES);
+        cargo_bin_cmd!()
+            .args(["insert", "--hex", &at_limit, "v"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .success();
+
+        let one_over = hex_value_of_key_byte.repeat(MAX_KEY_BYTES + 1);
+        cargo_bin_cmd!()
+            .args(["insert", "--hex", &one_over, "v"])
+            .arg("--db")
+            .arg(db_path)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(format!(
+                "KeyTooLong {{ len: {}, max: {} }}",
+                MAX_KEY_BYTES + 1,
+                MAX_KEY_BYTES
+            )));
     });
 }

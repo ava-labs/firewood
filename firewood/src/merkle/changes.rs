@@ -1941,6 +1941,6 @@ mod tests {
         assert!(iter.next().is_none());
 
         let items: Vec<_> = change_proof.into_iter().collect();
-        assert!(items.is_empty());
+        assert_eq!(items, [] as [&BatchOp<Box<[u8]>, Box<[u8]>>; 0]);
     }
 }

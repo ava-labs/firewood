@@ -29,6 +29,7 @@ use super::types::ProofNode;
 use super::types::ProofType;
 use crate::api::FrozenChangeProof;
 use crate::api::FrozenRangeProof;
+use crate::api::MAX_KEY_BYTES;
 use crate::db::BatchOp;
 use crate::merkle::Key;
 use crate::merkle::Value;
@@ -82,16 +83,6 @@ impl FrozenRangeProof {
         }
     }
 }
-
-/// Maximum length, in bytes, of a key accepted from a serialized proof.
-///
-/// Proof verification rebuilds a trie from the peer's keys and walks it once per
-/// level. A trie is at most as deep as its longest key has nibbles, so without
-/// this bound the peer decides how deep those walks go. The bound is sixteen
-/// times the deepest key the `ethhash` format defines: a 32-byte account hash
-/// followed by a 32-byte storage slot hash. It is a constant rather than a
-/// setting so that every reader enforces the same limit.
-pub(crate) const MAX_KEY_BYTES: usize = 1024;
 
 /// [`MAX_KEY_BYTES`] in nibbles, for proof-node keys.
 ///

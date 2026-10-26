@@ -14,7 +14,6 @@ use firewood_storage::logger::debug;
 use integer_encoding::VarInt;
 use test_case::test_case;
 
-use super::de::MAX_KEY_BYTES;
 use super::de::MAX_KEY_NIBBLES;
 use super::frame::MAX_DECOMPRESSED_LEN;
 use super::header::Header;
@@ -28,6 +27,7 @@ use super::types::ProofNode;
 use super::types::ProofType;
 use crate::api::FrozenChangeProof;
 use crate::api::FrozenRangeProof;
+use crate::api::MAX_KEY_BYTES;
 use crate::db::BatchOp;
 
 /// Length of the serialized proof header, which the wire stores uncompressed.
@@ -418,7 +418,7 @@ fn test_empty_proof() {
         Ok(proof) => {
             assert!(proof.start_proof().is_empty());
             assert!(proof.end_proof().is_empty());
-            assert!(proof.key_values().is_empty());
+            assert_eq!(proof.key_values(), []);
         }
         Err(err) => panic!("Expected valid empty proof, got error: {err}"),
     }

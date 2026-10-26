@@ -62,10 +62,11 @@ func FuzzRangeProofCreation(f *testing.F) {
 		err = proof.Verify(root, nil, nil, uint32(numAccounts))
 		require.NoErrorf(t, err, "%T.Verify()", proof)
 
-		seen := make(map[common.Hash]struct{})
-		for h, err := range proof.CodeHashes() {
-			require.NoErrorf(t, err, "%T.CodeHashes()", proof)
+		hashes, err := proof.CodeHashes()
+		require.NoErrorf(t, err, "%T.CodeHashes()", proof)
 
+		seen := make(map[common.Hash]struct{})
+		for _, h := range hashes {
 			ethHash := common.Hash(h)
 			require.NotEqual(t, types.EmptyCodeHash, ethHash)
 
