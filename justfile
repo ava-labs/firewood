@@ -136,7 +136,7 @@ prepush-lite:
 # After running, review the diffs in src/proofs/snapshots/ and commit them
 # alongside the format change.
 snapshot-proof-nodes:
-    RUSTUP_TOOLCHAIN=stable INSTA_UPDATE=always cargo nextest run -p firewood --features logger -E 'test(~snapshot_tests)'
+    RUSTUP_TOOLCHAIN=stable INSTA_UPDATE=always cargo nextest run --locked -p firewood --features logger -E 'test(~snapshot_tests)'
 
 # Regenerate firewood-storage node serialization snapshots for both hash modes.
 #
@@ -149,7 +149,7 @@ snapshot-proof-nodes:
 # After running, review the diffs in storage/src/node/snapshots/ and commit
 # them alongside the format change.
 snapshot-nodes:
-    RUSTUP_TOOLCHAIN=stable INSTA_UPDATE=always cargo nextest run -p firewood-storage --features logger -E 'test(~snapshot_tests)'
+    RUSTUP_TOOLCHAIN=stable INSTA_UPDATE=always cargo nextest run --locked -p firewood-storage --features logger -E 'test(~snapshot_tests)'
 
 # Regenerate all snapshots across the workspace for both hash modes.
 #
