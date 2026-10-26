@@ -74,7 +74,7 @@ mod tests {
     fn test_write_iter(limit: Option<usize>, expected: &str) {
         let mut output = String::new();
         let items = ["apple", "banana", "cherry", "date"];
-        write_limited_with_sep(&mut output, &items, ", ", limit).unwrap();
+        write_limited_with_sep(&mut output, items, ", ", limit).unwrap();
         assert_eq!(output, expected);
     }
 }

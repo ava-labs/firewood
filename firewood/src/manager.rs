@@ -385,6 +385,32 @@ impl<H: HashMode> RevisionManager<H> {
         proposal: &ProposedRevision<H>,
         revisions: &mut VecDeque<CommittedRevision<H>>,
     ) -> Result<CommittedId, RevisionManagerError> {
+        struct RevisionsGuard<'a, H: HashMode> {
+            revisions: &'a mut VecDeque<CommittedRevision<H>>,
+        }
+
+        impl<H: HashMode> Drop for RevisionsGuard<'_, H> {
+            fn drop(&mut self) {
+                // update the active revisions gauge on any path that drops the guard
+                firewood_gauge!(ACTIVE_REVISIONS).set_integer(self.revisions.len());
+            }
+        }
+
+        impl<H: HashMode> std::ops::Deref for RevisionsGuard<'_, H> {
+            type Target = VecDeque<CommittedRevision<H>>;
+            fn deref(&self) -> &Self::Target {
+                self.revisions
+            }
+        }
+
+        impl<H: HashMode> std::ops::DerefMut for RevisionsGuard<'_, H> {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                self.revisions
+            }
+        }
+
+        let mut revisions = RevisionsGuard { revisions };
+
         // Check if the persist worker has failed.
         self.persist_worker
             .check_error()
@@ -435,7 +461,6 @@ impl<H: HashMode> RevisionManager<H> {
                     break;
                 }
             }
-            firewood_gauge!(ACTIVE_REVISIONS).set_integer(revisions.len());
         }
 
         let new_id = committed.committed_id();
@@ -1126,6 +1151,80 @@ mod tests {
 
         let result = RevisionManager::<H>::new(config);
         assert!(result.is_ok());
+    }
+
+    /// `firewood_revisions_active` must match the in-memory queue length after
+    /// every commit: when no reaping is needed, and when reaping stops early
+    /// because the oldest revision is still referenced.
+    #[hash_mode]
+    #[test]
+    fn test_active_revisions_gauge_tracks_queue_len<H: HashMode>() {
+        use firewood_storage::LeafNode;
+        use firewood_storage::NibblesIterator;
+        use firewood_storage::Node;
+        use firewood_storage::Path;
+        use firewood_storage::TestRecorder;
+
+        const MAX_REVISIONS: usize = 3;
+
+        fn commit_leaf<H: HashMode>(manager: &RevisionManager<H>, i: u8) {
+            let base = manager.current_revision();
+            let mut proposal = NodeStore::new(&*base).unwrap();
+            *proposal.root_mut() = Some(Node::Leaf(LeafNode {
+                partial_path: Path::from_nibbles_iterator(NibblesIterator::new(&[i])),
+                value: Box::new([i]),
+            }));
+            let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _, H>> =
+                Arc::new(proposal.try_into().unwrap());
+            manager.add_proposal(proposal.clone());
+            manager.commit(proposal).unwrap();
+        }
+
+        let recorder = TestRecorder::default();
+        let gauge =
+            || recorder.gauge_value(crate::registry::ACTIVE_REVISIONS, &[("db_tag", "untagged")]);
+
+        recorder.with_local_recorder(|| {
+            let db_dir = tempfile::tempdir().unwrap();
+            let config = ConfigManager::builder()
+                .root_dir(db_dir.as_ref().to_path_buf())
+                .create(true)
+                .manager(
+                    RevisionManagerConfig::builder()
+                        .max_revisions(MAX_REVISIONS)
+                        .build(),
+                )
+                .build();
+            let manager = RevisionManager::<H>::new(config).unwrap();
+            let queue_len =
+                || f64::from(u32::try_from(manager.in_memory_revisions.read().len()).unwrap());
+
+            // Holding the oldest revision makes `Arc::try_unwrap` fail during
+            // reaping, which pushes it back and stops reaping early.
+            let pinned = manager.current_revision();
+
+            // Fill the queue without reaping, then overflow it while reaping
+            // is blocked by `pinned`.
+            for i in 0..u8::try_from(MAX_REVISIONS * 2).unwrap() {
+                commit_leaf(&manager, i);
+                assert_eq!(gauge(), Some(queue_len()), "after commit {i}");
+            }
+            let blocked_len = queue_len();
+            assert!(
+                blocked_len > f64::from(u32::try_from(MAX_REVISIONS).unwrap()),
+                "precondition: reaping must have been blocked by the pinned revision"
+            );
+
+            // Unblock reaping and confirm the gauge follows the shrinking queue.
+            drop(pinned);
+            manager.wait_persisted();
+            commit_leaf(&manager, u8::MAX);
+            assert!(
+                queue_len() < blocked_len,
+                "precondition: reaping must resume"
+            );
+            assert_eq!(gauge(), Some(queue_len()), "after unpinned commit");
+        });
     }
 
     /// Under `ethhash`, an empty committed revision is exposed via the

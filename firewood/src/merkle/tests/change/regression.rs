@@ -536,7 +536,7 @@ fn test_key_empty_range_verifies() {
             None,
         )
         .unwrap();
-    assert!(proof.batch_ops().is_empty());
+    assert_eq!(proof.batch_ops(), [] as [BatchOp<Box<[u8]>, Box<[u8]>>; 0]);
     verify(&db, &proof, &start_root, &end_root, Some(sk), Some(ek)).expect(
         "honest change proof over the key-empty range [0x60, 0xb0] must verify. \
          The start proof's exclusion terminal 0xe0 sorts after the end bound, so \

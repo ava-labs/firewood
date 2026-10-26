@@ -42,4 +42,7 @@ orthogonal and grouped into four namespaces plus a few flags.
   A maintainer adds `priority/*` (which auto-swaps to `status/ready`), plus
   `area/*`/`kind/*` as useful.
 - **PRs**: `area/*` is auto-applied from changed paths; `kind/*` is derived from
-  the conventional-commit title. `area/c-chain` is applied manually at review.
+  the conventional-commit title. `area/c-chain` is applied manually at review
+  when the change touches C-Chain reexecution or libevm integration.
+  `breaking-change` is added when any breaking-change box in the PR template is
+  checked.

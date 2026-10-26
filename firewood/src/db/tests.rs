@@ -8,7 +8,7 @@ use super::test::TestDb;
 
 mod key_length {
     use firewood_storage::DefaultHashMode;
-    use test_case::test_case;
+    use test_case::test_matrix;
 
     use super::TestDb;
     use crate::api::BatchOp;
@@ -42,29 +42,27 @@ mod key_length {
 
     /// Both batch paths, serial and parallel, accept a key at the limit and
     /// reject one a byte over, for every kind of operation.
-    #[test_case(put, MAX_KEY_BYTES, true ; "put at the limit")]
-    #[test_case(put, MAX_KEY_BYTES + 1, false ; "put one byte over")]
-    #[test_case(delete, MAX_KEY_BYTES, true ; "delete at the limit")]
-    #[test_case(delete, MAX_KEY_BYTES + 1, false ; "delete one byte over")]
-    #[test_case(delete_range, MAX_KEY_BYTES, true ; "delete range at the limit")]
-    #[test_case(delete_range, MAX_KEY_BYTES + 1, false ; "delete range one byte over")]
-    fn propose_enforces_the_key_length_limit(op: fn(usize) -> Op, len: usize, accepted: bool) {
-        for use_parallel in [UseParallel::Never, UseParallel::Always] {
-            let path = format!("{use_parallel:?}");
-            let db = TestDb::<DefaultHashMode>::new_with_config(
-                DbConfig::builder().use_parallel(use_parallel).build(),
+    #[test_matrix(
+        [put, delete, delete_range],
+        [MAX_KEY_BYTES, MAX_KEY_BYTES + 1],
+        [UseParallel::Never, UseParallel::Always]
+    )]
+    fn propose_enforces_the_key_length_limit(
+        op: fn(usize) -> Op,
+        len: usize,
+        use_parallel: UseParallel,
+    ) {
+        let db = TestDb::<DefaultHashMode>::new_with_config(
+            DbConfig::builder().use_parallel(use_parallel).build(),
+        );
+        let result = db.propose(vec![op(len)]).map(drop);
+        if len <= MAX_KEY_BYTES {
+            assert!(result.is_ok(), "{result:?}");
+        } else {
+            assert!(
+                matches!(result, Err(Error::KeyTooLong { len: got, max }) if got == len && max == MAX_KEY_BYTES),
+                "{result:?}"
             );
-            match db.propose(vec![op(len)]).map(drop) {
-                Ok(()) => assert!(accepted, "a {len}-byte key was accepted ({path})"),
-                Err(Error::KeyTooLong { len: got, max }) => {
-                    assert!(!accepted, "a {len}-byte key was rejected ({path})");
-                    assert_eq!(got, len);
-                    assert_eq!(max, MAX_KEY_BYTES);
-                }
-                Err(other) => {
-                    panic!("unexpected error for a {len}-byte key ({path}): {other}")
-                }
-            }
         }
     }
 

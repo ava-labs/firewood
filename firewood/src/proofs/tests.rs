@@ -418,7 +418,7 @@ fn test_empty_proof() {
         Ok(proof) => {
             assert!(proof.start_proof().is_empty());
             assert!(proof.end_proof().is_empty());
-            assert!(proof.key_values().is_empty());
+            assert_eq!(proof.key_values(), []);
         }
         Err(err) => panic!("Expected valid empty proof, got error: {err}"),
     }

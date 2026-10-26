@@ -58,16 +58,12 @@ pub type FrozenChangeProof = ChangeProof<Key, Value, Box<[ProofNode]>>;
 /// A frozen proof uses an immutable collection of proof nodes.
 pub type FrozenProof = Proof<Box<[ProofNode]>>;
 
-/// The longest key firewood supports, in bytes.
+/// The longest key firewood accepts, in bytes.
 ///
-/// Keys arrive from two directions and the limit applies to both: a peer's
-/// proof, checked when the proof is decoded, and a local write, checked when
-/// the batch is proposed. Under `ethhash` no legal key exceeds 64 bytes, so the
-/// limit rejects only malformed input. Under merkledb keys are arbitrary byte
-/// strings, and this is the largest key firewood commits to supporting. A trie
-/// is at most as deep as its longest key has nibbles, so the limit also caps
-/// the depth of any trie firewood stores. It is a constant rather than a
-/// setting so that every node enforces the same limit.
+/// This bounds every trie's depth to `2 * MAX_KEY_BYTES` nibbles. Under
+/// `ethhash` no legal key exceeds 64 bytes, so the limit only rejects
+/// malformed input. It is a constant rather than a setting so that every
+/// node agrees on which keys and proofs are valid.
 pub const MAX_KEY_BYTES: usize = 1024;
 
 /// Rejects a key longer than [`MAX_KEY_BYTES`].
