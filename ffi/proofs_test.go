@@ -1609,18 +1609,14 @@ func TestChangeProofSizedSyncsWholeDiff(t *testing.T) {
 					// Complete is the signal: a final chunk with operations
 					// still yields a next range.
 					r.Equal(tt.puts || tt.deletes, next != nil)
-					if next != nil {
-						r.NoError(next.Free())
-					}
 					r.NoError(received.Drop())
 					break
 				}
 				r.NotNil(next)
 				if startKey.HasValue() {
-					r.Equal(1, bytes.Compare(next.StartKey(), startKey.Value()), "paging must advance")
+					r.Equal(1, bytes.Compare(next.StartKey, startKey.Value()), "paging must advance")
 				}
-				startKey = something(next.StartKey())
-				r.NoError(next.Free())
+				startKey = something(next.StartKey)
 				r.NoError(received.Drop())
 			}
 			r.Equal(endRoot, receiver.Root())

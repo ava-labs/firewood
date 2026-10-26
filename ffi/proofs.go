@@ -578,9 +578,8 @@ func (db *Database) ChangeProof(
 // revision [startRoot] into [endRoot], from the inclusive [startKey] (Nothing
 // starts at the first key), whose serialized size approaches [budget] bytes
 // and never exceeds it. If the result's Complete is false, request the next
-// chunk from the start key of [ChangeProof.FindNextKey] with no end key (and
-// Free that range), passing the result's Hint as [hint]; a zero [hint] means
-// no hint. Returns [ErrEndRevisionNotFound] (also when both roots are
+// chunk from the start key of [ChangeProof.FindNextKey] with no end key,
+// passing the result's Hint as [hint]; a zero [hint] means no hint. Returns [ErrEndRevisionNotFound] (also when both roots are
 // missing), [ErrStartRevisionNotFound], or an [OverBudgetError] if even one
 // operation, or the edge proofs alone, do not fit.
 func (db *Database) ChangeProofSized(
