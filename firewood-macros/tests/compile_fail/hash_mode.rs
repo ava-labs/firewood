@@ -35,4 +35,8 @@ fn conditional_harness<H: HashMode>() {}
 #[inline]
 fn unsupported_attribute<H: HashMode>() {}
 
+#[hash_mode]
+#[test]
+fn maybe_bound<H: ?HashMode>() {}
+
 fn main() {}

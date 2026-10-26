@@ -4,8 +4,10 @@ module github.com/ava-labs/firewood/ffi
 //   - ffi/go.mod (here)
 //   - ffi/tests/go.mod
 //   - ffi/tools/external/go.mod
-// Consider updating the nix flake and the golangci-lint version.
-go 1.26.8
+//   - infra/toolchain-version.sh Golang version hash
+//   - ffi/flake.nix avalanchego commit hash
+// Consider updating the golangci-lint version.
+go 1.26.10
 
 require (
 	github.com/prometheus/client_golang v1.22.0

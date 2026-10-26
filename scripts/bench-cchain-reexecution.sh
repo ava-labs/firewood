@@ -56,7 +56,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 AVALANCHEGO_REPO="ava-labs/avalanchego"
-WORKFLOW_NAME="C-Chain Re-Execution Benchmark w/ Container"
+# Use the filename rather than the display name so this works across AvalancheGo
+# workflow-title changes.
+WORKFLOW_FILE="c-chain-reexecution-benchmark-container.yml"
 
 : "${FIREWOOD_REF:=}"
 : "${AVALANCHEGO_REF:=master}"
@@ -121,17 +123,17 @@ validate_ref() {
 # Check if a workflow run's inputs match expected values.
 # Returns: 0 if inputs match, 1 if mismatch
 #
-# NOTE: We rely on AvalancheGo's workflow job naming convention:
-#   "c-chain-reexecution (start, end, block-dir, config, runner...)"
-# If AvalancheGo changes this format, this matching logic will need updating.
+# AvalancheGo names dispatch jobs after the requested test. Custom dispatches
+# have no test name, so GitHub displays the c-chain-reexecution job ID instead.
 run_inputs_match() {
     local run_id="$1" expected_test="$2" expected_config="$3" expected_start="$4" expected_end="$5" expected_runner="$6"
     
-    # Get the c-chain-reexecution job name (second job, after define-matrix).
-    # If gh fails (e.g., run doesn't exist yet), return 1 to try the next candidate.
+    # Get the benchmark job name. If gh fails (e.g., run doesn't exist yet),
+    # return 1 to try the next candidate.
     local job_name
-    job_name=$(gh run view "$run_id" --repo "$AVALANCHEGO_REPO" --json jobs \
-        --jq '.jobs[] | select(.name | startswith("c-chain-reexecution")) | .name // ""' 2>/dev/null) || return 1
+    job_name=$(gh run view "$run_id" --repo "$AVALANCHEGO_REPO" --json jobs 2>/dev/null \
+        | jq -r --arg test "$expected_test" \
+            '.jobs[] | select((($test | length) == 0 and (.name | startswith("c-chain-reexecution"))) or .name == $test or (.name | startswith($test + " / "))) | .name // ""') || return 1
     
     # If job hasn't started yet (only define-matrix exists), accept for now
     [[ -z "$job_name" ]] && return 0
@@ -170,7 +172,7 @@ poll_workflow_registration() {
     log "Waiting for workflow to register (looking for runs after $trigger_time)..."
     
     # Verify we can list runs (fail fast on permission issues)
-    if ! gh run list --repo "$AVALANCHEGO_REPO" --workflow "$WORKFLOW_NAME" --limit 1 &>/dev/null; then
+    if ! gh run list --repo "$AVALANCHEGO_REPO" --workflow "$WORKFLOW_FILE" --limit 1 &>/dev/null; then
         err "Cannot list runs in $AVALANCHEGO_REPO. Check token permissions."; exit 1
     fi
     
@@ -181,7 +183,7 @@ poll_workflow_registration() {
         local raw_output
         raw_output=$(gh run list \
             --repo "$AVALANCHEGO_REPO" \
-            --workflow "$WORKFLOW_NAME" \
+            --workflow "$WORKFLOW_FILE" \
             --limit 10 \
             --json databaseId,createdAt 2>&1) || {
             last_error="$raw_output"
@@ -273,7 +275,7 @@ trigger_workflow() {
     local trigger_time
     trigger_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-    gh workflow run "$WORKFLOW_NAME" \
+    gh workflow run "$WORKFLOW_FILE" \
         --repo "$AVALANCHEGO_REPO" \
         --ref "$AVALANCHEGO_REF" \
         "${args[@]}"
@@ -404,7 +406,7 @@ check_status() {
 }
 
 list_runs() {
-    gh run list --repo "$AVALANCHEGO_REPO" --workflow "$WORKFLOW_NAME" --limit 10
+    gh run list --repo "$AVALANCHEGO_REPO" --workflow "$WORKFLOW_FILE" --limit 10
 }
 
 list_tests() {

@@ -45,3 +45,9 @@ error: unsupported hash_mode attribute; use cfg, lint attributes, test, test_cas
    |
 35 | #[inline]
    | ^^^^^^^^^
+
+error: hash_mode requires a synchronous safe free function with exactly one type parameter bounded by HashMode, no where clause, and concrete argument/return types
+  --> tests/compile_fail/hash_mode.rs:40:1
+   |
+40 | fn maybe_bound<H: ?HashMode>() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
