@@ -107,6 +107,15 @@ impl SizingHint {
     pub(super) const fn new(ratio: CompressionRatio, edges: Option<usize>) -> Self {
         Self { ratio, edges }
     }
+
+    /// The ratio, bounded like a measurement: hints are echoed through
+    /// callers unchecked.
+    fn ratio(self) -> CompressionRatio {
+        self.ratio.clamp(
+            CompressionRatio::MIN_EXPECTED,
+            CompressionRatio::MAX_EXPECTED,
+        )
+    }
 }
 
 /// A budget-targeted proof and its serialized wire representation.
@@ -318,12 +327,7 @@ pub(super) fn build_sized_chunk<B: ChunkBuilder>(
     let mut body = Vec::new();
     let mut wire = Vec::new();
     // A hint is echoed through callers unchecked, so bound it like a measurement.
-    let mut ratio = hint.map_or(CompressionRatio::INITIAL_ESTIMATE, |h| {
-        h.ratio.clamp(
-            CompressionRatio::MIN_EXPECTED,
-            CompressionRatio::MAX_EXPECTED,
-        )
-    });
+    let mut ratio = hint.map_or(CompressionRatio::INITIAL_ESTIMATE, SizingHint::ratio);
     let mut edges = hint
         .and_then(|h| h.edges)
         .unwrap_or(DEFAULT_EDGE_BYTES.min(target / 2));
