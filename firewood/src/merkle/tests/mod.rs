@@ -25,6 +25,7 @@ use firewood_storage::DenseChildren;
 use firewood_storage::HashMode;
 use firewood_storage::MemStore;
 use firewood_storage::Mutable;
+use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::NodeStore;
 use firewood_storage::NodeStoreHeader;
 use firewood_storage::PathComponent;
@@ -40,24 +41,16 @@ use crate::ProofNode;
 use crate::api::Error;
 use crate::api::MAX_KEY_BYTES;
 
-/// Test wrapper around [`crate::merkle::verify_range_proof`] that supplies the
-/// compile-default hash mode as the expected `algorithm` (the mode every proof
-/// built in the test binary carries). Shadows the glob-imported real function
-/// so the many existing call sites need not pass the mode explicitly.
+/// Test wrapper around [`crate::merkle::verify_range_proof`] that discards the
+/// proven range when a test only needs to assert successful verification.
 fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     first_key: Option<impl KeyType>,
     last_key: Option<impl KeyType>,
     root_hash: &TrieHash,
+    algorithm: NodeHashAlgorithm,
     proof: &RangeProof<impl KeyType, impl ValueType, H>,
 ) -> Result<(), Error> {
-    crate::merkle::verify_range_proof(
-        first_key,
-        last_key,
-        root_hash,
-        DefaultHashMode::ALGORITHM,
-        proof,
-    )
-    .map(drop)
+    crate::merkle::verify_range_proof(first_key, last_key, root_hash, algorithm, proof).map(drop)
 }
 
 /// The stack size `std::thread` gives a spawned thread when none is requested:
