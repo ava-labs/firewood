@@ -1445,10 +1445,9 @@ func TestRangeProofSizedSyncsWholeKeyspace(t *testing.T) {
 			break
 		}
 		if startKey.HasValue() {
-			r.Equal(1, bytes.Compare(next.StartKey(), startKey.Value()), "paging must advance")
+			r.Equal(1, bytes.Compare(next.StartKey, startKey.Value()), "paging must advance")
 		}
-		startKey = something(next.StartKey())
-		r.NoError(next.Free())
+		startKey = something(next.StartKey)
 		r.NoError(received.Drop())
 	}
 	r.Greater(chunks, 1, "budget should force multiple chunks")
