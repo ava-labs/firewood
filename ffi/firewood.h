@@ -9,13 +9,6 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
-/**
- * A sized proof's calibration for the next request. Opaque: pass back the
- * value a result carried.
- */
-typedef struct SizingHint {
-  uint64_t opaque[3];
-} SizingHint;
 
 
 /**
@@ -740,6 +733,21 @@ typedef struct CreateChangeProofArgs {
 } CreateChangeProofArgs;
 
 /**
+ * A sized proof's calibration for the next request. Opaque: pass back the
+ * value a result carried.
+ */
+typedef struct SizingHint {
+  /**
+   * Compressed/uncompressed body size ratio in fixed point.
+   */
+  uint32_t ratio;
+  /**
+   * Body bytes the edge proofs took; zero means unknown.
+   */
+  uint64_t edges;
+} SizingHint;
+
+/**
  * A size-targeted change proof with its serialized wire bytes.
  */
 typedef struct SizedChangeProof {
@@ -763,7 +771,7 @@ typedef struct SizedChangeProof {
   /**
    * The hint for the next request.
    */
-  SizingHint hint;
+  struct SizingHint hint;
 } SizedChangeProof;
 
 /**
@@ -866,7 +874,7 @@ typedef struct Maybe_SizingHint {
   Maybe_SizingHint_Tag tag;
   union {
     struct {
-      SizingHint some;
+      struct SizingHint some;
     };
   };
 } Maybe_SizingHint;
@@ -1021,7 +1029,7 @@ typedef struct SizedRangeProof {
   /**
    * The hint for the next request.
    */
-  SizingHint hint;
+  struct SizingHint hint;
 } SizedRangeProof;
 
 /**

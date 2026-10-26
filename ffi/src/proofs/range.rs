@@ -408,10 +408,6 @@ pub struct CreateSizedRangeProofArgs<'a> {
 ///   hint.
 /// - [`SizedRangeProofResult::Err`] containing an error message if the proof could not
 ///   be created.
-#[expect(
-    improper_ctypes_definitions,
-    reason = "`SizingHint` wraps a Rust-layout value that callers only echo back"
-)]
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_db_range_proof_sized(
     db: Option<&DatabaseHandle>,

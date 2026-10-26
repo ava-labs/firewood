@@ -687,24 +687,22 @@ impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult {
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct SizingHint {
-    inner: firewood::SizingHint,
+    /// Compressed/uncompressed body size ratio in fixed point.
+    pub ratio: u32,
+    /// Body bytes the edge proofs took; zero means unknown.
+    pub edges: u64,
 }
 
-// The header declares `SizingHint` by hand, as three `uint64_t`s.
-const _: () = assert!(
-    size_of::<SizingHint>() == 24 && align_of::<SizingHint>() == 8,
-    "SizingHint layout must match its declaration in cbindgen.toml"
-);
-
 impl From<firewood::SizingHint> for SizingHint {
-    fn from(inner: firewood::SizingHint) -> Self {
-        Self { inner }
+    fn from(hint: firewood::SizingHint) -> Self {
+        let (ratio, edges) = hint.into();
+        Self { ratio, edges }
     }
 }
 
 impl From<SizingHint> for firewood::SizingHint {
     fn from(hint: SizingHint) -> Self {
-        hint.inner
+        (hint.ratio, hint.edges).into()
     }
 }
 

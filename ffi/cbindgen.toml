@@ -29,15 +29,7 @@ sys_includes = []
 includes = []
 no_includes = false
 # cpp_compat = true
-after_includes = """
-/**
- * A sized proof's calibration for the next request. Opaque: pass back the
- * value a result carried.
- */
-typedef struct SizingHint {
-  uint64_t opaque[3];
-} SizingHint;
-"""
+after_includes = ""
 
 
 ############################ Code Style Options ################################
@@ -63,8 +55,7 @@ usize_is_size_t = true
 
 [export]
 include = []
-# `SizingHint` wraps a Rust-layout type; `after_includes` declares it by size.
-exclude = ["SizingHint"]
+exclude = []
 # prefix = "CAPI_"
 item_types = []
 renaming_overrides_prefixing = false
