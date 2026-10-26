@@ -221,15 +221,16 @@ fn proof_node(
 /// - `single_child`: one child at nibble 7 (`ChildMask` bit 7, `0x0080`).
 /// - `all_children`: all 16 children (`ChildMask = 0xFFFF`).
 #[hash_mode]
-#[test_case("single_child", &[1], 0, None, &[7] ; "single_child")]
-#[test_case("all_children", &[0], 0, None, &[0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] ; "all_children")]
+#[test_case("single_child", &[1], &[7] ; "single_child")]
+#[test_case("all_children", &[0], &[0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] ; "all_children")]
 fn branch_node<H: HashMode>(
     name: &str,
     key: &[u8],
-    partial_len: usize,
-    value: Option<Box<[u8]>>,
     children: &[u8],
 ) {
+    let partial_len = 0;
+    let value = None;
+
     let node = make_node(key, partial_len, value, children);
     insta::assert_snapshot!(
         hash_mode_name(H::ALGORITHM, name),
