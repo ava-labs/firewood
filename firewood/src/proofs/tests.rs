@@ -124,11 +124,51 @@ fn test_range_proof_roundtrip() {
     proof.write_to_vec(&mut wire).expect("serialize proof");
     let parsed = FrozenRangeProof::from_slice(&wire).expect("roundtrip should succeed");
     assert_eq!(proof, parsed);
+    let parsed_in_mode = FrozenRangeProof::from_slice_in_mode(&wire, DefaultHashMode::ALGORITHM)
+        .expect("roundtrip should succeed");
+    assert_eq!(proof, parsed_in_mode);
     let mut re_serialized = Vec::new();
     parsed
         .write_to_vec(&mut re_serialized)
         .expect("serialize proof");
     assert_eq!(wire, re_serialized, "re-serialization must be idempotent");
+}
+
+/// Parses a header in `proof_mode` followed by bytes that are not a zstd
+/// frame, so only a check that stops at the header can report a mode mismatch.
+/// Asserts the other mode is rejected as a mismatch and the proof's own mode
+/// gets as far as the body.
+#[test_case(ProofType::Range, NodeHashAlgorithm::MerkleDB; "range merkledb")]
+#[test_case(ProofType::Range, NodeHashAlgorithm::Ethereum; "range ethereum")]
+#[test_case(ProofType::Change, NodeHashAlgorithm::MerkleDB; "change merkledb")]
+#[test_case(ProofType::Change, NodeHashAlgorithm::Ethereum; "change ethereum")]
+fn test_from_slice_in_mode_rejects_another_mode_at_the_header(
+    proof_type: ProofType,
+    proof_mode: NodeHashAlgorithm,
+) {
+    let other_mode = if proof_mode.is_ethereum() {
+        NodeHashAlgorithm::MerkleDB
+    } else {
+        NodeHashAlgorithm::Ethereum
+    };
+    let mut data = bytemuck::bytes_of(&Header::from((proof_type, proof_mode))).to_vec();
+    data.extend_from_slice(&[0xFF; 16]);
+    let parse = |expected| match proof_type {
+        ProofType::Range => FrozenRangeProof::from_slice_in_mode(&data, expected).map(drop),
+        _ => FrozenChangeProof::from_slice_in_mode(&data, expected).map(drop),
+    };
+
+    match parse(other_mode) {
+        Err(ProofError::HashModeMismatch { expected, found }) => {
+            assert_eq!(expected, other_mode);
+            assert_eq!(found, proof_mode);
+        }
+        other => panic!("expected HashModeMismatch, got: {other:?}"),
+    }
+    assert!(
+        matches!(parse(proof_mode), Err(ProofError::Deserialization(_))),
+        "a header in the expected mode should pass on to the corrupt body"
+    );
 }
 
 #[test_case(NodeHashAlgorithm::MerkleDB; "merkledb")]
@@ -140,6 +180,9 @@ fn test_change_proof_roundtrip(hash_mode: NodeHashAlgorithm) {
     let parsed = FrozenChangeProof::from_slice(&wire).expect("roundtrip should succeed");
     assert_eq!(proof, parsed);
     assert_eq!(parsed.hash_mode(), hash_mode);
+    let parsed_in_mode =
+        FrozenChangeProof::from_slice_in_mode(&wire, hash_mode).expect("roundtrip should succeed");
+    assert_eq!(proof, parsed_in_mode);
     let mut re_serialized = Vec::new();
     parsed
         .write_to_vec(&mut re_serialized)

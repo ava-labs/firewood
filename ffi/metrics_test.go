@@ -359,3 +359,43 @@ func assertNonEmptyFile(t *testing.T, path string) bool {
 	require.NotEmpty(t, f)
 	return true
 }
+
+// TestProofUnmarshalDurationTaggedByDatabase checks that the Go-side unmarshal
+// histogram carries the parsing database's db_tag, and "untagged" for a
+// database opened without one.
+func TestProofUnmarshalDurationTaggedByDatabase(t *testing.T) {
+	r := require.New(t)
+	const tag = "proof_unmarshal_tag_test"
+
+	src := newTestDatabase(t)
+	_, _, batch := kvForTest(10)
+	root, err := src.Update(batch)
+	r.NoError(err)
+	proofBytes := newSerializedRangeProof(t, src, root, nothing(), nothing(), rangeProofLenUnbounded)
+
+	for _, db := range []*Database{newTestDatabase(t, WithMetricsTag(tag)), newTestDatabase(t)} {
+		proof, err := db.UnmarshalRangeProof(proofBytes)
+		r.NoError(err)
+		r.NoError(proof.Drop())
+	}
+
+	families, err := goMetricsRegistry.Gather()
+	r.NoError(err)
+	observed := map[string]bool{}
+	for _, family := range families {
+		if family.GetName() != "firewood_go_proof_unmarshal_duration_seconds" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			labels := make(map[string]string, len(metric.GetLabel()))
+			for _, pair := range metric.GetLabel() {
+				labels[pair.GetName()] = pair.GetValue()
+			}
+			if labels["proof_type"] == "range" && metric.GetHistogram().GetSampleCount() > 0 {
+				observed[labels["db_tag"]] = true
+			}
+		}
+	}
+	r.True(observed[tag], "no range unmarshal observed for db_tag %q: %v", tag, observed)
+	r.True(observed[untaggedDBTag], "no range unmarshal observed for an untagged database: %v", observed)
+}

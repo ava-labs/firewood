@@ -228,14 +228,16 @@ High tail latencies indicate write–read contention between concurrent commits 
 
 #### Go-side proof serialization
 
-These histograms are recorded in Go and are independent of the Rust recorder.
-They measure the full round-trip through the CGo boundary including any byte
-copies and pointer conversions.
+These histograms are recorded in Go, not through the Rust recorder. They
+measure the full round-trip through the CGo boundary including any byte copies
+and pointer conversions. Marshalling makes no database call and works after
+`Close`, so the marshal histogram has no `db_tag`. Unmarshalling runs on a
+database (`(*Database).Unmarshal*Proof`) and carries that database's `db_tag`.
 
-| Metric                                         | Type      | Labels       | Description                                         |
-| ---------------------------------------------- | --------- | ------------ | --------------------------------------------------- |
-| `firewood_go_proof_marshal_duration_seconds`   | histogram | `proof_type` | `Marshal` duration; `proof_type=range\|change`      |
-| `firewood_go_proof_unmarshal_duration_seconds` | histogram | `proof_type` | `UnmarshalXXX` duration; `proof_type=range\|change` |
+| Metric                                         | Type      | Labels                 | Description                                            |
+| ---------------------------------------------- | --------- | ---------------------- | ------------------------------------------------------ |
+| `firewood_go_proof_marshal_duration_seconds`   | histogram | `proof_type`           | `Marshal` duration; `proof_type=range\|change`         |
+| `firewood_go_proof_unmarshal_duration_seconds` | histogram | `proof_type`, `db_tag` | `Unmarshal*Proof` duration; `proof_type=range\|change` |
 
 Buckets: `5µs, 25µs, 100µs, 500µs, 1ms, 5ms, 25ms, 100ms`
 
