@@ -131,7 +131,7 @@ impl SizingHint {
     }
 
     /// The ratio, bounded like a measurement.
-    fn bounded_ratio(self) -> CompressionRatio {
+    fn bounded(self) -> CompressionRatio {
         self.ratio.clamp(
             CompressionRatio::MIN_EXPECTED,
             CompressionRatio::MAX_EXPECTED,
@@ -347,10 +347,7 @@ pub(super) fn build_sized_chunk<B: ChunkBuilder>(
     let mut costs = vec![0usize];
     let mut body = Vec::new();
     let mut wire = Vec::new();
-    let mut ratio = hint.map_or(
-        CompressionRatio::INITIAL_ESTIMATE,
-        SizingHint::bounded_ratio,
-    );
+    let mut ratio = hint.map_or(CompressionRatio::INITIAL_ESTIMATE, SizingHint::bounded);
     let mut edges = hint
         .and_then(|h| h.edges)
         .unwrap_or(DEFAULT_EDGE_BYTES.min(target / 2));
