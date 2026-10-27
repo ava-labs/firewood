@@ -396,21 +396,20 @@ pub trait DbView {
     /// # Arguments
     ///
     /// * `start_key` - If None, start at the lowest key; inclusive otherwise
-    /// * `budget` - The serialized proof never exceeds this many bytes
-    /// * `hint` - The previous chunk's [`SizedProof::hint`], if any
+    /// * `hint` - The byte budget, as [`SizingHint::new`] or the previous
+    ///   chunk's [`SizedProof::hint`]
     ///
     /// # Errors
     ///
     /// * [`Error::RangeProofOnEmptyTrie`] if the trie is empty and
     ///   `start_key` is `None`
     /// * [`Error::ProofOverBudget`] if one entry, or the edge proofs alone,
-    ///   serialize past `budget`
+    ///   serialize past the budget
     /// * Other I/O or structural errors during proof generation
     fn range_proof_sized<K: KeyType>(
         &self,
         start_key: Option<K>,
-        budget: usize,
-        hint: Option<SizingHint>,
+        hint: SizingHint,
     ) -> Result<SizedProof<FrozenRangeProof>, Error>;
 
     /// Obtain a stream over the keys/values of this view, using an optional starting point
@@ -498,8 +497,7 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
     fn range_proof_sized(
         &self,
         start_key: Option<&[u8]>,
-        budget: usize,
-        hint: Option<SizingHint>,
+        hint: SizingHint,
     ) -> Result<SizedProof<FrozenRangeProof>, Error>;
 
     /// Obtain a stream over the keys/values of this view, using an optional starting point
@@ -568,10 +566,9 @@ where
     fn range_proof_sized(
         &self,
         start_key: Option<&[u8]>,
-        budget: usize,
-        hint: Option<SizingHint>,
+        hint: SizingHint,
     ) -> Result<SizedProof<FrozenRangeProof>, Error> {
-        DbView::range_proof_sized(self, start_key, budget, hint)
+        DbView::range_proof_sized(self, start_key, hint)
     }
 
     fn iter_option(&self, first_key: Option<&[u8]>) -> Result<BoxKeyValueIter<'_>, Error> {
@@ -766,8 +763,7 @@ pub trait DynDb: Debug + Send + Sync + 'static {
         start_hash: HashKey,
         end_hash: HashKey,
         start_key: Option<&[u8]>,
-        budget: usize,
-        hint: Option<SizingHint>,
+        hint: SizingHint,
     ) -> Result<SizedProof<FrozenChangeProof>, Error>;
 
     /// Object-safe version of
@@ -864,8 +860,7 @@ pub trait DynProposal<'db>: Debug + Send + Sync {
     fn range_proof_sized(
         &self,
         start_key: Option<&[u8]>,
-        budget: usize,
-        hint: Option<SizingHint>,
+        hint: SizingHint,
     ) -> Result<SizedProof<FrozenRangeProof>, Error>;
 
     /// Object-safe version of [`DbView::iter_option`].

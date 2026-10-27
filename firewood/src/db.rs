@@ -118,10 +118,9 @@ where
     fn range_proof_sized<K: api::KeyType>(
         &self,
         start_key: Option<K>,
-        budget: usize,
-        hint: Option<SizingHint>,
+        hint: SizingHint,
     ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
-        Merkle::from(self).range_proof_sized(start_key.as_ref().map(AsRef::as_ref), budget, hint)
+        Merkle::from(self).range_proof_sized(start_key.as_ref().map(AsRef::as_ref), hint)
     }
 
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
@@ -258,10 +257,9 @@ impl<H: HashMode> api::DynDb for Db<H> {
         start_hash: HashKey,
         end_hash: HashKey,
         start_key: Option<&[u8]>,
-        budget: usize,
-        hint: Option<SizingHint>,
+        hint: SizingHint,
     ) -> Result<SizedProof<FrozenChangeProof>, api::Error> {
-        Db::change_proof_sized(self, start_hash, end_hash, start_key, budget, hint)
+        Db::change_proof_sized(self, start_hash, end_hash, start_key, hint)
     }
 
     fn verify_change_proof(
@@ -630,7 +628,7 @@ impl<H: HashMode> Db<H> {
     ///
     /// Returns the proof that covers key-value changes between `start_hash`
     /// and `end_hash` from `start_key`, whose serialized size never exceeds
-    /// `budget` bytes, with the hint for the next chunk.
+    /// the hint's budget, with the hint for the next chunk.
     ///
     /// # Errors
     ///
@@ -638,18 +636,17 @@ impl<H: HashMode> Db<H> {
     ///   is reported even when both hashes are missing.
     /// - [`api::Error::StartRevisionNotFound`] if `start_hash` is not found.
     /// - [`api::Error::ProofOverBudget`] if one operation, or the edge proofs
-    ///   alone, serialize past `budget`.
+    ///   alone, serialize past the budget.
     /// - Other I/O or structural errors during proof generation.
     pub fn change_proof_sized(
         &self,
         start_hash: HashKey,
         end_hash: HashKey,
         start_key: Option<&[u8]>,
-        budget: usize,
-        hint: Option<SizingHint>,
+        hint: SizingHint,
     ) -> Result<SizedProof<FrozenChangeProof>, api::Error> {
         let (start_merkle, end_merkle) = self.change_proof_merkles(start_hash, end_hash)?;
-        end_merkle.change_proof_sized(start_merkle.nodestore(), start_key, budget, hint)
+        end_merkle.change_proof_sized(start_merkle.nodestore(), start_key, hint)
     }
 
     /// Resolves the two committed revisions of a change proof as
@@ -803,10 +800,9 @@ impl<H: HashMode> api::DbView for Proposal<'_, H> {
     fn range_proof_sized<K: KeyType>(
         &self,
         start_key: Option<K>,
-        budget: usize,
-        hint: Option<SizingHint>,
+        hint: SizingHint,
     ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
-        api::DbView::range_proof_sized(&*self.nodestore, start_key, budget, hint)
+        api::DbView::range_proof_sized(&*self.nodestore, start_key, hint)
     }
 
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
@@ -859,10 +855,9 @@ impl<'db, H: HashMode> api::DynProposal<'db> for Proposal<'db, H> {
     fn range_proof_sized(
         &self,
         start_key: Option<&[u8]>,
-        budget: usize,
-        hint: Option<SizingHint>,
+        hint: SizingHint,
     ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
-        api::DbView::range_proof_sized(self, start_key, budget, hint)
+        api::DbView::range_proof_sized(self, start_key, hint)
     }
 
     fn iter_option(
@@ -1029,11 +1024,10 @@ impl api::DbView for ReconstructedView<'_> {
     fn range_proof_sized<K: KeyType>(
         &self,
         start_key: Option<K>,
-        budget: usize,
-        hint: Option<SizingHint>,
+        hint: SizingHint,
     ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
         self.nodestore
-            .range_proof_sized(start_key.as_ref().map(AsRef::as_ref), budget, hint)
+            .range_proof_sized(start_key.as_ref().map(AsRef::as_ref), hint)
     }
 
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
