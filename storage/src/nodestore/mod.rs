@@ -1578,7 +1578,6 @@ mod tests {
     use super::*;
     use crate::BranchNode;
     use crate::Children;
-    use crate::DefaultHashMode;
     use crate::EthHash;
     use crate::FileBacked;
     use crate::HashMode;
@@ -1969,19 +1968,17 @@ mod tests {
     /// A chain deeper than any key the proof bound admits is hashed on a stack
     /// far smaller than a thread's default, so the walk cannot be spending stack
     /// per level.
+    #[hash_mode]
     #[test]
-    fn hash_helper_survives_a_deep_chain_on_a_small_stack() {
+    fn hash_helper_survives_a_deep_chain_on_a_small_stack<H: HashMode>() {
         const DEPTH: usize = 4096;
         std::thread::Builder::new()
             .stack_size(256 * 1024)
             .spawn(|| {
                 let storage = Arc::new(MemStore::new(Vec::new()));
-                let recon = NodeStore::new_empty_recon(Arc::clone(&storage));
-                let reconstructed: NodeStore<
-                    Reconstructed<_, DefaultHashMode>,
-                    _,
-                    DefaultHashMode,
-                > = recon.into();
+                let recon: NodeStore<Mutable<Recon<_, H>>, _, H> =
+                    NodeStore::new_empty_recon(Arc::clone(&storage));
+                let reconstructed: NodeStore<Reconstructed<_, H>, _, H> = recon.into();
 
                 let mut node = Node::Leaf(LeafNode {
                     partial_path: Path::new(),
