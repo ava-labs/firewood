@@ -579,15 +579,17 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use firewood_macros::hash_mode;
     use firewood_storage::Committed;
-    use firewood_storage::DefaultHashMode;
     use firewood_storage::DeletedNodeTracking;
+    use firewood_storage::EthHash;
     use firewood_storage::FileBacked;
     use firewood_storage::FileIoError;
     use firewood_storage::HashMode;
     use firewood_storage::HashedNodeReader;
     use firewood_storage::ImmutableProposal;
     use firewood_storage::MemStore;
+    use firewood_storage::MerkleDbHash;
     use firewood_storage::Mutable;
     use firewood_storage::NodeStore;
     use firewood_storage::Propose;
@@ -614,27 +616,27 @@ mod tests {
     use crate::proofs::change::ChangeProof;
 
     type BatchOpVec = Vec<BatchOp<Box<[u8]>, Box<[u8]>>>;
-    type ImmutableMemstore = Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>>;
+    type ImmutableMemstore<H> = Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, H>>;
 
-    struct TestDb {
-        db: Db<DefaultHashMode>,
+    struct TestDb<H: HashMode> {
+        db: Db<H>,
     }
 
-    impl Deref for TestDb {
-        type Target = Db<DefaultHashMode>;
+    impl<H: HashMode> Deref for TestDb<H> {
+        type Target = Db<H>;
         fn deref(&self) -> &Self::Target {
             &self.db
         }
     }
 
-    impl TestDb {
+    impl<H: HashMode> TestDb<H> {
         pub fn new() -> Self {
             let tmpdir = tempfile::tempdir().unwrap();
             let dbconfig = DbConfig::builder().truncate(true).build();
             let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
                 .iter()
                 .collect();
-            let db = Db::<DefaultHashMode>::new(dbpath, dbconfig).unwrap();
+            let db = Db::<H>::new(dbpath, dbconfig).unwrap();
             TestDb { db }
         }
     }
@@ -651,17 +653,16 @@ mod tests {
         DiffMerkleNodeStream::new(tree_left.nodestore(), tree_right.nodestore(), start_key)
     }
 
-    fn create_test_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>> {
-        let memstore = MemStore::new(Vec::new());
-        let nodestore =
-            NodeStore::new_empty_proposal(Arc::new(memstore), DeletedNodeTracking::Enabled);
+    fn create_test_merkle<H: HashMode>() -> Merkle<NodeStore<Mutable<Propose>, MemStore, H>> {
+        let memstore = Arc::new(MemStore::new(Vec::new()));
+        let nodestore = NodeStore::new_empty_proposal(memstore, DeletedNodeTracking::Enabled);
         Merkle::from(nodestore)
     }
 
-    fn populate_merkle(
-        mut merkle: Merkle<NodeStore<Mutable<Propose>, MemStore, DefaultHashMode>>,
+    fn populate_merkle<H: HashMode>(
+        mut merkle: Merkle<NodeStore<Mutable<Propose>, MemStore, H>>,
         items: &[(&[u8], &[u8])],
-    ) -> Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>> {
+    ) -> Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, H>> {
         for (key, value) in items {
             merkle
                 .insert(key, value.to_vec().into_boxed_slice())
@@ -670,10 +671,10 @@ mod tests {
         merkle.try_into().unwrap()
     }
 
-    fn apply_ops_and_freeze(
-        base: &Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>>,
+    fn apply_ops_and_freeze<H: HashMode>(
+        base: &Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, H>>,
         ops: &[BatchOp<Key, Value>],
-    ) -> Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>> {
+    ) -> Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, H>> {
         let mut fork = base.fork().unwrap();
         for op in ops {
             match op {
@@ -823,8 +824,9 @@ mod tests {
         (batch, next_val)
     }
 
+    #[hash_mode]
     #[test]
-    fn test_preorder_iterator() {
+    fn test_preorder_iterator<H: HashMode>() {
         let rng = SeededRng::from_env_or_random();
         let (batch, _) = gen_random_test_batchops(&rng, &HashSet::new(), 1000, 0);
 
@@ -833,7 +835,7 @@ mod tests {
         batch_sorted.sort_by(|op1, op2| op1.key().cmp(op2.key()));
 
         // Insert batch into a merkle trie.
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<H>();
         for item in &batch {
             // All of the ops should be Puts
             merkle
@@ -844,7 +846,7 @@ mod tests {
                 .unwrap();
         }
         // freeze and compute the hash
-        let merkle: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>> =
+        let merkle: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, H>> =
             merkle.try_into().unwrap();
         assert!(HashedNodeReader::root_hash(merkle.nodestore()).is_some());
 
@@ -896,42 +898,45 @@ mod tests {
         assert!(preorder_it.count() > 0);
     }
 
+    #[hash_mode]
     #[test]
-    fn test_diff_empty_trees() {
-        let m1: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>> =
-            create_test_merkle().try_into().unwrap();
-        let m2: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>> =
-            create_test_merkle().try_into().unwrap();
+    fn test_diff_empty_trees<H: HashMode>() {
+        let m1: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, H>> =
+            create_test_merkle::<H>().try_into().unwrap();
+        let m2: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, H>> =
+            create_test_merkle::<H>().try_into().unwrap();
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
         assert!(diff_iter.next().is_none());
     }
 
+    #[hash_mode]
     #[test]
-    fn test_diff_identical_trees() {
+    fn test_diff_identical_trees<H: HashMode>() {
         let items = [
             (b"key1".as_slice(), b"value1".as_slice()),
             (b"key2".as_slice(), b"value2".as_slice()),
             (b"key3".as_slice(), b"value3".as_slice()),
         ];
 
-        let m1 = populate_merkle(create_test_merkle(), &items);
-        let m2 = populate_merkle(create_test_merkle(), &items);
+        let m1 = populate_merkle(create_test_merkle::<H>(), &items);
+        let m2 = populate_merkle(create_test_merkle::<H>(), &items);
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
         assert!(diff_iter.next().is_none());
     }
 
+    #[hash_mode]
     #[test]
-    fn test_diff_additions_only() {
+    fn test_diff_additions_only<H: HashMode>() {
         let items = [
             (b"key1".as_slice(), b"value1".as_slice()),
             (b"key2".as_slice(), b"value2".as_slice()),
         ];
 
-        let m1: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>> =
-            create_test_merkle().try_into().unwrap();
-        let m2 = populate_merkle(create_test_merkle(), &items);
+        let m1: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, H>> =
+            create_test_merkle::<H>().try_into().unwrap();
+        let m2 = populate_merkle(create_test_merkle::<H>(), &items);
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
 
@@ -948,16 +953,17 @@ mod tests {
         assert!(diff_iter.next().is_none());
     }
 
+    #[hash_mode]
     #[test]
-    fn test_diff_deletions_only() {
+    fn test_diff_deletions_only<H: HashMode>() {
         let items = [
             (b"key1".as_slice(), b"value1".as_slice()),
             (b"key2".as_slice(), b"value2".as_slice()),
         ];
 
-        let m1 = populate_merkle(create_test_merkle(), &items);
-        let m2: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>> =
-            create_test_merkle().try_into().unwrap();
+        let m1 = populate_merkle(create_test_merkle::<H>(), &items);
+        let m2: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, H>> =
+            create_test_merkle::<H>().try_into().unwrap();
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
 
@@ -970,10 +976,11 @@ mod tests {
         assert!(diff_iter.next().is_none());
     }
 
+    #[hash_mode]
     #[test]
-    fn test_diff_modifications() {
-        let m1 = populate_merkle(create_test_merkle(), &[(b"key1", b"old_value")]);
-        let m2 = populate_merkle(create_test_merkle(), &[(b"key1", b"new_value")]);
+    fn test_diff_modifications<H: HashMode>() {
+        let m1 = populate_merkle(create_test_merkle::<H>(), &[(b"key1", b"old_value")]);
+        let m2 = populate_merkle(create_test_merkle::<H>(), &[(b"key1", b"new_value")]);
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
 
@@ -985,14 +992,15 @@ mod tests {
         assert!(diff_iter.next().is_none());
     }
 
+    #[hash_mode]
     #[test]
-    fn test_diff_mixed_operations() {
+    fn test_diff_mixed_operations<H: HashMode>() {
         // m1 has: key1=value1, key2=old_value, key3=value3
         // m2 has: key2=new_value, key4=value4
         // Expected: Delete key1, Put key2=new_value, Delete key3, Put key4=value4
 
         let m1 = populate_merkle(
-            create_test_merkle(),
+            create_test_merkle::<H>(),
             &[
                 (b"key1", b"value1"), // [6b, 65, 79, 31]
                 (b"key2", b"old_value"),
@@ -1001,7 +1009,7 @@ mod tests {
         );
 
         let m2 = populate_merkle(
-            create_test_merkle(),
+            create_test_merkle::<H>(),
             &[(b"key2", b"new_value"), (b"key4", b"value4")],
         );
 
@@ -1026,19 +1034,20 @@ mod tests {
         assert!(diff_iter.next().is_none());
     }
 
+    #[hash_mode]
     #[test]
-    fn test_diff_interleaved_keys() {
+    fn test_diff_interleaved_keys<H: HashMode>() {
         // m1: a, c, e
         // m2: b, c, d, f
         // Expected: Delete a, Put b, Put d, Delete e, Put f
 
         let m1 = populate_merkle(
-            create_test_merkle(),
+            create_test_merkle::<H>(),
             &[(b"a", b"value_a"), (b"c", b"value_c"), (b"e", b"value_e")],
         );
 
         let m2 = populate_merkle(
-            create_test_merkle(),
+            create_test_merkle::<H>(),
             &[
                 (b"b", b"value_b"),
                 (b"c", b"value_c"),
@@ -1114,11 +1123,12 @@ mod tests {
         assert_eq!(ops.len(), 0);
     }
 
+    #[hash_mode]
     #[test_case(true, false, 0, 1)] // same value, m1->m2: no put needed, delete prefix/b
     #[test_case(false, false, 1, 1)] // diff value, m1->m2: put prefix/a, delete prefix/b
     #[test_case(true, true, 1, 0)] // same value, m2->m1: no change to prefix/a, add prefix/b
     #[test_case(false, true, 2, 0)] // diff value, m2->m1: update prefix/a, add prefix/b
-    fn test_branch_vs_leaf_empty_partial_path_bug(
+    fn test_branch_vs_leaf_empty_partial_path_bug<H: HashMode>(
         same_value: bool,
         backwards: bool,
         expected_puts: usize,
@@ -1136,7 +1146,7 @@ mod tests {
         // Tree1: Create children under "prefix" but no value at "prefix" itself
         // This creates a branch node at "prefix" with value=None
         let m1 = populate_merkle(
-            create_test_merkle(),
+            create_test_merkle::<H>(),
             &[
                 (b"prefix/a".as_slice(), b"value_a".as_slice()),
                 (b"prefix/b".as_slice(), b"value_b".as_slice()),
@@ -1150,7 +1160,10 @@ mod tests {
         } else {
             b"prefix_a_value"
         };
-        let m2 = populate_merkle(create_test_merkle(), &[(b"prefix/a".as_slice(), m2_value)]);
+        let m2 = populate_merkle(
+            create_test_merkle::<H>(),
+            &[(b"prefix/a".as_slice(), m2_value)],
+        );
 
         // Choose direction based on backwards parameter
         let (tree_left, tree_right, direction_desc) = if backwards {
@@ -1192,11 +1205,12 @@ mod tests {
         );
     }
 
+    #[hash_mode]
     #[test]
-    fn test_diff_processes_all_branch_children() {
+    fn test_diff_processes_all_branch_children<H: HashMode>() {
         // This test verifies the bug fix: ensure that after finding different children
         // at the same position in a branch, the algorithm continues to process remaining children
-        let m1 = create_test_merkle();
+        let m1 = create_test_merkle::<H>();
         let m1 = populate_merkle(
             m1,
             &[
@@ -1206,7 +1220,7 @@ mod tests {
             ],
         );
 
-        let m2 = create_test_merkle();
+        let m2 = create_test_merkle::<H>();
         let m2 = populate_merkle(
             m2,
             &[
@@ -1258,8 +1272,9 @@ mod tests {
         assert_eq!(additions, 1, "Should have 1 addition");
     }
 
+    #[hash_mode]
     #[test]
-    fn test_diff_states_coverage() {
+    fn test_diff_states_coverage<H: HashMode>() {
         // Create trees with carefully designed structure to trigger the following:
         // 1. Deep branching structure to ensure branch nodes exist
         // 2. Mix of shared, modified, left-only, and right-only content
@@ -1336,8 +1351,8 @@ mod tests {
             ),
         ];
 
-        let m1 = populate_merkle(create_test_merkle(), &tree1_data);
-        let m2 = populate_merkle(create_test_merkle(), &tree2_data);
+        let m1 = populate_merkle(create_test_merkle::<H>(), &tree1_data);
+        let m2 = populate_merkle(create_test_merkle::<H>(), &tree2_data);
 
         let diff_iter = diff_merkle_iterator(&m1, &m2, Key::default()).unwrap();
         let results: Vec<_> = diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
@@ -1369,14 +1384,15 @@ mod tests {
         println!("All 6 diff coverage tests passed:");
     }
 
+    #[hash_mode]
     #[test]
-    fn test_branch_vs_leaf_state_transitions() {
+    fn test_branch_vs_leaf_state_transitions<H: HashMode>() {
         // This test specifically covers the branch-vs-leaf scenarios in UnvisitedNodePairState
         // which can trigger different state transitions
 
         // Tree1: Has a branch structure at "path"
         let m1 = populate_merkle(
-            create_test_merkle(),
+            create_test_merkle::<H>(),
             &[
                 (b"path/file1".as_slice(), b"value1".as_slice()),
                 (b"path/file2".as_slice(), b"value2".as_slice()),
@@ -1385,7 +1401,7 @@ mod tests {
 
         // Tree2: Has a leaf at "path"
         let m2 = populate_merkle(
-            create_test_merkle(),
+            create_test_merkle::<H>(),
             &[(b"path".as_slice(), b"leaf_value".as_slice())],
         );
 
@@ -1408,10 +1424,11 @@ mod tests {
         );
     }
 
+    #[hash_mode]
     #[test]
-    fn test_diff_with_start_key() {
+    fn test_diff_with_start_key<H: HashMode>() {
         let m1 = populate_merkle(
-            create_test_merkle(),
+            create_test_merkle::<H>(),
             &[
                 (b"aaa", b"value1"),
                 (b"bbb", b"value2"),
@@ -1420,7 +1437,7 @@ mod tests {
         );
 
         let m2 = populate_merkle(
-            create_test_merkle(),
+            create_test_merkle::<H>(),
             &[
                 (b"aaa", b"value2"),   // Same
                 (b"bbb", b"modified"), // Modified
@@ -1448,10 +1465,11 @@ mod tests {
         assert!(diff_iter.next().is_none());
     }
 
+    #[hash_mode]
     #[test_case(500)]
     #[test_case(10)]
     #[test_case(3)]
-    fn test_diff_random_with_deletions(num_items: usize) {
+    fn test_diff_random_with_deletions<H: HashMode>(num_items: usize) {
         let rng = SeededRng::from_env_or_random();
 
         // Generate random key-value pairs, ensuring uniqueness
@@ -1472,8 +1490,8 @@ mod tests {
         }
 
         // Create two identical merkles
-        let mut m1 = create_test_merkle();
-        let mut m2 = create_test_merkle();
+        let mut m1 = create_test_merkle::<H>();
+        let mut m2 = create_test_merkle::<H>();
 
         for (key, value) in &items {
             m1.insert(key, value.clone().into_boxed_slice()).unwrap();
@@ -1496,10 +1514,10 @@ mod tests {
         }
 
         // Compute ops and immutable views according to mutability flags
-        let (ops, m1_immut, m2_immut): (BatchOpVec, ImmutableMemstore, ImmutableMemstore) = {
-            let m1_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>> =
+        let (ops, m1_immut, m2_immut): (BatchOpVec, ImmutableMemstore<H>, ImmutableMemstore<H>) = {
+            let m1_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, H>> =
                 m1.try_into().unwrap();
-            let m2_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, DefaultHashMode>> =
+            let m2_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore, H>> =
                 m2.try_into().unwrap();
             let ops = diff_merkle_iterator(&m1_immut, &m2_immut, Box::new([]))
                 .unwrap()
@@ -1513,19 +1531,17 @@ mod tests {
         assert_merkle_eq(&left_after, &m2_immut);
     }
 
+    #[hash_mode]
     #[test_case(20, 500)]
-    fn test_db_fuzz(num_iterations: usize, num_items: usize) {
-        fn one_iteration(
+    fn test_db_fuzz<H: HashMode>(num_iterations: usize, num_items: usize) {
+        fn one_iteration<H: HashMode>(
             rng: &SeededRng,
-            db: &Db<DefaultHashMode>,
-            committed: Arc<NodeStore<Committed, FileBacked, DefaultHashMode>>,
+            db: &Db<H>,
+            committed: Arc<NodeStore<Committed, FileBacked, H>>,
             committed_keys: &mut HashSet<Vec<u8>>,
             num_items: usize,
             start_val: usize,
-        ) -> (
-            Arc<NodeStore<Committed, FileBacked, DefaultHashMode>>,
-            usize,
-        ) {
+        ) -> (Arc<NodeStore<Committed, FileBacked, H>>, usize) {
             const CHANCE_COMMIT_PERCENT: usize = 25;
             let proposal = NodeStore::new(&committed).unwrap();
             let mut merkle = Merkle::from(proposal);
@@ -1549,7 +1565,7 @@ mod tests {
             // Randomly choose between comparing the committed nodestore against a
             // mutable proposal or an immutable proposal.
             let ops = {
-                let immutable: NodeStore<Arc<ImmutableProposal>, FileBacked, DefaultHashMode> =
+                let immutable: NodeStore<Arc<ImmutableProposal>, FileBacked, H> =
                     nodestore.try_into().unwrap();
                 diff_merkle_iterator(&committed.clone().into(), &immutable.into(), Box::new([]))
                     .unwrap()
@@ -1602,7 +1618,7 @@ mod tests {
             }
         }
 
-        let db = TestDb::new();
+        let db = TestDb::<H>::new();
         let rng = SeededRng::from_env_or_random();
         let mut committed_keys = HashSet::new();
         let start_val = 0;
@@ -1638,12 +1654,13 @@ mod tests {
         }
     }
 
+    #[hash_mode]
     #[test]
-    fn test_two_round_diff_with_start_keys() {
+    fn test_two_round_diff_with_start_keys<H: HashMode>() {
         let rng = SeededRng::from_env_or_random();
         // Run this test several times.
         for _ in 0..4 {
-            let db = TestDb::new();
+            let db = TestDb::<H>::new();
             let mut committed_keys = HashSet::new();
             let start_val = 0;
 
@@ -1682,7 +1699,7 @@ mod tests {
                 }
             }
             let nodestore = merkle.into_inner();
-            let target_immutable: NodeStore<Arc<ImmutableProposal>, FileBacked, DefaultHashMode> =
+            let target_immutable: NodeStore<Arc<ImmutableProposal>, FileBacked, H> =
                 nodestore.try_into().unwrap();
 
             // Now generate a diff iterator, but only create a vector from the first
@@ -1732,8 +1749,9 @@ mod tests {
         }
     }
 
+    #[hash_mode]
     #[test]
-    fn test_hash_optimization_reduces_next_calls() {
+    fn test_hash_optimization_reduces_next_calls<H: HashMode>() {
         let recorder = TestRecorder::default();
         recorder.with_local_recorder(|| {
             // Create test data with substantial shared content and unique content
@@ -1791,8 +1809,8 @@ mod tests {
                 (b"tree2_unique/r".as_slice(), b"r_value".as_slice()),
             ];
 
-            let m1 = populate_merkle(create_test_merkle(), &tree1_items);
-            let m2 = populate_merkle(create_test_merkle(), &tree2_items);
+            let m1 = populate_merkle(create_test_merkle::<H>(), &tree1_items);
+            let m2 = populate_merkle(create_test_merkle::<H>(), &tree2_items);
 
             // Check the number of next calls on two full tree traversals.
             let diff_nexts_before =
@@ -1836,8 +1854,9 @@ mod tests {
         });
     }
 
+    #[hash_mode]
     #[test]
-    fn test_change_proof_iterator() {
+    fn test_change_proof_iterator<H: HashMode>() {
         // Create test data
         let key_values: Box<[BatchOp<Key, Value>]> = Box::new([
             BatchOp::Put {
@@ -1858,12 +1877,7 @@ mod tests {
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
 
-        let change_proof = ChangeProof::new(
-            start_proof,
-            end_proof,
-            key_values,
-            DefaultHashMode::ALGORITHM,
-        );
+        let change_proof = ChangeProof::new(start_proof, end_proof, key_values, H::ALGORITHM);
 
         // Test basic iterator functionality
         let mut iter = change_proof.iter();
@@ -1887,8 +1901,9 @@ mod tests {
         assert!(iter.next().is_none());
     }
 
+    #[hash_mode]
     #[test]
-    fn test_change_proof_into_iterator() {
+    fn test_change_proof_into_iterator<H: HashMode>() {
         let key_values: Box<[BatchOp<Key, Value>]> = Box::new([
             BatchOp::Put {
                 key: b"a".to_vec().into_boxed_slice(),
@@ -1902,12 +1917,7 @@ mod tests {
 
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
-        let change_proof = ChangeProof::new(
-            start_proof,
-            end_proof,
-            key_values,
-            DefaultHashMode::ALGORITHM,
-        );
+        let change_proof = ChangeProof::new(start_proof, end_proof, key_values, H::ALGORITHM);
 
         // Test that we can use for-loop syntax
         let mut items = Vec::new();
@@ -1924,17 +1934,13 @@ mod tests {
         );
     }
 
+    #[hash_mode]
     #[test]
-    fn test_empty_change_proof_iterator() {
+    fn test_empty_change_proof_iterator<H: HashMode>() {
         let key_values: Box<[BatchOp<Key, Value>]> = Box::new([]);
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
-        let change_proof = ChangeProof::new(
-            start_proof,
-            end_proof,
-            key_values,
-            DefaultHashMode::ALGORITHM,
-        );
+        let change_proof = ChangeProof::new(start_proof, end_proof, key_values, H::ALGORITHM);
 
         let mut iter = change_proof.iter();
         assert_eq!(iter.len(), 0);
