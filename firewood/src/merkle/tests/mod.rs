@@ -115,24 +115,11 @@ fn into_committed<H: HashMode>(
     ns.into()
 }
 
-/// Calls [`init_merkle_in`] under the compile-default hash mode, for tests
-/// that are not generic over the mode.
-pub(crate) fn init_merkle<I, K, V>(
-    iter: I,
-) -> Merkle<NodeStore<Committed, MemStore, DefaultHashMode>>
-where
-    I: Clone + IntoIterator<Item = (K, V)>,
-    K: AsRef<[u8]>,
-    V: AsRef<[u8]>,
-{
-    init_merkle_in::<DefaultHashMode, _, _, _>(iter)
-}
-
 /// Builds a committed in-memory trie holding `iter` under hash mode `H`.
 ///
 /// Pair with `#[hash_mode]` to generate both mode-specific tests from one
 /// generic definition.
-pub(crate) fn init_merkle_in<H, I, K, V>(iter: I) -> Merkle<NodeStore<Committed, MemStore, H>>
+pub(crate) fn init_merkle<H, I, K, V>(iter: I) -> Merkle<NodeStore<Committed, MemStore, H>>
 where
     H: HashMode,
     I: Clone + IntoIterator<Item = (K, V)>,
@@ -143,7 +130,7 @@ where
     merkle
 }
 
-/// Builds the same trie as [`init_merkle_in`] and also returns the header
+/// Builds the same trie as [`init_merkle`] and also returns the header
 /// the store was persisted with, for tests that inspect or rewrite it.
 ///
 /// Every inserted key is read back after commit. Under the Ethereum mode an
@@ -870,7 +857,7 @@ fn test_delete_one_child_with_branch_value() {
 
 #[test]
 fn test_root_hash_simple_insertions() -> Result<(), Error> {
-    init_merkle([
+    init_merkle::<DefaultHashMode, _, _, _>([
         ("do", "verb"),
         ("doe", "reindeer"),
         ("dog", "puppy"),
@@ -910,7 +897,7 @@ fn test_root_hash_fuzz_insertions() -> Result<(), FileIoError> {
             items.push((keygen(), val));
         }
 
-        init_merkle(items);
+        init_merkle::<DefaultHashMode, _, _, _>(items);
     }
 
     Ok(())
@@ -919,7 +906,7 @@ fn test_root_hash_fuzz_insertions() -> Result<(), FileIoError> {
 #[test]
 fn test_delete_child() {
     let items = vec![("do", "verb")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items);
     let mut merkle = merkle.fork().unwrap();
 
     assert_eq!(merkle.remove(b"does_not_exist").unwrap(), None);
@@ -935,7 +922,9 @@ fn test_delete_some() {
             (key.as_bytes().to_vec(), val.as_bytes().to_vec())
         })
         .collect::<Vec<(Vec<u8>, Vec<u8>)>>();
-    let mut merkle = init_merkle(items.clone()).fork().unwrap();
+    let mut merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone())
+        .fork()
+        .unwrap();
     merkle.remove_prefix(b"key1").unwrap();
     for item in items {
         let (key, val) = item;
@@ -1033,7 +1022,9 @@ fn test_root_hash_reversed_deletions() -> Result<(), FileIoError> {
 #[test]
 fn remove_nonexistent_with_one() {
     let items = [("do", "verb")];
-    let mut merkle = init_merkle(items).fork().unwrap();
+    let mut merkle = init_merkle::<DefaultHashMode, _, _, _>(items)
+        .fork()
+        .unwrap();
 
     assert_eq!(merkle.remove(b"does_not_exist").unwrap(), None);
     assert_eq!(&*merkle.get_value(b"do").unwrap().unwrap(), b"verb");

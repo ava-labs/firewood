@@ -79,7 +79,9 @@ fn compress_and_parse_change(data: &[u8]) -> Result<FrozenChangeProof, ReadError
 /// single-byte keys keep the byte offsets those tests hard-code small and
 /// stable.
 fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
-    let merkle = crate::merkle::tests::init_merkle((0u8..=10).map(|k| ([k], [k])));
+    let merkle = crate::merkle::tests::init_merkle::<DefaultHashMode, _, _, _>(
+        (0u8..=10).map(|k| ([k], [k])),
+    );
     let proof = merkle
         .range_proof(Some(&[2u8]), Some(&[8u8]), std::num::NonZeroUsize::new(5))
         .unwrap();

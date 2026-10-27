@@ -26,7 +26,7 @@ fn range_proof_invalid_bounds() {
 
 #[test]
 fn full_range_proof() {
-    let merkle = init_merkle((u8::MIN..=u8::MAX).map(|k| ([k], [k])));
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>((u8::MIN..=u8::MAX).map(|k| ([k], [k])));
 
     let rangeproof = merkle.range_proof(None, None, None).unwrap();
     assert_eq!(rangeproof.key_values().len(), u8::MAX as usize + 1);
@@ -43,7 +43,7 @@ fn full_range_proof() {
 fn single_value_range_proof() {
     const RANDOM_KEY: u8 = 42;
 
-    let merkle = init_merkle((u8::MIN..=u8::MAX).map(|k| ([k], [k])));
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>((u8::MIN..=u8::MAX).map(|k| ([k], [k])));
 
     let rangeproof = merkle
         .range_proof(Some(&[RANDOM_KEY]), None, NonZeroUsize::new(1))
@@ -64,7 +64,7 @@ fn shared_path_proof() {
     let key2 = b"key2";
     let value2 = b"2";
 
-    let merkle = init_merkle([(key1, value1), (key2, value2)]);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>([(key1, value1), (key2, value2)]);
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -96,7 +96,7 @@ fn single_key_proof_with_one_node() {
     let key = b"key";
     let value = b"value";
 
-    let merkle = init_merkle([(key, value)]);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>([(key, value)]);
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -116,7 +116,7 @@ fn two_key_proof_without_shared_path() {
     let key1 = &[0x00];
     let key2 = &[0xff];
 
-    let merkle = init_merkle([(key1, key1), (key2, key2)]);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>([(key1, key1), (key2, key2)]);
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -144,7 +144,7 @@ fn two_key_proof_without_shared_path() {
 #[test]
 fn test_empty_tree_proof() {
     let items: Vec<(&str, &str)> = Vec::new();
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items);
     let key = "x".as_ref();
 
     let proof_err = merkle.prove(key).unwrap_err();
@@ -157,7 +157,7 @@ fn test_proof() {
     let set = fixed_and_pseudorandom_data(&rng, 500);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -182,7 +182,7 @@ fn test_proof() {
 
 #[test]
 fn test_proof_end_with_leaf() {
-    let merkle = init_merkle([
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>([
         ("do", "verb"),
         ("doe", "reindeer"),
         ("dog", "puppy"),
@@ -215,7 +215,7 @@ fn test_proof_end_with_branch() {
         ("doe", "reindeer"),
         ("e", "coin"),
     ];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let key = b"d";
@@ -239,7 +239,7 @@ fn test_bad_proof() {
     let set = fixed_and_pseudorandom_data(&rng, 800);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     for (key, value) in items {
@@ -368,7 +368,7 @@ fn proof_path_construction_and_corruption() {
 
 #[test]
 fn range_proof_serialization_roundtrip() {
-    let merkle = init_merkle((u8::MIN..=u8::MAX).map(|k| ([k], [k])));
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>((u8::MIN..=u8::MAX).map(|k| ([k], [k])));
 
     let start_key = &[42u8];
     let end_key = &[84u8];
@@ -397,7 +397,8 @@ fn roundtrip_range_proof(proof: &FrozenRangeProof) -> FrozenRangeProof {
 #[test]
 fn truncated_exclusion_proof_rejected() {
     // \x10 and \x20 exist. \x15 does not.
-    let merkle = init_merkle([(b"\x10" as &[u8], b"a"), (b"\x20", b"b")]);
+    let merkle =
+        init_merkle::<DefaultHashMode, _, _, _>([(b"\x10" as &[u8], b"a"), (b"\x20", b"b")]);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     // Full exclusion proof for \x15 — proves it doesn't exist.
