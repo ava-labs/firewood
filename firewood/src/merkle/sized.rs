@@ -9,7 +9,6 @@ use std::num::NonZeroU128;
 use firewood_metrics::HistogramExt;
 use firewood_metrics::firewood_histogram;
 use firewood_storage::HashedNodeReader;
-use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::TrieReader;
 use integer_encoding::VarInt;
 
@@ -428,8 +427,6 @@ pub(super) trait ChunkBuilder {
     fn build(&self, items: &[Self::Item], natural_end: bool) -> Result<Self::Proof, api::Error>;
     /// Writes `proof`'s canonical body.
     fn write_body(proof: &Self::Proof, out: &mut Vec<u8>);
-    fn hash_mode(proof: &Self::Proof) -> NodeHashAlgorithm;
-
     /// Serializes `proof`: its canonical body into `body` and its framed
     /// wire into `wire`, both cleared first.
     fn serialize(
@@ -437,12 +434,7 @@ pub(super) trait ChunkBuilder {
         proof: &Self::Proof,
         body: &mut Vec<u8>,
         wire: &mut Vec<u8>,
-    ) -> Result<(), ProofError> {
-        body.clear();
-        Self::write_body(proof, body);
-        wire.clear();
-        write_framed_body(body, Self::KIND, Self::hash_mode(proof), wire)
-    }
+    ) -> Result<(), ProofError>;
 }
 
 struct RangeChunkBuilder<'a, T> {
@@ -478,8 +470,16 @@ impl<T: TrieReader> ChunkBuilder for RangeChunkBuilder<'_, T> {
         proof.write_body_to_vec(out);
     }
 
-    fn hash_mode(proof: &Self::Proof) -> NodeHashAlgorithm {
-        proof.hash_mode()
+    fn serialize(
+        &self,
+        proof: &Self::Proof,
+        body: &mut Vec<u8>,
+        wire: &mut Vec<u8>,
+    ) -> Result<(), ProofError> {
+        body.clear();
+        Self::write_body(proof, body);
+        wire.clear();
+        write_framed_body(body, Self::KIND, proof.hash_mode(), wire)
     }
 }
 
@@ -521,8 +521,16 @@ impl<T: HashedNodeReader> ChunkBuilder for ChangeChunkBuilder<'_, T> {
         proof.write_body_to_vec(out);
     }
 
-    fn hash_mode(proof: &Self::Proof) -> NodeHashAlgorithm {
-        proof.hash_mode()
+    fn serialize(
+        &self,
+        proof: &Self::Proof,
+        body: &mut Vec<u8>,
+        wire: &mut Vec<u8>,
+    ) -> Result<(), ProofError> {
+        body.clear();
+        Self::write_body(proof, body);
+        wire.clear();
+        write_framed_body(body, Self::KIND, proof.hash_mode(), wire)
     }
 }
 

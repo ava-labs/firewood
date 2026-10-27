@@ -22,7 +22,6 @@ use firewood_storage::HashMode;
 use firewood_storage::HashedNodeReader;
 use firewood_storage::MemStore;
 use firewood_storage::MerkleDbHash;
-use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::NodeStore;
 use firewood_storage::SeededRng;
 use firewood_storage::TrieReader;
@@ -785,10 +784,6 @@ impl<F: Fn(usize) -> usize> ChunkBuilder for ScriptedBuilder<'_, F> {
     }
 
     fn write_body(_: &Self::Proof, _: &mut Vec<u8>) {}
-
-    fn hash_mode(_: &Self::Proof) -> NodeHashAlgorithm {
-        DefaultHashMode::ALGORITHM
-    }
 
     fn serialize(
         &self,
