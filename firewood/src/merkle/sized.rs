@@ -91,51 +91,79 @@ impl CompressionRatio {
     }
 }
 
-/// What a chunk measured about its data, calibrating the next request's
-/// first candidate: pass a chunk's [`SizedProof::hint`] as the `hint` of the
-/// request that follows it. A hint only costs probes, never correctness.
+/// The [`SizingHint::new`] budget when none is given: well under common
+/// p2p message limits.
+pub const DEFAULT_SIZED_PROOF_BUDGET: usize = 1024 * 1024;
+
+/// A sized request's byte budget and, once a chunk was built, what that
+/// chunk measured to calibrate the next one. Start with [`SizingHint::new`]
+/// or [`SizingHint::default`] and pass each [`SizedProof::hint`] into the
+/// request that follows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SizingHint {
-    ratio: CompressionRatio,
-    /// Body bytes the edge proofs and length prefixes took; `None` assumes a
-    /// default until the first probe measures them.
-    edges: Option<usize>,
+pub struct SizingHint(SizingHintState);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SizingHintState {
+    /// No chunk built yet.
+    Initial { budget: usize },
+    /// What the previous chunk measured: the body ratio, and the body bytes
+    /// its edge proofs and length prefixes took (`None` assumes a default).
+    Computed {
+        budget: usize,
+        ratio: CompressionRatio,
+        edges: Option<usize>,
+    },
 }
 
 impl SizingHint {
-    /// A hint from the parts [`Self::ratio`] and [`Self::edges`] read back; a
-    /// zero ratio means the initial estimate.
+    /// A hint for chunks whose serialized size never exceeds `budget` bytes.
     #[must_use]
-    pub fn new(ratio: u32, edges: Option<usize>) -> Self {
-        Self {
-            ratio: NonZeroU32::new(ratio)
-                .map_or(CompressionRatio::INITIAL_ESTIMATE, CompressionRatio),
+    pub const fn new(budget: usize) -> Self {
+        Self(SizingHintState::Initial { budget })
+    }
+
+    pub(super) const fn computed(
+        budget: usize,
+        ratio: CompressionRatio,
+        edges: Option<usize>,
+    ) -> Self {
+        Self(SizingHintState::Computed {
+            budget,
+            ratio,
             edges,
+        })
+    }
+
+    const fn budget(self) -> usize {
+        match self.0 {
+            SizingHintState::Initial { budget } | SizingHintState::Computed { budget, .. } => {
+                budget
+            }
         }
     }
 
-    /// The compressed/uncompressed body ratio in fixed point.
-    #[must_use]
-    pub const fn ratio(self) -> u32 {
-        self.ratio.0.get()
+    /// The ratio to start from, bounded like a measurement.
+    fn ratio(self) -> CompressionRatio {
+        match self.0 {
+            SizingHintState::Initial { .. } => CompressionRatio::INITIAL_ESTIMATE,
+            SizingHintState::Computed { ratio, .. } => ratio.clamp(
+                CompressionRatio::MIN_EXPECTED,
+                CompressionRatio::MAX_EXPECTED,
+            ),
+        }
     }
 
-    /// Body bytes the edge proofs took, once measured.
-    #[must_use]
-    pub const fn edges(self) -> Option<usize> {
-        self.edges
+    const fn edges(self) -> Option<usize> {
+        match self.0 {
+            SizingHintState::Initial { .. } => None,
+            SizingHintState::Computed { edges, .. } => edges,
+        }
     }
+}
 
-    pub(super) const fn with_ratio(ratio: CompressionRatio, edges: Option<usize>) -> Self {
-        Self { ratio, edges }
-    }
-
-    /// The ratio, bounded like a measurement.
-    fn bounded(self) -> CompressionRatio {
-        self.ratio.clamp(
-            CompressionRatio::MIN_EXPECTED,
-            CompressionRatio::MAX_EXPECTED,
-        )
+impl Default for SizingHint {
+    fn default() -> Self {
+        Self::new(DEFAULT_SIZED_PROOF_BUDGET)
     }
 }
 
@@ -197,7 +225,7 @@ impl<P> SizedProof<P> {
 
 impl<T: TrieReader> Merkle<T> {
     /// Generates a range proof from the inclusive lower bound whose wire
-    /// approaches, and never exceeds, `budget` bytes. Resume strictly above
+    /// approaches, and never exceeds, the hint's budget. Resume strictly above
     /// the last emitted key and pass the returned [`SizedProof::hint`] as the
     /// next request's `hint`.
     ///
@@ -222,8 +250,7 @@ impl<T: TrieReader> Merkle<T> {
     pub(crate) fn range_proof_sized(
         &self,
         start_key: Option<&[u8]>,
-        budget: usize,
-        hint: Option<SizingHint>,
+        hint: SizingHint,
     ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
         if start_key.is_none() && self.root().is_none() {
             return Err(api::Error::RangeProofOnEmptyTrie);
@@ -242,7 +269,6 @@ impl<T: TrieReader> Merkle<T> {
                 start_proof,
             },
             items,
-            budget,
             hint,
         )?;
         firewood_histogram!(PROOF_KEYS, "kind" => sized_kind_label(ProofType::Range))
@@ -253,7 +279,7 @@ impl<T: TrieReader> Merkle<T> {
 
 impl<T: HashedNodeReader> Merkle<T> {
     /// Generates a change proof from the inclusive lower bound whose wire
-    /// approaches, and never exceeds, `budget` bytes. Resume strictly above
+    /// approaches, and never exceeds, the hint's budget. Resume strictly above
     /// the last emitted key and pass the returned [`SizedProof::hint`] as the
     /// next request's `hint`.
     ///
@@ -278,8 +304,7 @@ impl<T: HashedNodeReader> Merkle<T> {
         &self,
         source_trie: &impl HashedNodeReader,
         start_key: Option<&[u8]>,
-        budget: usize,
-        hint: Option<SizingHint>,
+        hint: SizingHint,
     ) -> Result<SizedProof<FrozenChangeProof>, api::Error> {
         let start_proof = match start_key {
             Some(key) => self.prove(key)?,
@@ -298,7 +323,6 @@ impl<T: HashedNodeReader> Merkle<T> {
                 start_proof,
             },
             items,
-            budget,
             hint,
         )?;
         firewood_histogram!(PROOF_KEYS, "kind" => sized_kind_label(ProofType::Change))
@@ -335,9 +359,9 @@ impl<T: HashedNodeReader> Merkle<T> {
 pub(super) fn build_sized_chunk<B: ChunkBuilder>(
     builder: &B,
     items: impl Iterator<Item = Result<B::Item, api::Error>>,
-    budget: usize,
-    hint: Option<SizingHint>,
+    hint: SizingHint,
 ) -> Result<SizedProof<B::Proof>, api::Error> {
+    let budget = hint.budget();
     let target = percent_of(budget, TARGET_FILL_PERCENT);
     let sufficient_fill = percent_of(budget, SUFFICIENT_FILL_PERCENT);
 
@@ -347,10 +371,8 @@ pub(super) fn build_sized_chunk<B: ChunkBuilder>(
     let mut costs = vec![0usize];
     let mut body = Vec::new();
     let mut wire = Vec::new();
-    let mut ratio = hint.map_or(CompressionRatio::INITIAL_ESTIMATE, SizingHint::bounded);
-    let mut edges = hint
-        .and_then(|h| h.edges)
-        .unwrap_or(DEFAULT_EDGE_BYTES.min(target / 2));
+    let mut ratio = hint.ratio();
+    let mut edges = hint.edges().unwrap_or(DEFAULT_EDGE_BYTES.min(target / 2));
     let mut count = 0usize;
     // The largest candidate that fit the budget.
     let mut fit: Option<Fit<B::Proof>> = None;
@@ -436,7 +458,8 @@ pub(super) fn build_sized_chunk<B: ChunkBuilder>(
         .record_integer(probes);
     Ok(SizedProof {
         proof: fit.proof,
-        hint: SizingHint::with_ratio(
+        hint: SizingHint::computed(
+            budget,
             CompressionRatio::measured(
                 fit.wire.len().saturating_sub(size_of::<Header>()),
                 fit.body_len,
