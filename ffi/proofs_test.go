@@ -1413,12 +1413,12 @@ func TestRangeProofSizedSyncsWholeKeyspace(t *testing.T) {
 	r.NoError(err)
 
 	startKey := nothing()
-	var hint SizingHint
+	hint := NewSizingHint(sizedBudget)
 	chunks := 0
 	for {
 		chunks++
 		r.Less(chunks, sizedPagingLimit, "runaway paging")
-		sized, err := source.RangeProofSized(root, startKey, sizedBudget, hint)
+		sized, err := source.RangeProofSized(root, startKey, hint)
 		r.NoError(err, "chunk %d from %x", chunks, startKey.Value())
 		r.NotNil(sized)
 		assertProofNotNil(t, sized.Proof)
@@ -1435,7 +1435,7 @@ func TestRangeProofSizedSyncsWholeKeyspace(t *testing.T) {
 		_, err = receiver.VerifyAndCommitRangeProof(received, startKey, nothing(), root, rangeProofLenUnbounded)
 		r.NoError(err)
 		hint = sized.Hint
-		r.True(hint.set, "each chunk returns a hint for the next")
+		r.NotNil(hint, "each chunk returns a hint for the next")
 
 		next, err := received.FindNextKey()
 		r.NoError(err)
@@ -1451,6 +1451,7 @@ func TestRangeProofSizedSyncsWholeKeyspace(t *testing.T) {
 		r.NoError(received.Drop())
 	}
 	r.Greater(chunks, 1, "budget should force multiple chunks")
+	r.NoError(hint.Drop())
 	r.Equal(root, receiver.Root())
 	for i, key := range keys {
 		got, err := receiver.Get(key)
@@ -1477,32 +1478,41 @@ func TestRangeProofSizedErrors(t *testing.T) {
 	missingRoot := root
 	missingRoot[0] ^= 0xff
 
-	sized, err := db.RangeProofSized(missingRoot, nothing(), sizedBudget, SizingHint{})
+	sized, err := db.RangeProofSized(missingRoot, nothing(), NewSizingHint(sizedBudget))
 	r.ErrorIs(err, ErrRevisionNotFound)
 	r.Nil(sized)
 
-	sized, err = db.RangeProofSized(root, nothing(), 1, SizingHint{})
+	hint := NewSizingHint(1)
+	sized, err = db.RangeProofSized(root, nothing(), hint)
+	r.ErrorIs(err, ErrProofOverBudget)
+	r.Nil(sized)
+	sized, err = db.RangeProofSized(root, nothing(), hint)
+	r.ErrorIs(err, ErrDropped, "a hint is consumed by its request")
+	r.Nil(sized)
+	sized, err = db.RangeProofSized(root, nothing(), NewSizingHint(1))
 	r.ErrorIs(err, ErrProofOverBudget)
 	r.Nil(sized)
 	var overBudget *OverBudgetError
 	r.ErrorAs(err, &overBudget)
-	sized, err = db.RangeProofSized(root, nothing(), overBudget.WireSize, SizingHint{})
+	sized, err = db.RangeProofSized(root, nothing(), NewSizingHint(overBudget.WireSize))
 	r.NoError(err)
 	r.NotNil(sized)
 	r.LessOrEqual(uint64(len(sized.Wire)), overBudget.WireSize)
 	r.NoError(sized.Proof.Drop())
+	r.NoError(sized.Hint.Drop())
 
 	pastEnd := something(lexSuccessor(keys[len(keys)-1]))
-	sized, err = db.RangeProofSized(root, pastEnd, 1, SizingHint{})
+	sized, err = db.RangeProofSized(root, pastEnd, NewSizingHint(1))
 	r.ErrorIs(err, ErrProofOverBudget)
 	r.Nil(sized)
 	r.ErrorAs(err, &overBudget)
-	sized, err = db.RangeProofSized(root, pastEnd, overBudget.WireSize, SizingHint{})
+	sized, err = db.RangeProofSized(root, pastEnd, NewSizingHint(overBudget.WireSize))
 	r.NoError(err)
 	r.NotNil(sized)
 	r.True(sized.Complete, "past the last key the chunk is empty and complete")
 	r.NoError(sized.Proof.Verify(root, pastEnd, nothing(), rangeProofLenUnbounded))
 	r.NoError(sized.Proof.Drop())
+	r.NoError(sized.Hint.Drop())
 
 	empty := newTestDatabase(t)
 	few, _, fewBatch := kvForTest(3)
@@ -1510,7 +1520,7 @@ func TestRangeProofSizedErrors(t *testing.T) {
 	r.NoError(err)
 	emptyRoot, err := empty.Update([]BatchOp{Delete(few[0]), Delete(few[1]), Delete(few[2])})
 	r.NoError(err)
-	sized, err = empty.RangeProofSized(emptyRoot, nothing(), sizedBudget, SizingHint{})
+	sized, err = empty.RangeProofSized(emptyRoot, nothing(), nil)
 	if emptyRoot == EmptyRoot {
 		// MerkleDB hashing gives an empty trie no addressable root.
 		r.ErrorIs(err, ErrRevisionNotFound)
@@ -1520,7 +1530,7 @@ func TestRangeProofSizedErrors(t *testing.T) {
 	r.Nil(sized)
 
 	r.NoError(db.Close(oneSecCtx(t)))
-	sized, err = db.RangeProofSized(root, nothing(), sizedBudget, SizingHint{})
+	sized, err = db.RangeProofSized(root, nothing(), NewSizingHint(sizedBudget))
 	r.ErrorIs(err, errDBClosed)
 	r.Nil(sized)
 }

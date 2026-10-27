@@ -5,6 +5,10 @@ package ffi
 
 // #include <stdlib.h>
 // #include "firewood.h"
+// #cgo noescape fwd_sizing_hint_new
+// #cgo nocallback fwd_sizing_hint_new
+// #cgo noescape fwd_free_sizing_hint
+// #cgo nocallback fwd_free_sizing_hint
 // #cgo noescape fwd_db_range_proof
 // #cgo nocallback fwd_db_range_proof
 // #cgo noescape fwd_db_range_proof_sized
@@ -59,6 +63,7 @@ var (
 	errNotPrepared          = errors.New("proof not prepared into a proposal or committed")
 	errDroppedRangeProof    = fmt.Errorf("range proof %w", ErrDropped)
 	errDroppedChangeProof   = fmt.Errorf("change proof %w", ErrDropped)
+	errDroppedSizingHint    = fmt.Errorf("sizing hint %w", ErrDropped)
 	errBoundToOtherDatabase = errors.New("range proof is bound to a different database")
 )
 
@@ -116,11 +121,47 @@ type ChangeProof struct {
 	*handle[*C.ChangeProofContext]
 }
 
-// SizingHint is a sized proof's calibration for the next request. It is
-// opaque: pass back the one a result carried. The zero value means no hint.
+// SizingHint is a sized request's budget and, after a chunk, its calibration
+// for the next one. Create one with [NewSizingHint]; a sized request consumes
+// the hint it is given, even on error, and returns a new one in its result.
+// Drop a hint that will not be passed on.
 type SizingHint struct {
-	c   C.SizingHint
-	set bool
+	*handle[*C.SizingHint]
+}
+
+// NewSizingHint returns a hint for chunks whose serialized size never
+// exceeds [budget] bytes.
+func NewSizingHint(budget uint64) *SizingHint {
+	return newSizingHintFromPtr(C.fwd_sizing_hint_new(C.size_t(budget)))
+}
+
+// newSizingHintFromPtr takes ownership of a Rust SizingHint, freeing it on
+// Drop or, failing that, when the hint is garbage collected.
+func newSizingHintFromPtr(ptr *C.SizingHint) *SizingHint {
+	hint := &SizingHint{
+		handle: newHandle(ptr, func(p *C.SizingHint) C.VoidResult { return C.fwd_free_sizing_hint(p) }),
+	}
+	runtime.AddCleanup(hint, drop[*C.SizingHint], hint.handle)
+	return hint
+}
+
+// take hands the Rust hint to a request that consumes it. A nil hint yields
+// a nil pointer, which Rust reads as a default-budget hint.
+func (h *SizingHint) take() (*C.SizingHint, error) {
+	if h == nil {
+		return nil, nil
+	}
+	var ptr *C.SizingHint
+	err := h.lease.release(func() error {
+		if h.dropped {
+			return errDroppedSizingHint
+		}
+		ptr = h.ptr
+		h.ptr = nil
+		h.dropped = true
+		return nil
+	})
+	return ptr, err
 }
 
 // SizedProof is a size-targeted proof chunk with its serialized wire bytes.
@@ -133,28 +174,14 @@ type SizedProof[P any] struct {
 	// Complete is true if no further request is needed. It is out-of-band
 	// metadata: verify the proof before trusting it.
 	Complete bool
-	// Hint is the hint for the next request, if any.
-	Hint SizingHint
+	// Hint is the budget and calibration for the next request; pass it on
+	// or Drop it.
+	Hint *SizingHint
 }
 
 // SizedRangeProof is a size-targeted range proof; Complete means it reached
 // the end of the keyspace.
 type SizedRangeProof = SizedProof[*RangeProof]
-
-func (h SizingHint) toC() C.Maybe_SizingHint {
-	var cMaybe C.Maybe_SizingHint
-	if h.set {
-		*(*C.SizingHint)(unsafe.Pointer(&cMaybe.anon0)) = h.c
-		cMaybe.tag = C.Maybe_SizingHint_Some_SizingHint
-	} else {
-		cMaybe.tag = C.Maybe_SizingHint_None_SizingHint
-	}
-	return cMaybe
-}
-
-func sizingHintFromC(hint C.SizingHint) SizingHint {
-	return SizingHint{c: hint, set: true}
-}
 
 // NextKeyRange is a range of keys still to fetch, `[StartKey, EndKey]`, both
 // inclusive. StartKey is the smallest key above the last one already
@@ -207,18 +234,18 @@ func (db *Database) RangeProof(
 
 // RangeProofSized returns a range proof of the revision [rootHash] from the
 // inclusive [startKey] (Nothing starts at the first key) whose serialized size
-// approaches [budget] bytes and never exceeds it. If the result's Complete is
+// approaches the budget of [hint] and never exceeds it. The call consumes
+// [hint]; a nil [hint] means a default budget. If the result's Complete is
 // false, request the next chunk from the start key of [RangeProof.FindNextKey]
 // after [Database.VerifyRangeProof] or [Database.VerifyAndCommitRangeProof],
-// passing the result's Hint as [hint]; a zero [hint] means no hint. Returns
-// [ErrRevisionNotFound], [ErrRangeProofOnEmptyTrie] if the trie is empty and
-// [startKey] is Nothing, or an [OverBudgetError] if even one entry, or the
-// edge proofs alone, do not fit.
+// passing the result's Hint as [hint]. Returns [ErrRevisionNotFound],
+// [ErrRangeProofOnEmptyTrie] if the trie is empty and [startKey] is Nothing,
+// or an [OverBudgetError] if even one entry, or the edge proofs alone, do not
+// fit.
 func (db *Database) RangeProofSized(
 	rootHash Hash,
 	startKey Maybe[[]byte],
-	budget uint64,
-	hint SizingHint,
+	hint *SizingHint,
 ) (sized *SizedRangeProof, err error) {
 	start := time.Now()
 	defer func() {
@@ -233,14 +260,18 @@ func (db *Database) RangeProofSized(
 		return nil, errDBClosed
 	}
 
+	hintPtr, err := hint.take()
+	if err != nil {
+		return nil, err
+	}
+
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
 	args := C.CreateSizedRangeProofArgs{
 		root:      newCHashKey(rootHash),
 		start_key: newMaybeBorrowedBytes(startKey, &pinner),
-		budget:    C.size_t(budget),
-		hint:      hint.toC(),
+		hint:      hintPtr,
 	}
 
 	return getSizedRangeProofFromResult(C.fwd_db_range_proof_sized(db.handle, args))
@@ -777,7 +808,7 @@ func newSizedProof[P interface{ Drop() error }](
 	proof P,
 	wire C.OwnedBytes,
 	naturalEnd C.bool,
-	hint C.SizingHint,
+	hint *C.SizingHint,
 ) (*SizedProof[P], error) {
 	wireOwned := newOwnedBytes(wire)
 	copied := wireOwned.CopiedBytes()
@@ -788,7 +819,7 @@ func newSizedProof[P interface{ Drop() error }](
 		Proof:    proof,
 		Wire:     copied,
 		Complete: bool(naturalEnd),
-		Hint:     sizingHintFromC(hint),
+		Hint:     newSizingHintFromPtr(hint),
 	}, nil
 }
 
