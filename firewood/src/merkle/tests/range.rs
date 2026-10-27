@@ -216,7 +216,7 @@ fn outside_children_child_not_prefixed_by_parent() {
 // entry trie and checks for missing keys both before and after the single entry.
 fn test_missing_key_proof() {
     let items = [("k", "v")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     for key in ["a", "j", "l", "z"] {
@@ -240,7 +240,9 @@ fn test_truncated_bounded_range_proof_round_trip() {
     let items: Vec<([u8; 4], [u8; 4])> = (0u32..1000)
         .map(|i| (i.to_be_bytes(), i.to_be_bytes()))
         .collect();
-    let merkle = init_merkle(items.iter().map(|(k, v)| (k.as_slice(), v.as_slice())));
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(
+        items.iter().map(|(k, v)| (k.as_slice(), v.as_slice())),
+    );
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     // Bound covers many keys; limit forces truncation.
@@ -274,7 +276,7 @@ fn test_truncated_bounded_range_proof_round_trip() {
 // et al.) where the prior check rejected empty end_proof whenever key_values
 // was non-empty.
 fn test_full_range_proof_verifies_unbounded() {
-    let merkle = init_merkle((u8::MIN..=u8::MAX).map(|k| ([k], [k])));
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>((u8::MIN..=u8::MAX).map(|k| ([k], [k])));
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let range_proof = merkle.range_proof(None, None, None).unwrap();
@@ -308,7 +310,7 @@ fn test_terminal_strict_prefix_of_last_kv_verifies() {
         (b"\x10\x10", b"in_range"),
         (b"\x10\x50", b"after"),
     ];
-    let merkle = init_merkle(items.iter().copied());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.iter().copied());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let range_proof = merkle
@@ -346,7 +348,7 @@ fn test_dropped_trailing_key_accepted_as_partial_coverage() {
         (b"\x10\x10", b"in_range"),
         (b"\x10\x50", b"after"),
     ];
-    let merkle = init_merkle(items.iter().copied());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.iter().copied());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let honest = merkle
@@ -408,7 +410,7 @@ fn test_tampered_in_range_value_rejected() {
         (b"\x10\x10", b"in_range"),
         (b"\x10\x50", b"after"),
     ];
-    let merkle = init_merkle(items.iter().copied());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.iter().copied());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let honest = merkle
@@ -457,7 +459,7 @@ fn test_tampered_in_range_value_rejected() {
 // requested `[0x05, 0x10\x30]`.
 fn test_divergent_terminal_past_last_kv() {
     let items: &[(&[u8], &[u8])] = &[(b"\x05", b"a"), (b"\x10\x50", b"z")];
-    let merkle = init_merkle(items.iter().copied());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.iter().copied());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let range_proof = merkle
@@ -493,7 +495,7 @@ fn test_divergent_terminal_past_last_kv() {
 // variant for symmetry.
 fn test_divergent_terminal_before_first_kv() {
     let items: &[(&[u8], &[u8])] = &[(b"\x05", b"a"), (b"\x10", b"b")];
-    let merkle = init_merkle(items.iter().copied());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.iter().copied());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let range_proof = merkle
@@ -522,7 +524,7 @@ fn test_range_proof() {
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
 
     for _ in 0..10 {
         let start = rng.random_range(0..items.len() - 1);
@@ -561,7 +563,7 @@ fn test_bad_range_proof_out_of_order() {
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
 
     for _ in 0..10 {
         let start = rng.random_range(0..items.len() - 2);
@@ -629,7 +631,7 @@ fn test_bad_range_proof_modified_key() {
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start = 100;
@@ -682,7 +684,7 @@ fn test_bad_range_proof_modified_value() {
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start = 100;
@@ -729,7 +731,7 @@ fn test_bad_range_proof_gapped_entries() {
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start = 100;
@@ -774,7 +776,7 @@ fn test_range_proof_with_non_existent_proof() {
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
 
     for _ in 0..10 {
         let start = rng.random_range(1..items.len() - 2);
@@ -862,7 +864,7 @@ fn test_range_proof_with_invalid_non_existent_proof() {
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
 
     // Case 1
     let mut start = 100;
@@ -942,7 +944,7 @@ fn test_one_element_range_proof() {
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
 
     // One element with existent edge proof, both edge proofs
     // point to the SAME key.
@@ -1041,7 +1043,7 @@ fn test_one_element_range_proof() {
     // Test the mini trie with only a single element.
     let key = rng.random::<[u8; 32]>();
     let val = rng.random::<[u8; 20]>();
-    let merkle_mini = init_merkle(vec![(key, val)]);
+    let merkle_mini = init_merkle::<DefaultHashMode, _, _, _>(vec![(key, val)]);
 
     let first = &[0; 32];
     let start_proof_5 = merkle_mini.prove(first).unwrap();
@@ -1077,7 +1079,7 @@ fn test_all_elements_proof() {
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
@@ -1138,7 +1140,7 @@ fn test_empty_range_proof() {
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let first = increase_key(items[items.len() - 1].0);
@@ -1176,7 +1178,7 @@ fn test_gapped_range_proof() {
         }
         items.push((key, i.to_be_bytes()));
     }
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
 
     let first = 2;
     let last = 8;
@@ -1226,7 +1228,7 @@ fn test_same_side_proof() {
     let set = fixed_and_pseudorandom_data(&rng, 4096);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
 
     let pos = 1000;
     let mut last = decrease_key(items[pos].0);
@@ -1306,7 +1308,7 @@ fn test_single_side_range_proof() {
         }
         let mut items = set.iter().collect::<Vec<_>>();
         items.sort_unstable();
-        let merkle = init_merkle(items.clone());
+        let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
 
         let cases = vec![0, 1, 100, 1000, items.len() - 1];
         for case in cases {
@@ -1352,7 +1354,7 @@ fn test_reverse_single_side_range_proof() {
         }
         let mut items = set.iter().collect::<Vec<_>>();
         items.sort_unstable();
-        let merkle = init_merkle(items.clone());
+        let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
 
         let cases = vec![0, 1, 100, 1000, items.len() - 1];
         for case in cases {
@@ -1398,7 +1400,7 @@ fn test_both_sides_range_proof() {
         }
         let mut items = set.iter().collect::<Vec<_>>();
         items.sort_unstable();
-        let merkle = init_merkle(items.clone());
+        let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
 
         let start = &[0; 32];
         let end = &[255; 32];
@@ -1437,7 +1439,7 @@ fn test_empty_value_range_proof() {
     let set = fixed_and_pseudorandom_data(&rng, 512);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
 
     // Create a new entry with a slightly modified key
     let mid_index = items.len() / 2;
@@ -1489,7 +1491,7 @@ fn test_all_elements_empty_value_range_proof() {
     let set = fixed_and_pseudorandom_data(&rng, 512);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
 
     // Create a new entry with a slightly modified key
     let mid_index = items.len() / 2;
@@ -1543,7 +1545,7 @@ fn test_range_proof_keys_with_shared_prefix() {
             hex::decode("03").expect("Decoding failed"),
         ),
     ];
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
 
     let start = hex::decode("0000000000000000000000000000000000000000000000000000000000000000")
         .expect("Decoding failed");
@@ -1589,7 +1591,7 @@ fn test_bloated_range_proof() {
         }
         items.push((key, value));
     }
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
 
     // In the 'malicious' case, we add proofs for every single item
     // (but only one key/value pair used as leaf)
@@ -1631,7 +1633,7 @@ fn test_bloated_range_proof() {
 // Rejects a range proof containing keys below the requested start key.
 fn test_bad_range_proof_key_below_start() {
     let items = [("bb", "v1"), ("cc", "v2"), ("dd", "v3")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start_proof = merkle.prove(b"cc").unwrap();
@@ -1675,7 +1677,7 @@ fn test_bad_range_proof_key_below_start() {
 // Rejects a range proof containing keys above the requested end key.
 fn test_bad_range_proof_key_above_end() {
     let items = [("bb", "v1"), ("cc", "v2"), ("dd", "v3")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start_proof = merkle.prove(b"bb").unwrap();
@@ -1719,7 +1721,7 @@ fn test_bad_range_proof_key_above_end() {
 // Rejects a range proof with key-value pairs but no end proof.
 fn test_bad_range_proof_missing_end_proof() {
     let items = [("bb", "v1"), ("cc", "v2")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start_proof = merkle.prove(b"bb").unwrap();
@@ -1762,7 +1764,7 @@ fn test_bad_range_proof_missing_end_proof() {
 // Rejects a start proof when no start key is specified.
 fn test_bad_range_proof_unexpected_start_proof() {
     let items = [("bb", "v1"), ("cc", "v2")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start_proof = merkle.prove(b"bb").unwrap();
@@ -1817,7 +1819,7 @@ fn test_range_proof_fuzz() {
     let set = fixed_and_pseudorandom_data(&rng, num_keys);
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     for _ in 0..50 {
@@ -1928,7 +1930,7 @@ fn test_range_proof_fuzz() {
 // Rejects a range proof where the end proof has been truncated (missing last node).
 fn test_bad_range_proof_truncated_end_proof() {
     let items = [("aa", "v1"), ("bb", "v2"), ("cc", "v3")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start_proof = merkle.prove(b"aa").unwrap();
@@ -1970,7 +1972,7 @@ fn test_bad_range_proof_truncated_end_proof() {
 // Rejects a range proof where the start proof has been truncated (missing last node).
 fn test_bad_range_proof_truncated_start_proof() {
     let items = [("aa", "v1"), ("bb", "v2"), ("cc", "v3")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start_proof = merkle.prove(b"aa").unwrap();
@@ -2015,7 +2017,7 @@ fn test_bad_range_proof_truncated_start_proof() {
 // This test verifies the corruption is detected regardless of which check fires.
 fn test_bad_range_proof_value_at_odd_nibble() {
     let items = [("aa", "v1"), ("bb", "v2"), ("cc", "v3")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start_proof = merkle.prove(b"aa").unwrap();
@@ -2069,7 +2071,7 @@ fn test_bad_range_proof_value_at_odd_nibble() {
 #[test]
 fn test_range_proof_left_edge_hash_mismatch() {
     let items = [("aa", "v1"), ("bb", "v2"), ("cc", "v3")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let end_proof = merkle.prove(b"cc").unwrap();
@@ -2121,7 +2123,7 @@ fn test_range_proof_left_edge_hash_mismatch() {
 #[test]
 fn test_range_proof_right_edge_hash_mismatch() {
     let items = [("aa", "v1"), ("bb", "v2"), ("cc", "v3")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let start_proof = merkle.prove(b"aa").unwrap();
@@ -2179,7 +2181,7 @@ fn test_bad_range_proof_hidden_value_on_edge_path() {
     // "b" has a value AND is on the edge proof path for "bc".
     // The range ["a", "bc"] should include "b" and "ba", but we omit "b" from key_values.
     let items = [("b", "v1"), ("ba", "v2"), ("bc", "v3")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     // Use a non-existent start key so the start proof is an exclusion proof
@@ -2247,7 +2249,7 @@ fn test_bad_range_proof_truncated_non_existent_edge() {
         })
         .collect();
 
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     // Use a non-existent start key (before the first item)
@@ -2295,7 +2297,7 @@ fn test_bad_range_proof_truncated_non_existent_edge() {
 // Rejects a range proof when start key > end key during verification.
 fn test_bad_range_proof_start_after_end() {
     let items = [("bb", "v1"), ("cc", "v2"), ("dd", "v3")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let range_proof = merkle
@@ -2341,7 +2343,7 @@ fn test_range_proof_with_limit() {
         })
         .collect();
 
-    let merkle = init_merkle(items.clone());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     // Request range [items[0], items[9]] with limit=3. Should return items[0..3].
@@ -2391,7 +2393,7 @@ fn test_range_proof_with_limit() {
 // value in key_values is changed to "WRONG".
 fn test_bad_range_proof_value_mismatch_on_proof_path() {
     let items = [("b", "v1"), ("ba", "v2"), ("bc", "v3")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     // "a" is not in the trie → exclusion proof for start
@@ -2446,7 +2448,7 @@ fn test_bad_range_proof_value_mismatch_on_proof_path() {
 /// included in the proof.
 #[test]
 fn test_right_edge_boundary_prefix_of_terminal() {
-    let merkle = init_merkle([
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>([
         (b"\x10" as &[u8], b"a"),
         (b"\x20", b"b"),
         (b"\x20\xab", b"c"),
@@ -2493,7 +2495,7 @@ fn test_right_edge_boundary_prefix_of_terminal() {
 fn test_range_proof_with_hashed_value() {
     // Value >= 32 bytes triggers ValueDigest::Hash in merkledb mode
     let big_value = vec![0xab_u8; 32];
-    let merkle = init_merkle([
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>([
         (b"\x10" as &[u8], big_value.as_slice()),
         (b"\x10\x20", b"child"),
         (b"\x30", b"other"),
@@ -2544,7 +2546,7 @@ fn test_empty_range_proof_with_hashed_value() {
     // \x10 has a large value (>= 32 bytes), \x10\x20 makes \x10 a branch.
     // Range is past all keys — empty key-value list.
     let big_value = vec![0xab_u8; 32];
-    let merkle = init_merkle([
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>([
         (b"\x10" as &[u8], big_value.as_slice()),
         (b"\x10\x20", b"child"),
     ]);
@@ -2592,7 +2594,7 @@ fn test_empty_range_proof_with_hashed_value() {
 #[cfg(not(feature = "ethhash"))]
 #[test]
 fn test_multi_level_range_proof_with_hashed_values() {
-    let merkle = init_merkle([
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>([
         (b"abc" as &[u8], [0; 64].as_slice()),
         (b"abc123", [1; 64].as_slice()),
         (b"abcdef", [2; 64].as_slice()),
@@ -2736,7 +2738,7 @@ fn test_verification_context_reports_truncated_right_edge() {
         (b"\x20", b"c"),
         (b"\x30", b"d"),
     ];
-    let merkle = init_merkle(items.iter().copied());
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items.iter().copied());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     // Ask for the whole keyspace but cap the reply at two pairs, so the
@@ -2841,7 +2843,7 @@ fn test_max_bounded_depth_survives_default_stack() {
             .map(|key| (key.into_boxed_slice(), Box::from(b"v".as_slice())))
             .collect();
         items.sort_unstable();
-        let merkle = init_merkle(items);
+        let merkle = init_merkle::<DefaultHashMode, _, _, _>(items);
         let root_hash = merkle.nodestore().root_hash().unwrap();
         let proof = merkle.range_proof(None, None, None).unwrap();
         verify_range_proof(
