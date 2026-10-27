@@ -51,7 +51,6 @@ pub use self::results::SizedChangeProof;
 pub use self::results::SizedChangeProofResult;
 pub use self::results::SizedRangeProof;
 pub use self::results::SizedRangeProofResult;
-pub use self::results::SizingHint;
 pub use self::results::ValueResult;
 pub use self::results::VoidResult;
 

@@ -379,16 +379,16 @@ pub struct CreateSizedRangeProofArgs<'a> {
     /// The inclusive start key. If `None`, the proof starts from the
     /// beginning of the keyspace.
     pub start_key: Maybe<BorrowedBytes<'a>>,
-    /// The wire byte budget the serialized proof must fit; zero always
-    /// yields [`SizedRangeProofResult::OverBudget`].
-    pub budget: usize,
-    /// The previous chunk's hint, if any.
-    pub hint: Maybe<SizingHint>,
+    /// The budget and calibration, from [`fwd_sizing_hint_new`] or a previous
+    /// result; consumed by the call. `NULL` means a default-budget hint.
+    ///
+    /// [`fwd_sizing_hint_new`]: crate::fwd_sizing_hint_new
+    pub hint: Option<Box<SizingHint>>,
 }
 
 /// Generate a range proof from `start_key` whose serialized size approaches
-/// `budget` bytes and never exceeds it. The wire bytes are returned with the
-/// proof, so it need not be serialized again.
+/// the hint's budget and never exceeds it. The wire bytes are returned with
+/// the proof, so it need not be serialized again.
 ///
 /// # Arguments
 ///
@@ -422,8 +422,7 @@ pub extern "C" fn fwd_db_range_proof_sized(
                 .as_ref()
                 .map(BorrowedBytes::as_slice)
                 .into_option(),
-            args.budget,
-            args.hint.into_option().map(Into::into),
+            args.hint.map_or_else(Default::default, |hint| hint.0),
         )
     })
 }

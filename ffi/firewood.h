@@ -69,6 +69,14 @@ typedef struct ReconstructedHandle ReconstructedHandle;
 typedef struct RevisionHandle RevisionHandle;
 
 /**
+ * A sized request's budget and, after a chunk, its calibration for the next
+ * one. Create with [`fwd_sizing_hint_new`]; each sized request consumes the
+ * hint it is given and returns a new one with its result. Free an unused
+ * hint with [`fwd_free_sizing_hint`].
+ */
+typedef struct SizingHint SizingHint;
+
+/**
  * A database hash key, used in FFI functions that require hashes.
  * This type requires no allocation and can be copied freely and
  * dropped without any additional overhead.
@@ -733,21 +741,6 @@ typedef struct CreateChangeProofArgs {
 } CreateChangeProofArgs;
 
 /**
- * A sized proof's calibration for the next request. Opaque: pass back the
- * value a result carried.
- */
-typedef struct SizingHint {
-  /**
-   * Compressed/uncompressed body size ratio in fixed point.
-   */
-  uint32_t ratio;
-  /**
-   * Body bytes the edge proofs took; zero means unknown.
-   */
-  uint64_t edges;
-} SizingHint;
-
-/**
  * A size-targeted change proof with its serialized wire bytes.
  */
 typedef struct SizedChangeProof {
@@ -769,9 +762,12 @@ typedef struct SizedChangeProof {
    */
   bool natural_end;
   /**
-   * The hint for the next request.
+   * The hint for the next request; it is consumed by that request, or
+   * freed with [`fwd_free_sizing_hint`].
+   *
+   * [`fwd_free_sizing_hint`]: crate::fwd_free_sizing_hint
    */
-  struct SizingHint hint;
+  struct SizingHint *hint;
 } SizedChangeProof;
 
 /**
@@ -845,41 +841,6 @@ typedef struct SizedChangeProofResult {
 } SizedChangeProofResult;
 
 /**
- * Maybe is a C-compatible optional type using a tagged union pattern.
- *
- * FFI methods and types can use this to represent optional values where `Optional<T>`
- * does not work due to it not having a C-compatible layout.
- */
-enum Maybe_SizingHint_Tag
-#if __STDC_VERSION__ >= 202311L
-  : size_t
-#endif // __STDC_VERSION__ >= 202311L
- {
-  /**
-   * No value present.
-   */
-  Maybe_SizingHint_None_SizingHint,
-  /**
-   * A value is present.
-   */
-  Maybe_SizingHint_Some_SizingHint,
-};
-#if __STDC_VERSION__ >= 202311L
-typedef enum Maybe_SizingHint_Tag Maybe_SizingHint_Tag;
-#else
-typedef size_t Maybe_SizingHint_Tag;
-#endif // __STDC_VERSION__ >= 202311L
-
-typedef struct Maybe_SizingHint {
-  Maybe_SizingHint_Tag tag;
-  union {
-    struct {
-      struct SizingHint some;
-    };
-  };
-} Maybe_SizingHint;
-
-/**
  * Arguments for creating a size-targeted change proof.
  */
 typedef struct CreateSizedChangeProofArgs {
@@ -897,14 +858,12 @@ typedef struct CreateSizedChangeProofArgs {
    */
   struct Maybe_BorrowedBytes start_key;
   /**
-   * The wire byte budget the serialized proof must fit; zero always
-   * yields [`SizedChangeProofResult::OverBudget`].
+   * The budget and calibration, from [`fwd_sizing_hint_new`] or a previous
+   * result; consumed by the call. `NULL` means a default-budget hint.
+   *
+   * [`fwd_sizing_hint_new`]: crate::fwd_sizing_hint_new
    */
-  size_t budget;
-  /**
-   * The previous chunk's hint, if any.
-   */
-  struct Maybe_SizingHint hint;
+  struct SizingHint *hint;
 } CreateSizedChangeProofArgs;
 
 /**
@@ -1027,9 +986,12 @@ typedef struct SizedRangeProof {
    */
   bool natural_end;
   /**
-   * The hint for the next request.
+   * The hint for the next request; it is consumed by that request, or
+   * freed with [`fwd_free_sizing_hint`].
+   *
+   * [`fwd_free_sizing_hint`]: crate::fwd_free_sizing_hint
    */
-  struct SizingHint hint;
+  struct SizingHint *hint;
 } SizedRangeProof;
 
 /**
@@ -1113,14 +1075,12 @@ typedef struct CreateSizedRangeProofArgs {
    */
   struct Maybe_BorrowedBytes start_key;
   /**
-   * The wire byte budget the serialized proof must fit; zero always
-   * yields [`SizedRangeProofResult::OverBudget`].
+   * The budget and calibration, from [`fwd_sizing_hint_new`] or a previous
+   * result; consumed by the call. `NULL` means a default-budget hint.
+   *
+   * [`fwd_sizing_hint_new`]: crate::fwd_sizing_hint_new
    */
-  size_t budget;
-  /**
-   * The previous chunk's hint, if any.
-   */
-  struct Maybe_SizingHint hint;
+  struct SizingHint *hint;
 } CreateSizedRangeProofArgs;
 
 /**
@@ -2355,8 +2315,9 @@ struct ChangeProofResult fwd_db_change_proof(const struct DatabaseHandle *db,
 
 /**
  * Generate a change proof from `start_root` to `end_root` from `start_key`
- * whose serialized size approaches `budget` bytes and never exceeds it. The
- * wire bytes are returned with the proof, so it need not be serialized again.
+ * whose serialized size approaches the hint's budget and never exceeds it.
+ * The wire bytes are returned with the proof, so it need not be serialized
+ * again.
  *
  * # Arguments
  *
@@ -2427,8 +2388,8 @@ struct RangeProofResult fwd_db_range_proof(const struct DatabaseHandle *db,
 
 /**
  * Generate a range proof from `start_key` whose serialized size approaches
- * `budget` bytes and never exceeds it. The wire bytes are returned with the
- * proof, so it need not be serialized again.
+ * the hint's budget and never exceeds it. The wire bytes are returned with
+ * the proof, so it need not be serialized again.
  *
  * # Arguments
  *
@@ -2827,6 +2788,21 @@ struct VoidResult fwd_free_rendered_metrics(OwnedRenderedMetrics metrics);
  * this function is called.
  */
 struct VoidResult fwd_free_revision(struct RevisionHandle *revision);
+
+/**
+ * Frees the memory associated with a [`SizingHint`] that was not passed to
+ * a sized proof request.
+ *
+ * # Arguments
+ *
+ * * `hint` - The [`SizingHint`] to free, previously returned from any Rust function.
+ *
+ * # Returns
+ *
+ * - [`VoidResult::Ok`] if the memory was successfully freed.
+ * - [`VoidResult::Err`] if the process panics while freeing the memory.
+ */
+struct VoidResult fwd_free_sizing_hint(struct SizingHint *hint);
 
 /**
  * Gather latest metrics for this process as structured data.
@@ -3477,6 +3453,17 @@ struct ValueResult fwd_revision_dump(const struct RevisionHandle *revision);
  *   by value).
  */
 struct HashResult fwd_root_hash(const struct DatabaseHandle *db);
+
+/**
+ * Creates a hint for chunks whose serialized size never exceeds `budget`
+ * bytes.
+ *
+ * # Returns
+ *
+ * A [`SizingHint`] to pass to a sized proof request, which consumes it, or to
+ * free with [`fwd_free_sizing_hint`].
+ */
+struct SizingHint *fwd_sizing_hint_new(size_t budget);
 
 /**
  * Start logs for this process.

@@ -327,11 +327,10 @@ impl DatabaseHandle {
         start_hash: HashKey,
         end_hash: HashKey,
         start_key: Option<&[u8]>,
-        budget: usize,
-        hint: Option<firewood::SizingHint>,
+        hint: firewood::SizingHint,
     ) -> Result<firewood::SizedProof<api::FrozenChangeProof>, api::Error> {
         self.db
-            .change_proof_sized(start_hash, end_hash, start_key, budget, hint)
+            .change_proof_sized(start_hash, end_hash, start_key, hint)
     }
 
     /// Verify a change proof and create a proposal from it.

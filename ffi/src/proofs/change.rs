@@ -189,16 +189,17 @@ pub struct CreateSizedChangeProofArgs<'a> {
     /// The inclusive start key. If `None`, the proof starts from the
     /// beginning of the keyspace.
     pub start_key: Maybe<BorrowedBytes<'a>>,
-    /// The wire byte budget the serialized proof must fit; zero always
-    /// yields [`SizedChangeProofResult::OverBudget`].
-    pub budget: usize,
-    /// The previous chunk's hint, if any.
-    pub hint: Maybe<SizingHint>,
+    /// The budget and calibration, from [`fwd_sizing_hint_new`] or a previous
+    /// result; consumed by the call. `NULL` means a default-budget hint.
+    ///
+    /// [`fwd_sizing_hint_new`]: crate::fwd_sizing_hint_new
+    pub hint: Option<Box<SizingHint>>,
 }
 
 /// Generate a change proof from `start_root` to `end_root` from `start_key`
-/// whose serialized size approaches `budget` bytes and never exceeds it. The
-/// wire bytes are returned with the proof, so it need not be serialized again.
+/// whose serialized size approaches the hint's budget and never exceeds it.
+/// The wire bytes are returned with the proof, so it need not be serialized
+/// again.
 ///
 /// # Arguments
 ///
@@ -232,8 +233,7 @@ pub extern "C" fn fwd_db_change_proof_sized(
                 .as_ref()
                 .map(BorrowedBytes::as_slice)
                 .into_option(),
-            args.budget,
-            args.hint.into_option().map(Into::into),
+            args.hint.map_or_else(Default::default, |hint| hint.0),
         )
     })
 }

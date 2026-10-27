@@ -23,6 +23,7 @@ use crate::OwnedRenderedMetrics;
 use crate::ProposalHandle;
 use crate::RangeProofContext;
 use crate::ReconstructedHandle;
+use crate::SizingHint;
 use crate::revision::GetRevisionResult;
 use crate::revision::RevisionHandle;
 
@@ -682,35 +683,6 @@ impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult {
     }
 }
 
-/// A sized proof's calibration for the next request. Opaque: pass back the
-/// value a result carried.
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-pub struct SizingHint {
-    /// Compressed/uncompressed body size ratio in fixed point.
-    pub ratio: u32,
-    /// Body bytes the edge proofs took; zero means unknown.
-    pub edges: u64,
-}
-
-impl From<firewood::SizingHint> for SizingHint {
-    fn from(hint: firewood::SizingHint) -> Self {
-        Self {
-            ratio: hint.ratio(),
-            edges: hint.edges().map_or(0, byte_count),
-        }
-    }
-}
-
-impl From<SizingHint> for firewood::SizingHint {
-    fn from(hint: SizingHint) -> Self {
-        let edges = (hint.edges != 0)
-            .then(|| usize::try_from(hint.edges).ok())
-            .flatten();
-        Self::new(hint.ratio, edges)
-    }
-}
-
 /// Converts a byte count for the C ABI.
 fn byte_count(len: usize) -> u64 {
     u64::try_from(len).expect("usize is at most 64 bits wide")
@@ -719,9 +691,9 @@ fn byte_count(len: usize) -> u64 {
 /// Splits a sized proof into the parts both sized result types carry.
 fn sized_parts<P, C: From<P>>(
     sized: firewood::SizedProof<P>,
-) -> (Box<C>, OwnedBytes, bool, SizingHint) {
+) -> (Box<C>, OwnedBytes, bool, Box<SizingHint>) {
     let natural_end = sized.natural_end();
-    let hint = sized.hint().into();
+    let hint = Box::new(SizingHint(sized.hint()));
     let (proof, wire) = sized.into_parts();
     (Box::new(proof.into()), wire.into(), natural_end, hint)
 }
@@ -741,8 +713,11 @@ pub struct SizedRangeProof<'db> {
     /// True if the proof reached the end of the keyspace. Out-of-band: verify
     /// the proof before trusting it.
     pub natural_end: bool,
-    /// The hint for the next request.
-    pub hint: SizingHint,
+    /// The hint for the next request; it is consumed by that request, or
+    /// freed with [`fwd_free_sizing_hint`].
+    ///
+    /// [`fwd_free_sizing_hint`]: crate::fwd_free_sizing_hint
+    pub hint: Box<SizingHint>,
 }
 
 /// A result type returned from [`fwd_db_range_proof_sized`].
@@ -816,8 +791,11 @@ pub struct SizedChangeProof {
     /// True if the proof reached the end of the diff. Out-of-band: verify
     /// the proof before trusting it.
     pub natural_end: bool,
-    /// The hint for the next request.
-    pub hint: SizingHint,
+    /// The hint for the next request; it is consumed by that request, or
+    /// freed with [`fwd_free_sizing_hint`].
+    ///
+    /// [`fwd_free_sizing_hint`]: crate::fwd_free_sizing_hint
+    pub hint: Box<SizingHint>,
 }
 
 /// A result type returned from [`fwd_db_change_proof_sized`].
