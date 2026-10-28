@@ -91,9 +91,9 @@ impl CompressionRatio {
     }
 }
 
-/// The [`SizingHint::new`] budget when none is given: well under common
-/// p2p message limits.
-pub const DEFAULT_SIZED_PROOF_BUDGET: usize = 1024 * 1024;
+/// The [`SizingHint::new`] budget when none is given: 95% of the 2 MiB p2p
+/// message limit.
+pub const DEFAULT_SIZED_PROOF_BUDGET: usize = 2 * 1024 * 1024 * 95 / 100;
 
 /// A sized request's byte budget and, once a chunk was built, what that
 /// chunk measured to calibrate the next one. Start with [`SizingHint::new`]

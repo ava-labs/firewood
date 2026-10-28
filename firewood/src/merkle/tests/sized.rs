@@ -51,18 +51,18 @@ use crate::proofs::verify_range_proof_structure;
 
 const SEED: u64 = 0x243F_6A88_85A3_08D3;
 
-#[test_case(32 * 1024, None; "no hint")]
-#[test_case(32 * 1024, Some((5, 100)); "optimistic hint overfills then shrinks")]
-#[test_case(32 * 1024, Some((2, 1)); "pessimistic hint underfills then grows")]
-#[test_case(32 * 1024, Some((0, 0)); "zero lengths clamp to the minimum expected ratio")]
-#[test_case(4 * 1024 * 1024, None; "budget covering the whole trie")]
-fn test_range_sized_matches_plain_proof(budget: usize, lengths: Option<(usize, usize)>) {
+#[test_case(32 * 1024, Seed::Fresh; "no hint")]
+#[test_case(32 * 1024, Seed::measured(5, 100); "optimistic hint overfills then shrinks")]
+#[test_case(32 * 1024, Seed::measured(2, 1); "pessimistic hint underfills then grows")]
+#[test_case(32 * 1024, Seed::measured(0, 0); "zero lengths clamp to the minimum expected ratio")]
+#[test_case(4 * 1024 * 1024, Seed::Fresh; "budget covering the whole trie")]
+fn test_range_sized_matches_plain_proof(budget: usize, seed: Seed) {
     let kvs = test_kvs(2_000, false);
     let total = sorted_unique(&kvs).len();
     let merkle = init_merkle::<DefaultHashMode, _, _, _>(kvs);
 
     let sized = merkle
-        .range_proof_sized(None, None, hint_for(budget, lengths))
+        .range_proof_sized(None, None, seed.hint(budget))
         .unwrap();
 
     assert!(sized.wire().len() <= budget);
@@ -73,19 +73,19 @@ fn test_range_sized_matches_plain_proof(budget: usize, lengths: Option<(usize, u
     verify_range_chunk(&merkle, None, None, &sized);
 }
 
-#[test_case(16 * 1024, None; "no hint")]
-#[test_case(16 * 1024, Some((5, 100)); "optimistic hint overfills then shrinks")]
-#[test_case(16 * 1024, Some((2, 1)); "pessimistic hint underfills then grows")]
-#[test_case(16 * 1024, Some((0, 0)); "zero lengths clamp to the minimum expected ratio")]
-#[test_case(4 * 1024 * 1024, None; "budget covering the whole diff")]
-fn test_change_sized_matches_plain_proof(budget: usize, lengths: Option<(usize, usize)>) {
+#[test_case(16 * 1024, Seed::Fresh; "no hint")]
+#[test_case(16 * 1024, Seed::measured(5, 100); "optimistic hint overfills then shrinks")]
+#[test_case(16 * 1024, Seed::measured(2, 1); "pessimistic hint underfills then grows")]
+#[test_case(16 * 1024, Seed::measured(0, 0); "zero lengths clamp to the minimum expected ratio")]
+#[test_case(4 * 1024 * 1024, Seed::Fresh; "budget covering the whole diff")]
+fn test_change_sized_matches_plain_proof(budget: usize, seed: Seed) {
     let base = test_kvs(1_500, false);
     let source = init_merkle::<DefaultHashMode, _, _, _>(base.clone());
     let target = init_merkle::<DefaultHashMode, _, _, _>(modified_kvs(&base));
     let total = full_diff(&target, &source).len();
 
     let sized = target
-        .change_proof_sized(source.nodestore(), None, None, hint_for(budget, lengths))
+        .change_proof_sized(source.nodestore(), None, None, seed.hint(budget))
         .unwrap();
 
     assert!(sized.wire().len() <= budget);
@@ -270,23 +270,6 @@ fn test_sized_small_budget_first_probe_admits_several_items() {
         first.get()
     );
     assert!(chunk.wire().len() <= 1000);
-}
-
-/// An absurd hint ratio is clamped, so the request still converges on a
-/// chunk within budget in bounded probes.
-#[test]
-fn test_sized_absurd_hint_still_fits_the_budget() {
-    let hint = SizingHint::computed(1000, CompressionRatio::measured(1, 1_000_000), Some(0));
-    let probes = Cell::new(0);
-    let builder = ScriptedBuilder {
-        wire_for: |count| count * 10,
-        probes: &probes,
-    };
-
-    let chunk = build_sized_chunk(&builder, (0..100_000u32).map(Ok), hint).unwrap();
-
-    assert!(chunk.wire().len() <= 1000);
-    assert!(probes.get() <= MAX_CORRECTION_PASSES + 2);
 }
 
 /// A few oversized values among small ones: shrinking must drop the heavy
@@ -599,94 +582,136 @@ fn test_range_sized_single_entry_over_body_limit() {
     );
 }
 
-/// When every correction pass overshoots, the loop stops at the bound and
-/// returns the last candidate that fit rather than probing on.
-#[test]
-fn test_sized_passes_are_bounded_and_the_last_fit_is_kept() {
-    // One item fits comfortably; anything larger is just over budget, so
-    // each shrink drops a few items and overshoots again. The hint reserves
-    // more edge bytes than the budget holds, so the first probe is one item.
-    let hint = SizingHint::computed(1000, CompressionRatio::measured(52, 100), Some(16 * 1024));
-    let probes = Cell::new(0);
-    let builder = ScriptedBuilder {
-        wire_for: |count| if count <= 1 { 500 } else { 1001 },
-        probes: &probes,
-    };
-
-    let chunk = build_sized_chunk(&builder, (0..100_000u32).map(Ok), hint).unwrap();
-
-    assert_eq!(probes.get(), MAX_CORRECTION_PASSES + 1);
-    assert_eq!(*chunk.proof(), 1, "the one candidate that fit");
-    assert_eq!(chunk.wire().len(), 500);
-    assert!(!chunk.natural_end());
+/// What a scripted sizing loop must produce: the chunk it settles on, or
+/// the over-budget error, and how many probes it took to get there.
+#[derive(Debug, Clone, Copy)]
+enum Outcome {
+    Chunk {
+        probes: usize,
+        items: usize,
+        wire: usize,
+    },
+    OverBudget {
+        probes: usize,
+        wire: usize,
+    },
 }
 
-/// A shrink that would land at or below a candidate that already fit stops
-/// and returns that candidate instead of probing a smaller chunk.
-#[test]
-fn test_sized_shrink_never_undercuts_a_fitting_candidate() {
-    // The first probe (one item) fits under 97%; the grown candidate
-    // overshoots so far that the shrink would cut back to one item.
-    let probes = Cell::new(0);
-    let builder = ScriptedBuilder {
-        wire_for: |count| if count <= 1 { 900 } else { 5000 },
-        probes: &probes,
-    };
-
-    let chunk =
-        build_sized_chunk(&builder, (0..100_000u32).map(Ok), SizingHint::new(1000)).unwrap();
-
-    assert_eq!(probes.get(), 2, "the shrink is not probed");
-    assert_eq!(*chunk.proof(), 1);
-    assert_eq!(chunk.wire().len(), 900);
+/// A hint on a 1000-byte budget calibrated as if a body of these lengths
+/// was measured, reserving `edges` bytes.
+fn calibrated(compressed: usize, uncompressed: usize, edges: usize) -> SizingHint {
+    SizingHint::computed(
+        1000,
+        CompressionRatio::measured(compressed, uncompressed),
+        Some(edges),
+    )
 }
 
-/// With no fitting candidate at all, a single item is tried once more, and
-/// if even that is over the budget the request fails.
-#[test]
-fn test_sized_falls_back_to_a_single_item_after_exhausted_passes() {
-    // A hint that admits many items up front, so the first probe overshoots too.
-    let hint = SizingHint::computed(1000, CompressionRatio::measured(1, 2), Some(0));
-
+// One item fits comfortably and anything larger is just over budget, so each
+// shrink drops a few items and overshoots again; the hint reserves more edge
+// bytes than the budget holds, so the first probe is one item. The loop
+// stops at the bound and keeps the last candidate that fit.
+#[test_case(
+    calibrated(52, 100, 16 * 1024),
+    |count| if count <= 1 { 500 } else { 1001 },
+    Outcome::Chunk { probes: MAX_CORRECTION_PASSES + 1, items: 1, wire: 500 };
+    "exhausted passes keep the last fit"
+)]
+// The first probe (one item) fits under 97%; the grown candidate overshoots
+// so far that the shrink would cut back to one item, which is not probed.
+#[test_case(
+    SizingHint::new(1000),
+    |count| if count <= 1 { 900 } else { 5000 },
+    Outcome::Chunk { probes: 2, items: 1, wire: 900 };
+    "a shrink never undercuts a fitting candidate"
+)]
+// A hint that admits many items up front, so every pass overshoots; a
+// single item is then tried once more.
+#[test_case(
+    calibrated(1, 2, 0),
+    |count| if count <= 1 { 500 } else { 1001 },
+    Outcome::Chunk { probes: MAX_CORRECTION_PASSES + 2, items: 1, wire: 500 };
+    "falls back to a single item after exhausted passes"
+)]
+#[test_case(
+    calibrated(1, 2, 0),
+    |_| 1001,
+    Outcome::OverBudget { probes: MAX_CORRECTION_PASSES + 2, wire: 1001 };
+    "even one item over budget is an error"
+)]
+// An absurd ratio is clamped, so the first overshoot shrinks straight to a
+// chunk that fits.
+#[test_case(
+    calibrated(1, 1_000_000, 0),
+    |count| count * 10,
+    Outcome::Chunk { probes: 2, items: 1, wire: 10 };
+    "an absurd hint ratio is clamped"
+)]
+fn test_sized_loop_is_bounded(hint: SizingHint, wire_for: fn(usize) -> usize, expected: Outcome) {
     let probes = Cell::new(0);
     let builder = ScriptedBuilder {
-        wire_for: |count| if count <= 1 { 500 } else { 1001 },
+        wire_for,
         probes: &probes,
     };
-    let chunk = build_sized_chunk(&builder, (0..100_000u32).map(Ok), hint).unwrap();
-    assert_eq!(probes.get(), MAX_CORRECTION_PASSES + 2);
-    assert_eq!(*chunk.proof(), 1);
 
-    let probes = Cell::new(0);
-    let builder = ScriptedBuilder {
-        wire_for: |_| 1001,
-        probes: &probes,
-    };
-    let Err(err) = build_sized_chunk(&builder, (0..100_000u32).map(Ok), hint) else {
-        panic!("no candidate fits the budget");
-    };
-    assert_eq!(probes.get(), MAX_CORRECTION_PASSES + 2);
-    assert!(
-        matches!(
-            err,
-            api::Error::ProofOverBudget {
-                wire: 1001,
-                budget: 1000
-            }
-        ),
-        "{err:?}"
-    );
+    let result = build_sized_chunk(&builder, (0..100_000u32).map(Ok), hint);
+
+    match (expected, result) {
+        (
+            Outcome::Chunk {
+                probes: want,
+                items,
+                wire,
+            },
+            Ok(chunk),
+        ) => {
+            assert_eq!(probes.get(), want);
+            assert_eq!(*chunk.proof(), items);
+            assert_eq!(chunk.wire().len(), wire);
+            assert!(!chunk.natural_end());
+        }
+        (Outcome::OverBudget { probes: want, wire }, Err(err)) => {
+            assert_eq!(probes.get(), want);
+            assert!(
+                matches!(err, api::Error::ProofOverBudget { wire: got, budget: 1000 } if got == wire),
+                "{err:?}"
+            );
+        }
+        (expected, result) => panic!("expected {expected:?}, got {result:?}"),
+    }
 }
 
-/// A hint for `budget`, calibrated by a measured body if `lengths` are given.
-fn hint_for(budget: usize, lengths: Option<(usize, usize)>) -> SizingHint {
-    match lengths {
-        Some((compressed, uncompressed)) => SizingHint::computed(
-            budget,
-            CompressionRatio::measured(compressed, uncompressed),
-            None,
-        ),
-        None => SizingHint::new(budget),
+/// How a test seeds the sizer: fresh, or as if a previous chunk measured a
+/// body of these lengths.
+#[derive(Clone, Copy)]
+enum Seed {
+    Fresh,
+    Measured {
+        compressed: usize,
+        uncompressed: usize,
+    },
+}
+
+impl Seed {
+    const fn measured(compressed: usize, uncompressed: usize) -> Self {
+        Self::Measured {
+            compressed,
+            uncompressed,
+        }
+    }
+
+    fn hint(self, budget: usize) -> SizingHint {
+        match self {
+            Self::Fresh => SizingHint::new(budget),
+            Self::Measured {
+                compressed,
+                uncompressed,
+            } => SizingHint::computed(
+                budget,
+                CompressionRatio::measured(compressed, uncompressed),
+                None,
+            ),
+        }
     }
 }
 
