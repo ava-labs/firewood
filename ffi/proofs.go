@@ -5,8 +5,14 @@ package ffi
 
 // #include <stdlib.h>
 // #include "firewood.h"
+// #cgo noescape fwd_sizing_hint_new
+// #cgo nocallback fwd_sizing_hint_new
+// #cgo noescape fwd_free_sizing_hint
+// #cgo nocallback fwd_free_sizing_hint
 // #cgo noescape fwd_db_range_proof
 // #cgo nocallback fwd_db_range_proof
+// #cgo noescape fwd_db_range_proof_sized
+// #cgo nocallback fwd_db_range_proof_sized
 // #cgo noescape fwd_range_proof_verify
 // #cgo nocallback fwd_range_proof_verify
 // #cgo noescape fwd_db_verify_range_proof
@@ -55,11 +61,36 @@ import (
 
 var (
 	errNotPrepared          = errors.New("proof not prepared into a proposal or committed")
-	errEmptyTrie            = errors.New("a range proof was requested on an empty trie")
 	errDroppedRangeProof    = fmt.Errorf("range proof %w", ErrDropped)
 	errDroppedChangeProof   = fmt.Errorf("change proof %w", ErrDropped)
+	errDroppedSizingHint    = fmt.Errorf("sizing hint %w", ErrDropped)
 	errBoundToOtherDatabase = errors.New("range proof is bound to a different database")
 )
+
+var (
+	// ErrRangeProofOnEmptyTrie is returned for a range proof of an empty trie
+	// with no start key.
+	ErrRangeProofOnEmptyTrie = errors.New("cannot create a range proof for an empty trie")
+	// ErrProofOverBudget is wrapped by [OverBudgetError] when even the smallest
+	// sized proof chunk exceeds the budget.
+	ErrProofOverBudget = errors.New("the smallest proof chunk exceeds the byte budget")
+)
+
+// OverBudgetError wraps [ErrProofOverBudget] with the smallest chunk's wire
+// size in bytes; a budget of at least WireSize admits that chunk.
+type OverBudgetError struct {
+	WireSize uint64
+}
+
+// Error implements error.
+func (e *OverBudgetError) Error() string {
+	return fmt.Sprintf("%v: smallest chunk is %d bytes", ErrProofOverBudget, e.WireSize)
+}
+
+// Unwrap returns [ErrProofOverBudget] so [errors.Is] matches it.
+func (*OverBudgetError) Unwrap() error {
+	return ErrProofOverBudget
+}
 
 // RangeProof represents a proof that a range of keys and their values are
 // included in a trie with a given root hash.
@@ -69,7 +100,7 @@ type RangeProof struct {
 	//
 	// Every method that passes the handle to a C call must hold lease.mu for
 	// the duration of that call. Drop — including the GC cleanup registered
-	// in [getRangeProofFromRangeProofResult] — invalidates the handle under
+	// in [newRangeProofFromPtr] — invalidates the handle under
 	// lease.mu.Lock, so the lock serializes the call against the free.
 	// Omitting it is a use-after-free of the Rust RangeProofContext (see
 	// https://github.com/ava-labs/firewood/issues/2137). Methods whose Rust
@@ -89,6 +120,68 @@ type ChangeProof struct {
 	// mutably, so every method holds lease.mu.RLock.
 	*handle[*C.ChangeProofContext]
 }
+
+// SizingHint is a sized request's budget and, after a chunk, its calibration
+// for the next one. Create one with [NewSizingHint]; a sized request consumes
+// the hint it is given, even on error, and returns a new one in its result.
+// Drop a hint that will not be passed on.
+type SizingHint struct {
+	*handle[*C.SizingHint]
+}
+
+// NewSizingHint returns a hint for chunks whose serialized size never
+// exceeds [budget] bytes.
+func NewSizingHint(budget uint64) *SizingHint {
+	return newSizingHintFromPtr(C.fwd_sizing_hint_new(C.size_t(budget)))
+}
+
+// newSizingHintFromPtr takes ownership of a Rust SizingHint, freeing it on
+// Drop or, failing that, when the hint is garbage collected.
+func newSizingHintFromPtr(ptr *C.SizingHint) *SizingHint {
+	hint := &SizingHint{
+		handle: newHandle(ptr, func(p *C.SizingHint) C.VoidResult { return C.fwd_free_sizing_hint(p) }),
+	}
+	runtime.AddCleanup(hint, drop[*C.SizingHint], hint.handle)
+	return hint
+}
+
+// take hands the Rust hint to a request that consumes it. A nil hint yields
+// a nil pointer, which Rust reads as a default-budget hint.
+func (h *SizingHint) take() (*C.SizingHint, error) {
+	if h == nil {
+		return nil, nil
+	}
+	var ptr *C.SizingHint
+	err := h.lease.release(func() error {
+		if h.dropped {
+			return errDroppedSizingHint
+		}
+		ptr = h.ptr
+		h.ptr = nil
+		h.dropped = true
+		return nil
+	})
+	return ptr, err
+}
+
+// SizedProof is a size-targeted proof chunk with its serialized wire bytes.
+type SizedProof[P any] struct {
+	// Proof is the proof handle, which the caller should Drop when done.
+	Proof P
+	// Wire is Proof's serialization, ready to send without calling Marshal.
+	// It is a Go copy that outlives Proof.
+	Wire []byte
+	// Complete is true if no further request is needed. It is out-of-band
+	// metadata: verify the proof before trusting it.
+	Complete bool
+	// Hint is the budget and calibration for the next request; pass it on
+	// or Drop it.
+	Hint *SizingHint
+}
+
+// SizedRangeProof is a size-targeted range proof; Complete means it reached
+// the end of the keyspace.
+type SizedRangeProof = SizedProof[*RangeProof]
 
 // NextKeyRange is a range of keys still to fetch, `[StartKey, EndKey]`, both
 // inclusive. StartKey is the smallest key above the last one already
@@ -113,7 +206,8 @@ type codeIterator struct {
 // included in the tree with the current root. The proof may be truncated to at
 // most [maxLength] entries, if non-zero. If either [startKey] or [endKey] is
 // Nothing, the range is unbounded in that direction. If [rootHash] is Nothing, the
-// current root of the database is used.
+// current root of the database is used. Returns [ErrRangeProofOnEmptyTrie] if the
+// trie is empty and [startKey] is Nothing.
 func (db *Database) RangeProof(
 	rootHash Hash,
 	startKey, endKey Maybe[[]byte],
@@ -136,6 +230,52 @@ func (db *Database) RangeProof(
 	}
 
 	return getRangeProofFromRangeProofResult(C.fwd_db_range_proof(db.handle, args))
+}
+
+// RangeProofSized returns a range proof of the revision [rootHash] over the
+// inclusive range [startKey, endKey] (Nothing means unbounded on that side)
+// whose serialized size approaches the budget of [hint] and never exceeds it.
+// The call consumes [hint]; a nil [hint] means a default budget. If the
+// result's Complete is false, request the next chunk from the start key of
+// [RangeProof.FindNextKey] after [Database.VerifyRangeProof] or
+// [Database.VerifyAndCommitRangeProof], passing the result's Hint as [hint].
+// Returns [ErrRevisionNotFound], [ErrRangeProofOnEmptyTrie] if the trie is
+// empty and both keys are Nothing, or an [OverBudgetError] if even one entry,
+// or the edge proofs alone, do not fit.
+func (db *Database) RangeProofSized(
+	rootHash Hash,
+	startKey, endKey Maybe[[]byte],
+	hint *SizingHint,
+) (sized *SizedRangeProof, err error) {
+	start := time.Now()
+	defer func() {
+		if err == nil {
+			sizedProofDuration.WithLabelValues("range", db.metricsTag).Observe(time.Since(start).Seconds())
+		}
+	}()
+
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
+
+	hintPtr, err := hint.take()
+	if err != nil {
+		return nil, err
+	}
+
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	args := C.CreateSizedRangeProofArgs{
+		root:      newCHashKey(rootHash),
+		start_key: newMaybeBorrowedBytes(startKey, &pinner),
+		end_key:   newMaybeBorrowedBytes(endKey, &pinner),
+		hint:      hintPtr,
+	}
+
+	return getSizedRangeProofFromResult(C.fwd_db_range_proof_sized(db.handle, args))
 }
 
 // Verify verifies the provided range [proof] proves the values in the range
@@ -629,19 +769,84 @@ func getRangeProofFromRangeProofResult(result C.RangeProofResult) (*RangeProof, 
 		// it in the error message if needed.
 		return nil, ErrRevisionNotFound
 	case C.RangeProofResult_EmptyTrie:
-		return nil, errEmptyTrie
+		return nil, ErrRangeProofOnEmptyTrie
 	case C.RangeProofResult_Ok:
 		ptr := *(**C.RangeProofContext)(unsafe.Pointer(&result.anon0))
-		proof := &RangeProof{
-			handle: newHandle(ptr, func(p *C.RangeProofContext) C.VoidResult { return C.fwd_free_range_proof(p) }),
-		}
-		runtime.AddCleanup(proof, drop[*C.RangeProofContext], proof.handle)
-		return proof, nil
+		return newRangeProofFromPtr(ptr), nil
 	case C.RangeProofResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 		return nil, err
 	default:
 		return nil, fmt.Errorf("unknown C.RangeProofResult tag: %d", result.tag)
+	}
+}
+
+// newRangeProofFromPtr takes ownership of a Rust RangeProofContext, freeing it
+// on Drop or, failing that, when the proof is garbage collected. The caller
+// must not free or otherwise use ptr afterwards.
+func newRangeProofFromPtr(ptr *C.RangeProofContext) *RangeProof {
+	proof := &RangeProof{
+		handle: newHandle(ptr, func(p *C.RangeProofContext) C.VoidResult { return C.fwd_free_range_proof(p) }),
+	}
+	runtime.AddCleanup(proof, drop[*C.RangeProofContext], proof.handle)
+	return proof
+}
+
+// newChangeProofFromPtr takes ownership of a Rust ChangeProofContext under
+// the same rules as [newRangeProofFromPtr].
+func newChangeProofFromPtr(ptr *C.ChangeProofContext) *ChangeProof {
+	proof := &ChangeProof{
+		handle: newHandle(ptr, func(p *C.ChangeProofContext) C.VoidResult { return C.fwd_free_change_proof(p) }),
+	}
+	runtime.AddCleanup(proof, drop[*C.ChangeProofContext], proof.handle)
+	return proof
+}
+
+// newSizedProof assembles a sized result from its C parts. It owns both
+// proof and wire: the wire is copied into Go memory and freed, and if that
+// free fails the proof is dropped too.
+func newSizedProof[P interface{ Drop() error }](
+	proof P,
+	wire C.OwnedBytes,
+	naturalEnd C.bool,
+	hint *C.SizingHint,
+) (*SizedProof[P], error) {
+	wireOwned := newOwnedBytes(wire)
+	copied := wireOwned.CopiedBytes()
+	if err := wireOwned.Free(); err != nil {
+		return nil, errors.Join(err, proof.Drop())
+	}
+	return &SizedProof[P]{
+		Proof:    proof,
+		Wire:     copied,
+		Complete: bool(naturalEnd),
+		Hint:     newSizingHintFromPtr(hint),
+	}, nil
+}
+
+func getSizedRangeProofFromResult(result C.SizedRangeProofResult) (*SizedRangeProof, error) {
+	switch result.tag {
+	case C.SizedRangeProofResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.SizedRangeProofResult_RevisionNotFound:
+		return nil, ErrRevisionNotFound
+	case C.SizedRangeProofResult_EmptyTrie:
+		return nil, ErrRangeProofOnEmptyTrie
+	case C.SizedRangeProofResult_OverBudget:
+		// SAFETY: the tag says the union holds the OverBudget payload, a
+		// uint64_t laid out at the start of the union by cbindgen.
+		return nil, &OverBudgetError{WireSize: uint64(*(*C.uint64_t)(unsafe.Pointer(&result.anon0)))}
+	case C.SizedRangeProofResult_Ok:
+		// SAFETY: the tag says the union holds a C.SizedRangeProof, which
+		// cbindgen lays out at the start of the union. Its proof and wire
+		// allocations are each released exactly once: the proof by the
+		// handle created here, the wire by newSizedProof.
+		ok := *(*C.SizedRangeProof)(unsafe.Pointer(&result.anon0))
+		return newSizedProof(newRangeProofFromPtr(ok.proof), ok.wire, ok.natural_end, ok.hint)
+	case C.SizedRangeProofResult_Err:
+		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+	default:
+		return nil, fmt.Errorf("unknown C.SizedRangeProofResult tag: %d", result.tag)
 	}
 }
 
@@ -655,11 +860,7 @@ func getChangeProofFromChangeProofResult(result C.ChangeProofResult) (*ChangePro
 		return nil, ErrEndRevisionNotFound
 	case C.ChangeProofResult_Ok:
 		ptr := *(**C.ChangeProofContext)(unsafe.Pointer(&result.anon0))
-		proof := &ChangeProof{
-			handle: newHandle(ptr, func(p *C.ChangeProofContext) C.VoidResult { return C.fwd_free_change_proof(p) }),
-		}
-		runtime.AddCleanup(proof, drop[*C.ChangeProofContext], proof.handle)
-		return proof, nil
+		return newChangeProofFromPtr(ptr), nil
 	case C.ChangeProofResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 		return nil, err

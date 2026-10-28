@@ -29,6 +29,10 @@ import (
 // These cover operations that happen entirely in Go and are invisible to the Rust recorder.
 var goMetricsRegistry = prometheus.NewRegistry()
 
+// proofTypeLabel is the label the Go-side proof histograms share, with the
+// values "range" and "change".
+const proofTypeLabel = "proof_type"
+
 // proofMarshalDuration tracks the duration of proof marshal calls, labeled by
 // proof_type ("range", "change"). It carries no db_tag: Marshal makes no
 // database call and keeps working after the database is closed, so there is
@@ -37,7 +41,7 @@ var proofMarshalDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Name:    "firewood_go_proof_marshal_duration_seconds",
 	Help:    "Duration of Go-side proof marshal operations",
 	Buckets: []float64{5e-6, 25e-6, 1e-4, 5e-4, 1e-3, 5e-3, 25e-3, 0.1},
-}, []string{"proof_type"})
+}, []string{proofTypeLabel})
 
 // proofUnmarshalDuration tracks the duration of proof unmarshal calls, labeled
 // by proof_type ("range", "change") and the db_tag of the database the proof
@@ -46,10 +50,20 @@ var proofUnmarshalDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts
 	Name:    "firewood_go_proof_unmarshal_duration_seconds",
 	Help:    "Duration of Go-side proof unmarshal operations",
 	Buckets: []float64{5e-6, 25e-6, 1e-4, 5e-4, 1e-3, 5e-3, 25e-3, 0.1},
-}, []string{"proof_type", "db_tag"})
+}, []string{proofTypeLabel, "db_tag"})
+
+// sizedProofDuration tracks the wall-clock duration of successful sized proof
+// requests, labeled by proof_type ("range", "change") and the db_tag of the
+// database that built them. The FFI call runs the sizing loop and wire
+// serialization, so buckets span 1ms to 25s.
+var sizedProofDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	Name:    "firewood_go_proof_sized_duration_seconds",
+	Help:    "Duration of sized proof requests through the FFI",
+	Buckets: []float64{1e-3, 5e-3, 25e-3, 0.1, 0.5, 1, 5, 25},
+}, []string{proofTypeLabel, "db_tag"})
 
 func init() {
-	goMetricsRegistry.MustRegister(proofMarshalDuration, proofUnmarshalDuration)
+	goMetricsRegistry.MustRegister(proofMarshalDuration, proofUnmarshalDuration, sizedProofDuration)
 }
 
 var _ prometheus.Gatherer = (*Gatherer)(nil)
@@ -72,7 +86,8 @@ func (Gatherer) Gather() ([]*dto.MetricFamily, error) {
 // This method must be called after [StartMetrics].
 //
 // The result merges Rust-side metrics (via the native recorder) with Go-side
-// metrics (proof serialization timing) from an independent Go prometheus registry.
+// metrics (proof serialization and sized request timing) from an independent Go
+// prometheus registry.
 func GatherRenderedMetrics() ([]*dto.MetricFamily, error) {
 	rustFamilies, err := gatherFromRust()
 	if err != nil {
