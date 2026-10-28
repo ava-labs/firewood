@@ -12,7 +12,6 @@ mod merge;
 pub mod parallel;
 pub(crate) mod reconcile;
 mod sized;
-
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -60,6 +59,9 @@ use firewood_storage::ValueDigest;
 use firewood_storage::ensure_stack;
 use firewood_storage::hash_node_as_storage_trie_root_for_node;
 use firewood_storage::hash_node_as_storage_trie_root_parts;
+pub use sized::DEFAULT_SIZED_PROOF_BUDGET;
+pub use sized::SizedProof;
+pub use sized::SizingHint;
 
 use crate::ChangeProofVerificationContext;
 use crate::Proof;

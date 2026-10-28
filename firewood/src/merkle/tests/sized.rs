@@ -51,41 +51,49 @@ use crate::proofs::verify_range_proof_structure;
 
 const SEED: u64 = 0x243F_6A88_85A3_08D3;
 
-#[test_case(32 * 1024, None; "no hint")]
-#[test_case(32 * 1024, Some(hint(5, 100)); "optimistic hint overfills then shrinks")]
-#[test_case(32 * 1024, Some(hint(2, 1)); "pessimistic hint underfills then grows")]
-#[test_case(32 * 1024, Some(hint(0, 0)); "zero hint is sanitized")]
-#[test_case(4 * 1024 * 1024, None; "budget covering the whole trie")]
-fn test_range_sized_matches_plain_proof(budget: usize, hint: Option<SizingHint>) {
+#[test_case(32 * 1024, Seed::Fresh; "no hint")]
+#[test_case(32 * 1024, Seed::measured(5, 100); "optimistic hint overfills then shrinks")]
+#[test_case(32 * 1024, Seed::measured(2, 1); "pessimistic hint underfills then grows")]
+#[test_case(32 * 1024, Seed::measured(0, 0); "zero lengths clamp to the minimum expected ratio")]
+#[test_case(4 * 1024 * 1024, Seed::Fresh; "budget covering the whole trie")]
+fn test_range_sized_matches_plain_proof(budget: usize, seed: Seed) {
     let kvs = test_kvs(2_000, false);
     let total = sorted_unique(&kvs).len();
     let merkle = init_merkle::<DefaultHashMode, _, _, _>(kvs);
 
-    let sized = merkle.range_proof_sized(None, budget, hint).unwrap();
+    let sized = merkle
+        .range_proof_sized(None, None, seed.hint(budget))
+        .unwrap();
 
-    assert!(sized.wire.len() <= budget);
-    assert_eq!(sized.natural_end, sized.proof.key_values().len() == total);
-    verify_range_chunk(&merkle, None, &sized);
+    assert!(sized.wire().len() <= budget);
+    assert_eq!(
+        sized.natural_end(),
+        sized.proof().key_values().len() == total
+    );
+    verify_range_chunk(&merkle, None, None, &sized);
 }
 
-#[test_case(16 * 1024, None; "no hint")]
-#[test_case(16 * 1024, Some(hint(5, 100)); "optimistic hint overfills then shrinks")]
-#[test_case(16 * 1024, Some(hint(2, 1)); "pessimistic hint underfills then grows")]
-#[test_case(16 * 1024, Some(hint(0, 0)); "zero hint is sanitized")]
-#[test_case(4 * 1024 * 1024, None; "budget covering the whole diff")]
-fn test_change_sized_matches_plain_proof(budget: usize, hint: Option<SizingHint>) {
+#[test_case(16 * 1024, Seed::Fresh; "no hint")]
+#[test_case(16 * 1024, Seed::measured(5, 100); "optimistic hint overfills then shrinks")]
+#[test_case(16 * 1024, Seed::measured(2, 1); "pessimistic hint underfills then grows")]
+#[test_case(16 * 1024, Seed::measured(0, 0); "zero lengths clamp to the minimum expected ratio")]
+#[test_case(4 * 1024 * 1024, Seed::Fresh; "budget covering the whole diff")]
+fn test_change_sized_matches_plain_proof(budget: usize, seed: Seed) {
     let base = test_kvs(1_500, false);
     let source = init_merkle::<DefaultHashMode, _, _, _>(base.clone());
     let target = init_merkle::<DefaultHashMode, _, _, _>(modified_kvs(&base));
     let total = full_diff(&target, &source).len();
 
     let sized = target
-        .change_proof_sized(source.nodestore(), None, budget, hint)
+        .change_proof_sized(source.nodestore(), None, None, seed.hint(budget))
         .unwrap();
 
-    assert!(sized.wire.len() <= budget);
-    assert_eq!(sized.natural_end, sized.proof.batch_ops().len() == total);
-    verify_change_chunk(&target, &source, None, &sized);
+    assert!(sized.wire().len() <= budget);
+    assert_eq!(
+        sized.natural_end(),
+        sized.proof().batch_ops().len() == total
+    );
+    verify_change_chunk(&target, &source, None, None, &sized);
 }
 
 #[test_case(8 * 1024, false; "incompressible values")]
@@ -95,14 +103,14 @@ fn test_range_sized_paging_covers_keyspace(budget: usize, compressible: bool) {
     let expected = sorted_unique(&kvs);
     let merkle = init_merkle::<DefaultHashMode, _, _, _>(kvs);
 
-    let chunks = page_range_chunks(&merkle, budget);
+    let chunks = page_range_chunks(&merkle, None, budget);
 
     assert!(chunks.len() > 1);
     assert_well_filled(&chunks, budget);
     assert!(
         chunks
             .iter()
-            .flat_map(|c| c.proof.key_values().iter())
+            .flat_map(|c| c.proof().key_values().iter())
             .map(|(k, v)| (&**k, &**v))
             .eq(expected.iter().map(|(k, v)| (k.as_slice(), v.as_slice())))
     );
@@ -117,13 +125,13 @@ fn test_change_sized_paging_covers_diff(budget: usize, compressible: bool) {
     let expected = full_diff(&target, &source);
     assert!(expected.len() > 100, "diff should be non-trivial");
 
-    let chunks = page_change_chunks(&target, &source, budget);
+    let chunks = page_change_chunks(&target, &source, None, budget);
 
     assert!(chunks.len() > 1);
     assert_well_filled(&chunks, budget);
     let ops: Vec<_> = chunks
         .iter()
-        .flat_map(|c| c.proof.batch_ops().iter().cloned())
+        .flat_map(|c| c.proof().batch_ops().iter().cloned())
         .collect();
     assert_eq!(ops, expected);
 }
@@ -135,13 +143,13 @@ fn test_change_sized_paging_covers_diff(budget: usize, compressible: bool) {
 fn test_range_sized_chained_hint_stays_in_window(budget: usize, compressible: bool) {
     let merkle = init_merkle::<DefaultHashMode, _, _, _>(test_kvs(4_000, compressible));
 
-    let chunks = page_range_chunks(&merkle, budget);
+    let chunks = page_range_chunks(&merkle, None, budget);
 
     assert!(chunks.len() > 3);
     for (i, chunk) in chunks.iter().enumerate().skip(1) {
-        let len = chunk.wire.len();
+        let len = chunk.wire().len();
         assert!(len <= budget, "chunk {i}: {len} > {budget}");
-        if !chunk.natural_end {
+        if !chunk.natural_end() {
             assert!(
                 len * 100 >= budget * 90,
                 "chunk {i} underfilled: {len} of {budget}"
@@ -159,21 +167,23 @@ fn test_sized_body_limit_bounds_the_chunk() {
     let source = init_merkle::<DefaultHashMode, _, _, _>(base.clone());
     let target = init_merkle::<DefaultHashMode, _, _, _>(modified_kvs(&base));
 
-    let range = target.range_proof_sized(None, budget, None).unwrap();
+    let range = target
+        .range_proof_sized(None, None, SizingHint::new(budget))
+        .unwrap();
     let change = target
-        .change_proof_sized(source.nodestore(), None, budget, None)
+        .change_proof_sized(source.nodestore(), None, None, SizingHint::new(budget))
         .unwrap();
 
     for (wire, natural_end, body) in [
         (
-            &range.wire,
-            range.natural_end,
-            body_of(|out| range.proof.write_body_to_vec(out)),
+            range.wire(),
+            range.natural_end(),
+            body_of(|out| range.proof().write_body_to_vec(out)),
         ),
         (
-            &change.wire,
-            change.natural_end,
-            body_of(|out| change.proof.write_body_to_vec(out)),
+            change.wire(),
+            change.natural_end(),
+            body_of(|out| change.proof().write_body_to_vec(out)),
         ),
     ] {
         assert!(wire.len() <= budget);
@@ -184,6 +194,82 @@ fn test_sized_body_limit_bounds_the_chunk() {
             "body {body} uses less than 90% of the limit"
         );
     }
+}
+
+/// An end key bounds the keyspace: paging stops at it, the final chunk
+/// proves it, and every chunk matches the plain proof of the same range.
+#[test]
+fn test_range_sized_stops_at_the_end_key() {
+    let kvs = test_kvs(2_000, false);
+    let sorted = sorted_unique(&kvs);
+    let end = sorted[sorted.len() / 2].0.clone();
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(kvs);
+
+    let chunks = page_range_chunks(&merkle, Some(&end), 16 * 1024);
+
+    let paged: usize = chunks.iter().map(|c| c.proof().key_values().len()).sum();
+    assert_eq!(
+        paged,
+        sorted.len() / 2 + 1,
+        "every key up to and including the end key"
+    );
+    let last = chunks.last().unwrap();
+    assert!(last.natural_end());
+    assert!(
+        !last.proof().end_proof().is_empty(),
+        "the end key is proved"
+    );
+    assert!(matches!(
+        merkle.range_proof_sized(Some(&end), Some(&sorted[0].0), SizingHint::default()),
+        Err(api::Error::InvalidRange { .. })
+    ));
+}
+
+/// An end key bounds a diff the same way.
+#[test]
+fn test_change_sized_stops_at_the_end_key() {
+    let base = test_kvs(1_500, false);
+    let source = init_merkle::<DefaultHashMode, _, _, _>(base.clone());
+    let target = init_merkle::<DefaultHashMode, _, _, _>(modified_kvs(&base));
+    let diff = full_diff(&target, &source);
+    let end = diff[diff.len() / 2].key().clone();
+
+    let chunks = page_change_chunks(&target, &source, Some(&end), 16 * 1024);
+
+    let paged: usize = chunks.iter().map(|c| c.proof().batch_ops().len()).sum();
+    assert_eq!(
+        paged,
+        diff.len() / 2 + 1,
+        "every change up to and including the end key"
+    );
+    assert!(chunks.last().unwrap().natural_end());
+}
+
+/// Without a hint, the edge reserve is capped at half the target so a small
+/// budget still admits several items on the first probe.
+#[test]
+fn test_sized_small_budget_first_probe_admits_several_items() {
+    let first = Cell::new(0);
+    let probes = Cell::new(0);
+    let builder = ScriptedBuilder {
+        wire_for: |count| {
+            if first.get() == 0 {
+                first.set(count);
+            }
+            count
+        },
+        probes: &probes,
+    };
+
+    let chunk =
+        build_sized_chunk(&builder, (0..100_000u32).map(Ok), SizingHint::new(1000)).unwrap();
+
+    assert!(
+        first.get() > 1,
+        "first probe admitted {} item(s)",
+        first.get()
+    );
+    assert!(chunk.wire().len() <= 1000);
 }
 
 /// A few oversized values among small ones: shrinking must drop the heavy
@@ -200,7 +286,7 @@ fn test_range_sized_heavy_tail_entries_stay_well_filled() {
     }
     let merkle = init_merkle::<DefaultHashMode, _, _, _>(kvs);
 
-    let chunks = page_range_chunks(&merkle, budget);
+    let chunks = page_range_chunks(&merkle, None, budget);
 
     assert_well_filled(&chunks, budget);
 }
@@ -216,15 +302,17 @@ fn test_sized_constant_values_stay_decodable() {
     let target = init_merkle::<DefaultHashMode, _, _, _>(kvs);
     let source = init_merkle::<DefaultHashMode, _, _, _>(Vec::<(Vec<u8>, Vec<u8>)>::new());
 
-    let range = target.range_proof_sized(None, usize::MAX, None).unwrap();
-    assert!(!range.natural_end, "the body limit must bound the chunk");
-    verify_range_chunk(&target, None, &range);
+    let range = target
+        .range_proof_sized(None, None, SizingHint::new(usize::MAX))
+        .unwrap();
+    assert!(!range.natural_end(), "the body limit must bound the chunk");
+    verify_range_chunk(&target, None, None, &range);
 
     let change = target
-        .change_proof_sized(source.nodestore(), None, usize::MAX, None)
+        .change_proof_sized(source.nodestore(), None, None, SizingHint::new(usize::MAX))
         .unwrap();
-    assert!(!change.natural_end);
-    verify_change_chunk(&target, &source, None, &change);
+    assert!(!change.natural_end());
+    verify_change_chunk(&target, &source, None, None, &change);
 }
 
 /// The budget is a message limit: a chunk that cannot fit it is an error,
@@ -245,24 +333,24 @@ fn test_sized_budget_below_one_entry_is_an_error() {
     let source = init_merkle::<DefaultHashMode, _, _, _>(Vec::<(Vec<u8>, Vec<u8>)>::new());
 
     assert!(matches!(
-        merkle.range_proof_sized(None, 0, None),
+        merkle.range_proof_sized(None, None, SizingHint::new(0)),
         Err(api::Error::ProofOverBudget { wire, budget: 0 }) if wire > 0
     ));
     assert!(matches!(
-        merkle.change_proof_sized(source.nodestore(), None, 0, None),
+        merkle.change_proof_sized(source.nodestore(), None, None, SizingHint::new(0)),
         Err(api::Error::ProofOverBudget { wire, budget: 0 }) if wire > 0
     ));
 
     let mut start: Option<Vec<u8>> = None;
     let mut covered = 0usize;
     let err = loop {
-        match merkle.range_proof_sized(start.as_deref(), budget, None) {
+        match merkle.range_proof_sized(start.as_deref(), None, SizingHint::new(budget)) {
             Ok(chunk) => {
-                assert!(chunk.wire.len() <= budget);
-                assert!(!chunk.natural_end, "must stop at the big entry");
-                covered += chunk.proof.key_values().len();
+                assert!(chunk.wire().len() <= budget);
+                assert!(!chunk.natural_end(), "must stop at the big entry");
+                covered += chunk.proof().key_values().len();
                 start = chunk
-                    .proof
+                    .proof()
                     .key_values()
                     .last()
                     .map(|(k, _)| lex_successor(k).into_vec());
@@ -277,11 +365,11 @@ fn test_sized_budget_below_one_entry_is_an_error() {
     let big_at = expected.iter().position(|(k, _)| *k == big_key).unwrap();
     assert_eq!(covered, big_at, "everything before the big entry pages");
 
-    let chunks = page_range_chunks(&merkle, 128 * 1024);
+    let chunks = page_range_chunks(&merkle, None, 128 * 1024);
     assert_eq!(
         chunks
             .iter()
-            .map(|c| c.proof.key_values().len())
+            .map(|c| c.proof().key_values().len())
             .sum::<usize>(),
         expected.len()
     );
@@ -293,7 +381,7 @@ fn test_sized_empty_trie_errors_like_plain_api() {
     let target = init_merkle::<DefaultHashMode, _, _, _>([(b"key", b"value")]);
 
     assert!(matches!(
-        empty.range_proof_sized(None, 8 * 1024, None),
+        empty.range_proof_sized(None, None, SizingHint::new(8 * 1024)),
         Err(api::Error::RangeProofOnEmptyTrie)
     ));
     assert!(matches!(
@@ -302,12 +390,12 @@ fn test_sized_empty_trie_errors_like_plain_api() {
     ));
     for start in [b"".as_slice(), b"key"] {
         assert!(matches!(
-            empty.range_proof_sized(Some(start), 8 * 1024, None),
+            empty.range_proof_sized(Some(start), None, SizingHint::new(8 * 1024)),
             Err(api::Error::ProofError(ProofError::Empty))
         ));
     }
     assert!(matches!(
-        empty.change_proof_sized(target.nodestore(), None, 8 * 1024, None),
+        empty.change_proof_sized(target.nodestore(), None, None, SizingHint::new(8 * 1024)),
         Err(api::Error::ProofError(ProofError::Empty))
     ));
     assert!(matches!(
@@ -325,22 +413,22 @@ fn test_sized_exhausted_inputs_yield_empty_natural_end() {
     let past_end = vec![0xFFu8; 33]; // greater than every 32-byte key
 
     let range = merkle
-        .range_proof_sized(Some(&past_end), 8 * 1024, None)
+        .range_proof_sized(Some(&past_end), None, SizingHint::new(8 * 1024))
         .unwrap();
-    assert_eq!(range.proof.key_values(), []);
-    assert!(range.natural_end);
-    verify_range_chunk(&merkle, Some(&past_end), &range);
+    assert_eq!(range.proof().key_values(), []);
+    assert!(range.natural_end());
+    verify_range_chunk(&merkle, Some(&past_end), None, &range);
 
     let same = init_merkle::<DefaultHashMode, _, _, _>(kvs);
     let change = merkle
-        .change_proof_sized(same.nodestore(), None, 8 * 1024, None)
+        .change_proof_sized(same.nodestore(), None, None, SizingHint::new(8 * 1024))
         .unwrap();
     assert_eq!(
-        change.proof.batch_ops(),
+        change.proof().batch_ops(),
         [] as [BatchOp<Box<[u8]>, Box<[u8]>>; 0]
     );
-    assert!(change.natural_end);
-    verify_change_chunk(&merkle, &same, None, &change);
+    assert!(change.natural_end());
+    verify_change_chunk(&merkle, &same, None, None, &change);
 }
 
 #[test]
@@ -349,12 +437,12 @@ fn test_change_sized_from_empty_source_covers_target() {
     let empty = init_merkle::<DefaultHashMode, _, _, _>(Vec::<(Vec<u8>, Vec<u8>)>::new());
 
     let change = target
-        .change_proof_sized(empty.nodestore(), None, 4096, None)
+        .change_proof_sized(empty.nodestore(), None, None, SizingHint::new(4096))
         .unwrap();
 
-    assert_eq!(change.proof.batch_ops().len(), 1);
-    assert!(change.natural_end);
-    verify_change_chunk(&target, &empty, None, &change);
+    assert_eq!(change.proof().batch_ops().len(), 1);
+    assert!(change.natural_end());
+    verify_change_chunk(&target, &empty, None, None, &change);
 }
 
 /// Inclusive lower bounds on existing, absent, and prefix keys.
@@ -367,12 +455,19 @@ fn test_sized_bounded_starts_and_prefix_keys() {
 
     for start in [b"".as_slice(), b"a", b"aa", b"ab", b"zz"] {
         for budget in [1024, usize::MAX] {
-            let range = merkle.range_proof_sized(Some(start), budget, None).unwrap();
-            verify_range_chunk(&merkle, Some(start), &range);
-            let change = merkle
-                .change_proof_sized(source.nodestore(), Some(start), budget, None)
+            let range = merkle
+                .range_proof_sized(Some(start), None, SizingHint::new(budget))
                 .unwrap();
-            verify_change_chunk(&merkle, &source, Some(start), &change);
+            verify_range_chunk(&merkle, Some(start), None, &range);
+            let change = merkle
+                .change_proof_sized(
+                    source.nodestore(),
+                    Some(start),
+                    None,
+                    SizingHint::new(budget),
+                )
+                .unwrap();
+            verify_change_chunk(&merkle, &source, Some(start), None, &change);
         }
     }
 }
@@ -386,17 +481,19 @@ fn test_sized_length_prefix_boundaries() {
         let target = init_merkle::<DefaultHashMode, _, _, _>([(vec![0x42; len.min(128)], value)]);
         let source = init_merkle::<DefaultHashMode, _, _, _>(Vec::<(Vec<u8>, Vec<u8>)>::new());
 
-        let range = target.range_proof_sized(None, usize::MAX, None).unwrap();
-        assert_eq!(range.proof.key_values().len(), 1);
-        assert!(range.natural_end);
-        verify_range_chunk(&target, None, &range);
+        let range = target
+            .range_proof_sized(None, None, SizingHint::new(usize::MAX))
+            .unwrap();
+        assert_eq!(range.proof().key_values().len(), 1);
+        assert!(range.natural_end());
+        verify_range_chunk(&target, None, None, &range);
 
         let change = target
-            .change_proof_sized(source.nodestore(), None, usize::MAX, None)
+            .change_proof_sized(source.nodestore(), None, None, SizingHint::new(usize::MAX))
             .unwrap();
-        assert_eq!(change.proof.batch_ops().len(), 1);
-        assert!(change.natural_end);
-        verify_change_chunk(&target, &source, None, &change);
+        assert_eq!(change.proof().batch_ops().len(), 1);
+        assert!(change.natural_end());
+        verify_change_chunk(&target, &source, None, None, &change);
     }
 }
 
@@ -413,16 +510,18 @@ fn test_sized_immutable_proposal_target<H: HashMode>() {
     proposal.insert(b"key", b"value".as_slice().into()).unwrap();
     let target = proposal.hash();
 
-    let range = target.range_proof_sized(None, 1_024, None).unwrap();
-    assert_eq!(range.proof.hash_mode(), H::ALGORITHM);
-    verify_range_chunk(&target, None, &range);
+    let range = target
+        .range_proof_sized(None, None, SizingHint::new(1_024))
+        .unwrap();
+    assert_eq!(range.proof().hash_mode(), H::ALGORITHM);
+    verify_range_chunk(&target, None, None, &range);
 
     // The source is a committed store, the target an immutable proposal,
     // so only the decoded structure can be verified here.
     let change = target
-        .change_proof_sized(base.nodestore(), None, 1_024, None)
+        .change_proof_sized(base.nodestore(), None, None, SizingHint::new(1_024))
         .unwrap();
-    let decoded = FrozenChangeProof::from_slice(&change.wire).unwrap();
+    let decoded = FrozenChangeProof::from_slice(change.wire()).unwrap();
     assert_eq!(decoded.hash_mode(), H::ALGORITHM);
     verify_change_proof_structure(
         &decoded,
@@ -448,103 +547,171 @@ fn test_sized_account_with_storage_children() {
     let source = init_merkle::<DefaultHashMode, _, _, _>(vec![kvs.first().unwrap().clone()]);
     let target = init_merkle::<DefaultHashMode, _, _, _>(kvs);
 
-    let chunks = page_range_chunks(&target, 64 * 1024);
+    let chunks = page_range_chunks(&target, None, 64 * 1024);
     assert_eq!(
         chunks
             .iter()
-            .map(|c| c.proof.key_values().len())
+            .map(|c| c.proof().key_values().len())
             .sum::<usize>(),
         3
     );
     let change = target
-        .change_proof_sized(source.nodestore(), Some(&[]), 16 * 1024, None)
+        .change_proof_sized(
+            source.nodestore(),
+            Some(&[]),
+            None,
+            SizingHint::new(16 * 1024),
+        )
         .unwrap();
-    verify_change_chunk(&target, &source, Some(&[]), &change);
+    verify_change_chunk(&target, &source, Some(&[]), None, &change);
 }
 
-/// When every correction pass overshoots, the loop stops at the bound and
-/// returns the last candidate that fit rather than probing on.
+/// One entry whose body exceeds the decoder's limit can never be sent: the
+/// error is `BodyTooLarge`, not `ProofOverBudget`, whatever the budget.
 #[test]
-fn test_sized_passes_are_bounded_and_the_last_fit_is_kept() {
-    // One item fits comfortably; anything larger is just over budget, so
-    // each shrink drops a few items and overshoots again.
-    let probes = Cell::new(0);
-    let builder = ScriptedBuilder {
-        wire_for: |count| if count <= 1 { 500 } else { 1001 },
-        probes: &probes,
-    };
-
-    let chunk = build_sized_chunk(&builder, (0..100_000u32).map(Ok), 1000, None).unwrap();
-
-    assert_eq!(probes.get(), MAX_CORRECTION_PASSES + 1);
-    assert_eq!(chunk.proof, 1, "the one candidate that fit");
-    assert_eq!(chunk.wire.len(), 500);
-    assert!(!chunk.natural_end);
-}
-
-/// A shrink that would land at or below a candidate that already fit stops
-/// and returns that candidate instead of probing a smaller chunk.
-#[test]
-fn test_sized_shrink_never_undercuts_a_fitting_candidate() {
-    // The first probe (one item) fits under 97%; the grown candidate
-    // overshoots so far that the shrink would cut back to one item.
-    let probes = Cell::new(0);
-    let builder = ScriptedBuilder {
-        wire_for: |count| if count <= 1 { 900 } else { 5000 },
-        probes: &probes,
-    };
-
-    let chunk = build_sized_chunk(&builder, (0..100_000u32).map(Ok), 1000, None).unwrap();
-
-    assert_eq!(probes.get(), 2, "the shrink is not probed");
-    assert_eq!(chunk.proof, 1);
-    assert_eq!(chunk.wire.len(), 900);
-}
-
-/// With no fitting candidate at all, a single item is tried once more, and
-/// if even that is over the budget the request fails.
-#[test]
-fn test_sized_falls_back_to_a_single_item_after_exhausted_passes() {
-    // A hint that admits many items up front, so the first probe overshoots too.
-    let hint = Some(SizingHint {
-        ratio: CompressionRatio::measured(1, 2),
-        edges: Some(0),
-    });
-
-    let probes = Cell::new(0);
-    let builder = ScriptedBuilder {
-        wire_for: |count| if count <= 1 { 500 } else { 1001 },
-        probes: &probes,
-    };
-    let chunk = build_sized_chunk(&builder, (0..100_000u32).map(Ok), 1000, hint).unwrap();
-    assert_eq!(probes.get(), MAX_CORRECTION_PASSES + 2);
-    assert_eq!(chunk.proof, 1);
-
-    let probes = Cell::new(0);
-    let builder = ScriptedBuilder {
-        wire_for: |_| 1001,
-        probes: &probes,
-    };
-    let Err(err) = build_sized_chunk(&builder, (0..100_000u32).map(Ok), 1000, hint) else {
-        panic!("no candidate fits the budget");
-    };
-    assert_eq!(probes.get(), MAX_CORRECTION_PASSES + 2);
+fn test_range_sized_single_entry_over_body_limit() {
+    let key: Vec<u8> = vec![0x11; 32];
+    let merkle =
+        init_merkle::<DefaultHashMode, _, _, _>(vec![(key, vec![0x42; MAX_DECOMPRESSED_LEN + 1])]);
+    let err = merkle
+        .range_proof_sized(None, None, SizingHint::new(usize::MAX))
+        .unwrap_err();
     assert!(
-        matches!(
-            err,
-            api::Error::ProofOverBudget {
-                wire: 1001,
-                budget: 1000
-            }
-        ),
+        matches!(err, api::Error::ProofError(ProofError::BodyTooLarge { .. })),
         "{err:?}"
     );
 }
 
-fn hint(compressed: usize, uncompressed: usize) -> SizingHint {
-    SizingHint {
-        ratio: CompressionRatio::measured(compressed, uncompressed),
-        edges: None,
+/// What a scripted sizing loop must produce: the chunk it settles on, or
+/// the over-budget error, and how many probes it took to get there.
+#[derive(Debug, Clone, Copy)]
+enum Outcome {
+    Chunk {
+        probes: usize,
+        items: usize,
+        wire: usize,
+    },
+    OverBudget {
+        probes: usize,
+        wire: usize,
+    },
+}
+
+/// A hint on a 1000-byte budget calibrated as if a body of these lengths
+/// was measured, reserving `edges` bytes.
+fn calibrated(compressed: usize, uncompressed: usize, edges: usize) -> SizingHint {
+    SizingHint::computed(
+        1000,
+        CompressionRatio::measured(compressed, uncompressed),
+        Some(edges),
+    )
+}
+
+// One item fits comfortably and anything larger is just over budget, so each
+// shrink drops a few items and overshoots again; the hint reserves more edge
+// bytes than the budget holds, so the first probe is one item. The loop
+// stops at the bound and keeps the last candidate that fit.
+#[test_case(
+    calibrated(52, 100, 16 * 1024),
+    |count| if count <= 1 { 500 } else { 1001 },
+    Outcome::Chunk { probes: MAX_CORRECTION_PASSES + 1, items: 1, wire: 500 };
+    "exhausted passes keep the last fit"
+)]
+// The first probe (one item) fits under 97%; the grown candidate overshoots
+// so far that the shrink would cut back to one item, which is not probed.
+#[test_case(
+    SizingHint::new(1000),
+    |count| if count <= 1 { 900 } else { 5000 },
+    Outcome::Chunk { probes: 2, items: 1, wire: 900 };
+    "a shrink never undercuts a fitting candidate"
+)]
+// A hint that admits many items up front, so every pass overshoots; a
+// single item is then tried once more.
+#[test_case(
+    calibrated(1, 2, 0),
+    |count| if count <= 1 { 500 } else { 1001 },
+    Outcome::Chunk { probes: MAX_CORRECTION_PASSES + 2, items: 1, wire: 500 };
+    "falls back to a single item after exhausted passes"
+)]
+#[test_case(
+    calibrated(1, 2, 0),
+    |_| 1001,
+    Outcome::OverBudget { probes: MAX_CORRECTION_PASSES + 2, wire: 1001 };
+    "even one item over budget is an error"
+)]
+// An absurd ratio is clamped, so the first overshoot shrinks straight to a
+// chunk that fits.
+#[test_case(
+    calibrated(1, 1_000_000, 0),
+    |count| count * 10,
+    Outcome::Chunk { probes: 2, items: 1, wire: 10 };
+    "an absurd hint ratio is clamped"
+)]
+fn test_sized_loop_is_bounded(hint: SizingHint, wire_for: fn(usize) -> usize, expected: Outcome) {
+    let probes = Cell::new(0);
+    let builder = ScriptedBuilder {
+        wire_for,
+        probes: &probes,
+    };
+
+    let result = build_sized_chunk(&builder, (0..100_000u32).map(Ok), hint);
+
+    match (expected, result) {
+        (
+            Outcome::Chunk {
+                probes: want,
+                items,
+                wire,
+            },
+            Ok(chunk),
+        ) => {
+            assert_eq!(probes.get(), want);
+            assert_eq!(*chunk.proof(), items);
+            assert_eq!(chunk.wire().len(), wire);
+            assert!(!chunk.natural_end());
+        }
+        (Outcome::OverBudget { probes: want, wire }, Err(err)) => {
+            assert_eq!(probes.get(), want);
+            assert!(
+                matches!(err, api::Error::ProofOverBudget { wire: got, budget: 1000 } if got == wire),
+                "{err:?}"
+            );
+        }
+        (expected, result) => panic!("expected {expected:?}, got {result:?}"),
+    }
+}
+
+/// How a test seeds the sizer: fresh, or as if a previous chunk measured a
+/// body of these lengths.
+#[derive(Clone, Copy)]
+enum Seed {
+    Fresh,
+    Measured {
+        compressed: usize,
+        uncompressed: usize,
+    },
+}
+
+impl Seed {
+    const fn measured(compressed: usize, uncompressed: usize) -> Self {
+        Self::Measured {
+            compressed,
+            uncompressed,
+        }
+    }
+
+    fn hint(self, budget: usize) -> SizingHint {
+        match self {
+            Self::Fresh => SizingHint::new(budget),
+            Self::Measured {
+                compressed,
+                uncompressed,
+            } => SizingHint::computed(
+                budget,
+                CompressionRatio::measured(compressed, uncompressed),
+                None,
+            ),
+        }
     }
 }
 
@@ -635,26 +802,27 @@ fn body_of(write: impl FnOnce(&mut Vec<u8>)) -> usize {
 /// Page range proofs from the start until `natural_end`, verifying each.
 fn page_range_chunks<T: TrieReader + HashedNodeReader>(
     merkle: &Merkle<T>,
+    end: Option<&[u8]>,
     budget: usize,
 ) -> Vec<SizedProof<FrozenRangeProof>> {
     let mut chunks = Vec::new();
     let mut start: Option<Vec<u8>> = None;
-    let mut hint = None;
+    let mut hint = SizingHint::new(budget);
     loop {
         let sized = merkle
-            .range_proof_sized(start.as_deref(), budget, hint)
+            .range_proof_sized(start.as_deref(), end, hint)
             .unwrap();
-        hint = Some(sized.hint);
-        verify_range_chunk(merkle, start.as_deref(), &sized);
-        assert!(!sized.proof.key_values().is_empty(), "no empty pages");
+        hint = sized.hint();
+        verify_range_chunk(merkle, start.as_deref(), end, &sized);
+        assert!(!sized.proof().key_values().is_empty(), "no empty pages");
         let next = sized
-            .proof
+            .proof()
             .key_values()
             .last()
             .map(|(k, _)| lex_successor(k).into_vec());
         assert!(next > start, "each page must advance");
         start = next;
-        let natural_end = sized.natural_end;
+        let natural_end = sized.natural_end();
         chunks.push(sized);
         if natural_end {
             return chunks;
@@ -666,26 +834,27 @@ fn page_range_chunks<T: TrieReader + HashedNodeReader>(
 fn page_change_chunks<T: HashedNodeReader>(
     target: &Merkle<T>,
     source: &Merkle<T>,
+    end: Option<&[u8]>,
     budget: usize,
 ) -> Vec<SizedProof<FrozenChangeProof>> {
     let mut chunks = Vec::new();
     let mut start: Option<Vec<u8>> = None;
-    let mut hint = None;
+    let mut hint = SizingHint::new(budget);
     loop {
         let sized = target
-            .change_proof_sized(source.nodestore(), start.as_deref(), budget, hint)
+            .change_proof_sized(source.nodestore(), start.as_deref(), end, hint)
             .unwrap();
-        hint = Some(sized.hint);
-        verify_change_chunk(target, source, start.as_deref(), &sized);
-        assert!(!sized.proof.batch_ops().is_empty(), "no empty pages");
+        hint = sized.hint();
+        verify_change_chunk(target, source, start.as_deref(), end, &sized);
+        assert!(!sized.proof().batch_ops().is_empty(), "no empty pages");
         let next = sized
-            .proof
+            .proof()
             .batch_ops()
             .last()
             .map(|op| lex_successor(op.key()).into_vec());
         assert!(next > start, "each page must advance");
         start = next;
-        let natural_end = sized.natural_end;
+        let natural_end = sized.natural_end();
         chunks.push(sized);
         if natural_end {
             return chunks;
@@ -696,9 +865,9 @@ fn page_change_chunks<T: HashedNodeReader>(
 /// Every chunk fits the budget and, except the last, is at least half full.
 fn assert_well_filled<P>(chunks: &[SizedProof<P>], budget: usize) {
     for (i, chunk) in chunks.iter().enumerate() {
-        let len = chunk.wire.len();
+        let len = chunk.wire().len();
         assert!(len <= budget, "chunk {i}: {len} > {budget}");
-        if !chunk.natural_end {
+        if !chunk.natural_end() {
             assert!(
                 len >= budget / 2,
                 "chunk {i} underfilled: {len} of {budget}"
@@ -712,24 +881,25 @@ fn assert_well_filled<P>(chunks: &[SizedProof<P>], budget: usize) {
 fn verify_range_chunk<T: TrieReader + HashedNodeReader>(
     merkle: &Merkle<T>,
     start: Option<&[u8]>,
+    end: Option<&[u8]>,
     chunk: &SizedProof<FrozenRangeProof>,
 ) {
-    let decoded = FrozenRangeProof::from_slice(&chunk.wire).unwrap();
+    let decoded = FrozenRangeProof::from_slice(chunk.wire()).unwrap();
     verify_range_proof_structure(
         &decoded,
         merkle.nodestore().root_hash().unwrap(),
         start,
-        None,
+        end,
         merkle.nodestore().node_hash_algorithm(),
         None,
     )
     .unwrap();
     let plain = merkle
-        .range_proof(start, None, NonZeroUsize::new(decoded.key_values().len()))
+        .range_proof(start, end, NonZeroUsize::new(decoded.key_values().len()))
         .unwrap();
     let mut expected = Vec::new();
     plain.write_to_vec(&mut expected).unwrap();
-    assert_eq!(chunk.wire, expected);
+    assert_eq!(chunk.wire(), expected);
 }
 
 /// The wire decodes, verifies against the target root, and is byte-equal
@@ -738,14 +908,15 @@ fn verify_change_chunk<T: HashedNodeReader>(
     target: &Merkle<T>,
     source: &Merkle<T>,
     start: Option<&[u8]>,
+    end: Option<&[u8]>,
     chunk: &SizedProof<FrozenChangeProof>,
 ) {
-    let decoded = FrozenChangeProof::from_slice(&chunk.wire).unwrap();
+    let decoded = FrozenChangeProof::from_slice(chunk.wire()).unwrap();
     verify_change_proof_structure(
         &decoded,
         target.nodestore().root_hash().unwrap(),
         start,
-        None,
+        end,
         target.nodestore().node_hash_algorithm(),
         None,
     )
@@ -753,14 +924,14 @@ fn verify_change_chunk<T: HashedNodeReader>(
     let plain = target
         .change_proof(
             start,
-            None,
+            end,
             source.nodestore(),
             NonZeroUsize::new(decoded.batch_ops().len()),
         )
         .unwrap();
     let mut expected = Vec::new();
     plain.write_to_vec(&mut expected).unwrap();
-    assert_eq!(chunk.wire, expected);
+    assert_eq!(chunk.wire(), expected);
 }
 
 /// A chunk builder whose probes serialize to a scripted wire size per item
