@@ -238,7 +238,7 @@ database (`(*Database).Unmarshal*Proof`) and carries that database's `db_tag`.
 | ---------------------------------------------- | --------- | ---------------------- | ------------------------------------------------------ |
 | `firewood_go_proof_marshal_duration_seconds`   | histogram | `proof_type`           | `Marshal` duration; `proof_type=range\|change`         |
 | `firewood_go_proof_unmarshal_duration_seconds` | histogram | `proof_type`, `db_tag` | `Unmarshal*Proof` duration; `proof_type=range\|change` |
-| `firewood_go_proof_sized_duration_seconds`     | histogram | `proof_type`           | Sized request duration; `proof_type=range\|change`     |
+| `firewood_go_proof_sized_duration_seconds`     | histogram | `proof_type`, `db_tag` | Sized request duration; `proof_type=range\|change`     |
 
 Buckets: `5µs, 25µs, 100µs, 500µs, 1ms, 5ms, 25ms, 100ms`; the sized request
 histogram uses `1ms, 5ms, 25ms, 100ms, 500ms, 1s, 5s, 25s`.

@@ -1430,7 +1430,7 @@ func TestRangeProofSizedSyncsWholeKeyspace(t *testing.T) {
 		}
 		// The receiver only sees the wire bytes, which outlive the proof.
 		r.NoError(sized.Proof.Drop())
-		received, err := UnmarshalRangeProof(sized.Wire)
+		received, err := receiver.UnmarshalRangeProof(sized.Wire)
 		r.NoError(err)
 		_, err = receiver.VerifyAndCommitRangeProof(received, startKey, nothing(), root, rangeProofLenUnbounded)
 		r.NoError(err)
@@ -1487,7 +1487,7 @@ func TestRangeProofSizedBoundedRange(t *testing.T) {
 		sized, err := source.RangeProofSized(root, startKey, endKey, hint)
 		r.NoError(err)
 		r.NoError(sized.Proof.Drop())
-		received, err := UnmarshalRangeProof(sized.Wire)
+		received, err := receiver.UnmarshalRangeProof(sized.Wire)
 		r.NoError(err)
 		_, err = receiver.VerifyAndCommitRangeProof(received, startKey, endKey, root, rangeProofLenUnbounded)
 		r.NoError(err)

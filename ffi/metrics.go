@@ -53,13 +53,14 @@ var proofUnmarshalDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts
 }, []string{proofTypeLabel, "db_tag"})
 
 // sizedProofDuration tracks the wall-clock duration of successful sized proof
-// requests, labeled by proof_type ("range", "change"). The FFI call runs the
-// sizing loop and wire serialization, so buckets span 1ms to 25s.
+// requests, labeled by proof_type ("range", "change") and the db_tag of the
+// database that built them. The FFI call runs the sizing loop and wire
+// serialization, so buckets span 1ms to 25s.
 var sizedProofDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Name:    "firewood_go_proof_sized_duration_seconds",
 	Help:    "Duration of sized proof requests through the FFI",
 	Buckets: []float64{1e-3, 5e-3, 25e-3, 0.1, 0.5, 1, 5, 25},
-}, []string{proofTypeLabel})
+}, []string{proofTypeLabel, "db_tag"})
 
 func init() {
 	goMetricsRegistry.MustRegister(proofMarshalDuration, proofUnmarshalDuration, sizedProofDuration)

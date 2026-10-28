@@ -250,7 +250,7 @@ func (db *Database) RangeProofSized(
 	start := time.Now()
 	defer func() {
 		if err == nil {
-			sizedProofDuration.WithLabelValues("range").Observe(time.Since(start).Seconds())
+			sizedProofDuration.WithLabelValues("range", db.metricsTag).Observe(time.Since(start).Seconds())
 		}
 	}()
 
