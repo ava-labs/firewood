@@ -1976,7 +1976,7 @@ mod tests {
             .stack_size(256 * 1024)
             .spawn(|| {
                 let storage = Arc::new(MemStore::new(Vec::new()));
-                let recon: NodeStore<Mutable<Recon<_, H>>, _, H> =
+                let recon: MutableReconNodeStore<_, H> =
                     NodeStore::new_empty_recon(Arc::clone(&storage));
                 let reconstructed: NodeStore<Reconstructed<_, H>, _, H> = recon.into();
 
