@@ -203,7 +203,7 @@ fn test_range_sized_stops_at_the_end_key() {
     let kvs = test_kvs(2_000, false);
     let sorted = sorted_unique(&kvs);
     let end = sorted[sorted.len() / 2].0.clone();
-    let merkle = init_merkle(kvs);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(kvs);
 
     let chunks = page_range_chunks(&merkle, Some(&end), 16 * 1024);
 
@@ -229,8 +229,8 @@ fn test_range_sized_stops_at_the_end_key() {
 #[test]
 fn test_change_sized_stops_at_the_end_key() {
     let base = test_kvs(1_500, false);
-    let source = init_merkle(base.clone());
-    let target = init_merkle(modified_kvs(&base));
+    let source = init_merkle::<DefaultHashMode, _, _, _>(base.clone());
+    let target = init_merkle::<DefaultHashMode, _, _, _>(modified_kvs(&base));
     let diff = full_diff(&target, &source);
     let end = diff[diff.len() / 2].key().clone();
 
@@ -588,7 +588,8 @@ fn test_sized_account_with_storage_children() {
 #[test]
 fn test_range_sized_single_entry_over_body_limit() {
     let key: Vec<u8> = vec![0x11; 32];
-    let merkle = init_merkle(vec![(key, vec![0x42; MAX_DECOMPRESSED_LEN + 1])]);
+    let merkle =
+        init_merkle::<DefaultHashMode, _, _, _>(vec![(key, vec![0x42; MAX_DECOMPRESSED_LEN + 1])]);
     let err = merkle
         .range_proof_sized(None, None, SizingHint::new(usize::MAX))
         .unwrap_err();
