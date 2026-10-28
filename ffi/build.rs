@@ -19,8 +19,10 @@ fn main() {
             |error| match error {
                 // Leave syntax errors for rustc to report, but say that firewood.h
                 // kept its previous contents.
-                e @ cbindgen::Error::ParseSyntaxError { .. } => {
-                    println!("cargo::warning=firewood.h not regenerated: {e}");
+                cbindgen::Error::ParseSyntaxError { src_path, .. } => {
+                    println!(
+                        "cargo::warning=firewood.h not regenerated: cbindgen could not parse {src_path}"
+                    );
                 }
                 e => panic!("{e:?}"),
             },
