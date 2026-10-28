@@ -33,6 +33,8 @@ package ffi
 // #cgo nocallback fwd_db_range_proof_from_bytes
 // #cgo noescape fwd_db_change_proof
 // #cgo nocallback fwd_db_change_proof
+// #cgo noescape fwd_db_change_proof_sized
+// #cgo nocallback fwd_db_change_proof_sized
 // #cgo noescape fwd_db_verify_change_proof
 // #cgo nocallback fwd_db_verify_change_proof
 // #cgo noescape fwd_db_verify_and_commit_change_proof
@@ -182,6 +184,11 @@ type SizedProof[P any] struct {
 // SizedRangeProof is a size-targeted range proof; Complete means it reached
 // the end of the keyspace.
 type SizedRangeProof = SizedProof[*RangeProof]
+
+// SizedChangeProof is a size-targeted change proof; Complete means it reached
+// the end of the diff and is the only completion signal, since
+// [ChangeProof.FindNextKey] may still return a range after the final chunk.
+type SizedChangeProof = SizedProof[*ChangeProof]
 
 // NextKeyRange is a range of keys still to fetch, `[StartKey, EndKey]`, both
 // inclusive. StartKey is the smallest key above the last one already
@@ -567,6 +574,53 @@ func (db *Database) ChangeProof(
 	return getChangeProofFromChangeProofResult(C.fwd_db_change_proof(db.handle, args))
 }
 
+// ChangeProofSized returns a proof of the changes that turn the committed
+// revision [startRoot] into [endRoot] over the inclusive range
+// [startKey, endKey] (Nothing means unbounded on that side), whose serialized
+// size approaches the budget of [hint] and never exceeds it. The call
+// consumes [hint]; a nil [hint] means a default budget. If the result's
+// Complete is false, request the next chunk from the start key of
+// [ChangeProof.FindNextKey] called with [endKey], passing the result's Hint
+// as [hint]. Returns [ErrEndRevisionNotFound] (also when both roots are
+// missing), [ErrStartRevisionNotFound], or an [OverBudgetError] if even one
+// operation, or the edge proofs alone, do not fit.
+func (db *Database) ChangeProofSized(
+	startRoot, endRoot Hash,
+	startKey, endKey Maybe[[]byte],
+	hint *SizingHint,
+) (sized *SizedChangeProof, err error) {
+	start := time.Now()
+	defer func() {
+		if err == nil {
+			sizedProofDuration.WithLabelValues("change", db.metricsTag).Observe(time.Since(start).Seconds())
+		}
+	}()
+
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
+
+	hintPtr, err := hint.take()
+	if err != nil {
+		return nil, err
+	}
+
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	args := C.CreateSizedChangeProofArgs{
+		start_root: newCHashKey(startRoot),
+		end_root:   newCHashKey(endRoot),
+		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
+		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
+		hint:       hintPtr,
+	}
+
+	return getSizedChangeProofFromResult(C.fwd_db_change_proof_sized(db.handle, args))
+}
+
 // VerifyChangeProof verifies the change proof and creates a standard Proposal.
 // The proof is not consumed — it can still be used for [ChangeProof.FindNextKey] or serialization.
 func (db *Database) VerifyChangeProof(
@@ -847,6 +901,32 @@ func getSizedRangeProofFromResult(result C.SizedRangeProofResult) (*SizedRangePr
 		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 	default:
 		return nil, fmt.Errorf("unknown C.SizedRangeProofResult tag: %d", result.tag)
+	}
+}
+
+func getSizedChangeProofFromResult(result C.SizedChangeProofResult) (*SizedChangeProof, error) {
+	switch result.tag {
+	case C.SizedChangeProofResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.SizedChangeProofResult_StartRevisionNotFound:
+		return nil, ErrStartRevisionNotFound
+	case C.SizedChangeProofResult_EndRevisionNotFound:
+		return nil, ErrEndRevisionNotFound
+	case C.SizedChangeProofResult_OverBudget:
+		// SAFETY: the tag says the union holds the OverBudget payload, a
+		// uint64_t laid out at the start of the union by cbindgen.
+		return nil, &OverBudgetError{WireSize: uint64(*(*C.uint64_t)(unsafe.Pointer(&result.anon0)))}
+	case C.SizedChangeProofResult_Ok:
+		// SAFETY: the tag says the union holds a C.SizedChangeProof, which
+		// cbindgen lays out at the start of the union. Its proof and wire
+		// allocations are each released exactly once: the proof by the
+		// handle created here, the wire by newSizedProof.
+		ok := *(*C.SizedChangeProof)(unsafe.Pointer(&result.anon0))
+		return newSizedProof(newChangeProofFromPtr(ok.proof), ok.wire, ok.natural_end, ok.hint)
+	case C.SizedChangeProofResult_Err:
+		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+	default:
+		return nil, fmt.Errorf("unknown C.SizedChangeProofResult tag: %d", result.tag)
 	}
 }
 
