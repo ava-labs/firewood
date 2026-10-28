@@ -1,8 +1,6 @@
 // Copyright (C) 2026, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood_metrics::MetricsContext;
-
 use crate::VoidResult;
 
 /// A sized request's budget and, after a chunk, its calibration for the next
@@ -25,7 +23,7 @@ pub extern "C" fn fwd_sizing_hint_new(budget: usize) -> Box<SizingHint> {
 }
 
 /// Frees the memory associated with a [`SizingHint`] that was not passed to
-/// a sized proof request.
+/// a sized proof request. A null `hint` is a no-op.
 ///
 /// # Arguments
 ///
@@ -37,11 +35,5 @@ pub extern "C" fn fwd_sizing_hint_new(budget: usize) -> Box<SizingHint> {
 /// - [`VoidResult::Err`] if the process panics while freeing the memory.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_free_sizing_hint(hint: Option<Box<SizingHint>>) -> VoidResult {
-    crate::invoke_with_handle(hint, drop)
-}
-
-impl crate::MetricsContextExt for SizingHint {
-    fn metrics_context(&self) -> Option<MetricsContext> {
-        None
-    }
+    crate::invoke(move || drop(hint))
 }

@@ -2828,7 +2828,7 @@ struct VoidResult fwd_free_revision(struct RevisionHandle *revision);
 
 /**
  * Frees the memory associated with a [`SizingHint`] that was not passed to
- * a sized proof request.
+ * a sized proof request. A null `hint` is a no-op.
  *
  * # Arguments
  *
