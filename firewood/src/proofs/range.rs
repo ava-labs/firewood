@@ -273,8 +273,9 @@ where
     V: AsRef<[u8]>,
     H: ProofCollection,
 {
-    /// Create a new range proof with the given start and end proofs
-    /// and the key-value pairs that are included in the proof.
+    /// Create a range proof with the given proofs, key-value pairs, and hash algorithm.
+    ///
+    /// `hash_mode` is recorded in the serialized proof header.
     ///
     /// # Parameters
     ///
@@ -295,6 +296,7 @@ where
     ///   established by the start and end proofs. The keys should be in lexicographic
     ///   order as they appear in the trie. May be empty if proving the absence of keys
     ///   in a range.
+    ///
     /// * `hash_mode` - The algorithm recorded in the serialized proof header.
     #[must_use]
     pub const fn new(
@@ -395,14 +397,17 @@ where
 
 #[cfg(test)]
 mod tests {
-    use firewood_storage::DefaultHashMode;
+    use firewood_macros::hash_mode;
+    use firewood_storage::EthHash;
     use firewood_storage::HashMode;
+    use firewood_storage::MerkleDbHash;
 
     use super::*;
     use crate::api::TryIntoBatch;
 
+    #[hash_mode]
     #[test]
-    fn test_range_proof_iterator() {
+    fn test_range_proof_iterator<H: HashMode>() {
         // Create test data
         let key_values: Box<[(Vec<u8>, Vec<u8>)]> = Box::new([
             (b"key1".to_vec(), b"value1".to_vec()),
@@ -414,12 +419,7 @@ mod tests {
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
 
-        let range_proof = RangeProof::new(
-            start_proof,
-            end_proof,
-            key_values,
-            DefaultHashMode::ALGORITHM,
-        );
+        let range_proof = RangeProof::new(start_proof, end_proof, key_values, H::ALGORITHM);
 
         // Test basic iterator functionality
         let mut iter = range_proof.iter();
@@ -440,8 +440,9 @@ mod tests {
         assert!(iter.next().is_none());
     }
 
+    #[hash_mode]
     #[test]
-    fn test_range_proof_into_iterator() {
+    fn test_range_proof_into_iterator<H: HashMode>() {
         let key_values: Box<[(Vec<u8>, Vec<u8>)]> = Box::new([
             (b"a".to_vec(), b"alpha".to_vec()),
             (b"b".to_vec(), b"beta".to_vec()),
@@ -449,12 +450,7 @@ mod tests {
 
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
-        let range_proof = RangeProof::new(
-            start_proof,
-            end_proof,
-            key_values,
-            DefaultHashMode::ALGORITHM,
-        );
+        let range_proof = RangeProof::new(start_proof, end_proof, key_values, H::ALGORITHM);
 
         // Test that we can use for-loop syntax
         let mut items = Vec::new();
@@ -469,19 +465,15 @@ mod tests {
         assert_eq!(items[1].1, b"beta");
     }
 
+    #[hash_mode]
     #[test]
-    fn test_keyvaluepair_iter_trait() {
+    fn test_keyvaluepair_iter_trait<H: HashMode>() {
         let key_values: Box<[(Vec<u8>, Vec<u8>)]> =
             Box::new([(b"test".to_vec(), b"data".to_vec())]);
 
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
-        let range_proof = RangeProof::new(
-            start_proof,
-            end_proof,
-            key_values,
-            DefaultHashMode::ALGORITHM,
-        );
+        let range_proof = RangeProof::new(start_proof, end_proof, key_values, H::ALGORITHM);
 
         // Test that our iterator implements KeyValuePairIter
         let iter = range_proof.iter();
@@ -500,17 +492,13 @@ mod tests {
         }
     }
 
+    #[hash_mode]
     #[test]
-    fn test_empty_range_proof_iterator() {
+    fn test_empty_range_proof_iterator<H: HashMode>() {
         let key_values: Box<[(Vec<u8>, Vec<u8>)]> = Box::new([]);
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
-        let range_proof = RangeProof::new(
-            start_proof,
-            end_proof,
-            key_values,
-            DefaultHashMode::ALGORITHM,
-        );
+        let range_proof = RangeProof::new(start_proof, end_proof, key_values, H::ALGORITHM);
 
         let mut iter = range_proof.iter();
         assert_eq!(iter.len(), 0);
