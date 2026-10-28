@@ -89,7 +89,41 @@ Firewood pushes the FFI source code and attached static libraries to [firewood-g
 
 This enables consumers to utilize it directly without forcing them to compile Firewood locally. Go programs running on supported architectures can utilize `firewood-go-ethhash/ffi` just like any other dependency and select a hashing algorithm per database.
 
-To trigger this build, [attach-static-libs](../.github/workflows/attach-static-libs.yaml) supports triggers for both manual GitHub Actions and tags, so you can create a mirror branch/tag on [firewood-go-ethhash](https://github.com/ava-labs/firewood-go-ethhash) by either trigger a manual GitHub Action and selecting your branch or pushing a tag to Firewood.
+To trigger this build, [attach-static-libs](../.github/workflows/attach-static-libs.yaml) supports manual GitHub Actions and tags. You can create a mirror branch or tag on [firewood-go-ethhash](https://github.com/ava-labs/firewood-go-ethhash). Trigger the workflow manually and select your branch. You can also push a Firewood tag.
+
+### Bazel Source Builds
+
+Use Bazel targets when a consumer must build Firewood from source. This flow does
+not change ordinary Go builds. They continue to use the published FFI module and
+its pre-built static libraries.
+
+The Bazel module exports these Go libraries:
+
+- `//ffi:ffi_ethhash` has import path
+  `github.com/ava-labs/firewood-go-ethhash/ffi`.
+- `//ffi:ffi_merkledb` has import path `github.com/ava-labs/firewood-go/ffi`.
+
+A Bazel consumer must add a `firewood` module dependency and a `git_override`
+that points to a fetchable Firewood commit. The consumer must register the Rust
+1.95.0 toolchain in its root module. A dependency module cannot register a
+selected toolchain for the root build.
+
+Keep the Go import path and the `go.mod` dependency unchanged. In Bazel
+`BUILD.bazel` files, make Go targets that import the legacy Ethereum FFI depend
+on `@firewood//ffi:ffi_ethhash`. This gives Bazel the source-built library. It
+also keeps ordinary Go builds on the published module.
+
+After you change Cargo dependencies or Bazel module dependencies, run:
+
+```sh
+just update-bazel-metadata
+just ci-check-bazel-toolchain
+just ci-bazel-ffi
+```
+
+`update-bazel-metadata` updates `MODULE.bazel.lock`. The check commands verify
+that metadata is current, that the Cargo and Bazel Rust settings match, and that
+both FFI variants build.
 
 ### Hash Mode
 

@@ -51,6 +51,9 @@ Temporary Items
 debug/
 target/
 
+# Bazel output directories
+bazel-*
+
 ### Golang ###
 go.work
 go.work.sum
