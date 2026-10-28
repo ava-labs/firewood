@@ -575,18 +575,18 @@ func (db *Database) ChangeProof(
 }
 
 // ChangeProofSized returns a proof of the changes that turn the committed
-// revision [startRoot] into [endRoot], from the inclusive [startKey] (Nothing
-// starts at the first key), whose serialized size approaches the budget of
-// [hint] and never exceeds it. The call consumes [hint]; a nil [hint] means a
-// default budget. If the result's Complete is false, request the next chunk
-// from the start key of [ChangeProof.FindNextKey] with no end key, passing
-// the result's Hint as [hint]. Returns [ErrEndRevisionNotFound] (also when
-// both roots are missing), [ErrStartRevisionNotFound], or an
-// [OverBudgetError] if even one operation, or the edge proofs alone, do not
-// fit.
+// revision [startRoot] into [endRoot] over the inclusive range
+// [startKey, endKey] (Nothing means unbounded on that side), whose serialized
+// size approaches the budget of [hint] and never exceeds it. The call
+// consumes [hint]; a nil [hint] means a default budget. If the result's
+// Complete is false, request the next chunk from the start key of
+// [ChangeProof.FindNextKey] called with [endKey], passing the result's Hint
+// as [hint]. Returns [ErrEndRevisionNotFound] (also when both roots are
+// missing), [ErrStartRevisionNotFound], or an [OverBudgetError] if even one
+// operation, or the edge proofs alone, do not fit.
 func (db *Database) ChangeProofSized(
 	startRoot, endRoot Hash,
-	startKey Maybe[[]byte],
+	startKey, endKey Maybe[[]byte],
 	hint *SizingHint,
 ) (sized *SizedChangeProof, err error) {
 	start := time.Now()
@@ -614,6 +614,7 @@ func (db *Database) ChangeProofSized(
 		start_root: newCHashKey(startRoot),
 		end_root:   newCHashKey(endRoot),
 		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
+		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
 		hint:       hintPtr,
 	}
 

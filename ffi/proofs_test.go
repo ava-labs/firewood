@@ -1581,7 +1581,7 @@ func TestChangeProofSizedSyncsWholeDiff(t *testing.T) {
 			for {
 				chunks++
 				r.Less(chunks, sizedPagingLimit, "runaway paging")
-				sized, err := source.ChangeProofSized(startRoot, endRoot, startKey, hint)
+				sized, err := source.ChangeProofSized(startRoot, endRoot, startKey, nothing(), hint)
 				r.NoError(err, "chunk %d from %x", chunks, startKey.Value())
 				r.NotNil(sized)
 				assertChangeProofNotNil(t, sized.Proof)
@@ -1700,6 +1700,63 @@ func TestRangeProofSizedErrors(t *testing.T) {
 	r.Nil(sized)
 }
 
+// TestChangeProofSizedBoundedRange syncs only the changes in
+// [first key, midpoint] into a receiver at the start root, the way a sync
+// worker that owns one slice of the keyspace would.
+func TestChangeProofSizedBoundedRange(t *testing.T) {
+	r := require.New(t)
+	source := newTestDatabase(t)
+	receiver := newTestDatabase(t)
+
+	keys, vals, batch := kvForTest(sizedCorpusKeys)
+	const base = sizedCorpusKeys / 2
+	startRoot, err := source.Update(batch[:base])
+	r.NoError(err)
+	_, err = receiver.Update(batch[:base])
+	r.NoError(err)
+	endRoot, err := source.Update(batch[base:])
+	r.NoError(err)
+	// The diff is the second half; bound it at its midpoint.
+	const mid = base + base/2
+	endKey := something(keys[mid])
+
+	startKey := nothing()
+	hint := NewSizingHint(sizedBudget)
+	chunks := 0
+	for {
+		chunks++
+		r.Less(chunks, sizedPagingLimit, "runaway paging")
+		sized, err := source.ChangeProofSized(startRoot, endRoot, startKey, endKey, hint)
+		r.NoError(err)
+		r.NoError(sized.Proof.Drop())
+		received, err := UnmarshalChangeProof(sized.Wire)
+		r.NoError(err)
+		_, err = receiver.VerifyAndCommitChangeProof(received, endRoot, startKey, endKey, changeProofLenUnbounded)
+		r.NoError(err)
+		hint = sized.Hint
+		if sized.Complete {
+			r.NoError(received.Drop())
+			break
+		}
+		next, err := received.FindNextKey(endKey)
+		r.NoError(err)
+		r.NotNil(next)
+		startKey = something(next.StartKey)
+		r.NoError(received.Drop())
+	}
+	r.Greater(chunks, 1, "budget should force multiple chunks")
+	r.NoError(hint.Drop())
+	for i, key := range keys {
+		got, err := receiver.Get(key)
+		r.NoError(err)
+		if i <= mid {
+			r.Equal(vals[i], got, "key %d is inside the range", i)
+		} else {
+			r.Nil(got, "key %d is past the end key", i)
+		}
+	}
+}
+
 // TestChangeProofSizedErrors covers the error mapping: missing roots with the
 // end root taking precedence, over budget for one operation and for the edge
 // proofs alone (both retryable at the reported size), an empty end trie, and
@@ -1717,22 +1774,22 @@ func TestChangeProofSizedErrors(t *testing.T) {
 	missingStart[0] ^= 0xff
 	missingEnd[0] ^= 0xff
 
-	sized, err := db.ChangeProofSized(missingStart, endRoot, nothing(), NewSizingHint(sizedBudget))
+	sized, err := db.ChangeProofSized(missingStart, endRoot, nothing(), nothing(), NewSizingHint(sizedBudget))
 	r.ErrorIs(err, ErrStartRevisionNotFound)
 	r.Nil(sized)
-	sized, err = db.ChangeProofSized(startRoot, missingEnd, nothing(), NewSizingHint(sizedBudget))
+	sized, err = db.ChangeProofSized(startRoot, missingEnd, nothing(), nothing(), NewSizingHint(sizedBudget))
 	r.ErrorIs(err, ErrEndRevisionNotFound)
 	r.Nil(sized)
-	sized, err = db.ChangeProofSized(missingStart, missingEnd, nothing(), NewSizingHint(sizedBudget))
+	sized, err = db.ChangeProofSized(missingStart, missingEnd, nothing(), nothing(), NewSizingHint(sizedBudget))
 	r.ErrorIs(err, ErrEndRevisionNotFound, "the end root is reported first")
 	r.Nil(sized)
 
-	sized, err = db.ChangeProofSized(startRoot, endRoot, nothing(), NewSizingHint(1))
+	sized, err = db.ChangeProofSized(startRoot, endRoot, nothing(), nothing(), NewSizingHint(1))
 	r.ErrorIs(err, ErrProofOverBudget)
 	r.Nil(sized)
 	var overBudget *OverBudgetError
 	r.ErrorAs(err, &overBudget)
-	sized, err = db.ChangeProofSized(startRoot, endRoot, nothing(), NewSizingHint(overBudget.WireSize))
+	sized, err = db.ChangeProofSized(startRoot, endRoot, nothing(), nothing(), NewSizingHint(overBudget.WireSize))
 	r.NoError(err)
 	r.NotNil(sized)
 	r.LessOrEqual(uint64(len(sized.Wire)), overBudget.WireSize)
@@ -1740,11 +1797,11 @@ func TestChangeProofSizedErrors(t *testing.T) {
 	r.NoError(sized.Hint.Drop())
 
 	pastEnd := something(lexSuccessor(keys[len(keys)-1]))
-	sized, err = db.ChangeProofSized(startRoot, endRoot, pastEnd, NewSizingHint(1))
+	sized, err = db.ChangeProofSized(startRoot, endRoot, pastEnd, nothing(), NewSizingHint(1))
 	r.ErrorIs(err, ErrProofOverBudget)
 	r.Nil(sized)
 	r.ErrorAs(err, &overBudget)
-	sized, err = db.ChangeProofSized(startRoot, endRoot, pastEnd, NewSizingHint(overBudget.WireSize))
+	sized, err = db.ChangeProofSized(startRoot, endRoot, pastEnd, nothing(), NewSizingHint(overBudget.WireSize))
 	r.NoError(err)
 	r.NotNil(sized)
 	r.True(sized.Complete, "past the last change the chunk is empty and complete")
@@ -1757,7 +1814,7 @@ func TestChangeProofSizedErrors(t *testing.T) {
 	}
 	emptyRoot, err := db.Update(dels)
 	r.NoError(err)
-	sized, err = db.ChangeProofSized(startRoot, emptyRoot, nothing(), nil)
+	sized, err = db.ChangeProofSized(startRoot, emptyRoot, nothing(), nothing(), nil)
 	if emptyRoot == EmptyRoot {
 		// MerkleDB hashing gives an empty trie no addressable root.
 		r.ErrorIs(err, ErrEndRevisionNotFound)
@@ -1767,7 +1824,7 @@ func TestChangeProofSizedErrors(t *testing.T) {
 	r.Nil(sized)
 
 	r.NoError(db.Close(oneSecCtx(t)))
-	sized, err = db.ChangeProofSized(startRoot, endRoot, nothing(), NewSizingHint(sizedBudget))
+	sized, err = db.ChangeProofSized(startRoot, endRoot, nothing(), nothing(), NewSizingHint(sizedBudget))
 	r.ErrorIs(err, errDBClosed)
 	r.Nil(sized)
 }
