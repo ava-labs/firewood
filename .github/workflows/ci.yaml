@@ -52,13 +52,14 @@ jobs:
     # To optimize cargo performance and caching throughout the CI pipeline, we use Swatinem/rust-cache
     # and set up an initial build job that writes the cache for a matrix of joint build profiles and
     # feature sets.
-    # Future jobs specify the job they "need" (block to ensure the cache has been populated), the shared-key
-    # to read the cache and can set save-if: "false" to skip an expensive and unnecessary cache write.
+    # Later jobs "need" this job, so the cache is populated before they start, and pass the same
+    # `cache-key` to setup-rust to read it. setup-rust saves only when a job passes
+    # `cache-save: "true"`, so readers skip an expensive and unnecessary cache write.
     #
     # GitHub Actions does not provide easy support to define and re-use a matrix across multiple jobs
     # and later jobs may also want to execute with only a subset of this matrix. Therefore, we define
     # the matrix here and later jobs must re-specify the full matrix, a subset, or declare a single
-    # shared-key to read the cache.
+    # `cache-key` to read the cache.
     strategy:
       # do not cancel concurrent jobs if one fails for exhaustive failure reasons
       fail-fast: false
@@ -124,10 +125,13 @@ jobs:
           - profile-key: maxperf-ethhash-logger
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     steps:
+      # rust-cache hashes the toolchain into its key, so the pinned nightly cannot
+      # read the stable cache that `build` warms. This job warms its own.
       - uses: $/.github/actions/setup-rust
         with:
           toolchain: pinned
-          cache-key: ${{ matrix.profile-key }}
+          cache-key: clippy-${{ matrix.profile-key }}
+          cache-save: "true"
       - name: Clippy
         run: ./scripts/run-just.sh ci-rust clippy ${{ matrix.profile-key }}
 

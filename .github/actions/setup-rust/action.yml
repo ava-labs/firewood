@@ -12,9 +12,6 @@ description: >-
 # toolchain this action installs. See AGENTS.md, "Toolchain Selection".
 
 inputs:
-  checkout:
-    description: Whether to check out the repository.
-    default: "true"
   checkout-ref:
     description: The ref to check out. Empty checks out the event's default ref.
     default: ""
@@ -30,12 +27,14 @@ inputs:
       skips the cache. Any other value is passed to dtolnay/rust-toolchain.
     default: stable
   components:
-    description: Comma-separated rustup components to add to the toolchain.
+    description: >-
+      Comma-separated rustup components to add to the toolchain. Ignored for
+      the `none` toolchain.
     default: ""
   targets:
     description: >-
       Comma-separated rustup targets to add to the toolchain. Ignored for the
-      `pinned` toolchain.
+      `pinned` and `none` toolchains.
     default: ""
   cache:
     description: Whether to restore the Swatinem/rust-cache build cache.
@@ -59,8 +58,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - if: inputs.checkout == 'true'
-      uses: actions/checkout@v6
+    - uses: actions/checkout@v6
       with:
         ref: ${{ inputs.checkout-ref }}
     - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7

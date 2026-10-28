@@ -231,8 +231,9 @@ toolchain file. It is set in three places:
 
 Two consequences:
 
-- The `toolchain:` input of `dtolnay/rust-toolchain` sets rustup's default,
-  which `rust-toolchain.toml` outranks. A job that must run stable says so with
+- Rust CI jobs set up through the `$/.github/actions/setup-rust` composite
+  action. Its `toolchain:` input sets rustup's default, which
+  `rust-toolchain.toml` outranks. A job that must run stable says so with
   `RUSTUP_TOOLCHAIN`.
 - `target/` roughly doubles, because Cargo hashes the compiler version into
   each unit. Nothing rebuilds: stable and nightly artifacts coexist.
