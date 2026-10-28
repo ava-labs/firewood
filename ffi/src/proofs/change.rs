@@ -19,6 +19,8 @@ use crate::KeyRange;
 use crate::Maybe;
 use crate::NextKeyRangeResult;
 use crate::OwnedBytes;
+use crate::SizedChangeProofResult;
+use crate::SizingHint;
 use crate::ValueResult;
 use crate::VoidResult;
 
@@ -173,6 +175,74 @@ pub extern "C" fn fwd_db_change_proof_from_bytes(
     crate::invoke_with_handle(db, move |db| {
         FrozenChangeProof::from_slice_in_mode(&bytes, db.node_hash_algorithm())
             .map_err(api::Error::ProofError)
+    })
+}
+
+/// Arguments for creating a size-targeted change proof.
+#[derive(Debug)]
+#[repr(C)]
+pub struct CreateSizedChangeProofArgs<'a> {
+    /// The root hash of the starting committed revision.
+    pub start_root: HashKey,
+    /// The root hash of the ending committed revision.
+    pub end_root: HashKey,
+    /// The inclusive start key. If `None`, the proof starts from the
+    /// beginning of the keyspace.
+    pub start_key: Maybe<BorrowedBytes<'a>>,
+    /// The inclusive end key. If `None`, the proof runs to the end of the
+    /// keyspace; the chunk that reaches the end key proves it.
+    pub end_key: Maybe<BorrowedBytes<'a>>,
+    /// The budget and calibration, from [`fwd_sizing_hint_new`] or a previous
+    /// result; consumed by the call. `NULL` means a default-budget hint.
+    ///
+    /// [`fwd_sizing_hint_new`]: crate::fwd_sizing_hint_new
+    pub hint: Option<Box<SizingHint>>,
+}
+
+/// Generate a change proof from `start_root` to `end_root` over
+/// `[start_key, end_key]` whose serialized size approaches the hint's budget
+/// and never exceeds it.
+/// The wire bytes are returned with the proof, so it need not be serialized
+/// again.
+///
+/// # Arguments
+///
+/// - `db` - The database to create the proof from.
+/// - `args` - The arguments for creating the sized change proof.
+///
+/// # Returns
+///
+/// - [`SizedChangeProofResult::NullHandlePointer`] if the caller provided a null pointer.
+/// - [`SizedChangeProofResult::StartRevisionNotFound`] if the start root was not found.
+///   The missing root hash is included in the result.
+/// - [`SizedChangeProofResult::EndRevisionNotFound`] if the end root was not found. If
+///   both roots are missing, only the end root is reported. The missing root hash is
+///   included in the result.
+/// - [`SizedChangeProofResult::OverBudget`] if one operation, or the edge proofs alone,
+///   do not fit.
+/// - [`SizedChangeProofResult::Ok`] containing the proof, its wire bytes, and the next
+///   hint.
+/// - [`SizedChangeProofResult::Err`] containing an error message if the proof could not
+///   be created.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_db_change_proof_sized(
+    db: Option<&DatabaseHandle>,
+    args: CreateSizedChangeProofArgs,
+) -> SizedChangeProofResult {
+    crate::invoke_with_handle(db, |db| {
+        db.change_proof_sized(
+            args.start_root.into(),
+            args.end_root.into(),
+            args.start_key
+                .as_ref()
+                .map(BorrowedBytes::as_slice)
+                .into_option(),
+            args.end_key
+                .as_ref()
+                .map(BorrowedBytes::as_slice)
+                .into_option(),
+            args.hint.map_or_else(Default::default, |hint| hint.0),
+        )
     })
 }
 

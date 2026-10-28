@@ -5,6 +5,7 @@ mod change;
 mod code_hash;
 mod eth;
 mod range;
+mod sized;
 
 // Re-export firewood-side types that used to be defined in this crate, so
 // downstream FFI code (e.g. `crate::value::results`) can keep importing
@@ -15,3 +16,4 @@ pub use self::change::*;
 pub use self::code_hash::*;
 pub use self::eth::*;
 pub use self::range::*;
+pub use self::sized::*;
