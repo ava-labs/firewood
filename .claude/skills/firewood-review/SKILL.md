@@ -26,7 +26,7 @@ Version control: the commands below use `git` and `gh`. If another loaded skill 
 Copy this into the task list and update it as you go:
 
 - [ ] 0. Scratch directory created
-- [ ] 1. Mode chosen; PR gated, checked out, and metadata fetched (PR mode)
+- [ ] 1. Mode chosen; tree under review checked out; PR metadata fetched (when a PR exists)
 - [ ] 2. Changed files listed; agents selected
 - [ ] 3. Toolchain run or CI wait started in the background
 - [ ] 4. Review agents dispatched in one message
@@ -50,9 +50,11 @@ mktemp -d <scratchpad>/firewood-review-<pr-number-or-local>-XXXXXX
 
 | The target names... | Mode |
 | --- | --- |
-| a PR number, URL, or branch, plus "description" or a request for a better PR description | [PR description only](#pr-description-only) |
-| a PR number, URL, or branch | [PR review](#pr-review) |
-| "local", "my changes", "unpublished", or nothing with a dirty tree | [Local review](#local-review) |
+| a PR number or URL, plus "description" or a request for a better PR description | [PR description only](#pr-description-only) |
+| a PR number or URL | [PR review](#pr-review) — the head pushed to GitHub |
+| a local branch, "local", "my changes", "unpublished", or nothing with a dirty tree | [Local review](#local-review) — the commits on this machine |
+
+A branch name means the local branch, which may hold commits the PR does not have yet.
 
 ### PR review
 
@@ -93,10 +95,13 @@ mktemp -d <scratchpad>/firewood-review-<pr-number-or-local>-XXXXXX
 
 ### Local review
 
-1. `git status --porcelain`. If both staged and unstaged changes exist and the user has not said which to review, ask: "Review the workspace as-is, or stash unstaged changes first?"
-2. To stash: `git stash push --keep-index --include-untracked -m firewood-review-<scratch-dir-name>`, then record the entry's SHA from `git stash list --format='%H %gs'`. The stash stack is shared with every worktree and session, so restore by SHA in step 7, never with a bare `git stash pop`.
+1. **Pick the tree under review.**
+   - The named branch is checked out here, or no branch was named: the working tree. Run `git status --porcelain`. If both staged and unstaged changes exist and the user has not said which to review, ask: "Review the workspace as-is, or stash unstaged changes first?" To stash: `git stash push --keep-index --include-untracked -m firewood-review-<scratch-dir-name>`, then record the entry's SHA from `git stash list --format='%H %gs'`. The stash stack is shared with every worktree and session, so restore by SHA in step 7, never with a bare `git stash pop`.
+   - The named branch is not checked out here: `git worktree add --detach $SCRATCH/checkout <branch>`. It builds from an empty `target/`; do not point it at another checkout's target directory, which concurrent builds there would contend for.
+2. **Find the PR.** `gh pr view <branch> --json number,headRefOid` (omit `<branch>` for the current branch). If one exists, run [PR review](#pr-review) step 2 for it; skip the gate, since self-review of a draft is normal.
+3. **Diff base.** `git merge-base <branch> origin/main`, after `git fetch https://github.com/ava-labs/firewood.git main` if needed.
 
-Step 3 runs the toolchain unless the working tree matches a commit CI already ran on.
+Step 3 runs the toolchain unless the tree under review matches a tree CI already ran on.
 
 ### PR description only
 
@@ -106,36 +111,44 @@ Step 3 runs the toolchain unless the working tree matches a commit CI already ra
 
 ## 2. Select agents
 
-List changed files (`git diff --name-only <base>...<head>`, or `git diff --name-only HEAD` plus untracked files for local) into `$SCRATCH/changed-files.txt`, then select:
+List changed files (`git diff --name-only <base>...<head>`, plus uncommitted and untracked files when reviewing a working tree) into `$SCRATCH/changed-files.txt`, then select:
 
 | Agent | When | Brief |
 | --- | --- | --- |
 | code-quality | always | [agents/code-quality.md](agents/code-quality.md) |
-| pr-metadata | PR review | [agents/pr-metadata.md](agents/pr-metadata.md) |
+| pr-metadata | a PR exists, in either mode | [agents/pr-metadata.md](agents/pr-metadata.md) |
 | ci-review | any `.github/**` change | [agents/ci-review.md](agents/ci-review.md) |
 
 ## 3. Toolchain and CI
 
-Required CI checks are authoritative for build, lint, and test: they cover every platform and feature profile, including `io-uring` on Linux, which macOS never compiles. Build results depend on the tree, not the commit, so a local build adds nothing when CI ran on a commit whose tree matches the tree under review. Compare trees, not SHAs: a clean merge or rebase produces a new commit with the same tree.
+Required CI checks are authoritative for build, lint, and test: they cover every platform and feature profile, including `io-uring` on Linux, which macOS never compiles. Build results depend on the tree, not the commit, so a local build adds nothing when CI tested the tree under review. Compare trees, not SHAs: a clean merge or rebase produces a new commit with the same tree.
+
+CI does not test the PR head's own tree. On `pull_request` events it checks out the head merged into the base branch as it was when the run started. The run log names both commits:
 
 ```bash
-git rev-parse <ci-commit>^{tree} HEAD^{tree}   # the two lines match → same tree
+run=$(gh run list --commit <headRefOid> --workflow ci.yaml --event pull_request --json databaseId --jq '.[0].databaseId')
+gh run view $run --log > $SCRATCH/ci-run.log
+grep -m1 -oE 'Merge [0-9a-f]{40} into [0-9a-f]{40}' $SCRATCH/ci-run.log   # Merge <head> into <ci-base>
+git merge-tree --write-tree <ci-base> <headRefOid>                          # the tree CI tested
 ```
 
-In PR review the checkout is `headRefOid`, so the trees match by construction. In local review the tree under review is `HEAD^{tree}` with a clean working tree (uncommitted changes always differ), and `<ci-commit>` is the head of the PR for the checked-out branch (`gh pr view --json number,headRefOid`), if one exists.
+Fetch `<ci-base>` from the upstream URL first if it is not local.
 
-**Trees match:** do not build locally unless the user asks. If any check in `ci-checks.json` is pending, wait in a background Bash (`run_in_background`), which notifies once when the checks finish:
+- **PR review:** do not build locally. CI tested the head merged into its base, which is what lands.
+- **Local review:** compare the tree CI tested with the tree under review (`git rev-parse <ref>^{tree}`, from a clean working tree; uncommitted changes always differ). A branch rebased onto the same base CI used matches; one rebased onto a newer base does not. With no PR, CI never ran.
+
+**PR review, or trees match:** do not build locally unless the user asks. If any check in `ci-checks.json` is pending, wait in a background Bash (`run_in_background`), which notifies once when the checks finish:
 
 ```bash
 gh pr checks <PR> --watch --interval 60 > /dev/null; gh pr checks <PR> --json name,state,bucket,link,workflow,completedAt > $SCRATCH/ci-checks.json
 ```
 
-**Trees differ, or CI never ran:** start the local toolchain in the background before dispatching agents, so both run at once. Run it in a background Bash, logging to `$SCRATCH/toolchain.log`:
+**Trees differ, or CI never ran:** start the local toolchain in the background before dispatching agents, so both run at once. Run it in the tree under review in a background Bash, logging to `$SCRATCH/toolchain.log`:
 
 - `just prepush-lite` by default.
 - `just prepush` when the change touches `ffi/`, `Cargo.toml` or `Cargo.lock`, or code gated behind a feature that `debug-ethhash-logger` does not enable (see `AGENTS.md` § PR Strategy).
 
-**Either way, when `ffi/src/**` or `ffi/build.rs` changed:** CI does not check for a stale C header, so check it in the tree under review (`$SCRATCH/checkout` in PR review, the working tree in local review):
+**Either way, when `ffi/src/**` or `ffi/build.rs` changed:** CI does not check for a stale C header (#2373), so check it in the tree under review:
 
 ```bash
 cd <tree-under-review> && just ci-build-ffi && git diff --exit-code ffi/firewood.h
