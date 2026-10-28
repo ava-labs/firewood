@@ -232,19 +232,19 @@ func (db *Database) RangeProof(
 	return getRangeProofFromRangeProofResult(C.fwd_db_range_proof(db.handle, args))
 }
 
-// RangeProofSized returns a range proof of the revision [rootHash] from the
-// inclusive [startKey] (Nothing starts at the first key) whose serialized size
-// approaches the budget of [hint] and never exceeds it. The call consumes
-// [hint]; a nil [hint] means a default budget. If the result's Complete is
-// false, request the next chunk from the start key of [RangeProof.FindNextKey]
-// after [Database.VerifyRangeProof] or [Database.VerifyAndCommitRangeProof],
-// passing the result's Hint as [hint]. Returns [ErrRevisionNotFound],
-// [ErrRangeProofOnEmptyTrie] if the trie is empty and [startKey] is Nothing,
-// or an [OverBudgetError] if even one entry, or the edge proofs alone, do not
-// fit.
+// RangeProofSized returns a range proof of the revision [rootHash] over the
+// inclusive range [startKey, endKey] (Nothing means unbounded on that side)
+// whose serialized size approaches the budget of [hint] and never exceeds it.
+// The call consumes [hint]; a nil [hint] means a default budget. If the
+// result's Complete is false, request the next chunk from the start key of
+// [RangeProof.FindNextKey] after [Database.VerifyRangeProof] or
+// [Database.VerifyAndCommitRangeProof], passing the result's Hint as [hint].
+// Returns [ErrRevisionNotFound], [ErrRangeProofOnEmptyTrie] if the trie is
+// empty and both keys are Nothing, or an [OverBudgetError] if even one entry,
+// or the edge proofs alone, do not fit.
 func (db *Database) RangeProofSized(
 	rootHash Hash,
-	startKey Maybe[[]byte],
+	startKey, endKey Maybe[[]byte],
 	hint *SizingHint,
 ) (sized *SizedRangeProof, err error) {
 	start := time.Now()
@@ -271,6 +271,7 @@ func (db *Database) RangeProofSized(
 	args := C.CreateSizedRangeProofArgs{
 		root:      newCHashKey(rootHash),
 		start_key: newMaybeBorrowedBytes(startKey, &pinner),
+		end_key:   newMaybeBorrowedBytes(endKey, &pinner),
 		hint:      hintPtr,
 	}
 
