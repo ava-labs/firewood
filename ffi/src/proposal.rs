@@ -60,10 +60,14 @@ impl DbView for ProposalHandle<'_> {
     fn range_proof_sized<K: api::KeyType>(
         &self,
         start_key: Option<K>,
+        end_key: Option<K>,
         hint: firewood::SizingHint,
     ) -> Result<firewood::SizedProof<api::FrozenRangeProof>, api::Error> {
-        self.proposal
-            .range_proof_sized(start_key.as_ref().map(AsRef::as_ref), hint)
+        self.proposal.range_proof_sized(
+            start_key.as_ref().map(AsRef::as_ref),
+            end_key.as_ref().map(AsRef::as_ref),
+            hint,
+        )
     }
 
     fn iter_option<K: api::KeyType>(

@@ -118,9 +118,14 @@ where
     fn range_proof_sized<K: api::KeyType>(
         &self,
         start_key: Option<K>,
+        end_key: Option<K>,
         hint: SizingHint,
     ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
-        Merkle::from(self).range_proof_sized(start_key.as_ref().map(AsRef::as_ref), hint)
+        Merkle::from(self).range_proof_sized(
+            start_key.as_ref().map(AsRef::as_ref),
+            end_key.as_ref().map(AsRef::as_ref),
+            hint,
+        )
     }
 
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
@@ -257,9 +262,10 @@ impl<H: HashMode> api::DynDb for Db<H> {
         start_hash: HashKey,
         end_hash: HashKey,
         start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
         hint: SizingHint,
     ) -> Result<SizedProof<FrozenChangeProof>, api::Error> {
-        Db::change_proof_sized(self, start_hash, end_hash, start_key, hint)
+        Db::change_proof_sized(self, start_hash, end_hash, start_key, end_key, hint)
     }
 
     fn verify_change_proof(
@@ -627,8 +633,9 @@ impl<H: HashMode> Db<H> {
     /// hashes, sized to a byte budget.
     ///
     /// Returns the proof that covers key-value changes between `start_hash`
-    /// and `end_hash` from `start_key`, whose serialized size never exceeds
-    /// the hint's budget, with the hint for the next chunk.
+    /// and `end_hash` within the optional `[start_key, end_key]` range, whose
+    /// serialized size never exceeds the hint's budget, with the hint for the
+    /// next chunk.
     ///
     /// # Errors
     ///
@@ -643,10 +650,11 @@ impl<H: HashMode> Db<H> {
         start_hash: HashKey,
         end_hash: HashKey,
         start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
         hint: SizingHint,
     ) -> Result<SizedProof<FrozenChangeProof>, api::Error> {
         let (start_merkle, end_merkle) = self.change_proof_merkles(start_hash, end_hash)?;
-        end_merkle.change_proof_sized(start_merkle.nodestore(), start_key, hint)
+        end_merkle.change_proof_sized(start_merkle.nodestore(), start_key, end_key, hint)
     }
 
     /// Resolves the two committed revisions of a change proof as
@@ -800,9 +808,10 @@ impl<H: HashMode> api::DbView for Proposal<'_, H> {
     fn range_proof_sized<K: KeyType>(
         &self,
         start_key: Option<K>,
+        end_key: Option<K>,
         hint: SizingHint,
     ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
-        api::DbView::range_proof_sized(&*self.nodestore, start_key, hint)
+        api::DbView::range_proof_sized(&*self.nodestore, start_key, end_key, hint)
     }
 
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
@@ -855,9 +864,10 @@ impl<'db, H: HashMode> api::DynProposal<'db> for Proposal<'db, H> {
     fn range_proof_sized(
         &self,
         start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
         hint: SizingHint,
     ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
-        api::DbView::range_proof_sized(self, start_key, hint)
+        api::DbView::range_proof_sized(self, start_key, end_key, hint)
     }
 
     fn iter_option(
@@ -1024,10 +1034,14 @@ impl api::DbView for ReconstructedView<'_> {
     fn range_proof_sized<K: KeyType>(
         &self,
         start_key: Option<K>,
+        end_key: Option<K>,
         hint: SizingHint,
     ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
-        self.nodestore
-            .range_proof_sized(start_key.as_ref().map(AsRef::as_ref), hint)
+        self.nodestore.range_proof_sized(
+            start_key.as_ref().map(AsRef::as_ref),
+            end_key.as_ref().map(AsRef::as_ref),
+            hint,
+        )
     }
 
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {

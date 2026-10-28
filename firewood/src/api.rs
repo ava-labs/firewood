@@ -396,19 +396,23 @@ pub trait DbView {
     /// # Arguments
     ///
     /// * `start_key` - If None, start at the lowest key; inclusive otherwise
+    /// * `end_key` - If None, continue to the end of the database; inclusive
+    ///   otherwise
     /// * `hint` - The byte budget, as [`SizingHint::new`] or the previous
     ///   chunk's [`SizedProof::hint`]
     ///
     /// # Errors
     ///
-    /// * [`Error::RangeProofOnEmptyTrie`] if the trie is empty and
-    ///   `start_key` is `None`
+    /// * [`Error::InvalidRange`] if `start_key` is above `end_key`
+    /// * [`Error::RangeProofOnEmptyTrie`] if the trie is empty and both keys
+    ///   are `None`
     /// * [`Error::ProofOverBudget`] if one entry, or the edge proofs alone,
     ///   serialize past the budget
     /// * Other I/O or structural errors during proof generation
     fn range_proof_sized<K: KeyType>(
         &self,
         start_key: Option<K>,
+        end_key: Option<K>,
         hint: SizingHint,
     ) -> Result<SizedProof<FrozenRangeProof>, Error>;
 
@@ -497,6 +501,7 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
     fn range_proof_sized(
         &self,
         start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
         hint: SizingHint,
     ) -> Result<SizedProof<FrozenRangeProof>, Error>;
 
@@ -566,9 +571,10 @@ where
     fn range_proof_sized(
         &self,
         start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
         hint: SizingHint,
     ) -> Result<SizedProof<FrozenRangeProof>, Error> {
-        DbView::range_proof_sized(self, start_key, hint)
+        DbView::range_proof_sized(self, start_key, end_key, hint)
     }
 
     fn iter_option(&self, first_key: Option<&[u8]>) -> Result<BoxKeyValueIter<'_>, Error> {
@@ -763,6 +769,7 @@ pub trait DynDb: Debug + Send + Sync + 'static {
         start_hash: HashKey,
         end_hash: HashKey,
         start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
         hint: SizingHint,
     ) -> Result<SizedProof<FrozenChangeProof>, Error>;
 
@@ -860,6 +867,7 @@ pub trait DynProposal<'db>: Debug + Send + Sync {
     fn range_proof_sized(
         &self,
         start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
         hint: SizingHint,
     ) -> Result<SizedProof<FrozenRangeProof>, Error>;
 
