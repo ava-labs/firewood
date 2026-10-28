@@ -19,7 +19,7 @@ use firewood::db::BatchOp;
 use firewood::db::DbConfig;
 use firewood::manager::RevisionManagerConfig;
 use firewood::open;
-use firewood_storage::DefaultHashMode;
+use firewood_storage::EthHash;
 use firewood_storage::HashMode;
 use rand::RngExt;
 use rand::distr::Alphanumeric;
@@ -70,8 +70,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .manager(mgrcfg)
         .build();
 
-    let db =
-        open("firewood", DefaultHashMode::ALGORITHM, cfg).expect("db initiation should succeed");
+    let db = open("firewood", EthHash::ALGORITHM, cfg).expect("db initiation should succeed");
 
     let keys = args.batch_size;
     let start = Instant::now();
