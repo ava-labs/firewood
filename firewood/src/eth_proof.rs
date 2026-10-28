@@ -421,39 +421,14 @@ fn nibbles_match_packed(nibbles: &[PathComponent], packed: &[u8]) -> bool {
 }
 
 #[cfg(test)]
-mod merkledb_gate_tests {
+mod tests {
     use std::sync::Arc;
 
     use firewood_storage::Committed;
     use firewood_storage::DeletedNodeTracking;
-    use firewood_storage::MemStore;
-    use firewood_storage::MerkleDbHash;
-    use firewood_storage::NodeStore;
-
-    use super::*;
-
-    /// A MerkleDB view must refuse to emit eth proofs. This test runs in both
-    /// feature configurations.
-    #[test]
-    fn eth_get_proof_rejected_in_merkledb_mode() {
-        let storage = Arc::new(MemStore::new(Vec::new()));
-        let nodestore: NodeStore<Committed, _, MerkleDbHash> =
-            NodeStore::new_empty_committed(storage, DeletedNodeTracking::Enabled);
-        let err = eth_get_proof(&nodestore, &[0u8; 32], &[])
-            .expect_err("merkledb-mode database must not emit eth proofs");
-        assert!(
-            matches!(err, Error::FeatureNotSupported(_)),
-            "expected FeatureNotSupported, got {err:?}"
-        );
-    }
-}
-
-#[cfg(all(test, feature = "ethhash"))]
-#[expect(clippy::unwrap_used, clippy::indexing_slicing)]
-mod tests {
-    use firewood_storage::Committed;
     use firewood_storage::EthHash;
     use firewood_storage::MemStore;
+    use firewood_storage::MerkleDbHash;
     use firewood_storage::NULL_RLP;
     use firewood_storage::NibblesIterator;
     use firewood_storage::NodeStore;
@@ -498,6 +473,20 @@ mod tests {
             RlpItem::Bytes(&[0u8; 32]), // storageRoot — fixed up by firewood
             RlpItem::Bytes(code_hash),
         ])
+    }
+
+    /// A MerkleDB view must refuse to emit eth proofs.
+    #[test]
+    fn eth_get_proof_rejected_in_merkledb_mode() {
+        let storage = Arc::new(MemStore::new(Vec::new()));
+        let nodestore: NodeStore<Committed, _, MerkleDbHash> =
+            NodeStore::new_empty_committed(storage, DeletedNodeTracking::Enabled);
+        let err = eth_get_proof(&nodestore, &[0u8; 32], &[])
+            .expect_err("merkledb-mode database must not emit eth proofs");
+        assert!(
+            matches!(err, Error::FeatureNotSupported(_)),
+            "expected FeatureNotSupported, got {err:?}"
+        );
     }
 
     /// `KECCAK_EMPTY` is a hardcoded literal; confirm it really is
