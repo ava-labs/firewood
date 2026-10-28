@@ -2,7 +2,7 @@
 
 Review changes under `.github/`.
 
-1. Read every changed workflow and action file in full, and `AGENTS.md` § PR Strategy and § Toolchain Selection.
+1. Read every changed workflow and action file in full, and `AGENTS.md` § PR Strategy and § Toolchain Selection (already in your context if `CLAUDE.md` is loaded).
 2. **Correctness:** the conventions in those `AGENTS.md` sections, plus trigger events, `permissions`, `if:` conditions, and `continue-on-error`. Actions are pinned to a full commit SHA with a version comment, and the pin and comment agree.
 3. **Merge gating:** a job that should block merge is listed under `tests-required` in `ci.yaml`.
 4. **Efficiency:** redundant steps, matrix entries that duplicate coverage, serial jobs that could run in parallel, missing caches.
