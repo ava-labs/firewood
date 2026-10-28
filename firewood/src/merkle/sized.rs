@@ -4,9 +4,12 @@
 //! Range and change proofs sized to a serialized wire byte budget.
 
 use std::fmt;
+use std::mem::size_of;
 use std::num::NonZeroU32;
 use std::num::NonZeroU128;
 
+use bytemuck_derive::Pod;
+use bytemuck_derive::Zeroable;
 use firewood_metrics::HistogramExt;
 use firewood_metrics::firewood_histogram;
 use firewood_storage::HashedNodeReader;
@@ -95,6 +98,20 @@ impl CompressionRatio {
 /// message limit.
 pub const DEFAULT_SIZED_PROOF_BUDGET: usize = 2 * 1024 * 1024 * 95 / 100;
 
+/// Byte length of the stable encoding used to carry a [`SizingHint`] across an
+/// FFI boundary.
+pub const SIZING_HINT_ENCODING_LEN: usize = size_of::<SizingHintEncoding>();
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+struct SizingHintEncoding {
+    version: [u8; 1],
+    state: [u8; 1],
+    budget: [u8; 8],
+    ratio: [u8; 4],
+    edges: [u8; 8],
+}
+
 /// A sized request's byte budget and, once a chunk was built, what that
 /// chunk measured to calibrate the next one. Start with [`SizingHint::new`]
 /// or [`SizingHint::default`] and pass each [`SizedProof::hint`] into the
@@ -164,6 +181,110 @@ impl SizingHint {
 impl Default for SizingHint {
     fn default() -> Self {
         Self::new(DEFAULT_SIZED_PROOF_BUDGET)
+    }
+}
+
+/// A byte array did not contain a valid sizing hint encoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidSizingHintEncoding;
+
+impl fmt::Display for InvalidSizingHintEncoding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("invalid sizing hint encoding")
+    }
+}
+
+impl std::error::Error for InvalidSizingHintEncoding {}
+
+impl From<SizingHint> for [u8; SIZING_HINT_ENCODING_LEN] {
+    fn from(hint: SizingHint) -> Self {
+        let (state, ratio, edges) = match hint.0 {
+            SizingHintState::Initial { .. } => (0, [0; 4], [0; 8]),
+            SizingHintState::Computed { ratio, edges, .. } => (
+                if edges.is_some() { 2 } else { 1 },
+                ratio.0.get().to_le_bytes(),
+                edges.map_or([0; 8], |edges| {
+                    u64::try_from(edges)
+                        .expect("sizing hint edge size fits in u64")
+                        .to_le_bytes()
+                }),
+            ),
+        };
+        let encoding = SizingHintEncoding {
+            version: [1],
+            state: [state],
+            budget: u64::try_from(hint.budget())
+                .expect("sizing hint budget fits in u64")
+                .to_le_bytes(),
+            ratio,
+            edges,
+        };
+        bytemuck::bytes_of(&encoding)
+            .try_into()
+            .expect("encoding size matches SIZING_HINT_ENCODING_LEN")
+    }
+}
+
+impl TryFrom<[u8; SIZING_HINT_ENCODING_LEN]> for SizingHint {
+    type Error = InvalidSizingHintEncoding;
+
+    fn try_from(bytes: [u8; SIZING_HINT_ENCODING_LEN]) -> Result<Self, Self::Error> {
+        let encoding = bytemuck::try_from_bytes::<SizingHintEncoding>(&bytes)
+            .map_err(|_| InvalidSizingHintEncoding)?;
+        if encoding.version != [1] {
+            return Err(InvalidSizingHintEncoding);
+        }
+        let budget = usize::try_from(u64::from_le_bytes(encoding.budget))
+            .map_err(|_| InvalidSizingHintEncoding)?;
+        match encoding.state {
+            [0] if encoding.ratio == [0; 4] && encoding.edges == [0; 8] => Ok(Self::new(budget)),
+            [1] if encoding.edges == [0; 8] => {
+                let ratio = u32::from_le_bytes(encoding.ratio);
+                let ratio = NonZeroU32::new(ratio)
+                    .map(CompressionRatio)
+                    .ok_or(InvalidSizingHintEncoding)?;
+                Ok(Self::computed(budget, ratio, None))
+            }
+            [2] => {
+                let ratio = u32::from_le_bytes(encoding.ratio);
+                let ratio = NonZeroU32::new(ratio)
+                    .map(CompressionRatio)
+                    .ok_or(InvalidSizingHintEncoding)?;
+                let edges = usize::try_from(u64::from_le_bytes(encoding.edges))
+                    .map_err(|_| InvalidSizingHintEncoding)?;
+                Ok(Self::computed(budget, ratio, Some(edges)))
+            }
+            _ => Err(InvalidSizingHintEncoding),
+        }
+    }
+}
+
+#[cfg(test)]
+mod encoding_tests {
+    use super::*;
+
+    #[test]
+    fn sizing_hint_encoding_round_trips_all_states() {
+        let hints = [
+            SizingHint::new(2048),
+            SizingHint::computed(4096, CompressionRatio::measured(52, 100), None),
+            SizingHint::computed(8192, CompressionRatio::measured(25, 100), Some(512)),
+        ];
+
+        for hint in hints {
+            let encoded = <[u8; SIZING_HINT_ENCODING_LEN]>::from(hint);
+            assert_eq!(SizingHint::try_from(encoded), Ok(hint));
+        }
+    }
+
+    #[test]
+    fn sizing_hint_encoding_rejects_invalid_state() {
+        let mut encoded = <[u8; SIZING_HINT_ENCODING_LEN]>::from(SizingHint::new(2048));
+        encoded[0] = 0;
+        assert_eq!(
+            SizingHint::try_from(encoded),
+            Err(InvalidSizingHintEncoding)
+        );
     }
 }
 

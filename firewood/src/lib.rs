@@ -165,8 +165,10 @@ pub use eth_proof::eth_get_proof;
 // Re-export the proc macro from firewood-macros
 pub use firewood_macros::metrics;
 pub use merkle::DEFAULT_SIZED_PROOF_BUDGET;
+pub use merkle::InvalidSizingHintEncoding;
 pub use merkle::Key;
 pub use merkle::ProvenRange;
+pub use merkle::SIZING_HINT_ENCODING_LEN;
 pub use merkle::SizedProof;
 pub use merkle::SizingHint;
 pub use merkle::Value;

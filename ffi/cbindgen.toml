@@ -54,7 +54,7 @@ usize_is_size_t = true
 # "feature = serde" = "DEFINE_SERDE"
 
 [export]
-include = []
+include = ["SizedProofHint"]
 exclude = []
 # prefix = "CAPI_"
 item_types = []

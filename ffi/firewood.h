@@ -1767,6 +1767,19 @@ typedef struct LogArgs {
 } LogArgs;
 
 /**
+ * Opaque-by-convention state for carrying a proof-sizing hint across C calls.
+ *
+ * Pass the bytes back to Firewood unchanged. The encoding is versioned and is
+ * not the in-memory representation of [`firewood::SizingHint`].
+ */
+typedef struct SizedProofHint {
+  /**
+   * Internal state; callers must preserve these bytes unchanged.
+   */
+  uint8_t internal_state[22];
+} SizedProofHint;
+
+/**
  * Puts the given key-value pairs into the database.
  *
  * # Arguments
