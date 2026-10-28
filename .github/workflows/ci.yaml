@@ -27,6 +27,7 @@ jobs:
       - examples
       - docs
       - ffi
+      - firewood-ffi-compatibility-tests
     runs-on: ubuntu-latest
     steps:
       - name: Fail unless all required jobs succeeded
@@ -342,8 +343,9 @@ jobs:
           TEST_FIREWOOD_HASH_MODE: ethhash
         run: go test -run 'TestReplayLogExecution$' -v -timeout 20m .
 
-  firewood-ethhash-differential-fuzz:
-    needs: build
+  firewood-ffi-compatibility-tests:
+    name: Firewood FFI compatibility tests
+    needs: [build, ffi-check-go-generate]
     runs-on: ubuntu-latest
     env:
       RUSTUP_TOOLCHAIN: stable
@@ -366,8 +368,9 @@ jobs:
         with:
           go-version-file: "ffi/tests/go.mod"
           cache-dependency-path: "ffi/tests/go.sum"
-      - name: Test Firewood <> Ethereum Differential Fuzz
-        working-directory: ffi/tests
+      - name: Test Go FFI compatibility
+        run: ./scripts/run-just.sh ci-test-ffi-compat
+      - name: Test Firewood FFI Differential Fuzz
         run: |
           # Set memlock to unlimited for the shell invoking the fuzz tests
           ulimit -Sa
@@ -375,55 +378,12 @@ jobs:
           sudo prlimit --pid $$ --memlock=-1:-1 || echo "prlimit not available, locking kernel memory may fail when setting up io-uring"
           ulimit -Sa
           ulimit -Ha
-          go test -fuzz=FuzzFirewoodTree -fuzztime=30s
-          go test -fuzz=FuzzRangeProofCreation -fuzztime=30s
+          ./scripts/run-just.sh ci-fuzz-ffi-compat
       - name: Upload Fuzz testdata
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: ethhash-differential-fuzz-testdata
-          path: ffi/tests/testdata
-          retention-days: 30
-
-  firewood-merkle-differential-fuzz:
-    needs: build
-    runs-on: ubuntu-latest
-    env:
-      RUSTUP_TOOLCHAIN: stable
-    steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
-        with:
-          tool: just@1.46.0
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2 -> v2.9.1
-        with:
-          save-if: "false"
-          shared-key: "debug-no-features"
-      - name: Build Firewood FFI
-        run: ./scripts/run-just.sh ci-build-ffi
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: "ffi/tests/go.mod"
-          cache-dependency-path: "ffi/tests/go.sum"
-      - name: Test Firewood <> MerkleDB Differential fuzz
-        working-directory: ffi/tests
-        run: |
-          # Set memlock to unlimited for the shell invoking the fuzz tests
-          ulimit -Sa
-          ulimit -Ha
-          sudo prlimit --pid $$ --memlock=-1:-1 || echo "prlimit not available, locking kernel memory may fail when setting up io-uring"
-          ulimit -Sa
-          ulimit -Ha
-          go test -race -fuzz=FuzzTree -fuzztime=1m
-      - name: Upload Fuzz testdata
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: firewood-merkle-differential-fuzz-testdata
+          name: firewood-differential-fuzz-testdata
           path: ffi/tests/testdata
           retention-days: 30
 
