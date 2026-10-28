@@ -2,7 +2,7 @@
 
 Review the changed code for correctness and conformance to the repository's rules.
 
-1. Read `STYLE_GUIDE.md` and `AGENTS.md` in full. Review rules also live outside `STYLE_GUIDE.md`, such as `#[repr(C, usize)]` on FFI tagged enums (`AGENTS.md` § Common Development Tasks).
+1. Read `STYLE_GUIDE.md` in full. Read `AGENTS.md` in full too, unless it is already in your context as `CLAUDE.md`. Review rules also live outside `STYLE_GUIDE.md`, such as `#[repr(C, usize)]` on FFI tagged enums (`AGENTS.md` § Common Development Tasks).
 2. Read every file in `$SCRATCH/changed-files.txt` in full from the checkout, not only the diff hunks. Read callers and callees as needed to judge behavior.
 3. Look for, in order of weight:
    - correctness: logic and boundary errors, panics reachable on valid input, swallowed or mis-propagated errors, concurrency hazards;

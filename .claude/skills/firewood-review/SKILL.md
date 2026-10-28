@@ -2,7 +2,7 @@
 name: firewood-review
 description: Reviews ava-labs/firewood changes, either a pull request (number, URL, or branch) or uncommitted local work, against the repository's style guide, review process, and CI, and drafts replacement PR descriptions. Use when asked to "review PR 1234", "review my changes", "review this branch", "firewood review", or "write a better PR description".
 argument-hint: "[PR number | URL | branch | local] [description]"
-compatibility: Requires Claude Code with git, just, cargo/rustup, go, and the gh CLI or GitHub MCP. Designed for the ava-labs/firewood workspace.
+compatibility: Requires Claude Code with git, just, cargo/rustup, go, and the gh CLI or GitHub MCP.
 allowed-tools: Read Write Bash Agent AskUserQuestion mcp__github__pull_request_read mcp__github__list_pull_requests mcp__github__get_commit mcp__github__list_commits
 ---
 
@@ -16,7 +16,6 @@ The rules live in the repository, not in this skill:
 
 - `STYLE_GUIDE.md` — what the code must look like.
 - `CONTRIBUTING.md` § Code Review Process and § Before Requesting a Review — how findings are worded, which verdict applies, and what a PR description must say.
-- `AGENTS.md` — build, lint, and test commands, toolchain selection, and the PR strategy.
 
 [references/review-standards.md](references/review-standards.md) turns those into severity tiers and a verdict rule. Every subagent and the final synthesis apply it.
 
