@@ -69,16 +69,11 @@ jobs:
             target: aarch64-apple-darwin
             pre-build-cmd: echo "MACOSX_DEPLOYMENT_TARGET=15.0" >> "$GITHUB_ENV"
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
+      - uses: $/.github/actions/setup-rust
         with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2
-        with:
-          shared-key: ${{ matrix.target }}
-
-      - name: Add target for cross-compilation
-        run: rustup target add ${{ matrix.target }}
+          targets: ${{ matrix.target }}
+          cache-key: ${{ matrix.target }}
+          cache-save: "true"
 
       - name: Run pre-build command
         if: matrix.pre-build-cmd != ''

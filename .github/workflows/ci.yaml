@@ -75,19 +75,12 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
+      - uses: $/.github/actions/setup-rust
         with:
-          tool: just@1.46.0
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
-        with:
-          toolchain: stable
           components: clippy
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2
-        with:
-          shared-key: ${{ matrix.profile-key }}
-          cache-all-crates: true
-          cache-workspace-crates: true
+          cache-key: ${{ matrix.profile-key }}
+          cache-save: "true"
+          cache-all-crates: "true"
       # Require Cargo.lock to be up to date and ensure the registry cache is populated
       - name: Cargo Fetch (run `cargo generate-lockfile` if this fails)
         run: cargo fetch --locked --verbose
@@ -99,13 +92,10 @@ jobs:
   no-rust-cache-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
+      - uses: $/.github/actions/setup-rust
         with:
-          tool: just@1.46.0
-      # Toolchain and components come from rust-toolchain.toml.
-      - name: Install the pinned toolchain
-        run: rustup toolchain install
+          toolchain: pinned
+          cache: "false"
       - name: Check license headers
         uses: viperproject/check-license-header@e06c65614fa9f32e099838df4dd25440c5344b32 # @v2
         with:
@@ -134,17 +124,10 @@ jobs:
           - profile-key: maxperf-ethhash-logger
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
+      - uses: $/.github/actions/setup-rust
         with:
-          tool: just@1.46.0
-      # Toolchain and components come from rust-toolchain.toml.
-      - name: Install the pinned toolchain
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2 -> v2.9.1
-        with:
-          save-if: "false"
-          shared-key: ${{ matrix.profile-key }}
+          toolchain: pinned
+          cache-key: ${{ matrix.profile-key }}
       - name: Clippy
         run: ./scripts/run-just.sh ci-rust clippy ${{ matrix.profile-key }}
 
@@ -166,18 +149,10 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
+      - uses: $/.github/actions/setup-rust
         with:
-          tool: just@1.46.0
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
-        with:
-          toolchain: stable
-      - uses: taiki-e/install-action@a7cecc7ff99ae8eda4fc89463cb7ab6aaa619b43 # @nextest
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2 -> v2.9.1
-        with:
-          save-if: "false"
-          shared-key: ${{ matrix.profile-key }}
+          tools: nextest
+          cache-key: ${{ matrix.profile-key }}
       - name: Run tests with cargo-nextest
         run: ./scripts/run-just.sh ci-rust test ${{ matrix.profile-key }}
 
@@ -197,17 +172,9 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
+      - uses: $/.github/actions/setup-rust
         with:
-          tool: just@1.46.0
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2 -> v2.9.1
-        with:
-          save-if: "false"
-          shared-key: ${{ matrix.profile-key }}
+          cache-key: ${{ matrix.profile-key }}
       - name: Run benchmark example
         run: ./scripts/run-just.sh ci-rust benchmark-example ${{ matrix.profile-key }}
       - name: Run insert example
@@ -219,17 +186,9 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
+      - uses: $/.github/actions/setup-rust
         with:
-          tool: just@1.46.0
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2 -> v2.9.1
-        with:
-          save-if: "false"
-          shared-key: "debug-no-features"
+          cache-key: debug-no-features
       - name: md check
         uses: DavidAnson/markdownlint-cli2-action@ded1f9488f68a970bc66ea5619e13e9b52e601cd # @v23.2.0
       - name: doc generation
@@ -238,10 +197,9 @@ jobs:
   ffi-check-go-generate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
+      - uses: $/.github/actions/setup-rust
         with:
-          tool: just@1.46.0
+          toolchain: none
       - name: Check `go generate` for changes
         run: ./scripts/run-just.sh ci-check-go-generate
 
@@ -261,17 +219,9 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
+      - uses: $/.github/actions/setup-rust
         with:
-          tool: just@1.46.0
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2 -> v2.9.1
-        with:
-          save-if: "false"
-          shared-key: ${{ matrix.profile-key }}
+          cache-key: ${{ matrix.profile-key }}
       - name: Build Firewood FFI
         working-directory: ffi
         run: ../scripts/run-just.sh ci-build-ffi
@@ -310,14 +260,9 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
+      - uses: $/.github/actions/setup-rust
         with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2 -> v2.9.1
-        with:
-          save-if: "false"
-          shared-key: "maxperf-logger"
+          cache-key: maxperf-logger
       - name: Build Firewood FFI
         run: cargo build --locked -p firewood-ffi --profile maxperf --features logger
       - name: Set up Go
@@ -350,17 +295,9 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
+      - uses: $/.github/actions/setup-rust
         with:
-          tool: just@1.46.0
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2 -> v2.9.1
-        with:
-          save-if: "false"
-          shared-key: "debug-no-features"
+          cache-key: debug-no-features
       - name: Build Firewood FFI
         run: ./scripts/run-just.sh ci-build-ffi
       - name: Set up Go
@@ -393,17 +330,9 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
+      - uses: $/.github/actions/setup-rust
         with:
-          tool: just@1.46.0
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2 -> v2.9.1
-        with:
-          save-if: "false"
-          shared-key: "debug-no-features"
+          cache-key: debug-no-features
       - name: Install cargo-machete
         run: cargo install cargo-machete
       - name: Check for stale dependencies
@@ -416,13 +345,13 @@ jobs:
     # by the Miri interpreter.
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v6
-      # Toolchain comes from rust-toolchain.toml; only this job needs miri.
-      - name: Install the pinned toolchain with miri
-        run: rustup toolchain install && rustup component add miri
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2
+      # Only this job needs miri.
+      - uses: $/.github/actions/setup-rust
         with:
-          shared-key: "miri"
+          toolchain: pinned
+          components: miri
+          cache-key: miri
+          cache-save: "true"
       - name: Miri (slice reinterpret round-trip)
         run: cargo miri test --locked -p firewood-storage path::component
         env:

@@ -43,16 +43,12 @@ jobs:
     outputs:
       matrix: ${{ steps.list.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
-        with:
-          tool: just@1.46.0
       # The script runs `cargo metadata`, so it needs a toolchain. It does not
       # need rust-cache or `cargo fetch`: `--no-deps` reads only the workspace
       # manifests, resolving nothing and touching neither registry nor network.
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
+      - uses: $/.github/actions/setup-rust
         with:
-          toolchain: stable
+          cache: "false"
       - name: List bench targets
         id: list
         env:
@@ -78,18 +74,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
+      - uses: $/.github/actions/setup-rust
         with:
-          tool: just@1.46.0
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          shared-key: ${{ env.PROFILE_KEY }}
-          cache-all-crates: true
-          cache-workspace-crates: true
+          cache-key: ${{ env.PROFILE_KEY }}
+          cache-save: "true"
+          cache-all-crates: "true"
       - name: Cargo Fetch (run `cargo generate-lockfile` if this fails)
         run: cargo fetch --locked --verbose
       - name: Build benches
@@ -106,17 +95,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
+      - uses: $/.github/actions/setup-rust
         with:
-          tool: just@1.46.0
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          save-if: "false"
-          shared-key: ${{ env.PROFILE_KEY }}
+          cache-key: ${{ env.PROFILE_KEY }}
       - name: Cargo Fetch (run `cargo generate-lockfile` if this fails)
         run: cargo fetch --locked --verbose
       - name: Benchmark
