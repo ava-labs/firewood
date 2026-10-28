@@ -9,6 +9,7 @@ use std::num::NonZeroU128;
 use firewood_metrics::HistogramExt;
 use firewood_metrics::firewood_histogram;
 use firewood_storage::HashedNodeReader;
+use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::TrieReader;
 use integer_encoding::VarInt;
 
@@ -437,6 +438,18 @@ pub(super) trait ChunkBuilder {
     ) -> Result<(), ProofError>;
 }
 
+fn serialize_chunk<B: ChunkBuilder>(
+    proof: &B::Proof,
+    hash_mode: NodeHashAlgorithm,
+    body: &mut Vec<u8>,
+    wire: &mut Vec<u8>,
+) -> Result<(), ProofError> {
+    body.clear();
+    B::write_body(proof, body);
+    wire.clear();
+    write_framed_body(body, B::KIND, hash_mode, wire)
+}
+
 struct RangeChunkBuilder<'a, T> {
     merkle: &'a Merkle<T>,
     start_proof: FrozenProof,
@@ -476,10 +489,7 @@ impl<T: TrieReader> ChunkBuilder for RangeChunkBuilder<'_, T> {
         body: &mut Vec<u8>,
         wire: &mut Vec<u8>,
     ) -> Result<(), ProofError> {
-        body.clear();
-        Self::write_body(proof, body);
-        wire.clear();
-        write_framed_body(body, Self::KIND, proof.hash_mode(), wire)
+        serialize_chunk::<Self>(proof, proof.hash_mode(), body, wire)
     }
 }
 
@@ -527,10 +537,7 @@ impl<T: HashedNodeReader> ChunkBuilder for ChangeChunkBuilder<'_, T> {
         body: &mut Vec<u8>,
         wire: &mut Vec<u8>,
     ) -> Result<(), ProofError> {
-        body.clear();
-        Self::write_body(proof, body);
-        wire.clear();
-        write_framed_body(body, Self::KIND, proof.hash_mode(), wire)
+        serialize_chunk::<Self>(proof, proof.hash_mode(), body, wire)
     }
 }
 
