@@ -2,6 +2,8 @@
 
 Review the pull request as a unit: its description, labels, size, and the conversation so far. Inputs are in `$SCRATCH`: `pr.json`, `pr-files.json` (if present), `pr-reviews.json`, `pr-review-comments.json`, `pr-comments.json`, and `ci-checks.json`.
 
+In local review, the commits under review may differ from the PR's pushed head. Judge the description against the local diff, and report what it would need to say once the local commits are pushed.
+
 1. **Description.** Check the body against [../references/pr-description.md](../references/pr-description.md) and the diff:
    - every template section is present;
    - every claim matches the diff;
