@@ -18,6 +18,15 @@ use test_case::test_case;
 use super::*;
 use crate::merkle::Merkle;
 
+fn init_merkle<I, K, V>(items: I) -> Merkle<NodeStore<Committed, MemStore, EthHash>>
+where
+    I: Clone + IntoIterator<Item = (K, V)>,
+    K: AsRef<[u8]>,
+    V: AsRef<[u8]>,
+{
+    super::init_merkle::<EthHash, _, _, _>(items)
+}
+
 fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     first_key: Option<impl KeyType>,
     last_key: Option<impl KeyType>,

@@ -25,6 +25,7 @@ use firewood_storage::DenseChildren;
 use firewood_storage::HashMode;
 use firewood_storage::MemStore;
 use firewood_storage::Mutable;
+use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::NodeStore;
 use firewood_storage::NodeStoreHeader;
 use firewood_storage::PathComponent;
@@ -38,26 +39,18 @@ use super::*;
 use crate::ProofError;
 use crate::ProofNode;
 use crate::api::Error;
-use crate::proofs::de::MAX_KEY_BYTES;
+use crate::api::MAX_KEY_BYTES;
 
-/// Test wrapper around [`crate::merkle::verify_range_proof`] that supplies the
-/// compile-default hash mode as the expected `algorithm` (the mode every proof
-/// built in the test binary carries). Shadows the glob-imported real function
-/// so the many existing call sites need not pass the mode explicitly.
+/// Test wrapper around [`crate::merkle::verify_range_proof`] that discards the
+/// proven range when a test only needs to assert successful verification.
 fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     first_key: Option<impl KeyType>,
     last_key: Option<impl KeyType>,
     root_hash: &TrieHash,
+    algorithm: NodeHashAlgorithm,
     proof: &RangeProof<impl KeyType, impl ValueType, H>,
 ) -> Result<(), Error> {
-    crate::merkle::verify_range_proof(
-        first_key,
-        last_key,
-        root_hash,
-        DefaultHashMode::ALGORITHM,
-        proof,
-    )
-    .map(drop)
+    crate::merkle::verify_range_proof(first_key, last_key, root_hash, algorithm, proof).map(drop)
 }
 
 /// The stack size `std::thread` gives a spawned thread when none is requested:
@@ -122,24 +115,11 @@ fn into_committed<H: HashMode>(
     ns.into()
 }
 
-/// Calls [`init_merkle_in`] under the compile-default hash mode, for tests
-/// that are not generic over the mode.
-pub(crate) fn init_merkle<I, K, V>(
-    iter: I,
-) -> Merkle<NodeStore<Committed, MemStore, DefaultHashMode>>
-where
-    I: Clone + IntoIterator<Item = (K, V)>,
-    K: AsRef<[u8]>,
-    V: AsRef<[u8]>,
-{
-    init_merkle_in::<DefaultHashMode, _, _, _>(iter)
-}
-
 /// Builds a committed in-memory trie holding `iter` under hash mode `H`.
 ///
 /// Pair with `#[hash_mode]` to generate both mode-specific tests from one
 /// generic definition.
-pub(crate) fn init_merkle_in<H, I, K, V>(iter: I) -> Merkle<NodeStore<Committed, MemStore, H>>
+pub(crate) fn init_merkle<H, I, K, V>(iter: I) -> Merkle<NodeStore<Committed, MemStore, H>>
 where
     H: HashMode,
     I: Clone + IntoIterator<Item = (K, V)>,
@@ -150,7 +130,7 @@ where
     merkle
 }
 
-/// Builds the same trie as [`init_merkle_in`] and also returns the header
+/// Builds the same trie as [`init_merkle`] and also returns the header
 /// the store was persisted with, for tests that inspect or rewrite it.
 ///
 /// Every inserted key is read back after commit. Under the Ethereum mode an
@@ -556,17 +536,32 @@ fn remove_prefix_all() {
     assert_eq!(got, 256);
 }
 
-#[test]
-fn remove_prefix_partial() {
+/// `remove_prefix` removes every key under the prefix, counts each one once,
+/// and leaves every other key in place.
+#[test_case(&["abc", "abd"], "ab", 2 ; "matched branch has no value")]
+#[test_case(&["ab", "abc", "abd"], "ab", 3 ; "matched branch has a value")]
+#[test_case(&["a", "ab", "abc"], "a", 3 ; "matched branch and a nested branch have values")]
+#[test_case(&["ab", "abc", "abcd"], "a", 3 ; "prefix ends inside the compressed path")]
+#[test_case(&["a", "abc", "abcd"], "ab", 2 ; "prefix ends inside a descendant compressed path")]
+#[test_case(&["", "a", "ab"], "", 3 ; "empty prefix counts the root value")]
+#[test_case(&["abc"], "abc", 1 ; "prefix exactly matches a leaf")]
+#[test_case(&["ab", "ac"], "a", 2 ; "prefix is a branch without a value")]
+fn remove_prefix_partial(keys: &[&str], prefix: &str, expected: usize) {
     let mut merkle = create_in_memory_merkle();
-    merkle
-        .insert(b"abc", Box::from(b"value".as_slice()))
-        .unwrap();
-    merkle
-        .insert(b"abd", Box::from(b"value".as_slice()))
-        .unwrap();
-    let got = merkle.remove_prefix(b"ab").unwrap();
-    assert_eq!(got, 2);
+    for key in keys {
+        merkle
+            .insert(key.as_bytes(), Box::from(b"value".as_slice()))
+            .unwrap();
+    }
+    assert_eq!(merkle.remove_prefix(prefix.as_bytes()).unwrap(), expected);
+    for key in keys {
+        let under_prefix = key.as_bytes().starts_with(prefix.as_bytes());
+        assert_eq!(
+            merkle.get_value(key.as_bytes()).unwrap().is_none(),
+            under_prefix,
+            "{key:?} after removing the prefix {prefix:?}"
+        );
+    }
 }
 
 #[test]
@@ -862,7 +857,7 @@ fn test_delete_one_child_with_branch_value() {
 
 #[test]
 fn test_root_hash_simple_insertions() -> Result<(), Error> {
-    init_merkle([
+    init_merkle::<DefaultHashMode, _, _, _>([
         ("do", "verb"),
         ("doe", "reindeer"),
         ("dog", "puppy"),
@@ -902,7 +897,7 @@ fn test_root_hash_fuzz_insertions() -> Result<(), FileIoError> {
             items.push((keygen(), val));
         }
 
-        init_merkle(items);
+        init_merkle::<DefaultHashMode, _, _, _>(items);
     }
 
     Ok(())
@@ -911,7 +906,7 @@ fn test_root_hash_fuzz_insertions() -> Result<(), FileIoError> {
 #[test]
 fn test_delete_child() {
     let items = vec![("do", "verb")];
-    let merkle = init_merkle(items);
+    let merkle = init_merkle::<DefaultHashMode, _, _, _>(items);
     let mut merkle = merkle.fork().unwrap();
 
     assert_eq!(merkle.remove(b"does_not_exist").unwrap(), None);
@@ -927,7 +922,9 @@ fn test_delete_some() {
             (key.as_bytes().to_vec(), val.as_bytes().to_vec())
         })
         .collect::<Vec<(Vec<u8>, Vec<u8>)>>();
-    let mut merkle = init_merkle(items.clone()).fork().unwrap();
+    let mut merkle = init_merkle::<DefaultHashMode, _, _, _>(items.clone())
+        .fork()
+        .unwrap();
     merkle.remove_prefix(b"key1").unwrap();
     for item in items {
         let (key, val) = item;
@@ -1025,7 +1022,9 @@ fn test_root_hash_reversed_deletions() -> Result<(), FileIoError> {
 #[test]
 fn remove_nonexistent_with_one() {
     let items = [("do", "verb")];
-    let mut merkle = init_merkle(items).fork().unwrap();
+    let mut merkle = init_merkle::<DefaultHashMode, _, _, _>(items)
+        .fork()
+        .unwrap();
 
     assert_eq!(merkle.remove(b"does_not_exist").unwrap(), None);
     assert_eq!(&*merkle.get_value(b"do").unwrap().unwrap(), b"verb");
@@ -1098,7 +1097,9 @@ fn test_in_memory_ops_far_beyond_the_bound_survive_a_small_stack() {
         assert!(merkle.get_value(&[0x00]).unwrap().is_some());
         assert!(merkle.get_value(&deepest).unwrap().is_some());
         assert!(merkle.remove(&deepest).unwrap().is_some());
-        merkle.remove_prefix(&[0x00]).unwrap();
+        // Every key but `[0x10]` starts with a zero byte, and the deepest is
+        // already gone.
+        assert_eq!(merkle.remove_prefix(&[0x00]).unwrap(), keys.len() - 2);
         assert!(merkle.get_value(&[0x00]).unwrap().is_none());
         assert!(merkle.get_value(&[0x10]).unwrap().is_some());
     });

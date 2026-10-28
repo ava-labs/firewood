@@ -117,7 +117,18 @@ The `fwdctl` tool provides command-line operations on databases. See `fwdctl/REA
 
 ## Coding Conventions and Constraints
 
-For more information on coding conventions and constraints, please refer to [CONTRIBUTING.md](./CONTRIBUTING.md)
+For more information on coding conventions and constraints, please refer to [STYLE_GUIDE.md](./STYLE_GUIDE.md)
+
+## Design Documents
+
+Firewood records designs as living documentation in `docs/src/designs/`, rendered in
+the mdBook site. The naming convention, frontmatter schema, and the propose and promote
+workflows are documented in `docs/src/designs/README.md`; scaffold a new design with
+`just new-design <slug>`.
+
+Two constraints apply to every edit: never rename or move a design file, and never
+record a design's own proposal or last-updated date inside the file. The filename and
+git history already carry both.
 
 ## Commit and PR Title Convention
 
@@ -327,6 +338,7 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
 
 - `README.md` - Main documentation
 - `CONTRIBUTING.md` - Contribution guidelines
+- `STYLE_GUIDE.md` - Style guide
 - `RELEASE.md` - Release process
 - `CHANGELOG.md` - Version history
 - `.devcontainer/` - Development container configuration
@@ -352,7 +364,8 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
    on the call stack. Wrap each recursive call in
    `firewood_storage::ensure_stack` (see `storage/src/stack.rs`) and add a depth
    guard on a small thread stack, as
-   `hash_helper_survives_a_deep_chain_on_a_small_stack` does.
+   `hash_helper_survives_a_deep_chain_on_a_small_stack` does. Key length itself
+   is bounded by `firewood::api::MAX_KEY_BYTES` on both writes and decoded proofs.
 
 5. **Beta Status**: The API may change. Don't assume stability guarantees.
 
@@ -372,14 +385,14 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
    tense or imperative, consistent terminology, no filler or hype, each piece of
    context stated once and cross-referenced from everywhere else. The same bar
    applies to user-facing strings — error messages, log lines, and CLI help. See
-   [Comments and documentation](./CONTRIBUTING.md#comments-and-documentation)
-   and [User-facing strings](./CONTRIBUTING.md#user-facing-strings).
+   [Comments and documentation](./STYLE_GUIDE.md#comments-and-documentation)
+   and [User-facing strings](./STYLE_GUIDE.md#user-facing-strings).
 
 9. **Workspace Awareness**: This is a multi-crate workspace. Changes may affect multiple crates. Check `Cargo.toml` for workspace structure.
 
 ## Code Review Guidelines
 
-See [`CODE_REVIEW.md`](./CODE_REVIEW.md) for the complete set of code review checks.
+See [`STYLE_GUIDE.md`](./STYLE_GUIDE.md) for the complete set of code review checks.
 
 ## Additional Resources
 

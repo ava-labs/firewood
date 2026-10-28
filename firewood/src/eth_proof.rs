@@ -451,8 +451,12 @@ mod merkledb_gate_tests {
 #[cfg(all(test, feature = "ethhash"))]
 #[expect(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
+    use firewood_storage::Committed;
+    use firewood_storage::EthHash;
+    use firewood_storage::MemStore;
     use firewood_storage::NULL_RLP;
     use firewood_storage::NibblesIterator;
+    use firewood_storage::NodeStore;
     use firewood_storage::RlpItem;
     use firewood_storage::RlpList;
     use firewood_storage::encode_list;
@@ -460,7 +464,16 @@ mod tests {
     use sha3::Keccak256;
 
     use super::*;
-    use crate::merkle::tests::init_merkle;
+    use crate::merkle::Merkle;
+
+    fn init_merkle<I, K, V>(iter: I) -> Merkle<NodeStore<Committed, MemStore, EthHash>>
+    where
+        I: Clone + IntoIterator<Item = (K, V)>,
+        K: AsRef<[u8]>,
+        V: AsRef<[u8]>,
+    {
+        crate::merkle::tests::init_merkle(iter)
+    }
 
     fn keccak(bytes: &[u8]) -> [u8; 32] {
         Keccak256::digest(bytes).into()
