@@ -1593,7 +1593,7 @@ func TestChangeProofSizedSyncsWholeDiff(t *testing.T) {
 				}
 				// The receiver only sees the wire bytes, which outlive the proof.
 				r.NoError(sized.Proof.Drop())
-				received, err := UnmarshalChangeProof(sized.Wire)
+				received, err := receiver.UnmarshalChangeProof(sized.Wire)
 				r.NoError(err)
 				receiverRoot, err = receiver.VerifyAndCommitChangeProof(
 					received, endRoot, startKey, nothing(), changeProofLenUnbounded,
@@ -1729,7 +1729,7 @@ func TestChangeProofSizedBoundedRange(t *testing.T) {
 		sized, err := source.ChangeProofSized(startRoot, endRoot, startKey, endKey, hint)
 		r.NoError(err)
 		r.NoError(sized.Proof.Drop())
-		received, err := UnmarshalChangeProof(sized.Wire)
+		received, err := receiver.UnmarshalChangeProof(sized.Wire)
 		r.NoError(err)
 		_, err = receiver.VerifyAndCommitChangeProof(received, endRoot, startKey, endKey, changeProofLenUnbounded)
 		r.NoError(err)

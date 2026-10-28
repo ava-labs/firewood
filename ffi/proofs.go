@@ -592,7 +592,7 @@ func (db *Database) ChangeProofSized(
 	start := time.Now()
 	defer func() {
 		if err == nil {
-			sizedProofDuration.WithLabelValues("change").Observe(time.Since(start).Seconds())
+			sizedProofDuration.WithLabelValues("change", db.metricsTag).Observe(time.Since(start).Seconds())
 		}
 	}()
 
