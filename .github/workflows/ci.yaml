@@ -68,9 +68,8 @@ jobs:
           - profile-key: debug-no-features
           - profile-key: debug-no-features
             os: macos-26
-          - profile-key: debug-ethhash-logger
           - profile-key: debug-all-features
-          - profile-key: maxperf-ethhash-logger
+          - profile-key: maxperf-logger
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     env:
       RUSTUP_TOOLCHAIN: stable
@@ -129,9 +128,8 @@ jobs:
           - profile-key: debug-no-features
           - profile-key: debug-no-features
             os: macos-26
-          - profile-key: debug-ethhash-logger
           - profile-key: debug-all-features
-          - profile-key: maxperf-ethhash-logger
+          - profile-key: maxperf-logger
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v6
@@ -159,9 +157,8 @@ jobs:
           - profile-key: debug-no-features
           - profile-key: debug-no-features
             os: macos-26
-          - profile-key: debug-ethhash-logger
           - profile-key: debug-all-features
-          - profile-key: maxperf-ethhash-logger
+          - profile-key: maxperf-logger
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     env:
       RUSTUP_TOOLCHAIN: stable
@@ -190,9 +187,8 @@ jobs:
           - profile-key: debug-no-features
           - profile-key: debug-no-features
             os: macos-26
-          - profile-key: debug-ethhash-logger
           - profile-key: debug-all-features
-          - profile-key: maxperf-ethhash-logger
+          - profile-key: maxperf-logger
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     env:
       RUSTUP_TOOLCHAIN: stable

@@ -54,7 +54,7 @@
       ],
       "settings": {
         "rust-analyzer.check.command": "clippy",
-        "rust-analyzer.cargo.features": ["ethhash", "logger"],
+        "rust-analyzer.cargo.features": ["logger"],
         "[rust]": {
           "editor.formatOnSave": true
         },
