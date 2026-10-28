@@ -20,6 +20,8 @@ pub use crate::batch_op::KeyValuePair;
 pub use crate::batch_op::TryIntoBatch;
 use crate::manager::RevisionManagerError;
 use crate::merkle::Key;
+use crate::merkle::SizedProof;
+use crate::merkle::SizingHint;
 use crate::merkle::Value;
 use crate::merkle::parallel::CreateProposalError;
 use crate::persist_worker::PersistError;
@@ -389,6 +391,31 @@ pub trait DbView {
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, Error>;
 
+    /// Obtain a range proof over a set of keys, sized to a byte budget
+    ///
+    /// # Arguments
+    ///
+    /// * `start_key` - If None, start at the lowest key; inclusive otherwise
+    /// * `end_key` - If None, continue to the end of the database; inclusive
+    ///   otherwise
+    /// * `hint` - The byte budget, as [`SizingHint::new`] or the previous
+    ///   chunk's [`SizedProof::hint`]
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::InvalidRange`] if `start_key` is above `end_key`
+    /// * [`Error::RangeProofOnEmptyTrie`] if the trie is empty and both keys
+    ///   are `None`
+    /// * [`Error::ProofOverBudget`] if one entry, or the edge proofs alone,
+    ///   serialize past the budget
+    /// * Other I/O or structural errors during proof generation
+    fn range_proof_sized<K: KeyType>(
+        &self,
+        start_key: Option<K>,
+        end_key: Option<K>,
+        hint: SizingHint,
+    ) -> Result<SizedProof<FrozenRangeProof>, Error>;
+
     /// Obtain a stream over the keys/values of this view, using an optional starting point
     ///
     /// # Arguments
@@ -466,6 +493,18 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, Error>;
 
+    /// Object-safe version of [`DbView::range_proof_sized`].
+    ///
+    /// # Errors
+    ///
+    /// As [`DbView::range_proof_sized`].
+    fn range_proof_sized(
+        &self,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        hint: SizingHint,
+    ) -> Result<SizedProof<FrozenRangeProof>, Error>;
+
     /// Obtain a stream over the keys/values of this view, using an optional starting point
     ///
     /// # Arguments
@@ -527,6 +566,15 @@ where
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, Error> {
         DbView::range_proof(self, first_key, last_key, limit)
+    }
+
+    fn range_proof_sized(
+        &self,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        hint: SizingHint,
+    ) -> Result<SizedProof<FrozenRangeProof>, Error> {
+        DbView::range_proof_sized(self, start_key, end_key, hint)
     }
 
     fn iter_option(&self, first_key: Option<&[u8]>) -> Result<BoxKeyValueIter<'_>, Error> {
@@ -711,6 +759,21 @@ pub trait DynDb: Debug + Send + Sync + 'static {
     ) -> Result<FrozenChangeProof, Error>;
 
     /// Object-safe version of
+    /// [`Db::change_proof_sized`](crate::db::Db::change_proof_sized).
+    ///
+    /// # Errors
+    ///
+    /// As [`Db::change_proof_sized`](crate::db::Db::change_proof_sized).
+    fn change_proof_sized(
+        &self,
+        start_hash: HashKey,
+        end_hash: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        hint: SizingHint,
+    ) -> Result<SizedProof<FrozenChangeProof>, Error>;
+
+    /// Object-safe version of
     /// [`Db::verify_change_proof`](crate::db::Db::verify_change_proof).
     #[expect(clippy::missing_errors_doc)]
     fn verify_change_proof(
@@ -795,6 +858,18 @@ pub trait DynProposal<'db>: Debug + Send + Sync {
         last_key: Option<&[u8]>,
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, Error>;
+
+    /// Object-safe version of [`DbView::range_proof_sized`].
+    ///
+    /// # Errors
+    ///
+    /// As [`DbView::range_proof_sized`].
+    fn range_proof_sized(
+        &self,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        hint: SizingHint,
+    ) -> Result<SizedProof<FrozenRangeProof>, Error>;
 
     /// Object-safe version of [`DbView::iter_option`].
     #[expect(clippy::missing_errors_doc)]
