@@ -224,8 +224,9 @@ impl<P> SizedProof<P> {
 }
 
 impl<T: TrieReader> Merkle<T> {
-    /// Generates a range proof from the inclusive lower bound whose wire
-    /// approaches, and never exceeds, the hint's budget. Resume strictly above
+    /// Generates a range proof over `[start_key, end_key]` whose wire
+    /// approaches, and never exceeds, the hint's budget; the chunk that
+    /// reaches `end_key` proves it, as [`Merkle::range_proof`] does. Resume strictly above
     /// the last emitted key and pass the returned [`SizedProof::hint`] as the
     /// next request's `hint`.
     ///
@@ -250,9 +251,11 @@ impl<T: TrieReader> Merkle<T> {
     pub(crate) fn range_proof_sized(
         &self,
         start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
         hint: SizingHint,
     ) -> Result<SizedProof<FrozenRangeProof>, api::Error> {
-        if start_key.is_none() && self.root().is_none() {
+        check_range(start_key, end_key)?;
+        if start_key.is_none() && end_key.is_none() && self.root().is_none() {
             return Err(api::Error::RangeProofOnEmptyTrie);
         }
         let start_proof = match start_key {
@@ -261,12 +264,14 @@ impl<T: TrieReader> Merkle<T> {
         };
         let items = self
             .key_value_iter_from_key(start_key.unwrap_or_default())
+            .stop_after_key(end_key)
             .map(|r| r.map_err(api::Error::from));
 
         let sized = build_sized_chunk(
             &RangeChunkBuilder {
                 merkle: self,
                 start_proof,
+                end_key,
             },
             items,
             hint,
@@ -278,8 +283,9 @@ impl<T: TrieReader> Merkle<T> {
 }
 
 impl<T: HashedNodeReader> Merkle<T> {
-    /// Generates a change proof from the inclusive lower bound whose wire
-    /// approaches, and never exceeds, the hint's budget. Resume strictly above
+    /// Generates a change proof over `[start_key, end_key]` whose wire
+    /// approaches, and never exceeds, the hint's budget; the chunk that
+    /// reaches `end_key` proves it, as [`Merkle::change_proof`] does. Resume strictly above
     /// the last emitted key and pass the returned [`SizedProof::hint`] as the
     /// next request's `hint`.
     ///
@@ -292,7 +298,7 @@ impl<T: HashedNodeReader> Merkle<T> {
     ///   can send it.
     /// * [`ProofError::Empty`] - this trie is empty, as in
     ///   [`Self::change_proof`].
-    /// * Proof generation, diff iteration, body-size, or compression errors.
+    /// * Proof generation, diff iteration, or compression errors.
     #[cfg_attr(
         not(test),
         expect(
@@ -304,8 +310,10 @@ impl<T: HashedNodeReader> Merkle<T> {
         &self,
         source_trie: &impl HashedNodeReader,
         start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
         hint: SizingHint,
     ) -> Result<SizedProof<FrozenChangeProof>, api::Error> {
+        check_range(start_key, end_key)?;
         let start_proof = match start_key {
             Some(key) => self.prove(key)?,
             None => Proof::default(),
@@ -315,12 +323,19 @@ impl<T: HashedNodeReader> Merkle<T> {
             self.nodestore(),
             start_key.unwrap_or_default().into(),
         )?
+        .map_while(move |op| match op {
+            Ok(op) => end_key
+                .is_none_or(|end| op.key().as_ref() <= end)
+                .then_some(Ok(op)),
+            Err(err) => Some(Err(err)),
+        })
         .map(|r| r.map_err(api::Error::from));
 
         let sized = build_sized_chunk(
             &ChangeChunkBuilder {
                 merkle: self,
                 start_proof,
+                end_key,
             },
             items,
             hint,
@@ -328,6 +343,17 @@ impl<T: HashedNodeReader> Merkle<T> {
         firewood_histogram!(PROOF_KEYS, "kind" => sized_kind_label(ProofType::Change))
             .record_integer(sized.proof.batch_ops().len());
         Ok(sized)
+    }
+}
+
+/// Rejects a lower bound above the upper one, as the plain proofs do.
+fn check_range(start_key: Option<&[u8]>, end_key: Option<&[u8]>) -> Result<(), api::Error> {
+    match (start_key, end_key) {
+        (Some(start), Some(end)) if start > end => Err(api::Error::InvalidRange {
+            start_key: start.to_vec().into(),
+            end_key: end.to_vec().into(),
+        }),
+        _ => Ok(()),
     }
 }
 
@@ -556,6 +582,7 @@ pub(super) trait ChunkBuilder {
 struct RangeChunkBuilder<'a, T> {
     merkle: &'a Merkle<T>,
     start_proof: FrozenProof,
+    end_key: Option<&'a [u8]>,
 }
 
 impl<T: TrieReader> ChunkBuilder for RangeChunkBuilder<'_, T> {
@@ -567,12 +594,18 @@ impl<T: TrieReader> ChunkBuilder for RangeChunkBuilder<'_, T> {
         encoded_sequence_len(key).saturating_add(encoded_sequence_len(value))
     }
 
-    /// At the natural end the right edge stays open, as
-    /// [`Merkle::range_proof`] leaves it when its limit is not hit.
+    /// At the natural end the right edge is the requested end key, or stays
+    /// open without one, as [`Merkle::range_proof`] leaves it when its limit
+    /// is not hit.
     fn build(&self, kvs: &[Self::Item], natural_end: bool) -> Result<Self::Proof, api::Error> {
-        let end = match kvs.last() {
-            Some((last, _)) if !natural_end => self.merkle.prove(last)?,
-            _ => Proof::default(),
+        let end_key = if natural_end {
+            self.end_key
+        } else {
+            kvs.last().map(|(last, _)| last.as_ref())
+        };
+        let end = match end_key {
+            Some(key) => self.merkle.prove(key)?,
+            None => Proof::default(),
         };
         Ok(RangeProof::new(
             self.start_proof.clone(),
@@ -594,6 +627,7 @@ impl<T: TrieReader> ChunkBuilder for RangeChunkBuilder<'_, T> {
 struct ChangeChunkBuilder<'a, T> {
     merkle: &'a Merkle<T>,
     start_proof: FrozenProof,
+    end_key: Option<&'a [u8]>,
 }
 
 impl<T: HashedNodeReader> ChunkBuilder for ChangeChunkBuilder<'_, T> {
@@ -610,11 +644,18 @@ impl<T: HashedNodeReader> ChunkBuilder for ChangeChunkBuilder<'_, T> {
         }
     }
 
-    /// The right edge is always the last operation's key, as
-    /// [`Merkle::change_proof`] proves it when no end key is requested.
-    fn build(&self, ops: &[Self::Item], _natural_end: bool) -> Result<Self::Proof, api::Error> {
-        let end = match ops.last() {
-            Some(op) => self.merkle.prove(op.key())?,
+    /// The right edge is the requested end key once the natural end is
+    /// reached, and otherwise the last operation's key, as
+    /// [`Merkle::change_proof`] proves it.
+    fn build(&self, ops: &[Self::Item], natural_end: bool) -> Result<Self::Proof, api::Error> {
+        let last = ops.last().map(|op| op.key().as_ref());
+        let end_key = if natural_end {
+            self.end_key.or(last)
+        } else {
+            last
+        };
+        let end = match end_key {
+            Some(key) => self.merkle.prove(key)?,
             None => Proof::default(),
         };
         Ok(ChangeProof::new(
