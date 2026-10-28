@@ -345,7 +345,7 @@ jobs:
 
   firewood-ffi-compatibility-tests:
     name: Firewood FFI compatibility tests
-    needs: build
+    needs: [build, ffi-check-go-generate]
     runs-on: ubuntu-latest
     env:
       RUSTUP_TOOLCHAIN: stable
