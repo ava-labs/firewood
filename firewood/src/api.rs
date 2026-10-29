@@ -723,6 +723,17 @@ pub trait DynDb: Debug + Send + Sync + 'static {
     ) -> Result<Box<dyn DynProposal<'_> + '_>, Error>;
 
     /// Object-safe version of
+    /// [`Db::apply_verified_change_proof`](crate::db::Db::apply_verified_change_proof).
+    #[expect(
+        clippy::missing_errors_doc,
+        reason = "documented on Db::apply_verified_change_proof"
+    )]
+    fn apply_verified_change_proof(
+        &self,
+        verified: &crate::proofs::VerifiedChangeProof,
+    ) -> Result<Box<dyn DynProposal<'_> + '_>, Error>;
+
+    /// Object-safe version of
     /// [`Db::merge_key_value_range`](crate::db::Db::merge_key_value_range),
     /// taking already-collected [`OwnedKeyValuePairs`].
     #[expect(clippy::missing_errors_doc)]
