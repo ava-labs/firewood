@@ -208,16 +208,7 @@ fn verify_edge<H: ProofCollection + ?Sized>(
         }
     }
 
-    // Any `UnexpectedHash` bubbling up from this edge's `verify()` walk is
-    // by construction an edge-proof failure — re-stamp it with which edge.
-    let annotate = |e: ProofError| match e {
-        ProofError::UnexpectedHash { expected, actual } => ProofError::EdgeProofHashMismatch {
-            edge,
-            expected,
-            actual,
-        },
-        other => other,
-    };
+    let annotate = |e| annotate_edge_error(edge, e);
 
     // Verify the proof for this edge
     if let Some(bound) = requested_bound {
@@ -233,6 +224,19 @@ fn verify_edge<H: ProofCollection + ?Sized>(
     }
 
     Ok(())
+}
+
+/// Re-stamps an `UnexpectedHash` from walking an edge proof with the edge it
+/// came from; any such mismatch is by construction an edge-proof failure.
+fn annotate_edge_error(edge: ProofEdge, e: ProofError) -> ProofError {
+    match e {
+        ProofError::UnexpectedHash { expected, actual } => ProofError::EdgeProofHashMismatch {
+            edge,
+            expected,
+            actual,
+        },
+        other => other,
+    }
 }
 
 /// Describes the boundary of one edge of a range proof.
@@ -340,10 +344,6 @@ impl EdgeBoundary<'_> {
     const fn is_left(&self) -> bool {
         matches!(self, EdgeBoundary::Left(_))
     }
-
-    const fn is_right_exclusive(&self) -> bool {
-        matches!(self, EdgeBoundary::Right(RightBoundary::OutOfRange(_)))
-    }
 }
 
 /// How a boundary terminal marks its own children in the outside-children mask.
@@ -435,12 +435,10 @@ fn classify_terminal<'a>(
 /// For the right edge: children with index > the on-path child are outside.
 ///
 /// For [`RightBoundary::OutOfRange`], the boundary itself sits at the
-/// proof's terminal node and is *not* part of the proven range. The on-path
-/// child at the terminal's parent leads only to that terminal, so we mark
-/// it outside in addition to the usual "children with index > the on-path
-/// child" marking — the hash check then substitutes the proof's stored
-/// child hash there instead of recursing into the proving trie's
-/// (irrelevant) subtree.
+/// proof's terminal node and is *not* part of the proven range, but the
+/// on-path child at the terminal's parent stays in range: the reconstruction
+/// hashes the terminal, rebuilt from its proof node, together with any
+/// key-value under that slot, so a key-value placed there changes the root.
 ///
 /// Classifies the terminal via [`classify_terminal`] and applies the marking.
 /// The classification comes back alongside the mask, so no caller can supply one
@@ -473,11 +471,7 @@ fn compute_outside_children<'a>(
     let mut result: HashMap<PathBuf, ChildMask> = HashMap::new();
 
     // Non-terminal nodes: derive the on-path nibble from the next proof node
-    let mut pairs = proof_nodes
-        .iter()
-        .zip(proof_nodes.iter().skip(1))
-        .peekable();
-    while let Some((parent, child)) = pairs.next() {
+    for (parent, child) in proof_nodes.iter().zip(proof_nodes.iter().skip(1)) {
         let on_path_nibble = child
             .key
             .get(parent.key.len())
@@ -488,15 +482,6 @@ fn compute_outside_children<'a>(
         } else {
             entry.set_above(on_path_nibble.0)
         };
-
-        // Right-edge exclusive: at the terminal's parent (i.e., the last
-        // non-terminal pair), the on-path child's whole subtree is just
-        // the terminal, which is itself outside the proven range. Mark it
-        // outside so the hash check uses the proof's stored child hash
-        // here instead of recursing into the proving trie.
-        if boundary.is_right_exclusive() && pairs.peek().is_none() {
-            *entry = entry.set(on_path_nibble.0);
-        }
     }
 
     // Terminal node: apply its marking (see `classify_terminal`).
@@ -899,9 +884,8 @@ fn reject_odd_nibble_value_digests(proof_nodes: &[ProofNode]) -> Result<(), Proo
 ///
 /// * [`RightBoundary::InRange`] — runs the full `verify_edge` against
 ///   the boundary to cryptographically anchor the proof.
-/// * [`RightBoundary::OutOfRange`] — skips `verify_edge`; the anchor check
-///   is folded into the hash reconstruction via the out-of-range-boundary
-///   path in [`compute_outside_children`].
+/// * [`RightBoundary::OutOfRange`] — skips `verify_edge`, which anchors at
+///   the requested bound, and walks the end proof to its terminal instead.
 ///
 /// The classification:
 ///
@@ -1010,8 +994,7 @@ fn right_edge<'a>(
 ///    *proof-derived* right boundary — when the boundary is in-range, via
 ///    `verify_edge` against either `last_kv` or the caller's `last_key`
 ///    (whichever the proof anchors at); when the boundary is out-of-range,
-///    via the hash reconstruction below, where the anchor is the end-proof
-///    terminal's full key.
+///    by walking the end proof to its terminal, whose full key is the anchor.
 /// 4. **Trie reconstruction**: Build an in-memory Merkle trie from the key-value pairs
 ///    and reconcile it with proof nodes
 /// 5. **Root hash comparison**: Verify the reconstructed trie's root hash matches the
@@ -1138,12 +1121,10 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     //     (see `compute_outside_children`'s terminal-ancestor case and
     //     `test_tampered_in_range_value_rejected`); `verify_edge` anchors
     //     the boundary itself.
-    //   * OutOfRange (terminal_full_key > last_kv): skip
-    //     `proof.verify(...)` — the proof was structurally generated for
-    //     a deeper bound, and the cryptographic check is folded into the
-    //     hash reconstruction via the out-of-range-boundary path in
-    //     `compute_outside_children`. We still keep the ordering sanity
-    //     check.
+    //   * OutOfRange (terminal_full_key > last_kv): `verify_edge` would
+    //     anchor at the requested bound, which the end proof does not
+    //     reach. Walk it to its terminal instead, so every node on it is
+    //     authenticated as on the other edges.
     let last_kv_bytes = key_values.last().map(|(k, _)| k.as_ref());
     let right_boundary = right_edge(proof.end_proof().as_ref(), last_kv_bytes, last_key_bytes);
     match &right_boundary {
@@ -1173,6 +1154,10 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
                     ProofError::RangeProofEndBeforeLastKey,
                 ));
             }
+            proof
+                .end_proof()
+                .value_digest(bound.as_ref(), root_hash, algorithm)
+                .map_err(|e| api::Error::ProofError(annotate_edge_error(ProofEdge::Right, e)))?;
         }
     }
 
