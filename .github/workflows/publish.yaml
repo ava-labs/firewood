@@ -6,8 +6,8 @@ on:
     types: [published]
 
 env:
-  # Build on stable, not the nightly rust-toolchain.toml pin; the
-  # `toolchain: stable` input alone does not do that. See AGENTS.md,
+  # Build on stable, not the nightly rust-toolchain.toml pin; setup-rust's
+  # default stable toolchain alone does not do that. See AGENTS.md,
   # "Toolchain Selection".
   RUSTUP_TOOLCHAIN: stable
 
@@ -18,10 +18,9 @@ jobs:
     # Publishing requires CARGO_TOKEN which only the canonical repo has.
     if: github.repository == 'ava-labs/firewood' && startsWith(github.event.release.tag_name, 'v')
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
+      - uses: $/.github/actions/setup-rust
         with:
-          toolchain: stable
+          cache: "false"
       ## NOTE: keep these packages sorted in reverse topological order!
       ## cargo tree --workspace -e all | grep firewood
       - name: publish firewood-macros crate
