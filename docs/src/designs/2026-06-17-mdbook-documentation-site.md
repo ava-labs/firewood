@@ -744,7 +744,7 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
       canonical repo. A `smoke` job (`needs: [build, deploy]`) runs after `deploy`
       (non-PR events) and `curl --fail`s `/`, `/rustdoc/`, `/rustdoc/firewood/`, and
       `/ffi/`, plus `/bench/` only when the build reports benchmark history.
-- [ ] Introduction and a fully-authored `getting-started/dev-environment.md`
+- [x] Introduction and a fully-authored `getting-started/dev-environment.md`
       (macOS, Docker, remote SSH) are written. *Structural completeness*
       (reviewer-checkable): every section contains the concrete install/build/verify
       commands from the outline.
@@ -757,7 +757,7 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
       `proposed/`/`active/` folders). It contains a single RFC-style `template.md` and a
       `README.md` documenting the model, the promotion checklist, and a link to the
       backfill tracking issue.
-- [ ] The fully-written `2024-08-13-on-disk-format-and-addressing.md` seed is in place.
+- [x] The fully-written `2024-08-13-on-disk-format-and-addressing.md` seed is in place.
 - [x] Design docs carry the YAML frontmatter schema (`title`, `status`, `category`,
       `authors`, optional `tracking-issue`) with **no date fields**; the in-repo
       `[preprocessor.frontmatter-strip]` jq script strips it so it does not render. This
@@ -767,7 +767,7 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
       git-commit date, oldest first.
 - [x] `reference/` has an authored landing page linking only to generated artifacts
       (rustdoc/godoc/benchmarks).
-- [ ] Sections with seed content (`concepts/`, `integration/`, `operations/`) have
+- [x] Sections with seed content (`concepts/`, `integration/`, `operations/`) have
       authored landing pages and linked `SUMMARY.md` entries. Not-yet-written sub-pages
       are omitted from `SUMMARY.md` (added when their content lands) rather than shipped
       as empty `.md` files; no sub-page draft chapters ship. `integration/` documents the
@@ -775,7 +775,7 @@ Distilled from the [`mdbooks.yaml` catalog](https://github.com/szabgab/mdbooks.c
       (`Database`/`Proposal`/`Revision`, mapping to the Rust `Db`/`Proposal`/`DbView`)
       and the `firewood-go-ethhash` publish relationship that AvalancheGo actually
       consumes.
-- [ ] A `meta/` section exists with an **authored** `documentation.md` (how the docs
+- [x] A `meta/` section exists with an **authored** `documentation.md` (how the docs
       work: tooling, layout, build/serve, authoring, design workflow) and thin
       repository-function pages (`release.md` plus link-out pointers to CONTRIBUTING /
       STYLE_GUIDE); the process-doc link-outs are in `meta/`, not `reference/`.
