@@ -56,9 +56,11 @@ use firewood_storage::HashedNodeReader;
 use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::PathBuf;
 use firewood_storage::PathComponent;
+use firewood_storage::RlpError;
 use firewood_storage::TriePathAsPackedBytes;
 use firewood_storage::TriePathFromPackedBytes;
 use firewood_storage::ValueDigest;
+use firewood_storage::replace_list_field;
 
 use crate::api;
 use crate::merkle::Merkle;
@@ -73,6 +75,7 @@ use crate::proofs::ProofError;
 use crate::proofs::ProofNode;
 use crate::proofs::VerifiedChangeProof;
 use crate::proofs::VerifiedRangeProof;
+use crate::proofs::eth::ACCOUNT_DEPTH_NIBBLES;
 use crate::proofs::holes::merge_labels;
 use crate::proofs::holes::open_interval;
 
@@ -292,6 +295,9 @@ impl<'a, H: HashMode, T: HashedNodeReader> Walk<'a, H, T> {
 
     /// Reconcile the exact byte key `key` between the target's value digest,
     /// if the target has one, and the local value.
+    ///
+    /// Under the Ethereum mode an account value (a 32-byte key) is compared
+    /// with its `storageRoot` field masked; see [`values_agree`].
     fn point(
         &mut self,
         key: Box<[u8]>,
@@ -302,7 +308,7 @@ impl<'a, H: HashMode, T: HashedNodeReader> Walk<'a, H, T> {
             (None, None) => {}
             (None, Some(_)) => self.out.push(Hole::PointSurplus { key }),
             (Some(digest), local) => {
-                if local.is_some_and(|value| digest.verify(&value)) {
+                if local.is_some_and(|value| values_agree::<H>(&key, digest, &value)) {
                     return Ok(());
                 }
                 // A digest that is only a hash cannot be written locally; the
@@ -482,6 +488,41 @@ impl<'a, H: HashMode, T: HashedNodeReader> Walk<'a, H, T> {
     fn finish(self) -> Result<Vec<Hole>, api::Error> {
         merge_labels(self.out)
     }
+}
+
+/// Whether the target's value digest for `key` agrees with the local value.
+///
+/// Under the Ethereum mode an account value — the value at a 32-byte key —
+/// embeds the root of the account's storage trie as its third RLP field, and
+/// hashing derives that field from the storage children rather than trusting
+/// the stored bytes (see [`subtree_hash`]). The field is
+/// therefore not independently repairable: writing the target's value
+/// locally stores the local storage root again, so a [`Hole::PointFix`] on a
+/// `storageRoot`-only difference would be re-emitted by every later walk.
+/// The storage difference it stands for is already reported by the span
+/// labels at and below the account. Account values are compared with that
+/// field masked, so a point label at an account key means some other field
+/// differs: nonce, balance, code hash, or a trailing field a client appends.
+/// The mask also makes the comparison indifferent to databases written
+/// before `firewood-v1-hfix`, whose stored account values hold a stale
+/// `storageRoot`.
+///
+/// A value that is not well-formed account RLP is compared as-is.
+fn values_agree<H: HashMode>(key: &[u8], target: &ValueDigest<Value>, local: &[u8]) -> bool {
+    if H::ALGORITHM.is_ethereum()
+        && key.len() == ACCOUNT_DEPTH_NIBBLES / 2
+        && let Some(target) = target.value()
+        && let (Ok(target), Ok(local)) = (mask_storage_root(target), mask_storage_root(local))
+    {
+        return target == local;
+    }
+    target.verify(local)
+}
+
+/// `value` with its `storageRoot` field (the third item of an account's RLP
+/// list) replaced by zeros.
+fn mask_storage_root(value: &[u8]) -> Result<Box<[u8]>, RlpError> {
+    replace_list_field(value, 2, &[0; 32])
 }
 
 /// The hash a proof node would have with `prefix` as its parent prefix and
