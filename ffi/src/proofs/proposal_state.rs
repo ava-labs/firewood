@@ -9,9 +9,12 @@ use crate::ProposalHandle;
 /// Where a verified proof's proposal stands.
 ///
 /// A verified change proof starts `Proposed`: checking its end root needs the
-/// applied proposal. A successful commit moves to `Committed`, which caches
-/// the root so a second commit returns it without touching the database. A
-/// failed commit consumes the proposal and leaves `Pending`.
+/// applied proposal. A verified range proof starts `Pending` and builds its
+/// proposal at commit, so the time between building and committing it, in
+/// which another commit makes it stale, is as short as it can be. A
+/// successful commit moves to `Committed`, which caches the root so a second
+/// commit returns it without touching the database. A failed commit consumes
+/// the proposal and leaves `Pending`.
 #[derive(Debug)]
 pub(super) enum ProposalState<'db> {
     Pending,
