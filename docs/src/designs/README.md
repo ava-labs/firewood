@@ -28,6 +28,7 @@ location:
 | Design | Proposed | Status |
 | --- | --- | --- |
 | [Firewood mdBook Documentation Site](2026-06-17-mdbook-documentation-site.md) | 2026-06-17 | active |
+| [Next Key Ranges from Post-Merge Hole Detection](2026-10-26-next-key-ranges.md) | 2026-10-26 | proposed |
 
 Subsystems not yet documented as designs are tracked in
 [ava-labs/firewood#2139](https://github.com/ava-labs/firewood/issues/2139).
@@ -41,7 +42,7 @@ the in-repo `frontmatter-strip` preprocessor:
 | --- | --- | --- |
 | `title` | yes | Human-readable design title. |
 | `status` | yes | `draft`, `proposed`, `active`, `superseded`, or `rejected`. |
-| `category` | yes | The Firewood subsystem(s) the design touches: `storage`, `ffi`, `revision-management`, `hashing`, `proposals`, `docs`, or `tooling`. A design spanning several lists them, e.g. `[storage, hashing]`. Extend the list as new subsystems gain designs. |
+| `category` | yes | The Firewood subsystem(s) the design touches: `storage`, `ffi`, `revision-management`, `hashing`, `proposals`, `proofs`, `docs`, or `tooling`. A design spanning several lists them, e.g. `[storage, hashing]`. Extend the list as new subsystems gain designs. |
 | `authors` | yes | List of GitHub handles. |
 | `tracking-issue` | no | An `owner/repo#N` reference to the issue or PR tracking the work. |
 
