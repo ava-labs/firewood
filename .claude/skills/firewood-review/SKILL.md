@@ -1,256 +1,183 @@
 ---
 name: firewood-review
-description: Use when reviewing ava-labs/firewood code changes — pull request or local workspace. Invoke with phrases like "review PR", "review my changes", "review this branch", "firewood review", or "write a better PR description". Handles PR checkout, staged/unstaged changes, Rust toolchain, Go FFI, CI workflow, and multi-agent parallel review.
-compatibility: Requires Claude Code with git, cargo/rustup, go, and the gh CLI. Designed for use in the ava-labs/firewood workspace.
-allowed-tools: Read Write Bash Agent AskUserQuestion EnterWorktree ExitWorktree mcp__github__pull_request_read mcp__github__list_pull_requests mcp__github__get_commit mcp__github__list_commits
+description: Reviews ava-labs/firewood changes, either a pull request (number, URL, or branch) or uncommitted local work, against the repository's style guide, review process, and CI, and drafts replacement PR descriptions. Use when asked to "review PR 1234", "review my changes", "review this branch", "firewood review", or "write a better PR description".
+argument-hint: "[PR number | URL | branch | local] [description]"
+compatibility: Requires Claude Code with git, just, cargo/rustup, go, and the gh CLI or GitHub MCP.
+allowed-tools: Read Write Bash Agent AskUserQuestion mcp__github__pull_request_read mcp__github__list_pull_requests mcp__github__get_commit mcp__github__list_commits
 ---
 
 # Firewood Code Review
 
-## Overview
+Review target: `$ARGUMENTS`
 
-Firewood-specific local code review. Dispatches parallel agents covering Rust toolchain validation, Go FFI checks, CI workflow analysis, and deep code quality. Never publishes review output to GitHub unless explicitly instructed.
+Local review of a Firewood change. Present the report in the conversation; never publish anything to GitHub unless the user explicitly asks.
 
-Code quality review rules are defined in [`STYLE_GUIDE.md`](../../../STYLE_GUIDE.md) (referenced from the Code Review Guidelines section of `AGENTS.md`). Agents should read it in full before beginning scrutiny.
+The rules live in the repository, not in this skill:
 
-The review process itself follows [`CONTRIBUTING.md` — Code Review Process](../../../CONTRIBUTING.md#code-review-process), summarized in [Review Standards](#review-standards) below. They govern how findings are worded, which findings are reported, and which verdict is recommended.
+- `STYLE_GUIDE.md` — what the code must look like.
+- `CONTRIBUTING.md` § Code Review Process and § Before Requesting a Review — how findings are worded, which verdict applies, and what a PR description must say.
 
-**Version control:** the commands below use `git` and `gh`. Another loaded skill may take precedence over this skill's version-control steps; when one says so, use its equivalents for those steps and follow this skill for everything else.
+[references/review-standards.md](references/review-standards.md) turns those into severity tiers and a verdict rule. Every subagent and the final synthesis apply it.
 
-## Review Standards
+Version control: the commands below use `git` and `gh`. If another loaded skill says it takes precedence for version-control steps, use its equivalents for those steps and follow this skill for everything else.
 
-Apply these to every finding, in every agent and in the final report:
+## Checklist
 
-- **Actionable or `nit:`.** Each comment states exactly what change resolves it. A comment that requires no action is prefixed `nit:` so the author knows it can be ignored.
-- **Principles, not preferences.** Justify each finding by citing the rule it violates (`STYLE_GUIDE.md`, `CONTRIBUTING.md`, `AGENTS.md`, a failing check, or a concrete correctness/performance argument). Drop findings that rest only on taste.
-- **Ask when unsure.** If intent is unclear, phrase the finding as a question to the author instead of asserting a defect.
-- **Progress over perfection.** A change that is an improvement over the current codebase can be approved with minor comments outstanding. For larger out-of-scope improvements, suggest a follow-up issue or an annotated code `TODO(#issue)` rather than blocking.
-- **Respectful and constructive.** Comments guide the author; they do not discourage.
+Copy this into the task list and update it as you go:
 
-## Writing a PR Description
+- [ ] 0. Scratch directory created
+- [ ] 1. Mode chosen; tree under review checked out; PR metadata fetched (when a PR exists)
+- [ ] 2. Changed files listed; agents selected
+- [ ] 3. Toolchain run or CI wait started in the background
+- [ ] 4. Review agents dispatched in one message
+- [ ] 5. Every Blocking and Warning finding verified
+- [ ] 6. Report and verdict presented
+- [ ] 7. Stash restored and checkout removed
 
-A PR description passes when a reviewer can tell what is broken (or missing) from the first line of *Why this should be merged* and how the change fixes it from the first line of *How this works* (`CONTRIBUTING.md` § Before Requesting a Review). To write a replacement:
+## 0. Scratch directory
 
-1. Open *Why this should be merged* with what is broken and why it matters, without describing the fix. Open *How this works* with how this change fixes it.
-2. Keep every template section short. *How this works* lists only behavior a reviewer cannot see in the diff. *How this was tested* says "Required CI checks pass" once they have, plus any other validation run or not run. *Breaking Changes* is "None" or the checked boxes with their compatibility impact.
-3. Verify every claim against the diff, the code, or CI results; drop any claim you cannot verify.
-4. Drop anything the diff already shows.
-
-## Phase 0: Setup
-
-### Scratch Directory
-
-Create a session-scoped scratch directory at the start. All fetched API data is written here so subagents can read it without re-fetching or needing extra permissions:
+Create a fresh review directory once, inside the harness scratchpad (the session-specific directory the system prompt names as "Scratchpad directory"), or inside `${TMPDIR:-/tmp}` if the harness names none:
 
 ```bash
-SCRATCH=/tmp/firewood-review/$$
-mkdir -p "$SCRATCH"
+mktemp -d <scratchpad>/firewood-review-<pr-number-or-local>-XXXXXX
 ```
 
-Pass `$SCRATCH` to every subagent as part of its prompt.
+`mktemp` gives every review its own directory, so a rerun or a second review never reads stale files or collides on `checkout/`. Shell variables do not persist between Bash calls, so paste the printed absolute path into every later command, and into every subagent prompt (§ 4); subagents find the directory only through that path.
 
-### Determine Review Mode
+`$SCRATCH` below stands for that absolute path. Leave the directory in place when done; the user may want the logs.
 
-**PR review** — prompt names a PR number, branch, or URL:
+## 1. Choose the mode
 
-1. **Gate on draft status first.** Run `gh pr view <PR_NUMBER> --json isDraft,state`. If the PR is a draft or its state is not `OPEN`, stop and use `AskUserQuestion` to ask whether to proceed before checking anything out or dispatching agents — draft PRs are usually not ready for review.
-2. If worktrees are available and no worktree is already checked out for this PR, create a dedicated worktree via `EnterWorktree` for the PR branch. Otherwise fall back to `gh pr co <PR_NUMBER>`. Create at most one checkout per review - subagents can share worktrees and therefore, should not create worktrees of their own.
-3. Skip checkout if the prompt says the workspace is already on the PR branch.
-4. Fetch PR metadata — prefer the `github` MCP if available, otherwise fall back to `gh` CLI:
+| The target names... | Mode |
+| --- | --- |
+| a PR number or URL, plus "description" or a request for a better PR description | [PR description only](#pr-description-only) |
+| a PR number or URL | [PR review](#pr-review) — the head pushed to GitHub |
+| a local branch, "local", "my changes", "unpublished", or nothing with a dirty tree | [Local review](#local-review) — the commits on this machine |
 
-   **MCP (preferred):**
+A branch name means the local branch, which may hold commits the PR does not have yet.
 
-   ```text
-   mcp__github__pull_request_read → write JSON to $SCRATCH/pr.json
-   ```
+### PR review
 
-   **CLI fallback:**
+1. **Gate.** `gh pr view <PR> --json isDraft,state`. If it is a draft or not `OPEN`, stop and use `AskUserQuestion` to ask whether to proceed before checking anything out.
+2. **Fetch metadata in parallel**, even when the branch is already local: the description, checks, reviews, and comments inform the review and are not in the branch. Skip only when the user says to, no PR number exists, or both the MCP and `gh` are unavailable.
+
+   GitHub MCP (preferred), `mcp__github__pull_request_read` with:
+
+   | `method` | File |
+   | --- | --- |
+   | `get` | `$SCRATCH/pr.json` |
+   | `get_files` | `$SCRATCH/pr-files.json` |
+   | `get_check_runs` | `$SCRATCH/ci-checks.json` |
+   | `get_reviews` | `$SCRATCH/pr-reviews.json` |
+   | `get_review_comments` | `$SCRATCH/pr-review-comments.json` |
+   | `get_comments` | `$SCRATCH/pr-comments.json` |
+
+   `gh` fallback:
 
    ```bash
-   gh pr view <PR_NUMBER> \
-     --json title,body,comments,reviews,labels,isDraft,additions,deletions,baseRefOid,headRefOid \
-     > "$SCRATCH/pr.json"
-   gh api repos/ava-labs/firewood/pulls/<PR_NUMBER>/comments \
-     > "$SCRATCH/pr-comments.json"
+   gh pr view <PR> --json title,body,state,isDraft,labels,files,additions,deletions,baseRefOid,headRefOid > $SCRATCH/pr.json
+   gh pr checks <PR> --json name,state,bucket,link,workflow,completedAt > $SCRATCH/ci-checks.json
+   gh api repos/ava-labs/firewood/pulls/<PR>/reviews > $SCRATCH/pr-reviews.json
+   gh api graphql -F n=<PR> -f query='query($n:Int!){repository(owner:"ava-labs",name:"firewood"){pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved isOutdated path line comments(first:50){nodes{author{login} body url}}}}}}}' > $SCRATCH/pr-review-comments.json
+   gh api repos/ava-labs/firewood/issues/<PR>/comments > $SCRATCH/pr-comments.json
    ```
 
-5. Record the base and head SHAs from the fetched data for use in diffs.
-6. **Size check.** Count changed lines per file (`gh pr view <PR_NUMBER> --json files`), excluding generated files (`Cargo.lock`, `MODULE.bazel.lock`, `*.snap`, `ffi/firewood.h`, other lockfiles). If hand-written changes exceed a few hundred lines — more than can be reviewed well in 30–60 minutes — note it for the verdict and propose how the PR could be split.
+   Record the base and head SHAs (`baseRefOid`, `headRefOid`) for every diff below.
 
-**Local changes** — prompt says "local changes", "unpublished", or similar:
-
-1. Run `git status --porcelain` to detect staged vs unstaged files.
-2. If both staged and unstaged changes exist and the prompt didn't clarify, use `AskUserQuestion`: "Review workspace as-is, or stash unstaged changes first?"
-3. If stash: `git stash push --include-untracked -m "firewood-review-stash"`. After synthesis completes, `git stash pop` unconditionally.
-
-**PR description only** — prompt asks for a better, shorter, or rewritten PR description:
-
-1. Skip the draft gate and checkout. Run PR review steps 4–5, fetch the diff with `gh pr diff <PR_NUMBER>`, and fetch CI results with the `ci-review` command below.
-2. Head to phase 2 (synthesis) and write a replacement following [Writing a PR Description](#writing-a-pr-description) and present it with a one-line note per claim you dropped or changed.
-3. Do not edit the PR unless the user asks.
-
-### Detect Changed File Types
-
-From the diff (`git diff --name-only <base>..<head>` for PR, or `git diff --name-only HEAD` for local), determine which agents to activate:
-
-- Any `*.rs` or `Cargo.*` changes → activate **rust-toolchain**
-- Any `ffi/**` Go files → activate **go-toolchain**
-- Any `.github/**` changes → activate **ci-review**
-- Always activate **code-quality**
-
-Write the changed file list to `$SCRATCH/changed-files.txt`.
-
-## Phase 1: Parallel Agents
-
-Dispatch all applicable agents **in a single message** (parallel execution). Each agent receives: `$SCRATCH` path, the review checkout path, diff output, list of changed files, the [Review Standards](#review-standards), and the instructions from its section below. PR metadata is read from files in `$SCRATCH`.
-
-Every agent also returns its findings in its final response, so a sandbox that blocks writes to `$SCRATCH` does not lose them. For each finding, agents report the evidence that supports it (command output, file and line, CI result) so the synthesis step can verify it.
-
----
-
-### Agent: rust-toolchain
-
-**Precondition:** Any `*.rs` or `Cargo.*` files changed.
-
-```bash
-uname -s
-cargo fmt --all --check
-cargo fetch --locked
-# All subsequent cargo commands: add --frozen --target-dir target/review
-```
-
-Every feature set below builds on both platforms. Note that `io-uring` is inert off Linux, so a green macOS `--all-features` run does not exercise `storage/src/linear/io_uring.rs`; only Linux compiles it.
-
-Use `--frozen` after the initial fetch to ensure we're not accidentally pulling new dependencies that aren't covered by the lockfile.
-
-Use `--target-dir target/review` for ALL cargo commands to avoid conflicting with the workspace target dir.
-
-Run `cargo clippy --workspace --all-targets` and `cargo nextest run --workspace --all-targets` for each feature set:
-
-| Feature flags               | macOS | Linux |
-| --------------------------- | ----- | ----- |
-| (none)                      | ✓     | ✓     |
-| `--no-default-features`     | ✓     | ✓     |
-| `--features ethhash,logger` | ✓     | ✓     |
-| `--all-features`            | ✓     | ✓     |
-
-`--all-features` requires rustc 1.94.1+, above the 1.94.0 workspace MSRV, because it enables `fwdctl`'s `launch` feature and its AWS SDK dependencies declare that floor. If `cargo` reports `rustc 1.94.0 is not supported by the following packages`, that is this constraint and not a defect in the PR under review.
-
-If the PR adds any new Cargo feature, test with and without it across the applicable matrix rows.
-
-**Header drift check:**
-
-```bash
-cargo build -p firewood-ffi --frozen --target-dir target/review
-git diff --exit-code ffi/firewood.h
-```
-
-Non-zero exit = stale header. Write results to `$SCRATCH/rust-toolchain.txt`.
-
----
-
-### Agent: go-toolchain
-
-**Precondition:** Any Go files in `ffi/` changed.
-
-Go bindings require the FFI build to use the workspace `target/` dir (the `LDFLAGS` in `ffi/firewood.go` reference it directly — do not use `--target-dir` here):
-
-```bash
-cargo build -p firewood-ffi -F logger --frozen
-cd ffi
-./scripts/lint.sh
-go test ./... -race
-```
-
-Write results to `$SCRATCH/go-toolchain.txt`. Report any lint violations or test failures.
-
----
-
-### Agent: code-quality
-
-**Always activated.** Read all changed files in full. Do not skim diffs — read the actual source for context. Read PR metadata from `$SCRATCH/pr.json` and `$SCRATCH/pr-comments.json` if present.
-
-Read `STYLE_GUIDE.md` in full and apply every rule to the changed code.
-
-Review the PR description against `.github/pull_request_template.md`:
-
-- Every template section is present and follows `CONTRIBUTING.md` § Before Requesting a Review. *How this was tested* notes important validation that was not run. *Breaking Changes* either says "None" or checks each component whose public interface the change breaks — as listed in `RELEASE.md` § Versioning Policy — with a brief compatibility explanation after each checked box. Flag "None" when the diff contains such a break.
-- Claims are factual and match the diff; motivation, behavior, scope, and impact are stated.
-- The first line of *Why this should be merged* says what is broken, the first line of *How this works* says how the change fixes it, and the rest does not restate the diff. If not, report a Warning and include a replacement written per [Writing a PR Description](#writing-a-pr-description).
-- It uses vocabulary from the README and codebase and introduces no undefined terms.
-- Labels match `LABELS.md` § How labels get applied (e.g. `area/c-chain`, `breaking-change`).
-
-Additionally:
-
-- Read `CLAUDE.md`, `CONTRIBUTING.md`, and `STYLE_GUIDE.md` in full and check whether this PR's changes create any gaps or inconsistencies in those documents. Suggest specific wording updates if helpful.
-- If this review session itself introduces new conventions (e.g., a new skill, new workflow), note what should be added to `AGENTS.md`, `CONTRIBUTING.md`, or `STYLE_GUIDE.md`.
-
-Write findings to `$SCRATCH/code-quality.txt`.
-
----
-
-### Agent: ci-review
-
-**Precondition:** Any `.github/**` files changed.
-
-1. Read all changed workflow YAML files in full.
-2. **Efficiency:** redundant steps, matrix entries that duplicate coverage, jobs that could parallelize, missing `cache` steps.
-3. **Correctness:** wrong trigger events, missing `permissions`, broken `if:` conditionals, misuse of `continue-on-error`, pinned action SHA vs tag inconsistencies.
-4. **`act` validation** (if available):
+3. **Check out once.** Use a detached worktree in the scratch directory, which leaves the user's branches and working tree alone:
 
    ```bash
-   act --list
-   act -n -j <modified-job>
+   git fetch https://github.com/ava-labs/firewood.git pull/<PR>/head && git worktree add --detach $SCRATCH/checkout <headRefOid>
    ```
 
-   Report output. If `act` is unavailable, note it.
-5. **Realized CI results** — prefer the `github` MCP if available, otherwise fall back to `gh`:
+   Subagents share this checkout and never create their own.
+4. **Size** is judged by the pr-metadata agent ([agents/pr-metadata.md](agents/pr-metadata.md) step 4).
 
-   **MCP (preferred):**
+### Local review
 
-   ```text
-   mcp__github__pull_request_read → extract check_runs/status fields → write to $SCRATCH/ci-checks.json
-   ```
+1. **Pick the tree under review.**
+   - The named branch is checked out here, or no branch was named: the working tree. Run `git status --porcelain`. If both staged and unstaged changes exist and the user has not said which to review, ask: "Review the workspace as-is, or stash unstaged changes first?" To stash: `git stash push --keep-index --include-untracked -m firewood-review-<scratch-dir-name>`, then record the entry's SHA from `git stash list --format='%H %gs'`. The stash stack is shared with every worktree and session, so restore by SHA in step 7, never with a bare `git stash pop`.
+   - The named branch is not checked out here: `git worktree add --detach $SCRATCH/checkout <branch>`. It builds from an empty `target/`; do not point it at another checkout's target directory, which concurrent builds there would contend for.
+2. **Find the PR.** `gh pr view <branch> --json number,headRefOid` (omit `<branch>` for the current branch). If one exists, run [PR review](#pr-review) step 2 for it; skip the gate, since self-review of a draft is normal.
+3. **Diff base.** `git merge-base <branch> origin/main`, after `git fetch https://github.com/ava-labs/firewood.git main` if needed.
 
-   **CLI fallback:**
+Step 3 runs the toolchain unless the tree under review matches a tree CI already ran on.
 
-   ```bash
-   gh pr checks <PR_NUMBER> --json name,state,bucket,link,workflow,startedAt,completedAt \
-     > "$SCRATCH/ci-checks.json"
-   ```
+### PR description only
 
-   Compare expected jobs vs actual. Flag failures, unexpected skips, or jobs that didn't run.
+1. Skip the gate and the checkout. Run PR review step 2 and `gh pr diff <PR> > $SCRATCH/pr.diff`.
+2. Write a replacement per [references/pr-description.md](references/pr-description.md), verifying each claim against the diff, the code, or `ci-checks.json`.
+3. Present it with a one-line note for each claim you dropped or changed. Do not edit the PR unless the user asks. Stop here.
 
-Write findings to `$SCRATCH/ci-review.txt`.
+## 2. Select agents
 
----
+List changed files (`git diff --name-only <base>...<head>`, plus uncommitted and untracked files when reviewing a working tree) into `$SCRATCH/changed-files.txt`, then select:
 
-## Phase 2: Synthesis
+| Agent | When | Brief |
+| --- | --- | --- |
+| code-quality | always | [agents/code-quality.md](agents/code-quality.md) |
+| pr-metadata | a PR exists, in either mode | [agents/pr-metadata.md](agents/pr-metadata.md) |
+| ci-review | any `.github/**` change | [agents/ci-review.md](agents/ci-review.md) |
 
-After all agents complete, read `$SCRATCH/*.txt` (and the agents' final responses) and aggregate into a single report:
+## 3. Toolchain and CI
 
-1. **Verify before reporting.** Agent output is a lead, not a conclusion. For every Blocking or Warning finding, confirm it yourself: read the cited code, reproduce the command, or check it against realized CI results (fetch them with the `ci-review` command above if that agent did not run).
+Required CI checks are authoritative for build, lint, and test: they cover every platform and feature profile, including `io-uring` on Linux, which macOS never compiles. Build results depend on the tree, not the commit, so a local build adds nothing when CI tested the tree under review. Compare trees, not SHAs: a clean merge or rebase produces a new commit with the same tree.
 
-   Required CI checks are authoritative for build, lint, and test outcomes; CI covers every platform and feature set that matters, including `io-uring` on Linux. A failure in CI is Blocking. A failure seen only locally is never Blocking — local toolchains and configuration differ from CI — so report it as a Warning, with the command and output, and do not let it change the verdict.
+CI does not test the PR head's own tree. On `pull_request` events it checks out the head merged into the base branch as it was when the run started. The run log names both commits:
 
-   Drop findings you cannot verify, or downgrade them to questions for the author. Never report an unverified finding as Blocking.
+```bash
+run=$(gh run list --commit <headRefOid> --workflow ci.yaml --event pull_request --json databaseId --jq '.[0].databaseId')
+gh run view $run --log > $SCRATCH/ci-run.log
+grep -m1 -oE 'Merge [0-9a-f]{40} into [0-9a-f]{40}' $SCRATCH/ci-run.log   # Merge <head> into <ci-base>
+git merge-tree --write-tree <ci-base> <headRefOid>                          # the tree CI tested
+```
 
-2. Three severity tiers:
-   - **Blocking** — must fix before merge (failing required CI checks, `unwrap` in prod, unsafe soundness issues, significant correctness, architecture, design, or maintainability concerns)
-   - **Warning** — should fix, non-blocking (failures seen only locally, stale `ffi/firewood.h`, missing edge case tests, minor error context gaps, incomplete PR description)
-   - **nit** — optional; the author may ignore it (doc wording, style, AGENTS.md updates, CI efficiency)
+Fetch `<ci-base>` from the upstream URL first if it is not local.
 
-   Questions to the author are listed separately from findings.
+- **PR review:** do not build locally. CI tested the head merged into its base, which is what lands.
+- **Local review:** compare the tree CI tested with the tree under review (`git rev-parse <ref>^{tree}`, from a clean working tree; uncommitted changes always differ). A branch rebased onto the same base CI used matches; one rebased onto a newer base does not. With no PR, CI never ran.
 
-3. **Recommend a verdict** per `CONTRIBUTING.md` § Code Review Process:
-   - **Approve** — the change is an improvement over the current codebase. Warnings and nits may remain as comments.
-   - **Comment** — the review is incomplete, or it raises only questions or optional suggestions that need answers before a decision.
-   - **Request changes** — at least one verified Blocking finding, or the PR is too large to review in 30–60 minutes (include a proposed split). The same reviewer re-reviews after revisions.
+**PR review, or trees match:** do not build locally unless the user asks. If any check in `ci-checks.json` is pending, wait in a background Bash (`run_in_background`), which notifies once when the checks finish:
 
-4. Present the report in the current conversation, including any replacement PR description from `code-quality` so the reviewer can offer it to the author. Do not publish to GitHub unless the user explicitly asks.
+```bash
+gh pr checks <PR> --watch --interval 60 > /dev/null; gh pr checks <PR> --json name,state,bucket,link,workflow,completedAt > $SCRATCH/ci-checks.json
+```
 
-5. If a worktree was created: offer to exit and clean it up. Confirm no other worktrees or checkouts were created during the review; remove any that were.
+**Trees differ, or CI never ran:** start the local toolchain in the background before dispatching agents, so both run at once. Run it in the tree under review in a background Bash, logging to `$SCRATCH/toolchain.log`:
 
-6. If changes were stashed: `git stash pop` unconditionally before finishing.
+- `just prepush-lite` by default.
+- `just prepush` when the change touches `ffi/`, `Cargo.toml` or `Cargo.lock`, or code gated behind a feature that `debug-ethhash-logger` does not enable (see `AGENTS.md` § PR Strategy).
 
-7. Clean up: `rm -rf "$SCRATCH"` after presenting the report.
+`--all-features` needs rustc 1.94.1 or newer (`AGENTS.md` § Toolchain Floor). `rustc 1.94.0 is not supported by the following packages` is a local toolchain problem, not a defect in the change.
+
+## 4. Dispatch review agents
+
+Dispatch every selected agent in **one message** so they run in parallel, as `general-purpose` subagents. Subagents do not see this conversation, so each prompt contains:
+
+- the absolute paths of the checkout and `$SCRATCH`, and the PR number or "local";
+- the base and head SHAs (or "working tree");
+- the instruction to read its brief and [references/review-standards.md](references/review-standards.md) by absolute path (this skill's directory is `${CLAUDE_SKILL_DIR}`) and follow both;
+- its output file, `$SCRATCH/<agent>.md`.
+
+Each brief tells its agent to repeat its findings in its final message, so a sandbox that blocks writes to `$SCRATCH` does not lose them.
+
+## 5. Verify
+
+Agent findings are leads, not conclusions. For every Blocking and Warning finding, read the cited code, reproduce the command, or check it against `ci-checks.json`. Downgrade what you cannot confirm to a question for the author, or drop it. Never report an unverified finding as Blocking.
+
+In PR review, CI status goes in the § 6 CI summary only, never in a finding: a failing required check already blocks the merge, and GitHub, not a local run, is the authority on it. In local review there is no CI yet, so report each local failure as a Warning with its command and output.
+
+## 6. Report
+
+Present, in this order:
+
+1. **Verdict** — Approve, Comment, or Request changes, with a one-sentence reason (rule in [references/review-standards.md](references/review-standards.md)).
+2. **Blocking**, **Warning**, and **nit** findings, each with `file:line`, the rule it rests on, and the change that resolves it.
+3. **Questions for the author.**
+4. **CI and toolchain summary** — required checks, local commands run, and anything not run.
+5. **Replacement PR description**, if pr-metadata wrote one.
+
+## 7. Clean up
+
+- Stashed: `git stash apply <sha>`, even if the review failed partway; then find the entry's current `stash@{n}` by its message and drop it.
+- Checkout created: `git worktree remove $SCRATCH/checkout`. Confirm with `git worktree list` that no other checkout was created; remove any that was.
