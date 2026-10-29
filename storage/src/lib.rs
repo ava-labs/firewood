@@ -140,6 +140,7 @@ pub use path::TriePath;
 pub use path::TriePathAsPackedBytes;
 pub use path::TriePathFromPackedBytes;
 pub use path::TriePathFromUnpackedBytes;
+pub use path::prefix_upper_bound;
 pub use rlp::NULL_RLP;
 pub use rlp::RlpError;
 pub use rlp::RlpItem;

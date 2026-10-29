@@ -207,3 +207,74 @@ impl Extend<PathComponent> for PathGuard<'_> {
         self.buf.extend(iter);
     }
 }
+
+/// Returns the exclusive upper bound of paths starting with `prefix`,
+/// in lexicographic order.
+///
+/// Increments the rightmost component below `0xF` and drops everything
+/// after it: `A77FFF` becomes `A78`. The result need not end on a byte boundary.
+///
+/// Returns `None` for empty or all-`F` prefixes, whose ranges are
+/// unbounded above.
+#[must_use]
+pub fn prefix_upper_bound(prefix: &[PathComponent]) -> Option<PathBuf> {
+    for (index, component) in prefix.iter().enumerate().rev() {
+        if let Some(next) = component.checked_next() {
+            let mut bound: PathBuf = prefix.iter().take(index).copied().collect();
+            bound.push(next);
+            return Some(bound);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn components(nibbles: &[u8]) -> PathBuf {
+        nibbles
+            .iter()
+            .map(|&n| PathComponent::try_new(n).expect("test nibble in range"))
+            .collect()
+    }
+
+    #[test]
+    fn upper_bound_increments_the_last_component() {
+        assert_eq!(
+            prefix_upper_bound(&components(&[0xA, 0x7, 0x1])),
+            Some(components(&[0xA, 0x7, 0x2]))
+        );
+    }
+
+    #[test]
+    fn upper_bound_carries_out_of_trailing_max_components() {
+        // Trailing 0xF components are dropped by the carry, so the result is
+        // shorter than the input and may end mid-byte.
+        assert_eq!(
+            prefix_upper_bound(&components(&[0xA, 0xF])),
+            Some(components(&[0xB]))
+        );
+        assert_eq!(
+            prefix_upper_bound(&components(&[0xA, 0xF, 0xF])),
+            Some(components(&[0xB]))
+        );
+        // The carry stops at the first non-F component and keeps everything
+        // before it.
+        assert_eq!(
+            prefix_upper_bound(&components(&[0xA, 0x7, 0xF])),
+            Some(components(&[0xA, 0x8]))
+        );
+    }
+
+    #[test]
+    fn upper_bound_of_an_all_max_prefix_is_none() {
+        assert_eq!(prefix_upper_bound(&components(&[0xF, 0xF])), None);
+    }
+
+    #[test]
+    fn upper_bound_of_the_empty_prefix_is_none() {
+        // The empty prefix covers the entire key space; nothing sorts above it.
+        assert_eq!(prefix_upper_bound(&[]), None);
+    }
+}
