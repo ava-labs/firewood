@@ -16,7 +16,7 @@ Derived from `CONTRIBUTING.md` § Code Review Process. Apply them to every findi
 | Tier | Meaning | Examples |
 | --- | --- | --- |
 | Blocking | Must change before merge | panic the lints cannot see (`expect`, `panic!`, `unreachable!`) reachable from input in production; unsound `unsafe`; significant correctness, architecture, design, or maintainability problem |
-| Warning | Should change; does not block | local toolchain failure (local review only); stale `ffi/firewood.h`; missing edge-case test; thin error context; PR description that fails [pr-description.md](pr-description.md) |
+| Warning | Should change; does not block | local toolchain failure (local review only); missing edge-case test; thin error context; PR description that fails [pr-description.md](pr-description.md) |
 | nit | Optional | wording, style the linters do not enforce, doc updates, CI efficiency |
 
 In PR review, CI results are reported in the CI summary, not as findings. Questions for the author are listed apart from findings.

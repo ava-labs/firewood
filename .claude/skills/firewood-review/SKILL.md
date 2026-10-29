@@ -148,12 +148,6 @@ gh pr checks <PR> --watch --interval 60 > /dev/null; gh pr checks <PR> --json na
 - `just prepush-lite` by default.
 - `just prepush` when the change touches `ffi/`, `Cargo.toml` or `Cargo.lock`, or code gated behind a feature that `debug-ethhash-logger` does not enable (see `AGENTS.md` § PR Strategy).
 
-**Either way, when `ffi/src/**` or `ffi/build.rs` changed:** CI does not check for a stale C header (#2373), so check it in the tree under review:
-
-```bash
-cd <tree-under-review> && just ci-build-ffi && git diff --exit-code ffi/firewood.h
-```
-
 ## 4. Dispatch review agents
 
 Dispatch every selected agent in **one message** so they run in parallel, as `general-purpose` subagents. Subagents do not see this conversation, so each prompt contains:
