@@ -51,25 +51,25 @@ use crate::merkle::holes::find_holes_after_change_proof;
 use crate::merkle::holes::find_holes_after_range_proof;
 use crate::proofs::holes::KeySpan;
 
-type Map = BTreeMap<Vec<u8>, Vec<u8>>;
+pub(super) type Map = BTreeMap<Vec<u8>, Vec<u8>>;
 type Trie<H> = Merkle<NodeStore<Committed, MemStore, H>>;
 
-fn map(pairs: &[(&[u8], &[u8])]) -> Map {
+pub(super) fn map(pairs: &[(&[u8], &[u8])]) -> Map {
     pairs
         .iter()
         .map(|(k, v)| (k.to_vec(), v.to_vec()))
         .collect()
 }
 
-fn trie<H: HashMode>(m: &Map) -> Trie<H> {
+pub(super) fn trie<H: HashMode>(m: &Map) -> Trie<H> {
     init_merkle::<H, _, _, _>(m.iter().map(|(k, v)| (k.clone(), v.clone())))
 }
 
-fn root<H: HashMode>(t: &Trie<H>) -> HashKey {
+pub(super) fn root<H: HashMode>(t: &Trie<H>) -> HashKey {
     HashedNodeReader::root_hash(t.nodestore()).unwrap()
 }
 
-fn nibbles(key: &[u8]) -> Vec<PathComponent> {
+pub(super) fn nibbles(key: &[u8]) -> Vec<PathComponent> {
     Vec::<PathComponent>::path_from_packed_bytes(key)
 }
 
@@ -103,11 +103,15 @@ fn range_holes<H: HashMode>(
     (verified, holes)
 }
 
+/// A key range `[start, end]` with `None` for an absent bound, as the
+/// oracle's [`in_applied`] reads it.
+pub(super) type Applied = (Option<Vec<u8>>, Option<Vec<u8>>);
+
 /// The applied range of a verified range proof, as the walk infers it. A
 /// proof whose start proof is empty labels nothing below its start key, so
 /// no lower bound is reported and the oracle's coverage check applies only
 /// above the right edge.
-fn applied_range(verified: &VerifiedRangeProof) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+pub(super) fn applied_range(verified: &VerifiedRangeProof) -> Applied {
     let ctx = verified.verification();
     let start = if verified.proof().start_proof().is_empty() {
         None
@@ -117,7 +121,7 @@ fn applied_range(verified: &VerifiedRangeProof) -> (Option<Vec<u8>>, Option<Vec<
     (start, ctx.right_edge_key().map(<[u8]>::to_vec))
 }
 
-fn in_applied(key: &[u8], (start, end): &(Option<Vec<u8>>, Option<Vec<u8>>)) -> bool {
+pub(super) fn in_applied(key: &[u8], (start, end): &Applied) -> bool {
     start.as_deref().is_none_or(|s| key >= s) && end.as_deref().is_none_or(|e| key <= e)
 }
 
@@ -133,7 +137,7 @@ fn is_deletion(hole: &Hole) -> bool {
 }
 
 /// Whether `hole` covers `key`: the key lies under the span, or is the point.
-fn covers(hole: &Hole, key: &[u8]) -> bool {
+pub(super) fn covers(hole: &Hole, key: &[u8]) -> bool {
     match hole {
         Hole::Missing(s) | Hole::Stale(s) | Hole::Surplus(s) | Hole::Synced(s) => {
             nibbles(key).starts_with(s.prefix())
@@ -148,7 +152,7 @@ fn covers(hole: &Hole, key: &[u8]) -> bool {
 /// except that under the Ethereum mode an account value (32-byte key) is
 /// compared with its `storageRoot` field masked, since hashing derives that
 /// field and the walk reports storage differences through spans.
-fn values_equal<H: HashMode>(key: &[u8], a: &[u8], b: &[u8]) -> bool {
+pub(super) fn values_equal<H: HashMode>(key: &[u8], a: &[u8], b: &[u8]) -> bool {
     if H::ALGORITHM.is_ethereum()
         && key.len() == 32
         && let (Ok(a), Ok(b)) = (
@@ -173,10 +177,10 @@ fn equal_under<H: HashMode>(t: &Map, l: &Map) -> bool {
 
 /// Check every label against the flat maps and check coverage of the
 /// complement of the applied range.
-fn assert_matches_truth<H: HashMode>(
+pub(super) fn assert_matches_truth<H: HashMode>(
     target: &Map,
     local: &Map,
-    applied: &(Option<Vec<u8>>, Option<Vec<u8>>),
+    applied: &Applied,
     holes: &[Hole],
 ) {
     for hole in holes {
@@ -221,16 +225,10 @@ fn assert_matches_truth<H: HashMode>(
                     "PointStale at {key:02x?} but local matches the target"
                 );
             }
-            Hole::PointSurplus { key } => {
-                assert!(
-                    target.get(&**key).is_none(),
-                    "PointSurplus at {key:02x?} but the target holds it"
-                );
-                assert!(
-                    local.get(&**key).is_some(),
-                    "PointSurplus at {key:02x?} but local lacks it"
-                );
-            }
+            Hole::PointSurplus { key } => assert!(
+                target.get(&**key).is_none() && local.get(&**key).is_some(),
+                "PointSurplus at {key:02x?} but the target holds it or local lacks it"
+            ),
         }
     }
 
@@ -246,8 +244,11 @@ fn assert_matches_truth<H: HashMode>(
             // prefixes of the start key, and the end proof's terminal when it
             // lies above the proven edge, which is the target's first key past
             // it. A probed point whose value both sides share is silent, so
-            // only those keys may go uncovered; every other key outside the
-            // applied range is covered exactly once.
+            // only those keys may go uncovered. Every other key outside the
+            // applied range is covered exactly once, except that the start and
+            // end boundaries' terminal spans may both contain a key the target
+            // proves empty; such duplicates are deletions on both sides and
+            // idempotent.
             let (start, end) = applied;
             let prefix_point = start
                 .as_deref()
@@ -265,11 +266,12 @@ fn assert_matches_truth<H: HashMode>(
             if (prefix_point || successor_point) && both_equal && covering.is_empty() {
                 continue;
             }
-            assert_eq!(
-                covering.len(),
-                1,
-                "key {key:02x?} outside the applied range is covered by {covering:?}"
-            );
+            if covering.len() != 1 {
+                assert!(
+                    !covering.is_empty() && covering.iter().all(|h| is_deletion(h)),
+                    "key {key:02x?} outside the applied range is covered by {covering:?}"
+                );
+            }
         }
     }
 
@@ -289,7 +291,7 @@ fn assert_matches_truth<H: HashMode>(
     assert_eq!(sorted, lower_bounds, "labels are sorted by lowest key");
 }
 
-fn spans(holes: &[Hole]) -> Vec<(&'static str, Vec<u8>)> {
+pub(super) fn spans(holes: &[Hole]) -> Vec<(&'static str, Vec<u8>)> {
     holes
         .iter()
         .filter_map(|h| {
@@ -305,7 +307,7 @@ fn spans(holes: &[Hole]) -> Vec<(&'static str, Vec<u8>)> {
         .collect()
 }
 
-fn fetch_labels(holes: &[Hole]) -> usize {
+pub(super) fn fetch_labels(holes: &[Hole]) -> usize {
     holes
         .iter()
         .filter(|h| {
@@ -869,13 +871,13 @@ fn hash_mode_mismatch_rejected() {
     ));
 }
 
-fn new_db<H: HashMode>() -> (Db<H>, tempfile::TempDir) {
+pub(super) fn new_db<H: HashMode>() -> (Db<H>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::<H>::new(dir.path(), DbConfig::builder().build()).unwrap();
     (db, dir)
 }
 
-fn commit<H: HashMode>(db: &Db<H>, m: &Map) -> HashKey {
+pub(super) fn commit<H: HashMode>(db: &Db<H>, m: &Map) -> HashKey {
     let batch: Vec<BatchOp<&[u8], &[u8]>> = m
         .iter()
         .map(|(k, v)| BatchOp::Put {
@@ -1219,7 +1221,7 @@ fn account_with_slots(slots: &[u8]) -> Map {
 /// replacement *content* for fetch labels is read from `target`. Nothing here
 /// consults the local map, so a span that the write API cannot express
 /// surfaces as a convergence failure rather than being papered over.
-fn remedy_batch(target: &Map, holes: &[Hole]) -> Vec<BatchOp<Vec<u8>, Vec<u8>>> {
+pub(super) fn remedy_batch(target: &Map, holes: &[Hole]) -> Vec<BatchOp<Vec<u8>, Vec<u8>>> {
     let mut batch = Vec::new();
     let delete_span = |batch: &mut Vec<BatchOp<Vec<u8>, Vec<u8>>>, span: &KeySpan| {
         for prefix in span.delete_prefixes() {
@@ -1266,7 +1268,7 @@ fn remedy_batch(target: &Map, holes: &[Hole]) -> Vec<BatchOp<Vec<u8>, Vec<u8>>> 
 /// against the maps, commit the remedies through the write API, and assert
 /// that the walk over the committed result finds only agreement. Returns the
 /// labels of the first walk and of the walk over the repaired state.
-fn assert_converges_through_db<H: HashMode>(
+pub(super) fn assert_converges_through_db<H: HashMode>(
     target: &Map,
     local: &Map,
     db: &Db<H>,
@@ -1299,7 +1301,7 @@ fn assert_converges_through_db<H: HashMode>(
 }
 
 /// Every key-value pair a view holds, as a map.
-fn view_map(view: &dyn api::DynDbView) -> Map {
+pub(super) fn view_map(view: &dyn api::DynDbView) -> Map {
     view.iter()
         .unwrap()
         .map(|kv| {
