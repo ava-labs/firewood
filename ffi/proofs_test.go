@@ -497,14 +497,6 @@ func TestChangeProofMethodDropRace(t *testing.T) {
 		call func(*ChangeProof)
 	}{
 		{
-			name: "FindNextKey",
-			call: func(p *ChangeProof) { _, _ = p.FindNextKey(nothing()) },
-		},
-		{
-			name: "UnverifiedCodeHashes",
-			call: func(p *ChangeProof) { _, _ = p.CodeHashes() },
-		},
-		{
 			name: "Verify",
 			call: func(p *ChangeProof) {
 				v, err := p.Verify(endRoot, nothing(), nothing(), changeProofLenUnbounded)
@@ -746,33 +738,6 @@ func TestRangeProofCodeHashes(t *testing.T) {
 	r.NoError(err)
 
 	proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenUnbounded)
-
-	hashes, err := proof.CodeHashes()
-	if selectedHashMode == ethhashKey {
-		r.NoError(err, "%T.CodeHashes()", proof)
-		r.Equal([]Hash{codeHash}, hashes)
-	} else {
-		r.ErrorContains(err, "code hash iteration requires an ethereum-mode proof")
-	}
-}
-
-func TestChangeProofCodeHashes(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	// Baseline insert so the change proof's start root is non-empty. The key
-	// is shorter than 32 bytes so it is naturally skipped by the code-hash
-	// extractor's account-key filter even if it were ever present in
-	// batch_ops (it should not be, since it is unchanged in endRoot).
-	startRoot, err := db.Update([]BatchOp{Put([]byte("baseline"), []byte("v"))})
-	r.NoError(err)
-
-	key, val, codeHash := ethAccountWithCodeHash(t)
-	endRoot, err := db.Update([]BatchOp{Put(key[:], val)})
-	r.NoError(err)
-
-	proof, err := db.ChangeProof(startRoot, endRoot, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
 
 	hashes, err := proof.CodeHashes()
 	if selectedHashMode == ethhashKey {
@@ -1219,7 +1184,7 @@ func TestVerifyEmptyChangeProofRange(t *testing.T) {
 	r.NoError(verified.Drop())
 }
 
-func TestVerifyAndCommitChangeProof(t *testing.T) {
+func TestVerifiedChangeProofCommit(t *testing.T) {
 	r := require.New(t)
 	dbA := newTestDatabase(t)
 	dbB := newTestDatabase(t)
@@ -1260,51 +1225,6 @@ func TestVerifyAndCommitChangeProof(t *testing.T) {
 		r.NoError(err, "Get key %d", i)
 		r.Equal(vals[i], got, "Value mismatch for key %d", i)
 	}
-	r.NoError(verified.Drop())
-}
-
-func TestChangeProofFindNextKey(t *testing.T) {
-	r := require.New(t)
-	dbA := newTestDatabase(t)
-	dbB := newTestDatabase(t)
-
-	// Insert first half of data in the first batch
-	_, _, batch := kvForTest(10000)
-	rootA, err := dbA.Update(batch[:5000])
-	r.NoError(err)
-
-	_, err = dbB.Update(batch[:5000])
-	r.NoError(err)
-
-	// Insert the rest in the second batch
-	rootAUpdated, err := dbA.Update(batch[5000:])
-	r.NoError(err)
-
-	proof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenTruncated)
-	r.NoError(err)
-
-	// Verify the change proof on dbB.
-	proof = transferChangeProof(t, proof, dbB)
-	verified, err := proof.Verify(rootAUpdated, nothing(), nothing(), changeProofLenTruncated)
-	r.NoError(err)
-
-	// FindNextKey is on the proof, not the verified proof.
-	nextRange, err := proof.FindNextKey(nothing())
-	r.NoError(err)
-	r.NotNil(nextRange)
-	startKey := nextRange.StartKey
-	r.NotEmpty(startKey)
-	r.False(nextRange.EndKey.HasValue())
-
-	// Commit the proof on dbB.
-	_, err = verified.Commit()
-	r.NoError(err)
-
-	// FindNextKey still works — it reads from the proof, not the proposal.
-	nextRange, err = proof.FindNextKey(nothing())
-	r.NoError(err)
-	r.NotNil(nextRange)
-	r.Equal(startKey, nextRange.StartKey)
 	r.NoError(verified.Drop())
 }
 
@@ -1654,16 +1574,6 @@ func TestUnboundChangeProofOutlivesDatabase(t *testing.T) {
 				return proof
 			},
 		},
-		{
-			name: "verify_and_commit_change",
-			makeProof: func(t *testing.T, db *Database, startRoot, endRoot Hash) *ChangeProof {
-				proof, err := db.ChangeProof(startRoot, endRoot, nothing(), nothing(), changeProofLenUnbounded)
-				require.NoError(t, err)
-				_, err = db.VerifyAndCommitChangeProof(proof, endRoot, nothing(), nothing(), changeProofLenUnbounded)
-				require.NoError(t, err)
-				return proof
-			},
-		},
 	}
 
 	for _, tt := range tests {
@@ -1679,8 +1589,6 @@ func TestUnboundChangeProofOutlivesDatabase(t *testing.T) {
 			require.NoError(t, db.Close(oneSecCtx(t), WithForceCloseHandles()))
 
 			_, err = proof.Marshal()
-			require.NoError(t, err)
-			_, err = proof.FindNextKey(nothing())
 			require.NoError(t, err)
 			_, err = proof.Verify(endRoot, nothing(), nothing(), changeProofLenUnbounded)
 			require.ErrorIs(t, err, errDBClosed)
