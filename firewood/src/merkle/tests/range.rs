@@ -521,6 +521,198 @@ fn test_divergent_terminal_before_first_kv<H: HashMode>() {
     .unwrap();
 }
 
+/// The trie of `OUT_OF_RANGE_ITEMS` proved over `[0x00, 0x25]` has an end
+/// proof that runs from the root through the branch at nibble `2`, which the
+/// start proof does not share, to the leaf `0x2580`, past the proven range.
+const OUT_OF_RANGE_ITEMS: &[(&[u8], &[u8])] =
+    &[(b"\x10", b"a"), (b"\x20\x00", b"b"), (b"\x25\x80", b"c")];
+const OUT_OF_RANGE_START: &[u8] = b"\x00";
+const OUT_OF_RANGE_END: &[u8] = b"\x25";
+
+/// Verifies the `OUT_OF_RANGE_ITEMS` range proof after `tamper` edits its end
+/// proof and key-values.
+fn verify_tampered_out_of_range<H: HashMode>(
+    tamper: impl FnOnce(&mut Vec<ProofNode>, &mut KeyValuePairs),
+) -> Result<ProvenRange, api::Error> {
+    let merkle = init_merkle::<H, _, _, _>(OUT_OF_RANGE_ITEMS.iter().copied());
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let honest = merkle
+        .range_proof(Some(OUT_OF_RANGE_START), Some(OUT_OF_RANGE_END), None)
+        .unwrap();
+    let mut end_nodes = honest.end_proof().as_ref().to_vec();
+    let mut key_values: KeyValuePairs = honest
+        .key_values()
+        .iter()
+        .map(|(k, v)| (k.as_ref().into(), v.as_ref().into()))
+        .collect();
+    tamper(&mut end_nodes, &mut key_values);
+    let proof = RangeProof::new(
+        crate::Proof::<Box<[ProofNode]>>::new(honest.start_proof().as_ref().into()),
+        crate::Proof::<Box<[ProofNode]>>::new(end_nodes.into_boxed_slice()),
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
+    crate::merkle::verify_range_proof(
+        Some(OUT_OF_RANGE_START),
+        Some(OUT_OF_RANGE_END),
+        &root_hash,
+        H::ALGORITHM,
+        &proof,
+    )
+}
+
+#[hash_mode]
+#[test]
+fn test_out_of_range_terminal_honest_proof_verifies<H: HashMode>() {
+    let proven = verify_tampered_out_of_range::<H>(|end_nodes, _| {
+        assert_eq!(
+            end_nodes.last().map(|node| node.key.clone()),
+            Some(nibble_path(&[2, 5, 8, 0])),
+            "the end proof ends at the leaf past the proven range",
+        );
+    })
+    .unwrap();
+    assert_eq!(proven.end.as_deref(), Some(OUT_OF_RANGE_END));
+}
+
+#[hash_mode]
+#[test]
+fn test_tampered_out_of_range_terminal_rejected<H: HashMode>() {
+    // `verify_edge` never runs on an out-of-range end proof, so the walk to
+    // its terminal is what authenticates these fields. The root-hash
+    // reconstruction recomputes the parent's on-path slot rather than reading
+    // it, so only the walk catches the first edit.
+    type Tamper = fn(&mut [ProofNode]);
+    let tampers: [(&str, Tamper); 4] = [
+        ("parent's on-path child", |nodes| {
+            let [.., parent, _] = nodes else {
+                panic!("the end proof descends below the root");
+            };
+            parent
+                .child_hashes
+                .insert(U4::new_masked(5), TrieHash::from([0xab; 32]).into());
+        }),
+        ("terminal key", |nodes| {
+            let terminal = nodes.last_mut().unwrap();
+            *terminal.key.last_mut().unwrap() = PathComponent(U4::new_masked(9));
+        }),
+        ("terminal value", |nodes| {
+            nodes.last_mut().unwrap().value_digest =
+                Some(ValueDigest::Value(b"forged".to_vec().into_boxed_slice()));
+        }),
+        ("terminal child", |nodes| {
+            nodes
+                .last_mut()
+                .unwrap()
+                .child_hashes
+                .insert(U4::new_masked(3), TrieHash::from([0xab; 32]).into());
+        }),
+    ];
+    for (field, tamper) in tampers {
+        let result = verify_tampered_out_of_range::<H>(|end_nodes, _| tamper(end_nodes));
+        assert!(
+            matches!(
+                result,
+                Err(api::Error::ProofError(ProofError::EdgeProofHashMismatch {
+                    edge: ProofEdge::Right,
+                    ..
+                }))
+            ),
+            "tampered {field}: {result:?}",
+        );
+    }
+}
+
+#[hash_mode]
+#[test]
+fn test_key_value_under_out_of_range_terminal_rejected<H: HashMode>() {
+    // `0x25` sorts below the terminal `0x2580` but shares its slot under the
+    // branch at nibble `2`, so the reconstruction must hash it alongside the
+    // terminal.
+    let result = verify_tampered_out_of_range::<H>(|_, key_values| {
+        key_values.push((b"\x25".as_slice().into(), b"forged".as_slice().into()));
+    });
+    assert!(
+        matches!(
+            result,
+            Err(api::Error::ProofError(ProofError::UnexpectedHash { .. }))
+        ),
+        "forged key-value accepted: {result:?}",
+    );
+}
+
+#[hash_mode]
+#[test]
+fn test_key_value_beside_out_of_range_root_terminal_rejected<H: HashMode>() {
+    // A one-key trie's end proof is the root alone, and the reconstruction
+    // hashes the forged key alongside it.
+    let merkle = init_merkle::<H, _, _, _>([(b"\x28", b"b")]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let honest = merkle
+        .range_proof(Some(OUT_OF_RANGE_START), Some(OUT_OF_RANGE_END), None)
+        .unwrap();
+    assert_eq!(honest.end_proof().as_ref().len(), 1);
+    let forged: KeyValuePairs = vec![(b"\x20".as_slice().into(), b"forged".as_slice().into())];
+    let proof = RangeProof::new(
+        crate::Proof::<Box<[ProofNode]>>::new(honest.start_proof().as_ref().into()),
+        crate::Proof::<Box<[ProofNode]>>::new(honest.end_proof().as_ref().into()),
+        forged.into_boxed_slice(),
+        H::ALGORITHM,
+    );
+    let result = verify_range_proof(
+        Some(OUT_OF_RANGE_START),
+        Some(OUT_OF_RANGE_END),
+        &root_hash,
+        H::ALGORITHM,
+        &proof,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(api::Error::ProofError(ProofError::UnexpectedHash { .. }))
+        ),
+        "forged key-value accepted: {result:?}",
+    );
+}
+
+#[hash_mode]
+#[test]
+fn test_key_value_under_divergent_start_terminal_rejected<H: HashMode>() {
+    // The left-edge mirror: the start proof for `0x07` ends at the leaf `0x05`
+    // in slot `0`, and a forged `0x08` shares that slot. The reconstruction
+    // hashes it alongside the leaf, so the root hash rejects it.
+    let merkle = init_merkle::<H, _, _, _>([(b"\x05", b"a"), (b"\x10", b"b")]);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let (start, end): (&[u8], &[u8]) = (b"\x07", b"\x10");
+    let honest = merkle.range_proof(Some(start), Some(end), None).unwrap();
+    let mut key_values: KeyValuePairs = honest
+        .key_values()
+        .iter()
+        .map(|(k, v)| (k.as_ref().into(), v.as_ref().into()))
+        .collect();
+    key_values.insert(
+        0,
+        (
+            b"\x08".as_slice().into(),
+            b"forged".to_vec().into_boxed_slice(),
+        ),
+    );
+    let proof = RangeProof::new(
+        crate::Proof::<Box<[ProofNode]>>::new(honest.start_proof().as_ref().into()),
+        crate::Proof::<Box<[ProofNode]>>::new(honest.end_proof().as_ref().into()),
+        key_values.into_boxed_slice(),
+        H::ALGORITHM,
+    );
+    let result = verify_range_proof(Some(start), Some(end), &root_hash, H::ALGORITHM, &proof);
+    assert!(
+        matches!(
+            result,
+            Err(api::Error::ProofError(ProofError::UnexpectedHash { .. }))
+        ),
+        "forged key-value accepted: {result:?}",
+    );
+}
+
 #[hash_mode]
 #[test]
 // Tests normal range proof with both edge proofs as the existent proof.
