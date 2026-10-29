@@ -3,6 +3,7 @@
 
 mod change;
 mod collapse;
+mod descend;
 mod ethhash;
 #[cfg(feature = "ethhash")]
 mod ethhash_fuzz;

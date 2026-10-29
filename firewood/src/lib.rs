@@ -171,9 +171,11 @@ pub use merkle::verify_change_proof_root_hash;
 pub use merkle::verify_range_proof;
 pub use proofs::ChangeProof;
 pub use proofs::ChangeProofVerificationContext;
+pub use proofs::DeletePrefixes;
 pub use proofs::EmptyProofCollection;
 pub use proofs::InvalidHeader;
 pub use proofs::KeyRange;
+pub use proofs::KeySpan;
 pub use proofs::Proof;
 pub use proofs::ProofCollection;
 pub use proofs::ProofEdge;
@@ -197,10 +199,14 @@ pub mod api;
 /// A batch operation and associated types
 mod batch_op;
 
+/// Per-nibble child slots, as [`DeletePrefixes::PerNibble`] carries them.
+pub use firewood_storage::Children;
 pub use firewood_storage::EthHash;
 pub use firewood_storage::HashMode;
 /// Hashing mode used for trie nodes.
 pub use firewood_storage::NodeHashAlgorithm;
+/// One nibble of a trie path; indexes [`Children`].
+pub use firewood_storage::PathComponent;
 /// Root or node hash used by Firewood tries.
 ///
 /// This is the same type exposed as [`api::HashKey`] in the database API.
