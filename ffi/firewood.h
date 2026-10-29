@@ -81,8 +81,8 @@ typedef struct RevisionHandle RevisionHandle;
  *
  * Owns the proposal that applies the proof. The proof and the constraints
  * it was verified with travel together as a [`VerifiedChangeProof`], so a
- * commit can rebuild the proposal and `next_key_ranges` can resume from the
- * verified `end_key`.
+ * commit can rebuild the proposal and `next_key_ranges` can walk the
+ * boundary proofs again.
  */
 typedef struct VerifiedChangeProofContext VerifiedChangeProofContext;
 
@@ -3200,13 +3200,19 @@ struct CodeIteratorResult fwd_verified_change_proof_code_hash_iter(const struct 
 /**
  * Commit a verified change proof to its database.
  *
+ * The commit applies the proof's operations and, outside the applied range,
+ * the local remedies its boundary hashes justify: content the target does
+ * not hold is deleted and keys whose target value the proof carries are
+ * written. What remains to fetch is what
+ * [`fwd_verified_change_proof_next_key_ranges`] reports afterwards.
+ *
  * If the database advanced since verification, the proof is applied again
- * to the latest revision and its root re-checked against the verified end
- * root before committing, so the proven range is checked on the state it
- * lands on. The structural pass is not repeated. A proposal consumed by a
- * failed commit is rebuilt on the next call. After a successful commit the
- * root is cached, and later calls return it without touching the database.
- * The context stays usable afterwards.
+ * to the latest revision, the walk included, and its root re-checked
+ * against the verified end root before committing, so the proven range is
+ * checked on the state it lands on. The structural pass is not repeated. A
+ * proposal consumed by a failed commit is rebuilt on the next call. After a
+ * successful commit the root is cached, and later calls return it without
+ * touching the database. The context stays usable afterwards.
  *
  * # Returns
  *
@@ -3224,7 +3230,10 @@ struct CodeIteratorResult fwd_verified_change_proof_code_hash_iter(const struct 
 struct HashResult fwd_verified_change_proof_commit(struct VerifiedChangeProofContext *proof);
 
 /**
- * Returns the key ranges still to fetch after this change proof.
+ * Returns the key ranges still to fetch after this change proof, sorted
+ * ascending and coalesced where adjacent, on the same terms as
+ * [`fwd_verified_range_proof_next_key_ranges`]: the answer describes the
+ * database's latest committed revision.
  *
  * # Returns
  *
@@ -3232,6 +3241,8 @@ struct HashResult fwd_verified_change_proof_commit(struct VerifiedChangeProofCon
  * - [`NextKeyRangesResult::Ok`] containing the ranges; empty when nothing remains. The
  *   caller frees it with [`fwd_free_next_key_ranges`].
  * - [`NextKeyRangesResult::Err`] containing an error message.
+ *
+ * [`fwd_verified_range_proof_next_key_ranges`]: crate::fwd_verified_range_proof_next_key_ranges
  */
 struct NextKeyRangesResult fwd_verified_change_proof_next_key_ranges(const struct VerifiedChangeProofContext *proof);
 
