@@ -229,6 +229,9 @@ jobs:
       - name: Build Firewood FFI
         working-directory: ffi
         run: ../scripts/run-just.sh ci-build-ffi
+      # Every leg runs this, so platform-dependent cbindgen output also fails.
+      - name: Check ffi/firewood.h is up to date
+        run: ./scripts/run-just.sh ci-check-ffi-header
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
