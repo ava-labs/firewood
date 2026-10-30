@@ -4,9 +4,8 @@
 //! Helpers shared by fuzz tests: proof reconstruction from tampered parts,
 //! the rejected-by-either-check predicate, and serialization round-trips.
 
-use firewood_storage::DefaultHashMode;
+use firewood_storage::EthHash;
 use firewood_storage::HashMode;
-use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::SeededRng;
 
 use super::verify_and_check;
@@ -32,7 +31,7 @@ pub(in crate::merkle::tests) fn build_change_proof(
         Proof::new(start.into_boxed_slice()),
         Proof::new(end.into_boxed_slice()),
         ops.into_boxed_slice(),
-        DefaultHashMode::ALGORITHM,
+        EthHash::ALGORITHM,
     )
 }
 
@@ -46,14 +45,14 @@ pub(in crate::merkle::tests) fn build_range_proof(
         Proof::new(start.into_boxed_slice()),
         Proof::new(end.into_boxed_slice()),
         kvs.into_boxed_slice(),
-        DefaultHashMode::ALGORITHM,
+        EthHash::ALGORITHM,
     )
 }
 
 /// Whether a change proof is rejected by the structural check or, failing
 /// that, the root-hash check (its proposal won't match `end_root`).
 pub(in crate::merkle::tests) fn change_proof_rejected(
-    db: &Db<DefaultHashMode>,
+    db: &Db<EthHash>,
     proof: &FrozenChangeProof,
     start_root: &HashKey,
     end_root: &HashKey,
@@ -67,7 +66,7 @@ pub(in crate::merkle::tests) fn change_proof_rejected(
         end_root.clone(),
         first,
         last,
-        NodeHashAlgorithm::Ethereum,
+        EthHash::ALGORITHM,
         None,
     ) {
         Err(_) => true,
