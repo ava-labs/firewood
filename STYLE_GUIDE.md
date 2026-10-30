@@ -51,6 +51,12 @@ By default, we prohibit bare `unwrap` calls and index dereferencing, as there ar
   `Option<&[u8]>` with `None` for unbounded (+∞); reusing the empty slice there judges
   every key out of range. When either bound is threaded through new code, check every
   comparison site. See `merkle::collapse::CollapseRange`.
+- **Proof-node fields the hash does not cover**: Under the Ethereum scheme a node's hash
+  doesn't commit to every field a `ProofNode` carries; `check_node_shape` in
+  `proofs/types.rs` lists and checks the gaps. When a change adds a `ProofNode` field or
+  reads one the verifier didn't before, check whether the hash commits to it. If not, it
+  needs a check on every verification path and a test that shows the collision before the
+  rejection.
 
 ## Lint Suppression Policy
 
