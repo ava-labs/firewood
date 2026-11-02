@@ -76,9 +76,8 @@ const KEYS_PER_BATCH: usize = 16;
 /// not viable.
 const MAX_REVISIONS: usize = 16;
 
-// Keys must be 32 bytes (64 nibbles) so the checker accepts them under
-// the `ethhash` feature, where valid keys are sized like Ethereum account
-// or storage trie entries.
+// Keys must be 32 bytes (64 nibbles) so the checker accepts them in
+// Ethereum mode, where valid keys are sized like account or storage trie entries.
 #[expect(
     clippy::disallowed_methods,
     reason = "copy_from_slice panics on a length mismatch, but here it always writes an 8-byte range into a fixed 32-byte key"
