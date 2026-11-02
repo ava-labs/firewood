@@ -7,7 +7,10 @@ mod merge;
 use super::test::TestDb;
 
 mod key_length {
-    use firewood_storage::DefaultHashMode;
+    use firewood_macros::hash_mode;
+    use firewood_storage::EthHash;
+    use firewood_storage::HashMode;
+    use firewood_storage::MerkleDbHash;
     use test_case::test_matrix;
 
     use super::TestDb;
@@ -52,9 +55,18 @@ mod key_length {
         len: usize,
         use_parallel: UseParallel,
     ) {
-        let db = TestDb::<DefaultHashMode>::new_with_config(
-            DbConfig::builder().use_parallel(use_parallel).build(),
-        );
+        // TODO(RodrigoVillar): extend #[hash_mode] to support test_matrix.
+        check_proposal_key_length::<MerkleDbHash>(op, len, use_parallel.clone());
+        check_proposal_key_length::<EthHash>(op, len, use_parallel);
+    }
+
+    fn check_proposal_key_length<H: HashMode>(
+        op: fn(usize) -> Op,
+        len: usize,
+        use_parallel: UseParallel,
+    ) {
+        let db =
+            TestDb::<H>::new_with_config(DbConfig::builder().use_parallel(use_parallel).build());
         let result = db.propose(vec![op(len)]).map(drop);
         if len <= MAX_KEY_BYTES {
             assert!(result.is_ok(), "{result:?}");
@@ -67,9 +79,10 @@ mod key_length {
     }
 
     /// A proposal built on another proposal goes through the same check.
+    #[hash_mode]
     #[test]
-    fn proposing_on_a_proposal_enforces_the_key_length_limit() {
-        let db = TestDb::<DefaultHashMode>::new();
+    fn proposing_on_a_proposal_enforces_the_key_length_limit<H: HashMode>() {
+        let db = TestDb::<H>::new();
         let base = db.propose(vec![put(1)]).unwrap();
         let err = base
             .propose(vec![put(MAX_KEY_BYTES + 1)])

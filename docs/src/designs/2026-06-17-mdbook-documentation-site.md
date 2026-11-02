@@ -380,11 +380,11 @@ site/                         ← uploaded as the Pages artifact
 
 ### `build` job steps
 
-1. **Checkout ref.** The checkout uses a PR-head-aware expression instead of the
-   hardcoded `ref: main` the previous workflow had:
+1. **Checkout ref.** The `setup-rust` action checks out a PR-head-aware ref
+   instead of the hardcoded `ref: main` the previous workflow had:
 
    ```yaml
-   ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'main' }}
+   checkout-ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'main' }}
    ```
 
    For `push`, `workflow_dispatch`, and `workflow_run` events this evaluates to
@@ -393,8 +393,9 @@ site/                         ← uploaded as the Pages artifact
    deliberate: a `workflow_dispatch` triggered against a non-`main` branch still builds
    and deploys `main`'s docs, never the dispatched branch; the published site only ever
    reflects `main`.
-2. **mdBook toolchain.** `mdbook` and `mdbook-mermaid` install via
-   `taiki-e/install-action` (pinned by commit SHA), each pinned to an explicit version.
+2. **mdBook toolchain.** `mdbook` and `mdbook-mermaid` install through the
+   `setup-rust` action's `tools` input, which passes them to `taiki-e/install-action`
+   (pinned by commit SHA), each pinned to an explicit version.
    `mdbook-linkcheck2` is **not** in the `taiki-e/install-action` manifest, so it installs
    with `cargo binstall --no-confirm mdbook-linkcheck2@<version>` (`cargo-binstall` itself
    comes from `taiki-e/install-action`). `cargo binstall` downloads a prebuilt binary when

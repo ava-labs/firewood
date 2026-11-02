@@ -13,7 +13,10 @@ updates:
       timezone: "America/Los_Angeles"
     open-pull-requests-limit: 0 # Disable non-security version updates
   - package-ecosystem: github-actions
-    directory: "/"
+    # "/" covers .github/workflows only; composite actions need their own entry.
+    directories:
+      - "/"
+      - "/.github/actions/*"
     schedule:
       interval: weekly
     labels:

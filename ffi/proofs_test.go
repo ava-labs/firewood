@@ -238,7 +238,7 @@ func TestRoundTripSerialization(t *testing.T) {
 	proofBytes := newSerializedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenUnbounded)
 
 	// Deserialize the proof.
-	proof, err := UnmarshalRangeProof(proofBytes)
+	proof, err := db.UnmarshalRangeProof(proofBytes)
 	r.NoError(err)
 
 	// serialize the proof again
@@ -433,7 +433,7 @@ func TestRangeProofMethodFreeRace(t *testing.T) {
 			// margin while keeping the -race CI run fast.
 			const iterations = 10_000
 			for range iterations {
-				p, err := UnmarshalRangeProof(proofBytes)
+				p, err := db.UnmarshalRangeProof(proofBytes)
 				require.NoError(t, err)
 
 				start := make(chan struct{})
@@ -488,7 +488,7 @@ func TestChangeProofMethodDropRace(t *testing.T) {
 			// See [TestRangeProofMethodFreeRace] for the iteration count.
 			const iterations = 10_000
 			for range iterations {
-				p, err := UnmarshalChangeProof(proofBytes)
+				p, err := db.UnmarshalChangeProof(proofBytes)
 				require.NoError(t, err)
 
 				start := make(chan struct{})
@@ -593,7 +593,7 @@ func TestRangeProofBlocksClose(t *testing.T) {
 			name: "prepared_unmarshaled",
 			makeProof: func(t *testing.T, db *Database, root Hash) *RangeProof {
 				data := newSerializedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
-				proof, err := UnmarshalRangeProof(data)
+				proof, err := db.UnmarshalRangeProof(data)
 				require.NoError(t, err)
 				require.NoError(t, db.VerifyRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated))
 				return proof
@@ -714,7 +714,7 @@ func TestUnboundRangeProofOutlivesDatabase(t *testing.T) {
 			name: "unmarshaled_range",
 			makeProof: func(t *testing.T, db *Database, root Hash) *RangeProof {
 				data := newSerializedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
-				proof, err := UnmarshalRangeProof(data)
+				proof, err := db.UnmarshalRangeProof(data)
 				require.NoError(t, err)
 				return proof
 			},
@@ -783,6 +783,57 @@ func TestRangeProofLeasesVerifyingDatabase(t *testing.T) {
 
 	r.NoError(proof.Drop())
 	r.NoError(dbB.Close(oneSecCtx(t)))
+}
+
+// TestUnmarshalRejectsOtherHashMode checks that a proof encoded for one hash
+// mode is rejected when parsed for a database in the other mode, before any
+// verification.
+func TestUnmarshalRejectsOtherHashMode(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	otherAlgorithm := MerkleDBNodeHashing
+	if selectedHashMode != ethhashKey {
+		otherAlgorithm = EthereumNodeHashing
+	}
+	other, err := New(t.TempDir(), otherAlgorithm)
+	r.NoError(err)
+	t.Cleanup(func() { require.NoError(t, other.Close(oneSecCtx(t))) })
+
+	_, _, batch := kvForTest(100)
+	startRoot, err := db.Update(batch[:50])
+	r.NoError(err)
+	endRoot, err := db.Update(batch[50:])
+	r.NoError(err)
+
+	rangeBytes := newSerializedRangeProof(t, db, endRoot, nothing(), nothing(), rangeProofLenTruncated)
+	_, err = other.UnmarshalRangeProof(rangeBytes)
+	r.ErrorContains(err, "hash mode")
+
+	changeBytes := newSerializedChangeProof(t, db, startRoot, endRoot, nothing(), nothing())
+	_, err = other.UnmarshalChangeProof(changeBytes)
+	r.ErrorContains(err, "hash mode")
+}
+
+// TestUnmarshalOnClosedDatabase checks that parsing needs an open database.
+func TestUnmarshalOnClosedDatabase(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	_, _, batch := kvForTest(100)
+	startRoot, err := db.Update(batch[:50])
+	r.NoError(err)
+	endRoot, err := db.Update(batch[50:])
+	r.NoError(err)
+	rangeBytes := newSerializedRangeProof(t, db, endRoot, nothing(), nothing(), rangeProofLenTruncated)
+	changeBytes := newSerializedChangeProof(t, db, startRoot, endRoot, nothing(), nothing())
+
+	r.NoError(db.Close(oneSecCtx(t)))
+
+	_, err = db.UnmarshalRangeProof(rangeBytes)
+	r.ErrorIs(err, errDBClosed)
+	_, err = db.UnmarshalChangeProof(changeBytes)
+	r.ErrorIs(err, errDBClosed)
 }
 
 func TestChangeProofEmptyDB(t *testing.T) {
@@ -856,7 +907,7 @@ func TestRoundTripChangeProofSerialization(t *testing.T) {
 	proofBytes := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing())
 
 	// Deserialize the proof.
-	proof, err := UnmarshalChangeProof(proofBytes)
+	proof, err := db.UnmarshalChangeProof(proofBytes)
 	r.NoError(err)
 
 	// serialize the proof again
@@ -1277,7 +1328,7 @@ func TestUnboundChangeProofOutlivesDatabase(t *testing.T) {
 			name: "unmarshaled_change",
 			makeProof: func(t *testing.T, db *Database, startRoot, endRoot Hash) *ChangeProof {
 				data := newSerializedChangeProof(t, db, startRoot, endRoot, nothing(), nothing())
-				proof, err := UnmarshalChangeProof(data)
+				proof, err := db.UnmarshalChangeProof(data)
 				require.NoError(t, err)
 				return proof
 			},

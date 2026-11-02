@@ -218,6 +218,8 @@ thread_local! {
     static METRICS_CONTEXT: RefCell<Option<MetricsContext>> = const { RefCell::new(None) };
 }
 
+/// The `db_tag` of a database opened without one. The Go FFI mirrors it as
+/// `untaggedDBTag` in `ffi/memory.go`; change both together.
 const DEFAULT_DB_TAG: SharedString = SharedString::const_str("untagged");
 
 /// A guard that restores the previous thread-local [`MetricsContext`].
