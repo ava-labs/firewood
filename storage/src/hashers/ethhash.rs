@@ -79,12 +79,10 @@
 //!    re-splice the correct `storageRoot` before returning.
 //!
 //! Both sites must produce bit-identical bytes for the same inputs or
-//! proof verification will disagree with the trie's root hash.
-//! `fix_account_storage_root_value` runs at proof time where all storage-trie
-//! children are guaranteed to be 32-byte hashes (32-byte storage keys always
-//! yield encodings ≥ 32 bytes), so it treats [`HashType::Rlp`] as
-//! `unreachable!`; [`HashMode::write_preimage`] runs during hashing and must handle
-//! inline [`HashType::Rlp`] children.
+//! proof verification will disagree with the trie's root hash. Both handle an
+//! inline [`HashType::Rlp`] storage child the same way: a single one is hashed
+//! as the storage trie's root, and one of several goes into the branch RLP as
+//! raw bytes.
 //!
 //! ## Reviewer checklist
 //!
@@ -260,11 +258,11 @@ impl HashMode for EthHash {
                             .expect("we know there is exactly one child")
                         {
                             HashType::Hash(hash) => hash.clone(),
+                            // The child was hashed as the storage trie's root,
+                            // and a root is always hashed, even when its
+                            // encoding is short enough to be inline.
                             HashType::Rlp(rlp_bytes) => {
-                                let path = nibbles_to_eth_compact(node.partial_path(), true);
-                                let bytes =
-                                    encode_list(&[RlpItem::Bytes(&path), RlpItem::Raw(rlp_bytes)]);
-                                TrieHash::from(Keccak256::digest(bytes))
+                                TrieHash::from(Keccak256::digest(rlp_bytes))
                             }
                         }
                     } else {

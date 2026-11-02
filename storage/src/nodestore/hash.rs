@@ -316,10 +316,11 @@ pub fn hash_node_as_storage_trie_root_for_node<H: HashMode>(
 ///   Ethereum hashing.
 /// - ≥2 children → the 17-element branch RLP, hashed.
 ///
-/// At account depth (64 nibbles) storage keys are 32 bytes, so every child
-/// encoding exceeds 32 bytes and the inline-RLP variant of [`HashType`] cannot
-/// occur. Under MerkleDB hashing the single-child case returns the child hash
-/// unchanged.
+/// A child whose encoding is shorter than 32 bytes arrives as inline RLP. A
+/// storage trie's root is hashed whatever its size, so a single inline child
+/// is hashed here, and an inline child of a branch goes into the branch RLP
+/// as raw bytes. Under MerkleDB hashing the single-child case returns the
+/// child hash unchanged.
 #[must_use]
 fn compute_storage_trie_root(child_hashes: &Children<Option<HashType>>) -> TrieHash {
     if child_hashes.count() == 0 {
@@ -417,17 +418,14 @@ fn update_account_storage_root(node: &mut Node, path_prefix: &Path) {
     }
 }
 
-/// Extract the `TrieHash` for the single-storage-child case. At account
-/// depth storage child encodings always exceed 32 bytes (32-byte keys), so
-/// the inline-RLP variant cannot occur; under the merkledb scheme every child
-/// is already a 32-byte hash.
+/// The storage-trie root for an account with a single storage child, whose
+/// hash was computed with the child as the standalone root. A root is always
+/// hashed, so an encoding short enough to be inline is hashed here. Under the
+/// merkledb scheme every child is already a 32-byte hash.
 fn single_child_storage_root(child: HashType) -> crate::TrieHash {
     match child {
         HashType::Hash(hash) => hash,
-        HashType::Rlp(_) => unreachable!(
-            "account-depth single storage child cannot have inline RLP: \
-             storage leaf encoding with 32-byte keys always exceeds 32 bytes"
-        ),
+        HashType::Rlp(rlp_bytes) => TrieHash::from(Keccak256::digest(&rlp_bytes)),
     }
 }
 
@@ -437,10 +435,7 @@ fn single_child_storage_root(child: HashType) -> crate::TrieHash {
 fn child_to_rlp_item(child: Option<&HashType>) -> RlpItem<'_> {
     match child {
         Some(HashType::Hash(hash)) => RlpItem::Bytes(hash.as_slice()),
-        Some(HashType::Rlp(_)) => unreachable!(
-            "account-depth storage child cannot have inline RLP: \
-             storage node encoding with 32-byte keys always exceeds 32 bytes"
-        ),
+        Some(HashType::Rlp(rlp_bytes)) => RlpItem::Raw(rlp_bytes),
         None => RlpItem::Empty,
     }
 }

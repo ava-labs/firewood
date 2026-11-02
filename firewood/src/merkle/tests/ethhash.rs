@@ -440,6 +440,78 @@ fn test_persisted_storage_root_one_storage_entry() {
     );
 }
 
+/// Storage keys shorter than 32 bytes give storage nodes short enough to be
+/// inlined into their parent. The cases are an account whose storage root is a
+/// single inline node, a storage branch with two inline children, and a
+/// storage branch with one inline child and one hashed child. In each, the
+/// persisted storageRoot must equal the root of a standalone trie holding the
+/// storage entries, the whole trie must hash like an Ethereum state trie
+/// holding the account with that storageRoot, and range and key proofs over
+/// the trie must verify.
+#[test_case(&[(&[0xAB], &[0x02])]; "one short storage key")]
+#[test_case(&[(&[0x0B], &[0x02]), (&[0xAB], &[0x03])]; "two short storage keys")]
+#[test_case(&[(&[0x0B], &[0x02]), (&[0xA0; 32], &[0x03])]; "one short and one full storage key")]
+fn test_short_storage_keys_hash_like_ethereum(storage_entries: &[(&[u8], &[u8])]) {
+    let account_addr = [0u8; 20];
+    let dummy_storage_root = [0u8; 32];
+    let account_value = rlp_encode_account(0, 44, &dummy_storage_root, &empty_code_hash());
+
+    let storage_root = commit_and_read_storage_root(
+        &account_addr,
+        &account_value,
+        &dummy_storage_root,
+        storage_entries,
+    );
+    let expected_storage_root = init_merkle(storage_entries.iter().copied())
+        .nodestore()
+        .root_hash()
+        .expect("standalone storage trie should have a root");
+    assert_eq!(storage_root.as_slice(), expected_storage_root.as_ref());
+
+    let account_key_hash = Keccak256::digest(account_addr);
+    let mut items: Vec<(Key, Value)> = vec![(account_key_hash.as_slice().into(), account_value)];
+    for (suffix, value) in storage_entries {
+        items.push((
+            [account_key_hash.as_slice(), suffix].concat().into(),
+            Box::from(*value),
+        ));
+    }
+    let merkle = init_merkle(items.clone());
+    let root_hash = merkle
+        .nodestore()
+        .root_hash()
+        .expect("the trie holds an account");
+
+    let account_with_storage_root =
+        rlp_encode_account(0, 44, &expected_storage_root, &empty_code_hash());
+    let eth_root: TrieHash = KeccakHasher::trie_root([(
+        account_key_hash.as_slice(),
+        account_with_storage_root.as_ref(),
+    )])
+    .to_fixed_bytes()
+    .into();
+    assert_eq!(root_hash, eth_root);
+
+    let range_proof = merkle.range_proof(None, None, None).unwrap();
+    assert_range_proof_roundtrips(None, None, &root_hash, &range_proof);
+    for (key, _) in &items {
+        let stored = merkle
+            .get_value(key)
+            .unwrap()
+            .expect("every inserted key is stored");
+        merkle
+            .prove(key)
+            .unwrap()
+            .verify(
+                key.as_ref(),
+                Some(stored.as_ref()),
+                &root_hash,
+                EthHash::ALGORITHM,
+            )
+            .unwrap();
+    }
+}
+
 /// A branch account (two storage entries) should have its storageRoot set to
 /// the hash of the two-node storage sub-trie.
 #[test]
