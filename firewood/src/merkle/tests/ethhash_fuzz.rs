@@ -26,9 +26,10 @@ use std::collections::HashSet;
 use std::time::Duration;
 use std::time::Instant;
 
-use firewood_storage::DefaultHashMode;
-use firewood_storage::NodeHashAlgorithm;
+use firewood_storage::EthHash;
+use firewood_storage::HashMode;
 use firewood_storage::SeededRng;
+use firewood_storage::TrieHash;
 use firewood_storage::replace_list_field;
 use rand::seq::SliceRandom;
 
@@ -40,20 +41,31 @@ use super::change::fuzz_common::maybe_serialize_round_trip_range;
 use super::ethhash::account_storage_key;
 use super::ethhash::empty_code_hash;
 use super::ethhash::rlp_encode_account;
+use crate::ProvenRange;
+use crate::api;
 use crate::api::BatchOp;
 use crate::api::Db as DbTrait;
 use crate::api::DbView;
 use crate::api::FrozenChangeProof;
 use crate::api::FrozenRangeProof;
 use crate::api::HashKey;
+use crate::api::KeyType;
 use crate::api::Proposal as _;
 use crate::db::Db;
 use crate::db::DbConfig;
 use crate::merkle::Key;
 use crate::merkle::Value;
-use crate::merkle::verify_change_proof_root_hash;
-use crate::merkle::verify_range_proof;
+use crate::verify_change_proof_root_hash;
 use crate::verify_change_proof_structure;
+
+fn verify_range_proof(
+    first_key: Option<impl KeyType>,
+    last_key: Option<impl KeyType>,
+    root_hash: &TrieHash,
+    proof: &FrozenRangeProof,
+) -> Result<ProvenRange, api::Error> {
+    crate::merkle::verify_range_proof(first_key, last_key, root_hash, EthHash::ALGORITHM, proof)
+}
 
 /// An account's key paired with its sorted, distinct storage-slot bytes (byte
 /// 32 of its 64-byte storage keys). The generator only emits slot bytes of the
@@ -64,7 +76,7 @@ type AccountSlots = ([u8; 32], Box<[u8]>);
 /// committed end state, and the sorted key set of the end state (for boundary
 /// selection).
 struct ShapedFixture {
-    db: Db<DefaultHashMode>,
+    db: Db<EthHash>,
     /// Keeps the temp dir alive while `db` is in use.
     _dir: tempfile::TempDir,
     start_root: HashKey,
@@ -295,7 +307,7 @@ fn build_shaped_db(rng: &SeededRng) -> ShapedFixture {
         }
     }
     let dir = tempfile::tempdir().unwrap();
-    let db = Db::<DefaultHashMode>::new(dir.path(), DbConfig::builder().build()).unwrap();
+    let db = Db::<EthHash>::new(dir.path(), DbConfig::builder().build()).unwrap();
     let start_batch: Vec<BatchOp<Vec<u8>, Vec<u8>>> = state
         .iter()
         .map(|(k, v)| BatchOp::Put {
@@ -478,7 +490,7 @@ fn check_all_scenarios(
 /// Generate and verify a valid range proof over `root` for the given bounds
 /// (sometimes through a serialization round-trip), returning it for tampering.
 fn check_valid_range_proof(
-    db: &Db<DefaultHashMode>,
+    db: &Db<EthHash>,
     root: &HashKey,
     first: Option<&[u8]>,
     last: Option<&[u8]>,
@@ -491,7 +503,7 @@ fn check_valid_range_proof(
         .unwrap_or_else(|e| panic!("range_proof should succeed ({locator}): {e}"));
     let range_proof = maybe_serialize_round_trip_range(rng, range_proof);
     // This fuzzer is ethhash-gated, so every proof it builds is Ethereum-mode.
-    let _ = verify_range_proof(first, last, root, NodeHashAlgorithm::Ethereum, &range_proof)
+    let _ = verify_range_proof(first, last, root, &range_proof)
         .unwrap_or_else(|e| panic!("valid range proof should verify ({locator}): {e}"));
     range_proof
 }
@@ -500,7 +512,7 @@ fn check_valid_range_proof(
 /// the given bounds (sometimes through a serialization round-trip), returning
 /// it for tampering.
 fn check_valid_change_proof(
-    db: &Db<DefaultHashMode>,
+    db: &Db<EthHash>,
     start_root: &HashKey,
     end_root: &HashKey,
     first: Option<&[u8]>,
@@ -517,7 +529,7 @@ fn check_valid_change_proof(
         end_root.clone(),
         first,
         last,
-        NodeHashAlgorithm::Ethereum,
+        EthHash::ALGORITHM,
         None,
     )
     .unwrap_or_else(|e| panic!("valid change proof structure should verify ({locator}): {e}"));
@@ -780,7 +792,7 @@ fn forge_range_code_hash(proof: &FrozenRangeProof, rng: &SeededRng) -> Option<Fr
 /// consequence. An operation missing from inside the narrowed range must never
 /// be accepted, or narrowing could hide an omission.
 fn check_truncated_change_proof(
-    db: &Db<DefaultHashMode>,
+    db: &Db<EthHash>,
     start_root: &HashKey,
     end_root: &HashKey,
     first: Option<&[u8]>,
@@ -811,7 +823,7 @@ fn check_truncated_change_proof(
         end_root.clone(),
         first,
         last,
-        NodeHashAlgorithm::Ethereum,
+        EthHash::ALGORITHM,
         Some(limit),
     )
     .unwrap_or_else(|e| {
@@ -869,7 +881,7 @@ fn check_truncated_change_proof(
         end_root.clone(),
         first,
         last,
-        NodeHashAlgorithm::Ethereum,
+        EthHash::ALGORITHM,
         Some(limit),
     ) {
         Err(_) => true,
@@ -949,14 +961,7 @@ fn test_slow_ethhash_proof_fuzz() {
             ] {
                 if let Some(tampered) = tampered {
                     assert!(
-                        verify_range_proof(
-                            first,
-                            last,
-                            end_root,
-                            NodeHashAlgorithm::Ethereum,
-                            &tampered
-                        )
-                        .is_err(),
+                        verify_range_proof(first, last, end_root, &tampered).is_err(),
                         "tampered range proof must be rejected ({kind}, {locator})"
                     );
                 }
@@ -966,8 +971,7 @@ fn test_slow_ethhash_proof_fuzz() {
             // proof must still be accepted (recomputed at hash time).
             if let Some(forged) = forge_range_storage_root(&range, &rng) {
                 assert!(
-                    verify_range_proof(first, last, end_root, NodeHashAlgorithm::Ethereum, &forged)
-                        .is_ok(),
+                    verify_range_proof(first, last, end_root, &forged).is_ok(),
                     "forged storageRoot range proof must be accepted ({locator})"
                 );
             }

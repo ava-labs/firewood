@@ -1,7 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-//! Change proofs over `ethhash` accounts with partial storage.
+//! Change proofs over Ethereum accounts with partial storage.
 //!
 //! When a change-proof proposal is built from only a subset of an account's
 //! storage children, live hashing splices a *partial* `storageRoot` into the
@@ -23,6 +23,23 @@ use crate::merkle::tests::ethhash::rlp_encode_storage;
 /// The single account every test below builds its storage trie under.
 const ACCOUNT_KEY: [u8; 32] = [0x10u8; 32];
 
+fn verify_change_proof_structure(
+    proof: &FrozenChangeProof,
+    end_root: HashKey,
+    start_key: Option<&[u8]>,
+    end_key: Option<&[u8]>,
+    max_length: Option<NonZeroUsize>,
+) -> Result<ChangeProofVerificationContext, api::Error> {
+    crate::proofs::verify_change_proof_structure(
+        proof,
+        end_root,
+        start_key,
+        end_key,
+        EthHash::ALGORITHM,
+        max_length,
+    )
+}
+
 /// Build a 64-byte key whose first 32 bytes are `account_key` and whose
 /// 33rd byte is `byte_32` (the rest zero). Used to construct storage keys
 /// and range boundaries under a fixed account.
@@ -38,12 +55,8 @@ fn key_under_account(account_key: &[u8; 32], byte_32: u8) -> [u8; 64] {
 /// (`ACCOUNT_KEY`) with four storage children at suffixes 0x10/0x30/0x60/0xC0.
 /// Returns the DB and its tempdir guard (which the caller must keep alive),
 /// plus the empty and populated roots.
-fn source_with_four_storage_children() -> (
-    Db<DefaultHashMode>,
-    tempfile::TempDir,
-    api::HashKey,
-    api::HashKey,
-) {
+fn source_with_four_storage_children()
+-> (Db<EthHash>, tempfile::TempDir, api::HashKey, api::HashKey) {
     let storage_keys: Vec<[u8; 64]> = [0x10u8, 0x30, 0x60, 0xC0]
         .iter()
         .map(|&p| key_under_account(&ACCOUNT_KEY, p))
@@ -53,7 +66,7 @@ fn source_with_four_storage_children() -> (
         .collect();
     let account_value = rlp_encode_account(1, 100, &[0u8; 32], &empty_code_hash());
 
-    let (source, dir) = setup_db![];
+    let (source, dir) = setup_db![mode = EthHash];
     let (empty_root, root2) = setup_2nd_commit!(
         source,
         [
@@ -121,7 +134,7 @@ fn test_change_proof_partial_storage_children_against_empty(start_bound: Bound, 
     let ctx =
         verify_change_proof_structure(&proof, root2.clone(), start_key, end_key, None).unwrap();
 
-    let (target, _dir_target) = setup_db![];
+    let (target, _dir_target) = setup_db![mode = EthHash];
     let empty_root_target = target.root_hash().unwrap();
     verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
 }
@@ -186,7 +199,7 @@ fn test_change_proof_arbitrary_order_right_then_left_converges() {
     .unwrap();
 
     // Apply RIGHT first, then LEFT, to an empty target.
-    let (target, _dir_target) = setup_db![];
+    let (target, _dir_target) = setup_db![mode = EthHash];
     let target_empty_root = target.root_hash().unwrap();
 
     // Step 1: apply RIGHT half. Verifies, then commits.
@@ -255,7 +268,7 @@ fn test_change_proof_both_bounds_inside_account_storage() {
     )
     .unwrap();
 
-    let (target, _dir_target) = setup_db![];
+    let (target, _dir_target) = setup_db![mode = EthHash];
     let empty_root_target = target.root_hash().unwrap();
     verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
 }
@@ -288,7 +301,7 @@ fn test_change_proof_account_in_range_no_storage_in_range() {
     let ctx = verify_change_proof_structure(&proof, root2.clone(), None, Some(end.as_ref()), None)
         .unwrap();
 
-    let (target, _dir_target) = setup_db![];
+    let (target, _dir_target) = setup_db![mode = EthHash];
     let empty_root_target = target.root_hash().unwrap();
     verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
 }
@@ -306,7 +319,7 @@ fn test_change_proof_single_storage_child_truncated() {
     let storage_value = rlp_encode_storage(&[1u8; 32]);
     let account_value = rlp_encode_account(1, 100, &[0u8; 32], &empty_code_hash());
 
-    let (source, _dir_source) = setup_db![];
+    let (source, _dir_source) = setup_db![mode = EthHash];
     let (empty_root, root2) = setup_2nd_commit!(
         source,
         [
@@ -331,7 +344,7 @@ fn test_change_proof_single_storage_child_truncated() {
     let ctx = verify_change_proof_structure(&proof, root2.clone(), None, Some(end.as_ref()), None)
         .unwrap();
 
-    let (target, _dir_target) = setup_db![];
+    let (target, _dir_target) = setup_db![mode = EthHash];
     let empty_root_target = target.root_hash().unwrap();
     verify_and_check(&target, &proof, &ctx, empty_root_target).unwrap();
 }
@@ -343,8 +356,8 @@ fn test_change_proof_single_storage_child_truncated() {
 /// that batch. The end bound puts the storage slot at suffix `0x10` inside the
 /// range and the one at `0x99` outside it.
 fn commit_and_verify_boundary_range(
-    source: &Db<DefaultHashMode>,
-    target: &Db<DefaultHashMode>,
+    source: &Db<EthHash>,
+    target: &Db<EthHash>,
     root1_target: api::HashKey,
     end_batch: Vec<BatchOp<&[u8], &[u8]>>,
 ) {
@@ -386,7 +399,7 @@ fn test_change_proof_boundary_child_folds_single_storage_child() {
     let slot_b = rlp_encode_storage(&[2u8; 32]);
     let slot_a_new = rlp_encode_storage(&[3u8; 32]);
 
-    let (source, target, root1_target, _ds, _dt) = setup_source_target![
+    let (source, target, root1_target, _ds, _dt) = setup_source_target![mode = EthHash;
         (ACCOUNT_KEY.as_ref(), account_value.as_ref()),
         (in_range.as_ref(), slot_a.as_ref()),
         (out_of_range.as_ref(), slot_b.as_ref())
@@ -429,7 +442,7 @@ fn test_change_proof_added_out_of_range_slot_unfolds_in_range_slot() {
     let slot_a = rlp_encode_storage(&[1u8; 32]);
     let slot_b = rlp_encode_storage(&[2u8; 32]);
 
-    let (source, target, root1_target, _ds, _dt) = setup_source_target![
+    let (source, target, root1_target, _ds, _dt) = setup_source_target![mode = EthHash;
         (ACCOUNT_KEY.as_ref(), account_value.as_ref()),
         (in_range.as_ref(), slot_a.as_ref())
     ];
