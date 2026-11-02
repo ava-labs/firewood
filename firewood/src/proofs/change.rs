@@ -590,15 +590,18 @@ pub fn verify_change_proof_structure(
 
 #[cfg(test)]
 mod tests {
-    use firewood_storage::DefaultHashMode;
+    use firewood_macros::hash_mode;
+    use firewood_storage::EthHash;
     use firewood_storage::HashMode;
+    use firewood_storage::MerkleDbHash;
 
     use super::*;
     use crate::merkle::Key;
     use crate::merkle::Value;
 
+    #[hash_mode]
     #[test]
-    fn test_change_proof_iterator() {
+    fn test_change_proof_iterator<H: HashMode>() {
         let key_values: Box<[BatchOp<Key, Value>]> = Box::new([
             BatchOp::Put {
                 key: b"key1".to_vec().into_boxed_slice(),
@@ -617,12 +620,7 @@ mod tests {
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
 
-        let change_proof = ChangeProof::new(
-            start_proof,
-            end_proof,
-            key_values,
-            DefaultHashMode::ALGORITHM,
-        );
+        let change_proof = ChangeProof::new(start_proof, end_proof, key_values, H::ALGORITHM);
 
         let mut iter = change_proof.iter();
         assert_eq!(iter.len(), 3);
@@ -645,8 +643,9 @@ mod tests {
         assert!(iter.next().is_none());
     }
 
+    #[hash_mode]
     #[test]
-    fn test_change_proof_into_iterator() {
+    fn test_change_proof_into_iterator<H: HashMode>() {
         let key_values: Box<[BatchOp<Key, Value>]> = Box::new([
             BatchOp::Put {
                 key: b"a".to_vec().into_boxed_slice(),
@@ -660,12 +659,7 @@ mod tests {
 
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
-        let change_proof = ChangeProof::new(
-            start_proof,
-            end_proof,
-            key_values,
-            DefaultHashMode::ALGORITHM,
-        );
+        let change_proof = ChangeProof::new(start_proof, end_proof, key_values, H::ALGORITHM);
 
         let mut items = Vec::new();
         for item in &change_proof {
@@ -681,17 +675,13 @@ mod tests {
         );
     }
 
+    #[hash_mode]
     #[test]
-    fn test_empty_change_proof_iterator() {
+    fn test_empty_change_proof_iterator<H: HashMode>() {
         let key_values: Box<[BatchOp<Key, Value>]> = Box::new([]);
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
-        let change_proof = ChangeProof::new(
-            start_proof,
-            end_proof,
-            key_values,
-            DefaultHashMode::ALGORITHM,
-        );
+        let change_proof = ChangeProof::new(start_proof, end_proof, key_values, H::ALGORITHM);
 
         let mut iter = change_proof.iter();
         assert_eq!(iter.len(), 0);

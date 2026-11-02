@@ -23,8 +23,8 @@ package ffi
 // #cgo nocallback fwd_code_hash_iter_free
 // #cgo noescape fwd_range_proof_to_bytes
 // #cgo nocallback fwd_range_proof_to_bytes
-// #cgo noescape fwd_range_proof_from_bytes
-// #cgo nocallback fwd_range_proof_from_bytes
+// #cgo noescape fwd_db_range_proof_from_bytes
+// #cgo nocallback fwd_db_range_proof_from_bytes
 // #cgo noescape fwd_db_change_proof
 // #cgo nocallback fwd_db_change_proof
 // #cgo noescape fwd_db_verify_change_proof
@@ -37,8 +37,8 @@ package ffi
 // #cgo nocallback fwd_change_proof_code_hash_iter
 // #cgo noescape fwd_change_proof_to_bytes
 // #cgo nocallback fwd_change_proof_to_bytes
-// #cgo noescape fwd_change_proof_from_bytes
-// #cgo nocallback fwd_change_proof_from_bytes
+// #cgo noescape fwd_db_change_proof_from_bytes
+// #cgo nocallback fwd_db_change_proof_from_bytes
 // #cgo noescape fwd_free_range_proof
 // #cgo nocallback fwd_free_range_proof
 // #cgo noescape fwd_free_change_proof
@@ -377,18 +377,25 @@ func (p *RangeProof) Marshal() ([]byte, error) {
 	return getValueFromValueResult(C.fwd_range_proof_to_bytes(p.ptr))
 }
 
-// UnmarshalRangeProof deserializes a RangeProof from [data], which must have
-// been produced by [*RangeProof.Marshal]. The returned proof is bound to no
-// database until it is verified.
-func UnmarshalRangeProof(data []byte) (*RangeProof, error) {
+// UnmarshalRangeProof parses a proof produced by [RangeProof.Marshal] for use
+// with db. A proof encoded for the other hash mode is rejected here, before
+// any verification. The returned proof holds no lease on db until it is
+// verified.
+func (db *Database) UnmarshalRangeProof(data []byte) (*RangeProof, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
+
 	start := time.Now()
 	defer func() {
-		proofUnmarshalDuration.WithLabelValues("range").Observe(time.Since(start).Seconds())
+		proofUnmarshalDuration.WithLabelValues("range", db.metricsTag).Observe(time.Since(start).Seconds())
 	}()
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
-	return getRangeProofFromRangeProofResult(C.fwd_range_proof_from_bytes(newBorrowedBytes(data, &pinner)))
+	return getRangeProofFromRangeProofResult(C.fwd_db_range_proof_from_bytes(db.handle, newBorrowedBytes(data, &pinner)))
 }
 
 // ChangeProof returns a proof that the changes between [startRoot] and
@@ -543,17 +550,24 @@ func (p *ChangeProof) Marshal() ([]byte, error) {
 	return getValueFromValueResult(C.fwd_change_proof_to_bytes(p.ptr))
 }
 
-// UnmarshalChangeProof deserializes a ChangeProof from [data], which must have
-// been produced by [*ChangeProof.Marshal].
-func UnmarshalChangeProof(data []byte) (*ChangeProof, error) {
+// UnmarshalChangeProof parses a proof produced by [ChangeProof.Marshal] for use
+// with db. A proof encoded for the other hash mode is rejected here, before
+// any verification.
+func (db *Database) UnmarshalChangeProof(data []byte) (*ChangeProof, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
+
 	start := time.Now()
 	defer func() {
-		proofUnmarshalDuration.WithLabelValues("change").Observe(time.Since(start).Seconds())
+		proofUnmarshalDuration.WithLabelValues("change", db.metricsTag).Observe(time.Since(start).Seconds())
 	}()
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
-	return getChangeProofFromChangeProofResult(C.fwd_change_proof_from_bytes(newBorrowedBytes(data, &pinner)))
+	return getChangeProofFromChangeProofResult(C.fwd_db_change_proof_from_bytes(db.handle, newBorrowedBytes(data, &pinner)))
 }
 
 // getNextKeyRangeFromNextKeyRangeResult copies the range into Go memory and

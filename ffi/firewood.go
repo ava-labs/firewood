@@ -118,6 +118,11 @@ type Database struct {
 	// commitLock is used to ensure that methods accessing or modifying the latest
 	// revision do not conflict.
 	commitLock sync.Mutex
+
+	// metricsTag is the db_tag label the Rust recorder attaches to this
+	// database's metrics (see [WithMetricsTag]); Go-side histograms that have a
+	// database in scope use the same value so the two sides join on it.
+	metricsTag string
 }
 
 // config defines the internal configuration parameters used when opening a [Database].
@@ -317,7 +322,11 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 		max_persistence_gap:      C.uint64_t(conf.maxPersistenceGap),
 	}
 
-	return getDatabaseFromHandleResult(C.fwd_open_db(args))
+	metricsTag := conf.metricsTag
+	if metricsTag == "" {
+		metricsTag = untaggedDBTag
+	}
+	return getDatabaseFromHandleResult(C.fwd_open_db(args), metricsTag)
 }
 
 // Update applies a batch of operations to the database, returning the hash of the

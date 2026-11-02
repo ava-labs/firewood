@@ -70,7 +70,16 @@ ci-machete:
 ci-build-ffi:
     RUSTUP_TOOLCHAIN=stable cargo build --locked -p firewood-ffi --features logger
 
-# Test the Go FFI against a Rust library built for a hash mode.
+# Check that the checked-in ffi/firewood.h matches what cbindgen generates, as CI does.
+ci-check-ffi-header: ci-build-ffi
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! git --no-pager diff --exit-code -- ffi/firewood.h; then
+        echo "error: ffi/firewood.h is stale; run \`just ci-build-ffi\`, then stage or commit ffi/firewood.h" >&2
+        exit 1
+    fi
+
+# Test the Go FFI in one runtime hash mode against the built Rust library.
 ci-test-ffi hash_mode:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -85,6 +94,17 @@ ci-test-ffi hash_mode:
 ci-test-ffi-compat:
     cd ffi/tests && go test -count=1 -race ./...
 
+# Discover and fuzz every Go compatibility target against the built FFI.
+ci-fuzz-ffi-compat:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ffi/tests
+    tests=$(go test -list '^Fuzz' .)
+    while IFS= read -r test; do
+        [[ "$test" == Fuzz* ]] || continue
+        go test -run '^$' -fuzz "^${test}$" -fuzztime=30s .
+    done <<< "$tests"
+
 # Run macOS-compatible CI lints.
 lint:
     ./scripts/run-just.sh ci-format
@@ -98,6 +118,7 @@ lint:
     ./scripts/run-just.sh ci-docs
     ./scripts/run-just.sh ci-lint-ffi
     ./scripts/run-just.sh ci-check-go-generate
+    ./scripts/run-just.sh ci-check-ffi-header
     ./scripts/run-just.sh ci-machete
 
 # Run macOS-compatible CI unit tests (differential fuzzing remains Linux-only).

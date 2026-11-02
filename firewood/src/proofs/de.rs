@@ -10,6 +10,7 @@
 use std::num::NonZeroUsize;
 
 use firewood_storage::HashType;
+use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::PathBuf;
 use firewood_storage::TrieHash;
 use firewood_storage::TriePathFromUnpackedBytes;
@@ -24,6 +25,7 @@ use super::reader::ReadItem;
 use super::reader::V0Reader;
 use super::reader::Version0;
 use super::types::Proof;
+use super::types::ProofError;
 use super::types::ProofNode;
 use super::types::ProofType;
 use crate::api::FrozenChangeProof;
@@ -80,6 +82,23 @@ impl FrozenRangeProof {
                 InvalidHeader::UnsupportedVersion { found },
             )),
         }
+    }
+
+    /// Parses a `FrozenRangeProof` like [`FrozenRangeProof::from_slice`], but
+    /// rejects a proof whose header advertises a hash mode other than
+    /// `expected` before decompressing its body.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProofError::HashModeMismatch`] if the header's hash mode is
+    /// not `expected`, and [`ProofError::Deserialization`] if the data is
+    /// otherwise invalid or exceeds a limit.
+    pub fn from_slice_in_mode(
+        data: &[u8],
+        expected: NodeHashAlgorithm,
+    ) -> Result<Self, ProofError> {
+        check_header_hash_mode(data, ProofType::Range, expected)?;
+        Self::from_slice(data).map_err(ProofError::Deserialization)
     }
 }
 
@@ -166,6 +185,46 @@ impl FrozenChangeProof {
             ));
         }
         Ok(this)
+    }
+
+    /// Parses a `FrozenChangeProof` like [`FrozenChangeProof::from_slice`],
+    /// but rejects a proof whose header advertises a hash mode other than
+    /// `expected` before decompressing its body.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProofError::HashModeMismatch`] if the header's hash mode is
+    /// not `expected`, and [`ProofError::Deserialization`] if the data is
+    /// otherwise invalid or exceeds a limit.
+    pub fn from_slice_in_mode(
+        data: &[u8],
+        expected: NodeHashAlgorithm,
+    ) -> Result<Self, ProofError> {
+        check_header_hash_mode(data, ProofType::Change, expected)?;
+        Self::from_slice(data).map_err(ProofError::Deserialization)
+    }
+}
+
+/// Validates the header of a serialized `proof_type` proof and rejects it
+/// unless it advertises hash mode `expected`. Reads only the header.
+fn check_header_hash_mode(
+    data: &[u8],
+    proof_type: ProofType,
+    expected: NodeHashAlgorithm,
+) -> Result<(), ProofError> {
+    let found = ProofReader::new(data)
+        .read_header()
+        .and_then(|header| {
+            header
+                .validate(Some(proof_type))
+                .map_err(ReadError::InvalidHeader)
+        })
+        .map_err(ProofError::Deserialization)?
+        .node_hash_algorithm;
+    if found == expected {
+        Ok(())
+    } else {
+        Err(ProofError::HashModeMismatch { expected, found })
     }
 }
 

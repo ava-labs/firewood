@@ -21,19 +21,12 @@ jobs:
           - profile-key: maxperf-ethhash-logger
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
-        with:
-          tool: just@1.46.0
       # Deliberately the floating nightly, not the rust-toolchain.toml pin:
       # `clippy-nightly` runs `cargo +nightly`, which outranks that file.
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # @master
+      - uses: $/.github/actions/setup-rust
         with:
           toolchain: nightly
           components: clippy
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2
-        with:
-          save-if: "false"
-          shared-key: ${{ matrix.profile-key }}
+          cache-key: ${{ matrix.profile-key }}
       - name: Clippy
         run: ./scripts/run-just.sh ci-rust clippy-nightly ${{ matrix.profile-key }}

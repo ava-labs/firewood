@@ -1,15 +1,15 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#[cfg(feature = "ethhash")]
+use firewood_macros::hash_mode;
+use firewood_storage::HashMode;
 use test_case::test_case;
 
 use super::*;
 
-#[cfg(feature = "ethhash")]
 #[test]
 fn test_reconcile_branch_proof_node_rejects_hashed_value_digest() {
-    let mut merkle = create_in_memory_merkle();
+    let mut merkle = create_in_memory_merkle::<EthHash>();
     let proof_node = test_branch_proof_node(
         &[0xa, 0xb],
         Some(ValueDigest::Hash(TrieHash::from([0xabu8; 32]).into())),
@@ -28,18 +28,15 @@ fn test_reconcile_branch_proof_node_rejects_hashed_value_digest() {
     );
 }
 
+#[hash_mode]
 #[test]
-fn test_reconcile_branch_proof_node_creates_missing_branch_without_value() {
-    let mut merkle = create_in_memory_merkle();
+fn test_reconcile_branch_proof_node_creates_missing_branch_without_value<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
 
     let proof_node = test_branch_proof_node(&[0xa, 0xb, 0xc], None);
 
     merkle
-        .reconcile_branch_proof_node(
-            &proof_node,
-            firewood_storage::DefaultHashMode::ALGORITHM,
-            |_, _| unreachable!(),
-        )
+        .reconcile_branch_proof_node(&proof_node, H::ALGORITHM, |_, _| unreachable!())
         .unwrap();
 
     let node = merkle
@@ -50,9 +47,10 @@ fn test_reconcile_branch_proof_node_creates_missing_branch_without_value() {
     assert!(branch.value.is_none());
 }
 
+#[hash_mode]
 #[test]
-fn test_reconcile_branch_proof_node_sets_missing_value_via_callback() {
-    let mut merkle = create_in_memory_merkle();
+fn test_reconcile_branch_proof_node_sets_missing_value_via_callback<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
     merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
 
     let proof_node =
@@ -60,14 +58,10 @@ fn test_reconcile_branch_proof_node_sets_missing_value_via_callback() {
 
     // Proof has a value but trie doesn't — callback resolves it.
     merkle
-        .reconcile_branch_proof_node(
-            &proof_node,
-            firewood_storage::DefaultHashMode::ALGORITHM,
-            |pn, _| match &pn.value_digest {
-                Some(ValueDigest::Value(v)) => Ok(Some(v.clone())),
-                _ => Ok(None),
-            },
-        )
+        .reconcile_branch_proof_node(&proof_node, H::ALGORITHM, |pn, _| match &pn.value_digest {
+            Some(ValueDigest::Value(v)) => Ok(Some(v.clone())),
+            _ => Ok(None),
+        })
         .unwrap();
 
     let node = merkle.get_node_from_nibbles(&[0xa, 0xb]).unwrap().unwrap();
@@ -75,9 +69,10 @@ fn test_reconcile_branch_proof_node_sets_missing_value_via_callback() {
     assert_eq!(branch.value.as_deref(), Some([7u8].as_slice()));
 }
 
+#[hash_mode]
 #[test]
-fn test_reconcile_branch_proof_node_clears_value_via_callback() {
-    let mut merkle = create_in_memory_merkle();
+fn test_reconcile_branch_proof_node_clears_value_via_callback<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
     merkle.insert(&[0xab], Box::from([3u8])).unwrap();
     merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
 
@@ -85,11 +80,7 @@ fn test_reconcile_branch_proof_node_clears_value_via_callback() {
 
     // Proof says no value, trie has one — callback returns None to clear it.
     merkle
-        .reconcile_branch_proof_node(
-            &proof_node,
-            firewood_storage::DefaultHashMode::ALGORITHM,
-            |_, _| Ok(None),
-        )
+        .reconcile_branch_proof_node(&proof_node, H::ALGORITHM, |_, _| Ok(None))
         .unwrap();
 
     let node = merkle.get_node_from_nibbles(&[0xa, 0xb]).unwrap().unwrap();
@@ -97,9 +88,10 @@ fn test_reconcile_branch_proof_node_clears_value_via_callback() {
     assert!(branch.value.is_none());
 }
 
+#[hash_mode]
 #[test]
-fn test_reconcile_branch_proof_node_rejects_conflict_via_callback() {
-    let mut merkle = create_in_memory_merkle();
+fn test_reconcile_branch_proof_node_rejects_conflict_via_callback<H: HashMode>() {
+    let mut merkle = create_in_memory_merkle::<H>();
     merkle.insert(&[0xab], Box::from([1u8])).unwrap();
     merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
 
@@ -108,11 +100,9 @@ fn test_reconcile_branch_proof_node_rejects_conflict_via_callback() {
 
     // Callback rejects the conflict.
     let err = merkle
-        .reconcile_branch_proof_node(
-            &proof_node,
-            firewood_storage::DefaultHashMode::ALGORITHM,
-            |_, _| Err(ProofError::UnexpectedValue),
-        )
+        .reconcile_branch_proof_node(&proof_node, H::ALGORITHM, |_, _| {
+            Err(ProofError::UnexpectedValue)
+        })
         .unwrap_err();
     assert!(matches!(err, ProofError::UnexpectedValue));
 
@@ -122,17 +112,16 @@ fn test_reconcile_branch_proof_node_rejects_conflict_via_callback() {
     assert_eq!(branch.value.as_deref(), Some([1u8].as_slice()));
 }
 
-/// Checks that the `ethhash` account relaxation in
+/// Checks that the Ethereum account relaxation in
 /// `reconcile_branch_proof_node` is exactly as narrow as intended: at account
 /// depth (64 nibbles), two account values that differ *only* in `storageRoot`
 /// (field 2) reconcile without conflict, while a difference in any other field
 /// still conflicts.
 ///
 /// This exercises the helper directly, without constructing any proofs.
-#[cfg(feature = "ethhash")]
 #[test_case(100, true  ; "storage_root_only_diff_is_forgiven")]
 #[test_case(999, false ; "extra_balance_diff_still_conflicts")]
-fn test_reconcile_branch_proof_node_account_storage_root_relaxation(
+fn test_reconcile_branch_proof_node_account_storage_root_relaxation_ethhash(
     proof_balance: u64,
     expect_reconciled: bool,
 ) {
@@ -148,7 +137,7 @@ fn test_reconcile_branch_proof_node_account_storage_root_relaxation(
     let branch_value = rlp_encode_account(1, 100, &[0xAA; 32], &empty_code_hash());
     let proof_value = rlp_encode_account(1, proof_balance, &[0xBB; 32], &empty_code_hash());
 
-    let mut merkle = create_in_memory_merkle();
+    let mut merkle = create_in_memory_merkle::<EthHash>();
     merkle.insert(&account_key, branch_value.clone()).unwrap();
     merkle.insert_branch_from_nibbles(&account_nibbles).unwrap();
 

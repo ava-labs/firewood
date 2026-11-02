@@ -14,6 +14,8 @@ on:
       # duplicate that stricter check. Deploy is gated below, so PR runs are
       # build-only.
       - .github/workflows/gh-pages.yaml
+      # The only caller of setup-rust's `checkout-ref` and mdBook `tools`.
+      - .github/actions/setup-rust/**
       - docs/**
       - ffi/**/*.go
   # allow manual trigger because we cannot "retry" a deploy step
@@ -44,21 +46,15 @@ jobs:
     outputs:
       has_bench: ${{ steps.bench.outputs.has_bench }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: $/.github/actions/setup-rust
         with:
+          # Read the stable cache that ci.yaml's `build` job warms.
+          cache-key: debug-no-features
           # Docs deploy from main; for pull_request events check out the PR head
           # so the docs/** filter validates the PR's actual changes. A
           # workflow_dispatch on a non-main branch still builds main by design.
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'main' }}
-      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
-      # caution: this is the same restore as in ci.yaml
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2
-        with:
-          save-if: "false"
-      - name: Install mdBook toolchain
-        uses: taiki-e/install-action@b8cecb83565409bcc297b2df6e77f030b2a468d5 # v2.82.0
-        with:
-          tool: mdbook@0.5.3,mdbook-mermaid@0.17.0,cargo-binstall
+          checkout-ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'main' }}
+          tools: mdbook@0.5.3,mdbook-mermaid@0.17.0,cargo-binstall
       - name: Install the link checker (not in the install-action manifest)
         # cargo binstall downloads a prebuilt binary when available and
         # automatically falls back to `cargo install` otherwise.

@@ -17,7 +17,13 @@ fn main() {
         .generate()
         .map_or_else(
             |error| match error {
-                cbindgen::Error::ParseSyntaxError { .. } => {}
+                // Leave syntax errors for rustc to report, but say that firewood.h
+                // kept its previous contents.
+                cbindgen::Error::ParseSyntaxError { src_path, .. } => {
+                    println!(
+                        "cargo::warning=firewood.h not regenerated: cbindgen could not parse {src_path}"
+                    );
+                }
                 e => panic!("{e:?}"),
             },
             |bindings| {
