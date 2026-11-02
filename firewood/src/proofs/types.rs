@@ -1069,7 +1069,6 @@ mod tests {
 
     /// An absent value and a present zero-length value hash identically, so the
     /// verifier rejects a node that carries an empty value.
-    #[cfg(feature = "ethhash")]
     #[test]
     fn empty_value_is_rejected() {
         let absent = make_node(&[1, 2], 0, None, DenseChildren::new());
@@ -1100,7 +1099,6 @@ mod tests {
     /// hash unchanged, still hangs off the same nibble of its parent, so the
     /// prefix-of-next-key check does not notice. The verifier rejects the node
     /// because its parent prefix is not the previous key plus one nibble.
-    #[cfg(feature = "ethhash")]
     #[test]
     fn relabelled_later_node_is_rejected() {
         use firewood_storage::U4;
@@ -1132,7 +1130,6 @@ mod tests {
     /// Relabelling a node's declared position leaves its hash unchanged, so a
     /// diverging first nibble would read as an exclusion proof. The verifier
     /// rejects the node because its parent prefix does not match its position.
-    #[cfg(feature = "ethhash")]
     #[test]
     fn relabelled_node_position_is_rejected() {
         use firewood_storage::U4;
@@ -1161,7 +1158,6 @@ mod tests {
     /// Zero-length inline children contribute nothing to the preimage, so the
     /// payload can be re-partitioned to hide a present child with the hash
     /// unchanged. The verifier rejects the malformed children.
-    #[cfg(feature = "ethhash")]
     #[test]
     fn zero_length_inline_children_are_rejected() {
         use firewood_storage::U4;
@@ -1216,7 +1212,6 @@ mod tests {
     /// declared absent where the honest stream has a 0x80 byte, so the hash is
     /// unchanged. None of the items is a complete RLP list, so the verifier
     /// rejects them.
-    #[cfg(feature = "ethhash")]
     #[test]
     fn repartitioned_inline_children_are_rejected() {
         use firewood_storage::U4;
@@ -1274,7 +1269,6 @@ mod tests {
     /// At account depth, a value the storage-root splice cannot handle is hashed
     /// as raw bytes, so two nodes with different children hash the same. The
     /// verifier rejects the value.
-    #[cfg(feature = "ethhash")]
     #[test]
     fn malformed_account_value_is_rejected() {
         use firewood_storage::U4;

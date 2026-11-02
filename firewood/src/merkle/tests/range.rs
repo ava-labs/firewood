@@ -2804,7 +2804,7 @@ fn test_verification_context_reports_truncated_right_edge<H: HashMode>() {
 }
 
 /// Rebuilds a range proof from its parts so a test can alter one of them.
-fn rebuild_range_proof(
+fn rebuild_range_proof<H: HashMode>(
     start: &[ProofNode],
     end: Vec<ProofNode>,
     key_values: KeyValuePairs,
@@ -2813,7 +2813,7 @@ fn rebuild_range_proof(
         crate::Proof::<Box<[ProofNode]>>::new(start.into()),
         crate::Proof::<Box<[ProofNode]>>::new(end.into_boxed_slice()),
         key_values.into_boxed_slice(),
-        DefaultHashMode::ALGORITHM,
+        H::ALGORITHM,
     )
 }
 
@@ -2825,10 +2825,11 @@ fn rebuild_range_proof(
 /// is dropped from the pairs. Accepting the proof would prove `0x10 0x50` absent
 /// from a range that contains it. The position check runs before any hashing,
 /// so the expected error is the same under both schemes.
+#[hash_mode]
 #[test]
-fn test_relabelled_out_of_range_terminal_rejected() {
+fn test_relabelled_out_of_range_terminal_rejected<H: HashMode>() {
     let items: &[(&[u8], &[u8])] = &[(b"\x05", b"a"), (b"\x10\x50", b"z")];
-    let merkle = init_merkle(items.iter().copied());
+    let merkle = init_merkle::<H, _, _, _>(items.iter().copied());
     let root_hash = merkle.nodestore().root_hash().unwrap();
     let first = Some(b"\x05".as_slice());
     let last = Some(b"\x10\x60".as_slice());
@@ -2853,9 +2854,9 @@ fn test_relabelled_out_of_range_terminal_rejected() {
         .filter(|(k, _)| k.as_ref() != b"\x10\x50")
         .map(|(k, v)| (k.as_ref().into(), v.as_ref().into()))
         .collect();
-    let forged = rebuild_range_proof(honest.start_proof().as_ref(), end, key_values);
+    let forged = rebuild_range_proof::<H>(honest.start_proof().as_ref(), end, key_values);
 
-    let result = verify_range_proof(first, last, &root_hash, &forged);
+    let result = verify_range_proof(first, last, &root_hash, H::ALGORITHM, &forged);
     assert!(
         matches!(
             result,
@@ -2870,10 +2871,11 @@ fn test_relabelled_out_of_range_terminal_rejected() {
 /// An end proof whose terminal lies past the last pair, with an empty value
 /// placed on its root branch, which has none. Under the Ethereum scheme an empty
 /// value hashes the same as no value, so only the shape check can refuse it.
+#[hash_mode]
 #[test]
-fn test_empty_value_in_out_of_range_end_proof_rejected() {
+fn test_empty_value_in_out_of_range_end_proof_rejected<H: HashMode>() {
     let items: &[(&[u8], &[u8])] = &[(b"\x05", b"a"), (b"\x10\x50", b"z")];
-    let merkle = init_merkle(items.iter().copied());
+    let merkle = init_merkle::<H, _, _, _>(items.iter().copied());
     let root_hash = merkle.nodestore().root_hash().unwrap();
     let first = Some(b"\x05".as_slice());
     let last = Some(b"\x10\x30".as_slice());
@@ -2888,22 +2890,23 @@ fn test_empty_value_in_out_of_range_end_proof_rejected() {
         .iter()
         .map(|(k, v)| (k.as_ref().into(), v.as_ref().into()))
         .collect();
-    let forged = rebuild_range_proof(honest.start_proof().as_ref(), end, key_values);
+    let forged = rebuild_range_proof::<H>(honest.start_proof().as_ref(), end, key_values);
 
-    let result = verify_range_proof(first, last, &root_hash, &forged);
-    #[cfg(feature = "ethhash")]
-    assert!(
-        matches!(
-            result,
-            Err(crate::api::Error::ProofError(ProofError::EmptyValue))
-        ),
-        "empty value in the end proof must be rejected, got: {result:?}"
-    );
-    #[cfg(not(feature = "ethhash"))]
-    assert!(
-        result.is_err(),
-        "the value changes the root hash under merkledb, got: {result:?}"
-    );
+    let result = verify_range_proof(first, last, &root_hash, H::ALGORITHM, &forged);
+    if H::ALGORITHM.is_ethereum() {
+        assert!(
+            matches!(
+                result,
+                Err(crate::api::Error::ProofError(ProofError::EmptyValue))
+            ),
+            "empty value in the end proof must be rejected, got: {result:?}"
+        );
+    } else {
+        assert!(
+            result.is_err(),
+            "the value changes the root hash under merkledb, got: {result:?}"
+        );
+    }
 }
 
 /// Simulates a syncer that fetches one key per range proof, starting from no
