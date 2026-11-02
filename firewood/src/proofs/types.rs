@@ -910,8 +910,8 @@ fn check_node_shape<H: HashMode, N: Hashable>(
     }
 
     // An empty value encodes exactly as no value, so a proof of an empty value
-    // could be restated as a proof of absence. Ethereum never stores an empty
-    // value.
+    // could be restated as a proof of absence. No Ethereum client writes an
+    // empty value, so no honest proof carries one.
     if let Some(ValueDigest::Value(value)) = node.value_digest()
         && value.is_empty()
     {
