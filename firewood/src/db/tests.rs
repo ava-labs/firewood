@@ -98,13 +98,15 @@ mod key_length {
 mod account_depth_inline_storage {
     use firewood_storage::EthHash;
     use firewood_storage::HashMode;
-    use test_case::test_case;
+    use test_case::test_matrix;
 
     use super::TestDb;
     use crate::api::BatchOp;
     use crate::api::Db as _;
     use crate::api::FrozenChangeProof;
     use crate::api::Proposal as _;
+    use crate::db::DbConfig;
+    use crate::db::UseParallel;
     use crate::merkle::Key;
     use crate::merkle::Value;
 
@@ -112,14 +114,22 @@ mod account_depth_inline_storage {
     /// case adds puts for a 32-byte key and 33-byte keys extending it, one per
     /// suffix byte, which give that account inline storage children. One child
     /// reaches the single-child storage root and two reach the storage branch.
-    /// The forged proof must fail verification rather than abort hashing.
-    #[test_case(&[0xAB]; "one inline storage child")]
-    #[test_case(&[0x0B, 0xAB]; "two inline storage children")]
-    fn change_proof_with_short_storage_keys_is_rejected(suffixes: &[u8]) {
+    /// Each case runs on the serial and the parallel batch path. The forged
+    /// proof must fail verification rather than abort hashing.
+    #[test_matrix(
+        [&[0xAB], &[0x0B, 0xAB]],
+        [UseParallel::Never, UseParallel::Always]
+    )]
+    fn change_proof_with_short_storage_keys_is_rejected(
+        suffixes: &[u8],
+        use_parallel: UseParallel,
+    ) {
         let k_lo = vec![0x10; 32];
         let k_hi = vec![0xf0; 32];
         let source = TestDb::<EthHash>::new();
-        let target = TestDb::<EthHash>::new();
+        let target = TestDb::<EthHash>::new_with_config(
+            DbConfig::builder().use_parallel(use_parallel).build(),
+        );
         for db in [&source, &target] {
             db.propose(vec![
                 BatchOp::Put {
