@@ -18,21 +18,22 @@ use criterion::criterion_main;
 use firewood::Merkle;
 use firewood::api::DbView as _;
 use firewood::verify_range_proof_structure;
-use firewood_storage::DefaultHashMode;
 use firewood_storage::DeletedNodeTracking;
+use firewood_storage::EthHash;
 use firewood_storage::HashMode;
 use firewood_storage::MemStore;
+use firewood_storage::MerkleDbHash;
 use firewood_storage::NodeStore;
 use firewood_storage::SeededRng;
 use rand::RngExt;
 use rand::distr::Alphanumeric;
 
 #[expect(clippy::unwrap_used, clippy::indexing_slicing)]
-fn bench_proofs(criterion: &mut Criterion) {
+fn bench_proofs<H: HashMode>(criterion: &mut Criterion) {
     // Fixture: 1000 random 32-byte keys, 1-byte values, hashed and frozen.
     let rng = &SeededRng::from_option(Some(1234));
     let store = Arc::new(MemStore::new(Vec::new()));
-    let nodestore: NodeStore<_, _, DefaultHashMode> =
+    let nodestore: NodeStore<_, _, H> =
         NodeStore::new_empty_proposal(store, DeletedNodeTracking::Enabled);
     let mut merkle = Merkle::from(nodestore);
 
@@ -55,7 +56,7 @@ fn bench_proofs(criterion: &mut Criterion) {
     let mid = keys[keys.len() / 2].as_slice();
     let limit = NonZeroUsize::new(500);
 
-    let mut group = criterion.benchmark_group("Proofs");
+    let mut group = criterion.benchmark_group(format!("Proofs/{:?}", H::ALGORITHM));
     group.sample_size(30);
 
     group.bench_function("single_key_proof/generate", |b| {
@@ -65,12 +66,7 @@ fn bench_proofs(criterion: &mut Criterion) {
         let proof = view.single_key_proof(mid).unwrap();
         b.iter(|| {
             proof
-                .verify(
-                    mid,
-                    Some(b"v".as_slice()),
-                    &root_hash,
-                    DefaultHashMode::ALGORITHM,
-                )
+                .verify(mid, Some(b"v".as_slice()), &root_hash, H::ALGORITHM)
                 .unwrap();
         });
     });
@@ -85,7 +81,7 @@ fn bench_proofs(criterion: &mut Criterion) {
                 root_hash.clone(),
                 Some(first),
                 Some(last),
-                DefaultHashMode::ALGORITHM,
+                H::ALGORITHM,
                 limit,
             )
             .unwrap();
@@ -95,5 +91,9 @@ fn bench_proofs(criterion: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_proofs);
+criterion_group!(
+    benches,
+    bench_proofs::<MerkleDbHash>,
+    bench_proofs::<EthHash>
+);
 criterion_main!(benches);
