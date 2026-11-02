@@ -326,10 +326,8 @@ impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
             result
                 .map(|(key, node)| {
                     let must_recompute = self.iter.merkle.must_recompute_storage_hash();
-                    // Source the account storage-root fix policy from the source
-                    // DB's runtime algorithm, not the build's compile default, so
-                    // a cross-mode DB emits range-proof key_values that match its
-                    // proof nodes.
+                    // Use the source DB's hash mode so range-proof values and
+                    // proof nodes apply the same account storage-root fix.
                     let algorithm = self.iter.merkle.node_hash_algorithm();
                     match &*node {
                         Node::Branch(branch) => {
@@ -364,10 +362,7 @@ impl<T: TrieReader> FusedIterator for MerkleKeyValueIter<'_, T> {}
 /// recomputation, replace the storageRoot with the correct hash computed from the
 /// node's children. This ensures range proof `key_values` match the proof nodes.
 ///
-/// The eth-ness check is the source DB's runtime `algorithm`, not the build's
-/// compile default, so a `Db<EthHash>` opened in a non-ethhash binary still
-/// applies the fix (and a `Db<MerkleDbHash>` in an ethhash binary does not).
-/// `must_recompute` is an independent version flag, not an eth-ness proxy.
+/// `must_recompute` is a database-version flag, independent of the hash mode.
 fn fix_account_value(
     key: Key,
     value: &[u8],

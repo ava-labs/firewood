@@ -59,8 +59,6 @@ pub(in crate::merkle::tests) fn change_proof_rejected(
     first: Option<&[u8]>,
     last: Option<&[u8]>,
 ) -> bool {
-    // This module is ethhash-gated (only the ethhash-shaped fuzzer uses it),
-    // so every proof it sees is Ethereum-mode.
     match verify_change_proof_structure(
         proof,
         end_root.clone(),

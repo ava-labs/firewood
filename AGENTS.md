@@ -74,8 +74,10 @@ database is created and recorded in its file header):
 - **MerkleDB mode**: SHA-256 hashing compatible with merkledb
 - **Ethereum mode**: Keccak-256 hashing; understands "account" nodes at
   specific depths with RLP-encoded values and computes the account trie hash
-  as the actual root. See `storage/src/hashers/ethhash.rs` for implementation
-  details.
+  as the actual root. When an account has exactly one storage child, that
+  child is hashed as a standalone storage-trie root, so its hash depends on
+  the account's storage-child count. See `storage/src/hashers/ethhash.rs` for
+  implementation details.
 
 ## Feature Flags
 
