@@ -875,10 +875,11 @@ fn check_node_shape<H: HashMode, N: Hashable>(
     children: &Children<Option<HashType>>,
     prev_full_path_len: Option<usize>,
 ) -> Result<(), ProofError> {
-    // The first node is the trie root, so it has no parent and its whole key is
-    // its partial path. Every later node hangs off the previous one by the
-    // single nibble the descent takes, so its parent prefix is the previous key
-    // plus that nibble. Without this check a node can claim a fabricated
+    // The first node is the trie root, so it has no parent prefix. Every later
+    // node is one level below the previous one, so its parent prefix is one
+    // nibble longer than the previous node's key. This compares lengths only.
+    // `Proof::value_digest` separately checks that each key extends the
+    // previous one. Without this check a node can claim a fabricated
     // position while keeping its partial path, and therefore its hash,
     // unchanged, and the declared key decides inclusion and exclusion.
     let parent_prefix_len = node
@@ -909,8 +910,8 @@ fn check_node_shape<H: HashMode, N: Hashable>(
     }
 
     // An empty value encodes exactly as no value, so a proof of an empty value
-    // could be restated as a proof of absence. Empty values are not stored
-    // under this scheme.
+    // could be restated as a proof of absence. Ethereum never stores an empty
+    // value.
     if let Some(ValueDigest::Value(value)) = node.value_digest()
         && value.is_empty()
     {

@@ -2820,10 +2820,10 @@ fn rebuild_range_proof<H: HashMode>(
 /// A range proof whose end-proof terminal lies past the last key-value pair is
 /// anchored on the right by hash reconstruction, and the right-edge walk is
 /// skipped. The end proof's nodes must still pass the shape checks. Here the
-/// terminal is moved two nibbles deeper with its partial path unchanged, so
-/// under the Ethereum scheme its hash is unchanged too, and the key it stood at
-/// is dropped from the pairs. Accepting the proof would prove `0x10 0x50` absent
-/// from a range that contains it. The position check runs before any hashing,
+/// terminal, the leaf for `0x10 0x50`, is moved two nibbles deeper, which adds
+/// two to its parent-prefix length, and `0x10 0x50` is dropped from the
+/// key-value pairs. Accepting the proof would prove `0x10 0x50` absent from a
+/// range that contains it. The position check runs before any hashing,
 /// so the expected error is the same under both schemes.
 #[hash_mode]
 #[test]
