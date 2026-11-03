@@ -252,25 +252,28 @@ The crates.io workflow does **not** run until the GitHub release is published.
 ### After publishing the release
 
 Publishing triggers the crates.io workflow ([`.github/workflows/publish.yaml`](.github/workflows/publish.yaml)),
-which authenticates with the `CARGO_TOKEN` repository secret and runs one
-`cargo publish -p <crate>` step per crate, ordered so that each crate is
-published after everything it depends on.
+which writes the `CARGO_TOKEN` repository secret to Cargo's `credentials.toml`
+and runs `cargo publish -p <crate>` for each crate, ordered so that each crate is
+published after everything it depends on. A crate whose current version is
+already on crates.io is skipped, so re-running the workflow after a partial
+failure resumes at the first unpublished crate.
 
-The workflow is a flat list of steps with no conditional logic, so watch for
-these cases:
+Watch for these cases:
 
-- **A crate whose version was not bumped.** crates.io rejects a re-publish of an
-  existing version, and every step runs with `continue-on-error: false`, so the
-  job fails at that crate and the ones after it never publish. Bump every crate
-  you intend to release, and re-run the workflow after fixing a partial failure.
+- **A crate whose version was not bumped.** The workflow skips it without error,
+  so its changes do not ship. Bump every crate you intend to release.
+- **A dev-dependency cycle.** `firewood-macros` and `firewood-storage` are each a
+  dev-dependency of the other. A dev-dependency on a crate that publishes later
+  must omit `version`, which makes `cargo publish` strip it; otherwise packaging
+  fails because the required version is not yet on crates.io.
 - **A crate with a non-registry dependency.** Every dependency must resolve to a
   registry version, so a `[patch.crates-io]` entry pointing at a git revision
   makes each crate that transitively depends on it unpublishable. (Workspace
   members are fine: they carry both `path` and `version`, and `cargo publish`
   rewrites them to the registry version.) The workspace currently patches
   nothing.
-- **`firewood-triehash` is not published.** Its step is commented out pending
-  version-bump detection.
+- **`firewood-triehash` is not published.** It is unmaintained, sets
+  `publish = false`, and must not be published again.
 
 ## Milestone
 
