@@ -24,6 +24,8 @@ jobs:
       - name: write crates.io credentials
         env:
           CARGO_TOKEN: ${{ secrets.CARGO_TOKEN }}
+        # umask clears the group/global permissions bits and is required.
+        # cargo rejects the credentials file if it has insecure permissions.
         run: |
           umask 077
           credentials="${CARGO_HOME:-$HOME/.cargo}/credentials.toml"
@@ -36,8 +38,7 @@ jobs:
         # crate published later must omit `version` so that `cargo publish`
         # strips it.
         #
-        # firewood-triehash is unmaintained and must not be published again; it
-        # sets `publish = false` and is absent from this list.
+        # firewood-triehash is unmaintained and must not be published again.
         #
         # Versions already on crates.io are skipped, so re-running after a
         # partial failure resumes where the previous run stopped.
