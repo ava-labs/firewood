@@ -21,46 +21,59 @@ jobs:
       - uses: $/.github/actions/setup-rust
         with:
           cache: "false"
-      ## NOTE: keep these packages sorted in reverse topological order!
-      ## cargo tree --workspace -e all | grep firewood
-      - name: publish firewood-macros crate
-        continue-on-error: false
+      - name: write crates.io credentials
+        env:
+          CARGO_TOKEN: ${{ secrets.CARGO_TOKEN }}
         run: |
-          cargo login ${{ secrets.CARGO_TOKEN }}
-          cargo publish -p firewood-macros
-      # TODO(demosdemon): detect when version is bumped and only publish then
-      # - name: publish firewood-triehash crate
-      #   continue-on-error: false
-      #   run: |
-      #     cargo login ${{ secrets.CARGO_TOKEN }}
-      #     cargo publish -p firewood-triehash
-      - name: publish firewood-storage crate
-        continue-on-error: false
+          umask 077
+          credentials="${CARGO_HOME:-$HOME/.cargo}/credentials.toml"
+          mkdir -p "$(dirname "$credentials")"
+          printf '[registry]\ntoken = "%s"\n' "$CARGO_TOKEN" >"$credentials"
+      - name: publish crates
+        # Each crate follows every crate it depends on through normal or build
+        # dependencies; list them with
+        # `cargo metadata --format-version 1 --no-deps`. A dev-dependency on a
+        # crate published later must omit `version` so that `cargo publish`
+        # strips it.
+        #
+        # firewood-triehash is unmaintained and must not be published again; it
+        # sets `publish = false` and is absent from this list.
+        #
+        # Versions already on crates.io are skipped, so re-running after a
+        # partial failure resumes where the previous run stopped.
         run: |
-          cargo login ${{ secrets.CARGO_TOKEN }}
-          cargo publish -p firewood-storage
-      - name: publish firewood crate
-        continue-on-error: false
-        run: |
-          cargo login ${{ secrets.CARGO_TOKEN }}
-          cargo publish -p firewood
-      - name: publish firewood-replay crate
-        continue-on-error: false
-        run: |
-          cargo login ${{ secrets.CARGO_TOKEN }}
-          cargo publish -p firewood-replay
-      - name: publish firewood-ffi crate
-        continue-on-error: false
-        run: |
-          cargo login ${{ secrets.CARGO_TOKEN }}
-          cargo publish -p firewood-ffi
-      - name: publish firewood-fwdctl crate
-        continue-on-error: false
-        run: |
-          cargo login ${{ secrets.CARGO_TOKEN }}
-          cargo publish -p firewood-fwdctl
-      - name: publish firewood-benchmark crate
-        continue-on-error: false
-        run: |
-          cargo login ${{ secrets.CARGO_TOKEN }}
-          cargo publish -p firewood-benchmark
+          set -euo pipefail
+
+          crates=(
+            firewood-metrics
+            firewood-macros
+            firewood-storage
+            firewood
+            firewood-replay
+            firewood-ffi
+            firewood-fwdctl
+            firewood-benchmark
+          )
+
+          metadata="$(cargo metadata --format-version 1 --no-deps)"
+
+          # Paths follow the crates.io sparse index layout for names of four or
+          # more characters.
+          published() {
+            local name="$1" version="$2"
+            curl --proto '=https' --tlsv1.2 --silent --show-error --fail --retry 5 \
+              "https://index.crates.io/${name:0:2}/${name:2:2}/${name}" |
+              jq --exit-status --arg v "$version" 'select(.vers == $v)' >/dev/null
+          }
+
+          for crate in "${crates[@]}"; do
+            version="$(jq --raw-output --arg n "$crate" \
+              '.packages[] | select(.name == $n) | .version' <<<"$metadata")"
+            if published "$crate" "$version"; then
+              echo "::notice::skip $crate $version: already on crates.io"
+              continue
+            fi
+            # cargo publish waits until the new version is in the index, so the
+            # next crate resolves it.
+            cargo publish --package "$crate"
+          done
