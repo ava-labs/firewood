@@ -105,7 +105,7 @@ bump signals non-breaking changes.
 | `firewood` | Rust API |
 | `firewood-storage` | Rust API |
 | `firewood-ffi` | C ABI, metrics schema, database file format |
-| `firewood-go` (via `firewood-go-ethhash`) | Go module API |
+| `firewood-go` | Go module API |
 | `fwdctl` | CLI flags and config file format |
 
 Tag pull requests with the appropriate `breaking-change/<crate>` label when the
@@ -126,10 +126,10 @@ This check is **informational and inconclusive in the negative direction**: a
 passing result does not guarantee compatibility, because it does not cover
 metrics names, file format, behavioral guarantees, or C ABI stability.
 
-### firewood-go-ethhash versioning
+### firewood-go versioning
 
-The Go module at `ava-labs/firewood-go-ethhash` tracks `firewood-ffi`. When
-`firewood-ffi` is bumped to `v0.6.0`, CI tags `firewood-go-ethhash` at
+The Go module at `ava-labs/firewood-go` tracks `firewood-ffi`. When
+`firewood-ffi` is bumped to `v0.6.0`, CI tags `firewood-go` at
 `ffi/v0.6.0`.
 
 ## Package Version
@@ -234,9 +234,9 @@ Pushing the tag triggers three automated jobs:
    Creates a draft release with auto-generated notes. Do not act yet — publish
    the draft manually (see below) to trigger the crates.io workflow.
 
-2. **firewood-go-ethhash publish** ([`.github/workflows/attach-static-libs.yaml`](.github/workflows/attach-static-libs.yaml)):
+2. **firewood-go publish** ([`.github/workflows/attach-static-libs.yaml`](.github/workflows/attach-static-libs.yaml)):
    Builds the `firewood-ffi` static library for each supported target, pushes
-   the result to `ava-labs/firewood-go-ethhash`, and tags it `ffi/v0.1.1`.
+   the result to `ava-labs/firewood-go`, and tags it `ffi/v0.1.1`.
    This typically takes 10–15 minutes.
 
 ### Publish the draft release (manual step)

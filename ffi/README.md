@@ -56,7 +56,7 @@ To do this, [firewood.go](./firewood.go) includes CGO directives to include mult
 - aarch64-apple-darwin
 - x86_64-apple-darwin
 
-to a separate repo [firewood-go-ethhash](https://github.com/ava-labs/firewood-go-ethhash) (to avoid including binaries in the Firewood repo).
+to a separate repo [firewood-go](https://github.com/ava-labs/firewood-go) (to avoid including binaries in the Firewood repo).
 
 ### Local Development
 
@@ -79,17 +79,17 @@ go test
 To use a local build of Firewood for a project that depends on Firewood, you must redirect the `go.mod` to use the local version of Firewood FFI, for example:
 
 ```bash
-go mod edit -replace github.com/ava-labs/firewood-go-ethhash/ffi=/path/to/firewood/ffi
+go mod edit -replace github.com/ava-labs/firewood-go/ffi=/path/to/firewood/ffi
 go mod tidy
 ```
 
 ### Production Development Flow
 
-Firewood pushes the FFI source code and attached static libraries to [firewood-go-ethhash](https://github.com/ava-labs/firewood-go-ethhash) via [attach-static-libs](../.github/workflows/attach-static-libs.yaml).
+Firewood pushes the FFI source code and attached static libraries to [firewood-go](https://github.com/ava-labs/firewood-go) via [attach-static-libs](../.github/workflows/attach-static-libs.yaml).
 
-This enables consumers to utilize it directly without forcing them to compile Firewood locally. Go programs running on supported architectures can utilize `firewood-go-ethhash/ffi` just like any other dependency and select a hashing algorithm per database.
+This enables consumers to utilize it directly without forcing them to compile Firewood locally. Go programs running on supported architectures can utilize `firewood-go/ffi` just like any other dependency and select a hashing algorithm per database.
 
-To trigger this build, [attach-static-libs](../.github/workflows/attach-static-libs.yaml) supports triggers for both manual GitHub Actions and tags, so you can create a mirror branch/tag on [firewood-go-ethhash](https://github.com/ava-labs/firewood-go-ethhash) by either trigger a manual GitHub Action and selecting your branch or pushing a tag to Firewood.
+To trigger this build, [attach-static-libs](../.github/workflows/attach-static-libs.yaml) supports triggers for both manual GitHub Actions and tags, so you can create a mirror branch/tag on [firewood-go](https://github.com/ava-labs/firewood-go) by either trigger a manual GitHub Action and selecting your branch or pushing a tag to Firewood.
 
 ### Hash Mode
 

@@ -119,13 +119,13 @@ stages:
     name: "Configuring Go modules"
     commands:
       # Configure graft/coreth to use local firewood and local libevm when requested
-      - "sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/avalanchego/graft/coreth /usr/local/go/bin/go mod edit -replace github.com/ava-labs/firewood-go-ethhash/ffi=../../../firewood/ffi"
+      - "sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/avalanchego/graft/coreth /usr/local/go/bin/go mod edit -replace github.com/ava-labs/firewood-go/ffi=../../../firewood/ffi"
       - |
         if [ -n "{{ branches.libevm }}" ]; then
           sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/avalanchego/graft/coreth /usr/local/go/bin/go mod edit -replace github.com/ava-labs/libevm=../../../libevm
         fi
       # Configure avalanchego to use local firewood and local libevm when requested
-      - "sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/avalanchego /usr/local/go/bin/go mod edit -replace github.com/ava-labs/firewood-go-ethhash/ffi=../firewood/ffi"
+      - "sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/avalanchego /usr/local/go/bin/go mod edit -replace github.com/ava-labs/firewood-go/ffi=../firewood/ffi"
       - |
         if [ -n "{{ branches.libevm }}" ]; then
           sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/avalanchego /usr/local/go/bin/go mod edit -replace github.com/ava-labs/libevm=../libevm
