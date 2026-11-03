@@ -1817,7 +1817,7 @@ dependencies = [
 
 [[package]]
 name = "firewood"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "aquamarine",
  "arity-arrays",
@@ -1856,7 +1856,7 @@ dependencies = [
 
 [[package]]
 name = "firewood-benchmark"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "clap",
  "env_logger",
@@ -1883,7 +1883,7 @@ dependencies = [
 
 [[package]]
 name = "firewood-ffi"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "cbindgen",
  "env_logger",
@@ -1901,7 +1901,7 @@ dependencies = [
 
 [[package]]
 name = "firewood-fwdctl"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "askama",
  "assert_cmd",
@@ -1939,7 +1939,7 @@ dependencies = [
 
 [[package]]
 name = "firewood-macros"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "firewood-metrics",
  "firewood-storage",
@@ -1952,7 +1952,7 @@ dependencies = [
 
 [[package]]
 name = "firewood-metrics"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "log",
  "metrics",
@@ -1960,7 +1960,7 @@ dependencies = [
 
 [[package]]
 name = "firewood-replay"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "firewood",
  "firewood-macros",
@@ -1976,7 +1976,7 @@ dependencies = [
 
 [[package]]
 name = "firewood-storage"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "aquamarine",
  "arc-swap",
