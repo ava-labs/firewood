@@ -106,9 +106,8 @@ impl FrozenRangeProof {
     /// [`FrozenRangeProof::write_to_vec`] compresses after the header, and
     /// the sequence to hash or compare for a proof's canonical identity.
     pub fn write_body_to_vec(&self, out: &mut Vec<u8>) {
-        // The proof's hash mode determines the child-hash wire layout and the
-        // value-digest hashing rule; use its self-describing mode rather than
-        // the compile default.
+        // The proof's hash mode selects the child-hash wire layout and
+        // value-digest hashing rule.
         let mut w = ProofWriter {
             out,
             mode: self.hash_mode(),

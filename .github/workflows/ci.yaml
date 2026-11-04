@@ -69,9 +69,8 @@ jobs:
           - profile-key: debug-no-features
           - profile-key: debug-no-features
             os: macos-26
-          - profile-key: debug-ethhash-logger
           - profile-key: debug-all-features
-          - profile-key: maxperf-ethhash-logger
+          - profile-key: maxperf-logger
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     env:
       RUSTUP_TOOLCHAIN: stable
@@ -120,9 +119,8 @@ jobs:
           - profile-key: debug-no-features
           - profile-key: debug-no-features
             os: macos-26
-          - profile-key: debug-ethhash-logger
           - profile-key: debug-all-features
-          - profile-key: maxperf-ethhash-logger
+          - profile-key: maxperf-logger
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     steps:
       # rust-cache hashes the toolchain into its key, so the pinned nightly cannot
@@ -146,9 +144,8 @@ jobs:
           - profile-key: debug-no-features
           - profile-key: debug-no-features
             os: macos-26
-          - profile-key: debug-ethhash-logger
           - profile-key: debug-all-features
-          - profile-key: maxperf-ethhash-logger
+          - profile-key: maxperf-logger
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     env:
       RUSTUP_TOOLCHAIN: stable
@@ -169,9 +166,8 @@ jobs:
           - profile-key: debug-no-features
           - profile-key: debug-no-features
             os: macos-26
-          - profile-key: debug-ethhash-logger
           - profile-key: debug-all-features
-          - profile-key: maxperf-ethhash-logger
+          - profile-key: maxperf-logger
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     env:
       RUSTUP_TOOLCHAIN: stable
