@@ -105,7 +105,7 @@ bump signals non-breaking changes.
 | `firewood` | Rust API |
 | `firewood-storage` | Rust API |
 | `firewood-ffi` | C ABI, metrics schema, database file format |
-| `firewood-go` (via `firewood-go-ethhash`) | Go module API |
+| `firewood-go` | Go module API |
 | `fwdctl` | CLI flags and config file format |
 
 Tag pull requests with the appropriate `breaking-change/<crate>` label when the
@@ -126,10 +126,10 @@ This check is **informational and inconclusive in the negative direction**: a
 passing result does not guarantee compatibility, because it does not cover
 metrics names, file format, behavioral guarantees, or C ABI stability.
 
-### firewood-go-ethhash versioning
+### firewood-go versioning
 
-The Go module at `ava-labs/firewood-go-ethhash` tracks `firewood-ffi`. When
-`firewood-ffi` is bumped to `v0.6.0`, CI tags `firewood-go-ethhash` at
+The Go module at `ava-labs/firewood-go` tracks `firewood-ffi`. When
+`firewood-ffi` is bumped to `v0.6.0`, CI tags `firewood-go` at
 `ffi/v0.6.0`.
 
 ## Package Version
@@ -234,9 +234,9 @@ Pushing the tag triggers three automated jobs:
    Creates a draft release with auto-generated notes. Do not act yet — publish
    the draft manually (see below) to trigger the crates.io workflow.
 
-2. **firewood-go-ethhash publish** ([`.github/workflows/attach-static-libs.yaml`](.github/workflows/attach-static-libs.yaml)):
+2. **firewood-go publish** ([`.github/workflows/attach-static-libs.yaml`](.github/workflows/attach-static-libs.yaml)):
    Builds the `firewood-ffi` static library for each supported target, pushes
-   the result to `ava-labs/firewood-go-ethhash`, and tags it `ffi/v0.1.1`.
+   the result to `ava-labs/firewood-go`, and tags it `ffi/v0.1.1`.
    This typically takes 10–15 minutes.
 
 ### Publish the draft release (manual step)
@@ -252,25 +252,28 @@ The crates.io workflow does **not** run until the GitHub release is published.
 ### After publishing the release
 
 Publishing triggers the crates.io workflow ([`.github/workflows/publish.yaml`](.github/workflows/publish.yaml)),
-which authenticates with the `CARGO_TOKEN` repository secret and runs one
-`cargo publish -p <crate>` step per crate, ordered so that each crate is
-published after everything it depends on.
+which writes the `CARGO_TOKEN` repository secret to Cargo's `credentials.toml`
+and runs `cargo publish -p <crate>` for each crate, ordered so that each crate is
+published after everything it depends on. A crate whose current version is
+already on crates.io is skipped, so re-running the workflow after a partial
+failure resumes at the first unpublished crate.
 
-The workflow is a flat list of steps with no conditional logic, so watch for
-these cases:
+Watch for these cases:
 
-- **A crate whose version was not bumped.** crates.io rejects a re-publish of an
-  existing version, and every step runs with `continue-on-error: false`, so the
-  job fails at that crate and the ones after it never publish. Bump every crate
-  you intend to release, and re-run the workflow after fixing a partial failure.
+- **A crate whose version was not bumped.** The workflow skips it without error,
+  so its changes do not ship. Bump every crate you intend to release.
+- **A dev-dependency cycle.** `firewood-macros` and `firewood-storage` are each a
+  dev-dependency of the other. A dev-dependency on a crate that publishes later
+  must omit `version`, which makes `cargo publish` strip it; otherwise packaging
+  fails because the required version is not yet on crates.io.
 - **A crate with a non-registry dependency.** Every dependency must resolve to a
   registry version, so a `[patch.crates-io]` entry pointing at a git revision
   makes each crate that transitively depends on it unpublishable. (Workspace
   members are fine: they carry both `path` and `version`, and `cargo publish`
   rewrites them to the registry version.) The workspace currently patches
   nothing.
-- **`firewood-triehash` is not published.** Its step is commented out pending
-  version-bump detection.
+- **`firewood-triehash` is not published.** It is unmaintained, sets
+  `publish = false`, and must not be published again.
 
 ## Milestone
 
