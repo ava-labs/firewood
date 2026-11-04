@@ -17,10 +17,16 @@ on:
     branches:
       - "main"
 
+permissions: {}
+
 jobs:
   expected-golangci-yaml-diff:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Validate expected golangci-lint changes
         run: .github/scripts/verify_golangci_yaml_changes.sh

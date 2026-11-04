@@ -5,16 +5,33 @@ on:
     tags:
       - "v*.*.*"
 
+permissions: {}
+
 jobs:
   build:
+    permissions:
+      contents: write
     # Only cut releases from the canonical repo.
     if: github.repository == 'ava-labs/firewood'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-      - name: Release
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # @v2
         with:
-          draft: true
-          generate_release_notes: true
+          persist-credentials: false
+      - name: Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -eo pipefail
+          files=()
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --draft=true
+            if [ ${#files[@]} -gt 0 ]; then
+              gh release upload "${RELEASE_TAG}" "${files[@]}" --clobber --repo "${GITHUB_REPOSITORY}"
+            fi
+          else
+            gh release create "${RELEASE_TAG}" "${files[@]}" --repo "${GITHUB_REPOSITORY}" --target "${GITHUB_SHA}" --generate-notes --draft
+          fi

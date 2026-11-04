@@ -10,13 +10,19 @@ on:
     paths:
       - ".devcontainer/**"
 
+permissions: {}
+
 jobs:
   build:
+    permissions:
+      contents: read
     name: Build devcontainer
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Build devcontainer
         uses: devcontainers/ci@b63b30de439b47a52267f241112c5b453b673db5 # v0.3.1900000449

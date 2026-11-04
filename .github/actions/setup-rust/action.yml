@@ -61,6 +61,7 @@ runs:
     - uses: actions/checkout@v6
       with:
         ref: ${{ inputs.checkout-ref }}
+        persist-credentials: false
     - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
       with:
         tool: just@1.46.0${{ inputs.tools && format(',{0}', inputs.tools) || '' }}

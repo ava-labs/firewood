@@ -11,8 +11,12 @@ env:
   # "Toolchain Selection".
   RUSTUP_TOOLCHAIN: stable
 
+permissions: {}
+
 jobs:
   publish-firewood-crate:
+    permissions:
+      contents: read
     name: firewood-lib
     runs-on: ubuntu-latest
     # crates.io trusted publishing is configured for the canonical repo only.

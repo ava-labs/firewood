@@ -32,11 +32,14 @@ concurrency:
 # - x86_64-unknown-linux-gnu
 # - aarch64-unknown-linux-gnu
 # - aarch64-apple-darwin
+permissions: {}
+
 jobs:
   # Detect whether the deploy key is configured. On forks without the
   # secret, the downstream push step cannot run and the multi-arch build
   # is wasted CI time — so skip the entire workflow there.
   check-secrets:
+    permissions: {}
     runs-on: ubuntu-latest
     outputs:
       has_secrets: ${{ steps.check.outputs.has_secrets }}
@@ -57,6 +60,8 @@ jobs:
   # Build the static libraries for each target architecture and upload
   # them as artifacts to collect and attach in the next job.
   build-firewood-ffi-libs:
+    permissions:
+      contents: read
     needs: check-secrets
     if: needs.check-secrets.outputs.has_secrets == 'true'
     runs-on: ${{ matrix.os }}
@@ -100,6 +105,8 @@ jobs:
   # We commit and push this as a new branch with "--force" to overwrite
   # the previous static libs that will not be on our branch.
   push-firewood-ffi-libs:
+    permissions:
+      contents: write
     needs: build-firewood-ffi-libs
     runs-on: ubuntu-24.04
     outputs:
@@ -139,12 +146,14 @@ jobs:
       - uses: actions/checkout@v6
         with:
           path: firewood
+          persist-credentials: false
 
       - uses: actions/checkout@v6
         with:
           repository: ava-labs/firewood-go
           ssh-key: ${{ secrets.FIREWOOD_GO_DEPLOY_KEY }}
           path: firewood-go
+          persist-credentials: false
 
       - name: Copy FFI Source Code
         run: cp -r firewood/ffi firewood-go
@@ -200,6 +209,8 @@ jobs:
   # This tests that the Firewood FFI package passes tests on the target
   # architecture when it is forced to depend on the attached static libs.
   test-firewood-ffi-libs:
+    permissions:
+      contents: read
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -212,6 +223,7 @@ jobs:
           repository: ava-labs/firewood-go
           ssh-key: ${{ secrets.FIREWOOD_GO_DEPLOY_KEY }}
           ref: ${{ needs.push-firewood-ffi-libs.outputs.target_branch }}
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -236,6 +248,7 @@ jobs:
           repository: ava-labs/firewood-go
           ssh-key: ${{ secrets.FIREWOOD_GO_DEPLOY_KEY }}
           ref: ${{ needs.push-firewood-ffi-libs.outputs.target_branch }}
+          persist-credentials: false
       - name: Delete branch
         env:
           TARGET_BRANCH: ${{ needs.push-firewood-ffi-libs.outputs.target_branch }}

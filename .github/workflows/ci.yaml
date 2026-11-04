@@ -12,12 +12,15 @@ env:
   # `rust-lint`, and `miri` want the nightly rust-toolchain.toml pin, and every
   # other job wants stable. See AGENTS.md, "Toolchain Selection".
 
+permissions: {}
+
 jobs:
   # Keep this as the only CI status required by main's branch protection.
   # To make another job merge-blocking, add its job key to this list. This
   # keeps the required checks version-controlled instead of requiring a
   # corresponding branch-protection update in the GitHub UI.
   tests-required:
+    permissions: {}
     if: ${{ always() }}
     needs:
       - build
@@ -49,6 +52,8 @@ jobs:
           fi
 
   build:
+    permissions:
+      contents: read
     # To optimize cargo performance and caching throughout the CI pipeline, we use Swatinem/rust-cache
     # and set up an initial build job that writes the cache for a matrix of joint build profiles and
     # feature sets.
@@ -90,6 +95,8 @@ jobs:
         run: ./scripts/run-just.sh ci-rust build ${{ matrix.profile-key }}
 
   no-rust-cache-lint:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: $/.github/actions/setup-rust
@@ -109,6 +116,8 @@ jobs:
         run: ./scripts/run-just.sh ci-check-todos
 
   rust-lint:
+    permissions:
+      contents: read
     needs: build
     strategy:
       # do not cancel concurrent jobs if one fails for exhaustive failure reasons
@@ -134,6 +143,8 @@ jobs:
         run: ./scripts/run-just.sh ci-rust clippy ${{ matrix.profile-key }}
 
   test:
+    permissions:
+      contents: read
     needs: build
     strategy:
       # do not cancel concurrent jobs if one fails for exhaustive failure reasons
@@ -158,6 +169,8 @@ jobs:
         run: ./scripts/run-just.sh ci-rust test ${{ matrix.profile-key }}
 
   examples:
+    permissions:
+      contents: read
     needs: build
     strategy:
       matrix:
@@ -181,6 +194,8 @@ jobs:
         run: ./scripts/run-just.sh ci-rust insert-example ${{ matrix.profile-key }}
 
   docs:
+    permissions:
+      contents: read
     needs: build
     runs-on: ubuntu-latest
     env:
@@ -195,6 +210,8 @@ jobs:
         run: ./scripts/run-just.sh ci-docs
 
   ffi-check-go-generate:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: $/.github/actions/setup-rust
@@ -204,6 +221,8 @@ jobs:
         run: ./scripts/run-just.sh ci-check-go-generate
 
   ffi:
+    permissions:
+      contents: read
     needs: [build, ffi-check-go-generate]
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     strategy:
@@ -292,6 +311,8 @@ jobs:
         run: go test -run 'TestReplayLogExecution$' -v -timeout 20m .
 
   firewood-ffi-compatibility-tests:
+    permissions:
+      contents: read
     name: Firewood FFI compatibility tests
     needs: [build, ffi-check-go-generate]
     runs-on: ubuntu-latest
@@ -328,6 +349,8 @@ jobs:
           retention-days: 30
 
   stale-deps:
+    permissions:
+      contents: read
     needs: build
     runs-on: ubuntu-latest
     env:
@@ -342,6 +365,8 @@ jobs:
         run: ./scripts/run-just.sh ci-machete
 
   miri:
+    permissions:
+      contents: read
     name: miri (path::component slice casts)
     # NB: this uses macos and not linux intentionally. miri fails due to a dependency
     # that uses inline assembly (fastrace → fastant → small_ctor) which is not supported

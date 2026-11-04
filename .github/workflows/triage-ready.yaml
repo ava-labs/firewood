@@ -4,11 +4,12 @@ on:
   issues:
     types: [labeled]
 
-permissions:
-  issues: write
+permissions: {}
 
 jobs:
   promote:
+    permissions:
+      issues: write
     if: startsWith(github.event.label.name, 'priority/')
     runs-on: ubuntu-latest
     steps:
