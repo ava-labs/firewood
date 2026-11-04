@@ -943,3 +943,103 @@ fn test_bounded_multi_storage_child_union(
         &range_proof,
     );
 }
+
+/// Assert that `range_proof`'s right edge is
+/// [`RightBoundary::OutOfRange`](crate::merkle::RightBoundary::OutOfRange) at
+/// `terminal_key`: its end proof ends at a value node that sorts after the
+/// last key-value, so the verifier recomputes that node's slot instead of
+/// reading it from the parent.
+fn assert_out_of_range_terminal(range_proof: &crate::api::FrozenRangeProof, terminal_key: &[u8]) {
+    let last_kv = range_proof.key_values().last().map(|(k, _)| k.as_ref());
+    let boundary = crate::merkle::right_edge(range_proof.end_proof().as_ref(), last_kv, None);
+    assert!(
+        matches!(
+            &boundary,
+            crate::merkle::RightBoundary::OutOfRange(k) if k.as_ref() == terminal_key
+        ),
+        "expected an out-of-range terminal at {terminal_key:02x?}, got {boundary:?}",
+    );
+}
+
+/// An honest proof whose out-of-range terminal is an account's lone storage
+/// child. The verifier rebuilds that child from its proof node and must fold
+/// it as a standalone storage-trie root, as live hashing does.
+#[test]
+fn test_out_of_range_terminal_lone_storage_child() {
+    let AccountTrie {
+        merkle,
+        root_hash,
+        account_key,
+        storage_keys,
+    } = build_account_trie(&[0xA]);
+    let storage_key = &storage_keys[0];
+
+    // A strict prefix of the storage key: it sorts below the storage key, and
+    // proving it walks through the account into the lone child's slot.
+    let end: Box<[u8]> = storage_key[..=account_key.len()].into();
+    let range_proof = merkle
+        .range_proof(Some(account_key.as_ref()), Some(end.as_ref()), None)
+        .unwrap();
+    assert_eq!(range_proof.key_values().len(), 1);
+    assert_eq!(range_proof.key_values()[0].0.as_ref(), account_key.as_ref());
+    assert_out_of_range_terminal(&range_proof, storage_key);
+
+    assert_range_proof_roundtrips(
+        Some(account_key.as_ref()),
+        Some(end.as_ref()),
+        &root_hash,
+        &range_proof,
+    );
+}
+
+/// An honest proof whose out-of-range terminal is an account with storage.
+/// The verifier rebuilds the account from its proof node and must recompute
+/// its storageRoot from the storage children, as live hashing does — with
+/// the single-child fold when there is one child and without it otherwise.
+#[test_case(&[0xAu8] ; "single_storage_child")]
+#[test_case(&[0x1u8, 0x8u8] ; "multi_storage_child")]
+fn test_out_of_range_terminal_account_with_storage(storage_child_nibbles: &[u8]) {
+    // Placeholder storageRoot; live hashing recomputes the real one.
+    let dummy_storage_root = [0u8; 32];
+    let leading_key: Box<[u8]> = [0x05u8; 32].into();
+    let account_key: Box<[u8]> = [0x10u8; 32].into();
+    let following_key: Box<[u8]> = [0xFFu8; 32].into();
+    let storage_keys: Box<[Box<[u8]>]> = storage_child_nibbles
+        .iter()
+        .map(|&nibble| account_storage_key(account_key.as_ref(), nibble << 4))
+        .collect();
+    let storage_value = rlp_encode_storage(&[0x42; 32]);
+    let leading_value = rlp_encode_account(1, 100, &dummy_storage_root, &empty_code_hash());
+    let account_value = rlp_encode_account(2, 200, &dummy_storage_root, &empty_code_hash());
+    let following_value = rlp_encode_account(3, 300, &dummy_storage_root, &empty_code_hash());
+
+    let mut items: Vec<(&[u8], &[u8])> = vec![
+        (leading_key.as_ref(), leading_value.as_ref()),
+        (account_key.as_ref(), account_value.as_ref()),
+    ];
+    items.extend(
+        storage_keys
+            .iter()
+            .map(|k| (k.as_ref(), storage_value.as_ref())),
+    );
+    items.push((following_key.as_ref(), following_value.as_ref()));
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    // A strict prefix of the account key: it sorts after `leading_key` and
+    // before `account_key`, and proving it ends at the account.
+    let end: Box<[u8]> = account_key[..16].into();
+    let range_proof = merkle
+        .range_proof(Some(leading_key.as_ref()), Some(end.as_ref()), None)
+        .unwrap();
+    assert_eq!(range_proof.key_values().len(), 1);
+    assert_eq!(range_proof.key_values()[0].0.as_ref(), leading_key.as_ref());
+    assert_out_of_range_terminal(&range_proof, &account_key);
+
+    assert_range_proof_roundtrips(
+        Some(leading_key.as_ref()),
+        Some(end.as_ref()),
+        &root_hash,
+        &range_proof,
+    );
+}
