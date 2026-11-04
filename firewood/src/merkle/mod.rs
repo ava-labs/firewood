@@ -1586,9 +1586,8 @@ impl<T: TrieReader> Merkle<T> {
     pub fn prove(&self, key: &[u8]) -> Result<FrozenProof, ProofError> {
         self.root().ok_or(ProofError::Empty)?;
 
-        // Source the account storage-root fix policy from the source DB's
-        // runtime algorithm so a cross-mode DB emits correctly-fixed proof
-        // nodes regardless of the build's compile default.
+        // Use the source DB's hash mode so proof nodes apply the correct
+        // account storage-root fix.
         let algorithm = self.nodestore().node_hash_algorithm();
 
         // PathIterator yields every node on the path from root toward
@@ -1744,9 +1743,6 @@ impl<T: TrieReader> Merkle<T> {
 
         firewood_histogram!(PROOF_KEYS, "kind" => "range").record_integer(key_values.len());
 
-        // Stamp the proof with the source DB's runtime hash mode (not the
-        // build's compile default) so it serializes in the correct wire format
-        // and round-trips for a cross-mode DB.
         let algorithm = self.nodestore().node_hash_algorithm();
         Ok(RangeProof::new(
             start_proof,
@@ -1969,9 +1965,6 @@ impl<T: HashedNodeReader> Merkle<T> {
 
         firewood_histogram!(PROOF_KEYS, "kind" => "change").record_integer(batch_ops.len());
 
-        // Stamp the proof with the source DB's runtime hash mode (not the
-        // build's compile default) so it serializes in the correct wire format
-        // and round-trips for a cross-mode DB.
         let algorithm = self.nodestore().node_hash_algorithm();
         Ok(ChangeProof::new(
             start_proof,

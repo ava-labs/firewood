@@ -12,13 +12,14 @@ use firewood::db::BatchOp;
 use firewood::db::DbConfig;
 use firewood::manager::RevisionManagerConfig;
 use firewood::open;
-use firewood_storage::DefaultHashMode;
+use firewood_storage::EthHash;
 use firewood_storage::HashMode;
+use firewood_storage::MerkleDbHash;
 use rand::RngExt;
 use rand::distr::Alphanumeric;
 
 #[expect(clippy::unwrap_used)]
-fn bench_deferred_persistence<const N: usize, const MAX_PERSISTENCE_GAP: u64>(
+fn bench_deferred_persistence<H: HashMode, const N: usize, const MAX_PERSISTENCE_GAP: u64>(
     criterion: &mut Criterion,
 ) {
     const KEY_LEN: usize = 4;
@@ -27,7 +28,7 @@ fn bench_deferred_persistence<const N: usize, const MAX_PERSISTENCE_GAP: u64>(
     let max_revisions = max_persistence_gap.get().wrapping_add(1) as usize;
 
     criterion
-        .benchmark_group("deferred_persistence")
+        .benchmark_group(format!("deferred_persistence/{:?}", H::ALGORITHM))
         .sample_size(20)
         .bench_function(format!("max_persistence_gap_{MAX_PERSISTENCE_GAP}"), |b| {
             b.iter_batched(
@@ -52,7 +53,7 @@ fn bench_deferred_persistence<const N: usize, const MAX_PERSISTENCE_GAP: u64>(
                                 .build(),
                         )
                         .build();
-                    let db = open(tmpdir, DefaultHashMode::ALGORITHM, dbcfg).unwrap();
+                    let db = open(tmpdir, H::ALGORITHM, dbcfg).unwrap();
 
                     for op in batch_ops {
                         let batch: api::OwnedBatch = Box::new([op]);
@@ -72,10 +73,14 @@ fn bench_deferred_persistence<const N: usize, const MAX_PERSISTENCE_GAP: u64>(
 criterion_group! {
     name = benches;
     config = Criterion::default();
-    targets = bench_deferred_persistence::<1_000, 1>,
-              bench_deferred_persistence::<1_000, 10>,
-              bench_deferred_persistence::<1_000, 100>,
-              bench_deferred_persistence::<1_000, 1_000>
+    targets = bench_deferred_persistence::<MerkleDbHash, 1_000, 1>,
+              bench_deferred_persistence::<MerkleDbHash, 1_000, 10>,
+              bench_deferred_persistence::<MerkleDbHash, 1_000, 100>,
+              bench_deferred_persistence::<MerkleDbHash, 1_000, 1_000>,
+              bench_deferred_persistence::<EthHash, 1_000, 1>,
+              bench_deferred_persistence::<EthHash, 1_000, 10>,
+              bench_deferred_persistence::<EthHash, 1_000, 100>,
+              bench_deferred_persistence::<EthHash, 1_000, 1_000>
 }
 
 criterion_main!(benches);

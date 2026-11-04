@@ -461,10 +461,8 @@ impl<'a> ReadItem<'a> for ChildMask {
 
 impl<'a> ReadItem<'a> for HashType {
     fn read_item(reader: &mut ProofReader<'a>) -> Result<Self, ReadError> {
-        // The two schemes use different proof wire layouts for a child hash;
-        // dispatch on the proof's own self-describing mode (resolved from the
-        // header byte and threaded onto the reader) so each format is read back
-        // the way it was written, regardless of the compile default.
+        // Child-hash wire layouts differ by hash mode. Decode using the
+        // self-describing mode resolved from the proof header.
         if reader.node_hash_algorithm().is_ethereum() {
             match reader
                 .read_item::<u8>()
