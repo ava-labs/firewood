@@ -2,6 +2,170 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.0] - 2026-11-03
+
+### 🚀 Features
+
+- *(fwdctl)* Support hex and Ethereum keys ([#2156](https://github.com/ava-labs/firewood/pull/2156))
+- *(storage)* Add HashMode trait and route ethhash gates through it [2/9] ([#2101](https://github.com/ava-labs/firewood/pull/2101))
+- [**breaking**] Runtime hash-mode selection [7/9] ([#2122](https://github.com/ava-labs/firewood/pull/2122))
+- Add firewood_build_info metric with git sha and tag ([#2126](https://github.com/ava-labs/firewood/pull/2126))
+- *(metrics)* Tag metrics with per-database db_tag label ([#2215](https://github.com/ava-labs/firewood/pull/2215))
+- *(logging)* Tag log lines with per-database db_tag ([#2216](https://github.com/ava-labs/firewood/pull/2216))
+- *(proofs)* [**breaking**] Add zstd compression for proof body ([#2181](https://github.com/ava-labs/firewood/pull/2181))
+- *(proofs)* Keep highly compressible bodies decodable with flushed blocks ([#2277](https://github.com/ava-labs/firewood/pull/2277))
+- *(merkle)* Generating sized change/range proofs ([#2198](https://github.com/ava-labs/firewood/pull/2198))
+- *(benchmark)* Select hash mode at runtime ([#2296](https://github.com/ava-labs/firewood/pull/2296))
+
+### 🐛 Bug Fixes
+
+- *(ffi)* Serialize RangeProof handle methods against Free ([#2140](https://github.com/ava-labs/firewood/pull/2140))
+- *(ffi)* Make RangeProof finalizer registration idempotent ([#2141](https://github.com/ava-labs/firewood/pull/2141))
+- *(ffi)* Make repeated VerifyRangeProof idempotent ([#2142](https://github.com/ava-labs/firewood/pull/2142))
+- *(storage)* Make the io-uring feature a portable no-op off Linux ([#2182](https://github.com/ava-labs/firewood/pull/2182))
+- *(fwdctl)* Escape JSON dump strings ([#2177](https://github.com/ava-labs/firewood/pull/2177))
+- Add Owner tag to EC2 instances ([#2191](https://github.com/ava-labs/firewood/pull/2191))
+- *(proofs)* [**breaking**] Store ProofNode.child_hashes as DenseChildren ([#2148](https://github.com/ava-labs/firewood/pull/2148))
+- *(merkle)* Correct change-proof verification at range boundaries ([#2146](https://github.com/ava-labs/firewood/pull/2146))
+- *(proofs)* Advance the change-proof continuation and narrow the right edge ([#2188](https://github.com/ava-labs/firewood/pull/2188))
+- *(merkle)* Test both range bounds in the reconcile guards ([#2174](https://github.com/ava-labs/firewood/pull/2174))
+- *(ffi)* Keep RangeProof alive during CodeHashes iteration ([#2143](https://github.com/ava-labs/firewood/pull/2143))
+- *(ffi)* Fix ChangeProof use-after-free and double-SetFinalizer bugs ([#2144](https://github.com/ava-labs/firewood/pull/2144))
+- *(change-proof)* Re-derive an account's persisted storage children ([#2206](https://github.com/ava-labs/firewood/pull/2206))
+- *(proofs)* [**breaking**] Bound the range-proof apply to the proven range ([#2189](https://github.com/ava-labs/firewood/pull/2189))
+- *(proofs)* Refuse undecodable compression ratios and raise limit to 6MiB ([#2276](https://github.com/ava-labs/firewood/pull/2276))
+- *(ffi)* [**breaking**] GC Cleanup in Proofs ([#2282](https://github.com/ava-labs/firewood/pull/2282))
+- *(proofs)* Bound key length when deserializing a proof ([#2221](https://github.com/ava-labs/firewood/pull/2221))
+- Grow the stack on demand in the recursive trie walks ([#2222](https://github.com/ava-labs/firewood/pull/2222))
+- *(metrics)* [**breaking**] Remove firewood_free_list_entries gauge ([#2316](https://github.com/ava-labs/firewood/pull/2316))
+- *(proofs)* [**breaking**] Resume range-proof sync after the last proven key ([#2327](https://github.com/ava-labs/firewood/pull/2327))
+- *(ci)* Update avalanchego reexecution workflow name ([#2335](https://github.com/ava-labs/firewood/pull/2335))
+- *(go)* Build with Go 1.26.10 (CVE-2026-111943) ([#2340](https://github.com/ava-labs/firewood/pull/2340))
+- *(revision-manager)* Make `firewood_revisions_active` more accurate ([#2317](https://github.com/ava-labs/firewood/pull/2317))
+- *(db)* Enforce the key-length limit on writes ([#2278](https://github.com/ava-labs/firewood/pull/2278))
+- *(merkle)* Count a removed prefix's own value once ([#2279](https://github.com/ava-labs/firewood/pull/2279))
+- *(ci)* Rewrite publish workflow to be idempotent ([#2384](https://github.com/ava-labs/firewood/pull/2384))
+
+### 💼 Other
+
+- *(just)* Velocity: add a prepush-lite recipe for local iteration ([#2213](https://github.com/ava-labs/firewood/pull/2213))
+- *(benchmark)* Pin the Rust and Go toolchains ([#2264](https://github.com/ava-labs/firewood/pull/2264))
+- *(ffi)* [**breaking**] Remove compile-time ethhash feature ([#2298](https://github.com/ava-labs/firewood/pull/2298))
+- *(deps)* Replace the metrics git patch with metrics-collector-prometheus ([#2196](https://github.com/ava-labs/firewood/pull/2196))
+
+### 🚜 Refactor
+
+- *(ffi)* [**breaking**] Remove direct storage dependency ([#2111](https://github.com/ava-labs/firewood/pull/2111))
+- *(storage)* [**breaking**] Adopt arity-arrays for the U4 index type ([#2147](https://github.com/ava-labs/firewood/pull/2147))
+- *(db)* Let revision manager own consistency checks ([#2186](https://github.com/ava-labs/firewood/pull/2186))
+- *(storage)* [**breaking**] Back Children with arity_arrays::FixedArray (PR 3/3) ([#2149](https://github.com/ava-labs/firewood/pull/2149))
+- *(storage)* Unconditional HashType enum + per-mode codecs [3/9] ([#2102](https://github.com/ava-labs/firewood/pull/2102))
+- *(storage)* Fold HashOrRlp into HashType [4/9] ([#2150](https://github.com/ava-labs/firewood/pull/2150))
+- *(proofs)* Dispatch proof parsing on the self-describing header byte [5/9] ([#2121](https://github.com/ava-labs/firewood/pull/2121))
+- Thread HashMode through the typed database stack [6/9] ([#2135](https://github.com/ava-labs/firewood/pull/2135))
+- *(ffi)* Make the code-hash iterator's proof borrow structural ([#2209](https://github.com/ava-labs/firewood/pull/2209))
+- *(storage)* Read leaked areas directly instead of parse-fallback ([#2225](https://github.com/ava-labs/firewood/pull/2225))
+- *(proofs)* [**breaking**] Privatize verification-context fields ([#2194](https://github.com/ava-labs/firewood/pull/2194))
+- *(storage)* Make storage backends hash-agnostic ([#2249](https://github.com/ava-labs/firewood/pull/2249))
+- *(manager)* Emit revisions_limit gauge once at construction ([#2256](https://github.com/ava-labs/firewood/pull/2256))
+- *(storage)* Validate KVP roots in both hash modes ([#2255](https://github.com/ava-labs/firewood/pull/2255))
+- *(storage)* Remove unused AreaIndex/LinearAddress accessors ([#2257](https://github.com/ava-labs/firewood/pull/2257))
+- *(db)* [**breaking**] Separate hash mode from database configuration ([#2318](https://github.com/ava-labs/firewood/pull/2318))
+- *(api)* [**breaking**] Remove default-hash-mode extension traits ([#2320](https://github.com/ava-labs/firewood/pull/2320))
+- *(storage)* [**breaking**] Remove Preimage trait ([#2321](https://github.com/ava-labs/firewood/pull/2321))
+- *(proofs)* [**breaking**] Require explicit hash algorithms for proof constuction ([#2323](https://github.com/ava-labs/firewood/pull/2323))
+- *(ffi)* [**breaking**] Return Go-owned NextKeyRange values and code-hash slices ([#2328](https://github.com/ava-labs/firewood/pull/2328))
+- *(ffi)* [**breaking**] Parse proofs on the Database that will verify them ([#2330](https://github.com/ava-labs/firewood/pull/2330))
+- *(firewood)* Remove hash mode from ChunkBuilder ([#2364](https://github.com/ava-labs/firewood/pull/2364))
+- Select explicit hash modes in benchmarks and examples ([#2372](https://github.com/ava-labs/firewood/pull/2372))
+
+### 📚 Documentation
+
+- Scaffold the mdBook documentation site ([#2088](https://github.com/ava-labs/firewood/pull/2088))
+- Revise CODEOWNERS to use team groups ([#2207](https://github.com/ava-labs/firewood/pull/2207))
+- Require comments to earn their line, and fix stale references ([#2240](https://github.com/ava-labs/firewood/pull/2240))
+- Clarify revision definition ([#2253](https://github.com/ava-labs/firewood/pull/2253))
+- Move labeling rules from CODE_REVIEW.md to LABELS.md ([#2348](https://github.com/ava-labs/firewood/pull/2348))
+- Rename CODE_REVIEW.md to STYLE_GUIDE.md ([#2351](https://github.com/ava-labs/firewood/pull/2351))
+- Consolidate coding rules into STYLE_GUIDE.md ([#2350](https://github.com/ava-labs/firewood/pull/2350))
+- Establish the design-doc subsystem with date-prefixed filenames ([#2161](https://github.com/ava-labs/firewood/pull/2161))
+- Revert CODEOWNERS ([#2361](https://github.com/ava-labs/firewood/pull/2361))
+
+### ⚡ Performance
+
+- *(storage)* Use a constant for the empty-trie root instead of rehashing it ([#2204](https://github.com/ava-labs/firewood/pull/2204))
+- *(storage)* Take nodes out of the read cache when reading for update ([#2202](https://github.com/ava-labs/firewood/pull/2202))
+- *(storage)* Stop deep-cloning unhashed children during ethhash classification ([#2201](https://github.com/ava-labs/firewood/pull/2201))
+- Add collapse_strip benchmark ([#2218](https://github.com/ava-labs/firewood/pull/2218))
+
+### 🎨 Styling
+
+- Reject bare clippy::allow_attributes across the workspace ([#2208](https://github.com/ava-labs/firewood/pull/2208))
+- Enable the nightly rustfmt options that do not touch imports ([#2233](https://github.com/ava-labs/firewood/pull/2233))
+- Group imports as std, then external crates, then crate ([#2235](https://github.com/ava-labs/firewood/pull/2235))
+- Split grouped imports into one `use` per item ([#2236](https://github.com/ava-labs/firewood/pull/2236))
+
+### 🧪 Testing
+
+- *(merkle)* Add ethhash-shaped proof fuzzer ([#2080](https://github.com/ava-labs/firewood/pull/2080))
+- *(ffi)* Add C-Chain replay test and CI job ([#2134](https://github.com/ava-labs/firewood/pull/2134))
+- *(fwdctl)* Scope dump output to a tmpdir instead of the shared CWD ([#2190](https://github.com/ava-labs/firewood/pull/2190))
+- Add #[hash_mode] attribute ([#2272](https://github.com/ava-labs/firewood/pull/2272))
+- *(storage)* Run tests in both hash modes ([#2125](https://github.com/ava-labs/firewood/pull/2125))
+- *(replay)* Run tests in both hash modes ([#2274](https://github.com/ava-labs/firewood/pull/2274))
+- *(fwdctl)* Run CLI tests in both hash modes ([#2275](https://github.com/ava-labs/firewood/pull/2275))
+- *(ffi)* Consolidate Go compatibility tests ([#2300](https://github.com/ava-labs/firewood/pull/2300))
+- *(firewood)* Run crate-level tests in both hash modes ([#2319](https://github.com/ava-labs/firewood/pull/2319))
+- *(merkle)* Add a hash-mode-generic merkle fixture ([#2286](https://github.com/ava-labs/firewood/pull/2286))
+- Exercise snapshot and codec coverage in both hash modes ([#2324](https://github.com/ava-labs/firewood/pull/2324))
+- *(firewood)* Pass explicit algorithms to range-proof verification ([#2358](https://github.com/ava-labs/firewood/pull/2358))
+- *(firewood)* Make init_merkle hash mode explicit ([#2363](https://github.com/ava-labs/firewood/pull/2363))
+- *(firewood)* Run Merkle and range-proof tests in both hash modes ([#2325](https://github.com/ava-labs/firewood/pull/2325))
+- Exercise key-length and hashing-stack guards in both hash modes ([#2367](https://github.com/ava-labs/firewood/pull/2367))
+- *(proofs)* Exercise proof fixtures in both hash modes ([#2370](https://github.com/ava-labs/firewood/pull/2370))
+- *(merkle)* Run trie iterator tests in both hash modes ([#2371](https://github.com/ava-labs/firewood/pull/2371))
+- *(firewood)* Run change-proof tests in both hash modes ([#2326](https://github.com/ava-labs/firewood/pull/2326))
+
+### ⚙️ Miscellaneous Tasks
+
+- Serve the mdBook at the GitHub Pages site root ([#2089](https://github.com/ava-labs/firewood/pull/2089))
+- *(deps)* Bump google.golang.org/grpc from 1.80.0 to 1.82.1 in /ffi/tests/firewood ([#2152](https://github.com/ava-labs/firewood/pull/2152))
+- Run CI and local prepush checks through shared just recipes ([#2178](https://github.com/ava-labs/firewood/pull/2178))
+- Define required merge checks in code ([#2179](https://github.com/ava-labs/firewood/pull/2179))
+- Check TODO annotations in all tracked text files ([#2183](https://github.com/ava-labs/firewood/pull/2183))
+- Drop `rust-lint-pr-comments` job ([#2193](https://github.com/ava-labs/firewood/pull/2193))
+- Speed up the ethhash differential fuzz job ([#2214](https://github.com/ava-labs/firewood/pull/2214))
+- *(deps)* Bump github.com/gorilla/websocket from 1.5.0 to 1.5.3 in /ffi/tests/eth ([#2211](https://github.com/ava-labs/firewood/pull/2211))
+- *(config)* [**breaking**] Rename freelist cache size to freelist_memory_limit_kb ([#2219](https://github.com/ava-labs/firewood/pull/2219))
+- Derive the benchmark matrix from cargo metadata ([#2192](https://github.com/ava-labs/firewood/pull/2192))
+- *(deps)* Bump google.golang.org/grpc from 1.82.1 to 1.83.1 in /ffi/tests/firewood ([#2237](https://github.com/ava-labs/firewood/pull/2237))
+- *(deps)* Bump google.golang.org/grpc from 1.83.1 to 1.83.2 in /ffi/tests/firewood ([#2247](https://github.com/ava-labs/firewood/pull/2247))
+- [**breaking**] Clarify deferred persistence terminology ([#2043](https://github.com/ava-labs/firewood/pull/2043))
+- Update .golangci.yaml.patch to resolve ci workflow ([#2267](https://github.com/ava-labs/firewood/pull/2267))
+- Comment out schedule section in `track-performance.yml` ([#2271](https://github.com/ava-labs/firewood/pull/2271))
+- *(deps)* Bump go.opentelemetry.io/otel/exporters/otlp/otlptrace from 1.43.0 to 1.45.0 in /ffi/tests/firewood ([#2262](https://github.com/ava-labs/firewood/pull/2262))
+- *(ffi)* Update Go to v1.26.8 ([#2273](https://github.com/ava-labs/firewood/pull/2273))
+- *(deps)* Bump go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc from 1.22.0 to 1.45.0 in /ffi/tests/firewood ([#2259](https://github.com/ava-labs/firewood/pull/2259))
+- *(deps)* Bump go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp from 1.43.0 to 1.45.0 in /ffi/tests/firewood ([#2260](https://github.com/ava-labs/firewood/pull/2260))
+- *(ffi/tests)* Remove redundant import ([#2299](https://github.com/ava-labs/firewood/pull/2299))
+- *(deps)* Bump rustls from 0.23.41 to 0.23.45 ([#2301](https://github.com/ava-labs/firewood/pull/2301))
+- Skip replay-test on Dependabot runs ([#2314](https://github.com/ava-labs/firewood/pull/2314))
+- *(deps)* Bump google.golang.org/grpc from 1.66.0 to 1.83.2 in /ffi/tests ([#2312](https://github.com/ava-labs/firewood/pull/2312))
+- *(deps)* Bump go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp from 1.22.0 to 1.45.0 in /ffi/tests ([#2307](https://github.com/ava-labs/firewood/pull/2307))
+- *(deps)* Bump go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc from 1.22.0 to 1.45.0 in /ffi/tests ([#2309](https://github.com/ava-labs/firewood/pull/2309))
+- Pin the formatting and linting toolchain in rust-toolchain.toml ([#2232](https://github.com/ava-labs/firewood/pull/2232))
+- *(deps)* Bump github.com/klauspost/compress from 1.18.0 to 1.18.7 in /ffi/tests ([#2338](https://github.com/ava-labs/firewood/pull/2338))
+- *(skills)* Align firewood-review with CODE_REVIEW.md and the review process ([#2337](https://github.com/ava-labs/firewood/pull/2337))
+- Remove .github/copilot-instructions.md ([#2347](https://github.com/ava-labs/firewood/pull/2347))
+- Bump the nightly toolchain, fix the new lints ([#2303](https://github.com/ava-labs/firewood/pull/2303))
+- *(justfile)* Run snapshot recipes with --locked ([#2357](https://github.com/ava-labs/firewood/pull/2357))
+- *(ffi)* Consolidate compatibility tests and auto-discover fuzz targets ([#2313](https://github.com/ava-labs/firewood/pull/2313))
+- Share Rust job setup through a $/ composite action ([#2374](https://github.com/ava-labs/firewood/pull/2374))
+- Fail when the checked-in ffi/firewood.h is stale ([#2375](https://github.com/ava-labs/firewood/pull/2375))
+- Update CODEOWNERS ([#2379](https://github.com/ava-labs/firewood/pull/2379))
+- [**breaking**] Remove the ethhash feature flag ([#2123](https://github.com/ava-labs/firewood/pull/2123))
+- [**breaking**] Rename firewood-go-ethhash module to firewood-go ([#2382](https://github.com/ava-labs/firewood/pull/2382))
+
 ## [0.8.0] - 2026-07-09
 
 ### 🚀 Features
@@ -132,7 +296,7 @@ All notable changes to this project will be documented in this file.
 - *(range-proof)* Use last_kv_key as right-edge anchor for inclusion-style end_proofs ([#1970](https://github.com/ava-labs/firewood/pull/1970))
 - *(manager)* Hold proposals lock across cleanup and reparent (TOB-FIREWOOD-6) ([#1981](https://github.com/ava-labs/firewood/pull/1981))
 - *(manager)* Use CommittedId for parent identity, skip trivial commits ([#1987](https://github.com/ava-labs/firewood/pull/1987))
-- *(storage)* Pin committed parent in Reconstructed to prevent reaping ([#2000](https://github.com/ava-labs/firewood/pull/2000))
+- *(storage)* [**breaking**] Pin committed parent in Reconstructed to prevent reaping ([#2000](https://github.com/ava-labs/firewood/pull/2000))
 
 ### 🚜 Refactor
 

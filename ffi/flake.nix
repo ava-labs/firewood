@@ -1,9 +1,9 @@
 {
-  # To test with arbitrary firewood versions (alternative to firewood-go-ethhash):
+  # To test with arbitrary firewood versions (alternative to firewood-go):
   #  - Install nix: https://nixos.org/download/
   #  - Clone firewood locally at desired version/commit
   #  - Build: `cd ffi && nix build`
-  #  - In your Go project: `go mod edit -replace github.com/ava-labs/firewood-go-ethhash/ffi=/path/to/firewood/ffi/result/ffi`
+  #  - In your Go project: `go mod edit -replace github.com/ava-labs/firewood-go/ffi=/path/to/firewood/ffi/result/ffi`
 
   description = "Firewood FFI library and development environment";
 

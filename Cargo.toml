@@ -57,14 +57,15 @@ cast_possible_truncation = "allow"
 
 [workspace.dependencies]
 # workspace local packages
-firewood = { path = "firewood", version = "0.8.0" }
-firewood-macros = { path = "firewood-macros", version = "0.6.0" }
-firewood-storage = { path = "storage", version = "0.8.0" }
-firewood-metrics = { path = "metrics", version = "0.7.0" }
-firewood-replay = { path = "replay", version = "0.7.0" }
+firewood = { path = "firewood", version = "0.9.0" }
+firewood-macros = { path = "firewood-macros", version = "0.7.0" }
+firewood-storage = { path = "storage", version = "0.9.0" }
+firewood-metrics = { path = "metrics", version = "0.8.0" }
+firewood-replay = { path = "replay", version = "0.8.0" }
 
-# no longer bumping with workspace
-firewood-triehash = { path = "triehash", version = "0.0.16" }
+# Unmaintained and `publish = false`. No version, so `cargo publish` strips the
+# dev-dependency from the packaged manifest instead of resolving it on crates.io.
+firewood-triehash = { path = "triehash" }
 
 # common dependencies
 aquamarine = "0.6.0"
