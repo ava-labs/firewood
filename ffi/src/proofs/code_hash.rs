@@ -39,8 +39,7 @@ type KeyValuePair = (Box<[u8]>, Box<[u8]>);
 type BoxCodeHashIter<'p> = Box<dyn Iterator<Item = Result<HashKey, api::Error>> + 'p>;
 
 /// Reject code-hash iteration on a non-Ethereum proof. Code hashes only exist
-/// in Ethereum account values; this is the runtime replacement for the former
-/// compile-time `ethhash`-feature gate.
+/// in Ethereum account values.
 fn require_ethereum(algorithm: NodeHashAlgorithm) -> Result<(), api::Error> {
     if algorithm.is_ethereum() {
         Ok(())

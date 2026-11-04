@@ -100,9 +100,9 @@ impl<S: ReadableStorage, H: HashMode> Merkle<NodeStore<Mutable<Propose>, S, H>> 
             return Ok(());
         }
 
-        // Ethhash account values may differ from the proof's value in just
-        // the `storageRoot` field. This happens when the proposal was built
-        // from a subset of the account's storage children: live hashing
+        // Ethereum-mode account values may differ from the proof's value in
+        // just the `storageRoot` field. This happens when the proposal was
+        // built from a subset of the account's storage children: live hashing
         // splices in a partial storageRoot, while the proof carries the
         // full on-disk value. Both produce the same final hash because the
         // Ethereum implementation of `HashMode::write_preimage` always recomputes

@@ -46,6 +46,6 @@ body:
     id: context
     attributes:
       label: Additional context
-      description: Version/commit, OS, feature flags (e.g. ethhash), logs.
+      description: Version/commit, OS, hash mode (MerkleDB or Ethereum), logs.
     validations:
       required: false
