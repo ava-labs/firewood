@@ -177,7 +177,7 @@ jobs:
           popd
           git add .
           git commit -m "firewood ci $GITHUB_SHA: attach firewood static libs"
-          git push -u origin "$TARGET_BRANCH" --force
+          git push -u --force origin -- "$TARGET_BRANCH"
 
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             # If the tag is a semantic version, prefix it with "ffi/" to ensure go get correctly
