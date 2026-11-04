@@ -328,7 +328,7 @@ fn compute_storage_trie_root(child_hashes: &Children<Option<HashType>>) -> TrieH
     }
     let mut child_hashes = child_hashes.clone();
     if let Some((_, child)) = child_hashes.take_only_child() {
-        return single_child_storage_root(child);
+        return child.into();
     }
     let mut items: [RlpItem<'_>; BranchNode::MAX_CHILDREN + 1] =
         [RlpItem::Empty; BranchNode::MAX_CHILDREN + 1];
@@ -415,17 +415,6 @@ fn update_account_storage_root(node: &mut Node, path_prefix: &Path) {
                 l.value = new_value;
             }
         }
-    }
-}
-
-/// The storage-trie root for an account with a single storage child, whose
-/// hash was computed with the child as the standalone root. A root is always
-/// hashed, so an encoding short enough to be inline is hashed here. Under the
-/// merkledb scheme every child is already a 32-byte hash.
-fn single_child_storage_root(child: HashType) -> crate::TrieHash {
-    match child {
-        HashType::Hash(hash) => hash,
-        HashType::Rlp(rlp_bytes) => TrieHash::from(Keccak256::digest(&rlp_bytes)),
     }
 }
 

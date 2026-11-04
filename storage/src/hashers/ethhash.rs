@@ -252,19 +252,11 @@ impl HashMode for EthHash {
                     let replacement_hash = if children == 1 {
                         // we need to treat this child like it's a root node, so the partial path is
                         // actually one longer than it is reported
-                        match child_hashes
+                        child_hashes
                             .iter()
                             .find_map(|(_, c)| c.as_ref())
                             .expect("we know there is exactly one child")
-                        {
-                            HashType::Hash(hash) => hash.clone(),
-                            // The child was hashed as the storage trie's root,
-                            // and a root is always hashed, even when its
-                            // encoding is short enough to be inline.
-                            HashType::Rlp(rlp_bytes) => {
-                                TrieHash::from(Keccak256::digest(rlp_bytes))
-                            }
-                        }
+                            .into()
                     } else {
                         TrieHash::from(Keccak256::digest(&bytes))
                     };
