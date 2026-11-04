@@ -130,7 +130,7 @@ jobs:
 
           # Reject names git would refuse, including control characters such as
           # newlines that could otherwise inject extra lines into GITHUB_OUTPUT.
-          if ! git check-ref-format "refs/heads/$target_branch"; then
+          if ! git check-ref-format --branch "refs/heads/$target_branch"; then
             echo "Invalid target branch name."
             exit 1
           fi
