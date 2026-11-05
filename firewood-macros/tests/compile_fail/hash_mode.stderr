@@ -28,19 +28,19 @@ error: hash_mode requires a synchronous safe free function with exactly one type
 23 | fn where_clause<H>() where H: HashMode {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-error: place hash_mode above exactly one test attribute or one or more test_case attributes
+error: place hash_mode above exactly one test attribute, exactly one test_matrix attribute, or one or more test_case attributes
   --> tests/compile_fail/hash_mode.rs:26:1
    |
 26 | fn missing_test<H: HashMode>() {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-error: unsupported hash_mode attribute; use cfg, lint attributes, test, test_case, should_panic, or ignore
+error: unsupported hash_mode attribute; use cfg, lint attributes, test, test_case, test_matrix, should_panic, or ignore
   --> tests/compile_fail/hash_mode.rs:30:1
    |
 30 | #[cfg_attr(all(), inline)]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-error: unsupported hash_mode attribute; use cfg, lint attributes, test, test_case, should_panic, or ignore
+error: unsupported hash_mode attribute; use cfg, lint attributes, test, test_case, test_matrix, should_panic, or ignore
   --> tests/compile_fail/hash_mode.rs:35:1
    |
 35 | #[inline]

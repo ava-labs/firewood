@@ -35,12 +35,12 @@ pub(crate) fn expand(args: TokenStream, mut function: ItemFn) -> syn::Result<Tok
     let cases = function
         .attrs
         .iter()
-        .filter(|attr| is_test_case(attr))
+        .filter(|attr| is_test_case_or_matrix(attr))
         .count();
 
     for attr in &function.attrs {
         if attr.path().is_ident("test")
-            || is_test_case(attr)
+            || is_test_case_or_matrix(attr)
             || attr.path().is_ident("should_panic")
             || attr.path().is_ident("ignore")
         {
@@ -53,7 +53,7 @@ pub(crate) fn expand(args: TokenStream, mut function: ItemFn) -> syn::Result<Tok
         } else {
             return Err(syn::Error::new_spanned(
                 attr,
-                "unsupported hash_mode attribute; use cfg, lint attributes, test, test_case, should_panic, or ignore",
+                "unsupported hash_mode attribute; use cfg, lint attributes, test, test_case, test_matrix, should_panic, or ignore",
             ));
         }
     }
@@ -62,13 +62,13 @@ pub(crate) fn expand(args: TokenStream, mut function: ItemFn) -> syn::Result<Tok
     if !((tests == 1 && cases == 0) || (tests == 0 && cases > 0)) {
         return Err(syn::Error::new_spanned(
             &function.sig,
-            "place hash_mode above exactly one test attribute or one or more test_case attributes",
+            "place hash_mode above exactly one test attribute, exactly one test_matrix attribute, or one or more test_case attributes",
         ));
     }
     if tests == 1 && !function.sig.inputs.is_empty() {
         return Err(syn::Error::new_spanned(
             &function.sig.inputs,
-            "hash_mode test arguments require test_case",
+            "hash_mode test arguments require test_case or test_matrix",
         ));
     }
 
@@ -183,10 +183,15 @@ fn contains_ident(tokens: TokenStream, ident: &syn::Ident) -> bool {
     })
 }
 
-/// Recognizes bare and crate-qualified `test_case` attributes.
-fn is_test_case(attr: &Attribute) -> bool {
-    attr.path().is_ident("test_case")
-        || attr.path().to_token_stream().to_string() == "test_case :: test_case"
+/// Recognizes bare and crate-qualified `test_case` and `test_matrix` attributes.
+fn is_test_case_or_matrix(attr: &Attribute) -> bool {
+    let path = attr.path();
+    path.is_ident("test_case")
+        || path.is_ident("test_matrix")
+        || matches!(
+            path.to_token_stream().to_string().as_str(),
+            "test_case :: test_case" | "test_case :: test_matrix"
+        )
 }
 
 /// Recognizes attributes that set a lint level or expectation.

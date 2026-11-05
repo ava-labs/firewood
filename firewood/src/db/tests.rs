@@ -45,22 +45,13 @@ mod key_length {
 
     /// Both batch paths, serial and parallel, accept a key at the limit and
     /// reject one a byte over, for every kind of operation.
+    #[hash_mode]
     #[test_matrix(
         [put, delete, delete_range],
         [MAX_KEY_BYTES, MAX_KEY_BYTES + 1],
         [UseParallel::Never, UseParallel::Always]
     )]
-    fn propose_enforces_the_key_length_limit(
-        op: fn(usize) -> Op,
-        len: usize,
-        use_parallel: UseParallel,
-    ) {
-        // TODO(RodrigoVillar): extend #[hash_mode] to support test_matrix.
-        check_proposal_key_length::<MerkleDbHash>(op, len, use_parallel.clone());
-        check_proposal_key_length::<EthHash>(op, len, use_parallel);
-    }
-
-    fn check_proposal_key_length<H: HashMode>(
+    fn propose_enforces_the_key_length_limit<H: HashMode>(
         op: fn(usize) -> Op,
         len: usize,
         use_parallel: UseParallel,
