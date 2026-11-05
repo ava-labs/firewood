@@ -15,23 +15,26 @@ jobs:
   publish-firewood-crate:
     name: firewood-lib
     runs-on: ubuntu-latest
-    # Publishing requires CARGO_TOKEN which only the canonical repo has.
+    # crates.io trusted publishing is configured for the canonical repo only.
     if: github.repository == 'ava-labs/firewood' && startsWith(github.event.release.tag_name, 'v')
+    permissions:
+      contents: read
+      # Required to request the OIDC token that crates.io exchanges for a
+      # short-lived publish token.
+      id-token: write
     steps:
       - uses: $/.github/actions/setup-rust
         with:
           cache: "false"
-      - name: write crates.io credentials
-        env:
-          CARGO_TOKEN: ${{ secrets.CARGO_TOKEN }}
-        # umask clears the group/global permissions bits and is required.
-        # cargo rejects the credentials file if it has insecure permissions.
-        run: |
-          umask 077
-          credentials="${CARGO_HOME:-$HOME/.cargo}/credentials.toml"
-          mkdir -p "$(dirname "$credentials")"
-          printf '[registry]\ntoken = "%s"\n' "$CARGO_TOKEN" >"$credentials"
+      - name: authenticate to crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
       - name: publish crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        # The token expires after 30 minutes, so a run that outlasts it fails
+        # partway; re-running resumes (see below).
+        #
         # Each crate follows every crate it depends on through normal or build
         # dependencies; list them with
         # `cargo metadata --format-version 1 --no-deps`. A dev-dependency on a
