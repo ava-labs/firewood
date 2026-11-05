@@ -13,6 +13,7 @@ use firewood_storage::EthHash;
 use firewood_storage::HashMode;
 use firewood_storage::MerkleDbHash;
 use test_case::test_case;
+use test_case::test_matrix;
 
 #[hash_mode]
 #[test]
@@ -30,6 +31,13 @@ fn result<H: HashMode>() -> Result<(), String> {
 #[test_case(2; "two")]
 fn cases<H: HashMode>(number: u8) {
     assert!((1..=2).contains(&number));
+}
+
+#[hash_mode]
+#[test_matrix([1, 2], [true, false])]
+fn matrix<H: HashMode>(number: u8, flag: bool) {
+    assert!((1..=2).contains(&number));
+    let _ = flag;
 }
 
 #[hash_mode]

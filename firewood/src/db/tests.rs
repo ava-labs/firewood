@@ -100,22 +100,13 @@ mod key_length {
 
     /// Both batch paths, serial and parallel, accept a key at the limit and
     /// reject one a byte over, for every kind of operation.
+    #[hash_mode]
     #[test_matrix(
         [put, delete, delete_range],
         [MAX_KEY_BYTES, MAX_KEY_BYTES + 1],
         [UseParallel::Never, UseParallel::Always]
     )]
-    fn propose_enforces_the_key_length_limit(
-        op: fn(usize) -> Op,
-        len: usize,
-        use_parallel: UseParallel,
-    ) {
-        // TODO(RodrigoVillar): extend #[hash_mode] to support test_matrix.
-        check_proposal_key_length::<MerkleDbHash>(op, len, use_parallel.clone());
-        check_proposal_key_length::<EthHash>(op, len, use_parallel);
-    }
-
-    fn check_proposal_key_length<H: HashMode>(
+    fn propose_enforces_the_key_length_limit<H: HashMode>(
         op: fn(usize) -> Op,
         len: usize,
         use_parallel: UseParallel,
@@ -147,5 +138,103 @@ mod key_length {
             matches!(err, Error::KeyTooLong { len, max } if len == MAX_KEY_BYTES + 1 && max == MAX_KEY_BYTES),
             "unexpected error: {err}"
         );
+    }
+}
+
+mod account_depth_inline_storage {
+    use firewood_storage::EthHash;
+    use firewood_storage::HashMode;
+    use test_case::test_matrix;
+
+    use super::TestDb;
+    use crate::api::BatchOp;
+    use crate::api::Db as _;
+    use crate::api::FrozenChangeProof;
+    use crate::api::Proposal as _;
+    use crate::db::DbConfig;
+    use crate::db::UseParallel;
+    use crate::merkle::Key;
+    use crate::merkle::Value;
+
+    /// A change proof is applied and hashed before its root is compared. Each
+    /// case adds puts for a 32-byte key and 33-byte keys extending it, one per
+    /// suffix byte, which give that account inline storage children. One child
+    /// reaches the single-child storage root and two reach the storage branch.
+    /// Each case runs on the serial and the parallel batch path. The forged
+    /// proof must fail verification rather than abort hashing.
+    #[test_matrix(
+        [&[0xAB], &[0x0B, 0xAB]],
+        [UseParallel::Never, UseParallel::Always]
+    )]
+    fn change_proof_with_short_storage_keys_is_rejected(
+        suffixes: &[u8],
+        use_parallel: UseParallel,
+    ) {
+        let k_lo = vec![0x10; 32];
+        let k_hi = vec![0xf0; 32];
+        let source = TestDb::<EthHash>::new();
+        let target = TestDb::<EthHash>::new_with_config(
+            DbConfig::builder().use_parallel(use_parallel).build(),
+        );
+        for db in [&source, &target] {
+            db.propose(vec![
+                BatchOp::Put {
+                    key: k_lo.clone(),
+                    value: b"lo".to_vec(),
+                },
+                BatchOp::Put {
+                    key: k_hi.clone(),
+                    value: b"hi".to_vec(),
+                },
+            ])
+            .unwrap()
+            .commit()
+            .unwrap();
+        }
+        let start_root = source.root_hash().unwrap();
+        source
+            .propose(vec![BatchOp::Put {
+                key: k_hi.clone(),
+                value: b"hi2".to_vec(),
+            }])
+            .unwrap()
+            .commit()
+            .unwrap();
+        let end_root = source.root_hash().unwrap();
+        let honest = source
+            .change_proof(start_root, end_root.clone(), None, None, None)
+            .unwrap();
+
+        let account = vec![0x50; 32];
+        let mut forged_ops: Vec<BatchOp<Key, Value>> = vec![BatchOp::Put {
+            key: account.clone().into(),
+            value: vec![0x01].into(),
+        }];
+        for &suffix in suffixes {
+            forged_ops.push(BatchOp::Put {
+                key: [account.as_slice(), &[suffix]].concat().into(),
+                value: vec![0x02].into(),
+            });
+        }
+        let mut ops: Vec<BatchOp<Key, Value>> = honest.batch_ops().to_vec();
+        let last_op = ops.pop().expect("the honest proof changes k_hi");
+        ops.extend(forged_ops);
+        ops.push(last_op);
+        let forged = FrozenChangeProof::new(
+            crate::Proof::new(honest.start_proof().as_ref().into()),
+            crate::Proof::new(honest.end_proof().as_ref().into()),
+            ops.into_boxed_slice(),
+            EthHash::ALGORITHM,
+        );
+
+        assert!(
+            target
+                .verify_change_proof(&honest, end_root.clone(), None, None, None)
+                .is_ok()
+        );
+        let result = target
+            .verify_change_proof(&forged, end_root, None, None, None)
+            .map(drop);
+        assert!(result.is_err(), "the forged change proof must be rejected");
     }
 }
