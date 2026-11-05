@@ -121,7 +121,7 @@ jobs:
             export target_branch="main-ci" # Avoid pushing to main branch of firewood-go repo
             echo "Using main-ci as target branch for push to main: $target_branch"
           elif [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
-            export target_branch="$PR_HEAD_REF"
+            export target_branch="pr/$PR_HEAD_REF"
             echo "Using PR head name as target branch: $target_branch"
           else
             echo "No valid input or tag found."
