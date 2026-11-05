@@ -25,7 +25,6 @@
 
 use std::fs::File;
 use std::io::Error;
-use std::io::ErrorKind;
 use std::io::Read;
 use std::path::Path;
 
@@ -88,13 +87,10 @@ impl Version {
             debug!("Database version {:?} is valid.", self.as_str());
             Ok(())
         } else {
-            Err(Error::new(
-                ErrorKind::InvalidData,
-                format!(
-                    "Database cannot be opened due to incompatible version: {:?}",
-                    self.as_str()
-                ),
-            ))
+            Err(invalid_data(format!(
+                "Database cannot be opened due to incompatible version: {:?}",
+                self.as_str()
+            )))
         }
     }
 
@@ -367,9 +363,10 @@ impl NodeStoreHeader {
             .map_err(|e| {
                 storage.file_io_error(e, 0, Some("NodeStoreHeader::read_from_storage".to_owned()))
             })?;
-        this.validate(expected_node_hash_algorithm).map_err(|e| {
-            storage.file_io_error(e, 0, Some("NodeStoreHeader::validate".to_owned()))
-        })?;
+        this.validate(expected_node_hash_algorithm, storage.size()?)
+            .map_err(|e| {
+                storage.file_io_error(e, 0, Some("NodeStoreHeader::validate".to_owned()))
+            })?;
 
         Ok(this)
     }
@@ -438,11 +435,19 @@ impl NodeStoreHeader {
     /// - Area size hash matches the expected hash for the current build. This
     ///   prevents corrupting the allocation structures by changing area sizes.
     /// - Node hash algorithm flag matches the expected algorithm.
+    /// - The recorded high water mark is aligned to the minimum area size, is at
+    ///   least [`Self::SIZE`], and extends past `storage_size`, the length of
+    ///   the underlying storage, by less than one maximum-size area. The last
+    ///   area is not padded on disk, so the mark can exceed the length.
     ///
     /// # Errors
     ///
     /// Returns an error if validation fails.
-    pub fn validate(&self, expected_node_hash_algorithm: NodeHashAlgorithm) -> Result<(), Error> {
+    pub fn validate(
+        &self,
+        expected_node_hash_algorithm: NodeHashAlgorithm,
+        storage_size: u64,
+    ) -> Result<(), Error> {
         trace!("Checking version...");
         self.version.validate()?;
 
@@ -454,6 +459,9 @@ impl NodeStoreHeader {
 
         trace!("Checking if node hash algorithm flag matches the expected algorithm...");
         self.validate_node_hash_algorithm(expected_node_hash_algorithm)?;
+
+        trace!("Checking size...");
+        self.validate_size(storage_size)?;
 
         if self.version.has_extended_header_fields() {
             debug!(
@@ -504,10 +512,9 @@ impl NodeStoreHeader {
     /// [`NodeHashAlgorithm`] value.
     fn node_hash_algorithm(&self) -> Result<NodeHashAlgorithm, Error> {
         NodeHashAlgorithm::try_from(self.node_hash_algorithm).map_err(|err| {
-            Error::new(
-                ErrorKind::InvalidData,
-                format!("hash mode flag in database header is invalid: {err}"),
-            )
+            invalid_data(format!(
+                "hash mode flag in database header is invalid: {err}"
+            ))
         })
     }
 
@@ -586,8 +593,7 @@ impl NodeStoreHeader {
         if self.endian_test == 1 {
             Ok(())
         } else {
-            Err(Error::new(
-                ErrorKind::InvalidData,
+            Err(invalid_data(
                 "Database cannot be opened due to difference in endianness",
             ))
         }
@@ -597,8 +603,7 @@ impl NodeStoreHeader {
         if self.area_size_hash == AREA_SIZES_HASH {
             Ok(())
         } else {
-            Err(Error::new(
-                ErrorKind::InvalidData,
+            Err(invalid_data(
                 "Database cannot be opened due to difference in area size hash",
             ))
         }
@@ -607,12 +612,35 @@ impl NodeStoreHeader {
     fn validate_node_hash_algorithm(&self, expected: NodeHashAlgorithm) -> Result<(), Error> {
         NodeHashAlgorithm::try_from(self.node_hash_algorithm)
             .map_err(|err| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("hash mode flag in database header is invalid: {err}"),
-                )
+                invalid_data(format!(
+                    "hash mode flag in database header is invalid: {err}"
+                ))
             })?
             .validate_open(expected)
+    }
+
+    fn validate_size(&self, storage_size: u64) -> Result<(), Error> {
+        let size = self.size;
+        if !size.is_multiple_of(LinearAddress::MIN_AREA_SIZE) {
+            return Err(invalid_data(format!(
+                "database size {size} in header is not aligned to {}",
+                LinearAddress::MIN_AREA_SIZE
+            )));
+        }
+        if size < Self::SIZE {
+            return Err(invalid_data(format!(
+                "database size {size} in header is smaller than the header ({})",
+                Self::SIZE
+            )));
+        }
+        // The last area holds at least one byte on disk and at most
+        // `MAX_AREA_SIZE` bytes in total.
+        if size.saturating_sub(storage_size) >= LinearAddress::MAX_AREA_SIZE {
+            return Err(invalid_data(format!(
+                "database size {size} in header exceeds the storage length {storage_size}"
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -632,8 +660,14 @@ const fn const_copy(src: &[u8], dst: &mut [u8]) {
     }
 }
 
+fn invalid_data(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, error)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::io::ErrorKind;
+
     use firewood_macros::hash_mode;
     use test_case::test_case;
 
@@ -686,7 +720,9 @@ mod tests {
     fn rejects_mismatched_node_hash_algorithm() {
         let header = NodeStoreHeader::new(NodeHashAlgorithm::MerkleDB);
 
-        let error = header.validate(NodeHashAlgorithm::Ethereum).unwrap_err();
+        let error = header
+            .validate(NodeHashAlgorithm::Ethereum, NodeStoreHeader::SIZE)
+            .unwrap_err();
 
         assert_eq!(error.kind(), ErrorKind::Unsupported);
     }
@@ -700,5 +736,45 @@ mod tests {
             NodeStoreHeader::read_from_storage(&storage, NodeHashAlgorithm::Ethereum).unwrap_err();
 
         assert_eq!(error.kind(), ErrorKind::Unsupported);
+    }
+
+    fn header_with_size(size: u64) -> NodeStoreHeader {
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::MerkleDB);
+        header.set_size(size);
+        header
+    }
+
+    #[test_case(NodeStoreHeader::SIZE, NodeStoreHeader::SIZE; "header only")]
+    #[test_case(NodeStoreHeader::SIZE + 4096, NodeStoreHeader::SIZE + 4096; "exact length")]
+    #[test_case(NodeStoreHeader::SIZE + 16, NodeStoreHeader::SIZE + 4096; "trailing bytes past the high water mark")]
+    #[test_case(NodeStoreHeader::SIZE + 16, NodeStoreHeader::SIZE + 14; "unpadded last area")]
+    fn accepts_valid_size(size: u64, storage_size: u64) {
+        header_with_size(size)
+            .validate(NodeHashAlgorithm::MerkleDB, storage_size)
+            .unwrap();
+    }
+
+    #[test_case(0, 4096; "zero")]
+    #[test_case(NodeStoreHeader::SIZE - LinearAddress::MIN_AREA_SIZE, 4096; "smaller than the header")]
+    #[test_case(NodeStoreHeader::SIZE + 1, 4096; "unaligned")]
+    #[test_case(NodeStoreHeader::SIZE + LinearAddress::MAX_AREA_SIZE, NodeStoreHeader::SIZE; "past the end of storage")]
+    #[test_case(u64::MAX - 7, 4096; "huge")]
+    fn rejects_invalid_size(size: u64, storage_size: u64) {
+        let error = header_with_size(size)
+            .validate(NodeHashAlgorithm::MerkleDB, storage_size)
+            .unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn read_from_storage_rejects_size_past_end_of_storage() {
+        let header = header_with_size(NodeStoreHeader::SIZE + LinearAddress::MAX_AREA_SIZE);
+        let storage = MemStore::new(bytemuck::bytes_of(&header).to_vec());
+
+        let error =
+            NodeStoreHeader::read_from_storage(&storage, NodeHashAlgorithm::MerkleDB).unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
     }
 }
