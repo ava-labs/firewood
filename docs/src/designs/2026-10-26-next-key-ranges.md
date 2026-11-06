@@ -9,60 +9,80 @@ authors: [demosdemon]
 
 ## Summary
 
-After a sync client applies a verified range or change proof, it has to decide what to
-fetch next. Firewood answered with a cursor: resume just past the last proven key. That
-cursor ignores most of what the proof carries. Each of the proof's two boundary proofs
-holds, at every level, the hash of every sibling subtree the proven range did not
-include, and each of those hashes commits to the exact target content of a known span of
-key space.
+A sync client applies a range or change proof and then asks where to resume. Firewood
+answers with one cursor: the key just after the last proven key, up to the requested end.
+That answer reads nothing but the last proven key. It is adequate when the local
+database holds nothing outside the proven range, which is true for a client syncing into
+an empty database and false for one that already holds state.
 
-This design compares every such hash against the local trie and labels the whole key
-space outside the proven range:
+This design reads the rest of the proof. Each of its two boundary proofs carries, at every
+level of the trie, the hash of every child that lies outside the proven range. Comparing
+each of those child hashes with the hash of the same subtree in the local trie tells,
+without any network request, whether that part of the key space already matches the
+target. The comparison labels every key outside the proven range:
 
-- spans already correct;
+- spans already correct, which are never fetched again at that target root;
 - spans and keys the target provably lacks, which are deleted locally;
 - keys whose target value the proof carries, which are written locally;
-- spans that genuinely differ and must be fetched.
+- spans that differ and must be fetched.
 
-The verified proof's `Commit()` applies the local remedies together with the proof, and
-`NextKeyRanges()` returns only the spans that still need a fetch. The cursor becomes a
-work-list: an interrupted sync resumes from one proof, regions that did not change are
-never fetched again, and a sync converges by construction.
+Applying a proof now does two things in one commit: it writes the proof's key-value pairs
+over the proven range, as before, and it applies the local remedies, the deletions and
+writes from the second and third labels. The call that applies the proof returns the
+fourth label as a list of key ranges to fetch next, in place of the single cursor.
 
-The implementation is in review as a stack of pull requests, from
-[#2333](https://github.com/ava-labs/firewood/pull/2333) (the prefix arithmetic) through
-[#2295](https://github.com/ava-labs/firewood/pull/2295) (the FFI contract). It builds on
-the verified proof types of [#2284](https://github.com/ava-labs/firewood/pull/2284).
+## Terminology
+
+- **Target root**: the root hash the client is syncing to, and the root a proof is
+  verified against.
+- **Proven range**: the keys a verified proof covers, from the request's start key to
+  the last key the proof carries, or to the request's end key when the proof was not
+  truncated. Applying a proof replaces exactly this range, which the detailed design
+  also calls the **applied range**.
+- **Boundary proof**: the path of trie nodes, root first, that a range or change proof
+  carries for one end of its proven range. The start proof is for the start key; the end
+  proof is for the right edge.
+- **Child hash**: the hash a branch node stores for one of its sixteen children. A child
+  hash in a boundary proof whose subtree lies outside the proven range is an
+  **out-of-range child hash**; the verifier checks it as part of the path to the target
+  root, so it fixes the target's content under that child's key prefix.
+- **Span**: every key that starts with one nibble prefix. Out-of-range child hashes each
+  cover one span.
+- **Local remedy**: a write the proof justifies outside its proven range: deleting a span
+  or key the target lacks, or writing a key whose target value the proof carries.
+- **Fetch range**: a key range the client still has to request, because the proof shows
+  that it differs but does not carry its content.
 
 ## Motivation
 
-A client syncing state from peers verifies a proof for a key range against a target
-root, merges it, and asks where to go next. Before this design, Firewood's answer
-(`find_next_key_after_range_proof` and its change-proof twin) was the byte successor of
-the last proven key, paired with the requested end bound. It never inspected the proof's
-sibling hashes or the local trie, and its own documentation acknowledged the gap.
+A client syncing state from peers requests a key range at a target root, verifies the
+proof it receives against that root, applies it, and asks where to resume. As the summary
+says, Firewood's answer (`find_next_key_after_range_proof` and its change-proof twin) is
+the successor of the last proven key paired with the requested end. Its own
+documentation acknowledges that it ignores the boundary proofs and the local trie.
 
-A cursor that only moves forward has three costs:
+Two costs follow:
 
-- **Resuming re-fetches.** A client restarted mid-sync knows nothing about what it holds,
-  so it starts the cursor over or trusts bookkeeping the database does not keep.
-- **A moving target invalidates everything.** When consensus advances the target root,
-  the client cannot tell which of its spans the state transition touched.
-- **Divergence outside the request goes unseen.** Local content past the proven range,
-  whether stale or surplus, is reported to nobody.
+- **A restarted sync re-fetches what it holds.** A sync client restarted midway starts
+  again at the beginning of the key space, and keeps doing so under this design. Its
+  first proof's cursor then names everything above that proof, although the local trie
+  already holds most of it, so every key after the first proof is fetched again.
+- **Divergence outside the proven range goes unseen.** Local keys outside the proven
+  range that differ from the target (stale) or that the target lacks (surplus; both are
+  defined under [Labels](#labels)) are reported to nobody, and nothing deletes the
+  surplus ones.
 
-The boundary proofs already hold the answer. A range proof for `[start, end]` carries two
-root-to-leaf paths, and every child slot on those paths that the range does not cover is
-a sealed sibling hash: an authenticated commitment to the target's content under that
-child's prefix. On a database of 10⁸ random keys a boundary proof carries roughly 94
-populated sibling hashes, against a structural ceiling of `(16 − 1) × depth`. Path
-compression authenticates further spans as empty, so the number of spans classified is
-larger still. Comparing each commitment with the canonical hash of the local content
-under the same prefix classifies the entire outside key space at no network cost.
+The boundary proofs already hold the answer. Every out-of-range child hash fixes the
+target's content under its span, so comparing it with the hash of the local content
+under the same prefix decides whether that span is already correct. Path compression in
+the boundary proof shows further spans to be empty in the target. Together these cover
+the entire key space outside the proven range, so one proof classifies everything at no
+network cost. A boundary proof carries at most `(16 − 1) × depth` out-of-range child
+hashes, which bounds the work; [Cost](#cost) gives typical figures.
 
-Matching a sibling hash is a verification, not a heuristic. It authenticates the span's
+A matching child hash is a verification, not a heuristic. It authenticates the span's
 whole content against the target root with the same strength as a range proof over that
-span. A matched span never needs fetching while that root is the target.
+span, so a matched span never needs fetching while that root is the target.
 
 ## Guide-level explanation
 
@@ -97,12 +117,13 @@ Above the proven range, the walk labels the open interval `(0x25, 0x28)` empty i
 target, because the proof shows nothing between the last proven key and `0x28`. So local
 `0x26` is `Surplus` and is deleted. `0x28` is a key the proof carries in full, and the
 local value matches it, so it is silent. Everything above `0x28` is compared through the
-end proof's sibling hashes. A client using the old cursor would have resumed at `0x1000`, just
+end proof's out-of-range child hashes. A client using the old cursor would have resumed at `0x1000`, just
 past `0x10`, fetched `0x28` again, and never learned that `0x26` should not exist.
 
 ### The sync loop
 
-The sync client drives three calls per proof: verify, commit, and ask what is left.
+The sync client makes one call per proof, which verifies it, applies it, and answers what
+is left.
 
 ```mermaid
 sequenceDiagram
@@ -111,17 +132,14 @@ sequenceDiagram
     participant F as Firewood
     C->>P: request range [start, end] at target root R
     P-->>C: range proof
-    C->>F: RangeProof.Verify(R, start, end, limit)
-    F-->>C: VerifiedRangeProof
-    C->>F: VerifiedRangeProof.Commit()
-    Note over F: walk the latest revision,<br/>merge the proven range,<br/>apply local remedies,<br/>commit one proposal
-    C->>F: VerifiedRangeProof.NextKeyRanges()
-    F-->>C: fetch ranges (sorted, coalesced)
+    C->>F: RangeProof.VerifyAndCommit(R, start, end, limit)
+    Note over F: verify,<br/>walk the latest revision,<br/>merge the proven range,<br/>apply local remedies,<br/>commit one proposal
+    F-->>C: root, fetch ranges (sorted, coalesced), code hashes
     C->>P: request each range at R
 ```
 
-An empty `NextKeyRanges()` means nothing remains to fetch. A loop over it reaches the
-target root unless something else commits to the database in between (see
+An empty set of fetch ranges means nothing remains to fetch. A loop over them reaches
+the target root unless something else commits to the database in between (see
 [The FFI and Go contract](#the-ffi-and-go-contract)).
 
 ## Detailed design
@@ -173,7 +191,7 @@ unbounded above. This is not `lex_successor`, which appends a zero byte: for the
 `AB` it gives `AB00`, which still lies inside the span.
 
 **Why the crate owns span deletion.** Firewood's write API deletes by byte prefix
-(`BatchOp::DeleteRange`), and a sealed sibling sits one nibble below its parent, so
+(`BatchOp::DeleteRange`), and an out-of-range child sits one nibble below its parent, so
 odd-length spans are routine. Under the Ethereum mode, an account's storage children sit
 at 65 nibbles. An odd-length nibble prefix has no byte-prefix form, and `as_key_range`
 cannot recover it: an odd prefix `p` has the lower bound `pack(p ‖ 0)`, the same bytes as
@@ -212,9 +230,10 @@ impl VerifiedRangeProof {
 ```
 
 `verify` is the only constructor, and it takes the structure verifier's own parameters.
-The proof is held behind an `Arc` because the FFI keeps the unverified proof usable after
-verifying it, and an owned proof would clone its body on every verify. The type is not
-`Clone`; the body is shared through `proof()`.
+The proof is held behind an `Arc` because the FFI builds one of these from the same parsed
+proof on every `VerifyAndCommit()` and drops it when the call returns, and an owned proof would
+clone its body each time. The type is not `Clone`; the body is shared through `proof()`.
+These are library values, not FFI state: no Go or C handle holds one between calls.
 
 ### The coverage contract
 
@@ -239,7 +258,7 @@ stops when its last key is `None`, so `[start_key, None]` really is the applied 
 ### The local probe
 
 `subtree_hash(view, prefix)` returns the canonical hash of the local content under a
-nibble prefix: the value a sealed sibling at that position would hold if the local trie
+nibble prefix: the value an out-of-range child hash at that position would hold if the local trie
 were the target. It descends with `descend_to_prefix`, a read-only walk that consumes a
 nibble path one component at a time. It cannot use `path_iter`, because byte keys cannot
 name odd-length positions. Four outcomes, all handled:
@@ -259,7 +278,7 @@ not the stored hash. The re-encoding goes through `HashableShunt` under the data
 `HashMode`. Under MerkleDB hashing the preimage is the full path, so the adjusted split
 reproduces the stored hash and the case is invisible. Under the Ethereum mode the partial
 path itself is hashed, so the re-encoding produces a different hash, and the tests check
-both that it differs and that it matches the target's sibling hash.
+both that it differs and that it matches the target's child hash.
 
 **Never fold "unknown" into "empty".** A consumer reads `None` as "the target has keys
 here and the local trie has none", or as "nothing to delete", and either reading over an
@@ -288,7 +307,7 @@ The walk transcribes a verified boundary proof from its root down, for a boundar
 `κ` and a side (`Below` for the start proof, `Above` for the end proof). It keeps the
 number of nibbles of `κ` consumed so far, `cur`. `side(x)` is `{i : i < x}` below and
 `{i : i > x}` above. `compare(u, target)` probes `subtree_hash` at `u` and labels the
-pair. `point(k, value)` reconciles one exact key. `child_hash(N, i)` is the sibling hash
+pair. `point(k, value)` reconciles one exact key. `child_hash(N, i)` is the child hash
 `N` carries for slot `i`, and "`N` re-encoded below `p[l]`" is `N` hashed with
 `κ[..cur+l] ‖ p[l]` as its parent prefix and `p[l+1..]` as its partial path: the target's
 commitment to a subtree the proof holds in full.
@@ -298,7 +317,7 @@ for each proof node N, root first:
     p := N's partial path at the walk's position;  l := common prefix length of p and κ[cur..]
 
     (1) for each offset o < l, each x in side(κ[cur+o]):
-            compare(κ[..cur+o] ‖ x, None)        // a compressed path implies no siblings
+            compare(κ[..cur+o] ‖ x, None)        // a compressed path implies no other children
     (2) if Below: for each even offset cur+o < cur+l:
             point(κ[..cur+o], None)              // byte keys inside the segment
 
@@ -370,7 +389,7 @@ empty, the walk emits nothing below it, on both proof kinds:
   pairs, and a root match says nothing about `[0, start)`. Labeling that region
   `Surplus` would order the deletion of target keys.
 - **Change proofs.** Root verification forks the caller's proposal into the proving trie
-  and substitutes proof-supplied sibling hashes only where boundary nodes produce a mask.
+  and substitutes proof-supplied child hashes only where boundary nodes produce a mask.
   An empty start proof produces none, so the left portion of the computed hash comes from
   the proposal's own content. Content hanging off end-proof nodes is authenticated as
   equal, not empty. Content under an intermediate branch the end trie lacks is stripped
@@ -378,11 +397,10 @@ empty, the walk emits nothing below it, on both proof kinds:
   verifier just proved correct, and `Synced` would over-claim, so silence is the correct
   label rather than a conservative placeholder. Changing it would need a verifier change.
 
-**Above, range proofs.** The walk recomputes the end proof's right boundary with the same
-classifier the verifier uses (`right_edge`), and checks that reducing it the verifier's
-way reproduces the context's `right_edge_key`. The owning type makes a swapped context
-unconstructible, so a disagreement can only mean the walk and the verifier have drifted
-apart, and it is reported as `api::Error::InternalError`.
+**Above, range proofs.** The walk reads the end proof's right boundary from the
+verification context, which records the verifier's own classification (`right_edge`)
+alongside the reduced `right_edge_key`. It does not recompute it, so there is no second
+classifier that an adversarial proof could make disagree with the first.
 
 - `InRange(None)`: the applied range runs to the end of the key space, and there is
   nothing above it. An empty end proof always lands here, which is why the "delete the
@@ -425,8 +443,10 @@ depend on spans being prefixes. Instead `merge_labels` sorts every label by its 
 key and checks that labels overlap only when both are deletions. Redundant deletes are
 idempotent, so remedy order does not matter. A deletion overlapping any other label
 would contradict itself under one root: `Surplus` over `Synced` would assert the same
-span both empty and matching. Honest verified proofs cannot produce it, so the check
-returns `api::Error::InternalError` and names both labels.
+span both empty and matching. The coverage lemma rests only on what verification
+establishes, not on the proof being honest, so no proof the verifier accepts can produce
+an overlap; the check returns `api::Error::InternalError` and names both labels. The
+adversarial fuzz under [Tests](#tests) holds the lemma to that.
 
 ### The Ethereum mode
 
@@ -532,9 +552,8 @@ impl<H: HashMode> Db<H> {
         -> Result<(Proposal<'_, H>, Vec<Hole>), api::Error>;
     pub fn apply_verified_change_proof(&self, verified: &VerifiedChangeProof)
         -> Result<(Proposal<'_, H>, Vec<Hole>), api::Error>;
-    pub fn current_committed_view(&self) -> CommittedView;
 }
-// `DynDb` mirrors all three.
+// `DynDb` mirrors both.
 ```
 
 Each apply walks the latest revision and builds one proposal on it, containing the
@@ -547,12 +566,14 @@ proof's content (the range merge, or the change proof's operations) followed by
   inside the applied range, which the merge deletes anyway.
 - **The change-proof root check still holds with remedies in the proposal.** It hashes
   only the proposal's in-range content. Everything strictly outside the applied range is
-  either masked behind the proof's own sibling hash or stripped while collapsing
+  either masked behind the proof's own child hash or stripped while collapsing
   branches, whatever the local fork holds there. The one unmasked shape, an empty start
   proof with a start key, is the case where the walk emits nothing.
-- **`current_committed_view` takes the latest revision without a root hash.** An empty
-  MerkleDB database has no root hash, which is the ordinary first step of a sync, and
-  resolving a hash and then opening that revision races a concurrent commit.
+- **The walk and the proposal share one parent.** Each apply takes the latest revision
+  once and both walks and builds on it, so a concurrent commit cannot slip between the
+  labels and the proposal they authorize. An empty MerkleDB database, the ordinary first
+  step of a sync, has no root hash, so the parent is taken directly rather than resolved
+  by hash.
 
 The merge is collected into an owned batch so the remedies can follow it. The merge
 iterator reports no size hint, while the collected batch reports its exact length, so a
@@ -565,67 +586,95 @@ work-list.
 
 ### The FFI and Go contract
 
-The Go verified proof types (`VerifiedRangeProof`, `VerifiedChangeProof`) carry the
-contract.
+The Go proof types (`RangeProof`, `ChangeProof`) carry the contract. They hold no
+verification state. One method verifies a proof and applies it:
 
-**`Commit()` brings the database into agreement with the target everywhere the proof
-speaks**: inside the applied range by replacement, as before, and outside it by the
-walk's local remedies. It is one proposal and one commit. What the proof cannot settle is
-what `NextKeyRanges()` reports.
+```go
+func (p *RangeProof) VerifyAndCommit(root Hash, startKey, endKey Maybe[[]byte], maxLength uint32, opts ...CommitOption) (*ProofCommitResult, error)
+// `ChangeProof` mirrors it, with the end root in place of the root.
 
-- **Range proofs build their proposal at `Commit()`, not at `Verify()`.** Checking a range
-  proof needs only the root and the hash mode. The sync client runs several workers
-  committing to one database, so a proposal built at `Verify()` would usually be stale by
-  `Commit()`. In C, a commit that lands during the merge makes
-  `fwd_verified_range_proof_commit` return `ParentNotLatest`, and the next call builds
-  again. The Go wrapper holds the database's commit lock for the whole call, so the merge
-  instead blocks `Update`, `Propose`, and other commits while it runs. The merge writes
-  the proof's key-value pairs, bounded by the request's limit, and deletes every local key
-  in the proven range the proof lacks, which the limit does not bound. The hold is that
-  merge plus one walk and the commit.
-- **Change proofs build their proposal at `Verify()`.** Checking a change proof's end
-  root needs the applied proposal, so `Verify()` walks the latest revision, builds the
-  proposal with its remedies, and checks the root. A verified change proof holds that
-  proposal until `Commit()` or `Drop()`.
-- **Change proofs re-apply on a stale parent.** If the database advanced since `Verify()`,
-  `Commit()` applies the proof again to the latest revision, walk included, and re-checks
-  the root against the verified end root. The structural pass is not repeated, since its
-  result does not depend on the revision. Content written in between that the target
-  does not hold is deleted too.
-- A second `Commit()` returns the cached root without touching the database.
+type ProofCommitResult struct {
+    Root          Hash           // the root after the commit
+    NextKeyRanges []NextKeyRange // still to fetch
+    CodeHashes    []Hash         // contract code in the proof's accounts; nil under MerkleDB
+}
+```
 
-**`NextKeyRanges()` always describes the latest committed revision.** After a commit, the
-fetch ranges from the commit's own walk are returned only while the database's root is
-still the one that commit produced. At the verified root, nothing remains. Otherwise,
-before any commit or once something else has committed, the walk runs again against
-`current_committed_view()`. Reading the root and then the view is two steps, so a commit
-can land between them; the walk then describes the newer revision, which is still the
-latest, and the root comparison was only a shortcut. In the one call pattern that exists (commit, then next key,
-nothing in between) the walk runs once. Ranges are sorted, coalesced, and inclusive, and
-are not clipped to the request: they can lie below its start key or above its end key.
+Every error the proof's content causes wraps `ErrInvalidProof`: a parse failure, the
+other hash mode, a failed structural or root-hash check, or content the database rejects.
+A caller tells a peer to penalize from a local failure with `errors.Is`. Any other error
+is local: a closed database, I/O, or an internal invariant.
+
+**`VerifyAndCommit()` brings the database into agreement with the target everywhere the
+proof speaks**: inside the applied range by replacement, as before, and outside it by the
+walk's local remedies. Each call verifies the proof, walks the latest revision, builds
+one proposal on it holding the proof's content and the remedies, checks a change proof's
+end root on that proposal, runs the caller's pre-commit hook if one was given, and
+commits.
+
+- **The proposal never outlives the call.** The Go wrapper holds the database's commit
+  lock for the whole call, so verification, the walk, the merge, and the hook block
+  `Update`, `Propose`, and other commits while they run, and nothing can make the
+  proposal stale. The merge writes the proof's key-value pairs, bounded by the request's
+  limit, and deletes every local key in the proven range the proof lacks, which the limit
+  does not bound. In C, which has no such lock, a commit that lands during the call makes
+  it return `ParentNotLatest`, and calling it again starts over.
+- **The pre-commit hook** (`WithBeforeCommit`) sees the result before anything commits,
+  and an error from it commits nothing. It exists so a caller can make durable records of
+  authenticated output, such as code hashes to fetch, before the commit that would make
+  them otherwise unrecoverable.
+- **The call is repeatable.** A second call verifies and applies again on the
+  then-latest revision. Re-applying content that already matches leaves it unchanged.
+
+**The fetch ranges describe the revision the call produced.** They come from the walk
+that built the committed proposal, and the proposal never touches the key space they
+name, so they describe its parent and the committed revision alike. Ranges are sorted,
+coalesced, and inclusive, and are not clipped to the request: they can lie below its
+start key or above its end key. A later commit by another writer is not reflected in
+them; the next proof's walk sees it.
 
 An empty result means nothing remains to fetch, not that the database is at the target
 root. Content the database holds and the target lacks, or holds with a value the proof
-carries, is not reported, because `Commit()` deletes or writes it. Once that commit has
+carries, is not reported, because the call deletes or writes it. Once that commit has
 landed, a later commit that brings such content back is neither repaired nor reported. A
 caller that needs to know it reached the target compares the database's root with the
 target root.
 
-**A Go proof belongs to the database that generated or parsed it.** `Verify()` takes no
-database: it checks the proof against its own database, under that database's hash mode,
-and `Commit()` applies it there. To use a proof on another database, marshal it and
+**The root is trusted input.** Remedies delete and write outside the proven range on the
+authority of the root the caller passes. A proof verified against a wrong root, which
+any peer can produce for a root it made up, therefore rewrites local state outside the
+request as well as inside it. The caller must pass a root it obtained from consensus or
+from its own sync target, never one a peer supplied.
+
+**A Go proof belongs to the database that generated or parsed it.** `VerifyAndCommit()`
+takes no database: it checks the proof against its own database, under that database's
+hash mode, and applies it there. To use a proof on another database, marshal it and
 unmarshal it there, the same path it takes over the network. The Rust verified types are
 not bound to a database, and `Db::apply_verified_*` accepts one verified elsewhere if its
 hash mode matches; nothing prevents that, but no Go API offers it.
 
-**Concurrent sync.** AvalancheGo never runs state sync and block acceptance at the same
-time, but its syncer commits proofs from several concurrent work items over disjoint
-ranges of one target root. Keys another worker wrote from a proof of the same root are
-target content, so no remedy deletes them: inside another worker's range the walk sees
-either matching or partially written content, which reads `Synced`, `Missing`, or
-`Stale`, never `Surplus`. After the syncer moves its target root, a proof for the old
-root can delete keys written for the new one. A later walk reports them as fetch ranges,
-so the sync still converges, at the cost of a refetch.
+**Work-queue syncers.** A syncer that splits the key space into work items, as
+AvalancheGo's does, clips each returned range to the work item that requested the proof,
+enqueues the clipped ranges as new items, and records the gaps between them as done. A
+range outside the item belongs to another item, which its own proofs settle; the final
+root comparison still guards completion. A syncer restarted from scratch requests the
+whole key space as one item, so its first proof's walk skips every span that did not
+change.
+
+**Concurrent sync.** AvalancheGo's syncer commits proofs from several concurrent work
+items over disjoint ranges of one target root (`database/merkle/sync/syncer.go` in
+AvalancheGo). Keys another worker wrote from a proof of the same root are target
+content, so no remedy deletes them: inside another worker's range the walk sees either
+matching or partially written content, which reads `Synced`, `Missing`, or `Stale`,
+never `Surplus`.
+
+Proofs for different roots are not safe to mix. After the syncer moves its target, a
+proof for the old root sees keys written for the new one as `Surplus` and deletes them,
+outside its own range. A syncer that never revisits a range it already finished at the
+new root would then miss those keys until its final root comparison fails. The caller
+must therefore commit only proofs for its current target: a syncer whose target can move
+holds its target lock across `VerifyAndCommit()` and drops a response whose root is no
+longer the target.
 
 ### Errors and contracts
 
@@ -633,9 +682,17 @@ so the sync still converges, at the cost of a refetch.
   or `apply_verified_*`'s.
 - `ProofError::HashModeMismatch` for a proof parsed under the other mode.
 - `api::Error::UnhashedView` and propagated I/O errors from the local probes.
-- `api::Error::InternalError` when the walk's own invariants fail: the recomputed right
-  edge disagrees with the context, a verified proof ends without a terminal, or an overlap
-  check fails.
+- **Untrusted input never causes `InternalError`.** Every error a proof's content can
+  cause is a `ProofError`, which callers treat as the peer's fault, and verification is
+  where proof content is judged. Any shape the walk depends on is therefore checked by
+  the verifier: a boundary proof must end at its key's inclusion or exclusion point,
+  which gives every walk a terminal, and the context records the right-edge
+  classification instead of leaving the walk to recompute it. A shape the walk cannot
+  handle in a proof that verified is a verifier gap, closed by rejecting that shape in
+  the verifier, never by reclassifying the walk's error.
+- `api::Error::InternalError` remains for the walk's own invariants: a verified proof
+  without a terminal, or an overlap between labels. Reaching either means Firewood has a
+  bug, and callers treat it as fatal.
 - The local trie is assumed canonical and is not checked. A non-canonical trie, which a
   reconstructed view can be, can only manufacture holes, never hide them. A test checks
   that the walk then never orders the deletion of a key the target holds, and that one
@@ -658,7 +715,10 @@ The test program exists to falsify these.
 6. No emission orders the deletion of content authenticated as equal.
 7. `subtree_hash` handles all four outcomes, and a child held without a hash is an error,
    not "no local keys".
-8. `NextKeyRanges()` describes the latest committed revision.
+8. The fetch ranges `VerifyAndCommit()` returns come from the walk of the parent its
+   proposal was built on, and no call relies on a verification it did not perform.
+9. No proof, honest or not, that passes verification makes the walk return
+   `InternalError`; every failure proof content can cause is a `ProofError`.
 
 ## Evaluation
 
@@ -672,7 +732,7 @@ let the local map `L` be canonical. Then:
 2. **Sound skips.** Unless a hash collision can be extracted, every `Synced` span and
    every silent agreement has `L ∩ span = M ∩ span`, and every applied `PointFix` sets
    the target's value. Both comparands are canonical hashes of their content: the target
-   side because sibling hashes are child hashes of the canonical target trie, and
+   side because out-of-range child hashes are child hashes of the canonical target trie, and
    terminal re-encodings are injective encodings of verified nodes; the local side by
    `subtree_hash`'s construction. Equal hashes over different content would be a
    collision.
@@ -681,12 +741,12 @@ let the local map `L` be canonical. Then:
    repairs it. Equal content has equal canonical hashes, so a mismatch means different
    content. This direction needs no collision assumption, but it does need `L` canonical.
 4. **Granularity.** Nothing finer is decidable from the proof. Which keys inside a
-   `Stale` or `Missing` span differ is hidden behind the sibling hash.
+   `Stale` or `Missing` span differ is hidden behind the child hash.
 
-**Change proofs.** The same argument holds for the sibling hashes a change proof's
+**Change proofs.** The same argument holds for the out-of-range child hashes a change proof's
 boundary proofs carry, because the change-proof verifier checks both boundary proofs
 against the end root exactly as the range-proof verifier does. What differs is the root
-check itself: it hashes the proposal, substituting the proof's sibling hashes where the
+check itself: it hashes the proposal, substituting the proof's child hashes where the
 boundary nodes supply them and the proposal's own content elsewhere. The walk therefore
 labels only from boundary proofs that exist. Below an empty start proof, the only place
 the root check reads the proposal's own content outside the applied range, it emits
@@ -714,6 +774,11 @@ Ethereum account fixtures, which use 32-byte keys and are meaningless under Merk
   straddling terminals; an end key ending inside a compressed edge; the out-of-range
   interval; a tampered `partial_len`; a proof under the other hash mode; and a fully
   synced pair, which must yield only `Synced` labels and silence.
+- **An adversarial fuzz.** It mutates honest proofs (node keys and `partial_len`, child
+  hashes, values, inserted, dropped, and reordered nodes, both boundary proofs, both hash
+  modes), discards the ones verification rejects, and walks and applies the rest. Any
+  `InternalError` fails the test; a verified mutant the walk cannot classify is a
+  verifier gap to close.
 - **Ethereum fixtures.** Masked account comparisons and the legacy header. The fold is
   tested in every shape above, and each fold test applies its remedies through `Db` and
   walks again.
@@ -737,16 +802,18 @@ Ethereum account fixtures, which use 32-byte keys and are meaningless under Merk
   fine spans and a point, while the change walk reports one span. Both partitions are
   correct, so the fuzz asserts equality only outside these cases, and checks that the
   comparison still fires.
-- **Go.** `Commit()` deletes surplus past the proven edge, the ranges stay stable across
-  the commit and an unrelated commit, and a loop following `NextKeyRanges()` reaches the
-  source root, including for a bounded request with holes on both sides.
+- **Go.** `VerifyAndCommit()` deletes surplus past the proven edge, every proof-content
+  failure matches `ErrInvalidProof` while a closed database does not, the pre-commit hook
+  runs before the root changes and can veto the commit, and a loop following the returned
+  ranges reaches the source root, including for a bounded request with holes on both
+  sides.
 
 ### Cost
 
-A walk compares every populated sibling slot on its boundary path, at most
+A walk compares every populated out-of-range child slot on its boundary path, at most
 `(16 − 1) × depth`, plus the spans compressed paths imply empty. Each comparison is one
 root-down descent of at most `depth` node reads and at most one hash. A trie of 10⁸
-random keys reaches 7 levels, so the ceiling is 105 siblings per boundary, and with an
+random keys reaches 7 levels, so the ceiling is 105 out-of-range children per boundary, and with an
 average branching depth of about 6.3 a random-occupancy estimate is about 94 populated
 ones. Under the Ethereum mode a boundary key inside an account's
 storage traverses both tries, so `depth` is closer to 12–14 and the estimate is about
@@ -765,11 +832,11 @@ time noisy.
 A walk runs on every applied proof. At these figures it is small next to the merge and
 the commit, and next to the network round trip each `Synced` span saves. The measured
 times are against a warm node cache; a cold cache turns each read into a disk read, and
-for a range proof in Go that time is spent under the commit lock.
+in Go that time is spent under the commit lock.
 
 ## Drawbacks
 
-- **`Commit()` writes outside the proven range.** Every remedy is authenticated, but a
+- **`VerifyAndCommit()` writes outside the proven range.** Every remedy is authenticated, but a
   caller can no longer reason about a commit's effect from the proof's range alone.
   Reversing this later is a second breaking change to the Go contract. Every node synced
   in between would hold content a range-scoped client would not have produced: correct
@@ -777,8 +844,13 @@ for a range proof in Go that time is spent under the commit lock.
   kinds of client reach the same content once a sync completes; they differ only along the
   way. An opt-in flag for range-scoped commits can be added if a second consumer needs
   one.
-- **Every applied proof pays for a walk**, even when the caller never asks for next key
-  ranges.
+- **Every applied proof pays for a walk**, even when the caller ignores the ranges.
+- **No verification without application.** A caller cannot check a proof without
+  applying it, for example to compare several peers' proofs before choosing one. No
+  caller does; a verify-only method can be added without breaking this one.
+- **A wrong root rewrites state outside the request.** See
+  [The FFI and Go contract](#the-ffi-and-go-contract): the root must come from a trusted
+  source.
 - **The merge is held in memory.** Collecting it into an owned batch materializes every
   write and every in-range deletion before the proposal is built.
 - **Odd-length span deletion costs sixteen `DeleteRange` operations**, one per nibble,
@@ -794,8 +866,8 @@ for a range proof in Go that time is spent under the commit lock.
 - **Breaking changes.** `DynDb` gains required methods and is not sealed, so an external
   implementation must add them. `apply_verified_change_proof` changes its return type, and
   the `find_next_key_after_*` pair is removed. The C and Go signatures do not change, but
-  their contracts do: `Commit()` writes and deletes outside the proven range, and
-  `NextKeyRanges()` can return several ranges anywhere in the key space, with a start key
+  their contracts do: `VerifyAndCommit()` writes and deletes outside the proven range, and the
+  ranges it returns can number several and lie anywhere in the key space, with a start key
   that is no longer the successor of the last proven key.
 
 ## Rationale and alternatives
@@ -803,7 +875,7 @@ for a range proof in Go that time is spent under the commit lock.
 - **Emit the work-list from verification.** Range-proof root verification already
   computes the masks of outside children. Rejected: verification runs before the merge,
   against the proving trie, while hole detection needs the local trie after it. The
-  sibling inventory would have to be kept and compared later anyway, coupled to the
+  child-hash inventory would have to be kept and compared later anyway, coupled to the
   subtlest code in the verifier, and the three-phase change-proof verifier fits it poorly.
 - **A lockstep diff walk.** Descending the proof and the local trie together amortizes
   each probe to a constant. Deferred: at the probe counts above it is not needed, and its
@@ -826,12 +898,16 @@ for a range proof in Go that time is spent under the commit lock.
 - **`Synced` below an empty change-proof start proof.** Rejected: content under collapsed
   intermediate branches is not authenticated. See [Boundary keys](#boundary-keys).
 - **A separate `ApplyRemedies()`, or an opt-in `CommitWithRemedies()`.** Rejected: the
-  only consumer runs verify, commit, and next key together, so a separate call means two
-  commits and two walks per proof and halves the revision window a sync loop has. There is
-  no second consumer to justify the extra API.
-- **Resolve the root hash, then open that revision.** Rejected for
-  `current_committed_view`: an empty MerkleDB database has no root hash, and a commit
-  between the two calls can age the revision out of the revision window.
+  only consumer verifies, commits, and reads the ranges for every proof, so a separate call
+  means two commits and two walks per proof and halves the revision window a sync loop
+  has. There is no second consumer to justify the extra API.
+- **Separate verify and commit calls.** Rejected: the only consumer always runs both on
+  the same proof with the same arguments. Carrying "this proof is valid" between them
+  needs either a verified type that holds a lease and a proposal another commit can make
+  stale, or a second verification. One call needs neither, and the error sentinel keeps
+  the one distinction the consumer drew between the two calls: whose fault a failure is.
+- **A `NextKeyRanges()` call separate from the commit.** Rejected: it would verify again
+  and walk the latest revision again, and no caller asks for ranges without committing.
 - **Exclusive range ends.** Rejected: a prefix span still has no exact bound, so exclusive
   ends would only move the over-cover to every consumer of an API that takes inclusive
   request bounds.
@@ -851,10 +927,8 @@ for a range proof in Go that time is spent under the commit lock.
 
 ## Unresolved questions
 
-- Should `Commit()` gain an opt-in range-scoped mode now, or only once a second consumer
-  asks for one?
-- Should `NextKeyRanges()` report surplus content that a later commit brought back, so
-  that an empty result implies the target root?
+- Should `VerifyAndCommit()` gain an opt-in range-scoped mode now, or only once a second consumer
+  asks for one? An option on the existing call adds it without a break.
 
 ## Future possibilities
 
