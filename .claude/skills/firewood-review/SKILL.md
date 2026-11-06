@@ -99,7 +99,7 @@ A branch name means the local branch, which may hold commits the PR does not hav
    - The named branch is checked out here, or no branch was named: the working tree. Run `git status --porcelain`. If both staged and unstaged changes exist and the user has not said which to review, ask: "Review the workspace as-is, or stash unstaged changes first?" To stash: `git stash push --keep-index --include-untracked -m firewood-review-<scratch-dir-name>`, then record the entry's SHA from `git stash list --format='%H %gs'`. The stash stack is shared with every worktree and session, so restore by SHA in step 7, never with a bare `git stash pop`.
    - The named branch is not checked out here: `git worktree add --detach $SCRATCH/checkout <branch>`. It builds from an empty `target/`; do not point it at another checkout's target directory, which concurrent builds there would contend for.
 2. **Find the PR.** `gh pr view <branch> --json number,headRefOid` (omit `<branch>` for the current branch). If one exists, run [PR review](#pr-review) step 2 for it; skip the gate, since self-review of a draft is normal.
-3. **Diff base.** `git merge-base <branch> origin/main`, after `git fetch https://github.com/ava-labs/firewood.git main` if needed.
+3. **Diff base.** `git fetch https://github.com/ava-labs/firewood.git main`, then `git merge-base <branch> FETCH_HEAD`. A fetch by URL updates only `FETCH_HEAD`, and `origin` may be a fork.
 
 Step 3 runs the toolchain unless the tree under review matches a tree CI already ran on.
 
@@ -146,7 +146,7 @@ gh pr checks <PR> --watch --interval 60 > /dev/null; gh pr checks <PR> --json na
 **Trees differ, or CI never ran:** start the local toolchain in the background before dispatching agents, so both run at once. Run it in the tree under review in a background Bash, logging to `$SCRATCH/toolchain.log`:
 
 - `just prepush-lite` by default.
-- `just prepush` when the change touches `ffi/`, `Cargo.toml` or `Cargo.lock`, or code gated behind a feature that `debug-ethhash-logger` does not enable (see `AGENTS.md` § PR Strategy).
+- `just prepush` when the change touches `ffi/`, `Cargo.toml` or `Cargo.lock`, or code gated behind a feature that `debug-logger` does not enable (see `AGENTS.md` § PR Strategy).
 
 `--all-features` needs rustc 1.94.1 or newer (`AGENTS.md` § Toolchain Floor). `rustc 1.94.0 is not supported by the following packages` is a local toolchain problem, not a defect in the change.
 
@@ -179,5 +179,11 @@ Present, in this order:
 
 ## 7. Clean up
 
-- Stashed: `git stash apply <sha>`, even if the review failed partway; then find the entry's current `stash@{n}` by its message and drop it.
+- Stashed: restore even if the review failed partway. A plain `git stash apply` conflicts when a staged and an unstaged edit share a hunk, so first confirm the tree still holds only the kept index, then reset to it and apply with `--index`:
+
+  ```bash
+  git diff --quiet && [ "$(git write-tree)" = "$(git rev-parse <sha>^2^{tree})" ] && git reset --hard && git stash apply --index <sha>
+  ```
+
+  If the check fails, the tree changed during the review: stop and give the user the SHA instead of resetting. Drop the entry (find its current `stash@{n}` by its message) only after the apply exits 0.
 - Checkout created: `git worktree remove $SCRATCH/checkout`. Confirm with `git worktree list` that no other checkout was created; remove any that was.
