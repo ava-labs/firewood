@@ -189,20 +189,13 @@ pub(crate) fn descend_to_prefix<T: TrieReader>(
 ///
 /// # Errors
 ///
-/// [`api::Error::UnhashedView`] when the probe ends on, runs through, or lands
-/// on a node holding a [`Child::Node`], which carries no hash.
-/// [`api::Error::FileIO`] when a node read fails, including the root read.
-/// Neither case is folded into `Ok(None)`: a consumer reads `None` as "the
-/// target has keys here and the local trie has none" or as "nothing to
-/// delete", and either reading over an unreadable or unhashed subtree orders
-/// the wrong remedy.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used only by tests until the proof hole-detection code calls it; remove this attribute when a non-test caller exists"
-    )
-)]
+/// [`api::Error::UnhashedView`] when the probe runs through or lands on a
+/// node whose child slots include a [`Child::Node`], which carries no hash.
+/// Node reads, the root included, propagate their [`FileIoError`]. Neither
+/// case is folded into `Ok(None)`: a consumer reads `None` as "the target
+/// has keys here and the local trie has none" or as "nothing to delete", and
+/// either reading over an unreadable or unhashed subtree orders the wrong
+/// remedy.
 pub(crate) fn subtree_hash<H: HashMode, T: HashedNodeReader>(
     view: &T,
     prefix: &[PathComponent],
