@@ -507,6 +507,55 @@ fn compute_outside_children<'a>(
     Ok((result, terminal))
 }
 
+/// Nibble prefixes of the non-empty subtrees an end proof shows to the right
+/// of `right_edge` and starting at or before `end_key`, in key order.
+///
+/// The children come from the same outside mask the verifier takes from the
+/// proof, so every listed subtree is authenticated by the root hash. When the
+/// terminal itself sorts after `right_edge`, its own path is listed in place of
+/// its children, because its value is past the boundary too. A prefix that
+/// straddles `end_key` is kept.
+pub(crate) fn subtrees_right_of(
+    end_proof: &[ProofNode],
+    right_edge: &[u8],
+    end_key: Option<&[u8]>,
+) -> Result<Vec<PathBuf>, ProofError> {
+    let boundary = EdgeBoundary::Right(RightBoundary::InRange(Some(right_edge)));
+    let (outside, _) = compute_outside_children(end_proof, &boundary)?;
+    let past_edge = |path: &PathBuf| {
+        path.iter()
+            .map(|c| c.as_u8())
+            .gt(NibblesIterator::new(right_edge))
+    };
+
+    let mut subtrees = Vec::new();
+    let mut nodes = end_proof.iter().rev().peekable();
+    if let Some(terminal) = nodes.next_if(|t| past_edge(&t.key)) {
+        subtrees.push(terminal.key.clone());
+    }
+    for node in nodes {
+        let Some(mask) = outside.get(&node.key) else {
+            continue;
+        };
+        for (index, _) in node.child_hashes.iter_present() {
+            if mask.is_set(index) {
+                let mut prefix = node.key.clone();
+                prefix.push(PathComponent(index));
+                subtrees.push(prefix);
+            }
+        }
+    }
+    if let Some(end) = end_key {
+        subtrees.retain(|prefix| {
+            prefix
+                .iter()
+                .map(|c| c.as_u8())
+                .le(NibblesIterator::new(end))
+        });
+    }
+    Ok(subtrees)
+}
+
 /// Merge the outside-child masks for a change proof's two boundaries.
 ///
 /// Each boundary terminal's on-path child is decided from the proposal: it is

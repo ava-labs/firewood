@@ -3094,3 +3094,112 @@ fn test_max_bounded_depth_survives_default_stack<H: HashMode>() {
         .unwrap();
     });
 }
+
+/// For every truncated proof over a trie with branch values and mid-byte
+/// branches, the remaining subtrees list, in key order, disjoint non-empty
+/// subtrees that hold every key after the proven right edge up to the
+/// requested end exactly once. Only the last may hold no key in that range.
+#[hash_mode]
+#[test]
+fn test_remaining_subtrees_cover_unfetched_keys<H: HashMode>() {
+    use crate::proofs::range::remaining_subtrees_after_range_proof;
+    use crate::verify_range_proof_structure;
+
+    let keys: [&[u8]; 12] = [
+        b"\x01",
+        b"\x01\x00",
+        b"\x01\x10",
+        b"\x01\x11",
+        b"\x01\x12\x34",
+        b"\x02",
+        b"\x20",
+        b"\x21",
+        b"\x30\x00",
+        b"\x30\x01",
+        b"\x3f",
+        b"\xf0",
+    ];
+    let merkle = init_merkle::<H, _, _, _>(keys.iter().map(|k| (*k, b"v".as_slice())));
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let nibbles = |key: &[u8]| NibblesIterator::new(key).collect::<Vec<u8>>();
+    let under = |key: &[u8], prefix: &PathBuf| {
+        nibbles(key).starts_with(&prefix.iter().map(|c| c.as_u8()).collect::<Vec<_>>())
+    };
+
+    let ends = keys
+        .iter()
+        .map(|&k| Some(k))
+        .chain([Some(b"\x30".as_slice()), None]);
+    for end_key in ends {
+        for limit in 1..keys.len() {
+            let limit = NonZeroUsize::new(limit);
+            let proof = merkle.range_proof(None, end_key, limit).unwrap();
+            let ctx = verify_range_proof_structure(
+                &proof,
+                root_hash.clone(),
+                None,
+                end_key,
+                H::ALGORITHM,
+                limit,
+            )
+            .unwrap();
+            let subtrees = remaining_subtrees_after_range_proof(&proof, &ctx).unwrap();
+            let unfetched: Vec<&[u8]> = keys
+                .iter()
+                .copied()
+                .filter(|&k| ctx.right_edge_key().is_some_and(|edge| k > edge))
+                .filter(|&k| end_key.is_none_or(|end| k <= end))
+                .collect();
+            let context = format!("end {end_key:?}, limit {limit:?}, subtrees {subtrees:?}");
+
+            assert!(subtrees.is_sorted(), "{context}");
+            for key in &unfetched {
+                let holders = subtrees.iter().filter(|p| under(key, p)).count();
+                assert_eq!(holders, 1, "{key:?} in {holders} subtrees: {context}");
+            }
+            for prefix in &subtrees {
+                assert!(
+                    keys.iter().any(|k| under(k, prefix)),
+                    "empty {prefix:?}: {context}"
+                );
+            }
+            for prefix in subtrees.split_last().map_or(&[][..], |(_, init)| init) {
+                assert!(
+                    unfetched.iter().any(|k| under(k, prefix)),
+                    "{prefix:?} holds nothing unfetched: {context}"
+                );
+            }
+        }
+    }
+}
+
+/// An end proof whose terminal sorts past the proven right edge lists the
+/// terminal itself, since its own value is unfetched.
+#[hash_mode]
+#[test]
+fn test_remaining_subtrees_include_out_of_range_terminal<H: HashMode>() {
+    use crate::proofs::range::remaining_subtrees_after_range_proof;
+    use crate::verify_range_proof_structure;
+
+    let merkle = init_merkle::<H, _, _, _>(OUT_OF_RANGE_ITEMS.iter().copied());
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+    let proof = merkle
+        .range_proof(Some(OUT_OF_RANGE_START), Some(OUT_OF_RANGE_END), None)
+        .unwrap();
+    let wider_end: &[u8] = b"\x30";
+    let ctx = verify_range_proof_structure(
+        &proof,
+        root_hash,
+        Some(OUT_OF_RANGE_START),
+        Some(wider_end),
+        H::ALGORITHM,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(ctx.right_edge_key(), Some(b"\x20\x00".as_slice()));
+    assert_eq!(
+        remaining_subtrees_after_range_proof(&proof, &ctx).unwrap(),
+        [nibble_path(&[2, 5, 8, 0])]
+    );
+}
