@@ -9,6 +9,8 @@
 # Concepts
 
 - [Concepts & Architecture]()
+- [NodeStore Lifecycle](concepts/nodestore-lifecycle.md)
+- [Background Persistence](concepts/background-persistence.md)
 
 # Design Documents
 
