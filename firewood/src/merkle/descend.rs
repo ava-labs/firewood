@@ -10,30 +10,31 @@
 //! [`Merkle::path_iter`]: super::Merkle::path_iter
 
 use firewood_storage::Child;
+use firewood_storage::Children;
 use firewood_storage::FileIoError;
+use firewood_storage::HashMode;
 use firewood_storage::HashType;
+use firewood_storage::HashableShunt;
+use firewood_storage::HashedNodeReader;
 use firewood_storage::Node;
 use firewood_storage::PathComponent;
 use firewood_storage::SharedNode;
 use firewood_storage::TrieReader;
+use firewood_storage::ValueDigest;
+
+use crate::api;
 
 /// Where a nibble-path probe landed in the local trie.
 #[derive(Debug)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "exercised only by tests until the hole-detection walk calls it"
-    )
-)]
 pub(crate) enum ProbeOutcome {
     /// The trie is empty, or the descent diverged inside a compressed path,
     /// hit an absent child slot, or ran past a leaf: no local keys carry the
     /// probed prefix.
     Empty,
     /// The probe ends exactly on a child edge: this is the parent's stored
-    /// hash for that child, usable verbatim in either hash mode. Under the
-    /// Ethereum mode, a [`HashType`] may be the `Rlp` variant, an inline RLP
+    /// hash for that child. See [`subtree_hash`] for the Ethereum case where
+    /// that hash depends on an account's storage-child count. Under the
+    /// Ethereum mode a [`HashType`] may be the `Rlp` variant, an inline RLP
     /// encoding rather than a 32-byte hash, so a consumer must compare
     /// `HashType` values and must not assume a `TrieHash`.
     EdgeExact(HashType),
@@ -77,13 +78,6 @@ pub(crate) enum ProbeOutcome {
 /// `root_as_maybe_persisted_node` rather than `root_node`, whose `Option`
 /// return folds a failed root read into "no root" and would make a transient
 /// I/O error look like an empty trie.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "exercised only by tests until the hole-detection walk calls it"
-    )
-)]
 pub(crate) fn descend_to_prefix<T: TrieReader>(
     nodestore: &T,
     prefix: &[PathComponent],
@@ -162,5 +156,98 @@ pub(crate) fn descend_to_prefix<T: TrieReader>(
             }
         }
         remaining = rest;
+    }
+}
+
+/// The canonical hash of the local subtree under `prefix`: the hash the
+/// parent would store for a child edge at that position if the local trie
+/// were the target trie. `Ok(None)` means no local key carries the prefix.
+///
+/// Two kinds of position yield a hash. A probe ending exactly on a child edge
+/// returns the parent's stored hash for that child, verbatim. A probe that
+/// lands on a node, anywhere from the start of its partial path through its
+/// end, re-encodes the node with the probe as its parent prefix and the
+/// unconsumed remainder as its partial path, through [`HashableShunt`] under
+/// `H`. Under the MerkleDB mode that re-encoding hashes the same full path
+/// and reproduces the stored hash; under the Ethereum mode the partial path
+/// is part of the preimage, so the result differs from the stored hash and
+/// matches what a trie with a child edge at `prefix` would store.
+///
+/// Every hash is formed under the local trie's own shape. Under the Ethereum
+/// mode an account's lone storage child is hashed as a standalone
+/// storage-trie root, so at the depth just below an account the result
+/// depends on how many storage children the local account has. A caller
+/// comparing there against a target whose account has a different count
+/// must re-hash the local child the target's way.
+///
+/// No account `storageRoot` repair is needed on the way. Databases whose
+/// header version string predates `firewood-v1-hfix` store account values with
+/// a stale `storageRoot` field, but the Ethereum hasher derives that field while building the
+/// preimage (from the child hashes, or the empty-trie root when there are
+/// none), so a re-encoded account node hashes canonically on any database
+/// version.
+///
+/// # Errors
+///
+/// [`api::Error::UnhashedView`] when the probe ends on, runs through, or lands
+/// on a node holding a [`Child::Node`], which carries no hash.
+/// [`api::Error::FileIO`] when a node read fails, including the root read.
+/// Neither case is folded into `Ok(None)`: a consumer reads `None` as "the
+/// target has keys here and the local trie has none" or as "nothing to
+/// delete", and either reading over an unreadable or unhashed subtree orders
+/// the wrong remedy.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "used only by tests until the proof hole-detection code calls it; remove this attribute when a non-test caller exists"
+    )
+)]
+pub(crate) fn subtree_hash<H: HashMode, T: HashedNodeReader>(
+    view: &T,
+    prefix: &[PathComponent],
+) -> Result<Option<HashType>, api::Error> {
+    debug_assert_eq!(
+        view.node_hash_algorithm(),
+        H::ALGORITHM,
+        "subtree hashes must be formed under the view's own hash mode"
+    );
+
+    match descend_to_prefix(view, prefix)? {
+        ProbeOutcome::Empty => Ok(None),
+        ProbeOutcome::EdgeExact(hash) => Ok(Some(hash)),
+        ProbeOutcome::UnhashedChild => Err(api::Error::UnhashedView {
+            reason: "the probed path runs through a child held in memory without a hash; compute the view's root hash first",
+        }),
+        ProbeOutcome::AtNode { node, consumed } => {
+            let partial = node.partial_path().as_components();
+            let remaining = partial.get(consumed..).unwrap_or_default();
+            let hash = match &*node {
+                Node::Leaf(leaf) => H::to_hash(&HashableShunt::new(
+                    prefix,
+                    remaining,
+                    Some(ValueDigest::Value(&*leaf.value)),
+                    Children::new(),
+                )),
+                Node::Branch(branch) => {
+                    if branch
+                        .children
+                        .iter()
+                        .any(|(_, child)| matches!(child, Some(Child::Node(_))))
+                    {
+                        return Err(api::Error::UnhashedView {
+                            reason: "the node at the probed position has a child held in memory without a hash; compute the view's root hash first",
+                        });
+                    }
+                    H::to_hash(&HashableShunt::new(
+                        prefix,
+                        remaining,
+                        branch.value.as_deref().map(ValueDigest::Value),
+                        branch.children_hashes(),
+                    ))
+                }
+            };
+            Ok(Some(hash))
+        }
     }
 }
