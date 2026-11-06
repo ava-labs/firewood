@@ -12,6 +12,7 @@ mod range;
 mod reconcile;
 mod sized;
 mod triehash;
+mod verified;
 
 use std::collections::HashMap;
 use std::fmt::Write;
