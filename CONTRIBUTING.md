@@ -6,19 +6,35 @@ guidelines for contributing to firewood.
 
 ## Table of Contents
 
-* [Quick Links](#quick-links)
-* [Testing](#testing)
-* [Updating the Go version](#updating-the-go-version)
-* [How to submit changes](#how-to-submit-changes)
-* [Required merge checks](#required-merge-checks)
-* [Signing your commits](#signing-your-commits)
-* [Code Review Process](#code-review-process)
-* [Labels](#labels)
-* [Where can I ask for help?](#where-can-i-ask-for-help)
+* [Welcome contributors](#welcome-contributors)
+  * [Table of Contents](#table-of-contents)
+  * [Quick Links](#quick-links)
+  * [Testing](#testing)
+  * [Updating the Go version](#updating-the-go-version)
+  * [How to submit changes](#how-to-submit-changes)
+  * [Required merge checks](#required-merge-checks)
+  * [Signing your commits](#signing-your-commits)
+  * [Code review process](#code-review-process)
+    * [For Reviewers](#for-reviewers)
+      * [Accept (Approve)](#accept-approve)
+      * [Comment (Comment Only)](#comment-comment-only)
+      * [Reject (Request Changes)](#reject-request-changes)
+      * [Best practices](#best-practices)
+    * [For Authors](#for-authors)
+      * [Before Requesting a Review](#before-requesting-a-review)
+      * [During Review](#during-review)
+      * [After Review](#after-review)
+  * [How to report a bug](#how-to-report-a-bug)
+  * [First time fixes for contributors](#first-time-fixes-for-contributors)
+  * [How to request an enhancement](#how-to-request-an-enhancement)
+  * [Labels](#labels)
+  * [Style Guide / Coding Conventions](#style-guide--coding-conventions)
+  * [Where can I ask for help?](#where-can-i-ask-for-help)
+  * [Thank you](#thank-you)
 
 ## Quick Links
 
-* [Setting up the devcontainer](.devcontainer/)
+* [Development container](.devcontainer/README.md)
 * [Auto-generated documentation](https://ava-labs.github.io/firewood/rustdoc/firewood/)
 * [Issue tracker](https://github.com/ava-labs/firewood/issues)
 
@@ -26,8 +42,10 @@ guidelines for contributing to firewood.
 
 After submitting a PR, we'll run all the tests and verify your code meets our submission guidelines. To ensure it's more likely to pass these checks, run the same recipes CI runs:
 
-    just fmt
-    just prepush-lite
+```sh
+just fmt
+just prepush-lite
+```
 
 `just fmt` applies formatting; the recipes only check it. `prepush-lite` checks
 formatting and TODOs, runs clippy and the tests for one feature profile, and
@@ -37,7 +55,9 @@ CI is authoritative for the full matrix, and a change that touches the FFI,
 workspace dependencies, or a feature that profile does not enable warrants the
 whole thing before you push:
 
-    just prepush
+```sh
+just prepush
+```
 
 Use `./scripts/run-just.sh <recipe>` in place of `just` if you do not have `just`
 installed; the wrapper falls back to Nix and otherwise prints installation
@@ -48,9 +68,11 @@ Use the recipes rather than bare Cargo for anything that builds or runs code.
 bare `cargo nextest run` tests on that nightly while CI tests on stable. See
 [Toolchain Selection](./AGENTS.md#toolchain-selection) in AGENTS.md.
 
-Also, if you update any versions of packages, notably the MSRV (Minimum Supported Rust Version), you ought to update the nix ffi flake lock file to pin compatible versions of nix packages as well:
+Also, if you update any versions of packages, notably the MSRV (Minimum Supported Rust Version), update the nix ffi flake lock file to pin compatible versions of nix packages as well:
 
-    ./scripts/run-just.sh update-ffi-flake
+```sh
+./scripts/run-just.sh update-ffi-flake
+```
 
 ## Updating the Go version
 
@@ -76,8 +98,7 @@ disagree. To move to a different Go release, follow these steps:
 
 ## How to submit changes
 
-To create a PR, fork firewood, and use GitHub to create the PR. We typically prioritize reviews in the middle of the next work day,
-so you should expect a response during the week within 24 hours.
+To create a PR, fork firewood, and use GitHub to create the PR. Expect a response within one business day.
 
 ## Required merge checks
 
@@ -97,9 +118,11 @@ before you open one — GitHub should then show every commit as **Verified**.
 
 The quickest setup is signing with the SSH key you already push with:
 
-    git config --global gpg.format ssh
-    git config --global user.signingkey ~/.ssh/id_ed25519.pub
-    git config --global commit.gpgsign true
+```sh
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/id_ed25519.pub
+git config --global commit.gpgsign true
+```
 
 Then add that key to GitHub as a **Signing Key** under *Settings → SSH and GPG
 keys*. See GitHub's [signing commits][gh-signing] guide for full details,
@@ -107,24 +130,22 @@ including GPG keys and Windows/macOS setup.
 
 [gh-signing]: https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits
 
-## Code Review Process
-
-Code review is a critical part of our development process. It ensures that our codebase remains maintainable, performant, and secure. This document outlines how we approach code reviews at Ava Labs, with responsibilities and expectations for both reviewers and authors.
+## Code review process
 
 ### For Reviewers
 
-Reviews should be completed or commented within one business day. We have a daily reminder for reviews that have not been reviewed that is posted in slack's #firewood channel.
+Reviews should be completed or commented within one business day.
 
 When reviewing code, your goal is to help the author improve the quality of the change and confirm that it meets our architectural and operational standards. GitHub provides three primary review options:
 
-#### ✅ Accept (Approve)
+#### Accept (Approve)
 
 Use this when the code is an improvement over the current state of the codebase.
 
 * It's okay to request minor changes in comments and still approve the pull request.
 * Perfection is not the goal — progress is. If the submitted code is better than what's in production, it's acceptable to approve even if small improvements remain. Consider adding a new issue or request adding a code TODO for larger changes.
 
-#### 💬 Comment (Comment Only)
+#### Comment (Comment Only)
 
 Use this when your review is incomplete, or you're not ready to approve or reject yet. You should use this if the code is too large to review in a limited amount of time (typically 30-60 minutes). You can also suggest how to break up this diff into a smaller diff.
 
@@ -132,14 +153,14 @@ Use this when your review is incomplete, or you're not ready to approve or rejec
 * This state signals that your review is in progress or advisory, not final.
 * Make sure your review comments are actionable, or mark them as "nit" which implies that no action is required. If there's any doubt if your comment is actionable, call out exactly what action to take to resolve the comment.
 
-#### ❌ Reject (Request Changes)
+#### Reject (Request Changes)
 
 Use this when there are significant concerns with the code's correctness, architecture, design, or maintainability.
 
 * A "Reject" signals that the pull request must not be merged until the raised issues are addressed.
 * The author is expected to make substantial revisions and return the code for a second round of review by the same reviewer.
 
-#### Best Practices
+#### Best practices
 
 * Be respectful and constructive. Your comments should guide and empower the author, not discourage them.
 * Justify your feedback with principles, not preferences.
@@ -206,4 +227,4 @@ If you have questions or need help, please post them as issues in the [issue tra
 
 ## Thank you
 
-We'd like to extend a pre-emptive "thank you" for reading through this and submitting your first contribution!
+We'd like to extend a preemptive "thank you" for reading through this and submitting your first contribution!
