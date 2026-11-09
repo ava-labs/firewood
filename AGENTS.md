@@ -76,8 +76,10 @@ database is created and recorded in its file header):
   specific depths with RLP-encoded values and computes the account trie hash
   as the actual root. When an account has exactly one storage child, that
   child is hashed as a standalone storage-trie root, so its hash depends on
-  the account's storage-child count. See `storage/src/hashers/ethhash.rs` for
-  implementation details.
+  the account's storage-child count. A `Put` whose value is empty is rejected
+  with `api::Error::EmptyValue`, because the scheme encodes an empty value and
+  no value identically, so a key that should hold nothing must be deleted. See
+  `storage/src/hashers/ethhash.rs` for implementation details.
 
 ## Feature Flags
 
