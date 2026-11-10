@@ -146,14 +146,14 @@ jobs:
       - uses: actions/checkout@v6
         with:
           path: firewood
-          persist-credentials: false
+          persist-credentials: true  # kept: job runs git commands that use the checkout token
 
       - uses: actions/checkout@v6
         with:
           repository: ava-labs/firewood-go
           ssh-key: ${{ secrets.FIREWOOD_GO_DEPLOY_KEY }}
           path: firewood-go
-          persist-credentials: false
+          persist-credentials: true  # kept: job runs git commands that use the checkout token
 
       - name: Copy FFI Source Code
         run: cp -r firewood/ffi firewood-go
@@ -248,7 +248,7 @@ jobs:
           repository: ava-labs/firewood-go
           ssh-key: ${{ secrets.FIREWOOD_GO_DEPLOY_KEY }}
           ref: ${{ needs.push-firewood-ffi-libs.outputs.target_branch }}
-          persist-credentials: false
+          persist-credentials: true  # kept: job runs git commands that use the checkout token
       - name: Delete branch
         env:
           TARGET_BRANCH: ${{ needs.push-firewood-ffi-libs.outputs.target_branch }}

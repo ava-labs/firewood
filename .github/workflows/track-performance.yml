@@ -169,7 +169,7 @@ jobs:
           if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
             echo "data-dir=bench" >> "$GITHUB_OUTPUT"
           else
-            echo "data-dir=dev/bench/$(echo '${GITHUB_REF_NAME}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
+            echo "data-dir=dev/bench/$(echo "${GITHUB_REF_NAME}" | tr '/' '-')" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Publish benchmark results
