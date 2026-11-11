@@ -74,6 +74,7 @@ jobs:
       - uses: $/.github/actions/setup-rust
         with:
           targets: ${{ matrix.target }}
+          components: llvm-tools
           cache-key: ${{ matrix.target }}
           cache-save: "true"
 
@@ -87,6 +88,9 @@ jobs:
 
       - name: Build for ${{ matrix.target }}
         run: cargo build-static-ffi --target ${{ matrix.target }}
+
+      - name: Strip LLVM bitcode sections
+        run: ffi/scripts/strip-lto-sections.sh "target/${{ matrix.target }}/maxperf/libfirewood_ffi.a"
 
       - name: Upload binary
         uses: actions/upload-artifact@v7
@@ -199,13 +203,16 @@ jobs:
   # machine without re-compiling Firewood locally.
   # This tests that the Firewood FFI package passes tests on the target
   # architecture when it is forced to depend on the attached static libs.
+  # Test the newest Go patches, not the go.mod pin: consumers pick up Go patch
+  # releases (such as the go1.26.11 LTO section check) before the pin moves.
   test-firewood-ffi-libs:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-26]
+        go: ["1.26.x", "1.27.x"]
     needs: push-firewood-ffi-libs
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
         with:
@@ -215,7 +222,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: "ffi/go.mod"
+          go-version: ${{ matrix.go }}
+          check-latest: true
           cache-dependency-path: "ffi/go.sum"
       - name: Test Go FFI bindings
         working-directory: ffi
@@ -225,7 +233,10 @@ jobs:
   remove-if-pr-only:
     runs-on: ubuntu-24.04
     needs: [push-firewood-ffi-libs, test-firewood-ffi-libs]
-    if: needs.push-firewood-ffi-libs.result == 'success' && github.event_name == 'pull_request'
+    # always() is required: without a status function, GitHub skips this job
+    # whenever a job in `needs` fails, so a failing test-firewood-ffi-libs
+    # would leave the pr/ branch behind in firewood-go.
+    if: always() && needs.push-firewood-ffi-libs.result == 'success' && github.event_name == 'pull_request'
     permissions:
       # Give the GITHUB_TOKEN write permission to delete the
       # branch created by the previous job if it is a pull request.
