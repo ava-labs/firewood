@@ -1,6 +1,11 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![expect(
+    clippy::arithmetic_side_effects,
+    reason = "tests may panic on overflow"
+)]
+
 use firewood_macros::hash_mode;
 use firewood_storage::HashMode;
 use firewood_storage::U4;
@@ -3126,18 +3131,26 @@ fn test_remaining_subtrees_cover_unfetched_keys<H: HashMode>() {
         nibbles(key).starts_with(&prefix.iter().map(|c| c.as_u8()).collect::<Vec<_>>())
     };
 
+    let absent_ends: [&[u8]; 5] = [b"\x00", b"\x01\x13", b"\x25", b"\x30", b"\xff"];
     let ends = keys
         .iter()
+        .chain(&absent_ends)
         .map(|&k| Some(k))
-        .chain([Some(b"\x30".as_slice()), None]);
-    for end_key in ends {
-        for limit in 1..keys.len() {
-            let limit = NonZeroUsize::new(limit);
-            let proof = merkle.range_proof(None, end_key, limit).unwrap();
+        .chain([None]);
+    let limits = (NonZeroUsize::MIN..=NonZeroUsize::new(keys.len() + 1).unwrap())
+        .map(Some)
+        .chain([None]);
+    let pairs = [None, Some(b"\x01\x10".as_slice())]
+        .into_iter()
+        .flat_map(|start| ends.clone().map(move |end| (start, end)))
+        .filter(|(start, end)| start.zip(*end).is_none_or(|(s, e)| s <= e));
+    for (start_key, end_key) in pairs {
+        for limit in limits.clone() {
+            let proof = merkle.range_proof(start_key, end_key, limit).unwrap();
             let ctx = verify_range_proof_structure(
                 &proof,
                 root_hash.clone(),
-                None,
+                start_key,
                 end_key,
                 H::ALGORITHM,
                 limit,
@@ -3150,8 +3163,13 @@ fn test_remaining_subtrees_cover_unfetched_keys<H: HashMode>() {
                 .filter(|&k| ctx.right_edge_key().is_some_and(|edge| k > edge))
                 .filter(|&k| end_key.is_none_or(|end| k <= end))
                 .collect();
-            let context = format!("end {end_key:?}, limit {limit:?}, subtrees {subtrees:?}");
+            let context = format!(
+                "start {start_key:?}, end {end_key:?}, limit {limit:?}, subtrees {subtrees:?}"
+            );
 
+            if ctx.right_edge_key() == end_key {
+                assert!(subtrees.is_empty(), "proof covers the request: {context}");
+            }
             assert!(subtrees.is_sorted(), "{context}");
             for key in &unfetched {
                 let holders = subtrees.iter().filter(|p| under(key, p)).count();
