@@ -450,3 +450,42 @@ fn test_walk_stopping_short_on_a_removal_converges<H: HashMode>() {
         ranges(&walk.trace)
     );
 }
+
+/// A walk with no limit over more changes than one proof can hold. The first
+/// change proof stops at [`PROOF_GENERATION_BUDGET`] and serializes, and the
+/// walk reaches `end_root`.
+///
+/// [`PROOF_GENERATION_BUDGET`]: crate::api::PROOF_GENERATION_BUDGET
+#[hash_mode]
+#[test]
+fn test_walk_without_limit_splits_large_changes<H: HashMode>() {
+    let keys: Vec<Vec<u8>> = (0u8..129).map(|b| vec![b]).collect();
+    // 8 MiB of changed values (128 of 64 KiB), more than one proof body can hold.
+    let value = vec![0xab_u8; 64 * 1024];
+    let f = fixture_from::<H>(keys.clone(), 0..1, puts(&keys, 1..129, &value));
+
+    let first = f
+        .source
+        .change_proof(f.start_root.clone(), f.end_root.clone(), None, None, None)
+        .unwrap();
+    assert!(first.batch_ops().len() < f.changes);
+    first.write_to_vec(&mut Vec::new()).unwrap();
+
+    // Two proofs of changes and the closing round, so a walk that stops
+    // advancing fails fast.
+    let max_rounds = 4;
+    let walk = sync_walk(
+        &f.source,
+        &f.target,
+        &f.start_root,
+        &f.end_root,
+        None,
+        None,
+        max_rounds,
+    )
+    .unwrap_or_else(|e| panic!("walk must converge: {e}"));
+
+    assert_eq!(f.target.root_hash().unwrap(), f.end_root);
+    assert_keys_strictly_increase(&walk);
+    assert_eq!(walk.ops.len(), f.changes);
+}

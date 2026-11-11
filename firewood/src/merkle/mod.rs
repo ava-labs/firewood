@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::io::Error;
+use std::iter::Peekable;
 use std::iter::once;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -74,6 +75,7 @@ use crate::api::FrozenRangeProof;
 use crate::api::HashKey;
 use crate::api::KeyType;
 use crate::api::KeyValuePair;
+use crate::api::PROOF_GENERATION_BUDGET;
 use crate::api::ValueType;
 use crate::api::{self};
 use crate::iter::MerkleKeyValueIter;
@@ -92,6 +94,8 @@ pub type Value = Box<[u8]>;
 use childmask::ChildMask;
 use collapse::BoundaryChildSource;
 use collapse::CollapseRange;
+use sized::batch_op_encoded_len;
+use sized::key_value_encoded_len;
 
 macro_rules! write_attributes {
     ($writer:ident, $node:expr, $value:expr, $algorithm:expr) => {
@@ -1573,6 +1577,39 @@ pub fn verify_change_proof_root_hash<H: HashMode>(
     Ok(())
 }
 
+/// Collects items from `iter` until there are `limit` of them, the next item
+/// would take their total `size` past `budget` bytes, or `iter` ends. An item it
+/// does not take stays in `iter`. It always takes the first item, so a caller
+/// paging through a range makes progress even when one item is larger than the
+/// budget. If `iter` yields an error among the items it takes, it returns that
+/// error.
+fn collect_within_budget<T, E>(
+    iter: &mut Peekable<impl Iterator<Item = Result<T, E>>>,
+    limit: Option<NonZeroUsize>,
+    budget: usize,
+    size: impl Fn(&T) -> usize,
+) -> Result<Box<[T]>, E> {
+    let max_items = limit.map_or(usize::MAX, NonZeroUsize::get);
+    let mut items = Vec::new();
+    let mut bytes = 0usize;
+    while items.len() < max_items {
+        let next_bytes = match iter.peek() {
+            None => break,
+            Some(Ok(item)) => bytes.saturating_add(size(item)),
+            Some(Err(_)) => bytes,
+        };
+        if !items.is_empty() && next_bytes > budget {
+            break;
+        }
+        let Some(item) = iter.next().transpose()? else {
+            break;
+        };
+        bytes = next_bytes;
+        items.push(item);
+    }
+    Ok(items.into_boxed_slice())
+}
+
 impl<T: TrieReader> Merkle<T> {
     pub(crate) fn root(&self) -> Option<SharedNode> {
         self.nodestore.root_node()
@@ -1666,17 +1703,18 @@ impl<T: TrieReader> Merkle<T> {
     ///
     /// * `limit` - Optional maximum number of key-value pairs to include in the proof.
     ///   - If `Some(n)`, at most n key-value pairs will be included
-    ///   - If `None`, all key-value pairs in the range will be included
+    ///   - If `None`, there is no count limit
+    ///   - The proof may hold fewer pairs, because generation also stops at
+    ///     [`PROOF_GENERATION_BUDGET`].
     ///   - Useful for paginating through large ranges
-    ///   - **NOTE**: avalanchego's limit is based on the entire packet size and not the
-    ///     number of key-value pairs. Currently, we only limit by the number of pairs.
     ///
     /// # Returns
     ///
     /// A `FrozenRangeProof` containing:
     /// - Start proof: Merkle proof for the first key in the range
     /// - End proof: Merkle proof for the last key in the range
-    /// - Key-value pairs: All entries within the specified bounds (up to the limit)
+    /// - Key-value pairs: All entries within the specified bounds (up to the limit
+    ///   or the byte budget)
     ///
     /// # Errors
     ///
@@ -1696,6 +1734,18 @@ impl<T: TrieReader> Merkle<T> {
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
         limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenRangeProof, api::Error> {
+        self.range_proof_with_budget(start_key, end_key, limit, PROOF_GENERATION_BUDGET)
+    }
+
+    /// [`Self::range_proof`] with an explicit byte budget. `usize::MAX` turns
+    /// the budget off.
+    fn range_proof_with_budget(
+        &self,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        limit: Option<NonZeroUsize>,
+        budget: usize,
     ) -> Result<FrozenRangeProof, api::Error> {
         if let (Some(k1), Some(k2)) = (&start_key, &end_key)
             && k1 > k2
@@ -1717,30 +1767,25 @@ impl<T: TrieReader> Merkle<T> {
 
         let mut iter = self
             .key_value_iter_from_key(start_key.unwrap_or_default())
-            .stop_after_key(end_key);
+            .stop_after_key(end_key)
+            .peekable();
 
-        // don't consume the iterator so we can determine if we hit the
-        // limit or exhausted the iterator later
-        let key_values = iter
-            .by_ref()
-            .take(limit.map_or(usize::MAX, NonZeroUsize::get))
-            .collect::<Result<Box<_>, FileIoError>>()?;
+        // don't consume the iterator so we can determine if collection stopped
+        // early or exhausted the iterator later
+        let key_values = collect_within_budget(&mut iter, limit, budget, key_value_encoded_len)?;
 
         if key_values.is_empty() && start_key.is_none() && end_key.is_none() {
             // unbounded range proof yielded no key-values, so the trie must be empty
             return Err(api::Error::RangeProofOnEmptyTrie);
         }
 
-        let end_proof = if let Some(limit) = limit
-            && limit.get() <= key_values.len()
-            && iter.next().is_some()
-        {
-            // limit was provided, we hit it, and there is at least one more key
-            // end proof is for the last key provided
+        let end_proof = if iter.next().transpose()?.is_some() {
+            // collection stopped at the limit or the byte budget and there is at
+            // least one more key, so the end proof is for the last key provided
             key_values.last().map(|(largest_key, _)| &**largest_key)
         } else {
-            // limit was not hit or not provided, end proof is for the requested
-            // end key so that we can prove we have all keys up to that key
+            // every key in the range was collected, so the end proof is for the
+            // requested end key to prove we have all keys up to that key
             end_key
         }
         .map(|end_key| self.prove(end_key))
@@ -1886,6 +1931,9 @@ impl<T: TrieReader> Merkle<T> {
 impl<T: HashedNodeReader> Merkle<T> {
     /// Generate a change proof
     ///
+    /// The proof holds at most `limit` batch operations. Whatever the limit,
+    /// generation also stops at [`PROOF_GENERATION_BUDGET`].
+    ///
     /// # Errors
     ///
     /// * `api::Error::InvalidRange` - If `start_key` > `end_key` when both are provided.
@@ -1907,6 +1955,25 @@ impl<T: HashedNodeReader> Merkle<T> {
         end_key: Option<&[u8]>,
         source_trie: &T,
         limit: Option<NonZeroUsize>,
+    ) -> Result<api::FrozenChangeProof, api::Error> {
+        self.change_proof_with_budget(
+            start_key,
+            end_key,
+            source_trie,
+            limit,
+            PROOF_GENERATION_BUDGET,
+        )
+    }
+
+    /// [`Self::change_proof`] with an explicit byte budget. `usize::MAX` turns
+    /// the budget off.
+    fn change_proof_with_budget(
+        &self,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        source_trie: &T,
+        limit: Option<NonZeroUsize>,
+        budget: usize,
     ) -> Result<api::FrozenChangeProof, api::Error> {
         if let (Some(k1), Some(k2)) = (&start_key, &end_key)
             && k1 > k2
@@ -1943,23 +2010,22 @@ impl<T: HashedNodeReader> Merkle<T> {
                 }
             }
             Err(e) => Some(Err(e)),
-        });
+        })
+        .peekable();
 
         // Create an array of `BatchOp`s representing the difference between the two
-        // revisions. The size of the array is bounded by `limit`.
-        let batch_ops = iter
-            .by_ref()
-            .take(limit.map_or(usize::MAX, NonZeroUsize::get))
-            .collect::<Result<Box<_>, FileIoError>>()?;
+        // revisions. The size of the array is bounded by `limit` and by the
+        // byte budget.
+        let batch_ops = collect_within_budget(&mut iter, limit, budget, batch_op_encoded_len)?;
 
-        // Check whether the limit cut off remaining items.
-        let hit_limit = iter.next().transpose()?.is_some();
+        // Check whether the limit or the byte budget cut off remaining items.
+        let truncated = iter.next().transpose()?.is_some();
 
-        // When the limit was hit, the end proof is for the last key in
+        // When collection was cut off, the end proof is for the last key in
         // batch_ops (the actual right edge of what was produced). When
         // all items fit, the end proof is for end_key so the verifier
         // can check the full requested range.
-        let end_proof_key = if hit_limit {
+        let end_proof_key = if truncated {
             batch_ops.last().map(|op| &**op.key()).or(end_key)
         } else {
             end_key.or(batch_ops.last().map(|op| &**op.key()))

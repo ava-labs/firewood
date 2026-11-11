@@ -4,6 +4,7 @@
 use firewood_macros::hash_mode;
 use firewood_storage::HashMode;
 use firewood_storage::U4;
+use test_case::test_case;
 
 use super::verify_range_proof;
 use super::*;
@@ -3093,4 +3094,66 @@ fn test_max_bounded_depth_survives_default_stack<H: HashMode>() {
         )
         .unwrap();
     });
+}
+
+/// A range proof whose keys and values are larger than
+/// [`PROOF_GENERATION_BUDGET`] stops at that budget: with no limit, with a
+/// limit that covers every key, and with an end key. Each proof serializes and
+/// verifies, and resuming wherever [`find_next_key_after_range_proof`] says
+/// fetches every key in the range once, in order.
+///
+/// [`PROOF_GENERATION_BUDGET`]: crate::api::PROOF_GENERATION_BUDGET
+/// [`find_next_key_after_range_proof`]: crate::find_next_key_after_range_proof
+#[hash_mode]
+#[test_case(None, None ; "no limit")]
+#[test_case(Some(128), None ; "limit covers every key")]
+#[test_case(None, Some(100) ; "end key")]
+fn test_range_proof_stops_at_byte_budget<H: HashMode>(limit: Option<usize>, end: Option<u8>) {
+    use crate::find_next_key_after_range_proof;
+    use crate::verify_range_proof_structure;
+
+    // 8 MiB of values (128 of 64 KiB), more than one proof body can hold.
+    const KEYS: u8 = 128;
+    // Two proofs cover the range, so a walk that stops advancing fails fast.
+    const MAX_ROUNDS: usize = 4;
+    let limit = limit.and_then(NonZeroUsize::new);
+    let end_key: Option<Box<[u8]>> = end.map(|k| Box::from([k].as_slice()));
+    let merkle = init_merkle::<H, _, _, _>((0..KEYS).map(|k| ([k], vec![k; 64 * 1024])));
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let mut start_key: Option<Box<[u8]>> = None;
+    let mut fetched: Vec<Box<[u8]>> = Vec::new();
+    let mut rounds = 0usize;
+    loop {
+        rounds = rounds.saturating_add(1);
+        assert!(rounds <= MAX_ROUNDS, "the walk did not converge");
+        let proof = merkle
+            .range_proof(start_key.as_deref(), end_key.as_deref(), limit)
+            .unwrap();
+        proof.write_to_vec(&mut Vec::new()).unwrap();
+        let ctx = verify_range_proof_structure(
+            &proof,
+            root_hash.clone(),
+            start_key.as_deref(),
+            end_key.as_deref(),
+            H::ALGORITHM,
+            limit,
+        )
+        .unwrap();
+        fetched.extend(proof.key_values().iter().map(|(key, _)| key.clone()));
+        start_key = find_next_key_after_range_proof(&proof, &ctx)
+            .unwrap()
+            .map(|(next_start, _)| next_start);
+        if start_key.is_none() {
+            break;
+        }
+    }
+
+    let last = end.unwrap_or(KEYS - 1);
+    let expected: Vec<Box<[u8]>> = (0..=last).map(|k| Box::from([k].as_slice())).collect();
+    assert_eq!(fetched, expected, "keys missing, repeated or out of order");
+    assert!(
+        rounds > 1,
+        "a request for more than the budget must be split"
+    );
 }

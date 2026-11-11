@@ -721,14 +721,17 @@ typedef struct CreateChangeProofArgs {
   struct Maybe_BorrowedBytes start_key;
   /**
    * The end key of the range to create the proof for. If `None`, the range
-   * ends at the end of the keyspace or until `max_length` items have been
-   * included in the proof.
+   * ends at the end of the keyspace or where the proof stops early (see
+   * `max_length`).
    */
   struct Maybe_BorrowedBytes end_key;
   /**
    * The maximum number of key/value pairs to include in the proof. If the
    * range contains more items than this, the proof will be truncated. If
-   * `0`, there is no limit.
+   * `0`, there is no count limit.
+   *
+   * Whatever `max_length` is, generation also stops at
+   * [`firewood::api::PROOF_GENERATION_BUDGET`].
    */
   uint32_t max_length;
 } CreateChangeProofArgs;
@@ -816,8 +819,7 @@ typedef struct CreateRangeProofArgs {
   struct Maybe_BorrowedBytes start_key;
   /**
    * The end key of the range to prove. If `None`, the range ends at the end
-   * of the keyspace or until `max_length` items have been included in
-   * the proof.
+   * of the keyspace or where the proof stops early (see `max_length`).
    *
    * If provided, end key is inclusive if not truncated. Otherwise, the end
    * key will be the final key in the returned key-value pairs.
@@ -826,7 +828,10 @@ typedef struct CreateRangeProofArgs {
   /**
    * The maximum number of key/value pairs to include in the proof. If the
    * range contains more items than this, the proof will be truncated. If
-   * `0`, there is no limit.
+   * `0`, there is no count limit.
+   *
+   * Whatever `max_length` is, generation also stops at
+   * [`firewood::api::PROOF_GENERATION_BUDGET`].
    */
   uint32_t max_length;
 } CreateRangeProofArgs;

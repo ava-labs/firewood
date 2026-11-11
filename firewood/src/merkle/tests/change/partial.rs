@@ -6,7 +6,7 @@
 //! commits each partial proof and resumes from the last key returned.
 //!
 //! When `limit` is set and fewer changes remain than the limit, the proof
-//! is indistinguishable from a complete proof (`hit_limit` is false). When
+//! is indistinguishable from a complete proof (`truncated` is false). When
 //! the limit actually truncates, the end proof validates against the last
 //! returned key rather than the requested `end_key`.
 
