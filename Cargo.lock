@@ -1817,7 +1817,7 @@ dependencies = [
 
 [[package]]
 name = "firewood"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "aquamarine",
  "arity-arrays",
@@ -1856,7 +1856,7 @@ dependencies = [
 
 [[package]]
 name = "firewood-benchmark"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "clap",
  "env_logger",
@@ -1883,7 +1883,7 @@ dependencies = [
 
 [[package]]
 name = "firewood-ffi"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "cbindgen",
  "env_logger",
@@ -1939,7 +1939,7 @@ dependencies = [
 
 [[package]]
 name = "firewood-macros"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "firewood-metrics",
  "firewood-storage",
@@ -1976,7 +1976,7 @@ dependencies = [
 
 [[package]]
 name = "firewood-storage"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "aquamarine",
  "arc-swap",

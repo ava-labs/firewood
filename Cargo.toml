@@ -57,9 +57,9 @@ cast_possible_truncation = "allow"
 
 [workspace.dependencies]
 # workspace local packages
-firewood = { path = "firewood", version = "0.9.0" }
-firewood-macros = { path = "firewood-macros", version = "0.7.0" }
-firewood-storage = { path = "storage", version = "0.9.0" }
+firewood = { path = "firewood", version = "0.9.1" }
+firewood-macros = { path = "firewood-macros", version = "0.7.1" }
+firewood-storage = { path = "storage", version = "0.9.1" }
 firewood-metrics = { path = "metrics", version = "0.8.0" }
 firewood-replay = { path = "replay", version = "0.8.0" }
 
