@@ -42,15 +42,15 @@ tikv-jemallocator = "0.7.0"
 # NOTE: fastrace-opentelemetry often lags behind opentelemetry. They are both
 # pinned to prevent version mismatches. Bump together when `cargo upgrade -v`
 # reports that fastrace-opentelemetry is out of date.
-fastrace-opentelemetry = { version = "=0.18" }
-opentelemetry = "=0.32"
-opentelemetry-otlp = { version = "=0.32", features = ["grpc-tonic"] }
-opentelemetry-proto = "=0.32"
-opentelemetry_sdk = "=0.32"
+fastrace-opentelemetry = { version = "=0.19" }
+opentelemetry = "=0.33"
+opentelemetry-otlp = { version = "=0.33", features = ["grpc-tonic"] }
+opentelemetry-proto = "=0.33"
+opentelemetry_sdk = "=0.33"
 
 [dependencies.tokio]
 optional = true
-version = "1.53.3"
+version = "1.54.1"
 features = ["mio", "net", "parking_lot", "rt", "time"]
 
 [features]

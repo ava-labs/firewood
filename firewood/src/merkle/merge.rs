@@ -42,7 +42,7 @@ where
         kvp_iter: impl IntoIterator<IntoIter = I>,
     ) -> Self {
         let base_iter = merkle
-            .key_value_iter_from_key(first_key.as_ref().map(AsRef::as_ref).unwrap_or_default())
+            .key_value_iter_from_key(first_key.as_ref().map_or_default(AsRef::as_ref))
             .stop_after_key(last_key);
         Self {
             trie: ReturnableIterator::new(base_iter),
