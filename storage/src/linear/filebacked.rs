@@ -478,7 +478,7 @@ mod test {
 
         // with offset
         let mut reader = fb.stream_from(6).unwrap();
-        buf = String::new();
+        buf.clear();
         assert_eq!(reader.read_to_string(&mut buf).unwrap(), 5);
         assert_eq!(buf, "world".to_owned());
     }
