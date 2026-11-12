@@ -242,7 +242,16 @@ impl<S: WritableStorage, H: HashMode> NodeStore<Committed, S, H> {
                 // must persist freelist before writing anything
                 node_allocator.flush_freelist()?;
                 self.write_batch(allocated_objects)?;
-                allocated_objects = Vec::new();
+                #[expect(
+                    clippy::new_instead_of_clear,
+                    reason = "False positive. Does not compile with `.clear()` for 2 reasons: \
+                        1) `write_batch` takes ownership; there's nothing to clear, \
+                        2) `allocated_objects` contains references to `bump`; setting to `Vec::new()` \
+                            releases the borrow and allows `bump.reset()` to take a mutable reference."
+                )]
+                {
+                    allocated_objects = Vec::new();
+                }
                 bump.reset();
                 allocated_len = 0;
             }

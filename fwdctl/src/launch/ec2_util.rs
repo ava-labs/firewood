@@ -288,15 +288,14 @@ pub async fn describe_ips(
     ec2: &Ec2Client,
     instance_id: &str,
 ) -> Result<(Option<String>, Option<String>), LaunchError> {
-    Ok(describe_instance(ec2, instance_id).await?.map_or_else(
-        || (None, None),
-        |instance| {
+    Ok(describe_instance(ec2, instance_id)
+        .await?
+        .map_or((None, None), |instance| {
             (
                 instance.public_ip_address().map(Into::into),
                 instance.private_ip_address().map(Into::into),
             )
-        },
-    ))
+        }))
 }
 
 async fn describe_instance(
