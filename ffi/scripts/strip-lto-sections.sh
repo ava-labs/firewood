@@ -11,8 +11,9 @@ bin="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/b
 for lib in "$@"; do
     "$bin/llvm-objcopy" --remove-section=.llvmbc --remove-section=.llvmcmd \
         --remove-section=__LLVM,__bitcode --remove-section=__LLVM,__cmdline "$lib"
-    if "$bin/llvm-readobj" --sections "$lib" | grep -E \
-        'Segment: __(LLVM|GNU_LTO)|Name: (\.gnu\.(debug)?lto_|\.llvm\.lto|\.llvmbc |\.llvmcmd )|Type: SHT_LLVM_LTO'; then
+    sections=$("$bin/llvm-readobj" --sections "$lib")
+    if grep -E \
+        'Segment: __(LLVM|GNU_LTO)|Name: (\.gnu\.(debug)?lto_|\.llvm\.lto|\.llvmbc |\.llvmcmd )|Type: SHT_LLVM_LTO' <<<"$sections"; then
         echo "$lib: disallowed LTO sections remain" >&2
         exit 1
     fi
