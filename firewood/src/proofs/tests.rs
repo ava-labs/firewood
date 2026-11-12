@@ -1568,14 +1568,17 @@ fn test_frame_rejects_missing_frame<H: HashMode>() {
 #[hash_mode]
 #[test]
 fn test_frame_rejects_frame_without_content_size<H: HashMode>() {
-    // The producer's bulk compressor always records the content size in
-    // the frame header, but zstd streaming encoders (which don't know the
-    // input size up front) omit it. An attacker can hand-craft such a
-    // frame; the decoder must reject it before allocating.
+    // The producer always records the content size in the frame header, but
+    // the field is optional in the zstd format and a peer can omit it. The
+    // decoder must reject such a frame before allocating.
     let (_, canonical) = create_valid_range_proof::<H>();
     let body = &canonical[32..];
-    let frame = zstd::stream::encode_all(body, zstd::DEFAULT_COMPRESSION_LEVEL)
-        .expect("stream compression of an in-memory buffer");
+    let mut compressor =
+        zstd::bulk::Compressor::new(zstd::DEFAULT_COMPRESSION_LEVEL).expect("create compressor");
+    compressor
+        .set_parameter(zstd::zstd_safe::CParameter::ContentSizeFlag(false))
+        .expect("clear the content size flag");
+    let frame = compressor.compress(body).expect("compress body");
     let mut wire = canonical[..32].to_vec();
     wire.extend_from_slice(&frame);
     let err = FrozenRangeProof::from_slice(&wire).expect_err("frame without content size");
