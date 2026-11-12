@@ -22,9 +22,9 @@ FIREWOOD_RUST_VERSION=1.94.1
 # fails the build if the two diverge; the checksum comes from
 # https://go.dev/dl/?mode=json&include=all.
 # shellcheck disable=SC2034
-FIREWOOD_GO_VERSION=1.26.10
+FIREWOOD_GO_VERSION=1.26.11
 # shellcheck disable=SC2034
-FIREWOOD_GO_LINUX_AMD64_SHA256=ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5
+FIREWOOD_GO_LINUX_AMD64_SHA256=9849f4e04ee35303714e34fbc3ac8ab44ea3e448a95aa182f91e3b9b79c710ec
 
 # shellcheck disable=SC2034
 FIREWOOD_CARGO_BINSTALL_VERSION=1.21.1

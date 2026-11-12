@@ -7,7 +7,7 @@ module github.com/ava-labs/firewood/ffi
 //   - infra/toolchain-version.sh Golang version hash
 //   - ffi/flake.nix avalanchego commit hash
 // Consider updating the golangci-lint version.
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/prometheus/client_golang v1.22.0
