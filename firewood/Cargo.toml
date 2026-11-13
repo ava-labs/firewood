@@ -37,7 +37,8 @@ thiserror.workspace = true
 # Regular dependencies
 arity-arrays = { version = "0.2.0", default-features = false, features = ["16"] }
 typed-builder = "0.23.2"
-zstd = { version = "0.14.3", default-features = false }
+# NB: 0.14.4 breaks tests. bump separately.
+zstd = { version = "=0.14.3", default-features = false }
 rayon = "1.12.0"
 parking_lot.workspace = true
 lender = "0.8.0"
