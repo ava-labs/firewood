@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794612900880,
+  "lastUpdate": 1794613075289,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -93,6 +93,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 6186.100078467908,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "committer": {
+            "name": "Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "id": "20bf9df3a4d47e45e9d62b1189b1eaa339628bfc",
+          "message": "test(firewood): add get and remove merkle benchmarks\n\nThe existing Merkle benchmarks insert three keys, which builds one branch and\ncannot show the cost of looking up a child or of a branch gaining or losing\none. MerkleLarge builds a 10,000-key trie and times reading every key from the\nhashed trie and removing every key from the unhashed one.\n\nThey land before BranchNode changes layout so the dense layout has a baseline.\n\nMerkle::get_value and Merkle::remove become pub so the bench can call them.\nMerkle is exported only under the test_utils feature, as insert already\nassumes, so the default public API is unchanged.",
+          "timestamp": "2026-11-13T21:45:07Z",
+          "url": "https://github.com/ava-labs/firewood/commit/20bf9df3a4d47e45e9d62b1189b1eaa339628bfc"
+        },
+        "date": 1794613074748,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 153.77262815064944,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6503.107945975344,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 123.13251271523009,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6.789574356742302,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 6366.691071801241,
             "unit": "block_accept_ms/ggas"
           }
         ]
