@@ -572,7 +572,7 @@ and links to upstream install docs (and may include concrete install commands).
 
 ### Getting Started: `dev-environment.md` (fully authored)
 
-- **Common prerequisites:** `rustup` + pinned toolchain (MSRV 1.94.0, edition 2024),
+- **Common prerequisites:** `rustup` + pinned toolchain (MSRV 1.100.0, edition 2024),
   `just`, `jq` (used by the in-repo frontmatter preprocessor), Go (FFI), Nix (FFI
   flake), and the mdBook toolchain (`mdbook`, `mdbook-mermaid`, `mdbook-linkcheck2`).
 - **macOS local:** rustup install; components (`rustfmt`, `clippy`, `rust-analyzer`);
