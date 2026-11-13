@@ -103,10 +103,7 @@ fn child_at(nibble: u8) -> impl Fn(PathComponent) -> Option<Child> {
     let hash: crate::HashType = TrieHash::from([0u8; 32]).into();
     move |i| {
         if i.as_u8() == nibble {
-            Some(Child::AddressWithHash(
-                LinearAddress::new(1).unwrap(),
-                hash.clone(),
-            ))
+            Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), hash))
         } else {
             None
         }

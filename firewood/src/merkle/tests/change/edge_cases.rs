@@ -26,13 +26,7 @@ fn test_empty_batch_ops_with_nonempty_proofs<H: HashMode>() {
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x30", b"changed")]);
 
     let proof = source
-        .change_proof(
-            root1_source,
-            root2.clone(),
-            Some(b"\x10"),
-            Some(b"\x20"),
-            None,
-        )
+        .change_proof(root1_source, root2, Some(b"\x10"), Some(b"\x20"), None)
         .unwrap();
     assert_eq!(proof.batch_ops(), [] as [BatchOp<Box<[u8]>, Box<[u8]>>; 0]);
     assert!(!proof.start_proof().is_empty());
@@ -59,7 +53,7 @@ fn test_odd_depth_proof_node_accepted<H: HashMode>() {
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x50", b"changed")]);
 
     let proof = source
-        .change_proof(root1_source, root2.clone(), Some(b"\x14"), None, None)
+        .change_proof(root1_source, root2, Some(b"\x14"), None, None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
     assert!(
@@ -87,7 +81,7 @@ fn test_start_proof_inclusion_with_children_below<H: HashMode>() {
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\xf0", b"changed")]);
 
     let proof = source
-        .change_proof(root1_source, root2.clone(), Some(b"\xab"), None, None)
+        .change_proof(root1_source, root2, Some(b"\xab"), None, None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
     assert!(
@@ -116,13 +110,7 @@ fn test_end_proof_inclusion_with_children_below<H: HashMode>() {
 
     // Limited to 1 — last_op_key \xab is a prefix with children below.
     let proof = source
-        .change_proof(
-            root1_source,
-            root2.clone(),
-            None,
-            None,
-            NonZeroUsize::new(1),
-        )
+        .change_proof(root1_source, root2, None, None, NonZeroUsize::new(1))
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
     assert!(proof.start_proof().is_empty());
@@ -151,13 +139,7 @@ fn test_divergence_parent_start_key_exhausted<H: HashMode>() {
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\xf0", b"changed")]);
 
     let proof = source
-        .change_proof(
-            root1_source,
-            root2.clone(),
-            Some(b"\x12"),
-            Some(b"\xf0"),
-            None,
-        )
+        .change_proof(root1_source, root2, Some(b"\x12"), Some(b"\xf0"), None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
     // Start key is exhausted at the parent branch — exclusion proof.
@@ -209,7 +191,7 @@ fn test_start_tail_last_node_children_checked<H: HashMode>() {
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x30", b"changed")]);
 
     let proof = source
-        .change_proof(root1_source, root2.clone(), Some(b"\x10"), None, None)
+        .change_proof(root1_source, root2, Some(b"\x10"), None, None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
     // Exclusion proof — last node is a branch whose children must be verified.
@@ -250,7 +232,7 @@ fn test_start_proof_exclusion_for_deleted_key<H: HashMode>() {
     let root2 = source.root_hash().unwrap();
 
     let proof = source
-        .change_proof(root1_source, root2.clone(), Some(b"\x10"), None, None)
+        .change_proof(root1_source, root2, Some(b"\x10"), None, None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 2); // Delete(\x10) + Put(\x30)
     assert!(
@@ -290,8 +272,8 @@ fn test_disjoint_proof<H: HashMode>() {
 
     let proof = db
         .change_proof(
-            root1.clone(),
-            root2.clone(),
+            root1,
+            root2,
             Some(first.as_ref()),
             Some(last.as_ref()),
             None,
@@ -354,7 +336,7 @@ fn test_boundary_child_gap_closed_for_start_key<H: HashMode>() {
     let honest = source
         .change_proof(
             root1_source,
-            root2.clone(),
+            root2,
             Some(b"\x10\x50"),
             Some(b"\x30\x00"),
             None,
@@ -389,7 +371,7 @@ fn test_terminal_divergence_within_partial_path<H: HashMode>() {
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x30", b"changed")]);
 
     let proof = source
-        .change_proof(root1_source, root2.clone(), Some(b"\x10\x40"), None, None)
+        .change_proof(root1_source, root2, Some(b"\x10\x40"), None, None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
     let ctx =
@@ -420,7 +402,7 @@ fn test_terminal_ancestor_all_children_outside<H: HashMode>() {
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x30", b"changed")]);
 
     let proof = source
-        .change_proof(root1_source, root2.clone(), Some(b"\x10\x05"), None, None)
+        .change_proof(root1_source, root2, Some(b"\x10\x05"), None, None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
 
@@ -456,7 +438,7 @@ fn test_terminal_divergent_node_all_children_in_range<H: HashMode>() {
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x30", b"changed")]);
 
     let proof = source
-        .change_proof(root1_source, root2.clone(), Some(b"\x10"), None, None)
+        .change_proof(root1_source, root2, Some(b"\x10"), None, None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
 
@@ -487,7 +469,7 @@ fn test_right_edge_boundary_prefix_of_terminal<H: HashMode>() {
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x10", b"changed")]);
 
     let proof = source
-        .change_proof(root1_source, root2.clone(), None, Some(b"\x20"), None)
+        .change_proof(root1_source, root2, None, Some(b"\x20"), None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
     let ctx = verify_change_proof_structure(&proof, root2, None, Some(b"\x20"), H::ALGORITHM, None)
@@ -517,13 +499,7 @@ fn test_out_of_range_value_change_adopted<H: HashMode>() {
         setup_2nd_commit!(source, [(b"\x10", b"new_pfx"), (b"\x30", b"changed")]);
 
     let proof = source
-        .change_proof(
-            root1_source,
-            root2.clone(),
-            Some(b"\x10\x50"),
-            Some(b"\x30"),
-            None,
-        )
+        .change_proof(root1_source, root2, Some(b"\x10\x50"), Some(b"\x30"), None)
         .unwrap();
     // Only \x30 is in range [\x10\x50, \x30]; \x10's change is out of range.
     assert_eq!(proof.batch_ops().len(), 1);
@@ -580,8 +556,8 @@ fn test_change_proof_prefix_key_deleted_in_end_root<H: HashMode>() {
     // does not — reconciliation must clear the stale value.
     let proof = db
         .change_proof(
-            root1.clone(),
-            root2.clone(),
+            root1,
+            root2,
             Some(b"\xab\x00".as_slice()),
             Some(b"\xff".as_slice()),
             None,
@@ -592,7 +568,7 @@ fn test_change_proof_prefix_key_deleted_in_end_root<H: HashMode>() {
 
     let ctx = verify_change_proof_structure(
         &proof,
-        root2.clone(),
+        root2,
         Some(b"\xab\x00".as_slice()),
         Some(b"\xff".as_slice()),
         H::ALGORITHM,
@@ -632,7 +608,7 @@ fn test_end_proof_exclusion_for_deleted_key<H: HashMode>() {
     let root2 = source.root_hash().unwrap();
 
     let proof = source
-        .change_proof(root1_source, root2.clone(), None, Some(b"\x30"), None)
+        .change_proof(root1_source, root2, None, Some(b"\x30"), None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 2); // Put(\x10) + Delete(\x30)
     assert!(
@@ -659,13 +635,7 @@ fn test_single_point_range<H: HashMode>() {
     let (root1_source, root2) = setup_2nd_commit!(source, [(b"\x20", b"changed")]);
 
     let proof = source
-        .change_proof(
-            root1_source,
-            root2.clone(),
-            Some(b"\x20"),
-            Some(b"\x20"),
-            None,
-        )
+        .change_proof(root1_source, root2, Some(b"\x20"), Some(b"\x20"), None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
     // Both proofs anchor at the same key — start is inclusion, end is inclusion.
@@ -728,13 +698,7 @@ fn test_out_of_range_root_compression<H: HashMode>() {
     let root2 = db.root_hash().unwrap();
 
     let proof = db
-        .change_proof(
-            root1.clone(),
-            root2.clone(),
-            Some(b"\x10".as_slice()),
-            None,
-            None,
-        )
+        .change_proof(root1, root2, Some(b"\x10".as_slice()), None, None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
     // After deleting \x01, root compresses from partial_path [] to [1].
@@ -751,15 +715,8 @@ fn test_out_of_range_root_compression<H: HashMode>() {
         "root should compress to [1] after deletion"
     );
 
-    let ctx = verify_change_proof_structure(
-        &proof,
-        root2.clone(),
-        Some(b"\x10"),
-        None,
-        H::ALGORITHM,
-        None,
-    )
-    .unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10"), None, H::ALGORITHM, None)
+        .unwrap();
     verify_and_check(&db, &proof, &ctx, root1).unwrap();
 }
 
@@ -792,7 +749,7 @@ fn test_out_of_range_root_expansion<H: HashMode>() {
     let root2 = source.root_hash().unwrap();
 
     let proof = source
-        .change_proof(root1_source, root2.clone(), Some(b"\x10"), None, None)
+        .change_proof(root1_source, root2, Some(b"\x10"), None, None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
     // After inserting \x01, root expands from partial_path [1] to [].
@@ -818,7 +775,7 @@ fn test_root_value_change<H: HashMode>() {
         setup_2nd_commit!(source, [(b"", b"root_new"), (b"\x10", b"changed")]);
 
     let proof = source
-        .change_proof(root1_source, root2.clone(), None, None, None)
+        .change_proof(root1_source, root2, None, None, None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 2);
 
@@ -859,13 +816,7 @@ fn test_change_proof_with_hashed_out_of_range_value() {
 
     // Range [\x10\x50, \x30]: \x10 is out of range (prefix of start_key).
     let proof = source
-        .change_proof(
-            root1_target.clone(),
-            root2.clone(),
-            Some(b"\x10\x50"),
-            Some(b"\x30"),
-            None,
-        )
+        .change_proof(root1_target, root2, Some(b"\x10\x50"), Some(b"\x30"), None)
         .unwrap();
 
     // Serialize/deserialize to convert large values to Hash.
@@ -939,7 +890,7 @@ fn test_truncation_narrows_to_the_last_op<H: HashMode>(
     let root2 = db.root_hash().unwrap();
 
     let proof = db
-        .change_proof(root1, root2.clone(), None, Some(b"\x50"), limit)
+        .change_proof(root1, root2, None, Some(b"\x50"), limit)
         .unwrap();
     let ctx =
         verify_change_proof_structure(&proof, root2, None, Some(b"\x50"), H::ALGORITHM, limit)
@@ -998,7 +949,7 @@ fn test_truncation_classification_under_a_prefix_key<H: HashMode>(
 
     let limit = NonZeroUsize::new(1);
     let proof = db
-        .change_proof(root1, root2.clone(), None, Some(b"\x20"), limit)
+        .change_proof(root1, root2, None, Some(b"\x20"), limit)
         .unwrap();
     let ctx =
         verify_change_proof_structure(&proof, root2, None, Some(b"\x20"), H::ALGORITHM, limit)
@@ -1030,7 +981,7 @@ fn test_prefix_bound_does_not_narrow_a_complete_proof<H: HashMode>() {
     assert_eq!(root1, root1_target);
 
     let proof = source
-        .change_proof(root1, root2.clone(), None, Some(b"\x10\x20"), None)
+        .change_proof(root1, root2, None, Some(b"\x10\x20"), None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1, "the single change is included");
     assert_eq!(
@@ -1087,7 +1038,7 @@ fn test_a_terminal_at_the_last_operation_narrows_the_range<H: HashMode>() {
     assert_eq!(root1, root1_target);
 
     let proof = source
-        .change_proof(root1.clone(), root2.clone(), None, Some(b"\xff"), None)
+        .change_proof(root1, root2, None, Some(b"\xff"), None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1, "the single change is included");
     assert!(
@@ -1157,13 +1108,7 @@ fn stopped_short_on_a_delete<H: HashMode>() -> StoppedShort<H> {
     let root2 = source.root_hash().unwrap();
 
     let proof = source
-        .change_proof(
-            root1.clone(),
-            root2.clone(),
-            None,
-            Some(b"\xff"),
-            NonZeroUsize::new(2),
-        )
+        .change_proof(root1, root2, None, Some(b"\xff"), NonZeroUsize::new(2))
         .unwrap();
     assert!(
         matches!(proof.batch_ops().last(), Some(BatchOp::Delete { .. })),
@@ -1206,13 +1151,7 @@ fn stopped_short_below_a_surviving_key<H: HashMode>() -> StoppedShort<H> {
     let root2 = source.root_hash().unwrap();
 
     let proof = source
-        .change_proof(
-            root1.clone(),
-            root2.clone(),
-            None,
-            Some(b"\xff"),
-            NonZeroUsize::new(2),
-        )
+        .change_proof(root1, root2, None, Some(b"\xff"), NonZeroUsize::new(2))
         .unwrap();
     assert!(
         matches!(proof.batch_ops().last(), Some(BatchOp::Delete { .. })),
@@ -1241,7 +1180,7 @@ fn test_stopping_short_on_a_delete_is_accepted_over_the_narrowed_range<H: HashMo
 
     let ctx = verify_change_proof_structure(
         &f.proof,
-        f.end_root.clone(),
+        f.end_root,
         None,
         Some(b"\xff"),
         H::ALGORITHM,
@@ -1273,7 +1212,7 @@ fn test_stopping_short_below_a_surviving_key_is_accepted<H: HashMode>() {
 
     let ctx = verify_change_proof_structure(
         &f.proof,
-        f.end_root.clone(),
+        f.end_root,
         None,
         Some(b"\xff"),
         H::ALGORITHM,
@@ -1301,7 +1240,7 @@ fn test_mismatch_ending_in_a_put_is_still_rejected<H: HashMode>() {
     let (root1, root2) = setup_2nd_commit!(source, [(b"\x10", b"c0"), (b"\x20", b"c1")]);
 
     let honest = source
-        .change_proof(root1, root2.clone(), None, Some(b"\xff"), None)
+        .change_proof(root1, root2, None, Some(b"\xff"), None)
         .unwrap();
     assert!(matches!(
         honest.batch_ops().last(),
@@ -1346,13 +1285,7 @@ fn test_an_unrelated_end_proof_does_not_narrow<H: HashMode>() {
     // An end proof anchored at \x10: a complete proof over [None, \x10].
     let donor = f
         .source
-        .change_proof(
-            f.start_root.clone(),
-            f.end_root.clone(),
-            None,
-            Some(b"\x10"),
-            None,
-        )
+        .change_proof(f.start_root, f.end_root, None, Some(b"\x10"), None)
         .unwrap();
     let spliced = crate::ChangeProof::new(
         crate::Proof::new(f.proof.start_proof().to_vec().into_boxed_slice()),
@@ -1363,7 +1296,7 @@ fn test_an_unrelated_end_proof_does_not_narrow<H: HashMode>() {
 
     match verify_change_proof_structure(
         &spliced,
-        f.end_root.clone(),
+        f.end_root,
         None,
         Some(b"\xff"),
         H::ALGORITHM,
@@ -1386,7 +1319,7 @@ fn test_an_unrelated_end_proof_does_not_narrow<H: HashMode>() {
                 Some(&b"\xff"[..]),
                 "an end proof that cannot be anchored at the last operation keeps the wide range"
             );
-            verify_and_check(&f.target, &spliced, &ctx, f.start_root.clone())
+            verify_and_check(&f.target, &spliced, &ctx, f.start_root)
                 .expect_err("a spliced end proof must not be accepted");
         }
     }
@@ -1426,13 +1359,10 @@ fn test_same_change_proof_applied_twice_succeeds<H: HashMode>() {
     source.propose(end_batch).unwrap().commit().unwrap();
     let root2 = source.root_hash().unwrap();
 
-    let proof = source
-        .change_proof(root1.clone(), root2.clone(), None, None, None)
-        .unwrap();
+    let proof = source.change_proof(root1, root2, None, None, None).unwrap();
 
     // First application: start_root -> end_root, then commit so the target moves.
-    let ctx = verify_change_proof_structure(&proof, root2.clone(), None, None, H::ALGORITHM, None)
-        .unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, None, None, H::ALGORITHM, None).unwrap();
     let parent = target.revision(root1).unwrap();
     let proposal = target
         .apply_change_proof_to_parent(&proof, &*parent)
@@ -1447,8 +1377,8 @@ fn test_same_change_proof_applied_twice_succeeds<H: HashMode>() {
     );
 
     // Second application of the same proof, now from end_root.
-    let ctx2 = verify_change_proof_structure(&proof, root2.clone(), None, None, H::ALGORITHM, None)
-        .unwrap();
+    let ctx2 =
+        verify_change_proof_structure(&proof, root2, None, None, H::ALGORITHM, None).unwrap();
     verify_and_check(&target, &proof, &ctx2, root2)
         .expect("re-applying the same proof must verify");
 }
@@ -1539,7 +1469,7 @@ fn test_max_bounded_depth_change_proof_survives_default_stack<H: HashMode>() {
         let root2 = source.root_hash().unwrap();
 
         let proof = source
-            .change_proof(root1_source, root2.clone(), None, None, None)
+            .change_proof(root1_source, root2, None, None, None)
             .unwrap();
         let ctx =
             verify_change_proof_structure(&proof, root2, None, None, H::ALGORITHM, None).unwrap();

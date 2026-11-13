@@ -290,7 +290,7 @@ impl<H: HashMode> RevisionManager<H> {
         if let Some(root_hash) = manager.current_revision().root_hash() {
             let root_address = manager.current_revision().root_address().ok_or(
                 RevisionManagerError::RevisionWithoutAddress {
-                    provided: root_hash.clone(),
+                    provided: root_hash,
                 },
             )?;
 
@@ -639,13 +639,13 @@ impl<H: HashMode> RevisionManager<H> {
             self.root_store
                 .as_ref()
                 .ok_or(RevisionManagerError::RevisionNotFound {
-                    provided: root_hash.clone(),
+                    provided: root_hash,
                 })?;
         let revision = root_store
             .get(&root_hash)
             .map_err(RevisionManagerError::RootStoreError)?
             .ok_or(RevisionManagerError::RevisionNotFound {
-                provided: root_hash.clone(),
+                provided: root_hash,
             })?;
 
         Ok(revision)
@@ -940,7 +940,7 @@ mod tests {
                     // Try to view the current revision
                     let current_hash = manager.current_revision().root_hash();
                     if let Some(hash) = current_hash {
-                        match manager.view(hash.clone()) {
+                        match manager.view(hash) {
                             Ok(_) => {}
                             Err(RevisionManagerError::RevisionNotFound { .. }) => {
                                 local_errors += 1;
@@ -1260,7 +1260,7 @@ mod tests {
 
         // Sanity: the fresh manager indexes the empty revision under the
         // default hash.
-        assert!(manager.revision(empty_hash.clone()).is_ok());
+        assert!(manager.revision(empty_hash).is_ok());
 
         // Commit two non-empty revisions to push the empty one out of the
         // in-memory queue and out of `by_hash`.
@@ -1287,7 +1287,7 @@ mod tests {
 
         // Empty hash should still resolve via the default-hash short-circuit.
         let revision = manager
-            .revision(empty_hash.clone())
+            .revision(empty_hash)
             .expect("empty-trie revision must resolve via the default-hash short-circuit");
         assert!(revision.root_address().is_none());
     }

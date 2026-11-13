@@ -430,7 +430,7 @@ where
                     child_path_prefix.0.push(nibble.as_u8());
                     let child_subtrie = SubTrieMetadata {
                         root_address: address,
-                        root_hash: hash.clone(),
+                        root_hash: *hash,
                         parent,
                         depth: depth.saturating_add(1),
                         path_prefix: child_path_prefix,
@@ -849,7 +849,7 @@ mod test {
         test_write_header(
             nodestore,
             high_watermark,
-            Some((root_addr, root_hash.clone().into_triehash())),
+            Some((root_addr, root_hash.into_triehash())),
             FreeLists::default(),
         );
 
@@ -1080,7 +1080,7 @@ mod test {
             .unwrap()
             .persist_info()
             .unwrap();
-        let parent_stored_hash = parent_stored_hash.clone();
+        let parent_stored_hash = *parent_stored_hash;
 
         // run the checker and verify that it returns the HashMismatch error
         let mut visited = LinearAddressRangeSet::new(test_trie.high_watermark).unwrap();

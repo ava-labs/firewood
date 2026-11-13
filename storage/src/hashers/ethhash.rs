@@ -260,7 +260,7 @@ impl HashMode for EthHash {
                     } else {
                         TrieHash::from(Keccak256::digest(&bytes))
                     };
-                    trace!("replacement hash {:?}", hex::encode(&replacement_hash));
+                    trace!("replacement hash {:?}", hex::encode(replacement_hash));
 
                     let updated =
                         replace_list_field(rlp_encoded_bytes, 2, replacement_hash.as_ref())

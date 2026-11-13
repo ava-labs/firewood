@@ -56,15 +56,9 @@ fn verify<H: HashMode>(
     start_key: Option<&[u8]>,
     end_key: Option<&[u8]>,
 ) -> Result<(), api::Error> {
-    let ctx = verify_change_proof_structure(
-        proof,
-        end_root.clone(),
-        start_key,
-        end_key,
-        H::ALGORITHM,
-        None,
-    )?;
-    verify_and_check(db, proof, &ctx, start_root.clone())
+    let ctx =
+        verify_change_proof_structure(proof, *end_root, start_key, end_key, H::ALGORITHM, None)?;
+    verify_and_check(db, proof, &ctx, *start_root)
 }
 
 /// Commit `end_batch` onto `db`, returning the roots before and after. Unlike
@@ -137,7 +131,7 @@ fn test_tampered_right_edge_delete_to_put_is_rejected<H: HashMode>() {
 
     // No-bounds change proof; its end proof anchors on the max op key 0xf5cd.
     let proof = db
-        .change_proof(start_root.clone(), end_root.clone(), None, None, None)
+        .change_proof(start_root, end_root, None, None, None)
         .unwrap();
     verify(&db, &proof, &start_root, &end_root, None, None).expect("honest proof must verify");
 
@@ -186,13 +180,7 @@ fn test_out_of_range_delete_past_end_bound_verifies<H: HashMode>() {
 
     let (sk, ek) = (b"\x00".as_slice(), b"\xfb".as_slice());
     let proof = db
-        .change_proof(
-            start_root.clone(),
-            end_root.clone(),
-            Some(sk),
-            Some(ek),
-            None,
-        )
+        .change_proof(start_root, end_root, Some(sk), Some(ek), None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 2);
     verify(&db, &proof, &start_root, &end_root, Some(sk), Some(ek)).expect(
@@ -221,13 +209,7 @@ fn test_forged_in_range_delete_to_put_is_rejected<H: HashMode>() {
 
     let (sk, ek) = (b"\x00".as_slice(), b"\x56\x00".as_slice());
     let proof = db
-        .change_proof(
-            start_root.clone(),
-            end_root.clone(),
-            Some(sk),
-            Some(ek),
-            None,
-        )
+        .change_proof(start_root, end_root, Some(sk), Some(ek), None)
         .unwrap();
     verify(&db, &proof, &start_root, &end_root, Some(sk), Some(ek))
         .expect("honest proof must verify");
@@ -282,13 +264,7 @@ fn test_out_of_range_delete_below_start_bound_verifies<H: HashMode>() {
 
     let (sk, ek) = (b"\xd4\x4f".as_slice(), b"\xf9".as_slice());
     let proof = db
-        .change_proof(
-            start_root.clone(),
-            end_root.clone(),
-            Some(sk),
-            Some(ek),
-            None,
-        )
+        .change_proof(start_root, end_root, Some(sk), Some(ek), None)
         .unwrap();
     verify(&db, &proof, &start_root, &end_root, Some(sk), Some(ek)).expect(
         "honest change proof over [0xd44f, 0xf9] must verify. The deletion of \
@@ -320,7 +296,7 @@ fn test_unbounded_end_omitted_in_range_delete_is_rejected<H: HashMode>() {
 
     let sk = b"\x52".as_slice();
     let proof = db
-        .change_proof(start_root.clone(), end_root.clone(), Some(sk), None, None)
+        .change_proof(start_root, end_root, Some(sk), None, None)
         .unwrap();
     verify(&db, &proof, &start_root, &end_root, Some(sk), None).expect("honest proof must verify");
 
@@ -379,13 +355,7 @@ fn test_split_boundary_child_omitted_in_range_delete_is_rejected<H: HashMode>() 
 
     let (sk, ek) = (b"\x00".as_slice(), b"\xfb\x50".as_slice());
     let proof = db
-        .change_proof(
-            start_root.clone(),
-            end_root.clone(),
-            Some(sk),
-            Some(ek),
-            None,
-        )
+        .change_proof(start_root, end_root, Some(sk), Some(ek), None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
     verify(&db, &proof, &start_root, &end_root, Some(sk), Some(ek))
@@ -440,13 +410,7 @@ fn test_split_start_boundary_child_omitted_in_range_delete_is_rejected<H: HashMo
 
     let (sk, ek) = (b"\xd4\x50".as_slice(), b"\xf0".as_slice());
     let proof = db
-        .change_proof(
-            start_root.clone(),
-            end_root.clone(),
-            Some(sk),
-            Some(ek),
-            None,
-        )
+        .change_proof(start_root, end_root, Some(sk), Some(ek), None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
     verify(&db, &proof, &start_root, &end_root, Some(sk), Some(ek))
@@ -509,13 +473,7 @@ fn test_all_deleted_range_with_survivor_above_end_bound_verifies<H: HashMode>() 
 
     let (sk, ek) = (b"\x10\x00".as_slice(), b"\x56".as_slice());
     let proof = db
-        .change_proof(
-            start_root.clone(),
-            end_root.clone(),
-            Some(sk),
-            Some(ek),
-            None,
-        )
+        .change_proof(start_root, end_root, Some(sk), Some(ek), None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
     verify(&db, &proof, &start_root, &end_root, Some(sk), Some(ek)).expect(
@@ -552,13 +510,7 @@ fn test_key_empty_range_verifies<H: HashMode>() {
 
     let (sk, ek) = (b"\x60".as_slice(), b"\xb0".as_slice());
     let proof = db
-        .change_proof(
-            start_root.clone(),
-            end_root.clone(),
-            Some(sk),
-            Some(ek),
-            None,
-        )
+        .change_proof(start_root, end_root, Some(sk), Some(ek), None)
         .unwrap();
     assert_eq!(proof.batch_ops(), [] as [BatchOp<Box<[u8]>, Box<[u8]>>; 0]);
     verify(&db, &proof, &start_root, &end_root, Some(sk), Some(ek)).expect(

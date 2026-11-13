@@ -129,10 +129,9 @@ fn test_change_proof_partial_storage_children_against_empty(start_bound: Bound, 
     let end_key = resolve(end_bound);
 
     let proof = source
-        .change_proof(empty_root.clone(), root2.clone(), start_key, end_key, None)
+        .change_proof(empty_root, root2, start_key, end_key, None)
         .unwrap();
-    let ctx =
-        verify_change_proof_structure(&proof, root2.clone(), start_key, end_key, None).unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, start_key, end_key, None).unwrap();
 
     let (target, _dir_target) = setup_db![mode = EthHash];
     let empty_root_target = target.root_hash().unwrap();
@@ -163,47 +162,25 @@ fn test_change_proof_arbitrary_order_right_then_left_converges() {
     let mid_key = key_under_account(&ACCOUNT_KEY, 0x40);
 
     let proof_left = source
-        .change_proof(
-            empty_root.clone(),
-            full_root.clone(),
-            None,
-            Some(mid_key.as_ref()),
-            None,
-        )
+        .change_proof(empty_root, full_root, None, Some(mid_key.as_ref()), None)
         .unwrap();
-    let ctx_left = verify_change_proof_structure(
-        &proof_left,
-        full_root.clone(),
-        None,
-        Some(mid_key.as_ref()),
-        None,
-    )
-    .unwrap();
+    let ctx_left =
+        verify_change_proof_structure(&proof_left, full_root, None, Some(mid_key.as_ref()), None)
+            .unwrap();
 
     let proof_right = source
-        .change_proof(
-            empty_root.clone(),
-            full_root.clone(),
-            Some(mid_key.as_ref()),
-            None,
-            None,
-        )
+        .change_proof(empty_root, full_root, Some(mid_key.as_ref()), None, None)
         .unwrap();
-    let ctx_right = verify_change_proof_structure(
-        &proof_right,
-        full_root.clone(),
-        Some(mid_key.as_ref()),
-        None,
-        None,
-    )
-    .unwrap();
+    let ctx_right =
+        verify_change_proof_structure(&proof_right, full_root, Some(mid_key.as_ref()), None, None)
+            .unwrap();
 
     // Apply RIGHT first, then LEFT, to an empty target.
     let (target, _dir_target) = setup_db![mode = EthHash];
     let target_empty_root = target.root_hash().unwrap();
 
     // Step 1: apply RIGHT half. Verifies, then commits.
-    let parent = target.revision(target_empty_root.clone()).unwrap();
+    let parent = target.revision(target_empty_root).unwrap();
     let proposal_right = target
         .apply_change_proof_to_parent(&proof_right, &*parent)
         .unwrap();
@@ -252,8 +229,8 @@ fn test_change_proof_both_bounds_inside_account_storage() {
 
     let proof = source
         .change_proof(
-            empty_root.clone(),
-            root2.clone(),
+            empty_root,
+            root2,
             Some(start.as_ref()),
             Some(end.as_ref()),
             None,
@@ -261,7 +238,7 @@ fn test_change_proof_both_bounds_inside_account_storage() {
         .unwrap();
     let ctx = verify_change_proof_structure(
         &proof,
-        root2.clone(),
+        root2,
         Some(start.as_ref()),
         Some(end.as_ref()),
         None,
@@ -290,16 +267,9 @@ fn test_change_proof_account_in_range_no_storage_in_range() {
     let end = key_under_account(&ACCOUNT_KEY, 0x00);
 
     let proof = source
-        .change_proof(
-            empty_root.clone(),
-            root2.clone(),
-            None,
-            Some(end.as_ref()),
-            None,
-        )
+        .change_proof(empty_root, root2, None, Some(end.as_ref()), None)
         .unwrap();
-    let ctx = verify_change_proof_structure(&proof, root2.clone(), None, Some(end.as_ref()), None)
-        .unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, None, Some(end.as_ref()), None).unwrap();
 
     let (target, _dir_target) = setup_db![mode = EthHash];
     let empty_root_target = target.root_hash().unwrap();
@@ -333,16 +303,9 @@ fn test_change_proof_single_storage_child_truncated() {
     let end = key_under_account(&ACCOUNT_KEY, 0x00);
 
     let proof = source
-        .change_proof(
-            empty_root.clone(),
-            root2.clone(),
-            None,
-            Some(end.as_ref()),
-            None,
-        )
+        .change_proof(empty_root, root2, None, Some(end.as_ref()), None)
         .unwrap();
-    let ctx = verify_change_proof_structure(&proof, root2.clone(), None, Some(end.as_ref()), None)
-        .unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, None, Some(end.as_ref()), None).unwrap();
 
     let (target, _dir_target) = setup_db![mode = EthHash];
     let empty_root_target = target.root_hash().unwrap();
@@ -367,13 +330,7 @@ fn commit_and_verify_boundary_range(
 
     let end_key = key_under_account(&ACCOUNT_KEY, 0x95);
     let proof = source
-        .change_proof(
-            root1_source,
-            root2.clone(),
-            None,
-            Some(end_key.as_ref()),
-            None,
-        )
+        .change_proof(root1_source, root2, None, Some(end_key.as_ref()), None)
         .unwrap();
     let ctx =
         verify_change_proof_structure(&proof, root2, None, Some(end_key.as_ref()), None).unwrap();

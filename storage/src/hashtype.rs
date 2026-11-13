@@ -19,7 +19,7 @@ use crate::node::branch::Serializable;
 /// This is an unconditional enum so that both hashing schemes can be compiled
 /// into a single binary. The on-disk byte layout per scheme is governed by the
 /// per-mode codec on [`HashMode`](crate::HashMode), not by this type directly.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub enum HashType {
     /// A full 32-byte trie hash. This is the only variant produced under
     /// merkledb-compatible hashing.
@@ -245,7 +245,7 @@ impl From<HashType> for TrieHash {
 impl From<&HashType> for TrieHash {
     fn from(val: &HashType) -> Self {
         match val {
-            HashType::Hash(h) => h.clone(),
+            HashType::Hash(h) => *h,
             HashType::Rlp(r) => Keccak256::digest(r).into(),
         }
     }

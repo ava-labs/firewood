@@ -296,7 +296,7 @@ impl<S: WritableStorage, H: HashMode> NodeStore<Committed, S, H> {
         // Set the root address in the header based on the persisted root
         let root_location = self.kind.root.as_ref().and_then(|child| {
             let (addr, hash) = child.persist_info()?;
-            Some((addr, hash.clone().into_triehash()))
+            Some((addr, (*hash).into_triehash()))
         });
         header.set_root_location(root_location);
 

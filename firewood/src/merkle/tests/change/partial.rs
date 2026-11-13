@@ -45,7 +45,7 @@ fn test_partial_proof_verified<H: HashMode>(
     let limit_nz = limit.and_then(NonZeroUsize::new);
 
     let proof = source
-        .change_proof(root1_source, root2.clone(), start_key, end_key, limit_nz)
+        .change_proof(root1_source, root2, start_key, end_key, limit_nz)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), expected_ops);
 
@@ -74,24 +74,18 @@ fn test_partial_proof_round_trip<H: HashMode>() {
 
     // Round 1: partial (limit=1)
     let proof1 = source
-        .change_proof(
-            root1_source.clone(),
-            root2.clone(),
-            None,
-            None,
-            NonZeroUsize::new(1),
-        )
+        .change_proof(root1_source, root2, None, None, NonZeroUsize::new(1))
         .unwrap();
     let ctx1 = verify_change_proof_structure(
         &proof1,
-        root2.clone(),
+        root2,
         None,
         None,
         H::ALGORITHM,
         NonZeroUsize::new(1),
     )
     .unwrap();
-    verify_and_check(&target, &proof1, &ctx1, root1_target.clone()).unwrap();
+    verify_and_check(&target, &proof1, &ctx1, root1_target).unwrap();
 
     // Commit round 1
     let parent1 = target.revision(root1_target).unwrap();
@@ -104,7 +98,7 @@ fn test_partial_proof_round_trip<H: HashMode>() {
     // Round 2: continue from last key
     let next_start = proof1.batch_ops().last().unwrap().key().clone();
     let proof2 = source
-        .change_proof(root1_source, root2.clone(), Some(&next_start), None, None)
+        .change_proof(root1_source, root2, Some(&next_start), None, None)
         .unwrap();
     let ctx2 =
         verify_change_proof_structure(&proof2, root2, Some(&next_start), None, H::ALGORITHM, None)
@@ -141,13 +135,7 @@ fn test_partial_proof_with_delete_last_op<H: HashMode>() {
     let root2 = source.root_hash().unwrap();
 
     let proof = source
-        .change_proof(
-            root1_target.clone(),
-            root2.clone(),
-            None,
-            None,
-            NonZeroUsize::new(2),
-        )
+        .change_proof(root1_target, root2, None, None, NonZeroUsize::new(2))
         .unwrap();
     let ctx = verify_change_proof_structure(
         &proof,

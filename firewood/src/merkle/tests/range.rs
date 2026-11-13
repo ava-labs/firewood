@@ -3045,7 +3045,7 @@ fn test_range_proof_walk_resumes_after_last_proven_key<H: HashMode>() {
             .unwrap();
         let ctx = verify_range_proof_structure(
             &proof,
-            root_hash.clone(),
+            root_hash,
             start_key.as_deref(),
             Some(end_key),
             H::ALGORITHM,
@@ -3149,7 +3149,7 @@ fn test_remaining_subtrees_cover_unfetched_keys<H: HashMode>() {
             let proof = merkle.range_proof(start_key, end_key, limit).unwrap();
             let ctx = verify_range_proof_structure(
                 &proof,
-                root_hash.clone(),
+                root_hash,
                 start_key,
                 end_key,
                 H::ALGORITHM,

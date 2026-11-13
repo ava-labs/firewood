@@ -280,7 +280,7 @@ impl<'a, T: AsRef<[u8]> + ?Sized> HashedKeyValueTrieRoot<'a, T> {
                 node.value.map(|v| ValueDigest::Value(v.as_ref())),
                 children
                     .each_ref()
-                    .map(|_, c| c.as_deref().map(|c| c.computed.clone())),
+                    .map(|_, c| c.as_deref().map(|c| c.computed)),
             )),
             leading_path: leading_path.as_slice().into(),
             partial_path: node.partial_path,
@@ -390,7 +390,7 @@ impl<'a, T: AsRef<[u8]> + ?Sized> Hashable for HashedKeyValueTrieRoot<'a, T> {
     fn children(&self) -> Children<Option<HashType>> {
         self.children
             .each_ref()
-            .map(|_, c| c.as_deref().map(|c| c.computed.clone()))
+            .map(|_, c| c.as_deref().map(|c| c.computed))
     }
 }
 
