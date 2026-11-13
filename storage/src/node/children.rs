@@ -180,47 +180,6 @@ impl<T> Children<Option<T>> {
     }
 }
 
-impl<T> Children<Option<T>> {
-    /// Sets the child at `index` to `value`, returning the child it replaces.
-    pub fn insert(&mut self, index: PathComponent, value: T) -> Option<T> {
-        self.replace(index, Some(value))
-    }
-
-    /// Removes and returns the child at `index`.
-    pub fn remove(&mut self, index: PathComponent) -> Option<T> {
-        self.take(index)
-    }
-
-    /// Returns an iterator over each [`Some`] element, mutable in place, with
-    /// its corresponding [`PathComponent`].
-    pub fn iter_present_mut(&mut self) -> IterPresentMut<'_, T> {
-        self.into_iter()
-            .filter_map(|(pc, opt)| opt.as_mut().map(|v| (pc, v)))
-    }
-}
-
-impl Children<Option<Child>> {
-    /// Replaces the child at `index` with the result of `f`, which receives
-    /// the current child by value.
-    ///
-    /// If `f` returns an error or panics, the child it consumed is gone and
-    /// `index` is left absent. The caller must then drop the branch, not reuse
-    /// or hash it. [`PackedChildren::try_update`] has the same contract.
-    ///
-    /// # Errors
-    ///
-    /// Returns the error `f` returns.
-    pub fn try_update<E>(
-        &mut self,
-        index: PathComponent,
-        f: impl FnOnce(Option<Child>) -> Result<Option<Child>, E>,
-    ) -> Result<(), E> {
-        let child = self.take(index);
-        self[index] = f(child)?;
-        Ok(())
-    }
-}
-
 impl<T> Default for Children<Option<T>> {
     fn default() -> Self {
         Self::new()
@@ -818,60 +777,5 @@ mod tests {
         let failed = children.try_update(ABSENT, |_| Err("failed"));
         assert_eq!(failed, Err("failed"));
         assert_eq!(children, unchanged);
-    }
-
-    /// A dense collection holding `leaf(1)` at `TARGET` and `leaf(2)` at `SIBLING`.
-    fn dense_target_and_sibling() -> Children<Option<Child>> {
-        let mut children = Children::new();
-        children.insert(TARGET, leaf(1));
-        children.insert(SIBLING, leaf(2));
-        children
-    }
-
-    /// On the dense collection, `insert` and `remove` return the child they
-    /// displace, and `iter_present_mut` reaches exactly the present children.
-    #[test]
-    fn dense_insert_remove_and_iter_present_mut() {
-        let mut children = dense_target_and_sibling();
-        assert_eq!(children.insert(TARGET, leaf(7)), Some(leaf(1)));
-        assert_eq!(children.insert(ABSENT, leaf(9)), None);
-
-        let present: Vec<_> = children
-            .iter_present_mut()
-            .map(|(index, _)| index)
-            .collect();
-        let mut expected = [TARGET, SIBLING, ABSENT];
-        expected.sort();
-        assert_eq!(present, expected);
-
-        assert_eq!(children.remove(TARGET), Some(leaf(7)));
-        assert_eq!(children.remove(TARGET), None);
-    }
-
-    /// The dense `try_update` leaves each index present or absent exactly as
-    /// the packed one does, for every combination of starting state and
-    /// closure outcome.
-    #[test]
-    fn dense_try_update_matches_packed() {
-        type Outcome = Result<Option<Child>, &'static str>;
-        let outcomes: [fn() -> Outcome; 3] = [|| Ok(Some(leaf(7))), || Ok(None), || Err("failed")];
-
-        for index in [TARGET, ABSENT] {
-            for outcome in outcomes {
-                let mut dense = dense_target_and_sibling();
-                let mut packed = target_and_sibling();
-
-                let dense_result = dense.try_update(index, |_| outcome());
-                let packed_result = packed.try_update(index, |_| outcome());
-
-                assert_eq!(dense_result, packed_result);
-                assert_eq!(
-                    PackedChildren::from(dense),
-                    packed,
-                    "the collections differ after updating {index:?} with {:?}",
-                    outcome()
-                );
-            }
-        }
     }
 }

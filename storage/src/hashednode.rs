@@ -24,8 +24,8 @@ impl<'a, P: SplitPath> HashableShunt<'a, P, &'a [PathComponent]> {
                 // TODO(#2052): Enforce this with the type system.
                 debug_assert!(
                     node.children
-                        .iter()
-                        .all(|(_, c)| !matches!(c, Some(crate::Child::Node(_)))),
+                        .iter_present()
+                        .all(|(_, c)| !matches!(c, crate::Child::Node(_))),
                     "branch children: {:?}",
                     node.children
                 );

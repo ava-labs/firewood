@@ -21,6 +21,7 @@ use firewood_storage::Mutable;
 use firewood_storage::NibblesIterator;
 use firewood_storage::Node;
 use firewood_storage::NodeStore;
+use firewood_storage::PackedChildren;
 use firewood_storage::Path;
 use firewood_storage::PathComponent;
 use firewood_storage::Propose;
@@ -109,7 +110,7 @@ impl ParallelMerkle {
                 Ok(BranchNode {
                     partial_path: Path::default(),
                     value: None,
-                    children: Children::default(),
+                    children: PackedChildren::new(),
                 }
                 .into())
             },
@@ -136,50 +137,42 @@ impl ParallelMerkle {
         nodestore: &mut NodeStore<Mutable<Propose>, FileBacked, H>,
         mut branch: Box<BranchNode>,
     ) -> Result<Option<Node>, FileIoError> {
-        let mut children_iter = branch
-            .children
-            .iter_mut()
-            .filter_map(|(index, child)| child.as_mut().map(|child| (index, child)));
-
-        let first_child = children_iter.next();
-        match first_child {
-            None => {
-                Ok(branch.value.take().map(|value| {
-                    // There is a value for the empty key. Create a leaf with the value and return.
-                    Node::Leaf(LeafNode {
-                        value,
-                        partial_path: Path::default(), // Partial path should be empty
-                    })
-                }))
-            }
-            Some((child_index, child)) => {
-                // Check if the root has a value or if there is more than one child. If yes, then
-                // just return the root unmodified
-                if branch.value.is_some() || children_iter.next().is_some() {
-                    drop(children_iter);
-                    return Ok(Some(Node::Branch(branch)));
-                }
-
-                // Return the child as the new root. Update its partial path to include the index value.
-                let mut child = match child {
-                    Child::Node(child_node) => std::mem::take(child_node),
-                    Child::AddressWithHash(addr, _) => nodestore.read_for_update((*addr).into())?,
-                    Child::MaybePersisted(maybe_persisted, _) => {
-                        nodestore.read_for_update(maybe_persisted.clone())?
-                    }
-                };
-
-                // The child's partial path is the concatenation of its (now removed) parent, which
-                // should always be empty because of our prepare step, its (former) child index, and
-                // its partial path. Because the parent's partial path should always be empty, we
-                // can omit it and start with the `child_index`.
-                let partial_path = Path::from_nibbles_iterator(
-                    once(child_index.as_u8()).chain(child.partial_path().iter().copied()),
-                );
-                child.update_partial_path(partial_path);
-                Ok(Some(child))
-            }
+        if branch.children.is_empty() {
+            return Ok(branch.value.take().map(|value| {
+                // There is a value for the empty key. Create a leaf with the value and return.
+                Node::Leaf(LeafNode {
+                    value,
+                    partial_path: Path::default(), // Partial path should be empty
+                })
+            }));
         }
+
+        // If the root has a value or more than one child, return it unmodified.
+        if branch.value.is_some() {
+            return Ok(Some(Node::Branch(branch)));
+        }
+        let Some((child_index, child)) = branch.children.take_only_child() else {
+            return Ok(Some(Node::Branch(branch)));
+        };
+
+        // Return the child as the new root. Update its partial path to include the index value.
+        let mut child = match child {
+            Child::Node(child_node) => child_node,
+            Child::AddressWithHash(addr, _) => nodestore.read_for_update(addr.into())?,
+            Child::MaybePersisted(maybe_persisted, _) => {
+                nodestore.read_for_update(maybe_persisted)?
+            }
+        };
+
+        // The child's partial path is the concatenation of its (now removed) parent, which
+        // should always be empty because of our prepare step, its (former) child index, and
+        // its partial path. Because the parent's partial path should always be empty, we
+        // can omit it and start with the `child_index`.
+        let partial_path = Path::from_nibbles_iterator(
+            once(child_index.as_u8()).chain(child.partial_path().iter().copied()),
+        );
+        child.update_partial_path(partial_path);
+        Ok(Some(child))
     }
 
     /// Call by a worker to processes requests from `child_receiver` and send back a response on

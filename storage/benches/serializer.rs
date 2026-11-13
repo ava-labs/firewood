@@ -2,10 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 #![expect(
-    clippy::assigning_clones,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![expect(
     clippy::unwrap_used,
     reason = "Found 7 occurrences after enabling the lint."
 )]
@@ -23,6 +19,7 @@ use firewood_storage::Children;
 use firewood_storage::EthHash;
 use firewood_storage::LeafNode;
 use firewood_storage::Node;
+use firewood_storage::PackedChildren;
 use firewood_storage::Path;
 use firewood_storage::PathComponent;
 use pprof::ProfilerGuard;
@@ -105,7 +102,7 @@ fn branch(c: &mut Criterion) {
     let mut input = Node::Branch(Box::new(firewood_storage::BranchNode {
         partial_path: Path(SmallVec::from_slice(&[0, 1])),
         value: Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9].into_boxed_slice()),
-        children: Children::from_fn(|i| {
+        children: PackedChildren::from(Children::from_fn(|i| {
             if i.as_u8() == 0 {
                 Some(firewood_storage::Child::AddressWithHash(
                     firewood_storage::LinearAddress::new(1).unwrap(),
@@ -114,7 +111,7 @@ fn branch(c: &mut Criterion) {
             } else {
                 None
             }
-        }),
+        })),
     }));
 
     group.bench_with_input("manual", &input, manual_serializer);
@@ -127,15 +124,28 @@ fn branch(c: &mut Criterion) {
     group.bench_with_input("from_reader", &to_bytes(&input), manual_deserializer);
     group.finish();
 
-    let child = input.as_branch().unwrap().children[PathComponent::ALL[0]].clone();
+    let child = input
+        .as_branch()
+        .unwrap()
+        .children
+        .get(PathComponent::ALL[0])
+        .cloned()
+        .unwrap();
     let mut group = c.benchmark_group("2_child");
-    input.as_branch_mut().unwrap().children[PathComponent::ALL[1]] = child.clone();
+    input
+        .as_branch_mut()
+        .unwrap()
+        .children
+        .insert(PathComponent::ALL[1], child.clone());
     group.bench_with_input("manual", &input, manual_serializer);
     group.bench_with_input("from_reader", &to_bytes(&input), manual_deserializer);
     group.finish();
 
     let mut group = c.benchmark_group("16_child");
-    input.as_branch_mut().unwrap().children = Children::from_fn(|_| child.clone());
+    input.as_branch_mut().unwrap().children = PathComponent::ALL
+        .into_iter()
+        .map(|index| (index, child.clone()))
+        .collect();
     group.bench_with_input("manual", &input, manual_serializer);
     group.bench_with_input("from_reader", &to_bytes(&input), manual_deserializer);
     group.finish();
