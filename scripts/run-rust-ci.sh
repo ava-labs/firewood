@@ -30,9 +30,7 @@ Profiles:
   debug-no-default-features
   debug-no-features (default features)
   debug-logger
-  debug-all-features (io-uring is active on Linux only; needs rustc 1.94.1+,
-                      above the 1.94.0 workspace MSRV, because fwdctl's
-                      launch feature pulls in the AWS SDK)
+  debug-all-features (io-uring is active on Linux only)
   maxperf-logger
   maxperf-logger-test_utils (benchmarks; test_utils gates the internals
                       several bench targets declare in required-features)

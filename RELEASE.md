@@ -45,7 +45,7 @@ effort 2 releases behind the current latest stable [^1]. However, Rust evolves
 fairly quickly and we occasionally want to take advantage of a new improvement
 before the stable release matures.
 
-Updating the Rust MSRV requires edits in two places:
+Updating the Rust MSRV requires edits in these places:
 
 - [clippy.toml]
   - Update the root `msrv` setting to indicate the set MSRV. This configures
@@ -55,6 +55,16 @@ Updating the Rust MSRV requires edits in two places:
 - [Cargo.toml]
   - Update `workspace.package.rust-version` which will propagate through the
     other cargo packages that have `package.rust-version.workspace = true` set.
+- [infra/toolchain-versions.sh]
+  - Set `FIREWOOD_RUST_VERSION` to at least the new MSRV. Benchmark hosts
+    install it as their default toolchain, and scripts outside this repository
+    source it too.
+- [ffi/flake.nix]
+  - Move the `ref` in `rust-overlay.url` to a revision that ships the new MSRV,
+    then run `./scripts/run-just.sh update-ffi-flake`. The flake pins the
+    overlay by revision, so `nix flake update` alone does not move it.
+- [AGENTS.md]
+  - Update the MSRV under **Key Characteristics**.
 
 [^1]: e.g., with 1.91 stable, 1.89 is the best effort MSRV
 

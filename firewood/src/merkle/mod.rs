@@ -1497,8 +1497,7 @@ pub fn verify_change_proof_root_hash<H: HashMode>(
     // start_key is in range, and a value mismatch there is a real error.
     let start_key_nibbles: Vec<u8> = verification
         .start_key()
-        .map(|k| NibblesIterator::new(k).collect())
-        .unwrap_or_default();
+        .map_or_default(|k| NibblesIterator::new(k).collect());
     // `None` is an unbounded right edge (+∞). Keeping it distinct from an empty
     // slice matters: an empty slice sorts as the minimum key, which would mark
     // every key out of range at the upper bound.

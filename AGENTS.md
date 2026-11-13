@@ -10,8 +10,7 @@ and EVM-compatible blockchains that store state in Merkle tries.
 
 **Key Characteristics:**
 
-- Written in Rust (edition 2024, MSRV 1.94.0 — but see
-  [Toolchain Floor for `--all-features`](#toolchain-floor-for---all-features))
+- Written in Rust (edition 2024, MSRV 1.100.0)
 - Beta-level software with evolving API
 - Compaction-less database that directly stores trie nodes on-disk
 - Not built on generic KV stores (LevelDB/RocksDB)
@@ -244,33 +243,6 @@ Two consequences:
 `ffi/flake.nix` is outside this scheme. It exists only for avalanchego's ad hoc
 build and is not a supported development environment: it provides stable Rust
 with no rustup, so it never reads `rust-toolchain.toml`.
-
-### Toolchain Floor for `--all-features`
-
-The workspace declares `rust-version = "1.94.0"`, and that is accurate for the
-default build, `--no-default-features`, and `--features logger`.
-`--all-features` needs **1.94.1**.
-
-`--all-features` turns on `fwdctl`'s `launch` feature, which pulls in the AWS SDK
-(`aws-config`, `aws-sdk-ec2`, `aws-sdk-ssm`, `aws-sdk-sts`, and their
-`aws-smithy-*` dependencies). Every one of those crates declares
-`rust-version = "1.94.1"`. Cargo refuses the build before compiling anything:
-
-```text
-error: rustc 1.94.0 is not supported by the following packages:
-  aws-config@1.9.0 requires rustc 1.94.1
-  ...
-```
-
-This is unrelated to the platform gating described under
-[Linux-only Checks](#linux-only-checks) — it applies equally on macOS and Linux.
-
-On exactly 1.94.0, either use a newer toolchain for `debug-all-features` (any
-1.94.1+ release works, and CI is well ahead of the floor), or downgrade the AWS
-crates as the error suggests. The workspace `rust-version` is deliberately left at
-1.94.0 so the floor reflects what the shipped library crates need rather than what
-an optional `fwdctl` feature needs; bumping it to 1.94.1 is the alternative if the
-split proves confusing in practice.
 
 ### Slow Tests
 
