@@ -242,7 +242,13 @@ impl<S: WritableStorage, H: HashMode> NodeStore<Committed, S, H> {
                 // must persist freelist before writing anything
                 node_allocator.flush_freelist()?;
                 self.write_batch(allocated_objects)?;
-                allocated_objects = Vec::new();
+                #[expect(
+                    clippy::new_instead_of_clear,
+                    reason = "false positive: vec was consumed and ends bump borrow"
+                )]
+                {
+                    allocated_objects = Vec::new();
+                }
                 bump.reset();
                 allocated_len = 0;
             }
