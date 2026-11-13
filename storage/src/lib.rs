@@ -90,6 +90,7 @@ pub use node::ChildrenSlots;
 pub use node::DenseChildren;
 pub use node::LeafNode;
 pub use node::Node;
+pub use node::PackedChildren;
 pub use node::PathIterItem;
 pub use node::path::NibblesIterator;
 pub use node::path::Path;

@@ -5,6 +5,8 @@ use arity_arrays::Arity16;
 use arity_arrays::FixedArray;
 use arity_arrays::PackedArray;
 
+use crate::Child;
+use crate::Node;
 use crate::PathComponent;
 
 const MAX_CHILDREN: usize = PathComponent::LEN;
@@ -292,9 +294,211 @@ impl<T: Clone> From<&DenseChildren<T>> for Children<Option<T>> {
     }
 }
 
+/// The children of a branch node that exist, indexed by [`PathComponent`].
+///
+/// One pointer wide. An empty collection owns no heap; otherwise it owns one
+/// block sized to exactly the present children, in ascending index order.
+/// Adding a child at an absent index, or removing a present one, reallocates
+/// that block and moves the remaining children. Reading a child, mutating it
+/// through [`get_mut`](Self::get_mut), and overwriting a present index are in
+/// place.
+///
+/// [`DenseChildren`] names the same backing array indexed by [`crate::U4`].
+#[derive(Clone, PartialEq, Eq)]
+pub struct PackedChildren<T>(PackedArray<T, Arity16>);
+
+impl<T> PackedChildren<T> {
+    /// Creates an empty collection, which owns no heap.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(PackedArray::new())
+    }
+
+    /// Returns the number of children.
+    #[must_use]
+    pub fn count(&self) -> usize {
+        self.0.count()
+    }
+
+    /// Returns `true` if there are no children.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Returns the child at `index`, if there is one.
+    #[must_use]
+    pub fn get(&self, index: PathComponent) -> Option<&T> {
+        self.0.get(index.0)
+    }
+
+    /// Returns the child at `index` for mutation in place, if there is one.
+    #[must_use]
+    pub fn get_mut(&mut self, index: PathComponent) -> Option<&mut T> {
+        self.0.get_mut(index.0)
+    }
+
+    /// Sets the child at `index` to `value`, returning the child it replaces.
+    ///
+    /// Reallocates only when `index` had no child.
+    pub fn insert(&mut self, index: PathComponent, value: T) -> Option<T> {
+        self.0.insert(index.0, value)
+    }
+
+    /// Removes and returns the child at `index`.
+    ///
+    /// Reallocates when `index` had a child.
+    pub fn remove(&mut self, index: PathComponent) -> Option<T> {
+        self.0.remove(index.0)
+    }
+
+    /// If exactly one child is present, removes and returns it along with its
+    /// index. Returns `None`, changing nothing, if zero or more than one child
+    /// is present.
+    pub fn take_only_child(&mut self) -> Option<(PathComponent, T)> {
+        self.0
+            .take_only_child()
+            .map(|(index, child)| (PathComponent(index), child))
+    }
+
+    /// Returns an iterator over each child with its [`PathComponent`], in
+    /// ascending order.
+    pub fn iter_present(&self) -> impl DoubleEndedIterator<Item = (PathComponent, &T)> {
+        self.0
+            .iter_present()
+            .map(|(index, child)| (PathComponent(index), child))
+    }
+
+    /// Returns an iterator over each child, mutable in place, with its
+    /// [`PathComponent`], in ascending order.
+    pub fn iter_present_mut(&mut self) -> impl DoubleEndedIterator<Item = (PathComponent, &mut T)> {
+        self.0
+            .iter_present_mut()
+            .map(|(index, child)| (PathComponent(index), child))
+    }
+
+    /// Returns the size in bytes of the heap block holding the children, or
+    /// zero when empty. This is the size requested from the allocator, which
+    /// may reserve more.
+    #[must_use]
+    pub fn allocated_size(&self) -> usize {
+        self.0.allocated_size()
+    }
+}
+
+impl<T> Default for PackedChildren<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for PackedChildren<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_map()
+            .entries(self.iter_present().map(|(pc, child)| (pc.as_u8(), child)))
+            .finish()
+    }
+}
+
+impl<T> IntoIterator for PackedChildren<T> {
+    type Item = (PathComponent, T);
+    type IntoIter = std::iter::Map<
+        <PackedArray<T, Arity16> as IntoIterator>::IntoIter,
+        fn((crate::U4, T)) -> (PathComponent, T),
+    >;
+
+    /// Yields each child with its [`PathComponent`], in ascending order.
+    fn into_iter(self) -> Self::IntoIter {
+        self.0
+            .into_iter()
+            .map(|(index, child)| (PathComponent(index), child))
+    }
+}
+
+impl<T> FromIterator<(PathComponent, T)> for PackedChildren<T> {
+    /// Collects the children into one heap block. If an index repeats, the
+    /// last value wins.
+    fn from_iter<I: IntoIterator<Item = (PathComponent, T)>>(iter: I) -> Self {
+        Self(
+            iter.into_iter()
+                .map(|(index, child)| (index.0, child))
+                .collect(),
+        )
+    }
+}
+
+impl<T> From<Children<Option<T>>> for PackedChildren<T> {
+    /// Keeps the present (`Some`) slots, in one allocation.
+    fn from(children: Children<Option<T>>) -> Self {
+        Self(PackedArray::from(children.0))
+    }
+}
+
+impl PackedChildren<Child> {
+    /// Replaces the child at `index` with the result of `f`, which receives
+    /// the current child by value.
+    ///
+    /// Reallocates only when `f` changes whether the child is present. If `f`
+    /// returns an error or panics, the child it consumed is gone and `index`
+    /// is left absent.
+    ///
+    /// After an error or unwind the branch no longer matches the trie it came
+    /// from. The caller must drop it, not reuse or hash it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error `f` returns.
+    pub fn try_update<E>(
+        &mut self,
+        index: PathComponent,
+        f: impl FnOnce(Option<Child>) -> Result<Option<Child>, E>,
+    ) -> Result<(), E> {
+        let Some(slot) = self.get_mut(index) else {
+            if let Some(child) = f(None)? {
+                self.insert(index, child);
+            }
+            return Ok(());
+        };
+
+        // An empty leaf stands in for the child while `f` owns it, so the
+        // block keeps its size. `guard` removes the stand-in unless a new
+        // child is written over it.
+        let child = std::mem::replace(slot, Child::Node(Node::default()));
+        let mut guard = RemoveOnDrop {
+            children: self,
+            index,
+            armed: true,
+        };
+        if let Some(new_child) = f(Some(child))?
+            && let Some(slot) = guard.children.get_mut(index)
+        {
+            *slot = new_child;
+            guard.armed = false;
+        }
+        Ok(())
+    }
+}
+
+/// Removes the child at `index` when dropped, unless disarmed.
+struct RemoveOnDrop<'a> {
+    children: &'a mut PackedChildren<Child>,
+    index: PathComponent,
+    armed: bool,
+}
+
+impl Drop for RemoveOnDrop<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.children.remove(self.index);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::LeafNode;
+    use crate::Path;
 
     #[test]
     fn dense_children_round_trips_with_children() {
@@ -318,5 +522,260 @@ mod tests {
         let dense_empty = empty.to_dense();
         assert!(dense_empty.is_empty());
         assert_eq!(Children::from(&dense_empty), empty);
+    }
+
+    const fn pc(index: usize) -> PathComponent {
+        PathComponent::ALL[index]
+    }
+
+    /// A new collection is empty, owns no heap block, and has no child at any index.
+    #[test]
+    fn packed_children_starts_empty() {
+        let children = PackedChildren::<u32>::new();
+        assert!(children.is_empty());
+        assert_eq!(children.count(), 0);
+        assert_eq!(children.allocated_size(), 0);
+        for index in PathComponent::ALL {
+            assert_eq!(children.get(index), None, "index {index:?} is present");
+        }
+    }
+
+    /// Inserted values are readable at their index, an overwrite returns the
+    /// previous value, and a removed index reads as absent.
+    #[test]
+    fn packed_children_insert_get_remove() {
+        let entries = [(pc(9), 90), (pc(1), 10), (pc(15), 150)];
+        let mut children = PackedChildren::new();
+        for (index, value) in entries {
+            assert_eq!(children.insert(index, value), None);
+        }
+        assert_eq!(children.count(), entries.len());
+        for (index, value) in entries {
+            assert_eq!(children.get(index), Some(&value));
+        }
+
+        let (index, value) = entries[0];
+        assert_eq!(children.insert(index, value + 1), Some(value));
+        *children.get_mut(index).expect("the index was just written") += 1;
+        assert_eq!(children.get(index), Some(&(value + 2)));
+        assert_eq!(
+            children.count(),
+            entries.len(),
+            "an overwrite added a child"
+        );
+
+        assert_eq!(children.remove(index), Some(value + 2));
+        assert_eq!(children.get(index), None);
+        assert_eq!(children.remove(index), None);
+        assert_eq!(children.count(), entries.len() - 1);
+    }
+
+    /// Every iterator yields the present children in ascending index order,
+    /// whatever order they were inserted in.
+    #[test]
+    fn packed_children_iterates_in_ascending_order() {
+        let inserted = [pc(12), pc(3), pc(7), pc(0)];
+        let mut expected = inserted;
+        expected.sort();
+
+        let mut children: PackedChildren<u8> = inserted
+            .into_iter()
+            .map(|index| (index, index.as_u8()))
+            .collect();
+
+        let by_ref: Vec<_> = children.iter_present().map(|(index, _)| index).collect();
+        assert_eq!(by_ref, expected);
+        let reversed: Vec<_> = children
+            .iter_present()
+            .rev()
+            .map(|(index, _)| index)
+            .collect();
+        assert!(reversed.iter().eq(expected.iter().rev()));
+        let by_mut: Vec<_> = children
+            .iter_present_mut()
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(by_mut, expected);
+        let owned: Vec<_> = children.into_iter().collect();
+        assert!(
+            owned
+                .into_iter()
+                .eq(expected.map(|index| (index, index.as_u8())))
+        );
+    }
+
+    /// `take_only_child` returns the child only when it is the sole one, and
+    /// otherwise leaves the collection as it was.
+    #[test]
+    fn packed_children_take_only_child() {
+        let mut children = PackedChildren::<u32>::new();
+        assert_eq!(children.take_only_child(), None);
+
+        children.insert(pc(4), 40);
+        children.insert(pc(8), 80);
+        assert_eq!(children.take_only_child(), None);
+        assert_eq!(children.count(), 2, "a child was taken from a pair");
+
+        children.remove(pc(8));
+        assert_eq!(children.take_only_child(), Some((pc(4), 40)));
+        assert!(children.is_empty());
+    }
+
+    /// Converting a dense `Children` keeps exactly its present slots, and
+    /// collecting the same pairs builds an equal collection.
+    #[test]
+    fn packed_children_round_trips_through_children() {
+        let entries = [(pc(2), 20), (pc(5), 50), (pc(14), 140)];
+        let mut dense: Children<Option<u32>> = Children::new();
+        for (index, value) in entries {
+            dense[index] = Some(value);
+        }
+
+        let packed = PackedChildren::from(dense.clone());
+        for (index, slot) in &dense {
+            assert_eq!(packed.get(index), slot.as_ref(), "index {index:?} differs");
+        }
+        assert_eq!(packed, entries.into_iter().collect());
+    }
+
+    /// The heap block grows with every child and is released with the last one.
+    #[test]
+    fn packed_children_allocated_size_tracks_count() {
+        let indices = [pc(1), pc(6), pc(11)];
+        let mut children = PackedChildren::<u64>::new();
+        let mut previous = children.allocated_size();
+        for index in indices {
+            children.insert(index, 0);
+            let size = children.allocated_size();
+            assert!(size > previous, "the block did not grow at {index:?}");
+            previous = size;
+        }
+        for index in indices {
+            children.remove(index);
+        }
+        assert_eq!(children.allocated_size(), 0);
+    }
+
+    fn leaf(value: u8) -> Child {
+        Child::Node(Node::Leaf(LeafNode {
+            partial_path: Path::new(),
+            value: Box::from([value]),
+        }))
+    }
+
+    /// A collection holding `leaf(1)` at `TARGET` and `leaf(2)` at `SIBLING`.
+    fn target_and_sibling() -> PackedChildren<Child> {
+        [(TARGET, leaf(1)), (SIBLING, leaf(2))]
+            .into_iter()
+            .collect()
+    }
+
+    const TARGET: PathComponent = pc(3);
+    const SIBLING: PathComponent = pc(10);
+    const ABSENT: PathComponent = pc(6);
+
+    /// Replacing a present child hands the closure the old child, stores the
+    /// new one, and reuses the heap block.
+    #[test]
+    fn try_update_present_to_present_is_in_place() {
+        let mut children = target_and_sibling();
+        let block = children.get(TARGET).map(std::ptr::from_ref);
+        let size = children.allocated_size();
+
+        let result: Result<(), ()> = children.try_update(TARGET, |child| {
+            assert_eq!(child, Some(leaf(1)));
+            Ok(Some(leaf(7)))
+        });
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(children.get(TARGET), Some(&leaf(7)));
+        assert_eq!(children.get(SIBLING), Some(&leaf(2)));
+        assert_eq!(
+            children.get(TARGET).map(std::ptr::from_ref),
+            block,
+            "the child moved to a new block"
+        );
+        assert_eq!(children.allocated_size(), size);
+    }
+
+    /// A closure that returns no child removes a present one.
+    #[test]
+    fn try_update_present_to_absent_removes() {
+        let mut children = target_and_sibling();
+
+        let result: Result<(), ()> = children.try_update(TARGET, |_| Ok(None));
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(children.get(TARGET), None);
+        assert_eq!(children.get(SIBLING), Some(&leaf(2)));
+        assert_eq!(children.count(), 1);
+    }
+
+    /// A failing closure on a present child propagates its error and leaves
+    /// the index absent.
+    #[test]
+    fn try_update_present_error_leaves_absent() {
+        let mut children = target_and_sibling();
+
+        let result = children.try_update(TARGET, |_| Err("failed"));
+
+        assert_eq!(result, Err("failed"));
+        assert_eq!(children.get(TARGET), None);
+        assert_eq!(children.get(SIBLING), Some(&leaf(2)));
+        assert_eq!(children.count(), 1);
+    }
+
+    /// A panicking closure on a present child leaves the index absent and no
+    /// placeholder child behind.
+    #[test]
+    fn try_update_present_panic_leaves_absent() {
+        let mut children = target_and_sibling();
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: Result<(), ()> = children.try_update(TARGET, |_| panic!("closure panicked"));
+        }));
+
+        assert!(unwound.is_err(), "the panic did not propagate");
+        assert_eq!(children.get(TARGET), None);
+        assert_eq!(children.get(SIBLING), Some(&leaf(2)));
+        let placeholder = Child::Node(Node::default());
+        assert!(
+            children
+                .iter_present()
+                .all(|(_, child)| *child != placeholder),
+            "a placeholder child is still in the collection"
+        );
+    }
+
+    /// A closure that returns a child for an absent index inserts it.
+    #[test]
+    fn try_update_absent_to_present_inserts() {
+        let mut children = target_and_sibling();
+
+        let result: Result<(), ()> = children.try_update(ABSENT, |child| {
+            assert_eq!(child, None);
+            Ok(Some(leaf(9)))
+        });
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(children.get(ABSENT), Some(&leaf(9)));
+        assert_eq!(children.get(TARGET), Some(&leaf(1)));
+        assert_eq!(children.get(SIBLING), Some(&leaf(2)));
+    }
+
+    /// A closure that returns no child, or fails, for an absent index changes
+    /// nothing.
+    #[test]
+    fn try_update_absent_stays_absent() {
+        let mut children = target_and_sibling();
+        let unchanged = children.clone();
+
+        let none: Result<(), ()> = children.try_update(ABSENT, |_| Ok(None));
+        assert_eq!(none, Ok(()));
+        assert_eq!(children, unchanged);
+
+        let failed = children.try_update(ABSENT, |_| Err("failed"));
+        assert_eq!(failed, Err("failed"));
+        assert_eq!(children, unchanged);
     }
 }
