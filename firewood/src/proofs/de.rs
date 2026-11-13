@@ -10,6 +10,7 @@
 use std::num::NonZeroUsize;
 
 use firewood_storage::HashType;
+use firewood_storage::InlineRlp;
 use firewood_storage::NodeHashAlgorithm;
 use firewood_storage::PathBuf;
 use firewood_storage::TrieHash;
@@ -468,7 +469,16 @@ impl<'a> ReadItem<'a> for HashType {
                 .map_err(|err| err.set_item("hash type discriminant"))?
             {
                 0 => Ok(HashType::Hash(reader.read_item()?)),
-                1 => Ok(HashType::Rlp(reader.read_item::<&[u8]>()?.into())),
+                1 => {
+                    let rlp = reader.read_item::<&[u8]>()?;
+                    InlineRlp::new(rlp).map(HashType::Rlp).ok_or_else(|| {
+                        reader.invalid_item(
+                            "inline rlp length",
+                            "at most 31 bytes",
+                            format!("{} bytes", rlp.len()),
+                        )
+                    })
+                }
                 found => {
                     Err(reader.invalid_item("hash type discriminant", "0 (hash) or 1 (rlp)", found))
                 }

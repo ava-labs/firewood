@@ -547,9 +547,12 @@ mod tests {
         ) => {{
             (
                 $crate::HashType::from(from_ascii($hex16)),
-                $crate::HashType::Rlp(smallvec::SmallVec::from(
-                    &from_ascii::<{ $hexeth.len() }, { $hexeth.len() / 2 }>($hexeth)[..],
-                )),
+                $crate::HashType::Rlp(
+                    $crate::InlineRlp::new(
+                        &from_ascii::<{ $hexeth.len() }, { $hexeth.len() / 2 }>($hexeth)[..],
+                    )
+                    .expect("an inline RLP fixture is at most 31 bytes"),
+                ),
             )
         }};
         (

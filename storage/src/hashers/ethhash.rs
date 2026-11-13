@@ -113,6 +113,7 @@ use crate::EthHash;
 use crate::HashMode;
 use crate::HashType;
 use crate::Hashable;
+use crate::InlineRlp;
 use crate::NodeHashAlgorithm;
 use crate::Path;
 use crate::TrieHash;
@@ -157,7 +158,7 @@ impl HashMode for EthHash {
     fn to_hash<T: Hashable>(node: &T) -> HashType {
         // first collect the thing that would be hashed, and if it's smaller than a hash,
         // just use it directly
-        let mut collector = SmallVec::with_capacity(32);
+        let mut collector = SmallVec::<[u8; 32]>::new();
         Self::write_preimage(node, &mut collector);
 
         trace!(
@@ -166,10 +167,9 @@ impl HashMode for EthHash {
             hex::encode(&collector),
         );
 
-        if collector.len() >= 32 {
-            HashType::Hash(Keccak256::digest(collector).into())
-        } else {
-            HashType::Rlp(collector)
+        match InlineRlp::new(&collector) {
+            Some(rlp) => HashType::Rlp(rlp),
+            None => HashType::Hash(Keccak256::digest(collector).into()),
         }
     }
 
