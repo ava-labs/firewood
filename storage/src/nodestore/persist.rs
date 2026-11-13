@@ -384,7 +384,7 @@ mod tests {
                 .insert(index, Child::MaybePersisted(maybe_persisted, hash));
         }
 
-        Node::Branch(Box::new(branch))
+        Node::Branch(branch)
     }
 
     #[hash_mode]

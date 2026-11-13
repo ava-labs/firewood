@@ -90,7 +90,7 @@ impl ParallelMerkle {
     fn force_root<H: HashMode>(
         &self,
         proposal: &mut NodeStore<Mutable<Propose>, FileBacked, H>,
-    ) -> Result<Box<BranchNode>, CreateProposalError> {
+    ) -> Result<BranchNode, CreateProposalError> {
         // There are 3 different cases to handle depending on the value of the root node.
         //
         // 1. If root is None, create a branch node with an empty partial path and a None for
@@ -111,8 +111,7 @@ impl ParallelMerkle {
                     partial_path: Path::default(),
                     value: None,
                     children: PackedChildren::new(),
-                }
-                .into())
+                })
             },
             |node| {
                 // Returns an error if it cannot convert a child index into a path component.
@@ -135,7 +134,7 @@ impl ParallelMerkle {
     fn postprocess_trie<H: HashMode>(
         &self,
         nodestore: &mut NodeStore<Mutable<Propose>, FileBacked, H>,
-        mut branch: Box<BranchNode>,
+        mut branch: BranchNode,
     ) -> Result<Option<Node>, FileIoError> {
         if branch.children.is_empty() {
             return Ok(branch.value.take().map(|value| {

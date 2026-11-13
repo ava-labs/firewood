@@ -814,11 +814,11 @@ mod test {
 
         let mut branch_children = Children::new();
         branch_children[PathComponent::ALL[1]] = Some(Child::AddressWithHash(leaf_addr, leaf_hash));
-        let branch = Node::Branch(Box::new(BranchNode {
+        let branch = Node::Branch(BranchNode {
             partial_path: Path::from([3]),
             value: None,
             children: branch_children.into(),
-        }));
+        });
         let branch_addr = LinearAddress::new(high_watermark).unwrap();
         let branch_hash = hash_node::<H>(&branch, &Path::from([2, 0]));
         let (bytes_written, stored_area_size) =
@@ -831,11 +831,11 @@ mod test {
         let mut root_children = Children::new();
         root_children[PathComponent::ALL[0]] =
             Some(Child::AddressWithHash(branch_addr, branch_hash));
-        let root = Node::Branch(Box::new(BranchNode {
+        let root = Node::Branch(BranchNode {
             partial_path: Path::from([2]),
             value: None,
             children: root_children.into(),
-        }));
+        });
         let root_addr = LinearAddress::new(high_watermark).unwrap();
         let root_hash = hash_node::<H>(&root, &Path::new());
         let (bytes_written, stored_area_size) =
