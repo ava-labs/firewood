@@ -5,6 +5,8 @@ use arity_arrays::Arity16;
 use arity_arrays::FixedArray;
 use arity_arrays::PackedArray;
 
+use crate::Child;
+use crate::Node;
 use crate::PathComponent;
 
 const MAX_CHILDREN: usize = PathComponent::LEN;
@@ -432,9 +434,71 @@ impl<T> From<Children<Option<T>>> for PackedChildren<T> {
     }
 }
 
+impl PackedChildren<Child> {
+    /// Replaces the child at `index` with the result of `f`, which receives
+    /// the current child by value.
+    ///
+    /// Reallocates only when `f` changes whether the child is present. If `f`
+    /// returns an error or panics, the child it consumed is gone and `index`
+    /// is left absent.
+    ///
+    /// After an error or unwind the branch no longer matches the trie it came
+    /// from. The caller must drop it, not reuse or hash it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error `f` returns.
+    pub fn try_update<E>(
+        &mut self,
+        index: PathComponent,
+        f: impl FnOnce(Option<Child>) -> Result<Option<Child>, E>,
+    ) -> Result<(), E> {
+        let Some(slot) = self.get_mut(index) else {
+            if let Some(child) = f(None)? {
+                self.insert(index, child);
+            }
+            return Ok(());
+        };
+
+        // An empty leaf stands in for the child while `f` owns it, so the
+        // block keeps its size. `guard` removes the stand-in unless a new
+        // child is written over it.
+        let child = std::mem::replace(slot, Child::Node(Node::default()));
+        let mut guard = RemoveOnDrop {
+            children: self,
+            index,
+            armed: true,
+        };
+        if let Some(new_child) = f(Some(child))?
+            && let Some(slot) = guard.children.get_mut(index)
+        {
+            *slot = new_child;
+            guard.armed = false;
+        }
+        Ok(())
+    }
+}
+
+/// Removes the child at `index` when dropped, unless disarmed.
+struct RemoveOnDrop<'a> {
+    children: &'a mut PackedChildren<Child>,
+    index: PathComponent,
+    armed: bool,
+}
+
+impl Drop for RemoveOnDrop<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.children.remove(self.index);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::LeafNode;
+    use crate::Path;
 
     #[test]
     fn dense_children_round_trips_with_children() {
@@ -590,5 +654,128 @@ mod tests {
             children.remove(index);
         }
         assert_eq!(children.allocated_size(), 0);
+    }
+
+    fn leaf(value: u8) -> Child {
+        Child::Node(Node::Leaf(LeafNode {
+            partial_path: Path::new(),
+            value: Box::from([value]),
+        }))
+    }
+
+    /// A collection holding `leaf(1)` at `TARGET` and `leaf(2)` at `SIBLING`.
+    fn target_and_sibling() -> PackedChildren<Child> {
+        [(TARGET, leaf(1)), (SIBLING, leaf(2))]
+            .into_iter()
+            .collect()
+    }
+
+    const TARGET: PathComponent = pc(3);
+    const SIBLING: PathComponent = pc(10);
+    const ABSENT: PathComponent = pc(6);
+
+    /// Replacing a present child hands the closure the old child, stores the
+    /// new one, and reuses the heap block.
+    #[test]
+    fn try_update_present_to_present_is_in_place() {
+        let mut children = target_and_sibling();
+        let block = children.get(TARGET).map(std::ptr::from_ref);
+        let size = children.allocated_size();
+
+        let result: Result<(), ()> = children.try_update(TARGET, |child| {
+            assert_eq!(child, Some(leaf(1)));
+            Ok(Some(leaf(7)))
+        });
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(children.get(TARGET), Some(&leaf(7)));
+        assert_eq!(children.get(SIBLING), Some(&leaf(2)));
+        assert_eq!(
+            children.get(TARGET).map(std::ptr::from_ref),
+            block,
+            "the child moved to a new block"
+        );
+        assert_eq!(children.allocated_size(), size);
+    }
+
+    /// A closure that returns no child removes a present one.
+    #[test]
+    fn try_update_present_to_absent_removes() {
+        let mut children = target_and_sibling();
+
+        let result: Result<(), ()> = children.try_update(TARGET, |_| Ok(None));
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(children.get(TARGET), None);
+        assert_eq!(children.get(SIBLING), Some(&leaf(2)));
+        assert_eq!(children.count(), 1);
+    }
+
+    /// A failing closure on a present child propagates its error and leaves
+    /// the index absent.
+    #[test]
+    fn try_update_present_error_leaves_absent() {
+        let mut children = target_and_sibling();
+
+        let result = children.try_update(TARGET, |_| Err("failed"));
+
+        assert_eq!(result, Err("failed"));
+        assert_eq!(children.get(TARGET), None);
+        assert_eq!(children.get(SIBLING), Some(&leaf(2)));
+        assert_eq!(children.count(), 1);
+    }
+
+    /// A panicking closure on a present child leaves the index absent and no
+    /// placeholder child behind.
+    #[test]
+    fn try_update_present_panic_leaves_absent() {
+        let mut children = target_and_sibling();
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: Result<(), ()> = children.try_update(TARGET, |_| panic!("closure panicked"));
+        }));
+
+        assert!(unwound.is_err(), "the panic did not propagate");
+        assert_eq!(children.get(TARGET), None);
+        assert_eq!(children.get(SIBLING), Some(&leaf(2)));
+        let placeholder = Child::Node(Node::default());
+        assert!(
+            children
+                .iter_present()
+                .all(|(_, child)| *child != placeholder),
+            "a placeholder child is still in the collection"
+        );
+    }
+
+    /// A closure that returns a child for an absent index inserts it.
+    #[test]
+    fn try_update_absent_to_present_inserts() {
+        let mut children = target_and_sibling();
+
+        let result: Result<(), ()> = children.try_update(ABSENT, |child| {
+            assert_eq!(child, None);
+            Ok(Some(leaf(9)))
+        });
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(children.get(ABSENT), Some(&leaf(9)));
+        assert_eq!(children.get(TARGET), Some(&leaf(1)));
+        assert_eq!(children.get(SIBLING), Some(&leaf(2)));
+    }
+
+    /// A closure that returns no child, or fails, for an absent index changes
+    /// nothing.
+    #[test]
+    fn try_update_absent_stays_absent() {
+        let mut children = target_and_sibling();
+        let unchanged = children.clone();
+
+        let none: Result<(), ()> = children.try_update(ABSENT, |_| Ok(None));
+        assert_eq!(none, Ok(()));
+        assert_eq!(children, unchanged);
+
+        let failed = children.try_update(ABSENT, |_| Err("failed"));
+        assert_eq!(failed, Err("failed"));
+        assert_eq!(children, unchanged);
     }
 }
