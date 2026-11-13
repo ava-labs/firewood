@@ -378,7 +378,9 @@ mod tests {
             let shared_child = SharedNode::new(child);
             let maybe_persisted = MaybePersistedNode::from(shared_child);
             let hash = HashType::empty();
-            branch.children[index] = Some(Child::MaybePersisted(maybe_persisted, hash));
+            branch
+                .children
+                .insert(index, Child::MaybePersisted(maybe_persisted, hash));
         }
 
         Node::Branch(Box::new(branch))
