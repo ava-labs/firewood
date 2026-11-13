@@ -28,22 +28,15 @@ fn test_verify<H: HashMode>(start_key: Option<&[u8]>, end_key: Option<&[u8]>, ch
     let (root1_source, root2) = setup_2nd_commit!(source, [(change_key, b"changed")]);
 
     let proof = source
-        .change_proof(root1_source, root2.clone(), start_key, end_key, None)
+        .change_proof(root1_source, root2, start_key, end_key, None)
         .unwrap();
     assert_eq!(proof.batch_ops().len(), 1);
     assert_eq!(proof.start_proof().is_empty(), start_key.is_none());
     assert!(!proof.end_proof().is_empty());
 
-    let ctx = verify_change_proof_structure(
-        &proof,
-        root2.clone(),
-        start_key,
-        end_key,
-        H::ALGORITHM,
-        None,
-    )
-    .unwrap();
-    verify_and_check(&target, &proof, &ctx, root1_target.clone()).unwrap();
+    let ctx = verify_change_proof_structure(&proof, root2, start_key, end_key, H::ALGORITHM, None)
+        .unwrap();
+    verify_and_check(&target, &proof, &ctx, root1_target).unwrap();
 
     // Apply the proof to target and verify roots converge.
     let parent = target.revision(root1_target).unwrap();
@@ -78,13 +71,7 @@ fn test_inherited_key_at_start_boundary_accepted<H: HashMode>() {
     let root2 = db.root_hash().unwrap();
 
     let proof = db
-        .change_proof(
-            root1.clone(),
-            root2.clone(),
-            Some(b"\x01".as_ref()),
-            None,
-            None,
-        )
+        .change_proof(root1, root2, Some(b"\x01".as_ref()), None, None)
         .unwrap();
 
     let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x01"), None, H::ALGORITHM, None)
@@ -102,7 +89,7 @@ fn test_generator_uses_end_key_for_complete_proof<H: HashMode>() {
 
     // end_key far beyond last change, no limit — complete proof
     let proof = db
-        .change_proof(root1, root2.clone(), None, Some(b"\xff"), None)
+        .change_proof(root1, root2, None, Some(b"\xff"), None)
         .unwrap();
 
     // End proof validates against end_key for complete proofs

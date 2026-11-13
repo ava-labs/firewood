@@ -255,7 +255,7 @@ fn exclusion_with_proof_value_present<H: HashMode>() {
     debug!("{proof:#?}");
     assert_eq!(
         H::to_hash(proof.as_ref().first().unwrap()),
-        HashType::from(root_hash.clone())
+        HashType::from(root_hash)
     );
 
     // Ensure at least one node in the proof carries a value (proof value present)

@@ -88,8 +88,8 @@ fn sync_walk<H: HashMode>(
 
         let proof = source
             .change_proof(
-                start_root.clone(),
-                end_root.clone(),
+                *start_root,
+                *end_root,
                 start_key.as_deref(),
                 end_key.as_deref(),
                 limit,
@@ -99,7 +99,7 @@ fn sync_walk<H: HashMode>(
         target
             .verify_change_proof(
                 &proof,
-                end_root.clone(),
+                *end_root,
                 start_key.as_deref(),
                 end_key.as_deref(),
                 limit,

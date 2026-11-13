@@ -202,7 +202,7 @@ mod account_depth_inline_storage {
             .unwrap();
         let end_root = source.root_hash().unwrap();
         let honest = source
-            .change_proof(start_root, end_root.clone(), None, None, None)
+            .change_proof(start_root, end_root, None, None, None)
             .unwrap();
 
         let account = vec![0x50; 32];
@@ -229,7 +229,7 @@ mod account_depth_inline_storage {
 
         assert!(
             target
-                .verify_change_proof(&honest, end_root.clone(), None, None, None)
+                .verify_change_proof(&honest, end_root, None, None, None)
                 .is_ok()
         );
         let result = target

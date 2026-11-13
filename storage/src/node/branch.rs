@@ -279,7 +279,7 @@ impl BranchNode {
     pub fn children_hashes(&self) -> Children<Option<HashType>> {
         let mut hashes = Children::new();
         for (index, child) in self.children.iter_present() {
-            hashes[index] = child.hash().cloned();
+            hashes[index] = child.hash().copied();
         }
         hashes
     }

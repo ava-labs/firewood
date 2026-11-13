@@ -497,7 +497,7 @@ fn check_valid_range_proof(
     rng: &SeededRng,
     locator: &str,
 ) -> FrozenRangeProof {
-    let view = db.revision(root.clone()).unwrap();
+    let view = db.revision(*root).unwrap();
     let range_proof = view
         .range_proof(first, last, None)
         .unwrap_or_else(|e| panic!("range_proof should succeed ({locator}): {e}"));
@@ -520,19 +520,19 @@ fn check_valid_change_proof(
     locator: &str,
 ) -> FrozenChangeProof {
     let change_proof = db
-        .change_proof(start_root.clone(), end_root.clone(), first, last, None)
+        .change_proof(*start_root, *end_root, first, last, None)
         .unwrap_or_else(|e| panic!("change_proof should succeed ({locator}): {e}"));
     let change_proof = maybe_serialize_round_trip_change(rng, change_proof);
     let ctx = verify_change_proof_structure(
         &change_proof,
-        end_root.clone(),
+        *end_root,
         first,
         last,
         EthHash::ALGORITHM,
         None,
     )
     .unwrap_or_else(|e| panic!("valid change proof structure should verify ({locator}): {e}"));
-    let parent = db.revision(start_root.clone()).unwrap();
+    let parent = db.revision(*start_root).unwrap();
     let proposal = db
         .apply_change_proof_to_parent(&change_proof, &*parent)
         .unwrap_or_else(|e| panic!("apply_change_proof_to_parent should succeed ({locator}): {e}"));
@@ -803,13 +803,7 @@ fn check_truncated_change_proof(
     // The range starts at 1, so the limit is always valid.
     let limit = NonZeroUsize::new(rng.random_range(1..6_usize)).expect("range starts at 1");
     let proof = db
-        .change_proof(
-            start_root.clone(),
-            end_root.clone(),
-            first,
-            last,
-            Some(limit),
-        )
+        .change_proof(*start_root, *end_root, first, last, Some(limit))
         .unwrap_or_else(|e| {
             panic!("truncated change_proof should succeed ({locator}, limit={limit}): {e}")
         });
@@ -819,7 +813,7 @@ fn check_truncated_change_proof(
 
     let ctx = verify_change_proof_structure(
         &proof,
-        end_root.clone(),
+        *end_root,
         first,
         last,
         EthHash::ALGORITHM,
@@ -829,7 +823,7 @@ fn check_truncated_change_proof(
         panic!("honest truncated proof must verify structurally ({locator}, limit={limit}): {e}")
     });
     let right_edge = ctx.right_edge_key();
-    let parent = db.revision(start_root.clone()).unwrap();
+    let parent = db.revision(*start_root).unwrap();
     let proposal = db
         .apply_change_proof_to_parent(&proof, &*parent)
         .unwrap_or_else(|e| panic!("apply should succeed ({locator}, limit={limit}): {e}"));
@@ -877,7 +871,7 @@ fn check_truncated_change_proof(
     );
     let rejected = match verify_change_proof_structure(
         &holed,
-        end_root.clone(),
+        *end_root,
         first,
         last,
         EthHash::ALGORITHM,
@@ -885,7 +879,7 @@ fn check_truncated_change_proof(
     ) {
         Err(_) => true,
         Ok(hctx) => {
-            let parent = db.revision(start_root.clone()).unwrap();
+            let parent = db.revision(*start_root).unwrap();
             match db.apply_change_proof_to_parent(&holed, &*parent) {
                 Err(_) => true,
                 Ok(hproposal) => verify_change_proof_root_hash(&holed, &hctx, &hproposal).is_err(),

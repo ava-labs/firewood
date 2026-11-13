@@ -179,7 +179,7 @@ impl<H: HashMode> RootStore<H> {
 
         // 4. Construct the committed revision
         let nodestore = Arc::new(NodeStore::with_root(
-            hash.clone().into(),
+            (*hash).into(),
             addr,
             self.storage.clone(),
             // `RootStore` only exists when the database was opened in
@@ -188,7 +188,7 @@ impl<H: HashMode> RootStore<H> {
         )?);
 
         // 5. Cache for future lookups.
-        revision_cache.insert(hash.clone(), nodestore.clone());
+        revision_cache.insert(*hash, nodestore.clone());
 
         firewood_counter!(ROOTSTORE_GET, "result" => "fetched").increment(1);
 
@@ -243,7 +243,7 @@ mod tests {
         root_store
             .revision_cache
             .lock()
-            .insert(hash.clone(), revision.clone());
+            .insert(hash, revision.clone());
 
         // Since the underlying datastore is empty, this should get the revision
         // from the cache.

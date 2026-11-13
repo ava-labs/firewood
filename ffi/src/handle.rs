@@ -254,10 +254,10 @@ impl DatabaseHandle {
     /// root hash, for example when the revision does not exist or an I/O error occurs while
     /// accessing the database.
     pub fn get_revision(&self, root: HashKey) -> Result<GetRevisionResult<'_>, api::Error> {
-        let view = self.db.view(root.clone())?;
+        let view = self.db.view(root)?;
         // The opaque committed parent is `None` when `root` names a proposal
         // rather than a committed revision (see [`DynDb::committed_view`]).
-        let historical = self.db.committed_view(root.clone())?;
+        let historical = self.db.committed_view(root)?;
         Ok(GetRevisionResult {
             handle: RevisionHandle::new(view, historical, self.metrics_context.clone(), self),
             root_hash: root,

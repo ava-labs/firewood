@@ -59,16 +59,9 @@ pub(in crate::merkle::tests) fn change_proof_rejected(
     first: Option<&[u8]>,
     last: Option<&[u8]>,
 ) -> bool {
-    match verify_change_proof_structure(
-        proof,
-        end_root.clone(),
-        first,
-        last,
-        EthHash::ALGORITHM,
-        None,
-    ) {
+    match verify_change_proof_structure(proof, *end_root, first, last, EthHash::ALGORITHM, None) {
         Err(_) => true,
-        Ok(ctx) => verify_and_check(db, proof, &ctx, start_root.clone()).is_err(),
+        Ok(ctx) => verify_and_check(db, proof, &ctx, *start_root).is_err(),
     }
 }
 

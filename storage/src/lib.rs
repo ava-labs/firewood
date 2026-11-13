@@ -77,6 +77,8 @@ pub use hashmode::EthHash;
 pub use hashmode::HashMode;
 pub use hashmode::MerkleDbHash;
 pub use hashtype::HashType;
+pub use hashtype::InlineRlp;
+pub use hashtype::InlineRlpTooLong;
 pub use linear::FileIoError;
 pub use linear::ReadableStorage;
 pub use linear::WritableStorage;
